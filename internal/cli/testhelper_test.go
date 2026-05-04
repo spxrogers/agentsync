@@ -13,11 +13,20 @@ import (
 // the resulting error. Sets AGENTSYNC_TARGET_ROOT to the supplied tmp via env.
 func runCLI(t *testing.T, env map[string]string, args ...string) (string, error) {
 	t.Helper()
+	return runCLIWithStdin(t, env, "", args...)
+}
+
+// runCLIWithStdin is like runCLI but supplies stdinContent as stdin.
+func runCLIWithStdin(t *testing.T, env map[string]string, stdinContent string, args ...string) (string, error) {
+	t.Helper()
 	var buf bytes.Buffer
 	root := cli.NewRoot()
 	root.SetOut(&buf)
 	root.SetErr(&buf)
 	root.SetArgs(args)
+	if stdinContent != "" {
+		root.SetIn(strings.NewReader(stdinContent))
+	}
 	for k, v := range env {
 		t.Setenv(k, v)
 	}

@@ -38,6 +38,7 @@ func NewRoot() *cobra.Command {
 		newApplyCmd(),
 		newStatusCmd(),
 		newDiffCmd(),
+		newReconcileCmd(),
 	)
 	return cmd
 }
