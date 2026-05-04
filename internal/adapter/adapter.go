@@ -41,11 +41,13 @@ func (s Scope) String() string {
 // FileOp describes one destination-side change. Action is "write" or "delete".
 // Path is absolute (after AGENTSYNC_TARGET_ROOT redirection).
 type FileOp struct {
-	Action   string // "write" | "delete"
-	Path     string
-	Content  []byte
-	Mode     uint32
-	SourceID string // canonical source path that produced this op
+	Action        string   // "write" | "delete"
+	Path          string
+	Content       []byte
+	Mode          uint32
+	SourceID      string   // canonical source path that produced this op
+	MergeStrategy string   // "replace" (default) | "merge-json-keys"
+	OwnedKeys     []string // JSON pointers owned by agentsync; populated by Apply from state, not Render
 }
 
 // Skip describes a component the adapter chose not to render. Surfaces in the
