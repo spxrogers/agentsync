@@ -137,6 +137,36 @@ func TestRender_Skills(t *testing.T) {
 	}
 }
 
+func TestRender_Commands(t *testing.T) {
+	c := source.Canonical{
+		Commands: []source.Command{{
+			Name:        "review",
+			Frontmatter: map[string]any{"description": "Run a code review"},
+			Body:        "Please review the current changes.\n",
+		}},
+	}
+	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *adapter.FileOp
+	for i, op := range ops {
+		if strings.HasSuffix(op.Path, "/commands/review.md") {
+			found = &ops[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no commands/review.md op: %+v", ops)
+	}
+	if !strings.HasPrefix(string(found.Content), "---\n") {
+		t.Fatalf("missing frontmatter delimiter: %s", found.Content)
+	}
+	if found.MergeStrategy != "replace" {
+		t.Fatalf("MergeStrategy = %q, want replace", found.MergeStrategy)
+	}
+}
+
 func TestRender_Subagents(t *testing.T) {
 	c := source.Canonical{
 		Subagents: []source.Subagent{{
