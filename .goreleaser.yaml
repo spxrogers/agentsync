@@ -1,0 +1,29 @@
+project_name: agentsync
+
+builds:
+  - id: agentsync
+    main: ./cmd/agentsync
+    binary: agentsync
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot-{{.ShortCommit}}"
+
+# Homebrew/Scoop/Chocolatey blocks added in M7.
