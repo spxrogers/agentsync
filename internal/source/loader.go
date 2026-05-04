@@ -1,6 +1,7 @@
 package source
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/afero"
+	"sigs.k8s.io/yaml"
 )
 
 // Load reads a canonical model from <home>. Missing home or missing
@@ -141,9 +143,7 @@ func loadMarketplaces(fs afero.Fs, home string) ([]Marketplace, error) {
 	return out, nil
 }
 
-// loadSkills walks skills/<name>/SKILL.md. Frontmatter parsing is added in M1
-// when the Claude adapter actually uses skills; for M0 we just record the
-// skill names + body so the canonical model is complete.
+// loadSkills walks skills/<name>/SKILL.md, parsing YAML frontmatter if present.
 func loadSkills(fs afero.Fs, home string) ([]Skill, error) {
 	dir := filepath.Join(home, "skills")
 	entries, err := afero.ReadDir(fs, dir)
@@ -158,16 +158,44 @@ func loadSkills(fs afero.Fs, home string) ([]Skill, error) {
 		if !e.IsDir() {
 			continue
 		}
-		body, err := afero.ReadFile(fs, filepath.Join(dir, e.Name(), "SKILL.md"))
+		raw, err := afero.ReadFile(fs, filepath.Join(dir, e.Name(), "SKILL.md"))
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			return nil, fmt.Errorf("read SKILL.md for %s: %w", e.Name(), err)
 		}
-		out = append(out, Skill{Name: e.Name(), Body: string(body)})
+		fm, body, err := parseFrontmatter(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
+		}
+		out = append(out, Skill{Name: e.Name(), Frontmatter: fm, Body: body})
 	}
 	return out, nil
+}
+
+// parseFrontmatter extracts YAML frontmatter and body from a markdown file.
+// If the input doesn't begin with "---\n", returns an empty map and the
+// entire input as body.
+func parseFrontmatter(data []byte) (map[string]any, string, error) {
+	if !bytes.HasPrefix(data, []byte("---\n")) {
+		return map[string]any{}, string(data), nil
+	}
+	rest := data[len("---\n"):]
+	end := bytes.Index(rest, []byte("\n---\n"))
+	if end < 0 {
+		return nil, "", fmt.Errorf("unterminated frontmatter")
+	}
+	yml := rest[:end]
+	body := rest[end+len("\n---\n"):]
+	var fm map[string]any
+	if err := yaml.Unmarshal(yml, &fm); err != nil {
+		return nil, "", fmt.Errorf("parse yaml frontmatter: %w", err)
+	}
+	if fm == nil {
+		fm = map[string]any{}
+	}
+	return fm, string(body), nil
 }
 
 func loadMemory(fs afero.Fs, home string) (Memory, error) {
