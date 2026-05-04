@@ -137,6 +137,72 @@ func TestRender_Skills(t *testing.T) {
 	}
 }
 
+func TestRender_Hooks_WritesSettingsJSON(t *testing.T) {
+	c := source.Canonical{
+		Hooks: []source.Hook{
+			{Event: "PreToolUse", Matcher: "Write|Edit", Type: "command", Command: "echo intercepting"},
+			{Event: "PreToolUse", Matcher: "Bash", Type: "command", Command: "echo bash hook"},
+		},
+	}
+	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *adapter.FileOp
+	for i, op := range ops {
+		if strings.HasSuffix(op.Path, "settings.json") && strings.Contains(string(op.Content), "hooks") {
+			found = &ops[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no settings.json hooks op: %+v", ops)
+	}
+	if found.MergeStrategy != "merge-json-keys" {
+		t.Fatalf("MergeStrategy = %q, want merge-json-keys", found.MergeStrategy)
+	}
+	// Verify OwnedKeys contains the event path.
+	hasOwned := false
+	for _, k := range found.OwnedKeys {
+		if k == "/hooks/PreToolUse" {
+			hasOwned = true
+		}
+	}
+	if !hasOwned {
+		t.Fatalf("OwnedKeys missing /hooks/PreToolUse: %v", found.OwnedKeys)
+	}
+	// Verify content is valid JSON with hooks structure.
+	var got map[string]any
+	if err := json.Unmarshal(found.Content, &got); err != nil {
+		t.Fatalf("not valid json: %v", err)
+	}
+	hooks, ok := got["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks key missing or wrong type: %v", got)
+	}
+	preToolUse, ok := hooks["PreToolUse"].([]any)
+	if !ok {
+		t.Fatalf("PreToolUse key missing or wrong type: %v", hooks)
+	}
+	if len(preToolUse) != 2 {
+		t.Fatalf("expected 2 PreToolUse entries, got %d", len(preToolUse))
+	}
+}
+
+func TestRender_Hooks_EmptyProducesNoOp(t *testing.T) {
+	c := source.Canonical{}
+	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range ops {
+		if strings.HasSuffix(op.Path, "settings.json") && strings.Contains(string(op.Content), "\"hooks\"") {
+			t.Fatalf("unexpected hooks op when no hooks in canonical: %+v", op)
+		}
+	}
+}
+
 func TestRender_Commands(t *testing.T) {
 	c := source.Canonical{
 		Commands: []source.Command{{
