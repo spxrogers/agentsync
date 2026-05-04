@@ -52,7 +52,14 @@ func (a *Adapter) Render(c source.Canonical, scope adapter.Scope, project string
 		ops = append(ops, cmdOps...)
 	}
 
-	// Tasks 10-11: hooks, LSP — implemented later.
+	// 6. Hooks -> settings.json /hooks/<event>
+	if hookOps, err := a.renderHooks(c, paths); err != nil {
+		return nil, nil, err
+	} else {
+		ops = append(ops, hookOps...)
+	}
+
+	// Task 11: LSP — implemented later.
 
 	return ops, skips, nil
 }
