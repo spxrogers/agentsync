@@ -45,7 +45,14 @@ func (a *Adapter) Render(c source.Canonical, scope adapter.Scope, project string
 		ops = append(ops, subagentOps...)
 	}
 
-	// Tasks 9-11: commands, hooks, LSP — implemented later.
+	// 5. Commands -> ~/.claude/commands/<name>.md
+	if cmdOps, err := a.renderCommands(c, paths); err != nil {
+		return nil, nil, err
+	} else {
+		ops = append(ops, cmdOps...)
+	}
+
+	// Tasks 10-11: hooks, LSP — implemented later.
 
 	return ops, skips, nil
 }
