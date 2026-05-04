@@ -35,6 +35,18 @@ func Load(fs afero.Fs, home string) (Canonical, error) {
 	if c.Skills, err = loadSkills(fs, home); err != nil {
 		return c, err
 	}
+	if c.Subagents, err = loadSubagents(fs, home); err != nil {
+		return c, err
+	}
+	if c.Commands, err = loadCommands(fs, home); err != nil {
+		return c, err
+	}
+	if c.Hooks, err = loadHooks(fs, home); err != nil {
+		return c, err
+	}
+	if c.LSPServers, err = loadLSP(fs, home); err != nil {
+		return c, err
+	}
 	if c.Memory, err = loadMemory(fs, home); err != nil {
 		return c, err
 	}
@@ -170,6 +182,151 @@ func loadSkills(fs afero.Fs, home string) ([]Skill, error) {
 			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
 		}
 		out = append(out, Skill{Name: e.Name(), Frontmatter: fm, Body: body})
+	}
+	return out, nil
+}
+
+// loadSubagents walks agents/<name>.md, parsing YAML frontmatter if present.
+func loadSubagents(fs afero.Fs, home string) ([]Subagent, error) {
+	dir := filepath.Join(home, "agents")
+	entries, err := afero.ReadDir(fs, dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", dir, err)
+	}
+	var out []Subagent
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		raw, err := afero.ReadFile(fs, p)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", p, err)
+		}
+		fm, body, err := parseFrontmatter(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
+		}
+		name := strings.TrimSuffix(e.Name(), ".md")
+		out = append(out, Subagent{Name: name, Frontmatter: fm, Body: body})
+	}
+	return out, nil
+}
+
+// loadCommands walks commands/<name>.md, parsing YAML frontmatter if present.
+func loadCommands(fs afero.Fs, home string) ([]Command, error) {
+	dir := filepath.Join(home, "commands")
+	entries, err := afero.ReadDir(fs, dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", dir, err)
+	}
+	var out []Command
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		raw, err := afero.ReadFile(fs, p)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", p, err)
+		}
+		fm, body, err := parseFrontmatter(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
+		}
+		name := strings.TrimSuffix(e.Name(), ".md")
+		out = append(out, Command{Name: name, Frontmatter: fm, Body: body})
+	}
+	return out, nil
+}
+
+// hookFile is the TOML shape for hooks/<event>.toml.
+type hookFile struct {
+	Hook []hookEntry `toml:"hook"`
+}
+
+type hookEntry struct {
+	Matcher string `toml:"matcher"`
+	Type    string `toml:"type"`
+	Command string `toml:"command"`
+}
+
+// loadHooks walks hooks/<event>.toml files. Each file corresponds to one
+// Claude hook event (e.g. "PreToolUse"). Entries within the file become
+// individual Hook records sharing the same Event.
+func loadHooks(fs afero.Fs, home string) ([]Hook, error) {
+	dir := filepath.Join(home, "hooks")
+	entries, err := afero.ReadDir(fs, dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", dir, err)
+	}
+	var out []Hook
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".toml") {
+			continue
+		}
+		event := strings.TrimSuffix(e.Name(), ".toml")
+		p := filepath.Join(dir, e.Name())
+		data, err := afero.ReadFile(fs, p)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", p, err)
+		}
+		var hf hookFile
+		if err := toml.Unmarshal(data, &hf); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", p, err)
+		}
+		for _, h := range hf.Hook {
+			out = append(out, Hook{
+				Event:   event,
+				Matcher: h.Matcher,
+				Type:    h.Type,
+				Command: h.Command,
+			})
+		}
+	}
+	return out, nil
+}
+
+// lspFile is the TOML shape for lsp/<id>.toml.
+type lspFile struct {
+	Server LSPServerSpec `toml:"server"`
+}
+
+// loadLSP walks lsp/<id>.toml files.
+func loadLSP(fs afero.Fs, home string) ([]LSPServer, error) {
+	dir := filepath.Join(home, "lsp")
+	entries, err := afero.ReadDir(fs, dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", dir, err)
+	}
+	var out []LSPServer
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".toml") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		data, err := afero.ReadFile(fs, p)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", p, err)
+		}
+		var lf lspFile
+		if err := toml.Unmarshal(data, &lf); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", p, err)
+		}
+		id := strings.TrimSuffix(e.Name(), ".toml")
+		out = append(out, LSPServer{ID: id, Spec: lf.Server})
 	}
 	return out, nil
 }
