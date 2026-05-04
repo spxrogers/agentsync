@@ -46,11 +46,6 @@ func (a *Adapter) Detect() (bool, error) {
 	return false, nil
 }
 
-// Render is a stub — implemented in render.go (M1 Task 5+).
-func (a *Adapter) Render(_ source.Canonical, _ adapter.Scope, _ string) ([]adapter.FileOp, []adapter.Skip, error) {
-	return nil, nil, nil
-}
-
 // Ingest is a stub — implemented in ingest.go (M1 Task 9+).
 func (a *Adapter) Ingest(_ adapter.Scope, _ string) (source.Canonical, error) {
 	return source.Canonical{}, nil
