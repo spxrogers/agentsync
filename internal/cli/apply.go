@@ -42,8 +42,15 @@ func newApplyCmd() *cobra.Command {
 
 			reg := registryFactory()
 
+			// Load state (needed for OwnedKeys injection in Plan).
+			statePath := filepath.Join(home, ".state", "targets.json")
+			s, err := state.Load(statePath)
+			if err != nil {
+				return err
+			}
+
 			if dryRun {
-				plan, err := render.Plan(c, reg, agents, sc, "")
+				plan, err := render.Plan(c, reg, agents, sc, "", s)
 				if err != nil {
 					return err
 				}
@@ -60,7 +67,7 @@ func newApplyCmd() *cobra.Command {
 			}
 
 			// Real apply: render + write
-			plan, err := render.Plan(c, reg, agents, sc, "")
+			plan, err := render.Plan(c, reg, agents, sc, "", s)
 			if err != nil {
 				return err
 			}
@@ -68,12 +75,7 @@ func newApplyCmd() *cobra.Command {
 				return err
 			}
 
-			// Load + update state
-			statePath := filepath.Join(home, ".state", "targets.json")
-			s, err := state.Load(statePath)
-			if err != nil {
-				return err
-			}
+			// Update state with post-apply hashes.
 			for name, res := range plan.PerAgent {
 				if err := render.RecordOpsState(s, name, sc, "", res.Ops); err != nil {
 					return err
