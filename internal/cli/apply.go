@@ -18,12 +18,9 @@ func newApplyCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "apply",
-		Short: "render canonical config and write per agent (M0: --dry-run only)",
+		Short: "render canonical config and write per agent",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !dryRun {
-				return fmt.Errorf("M0 only supports --dry-run; real adapters arrive in M1 (claude) and M2 (opencode)")
-			}
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			c, err := source.Load(afero.NewOsFs(), home)
 			if err != nil {
@@ -42,20 +39,33 @@ func newApplyCmd() *cobra.Command {
 			}
 
 			reg := registryFactory()
+
+			if dryRun {
+				plan, err := render.Plan(c, reg, agents, sc, "")
+				if err != nil {
+					return err
+				}
+				w := cmd.OutOrStdout()
+				fmt.Fprintf(w, "Plan: %d ops total across %d agent(s)\n", plan.Total(), len(plan.PerAgent))
+				for _, name := range reg.Names() {
+					res, ok := plan.PerAgent[name]
+					if !ok {
+						continue
+					}
+					fmt.Fprintf(w, "  %-10s %d ops, %d skips\n", name, len(res.Ops), len(res.Skips))
+				}
+				return nil
+			}
+
+			// Real apply: render + write
 			plan, err := render.Plan(c, reg, agents, sc, "")
 			if err != nil {
 				return err
 			}
-
-			w := cmd.OutOrStdout()
-			fmt.Fprintf(w, "Plan: %d ops total across %d agent(s)\n", plan.Total(), len(plan.PerAgent))
-			for _, name := range reg.Names() {
-				res, ok := plan.PerAgent[name]
-				if !ok {
-					continue
-				}
-				fmt.Fprintf(w, "  %-10s %d ops, %d skips\n", name, len(res.Ops), len(res.Skips))
+			if err := render.Apply(plan, reg); err != nil {
+				return err
 			}
+			fmt.Fprintln(cmd.OutOrStdout(), "applied:", plan.Total(), "ops")
 			return nil
 		},
 	}
