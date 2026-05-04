@@ -45,11 +45,7 @@ func (a *Adapter) Detect() (bool, error) {
 	return false, nil
 }
 
-// Render converts canonical source into FileOps for OpenCode. Stub: will be
-// filled in Task 4–8.
-func (a *Adapter) Render(_ source.Canonical, _ adapter.Scope, _ string) ([]adapter.FileOp, []adapter.Skip, error) {
-	return nil, nil, nil
-}
+// Render is implemented in render.go.
 
 // Ingest reads OpenCode's native config files back into a source.Canonical. Stub:
 // will be filled in Task 10.
