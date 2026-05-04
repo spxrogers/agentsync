@@ -23,16 +23,17 @@ func TestApply_DryRunEmptyHome(t *testing.T) {
 	}
 }
 
-func TestApply_NoFlagDefaultsToDryRun_M0(t *testing.T) {
-	// M0 NEVER writes destinations; flag the user when they call apply
-	// without --dry-run so they understand M0 vs M1+ scope.
+func TestApply_NoFlag_WritesDestinations_M1(t *testing.T) {
+	// M1+: apply (no flag) should succeed (real adapters are wired).
+	// With an empty canonical there are 0 ops, so no files are written, but
+	// the command must not error.
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	_, _ = runCLI(t, env, "init")
 	_, _ = runCLI(t, env, "agent", "add", "claude")
 
 	out, err := runCLI(t, env, "apply")
-	if err == nil {
-		t.Fatalf("apply without --dry-run in M0 should error or warn; got: %s", out)
+	if err != nil {
+		t.Fatalf("apply in M1 should succeed; got err: %v\n%s", err, out)
 	}
 }
