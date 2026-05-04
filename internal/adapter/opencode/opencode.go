@@ -6,7 +6,6 @@ import (
 	"os/exec"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
-	"github.com/spxrogers/agentsync/internal/source"
 )
 
 // Options configure the adapter at construction.
@@ -46,9 +45,5 @@ func (a *Adapter) Detect() (bool, error) {
 }
 
 // Render is implemented in render.go.
-
-// Ingest reads OpenCode's native config files back into a source.Canonical. Stub:
-// will be filled in Task 10.
-func (a *Adapter) Ingest(_ adapter.Scope, _ string) (source.Canonical, error) {
-	return source.Canonical{}, nil
-}
+// Ingest is implemented in ingest.go.
+// Apply is implemented in apply.go.
