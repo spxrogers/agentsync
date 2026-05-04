@@ -136,3 +136,33 @@ func TestRender_Skills(t *testing.T) {
 		t.Fatalf("missing frontmatter delimiter: %s", found.Content)
 	}
 }
+
+func TestRender_Subagents(t *testing.T) {
+	c := source.Canonical{
+		Subagents: []source.Subagent{{
+			Name:        "reviewer",
+			Frontmatter: map[string]any{"description": "Code reviewer", "model": "claude-opus-4-5"},
+			Body:        "You are a code reviewer.\n",
+		}},
+	}
+	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *adapter.FileOp
+	for i, op := range ops {
+		if strings.HasSuffix(op.Path, "/agents/reviewer.md") {
+			found = &ops[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no agents/reviewer.md op: %+v", ops)
+	}
+	if !strings.HasPrefix(string(found.Content), "---\n") {
+		t.Fatalf("missing frontmatter delimiter: %s", found.Content)
+	}
+	if found.MergeStrategy != "replace" {
+		t.Fatalf("MergeStrategy = %q, want replace", found.MergeStrategy)
+	}
+}

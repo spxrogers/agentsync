@@ -9,6 +9,10 @@ type Canonical struct {
 	Config       Config
 	MCPServers   []MCPServer
 	Skills       []Skill
+	Subagents    []Subagent
+	Commands     []Command
+	Hooks        []Hook
+	LSPServers   []LSPServer
 	Plugins      []Plugin
 	Marketplaces []Marketplace
 	Memory       Memory
@@ -92,6 +96,45 @@ type MarketplaceSpec struct {
 	URL               string `toml:"url"`
 	Ref               string `toml:"ref,omitempty"`
 	DefaultUpdateMode string `toml:"default_update_mode,omitempty"`
+}
+
+// Subagent mirrors agents/<name>.md (frontmatter + body).
+// Subagents in Claude live at ~/.claude/agents/<name>.md.
+type Subagent struct {
+	Name        string         // filename without .md extension
+	Frontmatter map[string]any // YAML frontmatter (description, tools, model, color, etc.)
+	Body        string         // markdown body
+}
+
+// Command mirrors commands/<name>.md (frontmatter + body).
+// Slash commands in Claude live at ~/.claude/commands/<name>.md.
+type Command struct {
+	Name        string         // filename without .md extension
+	Frontmatter map[string]any // YAML frontmatter
+	Body        string         // markdown body
+}
+
+// Hook represents a single hook entry for an event.
+type Hook struct {
+	Event   string // e.g. "PreToolUse"
+	Matcher string // glob/regex string
+	Type    string // "command"
+	Command string // shell command
+}
+
+// LSPServer mirrors lsp/<id>.toml.
+type LSPServer struct {
+	ID      string
+	Spec    LSPServerSpec
+}
+
+// LSPServerSpec holds the server configuration for an LSP server.
+type LSPServerSpec struct {
+	Command string            `toml:"command,omitempty"`
+	Args    []string          `toml:"args,omitempty"`
+	Env     map[string]string `toml:"env,omitempty"`
+	URL     string            `toml:"url,omitempty"`
+	Headers map[string]string `toml:"headers,omitempty"`
 }
 
 // Memory mirrors memory/AGENTS.md and memory/fragments/.
