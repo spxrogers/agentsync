@@ -52,6 +52,3 @@ func (a *Adapter) Detect() (bool, error) {
 func (a *Adapter) Ingest(_ adapter.Scope, _ string) (source.Canonical, error) {
 	return source.Canonical{}, nil
 }
-
-// Apply writes FileOps to disk. Stub: will be filled in Task 9.
-func (a *Adapter) Apply(_ []adapter.FileOp) error { return nil }
