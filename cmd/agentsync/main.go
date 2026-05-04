@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/spxrogers/agentsync/internal/cli"
 )
 
 var (
@@ -12,9 +14,12 @@ var (
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "--version" {
-		fmt.Printf("agentsync %s (commit %s, built %s)\n", version, commit, date)
-		return
+	cli.Version = version
+	cli.Commit = commit
+	cli.Date = date
+
+	if err := cli.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, "agentsync:", err)
+		os.Exit(1)
 	}
-	fmt.Println("agentsync — placeholder; cli wiring lands in Task 13")
 }
