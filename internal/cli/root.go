@@ -36,6 +36,7 @@ func NewRoot() *cobra.Command {
 		newDoctorCmd(),
 		newVerifyCmd(),
 		newApplyCmd(),
+		newStatusCmd(),
 	)
 	return cmd
 }
