@@ -6,7 +6,6 @@ import (
 	"os/exec"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
-	"github.com/spxrogers/agentsync/internal/source"
 )
 
 // Options configure the adapter at construction.
@@ -44,14 +43,4 @@ func (a *Adapter) Detect() (bool, error) {
 		return true, nil
 	}
 	return false, nil
-}
-
-// Ingest is a stub — implemented in ingest.go (M1 Task 9+).
-func (a *Adapter) Ingest(_ adapter.Scope, _ string) (source.Canonical, error) {
-	return source.Canonical{}, nil
-}
-
-// Apply is a stub — implemented in apply.go (M1 Task 10+).
-func (a *Adapter) Apply(_ []adapter.FileOp) error {
-	return nil
 }
