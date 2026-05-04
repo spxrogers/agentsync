@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
@@ -9,6 +10,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/state"
 )
 
 func newApplyCmd() *cobra.Command {
@@ -65,6 +67,22 @@ func newApplyCmd() *cobra.Command {
 			if err := render.Apply(plan, reg); err != nil {
 				return err
 			}
+
+			// Load + update state
+			statePath := filepath.Join(home, ".state", "targets.json")
+			s, err := state.Load(statePath)
+			if err != nil {
+				return err
+			}
+			for name, res := range plan.PerAgent {
+				if err := render.RecordOpsState(s, name, sc, "", res.Ops); err != nil {
+					return err
+				}
+			}
+			if err := state.Save(statePath, s); err != nil {
+				return err
+			}
+
 			fmt.Fprintln(cmd.OutOrStdout(), "applied:", plan.Total(), "ops")
 			return nil
 		},
