@@ -59,7 +59,12 @@ func (a *Adapter) Render(c source.Canonical, scope adapter.Scope, project string
 		ops = append(ops, hookOps...)
 	}
 
-	// Task 11: LSP — implemented later.
+	// 7. LSP servers -> settings.json /lspServers/<id>
+	if lspOps, err := a.renderLSP(c, paths); err != nil {
+		return nil, nil, err
+	} else {
+		ops = append(ops, lspOps...)
+	}
 
 	return ops, skips, nil
 }
