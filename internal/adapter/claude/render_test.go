@@ -137,6 +137,75 @@ func TestRender_Skills(t *testing.T) {
 	}
 }
 
+func TestRender_LSP_WritesSettingsJSON(t *testing.T) {
+	c := source.Canonical{
+		LSPServers: []source.LSPServer{{
+			ID: "gopls",
+			Spec: source.LSPServerSpec{
+				Command: "gopls",
+				Args:    []string{"-mode=stdio"},
+			},
+		}},
+	}
+	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *adapter.FileOp
+	for i, op := range ops {
+		if strings.HasSuffix(op.Path, "settings.json") && strings.Contains(string(op.Content), "lspServers") {
+			found = &ops[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no settings.json lspServers op: %+v", ops)
+	}
+	if found.MergeStrategy != "merge-json-keys" {
+		t.Fatalf("MergeStrategy = %q, want merge-json-keys", found.MergeStrategy)
+	}
+	// OwnedKeys should include /lspServers/gopls
+	hasOwned := false
+	for _, k := range found.OwnedKeys {
+		if k == "/lspServers/gopls" {
+			hasOwned = true
+		}
+	}
+	if !hasOwned {
+		t.Fatalf("OwnedKeys missing /lspServers/gopls: %v", found.OwnedKeys)
+	}
+	// Content should be valid JSON with lspServers.gopls.command
+	var got map[string]any
+	if err := json.Unmarshal(found.Content, &got); err != nil {
+		t.Fatalf("not valid json: %v", err)
+	}
+	servers, ok := got["lspServers"].(map[string]any)
+	if !ok {
+		t.Fatalf("lspServers key missing or wrong type: %v", got)
+	}
+	gopls, ok := servers["gopls"].(map[string]any)
+	if !ok {
+		t.Fatalf("gopls key missing or wrong type: %v", servers)
+	}
+	if gopls["command"] != "gopls" {
+		t.Fatalf("command = %v", gopls["command"])
+	}
+}
+
+func TestRender_LSP_EmptyProducesNoOp(t *testing.T) {
+	c := source.Canonical{}
+	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range ops {
+		if strings.HasSuffix(op.Path, "settings.json") && strings.Contains(string(op.Content), "\"lspServers\"") {
+			t.Fatalf("unexpected lspServers op when no LSP in canonical: %+v", op)
+		}
+	}
+}
+
 func TestRender_Hooks_WritesSettingsJSON(t *testing.T) {
 	c := source.Canonical{
 		Hooks: []source.Hook{
