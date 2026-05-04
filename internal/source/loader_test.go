@@ -73,3 +73,28 @@ func TestLoad_MissingHomeReturnsEmpty(t *testing.T) {
 		t.Fatalf("expected empty canonical, got %d MCP", len(c.MCPServers))
 	}
 }
+
+func TestLoad_SkillFrontmatter(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	_ = afero.WriteFile(fs, "/home/.agentsync/skills/foo/SKILL.md", []byte(`---
+name: foo
+description: Test skill
+---
+Body.
+`), 0o644)
+
+	c, err := source.Load(fs, "/home/.agentsync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Skills) != 1 {
+		t.Fatalf("skills = %d", len(c.Skills))
+	}
+	s := c.Skills[0]
+	if s.Frontmatter["name"] != "foo" {
+		t.Fatalf("frontmatter name = %v", s.Frontmatter["name"])
+	}
+	if s.Body != "Body.\n" {
+		t.Fatalf("body = %q", s.Body)
+	}
+}
