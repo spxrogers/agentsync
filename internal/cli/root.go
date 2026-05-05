@@ -41,6 +41,7 @@ func NewRoot() *cobra.Command {
 		newReconcileCmd(),
 		newPluginCmd(),
 		newMarketplaceCmd(),
+		newUpdateCmd(),
 	)
 	return cmd
 }

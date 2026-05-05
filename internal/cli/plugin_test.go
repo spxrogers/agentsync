@@ -97,6 +97,44 @@ func makeGitMarketplace(t *testing.T) string {
 	return "file://" + workDir
 }
 
+// makeVersionedMarketplace creates a marketplace fixture where the demo plugin
+// has an explicit version (v) declared in marketplace.json.
+func makeVersionedMarketplace(t *testing.T, dir, version string) string {
+	t.Helper()
+	mpDir := filepath.Join(dir, "fixture-marketplace-v")
+
+	mpClaudePlugin := filepath.Join(mpDir, ".claude-plugin")
+	if err := os.MkdirAll(mpClaudePlugin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mpJSON := `{
+		"name": "test-mp-v",
+		"owner": {"name": "tester"},
+		"plugins": [
+			{"name": "demo", "source": "./plugins/demo", "version": "` + version + `"}
+		]
+	}`
+	if err := os.WriteFile(filepath.Join(mpClaudePlugin, "marketplace.json"), []byte(mpJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pluginDir := filepath.Join(mpDir, "plugins", "demo", ".claude-plugin")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pluginJSON := `{
+		"name": "demo",
+		"version": "` + version + `",
+		"mcpServers": {
+			"demo-mcp": {"command": "${CLAUDE_PLUGIN_ROOT}/run.sh"}
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(pluginJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return mpDir
+}
+
 // ---- marketplace add/remove/list tests -------------------------------------
 
 func TestMarketplace_AddLocalPath(t *testing.T) {
