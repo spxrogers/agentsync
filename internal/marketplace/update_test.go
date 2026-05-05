@@ -154,3 +154,90 @@ func TestComputePendingBumps_NoMarketplace_NoBump(t *testing.T) {
 		t.Errorf("plugin with no matching marketplace should not bump, got %d", len(bumps))
 	}
 }
+
+// ---- SHA drift detection tests -----------------------------------------------
+
+func TestDetectSHADrift_NoDrift(t *testing.T) {
+	plugins := []source.Plugin{
+		{
+			ID: "demo",
+			Plugin: source.PluginSpec{
+				ID:          "demo@test-mp",
+				Version:     "1.0.0",
+				ManifestSHA: "abc123",
+			},
+		},
+	}
+	// Same SHA → no warning.
+	warnings := marketplace.DetectSHADrift(plugins, map[string]string{"demo": "abc123"})
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings when SHAs match, got %d", len(warnings))
+	}
+}
+
+func TestDetectSHADrift_Drift(t *testing.T) {
+	plugins := []source.Plugin{
+		{
+			ID: "demo",
+			Plugin: source.PluginSpec{
+				ID:          "demo@test-mp",
+				Version:     "1.0.0",
+				ManifestSHA: "oldsha",
+			},
+		},
+	}
+	// Different SHA → warning.
+	warnings := marketplace.DetectSHADrift(plugins, map[string]string{"demo": "newsha"})
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d", len(warnings))
+	}
+	w := warnings[0]
+	if w.ID != "demo" {
+		t.Errorf("warning ID = %q, want demo", w.ID)
+	}
+	if w.RecordedSHA != "oldsha" {
+		t.Errorf("RecordedSHA = %q, want oldsha", w.RecordedSHA)
+	}
+	if w.FetchedSHA != "newsha" {
+		t.Errorf("FetchedSHA = %q, want newsha", w.FetchedSHA)
+	}
+	if w.Version != "1.0.0" {
+		t.Errorf("Version = %q, want 1.0.0", w.Version)
+	}
+}
+
+func TestDetectSHADrift_NoRecordedSHA(t *testing.T) {
+	// If plugin has no recorded SHA, no warning (it may not have been installed with pinning).
+	plugins := []source.Plugin{
+		{
+			ID: "demo",
+			Plugin: source.PluginSpec{
+				ID:          "demo@test-mp",
+				Version:     "1.0.0",
+				ManifestSHA: "",
+			},
+		},
+	}
+	warnings := marketplace.DetectSHADrift(plugins, map[string]string{"demo": "newsha"})
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings when no recorded SHA, got %d", len(warnings))
+	}
+}
+
+func TestDetectSHADrift_NoFreshSHA(t *testing.T) {
+	// If fresh SHA is not available (plugin not cached), no warning.
+	plugins := []source.Plugin{
+		{
+			ID: "demo",
+			Plugin: source.PluginSpec{
+				ID:          "demo@test-mp",
+				Version:     "1.0.0",
+				ManifestSHA: "abc123",
+			},
+		},
+	}
+	warnings := marketplace.DetectSHADrift(plugins, map[string]string{}) // no fresh SHA
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings when no fresh SHA available, got %d", len(warnings))
+	}
+}

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -104,6 +106,17 @@ func updateRun(cmd *cobra.Command, doApply, _ bool) error {
 			mpName, truncate(result.HeadSHA, 12))
 	}
 
+	// Compute fresh manifest SHAs for installed plugins (for SHA drift detection).
+	freshSHAs := computeFreshPluginSHAs(home, c.Plugins)
+
+	// Detect re-uploaded (same version, different SHA) plugins.
+	shaWarnings := marketplace.DetectSHADrift(c.Plugins, freshSHAs)
+	for _, w := range shaWarnings {
+		fmt.Fprintf(cmd.OutOrStdout(),
+			"warning: manifest-sha-mismatch plugin=%s version=%s recorded=%s fetched=%s (re-uploaded?)\n",
+			w.ID, w.Version, truncate(w.RecordedSHA, 12), truncate(w.FetchedSHA, 12))
+	}
+
 	// Compute pending bumps.
 	bumps := marketplace.ComputePendingBumps(st, c.Marketplaces, c.Plugins, fetched)
 
@@ -169,6 +182,25 @@ func updateRun(cmd *cobra.Command, doApply, _ bool) error {
 	}
 
 	return nil
+}
+
+// computeFreshPluginSHAs reads each installed plugin's cached plugin.json and
+// computes its sha256 hex.  Returns a map of plugin ID → sha hex.  Missing or
+// unreadable plugin.json files are silently skipped (they may not be cached yet).
+func computeFreshPluginSHAs(home string, plugins []source.Plugin) map[string]string {
+	out := make(map[string]string, len(plugins))
+	for _, pl := range plugins {
+		id := pl.ID
+		cacheDir := pluginCacheDir(home, id)
+		pluginJSONPath := filepath.Join(cacheDir, ".claude-plugin", "plugin.json")
+		data, err := os.ReadFile(pluginJSONPath)
+		if err != nil {
+			continue
+		}
+		h := sha256.Sum256(data)
+		out[id] = hex.EncodeToString(h[:])
+	}
+	return out
 }
 
 // applyPluginBump re-fetches a single plugin and updates its plugins/<id>.toml.

@@ -19,6 +19,46 @@ type Bump struct {
 	UpdateMode string
 }
 
+// SHAWarning is emitted when a plugin's recorded manifest_sha differs from
+// the freshly-fetched SHA for the same version — a signal that the marketplace
+// publisher re-uploaded the same version with different content.
+type SHAWarning struct {
+	// ID is the plugin's filesystem ID.
+	ID string
+	// Version is the version that was re-uploaded.
+	Version string
+	// RecordedSHA is what was stored in plugins/<id>.toml at install time.
+	RecordedSHA string
+	// FetchedSHA is the SHA of the freshly-fetched plugin.json.
+	FetchedSHA string
+}
+
+// DetectSHADrift checks installed plugins against freshly-fetched manifest SHAs
+// (provided by the caller after re-fetching each plugin's cache).  For each
+// plugin whose version hasn't changed but whose SHA has, a SHAWarning is returned.
+//
+// freshSHAs maps plugin ID → sha256 hex string of the freshly-fetched plugin.json.
+func DetectSHADrift(plugins []source.Plugin, freshSHAs map[string]string) []SHAWarning {
+	var out []SHAWarning
+	for _, pl := range plugins {
+		freshSHA, ok := freshSHAs[pl.ID]
+		if !ok || freshSHA == "" {
+			continue
+		}
+		recorded := pl.Plugin.ManifestSHA
+		if recorded == "" || recorded == freshSHA {
+			continue
+		}
+		out = append(out, SHAWarning{
+			ID:          pl.ID,
+			Version:     pl.Plugin.Version,
+			RecordedSHA: recorded,
+			FetchedSHA:  freshSHA,
+		})
+	}
+	return out
+}
+
 // ComputePendingBumps compares each installed plugin's current version against
 // the freshly-fetched marketplace data and returns the list of plugins that have
 // a newer version available and whose update mode allows automatic upgrade.
