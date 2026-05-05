@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/drift"
+	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -97,7 +98,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 
 	br := bufio.NewReader(in)
 
-	for i, it := range items {
+	for _, it := range items {
 		if !requiresAction(it.cls) {
 			continue
 		}
@@ -149,9 +150,12 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 
 		switch action {
 		case 'w':
-			// write-back: update source from dest. Task 7 provides source.Writer.
-			// For now emit a notice that write-back requires source.Writer (Task 7).
-			fmt.Fprintf(w, "  [%d] write-back: skipped (source.Writer not yet available; use 'apply' to override)\n", i)
+			// write-back: persist destination value into the canonical source.
+			if err := writeBackItem(home, it); err != nil {
+				fmt.Fprintf(w, "  write-back error: %v\n", err)
+			} else {
+				fmt.Fprintf(w, "  write-back: %s\n", itemLabel(it))
+			}
 		case 'o':
 			// override: queue a re-apply of this item's op.
 			overrideOps = append(overrideOps, struct {
@@ -289,6 +293,72 @@ func readChar(r *bufio.Reader) (byte, error) {
 			return b, nil
 		}
 	}
+}
+
+// writeBackItem persists the current destination value for item it back into
+// the canonical source (~/.agentsync/). Only MCP-server items are fully
+// supported in v1; other item types fall back to a raw file copy.
+func writeBackItem(home string, it reconcileItem) error {
+	if it.ptr != "" {
+		return writeBackKeyItem(home, it)
+	}
+	return writeBackFileItem(home, it)
+}
+
+// writeBackKeyItem handles key-level (merge-json-keys / merge-jsonc-keys) items.
+// For MCP servers it reconstructs a source.MCPServer from the destination JSON
+// and writes it with source.WriteMCP. For other key-level items it is a no-op
+// (unsupported in v1).
+func writeBackKeyItem(home string, it reconcileItem) error {
+	dest := readJSONFile(it.op.Path)
+	// Extract mcpServers section if this is an MCP ptr.
+	// Expected ptr shape: /mcpServers/<serverID>/...
+	parts := strings.SplitN(strings.TrimPrefix(it.ptr, "/"), "/", 3)
+	if len(parts) >= 2 && parts[0] == "mcpServers" {
+		serverID := parts[1]
+		mcpServers, _ := dest["mcpServers"].(map[string]any)
+		if mcpServers == nil {
+			return fmt.Errorf("mcpServers not found in destination")
+		}
+		specRaw, ok := mcpServers[serverID]
+		if !ok {
+			// Server removed from dest; skip write-back.
+			return nil
+		}
+		// Round-trip through JSON to get a typed spec.
+		specBytes, err := json.Marshal(specRaw)
+		if err != nil {
+			return fmt.Errorf("marshal mcp spec %s: %w", serverID, err)
+		}
+		var spec source.MCPServerSpec
+		if err := json.Unmarshal(specBytes, &spec); err != nil {
+			return fmt.Errorf("unmarshal mcp spec %s: %w", serverID, err)
+		}
+		m := source.MCPServer{ID: serverID, Server: spec}
+		return source.WriteMCP(home, serverID, m)
+	}
+	// Other key-level items not yet supported.
+	return nil
+}
+
+// writeBackFileItem handles file-level (replace strategy) items by copying
+// the destination file back into the corresponding source location verbatim.
+// This covers subagents, commands, memory, and skill files in v1.
+func writeBackFileItem(home string, it reconcileItem) error {
+	data, err := os.ReadFile(it.op.Path)
+	if err != nil {
+		return fmt.Errorf("read dest %s: %w", it.op.Path, err)
+	}
+	// Derive a relative source path from the SourceID field when possible.
+	// SourceID examples: "agents/reviewer.md", "skills/foo/SKILL.md",
+	//                    "memory/AGENTS.md", "commands/review.md".
+	srcID := it.op.SourceID
+	if srcID == "" || strings.HasSuffix(srcID, "(multiple)") {
+		// Cannot determine a single source file; skip.
+		return nil
+	}
+	dest := filepath.Join(home, srcID)
+	return iox.AtomicWrite(dest, data, 0o644)
 }
 
 // appendIgnore appends the label to ~/.agentsync/ignore.toml (best-effort).
