@@ -33,12 +33,18 @@ type ProjectionResult struct {
 // In both cases, ${CLAUDE_PLUGIN_ROOT} in command/url strings is replaced with
 // cacheDir so non-Claude adapters can resolve binary paths.
 func Project(entry PluginEntry, cacheDir string) (ProjectionResult, error) {
+	return ProjectWithReader(entry, cacheDir, os.ReadFile)
+}
+
+// ProjectWithReader is like Project but uses a caller-supplied readFile function
+// for loading plugin.json. This enables in-memory filesystem use in tests.
+func ProjectWithReader(entry PluginEntry, cacheDir string, readFile func(string) ([]byte, error)) (ProjectionResult, error) {
 	var pr ProjectionResult
 	strict := entry.Strict == nil || *entry.Strict
 
 	if strict {
 		manifestPath := filepath.Join(cacheDir, ".claude-plugin", "plugin.json")
-		data, err := os.ReadFile(manifestPath)
+		data, err := readFile(manifestPath)
 		if err != nil && !os.IsNotExist(err) {
 			return pr, fmt.Errorf("read plugin.json: %w", err)
 		}

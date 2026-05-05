@@ -142,3 +142,20 @@ type Memory struct {
 	Body      string            // resolved AGENTS.md after @import expansion
 	Fragments map[string]string // path -> body, keyed by repo-relative path under memory/
 }
+
+// PluginProjection is the set of canonical entries contributed by one plugin.
+// It mirrors marketplace.ProjectionResult but lives in the source package to
+// avoid an import cycle (marketplace already imports source).
+type PluginProjection struct {
+	MCPServers []MCPServer
+	Skills     []Skill
+	Subagents  []Subagent
+	Commands   []Command
+	Hooks      []Hook
+	LSPServers []LSPServer
+}
+
+// PluginProjector is a function that, given a plugin ID and its on-disk cache
+// directory, returns the canonical entries contributed by that plugin.
+// Pass nil to LoadWithCache to skip projection entirely.
+type PluginProjector func(id, cacheDir string) (PluginProjection, error)
