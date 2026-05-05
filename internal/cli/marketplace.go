@@ -7,12 +7,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/state"
 )
 
 func newMarketplaceCmd() *cobra.Command {
@@ -115,6 +117,19 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("write %s: %w", mpPath, err)
 	}
 
+	// Update state.json so the update command can track fetch timestamps and SHAs.
+	statePath := filepath.Join(home, ".state", "targets.json")
+	st, _ := state.Load(statePath) // best-effort; ignore read errors on fresh home
+	if st == nil {
+		st = state.New()
+	}
+	st.Marketplaces[mpName] = state.Marketplace{
+		URL:       rawURL,
+		HeadSHA:   result.HeadSHA,
+		FetchedAt: time.Now().UTC(),
+	}
+	_ = state.Save(statePath, st) // best-effort; don't fail add on state write errors
+
 	fmt.Fprintf(cmd.OutOrStdout(), "added marketplace %s (sha=%s)\n",
 		mpName, truncate(result.HeadSHA, 12))
 	return nil
@@ -143,6 +158,13 @@ func marketplaceRemoveRun(cmd *cobra.Command, args []string) error {
 	cacheDir := marketplaceCacheDir(home, name)
 	if err := os.RemoveAll(cacheDir); err != nil {
 		return fmt.Errorf("remove cache %s: %w", cacheDir, err)
+	}
+
+	// Remove from state.json (best-effort).
+	statePath := filepath.Join(home, ".state", "targets.json")
+	if st, err := state.Load(statePath); err == nil {
+		delete(st.Marketplaces, name)
+		_ = state.Save(statePath, st)
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "removed marketplace %s\n", name)

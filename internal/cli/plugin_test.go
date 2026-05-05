@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -188,6 +189,89 @@ func TestMarketplace_ListEmpty(t *testing.T) {
 	}
 	if !strings.Contains(out, "no marketplaces") {
 		t.Errorf("expected empty message: %s", out)
+	}
+}
+
+// TestMarketplace_AddUpdatesState verifies that marketplace add writes the
+// marketplace entry (with HeadSHA and FetchedAt) into .state/targets.json.
+func TestMarketplace_AddUpdatesState(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read state.json and verify marketplace entry.
+	home := filepath.Join(tmp, ".agentsync")
+	statePath := filepath.Join(home, ".state", "targets.json")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read targets.json: %v", err)
+	}
+	var st struct {
+		Marketplaces map[string]struct {
+			URL       string `json:"url"`
+			FetchedAt string `json:"fetched_at"`
+		} `json:"marketplaces"`
+	}
+	if err := json.Unmarshal(data, &st); err != nil {
+		t.Fatalf("parse targets.json: %v", err)
+	}
+	if len(st.Marketplaces) == 0 {
+		t.Fatalf("expected marketplace entry in state, got none; state=%s", data)
+	}
+	// The marketplace name should be "test-mp" (from the fixture's marketplace.json).
+	entry, ok := st.Marketplaces["test-mp"]
+	if !ok {
+		t.Fatalf("marketplace test-mp not in state; keys=%v", st.Marketplaces)
+	}
+	if entry.URL == "" {
+		t.Errorf("state marketplace URL is empty")
+	}
+	if entry.FetchedAt == "" {
+		t.Errorf("state marketplace FetchedAt is empty")
+	}
+}
+
+// TestMarketplace_RemoveUpdatesState verifies that marketplace remove clears
+// the entry from .state/targets.json.
+func TestMarketplace_RemoveUpdatesState(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "marketplace", "remove", "test-mp"); err != nil {
+		t.Fatal(err)
+	}
+
+	// State should no longer have test-mp.
+	home := filepath.Join(tmp, ".agentsync")
+	statePath := filepath.Join(home, ".state", "targets.json")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read targets.json: %v", err)
+	}
+	var st struct {
+		Marketplaces map[string]json.RawMessage `json:"marketplaces"`
+	}
+	if err := json.Unmarshal(data, &st); err != nil {
+		t.Fatalf("parse targets.json: %v", err)
+	}
+	if _, found := st.Marketplaces["test-mp"]; found {
+		t.Error("test-mp should have been removed from state after marketplace remove")
 	}
 }
 
