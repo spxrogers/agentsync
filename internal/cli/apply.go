@@ -24,7 +24,8 @@ func newApplyCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := paths.AgentsyncHome(paths.OSEnv{})
-			c, err := source.Load(afero.NewOsFs(), home)
+			pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+			c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
 			if err != nil {
 				return err
 			}
