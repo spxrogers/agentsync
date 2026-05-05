@@ -29,10 +29,10 @@ The features map 1:1 to the design spec's "north stars":
 
 ```bash
 # Local (fast iteration)
-make test-bdd
+just test-bdd
 
 # Hermetic (release gate; podman preferred, docker fallback)
-make test-container
+just test-container
 ```
 
 The build tag `bdd` keeps this suite out of `go test ./...`, so the fast

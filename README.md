@@ -70,17 +70,17 @@ Three layers, each meant for a different question.
 
 | Layer                                      | Question it answers                          | Command              |
 | ------------------------------------------ | -------------------------------------------- | -------------------- |
-| Unit + integration (`internal/*/*_test.go`) | Did I break an internal contract?            | `make test`          |
-| Lifecycle e2e (`test/e2e`, build tag `e2e`) | Does the binary survive the v1 happy path?   | `make test-e2e`      |
-| BDD Gherkin lock (`test/bdd`, tag `bdd`)    | Are the spec's north-star behaviours intact? | `make test-bdd`      |
-| Hermetic container suite                   | Can I safely cut a release right now?        | `make test-container` |
+| Unit + integration (`internal/*/*_test.go`) | Did I break an internal contract?            | `just test`          |
+| Lifecycle e2e (`test/e2e`, build tag `e2e`) | Does the binary survive the v1 happy path?   | `just test-e2e`      |
+| BDD Gherkin lock (`test/bdd`, tag `bdd`)    | Are the spec's north-star behaviours intact? | `just test-bdd`      |
+| Hermetic container suite                   | Can I safely cut a release right now?        | `just test-container` |
 
 The container runner picks **podman** first, then docker. The repo is
 mounted read-only, the network is off by default, and every Scenario runs
 against a fresh tmpdir, so the suite cannot touch your real `~/.claude.json`,
 `~/.config/opencode/`, or `~/.agentsync/`.
 
-If `make test-container` is green, ship.
+If `just test-container` is green, ship.
 
 ## License
 
