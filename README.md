@@ -64,6 +64,24 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 - **`agentsync update` fails to fetch a marketplace**: verify the marketplace URL with `git ls-remote`. agentsync uses `go-git` and falls back to system `git` for sparse clones if needed.
 - **`${secret:foo}` not resolving**: run `agentsync secrets get foo` to verify the key exists in the decrypted file. age library errors will surface here.
 
+## Testing
+
+Three layers, each meant for a different question.
+
+| Layer                                      | Question it answers                          | Command              |
+| ------------------------------------------ | -------------------------------------------- | -------------------- |
+| Unit + integration (`internal/*/*_test.go`) | Did I break an internal contract?            | `make test`          |
+| Lifecycle e2e (`test/e2e`, build tag `e2e`) | Does the binary survive the v1 happy path?   | `make test-e2e`      |
+| BDD Gherkin lock (`test/bdd`, tag `bdd`)    | Are the spec's north-star behaviours intact? | `make test-bdd`      |
+| Hermetic container suite                   | Can I safely cut a release right now?        | `make test-container` |
+
+The container runner picks **podman** first, then docker. The repo is
+mounted read-only, the network is off by default, and every Scenario runs
+against a fresh tmpdir, so the suite cannot touch your real `~/.claude.json`,
+`~/.config/opencode/`, or `~/.agentsync/`.
+
+If `make test-container` is green, ship.
+
 ## License
 
 MIT.

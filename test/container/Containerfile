@@ -1,0 +1,65 @@
+# Hermetic test image for agentsync.
+#
+# Naming: `Containerfile` rather than `Dockerfile` because podman is the
+# preferred runtime per the test design. Both podman and docker accept this
+# name (podman natively, docker via the `-f` flag).
+#
+# Image responsibilities:
+#   - Provide the exact Go toolchain agentsync targets (matches go.mod).
+#   - Pre-warm the Go module cache so the runtime suite needs no network.
+#   - Run as a non-root user so any host-mounted source is touched politely.
+#
+# Tests must NOT reach the host's $HOME, $XDG_CONFIG_HOME, or any external
+# service. The runner script enforces host-side hermeticity (read-only repo
+# mount, fresh tmpdirs); this image enforces inside-side hermeticity (no
+# network at runtime, deps already cached).
+#
+# Lint (`golangci-lint`) and the cross-build matrix (`goreleaser`) are
+# already gated by CI as separate jobs and can be run on the host directly;
+# they intentionally live outside this image so the image stays small and
+# rebuildable in restrictive networks.
+
+ARG GO_VERSION=1.26.2
+FROM docker.io/library/golang:${GO_VERSION}-bookworm
+
+# The golang:bookworm base already ships git, bash, curl, ca-certificates,
+# and tzdata — everything the test suites need. We deliberately do not
+# invoke apt-get, both to keep the layer count down and to keep the image
+# buildable in environments that block deb.debian.org.
+
+# Non-root user keeps mounted source from getting root-owned artefacts.
+# When the host user happens to be root (UID=0), we skip the create step
+# and reuse the existing root account, which already has a usable home.
+ARG UID=1000
+ARG GID=1000
+RUN if [ "${UID}" -ne 0 ]; then \
+        groupadd -g ${GID} runner \
+        && useradd -m -u ${UID} -g ${GID} -s /bin/bash runner ; \
+    fi
+
+# Resolve the target home dir for module/build caches. For non-root, that's
+# /home/runner; for root, /root.
+RUN if [ "${UID}" -eq 0 ]; then \
+        ln -snf /root /home/runner ; \
+    fi
+
+ENV GOPATH=/home/runner/go \
+    GOMODCACHE=/home/runner/go/pkg/mod \
+    GOCACHE=/home/runner/.cache/go-build \
+    CGO_ENABLED=0
+
+# ----- module pre-warm ------------------------------------------------------
+# Copy only the module manifests, fetch deps, then the runtime container
+# mounts the real source tree read-only and reuses this populated cache
+# without touching the network.
+RUN mkdir -p /home/runner/go/pkg/mod /home/runner/.cache/go-build /work-prewarm \
+ && if [ "${UID}" -ne 0 ]; then chown -R ${UID}:${GID} /home/runner /work-prewarm ; fi
+
+USER ${UID}:${GID}
+WORKDIR /work-prewarm
+COPY --chown=${UID}:${GID} go.mod go.sum ./
+RUN go mod download
+
+WORKDIR /workspace
+
+ENTRYPOINT ["bash", "test/container/entrypoint.sh"]
