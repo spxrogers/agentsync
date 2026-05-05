@@ -12,13 +12,18 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
 func newDiffCmd() *cobra.Command {
-	return &cobra.Command{
+	var (
+		scopeFlag   string
+		projectFlag string
+	)
+	cmd := &cobra.Command{
 		Use:   "diff [<path>]",
 		Short: "print unified diff between source-rendered content and destination",
 		Args:  cobra.MaximumNArgs(1),
@@ -37,6 +42,22 @@ func newDiffCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
+			sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag, c)
+			if err != nil {
+				return err
+			}
+
+			if sc == adapter.ScopeProject && projectRoot != "" {
+				marker, merr := project.Discover(projectRoot)
+				if merr != nil {
+					return fmt.Errorf("load project marker: %w", merr)
+				}
+				if marker != nil {
+					c = project.Merge(c, marker)
+				}
+			}
+
 			statePath := filepath.Join(home, ".state", "targets.json")
 			s, err := state.Load(statePath)
 			if err != nil {
@@ -49,7 +70,7 @@ func newDiffCmd() *cobra.Command {
 					agents = append(agents, name)
 				}
 			}
-			plan, err := render.Plan(c, reg, agents, adapter.ScopeUser, "", s)
+			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s)
 			if err != nil {
 				return err
 			}
@@ -121,6 +142,9 @@ func newDiffCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: auto-detect from cwd)")
+	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+	return cmd
 }
 
 func marshalPretty(v any) string {

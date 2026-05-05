@@ -14,13 +14,18 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/drift"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
 func newStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	var (
+		scopeFlag   string
+		projectFlag string
+	)
+	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "report drift across registered agents",
 		Args:  cobra.NoArgs,
@@ -30,6 +35,22 @@ func newStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
+			sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag, c)
+			if err != nil {
+				return err
+			}
+
+			if sc == adapter.ScopeProject && projectRoot != "" {
+				marker, merr := project.Discover(projectRoot)
+				if merr != nil {
+					return fmt.Errorf("load project marker: %w", merr)
+				}
+				if marker != nil {
+					c = project.Merge(c, marker)
+				}
+			}
+
 			statePath := filepath.Join(home, ".state", "targets.json")
 			s, err := state.Load(statePath)
 			if err != nil {
@@ -42,7 +63,7 @@ func newStatusCmd() *cobra.Command {
 					agents = append(agents, name)
 				}
 			}
-			plan, err := render.Plan(c, reg, agents, adapter.ScopeUser, "", s)
+			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s)
 			if err != nil {
 				return err
 			}
@@ -65,7 +86,7 @@ func newStatusCmd() *cobra.Command {
 					}
 					seen[op.Path] = true
 					hsrc := hashContent(op.Content)
-					happlied := s.Files[fmt.Sprintf("%s:user::%s", name, op.Path)].SHA256
+					happlied := s.Files[stateFileKey(name, sc, projectRoot, op.Path)].SHA256
 					hdest := hashFile(op.Path)
 					cls := drift.Classify(hsrc, happlied, hdest)
 					fmt.Fprintf(w, "  %-20s %s\n", cls, op.Path)
@@ -80,7 +101,7 @@ func newStatusCmd() *cobra.Command {
 					final := readJSONFile(op.Path)
 					for _, ptr := range render.CollectPointers(ours, "") {
 						hsrc := hashAnyValue(getPointerValue(ours, ptr))
-						happlied := s.Keys[fmt.Sprintf("%s:user::%s:%s", name, op.Path, ptr)].SHA256
+						happlied := s.Keys[stateKeyKey(name, sc, projectRoot, op.Path, ptr)].SHA256
 						hdest := hashAnyValue(getPointerValue(final, ptr))
 						cls := drift.Classify(hsrc, happlied, hdest)
 						fmt.Fprintf(w, "  %-20s %s#%s\n", cls, op.Path, ptr)
@@ -90,6 +111,21 @@ func newStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: auto-detect from cwd)")
+	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+	return cmd
+}
+
+// stateFileKey builds the state Files map key matching render.RecordOpsState.
+// Format: "agent:scope:project:path" (project is "" for user scope).
+func stateFileKey(agent string, sc adapter.Scope, projectRoot, path string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", agent, sc.String(), projectRoot, path)
+}
+
+// stateKeyKey builds the state Keys map key matching render.RecordOpsState.
+// Format: "agent:scope:project:path:ptr".
+func stateKeyKey(agent string, sc adapter.Scope, projectRoot, path, ptr string) string {
+	return fmt.Sprintf("%s:%s:%s:%s:%s", agent, sc.String(), projectRoot, path, ptr)
 }
 
 func hashContent(b []byte) string {
