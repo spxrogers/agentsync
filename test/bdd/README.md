@@ -28,15 +28,22 @@ The features map 1:1 to the design spec's "north stars":
 ## Running
 
 ```bash
-# Local (fast iteration)
+# Run the BDD suite alone (still hermetic — runs in container).
 just test-bdd
 
-# Hermetic (release gate; podman preferred, docker fallback)
+# Full release gate: every layer (vet → build → race → e2e → bdd → smoke)
+# in one hermetic container run.
 just test-container
 ```
 
+Both invocations route through `scripts/test-in-container.sh` (podman first,
+docker fallback). The repo is mounted read-only and the network is off;
+the suite cannot touch your real `~/.claude.json`, `~/.config/opencode/`,
+or `~/.agentsync/`.
+
 The build tag `bdd` keeps this suite out of `go test ./...`, so the fast
-unit/integration loop stays under two seconds.
+in-place iteration loop (`just test-fast` or plain `go test`) stays under
+two seconds.
 
 ## Adding a scenario
 
