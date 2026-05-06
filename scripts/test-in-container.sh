@@ -73,6 +73,9 @@ RUN_ARGS=(
     -v "$CACHE_VOL:/home/runner/.cache/go-build"
     -e "GOFLAGS=-mod=mod"
     -e "TZ=UTC"
+    # Hermeticity signal honoured by internal/testenv.RequireContainer.
+    # FS-touching tests refuse to run unless this is set.
+    -e "AGENTSYNC_TEST_IN_CONTAINER=1"
 )
 
 # Allow `--network=none` to be relaxed if the user explicitly passed it.

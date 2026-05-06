@@ -25,6 +25,7 @@ import (
 	"github.com/cucumber/godog"
 	"github.com/cucumber/godog/colors"
 
+	"github.com/spxrogers/agentsync/internal/testenv"
 	"github.com/spxrogers/agentsync/test/bdd/support"
 )
 
@@ -46,6 +47,7 @@ func init() {
 }
 
 func TestMain(m *testing.M) {
+	testenv.MustRunInContainer()
 	flag.Parse()
 	os.Exit(m.Run())
 }

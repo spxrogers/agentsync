@@ -35,11 +35,19 @@ test-bdd:
 test-release:
     ./scripts/test-in-container.sh
 
-# Existing tests already redirect HOME via AGENTSYNC_TARGET_ROOT, so they
-# don't touch your real config; the container is still the release gate.
-# Iteration only — host-mode unit + integration tests with no container.
+# The packages below are the pure-unit set: zero filesystem access.
+# Anything that touches the FS (even tmp dirs) is gated behind the
+# container — see internal/testenv/container.go.
+# Iteration only — pure-unit tests on the host (no container, no FS).
 test-fast:
-    go test -race -count=1 ./...
+    go test -race -count=1 \
+        ./internal/log/... \
+        ./internal/jsonkeys/... \
+        ./internal/drift/... \
+        ./internal/paths/... \
+        ./internal/adapter \
+        ./internal/adapter/noop/... \
+        ./internal/testenv/...
 
 # Run golangci-lint over every package.
 lint:

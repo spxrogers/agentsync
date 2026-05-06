@@ -14,6 +14,10 @@ set -euo pipefail
 
 cd /workspace
 
+# Hermeticity signal honoured by internal/testenv.RequireContainer. Tests
+# that touch the filesystem refuse to run unless this is exported.
+export AGENTSYNC_TEST_IN_CONTAINER=1
+
 step() {
     printf '\n\033[1;36m==> %s\033[0m\n' "$1"
 }
