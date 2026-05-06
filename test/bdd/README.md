@@ -33,7 +33,7 @@ just test-bdd
 
 # Full release gate: every layer (vet → build → race → e2e → bdd → smoke)
 # in one hermetic container run.
-just test-container
+just test-release
 ```
 
 Both invocations route through `scripts/test-in-container.sh` (podman first,

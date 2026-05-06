@@ -71,14 +71,14 @@ docker fallback). The repo is mounted read-only, the network is off, and
 every test's `HOME` is a fresh tmpdir — the suite cannot touch your real
 `~/.claude.json`, `~/.config/opencode/`, or `~/.agentsync/`.
 
-| Layer                                       | Question it answers                          | Command               |
-| ------------------------------------------- | -------------------------------------------- | --------------------- |
-| Unit + integration (`internal/*/*_test.go`) | Did I break an internal contract?            | `just test`           |
-| Lifecycle e2e (`test/e2e`, build tag `e2e`) | Does the binary survive the v1 happy path?   | `just test-e2e`       |
-| BDD Gherkin lock (`test/bdd`, tag `bdd`)    | Are the spec's north-star behaviours intact? | `just test-bdd`       |
-| **All layers in one container run**         | Can I safely cut a release right now?        | `just test-container` |
+| Layer                                       | Question it answers                          | Command             |
+| ------------------------------------------- | -------------------------------------------- | ------------------- |
+| Unit + integration (`internal/*/*_test.go`) | Did I break an internal contract?            | `just test`         |
+| Lifecycle e2e (`test/e2e`, build tag `e2e`) | Does the binary survive the v1 happy path?   | `just test-e2e`     |
+| BDD Gherkin lock (`test/bdd`, tag `bdd`)    | Are the spec's north-star behaviours intact? | `just test-bdd`     |
+| **All layers in one container run**         | Can I safely cut a release right now?        | `just test-release` |
 
-If `just test-container` is green, ship.
+If `just test-release` is green, ship.
 
 For fast in-place iteration without spinning up the container, `just test-fast`
 runs the unit/integration layer directly on the host. The existing tests

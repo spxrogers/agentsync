@@ -31,8 +31,8 @@ test-bdd:
     ./scripts/test-in-container.sh -- go test -tags=bdd -count=1 ./test/bdd/...
 
 # (entrypoint orchestrates vet → build → race tests → e2e → bdd → smoke)
-# Release-safe gate: full suite in one container run. If green, ship.
-test-container:
+# Release gate: every layer in one hermetic container run. If green, ship.
+test-release:
     ./scripts/test-in-container.sh
 
 # Existing tests already redirect HOME via AGENTSYNC_TARGET_ROOT, so they
@@ -54,8 +54,8 @@ fmt:
 tidy:
     go mod tidy
 
-# Full CI gate: lint + the hermetic container suite + the cross-build matrix.
-ci: lint test-container
+# Full CI gate: lint + the hermetic release suite + the cross-build matrix.
+ci: lint test-release
     goreleaser release --snapshot --skip=publish --clean
 
 # Remove generated artefacts (binaries, dist, coverage reports).
