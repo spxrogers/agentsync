@@ -32,6 +32,8 @@ type ProjectionResult struct {
 //
 // Strict mode (entry.Strict == nil || *entry.Strict):
 //   - Reads cacheDir/.claude-plugin/plugin.json for the primary component list.
+//   - If the manifest lists no skills, falls back to convention-based discovery:
+//     scans cacheDir/skills/*/ for SKILL.md files.
 //   - Then merges in any component fields on the PluginEntry itself (overrides).
 //
 // Non-strict mode:
@@ -40,13 +42,20 @@ type ProjectionResult struct {
 // In both cases, ${CLAUDE_PLUGIN_ROOT} in command/url strings is replaced with
 // cacheDir so non-Claude adapters can resolve binary paths.
 func Project(entry PluginEntry, cacheDir string) (ProjectionResult, error) {
-	return ProjectWithReader(entry, cacheDir, os.ReadFile)
+	return projectWithFuncs(entry, cacheDir, os.ReadFile, os.ReadDir)
 }
 
 // ProjectWithReader is like Project but uses a caller-supplied readFile function
 // for loading plugin.json and component markdown files. This enables in-memory
-// filesystem use in tests.
+// filesystem use in tests. Convention-based discovery (skills/ directory scan)
+// is disabled when using ProjectWithReader; use Project for full behavior.
 func ProjectWithReader(entry PluginEntry, cacheDir string, readFile func(string) ([]byte, error)) (ProjectionResult, error) {
+	return projectWithFuncs(entry, cacheDir, readFile, nil)
+}
+
+// projectWithFuncs is the internal implementation shared by Project and ProjectWithReader.
+// listDir may be nil to disable convention-based skills discovery.
+func projectWithFuncs(entry PluginEntry, cacheDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error)) (ProjectionResult, error) {
 	var pr ProjectionResult
 	strict := entry.Strict == nil || *entry.Strict
 
@@ -61,7 +70,7 @@ func ProjectWithReader(entry PluginEntry, cacheDir string, readFile func(string)
 			if err := json.Unmarshal(data, &manifest); err != nil {
 				return pr, fmt.Errorf("parse plugin.json: %w", err)
 			}
-			if err := applyManifest(manifest, &pr, cacheDir, readFile); err != nil {
+			if err := applyManifest(manifest, &pr, cacheDir, readFile, listDir); err != nil {
 				return pr, err
 			}
 		}
@@ -95,7 +104,9 @@ func resolvePluginRootInArgs(args []string, cacheDir string) []string {
 }
 
 // applyManifest converts a PluginManifest into ProjectionResult entries.
-func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir string, readFile func(string) ([]byte, error)) error {
+// listDir may be nil; when non-nil and the manifest lists no skills, skills
+// are discovered by convention from cacheDir/skills/*/SKILL.md.
+func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error)) error {
 	for name, raw := range manifest.MCPServers {
 		spec := parseMCPSpec(raw, cacheDir)
 		pr.MCPServers = append(pr.MCPServers, source.MCPServer{ID: name, Server: spec})
@@ -104,7 +115,18 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 		spec := parseLSPSpec(raw, cacheDir)
 		pr.LSPServers = append(pr.LSPServers, source.LSPServer{ID: name, Spec: spec})
 	}
-	for _, sk := range toStringSlice(manifest.Skills) {
+
+	skillPaths := toStringSlice(manifest.Skills)
+	if len(skillPaths) == 0 && listDir != nil {
+		// Convention-based discovery: scan cacheDir/skills/*/SKILL.md
+		discovered, err := discoverSkillDirs(filepath.Join(cacheDir, "skills"), listDir)
+		if err != nil {
+			slog.Warn("plugin skills convention-discovery failed", "cacheDir", cacheDir, "error", err)
+		} else {
+			skillPaths = discovered
+		}
+	}
+	for _, sk := range skillPaths {
 		skill, err := loadSkillEntry(resolvePluginRoot(sk, cacheDir), readFile)
 		if err != nil {
 			return fmt.Errorf("load skill %q: %w", sk, err)
@@ -113,6 +135,7 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 			pr.Skills = append(pr.Skills, *skill)
 		}
 	}
+
 	for _, cmd := range toStringSlice(manifest.Commands) {
 		command, err := loadMarkdownEntry(resolvePluginRoot(cmd, cacheDir), readFile)
 		if err != nil {
@@ -134,6 +157,26 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 	// Hooks: may be a string command or an object with event+command shape.
 	applyHooks(manifest.Hooks, pr, cacheDir)
 	return nil
+}
+
+// discoverSkillDirs scans skillsDir for subdirectories and returns a list of
+// absolute paths to each subdirectory (each of which is expected to contain
+// a SKILL.md file). The caller resolves the actual SKILL.md via loadSkillEntry.
+func discoverSkillDirs(skillsDir string, listDir func(string) ([]os.DirEntry, error)) ([]string, error) {
+	entries, err := listDir(skillsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var paths []string
+	for _, e := range entries {
+		if e.IsDir() {
+			paths = append(paths, filepath.Join(skillsDir, e.Name()))
+		}
+	}
+	return paths, nil
 }
 
 // applyEntryOverrides merges component fields from a PluginEntry into an
