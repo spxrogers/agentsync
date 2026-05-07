@@ -279,7 +279,7 @@ func TestProjectWithReader_SkillsFullyLoaded(t *testing.T) {
 			"skills": ["./skills/tdd", "./skills/refactor"]
 		}`),
 		// Directory-based skill: <path>/SKILL.md
-		"/fake/cache/skills/tdd/SKILL.md":     []byte("---\nname: test-driven-development\ndescription: TDD skill\n---\nWrite tests first.\n"),
+		"/fake/cache/skills/tdd/SKILL.md":      []byte("---\nname: test-driven-development\ndescription: TDD skill\n---\nWrite tests first.\n"),
 		"/fake/cache/skills/refactor/SKILL.md": []byte("---\nname: refactor\ndescription: Refactoring skill\n---\nMake it clean.\n"),
 	}
 	pr, err := marketplace.ProjectWithReader(

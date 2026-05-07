@@ -87,8 +87,31 @@ func projectWithFuncs(entry PluginEntry, cacheDir string, readFile func(string) 
 }
 
 // resolvePluginRoot replaces the ${CLAUDE_PLUGIN_ROOT} placeholder with cacheDir.
+// Used for command/arg/url substitution where we want only env-style expansion,
+// not filesystem path joining.
 func resolvePluginRoot(s, cacheDir string) string {
 	return strings.ReplaceAll(s, "${CLAUDE_PLUGIN_ROOT}", cacheDir)
+}
+
+// resolveComponentPath resolves a manifest-listed component path (skill,
+// subagent, command) against cacheDir. Resolution order:
+//  1. ${CLAUDE_PLUGIN_ROOT} substitution if present (the literal placeholder
+//     wins; result is treated as already-rooted).
+//  2. Absolute paths returned as-is.
+//  3. Relative paths joined to cacheDir.
+//
+// This separates "make a command portable" semantics (resolvePluginRoot) from
+// "find a file inside the plugin cache" semantics (this function), which the
+// Claude marketplace plugin convention conflates: manifest entries like
+// "./skills/foo" are relative to the plugin root, not the process cwd.
+func resolveComponentPath(s, cacheDir string) string {
+	if strings.Contains(s, "${CLAUDE_PLUGIN_ROOT}") {
+		return strings.ReplaceAll(s, "${CLAUDE_PLUGIN_ROOT}", cacheDir)
+	}
+	if filepath.IsAbs(s) {
+		return s
+	}
+	return filepath.Join(cacheDir, s)
 }
 
 // resolvePluginRootInArgs applies resolvePluginRoot to each element of args.
@@ -127,7 +150,7 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 		}
 	}
 	for _, sk := range skillPaths {
-		skill, err := loadSkillEntry(resolvePluginRoot(sk, cacheDir), readFile)
+		skill, err := loadSkillEntry(resolveComponentPath(sk, cacheDir), readFile)
 		if err != nil {
 			return fmt.Errorf("load skill %q: %w", sk, err)
 		}
@@ -137,7 +160,7 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 	}
 
 	for _, cmd := range toStringSlice(manifest.Commands) {
-		command, err := loadMarkdownEntry(resolvePluginRoot(cmd, cacheDir), readFile)
+		command, err := loadMarkdownEntry(resolveComponentPath(cmd, cacheDir), readFile)
 		if err != nil {
 			return fmt.Errorf("load command %q: %w", cmd, err)
 		}
@@ -146,7 +169,7 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 		}
 	}
 	for _, ag := range toStringSlice(manifest.Agents) {
-		agent, err := loadMarkdownEntry(resolvePluginRoot(ag, cacheDir), readFile)
+		agent, err := loadMarkdownEntry(resolveComponentPath(ag, cacheDir), readFile)
 		if err != nil {
 			return fmt.Errorf("load agent %q: %w", ag, err)
 		}
@@ -191,7 +214,7 @@ func applyEntryOverrides(entry PluginEntry, pr *ProjectionResult, cacheDir strin
 		pr.LSPServers = append(pr.LSPServers, source.LSPServer{ID: name, Spec: spec})
 	}
 	for _, sk := range toStringSlice(entry.Skills) {
-		skill, err := loadSkillEntry(resolvePluginRoot(sk, cacheDir), readFile)
+		skill, err := loadSkillEntry(resolveComponentPath(sk, cacheDir), readFile)
 		if err != nil {
 			return fmt.Errorf("load skill %q: %w", sk, err)
 		}
@@ -200,7 +223,7 @@ func applyEntryOverrides(entry PluginEntry, pr *ProjectionResult, cacheDir strin
 		}
 	}
 	for _, cmd := range toStringSlice(entry.Commands) {
-		command, err := loadMarkdownEntry(resolvePluginRoot(cmd, cacheDir), readFile)
+		command, err := loadMarkdownEntry(resolveComponentPath(cmd, cacheDir), readFile)
 		if err != nil {
 			return fmt.Errorf("load command %q: %w", cmd, err)
 		}
@@ -209,7 +232,7 @@ func applyEntryOverrides(entry PluginEntry, pr *ProjectionResult, cacheDir strin
 		}
 	}
 	for _, ag := range toStringSlice(entry.Agents) {
-		agent, err := loadMarkdownEntry(resolvePluginRoot(ag, cacheDir), readFile)
+		agent, err := loadMarkdownEntry(resolveComponentPath(ag, cacheDir), readFile)
 		if err != nil {
 			return fmt.Errorf("load agent %q: %w", ag, err)
 		}
