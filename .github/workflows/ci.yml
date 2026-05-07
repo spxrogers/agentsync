@@ -44,6 +44,13 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    # GOTOOLCHAIN=local pins the analyser to whatever Go setup-go installed
+    # (the language version from go.mod's `go` directive). Without this,
+    # Go's auto-toolchain logic upgrades to the `toolchain` directive at
+    # runtime and golangci-lint then panics analysing stdlib it wasn't
+    # compiled against.
+    env:
+      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
