@@ -358,7 +358,7 @@ func loadSkills(fs afero.Fs, home string) ([]Skill, error) {
 			}
 			return nil, fmt.Errorf("read SKILL.md for %s: %w", e.Name(), err)
 		}
-		fm, body, err := parseFrontmatter(raw)
+		fm, body, err := ParseFrontmatter(raw)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
 		}
@@ -387,7 +387,7 @@ func loadSubagents(fs afero.Fs, home string) ([]Subagent, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", p, err)
 		}
-		fm, body, err := parseFrontmatter(raw)
+		fm, body, err := ParseFrontmatter(raw)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
 		}
@@ -417,7 +417,7 @@ func loadCommands(fs afero.Fs, home string) ([]Command, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", p, err)
 		}
-		fm, body, err := parseFrontmatter(raw)
+		fm, body, err := ParseFrontmatter(raw)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
 		}
@@ -512,10 +512,10 @@ func loadLSP(fs afero.Fs, home string) ([]LSPServer, error) {
 	return out, nil
 }
 
-// parseFrontmatter extracts YAML frontmatter and body from a markdown file.
+// ParseFrontmatter extracts YAML frontmatter and body from a markdown file.
 // If the input doesn't begin with "---\n", returns an empty map and the
 // entire input as body.
-func parseFrontmatter(data []byte) (map[string]any, string, error) {
+func ParseFrontmatter(data []byte) (map[string]any, string, error) {
 	if !bytes.HasPrefix(data, []byte("---\n")) {
 		return map[string]any{}, string(data), nil
 	}

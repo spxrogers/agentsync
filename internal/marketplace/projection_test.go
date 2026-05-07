@@ -1,6 +1,7 @@
 package marketplace_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,10 +54,28 @@ func TestProject_StrictPluginJSON_MultipleComponents(t *testing.T) {
 			"lsp-x": {"command": "${CLAUDE_PLUGIN_ROOT}/lsp"}
 		},
 		"skills": ["skill-one", "skill-two"],
-		"commands": "my-cmd",
-		"agents": ["agent-alpha"]
+		"commands": "my-cmd.md",
+		"agents": ["agent-alpha.md"]
 	}`
 	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create the skill directories and SKILL.md files so projection finds them.
+	for _, sk := range []string{"skill-one", "skill-two"} {
+		if err := os.MkdirAll(filepath.Join(cache, sk), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := "---\nname: " + sk + "\n---\nSkill body.\n"
+		if err := os.WriteFile(filepath.Join(cache, sk, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Create the command and agent markdown files.
+	if err := os.WriteFile(filepath.Join(cache, "my-cmd.md"), []byte("---\nname: my-cmd\n---\nDo things.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "agent-alpha.md"), []byte("---\nname: agent-alpha\n---\nAgent body.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -234,5 +253,292 @@ func TestProject_MCPSpec_FullFields(t *testing.T) {
 	}
 	if len(spec.Agents) != 2 {
 		t.Errorf("agents = %v", spec.Agents)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests for full component projection (skills / commands / subagents).
+// These use ProjectWithReader and an in-memory readFile to avoid real FS.
+// ---------------------------------------------------------------------------
+
+// fakeFS builds a readFile that maps absolute paths to content.
+func fakeFS(files map[string][]byte) func(string) ([]byte, error) {
+	return func(path string) ([]byte, error) {
+		if data, ok := files[path]; ok {
+			return data, nil
+		}
+		return nil, os.ErrNotExist
+	}
+}
+
+func TestProjectWithReader_SkillsFullyLoaded(t *testing.T) {
+	const cacheDir = "/fake/cache"
+	files := map[string][]byte{
+		"/fake/cache/.claude-plugin/plugin.json": []byte(`{
+			"name": "sp",
+			"skills": ["./skills/tdd", "./skills/refactor"]
+		}`),
+		// Directory-based skill: <path>/SKILL.md
+		"/fake/cache/skills/tdd/SKILL.md":     []byte("---\nname: test-driven-development\ndescription: TDD skill\n---\nWrite tests first.\n"),
+		"/fake/cache/skills/refactor/SKILL.md": []byte("---\nname: refactor\ndescription: Refactoring skill\n---\nMake it clean.\n"),
+	}
+	pr, err := marketplace.ProjectWithReader(
+		marketplace.PluginEntry{Name: "sp"},
+		cacheDir,
+		fakeFS(files),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pr.Skills) != 2 {
+		t.Fatalf("skills count = %d, want 2", len(pr.Skills))
+	}
+
+	// Build a name set for order-independent assertions.
+	byName := make(map[string]struct{})
+	for _, sk := range pr.Skills {
+		byName[sk.Name] = struct{}{}
+	}
+	for _, wantName := range []string{"test-driven-development", "refactor"} {
+		if _, ok := byName[wantName]; !ok {
+			names := make([]string, 0, len(pr.Skills))
+			for _, s := range pr.Skills {
+				names = append(names, s.Name)
+			}
+			t.Errorf("skill %q not found; got names %v", wantName, names)
+		}
+	}
+
+	// All skills must have non-empty body and frontmatter with description.
+	for _, sk := range pr.Skills {
+		if sk.Body == "" {
+			t.Errorf("skill %q has empty body", sk.Name)
+		}
+		if sk.Frontmatter == nil {
+			t.Errorf("skill %q has nil frontmatter", sk.Name)
+		}
+		if _, ok := sk.Frontmatter["description"]; !ok {
+			t.Errorf("skill %q missing description in frontmatter", sk.Name)
+		}
+	}
+}
+
+func TestProjectWithReader_SkillsFullyLoaded_NamesAndBodies(t *testing.T) {
+	const cacheDir = "/plugin"
+	files := map[string][]byte{
+		"/plugin/.claude-plugin/plugin.json": []byte(`{"name":"p","skills":["./skills/alpha","./skills/beta","./skills/gamma"]}`),
+		"/plugin/skills/alpha/SKILL.md":      []byte("---\nname: alpha-skill\ndescription: Alpha\n---\nAlpha body text.\n"),
+		"/plugin/skills/beta/SKILL.md":       []byte("---\nname: beta-skill\ndescription: Beta\n---\nBeta body text.\n"),
+		"/plugin/skills/gamma/SKILL.md":      []byte("---\nname: gamma-skill\ndescription: Gamma\n---\nGamma body text.\n"),
+	}
+	pr, err := marketplace.ProjectWithReader(marketplace.PluginEntry{Name: "p"}, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pr.Skills) != 3 {
+		t.Fatalf("skills = %d, want 3", len(pr.Skills))
+	}
+	for _, sk := range pr.Skills {
+		if sk.Name == "" {
+			t.Errorf("empty skill name")
+		}
+		if sk.Body == "" {
+			t.Errorf("skill %q has empty body", sk.Name)
+		}
+		if sk.Frontmatter["name"] == "" {
+			t.Errorf("skill %q frontmatter name empty", sk.Name)
+		}
+	}
+}
+
+func TestProjectWithReader_CommandsFullyLoaded(t *testing.T) {
+	const cacheDir = "/plugin"
+	files := map[string][]byte{
+		"/plugin/.claude-plugin/plugin.json": []byte(`{"name":"p","commands":["./commands/deploy.md","./commands/lint.md"]}`),
+		// deploy.md has no name in frontmatter → fallback to filename sans .md
+		"/plugin/commands/deploy.md": []byte("---\ndescription: Deploy the app\n---\nRun the deploy script.\n"),
+		// lint.md has name in frontmatter
+		"/plugin/commands/lint.md": []byte("---\nname: run-lint\ndescription: Lint the code\n---\nRun linter.\n"),
+	}
+	pr, err := marketplace.ProjectWithReader(marketplace.PluginEntry{Name: "p"}, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pr.Commands) != 2 {
+		t.Fatalf("commands = %d, want 2", len(pr.Commands))
+	}
+	byName := make(map[string]struct{})
+	for _, cmd := range pr.Commands {
+		byName[cmd.Name] = struct{}{}
+		if cmd.Body == "" {
+			t.Errorf("command %q has empty body", cmd.Name)
+		}
+	}
+	// deploy.md has no frontmatter name → derives from filename
+	if _, ok := byName["deploy"]; !ok {
+		names := make([]string, 0, len(pr.Commands))
+		for _, c := range pr.Commands {
+			names = append(names, c.Name)
+		}
+		t.Errorf("expected command named 'deploy' (from filename), got names: %v", names)
+	}
+	// lint.md has frontmatter name → "run-lint"
+	if _, ok := byName["run-lint"]; !ok {
+		names := make([]string, 0, len(pr.Commands))
+		for _, c := range pr.Commands {
+			names = append(names, c.Name)
+		}
+		t.Errorf("expected command named 'run-lint' (from frontmatter), got names: %v", names)
+	}
+}
+
+func TestProjectWithReader_SubagentsFullyLoaded(t *testing.T) {
+	const cacheDir = "/plugin"
+	files := map[string][]byte{
+		"/plugin/.claude-plugin/plugin.json": []byte(`{"name":"p","agents":["./agents/reviewer.md","./agents/coder.md"]}`),
+		"/plugin/agents/reviewer.md":         []byte("---\nname: code-reviewer\ndescription: Reviews code\n---\nReview all the things.\n"),
+		"/plugin/agents/coder.md":            []byte("---\ndescription: Writes code\n---\nWrite it.\n"),
+	}
+	pr, err := marketplace.ProjectWithReader(marketplace.PluginEntry{Name: "p"}, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pr.Subagents) != 2 {
+		t.Fatalf("subagents = %d, want 2", len(pr.Subagents))
+	}
+	byName := make(map[string]struct{})
+	for _, ag := range pr.Subagents {
+		byName[ag.Name] = struct{}{}
+		if ag.Body == "" {
+			t.Errorf("subagent %q has empty body", ag.Name)
+		}
+	}
+	// reviewer.md has frontmatter name → "code-reviewer"
+	if _, ok := byName["code-reviewer"]; !ok {
+		names := make([]string, 0, len(pr.Subagents))
+		for _, a := range pr.Subagents {
+			names = append(names, a.Name)
+		}
+		t.Errorf("expected subagent 'code-reviewer', got: %v", names)
+	}
+	// coder.md has no frontmatter name → filename fallback
+	if _, ok := byName["coder"]; !ok {
+		names := make([]string, 0, len(pr.Subagents))
+		for _, a := range pr.Subagents {
+			names = append(names, a.Name)
+		}
+		t.Errorf("expected subagent 'coder', got: %v", names)
+	}
+}
+
+func TestProjectWithReader_MissingFile_Skipped(t *testing.T) {
+	const cacheDir = "/plugin"
+	files := map[string][]byte{
+		"/plugin/.claude-plugin/plugin.json": []byte(`{"name":"p","skills":["./skills/present","./skills/missing"],"commands":["./cmds/existing.md","./cmds/gone.md"]}`),
+		"/plugin/skills/present/SKILL.md":    []byte("---\nname: present\n---\nPresent.\n"),
+		"/plugin/cmds/existing.md":           []byte("---\nname: existing\n---\nExists.\n"),
+		// skills/missing and cmds/gone.md intentionally absent
+	}
+	pr, err := marketplace.ProjectWithReader(marketplace.PluginEntry{Name: "p"}, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatalf("missing file should be skipped, not error: %v", err)
+	}
+	if len(pr.Skills) != 1 {
+		t.Errorf("skills = %d, want 1 (missing entry skipped)", len(pr.Skills))
+	}
+	if pr.Skills[0].Name != "present" {
+		t.Errorf("skill name = %q, want present", pr.Skills[0].Name)
+	}
+	if len(pr.Commands) != 1 {
+		t.Errorf("commands = %d, want 1 (missing entry skipped)", len(pr.Commands))
+	}
+}
+
+func TestProjectWithReader_MalformedFrontmatter_Error(t *testing.T) {
+	const cacheDir = "/plugin"
+	files := map[string][]byte{
+		"/plugin/.claude-plugin/plugin.json": []byte(`{"name":"p","skills":["./skills/bad"]}`),
+		// Unterminated frontmatter — no closing ---
+		"/plugin/skills/bad/SKILL.md": []byte("---\nname: bad\ndescription: broken\nno closing delimiter\n"),
+	}
+	_, err := marketplace.ProjectWithReader(marketplace.PluginEntry{Name: "p"}, cacheDir, fakeFS(files))
+	if err == nil {
+		t.Fatal("expected error for malformed frontmatter, got nil")
+	}
+	if !strings.Contains(err.Error(), "frontmatter") && !strings.Contains(err.Error(), "load skill") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestProjectWithReader_SkillNameFallbackToBasename(t *testing.T) {
+	const cacheDir = "/plugin"
+	files := map[string][]byte{
+		"/plugin/.claude-plugin/plugin.json": []byte(`{"name":"p","skills":["./skills/my-skill"]}`),
+		// No name in frontmatter → use dirname
+		"/plugin/skills/my-skill/SKILL.md": []byte("---\ndescription: A skill\n---\nBody.\n"),
+	}
+	pr, err := marketplace.ProjectWithReader(marketplace.PluginEntry{Name: "p"}, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pr.Skills) != 1 {
+		t.Fatalf("skills = %d, want 1", len(pr.Skills))
+	}
+	if pr.Skills[0].Name != "my-skill" {
+		t.Errorf("skill name = %q, want my-skill (basename fallback)", pr.Skills[0].Name)
+	}
+}
+
+func TestProjectWithReader_NonStrict_FullyLoaded(t *testing.T) {
+	const cacheDir = "/plugin"
+	f := false
+	files := map[string][]byte{
+		"/plugin/skills/inline-skill/SKILL.md": []byte("---\nname: inline-skill\n---\nInline body.\n"),
+		"/plugin/agents/inline-agent.md":       []byte("---\nname: inline-agent\n---\nAgent body.\n"),
+	}
+	entry := marketplace.PluginEntry{
+		Name:   "ns",
+		Strict: &f,
+		Skills: []interface{}{"./skills/inline-skill"},
+		Agents: []interface{}{"./agents/inline-agent.md"},
+	}
+	pr, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pr.Skills) != 1 {
+		t.Errorf("skills = %d, want 1", len(pr.Skills))
+	}
+	if len(pr.Subagents) != 1 {
+		t.Errorf("subagents = %d, want 1", len(pr.Subagents))
+	}
+	if len(pr.Skills) > 0 && pr.Skills[0].Body == "" {
+		t.Errorf("non-strict skill has empty body")
+	}
+}
+
+// errorFS returns a readFile that errors for all paths with the given error.
+func errorFS(wrapped error) func(string) ([]byte, error) {
+	return func(path string) ([]byte, error) {
+		return nil, wrapped
+	}
+}
+
+// _ is used to suppress unused import lint for errorFS.
+var _ = errorFS
+
+func TestProjectWithReader_IOError_Propagates(t *testing.T) {
+	const cacheDir = "/plugin"
+	ioErr := errors.New("disk failure")
+	// plugin.json reads fine, but skill file returns a hard I/O error
+	readFile := func(path string) ([]byte, error) {
+		if strings.HasSuffix(path, "plugin.json") {
+			return []byte(`{"name":"p","skills":["./skills/bad"]}`), nil
+		}
+		return nil, ioErr
+	}
+	_, err := marketplace.ProjectWithReader(marketplace.PluginEntry{Name: "p"}, cacheDir, readFile)
+	if err == nil {
+		t.Fatal("expected I/O error to propagate, got nil")
 	}
 }
