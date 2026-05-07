@@ -11,6 +11,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -48,6 +49,13 @@ func newApplyCmd() *cobra.Command {
 				if marker != nil {
 					c = project.Merge(c, marker)
 				}
+			}
+
+			// Resolve ${secret:...} and ${env:...} references before rendering.
+			secBackend := secrets.SelectBackend(c.Config.Secrets, home)
+			envBackend := secrets.EnvBackend{}
+			if err := secrets.SubstituteCanonical(&c, secBackend, envBackend); err != nil {
+				return err
 			}
 
 			agents := []string{}

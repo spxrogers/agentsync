@@ -42,6 +42,7 @@ func NewRoot() *cobra.Command {
 		newPluginCmd(),
 		newMarketplaceCmd(),
 		newUpdateCmd(),
+		newSecretsCmd(),
 	)
 	return cmd
 }

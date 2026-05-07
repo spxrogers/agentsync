@@ -1,0 +1,91 @@
+package secrets_test
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"filippo.io/age"
+	secrets_pkg "github.com/spxrogers/agentsync/internal/secrets"
+)
+
+func TestAgeRoundTrip(t *testing.T) {
+	tmp := t.TempDir()
+	// Generate a fresh age identity.
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	idPath := filepath.Join(tmp, "id.txt")
+	if err := os.WriteFile(idPath, []byte(id.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := id.Recipient().String()
+
+	plain := []byte(`[github]
+token = "ghp_abc"
+[linear]
+api_key = "lin_xyz"
+`)
+	agePath := filepath.Join(tmp, "secrets.age")
+	if err := secrets_pkg.Encrypt(plain, rec, agePath); err != nil {
+		t.Fatal(err)
+	}
+
+	b := secrets_pkg.NewAgeBackend(agePath, idPath)
+	if v, err := b.Resolve("github.token"); err != nil || v != "ghp_abc" {
+		t.Fatalf("github.token = %q (err: %v)", v, err)
+	}
+	if v, err := b.Resolve("linear.api_key"); err != nil || v != "lin_xyz" {
+		t.Fatalf("linear.api_key = %q (err: %v)", v, err)
+	}
+}
+
+func TestAgeBackend_MissingKey(t *testing.T) {
+	tmp := t.TempDir()
+	id, _ := age.GenerateX25519Identity()
+	idPath := filepath.Join(tmp, "id.txt")
+	_ = os.WriteFile(idPath, []byte(id.String()), 0o600)
+	agePath := filepath.Join(tmp, "secrets.age")
+	_ = secrets_pkg.Encrypt([]byte("[foo]\nbar = \"baz\"\n"), id.Recipient().String(), agePath)
+
+	b := secrets_pkg.NewAgeBackend(agePath, idPath)
+	_, err := b.Resolve("missing.key")
+	if err == nil {
+		t.Fatal("expected error for missing key")
+	}
+}
+
+func TestAgeBackend_WrongIdentity(t *testing.T) {
+	tmp := t.TempDir()
+	id1, _ := age.GenerateX25519Identity()
+	id2, _ := age.GenerateX25519Identity()
+	idPath2 := filepath.Join(tmp, "id2.txt")
+	_ = os.WriteFile(idPath2, []byte(id2.String()), 0o600)
+	agePath := filepath.Join(tmp, "secrets.age")
+	_ = secrets_pkg.Encrypt([]byte("[foo]\nbar = \"baz\"\n"), id1.Recipient().String(), agePath)
+
+	b := secrets_pkg.NewAgeBackend(agePath, idPath2)
+	_, err := b.Resolve("foo.bar")
+	if err == nil {
+		t.Fatal("expected error with wrong identity")
+	}
+}
+
+func TestDecrypt_RawBytes(t *testing.T) {
+	tmp := t.TempDir()
+	id, _ := age.GenerateX25519Identity()
+	idPath := filepath.Join(tmp, "id.txt")
+	_ = os.WriteFile(idPath, []byte(id.String()), 0o600)
+	agePath := filepath.Join(tmp, "secrets.age")
+	plain := []byte("hello world")
+	_ = secrets_pkg.Encrypt(plain, id.Recipient().String(), agePath)
+
+	got, err := secrets_pkg.Decrypt(agePath, idPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hello world" {
+		t.Fatalf("expected %q, got %q", plain, got)
+	}
+}
