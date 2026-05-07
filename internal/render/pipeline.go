@@ -51,13 +51,29 @@ func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adap
 // Apply commits a RenderPlan by calling each adapter's Apply with its FileOps.
 // If any adapter returns an error, applies completed so far are NOT rolled back
 // (each adapter's Apply is itself atomic per-file via iox.AtomicWrite).
+//
+// Deduplication: when two adapters emit a "write" op for the same path (e.g.
+// a shared skill file written by both claude and opencode), the first one wins
+// and the second is silently skipped. Content is deterministic per path, so
+// skipping a duplicate is always safe.
 func Apply(p RenderPlan, reg *adapter.Registry) error {
+	seen := map[string]bool{}
 	for name, res := range p.PerAgent {
 		a := reg.Lookup(name)
 		if a == nil {
 			return fmt.Errorf("adapter %q not registered at apply", name)
 		}
-		if err := a.Apply(res.Ops); err != nil {
+		var deduped []adapter.FileOp
+		for _, op := range res.Ops {
+			if op.Action == "write" {
+				if seen[op.Path] {
+					continue
+				}
+				seen[op.Path] = true
+			}
+			deduped = append(deduped, op)
+		}
+		if err := a.Apply(deduped); err != nil {
 			return fmt.Errorf("apply %s: %w", name, err)
 		}
 	}
