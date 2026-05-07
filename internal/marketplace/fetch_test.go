@@ -130,6 +130,52 @@ func TestRelativeFetcher_CopiesDirectory(t *testing.T) {
 	}
 }
 
+func TestRelativeFetcher_RejectsPathTraversal(t *testing.T) {
+	// Marketplace cache root holds a benign plugin layout; a marketplace
+	// entry with `"source": "../escape"` is what we want to reject.
+	mpRoot := t.TempDir()
+	// Sibling directory the attacker would target.
+	sibling := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sibling, "secret.txt"), []byte("you should not see this"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := t.TempDir()
+	src := marketplace.Source{
+		Relative: sibling, // already resolved absolute, but outside RootDir
+		RootDir:  mpRoot,
+	}
+	fetcher := marketplace.Dispatch(src)
+	_, err := fetcher.Fetch(src, dst)
+	if err == nil {
+		t.Fatal("expected error for source outside RootDir")
+	}
+	// The attacker file must not have been copied.
+	if _, statErr := os.Stat(filepath.Join(dst, "secret.txt")); statErr == nil {
+		t.Fatalf("traversal succeeded — secret.txt copied into dst")
+	}
+}
+
+func TestRelativeFetcher_AllowsContainedPath(t *testing.T) {
+	mpRoot := t.TempDir()
+	pluginDir := filepath.Join(mpRoot, "plugins", "demo")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "README.md"), []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	src := marketplace.Source{Relative: pluginDir, RootDir: mpRoot}
+	fetcher := marketplace.Dispatch(src)
+	if _, err := fetcher.Fetch(src, dst); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "README.md")); err != nil {
+		t.Fatalf("README.md missing: %v", err)
+	}
+}
+
 func TestRelativeFetcher_EmptyPath_Error(t *testing.T) {
 	dst := t.TempDir()
 	source := marketplace.Source{Relative: ""}

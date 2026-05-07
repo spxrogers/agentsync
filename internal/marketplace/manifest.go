@@ -73,6 +73,13 @@ type Source struct {
 	Registry string `json:"registry,omitempty"`
 	// Relative is the relative-path string when Source was a JSON string.
 	Relative string `json:"-"`
+	// RootDir, if non-empty, constrains where the RelativeFetcher will copy
+	// from — Relative must resolve inside RootDir or the fetch is rejected.
+	// Callers that resolve a marketplace-supplied relative path against the
+	// marketplace cache directory should set this to the cache root so a
+	// hostile marketplace.json entry like `"source": "../../../etc"` cannot
+	// copy host files into the plugin cache.
+	RootDir string `json:"-"`
 }
 
 // UnmarshalJSON handles the polymorphic shape: string → Relative; object → Kind etc.

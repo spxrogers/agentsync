@@ -232,6 +232,7 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 	src := mpEntry.Source
 	if src.Relative != "" {
 		src.Relative = filepath.Join(mpCacheRoot, src.Relative)
+		src.RootDir = mpCacheRoot
 	}
 	fetcher := marketplace.Dispatch(src)
 	result, err := fetcher.Fetch(src, cacheDir)

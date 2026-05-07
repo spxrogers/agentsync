@@ -73,10 +73,12 @@ func pluginInstallRun(cmd *cobra.Command, args []string) error {
 
 	// Fetch plugin source into cache.
 	src := mpEntry.Source
-	// For relative sources, resolve relative to the marketplace cache root.
+	// For relative sources, resolve relative to the marketplace cache root
+	// AND constrain the fetcher so a hostile entry cannot escape that root.
 	if src.Relative != "" {
 		mpCacheRoot := marketplaceCacheDir(home, mpName)
 		src.Relative = filepath.Join(mpCacheRoot, src.Relative)
+		src.RootDir = mpCacheRoot
 	}
 	fetcher := marketplace.Dispatch(src)
 	result, err := fetcher.Fetch(src, cacheDir)
@@ -152,7 +154,9 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
 
 	src := mpEntry.Source
 	if src.Relative != "" {
-		src.Relative = filepath.Join(marketplaceCacheDir(home, mpName), src.Relative)
+		mpCacheRoot := marketplaceCacheDir(home, mpName)
+		src.Relative = filepath.Join(mpCacheRoot, src.Relative)
+		src.RootDir = mpCacheRoot
 	}
 	fetcher := marketplace.Dispatch(src)
 	result, err := fetcher.Fetch(src, cacheDir)
