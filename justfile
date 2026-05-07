@@ -2,10 +2,13 @@
 #
 # Run `just` (no args) to see this list. Run `just <recipe>` to invoke one.
 #
-# Hermeticity contract: every `test*` recipe (except `test-fast`) runs
-# inside the container — podman-first, docker fallback. The repo is
-# mounted read-only and the network is off, so a misbehaving test can
-# never touch your real ~/.claude.json, ~/.config/opencode/, or ~/.agentsync/.
+# Hermeticity contract: every `test*` recipe (except `test-fast` and
+# `test-live`) runs inside the container — podman-first, docker fallback.
+# The repo is mounted read-only and the network is off, so a misbehaving
+# test can never touch your real ~/.claude.json, ~/.config/opencode/, or
+# ~/.agentsync/. `test-live` is the explicit exception: live tests need
+# network access (e.g. cloning github.com/obra/superpowers) and run on
+# host with their own permissive TestMain.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set dotenv-load := false
@@ -48,6 +51,16 @@ test-fast:
         ./internal/adapter \
         ./internal/adapter/noop/... \
         ./internal/testenv/...
+
+# Live tests fetch real upstream sources (e.g. cloning
+# github.com/obra/superpowers via go-git) so they run on host with their
+# own permissive TestMain. NOT part of test-release — the release gate
+# stays hermetic and offline. Run this manually before any change touching
+# internal/marketplace/projection or the source loader's plugin projection
+# path, and as a periodic check that upstream plugin shapes haven't drifted.
+# Live network-dependent tests (build tag `live`) on host. Opt-in.
+test-live:
+    AGENTSYNC_LIVE_PLUGIN_TEST=1 go test -tags=live -count=1 -v ./internal/marketplace/...
 
 # Run golangci-lint over every package.
 lint:

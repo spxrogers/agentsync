@@ -32,6 +32,7 @@ func RegisterSteps(sc *godog.ScenarioContext, w *World) {
 	sc.Step(`^I append to "([^"]+)":$`, w.whenIAppendFile)
 	sc.Step(`^I tamper with "([^"]+)" by replacing "([^"]+)" with "([^"]+)"$`, w.whenITamperReplace)
 	sc.Step(`^I create a local marketplace "([^"]+)" with plugin "([^"]+)" exposing MCP "([^"]+)" command "([^"]+)"$`, w.whenICreateLocalMarketplace)
+	sc.Step(`^I create a local marketplace "([^"]+)" with plugin "([^"]+)" with explicit skills commands and agents$`, w.whenICreateProjectionTestMarketplace)
 	sc.Step(`^I configure age secrets$`, w.whenIConfigureAgeSecrets)
 	sc.Step(`^I encrypt secret "([^"]+)" = "([^"]+)"$`, w.whenIEncryptSecret)
 	sc.Step(`^I run two "agentsync apply" invocations concurrently$`, w.whenIRunConcurrentApplies)
@@ -155,6 +156,83 @@ func (w *World) whenICreateLocalMarketplace(dirRel, pluginID, mcpID, mcpCmd stri
 	}
 	pluginJSON, _ := json.MarshalIndent(plugin, "", "  ")
 	return os.WriteFile(filepath.Join(pluginDir, "plugin.json"), pluginJSON, 0o644)
+}
+
+// whenICreateProjectionTestMarketplace builds a local marketplace with a
+// single plugin that declares explicit "skills", "commands", and "agents"
+// arrays in its plugin.json manifest — i.e. the path through the projection
+// code that was broken by the regression fixed in 4b781b1.
+//
+// The three component files embed unique sentinel tokens in their bodies so
+// that downstream BDD assertions can confirm the rendered destination files
+// contain real content (not empty stubs).
+func (w *World) whenICreateProjectionTestMarketplace(dirRel, pluginID string) error {
+	dir := w.Resolve(dirRel)
+
+	// ── marketplace fixture ─────────────────────────────────────────────────
+	mpDir := filepath.Join(dir, ".claude-plugin")
+	if err := os.MkdirAll(mpDir, 0o755); err != nil {
+		return err
+	}
+	marketplace := map[string]any{
+		"name":  filepath.Base(dir),
+		"owner": map[string]any{"name": "bdd"},
+		"plugins": []map[string]any{
+			{"name": pluginID, "source": "./plugins/" + pluginID},
+		},
+	}
+	mpJSON, _ := json.MarshalIndent(marketplace, "", "  ")
+	if err := os.WriteFile(filepath.Join(mpDir, "marketplace.json"), mpJSON, 0o644); err != nil {
+		return err
+	}
+
+	// ── plugin source tree ──────────────────────────────────────────────────
+	pluginRoot := filepath.Join(dir, "plugins", pluginID)
+
+	// skills/proj-skill/SKILL.md
+	skillPath := filepath.Join(pluginRoot, "skills", "proj-skill")
+	if err := os.MkdirAll(skillPath, 0o755); err != nil {
+		return err
+	}
+	skillMD := "---\nname: proj-skill\ndescription: projection test skill\n---\nBODY_TOKEN_skill_proj-skill\n"
+	if err := os.WriteFile(filepath.Join(skillPath, "SKILL.md"), []byte(skillMD), 0o644); err != nil {
+		return err
+	}
+
+	// agents/proj-agent.md
+	agentPath := filepath.Join(pluginRoot, "agents")
+	if err := os.MkdirAll(agentPath, 0o755); err != nil {
+		return err
+	}
+	agentMD := "---\nname: proj-agent\ndescription: projection test subagent\n---\nBODY_TOKEN_agent_proj-agent\n"
+	if err := os.WriteFile(filepath.Join(agentPath, "proj-agent.md"), []byte(agentMD), 0o644); err != nil {
+		return err
+	}
+
+	// commands/proj-cmd.md
+	cmdPath := filepath.Join(pluginRoot, "commands")
+	if err := os.MkdirAll(cmdPath, 0o755); err != nil {
+		return err
+	}
+	cmdMD := "---\nname: proj-cmd\ndescription: projection test command\n---\nBODY_TOKEN_cmd_proj-cmd\n"
+	if err := os.WriteFile(filepath.Join(cmdPath, "proj-cmd.md"), []byte(cmdMD), 0o644); err != nil {
+		return err
+	}
+
+	// .claude-plugin/plugin.json — explicit manifest listing relative paths
+	pluginManifestDir := filepath.Join(pluginRoot, ".claude-plugin")
+	if err := os.MkdirAll(pluginManifestDir, 0o755); err != nil {
+		return err
+	}
+	plugin := map[string]any{
+		"name":     pluginID,
+		"version":  "1.0.0",
+		"skills":   []string{"./skills/proj-skill"},
+		"agents":   []string{"./agents/proj-agent.md"},
+		"commands": []string{"./commands/proj-cmd.md"},
+	}
+	pluginJSON, _ := json.MarshalIndent(plugin, "", "  ")
+	return os.WriteFile(filepath.Join(pluginManifestDir, "plugin.json"), pluginJSON, 0o644)
 }
 
 func (w *World) whenIConfigureAgeSecrets() error {

@@ -112,15 +112,21 @@ func projectPlugins(fs afero.Fs, c *Canonical, cacheDir string) error {
 
 // pluginManifestJSON is the minimal structure we need from plugin.json to build
 // a PluginProjection. It intentionally mirrors marketplace.PluginManifest but
-// lives here to avoid the import cycle.
+// lives here to avoid the import cycle (marketplace imports source).
 type pluginManifestJSON struct {
 	MCPServers map[string]json.RawMessage `json:"mcpServers"`
 	LSPServers map[string]json.RawMessage `json:"lspServers"`
+	Skills     json.RawMessage            `json:"skills"`
+	Commands   json.RawMessage            `json:"commands"`
+	Agents     json.RawMessage            `json:"agents"`
 }
 
 // readPluginProjection reads <pluginCacheDir>/.claude-plugin/plugin.json and
-// builds a PluginProjection from the MCP and LSP server entries. If the file is
-// absent, an empty projection is returned without error (plugin not yet cached).
+// builds a PluginProjection. MCP and LSP server entries are parsed inline to
+// avoid the source↔marketplace import cycle. Skills, commands, and subagents
+// are loaded by reading the markdown files the manifest points at (using
+// resolveComponentPath so relative paths are joined against pluginCacheDir).
+// If the file is absent, an empty projection is returned without error.
 func readPluginProjection(fs afero.Fs, pluginCacheDir string) (PluginProjection, error) {
 	var pr PluginProjection
 	manifestPath := filepath.Join(pluginCacheDir, ".claude-plugin", "plugin.json")
@@ -146,7 +152,177 @@ func readPluginProjection(fs afero.Fs, pluginCacheDir string) (PluginProjection,
 		spec := parseLSPSpecJSON(raw, root)
 		pr.LSPServers = append(pr.LSPServers, LSPServer{ID: name, Spec: spec})
 	}
+
+	// Skills: each entry is a path to a directory containing SKILL.md, or
+	// a direct SKILL.md path. Relative entries are resolved against pluginCacheDir.
+	skillPaths := rawToStringSlice(manifest.Skills)
+	if len(skillPaths) == 0 {
+		// Convention-based discovery: scan pluginCacheDir/skills/ for subdirs.
+		discovered, _ := discoverSkillDirsFS(fs, filepath.Join(pluginCacheDir, "skills"))
+		skillPaths = discovered
+	}
+	for _, sk := range skillPaths {
+		abs := resolveComponentPathFS(sk, pluginCacheDir)
+		skill, err := loadSkillEntryFS(fs, abs)
+		if err != nil {
+			return pr, fmt.Errorf("load skill %q: %w", sk, err)
+		}
+		if skill != nil {
+			pr.Skills = append(pr.Skills, *skill)
+		}
+	}
+
+	// Commands: each entry is a path to a <name>.md file.
+	for _, cmd := range rawToStringSlice(manifest.Commands) {
+		abs := resolveComponentPathFS(cmd, pluginCacheDir)
+		entry, err := loadMarkdownEntryFS(fs, abs)
+		if err != nil {
+			return pr, fmt.Errorf("load command %q: %w", cmd, err)
+		}
+		if entry != nil {
+			pr.Commands = append(pr.Commands, Command{Name: entry.name, Frontmatter: entry.fm, Body: entry.body})
+		}
+	}
+
+	// Subagents: each entry is a path to a <name>.md file.
+	for _, ag := range rawToStringSlice(manifest.Agents) {
+		abs := resolveComponentPathFS(ag, pluginCacheDir)
+		entry, err := loadMarkdownEntryFS(fs, abs)
+		if err != nil {
+			return pr, fmt.Errorf("load agent %q: %w", ag, err)
+		}
+		if entry != nil {
+			pr.Subagents = append(pr.Subagents, Subagent{Name: entry.name, Frontmatter: entry.fm, Body: entry.body})
+		}
+	}
+
 	return pr, nil
+}
+
+// resolveComponentPathFS resolves a manifest-listed component path against
+// pluginCacheDir. It mirrors marketplace.resolveComponentPath but lives here to
+// avoid the import cycle.
+//
+// Resolution order:
+//  1. ${CLAUDE_PLUGIN_ROOT} substitution if present.
+//  2. Absolute paths returned as-is.
+//  3. Relative paths joined to pluginCacheDir.
+func resolveComponentPathFS(s, pluginCacheDir string) string {
+	const placeholder = "${CLAUDE_PLUGIN_ROOT}"
+	if strings.Contains(s, placeholder) {
+		return strings.ReplaceAll(s, placeholder, pluginCacheDir)
+	}
+	if filepath.IsAbs(s) {
+		return s
+	}
+	return filepath.Join(pluginCacheDir, s)
+}
+
+// rawToStringSlice coerces a json.RawMessage that holds either a JSON string
+// or a JSON array of strings into a []string.
+func rawToStringSlice(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	// Try array first.
+	var arr []string
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		return arr
+	}
+	// Try single string.
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return []string{s}
+	}
+	return nil
+}
+
+// markdownEntryFS holds the parsed result of a single markdown file (loader-side).
+type markdownEntryFS struct {
+	name string
+	fm   map[string]any
+	body string
+}
+
+// loadSkillEntryFS reads a skill from path, which may be a directory containing
+// SKILL.md or a SKILL.md file directly. Returns nil when the file is absent.
+func loadSkillEntryFS(fs afero.Fs, path string) (*Skill, error) {
+	skillPath := filepath.Join(path, "SKILL.md")
+	data, err := afero.ReadFile(fs, skillPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// Try treating path itself as the file.
+			data, err = afero.ReadFile(fs, path)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return nil, nil // silently skip missing skill
+				}
+				return nil, fmt.Errorf("read %s: %w", path, err)
+			}
+			skillPath = path
+		} else {
+			return nil, fmt.Errorf("read %s: %w", skillPath, err)
+		}
+	}
+
+	fm, body, err := ParseFrontmatter(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse frontmatter in %s: %w", skillPath, err)
+	}
+
+	name := ""
+	if v, ok := fm["name"].(string); ok && v != "" {
+		name = v
+	}
+	if name == "" {
+		name = filepath.Base(path)
+	}
+	return &Skill{Name: name, Frontmatter: fm, Body: body}, nil
+}
+
+// loadMarkdownEntryFS reads a markdown file at path. Returns nil when absent.
+func loadMarkdownEntryFS(fs afero.Fs, path string) (*markdownEntryFS, error) {
+	data, err := afero.ReadFile(fs, path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil // silently skip missing entry
+		}
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	fm, body, err := ParseFrontmatter(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse frontmatter in %s: %w", path, err)
+	}
+
+	name := ""
+	if v, ok := fm["name"].(string); ok && v != "" {
+		name = v
+	}
+	if name == "" {
+		name = strings.TrimSuffix(filepath.Base(path), ".md")
+	}
+	return &markdownEntryFS{name: name, fm: fm, body: body}, nil
+}
+
+// discoverSkillDirsFS scans skillsDir for subdirectories (convention-based
+// discovery) and returns their absolute paths. Used when plugin.json lists no
+// skills. Mirrors marketplace.discoverSkillDirs but uses an afero.Fs.
+func discoverSkillDirsFS(fs afero.Fs, skillsDir string) ([]string, error) {
+	entries, err := afero.ReadDir(fs, skillsDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var paths []string
+	for _, e := range entries {
+		if e.IsDir() {
+			paths = append(paths, filepath.Join(skillsDir, e.Name()))
+		}
+	}
+	return paths, nil
 }
 
 // resolvePR replaces ${CLAUDE_PLUGIN_ROOT} with root in s.
@@ -358,7 +534,7 @@ func loadSkills(fs afero.Fs, home string) ([]Skill, error) {
 			}
 			return nil, fmt.Errorf("read SKILL.md for %s: %w", e.Name(), err)
 		}
-		fm, body, err := parseFrontmatter(raw)
+		fm, body, err := ParseFrontmatter(raw)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
 		}
@@ -387,7 +563,7 @@ func loadSubagents(fs afero.Fs, home string) ([]Subagent, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", p, err)
 		}
-		fm, body, err := parseFrontmatter(raw)
+		fm, body, err := ParseFrontmatter(raw)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
 		}
@@ -417,7 +593,7 @@ func loadCommands(fs afero.Fs, home string) ([]Command, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", p, err)
 		}
-		fm, body, err := parseFrontmatter(raw)
+		fm, body, err := ParseFrontmatter(raw)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
 		}
@@ -512,10 +688,10 @@ func loadLSP(fs afero.Fs, home string) ([]LSPServer, error) {
 	return out, nil
 }
 
-// parseFrontmatter extracts YAML frontmatter and body from a markdown file.
+// ParseFrontmatter extracts YAML frontmatter and body from a markdown file.
 // If the input doesn't begin with "---\n", returns an empty map and the
 // entire input as body.
-func parseFrontmatter(data []byte) (map[string]any, string, error) {
+func ParseFrontmatter(data []byte) (map[string]any, string, error) {
 	if !bytes.HasPrefix(data, []byte("---\n")) {
 		return map[string]any{}, string(data), nil
 	}

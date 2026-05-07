@@ -1,3 +1,5 @@
+//go:build !live
+
 package marketplace_test
 
 import (
@@ -11,6 +13,9 @@ import (
 // touches the filesystem (tmp dirs, AGENTSYNC_TARGET_ROOT redirection,
 // state files, etc.), so we refuse to run on the host. Use `just test`
 // or `just test-release` to invoke through the hermetic container.
+//
+// The `//go:build !live` constraint means this TestMain is excluded when
+// running with -tags=live. The live test has its own main_live_test.go.
 func TestMain(m *testing.M) {
 	testenv.MustRunInContainer()
 	os.Exit(m.Run())

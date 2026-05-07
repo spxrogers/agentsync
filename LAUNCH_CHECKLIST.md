@@ -128,25 +128,29 @@ artifact distributed publicly.
 Carried over from [issue #13 §4](https://github.com/spxrogers/agentsync/issues/13#issuecomment-4375725634)
 because the M0–M7 + PR #14 stack does not address it.
 
-- [ ] **Plugin component projection stub** —
-      `internal/marketplace/projection.go:93–103` records
-      `Skills` / `Commands` / `Subagents` from a plugin's manifest as **stub
-      entries with only `Name` populated** (the path), no frontmatter or body.
-      The Claude render path expects fully-loaded components. The M4
-      integration test and the BDD `06_marketplace_plugins.feature` use
-      synthetic fixtures that may not exercise this path.
+- [x] **Plugin component projection stub** — FIXED in PR #16
+      (`claude/plugin-projection-fix`).
 
-      **Verify before public:** install a real Claude marketplace plugin
-      (e.g. `atlassian@anthropic`) end-to-end and inspect the rendered output
-      at `~/.claude/skills/<name>/SKILL.md`,
-      `~/.claude/agents/<name>.md`, `~/.claude/commands/<name>.md`. If the
-      destination files are empty or missing body, the projector needs to
-      actually load the markdown content (parse frontmatter + read body) for
-      these three component types.
+      `internal/marketplace/projection.go` previously recorded
+      `Skills` / `Commands` / `Subagents` from a plugin's manifest as stub
+      entries with only the raw path in `Name`. The projection layer now fully
+      loads each component: resolves the path, reads the markdown file via the
+      injected `readFile` function, calls `source.ParseFrontmatter`, and
+      populates `Name` (from frontmatter `name:` key or basename fallback),
+      `Frontmatter`, and `Body`. Missing files are skipped with a warning;
+      malformed frontmatter is a hard error.
 
-      This is the only item below "deliberate v1.0 cut" that could meaningfully
-      surprise a public user — worth either fixing or pinning a "known limit"
-      banner on `agentsync plugin install` for these component types.
+      The fix applies to both `applyManifest` (strict plugin.json path) and
+      `applyEntryOverrides` / `applyEntryFull` (non-strict PluginEntry path).
+
+      - Unit tests in `internal/marketplace/projection_test.go` cover happy
+        path (directory-based skills, inline frontmatter name, filename
+        fallback), missing-file skip, malformed-frontmatter error, and I/O
+        error propagation.
+      - Live integration test in `projection_live_test.go` (build tag `live`,
+        opt-in via `AGENTSYNC_LIVE_PLUGIN_TEST=1`) fetches `obra/superpowers`
+        via `GitFetcher` and asserts at least 5 skills land with non-empty
+        Body and frontmatter.
 
 ## §6 — Comment preservation (documented v1.x deferral)
 

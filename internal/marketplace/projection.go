@@ -1,8 +1,15 @@
+// Package marketplace models the Claude marketplace plugin format and provides
+// the projection layer that decomposes plugin manifests into canonical source
+// model entries. Skills, commands, and subagents are fully loaded from their
+// on-disk markdown files (frontmatter + body + clean Name) via the injected
+// readFile function so that adapters downstream receive complete, render-ready
+// entries.
 package marketplace
 
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +32,8 @@ type ProjectionResult struct {
 //
 // Strict mode (entry.Strict == nil || *entry.Strict):
 //   - Reads cacheDir/.claude-plugin/plugin.json for the primary component list.
+//   - If the manifest lists no skills, falls back to convention-based discovery:
+//     scans cacheDir/skills/*/ for SKILL.md files.
 //   - Then merges in any component fields on the PluginEntry itself (overrides).
 //
 // Non-strict mode:
@@ -33,12 +42,20 @@ type ProjectionResult struct {
 // In both cases, ${CLAUDE_PLUGIN_ROOT} in command/url strings is replaced with
 // cacheDir so non-Claude adapters can resolve binary paths.
 func Project(entry PluginEntry, cacheDir string) (ProjectionResult, error) {
-	return ProjectWithReader(entry, cacheDir, os.ReadFile)
+	return projectWithFuncs(entry, cacheDir, os.ReadFile, os.ReadDir)
 }
 
 // ProjectWithReader is like Project but uses a caller-supplied readFile function
-// for loading plugin.json. This enables in-memory filesystem use in tests.
+// for loading plugin.json and component markdown files. This enables in-memory
+// filesystem use in tests. Convention-based discovery (skills/ directory scan)
+// is disabled when using ProjectWithReader; use Project for full behavior.
 func ProjectWithReader(entry PluginEntry, cacheDir string, readFile func(string) ([]byte, error)) (ProjectionResult, error) {
+	return projectWithFuncs(entry, cacheDir, readFile, nil)
+}
+
+// projectWithFuncs is the internal implementation shared by Project and ProjectWithReader.
+// listDir may be nil to disable convention-based skills discovery.
+func projectWithFuncs(entry PluginEntry, cacheDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error)) (ProjectionResult, error) {
 	var pr ProjectionResult
 	strict := entry.Strict == nil || *entry.Strict
 
@@ -53,19 +70,48 @@ func ProjectWithReader(entry PluginEntry, cacheDir string, readFile func(string)
 			if err := json.Unmarshal(data, &manifest); err != nil {
 				return pr, fmt.Errorf("parse plugin.json: %w", err)
 			}
-			applyManifest(manifest, &pr, cacheDir)
+			if err := applyManifest(manifest, &pr, cacheDir, readFile, listDir); err != nil {
+				return pr, err
+			}
 		}
 		// Merge entry-level overrides on top of manifest components.
-		applyEntryOverrides(entry, &pr, cacheDir)
+		if err := applyEntryOverrides(entry, &pr, cacheDir, readFile); err != nil {
+			return pr, err
+		}
 	} else {
-		applyEntryFull(entry, &pr, cacheDir)
+		if err := applyEntryFull(entry, &pr, cacheDir, readFile); err != nil {
+			return pr, err
+		}
 	}
 	return pr, nil
 }
 
 // resolvePluginRoot replaces the ${CLAUDE_PLUGIN_ROOT} placeholder with cacheDir.
+// Used for command/arg/url substitution where we want only env-style expansion,
+// not filesystem path joining.
 func resolvePluginRoot(s, cacheDir string) string {
 	return strings.ReplaceAll(s, "${CLAUDE_PLUGIN_ROOT}", cacheDir)
+}
+
+// resolveComponentPath resolves a manifest-listed component path (skill,
+// subagent, command) against cacheDir. Resolution order:
+//  1. ${CLAUDE_PLUGIN_ROOT} substitution if present (the literal placeholder
+//     wins; result is treated as already-rooted).
+//  2. Absolute paths returned as-is.
+//  3. Relative paths joined to cacheDir.
+//
+// This separates "make a command portable" semantics (resolvePluginRoot) from
+// "find a file inside the plugin cache" semantics (this function), which the
+// Claude marketplace plugin convention conflates: manifest entries like
+// "./skills/foo" are relative to the plugin root, not the process cwd.
+func resolveComponentPath(s, cacheDir string) string {
+	if strings.Contains(s, "${CLAUDE_PLUGIN_ROOT}") {
+		return strings.ReplaceAll(s, "${CLAUDE_PLUGIN_ROOT}", cacheDir)
+	}
+	if filepath.IsAbs(s) {
+		return s
+	}
+	return filepath.Join(cacheDir, s)
 }
 
 // resolvePluginRootInArgs applies resolvePluginRoot to each element of args.
@@ -81,7 +127,9 @@ func resolvePluginRootInArgs(args []string, cacheDir string) []string {
 }
 
 // applyManifest converts a PluginManifest into ProjectionResult entries.
-func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir string) {
+// listDir may be nil; when non-nil and the manifest lists no skills, skills
+// are discovered by convention from cacheDir/skills/*/SKILL.md.
+func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error)) error {
 	for name, raw := range manifest.MCPServers {
 		spec := parseMCPSpec(raw, cacheDir)
 		pr.MCPServers = append(pr.MCPServers, source.MCPServer{ID: name, Server: spec})
@@ -90,24 +138,73 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 		spec := parseLSPSpec(raw, cacheDir)
 		pr.LSPServers = append(pr.LSPServers, source.LSPServer{ID: name, Spec: spec})
 	}
-	// Skills and commands from manifest are markdown paths; for now we record
-	// them as stub entries so adapters can at least enumerate them.
-	for _, sk := range toStringSlice(manifest.Skills) {
-		pr.Skills = append(pr.Skills, source.Skill{Name: resolvePluginRoot(sk, cacheDir)})
+
+	skillPaths := toStringSlice(manifest.Skills)
+	if len(skillPaths) == 0 && listDir != nil {
+		// Convention-based discovery: scan cacheDir/skills/*/SKILL.md
+		discovered, err := discoverSkillDirs(filepath.Join(cacheDir, "skills"), listDir)
+		if err != nil {
+			slog.Warn("plugin skills convention-discovery failed", "cacheDir", cacheDir, "error", err)
+		} else {
+			skillPaths = discovered
+		}
 	}
+	for _, sk := range skillPaths {
+		skill, err := loadSkillEntry(resolveComponentPath(sk, cacheDir), readFile)
+		if err != nil {
+			return fmt.Errorf("load skill %q: %w", sk, err)
+		}
+		if skill != nil {
+			pr.Skills = append(pr.Skills, *skill)
+		}
+	}
+
 	for _, cmd := range toStringSlice(manifest.Commands) {
-		pr.Commands = append(pr.Commands, source.Command{Name: resolvePluginRoot(cmd, cacheDir)})
+		command, err := loadMarkdownEntry(resolveComponentPath(cmd, cacheDir), readFile)
+		if err != nil {
+			return fmt.Errorf("load command %q: %w", cmd, err)
+		}
+		if command != nil {
+			pr.Commands = append(pr.Commands, source.Command{Name: command.name, Frontmatter: command.fm, Body: command.body})
+		}
 	}
 	for _, ag := range toStringSlice(manifest.Agents) {
-		pr.Subagents = append(pr.Subagents, source.Subagent{Name: resolvePluginRoot(ag, cacheDir)})
+		agent, err := loadMarkdownEntry(resolveComponentPath(ag, cacheDir), readFile)
+		if err != nil {
+			return fmt.Errorf("load agent %q: %w", ag, err)
+		}
+		if agent != nil {
+			pr.Subagents = append(pr.Subagents, source.Subagent{Name: agent.name, Frontmatter: agent.fm, Body: agent.body})
+		}
 	}
 	// Hooks: may be a string command or an object with event+command shape.
 	applyHooks(manifest.Hooks, pr, cacheDir)
+	return nil
+}
+
+// discoverSkillDirs scans skillsDir for subdirectories and returns a list of
+// absolute paths to each subdirectory (each of which is expected to contain
+// a SKILL.md file). The caller resolves the actual SKILL.md via loadSkillEntry.
+func discoverSkillDirs(skillsDir string, listDir func(string) ([]os.DirEntry, error)) ([]string, error) {
+	entries, err := listDir(skillsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var paths []string
+	for _, e := range entries {
+		if e.IsDir() {
+			paths = append(paths, filepath.Join(skillsDir, e.Name()))
+		}
+	}
+	return paths, nil
 }
 
 // applyEntryOverrides merges component fields from a PluginEntry into an
 // already-seeded ProjectionResult (strict mode overlay).
-func applyEntryOverrides(entry PluginEntry, pr *ProjectionResult, cacheDir string) {
+func applyEntryOverrides(entry PluginEntry, pr *ProjectionResult, cacheDir string, readFile func(string) ([]byte, error)) error {
 	for name, raw := range entry.MCPServers {
 		spec := parseMCPSpec(raw, cacheDir)
 		pr.MCPServers = append(pr.MCPServers, source.MCPServer{ID: name, Server: spec})
@@ -117,20 +214,118 @@ func applyEntryOverrides(entry PluginEntry, pr *ProjectionResult, cacheDir strin
 		pr.LSPServers = append(pr.LSPServers, source.LSPServer{ID: name, Spec: spec})
 	}
 	for _, sk := range toStringSlice(entry.Skills) {
-		pr.Skills = append(pr.Skills, source.Skill{Name: resolvePluginRoot(sk, cacheDir)})
+		skill, err := loadSkillEntry(resolveComponentPath(sk, cacheDir), readFile)
+		if err != nil {
+			return fmt.Errorf("load skill %q: %w", sk, err)
+		}
+		if skill != nil {
+			pr.Skills = append(pr.Skills, *skill)
+		}
 	}
 	for _, cmd := range toStringSlice(entry.Commands) {
-		pr.Commands = append(pr.Commands, source.Command{Name: resolvePluginRoot(cmd, cacheDir)})
+		command, err := loadMarkdownEntry(resolveComponentPath(cmd, cacheDir), readFile)
+		if err != nil {
+			return fmt.Errorf("load command %q: %w", cmd, err)
+		}
+		if command != nil {
+			pr.Commands = append(pr.Commands, source.Command{Name: command.name, Frontmatter: command.fm, Body: command.body})
+		}
 	}
 	for _, ag := range toStringSlice(entry.Agents) {
-		pr.Subagents = append(pr.Subagents, source.Subagent{Name: resolvePluginRoot(ag, cacheDir)})
+		agent, err := loadMarkdownEntry(resolveComponentPath(ag, cacheDir), readFile)
+		if err != nil {
+			return fmt.Errorf("load agent %q: %w", ag, err)
+		}
+		if agent != nil {
+			pr.Subagents = append(pr.Subagents, source.Subagent{Name: agent.name, Frontmatter: agent.fm, Body: agent.body})
+		}
 	}
 	applyHooks(entry.Hooks, pr, cacheDir)
+	return nil
 }
 
 // applyEntryFull applies all component fields from a non-strict PluginEntry.
-func applyEntryFull(entry PluginEntry, pr *ProjectionResult, cacheDir string) {
-	applyEntryOverrides(entry, pr, cacheDir)
+func applyEntryFull(entry PluginEntry, pr *ProjectionResult, cacheDir string, readFile func(string) ([]byte, error)) error {
+	return applyEntryOverrides(entry, pr, cacheDir, readFile)
+}
+
+// markdownEntry holds the parsed result of a single markdown file.
+type markdownEntry struct {
+	name string
+	fm   map[string]any
+	body string
+}
+
+// loadSkillEntry reads a skill path which may be either a directory containing
+// SKILL.md or a SKILL.md file directly. Returns nil (no error) if the file is
+// simply missing — the caller should skip that entry with a warning.
+// Returns an error only for real I/O problems or malformed frontmatter.
+func loadSkillEntry(path string, readFile func(string) ([]byte, error)) (*source.Skill, error) {
+	// Try directory convention first: <path>/SKILL.md
+	skillPath := filepath.Join(path, "SKILL.md")
+	data, err := readFile(skillPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Try treating path itself as the file (e.g. skills/foo/SKILL.md directly).
+			data, err = readFile(path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					slog.Warn("plugin skill file not found, skipping", "path", path)
+					return nil, nil
+				}
+				return nil, fmt.Errorf("read %s: %w", path, err)
+			}
+			skillPath = path
+		} else {
+			return nil, fmt.Errorf("read %s: %w", skillPath, err)
+		}
+	}
+
+	fm, body, err := source.ParseFrontmatter(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse frontmatter in %s: %w", skillPath, err)
+	}
+
+	// Derive name: prefer frontmatter "name" key, fall back to basename of the resolved path.
+	name := ""
+	if v, ok := fm["name"].(string); ok && v != "" {
+		name = v
+	}
+	if name == "" {
+		name = filepath.Base(path)
+	}
+
+	return &source.Skill{Name: name, Frontmatter: fm, Body: body}, nil
+}
+
+// loadMarkdownEntry reads a markdown file at path. Returns nil (no error) if
+// the file is simply missing — the caller should skip that entry with a
+// warning. Returns an error for I/O failures or malformed frontmatter.
+func loadMarkdownEntry(path string, readFile func(string) ([]byte, error)) (*markdownEntry, error) {
+	data, err := readFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			slog.Warn("plugin component file not found, skipping", "path", path)
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	fm, body, err := source.ParseFrontmatter(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse frontmatter in %s: %w", path, err)
+	}
+
+	// Derive name: prefer frontmatter "name" key, fall back to basename without .md.
+	name := ""
+	if v, ok := fm["name"].(string); ok && v != "" {
+		name = v
+	}
+	if name == "" {
+		name = strings.TrimSuffix(filepath.Base(path), ".md")
+	}
+
+	return &markdownEntry{name: name, fm: fm, body: body}, nil
 }
 
 // applyHooks interprets the hooks field (string | []string | map) and appends
