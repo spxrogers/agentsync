@@ -37,6 +37,11 @@ jobs:
   test-release:
     name: test-release (hermetic gate)
     runs-on: ubuntu-latest
+    env:
+      # Surfaces every step in the runner script + entrypoint via `set -x`
+      # so when something fails we can pinpoint the failing command in the
+      # workflow log without having to rebuild the image and rerun.
+      AGENTSYNC_TEST_DEBUG: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: extractions/setup-just@v3

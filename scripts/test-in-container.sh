@@ -15,6 +15,11 @@
 
 set -euo pipefail
 
+# Verbose mode for debugging CI breakages; opt-in.
+if [[ "${AGENTSYNC_TEST_DEBUG:-}" == "1" ]]; then
+    set -x
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE_NAME="agentsync-tests:local"
 CACHE_VOL="agentsync-test-gocache"
@@ -76,6 +81,9 @@ RUN_ARGS=(
     # Hermeticity signal honoured by internal/testenv.RequireContainer.
     # FS-touching tests refuse to run unless this is set.
     -e "AGENTSYNC_TEST_IN_CONTAINER=1"
+    # Pass the debug flag through to the entrypoint so CI can opt into
+    # `set -x` tracing without editing the script.
+    -e "AGENTSYNC_TEST_DEBUG=${AGENTSYNC_TEST_DEBUG:-}"
 )
 
 # Allow `--network=none` to be relaxed if the user explicitly passed it.
