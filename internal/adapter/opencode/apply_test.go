@@ -24,7 +24,7 @@ func TestApply_WritesNewFile(t *testing.T) {
 		Mode:          0o644,
 		MergeStrategy: "merge-jsonc-keys",
 	}
-	if err := a.Apply([]adapter.FileOp{op}); err != nil {
+	if err := a.Apply([]adapter.FileOp{op}, adapter.PassThroughWriter{}); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := os.ReadFile(path)
@@ -54,7 +54,7 @@ func TestApply_JSONC_PreservesForeignKeysAndComments(t *testing.T) {
 		MergeStrategy: "merge-jsonc-keys",
 		OwnedKeys:     nil, // no owned -> no orphan removal
 	}
-	if err := a.Apply([]adapter.FileOp{op}); err != nil {
+	if err := a.Apply([]adapter.FileOp{op}, adapter.PassThroughWriter{}); err != nil {
 		t.Fatal(err)
 	}
 	var out map[string]any
@@ -86,7 +86,7 @@ func TestApply_JSONC_OrphanRemoval(t *testing.T) {
 		MergeStrategy: "merge-jsonc-keys",
 		OwnedKeys:     []string{"/mcp/github", "/mcp/stale"},
 	}
-	if err := a.Apply([]adapter.FileOp{op}); err != nil {
+	if err := a.Apply([]adapter.FileOp{op}, adapter.PassThroughWriter{}); err != nil {
 		t.Fatal(err)
 	}
 	var out map[string]any
@@ -108,7 +108,7 @@ func TestApply_Delete_RemovesFile(t *testing.T) {
 	_ = os.WriteFile(path, []byte("bye"), 0o644)
 
 	op := adapter.FileOp{Action: "delete", Path: path}
-	if err := a.Apply([]adapter.FileOp{op}); err != nil {
+	if err := a.Apply([]adapter.FileOp{op}, adapter.PassThroughWriter{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -120,7 +120,7 @@ func TestApply_Delete_MissingFileNoError(t *testing.T) {
 	tmp := t.TempDir()
 	a := opencode.New(opencode.Options{TargetRoot: tmp})
 	op := adapter.FileOp{Action: "delete", Path: filepath.Join(tmp, "nonexistent.txt")}
-	if err := a.Apply([]adapter.FileOp{op}); err != nil {
+	if err := a.Apply([]adapter.FileOp{op}, adapter.PassThroughWriter{}); err != nil {
 		t.Fatalf("delete missing file should not error: %v", err)
 	}
 }

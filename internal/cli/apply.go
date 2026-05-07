@@ -119,16 +119,14 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		return nil
 	}
 
-	// Real apply: render + write
+	// Real apply: render + write. The writer constructed inside
+	// render.Apply enforces the foreign-collision backup invariant on
+	// every destination write — there is no separate guard pass.
 	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s)
 	if err != nil {
 		return err
 	}
-	// Foreign-collision guard: back up any pre-existing destination
-	// (or per-key conflicts inside a shared JSON file) BEFORE we
-	// overwrite. The backup tree lives at <home>/.state/backups/<ts>/;
-	// the original layout is preserved so users can find their file.
-	collisions, err := render.ApplyWithCollisionGuard(plan, reg, s, home, sc, projectRoot)
+	collisions, err := render.Apply(plan, reg, s, home, sc, projectRoot)
 	if err != nil {
 		return err
 	}

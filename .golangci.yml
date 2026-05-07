@@ -30,10 +30,40 @@ linters:
       forbid:
         - pattern: '^os\.UserHomeDir$'
           msg: "use paths.HomeDir(env) so AGENTSYNC_TARGET_ROOT honored in tests"
+        # Direct iox.AtomicWrite to a *destination* file (anything outside
+        # ~/.agentsync) bypasses the foreign-collision backup invariant.
+        # Adapters and any future code that targets a native agent location
+        # (~/.claude*, ~/.config/opencode/*, etc.) must route through
+        # render.Writer / adapter.DestWriter. The exclusions list below
+        # whitelists callers that write to non-destination paths
+        # (canonical source, agentsync's own state, plugin TOMLs).
+        - pattern: '^iox\.AtomicWrite$'
+          msg: "use render.Writer / adapter.DestWriter for native-destination writes; iox.AtomicWrite is reserved for canonical-source / state / plugin-cache writes"
   exclusions:
     rules:
       # main.go can use os.UserHomeDir if needed.
       - path: '(^|/)cmd/.*'
+        linters: [forbidigo]
+      # Whitelisted iox.AtomicWrite callers — these write to canonical
+      # source, agentsync's own state, or plugin-cache scratch, none of
+      # which are native agent destinations and so don't need the
+      # foreign-collision backup. If you need to add a path here, the bar
+      # is "this write does NOT target a file the user could plausibly
+      # have hand-managed before agentsync was installed."
+      - path: '(^|/)internal/iox/.*'
+        linters: [forbidigo]
+      - path: '(^|/)internal/render/writer\.go$'
+        linters: [forbidigo]
+      - path: '(^|/)internal/source/writer\.go$'
+        linters: [forbidigo]
+      - path: '(^|/)internal/state/store\.go$'
+        linters: [forbidigo]
+      # CLI files writing to ~/.agentsync/* (canonical source).
+      - path: '(^|/)internal/cli/(plugin|marketplace|agent|reconcile|update)\.go$'
+        linters: [forbidigo]
+      # The PassThroughWriter test helper deliberately delegates to
+      # iox.AtomicWrite — that's its whole job.
+      - path: '(^|/)internal/adapter/testwriter\.go$'
         linters: [forbidigo]
 
 formatters:

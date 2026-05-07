@@ -1,0 +1,278 @@
+package render_test
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/state"
+)
+
+// fakeJSONApply implements just enough of adapter.Adapter to test the
+// Writer's collision behavior end-to-end. Apply does the same kind of
+// merge the real claude adapter does (existing ∪ ours) so the writer
+// sees both the pre-merge op.Content (for per-key conflict detection)
+// and the post-merge final bytes (for the actual write).
+type fakeJSONApply struct {
+	name string
+}
+
+func (f *fakeJSONApply) Name() string                       { return f.name }
+func (f *fakeJSONApply) Capabilities() adapter.Capability   { return 0 }
+func (f *fakeJSONApply) Detect() (bool, error)              { return true, nil }
+func (f *fakeJSONApply) Render(_ source.Canonical, _ adapter.Scope, _ string) ([]adapter.FileOp, []adapter.Skip, error) {
+	return nil, nil, nil
+}
+func (f *fakeJSONApply) Ingest(_ adapter.Scope, _ string) (source.Canonical, error) {
+	return source.Canonical{}, nil
+}
+
+// Apply mirrors the production adapter pattern: for replace ops, hand
+// op.Content to the writer; for merge ops, do the merge first and pass
+// the result.
+func (f *fakeJSONApply) Apply(ops []adapter.FileOp, w adapter.DestWriter) error {
+	for _, op := range ops {
+		switch op.Action {
+		case "delete":
+			if err := w.Delete(op); err != nil {
+				return err
+			}
+		case "", "write":
+			if op.MergeStrategy == "merge-json-keys" {
+				existing := map[string]any{}
+				if data, err := os.ReadFile(op.Path); err == nil {
+					_ = json.Unmarshal(data, &existing)
+				}
+				var ours map[string]any
+				_ = json.Unmarshal(op.Content, &ours)
+				for k, v := range ours {
+					existing[k] = v
+				}
+				out, _ := json.MarshalIndent(existing, "", "  ")
+				if err := w.Write(op, append(out, '\n')); err != nil {
+					return err
+				}
+			} else {
+				if err := w.Write(op, op.Content); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// TestWriter_FileLevelBackup is the regression for the HIGH-severity
+// finding: a pre-existing native file with no state entry is copied to
+// <home>/.state/backups/<ts>/ before the writer's iox.AtomicWrite
+// overwrites it.
+func TestWriter_FileLevelBackup(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, ".claude", "agents", "reviewer.md")
+	_ = os.MkdirAll(filepath.Dir(dest), 0o755)
+	original := []byte("---\nname: reviewer\n---\nMy carefully hand-tuned reviewer prompt.\n")
+	_ = os.WriteFile(dest, original, 0o644)
+
+	st := state.New()
+	w := render.NewWriter(st, home, adapter.ScopeUser, "", "claude")
+	op := adapter.FileOp{
+		Action:   "write",
+		Path:     dest,
+		Content:  []byte("---\nname: reviewer\n---\nNew shiny rendered prompt.\n"),
+		Mode:     0o644,
+		SourceID: "agents/reviewer.md",
+	}
+	if err := w.Write(op, op.Content); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	reports := w.Reports()
+	if len(reports) != 1 {
+		t.Fatalf("want 1 collision report; got %d (%v)", len(reports), reports)
+	}
+	if reports[0].Pointer != "" {
+		t.Fatalf("expected file-level collision; got pointer %q", reports[0].Pointer)
+	}
+	got, err := os.ReadFile(reports[0].BackupTo)
+	if err != nil {
+		t.Fatalf("read backup: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("backup mismatch:\nwant: %s\ngot:  %s", original, got)
+	}
+	if !strings.HasPrefix(reports[0].BackupTo, filepath.Join(home, ".state", "backups")) {
+		t.Fatalf("backup not under <home>/.state/backups: %s", reports[0].BackupTo)
+	}
+	// And the live file now has the new content.
+	live, _ := os.ReadFile(dest)
+	if !strings.Contains(string(live), "shiny rendered prompt") {
+		t.Fatalf("live file missing new content: %s", live)
+	}
+}
+
+// TestWriter_KeyLevelBackup asserts that for merge-json-keys ops, a per-
+// pointer conflict in a shared JSON file (e.g. user's hand-edited
+// ~/.claude.json with a custom mcpServers.github) backs up the whole
+// file once before the merge writes.
+func TestWriter_KeyLevelBackup(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, ".claude.json")
+	original := []byte(`{
+  "mcpServers": {"github": {"command": "/usr/local/bin/my-fork", "args": ["--my-flag"]}},
+  "preserveMe": "do not touch"
+}`)
+	_ = os.WriteFile(dest, original, 0o644)
+
+	st := state.New()
+	w := render.NewWriter(st, home, adapter.ScopeUser, "", "claude")
+	ours := []byte(`{"mcpServers":{"github":{"command":"npx","args":["-y","@m/server-github"]}}}`)
+	op := adapter.FileOp{
+		Action:        "write",
+		Path:          dest,
+		Content:       ours,
+		MergeStrategy: "merge-json-keys",
+		Mode:          0o644,
+		SourceID:      "mcp/github.toml",
+	}
+
+	// Compute final bytes the way the real adapter would.
+	existing := map[string]any{}
+	_ = json.Unmarshal(original, &existing)
+	var oursMap map[string]any
+	_ = json.Unmarshal(ours, &oursMap)
+	for k, v := range oursMap {
+		existing[k] = v
+	}
+	final, _ := json.MarshalIndent(existing, "", "  ")
+	if err := w.Write(op, append(final, '\n')); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	reports := w.Reports()
+	if len(reports) == 0 {
+		t.Fatal("expected at least one key-level collision")
+	}
+	if reports[0].Pointer == "" {
+		t.Fatalf("want per-pointer collision (Pointer set); got %+v", reports[0])
+	}
+	got, _ := os.ReadFile(reports[0].BackupTo)
+	if !strings.Contains(string(got), "my-fork") {
+		t.Fatalf("backup missing original command; got:\n%s", got)
+	}
+}
+
+// TestWriter_NoCollisionWhenAlreadyOwned asserts that when state already
+// records the file (file-level FileEntry), no backup is written even if
+// the bytes differ — that's just an in-place update by an owning agent.
+func TestWriter_NoCollisionWhenAlreadyOwned(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, "x.md")
+	_ = os.WriteFile(dest, []byte("ours-v1"), 0o644)
+
+	st := state.New()
+	st.Files["claude:user::"+dest] = state.FileEntry{SHA256: "anything"}
+
+	w := render.NewWriter(st, home, adapter.ScopeUser, "", "claude")
+	op := adapter.FileOp{Action: "write", Path: dest, Content: []byte("ours-v2"), Mode: 0o644}
+	if err := w.Write(op, op.Content); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.Reports()) != 0 {
+		t.Fatalf("expected no collisions when file is already owned; got %v", w.Reports())
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".state", "backups")); statErr == nil {
+		t.Fatal("backups dir should not have been created")
+	}
+}
+
+// TestWriter_NoCollisionWhenContentMatches asserts that a pre-existing
+// file with the *same* content as what we'd write is not backed up —
+// converged-on-arrival should be silent, not noisy.
+func TestWriter_NoCollisionWhenContentMatches(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, "match.md")
+	content := []byte("identical")
+	_ = os.WriteFile(dest, content, 0o644)
+
+	st := state.New()
+	w := render.NewWriter(st, home, adapter.ScopeUser, "", "claude")
+	if err := w.Write(adapter.FileOp{Action: "write", Path: dest, Content: content}, content); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.Reports()) != 0 {
+		t.Fatalf("expected no collision when content matches; got %v", w.Reports())
+	}
+}
+
+// TestWriter_DeleteSkipsBackup asserts that delete ops do not produce
+// backups — agentsync only deletes paths it already owns per state.
+func TestWriter_DeleteSkipsBackup(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, "to-delete.md")
+	_ = os.WriteFile(dest, []byte("bye"), 0o644)
+
+	st := state.New()
+	w := render.NewWriter(st, home, adapter.ScopeUser, "", "claude")
+	if err := w.Delete(adapter.FileOp{Action: "delete", Path: dest}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatal("dest should be gone after Delete")
+	}
+	if len(w.Reports()) != 0 {
+		t.Fatalf("Delete must not produce collision reports; got %v", w.Reports())
+	}
+}
+
+// TestRenderApply_FullPathBacksUpAcrossAgents exercises the integrated
+// path: render.Apply constructs one writer per agent, each agent's
+// Apply routes through it, and the union of reports is returned.
+func TestRenderApply_FullPathBacksUpAcrossAgents(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+
+	claudeDest := filepath.Join(tmp, ".claude", "agents", "x.md")
+	_ = os.MkdirAll(filepath.Dir(claudeDest), 0o755)
+	_ = os.WriteFile(claudeDest, []byte("original-claude"), 0o644)
+
+	reg := adapter.NewRegistry()
+	_ = reg.Register(&fakeJSONApply{name: "claude"})
+
+	plan := render.RenderPlan{
+		PerAgent: map[string]render.AgentResult{
+			"claude": {Ops: []adapter.FileOp{{
+				Action:   "write",
+				Path:     claudeDest,
+				Content:  []byte("rendered-claude"),
+				Mode:     0o644,
+				SourceID: "agents/x.md",
+			}}},
+		},
+	}
+	st := state.New()
+	reports, err := render.Apply(plan, reg, st, home, adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(reports) != 1 {
+		t.Fatalf("want 1 backup; got %d", len(reports))
+	}
+	if !strings.HasPrefix(reports[0].BackupTo, filepath.Join(home, ".state", "backups")) {
+		t.Fatalf("backup not under <home>/.state/backups: %s", reports[0].BackupTo)
+	}
+}

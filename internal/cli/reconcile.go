@@ -225,8 +225,12 @@ done:
 			if a == nil {
 				return fmt.Errorf("reconcile override: adapter %q not registered", name)
 			}
-			if err := a.Apply(ops); err != nil {
+			rw := render.NewWriter(s, home, sc, projectRoot, name)
+			if err := a.Apply(ops, rw); err != nil {
 				return fmt.Errorf("reconcile override apply %s: %w", name, err)
+			}
+			for _, r := range rw.Reports() {
+				fmt.Fprintf(w, "  backup: %s\n", r.String())
 			}
 			if err := render.RecordOpsState(s, name, sc, projectRoot, ops); err != nil {
 				return err

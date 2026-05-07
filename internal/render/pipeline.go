@@ -73,20 +73,47 @@ func ownedKeysFor(s *state.Targets, agent string, scope adapter.Scope, project, 
 	return out
 }
 
-// Apply commits a RenderPlan by calling each adapter's Apply with its FileOps.
-// If any adapter returns an error, applies completed so far are NOT rolled back
-// (each adapter's Apply is itself atomic per-file via iox.AtomicWrite).
+// Apply commits a RenderPlan by constructing one Writer per agent and
+// invoking adapter.Apply with that writer. The writer enforces the
+// foreign-collision backup invariant on every destination write — there
+// is no separate "guard" pass; the guarantee is intrinsic to the only
+// write path adapters are permitted to use.
 //
-// Deduplication: when two adapters emit a "write" op for the same path (e.g.
-// a shared skill file written by both claude and opencode), the first one wins
-// and the second is silently skipped. Content is deterministic per path, so
-// skipping a duplicate is always safe.
-func Apply(p RenderPlan, reg *adapter.Registry) error {
+// Returns the union of CollisionReports across all agents so the caller
+// can surface them. If any adapter returns an error, applies completed
+// so far are NOT rolled back (each underlying iox.AtomicWrite is atomic
+// per-file, but the plan as a whole is not transactional).
+//
+// Deduplication: when two adapters emit a "write" op for the same path
+// (e.g. a shared skill file written by both claude and opencode), the
+// first one wins and the second is silently skipped. Content is
+// deterministic per path, so skipping a duplicate is always safe.
+func Apply(
+	p RenderPlan,
+	reg *adapter.Registry,
+	st *state.Targets,
+	home string,
+	scope adapter.Scope,
+	project string,
+) ([]CollisionReport, error) {
+	if st == nil {
+		// Defensive: a nil state would make every write look like a
+		// foreign collision and produce duplicate backups. Callers that
+		// don't yet have a state object should construct an empty one
+		// (state.New) rather than passing nil.
+		return nil, fmt.Errorf("render.Apply: nil state")
+	}
+
+	var allReports []CollisionReport
 	seen := map[string]bool{}
-	for name, res := range p.PerAgent {
+	for _, name := range reg.Names() {
+		res, ok := p.PerAgent[name]
+		if !ok {
+			continue
+		}
 		a := reg.Lookup(name)
 		if a == nil {
-			return fmt.Errorf("adapter %q not registered at apply", name)
+			return allReports, fmt.Errorf("adapter %q not registered at apply", name)
 		}
 		var deduped []adapter.FileOp
 		for _, op := range res.Ops {
@@ -98,9 +125,12 @@ func Apply(p RenderPlan, reg *adapter.Registry) error {
 			}
 			deduped = append(deduped, op)
 		}
-		if err := a.Apply(deduped); err != nil {
-			return fmt.Errorf("apply %s: %w", name, err)
+		w := NewWriter(st, home, scope, project, name)
+		if err := a.Apply(deduped, w); err != nil {
+			allReports = append(allReports, w.Reports()...)
+			return allReports, fmt.Errorf("apply %s: %w", name, err)
 		}
+		allReports = append(allReports, w.Reports()...)
 	}
-	return nil
+	return allReports, nil
 }

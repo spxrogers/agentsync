@@ -22,7 +22,7 @@ func TestApply_NewSettings_WritesContent(t *testing.T) {
 		Mode:          0o644,
 		MergeStrategy: "merge-json-keys",
 	}
-	if err := a.Apply([]adapter.FileOp{op}); err != nil {
+	if err := a.Apply([]adapter.FileOp{op}, adapter.PassThroughWriter{}); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := os.ReadFile(op.Path)
@@ -47,7 +47,7 @@ func TestApply_PreservesForeignKeys(t *testing.T) {
 		MergeStrategy: "merge-json-keys",
 		OwnedKeys:     nil, // no owned keys -> no orphan removal
 	}
-	if err := a.Apply([]adapter.FileOp{op}); err != nil {
+	if err := a.Apply([]adapter.FileOp{op}, adapter.PassThroughWriter{}); err != nil {
 		t.Fatal(err)
 	}
 	var out map[string]any
@@ -79,7 +79,7 @@ func TestApply_OrphanRemoval(t *testing.T) {
 		MergeStrategy: "merge-json-keys",
 		OwnedKeys:     []string{"/mcpServers/github", "/mcpServers/stale"},
 	}
-	if err := a.Apply([]adapter.FileOp{op}); err != nil {
+	if err := a.Apply([]adapter.FileOp{op}, adapter.PassThroughWriter{}); err != nil {
 		t.Fatal(err)
 	}
 	var out map[string]any

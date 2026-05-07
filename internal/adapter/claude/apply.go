@@ -6,18 +6,21 @@ import (
 	"os"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
-	"github.com/spxrogers/agentsync/internal/iox"
 )
 
-func (a *Adapter) Apply(ops []adapter.FileOp) error {
+// Apply executes ops against Claude's native destinations. All writes
+// route through the supplied DestWriter; we never call iox.AtomicWrite
+// or os.Remove directly here. The DestWriter owns the foreign-collision
+// backup invariant.
+func (a *Adapter) Apply(ops []adapter.FileOp, w adapter.DestWriter) error {
 	for _, op := range ops {
 		switch op.Action {
 		case "delete":
-			if err := os.Remove(op.Path); err != nil && !os.IsNotExist(err) {
+			if err := w.Delete(op); err != nil {
 				return fmt.Errorf("delete %s: %w", op.Path, err)
 			}
 		case "", "write":
-			if err := a.applyWrite(op); err != nil {
+			if err := a.applyWrite(op, w); err != nil {
 				return err
 			}
 		default:
@@ -27,11 +30,11 @@ func (a *Adapter) Apply(ops []adapter.FileOp) error {
 	return nil
 }
 
-func (a *Adapter) applyWrite(op adapter.FileOp) error {
-	mode := os.FileMode(op.Mode)
-	if mode == 0 {
-		mode = 0o644
-	}
+// applyWrite performs the per-op merge (for merge-json-keys) and hands
+// the post-merge bytes to the writer. The writer compares pre-merge
+// `op.Content` against the destination for per-key collision detection,
+// so we still pass the raw FileOp (carrying op.Content) along.
+func (a *Adapter) applyWrite(op adapter.FileOp, w adapter.DestWriter) error {
 	if op.MergeStrategy == "merge-json-keys" {
 		existing := readJSONFile(op.Path)
 		var ours map[string]any
@@ -43,9 +46,9 @@ func (a *Adapter) applyWrite(op adapter.FileOp) error {
 		if err != nil {
 			return fmt.Errorf("marshal merged for %s: %w", op.Path, err)
 		}
-		return iox.AtomicWrite(op.Path, append(body, '\n'), mode)
+		return w.Write(op, append(body, '\n'))
 	}
-	return iox.AtomicWrite(op.Path, op.Content, mode)
+	return w.Write(op, op.Content)
 }
 
 func readJSONFile(path string) map[string]any {

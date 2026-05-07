@@ -20,7 +20,7 @@ func (stub) Render(source.Canonical, adapter.Scope, string) ([]adapter.FileOp, [
 }
 
 func (stub) Ingest(adapter.Scope, string) (source.Canonical, error) { return source.Canonical{}, nil }
-func (stub) Apply([]adapter.FileOp) error                           { return nil }
+func (stub) Apply([]adapter.FileOp, adapter.DestWriter) error       { return nil }
 
 func TestRegistry_RegisterLookup(t *testing.T) {
 	r := adapter.NewRegistry()

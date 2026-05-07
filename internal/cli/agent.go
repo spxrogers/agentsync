@@ -12,6 +12,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
@@ -282,7 +283,11 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 		}
 	}
 
-	// Build delete ops and apply via the adapter.
+	// Build delete ops and apply via the adapter. Purge is destructive
+	// by intent — we don't want collision-backups for files agentsync
+	// is being told to remove — but we still route through DestWriter
+	// because that's the only interface the adapter knows. The writer's
+	// Delete path skips backup deliberately (see DestWriter doc).
 	reg := registryFactory()
 	a := reg.Lookup(name)
 	if a == nil {
@@ -292,7 +297,8 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 		for path := range toDelete {
 			ops = append(ops, adapter.FileOp{Action: "delete", Path: path})
 		}
-		if err := a.Apply(ops); err != nil {
+		rw := render.NewWriter(s, home, adapter.ScopeUser, "", name)
+		if err := a.Apply(ops, rw); err != nil {
 			return fmt.Errorf("purge apply %s: %w", name, err)
 		}
 	}

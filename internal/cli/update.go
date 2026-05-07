@@ -206,7 +206,7 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 		if err != nil {
 			return fmt.Errorf("plan after update: %w", err)
 		}
-		collisions, err := render.ApplyWithCollisionGuard(plan, reg, st, home, sc, projectRoot)
+		collisions, err := render.Apply(plan, reg, st, home, sc, projectRoot)
 		if err != nil {
 			return fmt.Errorf("apply after update: %w", err)
 		}
