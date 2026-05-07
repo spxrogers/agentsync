@@ -1,6 +1,7 @@
 package source_test
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/spf13/afero"
@@ -206,5 +207,72 @@ args    = ["-mode=stdio"]
 	}
 	if lsp.Spec.Command != "gopls" {
 		t.Fatalf("command = %q", lsp.Spec.Command)
+	}
+}
+
+func TestLoad_PluginExpandsToMCP(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	home := "/h"
+	cache := "/h/.state/cache/plugins"
+	_ = afero.WriteFile(fs, filepath.Join(home, "plugins", "x.toml"), []byte(`
+[plugin]
+id = "x@m"
+version = "1"
+`), 0o644)
+	_ = afero.WriteFile(fs, filepath.Join(cache, "x", ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"x","mcpServers":{"server-from-plugin":{"command":"x"}}}`),
+		0o644)
+	c, err := source.LoadWithCache(fs, home, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, m := range c.MCPServers {
+		if m.ID == "server-from-plugin" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("plugin's MCP not surfaced via projection: %+v", c.MCPServers)
+	}
+}
+
+// TestLoad_WithCacheNoPlugin verifies that LoadWithCache with a cacheDir but no
+// plugin.json does not error and returns an empty projection (graceful skip).
+func TestLoad_WithCacheNoPlugin(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	home := "/h2"
+	cache := "/h2/.state/cache/plugins"
+	_ = afero.WriteFile(fs, filepath.Join(home, "plugins", "ghost.toml"), []byte(`
+[plugin]
+id = "ghost@m"
+version = "0"
+`), 0o644)
+	// No plugin.json in cache — should not error.
+	c, err := source.LoadWithCache(fs, home, cache)
+	if err != nil {
+		t.Fatalf("expected no error when plugin.json absent: %v", err)
+	}
+	if len(c.MCPServers) != 0 {
+		t.Fatalf("expected no MCP servers from missing cache, got %d", len(c.MCPServers))
+	}
+}
+
+// TestLoad_NoCacheDirBehavesLikeLoad verifies that LoadWithCache("") == Load.
+func TestLoad_NoCacheDirBehavesLikeLoad(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	home := "/h3"
+	_ = afero.WriteFile(fs, filepath.Join(home, "mcp", "s.toml"), []byte(`
+[server]
+type = "stdio"
+command = "s"
+`), 0o644)
+	c1, err1 := source.Load(fs, home)
+	c2, err2 := source.LoadWithCache(fs, home, "")
+	if err1 != nil || err2 != nil {
+		t.Fatalf("errors: %v / %v", err1, err2)
+	}
+	if len(c1.MCPServers) != len(c2.MCPServers) {
+		t.Fatalf("MCP count differs: Load=%d LoadWithCache=%d", len(c1.MCPServers), len(c2.MCPServers))
 	}
 }

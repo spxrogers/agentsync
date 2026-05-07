@@ -39,6 +39,9 @@ func NewRoot() *cobra.Command {
 		newStatusCmd(),
 		newDiffCmd(),
 		newReconcileCmd(),
+		newPluginCmd(),
+		newMarketplaceCmd(),
+		newUpdateCmd(),
 	)
 	return cmd
 }

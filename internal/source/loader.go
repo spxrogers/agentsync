@@ -2,6 +2,7 @@ package source
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,6 +18,18 @@ import (
 // subdirectories return an empty Canonical (not an error). Malformed files
 // return an error with a path prefix for actionability.
 func Load(fs afero.Fs, home string) (Canonical, error) {
+	return LoadWithCache(fs, home, "")
+}
+
+// LoadWithCache is like Load but also projects plugin manifests from the plugin
+// cache directory. For each plugins/<id>.toml entry, the loader reads
+// <cacheDir>/<id>/.claude-plugin/plugin.json (via the same afero FS), runs
+// marketplace.Project, and merges the resulting MCPServers / Skills / Subagents
+// / Commands / Hooks / LSPServers into the canonical model. Adapters downstream
+// therefore see plugin components transparently without knowing about plugins.
+//
+// If cacheDir is empty the function behaves identically to Load (no projection).
+func LoadWithCache(fs afero.Fs, home string, cacheDir string) (Canonical, error) {
 	var c Canonical
 
 	if err := loadConfig(fs, home, &c.Config); err != nil {
@@ -50,7 +63,175 @@ func Load(fs afero.Fs, home string) (Canonical, error) {
 	if c.Memory, err = loadMemory(fs, home); err != nil {
 		return c, err
 	}
+
+	// Plugin projection: expand each plugin's cached manifest into the canonical
+	// model so downstream adapters see plugin components transparently.
+	if cacheDir != "" {
+		if err := projectPlugins(fs, &c, cacheDir); err != nil {
+			return c, err
+		}
+	}
+
 	return c, nil
+}
+
+// projectPlugins iterates the canonical plugin list, projects each plugin's
+// manifest from the cache (using the afero FS for reading), and merges the
+// PluginProjection into the canonical model.
+//
+// Projection is performed inline (no import of the marketplace package) to avoid
+// an import cycle: marketplace already imports source. Only strict-mode
+// plugin.json parsing is performed here; PluginEntry-level overrides are not
+// applied at load time (they are handled during rendering per adapter).
+func projectPlugins(fs afero.Fs, c *Canonical, cacheDir string) error {
+	for _, pl := range c.Plugins {
+		// Derive the plugin's simple ID (strip any "@marketplace" suffix).
+		id := pl.Plugin.ID
+		if idx := strings.LastIndex(id, "@"); idx >= 0 {
+			id = id[:idx]
+		}
+		if id == "" {
+			id = pl.ID
+		}
+
+		pluginCacheDir := filepath.Join(cacheDir, id)
+		proj, err := readPluginProjection(fs, pluginCacheDir)
+		if err != nil {
+			return fmt.Errorf("project plugin %s: %w", id, err)
+		}
+
+		c.MCPServers = append(c.MCPServers, proj.MCPServers...)
+		c.Skills = append(c.Skills, proj.Skills...)
+		c.Subagents = append(c.Subagents, proj.Subagents...)
+		c.Commands = append(c.Commands, proj.Commands...)
+		c.Hooks = append(c.Hooks, proj.Hooks...)
+		c.LSPServers = append(c.LSPServers, proj.LSPServers...)
+	}
+	return nil
+}
+
+// pluginManifestJSON is the minimal structure we need from plugin.json to build
+// a PluginProjection. It intentionally mirrors marketplace.PluginManifest but
+// lives here to avoid the import cycle.
+type pluginManifestJSON struct {
+	MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	LSPServers map[string]json.RawMessage `json:"lspServers"`
+}
+
+// readPluginProjection reads <pluginCacheDir>/.claude-plugin/plugin.json and
+// builds a PluginProjection from the MCP and LSP server entries. If the file is
+// absent, an empty projection is returned without error (plugin not yet cached).
+func readPluginProjection(fs afero.Fs, pluginCacheDir string) (PluginProjection, error) {
+	var pr PluginProjection
+	manifestPath := filepath.Join(pluginCacheDir, ".claude-plugin", "plugin.json")
+	data, err := afero.ReadFile(fs, manifestPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return pr, nil
+		}
+		return pr, fmt.Errorf("read plugin.json: %w", err)
+	}
+
+	var manifest pluginManifestJSON
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return pr, fmt.Errorf("parse plugin.json: %w", err)
+	}
+
+	root := pluginCacheDir // used to resolve ${CLAUDE_PLUGIN_ROOT}
+	for name, raw := range manifest.MCPServers {
+		spec := parseMCPSpecJSON(raw, root)
+		pr.MCPServers = append(pr.MCPServers, MCPServer{ID: name, Server: spec})
+	}
+	for name, raw := range manifest.LSPServers {
+		spec := parseLSPSpecJSON(raw, root)
+		pr.LSPServers = append(pr.LSPServers, LSPServer{ID: name, Spec: spec})
+	}
+	return pr, nil
+}
+
+// resolvePR replaces ${CLAUDE_PLUGIN_ROOT} with root in s.
+func resolvePR(s, root string) string {
+	return strings.ReplaceAll(s, "${CLAUDE_PLUGIN_ROOT}", root)
+}
+
+// parseMCPSpecJSON converts raw JSON (from mcpServers map value) into MCPServerSpec.
+func parseMCPSpecJSON(raw json.RawMessage, root string) MCPServerSpec {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return MCPServerSpec{}
+	}
+	spec := MCPServerSpec{}
+	if v, ok := m["type"]; ok {
+		json.Unmarshal(v, &spec.Type) //nolint:errcheck
+	}
+	if v, ok := m["command"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			spec.Command = resolvePR(s, root)
+		}
+	}
+	if v, ok := m["url"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			spec.URL = resolvePR(s, root)
+		}
+	}
+	if v, ok := m["args"]; ok {
+		var args []string
+		if json.Unmarshal(v, &args) == nil {
+			for i, a := range args {
+				args[i] = resolvePR(a, root)
+			}
+			spec.Args = args
+		}
+	}
+	if v, ok := m["env"]; ok {
+		var env map[string]string
+		if json.Unmarshal(v, &env) == nil {
+			spec.Env = make(map[string]string, len(env))
+			for k, val := range env {
+				spec.Env[k] = resolvePR(val, root)
+			}
+		}
+	}
+	if v, ok := m["agents"]; ok {
+		var agents []string
+		if json.Unmarshal(v, &agents) == nil {
+			spec.Agents = agents
+		}
+	}
+	return spec
+}
+
+// parseLSPSpecJSON converts raw JSON into LSPServerSpec.
+func parseLSPSpecJSON(raw json.RawMessage, root string) LSPServerSpec {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return LSPServerSpec{}
+	}
+	spec := LSPServerSpec{}
+	if v, ok := m["command"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			spec.Command = resolvePR(s, root)
+		}
+	}
+	if v, ok := m["url"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			spec.URL = resolvePR(s, root)
+		}
+	}
+	if v, ok := m["args"]; ok {
+		var args []string
+		if json.Unmarshal(v, &args) == nil {
+			for i, a := range args {
+				args[i] = resolvePR(a, root)
+			}
+			spec.Args = args
+		}
+	}
+	return spec
 }
 
 func loadConfig(fs afero.Fs, home string, cfg *Config) error {

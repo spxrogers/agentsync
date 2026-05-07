@@ -24,7 +24,8 @@ func newApplyCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := paths.AgentsyncHome(paths.OSEnv{})
-			c, err := source.Load(afero.NewOsFs(), home)
+			pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+			c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
 			if err != nil {
 				return err
 			}
@@ -63,6 +64,11 @@ func newApplyCmd() *cobra.Command {
 					}
 					fmt.Fprintf(w, "  %-10s %d ops, %d skips\n", name, len(res.Ops), len(res.Skips))
 				}
+				report := render.BuildReport(c, plan, agents)
+				if len(report.Rows) > 0 {
+					fmt.Fprintln(w)
+					report.PrintText(w)
+				}
 				return nil
 			}
 
@@ -85,7 +91,13 @@ func newApplyCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), "applied:", plan.Total(), "ops")
+			w := cmd.OutOrStdout()
+			fmt.Fprintln(w, "applied:", plan.Total(), "ops")
+			report := render.BuildReport(c, plan, agents)
+			if len(report.Rows) > 0 {
+				fmt.Fprintln(w)
+				report.PrintText(w)
+			}
 			return nil
 		},
 	}

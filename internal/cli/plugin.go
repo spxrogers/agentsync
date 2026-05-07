@@ -1,0 +1,475 @@
+package cli
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/pelletier/go-toml/v2"
+	"github.com/spf13/cobra"
+	"github.com/spxrogers/agentsync/internal/iox"
+	"github.com/spxrogers/agentsync/internal/marketplace"
+	"github.com/spxrogers/agentsync/internal/paths"
+)
+
+func newPluginCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "plugin",
+		Short: "manage plugins from marketplaces",
+	}
+	cmd.AddCommand(
+		newPluginInstallCmd(),
+		newPluginUpgradeCmd(),
+		newPluginEnableCmd(),
+		newPluginDisableCmd(),
+		newPluginRemoveCmd(),
+		newPluginListCmd(),
+	)
+	return cmd
+}
+
+// pluginTOML is the shape of plugins/<id>.toml.
+type pluginTOML struct {
+	Plugin pluginTOMLSpec `toml:"plugin"`
+}
+
+type pluginTOMLSpec struct {
+	ID          string   `toml:"id"`
+	Version     string   `toml:"version,omitempty"`
+	ManifestSHA string   `toml:"manifest_sha,omitempty"`
+	Update      string   `toml:"update,omitempty"`
+	Agents      []string `toml:"agents,omitempty"`
+	Disabled    bool     `toml:"disabled,omitempty"`
+}
+
+// ---- install ----------------------------------------------------------------
+
+func newPluginInstallCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "install <id[@marketplace]>",
+		Short: "fetch a plugin and register it",
+		Args:  cobra.ExactArgs(1),
+		RunE:  pluginInstallRun,
+	}
+}
+
+func pluginInstallRun(cmd *cobra.Command, args []string) error {
+	id, mpName := splitPluginRef(args[0])
+	home := paths.AgentsyncHome(paths.OSEnv{})
+
+	// Resolve marketplace.json from the marketplace cache.
+	mpData, mpEntry, err := resolveMarketplaceEntry(home, mpName, id)
+	if err != nil {
+		return err
+	}
+
+	// Compute cache path.
+	cacheDir := pluginCacheDir(home, id)
+
+	// Fetch plugin source into cache.
+	src := mpEntry.Source
+	// For relative sources, resolve relative to the marketplace cache root.
+	if src.Relative != "" {
+		mpCacheRoot := marketplaceCacheDir(home, mpName)
+		src.Relative = filepath.Join(mpCacheRoot, src.Relative)
+	}
+	fetcher := marketplace.Dispatch(src)
+	result, err := fetcher.Fetch(src, cacheDir)
+	if err != nil {
+		return fmt.Errorf("fetch plugin %s: %w", id, err)
+	}
+
+	// Compute manifest SHA.
+	manifestSHA := computeManifestSHA(home, id, mpEntry, mpData, cacheDir)
+	if result.HeadSHA != "" && manifestSHA == "" {
+		manifestSHA = result.HeadSHA
+	}
+
+	// Write plugins/<id>.toml.
+	pluginPath := filepath.Join(home, "plugins", id+".toml")
+	spec := pluginTOMLSpec{
+		ID:          id + "@" + resolveMarketplaceName(mpName),
+		Version:     mpEntry.Version,
+		ManifestSHA: manifestSHA,
+		Update:      "track",
+		Agents:      []string{"*"},
+	}
+	if result.Version != "" {
+		spec.Version = result.Version
+	}
+	data, err := toml.Marshal(pluginTOML{Plugin: spec})
+	if err != nil {
+		return fmt.Errorf("marshal plugin toml: %w", err)
+	}
+	if err := iox.AtomicWrite(pluginPath, data, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", pluginPath, err)
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "installed plugin %s (version=%s sha=%s)\n",
+		id, spec.Version, truncate(spec.ManifestSHA, 12))
+	return nil
+}
+
+// ---- upgrade ----------------------------------------------------------------
+
+func newPluginUpgradeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "upgrade <id>",
+		Short: "re-fetch a plugin and update its manifest sha",
+		Args:  cobra.ExactArgs(1),
+		RunE:  pluginUpgradeRun,
+	}
+}
+
+func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
+	id := args[0]
+	home := paths.AgentsyncHome(paths.OSEnv{})
+
+	// Read existing plugin toml.
+	pluginPath := filepath.Join(home, "plugins", id+".toml")
+	existing, err := readPluginTOML(pluginPath)
+	if err != nil {
+		return err
+	}
+
+	// Parse marketplace name from the stored id "name@marketplace".
+	_, mpName := splitPluginRef(existing.Plugin.ID)
+
+	// Re-resolve marketplace entry.
+	mpData, mpEntry, err := resolveMarketplaceEntry(home, mpName, id)
+	if err != nil {
+		return err
+	}
+
+	cacheDir := pluginCacheDir(home, id)
+	// Remove old cache so we get a fresh fetch.
+	_ = os.RemoveAll(cacheDir)
+
+	src := mpEntry.Source
+	if src.Relative != "" {
+		src.Relative = filepath.Join(marketplaceCacheDir(home, mpName), src.Relative)
+	}
+	fetcher := marketplace.Dispatch(src)
+	result, err := fetcher.Fetch(src, cacheDir)
+	if err != nil {
+		return fmt.Errorf("fetch plugin %s: %w", id, err)
+	}
+
+	manifestSHA := computeManifestSHA(home, id, mpEntry, mpData, cacheDir)
+	if result.HeadSHA != "" && manifestSHA == "" {
+		manifestSHA = result.HeadSHA
+	}
+
+	existing.Plugin.ManifestSHA = manifestSHA
+	if mpEntry.Version != "" {
+		existing.Plugin.Version = mpEntry.Version
+	}
+	if result.Version != "" {
+		existing.Plugin.Version = result.Version
+	}
+
+	data, err := toml.Marshal(existing)
+	if err != nil {
+		return err
+	}
+	if err := iox.AtomicWrite(pluginPath, data, 0o644); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "upgraded plugin %s (sha=%s)\n",
+		id, truncate(manifestSHA, 12))
+	return nil
+}
+
+// ---- enable -----------------------------------------------------------------
+
+func newPluginEnableCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "enable <id>",
+		Short: "enable a disabled plugin",
+		Args:  cobra.ExactArgs(1),
+		RunE:  pluginEnableRun,
+	}
+}
+
+func pluginEnableRun(cmd *cobra.Command, args []string) error {
+	id := args[0]
+	home := paths.AgentsyncHome(paths.OSEnv{})
+	pluginPath := filepath.Join(home, "plugins", id+".toml")
+
+	existing, err := readPluginTOML(pluginPath)
+	if err != nil {
+		return err
+	}
+	existing.Plugin.Disabled = false
+	if len(existing.Plugin.Agents) == 0 {
+		existing.Plugin.Agents = []string{"*"}
+	}
+	data, err := toml.Marshal(existing)
+	if err != nil {
+		return err
+	}
+	if err := iox.AtomicWrite(pluginPath, data, 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "enabled plugin %s\n", id)
+	return nil
+}
+
+// ---- disable ----------------------------------------------------------------
+
+func newPluginDisableCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "disable <id>",
+		Short: "disable a plugin without removing it",
+		Args:  cobra.ExactArgs(1),
+		RunE:  pluginDisableRun,
+	}
+}
+
+func pluginDisableRun(cmd *cobra.Command, args []string) error {
+	id := args[0]
+	home := paths.AgentsyncHome(paths.OSEnv{})
+	pluginPath := filepath.Join(home, "plugins", id+".toml")
+
+	existing, err := readPluginTOML(pluginPath)
+	if err != nil {
+		return err
+	}
+	existing.Plugin.Disabled = true
+	existing.Plugin.Agents = []string{}
+	data, err := toml.Marshal(existing)
+	if err != nil {
+		return err
+	}
+	if err := iox.AtomicWrite(pluginPath, data, 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "disabled plugin %s\n", id)
+	return nil
+}
+
+// ---- remove -----------------------------------------------------------------
+
+func newPluginRemoveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove <id>",
+		Short: "remove a plugin and its cached files",
+		Args:  cobra.ExactArgs(1),
+		RunE:  pluginRemoveRun,
+	}
+}
+
+func pluginRemoveRun(cmd *cobra.Command, args []string) error {
+	id := args[0]
+	home := paths.AgentsyncHome(paths.OSEnv{})
+
+	pluginPath := filepath.Join(home, "plugins", id+".toml")
+	if err := os.Remove(pluginPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove %s: %w", pluginPath, err)
+	}
+
+	cacheDir := pluginCacheDir(home, id)
+	if err := os.RemoveAll(cacheDir); err != nil {
+		return fmt.Errorf("remove cache %s: %w", cacheDir, err)
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "removed plugin %s\n", id)
+	return nil
+}
+
+// ---- list -------------------------------------------------------------------
+
+func newPluginListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "list installed plugins",
+		Args:  cobra.NoArgs,
+		RunE:  pluginListRun,
+	}
+}
+
+func pluginListRun(cmd *cobra.Command, _ []string) error {
+	home := paths.AgentsyncHome(paths.OSEnv{})
+	dir := filepath.Join(home, "plugins")
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", dir, err)
+	}
+
+	var names []string
+	plugins := map[string]pluginTOMLSpec{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".toml") {
+			continue
+		}
+		id := strings.TrimSuffix(e.Name(), ".toml")
+		p, err := readPluginTOML(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		names = append(names, id)
+		plugins[id] = p.Plugin
+	}
+	sort.Strings(names)
+
+	if len(names) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "(no plugins installed; try: agentsync plugin install <id@marketplace>)")
+		return nil
+	}
+	for _, name := range names {
+		p := plugins[name]
+		status := "enabled"
+		if p.Disabled {
+			status = "disabled"
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "%-20s version=%-10s sha=%-14s %s\n",
+			name, p.Version, truncate(p.ManifestSHA, 12), status)
+	}
+	return nil
+}
+
+// ---- helpers ----------------------------------------------------------------
+
+// splitPluginRef splits "id@marketplace" → (id, marketplace).
+// If no "@" is present, marketplace is "".
+func splitPluginRef(ref string) (id, mpName string) {
+	if idx := strings.LastIndex(ref, "@"); idx >= 0 {
+		return ref[:idx], ref[idx+1:]
+	}
+	return ref, ""
+}
+
+// resolveMarketplaceName returns the marketplace name, defaulting to "default"
+// if empty.
+func resolveMarketplaceName(name string) string {
+	if name == "" {
+		return "default"
+	}
+	return name
+}
+
+// pluginCacheDir returns the cache directory for a plugin.
+func pluginCacheDir(home, id string) string {
+	return filepath.Join(home, ".state", "cache", "plugins", id)
+}
+
+// marketplaceCacheDir returns the cache directory for a marketplace.
+func marketplaceCacheDir(home, mpName string) string {
+	return filepath.Join(home, ".state", "cache", "marketplaces", mpName)
+}
+
+// resolveMarketplaceEntry loads the marketplace's marketplace.json from cache
+// and finds the named plugin entry. Returns the raw bytes (for SHA computation)
+// and the entry.
+func resolveMarketplaceEntry(home, mpName, pluginID string) ([]byte, marketplace.PluginEntry, error) {
+	if mpName == "" {
+		// No marketplace specified — look in all marketplace caches.
+		return searchAllMarketplaces(home, pluginID)
+	}
+
+	mpCacheDir := marketplaceCacheDir(home, mpName)
+	mpJSONPath := filepath.Join(mpCacheDir, ".claude-plugin", "marketplace.json")
+	data, err := os.ReadFile(mpJSONPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, marketplace.PluginEntry{}, fmt.Errorf(
+				"marketplace %q not found in cache; run: agentsync marketplace add <url>", mpName)
+		}
+		return nil, marketplace.PluginEntry{}, fmt.Errorf("read %s: %w", mpJSONPath, err)
+	}
+
+	var mp marketplace.Marketplace
+	if err := json.Unmarshal(data, &mp); err != nil {
+		return nil, marketplace.PluginEntry{}, fmt.Errorf("parse marketplace.json: %w", err)
+	}
+
+	for _, entry := range mp.Plugins {
+		if entry.Name == pluginID {
+			return data, entry, nil
+		}
+	}
+	return nil, marketplace.PluginEntry{}, fmt.Errorf("plugin %q not found in marketplace %q", pluginID, mpName)
+}
+
+// searchAllMarketplaces scans all cached marketplace.json files for a plugin.
+func searchAllMarketplaces(home, pluginID string) ([]byte, marketplace.PluginEntry, error) {
+	cacheRoot := filepath.Join(home, ".state", "cache", "marketplaces")
+	entries, err := os.ReadDir(cacheRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, marketplace.PluginEntry{}, fmt.Errorf(
+				"no marketplaces cached; run: agentsync marketplace add <url>")
+		}
+		return nil, marketplace.PluginEntry{}, err
+	}
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		mpJSONPath := filepath.Join(cacheRoot, e.Name(), ".claude-plugin", "marketplace.json")
+		data, err := os.ReadFile(mpJSONPath)
+		if err != nil {
+			continue
+		}
+		var mp marketplace.Marketplace
+		if err := json.Unmarshal(data, &mp); err != nil {
+			continue
+		}
+		for _, entry := range mp.Plugins {
+			if entry.Name == pluginID {
+				return data, entry, nil
+			}
+		}
+	}
+	return nil, marketplace.PluginEntry{}, fmt.Errorf("plugin %q not found in any cached marketplace", pluginID)
+}
+
+// computeManifestSHA computes a sha256 over the plugin.json bytes (strict) or
+// the raw marketplace entry bytes (non-strict).
+func computeManifestSHA(home, id string, entry marketplace.PluginEntry, mpData []byte, cacheDir string) string {
+	strict := entry.Strict == nil || *entry.Strict
+	if strict {
+		pluginJSONPath := filepath.Join(cacheDir, ".claude-plugin", "plugin.json")
+		data, err := os.ReadFile(pluginJSONPath)
+		if err != nil {
+			return ""
+		}
+		h := sha256.Sum256(data)
+		return hex.EncodeToString(h[:])
+	}
+	// Non-strict: SHA over the marketplace entry bytes (re-marshal entry for stability).
+	entryBytes, err := json.Marshal(entry)
+	if err != nil {
+		return ""
+	}
+	h := sha256.Sum256(entryBytes)
+	return hex.EncodeToString(h[:])
+}
+
+// readPluginTOML reads and parses a plugins/<id>.toml file.
+func readPluginTOML(path string) (pluginTOML, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return pluginTOML{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	var p pluginTOML
+	if err := toml.Unmarshal(data, &p); err != nil {
+		return pluginTOML{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return p, nil
+}
+
+// truncate shortens a string to n chars.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
