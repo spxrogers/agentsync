@@ -15,6 +15,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/drift"
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
@@ -22,37 +23,60 @@ import (
 
 // reconcileItem describes one classified item in the reconcile pass.
 type reconcileItem struct {
-	agentName string
-	op        adapter.FileOp
-	ptr       string // non-empty for key-level items
-	cls       drift.Class
-	hsrc      string
-	happlied  string
-	hdest     string
+	agentName   string
+	op          adapter.FileOp
+	ptr         string // non-empty for key-level items
+	cls         drift.Class
+	hsrc        string
+	happlied    string
+	hdest       string
+	scope       adapter.Scope
+	projectRoot string
 }
 
 func newReconcileCmd() *cobra.Command {
-	var autoWB, autoOR, autoSafe bool
+	var (
+		autoWB, autoOR, autoSafe bool
+		scopeFlag, projectFlag   string
+	)
 	cmd := &cobra.Command{
 		Use:   "reconcile",
 		Short: "interactively resolve drift",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return reconcileRun(cmd, cmd.InOrStdin(), autoWB, autoOR, autoSafe)
+			return reconcileRun(cmd, cmd.InOrStdin(), autoWB, autoOR, autoSafe, scopeFlag, projectFlag)
 		},
 	}
 	cmd.Flags().BoolVar(&autoWB, "auto-writeback", false, "auto-resolve drift by writing dest back to source")
 	cmd.Flags().BoolVar(&autoOR, "auto-override", false, "auto-resolve drift by re-applying source to dest")
 	cmd.Flags().BoolVar(&autoSafe, "auto-safe", false, "auto-resolve only converged/pending/new (no-op)")
+	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: auto-detect from cwd)")
+	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
 	return cmd
 }
 
-func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe bool) error {
+func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe bool, scopeFlag, projectFlag string) error {
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	c, err := source.Load(afero.NewOsFs(), home)
 	if err != nil {
 		return err
 	}
+
+	sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag, c)
+	if err != nil {
+		return err
+	}
+
+	if sc == adapter.ScopeProject && projectRoot != "" {
+		marker, merr := project.Discover(projectRoot)
+		if merr != nil {
+			return fmt.Errorf("load project marker: %w", merr)
+		}
+		if marker != nil {
+			c = project.Merge(c, marker)
+		}
+	}
+
 	statePath := filepath.Join(home, ".state", "targets.json")
 	s, err := state.Load(statePath)
 	if err != nil {
@@ -65,13 +89,13 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 			agents = append(agents, name)
 		}
 	}
-	plan, err := render.Plan(c, reg, agents, adapter.ScopeUser, "", s)
+	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s)
 	if err != nil {
 		return err
 	}
 
 	// Collect all items in order.
-	items := collectItems(plan, reg, s)
+	items := collectItems(plan, reg, s, sc, projectRoot)
 
 	w := cmd.OutOrStdout()
 
@@ -183,7 +207,7 @@ done:
 		}
 		// Update state.
 		for name, res := range plan.PerAgent {
-			if err := render.RecordOpsState(s, name, adapter.ScopeUser, "", res.Ops); err != nil {
+			if err := render.RecordOpsState(s, name, sc, projectRoot, res.Ops); err != nil {
 				return err
 			}
 		}
@@ -197,7 +221,7 @@ done:
 }
 
 // collectItems builds the flat reconcile list from a rendered plan + state.
-func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets) []reconcileItem {
+func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot string) []reconcileItem {
 	var items []reconcileItem
 	for _, name := range reg.Names() {
 		res, ok := plan.PerAgent[name]
@@ -216,17 +240,19 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 				final := readJSONFile(op.Path)
 				for _, ptr := range render.CollectPointers(ours, "") {
 					hsrc := hashAnyValue(getPointerValue(ours, ptr))
-					happlied := s.Keys[fmt.Sprintf("%s:user::%s:%s", name, op.Path, ptr)].SHA256
+					happlied := s.Keys[stateKeyKey(name, sc, projectRoot, op.Path, ptr)].SHA256
 					hdest := hashAnyValue(getPointerValue(final, ptr))
 					cls := drift.Classify(hsrc, happlied, hdest)
 					items = append(items, reconcileItem{
-						agentName: name,
-						op:        op,
-						ptr:       ptr,
-						cls:       cls,
-						hsrc:      hsrc,
-						happlied:  happlied,
-						hdest:     hdest,
+						agentName:   name,
+						op:          op,
+						ptr:         ptr,
+						cls:         cls,
+						hsrc:        hsrc,
+						happlied:    happlied,
+						hdest:       hdest,
+						scope:       sc,
+						projectRoot: projectRoot,
 					})
 				}
 			} else {
@@ -235,16 +261,18 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 				}
 				seen[op.Path] = true
 				hsrc := hashContent(op.Content)
-				happlied := s.Files[fmt.Sprintf("%s:user::%s", name, op.Path)].SHA256
+				happlied := s.Files[stateFileKey(name, sc, projectRoot, op.Path)].SHA256
 				hdest := hashFile(op.Path)
 				cls := drift.Classify(hsrc, happlied, hdest)
 				items = append(items, reconcileItem{
-					agentName: name,
-					op:        op,
-					cls:       cls,
-					hsrc:      hsrc,
-					happlied:  happlied,
-					hdest:     hdest,
+					agentName:   name,
+					op:          op,
+					cls:         cls,
+					hsrc:        hsrc,
+					happlied:    happlied,
+					hdest:       hdest,
+					scope:       sc,
+					projectRoot: projectRoot,
 				})
 			}
 		}
