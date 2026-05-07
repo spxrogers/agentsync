@@ -72,6 +72,53 @@ func TestAgeBackend_WrongIdentity(t *testing.T) {
 	}
 }
 
+func TestAgeBackend_RejectsLooseIdentityPermissions(t *testing.T) {
+	tmp := t.TempDir()
+	id, _ := age.GenerateX25519Identity()
+	idPath := filepath.Join(tmp, "id.txt")
+	// 0o644 — group/other readable; this defeats the threat model.
+	if err := os.WriteFile(idPath, []byte(id.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agePath := filepath.Join(tmp, "secrets.age")
+	_ = secrets_pkg.Encrypt([]byte("[foo]\nbar = \"baz\"\n"), id.Recipient().String(), agePath)
+
+	b := secrets_pkg.NewAgeBackend(agePath, idPath)
+	_, err := b.Resolve("foo.bar")
+	if err == nil {
+		t.Fatal("expected error for loose identity permissions")
+	}
+	if got := err.Error(); !contains(got, "insecure permissions") {
+		t.Fatalf("error %q did not mention insecure permissions", got)
+	}
+}
+
+func TestAgeBackend_SkipPermCheckOptOut(t *testing.T) {
+	tmp := t.TempDir()
+	id, _ := age.GenerateX25519Identity()
+	idPath := filepath.Join(tmp, "id.txt")
+	_ = os.WriteFile(idPath, []byte(id.String()), 0o644)
+	agePath := filepath.Join(tmp, "secrets.age")
+	_ = secrets_pkg.Encrypt([]byte("[foo]\nbar = \"baz\"\n"), id.Recipient().String(), agePath)
+
+	t.Setenv(secrets_pkg.SkipPermCheckEnv, "1")
+	b := secrets_pkg.NewAgeBackend(agePath, idPath)
+	if v, err := b.Resolve("foo.bar"); err != nil || v != "baz" {
+		t.Fatalf("with skip-env set, want baz; got %q err=%v", v, err)
+	}
+}
+
+// contains is a simple substring helper to keep the assertion readable
+// without pulling in strings just for one Contains call.
+func contains(haystack, needle string) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
+}
+
 func TestDecrypt_RawBytes(t *testing.T) {
 	tmp := t.TempDir()
 	id, _ := age.GenerateX25519Identity()
