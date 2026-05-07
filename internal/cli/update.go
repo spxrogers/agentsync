@@ -47,7 +47,10 @@ is used (auto-detect from cwd, --scope project, --project <path>) so the
 re-render lands in the right place when running inside a project.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return updateRun(cmd, apply, autoSafe, scopeFlag, projectFlag)
+			home := paths.AgentsyncHome(paths.OSEnv{})
+			return withGlobalLock(home, func() error {
+				return updateRun(cmd, apply, autoSafe, scopeFlag, projectFlag)
+			})
 		},
 	}
 	cmd.Flags().BoolVar(&apply, "apply", false, "upgrade plugins and apply to agents after polling")
