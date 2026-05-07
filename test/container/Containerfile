@@ -45,8 +45,10 @@ RUN if [ "${UID}" -eq 0 ]; then \
 
 ENV GOPATH=/home/runner/go \
     GOMODCACHE=/home/runner/go/pkg/mod \
-    GOCACHE=/home/runner/.cache/go-build \
-    CGO_ENABLED=0
+    GOCACHE=/home/runner/.cache/go-build
+# CGO_ENABLED is left at the toolchain default (1 on linux). The race
+# detector requires cgo, and `go test -race ./...` is one of the gates.
+# Static-binary release builds happen separately via goreleaser, not here.
 
 # ----- module pre-warm ------------------------------------------------------
 # Copy only the module manifests, fetch deps, then the runtime container

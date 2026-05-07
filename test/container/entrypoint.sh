@@ -43,7 +43,12 @@ step() {
 
 # We can't run `go mod tidy` against a read-only tree, but we can verify the
 # build & tests under -mod=mod against the pre-warmed module cache.
-export GOFLAGS="${GOFLAGS:--mod=mod}"
+#
+# -buildvcs=false: the workspace is mounted ro and the host's .git owner
+# may differ from the in-container user, so Go's VCS stamping fails with
+# `error obtaining VCS status: exit status 128`. We don't need vcs stamps
+# in test binaries — release artefacts get them via goreleaser separately.
+export GOFLAGS="${GOFLAGS:--mod=mod} -buildvcs=false"
 
 step "go env"
 go version
