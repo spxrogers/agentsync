@@ -124,8 +124,20 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	if err != nil {
 		return err
 	}
-	if err := render.Apply(plan, reg); err != nil {
+	// Foreign-collision guard: back up any pre-existing destination
+	// (or per-key conflicts inside a shared JSON file) BEFORE we
+	// overwrite. The backup tree lives at <home>/.state/backups/<ts>/;
+	// the original layout is preserved so users can find their file.
+	collisions, err := render.ApplyWithCollisionGuard(plan, reg, s, home, sc, projectRoot)
+	if err != nil {
 		return err
+	}
+	if len(collisions) > 0 {
+		ew := cmd.ErrOrStderr()
+		fmt.Fprintf(ew, "agentsync: backed up %d pre-existing target(s) before overwriting:\n", len(collisions))
+		for _, r := range collisions {
+			fmt.Fprintf(ew, "  %s\n", r.String())
+		}
 	}
 
 	// Drop state entries for files/keys this agent no longer

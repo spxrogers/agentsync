@@ -206,8 +206,16 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 		if err != nil {
 			return fmt.Errorf("plan after update: %w", err)
 		}
-		if err := render.Apply(plan, reg); err != nil {
+		collisions, err := render.ApplyWithCollisionGuard(plan, reg, st, home, sc, projectRoot)
+		if err != nil {
 			return fmt.Errorf("apply after update: %w", err)
+		}
+		if len(collisions) > 0 {
+			ew := cmd.ErrOrStderr()
+			fmt.Fprintf(ew, "agentsync: update --apply backed up %d pre-existing target(s):\n", len(collisions))
+			for _, r := range collisions {
+				fmt.Fprintf(ew, "  %s\n", r.String())
+			}
 		}
 		for name, res := range plan.PerAgent {
 			render.PruneStaleState(st, name, sc, projectRoot, res.Ops)
