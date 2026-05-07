@@ -419,7 +419,24 @@ func loadConfig(fs afero.Fs, home string, cfg *Config) error {
 		}
 		return fmt.Errorf("read %s: %w", p, err)
 	}
-	if err := toml.Unmarshal(data, cfg); err != nil {
+	// Strict-decode the top-level config so misspelled keys
+	// (`comunicate_mode`, `defauls`) surface as a clear error instead of
+	// being silently dropped. We only apply strictness to agentsync.toml;
+	// the per-component TOML files (mcp/<id>.toml, plugins/<id>.toml, …)
+	// keep the lenient default so plugin authors can add forward-compatible
+	// keys without breaking existing installs.
+	dec := toml.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(cfg); err != nil {
+		// pelletier's strict mode returns *StrictMissingError whose
+		// Error() is generic; its String() lists each unknown key with
+		// a position. Surface the detailed form so the user sees the
+		// typo, not "fields in the document are missing in the target
+		// struct".
+		var strictErr *toml.StrictMissingError
+		if errors.As(err, &strictErr) {
+			return fmt.Errorf("parse %s:\n%s", p, strictErr.String())
+		}
 		return fmt.Errorf("parse %s: %w", p, err)
 	}
 	return nil
