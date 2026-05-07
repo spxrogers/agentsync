@@ -1,0 +1,27 @@
+run:
+  timeout: 3m
+  tests: true
+
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - gocritic
+    - ineffassign
+    - gofumpt
+    - forbidigo
+
+linters-settings:
+  forbidigo:
+    forbid:
+      - p: '^os\.UserHomeDir$'
+        msg: "use paths.HomeDir(env) so AGENTSYNC_TARGET_ROOT honored in tests"
+        # apply only to test files
+        pattern: ".*"
+    analyze-types: true
+
+issues:
+  exclude-rules:
+    - path: '(^|/)cmd/.*'
+      linters: [forbidigo]    # main.go can use os.UserHomeDir if needed

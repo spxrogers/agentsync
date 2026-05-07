@@ -1,0 +1,10 @@
+/bin/
+/dist/
+/agentsync
+/agentsync.exe
+/coverage.out
+/coverage.html
+.vscode/
+.idea/
+*.swp
+.DS_Store

@@ -1,7 +1,13 @@
-# opensync
+# agentsync
 
-One source of truth for AI coding-agent configuration.
+Centrally manages AI coding-agent configurations across Claude Code, OpenCode, Codex CLI, and Cursor.
 
-opensync syncs plugins, MCP servers, skills, agents, rules, hooks, and memory across multiple coding-agent CLIs (Claude Code, OpenCode, Cursor, OpenAI Codex CLI) from a single git-managed source repo. It borrows chezmoi's three-state model (source → target → destination) and generalises it from "one home directory" to "N agent-specific config trees", with a canonical intermediate representation in the middle and per-agent adapters at the edges.
+**Status:** pre-release. Design at `docs/superpowers/specs/2026-05-04-agentsync-design.md`. Implementation roadmap at `docs/superpowers/plans/`.
 
-Status: pre-release. The implementation plan lives in [`docs/PLAN.md`](docs/PLAN.md).
+Distribution (coming in v1.0 M7): Homebrew, Scoop, Chocolatey, native Linux packages. No `go install`, no npm, no curl-bash.
+
+## Build from source
+
+    git clone https://github.com/spxrogers/agentsync.git
+    cd agentsync
+    make build
