@@ -12,7 +12,23 @@
 #     image build time.
 set -euo pipefail
 
+# Optional verbose mode for debugging CI breakages.
+if [[ "${AGENTSYNC_TEST_DEBUG:-}" == "1" ]]; then
+    set -x
+fi
+
 cd /workspace
+
+# Surface basic diagnostics up front. Any of these lines failing is itself
+# a useful signal — they're cheap and help triage failures from CI logs.
+echo "==> diagnostics"
+echo "    pwd:       $(pwd)"
+echo "    user:      $(id)"
+echo "    cgroup:    $(awk '/docker|podman|kube|libpod|containerd/{print; exit}' /proc/1/cgroup 2>/dev/null || echo '(none)')"
+echo "    /workspace ls:"
+ls -la | head -10
+echo "    go.mod first 4 lines:"
+head -4 go.mod || true
 
 # Hermeticity signal honoured by internal/testenv.RequireContainer. Tests
 # that touch the filesystem refuse to run unless this is exported.

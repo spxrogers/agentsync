@@ -56,11 +56,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v8
         with:
           # Pin to a v2 we've validated against this config locally. Bump
           # deliberately when upgrading; "latest" can change config syntax
-          # under us.
+          # under us. Action @v8 is the first that supports binary v2.
           version: v2.5.0
 
   goreleaser-snapshot:
