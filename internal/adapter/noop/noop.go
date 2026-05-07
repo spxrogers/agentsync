@@ -20,6 +20,7 @@ func (a *Adapter) Detect() (bool, error)            { return true, nil }
 func (a *Adapter) Render(source.Canonical, adapter.Scope, string) ([]adapter.FileOp, []adapter.Skip, error) {
 	return nil, nil, nil
 }
+
 func (a *Adapter) Ingest(adapter.Scope, string) (source.Canonical, error) {
 	return source.Canonical{}, nil
 }

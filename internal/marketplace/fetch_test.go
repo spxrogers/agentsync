@@ -216,9 +216,13 @@ func TestGitFetcher_GitSubdir(t *testing.T) {
 		t.Fatal(err)
 	}
 	w, _ := repo.Worktree()
-	w.Add(".")
+	if _, err := w.Add("."); err != nil {
+		t.Fatalf("worktree add: %v", err)
+	}
 	sig := &object.Signature{Name: "t", Email: "t@t", When: time.Now()}
-	w.Commit("init", &gogit.CommitOptions{Author: sig, Committer: sig})
+	if _, err := w.Commit("init", &gogit.CommitOptions{Author: sig, Committer: sig}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
 
 	dst := t.TempDir()
 	src := marketplace.Source{
@@ -263,10 +267,10 @@ func TestNPMFetcher_FakeRegistry(t *testing.T) {
 				"dist-tags": map[string]any{"latest": "1.0.0"},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(meta)
+			_ = json.NewEncoder(w).Encode(meta)
 		case strings.HasPrefix(r.URL.Path, "/tarball/"):
 			w.Header().Set("Content-Type", "application/octet-stream")
-			w.Write(tarball)
+			_, _ = w.Write(tarball)
 		default:
 			http.NotFound(w, r)
 		}
@@ -316,9 +320,9 @@ func TestNPMFetcher_LatestVersion(t *testing.T) {
 				},
 				"dist-tags": map[string]any{"latest": "2.0.0"},
 			}
-			json.NewEncoder(w).Encode(meta)
+			_ = json.NewEncoder(w).Encode(meta)
 		case strings.HasPrefix(r.URL.Path, "/tarball/"):
-			w.Write(tarball)
+			_, _ = w.Write(tarball)
 		default:
 			http.NotFound(w, r)
 		}

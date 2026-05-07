@@ -23,6 +23,7 @@ type countingAdapter struct {
 func (c *countingAdapter) Render(source.Canonical, adapter.Scope, string) ([]adapter.FileOp, []adapter.Skip, error) {
 	return c.renderOps, nil, nil
 }
+
 func (c *countingAdapter) Apply(ops []adapter.FileOp) error {
 	c.ops = append(c.ops, ops...)
 	return nil

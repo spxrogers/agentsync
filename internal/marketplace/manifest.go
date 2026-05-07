@@ -7,14 +7,14 @@ import "encoding/json"
 
 // Marketplace is the .claude-plugin/marketplace.json document.
 type Marketplace struct {
-	Schema      string               `json:"$schema,omitempty"`
-	Name        string               `json:"name"`
-	Owner       Owner                `json:"owner"`
-	Description string               `json:"description,omitempty"`
-	Version     string               `json:"version,omitempty"`
-	Metadata    *MarketplaceMetadata `json:"metadata,omitempty"`
-	Plugins     []PluginEntry        `json:"plugins"`
-	AllowCrossMarketplaceDependenciesOn []string `json:"allowCrossMarketplaceDependenciesOn,omitempty"`
+	Schema                              string               `json:"$schema,omitempty"`
+	Name                                string               `json:"name"`
+	Owner                               Owner                `json:"owner"`
+	Description                         string               `json:"description,omitempty"`
+	Version                             string               `json:"version,omitempty"`
+	Metadata                            *MarketplaceMetadata `json:"metadata,omitempty"`
+	Plugins                             []PluginEntry        `json:"plugins"`
+	AllowCrossMarketplaceDependenciesOn []string             `json:"allowCrossMarketplaceDependenciesOn,omitempty"`
 }
 
 // Owner holds the name and optional email of a marketplace or plugin owner.
@@ -30,24 +30,24 @@ type MarketplaceMetadata struct {
 
 // PluginEntry is one plugin listed in a marketplace.
 type PluginEntry struct {
-	Name        string         `json:"name"`
-	Source      Source         `json:"source"`
-	Description string         `json:"description,omitempty"`
-	Version     string         `json:"version,omitempty"`
-	Author      *Author        `json:"author,omitempty"`
-	Homepage    string         `json:"homepage,omitempty"`
-	Repository  string         `json:"repository,omitempty"`
-	License     string         `json:"license,omitempty"`
-	Keywords    []string       `json:"keywords,omitempty"`
-	Category    string         `json:"category,omitempty"`
-	Tags        []string       `json:"tags,omitempty"`
-	Strict      *bool          `json:"strict,omitempty"` // default true
+	Name        string   `json:"name"`
+	Source      Source   `json:"source"`
+	Description string   `json:"description,omitempty"`
+	Version     string   `json:"version,omitempty"`
+	Author      *Author  `json:"author,omitempty"`
+	Homepage    string   `json:"homepage,omitempty"`
+	Repository  string   `json:"repository,omitempty"`
+	License     string   `json:"license,omitempty"`
+	Keywords    []string `json:"keywords,omitempty"`
+	Category    string   `json:"category,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Strict      *bool    `json:"strict,omitempty"` // default true
 
 	// Component config can be inlined here when strict=false:
-	Skills     any            `json:"skills,omitempty"`    // string | []string
-	Commands   any            `json:"commands,omitempty"`  // string | []string
-	Agents     any            `json:"agents,omitempty"`    // string | []string
-	Hooks      any            `json:"hooks,omitempty"`     // string | object
+	Skills     any            `json:"skills,omitempty"`   // string | []string
+	Commands   any            `json:"commands,omitempty"` // string | []string
+	Agents     any            `json:"agents,omitempty"`   // string | []string
+	Hooks      any            `json:"hooks,omitempty"`    // string | object
 	MCPServers map[string]any `json:"mcpServers,omitempty"`
 	LSPServers map[string]any `json:"lspServers,omitempty"`
 }
@@ -62,7 +62,7 @@ type Author struct {
 // - A JSON string → Relative path
 // - A JSON object → Kind-based (github, url, git-subdir, npm)
 type Source struct {
-	Kind     string `json:"source,omitempty"`  // "github" | "url" | "git-subdir" | "npm"
+	Kind     string `json:"source,omitempty"` // "github" | "url" | "git-subdir" | "npm"
 	Repo     string `json:"repo,omitempty"`
 	URL      string `json:"url,omitempty"`
 	Path     string `json:"path,omitempty"`

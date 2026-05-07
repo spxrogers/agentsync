@@ -4,34 +4,77 @@ on:
   push:
     branches: [main]
 
+# Single source of truth for the Go toolchain. go.mod's `go` directive
+# specifies the language version; `toolchain` specifies the actual build
+# toolchain. setup-go reads the `go` directive and Go itself honours the
+# toolchain directive at runtime.
+env:
+  GO_VERSION_FILE: go.mod
+
 jobs:
-  test:
+  # Pure-unit tests across the supported OS matrix. These never touch the
+  # filesystem (per internal/testenv.RequireContainer), so they're safe on
+  # any host runner and give us cross-platform coverage that the Linux-only
+  # container suite below can't.
+  test-fast:
+    name: test-fast (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version: '1.22.x' }
-      - run: go test -race ./...
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+      - uses: extractions/setup-just@v3
+      - run: just test-fast
+
+  # The release-readiness gate: every FS-touching test layer in one
+  # hermetic container run. Linux only — the Containerfile targets
+  # linux/amd64 and the container is the hermeticity guarantee.
+  test-release:
+    name: test-release (hermetic gate)
+    runs-on: ubuntu-latest
+    # If this job ever fails again with no obvious cause, set
+    # `AGENTSYNC_TEST_DEBUG: "1"` here to enable `set -x` tracing in the
+    # runner script + entrypoint. Off by default to keep logs readable.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v3
+      - run: just test-release
 
   lint:
     runs-on: ubuntu-latest
+    # GOTOOLCHAIN=local pins the analyser to whatever Go setup-go installed
+    # (the language version from go.mod's `go` directive). Without this,
+    # Go's auto-toolchain logic upgrades to the `toolchain` directive at
+    # runtime and golangci-lint then panics analysing stdlib it wasn't
+    # compiled against.
+    env:
+      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version: '1.22.x' }
-      - uses: golangci/golangci-lint-action@v6
-        with: { version: latest }
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          # Pin to a v2 we've validated against this config locally. Bump
+          # deliberately when upgrading; "latest" can change config syntax
+          # under us. Action @v8 is the first that supports binary v2.
+          version: v2.5.0
 
   goreleaser-snapshot:
+    name: goreleaser-snapshot (cross-build matrix)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - uses: actions/setup-go@v5
-        with: { go-version: '1.22.x' }
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: latest

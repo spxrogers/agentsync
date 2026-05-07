@@ -37,7 +37,7 @@ type UpdateDefaults struct {
 }
 
 type SecretsConfig struct {
-	Backend      string `toml:"backend"`       // "env" | "age"
+	Backend      string `toml:"backend"` // "env" | "age"
 	File         string `toml:"file"`
 	Recipient    string `toml:"recipient"`
 	IdentityFile string `toml:"identity_file"`
@@ -50,13 +50,13 @@ type MCPServer struct {
 }
 
 type MCPServerSpec struct {
-	Type    string            `toml:"type"`              // stdio | http | sse
+	Type    string            `toml:"type"` // stdio | http | sse
 	Command string            `toml:"command,omitempty"`
 	Args    []string          `toml:"args,omitempty"`
 	URL     string            `toml:"url,omitempty"`
 	Headers map[string]string `toml:"headers,omitempty"`
 	Env     map[string]string `toml:"env,omitempty"`
-	Agents  []string          `toml:"agents,omitempty"` // ["*"] or ["claude","opencode"]
+	Agents  []string          `toml:"agents,omitempty"`  // ["*"] or ["claude","opencode"]
 	Enabled *bool             `toml:"enabled,omitempty"` // nil means default-on
 }
 
@@ -124,8 +124,8 @@ type Hook struct {
 
 // LSPServer mirrors lsp/<id>.toml.
 type LSPServer struct {
-	ID      string
-	Spec    LSPServerSpec
+	ID   string
+	Spec LSPServerSpec
 }
 
 // LSPServerSpec holds the server configuration for an LSP server.

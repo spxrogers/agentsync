@@ -41,7 +41,7 @@ func (s Scope) String() string {
 // FileOp describes one destination-side change. Action is "write" or "delete".
 // Path is absolute (after AGENTSYNC_TARGET_ROOT redirection).
 type FileOp struct {
-	Action        string   // "write" | "delete"
+	Action        string // "write" | "delete"
 	Path          string
 	Content       []byte
 	Mode          uint32

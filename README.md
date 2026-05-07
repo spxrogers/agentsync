@@ -64,6 +64,27 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 - **`agentsync update` fails to fetch a marketplace**: verify the marketplace URL with `git ls-remote`. agentsync uses `go-git` and falls back to system `git` for sparse clones if needed.
 - **`${secret:foo}` not resolving**: run `agentsync secrets get foo` to verify the key exists in the decrypted file. age library errors will surface here.
 
+## Testing
+
+Every `just test*` recipe runs **inside a hermetic container** (podman first,
+docker fallback). The repo is mounted read-only, the network is off, and
+every test's `HOME` is a fresh tmpdir — the suite cannot touch your real
+`~/.claude.json`, `~/.config/opencode/`, or `~/.agentsync/`.
+
+| Layer                                       | Question it answers                          | Command             |
+| ------------------------------------------- | -------------------------------------------- | ------------------- |
+| Unit + integration (`internal/*/*_test.go`) | Did I break an internal contract?            | `just test`         |
+| Lifecycle e2e (`test/e2e`, build tag `e2e`) | Does the binary survive the v1 happy path?   | `just test-e2e`     |
+| BDD Gherkin lock (`test/bdd`, tag `bdd`)    | Are the spec's north-star behaviours intact? | `just test-bdd`     |
+| **All layers in one container run**         | Can I safely cut a release right now?        | `just test-release` |
+
+If `just test-release` is green, ship.
+
+For fast in-place iteration without spinning up the container, `just test-fast`
+runs the unit/integration layer directly on the host. The existing tests
+already redirect `HOME` via `AGENTSYNC_TARGET_ROOT`, so they are still safe;
+the container is the release gate.
+
 ## License
 
 MIT.

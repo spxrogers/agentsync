@@ -379,7 +379,8 @@ func resolveMarketplaceEntry(home, mpName, pluginID string) ([]byte, marketplace
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, marketplace.PluginEntry{}, fmt.Errorf(
-				"marketplace %q not found in cache; run: agentsync marketplace add <url>", mpName)
+				"marketplace %q not found in cache; run: agentsync marketplace add <url>", mpName,
+			)
 		}
 		return nil, marketplace.PluginEntry{}, fmt.Errorf("read %s: %w", mpJSONPath, err)
 	}
@@ -404,7 +405,8 @@ func searchAllMarketplaces(home, pluginID string) ([]byte, marketplace.PluginEnt
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, marketplace.PluginEntry{}, fmt.Errorf(
-				"no marketplaces cached; run: agentsync marketplace add <url>")
+				"no marketplaces cached; run: agentsync marketplace add <url>",
+			)
 		}
 		return nil, marketplace.PluginEntry{}, err
 	}

@@ -43,8 +43,9 @@ args    = ["-y", "@modelcontextprotocol/server-github"]
 }
 
 // TestDriftLoop_FullRoundTrip exercises the full M3 drift loop:
-//   init → agent add → apply → mutate dest → status (drift) →
-//   reconcile --auto-override → verify dest restored.
+//
+//	init → agent add → apply → mutate dest → status (drift) →
+//	reconcile --auto-override → verify dest restored.
 func TestDriftLoop_FullRoundTrip(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
@@ -106,7 +107,8 @@ args    = ["-y", "@modelcontextprotocol/server-github"]
 }
 
 // TestDriftLoop_WriteBack exercises write-back:
-//   apply → mutate dest → reconcile --auto-writeback → verify source updated.
+//
+//	apply → mutate dest → reconcile --auto-writeback → verify source updated.
 func TestDriftLoop_WriteBack(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

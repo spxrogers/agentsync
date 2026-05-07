@@ -113,8 +113,8 @@ func TestMerge_AgentsFilter(t *testing.T) {
 	base := source.Canonical{
 		Config: source.Config{
 			Agents: map[string]source.Agent{
-				"claude":  {Enabled: true},
-				"codex":   {Enabled: true},
+				"claude":   {Enabled: true},
+				"codex":    {Enabled: true},
 				"opencode": {Enabled: true},
 			},
 		},
@@ -287,12 +287,12 @@ func TestMerge_DoesNotMutateBase(t *testing.T) {
 
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(func() bool {
+		func() bool {
 			for i := 0; i <= len(s)-len(substr); i++ {
 				if s[i:i+len(substr)] == substr {
 					return true
 				}
 			}
 			return false
-		})())
+		}())
 }

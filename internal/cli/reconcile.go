@@ -130,11 +130,12 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 		// Apply bulk action if set.
 		action := bulkAction
 		if action == 0 {
-			if autoWB {
+			switch {
+			case autoWB:
 				action = 'w'
-			} else if autoOR {
+			case autoOR:
 				action = 'o'
-			} else if autoSafe {
+			case autoSafe:
 				// auto-safe: skip non-safe items (they require prompting, but
 				// auto-safe only silently handles safe ones which never reach here).
 				action = 's'

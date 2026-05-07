@@ -94,7 +94,6 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 		if newCacheDir != cacheDir {
 			if err := os.MkdirAll(filepath.Dir(newCacheDir), 0o755); err == nil {
 				_ = os.Rename(cacheDir, newCacheDir)
-				cacheDir = newCacheDir
 			}
 		}
 	}
