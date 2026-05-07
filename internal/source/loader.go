@@ -1,6 +1,7 @@
 package source
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/afero"
+	"sigs.k8s.io/yaml"
 )
 
 // Load reads a canonical model from <home>. Missing home or missing
@@ -31,6 +33,18 @@ func Load(fs afero.Fs, home string) (Canonical, error) {
 		return c, err
 	}
 	if c.Skills, err = loadSkills(fs, home); err != nil {
+		return c, err
+	}
+	if c.Subagents, err = loadSubagents(fs, home); err != nil {
+		return c, err
+	}
+	if c.Commands, err = loadCommands(fs, home); err != nil {
+		return c, err
+	}
+	if c.Hooks, err = loadHooks(fs, home); err != nil {
+		return c, err
+	}
+	if c.LSPServers, err = loadLSP(fs, home); err != nil {
 		return c, err
 	}
 	if c.Memory, err = loadMemory(fs, home); err != nil {
@@ -141,9 +155,7 @@ func loadMarketplaces(fs afero.Fs, home string) ([]Marketplace, error) {
 	return out, nil
 }
 
-// loadSkills walks skills/<name>/SKILL.md. Frontmatter parsing is added in M1
-// when the Claude adapter actually uses skills; for M0 we just record the
-// skill names + body so the canonical model is complete.
+// loadSkills walks skills/<name>/SKILL.md, parsing YAML frontmatter if present.
 func loadSkills(fs afero.Fs, home string) ([]Skill, error) {
 	dir := filepath.Join(home, "skills")
 	entries, err := afero.ReadDir(fs, dir)
@@ -158,16 +170,189 @@ func loadSkills(fs afero.Fs, home string) ([]Skill, error) {
 		if !e.IsDir() {
 			continue
 		}
-		body, err := afero.ReadFile(fs, filepath.Join(dir, e.Name(), "SKILL.md"))
+		raw, err := afero.ReadFile(fs, filepath.Join(dir, e.Name(), "SKILL.md"))
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			return nil, fmt.Errorf("read SKILL.md for %s: %w", e.Name(), err)
 		}
-		out = append(out, Skill{Name: e.Name(), Body: string(body)})
+		fm, body, err := parseFrontmatter(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
+		}
+		out = append(out, Skill{Name: e.Name(), Frontmatter: fm, Body: body})
 	}
 	return out, nil
+}
+
+// loadSubagents walks agents/<name>.md, parsing YAML frontmatter if present.
+func loadSubagents(fs afero.Fs, home string) ([]Subagent, error) {
+	dir := filepath.Join(home, "agents")
+	entries, err := afero.ReadDir(fs, dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", dir, err)
+	}
+	var out []Subagent
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		raw, err := afero.ReadFile(fs, p)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", p, err)
+		}
+		fm, body, err := parseFrontmatter(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
+		}
+		name := strings.TrimSuffix(e.Name(), ".md")
+		out = append(out, Subagent{Name: name, Frontmatter: fm, Body: body})
+	}
+	return out, nil
+}
+
+// loadCommands walks commands/<name>.md, parsing YAML frontmatter if present.
+func loadCommands(fs afero.Fs, home string) ([]Command, error) {
+	dir := filepath.Join(home, "commands")
+	entries, err := afero.ReadDir(fs, dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", dir, err)
+	}
+	var out []Command
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		raw, err := afero.ReadFile(fs, p)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", p, err)
+		}
+		fm, body, err := parseFrontmatter(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
+		}
+		name := strings.TrimSuffix(e.Name(), ".md")
+		out = append(out, Command{Name: name, Frontmatter: fm, Body: body})
+	}
+	return out, nil
+}
+
+// hookFile is the TOML shape for hooks/<event>.toml.
+type hookFile struct {
+	Hook []hookEntry `toml:"hook"`
+}
+
+type hookEntry struct {
+	Matcher string `toml:"matcher"`
+	Type    string `toml:"type"`
+	Command string `toml:"command"`
+}
+
+// loadHooks walks hooks/<event>.toml files. Each file corresponds to one
+// Claude hook event (e.g. "PreToolUse"). Entries within the file become
+// individual Hook records sharing the same Event.
+func loadHooks(fs afero.Fs, home string) ([]Hook, error) {
+	dir := filepath.Join(home, "hooks")
+	entries, err := afero.ReadDir(fs, dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", dir, err)
+	}
+	var out []Hook
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".toml") {
+			continue
+		}
+		event := strings.TrimSuffix(e.Name(), ".toml")
+		p := filepath.Join(dir, e.Name())
+		data, err := afero.ReadFile(fs, p)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", p, err)
+		}
+		var hf hookFile
+		if err := toml.Unmarshal(data, &hf); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", p, err)
+		}
+		for _, h := range hf.Hook {
+			out = append(out, Hook{
+				Event:   event,
+				Matcher: h.Matcher,
+				Type:    h.Type,
+				Command: h.Command,
+			})
+		}
+	}
+	return out, nil
+}
+
+// lspFile is the TOML shape for lsp/<id>.toml.
+type lspFile struct {
+	Server LSPServerSpec `toml:"server"`
+}
+
+// loadLSP walks lsp/<id>.toml files.
+func loadLSP(fs afero.Fs, home string) ([]LSPServer, error) {
+	dir := filepath.Join(home, "lsp")
+	entries, err := afero.ReadDir(fs, dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", dir, err)
+	}
+	var out []LSPServer
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".toml") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		data, err := afero.ReadFile(fs, p)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", p, err)
+		}
+		var lf lspFile
+		if err := toml.Unmarshal(data, &lf); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", p, err)
+		}
+		id := strings.TrimSuffix(e.Name(), ".toml")
+		out = append(out, LSPServer{ID: id, Spec: lf.Server})
+	}
+	return out, nil
+}
+
+// parseFrontmatter extracts YAML frontmatter and body from a markdown file.
+// If the input doesn't begin with "---\n", returns an empty map and the
+// entire input as body.
+func parseFrontmatter(data []byte) (map[string]any, string, error) {
+	if !bytes.HasPrefix(data, []byte("---\n")) {
+		return map[string]any{}, string(data), nil
+	}
+	rest := data[len("---\n"):]
+	end := bytes.Index(rest, []byte("\n---\n"))
+	if end < 0 {
+		return nil, "", fmt.Errorf("unterminated frontmatter")
+	}
+	yml := rest[:end]
+	body := rest[end+len("\n---\n"):]
+	var fm map[string]any
+	if err := yaml.Unmarshal(yml, &fm); err != nil {
+		return nil, "", fmt.Errorf("parse yaml frontmatter: %w", err)
+	}
+	if fm == nil {
+		fm = map[string]any{}
+	}
+	return fm, string(body), nil
 }
 
 func loadMemory(fs afero.Fs, home string) (Memory, error) {

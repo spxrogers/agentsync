@@ -1,0 +1,203 @@
+package claude
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/source"
+)
+
+// Ingest reads native Claude config files and returns a partial source.Canonical.
+// It is the inverse of Render: Ingest(Apply(Render(c))) round-trips to c
+// for the components agentsync manages.
+func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical, error) {
+	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
+	var c source.Canonical
+
+	// MCP from .claude.json (user) or settings.json (project)
+	var mcpFile string
+	if scope == adapter.ScopeProject {
+		mcpFile = p.Settings
+	} else {
+		mcpFile = p.DotClaude
+	}
+	if data, err := os.ReadFile(mcpFile); err == nil {
+		var top map[string]any
+		if err := json.Unmarshal(data, &top); err != nil {
+			return c, fmt.Errorf("parse %s: %w", mcpFile, err)
+		}
+		if servers, ok := top["mcpServers"].(map[string]any); ok {
+			for id, raw := range servers {
+				spec, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				m := source.MCPServer{ID: id, Server: source.MCPServerSpec{
+					Type:    asStr(spec["type"]),
+					Command: asStr(spec["command"]),
+					Args:    asStrSlice(spec["args"]),
+					Env:     asStrMap(spec["env"]),
+					URL:     asStr(spec["url"]),
+					Headers: asStrMap(spec["headers"]),
+				}}
+				c.MCPServers = append(c.MCPServers, m)
+			}
+		}
+	}
+
+	// Skills from ~/.claude/skills/<name>/SKILL.md
+	if entries, err := os.ReadDir(p.SkillsDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(p.SkillsDir, e.Name(), "SKILL.md"))
+			if err != nil {
+				continue
+			}
+			fm, body, err := ParseFrontmatter(data)
+			if err != nil {
+				continue
+			}
+			c.Skills = append(c.Skills, source.Skill{Name: e.Name(), Frontmatter: fm, Body: body})
+		}
+	}
+
+	// Subagents from ~/.claude/agents/<name>.md
+	if entries, err := os.ReadDir(p.AgentsDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(p.AgentsDir, e.Name()))
+			if err != nil {
+				continue
+			}
+			fm, body, err := ParseFrontmatter(data)
+			if err != nil {
+				continue
+			}
+			name := e.Name()[:len(e.Name())-len(".md")]
+			c.Subagents = append(c.Subagents, source.Subagent{Name: name, Frontmatter: fm, Body: body})
+		}
+	}
+
+	// Commands from ~/.claude/commands/<name>.md
+	if entries, err := os.ReadDir(p.CommandsDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(p.CommandsDir, e.Name()))
+			if err != nil {
+				continue
+			}
+			fm, body, err := ParseFrontmatter(data)
+			if err != nil {
+				continue
+			}
+			name := e.Name()[:len(e.Name())-len(".md")]
+			c.Commands = append(c.Commands, source.Command{Name: name, Frontmatter: fm, Body: body})
+		}
+	}
+
+	// Hooks from settings.json /hooks/<event>
+	if data, err := os.ReadFile(p.Settings); err == nil {
+		var top map[string]any
+		if json.Unmarshal(data, &top) == nil {
+			if hooks, ok := top["hooks"].(map[string]any); ok {
+				for event, rawEntries := range hooks {
+					entries, ok := rawEntries.([]any)
+					if !ok {
+						continue
+					}
+					for _, rawEntry := range entries {
+						entry, ok := rawEntry.(map[string]any)
+						if !ok {
+							continue
+						}
+						matcher := asStr(entry["matcher"])
+						hooksArr, _ := entry["hooks"].([]any)
+						for _, rawH := range hooksArr {
+							h, ok := rawH.(map[string]any)
+							if !ok {
+								continue
+							}
+							c.Hooks = append(c.Hooks, source.Hook{
+								Event:   event,
+								Matcher: matcher,
+								Type:    asStr(h["type"]),
+								Command: asStr(h["command"]),
+							})
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// LSP servers from settings.json /lspServers/<id>
+	if data, err := os.ReadFile(p.Settings); err == nil {
+		var top map[string]any
+		if json.Unmarshal(data, &top) == nil {
+			if lspServers, ok := top["lspServers"].(map[string]any); ok {
+				for id, raw := range lspServers {
+					spec, ok := raw.(map[string]any)
+					if !ok {
+						continue
+					}
+					c.LSPServers = append(c.LSPServers, source.LSPServer{
+						ID: id,
+						Spec: source.LSPServerSpec{
+							Command: asStr(spec["command"]),
+							Args:    asStrSlice(spec["args"]),
+							Env:     asStrMap(spec["env"]),
+							URL:     asStr(spec["url"]),
+							Headers: asStrMap(spec["headers"]),
+						},
+					})
+				}
+			}
+		}
+	}
+
+	// Memory from CLAUDE.md (verbatim; fragments not de-resolved)
+	if data, err := os.ReadFile(p.Memory); err == nil {
+		c.Memory.Body = string(data)
+	}
+
+	return c, nil
+}
+
+func asStr(v any) string { s, _ := v.(string); return s }
+
+func asStrSlice(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, x := range arr {
+		if s, ok := x.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func asStrMap(v any) map[string]string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, val := range m {
+		if s, ok := val.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
+}

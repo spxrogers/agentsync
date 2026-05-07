@@ -73,3 +73,138 @@ func TestLoad_MissingHomeReturnsEmpty(t *testing.T) {
 		t.Fatalf("expected empty canonical, got %d MCP", len(c.MCPServers))
 	}
 }
+
+func TestLoad_SkillFrontmatter(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	_ = afero.WriteFile(fs, "/home/.agentsync/skills/foo/SKILL.md", []byte(`---
+name: foo
+description: Test skill
+---
+Body.
+`), 0o644)
+
+	c, err := source.Load(fs, "/home/.agentsync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Skills) != 1 {
+		t.Fatalf("skills = %d", len(c.Skills))
+	}
+	s := c.Skills[0]
+	if s.Frontmatter["name"] != "foo" {
+		t.Fatalf("frontmatter name = %v", s.Frontmatter["name"])
+	}
+	if s.Body != "Body.\n" {
+		t.Fatalf("body = %q", s.Body)
+	}
+}
+
+func TestLoad_Subagents(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	_ = afero.WriteFile(fs, "/home/.agentsync/agents/reviewer.md", []byte(`---
+description: Code reviewer subagent
+tools:
+  - read
+  - edit
+model: claude-opus-4-5
+---
+You are a code reviewer.
+`), 0o644)
+
+	c, err := source.Load(fs, "/home/.agentsync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Subagents) != 1 {
+		t.Fatalf("subagents = %d, want 1", len(c.Subagents))
+	}
+	sa := c.Subagents[0]
+	if sa.Name != "reviewer" {
+		t.Fatalf("name = %q, want reviewer", sa.Name)
+	}
+	if sa.Frontmatter["description"] != "Code reviewer subagent" {
+		t.Fatalf("description = %v", sa.Frontmatter["description"])
+	}
+	if sa.Body != "You are a code reviewer.\n" {
+		t.Fatalf("body = %q", sa.Body)
+	}
+}
+
+func TestLoad_Commands(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	_ = afero.WriteFile(fs, "/home/.agentsync/commands/review.md", []byte(`---
+description: Run a code review
+---
+Please review the current changes.
+`), 0o644)
+
+	c, err := source.Load(fs, "/home/.agentsync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Commands) != 1 {
+		t.Fatalf("commands = %d, want 1", len(c.Commands))
+	}
+	cmd := c.Commands[0]
+	if cmd.Name != "review" {
+		t.Fatalf("name = %q, want review", cmd.Name)
+	}
+	if cmd.Frontmatter["description"] != "Run a code review" {
+		t.Fatalf("description = %v", cmd.Frontmatter["description"])
+	}
+}
+
+func TestLoad_Hooks(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	_ = afero.WriteFile(fs, "/home/.agentsync/hooks/PreToolUse.toml", []byte(`
+[[hook]]
+matcher = "Write|Edit"
+type    = "command"
+command = "echo intercepting Write/Edit"
+
+[[hook]]
+matcher = "Bash"
+type    = "command"
+command = "echo intercepting Bash"
+`), 0o644)
+
+	c, err := source.Load(fs, "/home/.agentsync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Hooks) != 2 {
+		t.Fatalf("hooks = %d, want 2", len(c.Hooks))
+	}
+	for _, h := range c.Hooks {
+		if h.Event != "PreToolUse" {
+			t.Fatalf("event = %q, want PreToolUse", h.Event)
+		}
+	}
+	if c.Hooks[0].Matcher != "Write|Edit" {
+		t.Fatalf("matcher = %q", c.Hooks[0].Matcher)
+	}
+}
+
+func TestLoad_LSPServers(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	_ = afero.WriteFile(fs, "/home/.agentsync/lsp/gopls.toml", []byte(`
+[server]
+command = "gopls"
+args    = ["-mode=stdio"]
+`), 0o644)
+
+	c, err := source.Load(fs, "/home/.agentsync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.LSPServers) != 1 {
+		t.Fatalf("lsp servers = %d, want 1", len(c.LSPServers))
+	}
+	lsp := c.LSPServers[0]
+	if lsp.ID != "gopls" {
+		t.Fatalf("id = %q, want gopls", lsp.ID)
+	}
+	if lsp.Spec.Command != "gopls" {
+		t.Fatalf("command = %q", lsp.Spec.Command)
+	}
+}
