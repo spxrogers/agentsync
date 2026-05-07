@@ -64,6 +64,15 @@ func newApplyCmd() *cobra.Command {
 					agents = append(agents, name)
 				}
 			}
+			if len(agents) == 0 {
+				// Without this hint, `apply` prints "applied: 0 ops" and a
+				// new user assumes their config "worked". Tell them how to
+				// register an agent.
+				fmt.Fprintln(cmd.ErrOrStderr(),
+					"agentsync: no agents are enabled in agentsync.toml; nothing to apply.\n"+
+						"  Run `agentsync agent add claude` (or opencode) to register an agent.")
+				return nil
+			}
 
 			reg := registryFactory()
 

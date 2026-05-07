@@ -23,6 +23,21 @@ func TestApply_DryRunEmptyHome(t *testing.T) {
 	}
 }
 
+func TestApply_NoAgentsEnabled_WarnsAndExitsZero(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	_, _ = runCLI(t, env, "init")
+	// Deliberately do NOT call `agent add`. apply must hint at the fix
+	// instead of silently printing "applied: 0 ops".
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("apply with no agents should succeed; got: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "no agents") || !strings.Contains(out, "agent add") {
+		t.Fatalf("apply with no agents did not hint at remediation; got: %s", out)
+	}
+}
+
 func TestApply_NoFlag_WritesDestinations_M1(t *testing.T) {
 	// M1+: apply (no flag) should succeed (real adapters are wired).
 	// With an empty canonical there are 0 ops, so no files are written, but
