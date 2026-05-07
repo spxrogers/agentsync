@@ -9,8 +9,10 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
+	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/state"
 )
 
 // boolStr returns "true" or "false" as a string.
@@ -29,7 +31,32 @@ func newAgentCmd() *cobra.Command {
 		&cobra.Command{Use: "add <name>", Args: cobra.ExactArgs(1), RunE: agentAddRun},
 		&cobra.Command{Use: "remove <name>", Args: cobra.ExactArgs(1), RunE: agentRemoveRun},
 		&cobra.Command{Use: "list", Args: cobra.NoArgs, RunE: agentListRun},
+		newAgentEnableCmd(),
+		newAgentDisableCmd(),
 	)
+	return cmd
+}
+
+func newAgentEnableCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "enable <name>",
+		Args:  cobra.ExactArgs(1),
+		Short: "enable a registered agent",
+		RunE:  agentEnableRun,
+	}
+}
+
+func newAgentDisableCmd() *cobra.Command {
+	var purge bool
+	cmd := &cobra.Command{
+		Use:   "disable <name>",
+		Args:  cobra.ExactArgs(1),
+		Short: "disable a registered agent (optionally purging its destination files)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return agentDisableRun(cmd, args, purge)
+		},
+	}
+	cmd.Flags().BoolVar(&purge, "purge", false, "remove agent destination files that agentsync owns")
 	return cmd
 }
 
@@ -181,5 +208,110 @@ func agentListRun(cmd *cobra.Command, _ []string) error {
 		scope, _ := v["scope"].(string)
 		fmt.Fprintf(cmd.OutOrStdout(), "%-10s enabled=%t scope=%s\n", n, enabled, scope)
 	}
+	return nil
+}
+
+func agentEnableRun(cmd *cobra.Command, args []string) error {
+	name := args[0]
+	p, raw, agents, err := readAgentsyncTOML()
+	if err != nil {
+		return err
+	}
+	v, ok := agents[name]
+	if !ok {
+		return fmt.Errorf("agent %q not registered; use 'agentsync agent add %s' first", name, name)
+	}
+	v["enabled"] = true
+	agents[name] = v
+	if err := writeAgents(p, raw, agents); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "enabled agent: %s\n", name)
+	return nil
+}
+
+func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
+	name := args[0]
+	p, raw, agents, err := readAgentsyncTOML()
+	if err != nil {
+		return err
+	}
+	v, ok := agents[name]
+	if !ok {
+		return fmt.Errorf("agent %q not registered", name)
+	}
+	v["enabled"] = false
+	agents[name] = v
+	if err := writeAgents(p, raw, agents); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "disabled agent: %s\n", name)
+
+	if !purge {
+		return nil
+	}
+
+	// --purge: delete destination files and keys owned by this agent from state.
+	home := paths.AgentsyncHome(paths.OSEnv{})
+	statePath := filepath.Join(home, ".state", "targets.json")
+	s, err := state.Load(statePath)
+	if err != nil {
+		return fmt.Errorf("load state: %w", err)
+	}
+
+	// Gather paths to delete (unique, from Files state).
+	prefix := name + ":"
+	toDelete := map[string]bool{}
+	for key := range s.Files {
+		if strings.HasPrefix(key, prefix) {
+			// key format: "agent:scope:project:path" — extract path (4th field)
+			parts := strings.SplitN(key, ":", 4)
+			if len(parts) == 4 && parts[3] != "" {
+				toDelete[parts[3]] = true
+			}
+		}
+	}
+	// Also collect paths from Keys state.
+	for key := range s.Keys {
+		if strings.HasPrefix(key, prefix) {
+			// key format: "agent:scope:project:path:ptr" — extract path (4th field)
+			parts := strings.SplitN(key, ":", 5)
+			if len(parts) >= 4 && parts[3] != "" {
+				toDelete[parts[3]] = true
+			}
+		}
+	}
+
+	// Build delete ops and apply via the adapter.
+	reg := registryFactory()
+	a := reg.Lookup(name)
+	if a == nil {
+		// No adapter — just remove state entries.
+	} else {
+		var ops []adapter.FileOp
+		for path := range toDelete {
+			ops = append(ops, adapter.FileOp{Action: "delete", Path: path})
+		}
+		if err := a.Apply(ops); err != nil {
+			return fmt.Errorf("purge apply %s: %w", name, err)
+		}
+	}
+
+	// Remove state entries for this agent.
+	for key := range s.Files {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.Files, key)
+		}
+	}
+	for key := range s.Keys {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.Keys, key)
+		}
+	}
+	if err := state.Save(statePath, s); err != nil {
+		return fmt.Errorf("save state: %w", err)
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "purged %d destination path(s) for agent %s\n", len(toDelete), name)
 	return nil
 }

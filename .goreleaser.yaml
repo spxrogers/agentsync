@@ -19,6 +19,7 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: "checksums.txt"
@@ -26,4 +27,64 @@ checksum:
 snapshot:
   version_template: "{{ incpatch .Version }}-snapshot-{{.ShortCommit}}"
 
-# Homebrew/Scoop/Chocolatey blocks added in M7.
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^test:"
+
+# Linux native packages (deb/rpm) — produced in every snapshot build.
+nfpms:
+  - id: linux-pkgs
+    package_name: agentsync
+    homepage: https://github.com/spxrogers/agentsync
+    license: MIT
+    formats: [deb, rpm]
+    section: utils
+    description: Centrally manage AI coding-agent configurations.
+
+# --------------------------------------------------------------------------
+# Distribution / publishing blocks — deliberately NOT enabled yet.
+# Uncomment these once companion repos are created and the user is ready
+# to go public. See PR body for context.
+# TODO: enable when going public
+# --------------------------------------------------------------------------
+
+# brews:
+#   - name: agentsync
+#     repository:
+#       owner: spxrogers
+#       name: homebrew-tap
+#     homepage: https://github.com/spxrogers/agentsync
+#     description: Centrally manage AI coding-agent configurations
+#     license: MIT
+#     install: bin.install "agentsync"
+#     test: system "#{bin}/agentsync --version"
+
+# scoops:
+#   - name: agentsync
+#     repository:
+#       owner: spxrogers
+#       name: scoop-bucket
+#     homepage: https://github.com/spxrogers/agentsync
+#     description: Centrally manage AI coding-agent configurations
+#     license: MIT
+
+# chocolateys:
+#   - name: agentsync
+#     api_key: '{{ .Env.CHOCOLATEY_API_KEY }}'
+#     title: agentsync
+#     project_url: https://github.com/spxrogers/agentsync
+#     license_url: https://github.com/spxrogers/agentsync/blob/main/LICENSE
+#     summary: Centrally manage AI coding-agent configurations
+
+# aurs:
+#   - name: agentsync-bin
+#     homepage: https://github.com/spxrogers/agentsync
+#     description: Centrally manage AI coding-agent configurations.
+#     maintainers: ['Steven Rogers <noreply@example.com>']
+#     license: MIT
+#     private_key: '{{ .Env.AUR_KEY }}'
+#     git_url: 'ssh://aur@aur.archlinux.org/agentsync-bin.git'

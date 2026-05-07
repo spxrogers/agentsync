@@ -1,5 +1,6 @@
 // Package-level write-back helpers for the canonical source (~/.agentsync/).
-// These are called by the reconcile command when the user selects [w]rite-back.
+// These are called by the reconcile command when the user selects [w]rite-back,
+// and by the import command to capture native edits.
 //
 // v1 trade-off: TOML comments in the original file are not preserved on
 // write-back. Comment-preserving mutation is deferred to v1.x.
@@ -7,7 +8,9 @@ package source
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spxrogers/agentsync/internal/iox"
@@ -38,4 +41,130 @@ func WriteMarketplace(home, name string, m Marketplace) error {
 		return fmt.Errorf("marshal marketplace %s: %w", name, err)
 	}
 	return iox.AtomicWrite(filepath.Join(home, "marketplaces", name+".toml"), body, 0o644)
+}
+
+// WriteSkill writes skills/<name>/SKILL.md from sk into home. Overwrites atomically.
+func WriteSkill(home string, sk Skill) error {
+	dir := filepath.Join(home, "skills", sk.Name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir skills/%s: %w", sk.Name, err)
+	}
+	content := renderFrontmatter(sk.Frontmatter) + sk.Body
+	return iox.AtomicWrite(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644)
+}
+
+// WriteSubagent writes agents/<name>.md from sa into home. Overwrites atomically.
+func WriteSubagent(home string, sa Subagent) error {
+	dir := filepath.Join(home, "agents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir agents: %w", err)
+	}
+	content := renderFrontmatter(sa.Frontmatter) + sa.Body
+	return iox.AtomicWrite(filepath.Join(dir, sa.Name+".md"), []byte(content), 0o644)
+}
+
+// WriteCommand writes commands/<name>.md from cm into home. Overwrites atomically.
+func WriteCommand(home string, cm Command) error {
+	dir := filepath.Join(home, "commands")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir commands: %w", err)
+	}
+	content := renderFrontmatter(cm.Frontmatter) + cm.Body
+	return iox.AtomicWrite(filepath.Join(dir, cm.Name+".md"), []byte(content), 0o644)
+}
+
+// hookFileOut is the TOML shape written to hooks/<event>.toml.
+type hookFileOut struct {
+	Hook []hookEntryOut `toml:"hook"`
+}
+
+type hookEntryOut struct {
+	Matcher string `toml:"matcher,omitempty"`
+	Type    string `toml:"type"`
+	Command string `toml:"command"`
+}
+
+// WriteHooks writes hooks/<event>.toml for the given event. Overwrites atomically.
+func WriteHooks(home, event string, hooks []Hook) error {
+	dir := filepath.Join(home, "hooks")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir hooks: %w", err)
+	}
+	hf := hookFileOut{}
+	for _, h := range hooks {
+		hf.Hook = append(hf.Hook, hookEntryOut{
+			Matcher: h.Matcher,
+			Type:    h.Type,
+			Command: h.Command,
+		})
+	}
+	body, err := toml.Marshal(hf)
+	if err != nil {
+		return fmt.Errorf("marshal hooks/%s: %w", event, err)
+	}
+	return iox.AtomicWrite(filepath.Join(dir, event+".toml"), body, 0o644)
+}
+
+// lspFileOut is the TOML shape written to lsp/<id>.toml.
+type lspFileOut struct {
+	Server LSPServerSpec `toml:"server"`
+}
+
+// WriteLSP writes lsp/<id>.toml from ls into home. Overwrites atomically.
+func WriteLSP(home string, ls LSPServer) error {
+	dir := filepath.Join(home, "lsp")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir lsp: %w", err)
+	}
+	lf := lspFileOut{Server: ls.Spec}
+	body, err := toml.Marshal(lf)
+	if err != nil {
+		return fmt.Errorf("marshal lsp %s: %w", ls.ID, err)
+	}
+	return iox.AtomicWrite(filepath.Join(dir, ls.ID+".toml"), body, 0o644)
+}
+
+// WriteMemory writes memory/AGENTS.md from m into home. Overwrites atomically.
+func WriteMemory(home string, m Memory) error {
+	dir := filepath.Join(home, "memory")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir memory: %w", err)
+	}
+	return iox.AtomicWrite(filepath.Join(dir, "AGENTS.md"), []byte(m.Body), 0o644)
+}
+
+// renderFrontmatter serialises a frontmatter map as a YAML block enclosed in
+// "---\n...\n---\n". If the map is empty or nil, returns "".
+func renderFrontmatter(fm map[string]any) string {
+	if len(fm) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("---\n")
+	// Deterministic order: sort keys.
+	keys := make([]string, 0, len(fm))
+	for k := range fm {
+		keys = append(keys, k)
+	}
+	sortStrings(keys)
+	for _, k := range keys {
+		v := fm[k]
+		switch vv := v.(type) {
+		case string:
+			sb.WriteString(fmt.Sprintf("%s: %q\n", k, vv))
+		default:
+			sb.WriteString(fmt.Sprintf("%s: %v\n", k, v))
+		}
+	}
+	sb.WriteString("---\n")
+	return sb.String()
+}
+
+// sortStrings is a minimal in-place sort for small slices (avoids importing sort).
+func sortStrings(ss []string) {
+	for i := 1; i < len(ss); i++ {
+		for j := i; j > 0 && ss[j-1] > ss[j]; j-- {
+			ss[j-1], ss[j] = ss[j], ss[j-1]
+		}
+	}
 }
