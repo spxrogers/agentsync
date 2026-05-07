@@ -58,7 +58,10 @@ jobs:
           go-version-file: ${{ env.GO_VERSION_FILE }}
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          # Pin to a v2 we've validated against this config locally. Bump
+          # deliberately when upgrading; "latest" can change config syntax
+          # under us.
+          version: v2.5.0
 
   goreleaser-snapshot:
     name: goreleaser-snapshot (cross-build matrix)
