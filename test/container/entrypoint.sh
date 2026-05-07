@@ -19,16 +19,19 @@ fi
 
 cd /workspace
 
-# Surface basic diagnostics up front. Any of these lines failing is itself
-# a useful signal — they're cheap and help triage failures from CI logs.
-echo "==> diagnostics"
-echo "    pwd:       $(pwd)"
-echo "    user:      $(id)"
-echo "    cgroup:    $(awk '/docker|podman|kube|libpod|containerd/{print; exit}' /proc/1/cgroup 2>/dev/null || echo '(none)')"
-echo "    /workspace ls:"
-ls -la | head -10
-echo "    go.mod first 4 lines:"
-head -4 go.mod || true
+# Surface basic diagnostics up front. Each line is wrapped in `|| true` so
+# a stray failure here can never mask a real test failure from set -e.
+{
+    echo "==> diagnostics"
+    echo "    pwd:       $(pwd 2>&1 || true)"
+    echo "    user:      $(id 2>&1 || true)"
+    echo "    cgroup:    $(awk '/docker|podman|kube|libpod|containerd/{print; exit}' /proc/1/cgroup 2>/dev/null || echo '(none)')"
+    echo "    workspace: $(ls -la /workspace 2>&1 | wc -l) entries"
+    echo "    go.mod:    $(head -1 /workspace/go.mod 2>&1 || true)"
+    echo "    go:        $(go version 2>&1 || true)"
+    echo "    HOME:      ${HOME:-<unset>}"
+    echo "    GOMODCACHE files (top 3): $(ls "${GOMODCACHE:-/home/runner/go/pkg/mod}" 2>&1 | head -3 | tr '\n' ' ' || true)"
+} || true
 
 # Hermeticity signal honoured by internal/testenv.RequireContainer. Tests
 # that touch the filesystem refuse to run unless this is exported.
