@@ -6,6 +6,7 @@ package secrets
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -78,13 +79,15 @@ func (NopResolver) Resolve(key string) (string, error) {
 
 // SelectBackend returns the appropriate Resolver for the given SecretsConfig.
 // For "age" backend it returns an AgeBackend; for "env" or empty it returns EnvBackend.
+//
+// Relative paths in cfg.File are resolved against homeDir using filepath.Join
+// so that Windows backslash separators work the same as POSIX.
 func SelectBackend(cfg source.SecretsConfig, homeDir string) Resolver {
 	switch strings.ToLower(cfg.Backend) {
 	case "age":
 		ageFile := cfg.File
-		if ageFile != "" && !isAbs(ageFile) {
-			// relative paths are relative to the agentsync home/.agentsync/
-			ageFile = homeDir + "/" + ageFile
+		if ageFile != "" && !filepath.IsAbs(ageFile) {
+			ageFile = filepath.Join(homeDir, ageFile)
 		}
 		return NewAgeBackend(ageFile, cfg.IdentityFile)
 	case "env":
@@ -92,9 +95,4 @@ func SelectBackend(cfg source.SecretsConfig, homeDir string) Resolver {
 	default:
 		return NopResolver{}
 	}
-}
-
-// isAbs reports whether p is an absolute path.
-func isAbs(p string) bool {
-	return len(p) > 0 && p[0] == '/'
 }

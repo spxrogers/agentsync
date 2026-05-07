@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"filippo.io/age"
@@ -104,7 +105,7 @@ func Encrypt(plaintext []byte, recipient string, dest string) error {
 	if err != nil {
 		return fmt.Errorf("parse age recipient: %w", err)
 	}
-	if err := os.MkdirAll(parentDir(dest), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return fmt.Errorf("mkdir parent of %s: %w", dest, err)
 	}
 	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
@@ -149,12 +150,3 @@ func Decrypt(ageFile, identityFile string) ([]byte, error) {
 	return raw, err
 }
 
-// parentDir returns the directory component of a file path.
-func parentDir(p string) string {
-	for i := len(p) - 1; i >= 0; i-- {
-		if p[i] == '/' {
-			return p[:i]
-		}
-	}
-	return "."
-}
