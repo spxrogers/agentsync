@@ -6,11 +6,88 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/state"
 )
+
+// PruneStaleState removes Files / Keys entries owned by agent+scope+project
+// whose path or pointer is no longer produced by the current set of ops.
+// This must be called BEFORE RecordOpsState so the freshly-applied entries
+// don't get pruned by their own absence in the previous run's state.
+//
+// Without this, removing an MCP server / skill / hook from
+// ~/.agentsync/ leaves its state entry behind forever; it shows up as
+// `Orphan` in `status` and `targets.json` grows unbounded over time.
+func PruneStaleState(s *state.Targets, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) {
+	if s == nil {
+		return
+	}
+	prefix := fmt.Sprintf("%s:%s:%s:", agent, scope.String(), project)
+
+	// Build the set of paths and per-path pointer sets that this agent's
+	// current plan still produces.
+	currentFiles := map[string]struct{}{}        // path → present
+	currentKeys := map[string]map[string]struct{}{} // path → set of pointers
+	for _, op := range ops {
+		if op.Action != "" && op.Action != "write" {
+			continue
+		}
+		switch op.MergeStrategy {
+		case "merge-json-keys", "merge-jsonc-keys":
+			ptrs, ok := currentKeys[op.Path]
+			if !ok {
+				ptrs = map[string]struct{}{}
+				currentKeys[op.Path] = ptrs
+			}
+			var ours map[string]any
+			if err := json.Unmarshal(op.Content, &ours); err == nil {
+				for _, p := range CollectPointers(ours, "") {
+					ptrs[p] = struct{}{}
+				}
+			}
+		default:
+			currentFiles[op.Path] = struct{}{}
+		}
+	}
+
+	for key := range s.Files {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		path := strings.TrimPrefix(key, prefix)
+		if _, ok := currentFiles[path]; !ok {
+			delete(s.Files, key)
+		}
+	}
+	for key := range s.Keys {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(key, prefix)
+		// rest = "<path>:<pointer>"; find the LAST ':' isn't safe because
+		// pointers can contain ':'. Use strings.Index since we know the
+		// path part can also contain ':'. Match against currentKeys instead:
+		// look for any path in currentKeys that is a prefix of rest with a
+		// trailing ':<ptr>'.
+		matched := false
+		for path, ptrs := range currentKeys {
+			if !strings.HasPrefix(rest, path+":") {
+				continue
+			}
+			ptr := strings.TrimPrefix(rest, path+":")
+			if _, ok := ptrs[ptr]; ok {
+				matched = true
+			}
+			break
+		}
+		if !matched {
+			delete(s.Keys, key)
+		}
+	}
+}
 
 // RecordOpsState updates s with hashes for files and keys produced by ops.
 // Caller is expected to call this AFTER a successful Apply.

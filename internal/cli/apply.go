@@ -114,6 +114,13 @@ func newApplyCmd() *cobra.Command {
 				return err
 			}
 
+			// Drop state entries for files/keys this agent no longer
+			// produces. Without this, a removed MCP server / skill / hook
+			// shows up as `Orphan` in `status` forever and targets.json
+			// grows unbounded.
+			for name, res := range plan.PerAgent {
+				render.PruneStaleState(s, name, sc, projectRoot, res.Ops)
+			}
 			// Update state with post-apply hashes.
 			for name, res := range plan.PerAgent {
 				if err := render.RecordOpsState(s, name, sc, projectRoot, res.Ops); err != nil {
