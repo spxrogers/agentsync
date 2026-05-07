@@ -152,10 +152,15 @@ func (f *NPMFetcher) downloadAndExtract(client *http.Client, url, destDir string
 			continue
 		}
 
-		// Security: prevent path traversal.
+		// Security: prevent path traversal. Previously this silently
+		// `continue`d on bad entries, which hid both attacks ("../etc/passwd")
+		// and corrupted tarballs (everything after a stray ".." was skipped
+		// and the plugin cache ended up half-populated with no diagnostic).
+		// Hard-fail instead so the user knows the tarball is hostile or
+		// broken.
 		destPath := filepath.Join(destDir, filepath.Clean(name))
 		if !strings.HasPrefix(destPath, destDir+string(os.PathSeparator)) && destPath != destDir {
-			continue
+			return fmt.Errorf("npm fetcher: tarball entry %q escapes destination %q (refusing to extract)", hdr.Name, destDir)
 		}
 
 		switch hdr.Typeflag {

@@ -391,3 +391,82 @@ func TestNPMFetcher_LatestVersion(t *testing.T) {
 		t.Errorf("resolved version = %q, want 2.0.0", result.Version)
 	}
 }
+
+// makeNPMTarballWithEntry builds an in-memory npm-style .tgz with one
+// arbitrary entry name, bypassing the conventional "package/" prefix.
+// Used to construct tarballs with traversal entries.
+func makeNPMTarballWithEntry(t *testing.T, entryName, content string) []byte {
+	t.Helper()
+	tmp := t.TempDir()
+	outPath := filepath.Join(tmp, "pkg.tgz")
+	f, err := os.Create(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gw)
+	data := []byte(content)
+	hdr := &tar.Header{Name: entryName, Size: int64(len(data)), Mode: 0o644, ModTime: time.Now()}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// TestNPMFetcher_TraversalEntryIsHardError replaces the previous
+// silent-skip behavior: a tarball containing "package/../escape.txt"
+// (which strips to "../escape.txt") must error out instead of being
+// dropped. Silent skipping hid both attacks and corrupted tarballs.
+func TestNPMFetcher_TraversalEntryIsHardError(t *testing.T) {
+	// "package/../etc/passwd" → after the "package/" strip becomes
+	// "../etc/passwd", which Clean+Join would resolve outside destDir.
+	tarball := makeNPMTarballWithEntry(t, "package/../etc/passwd", "pwned")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/badpkg":
+			meta := map[string]any{
+				"versions": map[string]any{
+					"1.0.0": map[string]any{
+						"version": "1.0.0",
+						"dist":    map[string]any{"tarball": "http://" + r.Host + "/tarball/1.0.0"},
+					},
+				},
+				"dist-tags": map[string]any{"latest": "1.0.0"},
+			}
+			_ = json.NewEncoder(w).Encode(meta)
+		case strings.HasPrefix(r.URL.Path, "/tarball/"):
+			_, _ = w.Write(tarball)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dst := t.TempDir()
+	src := marketplace.Source{Kind: "npm", Package: "badpkg", Version: "1.0.0", Registry: srv.URL}
+	fetcher := &marketplace.NPMFetcher{HTTPClient: srv.Client()}
+	_, err := fetcher.Fetch(src, dst)
+	if err == nil {
+		t.Fatal("expected error for traversal tarball entry")
+	}
+	if !strings.Contains(err.Error(), "escapes destination") {
+		t.Fatalf("error %q did not mention escape", err.Error())
+	}
+}
