@@ -111,11 +111,18 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 		return nil
 	}
 
-	// Track whether we need to re-apply for override actions.
-	var overrideOps []struct {
+	// Track ops the user explicitly chose to override (re-apply source on
+	// top of dest). We re-apply ONLY these ops at the end, never the full
+	// plan — pressing [o] on one drifted item must not silently re-apply
+	// every other item in the plan as a side effect.
+	type overrideOp struct {
 		agentName string
 		op        adapter.FileOp
 	}
+	var overrideOps []overrideOp
+	// dedupOverride keeps us from re-applying the same path twice when the
+	// user picks [o] for two pointers inside the same merge file.
+	dedupOverride := map[string]bool{}
 
 	// bulkAction is set when user presses W/O/S to apply to all remaining items.
 	bulkAction := byte(0)
@@ -183,10 +190,11 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 			}
 		case 'o':
 			// override: queue a re-apply of this item's op.
-			overrideOps = append(overrideOps, struct {
-				agentName string
-				op        adapter.FileOp
-			}{it.agentName, it.op})
+			dedupKey := it.agentName + "\x00" + it.op.Path
+			if !dedupOverride[dedupKey] {
+				dedupOverride[dedupKey] = true
+				overrideOps = append(overrideOps, overrideOp{it.agentName, it.op})
+			}
 		case 's':
 			// skip: do nothing.
 		case 'i':
@@ -200,15 +208,24 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 	}
 
 done:
-	// Execute override re-applies.
+	// Execute override re-applies — ONLY for the ops the user opted into,
+	// grouped by adapter so each adapter sees its own ops. The previous
+	// implementation re-ran Apply for the entire plan, which silently
+	// re-applied every other agent's ops as a side effect.
 	if len(overrideOps) > 0 {
-		// Re-run Apply for the full plan; re-renders source values on top of dest.
-		if err := render.Apply(plan, reg); err != nil {
-			return fmt.Errorf("reconcile override apply: %w", err)
+		byAgent := map[string][]adapter.FileOp{}
+		for _, oo := range overrideOps {
+			byAgent[oo.agentName] = append(byAgent[oo.agentName], oo.op)
 		}
-		// Update state.
-		for name, res := range plan.PerAgent {
-			if err := render.RecordOpsState(s, name, sc, projectRoot, res.Ops); err != nil {
+		for name, ops := range byAgent {
+			a := reg.Lookup(name)
+			if a == nil {
+				return fmt.Errorf("reconcile override: adapter %q not registered", name)
+			}
+			if err := a.Apply(ops); err != nil {
+				return fmt.Errorf("reconcile override apply %s: %w", name, err)
+			}
+			if err := render.RecordOpsState(s, name, sc, projectRoot, ops); err != nil {
 				return err
 			}
 		}
