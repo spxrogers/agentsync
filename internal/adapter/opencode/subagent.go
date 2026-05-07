@@ -13,11 +13,12 @@ import (
 // OpenCode-shaped and emits FileOps for .config/opencode/agents/<name>.md.
 //
 // Frontmatter mapping:
-//   description -> description  (direct copy)
-//   model       -> model        (direct copy)
-//   tools       -> drop + Skip  (OpenCode uses permission model; non-trivial mapping)
-//   color       -> drop + Skip  (no OpenCode equivalent)
-//   (none)      -> mode: subagent  (always added)
+//
+//	description -> description  (direct copy)
+//	model       -> model        (direct copy)
+//	tools       -> drop + Skip  (OpenCode uses permission model; non-trivial mapping)
+//	color       -> drop + Skip  (no OpenCode equivalent)
+//	(none)      -> mode: subagent  (always added)
 func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp, []adapter.Skip, error) {
 	var ops []adapter.FileOp
 	var skips []adapter.Skip

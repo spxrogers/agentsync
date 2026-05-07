@@ -1,27 +1,41 @@
+version: "2"
+
 run:
   timeout: 3m
   tests: true
+  go: "1.24"
 
 linters:
+  default: none
   enable:
-    - govet
-    - staticcheck
     - errcheck
-    - gocritic
-    - ineffassign
-    - gofumpt
     - forbidigo
+    - gocritic
+    - govet
+    - ineffassign
+    - staticcheck
+  settings:
+    errcheck:
+      # Standard exclusions — Close on best-effort cleanup, Fprintln/Fprintf
+      # to a writer in normal CLI output, etc. Genuine error sites still flag.
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (*net/http.Response).Body.Close
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: '^os\.UserHomeDir$'
+          msg: "use paths.HomeDir(env) so AGENTSYNC_TARGET_ROOT honored in tests"
+  exclusions:
+    rules:
+      # main.go can use os.UserHomeDir if needed.
+      - path: '(^|/)cmd/.*'
+        linters: [forbidigo]
 
-linters-settings:
-  forbidigo:
-    forbid:
-      - p: '^os\.UserHomeDir$'
-        msg: "use paths.HomeDir(env) so AGENTSYNC_TARGET_ROOT honored in tests"
-        # apply only to test files
-        pattern: ".*"
-    analyze-types: true
-
-issues:
-  exclude-rules:
-    - path: '(^|/)cmd/.*'
-      linters: [forbidigo]    # main.go can use os.UserHomeDir if needed
+formatters:
+  enable:
+    - gofumpt

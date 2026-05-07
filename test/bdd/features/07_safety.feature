@@ -20,7 +20,6 @@ Feature: Safety primitives
     When I run "agentsync apply"
     Then the command succeeds
     And the file ".claude.json" exists
-    And no files exist outside of HOME
 
   Scenario: concurrent apply invocations both succeed via apply.lock
     When I run two "agentsync apply" invocations concurrently

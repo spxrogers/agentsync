@@ -42,8 +42,8 @@ func TestSubstituteCanonical_MCPEnv(t *testing.T) {
 }
 
 func TestSubstituteCanonical_UnresolvedReturnsError(t *testing.T) {
-	sec := mapBackend{}   // empty — no secrets
-	env := mapBackend{}   // empty
+	sec := mapBackend{} // empty — no secrets
+	env := mapBackend{} // empty
 
 	c := source.Canonical{
 		MCPServers: []source.MCPServer{

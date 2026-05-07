@@ -66,9 +66,7 @@ func (EnvBackend) Resolve(key string) (string, error) {
 }
 
 // osGetenv indirection so tests can inject without touching real env.
-var osGetenv = func(k string) string {
-	return os.Getenv(k)
-}
+var osGetenv = os.Getenv
 
 // NopResolver is a Resolver that always returns an error (key not found).
 // Used when no secrets backend is configured.

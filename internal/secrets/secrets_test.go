@@ -27,7 +27,8 @@ func TestSubstituteRefs_SecretsAndEnv(t *testing.T) {
 	env := mapBackend{"HOME": "/Users/x"}
 	got, unresolved, err := secrets.SubstituteRefs(
 		"token=${secret:github.token}; home=${env:HOME}; ?=${secret:missing}",
-		sec, env)
+		sec, env,
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

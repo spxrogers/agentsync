@@ -4,14 +4,20 @@ on:
   push:
     branches: [main]
 
-# Single source of truth for the Go toolchain. go.mod declares 1.26.2;
-# every job pins to it via go-version-file so it can't drift.
+# Single source of truth for the Go toolchain. go.mod's `go` directive
+# specifies the language version; `toolchain` specifies the actual build
+# toolchain. setup-go reads the `go` directive and Go itself honours the
+# toolchain directive at runtime.
 env:
   GO_VERSION_FILE: go.mod
 
 jobs:
-  test:
-    name: test (${{ matrix.os }})
+  # Pure-unit tests across the supported OS matrix. These never touch the
+  # filesystem (per internal/testenv.RequireContainer), so they're safe on
+  # any host runner and give us cross-platform coverage that the Linux-only
+  # container suite below can't.
+  test-fast:
+    name: test-fast (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -22,34 +28,19 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
-      - run: go test -race -count=1 ./...
+      - uses: extractions/setup-just@v3
+      - run: just test-fast
 
-  test-e2e:
-    name: test-e2e
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: ${{ env.GO_VERSION_FILE }}
-      - run: go test -tags=e2e -count=1 ./test/e2e/...
-
-  test-bdd:
-    name: test-bdd (Gherkin behaviour lock)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: ${{ env.GO_VERSION_FILE }}
-      - run: go test -tags=bdd -count=1 ./test/bdd/...
-
+  # The release-readiness gate: every FS-touching test layer in one
+  # hermetic container run. Linux only — the Containerfile targets
+  # linux/amd64 and the container is the hermeticity guarantee.
   test-release:
-    name: test-release (hermetic gate, podman/docker)
+    name: test-release (hermetic gate)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: ./scripts/test-in-container.sh
+      - uses: extractions/setup-just@v3
+      - run: just test-release
 
   lint:
     runs-on: ubuntu-latest
@@ -59,9 +50,11 @@ jobs:
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
       - uses: golangci/golangci-lint-action@v6
-        with: { version: latest }
+        with:
+          version: latest
 
   goreleaser-snapshot:
+    name: goreleaser-snapshot (cross-build matrix)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

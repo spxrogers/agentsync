@@ -13,9 +13,10 @@ import (
 // and emits FileOps for .config/opencode/commands/<name>.md.
 //
 // Frontmatter mapping:
-//   description   -> description  (direct copy)
-//   model         -> model        (direct copy)
-//   argument-hint -> drop + Skip  (no OpenCode equivalent)
+//
+//	description   -> description  (direct copy)
+//	model         -> model        (direct copy)
+//	argument-hint -> drop + Skip  (no OpenCode equivalent)
 //
 // Body is preserved as-is; OpenCode treats the body as the command template.
 // We do NOT add a `template:` frontmatter key to avoid duplication.

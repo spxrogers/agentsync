@@ -89,7 +89,9 @@ func makeGitMarketplace(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.Add(".")
+	if _, err := w.Add("."); err != nil {
+		t.Fatalf("worktree add: %v", err)
+	}
 	sig := &object.Signature{Name: "t", Email: "t@t", When: time.Now()}
 	if _, err := w.Commit("init", &gogit.CommitOptions{Author: sig, Committer: sig}); err != nil {
 		t.Fatalf("commit: %v", err)

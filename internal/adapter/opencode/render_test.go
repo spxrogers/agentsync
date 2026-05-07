@@ -322,7 +322,7 @@ func TestRender_Command_BodyPreserved(t *testing.T) {
 
 func TestRender_HooksAndLSP_Skipped(t *testing.T) {
 	c := source.Canonical{
-		Hooks: []source.Hook{{Event: "PreToolUse", Command: "echo hi"}},
+		Hooks:      []source.Hook{{Event: "PreToolUse", Command: "echo hi"}},
 		LSPServers: []source.LSPServer{{ID: "gopls", Spec: source.LSPServerSpec{Command: "gopls"}}},
 	}
 	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})

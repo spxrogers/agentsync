@@ -23,8 +23,7 @@ func MergeKeys(existing, ours map[string]any, ownedPointers []string) (map[strin
 
 	// Step 1: overlay ours onto merged
 	for k, v := range ours {
-		switch ev := merged[k].(type) {
-		case map[string]any:
+		if ev, ok := merged[k].(map[string]any); ok {
 			if vv, ok := v.(map[string]any); ok {
 				merged[k] = mergeMaps(ev, vv)
 				continue
@@ -52,8 +51,7 @@ func MergeKeys(existing, ours map[string]any, ownedPointers []string) (map[strin
 func mergeMaps(a, b map[string]any) map[string]any {
 	out := deepCopyMap(a)
 	for k, v := range b {
-		switch existing := out[k].(type) {
-		case map[string]any:
+		if existing, ok := out[k].(map[string]any); ok {
 			if vv, ok := v.(map[string]any); ok {
 				out[k] = mergeMaps(existing, vv)
 				continue

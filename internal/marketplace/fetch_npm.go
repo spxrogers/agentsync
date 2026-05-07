@@ -131,7 +131,7 @@ func (f *NPMFetcher) downloadAndExtract(client *http.Client, url, destDir string
 	if err != nil {
 		return fmt.Errorf("gzip reader: %w", err)
 	}
-	defer gr.Close()
+	defer func() { _ = gr.Close() }()
 
 	tr := tar.NewReader(gr)
 	for {

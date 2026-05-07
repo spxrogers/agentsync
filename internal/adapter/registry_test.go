@@ -9,14 +9,18 @@ import (
 
 type stub struct{ name string }
 
-func (s stub) Name() string                                                                        { return s.name }
-func (stub) Capabilities() adapter.Capability                                                      { return 0 }
-func (stub) Detect() (bool, error)                                                                  { return false, nil }
+func (s stub) Name() string { return s.name }
+
+func (stub) Capabilities() adapter.Capability { return 0 }
+
+func (stub) Detect() (bool, error) { return false, nil }
+
 func (stub) Render(source.Canonical, adapter.Scope, string) ([]adapter.FileOp, []adapter.Skip, error) {
 	return nil, nil, nil
 }
+
 func (stub) Ingest(adapter.Scope, string) (source.Canonical, error) { return source.Canonical{}, nil }
-func (stub) Apply([]adapter.FileOp) error                            { return nil }
+func (stub) Apply([]adapter.FileOp) error                           { return nil }
 
 func TestRegistry_RegisterLookup(t *testing.T) {
 	r := adapter.NewRegistry()

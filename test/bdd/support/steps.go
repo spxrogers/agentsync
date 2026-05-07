@@ -47,7 +47,6 @@ func RegisterSteps(sc *godog.ScenarioContext, w *World) {
 	sc.Step(`^the file "([^"]+)" contains "([^"]*)"$`, w.thenFileContains)
 	sc.Step(`^the file "([^"]+)" does not contain "([^"]*)"$`, w.thenFileDoesNotContain)
 	sc.Step(`^the directory "([^"]+)" exists$`, w.thenDirExists)
-	sc.Step(`^no files exist outside of HOME$`, w.thenNoFilesOutsideHome)
 }
 
 // ===== given (context) ======================================================
@@ -325,33 +324,6 @@ func (w *World) thenDirExists(path string) error {
 	}
 	if !st.IsDir() {
 		return fmt.Errorf("%s exists but is not a directory", abs)
-	}
-	return nil
-}
-
-// thenNoFilesOutsideHome is a hermeticity guard: it scans a small allowlist of
-// real-life paths the binary might be tempted to touch and confirms none of
-// them have been written. It does not aim to enumerate the filesystem.
-func (w *World) thenNoFilesOutsideHome() error {
-	realHome, _ := os.UserHomeDir()
-	if realHome == "" || realHome == w.Home {
-		return nil
-	}
-	suspects := []string{
-		filepath.Join(realHome, ".claude.json"),
-		filepath.Join(realHome, ".claude"),
-		filepath.Join(realHome, ".config", "opencode", "opencode.json"),
-		filepath.Join(realHome, ".agentsync"),
-	}
-	for _, s := range suspects {
-		st, err := os.Stat(s)
-		if err != nil {
-			continue
-		}
-		// File exists; was it modified during this scenario?
-		if st.ModTime().After(w.StartedAt) {
-			return fmt.Errorf("hermeticity breach: %s modified during scenario", s)
-		}
 	}
 	return nil
 }

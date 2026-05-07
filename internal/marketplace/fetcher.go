@@ -13,7 +13,7 @@ type Fetcher interface {
 // FetchResult carries metadata about a completed fetch.
 type FetchResult struct {
 	HeadSHA string // for git sources
-	Version  string // for npm
+	Version string // for npm
 }
 
 // errFetcher is a Fetcher that always returns a fixed error.
