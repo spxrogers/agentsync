@@ -22,8 +22,6 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE_NAME="agentsync-tests:local"
-CACHE_VOL="agentsync-test-gocache"
-MOD_VOL="agentsync-test-gomodcache"
 
 # ----- pick a container engine ---------------------------------------------
 
@@ -74,8 +72,11 @@ RUN_ARGS=(
     --init
     --network=none      # tests must work offline; CI parity guard
     -v "$ROOT:/workspace:$MOUNT_FLAG"
-    -v "$MOD_VOL:/home/runner/go/pkg/mod"
-    -v "$CACHE_VOL:/home/runner/.cache/go-build"
+    # No named cache volumes: the image already ships a pre-warmed module
+    # cache at /home/runner/go/pkg/mod, and overlayfs CoW makes the cache
+    # writable for runtime additions. Volumes only matter for persisting
+    # state across runs, which we don't need (CI is one-shot, local dev
+    # gets fast warm runs from the docker image-layer cache).
     -e "GOFLAGS=-mod=mod"
     -e "TZ=UTC"
     # Hermeticity signal honoured by internal/testenv.RequireContainer.
