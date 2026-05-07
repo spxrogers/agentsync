@@ -1,14 +1,83 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/state"
 )
+
+// loaderFsForState returns an afero.Fs suitable for re-loading the
+// canonical repo when seeding state — the OS FS is correct here because
+// state lives on the same disk as ~/.agentsync/.
+func loaderFsForState() afero.Fs { return afero.NewOsFs() }
+
+// jsonUnmarshalLoose is a thin wrapper that returns nil on empty input
+// (so callers can treat empty as "absent") and surfaces real parse errors.
+func jsonUnmarshalLoose(data []byte, v *map[string]any) error {
+	if len(data) == 0 {
+		*v = map[string]any{}
+		return nil
+	}
+	return json.Unmarshal(data, v)
+}
+
+// collectStateSeedPointers returns the JSON pointers we record state for
+// when seeding from a freshly imported canonical. We borrow the same
+// ownership rule used by render.RecordOpsState (second-level granularity).
+func collectStateSeedPointers(m map[string]any) []string {
+	return render.CollectPointers(m, "")
+}
+
+// hashAtPointer returns the SHA-256 of the JSON-marshaled value at ptr,
+// or the empty string if no value exists there.
+func hashAtPointer(m map[string]any, ptr string) string {
+	v := getJSONPointer(m, ptr)
+	data, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// getJSONPointer resolves a "/a/b/c" RFC 6901 pointer against m. Returns
+// nil if any segment is missing. We re-implement here rather than
+// exporting render.getPointer because keeping that helper unexported
+// preserves the current package boundary.
+func getJSONPointer(m map[string]any, ptr string) any {
+	if ptr == "" || ptr[0] != '/' {
+		return m
+	}
+	parts := strings.Split(ptr[1:], "/")
+	for i, p := range parts {
+		// Decode RFC 6901 escapes.
+		p = strings.ReplaceAll(p, "~1", "/")
+		p = strings.ReplaceAll(p, "~0", "~")
+		parts[i] = p
+	}
+	var cur any = m
+	for _, p := range parts {
+		mm, ok := cur.(map[string]any)
+		if !ok {
+			return nil
+		}
+		cur = mm[p]
+	}
+	return cur
+}
 
 // newImportCmd returns the "import" subcommand.
 // Selector grammar: <agent>:<component>:<name>
@@ -56,22 +125,114 @@ func importRun(cmd *cobra.Command, args []string) error {
 
 	switch component {
 	case "mcp":
-		return importMCP(cmd, home, c, name)
+		err = importMCP(cmd, home, c, name)
 	case "skill":
-		return importSkill(cmd, home, c, name)
+		err = importSkill(cmd, home, c, name)
 	case "agent", "subagent":
-		return importSubagent(cmd, home, c, name)
+		err = importSubagent(cmd, home, c, name)
 	case "command":
-		return importCommand(cmd, home, c, name)
+		err = importCommand(cmd, home, c, name)
 	case "hook":
-		return importHook(cmd, home, c, name)
+		err = importHook(cmd, home, c, name)
 	case "lsp":
-		return importLSP(cmd, home, c, name)
+		err = importLSP(cmd, home, c, name)
 	case "memory":
-		return importMemory(cmd, home, c)
+		err = importMemory(cmd, home, c)
 	default:
 		return fmt.Errorf("unknown component %q; valid: mcp, skill, agent, command, hook, lsp, memory", component)
 	}
+	if err != nil {
+		return err
+	}
+
+	// Seed state with the destination's current content hash so the next
+	// \`apply\` sees Clean/Converged instead of ForeignCollision and
+	// silently overwriting the file the user just imported from. We do
+	// this from the *current on-disk dest* hashes — not the rendered
+	// content — because the canonical→render pipeline may translate the
+	// content slightly (frontmatter normalization, etc.) and we want the
+	// next apply to compare against the file that exists today.
+	if seedErr := seedStateFromCurrentDest(home, agentName, reg); seedErr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: import succeeded but state seed failed: %v\n", seedErr)
+	}
+	return nil
+}
+
+// seedStateFromCurrentDest re-renders the canonical for agent and writes
+// state entries reflecting the current on-disk content of each destination.
+// This makes the next \`apply\` non-destructive — the destination is
+// already known to agentsync, so any future divergence is real drift, not a
+// first-run foreign-collision.
+func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) error {
+	statePath := filepath.Join(home, ".state", "targets.json")
+	st, err := state.Load(statePath)
+	if err != nil {
+		return err
+	}
+
+	// Build a fresh canonical from disk and render only this agent.
+	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+	c, err := source.LoadWithCache(loaderFsForState(), home, pluginCacheRoot)
+	if err != nil {
+		return err
+	}
+	a := reg.Lookup(agentName)
+	if a == nil {
+		return fmt.Errorf("adapter %q not registered", agentName)
+	}
+	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	for _, op := range ops {
+		if op.Action != "" && op.Action != "write" {
+			continue
+		}
+		switch op.MergeStrategy {
+		case "merge-json-keys", "merge-jsonc-keys":
+			// Per-key seed: hash the *current* value at each pointer the
+			// rendered op claims to own.
+			data, readErr := os.ReadFile(op.Path)
+			if readErr != nil {
+				continue // dest doesn't exist yet; nothing to seed
+			}
+			var existing map[string]any
+			if jsonErr := jsonUnmarshalLoose(data, &existing); jsonErr != nil {
+				continue
+			}
+			var ours map[string]any
+			if jsonErr := jsonUnmarshalLoose(op.Content, &ours); jsonErr != nil {
+				continue
+			}
+			for _, ptr := range collectStateSeedPointers(ours) {
+				key := fmt.Sprintf("%s:%s:%s:%s:%s",
+					agentName, adapter.ScopeUser.String(), "", op.Path, ptr)
+				st.Keys[key] = state.KeyEntry{
+					SHA256:    hashAtPointer(existing, ptr),
+					AppliedAt: now,
+					SourceID:  op.SourceID,
+				}
+			}
+		default:
+			data, readErr := os.ReadFile(op.Path)
+			if readErr != nil {
+				continue
+			}
+			sum := sha256.Sum256(data)
+			key := fmt.Sprintf("%s:%s:%s:%s",
+				agentName, adapter.ScopeUser.String(), "", op.Path)
+			st.Files[key] = state.FileEntry{
+				SHA256:    hex.EncodeToString(sum[:]),
+				Mode:      op.Mode,
+				AppliedAt: now,
+				SourceID:  op.SourceID,
+			}
+		}
+	}
+
+	return state.Save(statePath, st)
 }
 
 // parseSelector splits "agent:component:name" into its three parts.
