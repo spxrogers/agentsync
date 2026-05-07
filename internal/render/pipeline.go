@@ -5,9 +5,11 @@ package render
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/state"
 )
 
 // RenderPlan holds the result of rendering a canonical model through every
@@ -32,7 +34,10 @@ func (p RenderPlan) Total() int {
 
 // Plan asks each adapter named in agents to render the canonical model.
 // Returns a RenderPlan, never writes anything. Use Apply() to commit.
-func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adapter.Scope, project string) (RenderPlan, error) {
+//
+// s may be nil; when non-nil, OwnedKeys is populated on merge-json-keys ops
+// from state.Keys so the apply pipeline knows which JSON-pointer paths it owns.
+func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adapter.Scope, project string, s *state.Targets) (RenderPlan, error) {
 	out := RenderPlan{PerAgent: map[string]AgentResult{}}
 	for _, name := range agents {
 		a := reg.Lookup(name)
@@ -43,9 +48,29 @@ func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adap
 		if err != nil {
 			return out, fmt.Errorf("render %s: %w", name, err)
 		}
+		if s != nil {
+			for i, op := range ops {
+				if op.MergeStrategy == "merge-json-keys" || op.MergeStrategy == "merge-jsonc-keys" {
+					ops[i].OwnedKeys = ownedKeysFor(s, name, scope, project, op.Path)
+				}
+			}
+		}
 		out.PerAgent[name] = AgentResult{Ops: ops, Skips: skips}
 	}
 	return out, nil
+}
+
+// ownedKeysFor returns the JSON-pointer strings owned by agentsync for a given
+// agent+scope+project+path combination, as recorded in state.Keys.
+func ownedKeysFor(s *state.Targets, agent string, scope adapter.Scope, project, path string) []string {
+	prefix := fmt.Sprintf("%s:%s:%s:%s:", agent, scope.String(), project, path)
+	var out []string
+	for k := range s.Keys {
+		if strings.HasPrefix(k, prefix) {
+			out = append(out, strings.TrimPrefix(k, prefix))
+		}
+	}
+	return out
 }
 
 // Apply commits a RenderPlan by calling each adapter's Apply with its FileOps.

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
@@ -9,6 +10,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/state"
 )
 
 func newApplyCmd() *cobra.Command {
@@ -40,8 +42,15 @@ func newApplyCmd() *cobra.Command {
 
 			reg := registryFactory()
 
+			// Load state (needed for OwnedKeys injection in Plan).
+			statePath := filepath.Join(home, ".state", "targets.json")
+			s, err := state.Load(statePath)
+			if err != nil {
+				return err
+			}
+
 			if dryRun {
-				plan, err := render.Plan(c, reg, agents, sc, "")
+				plan, err := render.Plan(c, reg, agents, sc, "", s)
 				if err != nil {
 					return err
 				}
@@ -58,13 +67,24 @@ func newApplyCmd() *cobra.Command {
 			}
 
 			// Real apply: render + write
-			plan, err := render.Plan(c, reg, agents, sc, "")
+			plan, err := render.Plan(c, reg, agents, sc, "", s)
 			if err != nil {
 				return err
 			}
 			if err := render.Apply(plan, reg); err != nil {
 				return err
 			}
+
+			// Update state with post-apply hashes.
+			for name, res := range plan.PerAgent {
+				if err := render.RecordOpsState(s, name, sc, "", res.Ops); err != nil {
+					return err
+				}
+			}
+			if err := state.Save(statePath, s); err != nil {
+				return err
+			}
+
 			fmt.Fprintln(cmd.OutOrStdout(), "applied:", plan.Total(), "ops")
 			return nil
 		},
