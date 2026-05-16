@@ -40,6 +40,10 @@ type Writer struct {
 	backupRoot string          // <home>/.state/backups/<ts>; created lazily
 	backedUp   map[string]bool // path → already-backed-up this run
 	reports    []CollisionReport
+	// dryRun, when true, skips both the destination write AND the backup
+	// write. The reports slice is still populated so callers can preview
+	// the foreign-collisions a real apply would produce.
+	dryRun bool
 }
 
 // CollisionReport describes one foreign-collision the writer detected and
@@ -72,6 +76,15 @@ func NewWriter(st *state.Targets, home string, scope adapter.Scope, project, age
 		backupRoot: filepath.Join(home, ".state", "backups", ts),
 		backedUp:   map[string]bool{},
 	}
+}
+
+// NewPreviewWriter constructs a Writer that records foreign-collision
+// reports without performing any disk writes. Used by `apply --dry-run` to
+// surface the same backup-and-overwrite events a real apply would produce.
+func NewPreviewWriter(st *state.Targets, home string, scope adapter.Scope, project, agent string) *Writer {
+	w := NewWriter(st, home, scope, project, agent)
+	w.dryRun = true
+	return w
 }
 
 // Reports returns the per-write collision reports accumulated so far.
@@ -206,8 +219,14 @@ func (w *Writer) maybeBackupFileOpForJSONCFallback(op adapter.FileOp) error {
 
 // backup writes existing to <backupRoot>/<rel-path> via iox.AtomicWrite
 // and marks the path as backed-up so subsequent ops don't double-back-up.
+// In dry-run mode no disk write happens; only the dest path is computed
+// so the caller can surface it in a preview report.
 func (w *Writer) backup(path string, existing []byte) (string, error) {
 	dest := backupPathFor(path, w.backupRoot)
+	if w.dryRun {
+		w.backedUp[path] = true
+		return dest, nil
+	}
 	if err := iox.AtomicWrite(dest, existing, 0o600); err != nil {
 		return "", fmt.Errorf("backup %s: %w", path, err)
 	}

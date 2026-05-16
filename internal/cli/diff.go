@@ -14,6 +14,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -75,6 +76,17 @@ func newDiffCmd() *cobra.Command {
 				return err
 			}
 
+			// Build the secret-redaction map BEFORE diffing. The
+			// destination file was written by a prior apply with secrets
+			// substituted in cleartext (ghp_…, sk-…), so reading it back
+			// and printing the diff would otherwise leak credentials to
+			// stdout / log files / screenshots. We resolve every
+			// reference in the canonical, then mask its resolved value
+			// in both src and dst before the diff runs.
+			secBackend := secrets.SelectBackend(c.Config.Secrets, home)
+			envBackend := secrets.EnvBackend{}
+			redact := secrets.CollectResolved(&c, secBackend, envBackend)
+
 			dmp := diffmatchpatch.New()
 			w := cmd.OutOrStdout()
 			hasDiff := false
@@ -101,8 +113,8 @@ func newDiffCmd() *cobra.Command {
 						for _, ptr := range render.CollectPointers(ours, "") {
 							srcVal := getPointerValue(ours, ptr)
 							dstVal := getPointerValue(final, ptr)
-							srcStr := marshalPretty(srcVal)
-							dstStr := marshalPretty(dstVal)
+							srcStr := secrets.MaskResolved(marshalPretty(srcVal), redact)
+							dstStr := secrets.MaskResolved(marshalPretty(dstVal), redact)
 							if srcStr == dstStr {
 								continue
 							}
@@ -118,11 +130,11 @@ func newDiffCmd() *cobra.Command {
 							continue
 						}
 						seen[op.Path] = true
-						srcStr := string(op.Content)
+						srcStr := secrets.MaskResolved(string(op.Content), redact)
 						dstBytes, readErr := os.ReadFile(op.Path)
 						dstStr := ""
 						if readErr == nil {
-							dstStr = string(dstBytes)
+							dstStr = secrets.MaskResolved(string(dstBytes), redact)
 						}
 						if srcStr == dstStr {
 							continue
