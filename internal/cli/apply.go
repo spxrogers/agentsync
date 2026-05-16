@@ -157,16 +157,30 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	if err != nil {
 		return err
 	}
-	collisions, err := render.Apply(plan, reg, s, home, sc, projectRoot)
-	if err != nil {
-		return err
-	}
+	collisions, applyErr := render.Apply(plan, reg, s, home, sc, projectRoot)
 	if len(collisions) > 0 {
 		ew := cmd.ErrOrStderr()
 		fmt.Fprintf(ew, "agentsync: backed up %d pre-existing target(s) before overwriting:\n", len(collisions))
 		for _, r := range collisions {
 			fmt.Fprintf(ew, "  %s\n", r.String())
 		}
+	}
+
+	// CRITICAL: when render.Apply errors mid-pipeline (write #5 of 10
+	// failed with ENOSPC, EACCES, USB unplugged, …), files 1-4 are
+	// already on disk but state.Save below has not yet run. Without
+	// this best-effort state-save BEFORE returning the error, those
+	// completed files would be foreign on the next apply and trigger
+	// pointless backup-and-overwrite. We save whatever state we can
+	// derive from the on-disk reality and surface the original error.
+	//
+	// Some adapter ops may have completed and others not. Recording
+	// hashes from files that DO exist is always safe (RecordOpsState
+	// re-reads each file); recording from files that don't exist
+	// returns an error and we just skip those.
+	if applyErr != nil {
+		_ = saveBestEffortState(s, statePath, plan, home, sc, projectRoot)
+		return applyErr
 	}
 
 	// Drop state entries for files/keys this agent no longer
@@ -194,6 +208,33 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		report.PrintText(w)
 	}
 	return nil
+}
+
+// saveBestEffortState records hashes for every op in plan whose dest
+// file currently exists on disk. Called on the apply error path so a
+// partial write doesn't leave the next apply reclassifying those files
+// as foreign-collisions. Failures are swallowed — we already have the
+// real error to surface and want to maximise the chance of the rescue
+// state.Save landing.
+func saveBestEffortState(s *state.Targets, statePath string, plan render.RenderPlan, home string, sc adapter.Scope, projectRoot string) error {
+	for name, res := range plan.PerAgent {
+		var existing []adapter.FileOp
+		for _, op := range res.Ops {
+			if _, err := os.Stat(op.Path); err == nil {
+				existing = append(existing, op)
+			}
+		}
+		if len(existing) == 0 {
+			continue
+		}
+		// PruneStaleState is intentionally skipped here — we only want
+		// to ADD hashes, not remove entries that may refer to the now-
+		// half-applied state.
+		if err := render.RecordOpsState(s, home, name, sc, projectRoot, existing); err != nil {
+			continue
+		}
+	}
+	return state.Save(statePath, s)
 }
 
 // resolveProjectScope determines the effective scope and project root.

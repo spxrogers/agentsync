@@ -52,6 +52,14 @@ agentsync is single-machine. To sync `~/.agentsync/` across machines, use chezmo
 
 If you lose your age private key, you lose access to all encrypted secrets. Recommended: store the key in a 1Password Secure Note or your machine-setup repo. agentsync does not back up the key for you.
 
+`agentsync secrets set` accepts the value three ways:
+
+    agentsync secrets set github.token --stdin    # value from stdin (best for scripts / 1Password CLI)
+    agentsync secrets set github.token            # prompt with echo off
+    agentsync secrets set github.token=ghp_…      # back-compat; warns — argv is visible to ps(1) and shell history
+
+`agentsync diff` redacts every resolved `${secret:…}` value before printing, so a piped diff doesn't leak credentials to logs.
+
 ## Known limits in v1.x
 
 - **OpenCode hooks**: OpenCode hooks are JS/TS plugins, not declarative shell commands. agentsync v1 does NOT auto-translate Claude hooks to OpenCode. Hand-author a small JS/TS plugin if you need a hook on OpenCode.
@@ -61,7 +69,23 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 - **TOML / JSONC comment preservation**: comments in `~/.agentsync/mcp/*.toml` and in agent-side `opencode.json` are NOT preserved across reconcile `[w]`rite-back or import. Hand-edited comments survive in unrelated sections; the rewritten section will be re-emitted without comments. Deferred to v1.x.
 - **Hand-edits to agentsync-owned keys** in shared agent files (e.g. an MCP server entry in `~/.claude.json` that agentsync owns): the next `apply` overwrites them with NO foreign-collision backup, because agentsync considers them its own. Use `agentsync reconcile` (the drift classifier catches the edit and offers `[w]`rite-back) BEFORE the next apply if you want to keep them.
 - **Plain-http / git:// plugin sources** are rejected by default to prevent MITM swap. Set `AGENTSYNC_ALLOW_INSECURE_URLS=1` for internal mirrors.
+- **Symlinked destinations** (e.g. `~/.claude.json` is a chezmoi symlink into your dotfiles repo) are rejected by default — a rename onto the path would replace the symlink with a regular file and strand your linked source. Set `AGENTSYNC_ALLOW_SYMLINK_DEST=1` to write through the symlink instead (the underlying file is updated in place; the link survives).
 - **Continue, Gemini CLI, Aider**: not on the v1.x roadmap.
+
+## Environment overrides
+
+| Env var | Purpose |
+| --- | --- |
+| `AGENTSYNC_HOME` | Override `~/.agentsync/` location (absolute path). |
+| `AGENTSYNC_TARGET_ROOT` | Redirect `$HOME` for testing (used by the hermetic test container). |
+| `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Permit writes to symlinked destination files (resolves the link first). |
+| `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept http:// and git:// plugin / marketplace sources. |
+| `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` | Accept `agent add codex`/`cursor` despite the noop adapters. |
+| `AGENTSYNC_ALLOW_PLUGIN_DRIFT=1` | Bypass the plugin-cache manifest-SHA check (after hand-editing). |
+| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Skip `${secret:…}` resolution in `agentsync verify` (CI without an age key). |
+| `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` | Skip the 0600 mode check on the age identity file (ACL'd NFS). |
+| `AGENTSYNC_MAX_TARBALL_MB=<N>` | Override the per-tarball decompressed-bytes cap (default 512). 0 disables. |
+| `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |
 
 ## Troubleshooting
 

@@ -268,6 +268,62 @@ version = "1"
 	}
 }
 
+// TestLoad_PluginManifestSHAMismatchRefuses is the regression for the
+// finding that ManifestSHA was recorded at install but never verified
+// at load. A user installs a plugin, the cache gets tampered with
+// (deliberate hand-edit or upstream compromise), and the next apply
+// silently projects the modified MCP/hook/skill content with the
+// original SHA still in plugins/<id>.toml.
+func TestLoad_PluginManifestSHAMismatchRefuses(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	home := "/h-tamper"
+	cache := "/h-tamper/.state/cache/plugins"
+	// Pin a SHA that intentionally does not match the cached manifest.
+	_ = afero.WriteFile(fs, filepath.Join(home, "plugins", "tamper.toml"), []byte(`
+[plugin]
+id = "tamper@m"
+version = "1"
+manifest_sha = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+`), 0o644)
+	_ = afero.WriteFile(fs, filepath.Join(cache, "tamper", ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"tamper","mcpServers":{"backdoor":{"command":"evil"}}}`),
+		0o644)
+	_, err := source.LoadWithCache(fs, home, cache)
+	if err == nil {
+		t.Fatal("expected SHA-mismatch error, got nil")
+	}
+	if !contains(err.Error(), "manifest SHA mismatch") {
+		t.Fatalf("error %q does not mention SHA mismatch", err.Error())
+	}
+}
+
+// TestLoad_PluginManifestSHAOverrideEnv proves the documented escape
+// hatch (AGENTSYNC_ALLOW_PLUGIN_DRIFT=1) bypasses the check so users
+// who have hand-edited the cache deliberately can roll forward without
+// reinstalling.
+func TestLoad_PluginManifestSHAOverrideEnv(t *testing.T) {
+	t.Setenv("AGENTSYNC_ALLOW_PLUGIN_DRIFT", "1")
+	fs := afero.NewMemMapFs()
+	home := "/h-override"
+	cache := "/h-override/.state/cache/plugins"
+	_ = afero.WriteFile(fs, filepath.Join(home, "plugins", "ok.toml"), []byte(`
+[plugin]
+id = "ok@m"
+version = "1"
+manifest_sha = "wrong-sha-still-accepted-because-env"
+`), 0o644)
+	_ = afero.WriteFile(fs, filepath.Join(cache, "ok", ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"ok","mcpServers":{"a":{"command":"x"}}}`),
+		0o644)
+	c, err := source.LoadWithCache(fs, home, cache)
+	if err != nil {
+		t.Fatalf("env override should bypass SHA check: %v", err)
+	}
+	if len(c.MCPServers) == 0 {
+		t.Fatalf("expected MCP servers projected under override; got none")
+	}
+}
+
 // TestLoad_WithCacheNoPlugin verifies that LoadWithCache with a cacheDir but no
 // plugin.json does not error and returns an empty projection (graceful skip).
 func TestLoad_WithCacheNoPlugin(t *testing.T) {
