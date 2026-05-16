@@ -349,4 +349,3 @@ func resolveSecretKeyValue(cmd *cobra.Command, arg string, useStdin bool) (strin
 	}
 	return key, string(pwBytes), nil
 }
-
