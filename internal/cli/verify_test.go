@@ -36,6 +36,56 @@ func TestVerify_BadTOML(t *testing.T) {
 	}
 }
 
+// TestVerify_AgeMissingRecipient asserts verify catches a half-configured
+// [secrets] block (backend = age but no recipient).
+func TestVerify_AgeMissingRecipient(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp}
+	_, _ = runCLI(t, env, "init")
+
+	identity := filepath.Join(tmp, "age.key")
+	_ = os.WriteFile(identity, []byte("AGE-SECRET-KEY-...\n"), 0o600)
+	cfgPath := filepath.Join(tmp, ".agentsync", "agentsync.toml")
+	body := `[agents]
+[secrets]
+backend       = "age"
+identity_file = "` + identity + `"
+`
+	_ = os.WriteFile(cfgPath, []byte(body), 0o644)
+
+	out, err := runCLI(t, env, "verify")
+	if err == nil {
+		t.Fatalf("verify should fail when recipient is missing; got:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "recipient") {
+		t.Fatalf("verify should name the missing field; got err=%q out=%s", err, out)
+	}
+}
+
+// TestVerify_AgeIdentityPerms asserts verify rejects a world-readable
+// identity file.
+func TestVerify_AgeIdentityPerms(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp}
+	_, _ = runCLI(t, env, "init")
+
+	identity := filepath.Join(tmp, "age.key")
+	_ = os.WriteFile(identity, []byte("AGE-SECRET-KEY-...\n"), 0o644)
+	cfgPath := filepath.Join(tmp, ".agentsync", "agentsync.toml")
+	body := `[agents]
+[secrets]
+backend       = "age"
+recipient     = "age1qqqq"
+identity_file = "` + identity + `"
+`
+	_ = os.WriteFile(cfgPath, []byte(body), 0o644)
+
+	out, err := runCLI(t, env, "verify")
+	if err == nil {
+		t.Fatalf("verify should fail on 0644 identity; got:\n%s", out)
+	}
+}
+
 func TestVerify_UnknownAgent(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
