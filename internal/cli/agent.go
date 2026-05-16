@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -15,6 +16,16 @@ import (
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/state"
 )
+
+// agentBinaries maps an agent name to the executable agentsync should
+// look for on PATH at `agent add` time. Used to produce a warning when
+// the user registers an agent whose binary is not installed.
+var agentBinaries = map[string]string{
+	"claude":   "claude",
+	"opencode": "opencode",
+	"codex":    "codex",
+	"cursor":   "cursor",
+}
 
 // boolStr returns "true" or "false" as a string.
 func boolStr(b bool) string {
@@ -168,6 +179,21 @@ func agentAddRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "added agent: %s\n", name)
+
+	// Warn (don't fail) if the agent's binary is not on PATH. The user
+	// may be authoring config on machine A to apply on machine B, so we
+	// don't want a hard reject — but a silent success when Claude Code
+	// isn't installed leaves them debugging "why didn't apply do
+	// anything?" later.
+	if bin, ok := agentBinaries[name]; ok {
+		if _, err := exec.LookPath(bin); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"warning: %s binary not found on PATH; "+
+					"agentsync will still write config to its destination dirs "+
+					"but %s itself must be installed to read it\n",
+				bin, name)
+		}
+	}
 	return nil
 }
 
