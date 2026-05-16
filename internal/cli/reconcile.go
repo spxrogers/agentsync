@@ -92,13 +92,13 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 			agents = append(agents, name)
 		}
 	}
-	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s)
+	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, home)
 	if err != nil {
 		return err
 	}
 
 	// Collect all items in order.
-	items := collectItems(plan, reg, s, sc, projectRoot)
+	items := collectItems(plan, reg, s, sc, projectRoot, home)
 
 	w := cmd.OutOrStdout()
 
@@ -232,7 +232,7 @@ done:
 			for _, r := range rw.Reports() {
 				fmt.Fprintf(w, "  backup: %s\n", r.String())
 			}
-			if err := render.RecordOpsState(s, name, sc, projectRoot, ops); err != nil {
+			if err := render.RecordOpsState(s, home, name, sc, projectRoot, ops); err != nil {
 				return err
 			}
 		}
@@ -246,7 +246,7 @@ done:
 }
 
 // collectItems builds the flat reconcile list from a rendered plan + state.
-func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot string) []reconcileItem {
+func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, home string) []reconcileItem {
 	var items []reconcileItem
 	for _, name := range reg.Names() {
 		res, ok := plan.PerAgent[name]
@@ -265,7 +265,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 				final := readJSONFile(op.Path)
 				for _, ptr := range render.CollectPointers(ours, "") {
 					hsrc := hashAnyValue(getPointerValue(ours, ptr))
-					happlied := s.Keys[stateKeyKey(name, sc, projectRoot, op.Path, ptr)].SHA256
+					happlied := s.Keys[stateKeyKey(home, name, sc, projectRoot, op.Path, ptr)].SHA256
 					hdest := hashAnyValue(getPointerValue(final, ptr))
 					cls := drift.Classify(hsrc, happlied, hdest)
 					items = append(items, reconcileItem{
@@ -286,7 +286,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 				}
 				seen[op.Path] = true
 				hsrc := hashContent(op.Content)
-				happlied := s.Files[stateFileKey(name, sc, projectRoot, op.Path)].SHA256
+				happlied := s.Files[stateFileKey(home, name, sc, projectRoot, op.Path)].SHA256
 				hdest := hashFile(op.Path)
 				cls := drift.Classify(hsrc, happlied, hdest)
 				items = append(items, reconcileItem{

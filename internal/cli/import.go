@@ -208,7 +208,7 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) err
 			}
 			for _, ptr := range collectStateSeedPointers(ours) {
 				key := fmt.Sprintf("%s:%s:%s:%s:%s",
-					agentName, adapter.ScopeUser.String(), "", op.Path, ptr)
+					agentName, adapter.ScopeUser.String(), "", paths.HomeRelative(home, op.Path), ptr)
 				st.Keys[key] = state.KeyEntry{
 					SHA256:    hashAtPointer(existing, ptr),
 					AppliedAt: now,
@@ -222,7 +222,7 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) err
 			}
 			sum := sha256.Sum256(data)
 			key := fmt.Sprintf("%s:%s:%s:%s",
-				agentName, adapter.ScopeUser.String(), "", op.Path)
+				agentName, adapter.ScopeUser.String(), "", paths.HomeRelative(home, op.Path))
 			st.Files[key] = state.FileEntry{
 				SHA256:    hex.EncodeToString(sum[:]),
 				Mode:      op.Mode,

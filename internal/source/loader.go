@@ -85,6 +85,13 @@ func LoadWithCache(fs afero.Fs, home string, cacheDir string) (Canonical, error)
 // applied at load time (they are handled during rendering per adapter).
 func projectPlugins(fs afero.Fs, c *Canonical, cacheDir string) error {
 	for _, pl := range c.Plugins {
+		if pl.Plugin.Disabled {
+			// User explicitly disabled this plugin via
+			// `agentsync plugin disable <id>`. Skip projection so
+			// none of its MCP servers / skills / hooks / etc.
+			// reach the canonical model and downstream adapters.
+			continue
+		}
 		// Derive the plugin's simple ID (strip any "@marketplace" suffix).
 		id := pl.Plugin.ID
 		if idx := strings.LastIndex(id, "@"); idx >= 0 {

@@ -34,6 +34,60 @@ func TestHomeDir(t *testing.T) {
 	}
 }
 
+func TestHomeRelative(t *testing.T) {
+	cases := []struct {
+		name string
+		home string
+		in   string
+		want string
+	}{
+		{
+			name: "dest under home is normalized",
+			home: "/Users/alice",
+			in:   "/Users/alice/.claude.json",
+			want: "${HOME}/.claude.json",
+		},
+		{
+			name: "nested dest under home",
+			home: "/Users/alice",
+			in:   "/Users/alice/.config/opencode/opencode.json",
+			want: "${HOME}/.config/opencode/opencode.json",
+		},
+		{
+			name: "dest outside home is left absolute",
+			home: "/Users/alice",
+			in:   "/etc/agentsync/global.json",
+			want: "/etc/agentsync/global.json",
+		},
+		{
+			name: "empty home is no-op",
+			home: "",
+			in:   "/anywhere",
+			want: "/anywhere",
+		},
+		{
+			name: "exact home returns ${HOME}/.",
+			home: "/Users/alice",
+			in:   "/Users/alice",
+			want: "${HOME}/.",
+		},
+		{
+			name: "parent of home stays absolute (no escape)",
+			home: "/Users/alice/.agentsync",
+			in:   "/Users/alice/.claude.json",
+			want: "/Users/alice/.claude.json",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := paths.HomeRelative(tc.home, tc.in)
+			if got != tc.want {
+				t.Fatalf("HomeRelative(%q,%q) = %q, want %q", tc.home, tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAgentsyncHome(t *testing.T) {
 	cases := []struct {
 		name string

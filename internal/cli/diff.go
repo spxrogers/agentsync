@@ -71,7 +71,7 @@ func newDiffCmd() *cobra.Command {
 					agents = append(agents, name)
 				}
 			}
-			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s)
+			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, home)
 			if err != nil {
 				return err
 			}

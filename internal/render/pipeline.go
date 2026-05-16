@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -37,7 +38,10 @@ func (p RenderPlan) Total() int {
 //
 // s may be nil; when non-nil, OwnedKeys is populated on merge-json-keys ops
 // from state.Keys so the apply pipeline knows which JSON-pointer paths it owns.
-func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adapter.Scope, project string, s *state.Targets) (RenderPlan, error) {
+//
+// home is required so OwnedKeys lookups match the HOME-relative form
+// state stores.
+func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adapter.Scope, project string, s *state.Targets, home string) (RenderPlan, error) {
 	out := RenderPlan{PerAgent: map[string]AgentResult{}}
 	for _, name := range agents {
 		a := reg.Lookup(name)
@@ -51,7 +55,7 @@ func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adap
 		if s != nil {
 			for i, op := range ops {
 				if op.MergeStrategy == "merge-json-keys" || op.MergeStrategy == "merge-jsonc-keys" {
-					ops[i].OwnedKeys = ownedKeysFor(s, name, scope, project, op.Path)
+					ops[i].OwnedKeys = ownedKeysFor(s, name, scope, project, op.Path, home)
 				}
 			}
 		}
@@ -110,8 +114,9 @@ func PreviewCollisions(
 
 // ownedKeysFor returns the JSON-pointer strings owned by agentsync for a given
 // agent+scope+project+path combination, as recorded in state.Keys.
-func ownedKeysFor(s *state.Targets, agent string, scope adapter.Scope, project, path string) []string {
-	prefix := fmt.Sprintf("%s:%s:%s:%s:", agent, scope.String(), project, path)
+func ownedKeysFor(s *state.Targets, agent string, scope adapter.Scope, project, path, home string) []string {
+	prefix := fmt.Sprintf("%s:%s:%s:%s:", agent, scope.String(),
+		paths.HomeRelative(home, project), paths.HomeRelative(home, path))
 	var out []string
 	for k := range s.Keys {
 		if strings.HasPrefix(k, prefix) {

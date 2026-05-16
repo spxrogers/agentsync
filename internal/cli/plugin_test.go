@@ -429,6 +429,54 @@ func TestPlugin_EnableDisable(t *testing.T) {
 	}
 }
 
+// TestPlugin_DisableSuppressesProjectionAtApply is the regression test for
+// the bug where `plugin disable <id>` set the Disabled bit in the TOML
+// but the loader's PluginSpec had no `disabled` field, so the bit was
+// silently dropped on every Load. The plugin's MCP servers / hooks /
+// skills then projected into the canonical model regardless, and apply
+// shipped them.
+//
+// We install the demo plugin, disable it BEFORE first apply, then apply.
+// Disabled-at-projection means demo-mcp never lands in .claude.json.
+// (Note: disabling a plugin AFTER it has already been applied does NOT
+// retroactively remove its entries from the destination — JSON merge
+// only owns our-keys; once we stop owning demo-mcp, it becomes a
+// foreign key and survives. The `reconcile` flow handles that case.)
+func TestPlugin_DisableSuppressesProjectionAtApply(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Disable BEFORE the first apply.
+	if _, err := runCLI(t, env, "plugin", "disable", "demo"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	// .claude.json may not exist at all (no ops), or may exist but must
+	// not contain demo-mcp.
+	claudeJSON := filepath.Join(tmp, ".claude.json")
+	body, err := os.ReadFile(claudeJSON)
+	if err == nil && strings.Contains(string(body), "demo-mcp") {
+		t.Fatalf("plugin disable did not suppress projection at apply; got: %s", body)
+	}
+}
+
 func TestPlugin_Remove(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

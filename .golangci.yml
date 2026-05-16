@@ -58,6 +58,11 @@ linters:
         linters: [forbidigo]
       - path: '(^|/)internal/state/store\.go$'
         linters: [forbidigo]
+      # secrets/age.go writes secrets.age under ~/.agentsync/ via the
+      # atomic path so a Ctrl-C during re-encrypt can't truncate the file.
+      # Same canonical-source category, not a native destination.
+      - path: '(^|/)internal/secrets/age\.go$'
+        linters: [forbidigo]
       # CLI files writing to ~/.agentsync/* (canonical source).
       - path: '(^|/)internal/cli/(plugin|marketplace|agent|reconcile|update)\.go$'
         linters: [forbidigo]

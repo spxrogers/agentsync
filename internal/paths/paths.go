@@ -43,3 +43,44 @@ func AgentsyncHome(e Env) string {
 	}
 	return filepath.Join(HomeDir(e), ".agentsync")
 }
+
+// HomeRelative converts an absolute destination path into the portable
+// form stored in state files: "${HOME}/.claude.json" instead of the
+// machine-specific absolute "/Users/alice/.claude.json". Paths that do
+// not live under home are returned unchanged.
+//
+// Without this normalization, state.Files / state.Keys keys would embed
+// the absolute path that existed on the machine that wrote them, so a
+// state file synced via chezmoi from /Users/alice/ to /home/alice/ would
+// have every key prefix change and every native file would reclassify
+// as ForeignCollision on the next apply.
+//
+// HomeRelative uses forward-slash separators in the stored form so the
+// same key is produced on POSIX and Windows when home is the equivalent
+// path.
+func HomeRelative(home, abs string) string {
+	if home == "" || abs == "" {
+		return abs
+	}
+	rel, err := filepath.Rel(home, abs)
+	if err != nil {
+		return abs
+	}
+	// filepath.Rel may return "../something" — reject because that means
+	// the path is outside home.
+	if rel == ".." || hasParentPrefix(rel) {
+		return abs
+	}
+	return "${HOME}/" + filepath.ToSlash(rel)
+}
+
+// hasParentPrefix returns true when s starts with ".." as a path segment.
+func hasParentPrefix(s string) bool {
+	if len(s) < 2 || s[:2] != ".." {
+		return false
+	}
+	if len(s) == 2 {
+		return true
+	}
+	return s[2] == '/' || s[2] == '\\'
+}

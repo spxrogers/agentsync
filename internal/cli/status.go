@@ -63,7 +63,7 @@ func newStatusCmd() *cobra.Command {
 					agents = append(agents, name)
 				}
 			}
-			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s)
+			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, home)
 			if err != nil {
 				return err
 			}
@@ -86,7 +86,7 @@ func newStatusCmd() *cobra.Command {
 					}
 					seen[op.Path] = true
 					hsrc := hashContent(op.Content)
-					happlied := s.Files[stateFileKey(name, sc, projectRoot, op.Path)].SHA256
+					happlied := s.Files[stateFileKey(home, name, sc, projectRoot, op.Path)].SHA256
 					hdest := hashFile(op.Path)
 					cls := drift.Classify(hsrc, happlied, hdest)
 					fmt.Fprintf(w, "  %-20s %s\n", cls, op.Path)
@@ -101,7 +101,7 @@ func newStatusCmd() *cobra.Command {
 					final := readJSONFile(op.Path)
 					for _, ptr := range render.CollectPointers(ours, "") {
 						hsrc := hashAnyValue(getPointerValue(ours, ptr))
-						happlied := s.Keys[stateKeyKey(name, sc, projectRoot, op.Path, ptr)].SHA256
+						happlied := s.Keys[stateKeyKey(home, name, sc, projectRoot, op.Path, ptr)].SHA256
 						hdest := hashAnyValue(getPointerValue(final, ptr))
 						cls := drift.Classify(hsrc, happlied, hdest)
 						fmt.Fprintf(w, "  %-20s %s#%s\n", cls, op.Path, ptr)
@@ -117,15 +117,18 @@ func newStatusCmd() *cobra.Command {
 }
 
 // stateFileKey builds the state Files map key matching render.RecordOpsState.
-// Format: "agent:scope:project:path" (project is "" for user scope).
-func stateFileKey(agent string, sc adapter.Scope, projectRoot, path string) string {
-	return fmt.Sprintf("%s:%s:%s:%s", agent, sc.String(), projectRoot, path)
+// Format: "agent:scope:portableProject:portablePath" (project and path
+// are HOME-relative so keys are portable across machines).
+func stateFileKey(home, agent string, sc adapter.Scope, projectRoot, path string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", agent, sc.String(),
+		paths.HomeRelative(home, projectRoot), paths.HomeRelative(home, path))
 }
 
 // stateKeyKey builds the state Keys map key matching render.RecordOpsState.
-// Format: "agent:scope:project:path:ptr".
-func stateKeyKey(agent string, sc adapter.Scope, projectRoot, path, ptr string) string {
-	return fmt.Sprintf("%s:%s:%s:%s:%s", agent, sc.String(), projectRoot, path, ptr)
+// Format: "agent:scope:portableProject:portablePath:ptr".
+func stateKeyKey(home, agent string, sc adapter.Scope, projectRoot, path, ptr string) string {
+	return fmt.Sprintf("%s:%s:%s:%s:%s", agent, sc.String(),
+		paths.HomeRelative(home, projectRoot), paths.HomeRelative(home, path), ptr)
 }
 
 func hashContent(b []byte) string {
