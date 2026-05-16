@@ -60,6 +60,14 @@ func newPluginInstallCmd() *cobra.Command {
 
 func pluginInstallRun(cmd *cobra.Command, args []string) error {
 	id, mpName := splitPluginRef(args[0])
+	if err := validateCacheKey("plugin", id); err != nil {
+		return err
+	}
+	if mpName != "" {
+		if err := validateCacheKey("marketplace", mpName); err != nil {
+			return err
+		}
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 
 	// Resolve marketplace.json from the marketplace cache.
@@ -358,14 +366,52 @@ func resolveMarketplaceName(name string) string {
 	return name
 }
 
-// pluginCacheDir returns the cache directory for a plugin.
+// pluginCacheDir returns the cache directory for a plugin. The id is
+// sanitized so a hostile marketplace publishing a plugin named
+// "../../etc/foo" cannot cause writes outside .state/cache/plugins/.
 func pluginCacheDir(home, id string) string {
-	return filepath.Join(home, ".state", "cache", "plugins", id)
+	return filepath.Join(home, ".state", "cache", "plugins", sanitizeCacheKey(id))
 }
 
 // marketplaceCacheDir returns the cache directory for a marketplace.
+// Same sanitization applies — the marketplace name is user-supplied at
+// `marketplace add` time and must not escape the cache root.
 func marketplaceCacheDir(home, mpName string) string {
-	return filepath.Join(home, ".state", "cache", "marketplaces", mpName)
+	return filepath.Join(home, ".state", "cache", "marketplaces", sanitizeCacheKey(mpName))
+}
+
+// sanitizeCacheKey strips path separators and ".." components so the
+// returned string is safe to use as a single path segment. Callers can
+// also validate up-front via ValidateCacheKey before any filesystem
+// operation; this helper is the last line of defense for read-only
+// lookups where validation might be too aggressive.
+func sanitizeCacheKey(s string) string {
+	// Replace separators and walk-up components with an underscore.
+	s = strings.ReplaceAll(s, "/", "_")
+	s = strings.ReplaceAll(s, "\\", "_")
+	s = strings.ReplaceAll(s, "..", "_")
+	if s == "" || s == "." {
+		s = "_"
+	}
+	return s
+}
+
+// validateCacheKey is the up-front guard for write paths: it rejects
+// plugin / marketplace ids that contain path components which could
+// escape the cache root. Callers should prefer this to sanitizeCacheKey
+// when the id flows from user input or marketplace metadata so the user
+// sees the real problem name in the error, not a silently-mangled one.
+func validateCacheKey(kind, s string) error {
+	if s == "" {
+		return fmt.Errorf("%s id is empty", kind)
+	}
+	if strings.ContainsAny(s, "/\\") {
+		return fmt.Errorf("%s id %q contains path separators", kind, s)
+	}
+	if s == "." || s == ".." || strings.Contains(s, "..") {
+		return fmt.Errorf("%s id %q contains a path-traversal component", kind, s)
+	}
+	return nil
 }
 
 // resolveMarketplaceEntry loads the marketplace's marketplace.json from cache

@@ -93,6 +93,13 @@ func projectPlugins(fs afero.Fs, c *Canonical, cacheDir string) error {
 		if id == "" {
 			id = pl.ID
 		}
+		// Defense-in-depth: a malicious plugins/<id>.toml whose id field
+		// contains "../" must not let plugin.json reads escape cacheDir.
+		// The CLI install path validates ids up-front, but this loader is
+		// also reachable from `apply` against a hand-edited plugins/ dir.
+		if strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") {
+			return fmt.Errorf("project plugin %q: id contains path-traversal component", id)
+		}
 
 		pluginCacheDir := filepath.Join(cacheDir, id)
 		proj, err := readPluginProjection(fs, pluginCacheDir)
