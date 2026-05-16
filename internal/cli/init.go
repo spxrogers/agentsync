@@ -73,7 +73,14 @@ func newInitCmd() *cobra.Command {
 			if err := os.WriteFile(filepath.Join(home, "agentsync.toml"), []byte(initialAgentsyncTOML), 0o644); err != nil {
 				return fmt.Errorf("write agentsync.toml: %w", err)
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "agentsync home initialized at", home)
+			w := cmd.OutOrStdout()
+			fmt.Fprintln(w, "agentsync home initialized at", home)
+			fmt.Fprintln(w, "")
+			fmt.Fprintln(w, "Next steps:")
+			fmt.Fprintln(w, "  1. agentsync agent add claude        # register an agent")
+			fmt.Fprintln(w, "  2. agentsync mcp add github ...      # author an MCP server")
+			fmt.Fprintln(w, "  3. agentsync apply --dry-run         # preview before writing")
+			fmt.Fprintln(w, "  4. agentsync apply                   # write to agent destinations")
 			return nil
 		},
 	}
