@@ -134,10 +134,10 @@ func resolveRefName(ref string) plumbing.ReferenceName {
 // subPath are moved up to dir root.
 //
 // The strategy is rename-old-aside, rename-new-into-place, then cleanup:
-//   1. copyDir(fullSub, tmp)            // populate the new layout
-//   2. rename(dir, dir+".old")          // get the old clone out of the way
-//   3. rename(tmp, dir)                 // put new content into place
-//   4. RemoveAll(dir+".old")            // best-effort cleanup
+//  1. copyDir(fullSub, tmp)            // populate the new layout
+//  2. rename(dir, dir+".old")          // get the old clone out of the way
+//  3. rename(tmp, dir)                 // put new content into place
+//  4. RemoveAll(dir+".old")            // best-effort cleanup
 //
 // If step 3 fails (cross-device rename, antivirus locking on Windows), we
 // undo step 2 to restore the old clone. The previous implementation did

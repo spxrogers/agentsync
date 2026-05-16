@@ -1,7 +1,6 @@
 package render
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -32,11 +31,11 @@ import (
 // iox.AtomicWrite call outside the allowed packages, so a future
 // contributor cannot silently bypass this guard.
 type Writer struct {
-	state    *state.Targets
-	home     string
-	scope    adapter.Scope
-	project  string
-	agent    string
+	state   *state.Targets
+	home    string
+	scope   adapter.Scope
+	project string
+	agent   string
 
 	backupRoot string          // <home>/.state/backups/<ts>; created lazily
 	backedUp   map[string]bool // path → already-backed-up this run
@@ -233,17 +232,4 @@ func bytesEqual(a, b []byte) bool {
 		}
 	}
 	return true
-}
-
-// hashSHA256Hex is exported for callers that need the same hash format
-// the writer uses for collision comparisons.
-func hashSHA256Hex(data []byte) string {
-	sum := sha256.Sum256(data)
-	dst := make([]byte, 64)
-	const hex = "0123456789abcdef"
-	for i, b := range sum {
-		dst[i*2] = hex[b>>4]
-		dst[i*2+1] = hex[b&0x0f]
-	}
-	return string(dst)
 }

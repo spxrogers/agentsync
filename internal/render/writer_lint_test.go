@@ -27,16 +27,16 @@ func TestNoDirectAtomicWriteOutsideAllowedFiles(t *testing.T) {
 	// canonical source (~/.agentsync/*), agentsync's own state, or the
 	// plugin cache — none of which are native destinations.
 	allowed := map[string]bool{
-		"internal/iox/atomic.go":              true,
-		"internal/render/writer.go":           true,
-		"internal/source/writer.go":           true,
-		"internal/state/store.go":             true,
-		"internal/cli/plugin.go":              true,
-		"internal/cli/marketplace.go":         true,
-		"internal/cli/agent.go":               true,
-		"internal/cli/reconcile.go":           true,
-		"internal/cli/update.go":              true,
-		"internal/adapter/testwriter.go":      true,
+		"internal/iox/atomic.go":         true,
+		"internal/render/writer.go":      true,
+		"internal/source/writer.go":      true,
+		"internal/state/store.go":        true,
+		"internal/cli/plugin.go":         true,
+		"internal/cli/marketplace.go":    true,
+		"internal/cli/agent.go":          true,
+		"internal/cli/reconcile.go":      true,
+		"internal/cli/update.go":         true,
+		"internal/adapter/testwriter.go": true,
 	}
 
 	var bad []string

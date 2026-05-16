@@ -29,7 +29,7 @@ func PruneStaleState(s *state.Targets, agent string, scope adapter.Scope, projec
 
 	// Build the set of paths and per-path pointer sets that this agent's
 	// current plan still produces.
-	currentFiles := map[string]struct{}{}        // path → present
+	currentFiles := map[string]struct{}{}           // path → present
 	currentKeys := map[string]map[string]struct{}{} // path → set of pointers
 	for _, op := range ops {
 		if op.Action != "" && op.Action != "write" {

@@ -22,12 +22,13 @@ type fakeJSONApply struct {
 	name string
 }
 
-func (f *fakeJSONApply) Name() string                       { return f.name }
-func (f *fakeJSONApply) Capabilities() adapter.Capability   { return 0 }
-func (f *fakeJSONApply) Detect() (bool, error)              { return true, nil }
+func (f *fakeJSONApply) Name() string                     { return f.name }
+func (f *fakeJSONApply) Capabilities() adapter.Capability { return 0 }
+func (f *fakeJSONApply) Detect() (bool, error)            { return true, nil }
 func (f *fakeJSONApply) Render(_ source.Canonical, _ adapter.Scope, _ string) ([]adapter.FileOp, []adapter.Skip, error) {
 	return nil, nil, nil
 }
+
 func (f *fakeJSONApply) Ingest(_ adapter.Scope, _ string) (source.Canonical, error) {
 	return source.Canonical{}, nil
 }
