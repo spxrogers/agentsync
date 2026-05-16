@@ -83,7 +83,11 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 		mpName := mp.Name
 		cacheDir := marketplaceCacheDir(home, mpName)
 
-		src := parseMarketplaceSource(mp.Marketplace.URL)
+		src, perr := parseMarketplaceSource(mp.Marketplace.URL)
+		if perr != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "warning: marketplace %s has unparseable URL %q: %v\n", mpName, mp.Marketplace.URL, perr)
+			continue
+		}
 		if mp.Marketplace.Ref != "" {
 			src.Ref = mp.Marketplace.Ref
 		}
