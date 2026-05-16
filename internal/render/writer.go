@@ -10,6 +10,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/iox"
+	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
@@ -127,7 +128,8 @@ func (w *Writer) maybeBackup(op adapter.FileOp, finalBytes []byte) error {
 }
 
 func (w *Writer) maybeBackupFileOp(op adapter.FileOp, finalBytes []byte) error {
-	stateKey := fmt.Sprintf("%s:%s:%s:%s", w.agent, w.scope.String(), w.project, op.Path)
+	stateKey := fmt.Sprintf("%s:%s:%s:%s", w.agent, w.scope.String(),
+		paths.HomeRelative(w.home, w.project), paths.HomeRelative(w.home, op.Path))
 	if _, owned := w.state.Files[stateKey]; owned {
 		return nil
 	}
@@ -167,8 +169,10 @@ func (w *Writer) maybeBackupKeyOp(op adapter.FileOp) error {
 	}
 
 	var backupPath string
+	portableProject := paths.HomeRelative(w.home, w.project)
+	portablePath := paths.HomeRelative(w.home, op.Path)
 	for _, ptr := range CollectPointers(ours, "") {
-		stateKey := fmt.Sprintf("%s:%s:%s:%s:%s", w.agent, w.scope.String(), w.project, op.Path, ptr)
+		stateKey := fmt.Sprintf("%s:%s:%s:%s:%s", w.agent, w.scope.String(), portableProject, portablePath, ptr)
 		if _, owned := w.state.Keys[stateKey]; owned {
 			continue
 		}
@@ -199,7 +203,8 @@ func (w *Writer) maybeBackupKeyOp(op adapter.FileOp) error {
 // whose stripped form fails standard JSON.Unmarshal — we conservatively
 // back up the whole file once if state has no entries claiming the path.
 func (w *Writer) maybeBackupFileOpForJSONCFallback(op adapter.FileOp) error {
-	stateKeyPrefix := fmt.Sprintf("%s:%s:%s:%s:", w.agent, w.scope.String(), w.project, op.Path)
+	stateKeyPrefix := fmt.Sprintf("%s:%s:%s:%s:", w.agent, w.scope.String(),
+		paths.HomeRelative(w.home, w.project), paths.HomeRelative(w.home, op.Path))
 	for k := range w.state.Keys {
 		if strings.HasPrefix(k, stateKeyPrefix) {
 			return nil // state owns at least one pointer here; trust the merge

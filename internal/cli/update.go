@@ -202,7 +202,7 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 			}
 		}
 		reg := registryFactory()
-		plan, err := render.Plan(c2, reg, agents, sc, projectRoot, st)
+		plan, err := render.Plan(c2, reg, agents, sc, projectRoot, st, home)
 		if err != nil {
 			return fmt.Errorf("plan after update: %w", err)
 		}
@@ -218,10 +218,10 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 			}
 		}
 		for name, res := range plan.PerAgent {
-			render.PruneStaleState(st, name, sc, projectRoot, res.Ops)
+			render.PruneStaleState(st, home, name, sc, projectRoot, res.Ops)
 		}
 		for name, res := range plan.PerAgent {
-			if err := render.RecordOpsState(st, name, sc, projectRoot, res.Ops); err != nil {
+			if err := render.RecordOpsState(st, home, name, sc, projectRoot, res.Ops); err != nil {
 				return err
 			}
 		}

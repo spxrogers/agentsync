@@ -80,6 +80,12 @@ type PluginSpec struct {
 	ManifestSHA string   `toml:"manifest_sha,omitempty"`
 	Update      string   `toml:"update,omitempty"` // pinned | track | manual
 	Agents      []string `toml:"agents,omitempty"`
+	// Disabled, when true, suppresses the plugin's projection during
+	// LoadWithCache. `agentsync plugin disable <id>` sets this. Without
+	// honouring it here, the CLI's TOML write was a no-op: the loader
+	// still projected the plugin's MCP servers / skills / etc. into the
+	// canonical model and apply shipped them.
+	Disabled bool `toml:"disabled,omitempty"`
 }
 
 // PluginOverrideSet captures per-agent component overrides for one plugin.

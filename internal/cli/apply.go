@@ -105,7 +105,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	}
 
 	if dryRun {
-		plan, err := render.Plan(c, reg, agents, sc, projectRoot, s)
+		plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, home)
 		if err != nil {
 			return err
 		}
@@ -153,7 +153,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	// Real apply: render + write. The writer constructed inside
 	// render.Apply enforces the foreign-collision backup invariant on
 	// every destination write — there is no separate guard pass.
-	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s)
+	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, home)
 	if err != nil {
 		return err
 	}
@@ -174,11 +174,11 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	// shows up as `Orphan` in `status` forever and targets.json
 	// grows unbounded.
 	for name, res := range plan.PerAgent {
-		render.PruneStaleState(s, name, sc, projectRoot, res.Ops)
+		render.PruneStaleState(s, home, name, sc, projectRoot, res.Ops)
 	}
 	// Update state with post-apply hashes.
 	for name, res := range plan.PerAgent {
-		if err := render.RecordOpsState(s, name, sc, projectRoot, res.Ops); err != nil {
+		if err := render.RecordOpsState(s, home, name, sc, projectRoot, res.Ops); err != nil {
 			return err
 		}
 	}

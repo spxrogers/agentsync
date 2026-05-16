@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
@@ -21,26 +22,32 @@ import (
 // Without this, removing an MCP server / skill / hook from
 // ~/.agentsync/ leaves its state entry behind forever; it shows up as
 // `Orphan` in `status` and `targets.json` grows unbounded over time.
-func PruneStaleState(s *state.Targets, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) {
+//
+// The home argument is used to normalize op.Path to its HOME-relative
+// form so state-key lookups match keys written by RecordOpsState (which
+// stores HOME-relative paths for cross-machine portability).
+func PruneStaleState(s *state.Targets, home, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) {
 	if s == nil {
 		return
 	}
-	prefix := fmt.Sprintf("%s:%s:%s:", agent, scope.String(), project)
+	prefix := fmt.Sprintf("%s:%s:%s:", agent, scope.String(), paths.HomeRelative(home, project))
 
 	// Build the set of paths and per-path pointer sets that this agent's
-	// current plan still produces.
-	currentFiles := map[string]struct{}{}           // path → present
-	currentKeys := map[string]map[string]struct{}{} // path → set of pointers
+	// current plan still produces. Paths are normalized to HOME-relative
+	// so they compare equal to what's stored in state.
+	currentFiles := map[string]struct{}{}           // portable path → present
+	currentKeys := map[string]map[string]struct{}{} // portable path → set of pointers
 	for _, op := range ops {
 		if op.Action != "" && op.Action != "write" {
 			continue
 		}
+		portable := paths.HomeRelative(home, op.Path)
 		switch op.MergeStrategy {
 		case "merge-json-keys", "merge-jsonc-keys":
-			ptrs, ok := currentKeys[op.Path]
+			ptrs, ok := currentKeys[portable]
 			if !ok {
 				ptrs = map[string]struct{}{}
-				currentKeys[op.Path] = ptrs
+				currentKeys[portable] = ptrs
 			}
 			var ours map[string]any
 			if err := json.Unmarshal(op.Content, &ours); err == nil {
@@ -49,7 +56,7 @@ func PruneStaleState(s *state.Targets, agent string, scope adapter.Scope, projec
 				}
 			}
 		default:
-			currentFiles[op.Path] = struct{}{}
+			currentFiles[portable] = struct{}{}
 		}
 	}
 
@@ -91,12 +98,21 @@ func PruneStaleState(s *state.Targets, agent string, scope adapter.Scope, projec
 
 // RecordOpsState updates s with hashes for files and keys produced by ops.
 // Caller is expected to call this AFTER a successful Apply.
-func RecordOpsState(s *state.Targets, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) error {
+//
+// Both op.Path and project are normalized to HOME-relative form via
+// paths.HomeRelative before being embedded in the state-map keys, so the
+// resulting targets.json is portable across machines whose $HOME differs
+// (e.g. /Users/alice/ vs /home/alice/ after a chezmoi sync). Without
+// this, every key prefix would shift on the new machine and every
+// native file would reclassify as ForeignCollision.
+func RecordOpsState(s *state.Targets, home, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) error {
 	now := time.Now().UTC()
+	portableProject := paths.HomeRelative(home, project)
 	for _, op := range ops {
 		if op.Action != "" && op.Action != "write" {
 			continue
 		}
+		portablePath := paths.HomeRelative(home, op.Path)
 		switch op.MergeStrategy {
 		case "merge-json-keys", "merge-jsonc-keys":
 			// Re-read final on-disk content and record per pointer.
@@ -115,7 +131,7 @@ func RecordOpsState(s *state.Targets, agent string, scope adapter.Scope, project
 			for _, ptr := range CollectPointers(ours, "") {
 				v := getPointer(final, ptr)
 				hash := hashAny(v)
-				key := fmt.Sprintf("%s:%s:%s:%s:%s", agent, scope.String(), project, op.Path, ptr)
+				key := fmt.Sprintf("%s:%s:%s:%s:%s", agent, scope.String(), portableProject, portablePath, ptr)
 				s.Keys[key] = state.KeyEntry{
 					SHA256:    hash,
 					AppliedAt: now,
@@ -128,7 +144,7 @@ func RecordOpsState(s *state.Targets, agent string, scope adapter.Scope, project
 				return fmt.Errorf("read post-apply %s: %w", op.Path, err)
 			}
 			sum := sha256.Sum256(data)
-			key := fmt.Sprintf("%s:%s:%s:%s", agent, scope.String(), project, op.Path)
+			key := fmt.Sprintf("%s:%s:%s:%s", agent, scope.String(), portableProject, portablePath)
 			s.Files[key] = state.FileEntry{
 				SHA256:    hex.EncodeToString(sum[:]),
 				Mode:      op.Mode,
