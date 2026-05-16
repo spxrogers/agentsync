@@ -116,6 +116,85 @@ func TestReconcile_InteractiveSkip(t *testing.T) {
 	}
 }
 
+// TestReconcile_BulkActionRequiresConfirmation is the regression test for
+// the bug where a capital W/O/S immediately locked in the bulk choice for
+// every remaining item with no preview and no chance to cancel. Combined
+// with the writeback-no-op bug below, one accidental shift-W on a hook
+// item could silently destroy edits across the whole queue.
+func TestReconcile_BulkActionRequiresConfirmation(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(tmp, ".claude.json")
+	body, _ := os.ReadFile(dst)
+	_ = os.WriteFile(dst, []byte(strings.Replace(string(body), `"npx"`, `"npm"`, 1)), 0o644)
+
+	// Press capital S (bulk skip) but decline confirmation. The reconcile
+	// loop should NOT lock in the bulk choice; it should re-prompt the
+	// item and wait for the lowercase per-item choice. We follow up with
+	// 's' (skip just this one).
+	out, err := runCLIWithStdin(t, env, "Sns\n", "reconcile")
+	if err != nil {
+		t.Fatalf("reconcile bulk-confirm decline: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "apply 's' to all") {
+		t.Fatalf("expected bulk confirmation prompt; got: %s", out)
+	}
+	if !strings.Contains(out, "cancelled") {
+		t.Fatalf("expected 'cancelled' message after declining confirm; got: %s", out)
+	}
+}
+
+// TestReconcile_WriteBackUnsupportedReturnsError verifies that write-back
+// for a pointer shape we cannot handle (e.g. /hooks/PreToolUse/0) returns
+// an error visible to the user instead of silently printing
+// "write-back: <label>" success — which used to mask data loss.
+func TestReconcile_WriteBackUnsupportedReturnsError(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Author a hook source that produces a /hooks/* pointer in
+	// .claude.json. The hook payload is irrelevant — we just need a
+	// non-MCP key-level item to flow through reconcile.
+	hookDir := filepath.Join(tmp, ".agentsync", "hooks")
+	_ = os.MkdirAll(hookDir, 0o755)
+	_ = os.WriteFile(filepath.Join(hookDir, "PreToolUse.toml"),
+		[]byte("[[hook]]\nmatcher = \"*\"\ntype = \"command\"\ncommand = \"echo pre\"\n"),
+		0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(tmp, ".claude.json")
+	body, _ := os.ReadFile(dst)
+	// Drift the hook in the destination so reconcile classifies it as Drift.
+	_ = os.WriteFile(dst, []byte(strings.Replace(string(body), `echo pre`, `echo edited`, 1)), 0o644)
+
+	// Press w (write-back this item, single).
+	out, _ := runCLIWithStdin(t, env, "w\n", "reconcile")
+	// Should NOT silently print success for the hook write-back.
+	if strings.Contains(out, "write-back: ") && !strings.Contains(out, "write-back error") {
+		t.Fatalf("hook write-back must surface an error, not silent success; got:\n%s", out)
+	}
+}
+
 func TestReconcile_InteractiveQuit(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
