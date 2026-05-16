@@ -117,6 +117,30 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 				continue
 			}
 			fmt.Fprintf(w, "  %-10s %d ops, %d skips\n", name, len(res.Ops), len(res.Skips))
+			// List every destination path so the user can see exactly
+			// what apply will touch. Without this the dry-run hides the
+			// most useful piece of information (which files will be
+			// written) behind an op count.
+			for _, op := range res.Ops {
+				if op.Action == "" || op.Action == "write" {
+					fmt.Fprintf(w, "    write %s\n", op.Path)
+				} else {
+					fmt.Fprintf(w, "    %-5s %s\n", op.Action, op.Path)
+				}
+			}
+		}
+		// Foreign-collision preview: which destinations contain content
+		// that agentsync does not own and will therefore be backed up
+		// before overwrite. The dry-run previously hid this; users only
+		// found out which files were about to be backed up after the
+		// real apply ran.
+		previews := render.PreviewCollisions(plan, reg, s, home, sc, projectRoot)
+		if len(previews) > 0 {
+			fmt.Fprintln(w)
+			fmt.Fprintf(w, "Foreign collisions: %d (the real apply will back these up before overwriting)\n", len(previews))
+			for _, r := range previews {
+				fmt.Fprintf(w, "  %s\n", r.String())
+			}
 		}
 		report := render.BuildReport(c, plan, agents)
 		if len(report.Rows) > 0 {

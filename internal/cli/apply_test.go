@@ -136,6 +136,79 @@ func walkAll(root string, visit func(string, bool)) error {
 	return nil
 }
 
+// TestApply_DryRunPreviewsForeignCollisions is the regression test for the
+// finding that `apply --dry-run` only printed op counts and silently hid
+// the foreign-collision events the real apply would generate. The README
+// promised dry-run was a safe preview; without collision reporting the
+// user could not see which existing files were about to be backed up and
+// overwritten until the real apply ran.
+func TestApply_DryRunPreviewsForeignCollisions(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Populate ~/.claude.json with a server entry that conflicts.
+	claudeJSON := tmp + "/.claude.json"
+	original := `{"mcpServers": {"github": {"command": "/my/fork", "args": ["--x"]}}}`
+	if err := os.WriteFile(claudeJSON, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mcpDir := tmp + "/.agentsync/mcp"
+	_ = os.MkdirAll(mcpDir, 0o755)
+	_ = os.WriteFile(mcpDir+"/github.toml",
+		[]byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\nargs=[\"-y\"]\n"),
+		0o644)
+
+	out, err := runCLI(t, env, "apply", "--dry-run")
+	if err != nil {
+		t.Fatalf("apply --dry-run: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Foreign collisions") {
+		t.Fatalf("dry-run did not preview foreign collisions; got:\n%s", out)
+	}
+	if !strings.Contains(out, ".claude.json") {
+		t.Fatalf("dry-run did not name the affected destination path; got:\n%s", out)
+	}
+	// And dry-run must not have written anything.
+	bytes, _ := os.ReadFile(claudeJSON)
+	if string(bytes) != original {
+		t.Fatalf("dry-run mutated the live destination; got:\n%s", bytes)
+	}
+}
+
+// TestApply_DryRunListsDestinations is the regression for the finding that
+// dry-run reported "claude N ops" with no indication of which files would
+// be touched. Users could not safely run `apply --dry-run` to learn what
+// the real run would do without diff-ing every possible destination.
+func TestApply_DryRunListsDestinations(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	mcpDir := tmp + "/.agentsync/mcp"
+	_ = os.MkdirAll(mcpDir, 0o755)
+	_ = os.WriteFile(mcpDir+"/github.toml",
+		[]byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"),
+		0o644)
+
+	out, err := runCLI(t, env, "apply", "--dry-run")
+	if err != nil {
+		t.Fatalf("apply --dry-run: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, ".claude.json") {
+		t.Fatalf("dry-run did not list destination paths; got:\n%s", out)
+	}
+}
+
 func TestApply_NoAgentsEnabled_WarnsAndExitsZero(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

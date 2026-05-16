@@ -60,6 +60,54 @@ func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adap
 	return out, nil
 }
 
+// PreviewCollisions runs the same per-file / per-pointer foreign-collision
+// check that Apply runs at write time, but writes nothing. It returns the
+// reports a real apply would have produced. Used by `apply --dry-run` so
+// the user can see — before committing — exactly which destination files
+// are about to be backed up and overwritten.
+//
+// We have to re-run the deduplication that Apply does (path-level
+// first-writer-wins) so the dry-run preview matches what really happens.
+func PreviewCollisions(
+	p RenderPlan,
+	reg *adapter.Registry,
+	st *state.Targets,
+	home string,
+	scope adapter.Scope,
+	project string,
+) []CollisionReport {
+	if st == nil {
+		return nil
+	}
+	var all []CollisionReport
+	seen := map[string]bool{}
+	for _, name := range reg.Names() {
+		res, ok := p.PerAgent[name]
+		if !ok {
+			continue
+		}
+		w := NewPreviewWriter(st, home, scope, project, name)
+		for _, op := range res.Ops {
+			if op.Action != "" && op.Action != "write" {
+				continue
+			}
+			if seen[op.Path] {
+				continue
+			}
+			seen[op.Path] = true
+			// We don't have the post-merge finalBytes here without
+			// re-running the adapter. For preview purposes a conservative
+			// "is something there that doesn't look exactly like our op"
+			// is sufficient — Apply's real maybeBackup will recompute and
+			// suppress the report if the on-disk content happens to match
+			// the post-merge bytes exactly.
+			_ = w.maybeBackup(op, op.Content)
+		}
+		all = append(all, w.Reports()...)
+	}
+	return all
+}
+
 // ownedKeysFor returns the JSON-pointer strings owned by agentsync for a given
 // agent+scope+project+path combination, as recorded in state.Keys.
 func ownedKeysFor(s *state.Targets, agent string, scope adapter.Scope, project, path string) []string {
