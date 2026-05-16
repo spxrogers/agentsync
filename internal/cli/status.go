@@ -136,7 +136,24 @@ func hashContent(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// hashFile returns the SHA-256 hex digest of the file at path. Returns
+// the empty string on missing-file errors (which `drift.Classify` reads
+// as "absent" — the expected signal for Orphan / OrphanDrifted).
+//
+// If the path is a symlink, hashFile returns a special marker so the
+// drift classifier can flag the file as drifted in a way the user can
+// act on. A managed file becoming a symlink (e.g. user replaced
+// .claude.json with `ln -s /dev/null`) used to silently read through
+// the link and compare hashes — making the swap invisible to status.
 func hashFile(path string) string {
+	info, lerr := os.Lstat(path)
+	if lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+		// Return a sentinel that will never match a content hash.
+		// We don't include the link target to keep the sentinel stable
+		// (target may resolve to whatever attacker chose); just signal
+		// "this is a symlink now."
+		return "symlink-not-regular-file"
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""

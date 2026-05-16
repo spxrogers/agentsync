@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
@@ -32,8 +31,13 @@ func newVerifyCmd() *cobra.Command {
 			if err := verifySecrets(c.Config.Secrets, home); err != nil {
 				return fmt.Errorf("verify secrets: %w", err)
 			}
-			// Substitute against the live backends (using AGENTSYNC_ALLOW_OFFLINE_VERIFY
-			// to skip secret resolution when running in CI without an age key).
+			// Substitute against the live backends. AGENTSYNC_ALLOW_OFFLINE_VERIFY=1
+			// skips resolution when running in CI without an age key.
+			// Offline mode cannot catch a typo'd secret name (e.g.
+			// ${secret:GITHB.token}) — that requires a live backend.
+			// The regex inside SubstituteRefs already enforces the
+			// reference shape, so the schema decode + this pass cover
+			// the offline-validatable space.
 			if os.Getenv("AGENTSYNC_ALLOW_OFFLINE_VERIFY") != "1" {
 				secBackend := secrets.SelectBackend(c.Config.Secrets, home)
 				envBackend := secrets.EnvBackend{}
@@ -68,12 +72,16 @@ func verifySecrets(cfg source.SecretsConfig, home string) error {
 	if h := os.Getenv("HOME"); h != "" {
 		idPath = expandEnvHome(idPath, h)
 	}
-	info, err := os.Stat(idPath)
-	if err != nil {
+	if _, err := os.Stat(idPath); err != nil {
 		return fmt.Errorf("identity_file %s: %w", idPath, err)
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("identity_file %s has mode %v; agentsync requires 0600", idPath, info.Mode().Perm())
+	// Use the same permission check apply uses — it honours
+	// AGENTSYNC_AGE_SKIP_PERM_CHECK=1, which the previous inline
+	// runtime.GOOS check did not. Apply and verify must agree on
+	// what "secure" means or users will end up in a config where
+	// verify refuses but apply works (or vice versa).
+	if err := secrets.CheckIdentityPermissions(idPath); err != nil {
+		return err
 	}
 	// File path is optional (a brand-new install may not have written yet).
 	if cfg.File != "" {

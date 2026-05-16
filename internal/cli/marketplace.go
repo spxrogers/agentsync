@@ -59,7 +59,10 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 	home := paths.AgentsyncHome(paths.OSEnv{})
 
 	// Build the Source from the raw URL/path argument.
-	src := parseMarketplaceSource(rawURL)
+	src, err := parseMarketplaceSource(rawURL)
+	if err != nil {
+		return err
+	}
 
 	// Derive a slug for the marketplace.
 	slug := deriveMarketplaceSlug(rawURL)
@@ -229,7 +232,14 @@ func marketplaceListRun(cmd *cobra.Command, _ []string) error {
 //   - https://...                 → url source
 //   - file://... or /abs/path     → relative source
 //   - ./rel/path                  → relative source
-func parseMarketplaceSource(rawURL string) marketplace.Source {
+//
+// An input that does not match any known form returns an error rather
+// than silently degrading to a relative-path copy. The original behaviour
+// turned a typo like `gh:obra/superpowers` (should be `github:`) into
+// `cp -r ./gh:obra/superpowers ...`, creating an empty marketplace
+// cache with no diagnostic. We now refuse and tell the user the
+// supported forms.
+func parseMarketplaceSource(rawURL string) (marketplace.Source, error) {
 	// github: shorthand
 	if strings.HasPrefix(rawURL, "github:") {
 		rest := strings.TrimPrefix(rawURL, "github:")
@@ -238,26 +248,33 @@ func parseMarketplaceSource(rawURL string) marketplace.Source {
 			ref = rest[idx+1:]
 			rest = rest[:idx]
 		}
-		return marketplace.Source{Kind: "github", Repo: rest, Ref: ref}
+		if rest == "" {
+			return marketplace.Source{}, fmt.Errorf("github source missing owner/repo: %q", rawURL)
+		}
+		return marketplace.Source{Kind: "github", Repo: rest, Ref: ref}, nil
 	}
 
 	// file:// URL → treat as relative (strip file:// prefix)
 	if strings.HasPrefix(rawURL, "file://") {
-		return marketplace.Source{Relative: strings.TrimPrefix(rawURL, "file://")}
+		return marketplace.Source{Relative: strings.TrimPrefix(rawURL, "file://")}, nil
 	}
 
 	// Absolute path or ./relative
 	if strings.HasPrefix(rawURL, "/") || strings.HasPrefix(rawURL, "./") || strings.HasPrefix(rawURL, "../") {
-		return marketplace.Source{Relative: rawURL}
+		return marketplace.Source{Relative: rawURL}, nil
 	}
 
 	// https:// or http:// → url source
 	if strings.HasPrefix(rawURL, "https://") || strings.HasPrefix(rawURL, "http://") {
-		return marketplace.Source{Kind: "url", URL: rawURL}
+		return marketplace.Source{Kind: "url", URL: rawURL}, nil
 	}
 
-	// Default: treat as relative path.
-	return marketplace.Source{Relative: rawURL}
+	// Existing local path? (covers bare directory names typed without ./)
+	if info, err := os.Stat(rawURL); err == nil && info.IsDir() {
+		return marketplace.Source{Relative: rawURL}, nil
+	}
+
+	return marketplace.Source{}, fmt.Errorf("unrecognised marketplace source %q; supported forms: github:owner/repo[@ref], https://…, file://…, /abs/path, ./rel/path", rawURL)
 }
 
 // deriveMarketplaceSlug derives a filesystem-safe slug from a URL or path.

@@ -99,7 +99,16 @@ Examples:
   agentsync import claude:mcp:github
   agentsync import opencode:agent:reviewer
   agentsync import claude:command:review`,
-		RunE: importRun,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// import mutates ~/.agentsync/ AND .state/targets.json. It
+			// must hold the global lock so a concurrent apply on the
+			// other terminal cannot interleave its own state.Save and
+			// destroy our seed entries (or vice versa).
+			home := paths.AgentsyncHome(paths.OSEnv{})
+			return withGlobalLock(home, func() error {
+				return importRun(cmd, args)
+			})
+		},
 	}
 	return cmd
 }
