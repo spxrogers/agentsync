@@ -39,6 +39,7 @@ func NewRoot() *cobra.Command {
 		newStatusCmd(),
 		newDiffCmd(),
 		newReconcileCmd(),
+		newMCPCmd(),
 		newPluginCmd(),
 		newMarketplaceCmd(),
 		newUpdateCmd(),
