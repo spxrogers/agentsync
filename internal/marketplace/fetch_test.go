@@ -130,6 +130,52 @@ func TestRelativeFetcher_CopiesDirectory(t *testing.T) {
 	}
 }
 
+func TestRelativeFetcher_RejectsPathTraversal(t *testing.T) {
+	// Marketplace cache root holds a benign plugin layout; a marketplace
+	// entry with `"source": "../escape"` is what we want to reject.
+	mpRoot := t.TempDir()
+	// Sibling directory the attacker would target.
+	sibling := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sibling, "secret.txt"), []byte("you should not see this"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := t.TempDir()
+	src := marketplace.Source{
+		Relative: sibling, // already resolved absolute, but outside RootDir
+		RootDir:  mpRoot,
+	}
+	fetcher := marketplace.Dispatch(src)
+	_, err := fetcher.Fetch(src, dst)
+	if err == nil {
+		t.Fatal("expected error for source outside RootDir")
+	}
+	// The attacker file must not have been copied.
+	if _, statErr := os.Stat(filepath.Join(dst, "secret.txt")); statErr == nil {
+		t.Fatalf("traversal succeeded — secret.txt copied into dst")
+	}
+}
+
+func TestRelativeFetcher_AllowsContainedPath(t *testing.T) {
+	mpRoot := t.TempDir()
+	pluginDir := filepath.Join(mpRoot, "plugins", "demo")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "README.md"), []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	src := marketplace.Source{Relative: pluginDir, RootDir: mpRoot}
+	fetcher := marketplace.Dispatch(src)
+	if _, err := fetcher.Fetch(src, dst); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "README.md")); err != nil {
+		t.Fatalf("README.md missing: %v", err)
+	}
+}
+
 func TestRelativeFetcher_EmptyPath_Error(t *testing.T) {
 	dst := t.TempDir()
 	source := marketplace.Source{Relative: ""}
@@ -343,5 +389,84 @@ func TestNPMFetcher_LatestVersion(t *testing.T) {
 	}
 	if result.Version != "2.0.0" {
 		t.Errorf("resolved version = %q, want 2.0.0", result.Version)
+	}
+}
+
+// makeNPMTarballWithEntry builds an in-memory npm-style .tgz with one
+// arbitrary entry name, bypassing the conventional "package/" prefix.
+// Used to construct tarballs with traversal entries.
+func makeNPMTarballWithEntry(t *testing.T, entryName, content string) []byte {
+	t.Helper()
+	tmp := t.TempDir()
+	outPath := filepath.Join(tmp, "pkg.tgz")
+	f, err := os.Create(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gw)
+	data := []byte(content)
+	hdr := &tar.Header{Name: entryName, Size: int64(len(data)), Mode: 0o644, ModTime: time.Now()}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// TestNPMFetcher_TraversalEntryIsHardError replaces the previous
+// silent-skip behavior: a tarball containing "package/../escape.txt"
+// (which strips to "../escape.txt") must error out instead of being
+// dropped. Silent skipping hid both attacks and corrupted tarballs.
+func TestNPMFetcher_TraversalEntryIsHardError(t *testing.T) {
+	// "package/../etc/passwd" → after the "package/" strip becomes
+	// "../etc/passwd", which Clean+Join would resolve outside destDir.
+	tarball := makeNPMTarballWithEntry(t, "package/../etc/passwd", "pwned")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/badpkg":
+			meta := map[string]any{
+				"versions": map[string]any{
+					"1.0.0": map[string]any{
+						"version": "1.0.0",
+						"dist":    map[string]any{"tarball": "http://" + r.Host + "/tarball/1.0.0"},
+					},
+				},
+				"dist-tags": map[string]any{"latest": "1.0.0"},
+			}
+			_ = json.NewEncoder(w).Encode(meta)
+		case strings.HasPrefix(r.URL.Path, "/tarball/"):
+			_, _ = w.Write(tarball)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dst := t.TempDir()
+	src := marketplace.Source{Kind: "npm", Package: "badpkg", Version: "1.0.0", Registry: srv.URL}
+	fetcher := &marketplace.NPMFetcher{HTTPClient: srv.Client()}
+	_, err := fetcher.Fetch(src, dst)
+	if err == nil {
+		t.Fatal("expected error for traversal tarball entry")
+	}
+	if !strings.Contains(err.Error(), "escapes destination") {
+		t.Fatalf("error %q did not mention escape", err.Error())
 	}
 }

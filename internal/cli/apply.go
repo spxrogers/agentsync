@@ -28,107 +28,141 @@ func newApplyCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := paths.AgentsyncHome(paths.OSEnv{})
-			pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-			c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
-			if err != nil {
-				return err
-			}
-
-			// Discover project marker (walk-up from cwd, or explicit --project).
-			sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag, c)
-			if err != nil {
-				return err
-			}
-
-			// When project scope active, merge overlay into canonical.
-			if sc == adapter.ScopeProject && projectRoot != "" {
-				marker, merr := project.Discover(projectRoot)
-				if merr != nil {
-					return fmt.Errorf("load project marker: %w", merr)
-				}
-				if marker != nil {
-					c = project.Merge(c, marker)
-				}
-			}
-
-			// Resolve ${secret:...} and ${env:...} references before rendering.
-			secBackend := secrets.SelectBackend(c.Config.Secrets, home)
-			envBackend := secrets.EnvBackend{}
-			if err := secrets.SubstituteCanonical(&c, secBackend, envBackend); err != nil {
-				return err
-			}
-
-			agents := []string{}
-			for name, ag := range c.Config.Agents {
-				if ag.Enabled {
-					agents = append(agents, name)
-				}
-			}
-
-			reg := registryFactory()
-
-			// Load state (needed for OwnedKeys injection in Plan).
-			statePath := filepath.Join(home, ".state", "targets.json")
-			s, err := state.Load(statePath)
-			if err != nil {
-				return err
-			}
-
-			if dryRun {
-				plan, err := render.Plan(c, reg, agents, sc, projectRoot, s)
-				if err != nil {
-					return err
-				}
-				w := cmd.OutOrStdout()
-				fmt.Fprintf(w, "Plan: %d ops total across %d agent(s)\n", plan.Total(), len(plan.PerAgent))
-				for _, name := range reg.Names() {
-					res, ok := plan.PerAgent[name]
-					if !ok {
-						continue
-					}
-					fmt.Fprintf(w, "  %-10s %d ops, %d skips\n", name, len(res.Ops), len(res.Skips))
-				}
-				report := render.BuildReport(c, plan, agents)
-				if len(report.Rows) > 0 {
-					fmt.Fprintln(w)
-					report.PrintText(w)
-				}
-				return nil
-			}
-
-			// Real apply: render + write
-			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s)
-			if err != nil {
-				return err
-			}
-			if err := render.Apply(plan, reg); err != nil {
-				return err
-			}
-
-			// Update state with post-apply hashes.
-			for name, res := range plan.PerAgent {
-				if err := render.RecordOpsState(s, name, sc, projectRoot, res.Ops); err != nil {
-					return err
-				}
-			}
-			if err := state.Save(statePath, s); err != nil {
-				return err
-			}
-
-			w := cmd.OutOrStdout()
-			fmt.Fprintln(w, "applied:", plan.Total(), "ops")
-			report := render.BuildReport(c, plan, agents)
-			if len(report.Rows) > 0 {
-				fmt.Fprintln(w)
-				report.PrintText(w)
-			}
-			return nil
+			return withGlobalLock(home, func() error {
+				return applyRun(cmd, home, dryRun, scopeFlag, projectFlag)
+			})
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "compute plan without writing destinations")
 	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: auto-detect from cwd)")
 	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
 	return cmd
+}
+
+// applyRun is the lock-protected body of the apply command. It is split
+// out from newApplyCmd so the lock acquisition lives in one obvious place.
+func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFlag string) error {
+	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+	c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
+	if err != nil {
+		return err
+	}
+
+	// Discover project marker (walk-up from cwd, or explicit --project).
+	sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag, c)
+	if err != nil {
+		return err
+	}
+
+	// When project scope active, merge overlay into canonical.
+	if sc == adapter.ScopeProject && projectRoot != "" {
+		marker, merr := project.Discover(projectRoot)
+		if merr != nil {
+			return fmt.Errorf("load project marker: %w", merr)
+		}
+		if marker != nil {
+			c = project.Merge(c, marker)
+		}
+	}
+
+	// Resolve ${secret:...} and ${env:...} references before rendering.
+	secBackend := secrets.SelectBackend(c.Config.Secrets, home)
+	envBackend := secrets.EnvBackend{}
+	if err := secrets.SubstituteCanonical(&c, secBackend, envBackend); err != nil {
+		return err
+	}
+
+	agents := []string{}
+	for name, ag := range c.Config.Agents {
+		if ag.Enabled {
+			agents = append(agents, name)
+		}
+	}
+	if len(agents) == 0 {
+		// Without this hint, `apply` prints "applied: 0 ops" and a
+		// new user assumes their config "worked". Tell them how to
+		// register an agent.
+		fmt.Fprintln(cmd.ErrOrStderr(),
+			"agentsync: no agents are enabled in agentsync.toml; nothing to apply.\n"+
+				"  Run `agentsync agent add claude` (or opencode) to register an agent.")
+		return nil
+	}
+
+	reg := registryFactory()
+
+	// Load state (needed for OwnedKeys injection in Plan).
+	statePath := filepath.Join(home, ".state", "targets.json")
+	s, err := state.Load(statePath)
+	if err != nil {
+		return err
+	}
+
+	if dryRun {
+		plan, err := render.Plan(c, reg, agents, sc, projectRoot, s)
+		if err != nil {
+			return err
+		}
+		w := cmd.OutOrStdout()
+		fmt.Fprintf(w, "Plan: %d ops total across %d agent(s)\n", plan.Total(), len(plan.PerAgent))
+		for _, name := range reg.Names() {
+			res, ok := plan.PerAgent[name]
+			if !ok {
+				continue
+			}
+			fmt.Fprintf(w, "  %-10s %d ops, %d skips\n", name, len(res.Ops), len(res.Skips))
+		}
+		report := render.BuildReport(c, plan, agents)
+		if len(report.Rows) > 0 {
+			fmt.Fprintln(w)
+			report.PrintText(w)
+		}
+		return nil
+	}
+
+	// Real apply: render + write. The writer constructed inside
+	// render.Apply enforces the foreign-collision backup invariant on
+	// every destination write — there is no separate guard pass.
+	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s)
+	if err != nil {
+		return err
+	}
+	collisions, err := render.Apply(plan, reg, s, home, sc, projectRoot)
+	if err != nil {
+		return err
+	}
+	if len(collisions) > 0 {
+		ew := cmd.ErrOrStderr()
+		fmt.Fprintf(ew, "agentsync: backed up %d pre-existing target(s) before overwriting:\n", len(collisions))
+		for _, r := range collisions {
+			fmt.Fprintf(ew, "  %s\n", r.String())
+		}
+	}
+
+	// Drop state entries for files/keys this agent no longer
+	// produces. Without this, a removed MCP server / skill / hook
+	// shows up as `Orphan` in `status` forever and targets.json
+	// grows unbounded.
+	for name, res := range plan.PerAgent {
+		render.PruneStaleState(s, name, sc, projectRoot, res.Ops)
+	}
+	// Update state with post-apply hashes.
+	for name, res := range plan.PerAgent {
+		if err := render.RecordOpsState(s, name, sc, projectRoot, res.Ops); err != nil {
+			return err
+		}
+	}
+	if err := state.Save(statePath, s); err != nil {
+		return err
+	}
+
+	w := cmd.OutOrStdout()
+	fmt.Fprintln(w, "applied:", plan.Total(), "ops")
+	report := render.BuildReport(c, plan, agents)
+	if len(report.Rows) > 0 {
+		fmt.Fprintln(w)
+		report.PrintText(w)
+	}
+	return nil
 }
 
 // resolveProjectScope determines the effective scope and project root.

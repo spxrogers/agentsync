@@ -20,7 +20,10 @@ func newSecretsCmd() *cobra.Command {
 		&cobra.Command{
 			Use:   "edit",
 			Short: "decrypt secrets to tmp, open $EDITOR, re-encrypt on save",
-			RunE:  secretsEdit,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				home := paths.AgentsyncHome(paths.OSEnv{})
+				return withGlobalLock(home, func() error { return secretsEdit(cmd, args) })
+			},
 		},
 		&cobra.Command{
 			Use:   "get <key>",
@@ -32,7 +35,10 @@ func newSecretsCmd() *cobra.Command {
 			Use:   "set <key=value>",
 			Short: "set (or update) a secret key",
 			Args:  cobra.ExactArgs(1),
-			RunE:  secretsSet,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				home := paths.AgentsyncHome(paths.OSEnv{})
+				return withGlobalLock(home, func() error { return secretsSet(cmd, args) })
+			},
 		},
 	)
 	return sec

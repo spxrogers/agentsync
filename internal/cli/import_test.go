@@ -83,6 +83,64 @@ func TestImport_MCPFromClaude(t *testing.T) {
 	}
 }
 
+// TestImport_RoundTripDoesNotClobberDest is the regression for the
+// HIGH-severity finding: previously, \`import claude:mcp:github\` followed
+// by \`apply\` saw the existing .claude.json as ForeignCollision and the
+// merge silently overwrote any keys the user had hand-edited between the
+// import and the apply.
+//
+// After the fix, import seeds state with the destination's current hash,
+// so the next apply classifies the file as Clean (or Pending if the user
+// has edited the canonical since) — never ForeignCollision.
+func TestImport_RoundTripDoesNotClobberDest(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+
+	// User has a hand-managed .claude.json with one MCP server.
+	claudeJSON := filepath.Join(tmp, ".claude.json")
+	original := `{
+  "mcpServers": {
+    "github": {
+      "type": "stdio",
+      "command": "/usr/local/bin/my-github-fork",
+      "args": ["--my-flag"]
+    }
+  },
+  "preserveMe": "do not touch"
+}`
+	if err := os.WriteFile(claudeJSON, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runCLI(t, env, "import", "claude:mcp:github"); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	// State must now contain a key entry for /mcpServers/github so that
+	// the next apply sees Clean, not ForeignCollision.
+	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
+	stData, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("state file not written: %v", err)
+	}
+	if !strings.Contains(string(stData), "/mcpServers/github") {
+		t.Fatalf("state missing /mcpServers/github after import; have:\n%s", stData)
+	}
+	// And the user's foreign top-level key must still be there.
+	after, err := os.ReadFile(claudeJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(after), "preserveMe") {
+		t.Fatalf("import clobbered foreign key; .claude.json now:\n%s", after)
+	}
+}
+
 // TestImport_MCPNotFound verifies that importing a non-existent MCP server errors.
 func TestImport_MCPNotFound(t *testing.T) {
 	tmp := t.TempDir()

@@ -31,7 +31,7 @@ func TestIngest_RoundTripsMCPAndSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if err := a.Apply(ops); err != nil {
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	out, err := a.Ingest(adapter.ScopeUser, "")
@@ -65,7 +65,7 @@ func TestIngest_RoundTripsSubagentsAndCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if err := a.Apply(ops); err != nil {
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	out, err := a.Ingest(adapter.ScopeUser, "")
@@ -102,7 +102,7 @@ func TestIngest_RoundTripsHooksAndLSP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if err := a.Apply(ops); err != nil {
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	out, err := a.Ingest(adapter.ScopeUser, "")
@@ -127,7 +127,7 @@ func TestIngest_RoundTripsMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if err := a.Apply(ops); err != nil {
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	out, err := a.Ingest(adapter.ScopeUser, "")

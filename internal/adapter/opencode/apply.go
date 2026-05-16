@@ -6,18 +6,21 @@ import (
 	"os"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
-	"github.com/spxrogers/agentsync/internal/iox"
 )
 
-func (a *Adapter) Apply(ops []adapter.FileOp) error {
+// Apply routes every destination write through the supplied DestWriter
+// rather than calling iox.AtomicWrite directly. This is the contract that
+// keeps the foreign-collision backup guarantee honest — see the doc on
+// adapter.DestWriter.
+func (a *Adapter) Apply(ops []adapter.FileOp, w adapter.DestWriter) error {
 	for _, op := range ops {
 		switch op.Action {
 		case "delete":
-			if err := os.Remove(op.Path); err != nil && !os.IsNotExist(err) {
+			if err := w.Delete(op); err != nil {
 				return fmt.Errorf("delete %s: %w", op.Path, err)
 			}
 		case "", "write":
-			if err := a.applyWrite(op); err != nil {
+			if err := a.applyWrite(op, w); err != nil {
 				return err
 			}
 		default:
@@ -27,11 +30,7 @@ func (a *Adapter) Apply(ops []adapter.FileOp) error {
 	return nil
 }
 
-func (a *Adapter) applyWrite(op adapter.FileOp) error {
-	mode := os.FileMode(op.Mode)
-	if mode == 0 {
-		mode = 0o644
-	}
+func (a *Adapter) applyWrite(op adapter.FileOp, w adapter.DestWriter) error {
 	if op.MergeStrategy == "merge-jsonc-keys" {
 		existing, _ := os.ReadFile(op.Path)
 		var ours map[string]any
@@ -42,7 +41,7 @@ func (a *Adapter) applyWrite(op adapter.FileOp) error {
 		if err != nil {
 			return err
 		}
-		return iox.AtomicWrite(op.Path, out, mode)
+		return w.Write(op, out)
 	}
-	return iox.AtomicWrite(op.Path, op.Content, mode)
+	return w.Write(op, op.Content)
 }

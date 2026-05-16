@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"filippo.io/age"
@@ -30,6 +31,9 @@ func NewAgeBackend(ageFile, identityFile string) *AgeBackend {
 func (b *AgeBackend) load() error {
 	if b.cache != nil {
 		return nil
+	}
+	if err := CheckIdentityPermissions(b.IdentityFile); err != nil {
+		return err
 	}
 	idData, err := os.ReadFile(b.IdentityFile)
 	if err != nil {
@@ -104,7 +108,7 @@ func Encrypt(plaintext []byte, recipient string, dest string) error {
 	if err != nil {
 		return fmt.Errorf("parse age recipient: %w", err)
 	}
-	if err := os.MkdirAll(parentDir(dest), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return fmt.Errorf("mkdir parent of %s: %w", dest, err)
 	}
 	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
@@ -126,6 +130,9 @@ func Encrypt(plaintext []byte, recipient string, dest string) error {
 // and returns the plaintext bytes.
 func Decrypt(ageFile, identityFile string) ([]byte, error) {
 	b := NewAgeBackend(ageFile, identityFile)
+	if err := CheckIdentityPermissions(identityFile); err != nil {
+		return nil, err
+	}
 	// We want raw bytes, not parsed; bypass the cache and re-decrypt directly.
 	idData, err := os.ReadFile(identityFile)
 	if err != nil {
@@ -149,12 +156,36 @@ func Decrypt(ageFile, identityFile string) ([]byte, error) {
 	return raw, err
 }
 
-// parentDir returns the directory component of a file path.
-func parentDir(p string) string {
-	for i := len(p) - 1; i >= 0; i-- {
-		if p[i] == '/' {
-			return p[:i]
-		}
+// SkipPermCheckEnv is the env var that disables CheckIdentityPermissions.
+// Set to "1" for setups (network homes, dev containers) where mode bits
+// don't reflect actual access (e.g. NFS roots squash, ACLs override).
+const SkipPermCheckEnv = "AGENTSYNC_AGE_SKIP_PERM_CHECK"
+
+// CheckIdentityPermissions ensures the age identity file is not readable by
+// group or other. A 0o644 identity file defeats the purpose of encryption.
+// On Windows the mode bits are not POSIX semantics; we skip the check there.
+// Users can opt out by setting AGENTSYNC_AGE_SKIP_PERM_CHECK=1.
+func CheckIdentityPermissions(path string) error {
+	if path == "" {
+		return nil
 	}
-	return "."
+	if os.Getenv(SkipPermCheckEnv) == "1" {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		// Surface the open error from the caller, not a fake permission error.
+		return nil
+	}
+	mode := info.Mode().Perm()
+	// On Windows, os.Stat reports synthesized POSIX bits that don't reflect
+	// real ACL semantics. Don't gate on them.
+	if runtimeIsWindows() {
+		return nil
+	}
+	if mode&0o077 != 0 {
+		return fmt.Errorf("age identity %s has insecure permissions %#o (group/other readable); chmod 600 it, or set %s=1 to override",
+			path, mode, SkipPermCheckEnv)
+	}
+	return nil
 }

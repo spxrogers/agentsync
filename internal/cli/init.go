@@ -40,10 +40,24 @@ func newInitCmd() *cobra.Command {
 				return fmt.Errorf("%s already contains files; refusing to overwrite", home)
 			}
 
-			for _, sub := range []string{"mcp", "marketplaces", "plugins", "memory", "memory/fragments", "skills", "secrets", ".state"} {
+			// Every canonical subdirectory the loader recognizes is created up
+			// front so `agentsync agent list`, `verify`, and the writer
+			// helpers find a populated tree even on an empty install.
+			subs := []string{
+				"mcp", "marketplaces", "plugins",
+				"memory", "memory/fragments",
+				"skills", "agents", "commands", "hooks", "lsp",
+				".state",
+			}
+			for _, sub := range subs {
 				if err := os.MkdirAll(filepath.Join(home, sub), 0o755); err != nil {
 					return fmt.Errorf("mkdir %s: %w", sub, err)
 				}
+			}
+			// Secrets dir holds the age-encrypted file; restrict to the user
+			// even though the file itself is written 0600.
+			if err := os.MkdirAll(filepath.Join(home, "secrets"), 0o700); err != nil {
+				return fmt.Errorf("mkdir secrets: %w", err)
 			}
 			if err := os.WriteFile(filepath.Join(home, "agentsync.toml"), []byte(initialAgentsyncTOML), 0o644); err != nil {
 				return fmt.Errorf("write agentsync.toml: %w", err)

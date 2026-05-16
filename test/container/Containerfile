@@ -30,11 +30,17 @@ FROM docker.io/library/golang:${GO_VERSION}-bookworm
 # Non-root user keeps mounted source from getting root-owned artefacts.
 # When the host user happens to be root (UID=0), we skip the create step
 # and reuse the existing root account, which already has a usable home.
+#
+# `-o` (non-unique) on both groupadd and useradd lets us reuse a numeric
+# ID that already exists in the base image — common when the host user is
+# in macOS GID 20 (`staff`), which collides with Debian's `dialout` group.
+# The kernel keys permissions on the numeric ID, so a second symbolic name
+# alongside the existing one is harmless.
 ARG UID=1000
 ARG GID=1000
 RUN if [ "${UID}" -ne 0 ]; then \
-        groupadd -g ${GID} runner \
-        && useradd -m -u ${UID} -g ${GID} -s /bin/bash runner ; \
+        groupadd -o -g ${GID} runner \
+        && useradd -o -m -u ${UID} -g ${GID} -s /bin/bash runner ; \
     fi
 
 # Resolve the target home dir for module/build caches. For non-root, that's

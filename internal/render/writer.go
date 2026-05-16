@@ -1,0 +1,235 @@
+package render
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/iox"
+	"github.com/spxrogers/agentsync/internal/state"
+)
+
+// Writer is THE funnel for native-destination writes. Every adapter's
+// Apply method receives one of these and routes its writes through it
+// (rather than calling iox.AtomicWrite directly), so the
+// foreign-collision backup invariant is enforced at the only place it
+// matters: the moment of the write.
+//
+// Pre-write, Writer checks the (agent, scope, project, path) tuple
+// against state. If state does not yet record this destination as owned
+// AND the file already exists with content that differs from what we are
+// about to write, the existing content is copied to
+// <home>/.state/backups/<ts>/<original-path> before the new write
+// proceeds. For merge ops, the same check runs at JSON-pointer
+// granularity using op.Content (ours pre-merge) and op.OwnedKeys.
+//
+// The forbidigo lint rule in .golangci.yml fails any direct
+// iox.AtomicWrite call outside the allowed packages, so a future
+// contributor cannot silently bypass this guard.
+type Writer struct {
+	state   *state.Targets
+	home    string
+	scope   adapter.Scope
+	project string
+	agent   string
+
+	backupRoot string          // <home>/.state/backups/<ts>; created lazily
+	backedUp   map[string]bool // path → already-backed-up this run
+	reports    []CollisionReport
+}
+
+// CollisionReport describes one foreign-collision the writer detected and
+// backed up. Callers can surface these to the user.
+type CollisionReport struct {
+	Agent    string
+	Path     string
+	Pointer  string // empty for whole-file collisions
+	BackupTo string // absolute path of the backup that was written
+}
+
+// String formats a CollisionReport for human output.
+func (r CollisionReport) String() string {
+	if r.Pointer != "" {
+		return fmt.Sprintf("foreign-collision %s#%s (backed up to %s)", r.Path, r.Pointer, r.BackupTo)
+	}
+	return fmt.Sprintf("foreign-collision %s (backed up to %s)", r.Path, r.BackupTo)
+}
+
+// NewWriter constructs a Writer for one (agent, scope, project) tuple.
+// The render layer creates one writer per agent during Apply.
+func NewWriter(st *state.Targets, home string, scope adapter.Scope, project, agent string) *Writer {
+	ts := time.Now().UTC().Format("20060102T150405Z")
+	return &Writer{
+		state:      st,
+		home:       home,
+		scope:      scope,
+		project:    project,
+		agent:      agent,
+		backupRoot: filepath.Join(home, ".state", "backups", ts),
+		backedUp:   map[string]bool{},
+	}
+}
+
+// Reports returns the per-write collision reports accumulated so far.
+// Safe to call after Apply completes.
+func (w *Writer) Reports() []CollisionReport { return w.reports }
+
+// Write satisfies adapter.DestWriter. finalBytes is the post-merge content
+// for merge ops, or op.Content for replace ops.
+func (w *Writer) Write(op adapter.FileOp, finalBytes []byte) error {
+	if err := w.maybeBackup(op, finalBytes); err != nil {
+		return err
+	}
+	mode := os.FileMode(op.Mode)
+	if mode == 0 {
+		mode = 0o644
+	}
+	return iox.AtomicWrite(op.Path, finalBytes, mode)
+}
+
+// Delete satisfies adapter.DestWriter. Idempotent on missing files.
+func (w *Writer) Delete(op adapter.FileOp) error {
+	if err := os.Remove(op.Path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("delete %s: %w", op.Path, err)
+	}
+	return nil
+}
+
+// maybeBackup performs the foreign-collision check and conditionally
+// writes the backup. It mutates w.backedUp and w.reports.
+func (w *Writer) maybeBackup(op adapter.FileOp, finalBytes []byte) error {
+	if w.backedUp[op.Path] {
+		return nil
+	}
+	switch op.MergeStrategy {
+	case "merge-json-keys", "merge-jsonc-keys":
+		return w.maybeBackupKeyOp(op)
+	default:
+		return w.maybeBackupFileOp(op, finalBytes)
+	}
+}
+
+func (w *Writer) maybeBackupFileOp(op adapter.FileOp, finalBytes []byte) error {
+	stateKey := fmt.Sprintf("%s:%s:%s:%s", w.agent, w.scope.String(), w.project, op.Path)
+	if _, owned := w.state.Files[stateKey]; owned {
+		return nil
+	}
+	existing, err := os.ReadFile(op.Path)
+	if err != nil || len(existing) == 0 {
+		return nil
+	}
+	if bytesEqual(existing, finalBytes) {
+		return nil
+	}
+	dest, err := w.backup(op.Path, existing)
+	if err != nil {
+		return err
+	}
+	w.reports = append(w.reports, CollisionReport{Agent: w.agent, Path: op.Path, BackupTo: dest})
+	return nil
+}
+
+func (w *Writer) maybeBackupKeyOp(op adapter.FileOp) error {
+	existing, err := os.ReadFile(op.Path)
+	if err != nil || len(existing) == 0 {
+		return nil
+	}
+	var existingMap map[string]any
+	if err := json.Unmarshal(existing, &existingMap); err != nil {
+		// JSONC: best-effort. We don't replicate hujson.Standardize here
+		// because the writer must stay neutral on adapter format quirks.
+		// If we can't parse the file we fall back to file-level treatment.
+		return w.maybeBackupFileOpForJSONCFallback(op)
+	}
+	if existingMap == nil {
+		return nil
+	}
+	var ours map[string]any
+	if err := json.Unmarshal(op.Content, &ours); err != nil {
+		return nil
+	}
+
+	var backupPath string
+	for _, ptr := range CollectPointers(ours, "") {
+		stateKey := fmt.Sprintf("%s:%s:%s:%s:%s", w.agent, w.scope.String(), w.project, op.Path, ptr)
+		if _, owned := w.state.Keys[stateKey]; owned {
+			continue
+		}
+		ev := getPointer(existingMap, ptr)
+		if ev == nil {
+			continue
+		}
+		ov := getPointer(ours, ptr)
+		if hashAny(ev) == hashAny(ov) {
+			continue
+		}
+		// Conflict.
+		if backupPath == "" {
+			dest, err := w.backup(op.Path, existing)
+			if err != nil {
+				return err
+			}
+			backupPath = dest
+		}
+		w.reports = append(w.reports, CollisionReport{
+			Agent: w.agent, Path: op.Path, Pointer: ptr, BackupTo: backupPath,
+		})
+	}
+	return nil
+}
+
+// maybeBackupFileOpForJSONCFallback handles the rare case of a JSONC dest
+// whose stripped form fails standard JSON.Unmarshal — we conservatively
+// back up the whole file once if state has no entries claiming the path.
+func (w *Writer) maybeBackupFileOpForJSONCFallback(op adapter.FileOp) error {
+	stateKeyPrefix := fmt.Sprintf("%s:%s:%s:%s:", w.agent, w.scope.String(), w.project, op.Path)
+	for k := range w.state.Keys {
+		if strings.HasPrefix(k, stateKeyPrefix) {
+			return nil // state owns at least one pointer here; trust the merge
+		}
+	}
+	existing, err := os.ReadFile(op.Path)
+	if err != nil || len(existing) == 0 {
+		return nil
+	}
+	dest, err := w.backup(op.Path, existing)
+	if err != nil {
+		return err
+	}
+	w.reports = append(w.reports, CollisionReport{Agent: w.agent, Path: op.Path, BackupTo: dest})
+	return nil
+}
+
+// backup writes existing to <backupRoot>/<rel-path> via iox.AtomicWrite
+// and marks the path as backed-up so subsequent ops don't double-back-up.
+func (w *Writer) backup(path string, existing []byte) (string, error) {
+	dest := backupPathFor(path, w.backupRoot)
+	if err := iox.AtomicWrite(dest, existing, 0o600); err != nil {
+		return "", fmt.Errorf("backup %s: %w", path, err)
+	}
+	w.backedUp[path] = true
+	return dest, nil
+}
+
+// backupPathFor computes the deterministic backup destination for src.
+func backupPathFor(src, backupRoot string) string {
+	clean := strings.TrimLeft(src, string(os.PathSeparator))
+	return filepath.Join(backupRoot, clean)
+}
+
+// bytesEqual returns true iff a and b have identical contents.
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

@@ -65,5 +65,36 @@ type Adapter interface {
 	Detect() (bool, error)
 	Render(c source.Canonical, scope Scope, project string) ([]FileOp, []Skip, error)
 	Ingest(scope Scope, project string) (source.Canonical, error)
-	Apply(ops []FileOp) error
+	// Apply executes ops against destinations. Adapters MUST route every
+	// destination write through w.Write / w.Delete rather than calling
+	// iox.AtomicWrite or os.Remove directly — w owns the foreign-collision
+	// backup invariant. A forbidigo lint rule in .golangci.yml backs this
+	// up at build time by failing direct iox.AtomicWrite calls outside the
+	// allowed packages.
+	Apply(ops []FileOp, w DestWriter) error
+}
+
+// DestWriter is the single funnel for any write that targets a native agent
+// destination file (~/.claude.json, ~/.claude/agents/*.md, ~/.config/opencode/*,
+// etc). It enforces the foreign-collision backup invariant: a pre-existing
+// destination that agentsync does not yet own is copied to
+// <home>/.state/backups/<ts>/<original-path> before being overwritten.
+//
+// Adapters MUST use DestWriter instead of calling iox.AtomicWrite or
+// os.Remove directly. The forbidigo lint rule in .golangci.yml will fail
+// any direct iox.AtomicWrite call outside the allowed packages, so a new
+// adapter or a new write path inside an existing adapter cannot silently
+// regress the backup guarantee.
+type DestWriter interface {
+	// Write writes finalBytes to op.Path, after backing up any pre-existing
+	// foreign content. For replace ops, finalBytes is op.Content. For merge
+	// ops, the adapter performs its merge first (claude → jsonkeys.MergeKeys;
+	// opencode → hujson.MergeJSONC) and passes the post-merge bytes here;
+	// the writer uses op.Content (ours pre-merge) plus op.OwnedKeys to
+	// detect per-key collisions for the backup decision.
+	Write(op FileOp, finalBytes []byte) error
+
+	// Delete removes op.Path. No backup — agentsync only deletes paths it
+	// already owns per state. Idempotent on missing files.
+	Delete(op FileOp) error
 }

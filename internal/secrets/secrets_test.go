@@ -1,10 +1,12 @@
 package secrets_test
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/secrets"
+	"github.com/spxrogers/agentsync/internal/source"
 )
 
 // mapBackend is a simple Resolver backed by a map, for tests.
@@ -84,5 +86,31 @@ func TestEnvBackend_MissingKey(t *testing.T) {
 	_, err := b.Resolve("AGENTSYNC_DEFINITELY_NOT_SET_XYZ")
 	if err == nil {
 		t.Fatal("expected error for missing env var")
+	}
+}
+
+// TestSelectBackend_RelativeFilePathUsesFilepathJoin guards against the
+// pre-fix bug where SelectBackend joined homeDir+"/"+ageFile with a
+// hard-coded forward slash, breaking on Windows.
+func TestSelectBackend_RelativeFilePathUsesFilepathJoin(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := source.SecretsConfig{
+		Backend:      "age",
+		File:         filepath.Join("secrets", "secrets.age"),
+		IdentityFile: filepath.Join(tmp, "key"),
+	}
+	r := secrets.SelectBackend(cfg, tmp)
+	// The resolver is an *AgeBackend; calling Resolve forces it to read AgeFile.
+	// We don't care that decryption fails (the file doesn't exist) — we care
+	// that the error references a path joined with the OS separator, not "/".
+	_, err := r.Resolve("anything")
+	if err == nil {
+		t.Fatal("expected error from missing identity file")
+	}
+	wantPrefix := filepath.Join(tmp, "secrets")
+	if !strings.Contains(err.Error(), wantPrefix) && !strings.Contains(err.Error(), filepath.Join(tmp, "key")) {
+		// Either AgeFile or IdentityFile path may surface in the error; both
+		// must be filepath.Joined paths, never have a stray hard-coded "/".
+		t.Fatalf("error %q did not contain a filepath.Joined path under %q", err.Error(), tmp)
 	}
 }

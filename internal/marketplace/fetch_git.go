@@ -130,8 +130,21 @@ func resolveRefName(ref string) plumbing.ReferenceName {
 }
 
 // extractSubdir replaces the contents of dir with only the subdirectory at
-// subPath within dir. Files outside subPath are removed; files inside subPath
-// are moved up to dir root.
+// subPath within dir. Files outside subPath are removed; files inside
+// subPath are moved up to dir root.
+//
+// The strategy is rename-old-aside, rename-new-into-place, then cleanup:
+//  1. copyDir(fullSub, tmp)            // populate the new layout
+//  2. rename(dir, dir+".old")          // get the old clone out of the way
+//  3. rename(tmp, dir)                 // put new content into place
+//  4. RemoveAll(dir+".old")            // best-effort cleanup
+//
+// If step 3 fails (cross-device rename, antivirus locking on Windows), we
+// undo step 2 to restore the old clone. The previous implementation did
+// RemoveAll(dir) before Rename(tmp, dir) — if the rename then failed for
+// any reason, the cache was permanently destroyed and subsequent fetches
+// would either re-clone (fine) or fail confusingly because the cache dir
+// existed but wasn't a git repo.
 func extractSubdir(dir, subPath string) error {
 	fullSub := filepath.Join(dir, subPath)
 	info, err := os.Stat(fullSub)
@@ -142,20 +155,39 @@ func extractSubdir(dir, subPath string) error {
 		return fmt.Errorf("subdir %s is not a directory", subPath)
 	}
 
-	// Copy subdirectory to a temp location alongside dir.
 	tmp := dir + ".subdir_tmp"
+	old := dir + ".subdir_old"
+
+	// Best-effort: clean up any stragglers from a previous interrupted
+	// extraction so we don't fail at the rename step below with EEXIST.
+	_ = os.RemoveAll(tmp)
+	_ = os.RemoveAll(old)
+
 	if err := copyDir(fullSub, tmp); err != nil {
+		_ = os.RemoveAll(tmp)
 		return fmt.Errorf("copy subdir to tmp: %w", err)
 	}
 
-	// Remove original clone.
-	if err := os.RemoveAll(dir); err != nil {
+	// Move the old clone aside (rename, not delete) so we can restore it
+	// if the next step fails.
+	if err := os.Rename(dir, old); err != nil {
 		_ = os.RemoveAll(tmp)
-		return fmt.Errorf("remove clone dir: %w", err)
+		return fmt.Errorf("rename clone aside: %w", err)
 	}
 
-	// Rename tmp → dir.
-	return os.Rename(tmp, dir)
+	if err := os.Rename(tmp, dir); err != nil {
+		// Restore the original — keep the cache in a usable state.
+		_ = os.RemoveAll(tmp)
+		if rErr := os.Rename(old, dir); rErr != nil {
+			return fmt.Errorf("rename tmp→dir failed (%v) and rollback failed (%v); cache at %s",
+				err, rErr, old)
+		}
+		return fmt.Errorf("rename tmp→dir: %w", err)
+	}
+
+	// New layout is in place. Remove the moved-aside original.
+	_ = os.RemoveAll(old)
+	return nil
 }
 
 // Note: go-git v5 does not support sparse checkout natively in PlainClone.

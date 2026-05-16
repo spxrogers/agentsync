@@ -17,15 +17,19 @@ import (
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
 func newUpdateCmd() *cobra.Command {
 	var (
-		apply    bool
-		autoSafe bool
+		apply       bool
+		autoSafe    bool
+		scopeFlag   string
+		projectFlag string
 	)
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -36,18 +40,27 @@ plugins have newer versions available, and prints the pending bumps.
 By default, update is read-only (it does NOT touch agent configs). Use
 --apply to immediately upgrade all track-mode plugins and apply the result.
 Use --auto-safe to only bump plugins whose translation is non-lossy (requires
---apply).`,
+--apply).
+
+When --apply is set, the same scope/project resolution as 'agentsync apply'
+is used (auto-detect from cwd, --scope project, --project <path>) so the
+re-render lands in the right place when running inside a project.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return updateRun(cmd, apply, autoSafe)
+			home := paths.AgentsyncHome(paths.OSEnv{})
+			return withGlobalLock(home, func() error {
+				return updateRun(cmd, apply, autoSafe, scopeFlag, projectFlag)
+			})
 		},
 	}
 	cmd.Flags().BoolVar(&apply, "apply", false, "upgrade plugins and apply to agents after polling")
 	cmd.Flags().BoolVar(&autoSafe, "auto-safe", false, "only bump plugins with non-lossy translation (requires --apply)")
+	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: auto-detect from cwd) — only used with --apply")
+	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project) — only used with --apply")
 	return cmd
 }
 
-func updateRun(cmd *cobra.Command, doApply, _ bool) error {
+func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag string) error {
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	statePath := filepath.Join(home, ".state", "targets.json")
 
@@ -150,12 +163,38 @@ func updateRun(cmd *cobra.Command, doApply, _ bool) error {
 		}
 	}
 
-	// Re-apply to agents if any bumps were applied.
+	// Re-apply to agents if any bumps were applied. Mirror the apply
+	// pipeline: project-overlay merge, secret substitution, scope-aware
+	// state recording. Without this, a project-scope user would have their
+	// project state silently ignored, and \${secret:...\} references would
+	// land literally in agent native files.
 	if len(bumps) > 0 {
-		c2, err := source.Load(afero.NewOsFs(), home)
+		pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+		c2, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
 		if err != nil {
 			return fmt.Errorf("reload source after upgrade: %w", err)
 		}
+
+		sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag, c2)
+		if err != nil {
+			return fmt.Errorf("resolve scope after update: %w", err)
+		}
+		if sc == adapter.ScopeProject && projectRoot != "" {
+			marker, merr := project.Discover(projectRoot)
+			if merr != nil {
+				return fmt.Errorf("load project marker after update: %w", merr)
+			}
+			if marker != nil {
+				c2 = project.Merge(c2, marker)
+			}
+		}
+
+		secBackend := secrets.SelectBackend(c2.Config.Secrets, home)
+		envBackend := secrets.EnvBackend{}
+		if err := secrets.SubstituteCanonical(&c2, secBackend, envBackend); err != nil {
+			return fmt.Errorf("substitute secrets after update: %w", err)
+		}
+
 		agents := []string{}
 		for name, ag := range c2.Config.Agents {
 			if ag.Enabled {
@@ -163,15 +202,26 @@ func updateRun(cmd *cobra.Command, doApply, _ bool) error {
 			}
 		}
 		reg := registryFactory()
-		plan, err := render.Plan(c2, reg, agents, adapter.ScopeUser, "", st)
+		plan, err := render.Plan(c2, reg, agents, sc, projectRoot, st)
 		if err != nil {
 			return fmt.Errorf("plan after update: %w", err)
 		}
-		if err := render.Apply(plan, reg); err != nil {
+		collisions, err := render.Apply(plan, reg, st, home, sc, projectRoot)
+		if err != nil {
 			return fmt.Errorf("apply after update: %w", err)
 		}
+		if len(collisions) > 0 {
+			ew := cmd.ErrOrStderr()
+			fmt.Fprintf(ew, "agentsync: update --apply backed up %d pre-existing target(s):\n", len(collisions))
+			for _, r := range collisions {
+				fmt.Fprintf(ew, "  %s\n", r.String())
+			}
+		}
 		for name, res := range plan.PerAgent {
-			if err := render.RecordOpsState(st, name, adapter.ScopeUser, "", res.Ops); err != nil {
+			render.PruneStaleState(st, name, sc, projectRoot, res.Ops)
+		}
+		for name, res := range plan.PerAgent {
+			if err := render.RecordOpsState(st, name, sc, projectRoot, res.Ops); err != nil {
 				return err
 			}
 		}
@@ -232,6 +282,7 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 	src := mpEntry.Source
 	if src.Relative != "" {
 		src.Relative = filepath.Join(mpCacheRoot, src.Relative)
+		src.RootDir = mpCacheRoot
 	}
 	fetcher := marketplace.Dispatch(src)
 	result, err := fetcher.Fetch(src, cacheDir)

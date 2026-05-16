@@ -24,7 +24,7 @@ func (c *countingAdapter) Render(source.Canonical, adapter.Scope, string) ([]ada
 	return c.renderOps, nil, nil
 }
 
-func (c *countingAdapter) Apply(ops []adapter.FileOp) error {
+func (c *countingAdapter) Apply(ops []adapter.FileOp, _ adapter.DestWriter) error {
 	c.ops = append(c.ops, ops...)
 	return nil
 }
@@ -84,7 +84,7 @@ func TestPipeline_DedupesIdenticalWritesAcrossAdapters(t *testing.T) {
 		},
 	}
 
-	if err := render.Apply(plan, reg); err != nil {
+	if _, err := render.Apply(plan, reg, state.New(), t.TempDir(), adapter.ScopeUser, ""); err != nil {
 		t.Fatal(err)
 	}
 

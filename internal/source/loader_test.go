@@ -8,6 +8,37 @@ import (
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
+// TestLoad_AgentsyncTOMLRejectsTypos guards against the silent-drop bug
+// where misspelled top-level keys in agentsync.toml were ignored and the
+// default applied. Strict mode catches typos at load time.
+func TestLoad_AgentsyncTOMLRejectsTypos(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	_ = afero.WriteFile(fs, "/home/.agentsync/agentsync.toml", []byte(`
+[updates]
+defauls_mode = "track"
+`), 0o644)
+	_, err := source.Load(fs, "/home/.agentsync")
+	if err == nil {
+		t.Fatal("expected error from typo'd 'defauls_mode' key")
+	}
+	// We don't pin on the exact pelletier message; just confirm the bad
+	// key surfaces.
+	if got := err.Error(); !contains(got, "defauls_mode") {
+		t.Fatalf("error %q does not mention the typo'd key", got)
+	}
+}
+
+// contains is a small substring helper so the new test reads cleanly
+// without bringing in strings.Contains for one call.
+func contains(haystack, needle string) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
+}
+
 func TestLoad_EmptyHome(t *testing.T) {
 	fs := afero.NewMemMapFs()
 	_ = afero.WriteFile(fs, "/home/.agentsync/agentsync.toml", []byte(""), 0o644)

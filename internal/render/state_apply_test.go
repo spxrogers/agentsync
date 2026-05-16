@@ -73,6 +73,51 @@ func TestRecordState_FileReplace(t *testing.T) {
 	}
 }
 
+func TestPruneStaleState_DropsRemovedFiles(t *testing.T) {
+	s := state.New()
+	keep := "claude:user::/home/me/.claude/agents/keep.md"
+	drop := "claude:user::/home/me/.claude/agents/dropme.md"
+	otherAgent := "opencode:user::/home/me/.config/opencode/agent/keep.md"
+	s.Files[keep] = state.FileEntry{SHA256: "a"}
+	s.Files[drop] = state.FileEntry{SHA256: "b"}
+	s.Files[otherAgent] = state.FileEntry{SHA256: "c"}
+
+	render.PruneStaleState(s, "claude", adapter.ScopeUser, "", []adapter.FileOp{
+		{Action: "write", Path: "/home/me/.claude/agents/keep.md"},
+	})
+	if _, ok := s.Files[keep]; !ok {
+		t.Fatal("kept entry was pruned")
+	}
+	if _, ok := s.Files[drop]; ok {
+		t.Fatal("stale entry was not pruned")
+	}
+	if _, ok := s.Files[otherAgent]; !ok {
+		t.Fatal("other agent's entry must not be touched")
+	}
+}
+
+func TestPruneStaleState_DropsRemovedKeys(t *testing.T) {
+	s := state.New()
+	clauJSON := "/home/me/.claude.json"
+	keepKey := "claude:user::" + clauJSON + ":/mcpServers/keep"
+	dropKey := "claude:user::" + clauJSON + ":/mcpServers/dropme"
+	s.Keys[keepKey] = state.KeyEntry{SHA256: "a"}
+	s.Keys[dropKey] = state.KeyEntry{SHA256: "b"}
+
+	render.PruneStaleState(s, "claude", adapter.ScopeUser, "", []adapter.FileOp{{
+		Action:        "write",
+		Path:          clauJSON,
+		MergeStrategy: "merge-json-keys",
+		Content:       []byte(`{"mcpServers":{"keep":{"command":"x"}}}`),
+	}})
+	if _, ok := s.Keys[keepKey]; !ok {
+		t.Fatal("kept key was pruned")
+	}
+	if _, ok := s.Keys[dropKey]; ok {
+		t.Fatal("stale key was not pruned")
+	}
+}
+
 func TestRecordState_SkipsDeleteOps(t *testing.T) {
 	s := state.New()
 	err := render.RecordOpsState(s, "claude", adapter.ScopeUser, "", []adapter.FileOp{{
