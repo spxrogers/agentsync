@@ -37,6 +37,16 @@ func boolStr(b bool) string {
 
 const validAgents = "claude, opencode, codex, cursor"
 
+// v1Supported lists agents whose adapter actually emits ops today.
+// codex and cursor are registered as NoopAdapter in registry_internal.go;
+// adding them silently would produce `applied: 0 ops` for those agents
+// with no diagnostic — so `agent add` rejects them with a status hint.
+// (Allow override with AGENTSYNC_ALLOW_UNIMPLEMENTED=1 for plan/spec work.)
+var v1Supported = map[string]bool{
+	"claude":   true,
+	"opencode": true,
+}
+
 func newAgentCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "agent", Short: "manage which agents agentsync targets"}
 	cmd.AddCommand(
@@ -165,6 +175,11 @@ func agentAddRun(cmd *cobra.Command, args []string) error {
 	name := args[0]
 	if err := validateAgent(name); err != nil {
 		return err
+	}
+	if !v1Supported[name] && os.Getenv("AGENTSYNC_ALLOW_UNIMPLEMENTED") != "1" {
+		return fmt.Errorf("agent %q is not yet implemented in v1.0 "+
+			"(codex is planned for v1.1, cursor for v1.2); "+
+			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to register anyway and accept noop apply", name)
 	}
 	p, raw, agents, err := readAgentsyncTOML()
 	if err != nil {
