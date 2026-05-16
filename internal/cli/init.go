@@ -36,8 +36,19 @@ func newInitCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := paths.AgentsyncHome(paths.OSEnv{})
-			if entries, _ := os.ReadDir(home); len(entries) > 0 {
+			// Explicit-error guard: tell the user the difference between
+			// "directory exists with files" (refuse) and "path exists but
+			// is unreadable / is a file" (different actionable error).
+			entries, err := os.ReadDir(home)
+			switch {
+			case err == nil && len(entries) > 0:
 				return fmt.Errorf("%s already contains files; refusing to overwrite", home)
+			case err == nil:
+				// Empty directory — fall through and populate.
+			case os.IsNotExist(err):
+				// Path doesn't exist yet — MkdirAll below creates it.
+			default:
+				return fmt.Errorf("inspect %s: %w (remove the path or set $AGENTSYNC_HOME to a writable location)", home, err)
 			}
 
 			// Every canonical subdirectory the loader recognizes is created up
