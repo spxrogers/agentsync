@@ -41,6 +41,22 @@ func TestInit_FreshScaffold(t *testing.T) {
 	}
 }
 
+// TestInit_RejectsBadCloneURL covers the scheme-validation path so a user
+// who pastes "http://..." or a typo gets a clear error before go-git is
+// even called.
+func TestInit_RejectsBadCloneURL(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	out, err := runCLI(t, env, "init", "http://example.com/foo.git")
+	if err == nil {
+		t.Fatalf("init should reject http://; got:\n%s", out)
+	}
+	out, err = runCLI(t, env, "init", "rsync://example.com/foo")
+	if err == nil {
+		t.Fatalf("init should reject unsupported scheme; got:\n%s", out)
+	}
+}
+
 func TestInit_RefusesPopulatedHome(t *testing.T) {
 	tmp := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(tmp, ".agentsync"), 0o755)
