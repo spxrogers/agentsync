@@ -57,6 +57,10 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 - **OpenCode hooks**: OpenCode hooks are JS/TS plugins, not declarative shell commands. agentsync v1 does NOT auto-translate Claude hooks to OpenCode. Hand-author a small JS/TS plugin if you need a hook on OpenCode.
 - **Cursor user-level rules**: Cursor stores user-level rules in app-local storage (not the filesystem). agentsync's Cursor adapter manages project-scope rules only.
 - **LSP projection beyond Claude**: OpenCode/Codex/Cursor LSP support is deferred. Claude plugins that include LSP servers install correctly on Claude itself; on other agents you'll see `lsp server X skipped` in the apply translation report.
+- **codex / cursor agent registration**: `agent add codex` and `agent add cursor` are rejected in v1.0 because their adapters are noops. Set `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` to register anyway (apply will silently emit zero ops for them).
+- **TOML / JSONC comment preservation**: comments in `~/.agentsync/mcp/*.toml` and in agent-side `opencode.json` are NOT preserved across reconcile `[w]`rite-back or import. Hand-edited comments survive in unrelated sections; the rewritten section will be re-emitted without comments. Deferred to v1.x.
+- **Hand-edits to agentsync-owned keys** in shared agent files (e.g. an MCP server entry in `~/.claude.json` that agentsync owns): the next `apply` overwrites them with NO foreign-collision backup, because agentsync considers them its own. Use `agentsync reconcile` (the drift classifier catches the edit and offers `[w]`rite-back) BEFORE the next apply if you want to keep them.
+- **Plain-http / git:// plugin sources** are rejected by default to prevent MITM swap. Set `AGENTSYNC_ALLOW_INSECURE_URLS=1` for internal mirrors.
 - **Continue, Gemini CLI, Aider**: not on the v1.x roadmap.
 
 ## Troubleshooting
@@ -86,6 +90,13 @@ For fast in-place iteration without spinning up the container, `just test-fast`
 runs the unit/integration layer directly on the host. The existing tests
 already redirect `HOME` via `AGENTSYNC_TARGET_ROOT`, so they are still safe;
 the container is the release gate.
+
+If you reach for the obvious `go test ./...`, the filesystem-touching
+packages refuse to run on the host and print a long banner pointing you
+at the recipes above. To bypass the guard manually (e.g. for `go test -run`
+on a single test), set `AGENTSYNC_TEST_IN_CONTAINER=1`:
+
+    AGENTSYNC_TEST_IN_CONTAINER=1 go test ./internal/cli/ -run TestApply_FirstRun
 
 `just test-live` runs the **live cohort** (build tag `live`) — currently the
 `obra/superpowers` projection check, which clones the real upstream plugin
