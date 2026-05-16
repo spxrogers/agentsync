@@ -61,7 +61,7 @@ func newAgentDisableCmd() *cobra.Command {
 	return cmd
 }
 
-type opensyncCfg struct {
+type agentsyncCfg struct {
 	Agents map[string]map[string]any `toml:"agents"`
 	// other top-level keys preserved verbatim via decoder
 }
@@ -84,7 +84,7 @@ func readAgentsyncTOML() (string, []byte, map[string]map[string]any, error) {
 	if err != nil {
 		return p, nil, nil, fmt.Errorf("read %s: %w", p, err)
 	}
-	var cfg opensyncCfg
+	var cfg agentsyncCfg
 	if err := toml.Unmarshal(raw, &cfg); err != nil {
 		return p, raw, nil, fmt.Errorf("parse %s: %w", p, err)
 	}
