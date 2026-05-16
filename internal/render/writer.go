@@ -216,9 +216,34 @@ func (w *Writer) backup(path string, existing []byte) (string, error) {
 }
 
 // backupPathFor computes the deterministic backup destination for src.
+//
+// Defense-in-depth: filepath.Join cleans the joined path, so a src that
+// contains ".." segments could resolve outside backupRoot. We guarantee
+// containment by:
+//  1. Cleaning src first so ".." sequences are collapsed.
+//  2. Re-rooting via filepath.Rel to drop any prefix that would escape.
+//  3. Asserting the result is still under backupRoot.
+//
+// Today's adapters never produce ".." in destination paths, but the
+// guard means a future bug or hostile plugin component path can't turn
+// a backup into a write-anywhere primitive.
 func backupPathFor(src, backupRoot string) string {
-	clean := strings.TrimLeft(src, string(os.PathSeparator))
-	return filepath.Join(backupRoot, clean)
+	cleaned := filepath.Clean(src)
+	// Drop the leading separator(s) and any drive letter so Join treats
+	// the path as relative.
+	trimmed := strings.TrimLeft(cleaned, string(os.PathSeparator))
+	if vol := filepath.VolumeName(cleaned); vol != "" {
+		trimmed = strings.TrimLeft(strings.TrimPrefix(cleaned, vol), string(os.PathSeparator))
+	}
+	dest := filepath.Join(backupRoot, trimmed)
+	// Final containment check — if Clean leaves dest above backupRoot
+	// (e.g. trimmed started with ".."), fall back to a hash-style segment
+	// so we never escape.
+	rel, err := filepath.Rel(backupRoot, dest)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return filepath.Join(backupRoot, "_escaped", filepath.Base(cleaned))
+	}
+	return dest
 }
 
 // bytesEqual returns true iff a and b have identical contents.
