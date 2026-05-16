@@ -42,9 +42,9 @@ into ~/.agentsync/ instead of scaffolding — for bootstrapping a new
 machine from an existing source-of-truth repo (typically chezmoi-
 managed).
 
-The destination must not exist or be empty; init refuses to overwrite a
-populated home so a careless `+"`agentsync init`"+` on a working install does
-not nuke it.`,
+The destination must not exist or be empty; init refuses to overwrite
+a populated home so a careless re-run on a working install does not
+nuke it.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			home := paths.AgentsyncHome(paths.OSEnv{})
