@@ -6,6 +6,7 @@ package paths
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Env abstracts environment-variable lookup so tests can inject a fake.
@@ -72,6 +73,24 @@ func HomeRelative(home, abs string) string {
 		return abs
 	}
 	return "${HOME}/" + filepath.ToSlash(rel)
+}
+
+// FromHomeRelative is the inverse of HomeRelative: it expands a leading
+// "${HOME}" / "${HOME}/" in a stored state path back to an absolute path
+// rooted at userHome. Paths stored absolute (because they were outside home
+// when recorded) are returned unchanged. Callers that turn a stored state
+// key back into a real filesystem path (e.g. `agent disable --purge`) MUST
+// route through this so they don't operate on the literal "${HOME}/..."
+// string.
+func FromHomeRelative(userHome, stored string) string {
+	const tok = "${HOME}"
+	if stored == tok {
+		return userHome
+	}
+	if rest, ok := strings.CutPrefix(stored, tok+"/"); ok {
+		return filepath.Join(userHome, filepath.FromSlash(rest))
+	}
+	return stored
 }
 
 // hasParentPrefix returns true when s starts with ".." as a path segment.

@@ -35,6 +35,7 @@ func newStatusCmd() *cobra.Command {
 			// same plugin-projected components `apply` writes; source.Load
 			// alone would report plugin-managed files/keys as untracked.
 			pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+			userHome := paths.HomeDir(paths.OSEnv{})
 			c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
 			if err != nil {
 				return err
@@ -67,7 +68,7 @@ func newStatusCmd() *cobra.Command {
 					agents = append(agents, name)
 				}
 			}
-			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, home)
+			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, userHome)
 			if err != nil {
 				return err
 			}
@@ -90,7 +91,7 @@ func newStatusCmd() *cobra.Command {
 					}
 					seen[op.Path] = true
 					hsrc := hashContent(op.Content)
-					happlied := s.Files[stateFileKey(home, name, sc, projectRoot, op.Path)].SHA256
+					happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, op.Path)].SHA256
 					hdest := hashFile(op.Path)
 					cls := drift.Classify(hsrc, happlied, hdest)
 					fmt.Fprintf(w, "  %-20s %s\n", cls, op.Path)
@@ -105,7 +106,7 @@ func newStatusCmd() *cobra.Command {
 					final := readJSONFile(op.Path)
 					for _, ptr := range render.CollectPointers(ours, "") {
 						hsrc := hashAnyValue(getPointerValue(ours, ptr))
-						happlied := s.Keys[stateKeyKey(home, name, sc, projectRoot, op.Path, ptr)].SHA256
+						happlied := s.Keys[stateKeyKey(userHome, name, sc, projectRoot, op.Path, ptr)].SHA256
 						hdest := hashAnyValue(getPointerValue(final, ptr))
 						cls := drift.Classify(hsrc, happlied, hdest)
 						fmt.Fprintf(w, "  %-20s %s#%s\n", cls, op.Path, ptr)
@@ -121,18 +122,19 @@ func newStatusCmd() *cobra.Command {
 }
 
 // stateFileKey builds the state Files map key matching render.RecordOpsState.
-// Format: "agent:scope:portableProject:portablePath" (project and path
-// are HOME-relative so keys are portable across machines).
-func stateFileKey(home, agent string, sc adapter.Scope, projectRoot, path string) string {
+// Format: "agent:scope:portableProject:portablePath" (project and path are
+// HOME-relative against the user's $HOME so keys are portable across
+// machines — userHome must be paths.HomeDir, NOT the agentsync home).
+func stateFileKey(userHome, agent string, sc adapter.Scope, projectRoot, path string) string {
 	return fmt.Sprintf("%s:%s:%s:%s", agent, sc.String(),
-		paths.HomeRelative(home, projectRoot), paths.HomeRelative(home, path))
+		paths.HomeRelative(userHome, projectRoot), paths.HomeRelative(userHome, path))
 }
 
 // stateKeyKey builds the state Keys map key matching render.RecordOpsState.
 // Format: "agent:scope:portableProject:portablePath:ptr".
-func stateKeyKey(home, agent string, sc adapter.Scope, projectRoot, path, ptr string) string {
+func stateKeyKey(userHome, agent string, sc adapter.Scope, projectRoot, path, ptr string) string {
 	return fmt.Sprintf("%s:%s:%s:%s:%s", agent, sc.String(),
-		paths.HomeRelative(home, projectRoot), paths.HomeRelative(home, path), ptr)
+		paths.HomeRelative(userHome, projectRoot), paths.HomeRelative(userHome, path), ptr)
 }
 
 func hashContent(b []byte) string {

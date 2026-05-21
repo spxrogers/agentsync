@@ -62,6 +62,7 @@ re-render lands in the right place when running inside a project.`,
 
 func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag string) error {
 	home := paths.AgentsyncHome(paths.OSEnv{})
+	userHome := paths.HomeDir(paths.OSEnv{})
 	statePath := filepath.Join(home, ".state", "targets.json")
 
 	// Load canonical source.
@@ -193,7 +194,7 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 			}
 		}
 
-		secBackend := secrets.SelectBackend(c2.Config.Secrets, home, paths.HomeDir(paths.OSEnv{}))
+		secBackend := secrets.SelectBackend(c2.Config.Secrets, home, userHome)
 		envBackend := secrets.EnvBackend{}
 		if err := secrets.SubstituteCanonical(&c2, secBackend, envBackend); err != nil {
 			return fmt.Errorf("substitute secrets after update: %w", err)
@@ -206,11 +207,11 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 			}
 		}
 		reg := registryFactory()
-		plan, err := render.Plan(c2, reg, agents, sc, projectRoot, st, home)
+		plan, err := render.Plan(c2, reg, agents, sc, projectRoot, st, userHome)
 		if err != nil {
 			return fmt.Errorf("plan after update: %w", err)
 		}
-		collisions, err := render.Apply(plan, reg, st, home, sc, projectRoot)
+		collisions, err := render.Apply(plan, reg, st, home, userHome, sc, projectRoot)
 		if err != nil {
 			return fmt.Errorf("apply after update: %w", err)
 		}
@@ -222,10 +223,10 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 			}
 		}
 		for name, res := range plan.PerAgent {
-			render.PruneStaleState(st, home, name, sc, projectRoot, res.Ops)
+			render.PruneStaleState(st, userHome, name, sc, projectRoot, res.Ops)
 		}
 		for name, res := range plan.PerAgent {
-			if err := render.RecordOpsState(st, home, name, sc, projectRoot, res.Ops); err != nil {
+			if err := render.RecordOpsState(st, userHome, name, sc, projectRoot, res.Ops); err != nil {
 				return err
 			}
 		}

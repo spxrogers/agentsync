@@ -106,7 +106,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	}
 
 	if dryRun {
-		plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, home)
+		plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, userHome)
 		if err != nil {
 			return err
 		}
@@ -135,7 +135,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		// before overwrite. The dry-run previously hid this; users only
 		// found out which files were about to be backed up after the
 		// real apply ran.
-		previews := render.PreviewCollisions(plan, reg, s, home, sc, projectRoot)
+		previews := render.PreviewCollisions(plan, reg, s, home, userHome, sc, projectRoot)
 		if len(previews) > 0 {
 			fmt.Fprintln(w)
 			fmt.Fprintf(w, "Foreign collisions: %d (the real apply will back these up before overwriting)\n", len(previews))
@@ -154,11 +154,11 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	// Real apply: render + write. The writer constructed inside
 	// render.Apply enforces the foreign-collision backup invariant on
 	// every destination write — there is no separate guard pass.
-	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, home)
+	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, userHome)
 	if err != nil {
 		return err
 	}
-	collisions, applyErr := render.Apply(plan, reg, s, home, sc, projectRoot)
+	collisions, applyErr := render.Apply(plan, reg, s, home, userHome, sc, projectRoot)
 	if len(collisions) > 0 {
 		ew := cmd.ErrOrStderr()
 		fmt.Fprintf(ew, "agentsync: backed up %d pre-existing target(s) before overwriting:\n", len(collisions))
@@ -180,7 +180,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	// re-reads each file); recording from files that don't exist
 	// returns an error and we just skip those.
 	if applyErr != nil {
-		_ = saveBestEffortState(s, statePath, plan, home, sc, projectRoot)
+		_ = saveBestEffortState(s, statePath, plan, userHome, sc, projectRoot)
 		return applyErr
 	}
 
@@ -189,11 +189,11 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	// shows up as `Orphan` in `status` forever and targets.json
 	// grows unbounded.
 	for name, res := range plan.PerAgent {
-		render.PruneStaleState(s, home, name, sc, projectRoot, res.Ops)
+		render.PruneStaleState(s, userHome, name, sc, projectRoot, res.Ops)
 	}
 	// Update state with post-apply hashes.
 	for name, res := range plan.PerAgent {
-		if err := render.RecordOpsState(s, home, name, sc, projectRoot, res.Ops); err != nil {
+		if err := render.RecordOpsState(s, userHome, name, sc, projectRoot, res.Ops); err != nil {
 			return err
 		}
 	}
@@ -217,7 +217,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 // as foreign-collisions. Failures are swallowed — we already have the
 // real error to surface and want to maximise the chance of the rescue
 // state.Save landing.
-func saveBestEffortState(s *state.Targets, statePath string, plan render.RenderPlan, home string, sc adapter.Scope, projectRoot string) error {
+func saveBestEffortState(s *state.Targets, statePath string, plan render.RenderPlan, userHome string, sc adapter.Scope, projectRoot string) error {
 	for name, res := range plan.PerAgent {
 		var existing []adapter.FileOp
 		for _, op := range res.Ops {
@@ -231,7 +231,7 @@ func saveBestEffortState(s *state.Targets, statePath string, plan render.RenderP
 		// PruneStaleState is intentionally skipped here — we only want
 		// to ADD hashes, not remove entries that may refer to the now-
 		// half-applied state.
-		if err := render.RecordOpsState(s, home, name, sc, projectRoot, existing); err != nil {
+		if err := render.RecordOpsState(s, userHome, name, sc, projectRoot, existing); err != nil {
 			continue
 		}
 	}

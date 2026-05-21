@@ -32,11 +32,18 @@ import (
 // iox.AtomicWrite call outside the allowed packages, so a future
 // contributor cannot silently bypass this guard.
 type Writer struct {
-	state   *state.Targets
-	home    string
-	scope   adapter.Scope
-	project string
-	agent   string
+	state *state.Targets
+	// home is the agentsync home (~/.agentsync); it anchors the backup
+	// root only. userHome is the user's $HOME (paths.HomeDir) and is the
+	// base for HomeRelative state-key normalization — dest files like
+	// ~/.claude.json live under userHome, NOT under the agentsync home, so
+	// using home here would never normalize them (the cross-machine
+	// portability no-op fixed in this change).
+	home     string
+	userHome string
+	scope    adapter.Scope
+	project  string
+	agent    string
 
 	backupRoot string          // <home>/.state/backups/<ts>; created lazily
 	backedUp   map[string]bool // path → already-backed-up this run
@@ -65,12 +72,15 @@ func (r CollisionReport) String() string {
 }
 
 // NewWriter constructs a Writer for one (agent, scope, project) tuple.
-// The render layer creates one writer per agent during Apply.
-func NewWriter(st *state.Targets, home string, scope adapter.Scope, project, agent string) *Writer {
+// The render layer creates one writer per agent during Apply. home is the
+// agentsync home (backup root); userHome is the user's $HOME (state-key
+// normalization base).
+func NewWriter(st *state.Targets, home, userHome string, scope adapter.Scope, project, agent string) *Writer {
 	ts := time.Now().UTC().Format("20060102T150405Z")
 	return &Writer{
 		state:      st,
 		home:       home,
+		userHome:   userHome,
 		scope:      scope,
 		project:    project,
 		agent:      agent,
@@ -82,8 +92,8 @@ func NewWriter(st *state.Targets, home string, scope adapter.Scope, project, age
 // NewPreviewWriter constructs a Writer that records foreign-collision
 // reports without performing any disk writes. Used by `apply --dry-run` to
 // surface the same backup-and-overwrite events a real apply would produce.
-func NewPreviewWriter(st *state.Targets, home string, scope adapter.Scope, project, agent string) *Writer {
-	w := NewWriter(st, home, scope, project, agent)
+func NewPreviewWriter(st *state.Targets, home, userHome string, scope adapter.Scope, project, agent string) *Writer {
+	w := NewWriter(st, home, userHome, scope, project, agent)
 	w.dryRun = true
 	return w
 }
@@ -129,7 +139,7 @@ func (w *Writer) maybeBackup(op adapter.FileOp, finalBytes []byte) error {
 
 func (w *Writer) maybeBackupFileOp(op adapter.FileOp, finalBytes []byte) error {
 	stateKey := fmt.Sprintf("%s:%s:%s:%s", w.agent, w.scope.String(),
-		paths.HomeRelative(w.home, w.project), paths.HomeRelative(w.home, op.Path))
+		paths.HomeRelative(w.userHome, w.project), paths.HomeRelative(w.userHome, op.Path))
 	if _, owned := w.state.Files[stateKey]; owned {
 		return nil
 	}
@@ -169,8 +179,8 @@ func (w *Writer) maybeBackupKeyOp(op adapter.FileOp) error {
 	}
 
 	var backupPath string
-	portableProject := paths.HomeRelative(w.home, w.project)
-	portablePath := paths.HomeRelative(w.home, op.Path)
+	portableProject := paths.HomeRelative(w.userHome, w.project)
+	portablePath := paths.HomeRelative(w.userHome, op.Path)
 	for _, ptr := range CollectPointers(ours, "") {
 		stateKey := fmt.Sprintf("%s:%s:%s:%s:%s", w.agent, w.scope.String(), portableProject, portablePath, ptr)
 		if _, owned := w.state.Keys[stateKey]; owned {
@@ -204,7 +214,7 @@ func (w *Writer) maybeBackupKeyOp(op adapter.FileOp) error {
 // back up the whole file once if state has no entries claiming the path.
 func (w *Writer) maybeBackupFileOpForJSONCFallback(op adapter.FileOp) error {
 	stateKeyPrefix := fmt.Sprintf("%s:%s:%s:%s:", w.agent, w.scope.String(),
-		paths.HomeRelative(w.home, w.project), paths.HomeRelative(w.home, op.Path))
+		paths.HomeRelative(w.userHome, w.project), paths.HomeRelative(w.userHome, op.Path))
 	for k := range w.state.Keys {
 		if strings.HasPrefix(k, stateKeyPrefix) {
 			return nil // state owns at least one pointer here; trust the merge

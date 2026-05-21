@@ -242,6 +242,10 @@ func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []str
 // first-run foreign-collision.
 func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) error {
 	statePath := filepath.Join(home, ".state", "targets.json")
+	// State keys are HOME-relative against the user's $HOME (paths.HomeDir),
+	// matching render.RecordOpsState — NOT the agentsync home, or apply
+	// would never recognise the seeded entries as owned.
+	userHome := paths.HomeDir(paths.OSEnv{})
 	st, err := state.Load(statePath)
 	if err != nil {
 		return err
@@ -285,7 +289,7 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) err
 			}
 			for _, ptr := range collectStateSeedPointers(ours) {
 				key := fmt.Sprintf("%s:%s:%s:%s:%s",
-					agentName, adapter.ScopeUser.String(), "", paths.HomeRelative(home, op.Path), ptr)
+					agentName, adapter.ScopeUser.String(), "", paths.HomeRelative(userHome, op.Path), ptr)
 				st.Keys[key] = state.KeyEntry{
 					SHA256:    hashAtPointer(existing, ptr),
 					AppliedAt: now,
@@ -299,7 +303,7 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) err
 			}
 			sum := sha256.Sum256(data)
 			key := fmt.Sprintf("%s:%s:%s:%s",
-				agentName, adapter.ScopeUser.String(), "", paths.HomeRelative(home, op.Path))
+				agentName, adapter.ScopeUser.String(), "", paths.HomeRelative(userHome, op.Path))
 			st.Files[key] = state.FileEntry{
 				SHA256:    hex.EncodeToString(sum[:]),
 				Mode:      op.Mode,

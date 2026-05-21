@@ -82,7 +82,7 @@ func TestWriter_FileLevelBackup(t *testing.T) {
 	_ = os.WriteFile(dest, original, 0o644)
 
 	st := state.New()
-	w := render.NewWriter(st, home, adapter.ScopeUser, "", "claude")
+	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
 	op := adapter.FileOp{
 		Action:   "write",
 		Path:     dest,
@@ -133,7 +133,7 @@ func TestWriter_KeyLevelBackup(t *testing.T) {
 	_ = os.WriteFile(dest, original, 0o644)
 
 	st := state.New()
-	w := render.NewWriter(st, home, adapter.ScopeUser, "", "claude")
+	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
 	ours := []byte(`{"mcpServers":{"github":{"command":"npx","args":["-y","@m/server-github"]}}}`)
 	op := adapter.FileOp{
 		Action:        "write",
@@ -181,9 +181,12 @@ func TestWriter_NoCollisionWhenAlreadyOwned(t *testing.T) {
 	_ = os.WriteFile(dest, []byte("ours-v1"), 0o644)
 
 	st := state.New()
-	st.Files["claude:user::"+dest] = state.FileEntry{SHA256: "anything"}
+	// State keys are HOME-relative against the user's $HOME (here tmp), so an
+	// owned dest under tmp is recorded as "${HOME}/<rel>".
+	rel, _ := filepath.Rel(tmp, dest)
+	st.Files["claude:user::${HOME}/"+filepath.ToSlash(rel)] = state.FileEntry{SHA256: "anything"}
 
-	w := render.NewWriter(st, home, adapter.ScopeUser, "", "claude")
+	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
 	op := adapter.FileOp{Action: "write", Path: dest, Content: []byte("ours-v2"), Mode: 0o644}
 	if err := w.Write(op, op.Content); err != nil {
 		t.Fatal(err)
@@ -208,7 +211,7 @@ func TestWriter_NoCollisionWhenContentMatches(t *testing.T) {
 	_ = os.WriteFile(dest, content, 0o644)
 
 	st := state.New()
-	w := render.NewWriter(st, home, adapter.ScopeUser, "", "claude")
+	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
 	if err := w.Write(adapter.FileOp{Action: "write", Path: dest, Content: content}, content); err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +230,7 @@ func TestWriter_DeleteSkipsBackup(t *testing.T) {
 	_ = os.WriteFile(dest, []byte("bye"), 0o644)
 
 	st := state.New()
-	w := render.NewWriter(st, home, adapter.ScopeUser, "", "claude")
+	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
 	if err := w.Delete(adapter.FileOp{Action: "delete", Path: dest}); err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +269,7 @@ func TestRenderApply_FullPathBacksUpAcrossAgents(t *testing.T) {
 		},
 	}
 	st := state.New()
-	reports, err := render.Apply(plan, reg, st, home, adapter.ScopeUser, "")
+	reports, err := render.Apply(plan, reg, st, home, tmp, adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

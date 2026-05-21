@@ -44,6 +44,7 @@ func newDiffCmd() *cobra.Command {
 			// plugin-derived MCP server / skill / command and silently
 			// disagrees with what apply will write.
 			pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+			userHome := paths.HomeDir(paths.OSEnv{})
 			c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
 			if err != nil {
 				return err
@@ -76,7 +77,7 @@ func newDiffCmd() *cobra.Command {
 					agents = append(agents, name)
 				}
 			}
-			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, home)
+			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, userHome)
 			if err != nil {
 				return err
 			}
@@ -88,7 +89,7 @@ func newDiffCmd() *cobra.Command {
 			// stdout / log files / screenshots. We resolve every
 			// reference in the canonical, then mask its resolved value
 			// in both src and dst before the diff runs.
-			secBackend := secrets.SelectBackend(c.Config.Secrets, home, paths.HomeDir(paths.OSEnv{}))
+			secBackend := secrets.SelectBackend(c.Config.Secrets, home, userHome)
 			envBackend := secrets.EnvBackend{}
 			redact := secrets.CollectResolved(&c, secBackend, envBackend)
 

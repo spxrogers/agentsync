@@ -23,14 +23,15 @@ import (
 // ~/.agentsync/ leaves its state entry behind forever; it shows up as
 // `Orphan` in `status` and `targets.json` grows unbounded over time.
 //
-// The home argument is used to normalize op.Path to its HOME-relative
-// form so state-key lookups match keys written by RecordOpsState (which
-// stores HOME-relative paths for cross-machine portability).
-func PruneStaleState(s *state.Targets, home, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) {
+// The userHome argument (the user's $HOME, paths.HomeDir) is used to
+// normalize op.Path to its HOME-relative form so state-key lookups match
+// keys written by RecordOpsState. It must NOT be the agentsync home — dest
+// files live under $HOME, not under ~/.agentsync.
+func PruneStaleState(s *state.Targets, userHome, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) {
 	if s == nil {
 		return
 	}
-	prefix := fmt.Sprintf("%s:%s:%s:", agent, scope.String(), paths.HomeRelative(home, project))
+	prefix := fmt.Sprintf("%s:%s:%s:", agent, scope.String(), paths.HomeRelative(userHome, project))
 
 	// Build the set of paths and per-path pointer sets that this agent's
 	// current plan still produces. Paths are normalized to HOME-relative
@@ -41,7 +42,7 @@ func PruneStaleState(s *state.Targets, home, agent string, scope adapter.Scope, 
 		if op.Action != "" && op.Action != "write" {
 			continue
 		}
-		portable := paths.HomeRelative(home, op.Path)
+		portable := paths.HomeRelative(userHome, op.Path)
 		switch op.MergeStrategy {
 		case "merge-json-keys", "merge-jsonc-keys":
 			ptrs, ok := currentKeys[portable]
@@ -100,19 +101,20 @@ func PruneStaleState(s *state.Targets, home, agent string, scope adapter.Scope, 
 // Caller is expected to call this AFTER a successful Apply.
 //
 // Both op.Path and project are normalized to HOME-relative form via
-// paths.HomeRelative before being embedded in the state-map keys, so the
-// resulting targets.json is portable across machines whose $HOME differs
-// (e.g. /Users/alice/ vs /home/alice/ after a chezmoi sync). Without
-// this, every key prefix would shift on the new machine and every
-// native file would reclassify as ForeignCollision.
-func RecordOpsState(s *state.Targets, home, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) error {
+// paths.HomeRelative (against userHome, the user's $HOME) before being
+// embedded in the state-map keys, so the resulting targets.json is portable
+// across machines whose $HOME differs (e.g. /Users/alice/ vs /home/alice/
+// after a chezmoi sync). userHome must NOT be the agentsync home: dest files
+// live under $HOME, not under ~/.agentsync, so using the agentsync home as
+// the base leaves every key machine-absolute and unportable.
+func RecordOpsState(s *state.Targets, userHome, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) error {
 	now := time.Now().UTC()
-	portableProject := paths.HomeRelative(home, project)
+	portableProject := paths.HomeRelative(userHome, project)
 	for _, op := range ops {
 		if op.Action != "" && op.Action != "write" {
 			continue
 		}
-		portablePath := paths.HomeRelative(home, op.Path)
+		portablePath := paths.HomeRelative(userHome, op.Path)
 		switch op.MergeStrategy {
 		case "merge-json-keys", "merge-jsonc-keys":
 			// Re-read final on-disk content and record per pointer.

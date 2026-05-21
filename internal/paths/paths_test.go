@@ -88,6 +88,44 @@ func TestHomeRelative(t *testing.T) {
 	}
 }
 
+func TestFromHomeRelative(t *testing.T) {
+	cases := []struct {
+		name     string
+		userHome string
+		stored   string
+		want     string
+	}{
+		{"expands ${HOME}/ prefix", "/home/alice", "${HOME}/.claude.json", filepath.Join("/home/alice", ".claude.json")},
+		{"nested ${HOME}/ prefix", "/home/alice", "${HOME}/.config/opencode/opencode.json", filepath.Join("/home/alice", ".config/opencode/opencode.json")},
+		{"bare ${HOME}", "/home/alice", "${HOME}", "/home/alice"},
+		{"absolute stored path unchanged", "/home/alice", "/etc/agentsync/global.json", "/etc/agentsync/global.json"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := paths.FromHomeRelative(tc.userHome, tc.stored)
+			if got != tc.want {
+				t.Fatalf("FromHomeRelative(%q,%q) = %q, want %q", tc.userHome, tc.stored, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHomeRelative_RoundTrips proves HomeRelative and FromHomeRelative are
+// inverses for dest paths under home — the invariant `agent disable --purge`
+// relies on to turn a stored key back into a real path.
+func TestHomeRelative_RoundTrips(t *testing.T) {
+	home := "/home/alice"
+	abs := filepath.Join(home, ".config", "opencode", "opencode.json")
+	stored := paths.HomeRelative(home, abs)
+	if stored != "${HOME}/.config/opencode/opencode.json" {
+		t.Fatalf("HomeRelative = %q", stored)
+	}
+	back := paths.FromHomeRelative(home, stored)
+	if back != abs {
+		t.Fatalf("round-trip mismatch: %q -> %q -> %q", abs, stored, back)
+	}
+}
+
 func TestAgentsyncHome(t *testing.T) {
 	cases := []struct {
 		name string

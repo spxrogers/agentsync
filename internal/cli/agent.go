@@ -295,6 +295,11 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 
 	// --purge: delete destination files and keys owned by this agent from state.
 	home := paths.AgentsyncHome(paths.OSEnv{})
+	// State keys store dest paths HOME-relative ("${HOME}/.claude.json").
+	// Expand them back to absolute via the user's $HOME before deleting —
+	// otherwise os.Remove would target the literal "${HOME}/..." string,
+	// silently delete nothing, yet still report "purged N path(s)".
+	userHome := paths.HomeDir(paths.OSEnv{})
 	statePath := filepath.Join(home, ".state", "targets.json")
 	s, err := state.Load(statePath)
 	if err != nil {
@@ -309,7 +314,7 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 			// key format: "agent:scope:project:path" — extract path (4th field)
 			parts := strings.SplitN(key, ":", 4)
 			if len(parts) == 4 && parts[3] != "" {
-				toDelete[parts[3]] = true
+				toDelete[paths.FromHomeRelative(userHome, parts[3])] = true
 			}
 		}
 	}
@@ -319,7 +324,7 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 			// key format: "agent:scope:project:path:ptr" — extract path (4th field)
 			parts := strings.SplitN(key, ":", 5)
 			if len(parts) >= 4 && parts[3] != "" {
-				toDelete[parts[3]] = true
+				toDelete[paths.FromHomeRelative(userHome, parts[3])] = true
 			}
 		}
 	}
@@ -338,7 +343,7 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 		for path := range toDelete {
 			ops = append(ops, adapter.FileOp{Action: "delete", Path: path})
 		}
-		rw := render.NewWriter(s, home, adapter.ScopeUser, "", name)
+		rw := render.NewWriter(s, home, userHome, adapter.ScopeUser, "", name)
 		if err := a.Apply(ops, rw); err != nil {
 			return fmt.Errorf("purge apply %s: %w", name, err)
 		}

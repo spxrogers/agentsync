@@ -60,7 +60,11 @@ func newReconcileCmd() *cobra.Command {
 
 func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe bool, scopeFlag, projectFlag string) error {
 	home := paths.AgentsyncHome(paths.OSEnv{})
-	c, err := source.Load(afero.NewOsFs(), home)
+	userHome := paths.HomeDir(paths.OSEnv{})
+	// Project plugins like apply does so drift classification covers
+	// plugin-managed components instead of reporting them as untracked.
+	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+	c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
 	if err != nil {
 		return err
 	}
@@ -92,13 +96,13 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 			agents = append(agents, name)
 		}
 	}
-	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, home)
+	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, userHome)
 	if err != nil {
 		return err
 	}
 
 	// Collect all items in order.
-	items := collectItems(plan, reg, s, sc, projectRoot, home)
+	items := collectItems(plan, reg, s, sc, projectRoot, userHome)
 
 	w := cmd.OutOrStdout()
 
@@ -251,14 +255,14 @@ done:
 			if a == nil {
 				return fmt.Errorf("reconcile override: adapter %q not registered", name)
 			}
-			rw := render.NewWriter(s, home, sc, projectRoot, name)
+			rw := render.NewWriter(s, home, userHome, sc, projectRoot, name)
 			if err := a.Apply(ops, rw); err != nil {
 				return fmt.Errorf("reconcile override apply %s: %w", name, err)
 			}
 			for _, r := range rw.Reports() {
 				fmt.Fprintf(w, "  backup: %s\n", r.String())
 			}
-			if err := render.RecordOpsState(s, home, name, sc, projectRoot, ops); err != nil {
+			if err := render.RecordOpsState(s, userHome, name, sc, projectRoot, ops); err != nil {
 				return err
 			}
 		}
@@ -272,7 +276,8 @@ done:
 }
 
 // collectItems builds the flat reconcile list from a rendered plan + state.
-func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, home string) []reconcileItem {
+// userHome (the user's $HOME) is the HomeRelative base for state-key lookups.
+func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, userHome string) []reconcileItem {
 	var items []reconcileItem
 	for _, name := range reg.Names() {
 		res, ok := plan.PerAgent[name]
@@ -291,7 +296,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 				final := readJSONFile(op.Path)
 				for _, ptr := range render.CollectPointers(ours, "") {
 					hsrc := hashAnyValue(getPointerValue(ours, ptr))
-					happlied := s.Keys[stateKeyKey(home, name, sc, projectRoot, op.Path, ptr)].SHA256
+					happlied := s.Keys[stateKeyKey(userHome, name, sc, projectRoot, op.Path, ptr)].SHA256
 					hdest := hashAnyValue(getPointerValue(final, ptr))
 					cls := drift.Classify(hsrc, happlied, hdest)
 					items = append(items, reconcileItem{
@@ -312,7 +317,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 				}
 				seen[op.Path] = true
 				hsrc := hashContent(op.Content)
-				happlied := s.Files[stateFileKey(home, name, sc, projectRoot, op.Path)].SHA256
+				happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, op.Path)].SHA256
 				hdest := hashFile(op.Path)
 				cls := drift.Classify(hsrc, happlied, hdest)
 				items = append(items, reconcileItem{

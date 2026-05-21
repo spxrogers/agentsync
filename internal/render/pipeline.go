@@ -39,9 +39,10 @@ func (p RenderPlan) Total() int {
 // s may be nil; when non-nil, OwnedKeys is populated on merge-json-keys ops
 // from state.Keys so the apply pipeline knows which JSON-pointer paths it owns.
 //
-// home is required so OwnedKeys lookups match the HOME-relative form
-// state stores.
-func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adapter.Scope, project string, s *state.Targets, home string) (RenderPlan, error) {
+// userHome (the user's $HOME, paths.HomeDir) is required so OwnedKeys
+// lookups match the HOME-relative form state stores. It is NOT the agentsync
+// home — dest files live under $HOME, not under ~/.agentsync.
+func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adapter.Scope, project string, s *state.Targets, userHome string) (RenderPlan, error) {
 	out := RenderPlan{PerAgent: map[string]AgentResult{}}
 	for _, name := range agents {
 		a := reg.Lookup(name)
@@ -55,7 +56,7 @@ func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adap
 		if s != nil {
 			for i, op := range ops {
 				if op.MergeStrategy == "merge-json-keys" || op.MergeStrategy == "merge-jsonc-keys" {
-					ops[i].OwnedKeys = ownedKeysFor(s, name, scope, project, op.Path, home)
+					ops[i].OwnedKeys = ownedKeysFor(s, name, scope, project, op.Path, userHome)
 				}
 			}
 		}
@@ -77,6 +78,7 @@ func PreviewCollisions(
 	reg *adapter.Registry,
 	st *state.Targets,
 	home string,
+	userHome string,
 	scope adapter.Scope,
 	project string,
 ) []CollisionReport {
@@ -90,7 +92,7 @@ func PreviewCollisions(
 		if !ok {
 			continue
 		}
-		w := NewPreviewWriter(st, home, scope, project, name)
+		w := NewPreviewWriter(st, home, userHome, scope, project, name)
 		for _, op := range res.Ops {
 			if op.Action != "" && op.Action != "write" {
 				continue
@@ -114,9 +116,9 @@ func PreviewCollisions(
 
 // ownedKeysFor returns the JSON-pointer strings owned by agentsync for a given
 // agent+scope+project+path combination, as recorded in state.Keys.
-func ownedKeysFor(s *state.Targets, agent string, scope adapter.Scope, project, path, home string) []string {
+func ownedKeysFor(s *state.Targets, agent string, scope adapter.Scope, project, path, userHome string) []string {
 	prefix := fmt.Sprintf("%s:%s:%s:%s:", agent, scope.String(),
-		paths.HomeRelative(home, project), paths.HomeRelative(home, path))
+		paths.HomeRelative(userHome, project), paths.HomeRelative(userHome, path))
 	var out []string
 	for k := range s.Keys {
 		if strings.HasPrefix(k, prefix) {
@@ -146,6 +148,7 @@ func Apply(
 	reg *adapter.Registry,
 	st *state.Targets,
 	home string,
+	userHome string,
 	scope adapter.Scope,
 	project string,
 ) ([]CollisionReport, error) {
@@ -178,7 +181,7 @@ func Apply(
 			}
 			deduped = append(deduped, op)
 		}
-		w := NewWriter(st, home, scope, project, name)
+		w := NewWriter(st, home, userHome, scope, project, name)
 		if err := a.Apply(deduped, w); err != nil {
 			allReports = append(allReports, w.Reports()...)
 			return allReports, fmt.Errorf("apply %s: %w", name, err)
