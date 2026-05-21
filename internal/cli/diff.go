@@ -39,7 +39,12 @@ func newDiffCmd() *cobra.Command {
 			}
 
 			home := paths.AgentsyncHome(paths.OSEnv{})
-			c, err := source.Load(afero.NewOsFs(), home)
+			// Load WITH the plugin cache so the preview projects installed
+			// plugins exactly as `apply` does — otherwise diff omits every
+			// plugin-derived MCP server / skill / command and silently
+			// disagrees with what apply will write.
+			pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+			c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
 			if err != nil {
 				return err
 			}

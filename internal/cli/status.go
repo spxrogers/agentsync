@@ -31,7 +31,11 @@ func newStatusCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := paths.AgentsyncHome(paths.OSEnv{})
-			c, err := source.Load(afero.NewOsFs(), home)
+			// Load WITH the plugin cache so drift classification sees the
+			// same plugin-projected components `apply` writes; source.Load
+			// alone would report plugin-managed files/keys as untracked.
+			pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+			c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
 			if err != nil {
 				return err
 			}
