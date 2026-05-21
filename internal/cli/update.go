@@ -193,7 +193,7 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 			}
 		}
 
-		secBackend := secrets.SelectBackend(c2.Config.Secrets, home)
+		secBackend := secrets.SelectBackend(c2.Config.Secrets, home, paths.HomeDir(paths.OSEnv{}))
 		envBackend := secrets.EnvBackend{}
 		if err := secrets.SubstituteCanonical(&c2, secBackend, envBackend); err != nil {
 			return fmt.Errorf("substitute secrets after update: %w", err)

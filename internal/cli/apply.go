@@ -73,7 +73,8 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	}
 
 	// Resolve ${secret:...} and ${env:...} references before rendering.
-	secBackend := secrets.SelectBackend(c.Config.Secrets, home)
+	userHome := paths.HomeDir(paths.OSEnv{})
+	secBackend := secrets.SelectBackend(c.Config.Secrets, home, userHome)
 	envBackend := secrets.EnvBackend{}
 	if err := secrets.SubstituteCanonical(&c, secBackend, envBackend); err != nil {
 		return err

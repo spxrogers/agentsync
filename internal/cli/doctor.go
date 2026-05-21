@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -151,15 +152,15 @@ func checkSecrets(w io.Writer, cfg source.SecretsConfig, home string) int {
 		fmt.Fprintf(w, "  recipient  set\n")
 	}
 
-	idPath := cfg.IdentityFile
-	if idPath == "" {
+	if cfg.IdentityFile == "" {
 		fmt.Fprintf(w, "  identity   missing — set [secrets].identity_file in agentsync.toml\n")
 		return fails + 1
 	}
-	// Expand ${env:HOME} so the doctor message reflects the real path.
-	if h := os.Getenv("HOME"); h != "" {
-		idPath = expandEnvHome(idPath, h)
-	}
+	// Resolve identity_file the same way apply does (expanding ${env:HOME}/~
+	// via paths.HomeDir so it honours AGENTSYNC_TARGET_ROOT), so doctor and
+	// apply never disagree on the path.
+	userHome := paths.HomeDir(paths.OSEnv{})
+	idPath := secrets.ResolveIdentityFile(cfg, home, userHome)
 	info, err := os.Stat(idPath)
 	if err != nil {
 		fmt.Fprintf(w, "  identity   %s — not readable (%v)\n", idPath, err)
@@ -173,46 +174,11 @@ func checkSecrets(w io.Writer, cfg source.SecretsConfig, home string) int {
 
 	// Age-encrypted file location — warn if missing (legitimate on a
 	// fresh install where the user hasn't called `secrets set` yet).
-	agePath := cfg.File
-	if agePath == "" {
-		agePath = "secrets/secrets.age"
-	}
-	if !filepath.IsAbs(agePath) {
-		agePath = filepath.Join(home, agePath)
-	}
+	agePath := secrets.ResolveAgeFile(cfg, home, userHome)
 	if _, err := os.Stat(agePath); err != nil {
 		fmt.Fprintf(w, "  age file   %s — not yet created (run `agentsync secrets edit` to author)\n", agePath)
 	} else {
 		fmt.Fprintf(w, "  age file   %s\n", agePath)
 	}
 	return fails
-}
-
-// expandEnvHome replaces ${env:HOME} with the supplied HOME value, mirroring
-// the (very small) substitution agentsync does for identity_file paths.
-func expandEnvHome(s, home string) string {
-	const tok = "${env:HOME}"
-	if len(s) == 0 {
-		return s
-	}
-	out := s
-	for {
-		i := indexOf(out, tok)
-		if i < 0 {
-			return out
-		}
-		out = out[:i] + home + out[i+len(tok):]
-	}
-}
-
-func indexOf(s, sub string) int {
-	if len(sub) == 0 || len(sub) > len(s) {
-		return -1
-	}
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }

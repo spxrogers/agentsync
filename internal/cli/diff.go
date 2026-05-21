@@ -83,7 +83,7 @@ func newDiffCmd() *cobra.Command {
 			// stdout / log files / screenshots. We resolve every
 			// reference in the canonical, then mask its resolved value
 			// in both src and dst before the diff runs.
-			secBackend := secrets.SelectBackend(c.Config.Secrets, home)
+			secBackend := secrets.SelectBackend(c.Config.Secrets, home, paths.HomeDir(paths.OSEnv{}))
 			envBackend := secrets.EnvBackend{}
 			redact := secrets.CollectResolved(&c, secBackend, envBackend)
 
