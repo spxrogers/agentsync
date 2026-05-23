@@ -222,6 +222,12 @@ func getPointerValue(m map[string]any, ptr string) any {
 	parts := strings.Split(strings.TrimPrefix(ptr, "/"), "/")
 	var cur any = m
 	for _, p := range parts {
+		// Decode RFC 6901 escapes so a managed id containing '~' or '/'
+		// (which CollectPointers escaped to ~0/~1) matches the real key.
+		// Without this, status/diff looked up the literal escaped key, found
+		// nothing, and reported phantom drift forever for that item.
+		p = strings.ReplaceAll(p, "~1", "/")
+		p = strings.ReplaceAll(p, "~0", "~")
 		mp, ok := cur.(map[string]any)
 		if !ok {
 			return nil
