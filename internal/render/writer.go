@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,6 +14,43 @@ import (
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/state"
 )
+
+// DefaultBackupKeep is how many backup-timestamp dirs apply retains.
+const DefaultBackupKeep = 20
+
+// PruneBackups removes all but the most recent `keep` timestamp directories
+// under <home>/.state/backups. Each backup is a verbatim copy of a
+// pre-existing native config file (which may contain secrets), so they must
+// not accumulate unbounded — a disk-bloat and credential-lingering concern.
+// The dir names are zero-padded, fixed-width timestamps, so lexical sort is
+// chronological. Best-effort: a removal error for one dir doesn't abort.
+func PruneBackups(home string, keep int) error {
+	if keep < 0 {
+		return nil
+	}
+	root := filepath.Join(home, ".state", "backups")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs = append(dirs, e.Name())
+		}
+	}
+	if len(dirs) <= keep {
+		return nil
+	}
+	sort.Strings(dirs) // ascending → oldest first
+	for _, d := range dirs[:len(dirs)-keep] {
+		_ = os.RemoveAll(filepath.Join(root, d))
+	}
+	return nil
+}
 
 // Writer is THE funnel for native-destination writes. Every adapter's
 // Apply method receives one of these and routes its writes through it

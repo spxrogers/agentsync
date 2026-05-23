@@ -327,3 +327,37 @@ func TestRenderApply_FullPathBacksUpAcrossAgents(t *testing.T) {
 		t.Fatalf("backup not under <home>/.state/backups: %s", reports[0].BackupTo)
 	}
 }
+
+// TestPruneBackups_KeepsNewest verifies bounded backup retention: the most
+// recent `keep` timestamp dirs survive, older ones are removed.
+func TestPruneBackups_KeepsNewest(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, ".state", "backups")
+	names := []string{
+		"20260101T000001Z-000000001",
+		"20260101T000002Z-000000001",
+		"20260101T000003Z-000000001",
+		"20260101T000004Z-000000001",
+	}
+	for _, n := range names {
+		if err := os.MkdirAll(filepath.Join(root, n), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := render.PruneBackups(home, 2); err != nil {
+		t.Fatal(err)
+	}
+	left, _ := os.ReadDir(root)
+	if len(left) != 2 {
+		t.Fatalf("want 2 backups kept, got %d", len(left))
+	}
+	for _, e := range left {
+		if e.Name() < "20260101T000003Z" {
+			t.Fatalf("pruned the wrong (newer) dir; kept %s", e.Name())
+		}
+	}
+	// Missing backups root is a no-op, not an error.
+	if err := render.PruneBackups(t.TempDir(), 2); err != nil {
+		t.Fatalf("missing backups dir should be a no-op: %v", err)
+	}
+}

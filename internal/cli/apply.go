@@ -219,6 +219,9 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	if err := state.Save(statePath, s); err != nil {
 		return err
 	}
+	// Bound backup growth (each is a verbatim, possibly-secret-bearing copy
+	// of a pre-existing native file). Best-effort; never fails the apply.
+	_ = render.PruneBackups(home, render.DefaultBackupKeep)
 
 	w := cmd.OutOrStdout()
 	fmt.Fprintln(w, "applied:", plan.Total(), "ops")
