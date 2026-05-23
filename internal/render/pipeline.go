@@ -180,9 +180,15 @@ func orphanCleanupOps(s *state.Targets, a adapter.Adapter, agent string, scope a
 			continue
 		}
 		rest := strings.TrimPrefix(k, prefix)
-		// rest = "<portablePath>:<pointer>"; the pointer is a JSON pointer
-		// starting with '/', so the ":/" boundary is unambiguous even when
-		// the path itself contains characters like ':' (a Windows drive).
+		// rest = "<portablePath>:<pointer>". The pointer is a JSON pointer
+		// that always starts with '/', so the ":/" sequence marks the
+		// boundary. This is reliable for the realistic path shapes: portable
+		// "${HOME}/..." paths and POSIX absolute paths contain no ':', and
+		// Windows absolute paths use '\' (so a drive is "C:\", not "C:/").
+		// In the pathological case where a path or pointer-key still contains
+		// a literal ":/", a mis-split yields a path that fails the os.Stat
+		// existence check below and is harmlessly skipped (the orphan simply
+		// isn't cleaned that run) — it never deletes the wrong data.
 		i := strings.Index(rest, ":/")
 		if i < 0 {
 			continue
