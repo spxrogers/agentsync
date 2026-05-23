@@ -179,6 +179,16 @@ func resolveRefName(ref string) plumbing.ReferenceName {
 // existed but wasn't a git repo.
 func extractSubdir(dir, subPath string) error {
 	fullSub := filepath.Join(dir, subPath)
+	// Containment guard: subPath comes straight from an untrusted
+	// marketplace.json `path` field. A traversal sequence ("../../etc")
+	// resolves OUTSIDE the clone after filepath.Join, which would let the
+	// copyDir below slurp arbitrary host files into the plugin cache — and
+	// from there into the user's agent config. Refuse anything that escapes
+	// the clone root. (The sibling npm/relative fetchers already bound their
+	// extraction; this closes the lone git-subdir hole.)
+	if !pathContains(dir, fullSub) {
+		return fmt.Errorf("subdir %q escapes the repository root (refusing path traversal)", subPath)
+	}
 	info, err := os.Stat(fullSub)
 	if err != nil {
 		return fmt.Errorf("subdir %s does not exist in clone: %w", subPath, err)
