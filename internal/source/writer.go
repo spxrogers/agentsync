@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spxrogers/agentsync/internal/iox"
+	"sigs.k8s.io/yaml"
 )
 
 // ReadMCP reads mcp/<id>.toml from home. ok is false when the file does not
@@ -153,36 +153,21 @@ func WriteMemory(home string, m Memory) error {
 
 // renderFrontmatter serialises a frontmatter map as a YAML block enclosed in
 // "---\n...\n---\n". If the map is empty or nil, returns "".
+//
+// It uses a real YAML marshaller (the same library ParseFrontmatter reads
+// with, and that claude.EncodeFrontmatter writes with). The previous homemade
+// emitter used Go's %v for non-string values, so a `tools: [Read, Write]` list
+// serialized as "[Read Write]" and a nested map as "map[a:1]" — both re-parsed
+// as a single mangled string, corrupting subagent tool allowlists and any
+// structured frontmatter on import write-back. sigs.k8s.io/yaml sorts map keys,
+// so output stays deterministic.
 func renderFrontmatter(fm map[string]any) string {
 	if len(fm) == 0 {
 		return ""
 	}
-	var sb strings.Builder
-	sb.WriteString("---\n")
-	// Deterministic order: sort keys.
-	keys := make([]string, 0, len(fm))
-	for k := range fm {
-		keys = append(keys, k)
+	y, err := yaml.Marshal(fm)
+	if err != nil {
+		return ""
 	}
-	sortStrings(keys)
-	for _, k := range keys {
-		v := fm[k]
-		switch vv := v.(type) {
-		case string:
-			sb.WriteString(fmt.Sprintf("%s: %q\n", k, vv))
-		default:
-			sb.WriteString(fmt.Sprintf("%s: %v\n", k, v))
-		}
-	}
-	sb.WriteString("---\n")
-	return sb.String()
-}
-
-// sortStrings is a minimal in-place sort for small slices (avoids importing sort).
-func sortStrings(ss []string) {
-	for i := 1; i < len(ss); i++ {
-		for j := i; j > 0 && ss[j-1] > ss[j]; j-- {
-			ss[j-1], ss[j] = ss[j], ss[j-1]
-		}
-	}
+	return "---\n" + string(y) + "---\n"
 }
