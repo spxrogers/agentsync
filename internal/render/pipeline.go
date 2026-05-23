@@ -4,6 +4,7 @@
 package render
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -64,7 +65,14 @@ func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adap
 		if s != nil {
 			for i, op := range ops {
 				if isKeyMerge(op.MergeStrategy) {
-					ops[i].OwnedKeys = ownedKeysFor(s, name, scope, project, op.Path, userHome)
+					owned := ownedKeysFor(s, name, scope, project, op.Path, userHome)
+					// Scope each op's OwnedKeys to the top-level sections THIS op
+					// writes. Several ops can target one file (claude writes
+					// mcpServers, hooks, AND lspServers to settings.json); without
+					// scoping, every op carried the union of owned pointers and
+					// MergeKeys' removal step deleted the OTHER ops' sections —
+					// last op wins, earlier sections wiped on the next apply.
+					ops[i].OwnedKeys = scopeOwnedToSections(owned, op.Content)
 				}
 			}
 			// Cleanup synthesis: when a key-merge section becomes empty in the
@@ -159,6 +167,43 @@ func ownedKeysFor(s *state.Targets, agent string, scope adapter.Scope, project, 
 	return out
 }
 
+// scopeOwnedToSections filters owned JSON pointers down to those whose
+// top-level section is present in content (an op's rendered `ours`). Several
+// key-merge ops can target one file; each must only carry — and therefore only
+// be able to delete — pointers under the section(s) it actually writes. If
+// content can't be parsed we return none rather than all, so a malformed op
+// can never drive a cross-section deletion.
+func scopeOwnedToSections(owned []string, content []byte) []string {
+	if len(owned) == 0 {
+		return owned
+	}
+	var ours map[string]any
+	if err := json.Unmarshal(content, &ours); err != nil || ours == nil {
+		return nil
+	}
+	sections := make(map[string]struct{}, len(ours))
+	for k := range ours {
+		sections[escapeJSONPointer(k)] = struct{}{}
+	}
+	var out []string
+	for _, p := range owned {
+		if _, ok := sections[firstPointerSegment(p)]; ok {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// firstPointerSegment returns the first (escaped) path segment of a JSON
+// pointer, i.e. its top-level section: "/mcpServers/github" → "mcpServers".
+func firstPointerSegment(ptr string) string {
+	ptr = strings.TrimPrefix(ptr, "/")
+	if i := strings.IndexByte(ptr, '/'); i >= 0 {
+		return ptr[:i]
+	}
+	return ptr
+}
+
 // orphanCleanupOps synthesizes empty key-merge ops that remove keys the agent
 // owns in state but no longer renders this run — the case where a source
 // section went fully empty (e.g. the user deleted their last MCP server), so
@@ -175,11 +220,29 @@ func orphanCleanupOps(s *state.Targets, a adapter.Adapter, agent string, scope a
 	if strat == "" {
 		return nil // adapter doesn't merge keys
 	}
-	// Portable dest paths the agent DID render a key-merge op for this run.
-	renderedPaths := map[string]bool{}
+	// Portable dest path → set of escaped top-level sections the agent rendered
+	// a key-merge op for this run. A section that still has a real op handles
+	// its own per-key removals via that op's (section-scoped) OwnedKeys; only a
+	// section with NO op this run is orphan-cleaned here. Tracking per-section
+	// (not per-path) is required now that OwnedKeys are section-scoped: removing
+	// a whole section leaves no op carrying its pointers, so the remaining
+	// sections' ops can no longer delete it.
+	renderedSections := map[string]map[string]struct{}{}
 	for _, op := range rendered {
-		if isKeyMerge(op.MergeStrategy) {
-			renderedPaths[paths.HomeRelative(userHome, op.Path)] = true
+		if !isKeyMerge(op.MergeStrategy) {
+			continue
+		}
+		pp := paths.HomeRelative(userHome, op.Path)
+		secs := renderedSections[pp]
+		if secs == nil {
+			secs = map[string]struct{}{}
+			renderedSections[pp] = secs
+		}
+		var ours map[string]any
+		if json.Unmarshal(op.Content, &ours) == nil {
+			for k := range ours {
+				secs[escapeJSONPointer(k)] = struct{}{}
+			}
 		}
 	}
 
@@ -206,8 +269,10 @@ func orphanCleanupOps(s *state.Targets, a adapter.Adapter, agent string, scope a
 			continue
 		}
 		path, ptr := rest[:i], rest[i+1:]
-		if renderedPaths[path] {
-			continue // a real merge op already handles removal here
+		if secs, ok := renderedSections[path]; ok {
+			if _, sectionRendered := secs[firstPointerSegment(ptr)]; sectionRendered {
+				continue // a real op for this section handles its own removals
+			}
 		}
 		if _, seen := ownedByPath[path]; !seen {
 			order = append(order, path)
