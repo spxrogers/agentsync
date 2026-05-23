@@ -75,11 +75,14 @@ func PruneStaleState(s *state.Targets, userHome, agent string, scope adapter.Sco
 			continue
 		}
 		rest := strings.TrimPrefix(key, prefix)
-		// rest = "<path>:<pointer>"; find the LAST ':' isn't safe because
-		// pointers can contain ':'. Use strings.Index since we know the
-		// path part can also contain ':'. Match against currentKeys instead:
-		// look for any path in currentKeys that is a prefix of rest with a
-		// trailing ':<ptr>'.
+		// rest = "<path>:<pointer>", and BOTH path and pointer can contain
+		// ':' (e.g. a Windows "C:"-drive dest path), so the split point is
+		// ambiguous. Test every currentKeys path whose "path:" prefixes rest
+		// and keep the key if ANY of them owns the remaining pointer. We must
+		// NOT stop at the first prefix match: when one path is a colon-
+		// delimited string-prefix of another, the first candidate (map order
+		// is random) may be the wrong one, and breaking there would prune a
+		// live key.
 		matched := false
 		for path, ptrs := range currentKeys {
 			if !strings.HasPrefix(rest, path+":") {
@@ -88,8 +91,8 @@ func PruneStaleState(s *state.Targets, userHome, agent string, scope adapter.Sco
 			ptr := strings.TrimPrefix(rest, path+":")
 			if _, ok := ptrs[ptr]; ok {
 				matched = true
+				break
 			}
-			break
 		}
 		if !matched {
 			delete(s.Keys, key)

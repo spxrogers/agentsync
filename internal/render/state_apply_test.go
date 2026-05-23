@@ -170,6 +170,33 @@ func TestState_PortableAcrossHomes(t *testing.T) {
 	}
 }
 
+// TestPruneStaleState_AmbiguousPathPrefixKeepsLiveKey is the regression for
+// the prune bug where the Keys loop broke after the FIRST path whose
+// "path:" prefixed the key, even when that path's pointer set didn't match.
+// When one dest path is a colon-delimited string-prefix of another (e.g. a
+// Windows "C:"-drive path, or any path containing ':'), the wrong candidate
+// could be picked first (map order is random) and a live key pruned —
+// dropping ownership and forcing a needless foreign-collision backup next
+// apply. Looped to defeat map-iteration randomness: the old code failed
+// ~half the time, the fix passes every time.
+func TestPruneStaleState_AmbiguousPathPrefixKeepsLiveKey(t *testing.T) {
+	ops := []adapter.FileOp{
+		{Action: "write", Path: "a", MergeStrategy: "merge-json-keys", Content: []byte(`{"x":1}`)},
+		{Action: "write", Path: "a:b", MergeStrategy: "merge-json-keys", Content: []byte(`{"realptr":1}`)},
+	}
+	const liveKey = "claude:user::a:b:/realptr"
+	for i := 0; i < 64; i++ {
+		s := state.New()
+		s.Keys[liveKey] = state.KeyEntry{SHA256: "deadbeef"}
+		s.Keys["claude:user::a:/x"] = state.KeyEntry{SHA256: "feed"}
+		// userHome "" so HomeRelative leaves the colon-bearing paths intact.
+		render.PruneStaleState(s, "", "claude", adapter.ScopeUser, "", ops)
+		if _, ok := s.Keys[liveKey]; !ok {
+			t.Fatalf("iteration %d: live key %q wrongly pruned (ambiguous path prefix)", i, liveKey)
+		}
+	}
+}
+
 func TestRecordState_SkipsDeleteOps(t *testing.T) {
 	s := state.New()
 	err := render.RecordOpsState(s, "/tmp", "claude", adapter.ScopeUser, "", []adapter.FileOp{{
