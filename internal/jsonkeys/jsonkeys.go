@@ -3,8 +3,32 @@
 package jsonkeys
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 )
+
+// DecodeObject unmarshals JSON object bytes into a map, preserving numbers as
+// json.Number rather than coercing to float64. The merge promises to preserve
+// FOREIGN keys verbatim, but float64 silently rounds any integer larger than
+// 2^53 (snowflake ids, nanosecond timestamps) on re-marshal. json.Number keeps
+// the literal digits and re-marshals exactly. nil/empty input yields an empty
+// map.
+func DecodeObject(data []byte) (map[string]any, error) {
+	m := map[string]any{}
+	if len(data) == 0 {
+		return m, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(&m); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	return m, nil
+}
 
 // MergeKeys merges ours into existing, removing ownedPointers that are no
 // longer in ours. Returns the merged map plus diagnostic lists.

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 )
 
 // Apply executes ops against Claude's native destinations. All writes
@@ -37,8 +38,8 @@ func (a *Adapter) Apply(ops []adapter.FileOp, w adapter.DestWriter) error {
 func (a *Adapter) applyWrite(op adapter.FileOp, w adapter.DestWriter) error {
 	if op.MergeStrategy == "merge-json-keys" {
 		existing := readJSONFile(op.Path)
-		var ours map[string]any
-		if err := json.Unmarshal(op.Content, &ours); err != nil {
+		ours, err := jsonkeys.DecodeObject(op.Content)
+		if err != nil {
 			return fmt.Errorf("parse our payload for %s: %w", op.Path, err)
 		}
 		merged, _, _ := MergeKeys(existing, ours, op.OwnedKeys)
@@ -56,9 +57,10 @@ func readJSONFile(path string) map[string]any {
 	if err != nil {
 		return map[string]any{}
 	}
-	var m map[string]any
-	_ = json.Unmarshal(data, &m)
-	if m == nil {
+	// Decode preserving json.Number so a foreign integer > 2^53 isn't rounded
+	// when the merged file is re-marshalled.
+	m, err := jsonkeys.DecodeObject(data)
+	if err != nil {
 		return map[string]any{}
 	}
 	return m
