@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/source"
@@ -81,6 +82,79 @@ func CollectResolved(c *source.Canonical, sec, env Resolver) map[string]string {
 			out[k] = v
 		}
 	}
+	return out
+}
+
+// UnresolvedSecretRefs returns the sorted, de-duplicated set of ${secret:KEY}
+// reference keys in c that sec cannot resolve. Callers that print content
+// derived from a destination file written by a prior apply (notably
+// `agentsync diff`) use this to fail closed: if a secret reference cannot be
+// resolved now, the cleartext value substituted into that on-disk file on the
+// last apply cannot be redacted, so the safe action is to refuse rather than
+// leak it to stdout / logs / screenshots.
+//
+// ${env:…} references are intentionally excluded — the env backend is always
+// available, and an unresolved env ref is not a credential-leak risk.
+//
+// The walked field set mirrors CollectResolved / SubstituteCanonical.
+func UnresolvedSecretRefs(c *source.Canonical, sec Resolver) []string {
+	if c == nil {
+		return nil
+	}
+	missing := map[string]bool{}
+	scan := func(s string) {
+		for _, m := range re.FindAllStringSubmatch(s, -1) {
+			if len(m) < 3 || m[1] != "secret" {
+				continue
+			}
+			key := m[2]
+			if _, err := sec.Resolve(key); err != nil {
+				missing[key] = true
+			}
+		}
+	}
+	for _, srv := range c.MCPServers {
+		scan(srv.Server.Command)
+		scan(srv.Server.URL)
+		for _, a := range srv.Server.Args {
+			scan(a)
+		}
+		for _, v := range srv.Server.Env {
+			scan(v)
+		}
+		for _, v := range srv.Server.Headers {
+			scan(v)
+		}
+	}
+	for _, h := range c.Hooks {
+		scan(h.Command)
+	}
+	for _, ls := range c.LSPServers {
+		scan(ls.Spec.Command)
+		scan(ls.Spec.URL)
+		for _, a := range ls.Spec.Args {
+			scan(a)
+		}
+		for _, v := range ls.Spec.Env {
+			scan(v)
+		}
+		for _, v := range ls.Spec.Headers {
+			scan(v)
+		}
+	}
+	if c.Project != nil {
+		for _, k := range UnresolvedSecretRefs(c.Project, sec) {
+			missing[k] = true
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(missing))
+	for k := range missing {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }
 

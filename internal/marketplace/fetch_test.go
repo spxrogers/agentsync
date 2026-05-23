@@ -458,6 +458,38 @@ func TestNPMFetcher_LatestVersion(t *testing.T) {
 	}
 }
 
+// TestNPMFetcher_RejectsInsecureTarballURL is the regression for the second
+// half of the npm blind spot: even with a trusted registry, the tarball URL
+// returned in the metadata is attacker-influenced and was previously fetched
+// with no scheme check. A remote plain-http tarball URL must be rejected
+// before download. The metadata is served over loopback http (allowed); only
+// the tarball points at a remote http host, so this runs offline — the reject
+// fires before any dial to the remote host.
+func TestNPMFetcher_RejectsInsecureTarballURL(t *testing.T) {
+	t.Setenv("AGENTSYNC_ALLOW_INSECURE_URLS", "")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		meta := map[string]any{
+			"versions": map[string]any{
+				"1.0.0": map[string]any{
+					"version": "1.0.0",
+					"dist":    map[string]any{"tarball": "http://cdn.evil.example.com/pkg/1.0.0.tgz"},
+				},
+			},
+			"dist-tags": map[string]any{"latest": "1.0.0"},
+		}
+		_ = json.NewEncoder(w).Encode(meta)
+	}))
+	defer srv.Close()
+
+	dst := t.TempDir()
+	src := marketplace.Source{Kind: "npm", Package: "evilpkg", Version: "1.0.0", Registry: srv.URL}
+	fetcher := &marketplace.NPMFetcher{HTTPClient: srv.Client()}
+	_, err := fetcher.Fetch(src, dst)
+	if err == nil || !strings.Contains(err.Error(), "insecure scheme") {
+		t.Fatalf("remote plain-http tarball URL should be rejected; got err=%v", err)
+	}
+}
+
 // makeNPMTarballWithEntry builds an in-memory npm-style .tgz with one
 // arbitrary entry name, bypassing the conventional "package/" prefix.
 // Used to construct tarballs with traversal entries.

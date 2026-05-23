@@ -230,9 +230,12 @@ func orphanCleanupOps(s *state.Targets, a adapter.Adapter, agent string, scope a
 // write path adapters are permitted to use.
 //
 // Returns the union of CollisionReports across all agents so the caller
-// can surface them. If any adapter returns an error, applies completed
-// so far are NOT rolled back (each underlying iox.AtomicWrite is atomic
-// per-file, but the plan as a whole is not transactional).
+// can surface them, plus the set of destination paths actually written this
+// run (so the apply-error rescue can record state for exactly those files and
+// no others). If any adapter returns an error, applies completed so far are
+// NOT rolled back (each underlying iox.AtomicWrite is atomic per-file, but the
+// plan as a whole is not transactional); the reports and written-set returned
+// reflect the work done before the failure.
 //
 // Deduplication: when two adapters emit a "write" op for the same path
 // (e.g. a shared skill file written by both claude and opencode), the
@@ -246,13 +249,14 @@ func Apply(
 	userHome string,
 	scope adapter.Scope,
 	project string,
-) ([]CollisionReport, error) {
+) ([]CollisionReport, map[string]bool, error) {
+	written := map[string]bool{}
 	if st == nil {
 		// Defensive: a nil state would make every write look like a
 		// foreign collision and produce duplicate backups. Callers that
 		// don't yet have a state object should construct an empty one
 		// (state.New) rather than passing nil.
-		return nil, fmt.Errorf("render.Apply: nil state")
+		return nil, written, fmt.Errorf("render.Apply: nil state")
 	}
 
 	var allReports []CollisionReport
@@ -264,7 +268,7 @@ func Apply(
 		}
 		a := reg.Lookup(name)
 		if a == nil {
-			return allReports, fmt.Errorf("adapter %q not registered at apply", name)
+			return allReports, written, fmt.Errorf("adapter %q not registered at apply", name)
 		}
 		var deduped []adapter.FileOp
 		for _, op := range res.Ops {
@@ -284,11 +288,14 @@ func Apply(
 			deduped = append(deduped, op)
 		}
 		w := NewWriter(st, home, userHome, scope, project, name)
-		if err := a.Apply(deduped, w); err != nil {
-			allReports = append(allReports, w.Reports()...)
-			return allReports, fmt.Errorf("apply %s: %w", name, err)
-		}
+		err := a.Apply(deduped, w)
 		allReports = append(allReports, w.Reports()...)
+		for path := range w.Wrote() {
+			written[path] = true
+		}
+		if err != nil {
+			return allReports, written, fmt.Errorf("apply %s: %w", name, err)
+		}
 	}
-	return allReports, nil
+	return allReports, written, nil
 }

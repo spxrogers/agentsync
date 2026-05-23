@@ -177,7 +177,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	if err != nil {
 		return err
 	}
-	collisions, applyErr := render.Apply(plan, reg, s, home, userHome, sc, projectRoot)
+	collisions, written, applyErr := render.Apply(plan, reg, s, home, userHome, sc, projectRoot)
 	if len(collisions) > 0 {
 		ew := cmd.ErrOrStderr()
 		fmt.Fprintf(ew, "agentsync: backed up %d pre-existing target(s) before overwriting:\n", len(collisions))
@@ -199,7 +199,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	// re-reads each file); recording from files that don't exist
 	// returns an error and we just skip those.
 	if applyErr != nil {
-		_ = saveBestEffortState(s, statePath, plan, userHome, sc, projectRoot)
+		_ = saveBestEffortState(s, statePath, plan, userHome, sc, projectRoot, written)
 		return applyErr
 	}
 
@@ -233,27 +233,35 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	return nil
 }
 
-// saveBestEffortState records hashes for every op in plan whose dest
-// file currently exists on disk. Called on the apply error path so a
-// partial write doesn't leave the next apply reclassifying those files
-// as foreign-collisions. Failures are swallowed — we already have the
-// real error to surface and want to maximise the chance of the rescue
-// state.Save landing.
-func saveBestEffortState(s *state.Targets, statePath string, plan render.RenderPlan, userHome string, sc adapter.Scope, projectRoot string) error {
+// saveBestEffortState records hashes for the ops agentsync actually wrote
+// this run (the `wrote` set returned by render.Apply). Called on the apply
+// error path so a partial write doesn't leave the next apply reclassifying
+// those files as foreign-collisions and re-backing-them-up.
+//
+// It MUST key off what was written, not os.Stat existence: render.Apply stops
+// at the first failing op, so a later op that was never attempted may sit on
+// top of a pre-existing FOREIGN file. Recording that file as owned would
+// suppress its foreign-collision backup on the next apply and silently lose
+// the user's data — the exact opposite of this rescue's purpose. os.Stat
+// can't distinguish "we wrote this" from "this was already here"; `wrote` can.
+//
+// Failures are swallowed — we already have the real error to surface and want
+// to maximise the chance of the rescue state.Save landing.
+func saveBestEffortState(s *state.Targets, statePath string, plan render.RenderPlan, userHome string, sc adapter.Scope, projectRoot string, wrote map[string]bool) error {
 	for name, res := range plan.PerAgent {
-		var existing []adapter.FileOp
+		var done []adapter.FileOp
 		for _, op := range res.Ops {
-			if _, err := os.Stat(op.Path); err == nil {
-				existing = append(existing, op)
+			if wrote[op.Path] {
+				done = append(done, op)
 			}
 		}
-		if len(existing) == 0 {
+		if len(done) == 0 {
 			continue
 		}
 		// PruneStaleState is intentionally skipped here — we only want
 		// to ADD hashes, not remove entries that may refer to the now-
 		// half-applied state.
-		if err := render.RecordOpsState(s, userHome, name, sc, projectRoot, existing); err != nil {
+		if err := render.RecordOpsState(s, userHome, name, sc, projectRoot, done); err != nil {
 			continue
 		}
 	}

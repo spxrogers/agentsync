@@ -82,3 +82,43 @@ func TestCollectResolved_SkipsUnresolved(t *testing.T) {
 		t.Fatalf("expected no entries for unresolvable refs, got %v", got)
 	}
 }
+
+// TestUnresolvedSecretRefs_FlagsUnresolvable is the regression for the
+// diff-leak: CollectResolved silently skips ${secret:…} refs the backend
+// cannot resolve (age key locked/absent), so the cleartext value already on
+// disk would print unredacted. UnresolvedSecretRefs surfaces those keys so
+// `diff` can fail closed instead of leaking. ${env:…} refs are intentionally
+// ignored — the env backend is always available and is not a leak risk.
+func TestUnresolvedSecretRefs_FlagsUnresolvable(t *testing.T) {
+	c := source.Canonical{
+		MCPServers: []source.MCPServer{
+			{ID: "github", Server: source.MCPServerSpec{
+				Env: map[string]string{
+					"GITHUB_TOKEN": "${secret:github.token}",
+					"HOST":         "${env:MY_HOST}",
+				},
+			}},
+		},
+		Hooks: []source.Hook{{Command: "echo ${secret:other.key}"}},
+	}
+	// Backend resolves github.token but NOT other.key (mimics a partially
+	// available backend / locked identity for some keys).
+	sec := mapBackend{"github.token": "ghp_x"}
+	got := secrets.UnresolvedSecretRefs(&c, sec)
+	if len(got) != 1 || got[0] != "other.key" {
+		t.Fatalf("want [other.key], got %v", got)
+	}
+}
+
+// TestUnresolvedSecretRefs_NoneWhenAllResolve confirms the common case does
+// not trip the fail-closed guard: every ${secret:…} resolves, and ${env:…}
+// refs are ignored entirely.
+func TestUnresolvedSecretRefs_NoneWhenAllResolve(t *testing.T) {
+	c := source.Canonical{
+		Hooks: []source.Hook{{Command: "echo ${secret:a} ${env:B}"}},
+	}
+	sec := mapBackend{"a": "secret-a"}
+	if got := secrets.UnresolvedSecretRefs(&c, sec); len(got) != 0 {
+		t.Fatalf("want none, got %v", got)
+	}
+}

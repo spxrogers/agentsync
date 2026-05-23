@@ -270,7 +270,7 @@ func TestRenderApply_MultipleMergeOpsSamePathAllApplied(t *testing.T) {
 			}},
 		},
 	}
-	if _, err := render.Apply(plan, reg, state.New(), home, tmp, adapter.ScopeUser, ""); err != nil {
+	if _, _, err := render.Apply(plan, reg, state.New(), home, tmp, adapter.ScopeUser, ""); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -316,7 +316,7 @@ func TestRenderApply_FullPathBacksUpAcrossAgents(t *testing.T) {
 		},
 	}
 	st := state.New()
-	reports, err := render.Apply(plan, reg, st, home, tmp, adapter.ScopeUser, "")
+	reports, _, err := render.Apply(plan, reg, st, home, tmp, adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

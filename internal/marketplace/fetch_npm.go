@@ -90,6 +90,13 @@ func (f *NPMFetcher) Fetch(src Source, into string) (FetchResult, error) {
 	if tarballURL == "" {
 		return FetchResult{}, fmt.Errorf("npm fetcher: no tarball URL for %s@%s", src.Package, version)
 	}
+	// The tarball URL comes from registry metadata — attacker-influenced even
+	// when the registry itself is https. Reject a plain-http (remote) tarball
+	// before downloading so a MITM (or a hostile registry) cannot serve plugin
+	// content over an unauthenticated transport.
+	if err := checkURLScheme(tarballURL); err != nil {
+		return FetchResult{}, fmt.Errorf("npm fetcher: tarball %w", err)
+	}
 
 	if err := os.MkdirAll(into, 0o755); err != nil {
 		return FetchResult{}, fmt.Errorf("npm fetcher: mkdir %s: %w", into, err)

@@ -85,6 +85,7 @@ type Writer struct {
 
 	backupRoot string          // <home>/.state/backups/<ts>; created lazily
 	backedUp   map[string]bool // path → already-backed-up this run
+	wrote      map[string]bool // path → destination actually written this run
 	reports    []CollisionReport
 	// dryRun, when true, skips both the destination write AND the backup
 	// write. The reports slice is still populated so callers can preview
@@ -130,6 +131,7 @@ func NewWriter(st *state.Targets, home, userHome string, scope adapter.Scope, pr
 		agent:      agent,
 		backupRoot: filepath.Join(home, ".state", "backups", ts),
 		backedUp:   map[string]bool{},
+		wrote:      map[string]bool{},
 	}
 }
 
@@ -146,6 +148,12 @@ func NewPreviewWriter(st *state.Targets, home, userHome string, scope adapter.Sc
 // Safe to call after Apply completes.
 func (w *Writer) Reports() []CollisionReport { return w.reports }
 
+// Wrote returns the set of destination paths this writer actually wrote.
+// Used by the apply-error rescue to record state ONLY for files agentsync
+// committed this run — a pre-existing foreign file at an op that was never
+// attempted must not be recorded as owned (that would suppress its backup).
+func (w *Writer) Wrote() map[string]bool { return w.wrote }
+
 // Write satisfies adapter.DestWriter. finalBytes is the post-merge content
 // for merge ops, or op.Content for replace ops.
 func (w *Writer) Write(op adapter.FileOp, finalBytes []byte) error {
@@ -156,7 +164,11 @@ func (w *Writer) Write(op adapter.FileOp, finalBytes []byte) error {
 	if mode == 0 {
 		mode = 0o644
 	}
-	return iox.AtomicWrite(op.Path, finalBytes, mode)
+	if err := iox.AtomicWrite(op.Path, finalBytes, mode); err != nil {
+		return err
+	}
+	w.wrote[op.Path] = true
+	return nil
 }
 
 // Delete satisfies adapter.DestWriter. Idempotent on missing files.
