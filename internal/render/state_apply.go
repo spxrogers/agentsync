@@ -134,7 +134,19 @@ func RecordOpsState(s *state.Targets, userHome, agent string, scope adapter.Scop
 				return fmt.Errorf("parse our payload for %s: %w", op.Path, err)
 			}
 			for _, ptr := range CollectPointers(ours, "") {
-				v := getPointer(final, ptr)
+				v, present := getPointerOK(final, ptr)
+				if !present {
+					// The pointer is not in the post-apply file. In a normal
+					// (full-success) apply every pointer in `ours` lands on
+					// disk, so absence means this op's merge never happened —
+					// the case where the apply-error rescue records several
+					// same-path ops but only some were written. Recording an
+					// absent pointer as owned (with a hash of null) would
+					// suppress its foreign-collision backup on a later apply
+					// and silently overwrite a value the user added in between.
+					// Skip it; only record what actually landed.
+					continue
+				}
 				hash := hashAny(v)
 				key := fmt.Sprintf("%s:%s:%s:%s:%s", agent, scope.String(), portableProject, portablePath, ptr)
 				s.Keys[key] = state.KeyEntry{
@@ -203,16 +215,29 @@ func replaceAll(s, from, to string) string {
 }
 
 func getPointer(m map[string]any, ptr string) any {
+	v, _ := getPointerOK(m, ptr)
+	return v
+}
+
+// getPointerOK is getPointer with an explicit presence signal so callers can
+// distinguish "pointer absent from the document" from "pointer present with a
+// null value" — getPointer returns nil for both. RecordOpsState relies on this
+// to avoid recording a pointer that never landed on disk.
+func getPointerOK(m map[string]any, ptr string) (any, bool) {
 	parts := splitPtr(ptr)
 	var cur any = m
 	for _, p := range parts {
 		mm, ok := cur.(map[string]any)
 		if !ok {
-			return nil
+			return nil, false
 		}
-		cur = mm[p]
+		v, present := mm[p]
+		if !present {
+			return nil, false
+		}
+		cur = v
 	}
-	return cur
+	return cur, true
 }
 
 func splitPtr(ptr string) []string {
