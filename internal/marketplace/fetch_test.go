@@ -252,6 +252,44 @@ func TestGitFetcher_FileURL(t *testing.T) {
 	}
 }
 
+// TestGitFetcher_RejectsCommittedSymlink is the regression for the residual
+// hole: the lexical component-path containment check can't catch a symlink,
+// and go-git materializes committed symlinks on disk, so a malicious git
+// plugin repo could ship one (skills/x -> /etc) that os.ReadFile follows off
+// the cache. GitFetcher must reject any symlink in the fetched tree.
+func TestGitFetcher_RejectsCommittedSymlink(t *testing.T) {
+	workDir := t.TempDir()
+	repo, err := gogit.PlainInit(workDir, false)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "ok.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc/passwd", filepath.Join(workDir, "leak")); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+	w, err := repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Add("."); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	sig := &object.Signature{Name: "t", Email: "t@t", When: time.Now()}
+	if _, err := w.Commit("init", &gogit.CommitOptions{Author: sig, Committer: sig}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	dst := t.TempDir()
+	src := marketplace.Source{Kind: "url", Repo: "file://" + workDir}
+	if _, err := marketplace.Dispatch(src).Fetch(src, dst); err == nil {
+		t.Fatal("expected GitFetcher to reject a repo containing a symlink")
+	} else if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("error should name the symlink; got: %v", err)
+	}
+}
+
 func TestGitFetcher_Idempotent(t *testing.T) {
 	workDir := t.TempDir()
 	makeWorkRepo(t, workDir, "f.txt", "v1")
