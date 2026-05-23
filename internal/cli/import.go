@@ -26,12 +26,19 @@ func loaderFsForState() afero.Fs { return afero.NewOsFs() }
 
 // jsonUnmarshalLoose is a thin wrapper that returns nil on empty input
 // (so callers can treat empty as "absent") and surfaces real parse errors.
+// It accepts JSONC (comments, trailing commas) via hujson so seeding state
+// from a hand-commented opencode.json doesn't mis-hash the dest as null —
+// matching the apply/ingest read path.
 func jsonUnmarshalLoose(data []byte, v *map[string]any) error {
 	if len(data) == 0 {
 		*v = map[string]any{}
 		return nil
 	}
-	return json.Unmarshal(data, v)
+	std, err := standardizeJSONC(data)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(std, v)
 }
 
 // collectStateSeedPointers returns the JSON pointers we record state for
