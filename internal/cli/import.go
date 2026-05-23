@@ -15,9 +15,43 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
+
+// reReferenceImportedSecrets converts any cleartext in the ingested canonical
+// that matches a known ${secret:…} value back to its placeholder, so import
+// never persists a live credential into ~/.agentsync. Best-effort: the map is
+// built from the current source's resolvable secrets; refs that can't be
+// resolved (backend unavailable) are warned about, since their cleartext can't
+// be detected and would land verbatim.
+func reReferenceImportedSecrets(cmd *cobra.Command, home string, c *source.Canonical) {
+	cur, err := source.Load(loaderFsForState(), home)
+	if err != nil {
+		return // no source yet (first import) → nothing to re-reference
+	}
+	userHome := paths.HomeDir(paths.OSEnv{})
+	secBackend := secrets.SelectBackend(cur.Config.Secrets, home, userHome)
+	full := secrets.CollectResolved(&cur, secBackend, secrets.EnvBackend{})
+	redact := make(map[string]string, len(full))
+	for val, placeholder := range full {
+		// Only re-reference secret values; ${env:…} values are often
+		// low-entropy (paths, hostnames) and converting them risks
+		// over-matching unrelated text.
+		if strings.HasPrefix(placeholder, "${secret:") {
+			redact[val] = placeholder
+		}
+	}
+	secrets.ReReferenceSecrets(c, redact)
+
+	if missing := secrets.UnresolvedSecretRefs(&cur, secBackend); len(missing) > 0 {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"warning: import could not re-reference secret(s) %s (secrets backend unavailable); "+
+				"the imported file may contain cleartext — review it before committing\n",
+			strings.Join(missing, ", "))
+	}
+}
 
 // loaderFsForState returns an afero.Fs suitable for re-loading the
 // canonical repo when seeding state — the OS FS is correct here because
@@ -138,6 +172,13 @@ func importRun(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("ingest %s: %w", agentName, err)
 	}
+
+	// Re-reference secrets before writing back to source. The destination was
+	// written by a prior apply with ${secret:…} substituted to cleartext, so
+	// the ingested canonical holds live credentials. Convert any value that
+	// matches a known secret back to its placeholder so import doesn't persist
+	// a cleartext token into ~/.agentsync (often a committed dotfiles repo).
+	reReferenceImportedSecrets(cmd, home, &c)
 
 	switch component {
 	case "mcp":

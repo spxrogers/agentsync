@@ -169,6 +169,56 @@ func UnresolvedSecretRefs(c *source.Canonical, sec Resolver) []string {
 	return out
 }
 
+// ReReferenceSecrets is the inverse of SubstituteCanonical for the import
+// path: it walks the same string fields and replaces any occurrence of a
+// resolved secret value with its ${secret:KEY} placeholder. `apply` substitutes
+// secrets into destination files as cleartext, and `import` ingests those
+// destinations — without this, importing would persist the live credential in
+// cleartext into the user's ~/.agentsync source files (commonly committed to a
+// dotfiles repo). redact maps resolved value → placeholder; build it from the
+// CURRENT source via CollectResolved, filtered to ${secret:…} placeholders so
+// low-entropy ${env:…} values aren't over-converted.
+func ReReferenceSecrets(c *source.Canonical, redact map[string]string) {
+	if c == nil || len(redact) == 0 {
+		return
+	}
+	mask := func(s string) string { return MaskResolved(s, redact) }
+	for i := range c.MCPServers {
+		srv := &c.MCPServers[i].Server
+		srv.Command = mask(srv.Command)
+		srv.URL = mask(srv.URL)
+		for j := range srv.Args {
+			srv.Args[j] = mask(srv.Args[j])
+		}
+		for k, v := range srv.Env {
+			srv.Env[k] = mask(v)
+		}
+		for k, v := range srv.Headers {
+			srv.Headers[k] = mask(v)
+		}
+	}
+	for i := range c.Hooks {
+		c.Hooks[i].Command = mask(c.Hooks[i].Command)
+	}
+	for i := range c.LSPServers {
+		sp := &c.LSPServers[i].Spec
+		sp.Command = mask(sp.Command)
+		sp.URL = mask(sp.URL)
+		for j := range sp.Args {
+			sp.Args[j] = mask(sp.Args[j])
+		}
+		for k, v := range sp.Env {
+			sp.Env[k] = mask(v)
+		}
+		for k, v := range sp.Headers {
+			sp.Headers[k] = mask(v)
+		}
+	}
+	if c.Project != nil {
+		ReReferenceSecrets(c.Project, redact)
+	}
+}
+
 // MaskResolved replaces every resolved value in b with its original
 // placeholder. Idempotent — a placeholder that appears in b stays as a
 // placeholder. Designed for redacting cleartext that may contain secrets
