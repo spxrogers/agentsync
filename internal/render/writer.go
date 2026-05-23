@@ -76,7 +76,13 @@ func (r CollisionReport) String() string {
 // agentsync home (backup root); userHome is the user's $HOME (state-key
 // normalization base).
 func NewWriter(st *state.Targets, home, userHome string, scope adapter.Scope, project, agent string) *Writer {
-	ts := time.Now().UTC().Format("20060102T150405Z")
+	// Include the nanosecond offset so two applies in the same wall-clock
+	// second (e.g. a user-scope apply immediately followed by a project-scope
+	// one, or a retried apply) don't share a backup root and silently clobber
+	// each other's pre-existing-file copies. The global lock serializes
+	// applies, so successive runs always land on distinct nanoseconds.
+	now := time.Now().UTC()
+	ts := fmt.Sprintf("%s-%09d", now.Format("20060102T150405Z"), now.Nanosecond())
 	return &Writer{
 		state:      st,
 		home:       home,
