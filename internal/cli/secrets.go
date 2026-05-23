@@ -73,6 +73,9 @@ func loadSecretsConfig() (source.SecretsConfig, string, error) {
 	cfgPath := filepath.Join(home, "agentsync.toml")
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return source.SecretsConfig{}, home, fmt.Errorf("agentsync home not initialized (%s not found); run `agentsync init` first", cfgPath)
+		}
 		return source.SecretsConfig{}, home, fmt.Errorf("read %s: %w", cfgPath, err)
 	}
 	var cfg source.Config

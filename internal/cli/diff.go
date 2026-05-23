@@ -77,6 +77,10 @@ func newDiffCmd() *cobra.Command {
 					agents = append(agents, name)
 				}
 			}
+			if len(agents) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no agents enabled; run `agentsync agent add claude` (or opencode)")
+				return nil
+			}
 			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, userHome)
 			if err != nil {
 				return err

@@ -95,6 +95,9 @@ func scaffoldHome(cmd *cobra.Command, home string) error {
 	if err := os.WriteFile(filepath.Join(home, "agentsync.toml"), []byte(initialAgentsyncTOML), 0o644); err != nil {
 		return fmt.Errorf("write agentsync.toml: %w", err)
 	}
+	if err := ensureStateGitignore(home); err != nil {
+		return err
+	}
 	w := cmd.OutOrStdout()
 	fmt.Fprintln(w, "agentsync home initialized at", home)
 	fmt.Fprintln(w, "")
@@ -124,8 +127,49 @@ func cloneSourceRepo(cmd *cobra.Command, home, rawURL string) error {
 	if err := os.MkdirAll(filepath.Join(home, ".state"), 0o755); err != nil {
 		return fmt.Errorf("mkdir .state: %w", err)
 	}
+	if err := ensureStateGitignore(home); err != nil {
+		return err
+	}
 	fmt.Fprintln(w, "cloned. Run `agentsync apply --dry-run` to preview against this machine.")
 	return nil
+}
+
+// ensureStateGitignore guarantees ~/.agentsync/.gitignore excludes /.state/.
+// .state/ holds local-only state (targets.json) and .state/backups/<ts>/ —
+// verbatim copies of pre-existing native config files that routinely contain
+// API tokens. The README recommends syncing ~/.agentsync via chezmoi/git, so
+// without this a user would commit plaintext credential backups. Idempotent:
+// appends the rule if a .gitignore already exists (e.g. a cloned source repo)
+// and doesn't already ignore .state/.
+func ensureStateGitignore(home string) error {
+	const rule = "/.state/"
+	p := filepath.Join(home, ".gitignore")
+	data, err := os.ReadFile(p)
+	switch {
+	case err == nil:
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.TrimSpace(line) == rule {
+				return nil // already ignored
+			}
+		}
+		out := string(data)
+		if out != "" && !strings.HasSuffix(out, "\n") {
+			out += "\n"
+		}
+		out += rule + "\n"
+		if werr := os.WriteFile(p, []byte(out), 0o644); werr != nil {
+			return fmt.Errorf("update .gitignore: %w", werr)
+		}
+		return nil
+	case os.IsNotExist(err):
+		body := "# agentsync: local state + plaintext config backups — never commit.\n" + rule + "\n"
+		if werr := os.WriteFile(p, []byte(body), 0o644); werr != nil {
+			return fmt.Errorf("write .gitignore: %w", werr)
+		}
+		return nil
+	default:
+		return fmt.Errorf("read .gitignore: %w", err)
+	}
 }
 
 // validateCloneURL rejects unsafe URL schemes for the source-repo
