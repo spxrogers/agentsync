@@ -510,6 +510,107 @@ func makeNPMTarballWithSymlink(t *testing.T, linkName, target string) []byte {
 	return b
 }
 
+// makeGzipBombTarball produces a small .tgz that, when decompressed,
+// expands well beyond the requested cap. We use a long stream of zero
+// bytes — gzip's run-length encoding turns ~5 MiB of zeros into ~5 KiB
+// on the wire, which is plenty to defeat any wire-byte cap. The file
+// is presented as a single tar entry so the extractor reads enough
+// from the gzip stream to trip the post-decompress cap.
+func makeGzipBombTarball(t *testing.T, decompressedSize int) []byte {
+	t.Helper()
+	tmp := t.TempDir()
+	outPath := filepath.Join(tmp, "bomb.tgz")
+	f, err := os.Create(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gw)
+	hdr := &tar.Header{
+		Name:    "package/bomb.bin",
+		Size:    int64(decompressedSize),
+		Mode:    0o644,
+		ModTime: time.Now(),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	chunk := make([]byte, 64*1024)
+	written := 0
+	for written < decompressedSize {
+		n := len(chunk)
+		if written+n > decompressedSize {
+			n = decompressedSize - written
+		}
+		nw, werr := tw.Write(chunk[:n])
+		if werr != nil {
+			t.Fatal(werr)
+		}
+		written += nw
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// TestNPMFetcher_GzipBombIsCapped proves the per-tarball decompressed
+// byte cap stops a malicious or accidentally huge upload before it can
+// fill the user's disk. We override the cap to 64 KiB and ship a 1 MiB
+// payload.
+func TestNPMFetcher_GzipBombIsCapped(t *testing.T) {
+	t.Setenv("AGENTSYNC_MAX_TARBALL_MB", "0") // disabled by env? no, 0 means opt-out per code
+
+	// Use a 1 MiB decompressed payload but set cap to a tiny value so
+	// the test runs fast. We can't set "0.0625 MB" via env (it's
+	// integer MB), so re-do the test with a 65 MiB payload and a 1 MB
+	// cap. Still small enough to be fast.
+	t.Setenv("AGENTSYNC_MAX_TARBALL_MB", "1")
+	tarball := makeGzipBombTarball(t, 5*1024*1024) // 5 MiB > 1 MiB cap
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/bomb":
+			meta := map[string]any{
+				"versions": map[string]any{
+					"1.0.0": map[string]any{
+						"version": "1.0.0",
+						"dist":    map[string]any{"tarball": "http://" + r.Host + "/t/1.0.0"},
+					},
+				},
+				"dist-tags": map[string]any{"latest": "1.0.0"},
+			}
+			_ = json.NewEncoder(w).Encode(meta)
+		case strings.HasPrefix(r.URL.Path, "/t/"):
+			_, _ = w.Write(tarball)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dst := t.TempDir()
+	src := marketplace.Source{Kind: "npm", Package: "bomb", Version: "1.0.0", Registry: srv.URL}
+	fetcher := &marketplace.NPMFetcher{HTTPClient: srv.Client()}
+	_, err := fetcher.Fetch(src, dst)
+	if err == nil {
+		t.Fatal("expected error for over-cap tarball")
+	}
+	if !strings.Contains(err.Error(), "cap") {
+		t.Fatalf("error %q did not mention the cap", err.Error())
+	}
+}
+
 // TestNPMFetcher_SymlinkEntryIsRefused asserts that a tarball containing
 // a symlink entry — even one whose link target is "safe" — is rejected.
 // Symlinks in plugin tarballs have no legitimate use and have repeatedly

@@ -73,7 +73,7 @@ func newExplainCmd() *cobra.Command {
 				return err
 			}
 
-			plan, err := render.Plan(filtered, reg, agents, adapter.ScopeUser, "", s)
+			plan, err := render.Plan(filtered, reg, agents, adapter.ScopeUser, "", s, home)
 			if err != nil {
 				return err
 			}

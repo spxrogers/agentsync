@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/pelletier/go-toml/v2"
+	"github.com/spxrogers/agentsync/internal/iox"
 )
 
 // AgeBackend reads an age-encrypted TOML file (secrets.age), decrypts it using
@@ -100,8 +102,15 @@ func flatten(prefix string, m map[string]any) map[string]string {
 	return out
 }
 
-// Encrypt writes plaintext as-is, encrypted to the given age X25519 recipient
-// public key, into dest. The file is created or truncated (mode 0600).
+// Encrypt writes plaintext as-is, encrypted to the given age X25519
+// recipient public key, into dest. The encrypted bytes are produced in
+// memory and committed via the iox atomic-write path: write to a sibling
+// tmp file (0o600), fsync, rename onto dest. This is critical for
+// secrets.age — a previous implementation opened dest with O_TRUNC and
+// streamed encrypted bytes into it; a Ctrl-C, panic, or disk-full
+// between truncate and close left a zero-byte secrets.age with NO
+// backup, losing every key the user had ever stored.
+//
 // plaintext is typically TOML-formatted secrets.
 func Encrypt(plaintext []byte, recipient string, dest string) error {
 	rec, err := age.ParseX25519Recipient(recipient)
@@ -111,19 +120,20 @@ func Encrypt(plaintext []byte, recipient string, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return fmt.Errorf("mkdir parent of %s: %w", dest, err)
 	}
-	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	w, err := age.Encrypt(f, rec)
+	// Encrypt to an in-memory buffer first so a write failure mid-stream
+	// cannot truncate the user's existing secrets.age.
+	var buf bytes.Buffer
+	w, err := age.Encrypt(&buf, rec)
 	if err != nil {
 		return fmt.Errorf("init age encrypt: %w", err)
 	}
 	if _, err := w.Write(plaintext); err != nil {
-		return err
+		return fmt.Errorf("write age stream: %w", err)
 	}
-	return w.Close()
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("close age stream: %w", err)
+	}
+	return iox.AtomicWrite(dest, buf.Bytes(), 0o600)
 }
 
 // Decrypt decrypts an age-encrypted file using the identity in identityFile

@@ -14,6 +14,7 @@ require (
 	github.com/spf13/afero v1.15.0
 	github.com/spf13/cobra v1.10.2
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
+	golang.org/x/term v0.37.0
 	sigs.k8s.io/yaml v1.6.0
 )
 

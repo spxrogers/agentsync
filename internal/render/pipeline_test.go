@@ -1,7 +1,6 @@
 package render_test
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
@@ -34,7 +33,7 @@ func TestPipeline_PlanEmpty(t *testing.T) {
 	_ = reg.Register(noop.New("claude"))
 	_ = reg.Register(noop.New("opencode"))
 
-	plan, err := render.Plan(source.Canonical{}, reg, []string{"claude", "opencode"}, adapter.ScopeUser, "", nil)
+	plan, err := render.Plan(source.Canonical{}, reg, []string{"claude", "opencode"}, adapter.ScopeUser, "", nil, "/tmp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +48,7 @@ func TestPipeline_PlanEmpty(t *testing.T) {
 func TestPipeline_UnknownAgentError(t *testing.T) {
 	reg := adapter.NewRegistry()
 	_ = reg.Register(noop.New("claude"))
-	_, err := render.Plan(source.Canonical{}, reg, []string{"missing"}, adapter.ScopeUser, "", nil)
+	_, err := render.Plan(source.Canonical{}, reg, []string{"missing"}, adapter.ScopeUser, "", nil, "/tmp")
 	if err == nil {
 		t.Fatal("expected error for unknown adapter")
 	}
@@ -104,6 +103,7 @@ func TestPipeline_DedupesIdenticalWritesAcrossAdapters(t *testing.T) {
 // TestPipeline_OwnedKeysInjected verifies that Plan injects OwnedKeys from
 // state.Keys into merge-json-keys ops for the matching agent+scope+project+path.
 func TestPipeline_OwnedKeysInjected(t *testing.T) {
+	home := "/tmp/fake-root"
 	destPath := "/tmp/fake-root/.claude.json"
 	mergeOp := adapter.FileOp{
 		Action:        "write",
@@ -117,12 +117,12 @@ func TestPipeline_OwnedKeysInjected(t *testing.T) {
 	reg := adapter.NewRegistry()
 	_ = reg.Register(a)
 
-	// Pre-populate state with one owned pointer.
+	// Pre-populate state with one owned pointer in HOME-relative form.
 	s := state.New()
-	key := fmt.Sprintf("claude:user::%s:/mcpServers/github", destPath)
+	key := "claude:user::${HOME}/.claude.json:/mcpServers/github"
 	s.Keys[key] = state.KeyEntry{SHA256: "abc123", AppliedAt: time.Now()}
 
-	plan, err := render.Plan(source.Canonical{}, reg, []string{"claude"}, adapter.ScopeUser, "", s)
+	plan, err := render.Plan(source.Canonical{}, reg, []string{"claude"}, adapter.ScopeUser, "", s, home)
 	if err != nil {
 		t.Fatal(err)
 	}

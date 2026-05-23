@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
+	"golang.org/x/term"
 )
 
 func newSecretsCmd() *cobra.Command {
@@ -31,17 +33,38 @@ func newSecretsCmd() *cobra.Command {
 			Args:  cobra.ExactArgs(1),
 			RunE:  secretsGet,
 		},
-		&cobra.Command{
-			Use:   "set <key=value>",
-			Short: "set (or update) a secret key",
-			Args:  cobra.ExactArgs(1),
-			RunE: func(cmd *cobra.Command, args []string) error {
-				home := paths.AgentsyncHome(paths.OSEnv{})
-				return withGlobalLock(home, func() error { return secretsSet(cmd, args) })
-			},
-		},
+		newSecretsSetCmd(),
 	)
 	return sec
+}
+
+// newSecretsSetCmd builds the `secrets set` subcommand. Three argv shapes
+// are supported:
+//
+//	secrets set <key> --stdin             # value comes from stdin
+//	secrets set <key>                     # prompt with echo off (interactive)
+//	secrets set <key>=<value>             # legacy; warns + recommends --stdin
+//
+// The legacy form leaks the value into ps(1) output, shell history, and
+// auditd logs; the warning steers users to a safer mode without breaking
+// existing scripts. When the argument has no '=' AND --stdin is unset AND
+// stdin is not a TTY, we error out with a helpful message rather than
+// hanging on a non-interactive prompt.
+func newSecretsSetCmd() *cobra.Command {
+	var useStdin bool
+	cmd := &cobra.Command{
+		Use:   "set <key>[=<value>]",
+		Short: "set (or update) a secret key (prompts securely by default)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			home := paths.AgentsyncHome(paths.OSEnv{})
+			return withGlobalLock(home, func() error {
+				return secretsSet(cmd, args[0], useStdin)
+			})
+		},
+	}
+	cmd.Flags().BoolVar(&useStdin, "stdin", false, "read the secret value from stdin (recommended for scripts)")
+	return cmd
 }
 
 // loadSecretsConfig returns the SecretsConfig and the agentsync home directory.
@@ -236,7 +259,7 @@ func secretsGet(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func secretsSet(cmd *cobra.Command, args []string) error {
+func secretsSet(cmd *cobra.Command, arg string, useStdin bool) error {
 	cfg, home, err := loadSecretsConfig()
 	if err != nil {
 		return err
@@ -251,13 +274,10 @@ func secretsSet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("secrets set requires [secrets].identity_file in agentsync.toml")
 	}
 
-	kv := args[0]
-	idx := strings.IndexByte(kv, '=')
-	if idx < 0 {
-		return fmt.Errorf("set argument must be key=value, got %q", kv)
+	key, value, err := resolveSecretKeyValue(cmd, arg, useStdin)
+	if err != nil {
+		return err
 	}
-	key := kv[:idx]
-	value := kv[idx+1:]
 
 	m, err := decryptToMap(cfg, home)
 	if err != nil {
@@ -269,4 +289,63 @@ func secretsSet(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "secret %q set\n", key)
 	return nil
+}
+
+// resolveSecretKeyValue extracts (key, value) from the user's invocation.
+// Error messages here are deliberately devoid of the raw argument bytes —
+// a user who mistyped `secrets set ghp_live_token` instead of
+// `secrets set github.token=…` was previously greeted with
+// `got "ghp_live_token"` in stderr, dumping the live secret into log
+// scrollback. Now we report shape, length, and remediation only.
+func resolveSecretKeyValue(cmd *cobra.Command, arg string, useStdin bool) (string, string, error) {
+	if useStdin {
+		// arg is the key; value comes from stdin (trim a single trailing
+		// newline, but keep all other whitespace).
+		key := strings.TrimSpace(arg)
+		if key == "" || strings.ContainsAny(key, "= \t") {
+			return "", "", fmt.Errorf("--stdin requires a single key argument (no '=' or whitespace)")
+		}
+		raw, err := io.ReadAll(cmd.InOrStdin())
+		if err != nil {
+			return "", "", fmt.Errorf("read secret from stdin: %w", err)
+		}
+		v := strings.TrimRight(string(raw), "\n")
+		v = strings.TrimRight(v, "\r")
+		return key, v, nil
+	}
+
+	// Legacy key=value form. Warn that the value just hit argv (and
+	// therefore ps(1)/history/auditd) but accept it for back-compat.
+	if idx := strings.IndexByte(arg, '='); idx >= 0 {
+		key := arg[:idx]
+		if key == "" {
+			return "", "", fmt.Errorf("set argument has empty key (expected <key>=<value>)")
+		}
+		value := arg[idx+1:]
+		fmt.Fprintln(cmd.ErrOrStderr(),
+			"agentsync: warning: passing the value on argv exposes it to ps(1), shell history, and process auditing.")
+		fmt.Fprintln(cmd.ErrOrStderr(),
+			"  Use `agentsync secrets set <key> --stdin` or omit the value to be prompted.")
+		return key, value, nil
+	}
+
+	// No '=' and no --stdin → prompt or error if stdin is not a TTY.
+	stdin, ok := cmd.InOrStdin().(*os.File)
+	if !ok || !term.IsTerminal(int(stdin.Fd())) {
+		// Refuse to hang silently on a non-interactive stdin. The
+		// remediation pointer must NOT include the user's arg — it
+		// may itself be a leaked secret.
+		return "", "", fmt.Errorf("no value provided for key (argument has no '=', --stdin not set, stdin is not a terminal); use --stdin or run interactively")
+	}
+	key := strings.TrimSpace(arg)
+	if key == "" {
+		return "", "", fmt.Errorf("empty key argument")
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "Enter value for %s (input hidden): ", key)
+	pwBytes, err := term.ReadPassword(int(stdin.Fd()))
+	fmt.Fprintln(cmd.ErrOrStderr())
+	if err != nil {
+		return "", "", fmt.Errorf("read secret: %w", err)
+	}
+	return key, string(pwBytes), nil
 }

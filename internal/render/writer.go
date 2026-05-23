@@ -10,6 +10,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/iox"
+	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
@@ -40,6 +41,10 @@ type Writer struct {
 	backupRoot string          // <home>/.state/backups/<ts>; created lazily
 	backedUp   map[string]bool // path → already-backed-up this run
 	reports    []CollisionReport
+	// dryRun, when true, skips both the destination write AND the backup
+	// write. The reports slice is still populated so callers can preview
+	// the foreign-collisions a real apply would produce.
+	dryRun bool
 }
 
 // CollisionReport describes one foreign-collision the writer detected and
@@ -72,6 +77,15 @@ func NewWriter(st *state.Targets, home string, scope adapter.Scope, project, age
 		backupRoot: filepath.Join(home, ".state", "backups", ts),
 		backedUp:   map[string]bool{},
 	}
+}
+
+// NewPreviewWriter constructs a Writer that records foreign-collision
+// reports without performing any disk writes. Used by `apply --dry-run` to
+// surface the same backup-and-overwrite events a real apply would produce.
+func NewPreviewWriter(st *state.Targets, home string, scope adapter.Scope, project, agent string) *Writer {
+	w := NewWriter(st, home, scope, project, agent)
+	w.dryRun = true
+	return w
 }
 
 // Reports returns the per-write collision reports accumulated so far.
@@ -114,7 +128,8 @@ func (w *Writer) maybeBackup(op adapter.FileOp, finalBytes []byte) error {
 }
 
 func (w *Writer) maybeBackupFileOp(op adapter.FileOp, finalBytes []byte) error {
-	stateKey := fmt.Sprintf("%s:%s:%s:%s", w.agent, w.scope.String(), w.project, op.Path)
+	stateKey := fmt.Sprintf("%s:%s:%s:%s", w.agent, w.scope.String(),
+		paths.HomeRelative(w.home, w.project), paths.HomeRelative(w.home, op.Path))
 	if _, owned := w.state.Files[stateKey]; owned {
 		return nil
 	}
@@ -154,8 +169,10 @@ func (w *Writer) maybeBackupKeyOp(op adapter.FileOp) error {
 	}
 
 	var backupPath string
+	portableProject := paths.HomeRelative(w.home, w.project)
+	portablePath := paths.HomeRelative(w.home, op.Path)
 	for _, ptr := range CollectPointers(ours, "") {
-		stateKey := fmt.Sprintf("%s:%s:%s:%s:%s", w.agent, w.scope.String(), w.project, op.Path, ptr)
+		stateKey := fmt.Sprintf("%s:%s:%s:%s:%s", w.agent, w.scope.String(), portableProject, portablePath, ptr)
 		if _, owned := w.state.Keys[stateKey]; owned {
 			continue
 		}
@@ -186,7 +203,8 @@ func (w *Writer) maybeBackupKeyOp(op adapter.FileOp) error {
 // whose stripped form fails standard JSON.Unmarshal — we conservatively
 // back up the whole file once if state has no entries claiming the path.
 func (w *Writer) maybeBackupFileOpForJSONCFallback(op adapter.FileOp) error {
-	stateKeyPrefix := fmt.Sprintf("%s:%s:%s:%s:", w.agent, w.scope.String(), w.project, op.Path)
+	stateKeyPrefix := fmt.Sprintf("%s:%s:%s:%s:", w.agent, w.scope.String(),
+		paths.HomeRelative(w.home, w.project), paths.HomeRelative(w.home, op.Path))
 	for k := range w.state.Keys {
 		if strings.HasPrefix(k, stateKeyPrefix) {
 			return nil // state owns at least one pointer here; trust the merge
@@ -206,8 +224,14 @@ func (w *Writer) maybeBackupFileOpForJSONCFallback(op adapter.FileOp) error {
 
 // backup writes existing to <backupRoot>/<rel-path> via iox.AtomicWrite
 // and marks the path as backed-up so subsequent ops don't double-back-up.
+// In dry-run mode no disk write happens; only the dest path is computed
+// so the caller can surface it in a preview report.
 func (w *Writer) backup(path string, existing []byte) (string, error) {
 	dest := backupPathFor(path, w.backupRoot)
+	if w.dryRun {
+		w.backedUp[path] = true
+		return dest, nil
+	}
 	if err := iox.AtomicWrite(dest, existing, 0o600); err != nil {
 		return "", fmt.Errorf("backup %s: %w", path, err)
 	}

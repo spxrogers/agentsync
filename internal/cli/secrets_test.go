@@ -105,10 +105,54 @@ func TestSecretsGet_MissingKey(t *testing.T) {
 	}
 }
 
-func TestSecretsSet_InvalidArg(t *testing.T) {
+// TestSecretsSet_NoEqualsNonTTYErrors is the regression for the bug where
+// `agentsync secrets set <something>` (no `=`) printed the user's argument
+// back via `got %q` — leaking it if the argument was a real token. The
+// new behaviour refuses without echoing the argument when stdin is not a
+// TTY (the test environment).
+func TestSecretsSet_NoEqualsNonTTYErrors(t *testing.T) {
+	const sentinel = "ghp_SENTINEL_NEVER_ECHO_THIS_TOKEN"
 	env, _, _, _ := setupSecretsEnv(t)
-	_, err := runCLI(t, env, "secrets", "set", "noequalssign")
+	out, err := runCLI(t, env, "secrets", "set", sentinel)
 	if err == nil {
-		t.Fatal("expected error for missing = in set argument")
+		t.Fatal("expected error when no '=' and stdin is not a terminal")
+	}
+	if strings.Contains(err.Error(), sentinel) {
+		t.Fatalf("SECURITY: error message echoed sentinel %q: %v", sentinel, err)
+	}
+	if strings.Contains(out, sentinel) {
+		t.Fatalf("SECURITY: stdout/stderr echoed sentinel %q:\n%s", sentinel, out)
+	}
+}
+
+// TestSecretsSet_StdinPath proves the safe input mode works end-to-end:
+// the secret never appears on argv (so ps(1) / history don't see it) and
+// the stored value matches the stdin payload.
+func TestSecretsSet_StdinPath(t *testing.T) {
+	env, _, _, _ := setupSecretsEnv(t)
+	const value = "ghp_VIA_STDIN_FLOW_123"
+	out, err := runCLIWithStdin(t, env, value+"\n", "secrets", "set", "github.token", "--stdin")
+	if err != nil {
+		t.Fatalf("secrets set --stdin: %v\n%s", err, out)
+	}
+	got, err := runCLI(t, env, "secrets", "get", "github.token")
+	if err != nil {
+		t.Fatalf("get after stdin set: %v\n%s", err, got)
+	}
+	if !strings.Contains(got, value) {
+		t.Fatalf("stored value mismatch: want %q in %q", value, got)
+	}
+}
+
+// TestSecretsSet_LegacyArgWarns proves the back-compat path still works
+// but warns the user that the value just hit argv.
+func TestSecretsSet_LegacyArgWarns(t *testing.T) {
+	env, _, _, _ := setupSecretsEnv(t)
+	out, err := runCLI(t, env, "secrets", "set", "legacy.key=legacy_value")
+	if err != nil {
+		t.Fatalf("legacy set: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "warning") || !strings.Contains(out, "--stdin") {
+		t.Fatalf("legacy form did not warn about argv exposure; got:\n%s", out)
 	}
 }

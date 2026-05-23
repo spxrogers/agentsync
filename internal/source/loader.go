@@ -2,6 +2,8 @@ package source
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,6 +87,13 @@ func LoadWithCache(fs afero.Fs, home string, cacheDir string) (Canonical, error)
 // applied at load time (they are handled during rendering per adapter).
 func projectPlugins(fs afero.Fs, c *Canonical, cacheDir string) error {
 	for _, pl := range c.Plugins {
+		if pl.Plugin.Disabled {
+			// User explicitly disabled this plugin via
+			// `agentsync plugin disable <id>`. Skip projection so
+			// none of its MCP servers / skills / hooks / etc.
+			// reach the canonical model and downstream adapters.
+			continue
+		}
 		// Derive the plugin's simple ID (strip any "@marketplace" suffix).
 		id := pl.Plugin.ID
 		if idx := strings.LastIndex(id, "@"); idx >= 0 {
@@ -102,6 +111,18 @@ func projectPlugins(fs afero.Fs, c *Canonical, cacheDir string) error {
 		}
 
 		pluginCacheDir := filepath.Join(cacheDir, id)
+
+		// Manifest-SHA verification at projection time. plugin install
+		// records the SHA of plugin.json into plugins/<id>.toml; if the
+		// cache has been tampered with (the file rewritten on disk
+		// between install and apply), the SHA no longer matches. The
+		// previous code only checked drift during `update` and only
+		// warned. We hard-fail here unless the env override is set so
+		// the user can roll forward (e.g. after a deliberate hand-edit).
+		if err := verifyPluginManifestSHA(fs, pluginCacheDir, pl.Plugin.ManifestSHA, id); err != nil {
+			return err
+		}
+
 		proj, err := readPluginProjection(fs, pluginCacheDir)
 		if err != nil {
 			return fmt.Errorf("project plugin %s: %w", id, err)
@@ -113,6 +134,39 @@ func projectPlugins(fs afero.Fs, c *Canonical, cacheDir string) error {
 		c.Commands = append(c.Commands, proj.Commands...)
 		c.Hooks = append(c.Hooks, proj.Hooks...)
 		c.LSPServers = append(c.LSPServers, proj.LSPServers...)
+	}
+	return nil
+}
+
+// verifyPluginManifestSHA checks the on-disk plugin.json against the SHA
+// recorded in plugins/<id>.toml. A mismatch indicates the plugin cache
+// was tampered with (or hand-edited intentionally) since install — the
+// `Disabled`/`update`/`Agents` fields the user chose at install time
+// are no longer trustworthy. Returns nil when:
+//   - expected is empty (legacy install or hand-managed plugin entry)
+//   - AGENTSYNC_ALLOW_PLUGIN_DRIFT=1 (explicit opt-in to roll forward)
+//   - the cached plugin.json is missing (handled by readPluginProjection)
+func verifyPluginManifestSHA(fs afero.Fs, pluginCacheDir, expected, id string) error {
+	if expected == "" {
+		return nil
+	}
+	if os.Getenv("AGENTSYNC_ALLOW_PLUGIN_DRIFT") == "1" {
+		return nil
+	}
+	manifestPath := filepath.Join(pluginCacheDir, ".claude-plugin", "plugin.json")
+	data, err := afero.ReadFile(fs, manifestPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("verify plugin %s manifest SHA: %w", id, err)
+	}
+	sum := sha256.Sum256(data)
+	got := hex.EncodeToString(sum[:])
+	if got != expected {
+		return fmt.Errorf("plugin %s manifest SHA mismatch (cache tampered or upstream rolled): "+
+			"want %s got %s; run `agentsync plugin upgrade %s` to accept the new manifest, "+
+			"or set AGENTSYNC_ALLOW_PLUGIN_DRIFT=1 to bypass this check", id, expected, got, id)
 	}
 	return nil
 }

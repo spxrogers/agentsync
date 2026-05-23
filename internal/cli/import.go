@@ -99,7 +99,16 @@ Examples:
   agentsync import claude:mcp:github
   agentsync import opencode:agent:reviewer
   agentsync import claude:command:review`,
-		RunE: importRun,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// import mutates ~/.agentsync/ AND .state/targets.json. It
+			// must hold the global lock so a concurrent apply on the
+			// other terminal cannot interleave its own state.Save and
+			// destroy our seed entries (or vice versa).
+			home := paths.AgentsyncHome(paths.OSEnv{})
+			return withGlobalLock(home, func() error {
+				return importRun(cmd, args)
+			})
+		},
 	}
 	return cmd
 }
@@ -155,7 +164,75 @@ func importRun(cmd *cobra.Command, args []string) error {
 	if seedErr := seedStateFromCurrentDest(home, agentName, reg); seedErr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "warning: import succeeded but state seed failed: %v\n", seedErr)
 	}
+
+	// Warn if the destination file has additional pointers / files
+	// that the canonical does not own. Those will appear as
+	// ForeignCollision on the next apply and the user often expects
+	// import to have captured everything — not just the one named item.
+	if warnings := unimportedDestPointers(home, agentName, reg); len(warnings) > 0 {
+		ew := cmd.ErrOrStderr()
+		fmt.Fprintln(ew, "warning: the following destination items are NOT in the canonical source and will trigger ForeignCollision on next apply:")
+		for _, w := range warnings {
+			fmt.Fprintf(ew, "  %s\n", w)
+		}
+		fmt.Fprintln(ew, "  Run `agentsync import <agent>:<component>:<name>` for each, or accept the backup on next apply.")
+	}
 	return nil
+}
+
+// unimportedDestPointers returns a list of human-readable labels for
+// destination pointers / files that exist on disk for the given agent
+// but are NOT in the canonical model after the import. Used to alert
+// the user that import covers ONE item and the rest of the destination
+// is still unowned.
+//
+// We render canonical → ops, build the set of (path, pointer) pairs
+// canonical claims, and diff against the actual on-disk contents.
+func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []string {
+	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+	c, err := source.LoadWithCache(loaderFsForState(), home, pluginCacheRoot)
+	if err != nil {
+		return nil
+	}
+	a := reg.Lookup(agentName)
+	if a == nil {
+		return nil
+	}
+	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, op := range ops {
+		if op.MergeStrategy != "merge-json-keys" && op.MergeStrategy != "merge-jsonc-keys" {
+			continue
+		}
+		data, readErr := os.ReadFile(op.Path)
+		if readErr != nil {
+			continue
+		}
+		var existing map[string]any
+		if jsonErr := jsonUnmarshalLoose(data, &existing); jsonErr != nil {
+			continue
+		}
+		var ours map[string]any
+		if jsonErr := jsonUnmarshalLoose(op.Content, &ours); jsonErr != nil {
+			continue
+		}
+		ownedPtrs := map[string]bool{}
+		for _, p := range collectStateSeedPointers(ours) {
+			ownedPtrs[p] = true
+		}
+		// Walk existing's second-level pointers and flag the ones
+		// canonical doesn't own. We borrow CollectPointers indirectly
+		// via collectStateSeedPointers for symmetry.
+		for _, p := range collectStateSeedPointers(existing) {
+			if !ownedPtrs[p] {
+				out = append(out, op.Path+"#"+p)
+			}
+		}
+	}
+	return out
 }
 
 // seedStateFromCurrentDest re-renders the canonical for agent and writes
@@ -208,7 +285,7 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) err
 			}
 			for _, ptr := range collectStateSeedPointers(ours) {
 				key := fmt.Sprintf("%s:%s:%s:%s:%s",
-					agentName, adapter.ScopeUser.String(), "", op.Path, ptr)
+					agentName, adapter.ScopeUser.String(), "", paths.HomeRelative(home, op.Path), ptr)
 				st.Keys[key] = state.KeyEntry{
 					SHA256:    hashAtPointer(existing, ptr),
 					AppliedAt: now,
@@ -222,7 +299,7 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) err
 			}
 			sum := sha256.Sum256(data)
 			key := fmt.Sprintf("%s:%s:%s:%s",
-				agentName, adapter.ScopeUser.String(), "", op.Path)
+				agentName, adapter.ScopeUser.String(), "", paths.HomeRelative(home, op.Path))
 			st.Files[key] = state.FileEntry{
 				SHA256:    hex.EncodeToString(sum[:]),
 				Mode:      op.Mode,

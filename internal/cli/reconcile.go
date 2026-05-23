@@ -92,13 +92,13 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 			agents = append(agents, name)
 		}
 	}
-	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s)
+	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, home)
 	if err != nil {
 		return err
 	}
 
 	// Collect all items in order.
-	items := collectItems(plan, reg, s, sc, projectRoot)
+	items := collectItems(plan, reg, s, sc, projectRoot, home)
 
 	w := cmd.OutOrStdout()
 
@@ -169,9 +169,35 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 				switch ch {
 				case 'w', 'W', 'o', 'O', 's', 'S', 'i', 'q', 'Q':
 					if ch == 'W' || ch == 'O' || ch == 'S' {
-						bulkAction = ch | 0x20 // lowercase
+						// Capital letter = "apply this choice to all
+						// remaining items." Confirm before locking it
+						// in — a stray shift-W on a hooks item used to
+						// silently no-op data away across the whole
+						// queue. Show the count and require an
+						// explicit y/N. Default is N.
+						remaining := 0
+						for _, ri := range items {
+							if requiresAction(ri.cls) {
+								remaining++
+							}
+						}
+						lower := ch | 0x20
+						fmt.Fprintf(w, "%c\n", ch)
+						fmt.Fprintf(w, "  apply '%c' to all %d remaining items? [y/N] ", lower, remaining)
+						confirm, readErr := readChar(br)
+						if readErr != nil {
+							return nil
+						}
+						fmt.Fprintf(w, "%c\n", confirm)
+						if confirm != 'y' && confirm != 'Y' {
+							fmt.Fprintln(w, "  cancelled; choose a per-item action")
+							continue
+						}
+						bulkAction = lower
+						action = lower
+						break prompt
 					}
-					action = ch | 0x20 // normalize to lowercase for switch below
+					action = ch | 0x20
 					fmt.Fprintf(w, "%c\n", ch)
 					break prompt
 				case 'd':
@@ -232,7 +258,7 @@ done:
 			for _, r := range rw.Reports() {
 				fmt.Fprintf(w, "  backup: %s\n", r.String())
 			}
-			if err := render.RecordOpsState(s, name, sc, projectRoot, ops); err != nil {
+			if err := render.RecordOpsState(s, home, name, sc, projectRoot, ops); err != nil {
 				return err
 			}
 		}
@@ -246,7 +272,7 @@ done:
 }
 
 // collectItems builds the flat reconcile list from a rendered plan + state.
-func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot string) []reconcileItem {
+func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, home string) []reconcileItem {
 	var items []reconcileItem
 	for _, name := range reg.Names() {
 		res, ok := plan.PerAgent[name]
@@ -265,7 +291,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 				final := readJSONFile(op.Path)
 				for _, ptr := range render.CollectPointers(ours, "") {
 					hsrc := hashAnyValue(getPointerValue(ours, ptr))
-					happlied := s.Keys[stateKeyKey(name, sc, projectRoot, op.Path, ptr)].SHA256
+					happlied := s.Keys[stateKeyKey(home, name, sc, projectRoot, op.Path, ptr)].SHA256
 					hdest := hashAnyValue(getPointerValue(final, ptr))
 					cls := drift.Classify(hsrc, happlied, hdest)
 					items = append(items, reconcileItem{
@@ -286,7 +312,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 				}
 				seen[op.Path] = true
 				hsrc := hashContent(op.Content)
-				happlied := s.Files[stateFileKey(name, sc, projectRoot, op.Path)].SHA256
+				happlied := s.Files[stateFileKey(home, name, sc, projectRoot, op.Path)].SHA256
 				hdest := hashFile(op.Path)
 				cls := drift.Classify(hsrc, happlied, hdest)
 				items = append(items, reconcileItem{
@@ -306,9 +332,14 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 }
 
 // requiresAction returns true for drift classes that need user (or auto) action.
+// ForeignCollision is included: the very purpose of reconcile is to surface
+// the pre-existing native files agentsync is about to back up and overwrite
+// on the next apply. Hiding them meant `reconcile --auto-safe` reported
+// "nothing to reconcile" on a populated machine, and the user only learned
+// about the impending backups when the real apply ran.
 func requiresAction(cls drift.Class) bool {
 	switch cls {
-	case drift.Drift, drift.Conflict, drift.OrphanDrifted:
+	case drift.Drift, drift.Conflict, drift.OrphanDrifted, drift.ForeignCollision:
 		return true
 	}
 	return false
@@ -360,11 +391,15 @@ func writeBackItem(home string, it reconcileItem) error {
 
 // writeBackKeyItem handles key-level (merge-json-keys / merge-jsonc-keys) items.
 // For MCP servers it reconstructs a source.MCPServer from the destination JSON
-// and writes it with source.WriteMCP. For other key-level items it is a no-op
-// (unsupported in v1).
+// and writes it with source.WriteMCP.
+//
+// For other key-level items (hooks, LSP, future shapes) write-back is not
+// implemented and we return a clear error so the user is not silently lied
+// to: the prior code returned nil and printed "write-back: <label>", giving
+// the impression the hand-edit had been persisted when in fact it had not
+// — the next apply would then destroy the user's edit.
 func writeBackKeyItem(home string, it reconcileItem) error {
 	dest := readJSONFile(it.op.Path)
-	// Extract mcpServers section if this is an MCP ptr.
 	// Expected ptr shape: /mcpServers/<serverID>/...
 	parts := strings.SplitN(strings.TrimPrefix(it.ptr, "/"), "/", 3)
 	if len(parts) >= 2 && parts[0] == "mcpServers" {
@@ -375,8 +410,12 @@ func writeBackKeyItem(home string, it reconcileItem) error {
 		}
 		specRaw, ok := mcpServers[serverID]
 		if !ok {
-			// Server removed from dest; skip write-back.
-			return nil
+			// Server removed from dest; nothing to write back. We treat
+			// this as a tombstone — the user wants the source dropped to
+			// match — but persisting that requires source-side mutation
+			// which isn't safe to do silently here. Surface as an error
+			// so the user can pick [d]elete-source via a follow-up flow.
+			return fmt.Errorf("destination dropped %s/%s — no write-back possible; remove the source manually or use [o]verride to push canonical back", parts[0], serverID)
 		}
 		// Round-trip through JSON to get a typed spec.
 		specBytes, err := json.Marshal(specRaw)
@@ -390,25 +429,33 @@ func writeBackKeyItem(home string, it reconcileItem) error {
 		m := source.MCPServer{ID: serverID, Server: spec}
 		return source.WriteMCP(home, serverID, m)
 	}
-	// Other key-level items not yet supported.
-	return nil
+	// Unsupported pointer shape (hooks, lsp, …). DO NOT silently no-op —
+	// the success message would be a lie.
+	return fmt.Errorf("write-back for pointer %q is not implemented in v1; only /mcpServers/* items can be written back today — choose [o]verride to push canonical to the dest, or [i]gnore to suppress this item", it.ptr)
 }
 
 // writeBackFileItem handles file-level (replace strategy) items by copying
 // the destination file back into the corresponding source location verbatim.
 // This covers subagents, commands, memory, and skill files in v1.
+//
+// Two unsafe historical no-ops are now hard errors:
+//   - SourceID == "" (no canonical home for this op)
+//   - SourceID ends with "(multiple)" (the dest was assembled from N
+//     source fragments; collapsing the whole dest back into ONE of them
+//     would strand the others)
+//
+// Both used to return nil with a success message, hiding data loss.
 func writeBackFileItem(home string, it reconcileItem) error {
 	data, err := os.ReadFile(it.op.Path)
 	if err != nil {
 		return fmt.Errorf("read dest %s: %w", it.op.Path, err)
 	}
-	// Derive a relative source path from the SourceID field when possible.
-	// SourceID examples: "agents/reviewer.md", "skills/foo/SKILL.md",
-	//                    "memory/AGENTS.md", "commands/review.md".
 	srcID := it.op.SourceID
-	if srcID == "" || strings.HasSuffix(srcID, "(multiple)") {
-		// Cannot determine a single source file; skip.
-		return nil
+	if srcID == "" {
+		return fmt.Errorf("write-back for %s requires a single source-of-record; the rendering op has no SourceID (this happens for ad-hoc paths) — use [o]verride or [i]gnore", it.op.Path)
+	}
+	if strings.HasSuffix(srcID, "(multiple)") {
+		return fmt.Errorf("write-back for %s is unsafe: the dest is the concatenation of multiple source fragments. Persisting the whole dest into one of them would strand the others. Edit the source fragments under %s/ directly, then apply", it.op.Path, home)
 	}
 	dest := filepath.Join(home, srcID)
 	return iox.AtomicWrite(dest, data, 0o644)

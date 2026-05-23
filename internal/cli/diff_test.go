@@ -66,6 +66,69 @@ func TestDiff_ShowsDriftedKey(t *testing.T) {
 	}
 }
 
+// TestDiff_DoesNotLeakResolvedSecrets is the regression test for the bug
+// where `agentsync diff` printed the resolved cleartext secret to stdout.
+// The dst file was written by a prior apply with the secret substituted,
+// so reading it back and printing it via diffmatchpatch leaked the token.
+//
+// We use a sentinel token string so any leak shows up as a clear failure
+// rather than a fuzzy match.
+func TestDiff_DoesNotLeakResolvedSecrets(t *testing.T) {
+	const sentinel = "ghp_SENTINEL_DO_NOT_LEAK_THIS_TOKEN_123456789"
+
+	tmp := t.TempDir()
+	env := map[string]string{
+		"AGENTSYNC_TARGET_ROOT": tmp,
+		"GITHUB_TOKEN":          sentinel,
+	}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	body := `[server]
+type = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+
+[server.env]
+GITHUB_TOKEN = "${env:GITHUB_TOKEN}"
+`
+	_ = os.WriteFile(mcp, []byte(body), 0o644)
+
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sanity check: dest does contain the sentinel (proving the
+	// substitution worked and the leak would be possible).
+	dst := filepath.Join(tmp, ".claude.json")
+	dstBytes, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(dstBytes), sentinel) {
+		t.Fatalf("setup invariant failed — dest does not contain sentinel; got: %s", dstBytes)
+	}
+
+	// Now drift the dest by changing some unrelated key, so diff has
+	// something to print.
+	driftBody := strings.ReplaceAll(string(dstBytes), `"npx"`, `"npm"`)
+	_ = os.WriteFile(dst, []byte(driftBody), 0o644)
+
+	out, err := runCLI(t, env, "diff")
+	if err != nil {
+		t.Fatalf("diff: %v\n%s", err, out)
+	}
+	if strings.Contains(out, sentinel) {
+		t.Fatalf("SECURITY: diff output leaked sentinel secret %q\n%s", sentinel, out)
+	}
+}
+
 func TestDiff_PathFilter(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

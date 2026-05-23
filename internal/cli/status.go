@@ -63,7 +63,7 @@ func newStatusCmd() *cobra.Command {
 					agents = append(agents, name)
 				}
 			}
-			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s)
+			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, home)
 			if err != nil {
 				return err
 			}
@@ -86,7 +86,7 @@ func newStatusCmd() *cobra.Command {
 					}
 					seen[op.Path] = true
 					hsrc := hashContent(op.Content)
-					happlied := s.Files[stateFileKey(name, sc, projectRoot, op.Path)].SHA256
+					happlied := s.Files[stateFileKey(home, name, sc, projectRoot, op.Path)].SHA256
 					hdest := hashFile(op.Path)
 					cls := drift.Classify(hsrc, happlied, hdest)
 					fmt.Fprintf(w, "  %-20s %s\n", cls, op.Path)
@@ -101,7 +101,7 @@ func newStatusCmd() *cobra.Command {
 					final := readJSONFile(op.Path)
 					for _, ptr := range render.CollectPointers(ours, "") {
 						hsrc := hashAnyValue(getPointerValue(ours, ptr))
-						happlied := s.Keys[stateKeyKey(name, sc, projectRoot, op.Path, ptr)].SHA256
+						happlied := s.Keys[stateKeyKey(home, name, sc, projectRoot, op.Path, ptr)].SHA256
 						hdest := hashAnyValue(getPointerValue(final, ptr))
 						cls := drift.Classify(hsrc, happlied, hdest)
 						fmt.Fprintf(w, "  %-20s %s#%s\n", cls, op.Path, ptr)
@@ -117,15 +117,18 @@ func newStatusCmd() *cobra.Command {
 }
 
 // stateFileKey builds the state Files map key matching render.RecordOpsState.
-// Format: "agent:scope:project:path" (project is "" for user scope).
-func stateFileKey(agent string, sc adapter.Scope, projectRoot, path string) string {
-	return fmt.Sprintf("%s:%s:%s:%s", agent, sc.String(), projectRoot, path)
+// Format: "agent:scope:portableProject:portablePath" (project and path
+// are HOME-relative so keys are portable across machines).
+func stateFileKey(home, agent string, sc adapter.Scope, projectRoot, path string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", agent, sc.String(),
+		paths.HomeRelative(home, projectRoot), paths.HomeRelative(home, path))
 }
 
 // stateKeyKey builds the state Keys map key matching render.RecordOpsState.
-// Format: "agent:scope:project:path:ptr".
-func stateKeyKey(agent string, sc adapter.Scope, projectRoot, path, ptr string) string {
-	return fmt.Sprintf("%s:%s:%s:%s:%s", agent, sc.String(), projectRoot, path, ptr)
+// Format: "agent:scope:portableProject:portablePath:ptr".
+func stateKeyKey(home, agent string, sc adapter.Scope, projectRoot, path, ptr string) string {
+	return fmt.Sprintf("%s:%s:%s:%s:%s", agent, sc.String(),
+		paths.HomeRelative(home, projectRoot), paths.HomeRelative(home, path), ptr)
 }
 
 func hashContent(b []byte) string {
@@ -133,7 +136,24 @@ func hashContent(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// hashFile returns the SHA-256 hex digest of the file at path. Returns
+// the empty string on missing-file errors (which `drift.Classify` reads
+// as "absent" — the expected signal for Orphan / OrphanDrifted).
+//
+// If the path is a symlink, hashFile returns a special marker so the
+// drift classifier can flag the file as drifted in a way the user can
+// act on. A managed file becoming a symlink (e.g. user replaced
+// .claude.json with `ln -s /dev/null`) used to silently read through
+// the link and compare hashes — making the swap invisible to status.
 func hashFile(path string) string {
+	info, lerr := os.Lstat(path)
+	if lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+		// Return a sentinel that will never match a content hash.
+		// We don't include the link target to keep the sentinel stable
+		// (target may resolve to whatever attacker chose); just signal
+		// "this is a symlink now."
+		return "symlink-not-regular-file"
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
