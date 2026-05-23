@@ -24,6 +24,13 @@ type AgentResult struct {
 	Skips []adapter.Skip
 }
 
+// isKeyMerge reports whether a MergeStrategy accumulates JSON pointers into a
+// shared file (rather than replacing the whole file). Such ops must never be
+// deduped by path — one agent emits several of them to the same destination.
+func isKeyMerge(strategy string) bool {
+	return strategy == "merge-json-keys" || strategy == "merge-jsonc-keys"
+}
+
 // Total returns the total number of FileOps across all agents.
 func (p RenderPlan) Total() int {
 	n := 0
@@ -97,10 +104,15 @@ func PreviewCollisions(
 			if op.Action != "" && op.Action != "write" {
 				continue
 			}
-			if seen[op.Path] {
-				continue
+			// Mirror Apply's dedup: only whole-file replace writes are
+			// collapsed by path. Key-merge ops all run; the writer's
+			// per-path backedUp guard prevents a duplicate collision report.
+			if !isKeyMerge(op.MergeStrategy) {
+				if seen[op.Path] {
+					continue
+				}
+				seen[op.Path] = true
 			}
-			seen[op.Path] = true
 			// We don't have the post-merge finalBytes here without
 			// re-running the adapter. For preview purposes a conservative
 			// "is something there that doesn't look exactly like our op"
@@ -173,7 +185,14 @@ func Apply(
 		}
 		var deduped []adapter.FileOp
 		for _, op := range res.Ops {
-			if op.Action == "write" {
+			// Only whole-file replace writes are deduped (e.g. a shared
+			// SKILL.md written identically by claude and opencode). Key-merge
+			// ops are NOT deduped: a single agent emits separate
+			// merge-json-keys ops to one file (claude writes mcpServers,
+			// hooks, AND lspServers to settings.json), and each must run —
+			// the adapter re-reads and merges per op. Deduping them by path
+			// silently dropped every merge op after the first.
+			if op.Action == "write" && !isKeyMerge(op.MergeStrategy) {
 				if seen[op.Path] {
 					continue
 				}

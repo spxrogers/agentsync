@@ -242,6 +242,51 @@ func TestWriter_DeleteSkipsBackup(t *testing.T) {
 	}
 }
 
+// TestRenderApply_MultipleMergeOpsSamePathAllApplied is the regression for
+// the dedup bug: render.Apply skipped any second Action=="write" op for a
+// path already seen, but that swept up merge-json-keys ops too. The claude
+// adapter emits separate merge ops to settings.json for MCP, hooks, and LSP;
+// deduping by path silently dropped hooks and LSP. Merge ops to the same
+// path must ALL run (the adapter re-reads and merges each), so only
+// whole-file replace writes may be deduped.
+func TestRenderApply_MultipleMergeOpsSamePathAllApplied(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, ".claude", "settings.json")
+	_ = os.MkdirAll(filepath.Dir(dest), 0o755)
+
+	reg := adapter.NewRegistry()
+	_ = reg.Register(&fakeJSONApply{name: "claude"})
+
+	plan := render.RenderPlan{
+		PerAgent: map[string]render.AgentResult{
+			"claude": {Ops: []adapter.FileOp{
+				{Action: "write", Path: dest, Content: []byte(`{"mcpServers":{"a":1}}`), MergeStrategy: "merge-json-keys", Mode: 0o644},
+				{Action: "write", Path: dest, Content: []byte(`{"hooks":{"PreToolUse":"echo"}}`), MergeStrategy: "merge-json-keys", Mode: 0o644},
+				{Action: "write", Path: dest, Content: []byte(`{"lspServers":{"go":{"command":"gopls"}}}`), MergeStrategy: "merge-json-keys", Mode: 0o644},
+			}},
+		},
+	}
+	if _, err := render.Apply(plan, reg, state.New(), home, tmp, adapter.ScopeUser, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read settings.json: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("parse settings.json: %v\n%s", err, data)
+	}
+	for _, key := range []string{"mcpServers", "hooks", "lspServers"} {
+		if _, ok := got[key]; !ok {
+			t.Fatalf("merge op for %q was dropped; settings.json = %s", key, data)
+		}
+	}
+}
+
 // TestRenderApply_FullPathBacksUpAcrossAgents exercises the integrated
 // path: render.Apply constructs one writer per agent, each agent's
 // Apply routes through it, and the union of reports is returned.
