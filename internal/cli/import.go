@@ -20,36 +20,118 @@ import (
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
-// reReferenceImportedSecrets converts any cleartext in the ingested canonical
-// that matches a known ${secret:…} value back to its placeholder, so import
-// never persists a live credential into ~/.agentsync. Best-effort: the map is
-// built from the current source's resolvable secrets; refs that can't be
-// resolved (backend unavailable) are warned about, since their cleartext can't
-// be detected and would land verbatim.
+// reReferenceImportedSecrets restores ${secret:…} placeholders in the ingested
+// canonical so import never persists a live credential into ~/.agentsync. apply
+// substitutes secrets to cleartext into the destination, and import ingests
+// that destination; this puts the placeholders back.
+//
+// Matching is FIELD-POSITIONAL, not value-based: for each item present in the
+// current source, a field is restored to its templated form only if (a) the
+// source field actually referenced a secret and (b) the ingested value still
+// resolves to the same thing (the field is unchanged). A field the source did
+// NOT template (e.g. command = "npx") is never rewritten, even if its literal
+// happens to equal some secret's value — value-based masking would corrupt it.
 func reReferenceImportedSecrets(cmd *cobra.Command, home string, c *source.Canonical) {
 	cur, err := source.Load(loaderFsForState(), home)
 	if err != nil {
 		return // no source yet (first import) → nothing to re-reference
 	}
 	userHome := paths.HomeDir(paths.OSEnv{})
-	secBackend := secrets.SelectBackend(cur.Config.Secrets, home, userHome)
-	full := secrets.CollectResolved(&cur, secBackend, secrets.EnvBackend{})
-	redact := make(map[string]string, len(full))
-	for val, placeholder := range full {
-		// Only re-reference secret values; ${env:…} values are often
-		// low-entropy (paths, hostnames) and converting them risks
-		// over-matching unrelated text.
-		if strings.HasPrefix(placeholder, "${secret:") {
-			redact[val] = placeholder
+	sec := secrets.SelectBackend(cur.Config.Secrets, home, userHome)
+	env := secrets.EnvBackend{}
+
+	// restore returns the source field's templated value when it referenced a
+	// secret and still resolves to the (unchanged) ingested value; otherwise it
+	// keeps the ingested value verbatim.
+	restore := func(srcVal, ingestedVal string) string {
+		if !strings.Contains(srcVal, "${secret:") {
+			return ingestedVal
+		}
+		if resolved, _, rerr := secrets.SubstituteRefs(srcVal, sec, env); rerr == nil && resolved == ingestedVal {
+			return srcVal
+		}
+		return ingestedVal
+	}
+
+	curMCP := make(map[string]source.MCPServerSpec, len(cur.MCPServers))
+	for _, m := range cur.MCPServers {
+		curMCP[m.ID] = m.Server
+	}
+	for i := range c.MCPServers {
+		src, ok := curMCP[c.MCPServers[i].ID]
+		if !ok {
+			continue
+		}
+		restoreServerFields(&c.MCPServers[i].Server, src.Command, src.URL, src.Args, src.Env, src.Headers, restore)
+	}
+
+	curLSP := make(map[string]source.LSPServerSpec, len(cur.LSPServers))
+	for _, l := range cur.LSPServers {
+		curLSP[l.ID] = l.Spec
+	}
+	for i := range c.LSPServers {
+		src, ok := curLSP[c.LSPServers[i].ID]
+		if !ok {
+			continue
+		}
+		sp := &c.LSPServers[i].Spec
+		restoreServerFields2(sp, src.Command, src.URL, src.Args, src.Env, src.Headers, restore)
+	}
+
+	// Hooks have no stable id; match by Event and restore a Command that the
+	// source templated and whose resolution equals the ingested command.
+	for i := range c.Hooks {
+		for _, h := range cur.Hooks {
+			if h.Event != c.Hooks[i].Event || !strings.Contains(h.Command, "${secret:") {
+				continue
+			}
+			if resolved, _, rerr := secrets.SubstituteRefs(h.Command, sec, env); rerr == nil && resolved == c.Hooks[i].Command {
+				c.Hooks[i].Command = h.Command
+				break
+			}
 		}
 	}
-	secrets.ReReferenceSecrets(c, redact)
 
-	if missing := secrets.UnresolvedSecretRefs(&cur, secBackend); len(missing) > 0 {
+	if missing := secrets.UnresolvedSecretRefs(&cur, sec); len(missing) > 0 {
 		fmt.Fprintf(cmd.ErrOrStderr(),
 			"warning: import could not re-reference secret(s) %s (secrets backend unavailable); "+
 				"the imported file may contain cleartext — review it before committing\n",
 			strings.Join(missing, ", "))
+	}
+}
+
+// restoreServerFields applies restore() field-positionally to an MCP spec.
+func restoreServerFields(dst *source.MCPServerSpec, srcCmd, srcURL string, srcArgs []string, srcEnv, srcHeaders map[string]string, restore func(string, string) string) {
+	dst.Command = restore(srcCmd, dst.Command)
+	dst.URL = restore(srcURL, dst.URL)
+	for j := range dst.Args {
+		if j < len(srcArgs) {
+			dst.Args[j] = restore(srcArgs[j], dst.Args[j])
+		}
+	}
+	for k, v := range dst.Env {
+		dst.Env[k] = restore(srcEnv[k], v)
+	}
+	for k, v := range dst.Headers {
+		dst.Headers[k] = restore(srcHeaders[k], v)
+	}
+}
+
+// restoreServerFields2 is restoreServerFields for an LSP spec (same field set,
+// distinct struct type).
+func restoreServerFields2(dst *source.LSPServerSpec, srcCmd, srcURL string, srcArgs []string, srcEnv, srcHeaders map[string]string, restore func(string, string) string) {
+	dst.Command = restore(srcCmd, dst.Command)
+	dst.URL = restore(srcURL, dst.URL)
+	for j := range dst.Args {
+		if j < len(srcArgs) {
+			dst.Args[j] = restore(srcArgs[j], dst.Args[j])
+		}
+	}
+	for k, v := range dst.Env {
+		dst.Env[k] = restore(srcEnv[k], v)
+	}
+	for k, v := range dst.Headers {
+		dst.Headers[k] = restore(srcHeaders[k], v)
 	}
 }
 
