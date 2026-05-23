@@ -7,6 +7,22 @@ import (
 	"testing"
 )
 
+// TestVerify_UninitializedHomeErrors is the regression for verify printing a
+// false "ok" (exit 0) when run before `init` — source.Load tolerates a
+// missing home, so the user got a green light on a non-existent config.
+func TestVerify_UninitializedHomeErrors(t *testing.T) {
+	tmp := t.TempDir()
+	// Note: no `init` — the agentsync home does not exist.
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	out, err := runCLI(t, env, "verify")
+	if err == nil {
+		t.Fatalf("verify on uninitialized home should error; got ok:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "init") {
+		t.Fatalf("error should point at `init`; got: %v", err)
+	}
+}
+
 func TestVerify_Empty(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

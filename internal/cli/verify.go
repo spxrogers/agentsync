@@ -18,6 +18,15 @@ func newVerifyCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := paths.AgentsyncHome(paths.OSEnv{})
+			// source.Load tolerates a missing home and returns an empty model,
+			// so without this guard `verify` on an uninitialized machine
+			// printed a false "ok" and exited 0. Fail with a pointer to init.
+			if _, err := os.Stat(home); err != nil {
+				if os.IsNotExist(err) {
+					return fmt.Errorf("agentsync home %s does not exist; run `agentsync init` first", home)
+				}
+				return fmt.Errorf("verify: stat %s: %w", home, err)
+			}
 			c, err := source.Load(afero.NewOsFs(), home)
 			if err != nil {
 				return fmt.Errorf("verify: %w", err)

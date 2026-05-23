@@ -13,6 +13,14 @@ Centrally manage AI coding-agent configurations across Claude Code, OpenCode, Co
 
 ## Install
 
+> **Pre-release:** the package-manager channels below are wired in
+> `.goreleaser.yaml` but are published starting with the first tagged release.
+> Until then, **build from source**:
+>
+>     go install github.com/spxrogers/agentsync/cmd/agentsync@latest
+>
+> or clone and `go build ./cmd/agentsync`.
+
 ### macOS — Homebrew
 
     brew tap spxrogers/tap
@@ -40,7 +48,7 @@ RPM:
 
 Arch (AUR):
 
-    yay -S agentsync
+    yay -S agentsync-bin
 
 ## Cross-machine sync
 

@@ -14,7 +14,7 @@ import (
 )
 
 // AgeBackend reads an age-encrypted TOML file (secrets.age), decrypts it using
-// the identity file specified in opensync.toml [secrets], parses as TOML, and
+// the identity file specified in agentsync.toml [secrets], parses as TOML, and
 // resolves dotted keys. Cleartext is held in memory only and never written to
 // durable storage.
 type AgeBackend struct {

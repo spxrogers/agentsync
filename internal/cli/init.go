@@ -13,7 +13,7 @@ import (
 )
 
 const initialAgentsyncTOML = `# agentsync source-of-truth config
-# See docs/superpowers/specs/2026-05-04-agentsync-design.md for the full schema.
+# Schema reference: https://github.com/spxrogers/agentsync#readme
 
 [agents]
 # claude   = { enabled = true,  scope = "user" }

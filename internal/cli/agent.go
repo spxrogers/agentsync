@@ -50,9 +50,9 @@ var v1Supported = map[string]bool{
 func newAgentCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "agent", Short: "manage which agents agentsync targets"}
 	cmd.AddCommand(
-		&cobra.Command{Use: "add <name>", Args: cobra.ExactArgs(1), RunE: agentAddRun},
-		&cobra.Command{Use: "remove <name>", Args: cobra.ExactArgs(1), RunE: agentRemoveRun},
-		&cobra.Command{Use: "list", Args: cobra.NoArgs, RunE: agentListRun},
+		&cobra.Command{Use: "add <name>", Short: "register an agent (claude | opencode)", Args: cobra.ExactArgs(1), RunE: agentAddRun},
+		&cobra.Command{Use: "remove <name>", Short: "unregister an agent", Args: cobra.ExactArgs(1), RunE: agentRemoveRun},
+		&cobra.Command{Use: "list", Short: "list registered agents", Args: cobra.NoArgs, RunE: agentListRun},
 		newAgentEnableCmd(),
 		newAgentDisableCmd(),
 	)

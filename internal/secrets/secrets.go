@@ -1,5 +1,5 @@
 // Package secrets resolves ${secret:foo.bar} and ${env:FOO} references at
-// apply-time. The active backend is selected from opensync.toml [secrets]
+// apply-time. The active backend is selected from agentsync.toml [secrets]
 // `backend` field (env|age).
 package secrets
 
