@@ -14,6 +14,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/state"
 )
 
 func newDoctorCmd() *cobra.Command {
@@ -115,6 +116,16 @@ func checkStateDir(w io.Writer, home string) int {
 	}
 	_ = os.Remove(probe)
 	fmt.Fprintf(w, "  .state/    ok (writable)\n")
+
+	// Verify targets.json parses — the same load status/apply/diff/reconcile
+	// do. A corrupt state file makes every real command exit 1, so a readiness
+	// check that ignores it would falsely report healthy. A missing file is
+	// fine (state.Load returns an empty state on a fresh install).
+	if _, err := state.Load(filepath.Join(stateDir, "targets.json")); err != nil {
+		fmt.Fprintf(w, "  state file corrupt: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(w, "  state file ok\n")
 	return 0
 }
 
