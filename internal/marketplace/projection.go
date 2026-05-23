@@ -344,6 +344,9 @@ func loadSkillEntry(path string, readFile func(string) ([]byte, error)) (*source
 	if name == "" {
 		name = filepath.Base(path)
 	}
+	if err := validateProjectedName("skill", name); err != nil {
+		return nil, err
+	}
 
 	return &source.Skill{Name: name, Frontmatter: fm, Body: body}, nil
 }
@@ -374,8 +377,27 @@ func loadMarkdownEntry(path string, readFile func(string) ([]byte, error)) (*mar
 	if name == "" {
 		name = strings.TrimSuffix(filepath.Base(path), ".md")
 	}
+	if err := validateProjectedName("component", name); err != nil {
+		return nil, err
+	}
 
 	return &markdownEntry{name: name, fm: fm, body: body}, nil
+}
+
+// validateProjectedName rejects a skill/subagent/command name that would
+// escape its destination directory once joined into a path. Component names
+// become path segments at render time, so a name from a hostile plugin
+// manifest's frontmatter like "../../evil" must never reach a writer. This
+// mirrors the equivalent guard in the source loader's projection twin — the
+// runtime path — so the two projection implementations cannot diverge.
+func validateProjectedName(kind, name string) error {
+	if name == "" {
+		return fmt.Errorf("%s has an empty name", kind)
+	}
+	if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") || strings.ContainsRune(name, 0) {
+		return fmt.Errorf("%s name %q contains a path separator or traversal component", kind, name)
+	}
+	return nil
 }
 
 // applyHooks interprets the hooks field (string | []string | map) and appends

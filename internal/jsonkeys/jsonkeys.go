@@ -3,8 +3,32 @@
 package jsonkeys
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 )
+
+// DecodeObject unmarshals JSON object bytes into a map, preserving numbers as
+// json.Number rather than coercing to float64. The merge promises to preserve
+// FOREIGN keys verbatim, but float64 silently rounds any integer larger than
+// 2^53 (snowflake ids, nanosecond timestamps) on re-marshal. json.Number keeps
+// the literal digits and re-marshals exactly. nil/empty input yields an empty
+// map.
+func DecodeObject(data []byte) (map[string]any, error) {
+	m := map[string]any{}
+	if len(data) == 0 {
+		return m, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(&m); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	return m, nil
+}
 
 // MergeKeys merges ours into existing, removing ownedPointers that are no
 // longer in ours. Returns the merged map plus diagnostic lists.
@@ -21,16 +45,9 @@ func MergeKeys(existing, ours map[string]any, ownedPointers []string) (map[strin
 		merged = map[string]any{}
 	}
 
-	// Step 1: overlay ours onto merged
-	for k, v := range ours {
-		if ev, ok := merged[k].(map[string]any); ok {
-			if vv, ok := v.(map[string]any); ok {
-				merged[k] = mergeMaps(ev, vv)
-				continue
-			}
-		}
-		merged[k] = v
-	}
+	// Step 1: overlay ours onto merged, REPLACING at second-level (owned)
+	// granularity rather than deep-merging.
+	overlayOwned(merged, ours)
 
 	// Step 2: walk ownedPointers; if a pointer is no longer present in `ours`,
 	// delete it from merged. If still present, mark kept.
@@ -48,18 +65,27 @@ func MergeKeys(existing, ours map[string]any, ownedPointers []string) (map[strin
 	return merged, kept, removed
 }
 
-func mergeMaps(a, b map[string]any) map[string]any {
-	out := deepCopyMap(a)
-	for k, v := range b {
-		if existing, ok := out[k].(map[string]any); ok {
-			if vv, ok := v.(map[string]any); ok {
-				out[k] = mergeMaps(existing, vv)
-				continue
+// overlayOwned overlays ours onto merged at SECOND-LEVEL (owned) granularity:
+// agentsync owns a top-level section's child objects wholesale (e.g.
+// /mcpServers/<id>), so when both sides hold an object at a top-level key, each
+// child key from ours REPLACES the corresponding child in merged — it is not
+// deep-merged. This is what makes a removed inner field (a dropped env var, or
+// a stale `command` after a stdio→http switch) actually disappear, while still
+// preserving FOREIGN sibling children (ids the user added that ours doesn't
+// mention). A top-level key whose value is a scalar/array is replaced whole.
+// Values are deep-copied so merged shares no mutable structure with ours.
+func overlayOwned(merged, ours map[string]any) {
+	for k, v := range ours {
+		ovv, ok := v.(map[string]any)
+		mvv, mok := merged[k].(map[string]any)
+		if ok && mok {
+			for kk, vv := range ovv {
+				mvv[kk] = deepCopyValue(vv)
 			}
+			continue
 		}
-		out[k] = v
+		merged[k] = deepCopyValue(v)
 	}
-	return out
 }
 
 func deepCopyMap(m map[string]any) map[string]any {
@@ -68,13 +94,28 @@ func deepCopyMap(m map[string]any) map[string]any {
 	}
 	out := make(map[string]any, len(m))
 	for k, v := range m {
-		if mm, ok := v.(map[string]any); ok {
-			out[k] = deepCopyMap(mm)
-		} else {
-			out[k] = v
-		}
+		out[k] = deepCopyValue(v)
 	}
 	return out
+}
+
+// deepCopyValue recursively copies maps and slices so the result shares no
+// mutable structure with the input. Scalars (string/float64/bool/nil) are
+// immutable and returned as-is. Without the []any case a merged result aliased
+// the input's arrays (and the objects inside them).
+func deepCopyValue(v any) any {
+	switch vv := v.(type) {
+	case map[string]any:
+		return deepCopyMap(vv)
+	case []any:
+		out := make([]any, len(vv))
+		for i, e := range vv {
+			out[i] = deepCopyValue(e)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 func pointerExists(m map[string]any, ptr string) bool {

@@ -61,3 +61,25 @@ func TestEncodeFrontmatter_Roundtrip(t *testing.T) {
 		t.Fatalf("body = %q", body2)
 	}
 }
+
+// TestParseFrontmatter_CRLF is the regression for skill/subagent/command .md
+// files saved by a Windows editor with CRLF line endings. The parser matched
+// only the literal "---\n" delimiter, so a "---\r\n" header was treated as no
+// frontmatter — the entire file became body and description/model/mode
+// silently vanished on ingest/import.
+func TestParseFrontmatter_CRLF(t *testing.T) {
+	input := []byte("---\r\nname: my-skill\r\ndescription: Does the thing\r\n---\r\nBody line one\r\n")
+	fm, body, err := claude.ParseFrontmatter(input)
+	if err != nil {
+		t.Fatalf("ParseFrontmatter: %v", err)
+	}
+	if fm["description"] != "Does the thing" {
+		t.Fatalf("description lost on CRLF input: %+v", fm)
+	}
+	if fm["name"] != "my-skill" {
+		t.Fatalf("name lost on CRLF input: %+v", fm)
+	}
+	if body == string(input) {
+		t.Fatalf("frontmatter not stripped; whole file returned as body: %q", body)
+	}
+}

@@ -12,7 +12,9 @@ import (
 )
 
 func TestBuildReport_NoPlugins(t *testing.T) {
-	c := source.Canonical{}
+	c := source.Canonical{
+		MCPServers: []source.MCPServer{{ID: "github"}},
+	}
 	plan := render.RenderPlan{
 		PerAgent: map[string]render.AgentResult{
 			"claude": {
@@ -35,7 +37,7 @@ func TestBuildReport_NoPlugins(t *testing.T) {
 		t.Errorf("agent = %q, want claude", row.Agent)
 	}
 	if row.MCP != 1 {
-		t.Errorf("mcp = %d, want 1", row.MCP)
+		t.Errorf("mcp = %d, want 1 (one canonical MCP server)", row.MCP)
 	}
 	if row.Coverage != "full" {
 		t.Errorf("coverage = %q, want full", row.Coverage)
@@ -80,6 +82,8 @@ func TestBuildReport_WithPlugin(t *testing.T) {
 
 func TestBuildReport_PartialCoverage(t *testing.T) {
 	c := source.Canonical{
+		// One server renders (MCP>0) and one component is skipped → partial.
+		MCPServers: []source.MCPServer{{ID: "github"}},
 		Plugins: []source.Plugin{
 			{ID: "demo", Plugin: source.PluginSpec{ID: "demo@test-mp"}},
 		},
@@ -171,5 +175,35 @@ func TestTranslationReport_PrintJSON(t *testing.T) {
 	}
 	if len(out.Rows) != 1 {
 		t.Fatalf("expected 1 row in JSON, got %d", len(out.Rows))
+	}
+}
+
+// TestBuildReport_CountsItemsNotOps is the regression for the translation
+// report miscounting: it counted merge-json-keys OPS (always 1 for claude's
+// single .claude.json merge, and wrongly including hooks/lsp ops) as "mcp",
+// and counted every replace op (skills/subagents/memory) as "commands". The
+// counts must reflect actual canonical items.
+func TestBuildReport_CountsItemsNotOps(t *testing.T) {
+	c := source.Canonical{
+		MCPServers: []source.MCPServer{{ID: "github"}, {ID: "slack"}, {ID: "jira"}},
+		Memory:     source.Memory{Body: "# mem"},
+	}
+	plan := render.RenderPlan{
+		PerAgent: map[string]render.AgentResult{
+			"claude": {
+				Ops: []adapter.FileOp{
+					{Action: "write", Path: "/h/.claude.json", MergeStrategy: "merge-json-keys"},
+					{Action: "write", Path: "/h/.claude/CLAUDE.md", MergeStrategy: "replace"},
+				},
+			},
+		},
+	}
+	report := render.BuildReport(c, plan, []string{"claude"})
+	row := report.Rows[0]
+	if row.MCP != 3 {
+		t.Fatalf("MCP = %d, want 3 (server count, not op count)", row.MCP)
+	}
+	if row.Commands != 0 {
+		t.Fatalf("Commands = %d, want 0 (memory must not be counted as a command)", row.Commands)
 	}
 }

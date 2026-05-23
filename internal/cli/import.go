@@ -15,9 +15,126 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
+
+// reReferenceSecretsAgainstSource restores ${secret:…} placeholders in a
+// canonical reconstructed from a destination so import AND reconcile write-back
+// never persist a live credential into ~/.agentsync. apply substitutes secrets
+// to cleartext into the destination; both import and reconcile read that
+// destination back, so this puts the placeholders back before writing source.
+//
+// Matching is FIELD-POSITIONAL, not value-based: for each item present in the
+// current source, a field is restored to its templated form only if (a) the
+// source field actually referenced a secret and (b) the ingested value still
+// resolves to the same thing (the field is unchanged). A field the source did
+// NOT template (e.g. command = "npx") is never rewritten, even if its literal
+// happens to equal some secret's value — value-based masking would corrupt it.
+func reReferenceSecretsAgainstSource(cmd *cobra.Command, home string, c *source.Canonical) {
+	cur, err := source.Load(loaderFsForState(), home)
+	if err != nil {
+		return // no source yet (first import) → nothing to re-reference
+	}
+	userHome := paths.HomeDir(paths.OSEnv{})
+	sec := secrets.SelectBackend(cur.Config.Secrets, home, userHome)
+	env := secrets.EnvBackend{}
+
+	// restore returns the source field's templated value when it referenced a
+	// secret and still resolves to the (unchanged) ingested value; otherwise it
+	// keeps the ingested value verbatim.
+	restore := func(srcVal, ingestedVal string) string {
+		if !strings.Contains(srcVal, "${secret:") {
+			return ingestedVal
+		}
+		if resolved, _, rerr := secrets.SubstituteRefs(srcVal, sec, env); rerr == nil && resolved == ingestedVal {
+			return srcVal
+		}
+		return ingestedVal
+	}
+
+	curMCP := make(map[string]source.MCPServerSpec, len(cur.MCPServers))
+	for _, m := range cur.MCPServers {
+		curMCP[m.ID] = m.Server
+	}
+	for i := range c.MCPServers {
+		src, ok := curMCP[c.MCPServers[i].ID]
+		if !ok {
+			continue
+		}
+		restoreServerFields(&c.MCPServers[i].Server, src.Command, src.URL, src.Args, src.Env, src.Headers, restore)
+	}
+
+	curLSP := make(map[string]source.LSPServerSpec, len(cur.LSPServers))
+	for _, l := range cur.LSPServers {
+		curLSP[l.ID] = l.Spec
+	}
+	for i := range c.LSPServers {
+		src, ok := curLSP[c.LSPServers[i].ID]
+		if !ok {
+			continue
+		}
+		sp := &c.LSPServers[i].Spec
+		restoreServerFields2(sp, src.Command, src.URL, src.Args, src.Env, src.Headers, restore)
+	}
+
+	// Hooks have no stable id; match by Event and restore a Command that the
+	// source templated and whose resolution equals the ingested command.
+	for i := range c.Hooks {
+		for _, h := range cur.Hooks {
+			if h.Event != c.Hooks[i].Event || !strings.Contains(h.Command, "${secret:") {
+				continue
+			}
+			if resolved, _, rerr := secrets.SubstituteRefs(h.Command, sec, env); rerr == nil && resolved == c.Hooks[i].Command {
+				c.Hooks[i].Command = h.Command
+				break
+			}
+		}
+	}
+
+	if missing := secrets.UnresolvedSecretRefs(&cur, sec); len(missing) > 0 {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"warning: could not re-reference secret(s) %s (secrets backend unavailable); "+
+				"the written-back source file may contain cleartext — review it before committing\n",
+			strings.Join(missing, ", "))
+	}
+}
+
+// restoreServerFields applies restore() field-positionally to an MCP spec.
+func restoreServerFields(dst *source.MCPServerSpec, srcCmd, srcURL string, srcArgs []string, srcEnv, srcHeaders map[string]string, restore func(string, string) string) {
+	dst.Command = restore(srcCmd, dst.Command)
+	dst.URL = restore(srcURL, dst.URL)
+	for j := range dst.Args {
+		if j < len(srcArgs) {
+			dst.Args[j] = restore(srcArgs[j], dst.Args[j])
+		}
+	}
+	for k, v := range dst.Env {
+		dst.Env[k] = restore(srcEnv[k], v)
+	}
+	for k, v := range dst.Headers {
+		dst.Headers[k] = restore(srcHeaders[k], v)
+	}
+}
+
+// restoreServerFields2 is restoreServerFields for an LSP spec (same field set,
+// distinct struct type).
+func restoreServerFields2(dst *source.LSPServerSpec, srcCmd, srcURL string, srcArgs []string, srcEnv, srcHeaders map[string]string, restore func(string, string) string) {
+	dst.Command = restore(srcCmd, dst.Command)
+	dst.URL = restore(srcURL, dst.URL)
+	for j := range dst.Args {
+		if j < len(srcArgs) {
+			dst.Args[j] = restore(srcArgs[j], dst.Args[j])
+		}
+	}
+	for k, v := range dst.Env {
+		dst.Env[k] = restore(srcEnv[k], v)
+	}
+	for k, v := range dst.Headers {
+		dst.Headers[k] = restore(srcHeaders[k], v)
+	}
+}
 
 // loaderFsForState returns an afero.Fs suitable for re-loading the
 // canonical repo when seeding state — the OS FS is correct here because
@@ -26,12 +143,19 @@ func loaderFsForState() afero.Fs { return afero.NewOsFs() }
 
 // jsonUnmarshalLoose is a thin wrapper that returns nil on empty input
 // (so callers can treat empty as "absent") and surfaces real parse errors.
+// It accepts JSONC (comments, trailing commas) via hujson so seeding state
+// from a hand-commented opencode.json doesn't mis-hash the dest as null —
+// matching the apply/ingest read path.
 func jsonUnmarshalLoose(data []byte, v *map[string]any) error {
 	if len(data) == 0 {
 		*v = map[string]any{}
 		return nil
 	}
-	return json.Unmarshal(data, v)
+	std, err := standardizeJSONC(data)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(std, v)
 }
 
 // collectStateSeedPointers returns the JSON pointers we record state for
@@ -131,6 +255,20 @@ func importRun(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("ingest %s: %w", agentName, err)
 	}
+
+	// Every component except memory addresses a named item; a two-part
+	// selector like "claude:mcp" would otherwise fall through to a misleading
+	// `mcp server "" not found` downstream. Fail with the expected grammar.
+	if component != "memory" && name == "" {
+		return fmt.Errorf("selector %q is missing the item name; expected <agent>:<component>:<name>", sel)
+	}
+
+	// Re-reference secrets before writing back to source. The destination was
+	// written by a prior apply with ${secret:…} substituted to cleartext, so
+	// the ingested canonical holds live credentials. Convert any value that
+	// matches a known secret back to its placeholder so import doesn't persist
+	// a cleartext token into ~/.agentsync (often a committed dotfiles repo).
+	reReferenceSecretsAgainstSource(cmd, home, &c)
 
 	switch component {
 	case "mcp":
@@ -336,6 +474,14 @@ func parseSelector(sel string) (agentName, component, name string, err error) {
 func importMCP(cmd *cobra.Command, home string, c source.Canonical, name string) error {
 	for _, m := range c.MCPServers {
 		if m.ID == name {
+			// Preserve source-only fields (agents allowlist, enabled) that the
+			// rendered destination never carries — otherwise import resets the
+			// agents allowlist to default-all (silently broadening the server's
+			// exposure) and clears enabled. reconcile write-back does the same.
+			if existing, ok, rerr := source.ReadMCP(home, m.ID); rerr == nil && ok {
+				m.Server.Agents = existing.Server.Agents
+				m.Server.Enabled = existing.Server.Enabled
+			}
 			if err := source.WriteMCP(home, m.ID, m); err != nil {
 				return fmt.Errorf("write mcp %s: %w", name, err)
 			}

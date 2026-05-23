@@ -12,6 +12,14 @@ import (
 // the input doesn't begin with "---\n", returns an empty map and the entire
 // input as body.
 func ParseFrontmatter(data []byte) (map[string]any, string, error) {
+	// Normalize CRLF → LF so a .md saved by a Windows editor ("---\r\n") is
+	// recognized as having frontmatter. Without this the literal "---\n" check
+	// fails, the whole file is treated as body, and description/model/mode
+	// silently vanish on ingest/import. agentsync re-renders bodies with LF,
+	// so the normalization is lossless in practice.
+	if bytes.IndexByte(data, '\r') >= 0 {
+		data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	}
 	if !bytes.HasPrefix(data, []byte("---\n")) {
 		return map[string]any{}, string(data), nil
 	}

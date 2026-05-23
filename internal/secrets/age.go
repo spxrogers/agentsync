@@ -104,9 +104,15 @@ func flatten(prefix string, m map[string]any) (map[string]string, error) {
 				return nil, err
 			}
 			for kk, vvv := range sub {
+				if _, dup := out[kk]; dup {
+					return nil, fmt.Errorf("secret key %q is defined more than once (e.g. both a quoted %q key and a nested table); use exactly one form", kk, kk)
+				}
 				out[kk] = vvv
 			}
 		case string:
+			if _, dup := out[key]; dup {
+				return nil, fmt.Errorf("secret key %q is defined more than once (e.g. both a quoted %q key and a nested table); use exactly one form", key, key)
+			}
 			out[key] = vv
 		default:
 			return nil, fmt.Errorf("secret %q has a non-string value (%T); secret values must be quoted strings", key, vv)

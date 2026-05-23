@@ -46,6 +46,43 @@ func TestIngest_RoundTripsMCP(t *testing.T) {
 	}
 }
 
+// TestIngest_RoundTripsMCPHeaders is the regression for OpenCode ingest
+// silently dropping a remote MCP server's auth headers. Render writes
+// spec["headers"]; ingest must read them back, or an `import`/reconcile
+// round-trip produces a server config missing its Authorization header,
+// which then 401s on the next apply.
+func TestIngest_RoundTripsMCPHeaders(t *testing.T) {
+	tmp := t.TempDir()
+	in := source.Canonical{
+		MCPServers: []source.MCPServer{{
+			ID: "remote",
+			Server: source.MCPServerSpec{
+				Type:    "http",
+				URL:     "https://mcp.example.com",
+				Headers: map[string]string{"Authorization": "Bearer xyz"},
+			},
+		}},
+	}
+	a := opencode.New(opencode.Options{TargetRoot: tmp})
+	ops, _, err := a.Render(in, adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	out, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if len(out.MCPServers) != 1 {
+		t.Fatalf("MCP roundtrip lost: %+v", out.MCPServers)
+	}
+	if got := out.MCPServers[0].Server.Headers["Authorization"]; got != "Bearer xyz" {
+		t.Fatalf("auth header dropped on round-trip: got %q, headers=%+v", got, out.MCPServers[0].Server.Headers)
+	}
+}
+
 // TestIngest_RoundTripsMemory exercises: Render → Apply → Ingest for AGENTS.md.
 func TestIngest_RoundTripsMemory(t *testing.T) {
 	tmp := t.TempDir()

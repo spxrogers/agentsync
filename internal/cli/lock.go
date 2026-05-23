@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/iox"
+	"github.com/spxrogers/agentsync/internal/paths"
 )
 
 // lockTimeout is how long mutating CLI commands wait for the global lock
@@ -30,4 +32,20 @@ func withGlobalLock(home string, fn func() error) error {
 	}
 	defer func() { _ = lock.Release() }()
 	return fn()
+}
+
+// lockedRun wraps a cobra RunE so the command body executes under the global
+// lock. Used by the agent/plugin mutators that do a read-modify-write of
+// agentsync.toml or plugins/<id>.toml: without serialization, two concurrent
+// runs (or one racing a locked `apply`/`update`) lose an update — AtomicWrite
+// prevents a torn file but not a stale-read overwrite. The wrapped function
+// must NOT acquire the global lock itself (gofrs/flock would deadlock on the
+// re-entrant acquire from the same process).
+func lockedRun(fn func(*cobra.Command, []string) error) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		home := paths.AgentsyncHome(paths.OSEnv{})
+		return withGlobalLock(home, func() error {
+			return fn(cmd, args)
+		})
+	}
 }

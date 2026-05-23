@@ -54,7 +54,7 @@ func newPluginInstallCmd() *cobra.Command {
 		Use:   "install <id[@marketplace]>",
 		Short: "fetch a plugin and register it",
 		Args:  cobra.ExactArgs(1),
-		RunE:  pluginInstallRun,
+		RunE:  lockedRun(pluginInstallRun),
 	}
 }
 
@@ -132,12 +132,15 @@ func newPluginUpgradeCmd() *cobra.Command {
 		Use:   "upgrade <id>",
 		Short: "re-fetch a plugin and update its manifest sha",
 		Args:  cobra.ExactArgs(1),
-		RunE:  pluginUpgradeRun,
+		RunE:  lockedRun(pluginUpgradeRun),
 	}
 }
 
 func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
 	id := args[0]
+	if err := validateCacheKey("plugin", id); err != nil {
+		return err
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 
 	// Read existing plugin toml.
@@ -205,12 +208,15 @@ func newPluginEnableCmd() *cobra.Command {
 		Use:   "enable <id>",
 		Short: "enable a disabled plugin",
 		Args:  cobra.ExactArgs(1),
-		RunE:  pluginEnableRun,
+		RunE:  lockedRun(pluginEnableRun),
 	}
 }
 
 func pluginEnableRun(cmd *cobra.Command, args []string) error {
 	id := args[0]
+	if err := validateCacheKey("plugin", id); err != nil {
+		return err
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	pluginPath := filepath.Join(home, "plugins", id+".toml")
 
@@ -240,12 +246,15 @@ func newPluginDisableCmd() *cobra.Command {
 		Use:   "disable <id>",
 		Short: "disable a plugin without removing it",
 		Args:  cobra.ExactArgs(1),
-		RunE:  pluginDisableRun,
+		RunE:  lockedRun(pluginDisableRun),
 	}
 }
 
 func pluginDisableRun(cmd *cobra.Command, args []string) error {
 	id := args[0]
+	if err := validateCacheKey("plugin", id); err != nil {
+		return err
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	pluginPath := filepath.Join(home, "plugins", id+".toml")
 
@@ -273,12 +282,15 @@ func newPluginRemoveCmd() *cobra.Command {
 		Use:   "remove <id>",
 		Short: "remove a plugin and its cached files",
 		Args:  cobra.ExactArgs(1),
-		RunE:  pluginRemoveRun,
+		RunE:  lockedRun(pluginRemoveRun),
 	}
 }
 
 func pluginRemoveRun(cmd *cobra.Command, args []string) error {
 	id := args[0]
+	if err := validateCacheKey("plugin", id); err != nil {
+		return err
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 
 	pluginPath := filepath.Join(home, "plugins", id+".toml")

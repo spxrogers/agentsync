@@ -18,6 +18,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/tailscale/hujson"
 )
 
 func newStatusCmd() *cobra.Command {
@@ -85,9 +86,14 @@ func newStatusCmd() *cobra.Command {
 				}
 				fmt.Fprintf(w, "[%s]\n", name)
 				seen := map[string]bool{}
-				// file-level: for each op, classify
+				// file-level: for each op, classify. Only key-merge ops are
+				// handled key-by-key below; every other strategy (including
+				// "replace", used by skills/subagents/commands/memory) is a
+				// whole-file op and must be classified here. Skipping on any
+				// non-empty MergeStrategy silently dropped all replace-strategy
+				// files, so status reported no drift for them.
 				for _, op := range res.Ops {
-					if op.MergeStrategy != "" {
+					if op.MergeStrategy == "merge-json-keys" || op.MergeStrategy == "merge-jsonc-keys" {
 						continue // covered key-by-key below
 					}
 					if seen[op.Path] {
@@ -179,13 +185,33 @@ func hashAnyValue(v any) string {
 	return hashContent(data)
 }
 
+// standardizeJSONC converts JSONC (comments, trailing commas) to plain JSON
+// bytes so encoding/json can parse it. It mirrors how the adapters read these
+// destination files (hujson.Parse + Standardize), keeping the drift/import
+// read paths in agreement with the apply write path.
+func standardizeJSONC(data []byte) ([]byte, error) {
+	v, err := hujson.Parse(data)
+	if err != nil {
+		return nil, err
+	}
+	v.Standardize()
+	return v.Pack(), nil
+}
+
 func readJSONFile(path string) map[string]any {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return map[string]any{}
 	}
-	var m map[string]any
-	_ = json.Unmarshal(data, &m)
+	m := map[string]any{}
+	// Accept JSONC: apply/ingest write and read these dests via hujson, so a
+	// user may legitimately have `//` comments or trailing commas in
+	// opencode.json. Reading them with plain encoding/json would fail and
+	// yield an empty map, making drift classification (status/diff/reconcile)
+	// report phantom conflicts for every owned pointer.
+	if std, serr := standardizeJSONC(data); serr == nil {
+		_ = json.Unmarshal(std, &m)
+	}
 	return m
 }
 
@@ -196,6 +222,12 @@ func getPointerValue(m map[string]any, ptr string) any {
 	parts := strings.Split(strings.TrimPrefix(ptr, "/"), "/")
 	var cur any = m
 	for _, p := range parts {
+		// Decode RFC 6901 escapes so a managed id containing '~' or '/'
+		// (which CollectPointers escaped to ~0/~1) matches the real key.
+		// Without this, status/diff looked up the literal escaped key, found
+		// nothing, and reported phantom drift forever for that item.
+		p = strings.ReplaceAll(p, "~1", "/")
+		p = strings.ReplaceAll(p, "~0", "~")
 		mp, ok := cur.(map[string]any)
 		if !ok {
 			return nil

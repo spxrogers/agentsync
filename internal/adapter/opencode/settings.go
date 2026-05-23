@@ -35,12 +35,11 @@ func MergeJSONC(existing []byte, ours map[string]any, ownedPointers []string) ([
 		return nil, fmt.Errorf("parse jsonc: %w", err)
 	}
 	val.Standardize()
-	var existingMap map[string]any
-	if err := json.Unmarshal(val.Pack(), &existingMap); err != nil {
+	// Decode preserving json.Number so a foreign integer > 2^53 in the user's
+	// opencode.json isn't rounded when the merged file is re-marshalled.
+	existingMap, err := jsonkeys.DecodeObject(val.Pack())
+	if err != nil {
 		return nil, fmt.Errorf("standardize jsonc: %w", err)
-	}
-	if existingMap == nil {
-		existingMap = map[string]any{}
 	}
 	merged, _, _ := jsonkeys.MergeKeys(existingMap, ours, ownedPointers)
 	out, err := json.MarshalIndent(merged, "", "  ")

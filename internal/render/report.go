@@ -10,7 +10,6 @@ import (
 	"io"
 	"sort"
 
-	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -124,8 +123,8 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 			row := PluginRow{
 				Plugin:   "(base)",
 				Agent:    agName,
-				MCP:      countMCPOps(res.Ops),
-				Commands: countCommandOps(res.Ops),
+				MCP:      countMCPServers(c, agName),
+				Commands: len(c.Commands),
 				Skips:    len(res.Skips),
 			}
 			row.Coverage = computeCoverage(row)
@@ -151,8 +150,8 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 			row := PluginRow{
 				Plugin:   label,
 				Agent:    agName,
-				MCP:      countMCPOps(res.Ops),
-				Commands: countCommandOps(res.Ops),
+				MCP:      countMCPServers(c, agName),
+				Commands: len(c.Commands),
 				Skips:    len(res.Skips),
 			}
 			row.Coverage = computeCoverage(row)
@@ -173,29 +172,34 @@ func computeCoverage(row PluginRow) string {
 	return "none"
 }
 
-// countMCPOps counts write ops whose SourceID begins with "mcp" or that write
-// a file containing mcpServers (approximate heuristic).
-func countMCPOps(ops []adapter.FileOp) int {
-	// We count merge-json-keys ops (the claude adapter emits one for .claude.json
-	// which contains all MCP servers) — use the number of mcpServers in canonical
-	// as proxy.  Since we don't have the canonical here, count ops with
-	// MergeStrategy containing "json".
+// countMCPServers counts the canonical MCP servers that render for agent —
+// the actual server count, not the op count. The previous countMCPOps counted
+// merge-json-keys ops, which is always 1 for claude's single .claude.json
+// merge regardless of how many servers it holds, and wrongly also counted
+// hooks/lspServers ops (same strategy) as MCP.
+func countMCPServers(c source.Canonical, agent string) int {
 	n := 0
-	for _, op := range ops {
-		if op.MergeStrategy == "merge-json-keys" || op.MergeStrategy == "merge-jsonc-keys" {
+	for _, m := range c.MCPServers {
+		if m.Server.Enabled != nil && !*m.Server.Enabled {
+			continue
+		}
+		if targetsAgent(m.Server.Agents, agent) {
 			n++
 		}
 	}
 	return n
 }
 
-// countCommandOps counts write ops for slash commands.
-func countCommandOps(ops []adapter.FileOp) int {
-	n := 0
-	for _, op := range ops {
-		if op.Action == "write" && (op.MergeStrategy == "replace" || op.MergeStrategy == "") {
-			n++
+// targetsAgent reports whether an Agents allowlist includes agent. An empty
+// list or one containing "*" targets every agent.
+func targetsAgent(agents []string, agent string) bool {
+	if len(agents) == 0 {
+		return true
+	}
+	for _, a := range agents {
+		if a == "*" || a == agent {
+			return true
 		}
 	}
-	return n
+	return false
 }
