@@ -74,3 +74,27 @@ func TestMergeKeys_ForeignNotInOwnedListPreserved(t *testing.T) {
 		t.Fatalf("we owned old-mine but it wasn't in existing; nothing to remove. Got %v", removed)
 	}
 }
+
+// TestMergeKeys_DeepCopiesArrays guards against deepCopyMap aliasing nested
+// arrays (and the objects inside them) from the input `existing` map. Today no
+// caller mutates a merged array post-merge, but the aliasing is a latent
+// footgun: a future caller that did would silently corrupt the on-disk-derived
+// input. MergeKeys must return a fully independent copy.
+func TestMergeKeys_DeepCopiesArrays(t *testing.T) {
+	existing := map[string]any{
+		"hooks": []any{map[string]any{"cmd": "original"}},
+	}
+	merged, _, _ := jsonkeys.MergeKeys(existing, map[string]any{"other": float64(1)}, nil)
+
+	arr, ok := merged["hooks"].([]any)
+	if !ok || len(arr) != 1 {
+		t.Fatalf("hooks array not preserved through merge: %+v", merged["hooks"])
+	}
+	elem := arr[0].(map[string]any)
+	elem["cmd"] = "mutated"
+
+	origElem := existing["hooks"].([]any)[0].(map[string]any)
+	if origElem["cmd"] != "original" {
+		t.Fatalf("mutating the merged array corrupted the input `existing`: %v", origElem)
+	}
+}

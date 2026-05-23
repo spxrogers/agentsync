@@ -68,13 +68,28 @@ func deepCopyMap(m map[string]any) map[string]any {
 	}
 	out := make(map[string]any, len(m))
 	for k, v := range m {
-		if mm, ok := v.(map[string]any); ok {
-			out[k] = deepCopyMap(mm)
-		} else {
-			out[k] = v
-		}
+		out[k] = deepCopyValue(v)
 	}
 	return out
+}
+
+// deepCopyValue recursively copies maps and slices so the result shares no
+// mutable structure with the input. Scalars (string/float64/bool/nil) are
+// immutable and returned as-is. Without the []any case a merged result aliased
+// the input's arrays (and the objects inside them).
+func deepCopyValue(v any) any {
+	switch vv := v.(type) {
+	case map[string]any:
+		return deepCopyMap(vv)
+	case []any:
+		out := make([]any, len(vv))
+		for i, e := range vv {
+			out[i] = deepCopyValue(e)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 func pointerExists(m map[string]any, ptr string) bool {
