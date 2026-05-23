@@ -298,6 +298,21 @@ func resolveComponentPathFS(s, pluginCacheDir string) (string, error) {
 	return resolved, nil
 }
 
+// validateComponentName rejects a skill/subagent/command name that would
+// escape its destination directory once joined into a path. Component names
+// become path segments at render time (e.g. filepath.Join(SkillsDir, name,
+// "SKILL.md")), so a name from a hostile plugin manifest's frontmatter like
+// "../../evil" must never reach the writer.
+func validateComponentName(kind, name string) error {
+	if name == "" {
+		return fmt.Errorf("%s has an empty name", kind)
+	}
+	if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") || strings.ContainsRune(name, 0) {
+		return fmt.Errorf("%s name %q contains a path separator or traversal component", kind, name)
+	}
+	return nil
+}
+
 // pathWithin reports whether child is the same path as parent or sits inside
 // it, after making both absolute and Clean. Used to bound manifest-listed
 // component paths to the plugin cache.
@@ -384,6 +399,9 @@ func loadSkillEntryFS(fs afero.Fs, path string) (*Skill, error) {
 	if name == "" {
 		name = filepath.Base(path)
 	}
+	if err := validateComponentName("skill", name); err != nil {
+		return nil, err
+	}
 	return &Skill{Name: name, Frontmatter: fm, Body: body}, nil
 }
 
@@ -408,6 +426,9 @@ func loadMarkdownEntryFS(fs afero.Fs, path string) (*markdownEntryFS, error) {
 	}
 	if name == "" {
 		name = strings.TrimSuffix(filepath.Base(path), ".md")
+	}
+	if err := validateComponentName("component", name); err != nil {
+		return nil, err
 	}
 	return &markdownEntryFS{name: name, fm: fm, body: body}, nil
 }

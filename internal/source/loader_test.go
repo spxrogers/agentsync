@@ -294,6 +294,34 @@ version = "1"
 	}
 }
 
+// TestLoad_RejectsTraversalComponentName is the regression for a plugin
+// component whose frontmatter name contains a path-traversal segment. The
+// name becomes a path segment at render time (filepath.Join(SkillsDir, name,
+// "SKILL.md")), so "../../evil" would write the SKILL.md outside the managed
+// skills dir. The loader must reject it.
+func TestLoad_RejectsTraversalComponentName(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	home := "/h"
+	cache := "/h/.state/cache/plugins"
+	_ = afero.WriteFile(fs, filepath.Join(home, "plugins", "x.toml"), []byte(`
+[plugin]
+id = "x@m"
+version = "1"
+`), 0o644)
+	_ = afero.WriteFile(fs, filepath.Join(cache, "x", ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"x","skills":["s"]}`), 0o644)
+	_ = afero.WriteFile(fs, filepath.Join(cache, "x", "s", "SKILL.md"),
+		[]byte("---\nname: ../../evil\n---\nbody\n"), 0o644)
+
+	_, err := source.LoadWithCache(fs, home, cache)
+	if err == nil {
+		t.Fatal("expected error for a component name with a traversal segment")
+	}
+	if !strings.Contains(err.Error(), "name") {
+		t.Fatalf("error should name the bad component name; got: %v", err)
+	}
+}
+
 // TestLoad_PluginManifestSHAMismatchRefuses is the regression for the
 // finding that ManifestSHA was recorded at install but never verified
 // at load. A user installs a plugin, the cache gets tampered with
