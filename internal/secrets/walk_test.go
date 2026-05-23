@@ -36,6 +36,7 @@ var walkerCovered = map[string]map[string]bool{
 		"Args":    true,
 		"Env":     true,
 		"Headers": true,
+		"Agents":  false, // source-only targeting allowlist, never a secret
 	},
 }
 

@@ -13,37 +13,12 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/capture"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
-	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
-
-// reReferenceSecretsAgainstSource restores ${secret:…} placeholders in a
-// canonical reconstructed from a destination so import AND reconcile write-back
-// never persist a live credential into ~/.agentsync. It is a thin shim around
-// secrets.ReReferenceCanonical (the single boundary that owns the field-walk and
-// the field-positional restore) that supplies the current source as the
-// reference and surfaces a warning when the secrets backend can't resolve.
-func reReferenceSecretsAgainstSource(cmd *cobra.Command, home string, c *source.Canonical) {
-	cur, err := source.Load(loaderFsForState(), home)
-	if err != nil {
-		return // no source yet (first import) → nothing to re-reference
-	}
-	userHome := paths.HomeDir(paths.OSEnv{})
-	sec := secrets.SelectBackend(cur.Config.Secrets, home, userHome)
-	env := secrets.EnvBackend{}
-
-	secrets.ReReferenceCanonical(c, &cur, sec, env)
-
-	if missing := secrets.UnresolvedSecretRefs(&cur, sec); len(missing) > 0 {
-		fmt.Fprintf(cmd.ErrOrStderr(),
-			"warning: could not re-reference secret(s) %s (secrets backend unavailable); "+
-				"the written-back source file may contain cleartext — review it before committing\n",
-			strings.Join(missing, ", "))
-	}
-}
 
 // loaderFsForState returns an afero.Fs suitable for re-loading the
 // canonical repo when seeding state — the OS FS is correct here because
@@ -172,13 +147,11 @@ func importRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("selector %q is missing the item name; expected <agent>:<component>:<name>", sel)
 	}
 
-	// Re-reference secrets before writing back to source. The destination was
-	// written by a prior apply with ${secret:…} substituted to cleartext, so
-	// the ingested canonical holds live credentials. Convert any value that
-	// matches a known secret back to its placeholder so import doesn't persist
-	// a cleartext token into ~/.agentsync (often a committed dotfiles repo).
-	reReferenceSecretsAgainstSource(cmd, home, &c)
-
+	// MCP / LSP / hook capture routes through capture.Capture, which
+	// re-references secrets (the destination holds live cleartext substituted
+	// by a prior apply) and preserves source-only fields before writing source.
+	// The text components (skill/subagent/command/memory) carry no secrets and
+	// no source-only fields, so they write directly.
 	switch component {
 	case "mcp":
 		err = importMCP(cmd, home, c, name)
@@ -383,16 +356,9 @@ func parseSelector(sel string) (agentName, component, name string, err error) {
 func importMCP(cmd *cobra.Command, home string, c source.Canonical, name string) error {
 	for _, m := range c.MCPServers {
 		if m.ID == name {
-			// Preserve source-only fields (agents allowlist, enabled) that the
-			// rendered destination never carries — otherwise import resets the
-			// agents allowlist to default-all (silently broadening the server's
-			// exposure) and clears enabled. reconcile write-back does the same.
-			if existing, ok, rerr := source.ReadMCP(home, m.ID); rerr == nil && ok {
-				m.Server.Agents = existing.Server.Agents
-				m.Server.Enabled = existing.Server.Enabled
-			}
-			if err := source.WriteMCP(home, m.ID, m); err != nil {
-				return fmt.Errorf("write mcp %s: %w", name, err)
+			single := source.Canonical{MCPServers: []source.MCPServer{m}}
+			if _, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
+				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "imported mcp/%s.toml\n", name)
 			return nil
@@ -451,8 +417,9 @@ func importHook(cmd *cobra.Command, home string, c source.Canonical, name string
 	if len(matched) == 0 {
 		return fmt.Errorf("hook event %q not found in native config", name)
 	}
-	if err := source.WriteHooks(home, name, matched); err != nil {
-		return fmt.Errorf("write hooks/%s: %w", name, err)
+	single := source.Canonical{Hooks: matched}
+	if _, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
+		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "imported hooks/%s.toml (%d entries)\n", name, len(matched))
 	return nil
@@ -461,8 +428,9 @@ func importHook(cmd *cobra.Command, home string, c source.Canonical, name string
 func importLSP(cmd *cobra.Command, home string, c source.Canonical, name string) error {
 	for _, ls := range c.LSPServers {
 		if ls.ID == name {
-			if err := source.WriteLSP(home, ls); err != nil {
-				return fmt.Errorf("write lsp %s: %w", name, err)
+			single := source.Canonical{LSPServers: []source.LSPServer{ls}}
+			if _, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
+				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "imported lsp/%s.toml\n", name)
 			return nil

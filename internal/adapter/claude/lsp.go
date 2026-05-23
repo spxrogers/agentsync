@@ -17,6 +17,12 @@ func (a *Adapter) renderLSP(c source.Canonical, p Paths) ([]adapter.FileOp, erro
 	lspMap := map[string]any{}
 	var ownedKeys []string
 	for _, lsp := range c.LSPServers {
+		if lsp.Spec.Enabled != nil && !*lsp.Spec.Enabled {
+			continue
+		}
+		if !agentTargeted("claude", lsp.Spec.Agents) {
+			continue
+		}
 		spec := map[string]any{}
 		if lsp.Spec.Command != "" {
 			spec["command"] = lsp.Spec.Command
@@ -35,6 +41,9 @@ func (a *Adapter) renderLSP(c source.Canonical, p Paths) ([]adapter.FileOp, erro
 		}
 		lspMap[lsp.ID] = spec
 		ownedKeys = append(ownedKeys, "/lspServers/"+lsp.ID)
+	}
+	if len(lspMap) == 0 {
+		return nil, nil
 	}
 	obj := map[string]any{"lspServers": lspMap}
 	body, err := json.MarshalIndent(obj, "", "  ")

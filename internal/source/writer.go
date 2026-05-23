@@ -34,6 +34,24 @@ func ReadMCP(home, id string) (m MCPServer, ok bool, err error) {
 	return m, true, nil
 }
 
+// ReadLSP reads lsp/<id>.toml from home. ok is false when the file does not
+// exist. Mirrors ReadMCP: used by capture to preserve source-only LSP fields
+// (agents/enabled) that the rendered destination spec doesn't carry.
+func ReadLSP(home, id string) (ls LSPServer, ok bool, err error) {
+	data, rerr := os.ReadFile(filepath.Join(home, "lsp", id+".toml"))
+	if rerr != nil {
+		if os.IsNotExist(rerr) {
+			return LSPServer{}, false, nil
+		}
+		return LSPServer{}, false, fmt.Errorf("read lsp %s: %w", id, rerr)
+	}
+	var lf lspFileOut
+	if uerr := toml.Unmarshal(data, &lf); uerr != nil {
+		return LSPServer{}, false, fmt.Errorf("parse lsp %s: %w", id, uerr)
+	}
+	return LSPServer{ID: id, Spec: lf.Server}, true, nil
+}
+
 // WriteMCP writes mcp/<id>.toml from m into home. Overwrites atomically.
 func WriteMCP(home, id string, m MCPServer) error {
 	body, err := toml.Marshal(m)
