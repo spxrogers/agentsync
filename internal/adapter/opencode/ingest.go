@@ -42,6 +42,7 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 							Args:    asStrSlice(spec["args"]),
 							Env:     asStrMap(spec["env"]),
 							URL:     asStr(spec["url"]),
+							Headers: asStrMap(spec["headers"]),
 						}}
 						c.MCPServers = append(c.MCPServers, m)
 					}
