@@ -474,6 +474,14 @@ func parseSelector(sel string) (agentName, component, name string, err error) {
 func importMCP(cmd *cobra.Command, home string, c source.Canonical, name string) error {
 	for _, m := range c.MCPServers {
 		if m.ID == name {
+			// Preserve source-only fields (agents allowlist, enabled) that the
+			// rendered destination never carries — otherwise import resets the
+			// agents allowlist to default-all (silently broadening the server's
+			// exposure) and clears enabled. reconcile write-back does the same.
+			if existing, ok, rerr := source.ReadMCP(home, m.ID); rerr == nil && ok {
+				m.Server.Agents = existing.Server.Agents
+				m.Server.Enabled = existing.Server.Enabled
+			}
 			if err := source.WriteMCP(home, m.ID, m); err != nil {
 				return fmt.Errorf("write mcp %s: %w", name, err)
 			}
