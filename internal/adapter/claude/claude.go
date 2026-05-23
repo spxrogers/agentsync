@@ -25,6 +25,10 @@ func New(opts Options) *Adapter { return &Adapter{opts: opts} }
 
 func (a *Adapter) Name() string { return "claude" }
 
+// KeyMergeStrategy is claude's single key-merge strategy: strict JSON
+// (.claude.json, settings.json).
+func (a *Adapter) KeyMergeStrategy() string { return "merge-json-keys" }
+
 func (a *Adapter) Capabilities() adapter.Capability {
 	return adapter.CapMCP | adapter.CapMemory | adapter.CapSkill |
 		adapter.CapSubagent | adapter.CapCommand | adapter.CapHook | adapter.CapLSP

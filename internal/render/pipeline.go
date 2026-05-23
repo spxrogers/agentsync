@@ -5,6 +5,7 @@ package render
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -62,10 +63,16 @@ func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adap
 		}
 		if s != nil {
 			for i, op := range ops {
-				if op.MergeStrategy == "merge-json-keys" || op.MergeStrategy == "merge-jsonc-keys" {
+				if isKeyMerge(op.MergeStrategy) {
 					ops[i].OwnedKeys = ownedKeysFor(s, name, scope, project, op.Path, userHome)
 				}
 			}
+			// Cleanup synthesis: when a key-merge section becomes empty in the
+			// source (e.g. the user removes their last MCP server), the
+			// adapter renders NO op for that file, so the owned key would
+			// linger in the destination forever. Synthesize an empty merge op
+			// per orphaned dest path so MergeKeys deletes the dead keys.
+			ops = append(ops, orphanCleanupOps(s, a, name, scope, project, userHome, ops)...)
 		}
 		out.PerAgent[name] = AgentResult{Ops: ops, Skips: skips}
 	}
@@ -138,6 +145,76 @@ func ownedKeysFor(s *state.Targets, agent string, scope adapter.Scope, project, 
 		}
 	}
 	return out
+}
+
+// orphanCleanupOps synthesizes empty key-merge ops that remove keys the agent
+// owns in state but no longer renders this run — the case where a source
+// section went fully empty (e.g. the user deleted their last MCP server), so
+// no real merge op exists to carry the removal via OwnedKeys. Without this the
+// dead key lingers in the destination forever.
+//
+// Safety (validated): the strategy is the adapter's exact, static
+// KeyMergeStrategy() — never inferred — so a JSONC opencode.json is never
+// merged with the strict-JSON path (which would clobber it). A dest that no
+// longer exists on disk is skipped (no empty "{}" file is created); the stale
+// state entry is dropped by PruneStaleState instead.
+func orphanCleanupOps(s *state.Targets, a adapter.Adapter, agent string, scope adapter.Scope, project, userHome string, rendered []adapter.FileOp) []adapter.FileOp {
+	strat := a.KeyMergeStrategy()
+	if strat == "" {
+		return nil // adapter doesn't merge keys
+	}
+	// Portable dest paths the agent DID render a key-merge op for this run.
+	renderedPaths := map[string]bool{}
+	for _, op := range rendered {
+		if isKeyMerge(op.MergeStrategy) {
+			renderedPaths[paths.HomeRelative(userHome, op.Path)] = true
+		}
+	}
+
+	// Group owned pointers by their portable dest path from state.Keys.
+	prefix := fmt.Sprintf("%s:%s:%s:", agent, scope.String(), paths.HomeRelative(userHome, project))
+	ownedByPath := map[string][]string{}
+	var order []string
+	for k := range s.Keys {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(k, prefix)
+		// rest = "<portablePath>:<pointer>"; the pointer is a JSON pointer
+		// starting with '/', so the ":/" boundary is unambiguous even when
+		// the path itself contains characters like ':' (a Windows drive).
+		i := strings.Index(rest, ":/")
+		if i < 0 {
+			continue
+		}
+		path, ptr := rest[:i], rest[i+1:]
+		if renderedPaths[path] {
+			continue // a real merge op already handles removal here
+		}
+		if _, seen := ownedByPath[path]; !seen {
+			order = append(order, path)
+		}
+		ownedByPath[path] = append(ownedByPath[path], ptr)
+	}
+
+	var cleanup []adapter.FileOp
+	for _, path := range order {
+		abs := paths.FromHomeRelative(userHome, path)
+		// If the dest was already deleted, there's nothing to clean — skip so
+		// we don't create an empty "{}" file. PruneStaleState drops the entry.
+		if _, err := os.Stat(abs); err != nil {
+			continue
+		}
+		cleanup = append(cleanup, adapter.FileOp{
+			Action:        "write",
+			Path:          abs,
+			Content:       []byte("{}"),
+			Mode:          0o644,
+			MergeStrategy: strat,
+			OwnedKeys:     ownedByPath[path],
+		})
+	}
+	return cleanup
 }
 
 // Apply commits a RenderPlan by constructing one Writer per agent and

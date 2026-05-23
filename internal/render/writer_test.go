@@ -33,6 +33,8 @@ func (f *fakeJSONApply) Ingest(_ adapter.Scope, _ string) (source.Canonical, err
 	return source.Canonical{}, nil
 }
 
+func (f *fakeJSONApply) KeyMergeStrategy() string { return "merge-json-keys" }
+
 // Apply mirrors the production adapter pattern: for replace ops, hand
 // op.Content to the writer; for merge ops, do the merge first and pass
 // the result.
