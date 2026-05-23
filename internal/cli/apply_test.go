@@ -7,6 +7,47 @@ import (
 	"testing"
 )
 
+// TestApply_PartialFailureRescuesState exercises saveBestEffortState (the
+// apply-error rescue, previously 0% covered): when an apply fails mid-write,
+// the dest files that DID land must be recorded in state so the next apply
+// doesn't reclassify them as foreign collisions and back them up. We force
+// the skill write to fail (a regular file blocks the skills dir) while the
+// MCP write to .claude.json (which runs first) succeeds.
+func TestApply_PartialFailureRescuesState(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
+
+	skill := filepath.Join(tmp, ".agentsync", "skills", "demo", "SKILL.md")
+	_ = os.MkdirAll(filepath.Dir(skill), 0o755)
+	_ = os.WriteFile(skill, []byte("---\nname: demo\ndescription: d\n---\nbody\n"), 0o644)
+
+	// Block the skills destination dir with a regular file so the skill op's
+	// MkdirAll fails (the MCP op to ~/.claude.json runs first and succeeds).
+	_ = os.MkdirAll(filepath.Join(tmp, ".claude"), 0o755)
+	if err := os.WriteFile(filepath.Join(tmp, ".claude", "skills"), []byte("blocker"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runCLI(t, env, "apply"); err == nil {
+		t.Fatal("expected apply to fail when the skills dir is blocked")
+	}
+
+	// The rescue must have recorded the .claude.json keys that DID land.
+	state, err := os.ReadFile(filepath.Join(tmp, ".agentsync", ".state", "targets.json"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if !strings.Contains(string(state), "/.claude.json") || !strings.Contains(string(state), "mcpServers") {
+		t.Fatalf("partial-apply rescue did not record the landed .claude.json keys:\n%s", state)
+	}
+}
+
 // TestApply_AnnouncesScope is the regression for silent scope selection:
 // apply auto-detects project scope by walking up from cwd, but the real apply
 // printed only an op count — config could land in an unexpected project tree

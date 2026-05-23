@@ -361,3 +361,37 @@ func TestPruneBackups_KeepsNewest(t *testing.T) {
 		t.Fatalf("missing backups dir should be a no-op: %v", err)
 	}
 }
+
+// TestWriter_JSONCFallbackBacksUpWholeFile covers maybeBackupFileOpForJSONCFallback
+// (previously 0% covered): a merge op whose destination is JSONC (comments
+// make strict json.Unmarshal fail) and which state does not own must be
+// backed up whole-file before the merge writes.
+func TestWriter_JSONCFallbackBacksUpWholeFile(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, "opencode.json")
+	original := []byte("// my hand-written config\n{\"mcp\":{\"github\":{\"command\":\"old\"}}}\n")
+	_ = os.WriteFile(dest, original, 0o644)
+
+	st := state.New() // nothing owned → must back up
+	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "opencode")
+	op := adapter.FileOp{
+		Action:        "write",
+		Path:          dest,
+		Content:       []byte(`{"mcp":{"github":{"command":"new"}}}`),
+		MergeStrategy: "merge-json-keys",
+		Mode:          0o644,
+	}
+	if err := w.Write(op, []byte(`{"mcp":{"github":{"command":"new"}}}`)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	reports := w.Reports()
+	if len(reports) != 1 || reports[0].Pointer != "" {
+		t.Fatalf("expected one whole-file (no-pointer) backup; got %+v", reports)
+	}
+	got, _ := os.ReadFile(reports[0].BackupTo)
+	if !strings.Contains(string(got), "old") {
+		t.Fatalf("JSONC-fallback backup missing original content: %s", got)
+	}
+}
