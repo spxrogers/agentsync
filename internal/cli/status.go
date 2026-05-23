@@ -86,9 +86,14 @@ func newStatusCmd() *cobra.Command {
 				}
 				fmt.Fprintf(w, "[%s]\n", name)
 				seen := map[string]bool{}
-				// file-level: for each op, classify
+				// file-level: for each op, classify. Only key-merge ops are
+				// handled key-by-key below; every other strategy (including
+				// "replace", used by skills/subagents/commands/memory) is a
+				// whole-file op and must be classified here. Skipping on any
+				// non-empty MergeStrategy silently dropped all replace-strategy
+				// files, so status reported no drift for them.
 				for _, op := range res.Ops {
-					if op.MergeStrategy != "" {
+					if op.MergeStrategy == "merge-json-keys" || op.MergeStrategy == "merge-jsonc-keys" {
 						continue // covered key-by-key below
 					}
 					if seen[op.Path] {
