@@ -72,6 +72,17 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		}
 	}
 
+	// Announce the effective scope. Scope is auto-detected by walking up from
+	// cwd to find a project marker, so without this a `apply` run from inside
+	// a project (or any ancestor with a marker) could silently write to a
+	// project tree the user didn't expect. The dry-run lists paths; the real
+	// apply otherwise printed only an op count.
+	if sc == adapter.ScopeProject {
+		fmt.Fprintf(cmd.ErrOrStderr(), "scope: project (%s)\n", projectRoot)
+	} else {
+		fmt.Fprintln(cmd.ErrOrStderr(), "scope: user")
+	}
+
 	// Resolve ${secret:...} and ${env:...} references before rendering.
 	userHome := paths.HomeDir(paths.OSEnv{})
 	secBackend := secrets.SelectBackend(c.Config.Secrets, home, userHome)
@@ -89,10 +100,18 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	if len(agents) == 0 {
 		// Without this hint, `apply` prints "applied: 0 ops" and a
 		// new user assumes their config "worked". Tell them how to
-		// register an agent.
-		fmt.Fprintln(cmd.ErrOrStderr(),
-			"agentsync: no agents are enabled in agentsync.toml; nothing to apply.\n"+
-				"  Run `agentsync agent add claude` (or opencode) to register an agent.")
+		// register an agent. Under project scope the likely cause is a
+		// marker `agents` allowlist that intersects to nothing, so point
+		// there instead of at `agent add`.
+		if sc == adapter.ScopeProject {
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"agentsync: no agents are enabled after applying the project marker at %s; nothing to apply.\n"+
+					"  Check the [agents] allowlist in that project's .agentsync.toml.\n", projectRoot)
+		} else {
+			fmt.Fprintln(cmd.ErrOrStderr(),
+				"agentsync: no agents are enabled in agentsync.toml; nothing to apply.\n"+
+					"  Run `agentsync agent add claude` (or opencode) to register an agent.")
+		}
 		return nil
 	}
 

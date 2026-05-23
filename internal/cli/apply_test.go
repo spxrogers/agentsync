@@ -2,9 +2,41 @@ package cli_test
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// TestApply_AnnouncesScope is the regression for silent scope selection:
+// apply auto-detects project scope by walking up from cwd, but the real apply
+// printed only an op count — config could land in an unexpected project tree
+// invisibly. apply now announces the effective scope.
+func TestApply_AnnouncesScope(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "scope: user") {
+		t.Fatalf("expected user-scope announcement; got:\n%s", out)
+	}
+
+	proj := filepath.Join(tmp, "proj")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out2, err := runCLI(t, env, "apply", "--project", proj)
+	if err != nil {
+		t.Fatalf("apply --project: %v\n%s", err, out2)
+	}
+	if !strings.Contains(out2, "scope: project") {
+		t.Fatalf("expected project-scope announcement; got:\n%s", out2)
+	}
+}
 
 func TestApply_DryRunEmptyHome(t *testing.T) {
 	tmp := t.TempDir()
