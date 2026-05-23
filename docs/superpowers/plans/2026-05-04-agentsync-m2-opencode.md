@@ -818,6 +818,6 @@ EOF
 - `agentsync apply` writes both `~/.claude.json` AND `~/.config/opencode/opencode.json` from a single canonical MCP file.
 - A single canonical Subagent renders to both `~/.claude/agents/<n>.md` (Claude shape) AND `~/.config/opencode/agents/<n>.md` (OpenCode shape with frontmatter munge); skips for `tools`+`color` are surfaced in the apply translation report.
 - A single canonical Skill writes ONE file at `~/.claude/skills/<n>/SKILL.md` (deduped), consumed by both Claude and OpenCode.
-- JSONC comments in pre-existing `opencode.json` survive opensync mutations to keys we don't touch.
+- JSONC comments in pre-existing `opencode.json` survive agentsync mutations to keys we don't touch.
 - Hooks and LSP in canonical produce explicit `✗ skip(warn)` entries in the translation report.
 - CI green on linux/macos/windows.

@@ -232,7 +232,7 @@ Commit each fetcher individually.
 
 **Files:** `internal/marketplace/projection.go`, `internal/cli/plugin.go`
 
-`opensync plugin install <id>@<marketplace>`:
+`agentsync plugin install <id>@<marketplace>`:
 1. Resolve marketplace from `~/.agentsync/marketplaces/<name>.toml` + cache.
 2. Find `<id>` in `marketplace.json` plugins list.
 3. Compute manifest sha (sha256 of plugin.json bytes if strict; sha of marketplace entry block if non-strict).
@@ -311,12 +311,12 @@ func TestProject_StrictPluginJSON(t *testing.T) {
 - [ ] **Implement** `internal/cli/plugin.go`:
 
 ```go
-opensync plugin install <id>[@<marketplace>]   # cache + write plugins/<id>.toml
-opensync plugin upgrade <id>                   # bump version in plugins/<id>.toml; re-fetch; update sha
-opensync plugin enable <id>                    # set enabled on plugins/<id>.toml (already implicit; flag noop unless we add one)
-opensync plugin disable <id>                   # set agents=[] effectively (or add a disabled bool)
-opensync plugin remove <id>                    # delete plugins/<id>.toml + cache
-opensync plugin list                           # walk plugins/*.toml, print
+agentsync plugin install <id>[@<marketplace>]   # cache + write plugins/<id>.toml
+agentsync plugin upgrade <id>                   # bump version in plugins/<id>.toml; re-fetch; update sha
+agentsync plugin enable <id>                    # set enabled on plugins/<id>.toml (already implicit; flag noop unless we add one)
+agentsync plugin disable <id>                   # set agents=[] effectively (or add a disabled bool)
+agentsync plugin remove <id>                    # delete plugins/<id>.toml + cache
+agentsync plugin list                           # walk plugins/*.toml, print
 ```
 
 Commit per subcommand. Tests use file:// fake repo as marketplace fixture; npm via httptest.Server.
@@ -371,10 +371,10 @@ Implement `source.LoadWithCache` (existing `Load` becomes a thin wrapper that pa
 **Files:** `internal/cli/marketplace.go`, `internal/cli/marketplace_test.go`
 
 ```
-opensync marketplace add github:owner/repo[@ref]   # writes marketplaces/<owner-repo>.toml; fetches into cache
-opensync marketplace add https://example.com/r.git # url source
-opensync marketplace remove <name>                  # deletes marketplaces/<name>.toml + cache
-opensync marketplace list                           # walks marketplaces/*.toml, prints
+agentsync marketplace add github:owner/repo[@ref]   # writes marketplaces/<owner-repo>.toml; fetches into cache
+agentsync marketplace add https://example.com/r.git # url source
+agentsync marketplace remove <name>                  # deletes marketplaces/<name>.toml + cache
+agentsync marketplace list                           # walks marketplaces/*.toml, prints
 ```
 
 `add` performs an initial fetch via `marketplace.Fetcher` and writes the head SHA into `state.Marketplaces[<name>]`. Commit.

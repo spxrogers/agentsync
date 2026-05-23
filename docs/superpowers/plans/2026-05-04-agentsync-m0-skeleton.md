@@ -897,7 +897,7 @@ type Canonical struct {
     Project     *Canonical // nil for user-scope canonical; populated by M5 overlay
 }
 
-// Config mirrors opensync.toml at the root of ~/.agentsync/.
+// Config mirrors agentsync.toml at the root of ~/.agentsync/.
 type Config struct {
     Agents   map[string]Agent     `toml:"agents"`
     Updates  UpdateDefaults       `toml:"updates"`
@@ -1036,7 +1036,7 @@ import (
 
 func TestLoad_EmptyHome(t *testing.T) {
     fs := afero.NewMemMapFs()
-    _ = afero.WriteFile(fs, "/home/.agentsync/opensync.toml", []byte(""), 0o644)
+    _ = afero.WriteFile(fs, "/home/.agentsync/agentsync.toml", []byte(""), 0o644)
 
     c, err := source.Load(fs, "/home/.agentsync")
     if err != nil {
@@ -1049,7 +1049,7 @@ func TestLoad_EmptyHome(t *testing.T) {
 
 func TestLoad_AgentsAndMCP(t *testing.T) {
     fs := afero.NewMemMapFs()
-    _ = afero.WriteFile(fs, "/home/.agentsync/opensync.toml", []byte(`
+    _ = afero.WriteFile(fs, "/home/.agentsync/agentsync.toml", []byte(`
 [agents]
 claude   = { enabled = true,  scope = "user" }
 opencode = { enabled = true }
@@ -1153,7 +1153,7 @@ func Load(fs afero.Fs, home string) (Canonical, error) {
 }
 
 func loadConfig(fs afero.Fs, home string, cfg *Config) error {
-    p := filepath.Join(home, "opensync.toml")
+    p := filepath.Join(home, "agentsync.toml")
     data, err := afero.ReadFile(fs, p)
     if err != nil {
         if errors.Is(err, os.ErrNotExist) {
@@ -1323,7 +1323,7 @@ git add go.mod go.sum internal/source
 git commit -m "$(cat <<'EOF'
 feat(source): loader walks ~/.agentsync/ -> Canonical
 
-Reads opensync.toml, mcp/, plugins/, marketplaces/, skills/, memory/.
+Reads agentsync.toml, mcp/, plugins/, marketplaces/, skills/, memory/.
 Missing dirs return empty (not error); malformed files return path-prefixed
 errors. Frontmatter parsing for skills lands in M1 where it's first used.
 
@@ -2237,7 +2237,7 @@ EOF
 - Modify: `internal/cli/init.go`
 - Create: `internal/cli/init_test.go`
 
-Scaffolds `~/.agentsync/` with empty subdirectories and a stub `opensync.toml`.
+Scaffolds `~/.agentsync/` with empty subdirectories and a stub `agentsync.toml`.
 
 - [ ] **Step 12.1: Test**
 
@@ -2267,15 +2267,15 @@ func TestInit_FreshScaffold(t *testing.T) {
             t.Fatalf("missing dir %s: %v", d, err)
         }
     }
-    if _, err := os.Stat(filepath.Join(home, "opensync.toml")); err != nil {
-        t.Fatalf("missing opensync.toml: %v", err)
+    if _, err := os.Stat(filepath.Join(home, "agentsync.toml")); err != nil {
+        t.Fatalf("missing agentsync.toml: %v", err)
     }
 }
 
 func TestInit_RefusesPopulatedHome(t *testing.T) {
     tmp := t.TempDir()
     _ = os.MkdirAll(filepath.Join(tmp, ".agentsync"), 0o755)
-    _ = os.WriteFile(filepath.Join(tmp, ".agentsync", "opensync.toml"), []byte("# already there"), 0o644)
+    _ = os.WriteFile(filepath.Join(tmp, ".agentsync", "agentsync.toml"), []byte("# already there"), 0o644)
 
     _, err := runCLI(t,
         map[string]string{"AGENTSYNC_TARGET_ROOT": tmp},
@@ -2325,7 +2325,7 @@ default_interval = "24h"
 func newInitCmd() *cobra.Command {
     return &cobra.Command{
         Use:   "init",
-        Short: "scaffold ~/.agentsync/ with empty subdirectories and stub opensync.toml",
+        Short: "scaffold ~/.agentsync/ with empty subdirectories and stub agentsync.toml",
         Args:  cobra.NoArgs,
         RunE: func(cmd *cobra.Command, _ []string) error {
             home := paths.AgentsyncHome(paths.OSEnv{})
@@ -2338,8 +2338,8 @@ func newInitCmd() *cobra.Command {
                     return fmt.Errorf("mkdir %s: %w", sub, err)
                 }
             }
-            if err := os.WriteFile(filepath.Join(home, "opensync.toml"), []byte(initialOpensyncTOML), 0o644); err != nil {
-                return fmt.Errorf("write opensync.toml: %w", err)
+            if err := os.WriteFile(filepath.Join(home, "agentsync.toml"), []byte(initialOpensyncTOML), 0o644); err != nil {
+                return fmt.Errorf("write agentsync.toml: %w", err)
             }
             fmt.Fprintln(cmd.OutOrStdout(), "agentsync home initialized at", home)
             return nil
@@ -2374,7 +2374,7 @@ EOF
 - Modify: `internal/cli/agent.go`
 - Create: `internal/cli/agent_test.go`
 
-Manipulates the `[agents]` table in `~/.agentsync/opensync.toml` via TOML AST round-trip (preserves comments + key order).
+Manipulates the `[agents]` table in `~/.agentsync/agentsync.toml` via TOML AST round-trip (preserves comments + key order).
 
 - [ ] **Step 13.1: Test**
 
@@ -2420,7 +2420,7 @@ func TestAgent_AddListRemove(t *testing.T) {
         t.Fatalf("list still contains removed agent: %s", listOut2)
     }
 
-    cfg, _ := os.ReadFile(filepath.Join(tmp, ".agentsync", "opensync.toml"))
+    cfg, _ := os.ReadFile(filepath.Join(tmp, ".agentsync", "agentsync.toml"))
     if !strings.Contains(string(cfg), `claude = `) {
         t.Fatalf("config didn't preserve claude line:\n%s", cfg)
     }
@@ -2459,7 +2459,7 @@ func newAgentCmd() *cobra.Command {
     return cmd
 }
 
-type opensyncCfg struct {
+type agentsyncCfg struct {
     Agents map[string]map[string]any `toml:"agents"`
     // other top-level keys preserved verbatim via decoder
 }
@@ -2477,12 +2477,12 @@ func validateAgent(name string) error {
 // readOpensyncTOML returns the file contents + parsed `agents` section.
 func readOpensyncTOML() (string, []byte, map[string]map[string]any, error) {
     home := paths.AgentsyncHome(paths.OSEnv{})
-    p := filepath.Join(home, "opensync.toml")
+    p := filepath.Join(home, "agentsync.toml")
     raw, err := os.ReadFile(p)
     if err != nil {
         return p, nil, nil, fmt.Errorf("read %s: %w", p, err)
     }
-    var cfg opensyncCfg
+    var cfg agentsyncCfg
     if err := toml.Unmarshal(raw, &cfg); err != nil {
         return p, raw, nil, fmt.Errorf("parse %s: %w", p, err)
     }
@@ -2591,7 +2591,7 @@ go test -race ./internal/cli/...
 ```bash
 git add internal/cli
 git commit -m "$(cat <<'EOF'
-feat(cli/agent): add/list/remove via TOML round-trip in opensync.toml
+feat(cli/agent): add/list/remove via TOML round-trip in agentsync.toml
 
 [agents] section is regenerated; surrounding comments/sections preserved
 by simple slice operations. Comment-preserving AST mutations for
@@ -2767,7 +2767,7 @@ func TestVerify_UnknownAgent(t *testing.T) {
     _, _ = runCLI(t, env, "init")
     _, _ = runCLI(t, env, "agent", "add", "claude")
 
-    cfg := filepath.Join(tmp, ".agentsync", "opensync.toml")
+    cfg := filepath.Join(tmp, ".agentsync", "agentsync.toml")
     body, _ := os.ReadFile(cfg)
     body = append(body, []byte("\n[agents]\nbogus = { enabled = true }\n")...)
     _ = os.WriteFile(cfg, body, 0o644)

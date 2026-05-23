@@ -52,7 +52,7 @@ slack-mcp-plugin/
 └── .mcp.json
 ```
 
-This is the manual, hand-maintained version of what opensync wants to automate. Same vendor, same backend MCP, parallel shim folders side-by-side because there is no shared format. If Slack adds Codex tomorrow, they will add a `.codex-plugin/` folder.
+This is the manual, hand-maintained version of what agentsync wants to automate. Same vendor, same backend MCP, parallel shim folders side-by-side because there is no shared format. If Slack adds Codex tomorrow, they will add a `.codex-plugin/` folder.
 
 **Officially supported clients**: Claude.ai, Claude Code, Perplexity, Cursor. **Codex is not on the list.**
 
@@ -62,7 +62,7 @@ This is the manual, hand-maintained version of what opensync wants to automate. 
 - Anthropic's `@modelcontextprotocol/server-slack` (npm, bot-token, older)
 - plus prominent community forks (`korotovsky/slack-mcp-server`)
 
-When a user types `opensync mcp add slack`, which do they mean? Need a canonical-id namespace (`slack@slackapi` vs `slack@modelcontextprotocol` vs `slack@korotovsky`) to disambiguate. Atlassian had one clear winner; Slack does not.
+When a user types `agentsync mcp add slack`, which do they mean? Need a canonical-id namespace (`slack@slackapi` vs `slack@modelcontextprotocol` vs `slack@korotovsky`) to disambiguate. Atlassian had one clear winner; Slack does not.
 
 ## Side-by-side
 
@@ -74,13 +74,13 @@ When a user types `opensync mcp add slack`, which do they mean? Need a canonical
 | Codex official path | none | none |
 | Competing "official" servers | one | two (hosted vs npm) + community forks |
 
-## Implications for opensync
+## Implications for agentsync
 
-1. **Marketplace primacy is real but only on Claude Code and OpenCode.** For everyone else, what opensync projects is not a marketplace install — it is the same hand-rolled MCP/skills config that vendors today expect users to paste manually. The `Plugin content × Agent` translation table in `PLAN.md` is exactly the gap.
+1. **Marketplace primacy is real but only on Claude Code and OpenCode.** For everyone else, what agentsync projects is not a marketplace install — it is the same hand-rolled MCP/skills config that vendors today expect users to paste manually. The `Plugin content × Agent` translation table in `PLAN.md` is exactly the gap.
 
-2. **Atlassian is the canonical M2 test fixture.** Take `atlassian@claude-plugins-official`, project the MCP server universally, project the 5 slash-commands as Cursor/Continue rules, skip skills on Codex with a logged reason. If opensync handles this one plugin cleanly across all seven agents, it has solved the real problem.
+2. **Atlassian is the canonical M2 test fixture.** Take `atlassian@claude-plugins-official`, project the MCP server universally, project the 5 slash-commands as Cursor/Continue rules, skip skills on Codex with a logged reason. If agentsync handles this one plugin cleanly across all seven agents, it has solved the real problem.
 
-3. **`slackapi/slack-mcp-plugin` is the proof-of-concept fixture for per-agent passthrough.** A real-world repo with `.claude-plugin/` and `.cursor-plugin/` side-by-side is exactly what opensync's source layout should ingest cleanly. Worth using as a golden test case in M2.
+3. **`slackapi/slack-mcp-plugin` is the proof-of-concept fixture for per-agent passthrough.** A real-world repo with `.claude-plugin/` and `.cursor-plugin/` side-by-side is exactly what agentsync's source layout should ingest cleanly. Worth using as a golden test case in M2.
 
 4. **Canonical IDs need to handle multiple implementations of the same logical service.** Slack exposes the gap: hosted-OAuth vs npm-bot-token vs community fork. The current `id@marketplace` scheme in `PLAN.md` works when there is one marketplace with one canonical entry; it is ambiguous when "official" splits. Recommend extending to `id@marketplace` with a tiebreak on implementation, or namespacing by upstream owner.
 

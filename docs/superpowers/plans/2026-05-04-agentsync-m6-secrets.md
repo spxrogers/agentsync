@@ -26,7 +26,7 @@ internal/cli/
 
 MODIFIED:
 internal/render/pipeline.go     # walk canonical, substitute ${secret:...} / ${env:...}
-internal/source/loader.go       # secrets backend hint loaded from opensync.toml
+internal/source/loader.go       # secrets backend hint loaded from agentsync.toml
 ```
 
 ---
@@ -35,7 +35,7 @@ internal/source/loader.go       # secrets backend hint loaded from opensync.toml
 
 ```go
 // Package secrets resolves ${secret:foo.bar} and ${env:FOO} references at
-// apply-time. The active backend is selected from opensync.toml [secrets]
+// apply-time. The active backend is selected from agentsync.toml [secrets]
 // `backend` field (env|age).
 package secrets
 
@@ -140,7 +140,7 @@ go get filippo.io/age@latest
 
 ```go
 // AgeBackend reads ~/.agentsync/secrets/secrets.age, decrypts using identity
-// file specified in opensync.toml [secrets].identity_file, parses as TOML,
+// file specified in agentsync.toml [secrets].identity_file, parses as TOML,
 // and resolves dotted keys.
 package secrets
 
@@ -292,9 +292,9 @@ Commit.
 `internal/cli/secrets.go`:
 
 ```go
-opensync secrets edit            # decrypt -> tmp -> $EDITOR -> re-encrypt
-opensync secrets get <key>       # print one value
-opensync secrets set <key>=<val> # mutate one value (decrypt -> patch -> re-encrypt)
+agentsync secrets edit            # decrypt -> tmp -> $EDITOR -> re-encrypt
+agentsync secrets get <key>       # print one value
+agentsync secrets set <key>=<val> # mutate one value (decrypt -> patch -> re-encrypt)
 ```
 
 Implementation:
@@ -311,7 +311,7 @@ func newSecretsCmd() *cobra.Command {
 }
 
 func secretsEdit(cmd *cobra.Command, _ []string) error {
-    // 1. Resolve agePath + identityPath + recipient from opensync.toml
+    // 1. Resolve agePath + identityPath + recipient from agentsync.toml
     // 2. Read existing or create empty plaintext
     // 3. Write to tmp file in os.TempDir() (RAM-backed on macOS)
     // 4. Run os.Getenv("EDITOR") on the tmp file (default to vi)
@@ -362,8 +362,8 @@ func TestIntegration_M6_AgeSecretsResolveOnApply(t *testing.T) {
     _ = os.MkdirAll(filepath.Dir(idPath), 0o755)
     _ = os.WriteFile(idPath, []byte(id.String()), 0o600)
 
-    // configure opensync.toml [secrets]
-    cfg := filepath.Join(tmp, ".agentsync", "opensync.toml")
+    // configure agentsync.toml [secrets]
+    cfg := filepath.Join(tmp, ".agentsync", "agentsync.toml")
     body, _ := os.ReadFile(cfg)
     body = append(body, []byte(fmt.Sprintf(`
 [secrets]
