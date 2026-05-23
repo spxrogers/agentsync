@@ -20,10 +20,11 @@ import (
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
-// reReferenceImportedSecrets restores ${secret:…} placeholders in the ingested
-// canonical so import never persists a live credential into ~/.agentsync. apply
-// substitutes secrets to cleartext into the destination, and import ingests
-// that destination; this puts the placeholders back.
+// reReferenceSecretsAgainstSource restores ${secret:…} placeholders in a
+// canonical reconstructed from a destination so import AND reconcile write-back
+// never persist a live credential into ~/.agentsync. apply substitutes secrets
+// to cleartext into the destination; both import and reconcile read that
+// destination back, so this puts the placeholders back before writing source.
 //
 // Matching is FIELD-POSITIONAL, not value-based: for each item present in the
 // current source, a field is restored to its templated form only if (a) the
@@ -31,7 +32,7 @@ import (
 // resolves to the same thing (the field is unchanged). A field the source did
 // NOT template (e.g. command = "npx") is never rewritten, even if its literal
 // happens to equal some secret's value — value-based masking would corrupt it.
-func reReferenceImportedSecrets(cmd *cobra.Command, home string, c *source.Canonical) {
+func reReferenceSecretsAgainstSource(cmd *cobra.Command, home string, c *source.Canonical) {
 	cur, err := source.Load(loaderFsForState(), home)
 	if err != nil {
 		return // no source yet (first import) → nothing to re-reference
@@ -94,8 +95,8 @@ func reReferenceImportedSecrets(cmd *cobra.Command, home string, c *source.Canon
 
 	if missing := secrets.UnresolvedSecretRefs(&cur, sec); len(missing) > 0 {
 		fmt.Fprintf(cmd.ErrOrStderr(),
-			"warning: import could not re-reference secret(s) %s (secrets backend unavailable); "+
-				"the imported file may contain cleartext — review it before committing\n",
+			"warning: could not re-reference secret(s) %s (secrets backend unavailable); "+
+				"the written-back source file may contain cleartext — review it before committing\n",
 			strings.Join(missing, ", "))
 	}
 }
@@ -267,7 +268,7 @@ func importRun(cmd *cobra.Command, args []string) error {
 	// the ingested canonical holds live credentials. Convert any value that
 	// matches a known secret back to its placeholder so import doesn't persist
 	// a cleartext token into ~/.agentsync (often a committed dotfiles repo).
-	reReferenceImportedSecrets(cmd, home, &c)
+	reReferenceSecretsAgainstSource(cmd, home, &c)
 
 	switch component {
 	case "mcp":

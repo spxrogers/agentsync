@@ -237,7 +237,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 		switch action {
 		case 'w':
 			// write-back: persist destination value into the canonical source.
-			if err := writeBackItem(home, it); err != nil {
+			if err := writeBackItem(cmd, home, it); err != nil {
 				fmt.Fprintf(w, "  write-back error: %v\n", err)
 			} else {
 				fmt.Fprintf(w, "  write-back: %s\n", itemLabel(it))
@@ -419,9 +419,9 @@ func readChar(r *bufio.Reader) (byte, error) {
 // writeBackItem persists the current destination value for item it back into
 // the canonical source (~/.agentsync/). Only MCP-server items are fully
 // supported in v1; other item types fall back to a raw file copy.
-func writeBackItem(home string, it reconcileItem) error {
+func writeBackItem(cmd *cobra.Command, home string, it reconcileItem) error {
 	if it.ptr != "" {
-		return writeBackKeyItem(home, it)
+		return writeBackKeyItem(cmd, home, it)
 	}
 	return writeBackFileItem(home, it)
 }
@@ -435,7 +435,7 @@ func writeBackItem(home string, it reconcileItem) error {
 // to: the prior code returned nil and printed "write-back: <label>", giving
 // the impression the hand-edit had been persisted when in fact it had not
 // — the next apply would then destroy the user's edit.
-func writeBackKeyItem(home string, it reconcileItem) error {
+func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 	dest := readJSONFile(it.op.Path)
 	// Expected ptr shape: /mcpServers/<serverID>/...
 	parts := strings.SplitN(strings.TrimPrefix(it.ptr, "/"), "/", 3)
@@ -471,7 +471,14 @@ func writeBackKeyItem(home string, it reconcileItem) error {
 			spec.Enabled = existing.Server.Enabled
 		}
 		m := source.MCPServer{ID: serverID, Server: spec}
-		return source.WriteMCP(home, serverID, m)
+		// The spec was reconstructed from the destination, where apply wrote
+		// any ${secret:…} as resolved cleartext. Re-reference known secrets
+		// back to their placeholder before persisting to source — otherwise
+		// write-back leaks the live token into ~/.agentsync (same hole that
+		// `import` guards against).
+		rc := source.Canonical{MCPServers: []source.MCPServer{m}}
+		reReferenceSecretsAgainstSource(cmd, home, &rc)
+		return source.WriteMCP(home, serverID, rc.MCPServers[0])
 	}
 	// Unsupported pointer shape (hooks, lsp, …). DO NOT silently no-op —
 	// the success message would be a lie.
