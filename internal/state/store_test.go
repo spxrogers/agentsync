@@ -9,6 +9,34 @@ import (
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
+// TestStore_RejectsEmptyShapedFile is the regression for the silent state
+// reset: a targets.json that is valid JSON but empty-shaped (`null` / `{}`)
+// — producible by an interrupted external edit or a truncate-clobber — used
+// to load as a pristine empty state, making the next apply back up every
+// managed destination as a foreign collision. It must now fail loudly.
+func TestStore_RejectsEmptyShapedFile(t *testing.T) {
+	for _, content := range []string{"null", "{}", "  {}\n", `{"schema_version":0}`} {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "targets.json")
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := state.Load(p); err == nil {
+			t.Fatalf("Load(%q) should fail as corrupt/empty; got nil", content)
+		}
+	}
+
+	// A legacy v0 file WITH entries must still load (migrate handles it).
+	dir := t.TempDir()
+	p := filepath.Join(dir, "targets.json")
+	if err := os.WriteFile(p, []byte(`{"files":{"claude:user::x":{"sha256":"a"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Load(p); err != nil {
+		t.Fatalf("legacy v0 file with entries should load; got %v", err)
+	}
+}
+
 func TestStore_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "targets.json")
