@@ -50,7 +50,10 @@ func newMarketplaceAddCmd() *cobra.Command {
 		Use:   "add <url-or-path>",
 		Short: "fetch a marketplace and register it",
 		Args:  cobra.ExactArgs(1),
-		RunE:  marketplaceAddRun,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			home := paths.AgentsyncHome(paths.OSEnv{})
+			return withGlobalLock(home, func() error { return marketplaceAddRun(cmd, args) })
+		},
 	}
 }
 
@@ -144,7 +147,10 @@ func newMarketplaceRemoveCmd() *cobra.Command {
 		Use:   "remove <name>",
 		Short: "remove a marketplace and its cached files",
 		Args:  cobra.ExactArgs(1),
-		RunE:  marketplaceRemoveRun,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			home := paths.AgentsyncHome(paths.OSEnv{})
+			return withGlobalLock(home, func() error { return marketplaceRemoveRun(cmd, args) })
+		},
 	}
 }
 

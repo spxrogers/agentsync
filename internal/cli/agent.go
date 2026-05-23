@@ -293,8 +293,18 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 		return nil
 	}
 
-	// --purge: delete destination files and keys owned by this agent from state.
+	// --purge mutates .state/targets.json and deletes destination files, so
+	// it must hold the global lock — otherwise a concurrent apply's
+	// read-modify-write of targets.json races this one and loses updates.
 	home := paths.AgentsyncHome(paths.OSEnv{})
+	return withGlobalLock(home, func() error {
+		return purgeAgentDests(cmd, name, home)
+	})
+}
+
+// purgeAgentDests deletes the destination files owned solely by the named
+// agent and removes its state entries. Must be called under withGlobalLock.
+func purgeAgentDests(cmd *cobra.Command, name, home string) error {
 	// State keys store dest paths HOME-relative ("${HOME}/.claude.json").
 	// Expand them back to absolute via the user's $HOME before deleting —
 	// otherwise os.Remove would target the literal "${HOME}/..." string,
