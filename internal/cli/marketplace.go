@@ -156,6 +156,9 @@ func newMarketplaceRemoveCmd() *cobra.Command {
 
 func marketplaceRemoveRun(cmd *cobra.Command, args []string) error {
 	name := args[0]
+	if err := validateCacheKey("marketplace", name); err != nil {
+		return err
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 
 	tomlPath := filepath.Join(home, "marketplaces", name+".toml")

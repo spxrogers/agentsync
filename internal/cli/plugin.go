@@ -138,6 +138,9 @@ func newPluginUpgradeCmd() *cobra.Command {
 
 func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
 	id := args[0]
+	if err := validateCacheKey("plugin", id); err != nil {
+		return err
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 
 	// Read existing plugin toml.
@@ -211,6 +214,9 @@ func newPluginEnableCmd() *cobra.Command {
 
 func pluginEnableRun(cmd *cobra.Command, args []string) error {
 	id := args[0]
+	if err := validateCacheKey("plugin", id); err != nil {
+		return err
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	pluginPath := filepath.Join(home, "plugins", id+".toml")
 
@@ -246,6 +252,9 @@ func newPluginDisableCmd() *cobra.Command {
 
 func pluginDisableRun(cmd *cobra.Command, args []string) error {
 	id := args[0]
+	if err := validateCacheKey("plugin", id); err != nil {
+		return err
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	pluginPath := filepath.Join(home, "plugins", id+".toml")
 
@@ -279,6 +288,9 @@ func newPluginRemoveCmd() *cobra.Command {
 
 func pluginRemoveRun(cmd *cobra.Command, args []string) error {
 	id := args[0]
+	if err := validateCacheKey("plugin", id); err != nil {
+		return err
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 
 	pluginPath := filepath.Join(home, "plugins", id+".toml")
