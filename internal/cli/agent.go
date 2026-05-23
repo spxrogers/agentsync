@@ -50,8 +50,8 @@ var v1Supported = map[string]bool{
 func newAgentCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "agent", Short: "manage which agents agentsync targets"}
 	cmd.AddCommand(
-		&cobra.Command{Use: "add <name>", Short: "register an agent (claude | opencode)", Args: cobra.ExactArgs(1), RunE: agentAddRun},
-		&cobra.Command{Use: "remove <name>", Short: "unregister an agent", Args: cobra.ExactArgs(1), RunE: agentRemoveRun},
+		&cobra.Command{Use: "add <name>", Short: "register an agent (claude | opencode)", Args: cobra.ExactArgs(1), RunE: lockedRun(agentAddRun)},
+		&cobra.Command{Use: "remove <name>", Short: "unregister an agent", Args: cobra.ExactArgs(1), RunE: lockedRun(agentRemoveRun)},
 		&cobra.Command{Use: "list", Short: "list registered agents", Args: cobra.NoArgs, RunE: agentListRun},
 		newAgentEnableCmd(),
 		newAgentDisableCmd(),
@@ -64,7 +64,7 @@ func newAgentEnableCmd() *cobra.Command {
 		Use:   "enable <name>",
 		Args:  cobra.ExactArgs(1),
 		Short: "enable a registered agent",
-		RunE:  agentEnableRun,
+		RunE:  lockedRun(agentEnableRun),
 	}
 }
 
@@ -74,9 +74,9 @@ func newAgentDisableCmd() *cobra.Command {
 		Use:   "disable <name>",
 		Args:  cobra.ExactArgs(1),
 		Short: "disable a registered agent (optionally purging its destination files)",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: lockedRun(func(cmd *cobra.Command, args []string) error {
 			return agentDisableRun(cmd, args, purge)
-		},
+		}),
 	}
 	cmd.Flags().BoolVar(&purge, "purge", false, "remove agent destination files that agentsync owns")
 	return cmd
@@ -293,13 +293,11 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 		return nil
 	}
 
-	// --purge mutates .state/targets.json and deletes destination files, so
-	// it must hold the global lock — otherwise a concurrent apply's
-	// read-modify-write of targets.json races this one and loses updates.
+	// The whole disable command (including this purge) already runs under the
+	// global lock via lockedRun, so call purge directly — re-acquiring here
+	// would deadlock on the re-entrant flock.
 	home := paths.AgentsyncHome(paths.OSEnv{})
-	return withGlobalLock(home, func() error {
-		return purgeAgentDests(cmd, name, home)
-	})
+	return purgeAgentDests(cmd, name, home)
 }
 
 // purgeAgentDests deletes the destination files owned solely by the named

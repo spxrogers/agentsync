@@ -54,7 +54,7 @@ func newPluginInstallCmd() *cobra.Command {
 		Use:   "install <id[@marketplace]>",
 		Short: "fetch a plugin and register it",
 		Args:  cobra.ExactArgs(1),
-		RunE:  pluginInstallRun,
+		RunE:  lockedRun(pluginInstallRun),
 	}
 }
 
@@ -132,7 +132,7 @@ func newPluginUpgradeCmd() *cobra.Command {
 		Use:   "upgrade <id>",
 		Short: "re-fetch a plugin and update its manifest sha",
 		Args:  cobra.ExactArgs(1),
-		RunE:  pluginUpgradeRun,
+		RunE:  lockedRun(pluginUpgradeRun),
 	}
 }
 
@@ -208,7 +208,7 @@ func newPluginEnableCmd() *cobra.Command {
 		Use:   "enable <id>",
 		Short: "enable a disabled plugin",
 		Args:  cobra.ExactArgs(1),
-		RunE:  pluginEnableRun,
+		RunE:  lockedRun(pluginEnableRun),
 	}
 }
 
@@ -246,7 +246,7 @@ func newPluginDisableCmd() *cobra.Command {
 		Use:   "disable <id>",
 		Short: "disable a plugin without removing it",
 		Args:  cobra.ExactArgs(1),
-		RunE:  pluginDisableRun,
+		RunE:  lockedRun(pluginDisableRun),
 	}
 }
 
@@ -282,7 +282,7 @@ func newPluginRemoveCmd() *cobra.Command {
 		Use:   "remove <id>",
 		Short: "remove a plugin and its cached files",
 		Args:  cobra.ExactArgs(1),
-		RunE:  pluginRemoveRun,
+		RunE:  lockedRun(pluginRemoveRun),
 	}
 }
 
