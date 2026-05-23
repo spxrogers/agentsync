@@ -160,7 +160,15 @@ func Merge(base source.Canonical, m *Marker) source.Canonical {
 	if len(m.Memory.Import) > 0 {
 		body := out.Memory.Body
 		for _, rel := range m.Memory.Import {
-			data, err := os.ReadFile(filepath.Join(m.Root, rel))
+			// Containment: a committed marker's import path must not escape
+			// the project root. Without this, `import = ["../../etc/passwd"]`
+			// (or an absolute path) reads arbitrary host files into the
+			// rendered memory. Skip anything that resolves outside m.Root.
+			abs := filepath.Join(m.Root, rel)
+			if !importWithinRoot(m.Root, abs) {
+				continue
+			}
+			data, err := os.ReadFile(abs)
 			if err != nil {
 				continue
 			}
@@ -172,4 +180,21 @@ func Merge(base source.Canonical, m *Marker) source.Canonical {
 		out.Memory.Body = body
 	}
 	return out
+}
+
+// importWithinRoot reports whether abs is the same path as root or sits
+// inside it (lexical, after Clean). Used to bound project memory imports.
+func importWithinRoot(root, abs string) bool {
+	root = filepath.Clean(root)
+	abs = filepath.Clean(abs)
+	if root == abs {
+		return true
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil {
+		return false
+	}
+	return rel != ".." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) &&
+		!filepath.IsAbs(rel)
 }
