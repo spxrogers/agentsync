@@ -62,7 +62,11 @@ func (b *AgeBackend) load() error {
 	if err := toml.Unmarshal(raw, &top); err != nil {
 		return fmt.Errorf("parse decrypted as TOML: %w", err)
 	}
-	b.cache = flatten("", top)
+	cache, err := flatten("", top)
+	if err != nil {
+		return fmt.Errorf("parse decrypted secrets: %w", err)
+	}
+	b.cache = cache
 	return nil
 }
 
@@ -81,7 +85,12 @@ func (b *AgeBackend) Resolve(dottedKey string) (string, error) {
 // flatten recursively converts a nested map[string]any into a flat
 // map[string]string with dotted keys, e.g. {"github": {"token": "x"}} ->
 // {"github.token": "x"}.
-func flatten(prefix string, m map[string]any) map[string]string {
+//
+// Non-string leaf values (numbers, bools, arrays, datetimes) are rejected
+// rather than coerced via fmt.Sprint: a TOML `token = 0123` would otherwise
+// resolve to "123" (or "83" for octal) and an array to Go's "[a b]" syntax,
+// substituting a silently-wrong credential into the user's agent config.
+func flatten(prefix string, m map[string]any) (map[string]string, error) {
 	out := map[string]string{}
 	for k, v := range m {
 		key := k
@@ -90,16 +99,20 @@ func flatten(prefix string, m map[string]any) map[string]string {
 		}
 		switch vv := v.(type) {
 		case map[string]any:
-			for kk, vvv := range flatten(key, vv) {
+			sub, err := flatten(key, vv)
+			if err != nil {
+				return nil, err
+			}
+			for kk, vvv := range sub {
 				out[kk] = vvv
 			}
 		case string:
 			out[key] = vv
 		default:
-			out[key] = fmt.Sprint(vv)
+			return nil, fmt.Errorf("secret %q has a non-string value (%T); secret values must be quoted strings", key, vv)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // Encrypt writes plaintext as-is, encrypted to the given age X25519
