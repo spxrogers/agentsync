@@ -259,13 +259,27 @@ type cappedReader struct {
 }
 
 func (c *cappedReader) Read(p []byte) (int, error) {
-	if c.remaining <= 0 {
-		return 0, fmt.Errorf("npm fetcher: decompressed tarball from %s exceeds cap (set AGENTSYNC_MAX_TARBALL_MB to override)", c.url)
+	if c.remaining < 0 {
+		return 0, c.capErr()
 	}
-	if int64(len(p)) > c.remaining {
-		p = p[:c.remaining]
+	// Allow reading up to remaining+1 bytes. A payload of exactly `cap`
+	// bytes drains remaining to 0 without error (the tar reader's trailing
+	// probe read then sees EOF), while the (cap+1)th byte drives remaining
+	// negative and trips the cap. The previous `remaining <= 0` guard
+	// rejected a tarball whose decompressed size was *exactly* the cap,
+	// because tar issues one more Read after the last data byte.
+	allow := c.remaining + 1
+	if int64(len(p)) > allow {
+		p = p[:allow]
 	}
 	n, err := c.r.Read(p)
 	c.remaining -= int64(n)
+	if c.remaining < 0 {
+		return n, c.capErr()
+	}
 	return n, err
+}
+
+func (c *cappedReader) capErr() error {
+	return fmt.Errorf("npm fetcher: decompressed tarball from %s exceeds cap (set AGENTSYNC_MAX_TARBALL_MB to override)", c.url)
 }
