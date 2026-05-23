@@ -159,6 +159,13 @@ func Merge(base source.Canonical, m *Marker) source.Canonical {
 	// Memory imports: read project-relative files and append.
 	if len(m.Memory.Import) > 0 {
 		body := out.Memory.Body
+		// Resolve the root through any symlinks once so a symlinked tmp root
+		// (e.g. macOS /tmp -> /private/tmp) doesn't cause false rejections of
+		// legitimate in-root imports below.
+		resolvedRoot := m.Root
+		if rr, err := filepath.EvalSymlinks(m.Root); err == nil {
+			resolvedRoot = rr
+		}
 		for _, rel := range m.Memory.Import {
 			// Containment: a committed marker's import path must not escape
 			// the project root. Without this, `import = ["../../etc/passwd"]`
@@ -168,7 +175,16 @@ func Merge(base source.Canonical, m *Marker) source.Canonical {
 			if !importWithinRoot(m.Root, abs) {
 				continue
 			}
-			data, err := os.ReadFile(abs)
+			// Defense-in-depth: the lexical check above can't see a committed
+			// symlink under the root (leak.md -> /etc/passwd) — os.ReadFile
+			// would follow it off-root. Resolve symlinks and re-check against
+			// the resolved root before reading. Project markers come from
+			// cloned repos, so this path is attacker-influenced.
+			resolved, err := filepath.EvalSymlinks(abs)
+			if err != nil || !importWithinRoot(resolvedRoot, resolved) {
+				continue
+			}
+			data, err := os.ReadFile(resolved)
 			if err != nil {
 				continue
 			}
