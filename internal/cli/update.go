@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
@@ -290,17 +289,20 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 		src.RootDir = mpCacheRoot
 	}
 	fetcher := marketplace.Dispatch(src)
-	result, err := fetcher.Fetch(src, cacheDir)
-	if err != nil {
+	if _, err := fetcher.Fetch(src, cacheDir); err != nil {
 		return fmt.Errorf("fetch plugin %s: %w", b.ID, err)
 	}
 
-	// Update the plugin TOML.
+	// Update the plugin TOML. Recompute the manifest SHA from the freshly
+	// fetched cache exactly as `plugin install` does (computeManifestSHA),
+	// for every fetcher type. The previous code only set the SHA for git
+	// fetchers — and to result.HeadSHA, a git commit SHA rather than the
+	// sha256(plugin.json) that verifyPluginManifestSHA compares against —
+	// so npm/relative/strict plugins kept the stale pre-bump SHA and the
+	// immediate re-apply hard-failed "manifest SHA mismatch".
 	existing.Plugin.Version = b.To
-	if result.HeadSHA != "" {
-		existing.Plugin.ManifestSHA = result.HeadSHA
-	} else if strings.ContainsAny(b.ManifestSHA, "0123456789abcdef") {
-		existing.Plugin.ManifestSHA = b.ManifestSHA
+	if sha := computeManifestSHA(home, b.ID, mpEntry, nil, cacheDir); sha != "" {
+		existing.Plugin.ManifestSHA = sha
 	}
 
 	data, err := toml.Marshal(existing)
