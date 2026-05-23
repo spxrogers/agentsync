@@ -243,6 +243,110 @@ func TestImport_CommandFromClaude(t *testing.T) {
 	}
 }
 
+// importTestEnv inits + registers claude and returns (tmp, env).
+func importTestEnv(t *testing.T) (string, map[string]string) {
+	t.Helper()
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	return tmp, env
+}
+
+// TestImport_SkillFromClaude round-trips a native SKILL.md into the source.
+func TestImport_SkillFromClaude(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	skillDir := filepath.Join(tmp, ".claude", "skills", "deploy")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: deploy\ndescription: ship it\n---\nSteps to deploy.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude:skill:deploy"); err != nil {
+		t.Fatalf("import skill: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(filepath.Join(tmp, ".agentsync", "skills", "deploy", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("source skill not written: %v", err)
+	}
+	if !strings.Contains(string(data), "Steps to deploy") {
+		t.Fatalf("skill body not captured:\n%s", data)
+	}
+}
+
+// TestImport_HookFromClaude round-trips a settings.json hook into the source.
+func TestImport_HookFromClaude(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	settings := filepath.Join(tmp, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte(`{
+		"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi"}]}]}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude:hook:PreToolUse"); err != nil {
+		t.Fatalf("import hook: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(filepath.Join(tmp, ".agentsync", "hooks", "PreToolUse.toml"))
+	if err != nil {
+		t.Fatalf("source hook not written: %v", err)
+	}
+	if !strings.Contains(string(data), "echo hi") {
+		t.Fatalf("hook command not captured:\n%s", data)
+	}
+}
+
+// TestImport_LSPFromClaude round-trips a settings.json lspServers entry.
+func TestImport_LSPFromClaude(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	settings := filepath.Join(tmp, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte(`{"lspServers": {"gopls": {"command": "gopls", "args": ["-rpc"]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude:lsp:gopls"); err != nil {
+		t.Fatalf("import lsp: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(filepath.Join(tmp, ".agentsync", "lsp", "gopls.toml"))
+	if err != nil {
+		t.Fatalf("source lsp not written: %v", err)
+	}
+	if !strings.Contains(string(data), "gopls") {
+		t.Fatalf("lsp command not captured:\n%s", data)
+	}
+}
+
+// TestImport_MemoryFromClaude round-trips CLAUDE.md into memory/AGENTS.md.
+func TestImport_MemoryFromClaude(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	if err := os.MkdirAll(filepath.Join(tmp, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".claude", "CLAUDE.md"), []byte("# My project memory\nBe concise.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude:memory"); err != nil {
+		t.Fatalf("import memory: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(filepath.Join(tmp, ".agentsync", "memory", "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("source memory not written: %v", err)
+	}
+	if !strings.Contains(string(data), "Be concise") {
+		t.Fatalf("memory body not captured:\n%s", data)
+	}
+}
+
 // TestImport_UnknownComponent verifies that an unknown component errors.
 func TestImport_UnknownComponent(t *testing.T) {
 	tmp := t.TempDir()
