@@ -125,19 +125,27 @@ args    = ["-y", "@modelcontextprotocol/server-github"]
 		t.Fatalf("expected 'purged' in output; got: %s", out)
 	}
 
-	// .claude.json should be gone (it was the only owned file).
-	if _, err := os.Stat(claudePath); !os.IsNotExist(err) {
-		t.Fatalf(".claude.json should be removed after --purge; stat err: %v", err)
+	// .claude.json is a key-merge dest: agentsync owns only /mcpServers/github,
+	// not the whole file. Purge must PRUNE the owned pointer (so a user's
+	// foreign keys would survive), not delete the file. With no other content,
+	// the file remains as an empty object — but it must NOT be deleted, and the
+	// owned server must be gone.
+	after, statErr := os.ReadFile(claudePath)
+	if statErr != nil {
+		t.Fatalf(".claude.json must survive purge (key-merge dest, only pointers owned); read err: %v", statErr)
+	}
+	if strings.Contains(string(after), "github") {
+		t.Fatalf("owned mcpServers/github should have been pruned from .claude.json; got: %s", after)
 	}
 
 	// State should no longer have claude entries for Files/Keys.
-	// (We verify indirectly: a second purge should report 0 paths.)
+	// (We verify indirectly: a second purge should report nothing pruned.)
 	out2, err2 := runCLI(t, env, "agent", "disable", "claude", "--purge")
 	if err2 != nil {
 		t.Fatalf("second agent disable --purge: %v\n%s", err2, out2)
 	}
-	if !strings.Contains(out2, "0 destination path(s)") {
-		t.Fatalf("expected 0 paths on second purge; got: %s", out2)
+	if !strings.Contains(out2, "deleted 0 file(s), pruned owned keys from 0") {
+		t.Fatalf("expected nothing to purge on second run; got: %s", out2)
 	}
 }
 
