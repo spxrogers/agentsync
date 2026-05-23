@@ -83,7 +83,7 @@ func TestPipeline_DedupesIdenticalWritesAcrossAdapters(t *testing.T) {
 		},
 	}
 
-	if _, err := render.Apply(plan, reg, state.New(), t.TempDir(), adapter.ScopeUser, ""); err != nil {
+	if _, _, err := render.Apply(plan, reg, state.New(), t.TempDir(), t.TempDir(), adapter.ScopeUser, ""); err != nil {
 		t.Fatal(err)
 	}
 

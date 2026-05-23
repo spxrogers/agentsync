@@ -3,6 +3,7 @@ package secrets_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"filippo.io/age"
@@ -38,6 +39,34 @@ api_key = "lin_xyz"
 	}
 	if v, err := b.Resolve("linear.api_key"); err != nil || v != "lin_xyz" {
 		t.Fatalf("linear.api_key = %q (err: %v)", v, err)
+	}
+}
+
+// TestAgeBackend_NonStringValueRejected is the regression for the bug where
+// flatten coerced non-string TOML leaves via fmt.Sprint: a numeric secret
+// like `token = 0123` silently resolved to "123" instead of erroring, so a
+// mistyped (unquoted) credential landed wrong in the agent config with no
+// diagnostic. Now load() fails loudly.
+func TestAgeBackend_NonStringValueRejected(t *testing.T) {
+	tmp := t.TempDir()
+	id, _ := age.GenerateX25519Identity()
+	idPath := filepath.Join(tmp, "id.txt")
+	if err := os.WriteFile(idPath, []byte(id.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agePath := filepath.Join(tmp, "secrets.age")
+	// token is an unquoted integer — a common mistake.
+	if err := secrets_pkg.Encrypt([]byte("[github]\ntoken = 1234\n"), id.Recipient().String(), agePath); err != nil {
+		t.Fatal(err)
+	}
+
+	b := secrets_pkg.NewAgeBackend(agePath, idPath)
+	_, err := b.Resolve("github.token")
+	if err == nil {
+		t.Fatal("expected error resolving a non-string secret value; got nil")
+	}
+	if !strings.Contains(err.Error(), "non-string") {
+		t.Fatalf("error should explain the non-string value; got: %v", err)
 	}
 }
 

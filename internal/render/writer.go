@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,6 +14,43 @@ import (
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/state"
 )
+
+// DefaultBackupKeep is how many backup-timestamp dirs apply retains.
+const DefaultBackupKeep = 20
+
+// PruneBackups removes all but the most recent `keep` timestamp directories
+// under <home>/.state/backups. Each backup is a verbatim copy of a
+// pre-existing native config file (which may contain secrets), so they must
+// not accumulate unbounded — a disk-bloat and credential-lingering concern.
+// The dir names are zero-padded, fixed-width timestamps, so lexical sort is
+// chronological. Best-effort: a removal error for one dir doesn't abort.
+func PruneBackups(home string, keep int) error {
+	if keep < 0 {
+		return nil
+	}
+	root := filepath.Join(home, ".state", "backups")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs = append(dirs, e.Name())
+		}
+	}
+	if len(dirs) <= keep {
+		return nil
+	}
+	sort.Strings(dirs) // ascending → oldest first
+	for _, d := range dirs[:len(dirs)-keep] {
+		_ = os.RemoveAll(filepath.Join(root, d))
+	}
+	return nil
+}
 
 // Writer is THE funnel for native-destination writes. Every adapter's
 // Apply method receives one of these and routes its writes through it
@@ -32,14 +70,22 @@ import (
 // iox.AtomicWrite call outside the allowed packages, so a future
 // contributor cannot silently bypass this guard.
 type Writer struct {
-	state   *state.Targets
-	home    string
-	scope   adapter.Scope
-	project string
-	agent   string
+	state *state.Targets
+	// home is the agentsync home (~/.agentsync); it anchors the backup
+	// root only. userHome is the user's $HOME (paths.HomeDir) and is the
+	// base for HomeRelative state-key normalization — dest files like
+	// ~/.claude.json live under userHome, NOT under the agentsync home, so
+	// using home here would never normalize them (the cross-machine
+	// portability no-op fixed in this change).
+	home     string
+	userHome string
+	scope    adapter.Scope
+	project  string
+	agent    string
 
 	backupRoot string          // <home>/.state/backups/<ts>; created lazily
 	backedUp   map[string]bool // path → already-backed-up this run
+	wrote      map[string]bool // path → destination actually written this run
 	reports    []CollisionReport
 	// dryRun, when true, skips both the destination write AND the backup
 	// write. The reports slice is still populated so callers can preview
@@ -65,25 +111,35 @@ func (r CollisionReport) String() string {
 }
 
 // NewWriter constructs a Writer for one (agent, scope, project) tuple.
-// The render layer creates one writer per agent during Apply.
-func NewWriter(st *state.Targets, home string, scope adapter.Scope, project, agent string) *Writer {
-	ts := time.Now().UTC().Format("20060102T150405Z")
+// The render layer creates one writer per agent during Apply. home is the
+// agentsync home (backup root); userHome is the user's $HOME (state-key
+// normalization base).
+func NewWriter(st *state.Targets, home, userHome string, scope adapter.Scope, project, agent string) *Writer {
+	// Include the nanosecond offset so two applies in the same wall-clock
+	// second (e.g. a user-scope apply immediately followed by a project-scope
+	// one, or a retried apply) don't share a backup root and silently clobber
+	// each other's pre-existing-file copies. The global lock serializes
+	// applies, so successive runs always land on distinct nanoseconds.
+	now := time.Now().UTC()
+	ts := fmt.Sprintf("%s-%09d", now.Format("20060102T150405Z"), now.Nanosecond())
 	return &Writer{
 		state:      st,
 		home:       home,
+		userHome:   userHome,
 		scope:      scope,
 		project:    project,
 		agent:      agent,
 		backupRoot: filepath.Join(home, ".state", "backups", ts),
 		backedUp:   map[string]bool{},
+		wrote:      map[string]bool{},
 	}
 }
 
 // NewPreviewWriter constructs a Writer that records foreign-collision
 // reports without performing any disk writes. Used by `apply --dry-run` to
 // surface the same backup-and-overwrite events a real apply would produce.
-func NewPreviewWriter(st *state.Targets, home string, scope adapter.Scope, project, agent string) *Writer {
-	w := NewWriter(st, home, scope, project, agent)
+func NewPreviewWriter(st *state.Targets, home, userHome string, scope adapter.Scope, project, agent string) *Writer {
+	w := NewWriter(st, home, userHome, scope, project, agent)
 	w.dryRun = true
 	return w
 }
@@ -91,6 +147,12 @@ func NewPreviewWriter(st *state.Targets, home string, scope adapter.Scope, proje
 // Reports returns the per-write collision reports accumulated so far.
 // Safe to call after Apply completes.
 func (w *Writer) Reports() []CollisionReport { return w.reports }
+
+// Wrote returns the set of destination paths this writer actually wrote.
+// Used by the apply-error rescue to record state ONLY for files agentsync
+// committed this run — a pre-existing foreign file at an op that was never
+// attempted must not be recorded as owned (that would suppress its backup).
+func (w *Writer) Wrote() map[string]bool { return w.wrote }
 
 // Write satisfies adapter.DestWriter. finalBytes is the post-merge content
 // for merge ops, or op.Content for replace ops.
@@ -102,7 +164,11 @@ func (w *Writer) Write(op adapter.FileOp, finalBytes []byte) error {
 	if mode == 0 {
 		mode = 0o644
 	}
-	return iox.AtomicWrite(op.Path, finalBytes, mode)
+	if err := iox.AtomicWrite(op.Path, finalBytes, mode); err != nil {
+		return err
+	}
+	w.wrote[op.Path] = true
+	return nil
 }
 
 // Delete satisfies adapter.DestWriter. Idempotent on missing files.
@@ -129,7 +195,7 @@ func (w *Writer) maybeBackup(op adapter.FileOp, finalBytes []byte) error {
 
 func (w *Writer) maybeBackupFileOp(op adapter.FileOp, finalBytes []byte) error {
 	stateKey := fmt.Sprintf("%s:%s:%s:%s", w.agent, w.scope.String(),
-		paths.HomeRelative(w.home, w.project), paths.HomeRelative(w.home, op.Path))
+		paths.HomeRelative(w.userHome, w.project), paths.HomeRelative(w.userHome, op.Path))
 	if _, owned := w.state.Files[stateKey]; owned {
 		return nil
 	}
@@ -169,8 +235,8 @@ func (w *Writer) maybeBackupKeyOp(op adapter.FileOp) error {
 	}
 
 	var backupPath string
-	portableProject := paths.HomeRelative(w.home, w.project)
-	portablePath := paths.HomeRelative(w.home, op.Path)
+	portableProject := paths.HomeRelative(w.userHome, w.project)
+	portablePath := paths.HomeRelative(w.userHome, op.Path)
 	for _, ptr := range CollectPointers(ours, "") {
 		stateKey := fmt.Sprintf("%s:%s:%s:%s:%s", w.agent, w.scope.String(), portableProject, portablePath, ptr)
 		if _, owned := w.state.Keys[stateKey]; owned {
@@ -204,7 +270,7 @@ func (w *Writer) maybeBackupKeyOp(op adapter.FileOp) error {
 // back up the whole file once if state has no entries claiming the path.
 func (w *Writer) maybeBackupFileOpForJSONCFallback(op adapter.FileOp) error {
 	stateKeyPrefix := fmt.Sprintf("%s:%s:%s:%s:", w.agent, w.scope.String(),
-		paths.HomeRelative(w.home, w.project), paths.HomeRelative(w.home, op.Path))
+		paths.HomeRelative(w.userHome, w.project), paths.HomeRelative(w.userHome, op.Path))
 	for k := range w.state.Keys {
 		if strings.HasPrefix(k, stateKeyPrefix) {
 			return nil // state owns at least one pointer here; trust the merge

@@ -73,6 +73,9 @@ func loadSecretsConfig() (source.SecretsConfig, string, error) {
 	cfgPath := filepath.Join(home, "agentsync.toml")
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return source.SecretsConfig{}, home, fmt.Errorf("agentsync home not initialized (%s not found); run `agentsync init` first", cfgPath)
+		}
 		return source.SecretsConfig{}, home, fmt.Errorf("read %s: %w", cfgPath, err)
 	}
 	var cfg source.Config
@@ -82,16 +85,18 @@ func loadSecretsConfig() (source.SecretsConfig, string, error) {
 	return cfg.Secrets, home, nil
 }
 
-// resolveAgePath returns the absolute path to the secrets.age file.
+// resolveAgePath returns the absolute path to the secrets.age file, applying
+// the same default + ${env:HOME}/~ expansion the apply path uses.
 func resolveAgePath(cfg source.SecretsConfig, home string) string {
-	f := cfg.File
-	if f == "" {
-		f = "secrets/secrets.age"
-	}
-	if !filepath.IsAbs(f) {
-		return filepath.Join(home, f)
-	}
-	return f
+	return secrets.ResolveAgeFile(cfg, home, paths.HomeDir(paths.OSEnv{}))
+}
+
+// resolveIdentityPath returns the absolute identity_file path, expanding
+// ${env:HOME}/~ the same way the apply path does — without this, `secrets
+// get/set/edit` would os.ReadFile a literal "${env:HOME}/..." string and
+// fail even though the documented init template uses exactly that form.
+func resolveIdentityPath(cfg source.SecretsConfig, home string) string {
+	return secrets.ResolveIdentityFile(cfg, home, paths.HomeDir(paths.OSEnv{}))
 }
 
 // decryptToMap decrypts secrets.age and returns the top-level map.
@@ -101,7 +106,7 @@ func decryptToMap(cfg source.SecretsConfig, home string) (map[string]any, error)
 	if _, err := os.Stat(agePath); os.IsNotExist(err) {
 		return map[string]any{}, nil
 	}
-	plain, err := secrets.Decrypt(agePath, cfg.IdentityFile)
+	plain, err := secrets.Decrypt(agePath, resolveIdentityPath(cfg, home))
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +193,7 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 	if _, err := os.Stat(agePath); os.IsNotExist(err) {
 		plain = []byte("# agentsync secrets — TOML format\n# Example:\n# [github]\n# token = \"ghp_...\"\n")
 	} else {
-		plain, err = secrets.Decrypt(agePath, cfg.IdentityFile)
+		plain, err = secrets.Decrypt(agePath, resolveIdentityPath(cfg, home))
 		if err != nil {
 			return fmt.Errorf("decrypt: %w", err)
 		}

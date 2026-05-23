@@ -1,12 +1,11 @@
 // Package secrets resolves ${secret:foo.bar} and ${env:FOO} references at
-// apply-time. The active backend is selected from opensync.toml [secrets]
+// apply-time. The active backend is selected from agentsync.toml [secrets]
 // `backend` field (env|age).
 package secrets
 
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -80,16 +79,18 @@ func (NopResolver) Resolve(key string) (string, error) {
 // SelectBackend returns the appropriate Resolver for the given SecretsConfig.
 // For "age" backend it returns an AgeBackend; for "env" or empty it returns EnvBackend.
 //
-// Relative paths in cfg.File are resolved against homeDir using filepath.Join
-// so that Windows backslash separators work the same as POSIX.
-func SelectBackend(cfg source.SecretsConfig, homeDir string) Resolver {
+// agentsyncHome anchors relative cfg.File / identity_file paths; userHome
+// (paths.HomeDir) expands ${env:HOME} and a leading ~. Both the age file
+// (defaulted via ResolveAgeFile) and the identity file (expanded via
+// ResolveIdentityFile) are resolved here so apply/verify/diff agree with the
+// `secrets` subcommands on which files to read.
+func SelectBackend(cfg source.SecretsConfig, agentsyncHome, userHome string) Resolver {
 	switch strings.ToLower(cfg.Backend) {
 	case "age":
-		ageFile := cfg.File
-		if ageFile != "" && !filepath.IsAbs(ageFile) {
-			ageFile = filepath.Join(homeDir, ageFile)
-		}
-		return NewAgeBackend(ageFile, cfg.IdentityFile)
+		return NewAgeBackend(
+			ResolveAgeFile(cfg, agentsyncHome, userHome),
+			ResolveIdentityFile(cfg, agentsyncHome, userHome),
+		)
 	case "env":
 		return EnvBackend{}
 	default:

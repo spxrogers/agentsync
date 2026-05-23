@@ -2,6 +2,7 @@ package marketplace
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,7 +92,38 @@ func (f *GitFetcher) Fetch(src Source, into string) (FetchResult, error) {
 		}
 	}
 
+	// go-git materializes committed symlinks on disk. Without this, a
+	// malicious plugin repo could ship a symlink (skills/x -> /etc) that the
+	// lexical component-path containment check cannot catch and os.ReadFile
+	// would follow off the cache. Reject any symlink in the fetched tree —
+	// the same stance npm/relative fetchers take. The .git dir is never
+	// projected, so skip it.
+	if err := rejectSymlinks(into); err != nil {
+		return FetchResult{}, err
+	}
+
 	return FetchResult{HeadSHA: headSHA}, nil
+}
+
+// rejectSymlinks walks root and returns an error if any entry is a symlink,
+// skipping the .git directory.
+func rejectSymlinks(root string) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && d.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				rel = path
+			}
+			return fmt.Errorf("git fetcher: repository contains a symlink %q (refusing — plugin trees must contain only regular files and directories)", rel)
+		}
+		return nil
+	})
 }
 
 // resolveGitURL returns the clone URL for the given source.

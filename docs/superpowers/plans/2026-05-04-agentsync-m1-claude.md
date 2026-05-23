@@ -4,7 +4,7 @@
 
 **Goal:** First real adapter. Implements `internal/adapter/claude` covering all 7 component types (MCP, memory, skill, subagent, slash command, hook, LSP). Renders + ingests round-trip. Settings written to `~/.claude/settings.json` and `~/.claude.json` use **per-key merge** so foreign keys (Claude's own writes, user hand-edits) survive untouched. Replaces the NoopAdapter for `claude` in the registry.
 
-**Architecture:** One package (`internal/adapter/claude`) with one file per concern. The adapter consumes a `source.Canonical` and emits a `[]adapter.FileOp` ready for atomic write. Settings/`.claude.json` merging uses a JSON-pointer-based AST walk: opensync only touches keys it has written before (tracked in M0's `state.Keys`); foreign keys flow through unchanged.
+**Architecture:** One package (`internal/adapter/claude`) with one file per concern. The adapter consumes a `source.Canonical` and emits a `[]adapter.FileOp` ready for atomic write. Settings/`.claude.json` merging uses a JSON-pointer-based AST walk: agentsync only touches keys it has written before (tracked in M0's `state.Keys`); foreign keys flow through unchanged.
 
 **Tech stack:** Stdlib `encoding/json` for Claude's strict-JSON files; `pelletier/go-toml/v2` already vendored from M0; `os/exec` to detect Claude installation.
 
@@ -227,8 +227,8 @@ The hardest single piece of M1. Claude's `settings.json` is shared between Claud
 - `MergeKeys(existing, ours map[string]any, ownedPointers []string) (merged map[string]any, kept, removed []string)`
 - `existing` = raw parse of the on-disk file
 - `ours` = the keys agentsync wants to write (also as map)
-- `ownedPointers` = JSON pointers (`/mcpServers/github`, `/hooks/PreToolUse/0`) that opensync wrote *last apply* — these are reclaimable
-- Returns merged map: foreign keys preserved; owned-but-now-absent pointers deleted; new opensync pointers from `ours` overlaid.
+- `ownedPointers` = JSON pointers (`/mcpServers/github`, `/hooks/PreToolUse/0`) that agentsync wrote *last apply* — these are reclaimable
+- Returns merged map: foreign keys preserved; owned-but-now-absent pointers deleted; new agentsync pointers from `ours` overlaid.
 
 - [ ] **Step 2.1: Test**
 

@@ -129,6 +129,44 @@ GITHUB_TOKEN = "${env:GITHUB_TOKEN}"
 	}
 }
 
+// TestDiff_FailsClosedOnUnresolvableSecret is the regression for the residual
+// leak: when a ${secret:…} reference cannot be resolved at diff time (age key
+// locked/absent, or — as here — no [secrets] backend configured), the cleartext
+// value a prior apply wrote into the destination cannot be redacted, so diff
+// must refuse rather than risk printing it. It names the offending key so the
+// user knows what to unlock.
+func TestDiff_FailsClosedOnUnresolvableSecret(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	// An age-style ${secret:…} ref, but no [secrets] backend is configured, so
+	// SelectBackend returns a resolver that cannot resolve github.token.
+	body := `[server]
+type = "stdio"
+command = "npx"
+
+[server.env]
+GITHUB_TOKEN = "${secret:github.token}"
+`
+	_ = os.WriteFile(mcp, []byte(body), 0o644)
+
+	out, err := runCLI(t, env, "diff")
+	if err == nil {
+		t.Fatalf("diff must fail closed when a secret ref is unresolvable; got nil err, out:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "cannot resolve secret reference") ||
+		!strings.Contains(err.Error(), "github.token") {
+		t.Fatalf("expected fail-closed message naming the unresolved key; got: %v", err)
+	}
+}
+
 func TestDiff_PathFilter(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

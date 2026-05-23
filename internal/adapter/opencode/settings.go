@@ -1,8 +1,11 @@
 // Package opencode implements the OpenCode adapter for agentsync.
 //
-// settings.go: JSONC-aware merge for opencode.json. Uses tailscale/hujson
-// which preserves comments and trailing commas across parse->mutate->serialize
-// cycles.
+// settings.go: JSONC-aware merge for opencode.json. Uses tailscale/hujson to
+// PARSE JSONC (comments + trailing commas) so a hand-edited opencode.json is
+// not rejected. NOTE: the merged result is re-emitted as plain JSON — comments
+// and trailing commas are NOT preserved (see MergeJSONC). Foreign keys/values
+// are preserved; only the formatting/comments are lost. Comment-preserving
+// mutation is deferred to v1.x (matches the README "Known limits").
 package opencode
 
 import (
@@ -15,14 +18,14 @@ import (
 )
 
 // MergeJSONC merges ours into existing JSONC content, removing ownedPointers
-// no longer present in ours. Comments and trailing-comma formatting from
-// existing are preserved as much as the hujson AST allows.
+// no longer present in ours. Foreign keys and values are preserved.
 //
-// Strategy: parse existing JSONC -> standardize to JSON (Pack), MergeKeys,
-// then format result as plain JSON. v1 trade-off: trailing comma + comment
-// preservation is partial — comments outside touched keys survive; comments
-// adjacent to deleted keys are also removed. M2 ships this; comment-position
-// fidelity can be tightened later if pain emerges.
+// Strategy: parse existing JSONC (hujson, tolerating comments + trailing
+// commas) -> Standardize to strict JSON -> MergeKeys -> emit via
+// json.MarshalIndent. v1 trade-off: this Standardize+marshal path discards ALL
+// comments and trailing-comma formatting (not just touched sections). The
+// file is never corrupted and no data keys are lost; only JSONC formatting is.
+// Comment-preserving mutation is deferred to v1.x.
 func MergeJSONC(existing []byte, ours map[string]any, ownedPointers []string) ([]byte, error) {
 	if len(existing) == 0 {
 		existing = []byte("{}")

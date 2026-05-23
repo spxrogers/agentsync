@@ -20,8 +20,8 @@ const lockTimeout = 30 * time.Second
 // corrupt targets.json (read-modify-write race) and produce ghost-orphan
 // state entries.
 //
-// The lock file lives at <home>/.state/agentsync.lock. It is created with
-// 0o644 mode and re-used across runs.
+// The lock file lives at <home>/.state/agentsync.lock. gofrs/flock creates it
+// 0o600 (owner-only) and it is re-used across runs.
 func withGlobalLock(home string, fn func() error) error {
 	lockPath := filepath.Join(home, ".state", "agentsync.lock")
 	lock, err := iox.AcquireLockTimeout(lockPath, lockTimeout)

@@ -21,6 +21,7 @@ func (stub) Render(source.Canonical, adapter.Scope, string) ([]adapter.FileOp, [
 
 func (stub) Ingest(adapter.Scope, string) (source.Canonical, error) { return source.Canonical{}, nil }
 func (stub) Apply([]adapter.FileOp, adapter.DestWriter) error       { return nil }
+func (stub) KeyMergeStrategy() string                               { return "" }
 
 func TestRegistry_RegisterLookup(t *testing.T) {
 	r := adapter.NewRegistry()

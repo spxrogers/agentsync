@@ -2,6 +2,7 @@ package source_test
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/afero"
@@ -265,6 +266,59 @@ version = "1"
 	}
 	if !found {
 		t.Fatalf("plugin's MCP not surfaced via projection: %+v", c.MCPServers)
+	}
+}
+
+// TestLoad_RejectsEscapingComponentPath is the regression for the
+// manifest-path traversal on the loader projection path: a hostile
+// plugin.json listing a skills/commands/agents path outside the plugin
+// cache must be refused rather than read and projected.
+func TestLoad_RejectsEscapingComponentPath(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	home := "/h"
+	cache := "/h/.state/cache/plugins"
+	_ = afero.WriteFile(fs, filepath.Join(home, "plugins", "x.toml"), []byte(`
+[plugin]
+id = "x@m"
+version = "1"
+`), 0o644)
+	_ = afero.WriteFile(fs, filepath.Join(cache, "x", ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"x","skills":["../../../../etc/passwd"]}`),
+		0o644)
+	_, err := source.LoadWithCache(fs, home, cache)
+	if err == nil {
+		t.Fatal("expected error for plugin.json skill path escaping the cache")
+	}
+	if !strings.Contains(err.Error(), "escapes plugin cache") {
+		t.Fatalf("error should explain the escape; got: %v", err)
+	}
+}
+
+// TestLoad_RejectsTraversalComponentName is the regression for a plugin
+// component whose frontmatter name contains a path-traversal segment. The
+// name becomes a path segment at render time (filepath.Join(SkillsDir, name,
+// "SKILL.md")), so "../../evil" would write the SKILL.md outside the managed
+// skills dir. The loader must reject it.
+func TestLoad_RejectsTraversalComponentName(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	home := "/h"
+	cache := "/h/.state/cache/plugins"
+	_ = afero.WriteFile(fs, filepath.Join(home, "plugins", "x.toml"), []byte(`
+[plugin]
+id = "x@m"
+version = "1"
+`), 0o644)
+	_ = afero.WriteFile(fs, filepath.Join(cache, "x", ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"x","skills":["s"]}`), 0o644)
+	_ = afero.WriteFile(fs, filepath.Join(cache, "x", "s", "SKILL.md"),
+		[]byte("---\nname: ../../evil\n---\nbody\n"), 0o644)
+
+	_, err := source.LoadWithCache(fs, home, cache)
+	if err == nil {
+		t.Fatal("expected error for a component name with a traversal segment")
+	}
+	if !strings.Contains(err.Error(), "name") {
+		t.Fatalf("error should name the bad component name; got: %v", err)
 	}
 }
 

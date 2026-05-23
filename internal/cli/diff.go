@@ -39,7 +39,13 @@ func newDiffCmd() *cobra.Command {
 			}
 
 			home := paths.AgentsyncHome(paths.OSEnv{})
-			c, err := source.Load(afero.NewOsFs(), home)
+			// Load WITH the plugin cache so the preview projects installed
+			// plugins exactly as `apply` does — otherwise diff omits every
+			// plugin-derived MCP server / skill / command and silently
+			// disagrees with what apply will write.
+			pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+			userHome := paths.HomeDir(paths.OSEnv{})
+			c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
 			if err != nil {
 				return err
 			}
@@ -71,7 +77,11 @@ func newDiffCmd() *cobra.Command {
 					agents = append(agents, name)
 				}
 			}
-			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, home)
+			if len(agents) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no agents enabled; run `agentsync agent add claude` (or opencode)")
+				return nil
+			}
+			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, userHome)
 			if err != nil {
 				return err
 			}
@@ -83,8 +93,20 @@ func newDiffCmd() *cobra.Command {
 			// stdout / log files / screenshots. We resolve every
 			// reference in the canonical, then mask its resolved value
 			// in both src and dst before the diff runs.
-			secBackend := secrets.SelectBackend(c.Config.Secrets, home)
+			secBackend := secrets.SelectBackend(c.Config.Secrets, home, userHome)
 			envBackend := secrets.EnvBackend{}
+			// Fail closed: if any ${secret:…} reference cannot be resolved now
+			// (age identity locked/absent, backend misconfigured), the cleartext
+			// value a prior apply substituted into the destination file cannot be
+			// redacted — CollectResolved silently skips unresolvable refs — so
+			// printing the diff would leak it. Refuse with an actionable message
+			// rather than risk emitting a credential to stdout / logs.
+			if missing := secrets.UnresolvedSecretRefs(&c, secBackend); len(missing) > 0 {
+				return fmt.Errorf("diff: cannot resolve secret reference(s) %s; "+
+					"the destination file may contain a cleartext secret that diff cannot redact. "+
+					"Unlock or configure your secrets backend ([secrets] in agentsync.toml) and retry",
+					strings.Join(missing, ", "))
+			}
 			redact := secrets.CollectResolved(&c, secBackend, envBackend)
 
 			dmp := diffmatchpatch.New()

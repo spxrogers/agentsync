@@ -99,7 +99,7 @@ func TestSelectBackend_RelativeFilePathUsesFilepathJoin(t *testing.T) {
 		File:         filepath.Join("secrets", "secrets.age"),
 		IdentityFile: filepath.Join(tmp, "key"),
 	}
-	r := secrets.SelectBackend(cfg, tmp)
+	r := secrets.SelectBackend(cfg, tmp, tmp)
 	// The resolver is an *AgeBackend; calling Resolve forces it to read AgeFile.
 	// We don't care that decryption fails (the file doesn't exist) — we care
 	// that the error references a path joined with the OS separator, not "/".

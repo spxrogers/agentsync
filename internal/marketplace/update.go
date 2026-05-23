@@ -13,8 +13,6 @@ type Bump struct {
 	From string
 	// To is the latest version available in the fetched marketplace.
 	To string
-	// ManifestSHA is the SHA of the freshly-fetched plugin.json (if available).
-	ManifestSHA string
 	// UpdateMode is the plugin's configured update mode ("pinned", "track", "manual").
 	UpdateMode string
 }

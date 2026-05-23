@@ -39,6 +39,36 @@ func TestProject_StrictPluginJSON(t *testing.T) {
 	}
 }
 
+// TestProject_RejectsEscapingComponentPath is the regression for the
+// manifest-path traversal: the fetchers are hardened, but a hostile
+// plugin.json could list a skill/command/agent path that resolves outside
+// the plugin cache, exfiltrating a host file into a projected component.
+func TestProject_RejectsEscapingComponentPath(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "SKILL.md")
+	if err := os.WriteFile(secret, []byte("---\nname: leak\n---\nhost secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, mal := range []string{secret, "../../../../etc/passwd", "../escape/SKILL.md"} {
+		t.Run(mal, func(t *testing.T) {
+			cache := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			manifest := `{"name":"x","skills":["` + mal + `"]}`
+			if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"), []byte(manifest), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := marketplace.Project(marketplace.PluginEntry{Name: "x"}, cache)
+			if err == nil {
+				t.Fatalf("expected escape error for skills path %q", mal)
+			}
+			if !strings.Contains(err.Error(), "escapes plugin cache") {
+				t.Fatalf("error should explain the escape; got: %v", err)
+			}
+		})
+	}
+}
+
 func TestProject_StrictPluginJSON_MultipleComponents(t *testing.T) {
 	cache := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {

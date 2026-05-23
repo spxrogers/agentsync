@@ -1,3 +1,6 @@
+# goreleaser v2 config (the CI action installs the latest v2 release).
+version: 2
+
 project_name: agentsync
 
 builds:
@@ -39,6 +42,7 @@ changelog:
 nfpms:
   - id: linux-pkgs
     package_name: agentsync
+    maintainer: spxrogers <spxrogers@users.noreply.github.com>
     homepage: https://github.com/spxrogers/agentsync
     license: MIT
     formats: [deb, rpm]

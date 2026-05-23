@@ -46,9 +46,9 @@ Selector grammar: `<agent>:<component>:<name>`. Reads native config from disk vi
 
 ```bash
 # Examples:
-opensync import claude:mcp:github
-opensync import opencode:agent:reviewer
-opensync import claude:plugin:atlassian-anthropic   # post-M4: import a plugin install record
+agentsync import claude:mcp:github
+agentsync import opencode:agent:reviewer
+agentsync import claude:plugin:atlassian-anthropic   # post-M4: import a plugin install record
 ```
 
 Implementation: parse selector, dispatch to the right Ingest path, find matching item by name, marshal back to canonical via Writer. Test for each component type. Commit.
@@ -306,7 +306,7 @@ func TestE2E_FullV1Lifecycle(t *testing.T) {
     id, _ := age.GenerateX25519Identity()
     _ = os.MkdirAll(filepath.Join(home, ".config", "agentsync"), 0o755)
     _ = os.WriteFile(filepath.Join(home, ".config", "agentsync", "age.key"), []byte(id.String()), 0o600)
-    cfg := filepath.Join(home, ".agentsync", "opensync.toml")
+    cfg := filepath.Join(home, ".agentsync", "agentsync.toml")
     body, _ := os.ReadFile(cfg)
     body = append(body, []byte("[secrets]\nbackend=\"age\"\nfile=\"secrets/secrets.age\"\nrecipient=\""+id.Recipient().String()+"\"\nidentity_file=\""+filepath.Join(home, ".config", "agentsync", "age.key")+"\"\n")...)
     _ = os.WriteFile(cfg, body, 0o644)

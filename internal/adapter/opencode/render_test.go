@@ -45,6 +45,35 @@ func TestRender_MCP(t *testing.T) {
 	}
 }
 
+// TestRender_MCP_PreservesHeaders is the regression for OpenCode silently
+// dropping the `headers` of a remote MCP server — a server requiring an
+// Authorization header would render unauthenticated and broken, with no Skip.
+func TestRender_MCP_PreservesHeaders(t *testing.T) {
+	c := source.Canonical{MCPServers: []source.MCPServer{{
+		ID: "remote",
+		Server: source.MCPServerSpec{
+			Type: "http", URL: "https://mcp.example.com",
+			Headers: map[string]string{"Authorization": "Bearer tok"},
+		},
+	}}}
+	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
+	ops, _, _ := a.Render(c, adapter.ScopeUser, "")
+	for _, op := range ops {
+		if !strings.HasSuffix(op.Path, "opencode.json") {
+			continue
+		}
+		var ours map[string]any
+		_ = json.Unmarshal(op.Content, &ours)
+		mcp := ours["mcp"].(map[string]any)["remote"].(map[string]any)
+		h, ok := mcp["headers"].(map[string]any)
+		if !ok || h["Authorization"] != "Bearer tok" {
+			t.Fatalf("opencode MCP dropped headers: %v", mcp)
+		}
+		return
+	}
+	t.Fatal("opencode.json op missing")
+}
+
 func TestRender_MCP_SkipsDisabled(t *testing.T) {
 	disabled := false
 	c := source.Canonical{MCPServers: []source.MCPServer{{

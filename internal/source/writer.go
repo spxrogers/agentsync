@@ -16,6 +16,24 @@ import (
 	"github.com/spxrogers/agentsync/internal/iox"
 )
 
+// ReadMCP reads mcp/<id>.toml from home. ok is false when the file does not
+// exist. Used by reconcile write-back to preserve source-only fields
+// (agents/enabled) that the rendered destination spec doesn't carry.
+func ReadMCP(home, id string) (m MCPServer, ok bool, err error) {
+	data, rerr := os.ReadFile(filepath.Join(home, "mcp", id+".toml"))
+	if rerr != nil {
+		if os.IsNotExist(rerr) {
+			return MCPServer{}, false, nil
+		}
+		return MCPServer{}, false, fmt.Errorf("read mcp %s: %w", id, rerr)
+	}
+	if uerr := toml.Unmarshal(data, &m); uerr != nil {
+		return MCPServer{}, false, fmt.Errorf("parse mcp %s: %w", id, uerr)
+	}
+	m.ID = id
+	return m, true, nil
+}
+
 // WriteMCP writes mcp/<id>.toml from m into home. Overwrites atomically.
 func WriteMCP(home, id string, m MCPServer) error {
 	body, err := toml.Marshal(m)

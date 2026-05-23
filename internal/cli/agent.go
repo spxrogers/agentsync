@@ -50,9 +50,9 @@ var v1Supported = map[string]bool{
 func newAgentCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "agent", Short: "manage which agents agentsync targets"}
 	cmd.AddCommand(
-		&cobra.Command{Use: "add <name>", Args: cobra.ExactArgs(1), RunE: agentAddRun},
-		&cobra.Command{Use: "remove <name>", Args: cobra.ExactArgs(1), RunE: agentRemoveRun},
-		&cobra.Command{Use: "list", Args: cobra.NoArgs, RunE: agentListRun},
+		&cobra.Command{Use: "add <name>", Short: "register an agent (claude | opencode)", Args: cobra.ExactArgs(1), RunE: agentAddRun},
+		&cobra.Command{Use: "remove <name>", Short: "unregister an agent", Args: cobra.ExactArgs(1), RunE: agentRemoveRun},
+		&cobra.Command{Use: "list", Short: "list registered agents", Args: cobra.NoArgs, RunE: agentListRun},
 		newAgentEnableCmd(),
 		newAgentDisableCmd(),
 	)
@@ -293,35 +293,67 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 		return nil
 	}
 
-	// --purge: delete destination files and keys owned by this agent from state.
+	// --purge mutates .state/targets.json and deletes destination files, so
+	// it must hold the global lock — otherwise a concurrent apply's
+	// read-modify-write of targets.json races this one and loses updates.
 	home := paths.AgentsyncHome(paths.OSEnv{})
+	return withGlobalLock(home, func() error {
+		return purgeAgentDests(cmd, name, home)
+	})
+}
+
+// purgeAgentDests deletes the destination files owned solely by the named
+// agent and removes its state entries. Must be called under withGlobalLock.
+func purgeAgentDests(cmd *cobra.Command, name, home string) error {
+	// State keys store dest paths HOME-relative ("${HOME}/.claude.json").
+	// Expand them back to absolute via the user's $HOME before deleting —
+	// otherwise os.Remove would target the literal "${HOME}/..." string,
+	// silently delete nothing, yet still report "purged N path(s)".
+	userHome := paths.HomeDir(paths.OSEnv{})
 	statePath := filepath.Join(home, ".state", "targets.json")
 	s, err := state.Load(statePath)
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
 	}
 
-	// Gather paths to delete (unique, from Files state).
+	// Gather the portable ("${HOME}/...") dest paths owned by the agent
+	// being purged, and — separately — those still owned by ANY OTHER agent.
+	// The dest-path field is index 3 in both Files keys ("a:s:p:path") and
+	// Keys keys ("a:s:p:path:ptr").
 	prefix := name + ":"
-	toDelete := map[string]bool{}
-	for key := range s.Files {
+	purgedPaths := map[string]bool{}
+	otherPaths := map[string]bool{}
+	collect := func(key string, fields int) {
+		parts := strings.SplitN(key, ":", fields)
+		if len(parts) < 4 || parts[3] == "" {
+			return
+		}
 		if strings.HasPrefix(key, prefix) {
-			// key format: "agent:scope:project:path" — extract path (4th field)
-			parts := strings.SplitN(key, ":", 4)
-			if len(parts) == 4 && parts[3] != "" {
-				toDelete[parts[3]] = true
-			}
+			purgedPaths[parts[3]] = true
+		} else {
+			otherPaths[parts[3]] = true
 		}
 	}
-	// Also collect paths from Keys state.
+	for key := range s.Files {
+		collect(key, 4)
+	}
 	for key := range s.Keys {
-		if strings.HasPrefix(key, prefix) {
-			// key format: "agent:scope:project:path:ptr" — extract path (4th field)
-			parts := strings.SplitN(key, ":", 5)
-			if len(parts) >= 4 && parts[3] != "" {
-				toDelete[parts[3]] = true
-			}
+		collect(key, 5)
+	}
+
+	// Delete only paths NOT still owned by another agent. claude and
+	// opencode both render skills to ~/.claude/skills/<name>/SKILL.md, so
+	// after apply that path is owned by BOTH in state. Deleting it while
+	// purging one agent would destroy a file the other still needs — and
+	// Writer.Delete skips backup, so the loss is unrecoverable.
+	toDelete := map[string]bool{}
+	sharedKept := 0
+	for p := range purgedPaths {
+		if otherPaths[p] {
+			sharedKept++
+			continue
 		}
+		toDelete[paths.FromHomeRelative(userHome, p)] = true
 	}
 
 	// Build delete ops and apply via the adapter. Purge is destructive
@@ -338,7 +370,7 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 		for path := range toDelete {
 			ops = append(ops, adapter.FileOp{Action: "delete", Path: path})
 		}
-		rw := render.NewWriter(s, home, adapter.ScopeUser, "", name)
+		rw := render.NewWriter(s, home, userHome, adapter.ScopeUser, "", name)
 		if err := a.Apply(ops, rw); err != nil {
 			return fmt.Errorf("purge apply %s: %w", name, err)
 		}
@@ -360,5 +392,8 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "purged %d destination path(s) for agent %s\n", len(toDelete), name)
+	if sharedKept > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "  kept %d shared path(s) still owned by another agent\n", sharedKept)
+	}
 	return nil
 }

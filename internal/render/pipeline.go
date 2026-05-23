@@ -5,6 +5,7 @@ package render
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -24,6 +25,13 @@ type AgentResult struct {
 	Skips []adapter.Skip
 }
 
+// isKeyMerge reports whether a MergeStrategy accumulates JSON pointers into a
+// shared file (rather than replacing the whole file). Such ops must never be
+// deduped by path — one agent emits several of them to the same destination.
+func isKeyMerge(strategy string) bool {
+	return strategy == "merge-json-keys" || strategy == "merge-jsonc-keys"
+}
+
 // Total returns the total number of FileOps across all agents.
 func (p RenderPlan) Total() int {
 	n := 0
@@ -39,9 +47,10 @@ func (p RenderPlan) Total() int {
 // s may be nil; when non-nil, OwnedKeys is populated on merge-json-keys ops
 // from state.Keys so the apply pipeline knows which JSON-pointer paths it owns.
 //
-// home is required so OwnedKeys lookups match the HOME-relative form
-// state stores.
-func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adapter.Scope, project string, s *state.Targets, home string) (RenderPlan, error) {
+// userHome (the user's $HOME, paths.HomeDir) is required so OwnedKeys
+// lookups match the HOME-relative form state stores. It is NOT the agentsync
+// home — dest files live under $HOME, not under ~/.agentsync.
+func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adapter.Scope, project string, s *state.Targets, userHome string) (RenderPlan, error) {
 	out := RenderPlan{PerAgent: map[string]AgentResult{}}
 	for _, name := range agents {
 		a := reg.Lookup(name)
@@ -54,10 +63,16 @@ func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adap
 		}
 		if s != nil {
 			for i, op := range ops {
-				if op.MergeStrategy == "merge-json-keys" || op.MergeStrategy == "merge-jsonc-keys" {
-					ops[i].OwnedKeys = ownedKeysFor(s, name, scope, project, op.Path, home)
+				if isKeyMerge(op.MergeStrategy) {
+					ops[i].OwnedKeys = ownedKeysFor(s, name, scope, project, op.Path, userHome)
 				}
 			}
+			// Cleanup synthesis: when a key-merge section becomes empty in the
+			// source (e.g. the user removes their last MCP server), the
+			// adapter renders NO op for that file, so the owned key would
+			// linger in the destination forever. Synthesize an empty merge op
+			// per orphaned dest path so MergeKeys deletes the dead keys.
+			ops = append(ops, orphanCleanupOps(s, a, name, scope, project, userHome, ops)...)
 		}
 		out.PerAgent[name] = AgentResult{Ops: ops, Skips: skips}
 	}
@@ -77,6 +92,7 @@ func PreviewCollisions(
 	reg *adapter.Registry,
 	st *state.Targets,
 	home string,
+	userHome string,
 	scope adapter.Scope,
 	project string,
 ) []CollisionReport {
@@ -90,15 +106,20 @@ func PreviewCollisions(
 		if !ok {
 			continue
 		}
-		w := NewPreviewWriter(st, home, scope, project, name)
+		w := NewPreviewWriter(st, home, userHome, scope, project, name)
 		for _, op := range res.Ops {
 			if op.Action != "" && op.Action != "write" {
 				continue
 			}
-			if seen[op.Path] {
-				continue
+			// Mirror Apply's dedup: only whole-file replace writes are
+			// collapsed by path. Key-merge ops all run; the writer's
+			// per-path backedUp guard prevents a duplicate collision report.
+			if !isKeyMerge(op.MergeStrategy) {
+				if seen[op.Path] {
+					continue
+				}
+				seen[op.Path] = true
 			}
-			seen[op.Path] = true
 			// We don't have the post-merge finalBytes here without
 			// re-running the adapter. For preview purposes a conservative
 			// "is something there that doesn't look exactly like our op"
@@ -114,9 +135,9 @@ func PreviewCollisions(
 
 // ownedKeysFor returns the JSON-pointer strings owned by agentsync for a given
 // agent+scope+project+path combination, as recorded in state.Keys.
-func ownedKeysFor(s *state.Targets, agent string, scope adapter.Scope, project, path, home string) []string {
+func ownedKeysFor(s *state.Targets, agent string, scope adapter.Scope, project, path, userHome string) []string {
 	prefix := fmt.Sprintf("%s:%s:%s:%s:", agent, scope.String(),
-		paths.HomeRelative(home, project), paths.HomeRelative(home, path))
+		paths.HomeRelative(userHome, project), paths.HomeRelative(userHome, path))
 	var out []string
 	for k := range s.Keys {
 		if strings.HasPrefix(k, prefix) {
@@ -126,6 +147,82 @@ func ownedKeysFor(s *state.Targets, agent string, scope adapter.Scope, project, 
 	return out
 }
 
+// orphanCleanupOps synthesizes empty key-merge ops that remove keys the agent
+// owns in state but no longer renders this run — the case where a source
+// section went fully empty (e.g. the user deleted their last MCP server), so
+// no real merge op exists to carry the removal via OwnedKeys. Without this the
+// dead key lingers in the destination forever.
+//
+// Safety (validated): the strategy is the adapter's exact, static
+// KeyMergeStrategy() — never inferred — so a JSONC opencode.json is never
+// merged with the strict-JSON path (which would clobber it). A dest that no
+// longer exists on disk is skipped (no empty "{}" file is created); the stale
+// state entry is dropped by PruneStaleState instead.
+func orphanCleanupOps(s *state.Targets, a adapter.Adapter, agent string, scope adapter.Scope, project, userHome string, rendered []adapter.FileOp) []adapter.FileOp {
+	strat := a.KeyMergeStrategy()
+	if strat == "" {
+		return nil // adapter doesn't merge keys
+	}
+	// Portable dest paths the agent DID render a key-merge op for this run.
+	renderedPaths := map[string]bool{}
+	for _, op := range rendered {
+		if isKeyMerge(op.MergeStrategy) {
+			renderedPaths[paths.HomeRelative(userHome, op.Path)] = true
+		}
+	}
+
+	// Group owned pointers by their portable dest path from state.Keys.
+	prefix := fmt.Sprintf("%s:%s:%s:", agent, scope.String(), paths.HomeRelative(userHome, project))
+	ownedByPath := map[string][]string{}
+	var order []string
+	for k := range s.Keys {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(k, prefix)
+		// rest = "<portablePath>:<pointer>". The pointer is a JSON pointer
+		// that always starts with '/', so the ":/" sequence marks the
+		// boundary. This is reliable for the realistic path shapes: portable
+		// "${HOME}/..." paths and POSIX absolute paths contain no ':', and
+		// Windows absolute paths use '\' (so a drive is "C:\", not "C:/").
+		// In the pathological case where a path or pointer-key still contains
+		// a literal ":/", a mis-split yields a path that fails the os.Stat
+		// existence check below and is harmlessly skipped (the orphan simply
+		// isn't cleaned that run) — it never deletes the wrong data.
+		i := strings.Index(rest, ":/")
+		if i < 0 {
+			continue
+		}
+		path, ptr := rest[:i], rest[i+1:]
+		if renderedPaths[path] {
+			continue // a real merge op already handles removal here
+		}
+		if _, seen := ownedByPath[path]; !seen {
+			order = append(order, path)
+		}
+		ownedByPath[path] = append(ownedByPath[path], ptr)
+	}
+
+	var cleanup []adapter.FileOp
+	for _, path := range order {
+		abs := paths.FromHomeRelative(userHome, path)
+		// If the dest was already deleted, there's nothing to clean — skip so
+		// we don't create an empty "{}" file. PruneStaleState drops the entry.
+		if _, err := os.Stat(abs); err != nil {
+			continue
+		}
+		cleanup = append(cleanup, adapter.FileOp{
+			Action:        "write",
+			Path:          abs,
+			Content:       []byte("{}"),
+			Mode:          0o644,
+			MergeStrategy: strat,
+			OwnedKeys:     ownedByPath[path],
+		})
+	}
+	return cleanup
+}
+
 // Apply commits a RenderPlan by constructing one Writer per agent and
 // invoking adapter.Apply with that writer. The writer enforces the
 // foreign-collision backup invariant on every destination write — there
@@ -133,9 +230,12 @@ func ownedKeysFor(s *state.Targets, agent string, scope adapter.Scope, project, 
 // write path adapters are permitted to use.
 //
 // Returns the union of CollisionReports across all agents so the caller
-// can surface them. If any adapter returns an error, applies completed
-// so far are NOT rolled back (each underlying iox.AtomicWrite is atomic
-// per-file, but the plan as a whole is not transactional).
+// can surface them, plus the set of destination paths actually written this
+// run (so the apply-error rescue can record state for exactly those files and
+// no others). If any adapter returns an error, applies completed so far are
+// NOT rolled back (each underlying iox.AtomicWrite is atomic per-file, but the
+// plan as a whole is not transactional); the reports and written-set returned
+// reflect the work done before the failure.
 //
 // Deduplication: when two adapters emit a "write" op for the same path
 // (e.g. a shared skill file written by both claude and opencode), the
@@ -146,15 +246,17 @@ func Apply(
 	reg *adapter.Registry,
 	st *state.Targets,
 	home string,
+	userHome string,
 	scope adapter.Scope,
 	project string,
-) ([]CollisionReport, error) {
+) ([]CollisionReport, map[string]bool, error) {
+	written := map[string]bool{}
 	if st == nil {
 		// Defensive: a nil state would make every write look like a
 		// foreign collision and produce duplicate backups. Callers that
 		// don't yet have a state object should construct an empty one
 		// (state.New) rather than passing nil.
-		return nil, fmt.Errorf("render.Apply: nil state")
+		return nil, written, fmt.Errorf("render.Apply: nil state")
 	}
 
 	var allReports []CollisionReport
@@ -166,11 +268,18 @@ func Apply(
 		}
 		a := reg.Lookup(name)
 		if a == nil {
-			return allReports, fmt.Errorf("adapter %q not registered at apply", name)
+			return allReports, written, fmt.Errorf("adapter %q not registered at apply", name)
 		}
 		var deduped []adapter.FileOp
 		for _, op := range res.Ops {
-			if op.Action == "write" {
+			// Only whole-file replace writes are deduped (e.g. a shared
+			// SKILL.md written identically by claude and opencode). Key-merge
+			// ops are NOT deduped: a single agent emits separate
+			// merge-json-keys ops to one file (claude writes mcpServers,
+			// hooks, AND lspServers to settings.json), and each must run —
+			// the adapter re-reads and merges per op. Deduping them by path
+			// silently dropped every merge op after the first.
+			if op.Action == "write" && !isKeyMerge(op.MergeStrategy) {
 				if seen[op.Path] {
 					continue
 				}
@@ -178,12 +287,15 @@ func Apply(
 			}
 			deduped = append(deduped, op)
 		}
-		w := NewWriter(st, home, scope, project, name)
-		if err := a.Apply(deduped, w); err != nil {
-			allReports = append(allReports, w.Reports()...)
-			return allReports, fmt.Errorf("apply %s: %w", name, err)
-		}
+		w := NewWriter(st, home, userHome, scope, project, name)
+		err := a.Apply(deduped, w)
 		allReports = append(allReports, w.Reports()...)
+		for path := range w.Wrote() {
+			written[path] = true
+		}
+		if err != nil {
+			return allReports, written, fmt.Errorf("apply %s: %w", name, err)
+		}
 	}
-	return allReports, nil
+	return allReports, written, nil
 }

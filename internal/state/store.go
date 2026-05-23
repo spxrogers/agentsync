@@ -23,6 +23,18 @@ func Load(path string) (*Targets, error) {
 	if err := json.Unmarshal(data, &t); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+	// A file that is valid JSON but empty-shaped (`null`, `{}`, or any doc
+	// with no schema_version AND no entries) is almost certainly corruption
+	// (an interrupted external edit, a zeroed disk block, a truncate-clobber)
+	// — agentsync itself always writes schema_version. Loading it as a
+	// pristine empty state would make the next apply treat every managed
+	// destination as unowned and back them all up as foreign collisions.
+	// A legacy v0 file with real entries is still accepted (migrate handles it).
+	if t.SchemaVersion == 0 && len(t.Files) == 0 && len(t.Keys) == 0 &&
+		len(t.Marketplaces) == 0 && len(t.Plugins) == 0 {
+		return nil, fmt.Errorf("state file %s is empty or corrupt (no schema_version and no entries); "+
+			"remove it to reinitialize (agentsync will re-adopt destinations on the next apply)", path)
+	}
 	if err := migrate(&t); err != nil {
 		return nil, fmt.Errorf("migrate %s: %w", path, err)
 	}

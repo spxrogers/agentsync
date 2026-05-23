@@ -59,8 +59,18 @@ func newReconcileCmd() *cobra.Command {
 }
 
 func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe bool, scopeFlag, projectFlag string) error {
+	// The three auto modes are mutually exclusive — writeback (dest→source)
+	// and override (source→dest) are exact opposites, and silently accepting
+	// both (writeback won) was a data-loss footgun.
+	if n := b2i(autoWB) + b2i(autoOR) + b2i(autoSafe); n > 1 {
+		return fmt.Errorf("--auto-writeback, --auto-override, and --auto-safe are mutually exclusive; pass at most one")
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
-	c, err := source.Load(afero.NewOsFs(), home)
+	userHome := paths.HomeDir(paths.OSEnv{})
+	// Project plugins like apply does so drift classification covers
+	// plugin-managed components instead of reporting them as untracked.
+	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+	c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
 	if err != nil {
 		return err
 	}
@@ -92,13 +102,13 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 			agents = append(agents, name)
 		}
 	}
-	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, home)
+	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, userHome)
 	if err != nil {
 		return err
 	}
 
 	// Collect all items in order.
-	items := collectItems(plan, reg, s, sc, projectRoot, home)
+	items := collectItems(plan, reg, s, sc, projectRoot, userHome)
 
 	w := cmd.OutOrStdout()
 
@@ -129,6 +139,9 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 
 	// bulkAction is set when user presses W/O/S to apply to all remaining items.
 	bulkAction := byte(0)
+	// autoSkipped counts items an --auto-* mode left unresolved, so the run
+	// ends with a summary instead of silently doing nothing.
+	autoSkipped := 0
 
 	br := bufio.NewReader(in)
 
@@ -142,12 +155,24 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 		if action == 0 {
 			switch {
 			case autoWB:
-				action = 'w'
+				// ForeignCollision is a never-applied pre-existing native
+				// file. Writing it back would overwrite the curated source
+				// with foreign content — the worst data-loss path. Refuse to
+				// do that non-interactively; leave it for an explicit choice.
+				if it.cls == drift.ForeignCollision {
+					fmt.Fprintf(w, "skipped (foreign-collision, would overwrite source): %s — resolve interactively\n", itemLabel(it))
+					autoSkipped++
+					action = 's'
+				} else {
+					action = 'w'
+				}
 			case autoOR:
 				action = 'o'
 			case autoSafe:
 				// auto-safe: skip non-safe items (they require prompting, but
 				// auto-safe only silently handles safe ones which never reach here).
+				fmt.Fprintf(w, "skipped (needs manual review): %s (%s)\n", itemLabel(it), it.cls)
+				autoSkipped++
 				action = 's'
 			}
 		}
@@ -251,14 +276,14 @@ done:
 			if a == nil {
 				return fmt.Errorf("reconcile override: adapter %q not registered", name)
 			}
-			rw := render.NewWriter(s, home, sc, projectRoot, name)
+			rw := render.NewWriter(s, home, userHome, sc, projectRoot, name)
 			if err := a.Apply(ops, rw); err != nil {
 				return fmt.Errorf("reconcile override apply %s: %w", name, err)
 			}
 			for _, r := range rw.Reports() {
 				fmt.Fprintf(w, "  backup: %s\n", r.String())
 			}
-			if err := render.RecordOpsState(s, home, name, sc, projectRoot, ops); err != nil {
+			if err := render.RecordOpsState(s, userHome, name, sc, projectRoot, ops); err != nil {
 				return err
 			}
 		}
@@ -268,11 +293,23 @@ done:
 		fmt.Fprintf(w, "override: applied %d item(s)\n", len(overrideOps))
 	}
 
+	if autoSkipped > 0 {
+		fmt.Fprintf(w, "%d item(s) left unresolved; run `agentsync reconcile` interactively to handle them\n", autoSkipped)
+	}
 	return nil
 }
 
+// b2i returns 1 for true, 0 for false.
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // collectItems builds the flat reconcile list from a rendered plan + state.
-func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, home string) []reconcileItem {
+// userHome (the user's $HOME) is the HomeRelative base for state-key lookups.
+func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, userHome string) []reconcileItem {
 	var items []reconcileItem
 	for _, name := range reg.Names() {
 		res, ok := plan.PerAgent[name]
@@ -291,7 +328,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 				final := readJSONFile(op.Path)
 				for _, ptr := range render.CollectPointers(ours, "") {
 					hsrc := hashAnyValue(getPointerValue(ours, ptr))
-					happlied := s.Keys[stateKeyKey(home, name, sc, projectRoot, op.Path, ptr)].SHA256
+					happlied := s.Keys[stateKeyKey(userHome, name, sc, projectRoot, op.Path, ptr)].SHA256
 					hdest := hashAnyValue(getPointerValue(final, ptr))
 					cls := drift.Classify(hsrc, happlied, hdest)
 					items = append(items, reconcileItem{
@@ -312,7 +349,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 				}
 				seen[op.Path] = true
 				hsrc := hashContent(op.Content)
-				happlied := s.Files[stateFileKey(home, name, sc, projectRoot, op.Path)].SHA256
+				happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, op.Path)].SHA256
 				hdest := hashFile(op.Path)
 				cls := drift.Classify(hsrc, happlied, hdest)
 				items = append(items, reconcileItem{
@@ -425,6 +462,13 @@ func writeBackKeyItem(home string, it reconcileItem) error {
 		var spec source.MCPServerSpec
 		if err := json.Unmarshal(specBytes, &spec); err != nil {
 			return fmt.Errorf("unmarshal mcp spec %s: %w", serverID, err)
+		}
+		// Preserve source-only fields (agents/enabled) that the rendered
+		// destination spec never carries — otherwise writing a dest edit
+		// back silently drops the user's targeting/enablement config.
+		if existing, ok, rerr := source.ReadMCP(home, serverID); rerr == nil && ok {
+			spec.Agents = existing.Server.Agents
+			spec.Enabled = existing.Server.Enabled
 		}
 		m := source.MCPServer{ID: serverID, Server: spec}
 		return source.WriteMCP(home, serverID, m)

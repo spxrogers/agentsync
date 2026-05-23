@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
@@ -62,6 +61,7 @@ re-render lands in the right place when running inside a project.`,
 
 func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag string) error {
 	home := paths.AgentsyncHome(paths.OSEnv{})
+	userHome := paths.HomeDir(paths.OSEnv{})
 	statePath := filepath.Join(home, ".state", "targets.json")
 
 	// Load canonical source.
@@ -193,7 +193,7 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 			}
 		}
 
-		secBackend := secrets.SelectBackend(c2.Config.Secrets, home)
+		secBackend := secrets.SelectBackend(c2.Config.Secrets, home, userHome)
 		envBackend := secrets.EnvBackend{}
 		if err := secrets.SubstituteCanonical(&c2, secBackend, envBackend); err != nil {
 			return fmt.Errorf("substitute secrets after update: %w", err)
@@ -206,11 +206,11 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 			}
 		}
 		reg := registryFactory()
-		plan, err := render.Plan(c2, reg, agents, sc, projectRoot, st, home)
+		plan, err := render.Plan(c2, reg, agents, sc, projectRoot, st, userHome)
 		if err != nil {
 			return fmt.Errorf("plan after update: %w", err)
 		}
-		collisions, err := render.Apply(plan, reg, st, home, sc, projectRoot)
+		collisions, _, err := render.Apply(plan, reg, st, home, userHome, sc, projectRoot)
 		if err != nil {
 			return fmt.Errorf("apply after update: %w", err)
 		}
@@ -222,10 +222,10 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 			}
 		}
 		for name, res := range plan.PerAgent {
-			render.PruneStaleState(st, home, name, sc, projectRoot, res.Ops)
+			render.PruneStaleState(st, userHome, name, sc, projectRoot, res.Ops)
 		}
 		for name, res := range plan.PerAgent {
-			if err := render.RecordOpsState(st, home, name, sc, projectRoot, res.Ops); err != nil {
+			if err := render.RecordOpsState(st, userHome, name, sc, projectRoot, res.Ops); err != nil {
 				return err
 			}
 		}
@@ -289,17 +289,20 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 		src.RootDir = mpCacheRoot
 	}
 	fetcher := marketplace.Dispatch(src)
-	result, err := fetcher.Fetch(src, cacheDir)
-	if err != nil {
+	if _, err := fetcher.Fetch(src, cacheDir); err != nil {
 		return fmt.Errorf("fetch plugin %s: %w", b.ID, err)
 	}
 
-	// Update the plugin TOML.
+	// Update the plugin TOML. Recompute the manifest SHA from the freshly
+	// fetched cache exactly as `plugin install` does (computeManifestSHA),
+	// for every fetcher type. The previous code only set the SHA for git
+	// fetchers — and to result.HeadSHA, a git commit SHA rather than the
+	// sha256(plugin.json) that verifyPluginManifestSHA compares against —
+	// so npm/relative/strict plugins kept the stale pre-bump SHA and the
+	// immediate re-apply hard-failed "manifest SHA mismatch".
 	existing.Plugin.Version = b.To
-	if result.HeadSHA != "" {
-		existing.Plugin.ManifestSHA = result.HeadSHA
-	} else if strings.ContainsAny(b.ManifestSHA, "0123456789abcdef") {
-		existing.Plugin.ManifestSHA = b.ManifestSHA
+	if sha := computeManifestSHA(home, b.ID, mpEntry, nil, cacheDir); sha != "" {
+		existing.Plugin.ManifestSHA = sha
 	}
 
 	data, err := toml.Marshal(existing)

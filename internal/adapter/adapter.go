@@ -65,6 +65,14 @@ type Adapter interface {
 	Detect() (bool, error)
 	Render(c source.Canonical, scope Scope, project string) ([]FileOp, []Skip, error)
 	Ingest(scope Scope, project string) (source.Canonical, error)
+	// KeyMergeStrategy returns this adapter's single JSON-key-merge strategy
+	// ("merge-json-keys" for claude, "merge-jsonc-keys" for opencode), or ""
+	// if the adapter does not merge keys. The render layer needs it to
+	// synthesize cleanup ops that remove now-orphaned owned keys from a
+	// destination when the source section became empty (no render op exists
+	// to carry the removal). It MUST be exact — applying the wrong strategy to
+	// a JSONC file would parse it as strict JSON and clobber the file.
+	KeyMergeStrategy() string
 	// Apply executes ops against destinations. Adapters MUST route every
 	// destination write through w.Write / w.Delete rather than calling
 	// iox.AtomicWrite or os.Remove directly — w owns the foreign-collision

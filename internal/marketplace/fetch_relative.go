@@ -91,6 +91,16 @@ func copyDir(src, dst string) error {
 	for _, entry := range entries {
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
+		// Reject symlinks rather than dereferencing them. copyFile does
+		// os.Open (which follows the link), so a marketplace tree with a
+		// symlink to /etc/passwd (or a dir symlink escaping the root) would
+		// otherwise have its target's content copied into the plugin cache
+		// and projected into agent config. The RootDir containment check
+		// only validates the top-level source path, not links discovered
+		// during the walk — mirror the npm fetcher's loud reject.
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("relative fetcher: %s is a symlink (refusing — marketplace trees must contain only regular files and directories)", srcPath)
+		}
 		if entry.IsDir() {
 			if err := copyDir(srcPath, dstPath); err != nil {
 				return err

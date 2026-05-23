@@ -3,6 +3,7 @@ package project_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/project"
@@ -96,6 +97,34 @@ func TestDiscover_FirstMatchWins(t *testing.T) {
 }
 
 // ─── Task 2: Merge ───────────────────────────────────────────────────────────
+
+// TestMerge_MemoryImport_RejectsTraversal is the regression for a committed
+// marker reading arbitrary host files into rendered memory via a "../" import
+// path. The escaping import must be skipped (its content must not appear).
+func TestMerge_MemoryImport_RejectsTraversal(t *testing.T) {
+	root := t.TempDir()
+	// A secret file OUTSIDE the project root.
+	parent := filepath.Dir(root)
+	secret := filepath.Join(parent, "secret.txt")
+	if err := os.WriteFile(secret, []byte("TOP-SECRET-HOST-FILE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A legit in-root fragment that SHOULD be imported.
+	if err := os.WriteFile(filepath.Join(root, "ok.md"), []byte("legit-memory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := &project.Marker{
+		Root:   root,
+		Memory: project.ProjectMemorySection{Import: []string{"../secret.txt", "ok.md"}},
+	}
+	out := project.Merge(source.Canonical{}, m)
+	if strings.Contains(out.Memory.Body, "TOP-SECRET-HOST-FILE") {
+		t.Fatalf("traversal import leaked host file into memory: %q", out.Memory.Body)
+	}
+	if !strings.Contains(out.Memory.Body, "legit-memory") {
+		t.Fatalf("in-root import was dropped: %q", out.Memory.Body)
+	}
+}
 
 func TestMerge_NilMarker(t *testing.T) {
 	base := source.Canonical{

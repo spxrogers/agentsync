@@ -13,6 +13,14 @@ Centrally manage AI coding-agent configurations across Claude Code, OpenCode, Co
 
 ## Install
 
+> **Pre-release:** the package-manager channels below are wired in
+> `.goreleaser.yaml` but are published starting with the first tagged release.
+> Until then, **build from source**:
+>
+>     go install github.com/spxrogers/agentsync/cmd/agentsync@latest
+>
+> or clone and `go build ./cmd/agentsync`.
+
 ### macOS — Homebrew
 
     brew tap spxrogers/tap
@@ -40,7 +48,7 @@ RPM:
 
 Arch (AUR):
 
-    yay -S agentsync
+    yay -S agentsync-bin
 
 ## Cross-machine sync
 
@@ -90,6 +98,7 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 ## Troubleshooting
 
 - **First apply on a populated machine**: agentsync sees pre-existing native config files and triggers `foreign-collision`. The original is backed up to `~/.agentsync/.state/backups/<ts>/` before the new content lands. Recommend `agentsync apply --dry-run` first to preview the translation report.
+- **One-time backup churn after upgrading**: state keys are now stored `${HOME}`-relative (portable across machines) instead of with absolute paths. If you ran a pre-portability build, the first `apply` after upgrading will not recognize the old absolute-path entries, so every managed destination is treated as a `foreign-collision` once: the current content is backed up to `~/.agentsync/.state/backups/<ts>/` and then re-owned. This is expected, non-destructive (nothing is lost — it's backed up), and self-heals after that single apply. Run `agentsync apply --dry-run` first if you want to see which files will be backed up.
 - **`agentsync update` fails to fetch a marketplace**: verify the marketplace URL with `git ls-remote`. agentsync uses `go-git` and falls back to system `git` for sparse clones if needed.
 - **`${secret:foo}` not resolving**: run `agentsync secrets get foo` to verify the key exists in the decrypted file. age library errors will surface here.
 

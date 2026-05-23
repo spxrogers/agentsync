@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -131,21 +132,36 @@ func TestPruneStaleState_DropsRemovedKeys(t *testing.T) {
 // works on either machine.
 func TestState_PortableAcrossHomes(t *testing.T) {
 	s := state.New()
-	// Machine A wrote state under /Users/alice/.
-	macHome := "/Users/alice"
-	macPath := "/Users/alice/.claude.json"
-	if err := writeKey(s, macHome, "claude", adapter.ScopeUser, "", macPath); err != nil {
+	// Machine A wrote state under its $HOME. We drive the REAL
+	// RecordOpsState path (not a hand-faked key) so this test would have
+	// caught the bug where the normalization base was the agentsync home
+	// rather than the user's $HOME and the key stayed machine-absolute.
+	macHome := t.TempDir() // stand-in for /Users/alice
+	macPath := filepath.Join(macHome, ".claude.json")
+	if err := os.WriteFile(macPath, []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Machine B reads the same state under /home/alice/.
-	linuxHome := "/home/alice"
-	linuxPath := "/home/alice/.claude.json"
+	if err := render.RecordOpsState(s, macHome, "claude", adapter.ScopeUser, "", []adapter.FileOp{
+		{Action: "write", Path: macPath},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	gotKey := "claude:user::${HOME}/.claude.json"
 	if _, ok := s.Files[gotKey]; !ok {
-		t.Fatalf("expected portable key %q; have %v", gotKey, s.Files)
+		t.Fatalf("RecordOpsState did not produce a portable key %q; have %v", gotKey, s.Files)
 	}
-	// Now PruneStaleState on machine B with the same logical op should
-	// recognise the entry as still-present (not stale).
+	// The machine-absolute path must NOT appear anywhere in the keys.
+	for k := range s.Files {
+		if strings.Contains(k, macHome) {
+			t.Fatalf("state key embeds machine-absolute path %q: %q", macHome, k)
+		}
+	}
+
+	// Machine B reads the same state under a DIFFERENT $HOME. PruneStaleState
+	// with the same logical op must recognise the entry as still-present.
+	linuxHome := t.TempDir() // stand-in for /home/alice
+	linuxPath := filepath.Join(linuxHome, ".claude.json")
 	render.PruneStaleState(s, linuxHome, "claude", adapter.ScopeUser, "", []adapter.FileOp{
 		{Action: "write", Path: linuxPath},
 	})
@@ -154,22 +170,31 @@ func TestState_PortableAcrossHomes(t *testing.T) {
 	}
 }
 
-// writeKey is a tiny test helper that calls RecordOpsState with a single
-// file op so the test stays focused on the key shape, not the
-// per-op-type record path.
-func writeKey(s *state.Targets, home, agent string, sc adapter.Scope, project, path string) error {
-	tmp, _ := os.CreateTemp("", "agentsync-state-test-*")
-	tmpPath := tmp.Name()
-	_ = tmp.Close()
-	defer func() { _ = os.Remove(tmpPath) }()
-	_ = os.WriteFile(tmpPath, []byte("hello"), 0o644)
-	// Manually format the portable key — we can't call RecordOpsState
-	// because it reads the file at op.Path post-apply, and we want to
-	// pin the key shape, not the I/O.
-	s.Files[agent+":"+sc.String()+":"+project+":${HOME}/"+filepath.Base(path)] = state.FileEntry{
-		SHA256: "deadbeef",
+// TestPruneStaleState_AmbiguousPathPrefixKeepsLiveKey is the regression for
+// the prune bug where the Keys loop broke after the FIRST path whose
+// "path:" prefixed the key, even when that path's pointer set didn't match.
+// When one dest path is a colon-delimited string-prefix of another (e.g. a
+// Windows "C:"-drive path, or any path containing ':'), the wrong candidate
+// could be picked first (map order is random) and a live key pruned —
+// dropping ownership and forcing a needless foreign-collision backup next
+// apply. Looped to defeat map-iteration randomness: the old code failed
+// ~half the time, the fix passes every time.
+func TestPruneStaleState_AmbiguousPathPrefixKeepsLiveKey(t *testing.T) {
+	ops := []adapter.FileOp{
+		{Action: "write", Path: "a", MergeStrategy: "merge-json-keys", Content: []byte(`{"x":1}`)},
+		{Action: "write", Path: "a:b", MergeStrategy: "merge-json-keys", Content: []byte(`{"realptr":1}`)},
 	}
-	return nil
+	const liveKey = "claude:user::a:b:/realptr"
+	for i := 0; i < 64; i++ {
+		s := state.New()
+		s.Keys[liveKey] = state.KeyEntry{SHA256: "deadbeef"}
+		s.Keys["claude:user::a:/x"] = state.KeyEntry{SHA256: "feed"}
+		// userHome "" so HomeRelative leaves the colon-bearing paths intact.
+		render.PruneStaleState(s, "", "claude", adapter.ScopeUser, "", ops)
+		if _, ok := s.Keys[liveKey]; !ok {
+			t.Fatalf("iteration %d: live key %q wrongly pruned (ambiguous path prefix)", i, liveKey)
+		}
+	}
 }
 
 func TestRecordState_SkipsDeleteOps(t *testing.T) {

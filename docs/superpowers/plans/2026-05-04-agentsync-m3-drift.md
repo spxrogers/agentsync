@@ -164,7 +164,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 **Files:** `internal/render/state_apply.go`, modify `internal/render/pipeline.go`, `internal/cli/apply.go`
 
-After every successful Apply, opensync must:
+After every successful Apply, agentsync must:
 1. For each `write` FileOp: hash final on-disk content + record in `state.Files[<key>]`.
 2. For each `merge-json-keys`/`merge-jsonc-keys` op: parse final on-disk JSON, for each pointer that came from `ours`, hash that subtree + record in `state.Keys[<key>]`.
 
@@ -785,7 +785,7 @@ Commit.
 
 **Files:** `internal/source/writer.go`, `internal/source/writer_test.go`
 
-When reconcile chooses write-back, opensync mutates the canonical file. Comment-preserving via `pelletier/go-toml/v2` AST: we don't have full AST mutation today; v1 strategy:
+When reconcile chooses write-back, agentsync mutates the canonical file. Comment-preserving via `pelletier/go-toml/v2` AST: we don't have full AST mutation today; v1 strategy:
 
 For `mcp/<id>.toml`: marshal the updated `MCPServer` as TOML and atomically write — comments above the file are lost on first write-back. **Documented v1 trade-off.** Better preservation lands as a v1.x improvement.
 

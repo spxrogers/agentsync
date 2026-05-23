@@ -25,3 +25,4 @@ func (a *Adapter) Ingest(adapter.Scope, string) (source.Canonical, error) {
 	return source.Canonical{}, nil
 }
 func (a *Adapter) Apply([]adapter.FileOp, adapter.DestWriter) error { return nil }
+func (a *Adapter) KeyMergeStrategy() string                         { return "" }

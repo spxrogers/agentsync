@@ -33,6 +33,8 @@ func (f *fakeJSONApply) Ingest(_ adapter.Scope, _ string) (source.Canonical, err
 	return source.Canonical{}, nil
 }
 
+func (f *fakeJSONApply) KeyMergeStrategy() string { return "merge-json-keys" }
+
 // Apply mirrors the production adapter pattern: for replace ops, hand
 // op.Content to the writer; for merge ops, do the merge first and pass
 // the result.
@@ -82,7 +84,7 @@ func TestWriter_FileLevelBackup(t *testing.T) {
 	_ = os.WriteFile(dest, original, 0o644)
 
 	st := state.New()
-	w := render.NewWriter(st, home, adapter.ScopeUser, "", "claude")
+	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
 	op := adapter.FileOp{
 		Action:   "write",
 		Path:     dest,
@@ -133,7 +135,7 @@ func TestWriter_KeyLevelBackup(t *testing.T) {
 	_ = os.WriteFile(dest, original, 0o644)
 
 	st := state.New()
-	w := render.NewWriter(st, home, adapter.ScopeUser, "", "claude")
+	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
 	ours := []byte(`{"mcpServers":{"github":{"command":"npx","args":["-y","@m/server-github"]}}}`)
 	op := adapter.FileOp{
 		Action:        "write",
@@ -181,9 +183,12 @@ func TestWriter_NoCollisionWhenAlreadyOwned(t *testing.T) {
 	_ = os.WriteFile(dest, []byte("ours-v1"), 0o644)
 
 	st := state.New()
-	st.Files["claude:user::"+dest] = state.FileEntry{SHA256: "anything"}
+	// State keys are HOME-relative against the user's $HOME (here tmp), so an
+	// owned dest under tmp is recorded as "${HOME}/<rel>".
+	rel, _ := filepath.Rel(tmp, dest)
+	st.Files["claude:user::${HOME}/"+filepath.ToSlash(rel)] = state.FileEntry{SHA256: "anything"}
 
-	w := render.NewWriter(st, home, adapter.ScopeUser, "", "claude")
+	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
 	op := adapter.FileOp{Action: "write", Path: dest, Content: []byte("ours-v2"), Mode: 0o644}
 	if err := w.Write(op, op.Content); err != nil {
 		t.Fatal(err)
@@ -208,7 +213,7 @@ func TestWriter_NoCollisionWhenContentMatches(t *testing.T) {
 	_ = os.WriteFile(dest, content, 0o644)
 
 	st := state.New()
-	w := render.NewWriter(st, home, adapter.ScopeUser, "", "claude")
+	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
 	if err := w.Write(adapter.FileOp{Action: "write", Path: dest, Content: content}, content); err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +232,7 @@ func TestWriter_DeleteSkipsBackup(t *testing.T) {
 	_ = os.WriteFile(dest, []byte("bye"), 0o644)
 
 	st := state.New()
-	w := render.NewWriter(st, home, adapter.ScopeUser, "", "claude")
+	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
 	if err := w.Delete(adapter.FileOp{Action: "delete", Path: dest}); err != nil {
 		t.Fatal(err)
 	}
@@ -236,6 +241,51 @@ func TestWriter_DeleteSkipsBackup(t *testing.T) {
 	}
 	if len(w.Reports()) != 0 {
 		t.Fatalf("Delete must not produce collision reports; got %v", w.Reports())
+	}
+}
+
+// TestRenderApply_MultipleMergeOpsSamePathAllApplied is the regression for
+// the dedup bug: render.Apply skipped any second Action=="write" op for a
+// path already seen, but that swept up merge-json-keys ops too. The claude
+// adapter emits separate merge ops to settings.json for MCP, hooks, and LSP;
+// deduping by path silently dropped hooks and LSP. Merge ops to the same
+// path must ALL run (the adapter re-reads and merges each), so only
+// whole-file replace writes may be deduped.
+func TestRenderApply_MultipleMergeOpsSamePathAllApplied(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, ".claude", "settings.json")
+	_ = os.MkdirAll(filepath.Dir(dest), 0o755)
+
+	reg := adapter.NewRegistry()
+	_ = reg.Register(&fakeJSONApply{name: "claude"})
+
+	plan := render.RenderPlan{
+		PerAgent: map[string]render.AgentResult{
+			"claude": {Ops: []adapter.FileOp{
+				{Action: "write", Path: dest, Content: []byte(`{"mcpServers":{"a":1}}`), MergeStrategy: "merge-json-keys", Mode: 0o644},
+				{Action: "write", Path: dest, Content: []byte(`{"hooks":{"PreToolUse":"echo"}}`), MergeStrategy: "merge-json-keys", Mode: 0o644},
+				{Action: "write", Path: dest, Content: []byte(`{"lspServers":{"go":{"command":"gopls"}}}`), MergeStrategy: "merge-json-keys", Mode: 0o644},
+			}},
+		},
+	}
+	if _, _, err := render.Apply(plan, reg, state.New(), home, tmp, adapter.ScopeUser, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read settings.json: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("parse settings.json: %v\n%s", err, data)
+	}
+	for _, key := range []string{"mcpServers", "hooks", "lspServers"} {
+		if _, ok := got[key]; !ok {
+			t.Fatalf("merge op for %q was dropped; settings.json = %s", key, data)
+		}
 	}
 }
 
@@ -266,7 +316,7 @@ func TestRenderApply_FullPathBacksUpAcrossAgents(t *testing.T) {
 		},
 	}
 	st := state.New()
-	reports, err := render.Apply(plan, reg, st, home, adapter.ScopeUser, "")
+	reports, _, err := render.Apply(plan, reg, st, home, tmp, adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -275,5 +325,73 @@ func TestRenderApply_FullPathBacksUpAcrossAgents(t *testing.T) {
 	}
 	if !strings.HasPrefix(reports[0].BackupTo, filepath.Join(home, ".state", "backups")) {
 		t.Fatalf("backup not under <home>/.state/backups: %s", reports[0].BackupTo)
+	}
+}
+
+// TestPruneBackups_KeepsNewest verifies bounded backup retention: the most
+// recent `keep` timestamp dirs survive, older ones are removed.
+func TestPruneBackups_KeepsNewest(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, ".state", "backups")
+	names := []string{
+		"20260101T000001Z-000000001",
+		"20260101T000002Z-000000001",
+		"20260101T000003Z-000000001",
+		"20260101T000004Z-000000001",
+	}
+	for _, n := range names {
+		if err := os.MkdirAll(filepath.Join(root, n), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := render.PruneBackups(home, 2); err != nil {
+		t.Fatal(err)
+	}
+	left, _ := os.ReadDir(root)
+	if len(left) != 2 {
+		t.Fatalf("want 2 backups kept, got %d", len(left))
+	}
+	for _, e := range left {
+		if e.Name() < "20260101T000003Z" {
+			t.Fatalf("pruned the wrong (newer) dir; kept %s", e.Name())
+		}
+	}
+	// Missing backups root is a no-op, not an error.
+	if err := render.PruneBackups(t.TempDir(), 2); err != nil {
+		t.Fatalf("missing backups dir should be a no-op: %v", err)
+	}
+}
+
+// TestWriter_JSONCFallbackBacksUpWholeFile covers maybeBackupFileOpForJSONCFallback
+// (previously 0% covered): a merge op whose destination is JSONC (comments
+// make strict json.Unmarshal fail) and which state does not own must be
+// backed up whole-file before the merge writes.
+func TestWriter_JSONCFallbackBacksUpWholeFile(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, "opencode.json")
+	original := []byte("// my hand-written config\n{\"mcp\":{\"github\":{\"command\":\"old\"}}}\n")
+	_ = os.WriteFile(dest, original, 0o644)
+
+	st := state.New() // nothing owned → must back up
+	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "opencode")
+	op := adapter.FileOp{
+		Action:        "write",
+		Path:          dest,
+		Content:       []byte(`{"mcp":{"github":{"command":"new"}}}`),
+		MergeStrategy: "merge-json-keys",
+		Mode:          0o644,
+	}
+	if err := w.Write(op, []byte(`{"mcp":{"github":{"command":"new"}}}`)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	reports := w.Reports()
+	if len(reports) != 1 || reports[0].Pointer != "" {
+		t.Fatalf("expected one whole-file (no-pointer) backup; got %+v", reports)
+	}
+	got, _ := os.ReadFile(reports[0].BackupTo)
+	if !strings.Contains(string(got), "old") {
+		t.Fatalf("JSONC-fallback backup missing original content: %s", got)
 	}
 }
