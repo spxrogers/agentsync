@@ -23,7 +23,9 @@ func CollectResolved(c *source.Canonical, sec, env Resolver) map[string]string {
 	if c == nil {
 		return out
 	}
-	collectString := func(s string) {
+	// walkSecretFields mutates in place; returning each value unchanged makes
+	// every assignment a no-op, so this stays a read-only redaction pass.
+	walkSecretFields(c, func(_ secretFieldLoc, s string) string {
 		// Find every ${secret:foo} / ${env:NAME}; resolve each; record
 		// the mapping. We do not error on missing keys — this is a
 		// best-effort redaction.
@@ -58,41 +60,8 @@ func CollectResolved(c *source.Canonical, sec, env Resolver) map[string]string {
 				out[esc] = placeholder
 			}
 		}
-	}
-	for _, srv := range c.MCPServers {
-		collectString(srv.Server.Command)
-		collectString(srv.Server.URL)
-		for _, a := range srv.Server.Args {
-			collectString(a)
-		}
-		for _, v := range srv.Server.Env {
-			collectString(v)
-		}
-		for _, v := range srv.Server.Headers {
-			collectString(v)
-		}
-	}
-	for _, h := range c.Hooks {
-		collectString(h.Command)
-	}
-	for _, ls := range c.LSPServers {
-		collectString(ls.Spec.Command)
-		collectString(ls.Spec.URL)
-		for _, a := range ls.Spec.Args {
-			collectString(a)
-		}
-		for _, v := range ls.Spec.Env {
-			collectString(v)
-		}
-		for _, v := range ls.Spec.Headers {
-			collectString(v)
-		}
-	}
-	if c.Project != nil {
-		for k, v := range CollectResolved(c.Project, sec, env) {
-			out[k] = v
-		}
-	}
+		return s
+	})
 	return out
 }
 
@@ -107,13 +76,14 @@ func CollectResolved(c *source.Canonical, sec, env Resolver) map[string]string {
 // ${env:…} references are intentionally excluded — the env backend is always
 // available, and an unresolved env ref is not a credential-leak risk.
 //
-// The walked field set mirrors CollectResolved / SubstituteCanonical.
+// Walks the single walkSecretFields field set, shared with SubstituteCanonical,
+// CollectResolved, and ReReferenceCanonical.
 func UnresolvedSecretRefs(c *source.Canonical, sec Resolver) []string {
 	if c == nil {
 		return nil
 	}
 	missing := map[string]bool{}
-	scan := func(s string) {
+	walkSecretFields(c, func(_ secretFieldLoc, s string) string {
 		for _, m := range re.FindAllStringSubmatch(s, -1) {
 			if len(m) < 3 || m[1] != "secret" {
 				continue
@@ -123,41 +93,8 @@ func UnresolvedSecretRefs(c *source.Canonical, sec Resolver) []string {
 				missing[key] = true
 			}
 		}
-	}
-	for _, srv := range c.MCPServers {
-		scan(srv.Server.Command)
-		scan(srv.Server.URL)
-		for _, a := range srv.Server.Args {
-			scan(a)
-		}
-		for _, v := range srv.Server.Env {
-			scan(v)
-		}
-		for _, v := range srv.Server.Headers {
-			scan(v)
-		}
-	}
-	for _, h := range c.Hooks {
-		scan(h.Command)
-	}
-	for _, ls := range c.LSPServers {
-		scan(ls.Spec.Command)
-		scan(ls.Spec.URL)
-		for _, a := range ls.Spec.Args {
-			scan(a)
-		}
-		for _, v := range ls.Spec.Env {
-			scan(v)
-		}
-		for _, v := range ls.Spec.Headers {
-			scan(v)
-		}
-	}
-	if c.Project != nil {
-		for _, k := range UnresolvedSecretRefs(c.Project, sec) {
-			missing[k] = true
-		}
-	}
+		return s
+	})
 	if len(missing) == 0 {
 		return nil
 	}
