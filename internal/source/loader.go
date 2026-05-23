@@ -837,6 +837,14 @@ func loadLSP(fs afero.Fs, home string) ([]LSPServer, error) {
 // If the input doesn't begin with "---\n", returns an empty map and the
 // entire input as body.
 func ParseFrontmatter(data []byte) (map[string]any, string, error) {
+	// Normalize CRLF → LF so a component .md saved by a Windows editor
+	// ("---\r\n"), or shipped CRLF inside a fetched plugin, is recognized as
+	// having frontmatter. Without this the literal "---\n" check fails and the
+	// whole file becomes body, silently dropping description/model/mode.
+	// agentsync re-renders bodies with LF, so the normalization is lossless.
+	if bytes.IndexByte(data, '\r') >= 0 {
+		data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	}
 	if !bytes.HasPrefix(data, []byte("---\n")) {
 		return map[string]any{}, string(data), nil
 	}
