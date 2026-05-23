@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -103,6 +104,9 @@ func readAgentsyncTOML() (string, []byte, map[string]map[string]any, error) {
 	p := filepath.Join(home, "agentsync.toml")
 	raw, err := os.ReadFile(p)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return p, nil, nil, fmt.Errorf("no agentsync config at %s; run `agentsync init` first", p)
+		}
 		return p, nil, nil, fmt.Errorf("read %s: %w", p, err)
 	}
 	var cfg agentsyncCfg

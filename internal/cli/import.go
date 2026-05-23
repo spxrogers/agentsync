@@ -255,6 +255,13 @@ func importRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("ingest %s: %w", agentName, err)
 	}
 
+	// Every component except memory addresses a named item; a two-part
+	// selector like "claude:mcp" would otherwise fall through to a misleading
+	// `mcp server "" not found` downstream. Fail with the expected grammar.
+	if component != "memory" && name == "" {
+		return fmt.Errorf("selector %q is missing the item name; expected <agent>:<component>:<name>", sel)
+	}
+
 	// Re-reference secrets before writing back to source. The destination was
 	// written by a prior apply with ${secret:…} substituted to cleartext, so
 	// the ingested canonical holds live credentials. Convert any value that
