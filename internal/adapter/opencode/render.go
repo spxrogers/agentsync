@@ -83,6 +83,9 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, erro
 		if m.Server.URL != "" {
 			spec["url"] = m.Server.URL
 		}
+		if len(m.Server.Headers) > 0 {
+			spec["headers"] = m.Server.Headers
+		}
 		mcp[m.ID] = spec
 	}
 	if len(mcp) == 0 {
