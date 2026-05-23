@@ -57,6 +57,88 @@ func TestReconcile_AutoOverride(t *testing.T) {
 	}
 }
 
+// TestReconcile_AutoWriteback_ForeignCollisionDoesNotClobberSource is the
+// regression for the worst data-loss path: --auto-writeback mapped EVERY
+// actionable item (including ForeignCollision — a never-applied pre-existing
+// native file) to write-back, overwriting the curated source with whatever
+// foreign content the dest happened to hold.
+func TestReconcile_AutoWriteback_ForeignCollisionDoesNotClobberSource(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
+
+	// Pre-existing native file agentsync never applied (→ ForeignCollision).
+	dst := filepath.Join(tmp, ".claude.json")
+	_ = os.WriteFile(dst, []byte(`{"mcpServers":{"github":{"type":"stdio","command":"FOREIGN"}}}`), 0o644)
+
+	if _, err := runCLI(t, env, "reconcile", "--auto-writeback"); err != nil {
+		t.Fatalf("reconcile --auto-writeback: %v", err)
+	}
+	src, _ := os.ReadFile(mcp)
+	if strings.Contains(string(src), "FOREIGN") || !strings.Contains(string(src), "npx") {
+		t.Fatalf("auto-writeback clobbered curated source with foreign dest content:\n%s", src)
+	}
+}
+
+// TestReconcile_Writeback_PreservesSourceOnlyFields is the regression for
+// write-back reconstructing the source MCP entry purely from the dest spec
+// (which never carries agents/enabled), silently dropping the user's
+// targeting/enablement config.
+func TestReconcile_Writeback_PreservesSourceOnlyFields(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\nagents=[\"claude\"]\nenabled=true\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	// Drift the dest command so write-back rewrites the source.
+	dst := filepath.Join(tmp, ".claude.json")
+	body, _ := os.ReadFile(dst)
+	_ = os.WriteFile(dst, []byte(strings.Replace(string(body), `"npx"`, `"npm"`, 1)), 0o644)
+
+	if _, err := runCLI(t, env, "reconcile", "--auto-writeback"); err != nil {
+		t.Fatalf("reconcile --auto-writeback: %v", err)
+	}
+	src, _ := os.ReadFile(mcp)
+	if !strings.Contains(string(src), "npm") {
+		t.Fatalf("write-back didn't capture the dest edit: %s", src)
+	}
+	if !strings.Contains(string(src), "agents") || !strings.Contains(string(src), "enabled") {
+		t.Fatalf("write-back dropped source-only agents/enabled fields:\n%s", src)
+	}
+}
+
+// TestReconcile_AutoFlagsMutuallyExclusive is the regression for both
+// --auto-writeback and --auto-override being silently accepted (writeback
+// wins) despite being exact opposites.
+func TestReconcile_AutoFlagsMutuallyExclusive(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runCLI(t, env, "reconcile", "--auto-writeback", "--auto-override")
+	if err == nil {
+		t.Fatal("expected error when both --auto-writeback and --auto-override are set")
+	}
+}
+
 func TestReconcile_AutoSafe_NoDriftItems(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

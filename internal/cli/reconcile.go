@@ -59,6 +59,12 @@ func newReconcileCmd() *cobra.Command {
 }
 
 func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe bool, scopeFlag, projectFlag string) error {
+	// The three auto modes are mutually exclusive — writeback (dest→source)
+	// and override (source→dest) are exact opposites, and silently accepting
+	// both (writeback won) was a data-loss footgun.
+	if n := b2i(autoWB) + b2i(autoOR) + b2i(autoSafe); n > 1 {
+		return fmt.Errorf("--auto-writeback, --auto-override, and --auto-safe are mutually exclusive; pass at most one")
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	userHome := paths.HomeDir(paths.OSEnv{})
 	// Project plugins like apply does so drift classification covers
@@ -133,6 +139,9 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 
 	// bulkAction is set when user presses W/O/S to apply to all remaining items.
 	bulkAction := byte(0)
+	// autoSkipped counts items an --auto-* mode left unresolved, so the run
+	// ends with a summary instead of silently doing nothing.
+	autoSkipped := 0
 
 	br := bufio.NewReader(in)
 
@@ -146,12 +155,24 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 		if action == 0 {
 			switch {
 			case autoWB:
-				action = 'w'
+				// ForeignCollision is a never-applied pre-existing native
+				// file. Writing it back would overwrite the curated source
+				// with foreign content — the worst data-loss path. Refuse to
+				// do that non-interactively; leave it for an explicit choice.
+				if it.cls == drift.ForeignCollision {
+					fmt.Fprintf(w, "skipped (foreign-collision, would overwrite source): %s — resolve interactively\n", itemLabel(it))
+					autoSkipped++
+					action = 's'
+				} else {
+					action = 'w'
+				}
 			case autoOR:
 				action = 'o'
 			case autoSafe:
 				// auto-safe: skip non-safe items (they require prompting, but
 				// auto-safe only silently handles safe ones which never reach here).
+				fmt.Fprintf(w, "skipped (needs manual review): %s (%s)\n", itemLabel(it), it.cls)
+				autoSkipped++
 				action = 's'
 			}
 		}
@@ -272,7 +293,18 @@ done:
 		fmt.Fprintf(w, "override: applied %d item(s)\n", len(overrideOps))
 	}
 
+	if autoSkipped > 0 {
+		fmt.Fprintf(w, "%d item(s) left unresolved; run `agentsync reconcile` interactively to handle them\n", autoSkipped)
+	}
 	return nil
+}
+
+// b2i returns 1 for true, 0 for false.
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // collectItems builds the flat reconcile list from a rendered plan + state.
@@ -430,6 +462,13 @@ func writeBackKeyItem(home string, it reconcileItem) error {
 		var spec source.MCPServerSpec
 		if err := json.Unmarshal(specBytes, &spec); err != nil {
 			return fmt.Errorf("unmarshal mcp spec %s: %w", serverID, err)
+		}
+		// Preserve source-only fields (agents/enabled) that the rendered
+		// destination spec never carries — otherwise writing a dest edit
+		// back silently drops the user's targeting/enablement config.
+		if existing, ok, rerr := source.ReadMCP(home, serverID); rerr == nil && ok {
+			spec.Agents = existing.Server.Agents
+			spec.Enabled = existing.Server.Enabled
 		}
 		m := source.MCPServer{ID: serverID, Server: spec}
 		return source.WriteMCP(home, serverID, m)
