@@ -23,8 +23,8 @@ func Load(path string) (*Targets, error) {
 	if err := json.Unmarshal(data, &t); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if t.SchemaVersion == 0 {
-		t.SchemaVersion = SchemaVersion
+	if err := migrate(&t); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", path, err)
 	}
 	if t.Files == nil {
 		t.Files = map[string]FileEntry{}

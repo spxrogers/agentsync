@@ -95,6 +95,59 @@ commented out with `# TODO: enable when going public`. Each item below is
 - [ ] **Companion repo READMEs** — each Homebrew tap / Scoop bucket / AUR
       repo needs at minimum a one-paragraph README + LICENSE.
 
+## §4.5 — Audit findings addressed (second review wave)
+
+Captured here so the v1.0 audit trail stays in one place. Each was a
+finding flagged in a follow-up review of the M0–M7 + PR #18 stack;
+each has a corresponding commit on the integration branch.
+
+- [x] **README quickstart command did not exist** — `agentsync mcp add` is
+      now implemented (subcommands: add/remove/list). set/enable/disable
+      remain deferred (add-after-remove covers same need).
+- [x] **`init [<git-url>]`** — clones bootstrap source repo when a URL
+      is given (matches design spec line 361). https/ssh/file accepted;
+      http/git:// gated by AGENTSYNC_ALLOW_INSECURE_URLS=1.
+- [x] **Stale `opensync.toml` references** — error messages in
+      cli/secrets.go and a type name in cli/agent.go now use
+      `agentsync.toml`/`agentsyncCfg`.
+- [x] **`apply --dry-run` held the global lock** — dry-run is read-only;
+      lock acquisition moved to the real-apply branch only.
+- [x] **`agent add codex` / `cursor` were silent noops** — rejected at
+      `agent add` time with a v1.x status message and an
+      AGENTSYNC_ALLOW_UNIMPLEMENTED override for plan/spec work.
+- [x] **`agent add` did not check that the agent's binary was on PATH**
+      — warns (not fails) so authoring on a control machine still works.
+- [x] **`doctor` only checked PATH** — now validates home, .state/
+      writability, agentsync.toml schema, and (when [secrets] block is
+      present) backend / recipient / identity_file existence + perms.
+- [x] **`verify` was a near-noop** — now validates secrets config and
+      runs the same SubstituteCanonical apply uses, surfacing every
+      unresolved `${secret:}`/`${env:}` reference.
+- [x] **Plugin id path-traversal** — `pluginCacheDir`/`marketplaceCacheDir`
+      validated up-front in plugin install; loader rejects projection
+      of plugins whose derived id contains `..`/`/`.
+- [x] **Backup destination escape** — `backupPathFor` cleans the input,
+      drops volume names, and asserts containment via filepath.Rel;
+      falls back to a `_escaped/` subdir if anchor check fails.
+- [x] **State schema version was silently accepted** — `migrate()`
+      handles legacy zero, no-ops current, refuses newer with an
+      "upgrade agentsync" message, refuses older without a migrator.
+- [x] **No HTTPS policy for plugin fetches** — `Dispatch` rejects
+      http://, git:// unless AGENTSYNC_ALLOW_INSECURE_URLS=1.
+- [x] **No symlink protection in npm tarballs** — TypeSymlink/TypeLink
+      hard-reject. Prior implicit silent-drop is gone.
+- [x] **Spec-required concurrent-apply lock test** — added.
+- [x] **`init` re-init guard swallowed ReadDir errors** — three cases
+      distinguished: populated/refuse, empty/proceed, missing/proceed,
+      other/error-with-hint.
+- [x] **First-apply UX** — `init` ends with a Next-steps block that
+      pushes the user at `apply --dry-run` before the real thing.
+- [x] **README known-limits expanded** — owned-key overwrite, codex/cursor
+      reject, http-scheme policy now spelled out.
+- [ ] **Comment-preservation fuzz** — still deferred (§6). The
+      underlying preservation isn't implemented in TOML or JSONC; fuzz
+      lands when either does.
+
 ## §4 — Adapter coverage gaps (deliberate v1.0 cuts; review before public)
 
 Each of these is documented in `README.md`'s "Known limitations" section. They

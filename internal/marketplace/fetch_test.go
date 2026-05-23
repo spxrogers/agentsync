@@ -470,3 +470,88 @@ func TestNPMFetcher_TraversalEntryIsHardError(t *testing.T) {
 		t.Fatalf("error %q did not mention escape", err.Error())
 	}
 }
+
+// makeNPMTarballWithSymlink builds a tarball containing a single
+// symlink entry. Used to assert npm fetcher refuses to extract links
+// (TOCTOU-escape risk).
+func makeNPMTarballWithSymlink(t *testing.T, linkName, target string) []byte {
+	t.Helper()
+	tmp := t.TempDir()
+	outPath := filepath.Join(tmp, "pkg.tgz")
+	f, err := os.Create(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gw)
+	hdr := &tar.Header{
+		Name:     "package/" + linkName,
+		Linkname: target,
+		Typeflag: tar.TypeSymlink,
+		Mode:     0o777,
+		ModTime:  time.Now(),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// TestNPMFetcher_SymlinkEntryIsRefused asserts that a tarball containing
+// a symlink entry — even one whose link target is "safe" — is rejected.
+// Symlinks in plugin tarballs have no legitimate use and have repeatedly
+// been the TOCTOU vector in similar projects (extract symlink, then a
+// later TypeReg entry writes through it to escape destDir).
+func TestNPMFetcher_SymlinkEntryIsRefused(t *testing.T) {
+	tarball := makeNPMTarballWithSymlink(t, "innocent.txt", "/etc/passwd")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/linkpkg":
+			meta := map[string]any{
+				"versions": map[string]any{
+					"1.0.0": map[string]any{
+						"version": "1.0.0",
+						"dist":    map[string]any{"tarball": "http://" + r.Host + "/tarball/1.0.0"},
+					},
+				},
+				"dist-tags": map[string]any{"latest": "1.0.0"},
+			}
+			_ = json.NewEncoder(w).Encode(meta)
+		case strings.HasPrefix(r.URL.Path, "/tarball/"):
+			_, _ = w.Write(tarball)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dst := t.TempDir()
+	src := marketplace.Source{Kind: "npm", Package: "linkpkg", Version: "1.0.0", Registry: srv.URL}
+	fetcher := &marketplace.NPMFetcher{HTTPClient: srv.Client()}
+	_, err := fetcher.Fetch(src, dst)
+	if err == nil {
+		t.Fatal("expected error for symlink tarball entry")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("error %q did not mention symlink", err.Error())
+	}
+	// Defense check: nothing should be written under dst either.
+	entries, _ := os.ReadDir(dst)
+	for _, e := range entries {
+		t.Errorf("dst should be empty after refused extract; saw %s", e.Name())
+	}
+}

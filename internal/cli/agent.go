@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -16,6 +17,16 @@ import (
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
+// agentBinaries maps an agent name to the executable agentsync should
+// look for on PATH at `agent add` time. Used to produce a warning when
+// the user registers an agent whose binary is not installed.
+var agentBinaries = map[string]string{
+	"claude":   "claude",
+	"opencode": "opencode",
+	"codex":    "codex",
+	"cursor":   "cursor",
+}
+
 // boolStr returns "true" or "false" as a string.
 func boolStr(b bool) string {
 	if b {
@@ -25,6 +36,16 @@ func boolStr(b bool) string {
 }
 
 const validAgents = "claude, opencode, codex, cursor"
+
+// v1Supported lists agents whose adapter actually emits ops today.
+// codex and cursor are registered as NoopAdapter in registry_internal.go;
+// adding them silently would produce `applied: 0 ops` for those agents
+// with no diagnostic — so `agent add` rejects them with a status hint.
+// (Allow override with AGENTSYNC_ALLOW_UNIMPLEMENTED=1 for plan/spec work.)
+var v1Supported = map[string]bool{
+	"claude":   true,
+	"opencode": true,
+}
 
 func newAgentCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "agent", Short: "manage which agents agentsync targets"}
@@ -61,7 +82,7 @@ func newAgentDisableCmd() *cobra.Command {
 	return cmd
 }
 
-type opensyncCfg struct {
+type agentsyncCfg struct {
 	Agents map[string]map[string]any `toml:"agents"`
 	// other top-level keys preserved verbatim via decoder
 }
@@ -84,7 +105,7 @@ func readAgentsyncTOML() (string, []byte, map[string]map[string]any, error) {
 	if err != nil {
 		return p, nil, nil, fmt.Errorf("read %s: %w", p, err)
 	}
-	var cfg opensyncCfg
+	var cfg agentsyncCfg
 	if err := toml.Unmarshal(raw, &cfg); err != nil {
 		return p, raw, nil, fmt.Errorf("parse %s: %w", p, err)
 	}
@@ -155,6 +176,11 @@ func agentAddRun(cmd *cobra.Command, args []string) error {
 	if err := validateAgent(name); err != nil {
 		return err
 	}
+	if !v1Supported[name] && os.Getenv("AGENTSYNC_ALLOW_UNIMPLEMENTED") != "1" {
+		return fmt.Errorf("agent %q is not yet implemented in v1.0 "+
+			"(codex is planned for v1.1, cursor for v1.2); "+
+			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to register anyway and accept noop apply", name)
+	}
 	p, raw, agents, err := readAgentsyncTOML()
 	if err != nil {
 		return err
@@ -168,6 +194,21 @@ func agentAddRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "added agent: %s\n", name)
+
+	// Warn (don't fail) if the agent's binary is not on PATH. The user
+	// may be authoring config on machine A to apply on machine B, so we
+	// don't want a hard reject — but a silent success when Claude Code
+	// isn't installed leaves them debugging "why didn't apply do
+	// anything?" later.
+	if bin, ok := agentBinaries[name]; ok {
+		if _, err := exec.LookPath(bin); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"warning: %s binary not found on PATH; "+
+					"agentsync will still write config to its destination dirs "+
+					"but %s itself must be installed to read it\n",
+				bin, name)
+		}
+	}
 	return nil
 }
 

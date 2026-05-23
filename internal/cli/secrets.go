@@ -151,13 +151,13 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	if cfg.Backend != "age" {
-		return fmt.Errorf("secrets edit requires backend = \"age\" in opensync.toml [secrets]")
+		return fmt.Errorf("secrets edit requires backend = \"age\" in agentsync.toml [secrets]")
 	}
 	if cfg.Recipient == "" {
-		return fmt.Errorf("secrets edit requires [secrets].recipient in opensync.toml")
+		return fmt.Errorf("secrets edit requires [secrets].recipient in agentsync.toml")
 	}
 	if cfg.IdentityFile == "" {
-		return fmt.Errorf("secrets edit requires [secrets].identity_file in opensync.toml")
+		return fmt.Errorf("secrets edit requires [secrets].identity_file in agentsync.toml")
 	}
 
 	agePath := resolveAgePath(cfg, home)
@@ -221,7 +221,7 @@ func secretsGet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if cfg.Backend != "age" {
-		return fmt.Errorf("secrets get requires backend = \"age\" in opensync.toml [secrets]")
+		return fmt.Errorf("secrets get requires backend = \"age\" in agentsync.toml [secrets]")
 	}
 
 	m, err := decryptToMap(cfg, home)
@@ -242,13 +242,13 @@ func secretsSet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if cfg.Backend != "age" {
-		return fmt.Errorf("secrets set requires backend = \"age\" in opensync.toml [secrets]")
+		return fmt.Errorf("secrets set requires backend = \"age\" in agentsync.toml [secrets]")
 	}
 	if cfg.Recipient == "" {
-		return fmt.Errorf("secrets set requires [secrets].recipient in opensync.toml")
+		return fmt.Errorf("secrets set requires [secrets].recipient in agentsync.toml")
 	}
 	if cfg.IdentityFile == "" {
-		return fmt.Errorf("secrets set requires [secrets].identity_file in opensync.toml")
+		return fmt.Errorf("secrets set requires [secrets].identity_file in agentsync.toml")
 	}
 
 	kv := args[0]

@@ -181,6 +181,12 @@ func (f *NPMFetcher) downloadAndExtract(client *http.Client, url, destDir string
 				return err
 			}
 			out.Close()
+		case tar.TypeSymlink, tar.TypeLink:
+			// Explicit reject: even with destPath bounded, a symlink
+			// could later be written through (TOCTOU) or surprise the
+			// adapter expecting regular files. Plugin tarballs don't
+			// need links — fail loud rather than silently drop.
+			return fmt.Errorf("npm fetcher: tarball entry %q is a symlink/hardlink (refusing — plugin tarballs must be regular files)", hdr.Name)
 		}
 	}
 	return nil

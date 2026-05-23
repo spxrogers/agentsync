@@ -28,6 +28,13 @@ func newApplyCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := paths.AgentsyncHome(paths.OSEnv{})
+			// Dry-run is read-only — it touches neither destinations nor
+			// state. Acquiring the global lock would needlessly block
+			// concurrent `status` / `diff` / other dry-runs behind a long
+			// real apply.
+			if dryRun {
+				return applyRun(cmd, home, dryRun, scopeFlag, projectFlag)
+			}
 			return withGlobalLock(home, func() error {
 				return applyRun(cmd, home, dryRun, scopeFlag, projectFlag)
 			})
