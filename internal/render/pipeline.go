@@ -140,9 +140,21 @@ func ownedKeysFor(s *state.Targets, agent string, scope adapter.Scope, project, 
 		paths.HomeRelative(userHome, project), paths.HomeRelative(userHome, path))
 	var out []string
 	for k := range s.Keys {
-		if strings.HasPrefix(k, prefix) {
-			out = append(out, strings.TrimPrefix(k, prefix))
+		if !strings.HasPrefix(k, prefix) {
+			continue
 		}
+		ptr := strings.TrimPrefix(k, prefix)
+		// The remainder must be a JSON pointer, which always begins with '/'.
+		// If it doesn't, this key belongs to a DIFFERENT dest path that merely
+		// shares a colon-delimited string prefix with `path` (e.g. dest "a" vs
+		// "a:b", realistic only for a Windows drive-letter path stored
+		// absolute). Claiming it would inject a foreign pointer into this op's
+		// OwnedKeys and corrupt ownership — the same colon-ambiguity class
+		// PruneStaleState and orphanCleanupOps already guard against.
+		if !strings.HasPrefix(ptr, "/") {
+			continue
+		}
+		out = append(out, ptr)
 	}
 	return out
 }
