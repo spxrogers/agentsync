@@ -98,3 +98,33 @@ func TestMergeKeys_DeepCopiesArrays(t *testing.T) {
 		t.Fatalf("mutating the merged array corrupted the input `existing`: %v", origElem)
 	}
 }
+
+// TestMergeKeys_ReplacesOwnedObjectWholesale is the regression for stale inner
+// fields surviving removal. agentsync owns /mcpServers/<id> as a whole object,
+// so when `ours` drops an inner key (e.g. `env`, or `command` after a
+// stdio→http transport switch), MergeKeys must REPLACE the object — a
+// deep-merge stranded the removed field, leaving a stale (often secret-bearing)
+// value or an ambiguous command+url server on disk.
+func TestMergeKeys_ReplacesOwnedObjectWholesale(t *testing.T) {
+	existing := decode(`{"mcpServers": {"github": {"command": "npx", "env": {"TOKEN": "abc"}}}}`)
+	ours := decode(`{"mcpServers": {"github": {"command": "npx"}}}`)
+	owned := []string{"/mcpServers/github"}
+
+	merged, _, _ := jsonkeys.MergeKeys(existing, ours, owned)
+	gh := merged["mcpServers"].(map[string]any)["github"].(map[string]any)
+	if _, ok := gh["env"]; ok {
+		t.Fatalf("stale env survived owned-object replace: %+v", gh)
+	}
+
+	// Transport switch: command must vanish when ours has only url.
+	existing2 := decode(`{"mcpServers": {"srv": {"command": "npx", "type": "stdio"}}}`)
+	ours2 := decode(`{"mcpServers": {"srv": {"url": "https://x", "type": "http"}}}`)
+	merged2, _, _ := jsonkeys.MergeKeys(existing2, ours2, []string{"/mcpServers/srv"})
+	srv := merged2["mcpServers"].(map[string]any)["srv"].(map[string]any)
+	if _, ok := srv["command"]; ok {
+		t.Fatalf("stale command survived transport switch: %+v", srv)
+	}
+	if srv["url"] != "https://x" {
+		t.Fatalf("url not written on transport switch: %+v", srv)
+	}
+}
