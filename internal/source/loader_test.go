@@ -2,6 +2,7 @@ package source_test
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/afero"
@@ -265,6 +266,31 @@ version = "1"
 	}
 	if !found {
 		t.Fatalf("plugin's MCP not surfaced via projection: %+v", c.MCPServers)
+	}
+}
+
+// TestLoad_RejectsEscapingComponentPath is the regression for the
+// manifest-path traversal on the loader projection path: a hostile
+// plugin.json listing a skills/commands/agents path outside the plugin
+// cache must be refused rather than read and projected.
+func TestLoad_RejectsEscapingComponentPath(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	home := "/h"
+	cache := "/h/.state/cache/plugins"
+	_ = afero.WriteFile(fs, filepath.Join(home, "plugins", "x.toml"), []byte(`
+[plugin]
+id = "x@m"
+version = "1"
+`), 0o644)
+	_ = afero.WriteFile(fs, filepath.Join(cache, "x", ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"x","skills":["../../../../etc/passwd"]}`),
+		0o644)
+	_, err := source.LoadWithCache(fs, home, cache)
+	if err == nil {
+		t.Fatal("expected error for plugin.json skill path escaping the cache")
+	}
+	if !strings.Contains(err.Error(), "escapes plugin cache") {
+		t.Fatalf("error should explain the escape; got: %v", err)
 	}
 }
 

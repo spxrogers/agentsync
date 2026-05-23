@@ -223,7 +223,10 @@ func readPluginProjection(fs afero.Fs, pluginCacheDir string) (PluginProjection,
 		skillPaths = discovered
 	}
 	for _, sk := range skillPaths {
-		abs := resolveComponentPathFS(sk, pluginCacheDir)
+		abs, err := resolveComponentPathFS(sk, pluginCacheDir)
+		if err != nil {
+			return pr, err
+		}
 		skill, err := loadSkillEntryFS(fs, abs)
 		if err != nil {
 			return pr, fmt.Errorf("load skill %q: %w", sk, err)
@@ -235,7 +238,10 @@ func readPluginProjection(fs afero.Fs, pluginCacheDir string) (PluginProjection,
 
 	// Commands: each entry is a path to a <name>.md file.
 	for _, cmd := range rawToStringSlice(manifest.Commands) {
-		abs := resolveComponentPathFS(cmd, pluginCacheDir)
+		abs, err := resolveComponentPathFS(cmd, pluginCacheDir)
+		if err != nil {
+			return pr, err
+		}
 		entry, err := loadMarkdownEntryFS(fs, abs)
 		if err != nil {
 			return pr, fmt.Errorf("load command %q: %w", cmd, err)
@@ -247,7 +253,10 @@ func readPluginProjection(fs afero.Fs, pluginCacheDir string) (PluginProjection,
 
 	// Subagents: each entry is a path to a <name>.md file.
 	for _, ag := range rawToStringSlice(manifest.Agents) {
-		abs := resolveComponentPathFS(ag, pluginCacheDir)
+		abs, err := resolveComponentPathFS(ag, pluginCacheDir)
+		if err != nil {
+			return pr, err
+		}
 		entry, err := loadMarkdownEntryFS(fs, abs)
 		if err != nil {
 			return pr, fmt.Errorf("load agent %q: %w", ag, err)
@@ -268,15 +277,52 @@ func readPluginProjection(fs afero.Fs, pluginCacheDir string) (PluginProjection,
 //  1. ${CLAUDE_PLUGIN_ROOT} substitution if present.
 //  2. Absolute paths returned as-is.
 //  3. Relative paths joined to pluginCacheDir.
-func resolveComponentPathFS(s, pluginCacheDir string) string {
+func resolveComponentPathFS(s, pluginCacheDir string) (string, error) {
 	const placeholder = "${CLAUDE_PLUGIN_ROOT}"
-	if strings.Contains(s, placeholder) {
-		return strings.ReplaceAll(s, placeholder, pluginCacheDir)
+	var resolved string
+	switch {
+	case strings.Contains(s, placeholder):
+		resolved = strings.ReplaceAll(s, placeholder, pluginCacheDir)
+	case filepath.IsAbs(s):
+		resolved = s
+	default:
+		resolved = filepath.Join(pluginCacheDir, s)
 	}
-	if filepath.IsAbs(s) {
-		return s
+	// The manifest contents are untrusted even though the cache itself was
+	// fetched safely: a hostile plugin.json listing "skills":["/etc/passwd"]
+	// or "../../secret" would otherwise be read and projected into the
+	// user's agent config. Refuse any path that escapes the plugin cache.
+	if !pathWithin(pluginCacheDir, resolved) {
+		return "", fmt.Errorf("plugin component path %q escapes plugin cache %q", resolved, pluginCacheDir)
 	}
-	return filepath.Join(pluginCacheDir, s)
+	return resolved, nil
+}
+
+// pathWithin reports whether child is the same path as parent or sits inside
+// it, after making both absolute and Clean. Used to bound manifest-listed
+// component paths to the plugin cache.
+func pathWithin(parent, child string) bool {
+	ap, err := filepath.Abs(parent)
+	if err != nil {
+		return false
+	}
+	ac, err := filepath.Abs(child)
+	if err != nil {
+		return false
+	}
+	ap = filepath.Clean(ap)
+	ac = filepath.Clean(ac)
+	if ap == ac {
+		return true
+	}
+	rel, err := filepath.Rel(ap, ac)
+	if err != nil {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return false
+	}
+	return true
 }
 
 // rawToStringSlice coerces a json.RawMessage that holds either a JSON string
