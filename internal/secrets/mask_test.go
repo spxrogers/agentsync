@@ -1,12 +1,50 @@
 package secrets_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
+
+// TestCollectResolved_MasksJSONEscapedSecret is the regression for the diff
+// credential-leak when a secret value contains JSON-special characters (a
+// quote, backslash, or control char — common in GCP service-account JSON
+// keys, escaped tokens, base64 blobs). apply substitutes the RAW value into
+// .claude.json, where it is stored JSON-ESCAPED. diff reads it back and
+// JSON-marshals it before masking, so a redaction map keyed only on the raw
+// value never matches the escaped on-disk form and the cleartext leaks to
+// stdout. CollectResolved must register the JSON-escaped representation too.
+func TestCollectResolved_MasksJSONEscapedSecret(t *testing.T) {
+	raw := `tok"en\val` // contains a double-quote and a backslash
+	sec := mapBackend{"gcp.key": raw}
+	env := mapBackend{}
+	c := source.Canonical{
+		MCPServers: []source.MCPServer{{
+			ID: "x",
+			Server: source.MCPServerSpec{
+				Env: map[string]string{"GCP_KEY": "${secret:gcp.key}"},
+			},
+		}},
+	}
+	redact := secrets.CollectResolved(&c, sec, env)
+
+	// Simulate what diff prints: the value as it sits in the on-disk JSON,
+	// i.e. json.Marshal of the raw value (quotes + escaping).
+	escaped, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	masked := secrets.MaskResolved(string(escaped), redact)
+	if strings.Contains(masked, `en\val`) {
+		t.Fatalf("JSON-escaped secret leaked through diff redaction: %s", masked)
+	}
+	if !strings.Contains(masked, "${secret:gcp.key}") {
+		t.Fatalf("placeholder missing after masking escaped form: %s", masked)
+	}
+}
 
 func TestCollectResolved_MCPEnv(t *testing.T) {
 	sec := mapBackend{"github.token": "ghp_SENTINEL_TOKEN_DO_NOT_LEAK"}

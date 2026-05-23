@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 
@@ -46,6 +47,16 @@ func CollectResolved(c *source.Canonical, sec, env Resolver) map[string]string {
 				continue
 			}
 			out[v] = placeholder
+			// Also register the JSON-escaped representation. A secret value
+			// containing a quote/backslash/control char (GCP JSON keys,
+			// escaped tokens) is stored JSON-escaped in destination files like
+			// .claude.json, and diff JSON-marshals it again before masking. A
+			// map keyed only on the raw value would never match the escaped
+			// on-disk form, leaking the cleartext to stdout. The longest-match
+			// ordering in MaskResolved handles raw-vs-escaped overlap.
+			if esc := jsonEscapeInner(v); esc != v {
+				out[esc] = placeholder
+			}
 		}
 	}
 	for _, srv := range c.MCPServers {
@@ -181,6 +192,18 @@ func MaskResolved(s string, resolved map[string]string) string {
 		s = strings.ReplaceAll(s, v, resolved[v])
 	}
 	return s
+}
+
+// jsonEscapeInner returns s as it would appear INSIDE a JSON string literal
+// (the json.Marshal output with the surrounding quotes stripped). For a value
+// with no special characters this equals s. Used so redaction also catches a
+// secret stored JSON-escaped in a destination file.
+func jsonEscapeInner(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil || len(b) < 2 {
+		return s
+	}
+	return string(b[1 : len(b)-1])
 }
 
 // sortByLengthDesc sorts s in place by descending length.
