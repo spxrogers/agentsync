@@ -130,6 +130,34 @@ func TestRelativeFetcher_CopiesDirectory(t *testing.T) {
 	}
 }
 
+// TestRelativeFetcher_RejectsSymlinkEntry is the regression for the bug where
+// copyDir dereferenced symlinks (copyFile -> os.Open follows the link), so a
+// marketplace tree containing a symlink to a host file outside the tree had
+// that file's content copied into the plugin cache.
+func TestRelativeFetcher_RejectsSymlinkEntry(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(secret, []byte("TOP SECRET HOST FILE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "README.md"), []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(src, "leak.txt")); err != nil {
+		t.Skipf("symlink unsupported on this platform: %v", err)
+	}
+
+	dst := t.TempDir()
+	source := marketplace.Source{Relative: src}
+	_, err := marketplace.Dispatch(source).Fetch(source, dst)
+	if err == nil {
+		t.Fatal("expected error when marketplace tree contains a symlink")
+	}
+	if data, rerr := os.ReadFile(filepath.Join(dst, "leak.txt")); rerr == nil {
+		t.Fatalf("symlink target content leaked into cache: %q", data)
+	}
+}
+
 func TestRelativeFetcher_RejectsPathTraversal(t *testing.T) {
 	// Marketplace cache root holds a benign plugin layout; a marketplace
 	// entry with `"source": "../escape"` is what we want to reject.
