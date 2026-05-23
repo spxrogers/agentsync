@@ -141,6 +141,54 @@ args    = ["-y", "@modelcontextprotocol/server-github"]
 	}
 }
 
+// TestAgentDisable_Purge_KeepsSharedFileOwnedByOtherAgent is the regression
+// for the data-loss bug: claude and opencode both render skills to the SAME
+// path ~/.claude/skills/<name>/SKILL.md, so apply records that path under
+// BOTH agents' state. `agent disable opencode --purge` then deleted the
+// shared SKILL.md (Delete skips backup) — destroying a file the still-enabled
+// claude needs. Purge must skip paths another registered agent still owns.
+func TestAgentDisable_Purge_KeepsSharedFileOwnedByOtherAgent(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "opencode"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Author a skill — both adapters render it to ~/.claude/skills/demo/SKILL.md.
+	skillDir := filepath.Join(tmp, ".agentsync", "skills", "demo")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: demo\ndescription: d\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	sharedSkill := filepath.Join(tmp, ".claude", "skills", "demo", "SKILL.md")
+	if _, err := os.Stat(sharedSkill); err != nil {
+		t.Fatalf("shared skill not created by apply: %v", err)
+	}
+
+	// Purge opencode — claude is still enabled and owns the same file.
+	if _, err := runCLI(t, env, "agent", "disable", "opencode", "--purge"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(sharedSkill); err != nil {
+		t.Fatalf("purging opencode destroyed a skill still owned by claude: %v", err)
+	}
+}
+
 // TestAgentDisable_Purge_NoPurge verifies that without --purge, destination
 // files are NOT removed.
 func TestAgentDisable_Purge_NoPurge(t *testing.T) {

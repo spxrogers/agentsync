@@ -306,27 +306,44 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 		return fmt.Errorf("load state: %w", err)
 	}
 
-	// Gather paths to delete (unique, from Files state).
+	// Gather the portable ("${HOME}/...") dest paths owned by the agent
+	// being purged, and — separately — those still owned by ANY OTHER agent.
+	// The dest-path field is index 3 in both Files keys ("a:s:p:path") and
+	// Keys keys ("a:s:p:path:ptr").
 	prefix := name + ":"
-	toDelete := map[string]bool{}
-	for key := range s.Files {
+	purgedPaths := map[string]bool{}
+	otherPaths := map[string]bool{}
+	collect := func(key string, fields int) {
+		parts := strings.SplitN(key, ":", fields)
+		if len(parts) < 4 || parts[3] == "" {
+			return
+		}
 		if strings.HasPrefix(key, prefix) {
-			// key format: "agent:scope:project:path" — extract path (4th field)
-			parts := strings.SplitN(key, ":", 4)
-			if len(parts) == 4 && parts[3] != "" {
-				toDelete[paths.FromHomeRelative(userHome, parts[3])] = true
-			}
+			purgedPaths[parts[3]] = true
+		} else {
+			otherPaths[parts[3]] = true
 		}
 	}
-	// Also collect paths from Keys state.
+	for key := range s.Files {
+		collect(key, 4)
+	}
 	for key := range s.Keys {
-		if strings.HasPrefix(key, prefix) {
-			// key format: "agent:scope:project:path:ptr" — extract path (4th field)
-			parts := strings.SplitN(key, ":", 5)
-			if len(parts) >= 4 && parts[3] != "" {
-				toDelete[paths.FromHomeRelative(userHome, parts[3])] = true
-			}
+		collect(key, 5)
+	}
+
+	// Delete only paths NOT still owned by another agent. claude and
+	// opencode both render skills to ~/.claude/skills/<name>/SKILL.md, so
+	// after apply that path is owned by BOTH in state. Deleting it while
+	// purging one agent would destroy a file the other still needs — and
+	// Writer.Delete skips backup, so the loss is unrecoverable.
+	toDelete := map[string]bool{}
+	sharedKept := 0
+	for p := range purgedPaths {
+		if otherPaths[p] {
+			sharedKept++
+			continue
 		}
+		toDelete[paths.FromHomeRelative(userHome, p)] = true
 	}
 
 	// Build delete ops and apply via the adapter. Purge is destructive
@@ -365,5 +382,8 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "purged %d destination path(s) for agent %s\n", len(toDelete), name)
+	if sharedKept > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "  kept %d shared path(s) still owned by another agent\n", sharedKept)
+	}
 	return nil
 }
