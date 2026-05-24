@@ -4,6 +4,7 @@
 package render
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -337,7 +338,7 @@ func Apply(
 	}
 
 	var allReports []CollisionReport
-	seen := map[string]bool{}
+	seen := map[string][]byte{}
 	for _, name := range reg.Names() {
 		res, ok := p.PerAgent[name]
 		if !ok {
@@ -357,10 +358,21 @@ func Apply(
 			// the adapter re-reads and merges per op. Deduping them by path
 			// silently dropped every merge op after the first.
 			if op.Action == "write" && !isKeyMerge(op.MergeStrategy) {
-				if seen[op.Path] {
+				if prev, ok := seen[op.Path]; ok {
+					// Identical content is the safe, expected dedup (claude and
+					// opencode render byte-identical SKILL.md). Divergent content
+					// for the same path is a projection bug, and silently
+					// dropping one agent's bytes would be data loss — so fail
+					// loud rather than pick a winner.
+					if !bytes.Equal(prev, op.Content) {
+						return allReports, written, fmt.Errorf(
+							"agent %q renders different content than an earlier agent for the same path %s; "+
+								"refusing to silently drop one (shared paths must render identical bytes)",
+							name, op.Path)
+					}
 					continue
 				}
-				seen[op.Path] = true
+				seen[op.Path] = op.Content
 			}
 			deduped = append(deduped, op)
 		}

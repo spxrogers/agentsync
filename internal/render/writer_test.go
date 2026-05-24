@@ -341,6 +341,59 @@ func TestRenderApply_MultipleMergeOpsSamePathAllApplied(t *testing.T) {
 	}
 }
 
+// TestRenderApply_SharedWriteDivergence locks in the cross-adapter shared-write
+// contract. render.Apply dedups identical whole-file writes to the same path
+// (claude and opencode render byte-identical SKILL.md), keeping the first.
+// That is data-safe ONLY while the content is identical; if two adapters ever
+// render the same path with DIFFERENT bytes, silently dropping one is data
+// loss. The dedup must fail loud on divergence instead.
+func TestRenderApply_SharedWriteDivergence(t *testing.T) {
+	newPlan := func(dest, claudeBody, opencodeBody string) render.RenderPlan {
+		return render.RenderPlan{PerAgent: map[string]render.AgentResult{
+			"claude":   {Ops: []adapter.FileOp{{Action: "write", Path: dest, Content: []byte(claudeBody), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
+			"opencode": {Ops: []adapter.FileOp{{Action: "write", Path: dest, Content: []byte(opencodeBody), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
+		}}
+	}
+
+	t.Run("divergent fails loud", func(t *testing.T) {
+		tmp := t.TempDir()
+		home := filepath.Join(tmp, ".agentsync")
+		_ = os.MkdirAll(home, 0o755)
+		dest := filepath.Join(tmp, ".claude", "skills", "x", "SKILL.md")
+		_ = os.MkdirAll(filepath.Dir(dest), 0o755)
+		reg := adapter.NewRegistry()
+		_ = reg.Register(&fakeJSONApply{name: "claude"})
+		_ = reg.Register(&fakeJSONApply{name: "opencode"})
+
+		_, _, err := render.Apply(newPlan(dest, "shared-body", "DIVERGENT-body"), reg, state.New(), home, tmp, adapter.ScopeUser, "")
+		if err == nil {
+			t.Fatal("expected divergent shared-write to fail loud, got nil error")
+		}
+		if !strings.Contains(err.Error(), dest) {
+			t.Fatalf("error should name the divergent path; got: %v", err)
+		}
+	})
+
+	t.Run("identical dedups cleanly", func(t *testing.T) {
+		tmp := t.TempDir()
+		home := filepath.Join(tmp, ".agentsync")
+		_ = os.MkdirAll(home, 0o755)
+		dest := filepath.Join(tmp, ".claude", "skills", "x", "SKILL.md")
+		_ = os.MkdirAll(filepath.Dir(dest), 0o755)
+		reg := adapter.NewRegistry()
+		_ = reg.Register(&fakeJSONApply{name: "claude"})
+		_ = reg.Register(&fakeJSONApply{name: "opencode"})
+
+		if _, _, err := render.Apply(newPlan(dest, "shared-body", "shared-body"), reg, state.New(), home, tmp, adapter.ScopeUser, ""); err != nil {
+			t.Fatalf("identical shared-write should dedup cleanly, got: %v", err)
+		}
+		data, err := os.ReadFile(dest)
+		if err != nil || string(data) != "shared-body" {
+			t.Fatalf("want deduped single write 'shared-body'; got %q err=%v", data, err)
+		}
+	})
+}
+
 // TestRenderApply_FullPathBacksUpAcrossAgents exercises the integrated
 // path: render.Apply constructs one writer per agent, each agent's
 // Apply routes through it, and the union of reports is returned.
