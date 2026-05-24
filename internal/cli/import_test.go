@@ -502,6 +502,70 @@ func TestImport_FullAgentEmpty(t *testing.T) {
 	}
 }
 
+// TestImport_DryRunWritesNothing verifies --dry-run previews the target
+// without writing the source file or seeding state.
+func TestImport_DryRunWritesNothing(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	if err := os.WriteFile(filepath.Join(tmp, ".claude.json"),
+		[]byte(`{"mcpServers": {"github": {"type": "stdio", "command": "npx"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "import", "claude:mcp:github", "--dry-run")
+	if err != nil {
+		t.Fatalf("import --dry-run: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "would import mcp/github.toml") {
+		t.Fatalf("dry-run should preview the target; got: %s", out)
+	}
+	if strings.Contains(out, "imported mcp/github.toml") && !strings.Contains(out, "would import") {
+		t.Fatalf("dry-run must not claim a real import; got: %s", out)
+	}
+	if _, statErr := os.Stat(filepath.Join(tmp, ".agentsync", "mcp", "github.toml")); !os.IsNotExist(statErr) {
+		t.Fatalf("dry-run must not write the canonical source; stat err=%v", statErr)
+	}
+
+	// A real import afterwards still works (dry-run left no partial state).
+	if out, err := runCLI(t, env, "import", "claude:mcp:github"); err != nil {
+		t.Fatalf("real import after dry-run: %v\n%s", err, out)
+	}
+	if _, statErr := os.Stat(filepath.Join(tmp, ".agentsync", "mcp", "github.toml")); statErr != nil {
+		t.Fatalf("real import after dry-run did not write source: %v", statErr)
+	}
+}
+
+// TestImport_DryRunFullAgent verifies --dry-run on the full-agent form
+// previews a summary and writes none of the components.
+func TestImport_DryRunFullAgent(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	if err := os.MkdirAll(filepath.Join(tmp, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".claude.json"),
+		[]byte(`{"mcpServers": {"github": {"type": "stdio", "command": "npx"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".claude", "CLAUDE.md"), []byte("# Memory\nBe concise.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "import", "claude", "--dry-run")
+	if err != nil {
+		t.Fatalf("import claude --dry-run: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "would import") || !strings.Contains(out, "from claude") {
+		t.Fatalf("dry-run full-agent summary missing; got: %s", out)
+	}
+	for _, rel := range []string{
+		filepath.Join("mcp", "github.toml"),
+		filepath.Join("memory", "AGENTS.md"),
+	} {
+		if _, statErr := os.Stat(filepath.Join(tmp, ".agentsync", rel)); !os.IsNotExist(statErr) {
+			t.Fatalf("dry-run must not write %s; stat err=%v", rel, statErr)
+		}
+	}
+}
+
 // TestImport_UnknownComponent verifies that an unknown component errors.
 func TestImport_UnknownComponent(t *testing.T) {
 	tmp := t.TempDir()

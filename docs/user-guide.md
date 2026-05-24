@@ -151,6 +151,7 @@ agentsync status
 
 # Pull native config into your canonical source.
 # Selector grammar: <agent>[:<component>[:<name>]] — drop parts to widen scope.
+agentsync import claude --dry-run       # preview what a full import would write
 agentsync import claude                 # the agent's full native config
 agentsync import claude:mcp             # every MCP server
 agentsync import claude:mcp:github      # a single MCP server
@@ -163,7 +164,8 @@ agentsync apply
 Dropping the name imports every entry of a component; dropping the component
 too imports everything the agent has (MCP, skills, subagents, commands, hooks,
 LSP, and memory) in one pass. A bulk import that finds nothing for a component
-reports it and exits cleanly rather than erroring.
+reports it and exits cleanly rather than erroring. Add `--dry-run` to list the
+source files an import would write without touching `~/.agentsync/`.
 
 On a populated machine, the **first** apply will see pre-existing native files it
 didn't write and treat them as `foreign-collision`: it backs each one up to
@@ -442,7 +444,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `status` | Summarize drift/pending across agents. | `--scope --project` |
 | `diff [<path>]` | Show pending/drift changes; secrets redacted. | `--scope --project` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
-| `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. | |
+| `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. | `--dry-run` |
 | `explain <plugin>` | Show a plugin's per-agent translation coverage. | `--json` |
 
 Global: `-v/--verbose` for verbose logging on any command.
