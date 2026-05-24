@@ -81,11 +81,10 @@ func LoadProjected(fs afero.Fs, home, pluginCacheRoot string) (source.Canonical,
 // failing the whole load.
 //
 // CAVEAT: the entry reflects the marketplace's CURRENT version of the plugin,
-// which can differ from the installed version until the next `update`. If an
-// upstream version flips a plugin strict:true→false, Project's non-strict path
-// ignores the installed plugin.json and the plugin's components drop out until
-// the cache is re-synced. (See PR notes — non-strict is entry-authoritative by
-// marketplace.Project's contract.)
+// which can differ from the installed version until the next `update` — so its
+// inline overrides may be slightly ahead of the installed content. Project
+// unions plugin.json with the entry, so this never DROPS the plugin's own
+// components; at worst a stale entry adds a slightly-ahead override.
 func resolveInstalledEntry(home, id, mpName string) PluginEntry {
 	if mpName == "" {
 		return PluginEntry{Name: id}

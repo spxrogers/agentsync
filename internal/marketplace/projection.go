@@ -28,19 +28,23 @@ type ProjectionResult struct {
 	LSPServers []source.LSPServer
 }
 
-// Project loads the plugin's components and returns them as canonical entries.
-//
-// Strict mode (entry.Strict == nil || *entry.Strict):
-//   - Reads cacheDir/.claude-plugin/plugin.json for the primary component list.
+// Project loads the plugin's components and returns them as canonical entries:
+//   - Reads cacheDir/.claude-plugin/plugin.json (when present) for the primary
+//     component list; a missing plugin.json is fine (a curator-defined plugin
+//     may declare everything in the entry).
 //   - If the manifest lists no skills, falls back to convention-based discovery:
 //     scans cacheDir/skills/*/ for SKILL.md files.
-//   - Then merges in any component fields on the PluginEntry itself (overrides).
+//   - Then overlays any component fields on the PluginEntry itself; an inline
+//     override of a same-named component wins (last-write at render).
 //
-// Non-strict mode:
-//   - Uses only the PluginEntry's inlined component fields.
+// This is a UNION: plugin.json PLUS entry additions/overrides. The entry.Strict
+// flag no longer changes projection — it used to make "non-strict" IGNORE
+// plugin.json entirely, which silently dropped a plugin's own components
+// whenever the marketplace entry was non-strict (and after an upstream
+// strict-flip). Union semantics never drop the plugin's declared components.
 //
-// In both cases, ${CLAUDE_PLUGIN_ROOT} in command/url strings is replaced with
-// cacheDir so non-Claude adapters can resolve binary paths.
+// ${CLAUDE_PLUGIN_ROOT} in command/url strings is replaced with cacheDir so
+// non-Claude adapters can resolve binary paths.
 func Project(entry PluginEntry, cacheDir string) (ProjectionResult, error) {
 	return projectWithFuncs(entry, cacheDir, os.ReadFile, os.ReadDir)
 }
@@ -57,31 +61,27 @@ func ProjectWithReader(entry PluginEntry, cacheDir string, readFile func(string)
 // listDir may be nil to disable convention-based skills discovery.
 func projectWithFuncs(entry PluginEntry, cacheDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error)) (ProjectionResult, error) {
 	var pr ProjectionResult
-	strict := entry.Strict == nil || *entry.Strict
 
-	if strict {
-		manifestPath := filepath.Join(cacheDir, ".claude-plugin", "plugin.json")
-		data, err := readFile(manifestPath)
-		if err != nil && !os.IsNotExist(err) {
-			return pr, fmt.Errorf("read plugin.json: %w", err)
+	// Always honour plugin.json when present (a missing one is fine for a
+	// curator-defined plugin), then overlay the entry's component config. Union
+	// semantics — plugin.json PLUS entry additions/overrides — regardless of the
+	// Strict flag, so a non-strict entry never drops the plugin's own components.
+	manifestPath := filepath.Join(cacheDir, ".claude-plugin", "plugin.json")
+	data, err := readFile(manifestPath)
+	if err != nil && !os.IsNotExist(err) {
+		return pr, fmt.Errorf("read plugin.json: %w", err)
+	}
+	if err == nil {
+		var manifest PluginManifest
+		if err := json.Unmarshal(data, &manifest); err != nil {
+			return pr, fmt.Errorf("parse plugin.json: %w", err)
 		}
-		if err == nil {
-			var manifest PluginManifest
-			if err := json.Unmarshal(data, &manifest); err != nil {
-				return pr, fmt.Errorf("parse plugin.json: %w", err)
-			}
-			if err := applyManifest(manifest, &pr, cacheDir, readFile, listDir); err != nil {
-				return pr, err
-			}
-		}
-		// Merge entry-level overrides on top of manifest components.
-		if err := applyEntryOverrides(entry, &pr, cacheDir, readFile); err != nil {
+		if err := applyManifest(manifest, &pr, cacheDir, readFile, listDir); err != nil {
 			return pr, err
 		}
-	} else {
-		if err := applyEntryFull(entry, &pr, cacheDir, readFile); err != nil {
-			return pr, err
-		}
+	}
+	if err := applyEntryOverrides(entry, &pr, cacheDir, readFile); err != nil {
+		return pr, err
 	}
 	return pr, nil
 }
@@ -292,11 +292,6 @@ func applyEntryOverrides(entry PluginEntry, pr *ProjectionResult, cacheDir strin
 	}
 	applyHooks(entry.Hooks, pr, cacheDir)
 	return nil
-}
-
-// applyEntryFull applies all component fields from a non-strict PluginEntry.
-func applyEntryFull(entry PluginEntry, pr *ProjectionResult, cacheDir string, readFile func(string) ([]byte, error)) error {
-	return applyEntryOverrides(entry, pr, cacheDir, readFile)
 }
 
 // markdownEntry holds the parsed result of a single markdown file.

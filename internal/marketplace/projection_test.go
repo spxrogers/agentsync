@@ -174,6 +174,43 @@ func TestProject_NonStrict_EntryComponents(t *testing.T) {
 	}
 }
 
+// TestProject_NonStrict_UnionsPluginJSON is the regression for non-strict mode
+// dropping the plugin's own plugin.json components. Non-strict must mean
+// "plugin.json PLUS entry additions", not "entry replaces plugin.json", so a
+// non-strict entry never silently loses the plugin's declared components — and
+// an upstream strict:true→false flip can't drop them.
+func TestProject_NonStrict_UnionsPluginJSON(t *testing.T) {
+	cache := t.TempDir()
+	d := filepath.Join(cache, ".claude-plugin")
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "plugin.json"),
+		[]byte(`{"name":"ns","mcpServers":{"base-srv":{"command":"b"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := false
+	entry := marketplace.PluginEntry{
+		Name:       "ns",
+		Strict:     &f,
+		MCPServers: map[string]any{"extra-srv": map[string]any{"command": "e"}},
+	}
+	pr, err := marketplace.Project(entry, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, m := range pr.MCPServers {
+		ids[m.ID] = true
+	}
+	if !ids["base-srv"] {
+		t.Fatalf("non-strict dropped the plugin.json component base-srv: %v", ids)
+	}
+	if !ids["extra-srv"] {
+		t.Fatalf("non-strict entry override extra-srv missing: %v", ids)
+	}
+}
+
 func TestProject_Strict_MissingPluginJSON(t *testing.T) {
 	// Strict mode but no plugin.json — should return empty result, no error.
 	cache := t.TempDir()

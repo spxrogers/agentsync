@@ -41,9 +41,9 @@ type PluginEntry struct {
 	Keywords    []string `json:"keywords,omitempty"`
 	Category    string   `json:"category,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
-	Strict      *bool    `json:"strict,omitempty"` // default true
+	Strict      *bool    `json:"strict,omitempty"` // accepted for compat; no longer changes projection (Project unions plugin.json + entry)
 
-	// Component config can be inlined here when strict=false:
+	// Component config can be inlined here (overlaid on plugin.json):
 	Skills     any            `json:"skills,omitempty"`   // string | []string
 	Commands   any            `json:"commands,omitempty"` // string | []string
 	Agents     any            `json:"agents,omitempty"`   // string | []string

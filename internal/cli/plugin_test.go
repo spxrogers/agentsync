@@ -420,6 +420,11 @@ func TestPlugin_EntryOverrideReachesApply(t *testing.T) {
 	if !strings.Contains(string(data), "inline-srv") {
 		t.Fatalf("marketplace-entry inline MCP override did not reach .claude.json:\n%s", data)
 	}
+	// Union semantics: the plugin's OWN plugin.json component (demo-mcp) must
+	// also be present, not dropped by the non-strict entry.
+	if !strings.Contains(string(data), "demo-mcp") {
+		t.Fatalf("non-strict plugin dropped its plugin.json component (demo-mcp):\n%s", data)
+	}
 }
 
 func TestPlugin_NonStrictInstallThenApply(t *testing.T) {
