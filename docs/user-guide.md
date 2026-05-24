@@ -149,14 +149,21 @@ retyping them.
 # See what's on disk vs. what agentsync would write.
 agentsync status
 
-# Pull a specific native item into your canonical source.
-# Selector grammar: <agent>:<component>:<name>
-agentsync import claude:mcp:github
+# Pull native config into your canonical source.
+# Selector grammar: <agent>[:<component>[:<name>]] — drop parts to widen scope.
+agentsync import claude                 # the agent's full native config
+agentsync import claude:mcp             # every MCP server
+agentsync import claude:mcp:github      # a single MCP server
 agentsync import opencode:mcp:linear
 
 # Now it's in ~/.agentsync/ — apply to fan it out to your other agents.
 agentsync apply
 ```
+
+Dropping the name imports every entry of a component; dropping the component
+too imports everything the agent has (MCP, skills, subagents, commands, hooks,
+LSP, and memory) in one pass. A bulk import that finds nothing for a component
+reports it and exits cleanly rather than erroring.
 
 On a populated machine, the **first** apply will see pre-existing native files it
 didn't write and treat them as `foreign-collision`: it backs each one up to
@@ -435,7 +442,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `status` | Summarize drift/pending across agents. | `--scope --project` |
 | `diff [<path>]` | Show pending/drift changes; secrets redacted. | `--scope --project` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
-| `import <agent>:<component>:<name>` | Capture a native edit into source. | |
+| `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. | |
 | `explain <plugin>` | Show a plugin's per-agent translation coverage. | `--json` |
 
 Global: `-v/--verbose` for verbose logging on any command.

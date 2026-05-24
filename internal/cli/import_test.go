@@ -394,6 +394,114 @@ func TestImport_MemoryFromClaude(t *testing.T) {
 	}
 }
 
+// TestImport_AllMCPFromClaude verifies the bulk component form: import
+// claude:mcp (no name) captures every native MCP server in one pass.
+func TestImport_AllMCPFromClaude(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	claudeJSON := filepath.Join(tmp, ".claude.json")
+	if err := os.WriteFile(claudeJSON, []byte(`{
+		"mcpServers": {
+			"github": {"type": "stdio", "command": "npx", "args": ["-y", "server-github"]},
+			"linear":  {"type": "stdio", "command": "npx", "args": ["-y", "server-linear"]}
+		}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "import", "claude:mcp")
+	if err != nil {
+		t.Fatalf("import claude:mcp: %v\n%s", err, out)
+	}
+	for _, want := range []string{"mcp/github.toml", "mcp/linear.toml"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("bulk import output missing %q; got: %s", want, out)
+		}
+	}
+	for _, id := range []string{"github", "linear"} {
+		if _, statErr := os.Stat(filepath.Join(tmp, ".agentsync", "mcp", id+".toml")); statErr != nil {
+			t.Fatalf("canonical mcp/%s.toml not written: %v", id, statErr)
+		}
+	}
+}
+
+// TestImport_FullAgentFromClaude verifies the full-agent form: import claude
+// (no component) captures every importable component and prints a summary.
+func TestImport_FullAgentFromClaude(t *testing.T) {
+	tmp, env := importTestEnv(t)
+
+	// Component dirs under .claude/.
+	agentsDir := filepath.Join(tmp, ".claude", "agents")
+	commandsDir := filepath.Join(tmp, ".claude", "commands")
+	skillDir := filepath.Join(tmp, ".claude", "skills", "deploy")
+	for _, d := range []string{agentsDir, commandsDir, skillDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// MCP via .claude.json.
+	if err := os.WriteFile(filepath.Join(tmp, ".claude.json"),
+		[]byte(`{"mcpServers": {"github": {"type": "stdio", "command": "npx"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Hooks + LSP via settings.json.
+	if err := os.WriteFile(filepath.Join(tmp, ".claude", "settings.json"), []byte(`{
+		"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi"}]}]},
+		"lspServers": {"gopls": {"command": "gopls"}}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "reviewer.md"),
+		[]byte("---\ndescription: \"Code reviewer\"\n---\nReview.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(commandsDir, "review.md"), []byte("Do a review."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: deploy\ndescription: ship it\n---\nDeploy.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".claude", "CLAUDE.md"), []byte("# Memory\nBe concise.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "import", "claude")
+	if err != nil {
+		t.Fatalf("import claude: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "imported") || !strings.Contains(out, "from claude") {
+		t.Fatalf("full-agent import missing summary line; got: %s", out)
+	}
+
+	// Every component should have landed in the canonical source.
+	wantFiles := []string{
+		filepath.Join("mcp", "github.toml"),
+		filepath.Join("lsp", "gopls.toml"),
+		filepath.Join("hooks", "PreToolUse.toml"),
+		filepath.Join("agents", "reviewer.md"),
+		filepath.Join("commands", "review.md"),
+		filepath.Join("skills", "deploy", "SKILL.md"),
+		filepath.Join("memory", "AGENTS.md"),
+	}
+	for _, rel := range wantFiles {
+		if _, statErr := os.Stat(filepath.Join(tmp, ".agentsync", rel)); statErr != nil {
+			t.Fatalf("full-agent import did not write %s: %v", rel, statErr)
+		}
+	}
+}
+
+// TestImport_FullAgentEmpty reports cleanly when there is nothing to import.
+func TestImport_FullAgentEmpty(t *testing.T) {
+	_, env := importTestEnv(t)
+	out, err := runCLI(t, env, "import", "claude")
+	if err != nil {
+		t.Fatalf("full-agent import of an empty config should not error; out=%s err=%v", out, err)
+	}
+	if !strings.Contains(out, "no importable items found") {
+		t.Fatalf("expected an empty-config notice; got: %s", out)
+	}
+}
+
 // TestImport_UnknownComponent verifies that an unknown component errors.
 func TestImport_UnknownComponent(t *testing.T) {
 	tmp := t.TempDir()

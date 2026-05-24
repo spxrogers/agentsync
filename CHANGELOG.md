@@ -37,6 +37,10 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 - **CLI**: `init`, `agent`, `doctor`, `verify`, `apply`, `status`, `diff`,
   `reconcile`, `import`, `mcp`, `plugin`, `marketplace`, `update`, `secrets`,
   `explain`.
+- **Bulk import** — the `import` selector now widens as parts are dropped:
+  `import <agent>` captures the agent's full native config, `<agent>:<component>`
+  captures every entry of a component, and the original `<agent>:<component>:<name>`
+  still captures one item. Empty scopes report a notice and exit cleanly.
 - **Safety primitives** — two-phase atomic writes, an apply lock, first-apply
   foreign-collision backups, symlinked-destination refusal, and a schema-versioned
   state file with portable (`${HOME}`-relative) keys.
