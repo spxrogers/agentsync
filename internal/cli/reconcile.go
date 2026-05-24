@@ -641,7 +641,37 @@ func writeBackFileItem(home string, it reconcileItem) error {
 		return fmt.Errorf("write-back for %s is unsafe: the dest is the concatenation of multiple source fragments. Persisting the whole dest into one of them would strand the others. Edit the source fragments under %s/ directly, then apply", it.op.Path, home)
 	}
 	dest := filepath.Join(home, srcID)
+	// Defense-in-depth: srcID derives from a component Name, and AtomicWrite
+	// does no containment check. A "../" segment in the name would let this
+	// reverse (dest→source) write escape ~/.agentsync and clobber an arbitrary
+	// file. The forward import boundary (source.Write*) is fenced with
+	// validateComponentID; mirror that here. Every name reaching this path is
+	// sanitized today (loader basenames, projection's validateProjectedName),
+	// so this guards future callers, not a live exploit.
+	if !withinDir(home, dest) {
+		return fmt.Errorf("write-back for %s escapes the source tree %s (SourceID %q has a traversal segment); refusing", it.op.Path, home, srcID)
+	}
 	return iox.AtomicWrite(dest, data, 0o644)
+}
+
+// withinDir reports whether path is dir itself or sits lexically inside it,
+// after Clean. Used to bound dest→source write-backs to ~/.agentsync.
+func withinDir(dir, path string) bool {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absDir, absPath)
+	if err != nil {
+		return false
+	}
+	return rel != ".." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) &&
+		!filepath.IsAbs(rel)
 }
 
 // appendIgnore appends the label to ~/.agentsync/ignore.toml (best-effort).
