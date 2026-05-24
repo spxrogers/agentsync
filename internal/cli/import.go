@@ -163,8 +163,8 @@ func importRun(cmd *cobra.Command, args []string) error {
 	// filter, so MCP/LSP/hook capture still routes through capture.Capture
 	// (secret re-referencing + source-only field preservation) — see the
 	// importer bodies. Text components write directly via source.Write*.
-	switch {
-	case component == "":
+	switch component {
+	case "":
 		if err := importAllComponents(cmd, home, agentName, c); err != nil {
 			return err
 		}
