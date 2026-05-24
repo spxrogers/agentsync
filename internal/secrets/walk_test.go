@@ -38,6 +38,12 @@ var walkerCovered = map[string]map[string]bool{
 		"Headers": true,
 		"Agents":  false, // source-only targeting allowlist, never a secret
 	},
+	"MCPServer": {
+		"ID": false, // filename identifier, never a secret
+	},
+	"LSPServer": {
+		"ID": false, // filename identifier, never a secret
+	},
 }
 
 // isStringShaped reports whether a struct field can carry a ${secret:…} /
@@ -66,6 +72,12 @@ func TestNewSecretFieldGuard(t *testing.T) {
 		"MCPServerSpec": reflect.TypeOf(source.MCPServerSpec{}),
 		"Hook":          reflect.TypeOf(source.Hook{}),
 		"LSPServerSpec": reflect.TypeOf(source.LSPServerSpec{}),
+		// The wrapper structs must be guarded too: walkSecretFields descends
+		// from these, and a secret-bearing string added to a wrapper (rather
+		// than its inner *Spec) would otherwise escape both the guard and the
+		// walker — persisting cleartext on the next write-back.
+		"MCPServer": reflect.TypeOf(source.MCPServer{}),
+		"LSPServer": reflect.TypeOf(source.LSPServer{}),
 	}
 	for name, typ := range structs {
 		covered := walkerCovered[name]
