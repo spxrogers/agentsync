@@ -1,10 +1,9 @@
 package cli
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -124,7 +123,7 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 	}
 
 	// Compute fresh manifest SHAs for installed plugins (for SHA drift detection).
-	freshSHAs := computeFreshPluginSHAs(home, c.Plugins)
+	freshSHAs := computeFreshPluginSHAs(home, c.Plugins, fetched, cmd.OutOrStdout())
 
 	// Detect re-uploaded (same version, different SHA) plugins.
 	shaWarnings := marketplace.DetectSHADrift(c.Plugins, freshSHAs)
@@ -244,21 +243,74 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 	return nil
 }
 
-// computeFreshPluginSHAs reads each installed plugin's cached plugin.json and
-// computes its sha256 hex.  Returns a map of plugin ID → sha hex.  Missing or
-// unreadable plugin.json files are silently skipped (they may not be cached yet).
-func computeFreshPluginSHAs(home string, plugins []source.Plugin) map[string]string {
+// computeFreshPluginSHAs re-fetches each installed plugin's CURRENT upstream
+// manifest and computes the SHA the same way `plugin install` recorded it
+// (computeManifestSHA: sha256(plugin.json) for strict entries, sha256(entry)
+// for non-strict). The result feeds marketplace.DetectSHADrift, which flags a
+// plugin re-uploaded at the SAME version with DIFFERENT content (tamper /
+// upstream rollback at the same tag).
+//
+// Crucially it must NOT read the plugin's installed cache: that is
+// byte-identical to what produced the recorded SHA, so drift would be
+// structurally undetectable (the original dead-code bug). For a Relative source
+// the fresh content already lives in this run's freshly re-fetched marketplace
+// cache, so we read it in place (no extra fetch). For git/npm sources we fetch
+// into a throwaway temp dir so the installed cache is never clobbered. A fetch
+// failure is warned and skipped — a read-only poll must not fail because one
+// upstream is unreachable, and an un-fetchable plugin is unknown, not "clean".
+//
+// Plugins with no recorded SHA (legacy / hand-managed) are skipped: DetectSHADrift
+// ignores them anyway, so there is no point paying to re-fetch them.
+func computeFreshPluginSHAs(home string, plugins []source.Plugin, fetched map[string]map[string]marketplace.PluginEntry, warn io.Writer) map[string]string {
 	out := make(map[string]string, len(plugins))
 	for _, pl := range plugins {
-		id := pl.ID
-		cacheDir := pluginCacheDir(home, id)
-		pluginJSONPath := filepath.Join(cacheDir, ".claude-plugin", "plugin.json")
-		data, err := os.ReadFile(pluginJSONPath)
-		if err != nil {
+		if pl.Plugin.ManifestSHA == "" {
 			continue
 		}
-		h := sha256.Sum256(data)
-		out[id] = hex.EncodeToString(h[:])
+		_, mpName := splitPluginRef(pl.Plugin.ID)
+		if mpName == "" {
+			mpName = "default"
+		}
+		entries, ok := fetched[mpName]
+		if !ok {
+			continue
+		}
+		mpEntry, ok := entries[pl.ID]
+		if !ok {
+			continue
+		}
+		mpCacheRoot := marketplaceCacheDir(home, mpName)
+		src := mpEntry.Source
+
+		// Relative source: read the freshly re-fetched marketplace cache in
+		// place — the plugin.json lives at <mpCacheRoot>/<relative>/.claude-plugin/.
+		if src.Relative != "" {
+			relCacheDir := filepath.Join(mpCacheRoot, src.Relative)
+			if sha := computeManifestSHA(home, pl.ID, mpEntry, nil, relCacheDir); sha != "" {
+				out[pl.ID] = sha
+			}
+			continue
+		}
+
+		// git/npm source: fetch into a throwaway temp dir.
+		tmp, err := os.MkdirTemp("", "agentsync-drift-")
+		if err != nil {
+			if warn != nil {
+				fmt.Fprintf(warn, "warning: drift check for %s skipped: %v\n", pl.ID, err)
+			}
+			continue
+		}
+		if _, ferr := marketplace.Dispatch(src).Fetch(src, tmp); ferr != nil {
+			if warn != nil {
+				fmt.Fprintf(warn, "warning: drift check for %s skipped (re-fetch failed): %v\n", pl.ID, ferr)
+			}
+			_ = os.RemoveAll(tmp)
+			continue
+		}
+		if sha := computeManifestSHA(home, pl.ID, mpEntry, nil, tmp); sha != "" {
+			out[pl.ID] = sha
+		}
+		_ = os.RemoveAll(tmp)
 	}
 	return out
 }
