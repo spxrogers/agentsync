@@ -92,6 +92,38 @@ func TestSecretsGetSet(t *testing.T) {
 	}
 }
 
+// TestSecretsSet_RejectsRecipientIdentityMismatch is the regression for
+// `secrets set` re-encrypting the whole store to a recipient the configured
+// identity_file cannot decrypt — silently locking the user out of their own
+// secrets. It must refuse and leave the existing store intact.
+func TestSecretsSet_RejectsRecipientIdentityMismatch(t *testing.T) {
+	env, agePath, _, id := setupSecretsEnv(t)
+	// Seed a store readable by the configured identity.
+	if err := secrets_pkg.Encrypt([]byte("[a]\nb = \"c\"\n"), id.Recipient().String(), agePath); err != nil {
+		t.Fatal(err)
+	}
+	// Point recipient at a DIFFERENT key while leaving identity_file unchanged.
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(env["AGENTSYNC_TARGET_ROOT"], ".agentsync", "agentsync.toml")
+	data, _ := os.ReadFile(cfgPath)
+	mismatched := strings.Replace(string(data), id.Recipient().String(), other.Recipient().String(), 1)
+	if err := os.WriteFile(cfgPath, []byte(mismatched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runCLI(t, env, "secrets", "set", "x.y=z"); err == nil {
+		t.Fatal("secrets set with a recipient the identity can't decrypt should be rejected")
+	}
+	// The original store must still be readable (rolled back, not clobbered).
+	out, gerr := runCLI(t, env, "secrets", "get", "a.b")
+	if gerr != nil || !strings.Contains(out, "c") {
+		t.Fatalf("original store not preserved after rejected set: err=%v out=%q", gerr, out)
+	}
+}
+
 func TestSecretsGet_MissingKey(t *testing.T) {
 	env, agePath, _, id := setupSecretsEnv(t)
 	plain := []byte("[foo]\nbar = \"baz\"\n")
