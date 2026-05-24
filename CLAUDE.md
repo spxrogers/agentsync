@@ -2,6 +2,48 @@
 
 Project memory for Claude Code / agent sessions working on agentsync.
 
+## What this is
+
+agentsync is a single-machine Go CLI that centrally manages AI coding-agent
+configurations (Claude Code, OpenCode, and — planned — Codex CLI, Cursor). The
+user keeps a canonical config in `~/.agentsync/` (small TOML + markdown,
+committable to a dotfiles repo); `agentsync apply` renders it into each agent's
+native config. It's bidirectional: native edits are detected as drift and merged
+back via `reconcile`/`import`. Secrets are `${secret:…}`/`${env:…}` references
+resolved at apply time from an age-encrypted vault.
+
+**Read the docs before large changes:**
+- [`docs/concepts.md`](docs/concepts.md) — the three-state model + every term.
+- [`docs/architecture.md`](docs/architecture.md) — pipelines, drift classifier,
+  secret invariants, package layering.
+- [`docs/components.md`](docs/components.md) — package-by-package map.
+- [`docs/capability-matrix.md`](docs/capability-matrix.md) — per-agent support.
+- [`docs/superpowers/specs/2026-05-04-agentsync-design.md`](docs/superpowers/specs/2026-05-04-agentsync-design.md)
+  — the authoritative v1.0 design. Note: a few items in its §"CLI surface" were
+  aspirational and not wired in v1.0 (`apply --strict/--force/--agent` flags, an
+  `agentsync skill` command) — trust the code over the spec on the CLI surface.
+
+## Mental map of the code
+
+- **`internal/source`** — the canonical model (`source.Canonical`). The TOML
+  structs here *are* the schema; there is no separate IR. Loaders + `Write*` helpers.
+- **`internal/adapter`** (+ `claude`, `opencode`, `noop`) — the per-agent
+  `Adapter` interface. `Render` takes `secrets.Resolved` (not raw source);
+  `Apply` writes only through `DestWriter`.
+- **`internal/render`** — the apply pipeline (plan → classify → write → record
+  state → translation report).
+- **`internal/capture`** — the *single* dest→source write-back funnel.
+- **`internal/secrets`** — resolve / re-reference / mask. The leak guards live here.
+- **`internal/drift`** — the pure 3-way classifier (9 cases).
+- **`internal/marketplace`** — fetch + project plugins into components.
+- **`internal/{state,project,iox,jsonkeys,paths,log,testenv}`** — state file,
+  project overlay, atomic IO + lock, JSON-pointer merge, path resolution,
+  logging, test container guard.
+
+The registered command tree (`internal/cli/root.go`): `init`, `agent`, `apply`,
+`status`, `diff`, `reconcile`, `import`, `doctor`, `verify`, `mcp`, `plugin`,
+`marketplace`, `update`, `secrets`, `explain`.
+
 ## Secret-handling invariants (read before touching secrets / capture / source writers)
 
 agentsync resolves `${secret:…}` / `${env:…}` references into native agent
@@ -71,3 +113,39 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
   v2.12.2**, whose release binary is built with Go 1.26, so it parses our export
   data natively — no `GOTOOLCHAIN` override needed. A local install built with
   Go < 1.26 will refuse to run against this module; install v2.12.2 to match CI.
+- `just test` (full unit/integration in container), `just test-e2e`,
+  `just test-bdd`, `just test-live` (network, opt-in, not in the release gate).
+- Go version is `go.mod`'s `go` directive (currently **1.26.2**); CI reads it via
+  `go-version-file`. Bump in one place.
+
+## Code conventions
+
+- **Stdlib testing only** — no testify/gomega. Table-driven with a `name` field
+  and `t.Run`. `t.Helper()` in helpers that call `t.Fatal/Errorf`.
+- **Filesystem in tests** is always `afero.NewMemMapFs()` or `t.TempDir()`, never
+  `os.UserHomeDir()` — a `forbidigo` rule bans it in `_test.go` (use
+  `paths.HomeDir(env)`). FS-touching tests must run in the container; call
+  `testenv.RequireContainer(t)` / `MustRunInContainer()`.
+- **Errors** wrap with `fmt.Errorf("doing X: %w", err)`; match with `errors.Is/As`.
+  No `pkg/errors`.
+- **Imports** grouped stdlib / third-party / internal; gofumpt + goimports
+  formatting (`just fmt`).
+- **`time.Now()`** is forbidden in `internal/state` and `internal/render` (inject
+  a clock for testability) — enforced by `forbidigo`.
+- **Commits**: conventional commits with scope, e.g.
+  `feat(adapter): …`, `fix(secrets): …`, `test(drift): …`, `docs(readme): …`.
+
+## Adding things (where the invariants bite)
+
+- **New secret-bearing canonical field** → add it ONLY to `walkSecretFields`
+  (`internal/secrets/walk.go`). Every secret operation then picks it up; the
+  reflect-based `TestNewSecretFieldGuard` fails if you forget.
+- **New agent** → add `internal/adapter/<name>/` implementing the `Adapter`
+  interface and register it. `Render` must take `secrets.Resolved`; all writes
+  go through `DestWriter`. The canonical schema does not change.
+- **New dest→source write** → it must go through `capture.Capture`. Do not call
+  `source.Write*` directly from a write-back path (it does not re-reference
+  secrets). See the "Accepted residual" note above.
+- **New component field on the canonical model** → edit the structs in
+  `internal/source/schema.go`; teach each adapter's `Render`/`Ingest` and the
+  capability bitmask if it's a new component kind.

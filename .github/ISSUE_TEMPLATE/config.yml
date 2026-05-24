@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/spxrogers/agentsync/security/advisories/new
+    about: Report security issues privately via a GitHub Security Advisory — please do NOT open a public issue. See SECURITY.md.
+  - name: Question or usage help
+    url: https://github.com/spxrogers/agentsync/blob/main/docs/user-guide.md
+    about: Start with the user guide; it covers install, the daily loop, secrets, and plugins.

@@ -1,6 +1,41 @@
+<div align="center">
+
 # agentsync
 
-Centrally manage AI coding-agent configurations across Claude Code, OpenCode, Codex CLI, and Cursor.
+**One source of truth for every AI coding agent on your machine.**
+
+Define your MCP servers, memory, skills, and marketplace plugins once in
+`~/.agentsync/`. Run `agentsync apply`. They land — correctly translated — in
+Claude Code, OpenCode, and (soon) Codex CLI and Cursor.
+
+[Quickstart](#quickstart) · [Install](#install) · **[User guide](docs/user-guide.md)** · [Docs](docs/) · [Known limits](#known-limits-in-v1x)
+
+</div>
+
+> **Status: beta.** v1.0 ships Claude Code + OpenCode end-to-end. The tool is
+> functional and tested under `just test-release`; package-manager distribution
+> and a few documented trade-offs are still being finalized.
+
+---
+
+## What it does
+
+If you use more than one AI coding agent, you keep re-entering the same config in
+each one's native format, you forget to install a plugin everywhere, and your
+configs quietly drift apart. agentsync fixes the fan-out:
+
+- **Edit once, apply everywhere.** Add an MCP server or install a plugin a single
+  time; it's projected into each agent's native config — fully where the agent
+  has the concept, lossily-but-reported where it doesn't, skipped (never
+  silently) where it can't.
+- **Bidirectional, chezmoi-style.** When an agent edits its own config, agentsync
+  detects the drift and offers a merge: adopt the edit into your source, or
+  re-impose the source. Nothing is overwritten behind your back.
+- **Secrets stay secret.** Reference `${secret:github.token}`; agentsync resolves
+  it at apply time from an age-encrypted vault and **never** writes the cleartext
+  back into your (committable) source.
+
+New here? The **[User guide](docs/user-guide.md)** takes you 0→100.
 
 ## Quickstart
 
@@ -10,6 +45,28 @@ Centrally manage AI coding-agent configurations across Claude Code, OpenCode, Co
     agentsync mcp add github --command npx --args "-y,@modelcontextprotocol/server-github"
     agentsync apply --dry-run    # preview translation report before writing
     agentsync apply
+
+## Documentation
+
+| Doc | What it covers |
+| --- | --- |
+| **[User guide](docs/user-guide.md)** | Install → first sync → daily loop → secrets → plugins → project config. |
+| [Concepts & glossary](docs/concepts.md) | The three-state model, drift, reconcile — every term in one page. |
+| [Capability matrix](docs/capability-matrix.md) | Exactly what each agent supports, and what's lossy or deferred. |
+| [Architecture](docs/architecture.md) | The apply/capture pipelines, drift classifier, and secret invariants. |
+| [Component map](docs/components.md) | The codebase, package by package. |
+| [CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [CHANGELOG](CHANGELOG.md) | Contributing, threat model, release history. |
+
+## Supported agents at a glance
+
+| Agent | Status | Component coverage |
+| --- | --- | --- |
+| **Claude Code** | ✓ full adapter | All seven components, incl. LSP. |
+| **OpenCode** | ✓ adapter | MCP, memory, skills, subagents, commands. Hooks + LSP skipped. |
+| **Codex CLI** | planned (v1.1) | No-op today; `agent add codex` rejected unless overridden. |
+| **Cursor** | planned (v1.2) | No-op today; will manage project-scope rules only. |
+
+Full ✓/◐/✗ breakdown per component: **[capability matrix](docs/capability-matrix.md)**.
 
 ## Install
 
