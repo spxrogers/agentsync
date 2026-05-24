@@ -1,0 +1,76 @@
+name: Bug report
+description: Something agentsync did wrong or unexpectedly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! A few details up front make this far faster to act on.
+        **Redact any secrets** before pasting config or output.
+  - type: input
+    id: version
+    attributes:
+      label: agentsync version
+      description: Output of `agentsync --version`.
+      placeholder: "agentsync v1.0.0 (commit abc1234, built …)"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other (note in description)
+    validations:
+      required: true
+  - type: dropdown
+    id: agents
+    attributes:
+      label: Which agent(s) are involved?
+      multiple: true
+      options:
+        - Claude Code
+        - OpenCode
+        - Codex CLI
+        - Cursor
+        - Not agent-specific
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you get instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands you ran, in order.
+      placeholder: |
+        1. agentsync mcp add github --command npx --args "-y,@modelcontextprotocol/server-github"
+        2. agentsync apply
+        3. ...
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config
+      description: The relevant snippet of your `~/.agentsync/` files. Redact secrets.
+      render: toml
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output / logs
+      description: Command output, ideally re-run with `-v/--verbose`. Redact secrets.
+      render: shell
+    validations:
+      required: false

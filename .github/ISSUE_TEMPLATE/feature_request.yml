@@ -1,0 +1,48 @@
+name: Feature request
+description: Suggest an enhancement or new capability.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        agentsync is personal-first and OSS-shareable — breadth isn't a goal, so
+        proposals that fit the existing model land fastest. Check the
+        [capability matrix](../blob/main/docs/capability-matrix.md) and
+        [known limits](../blob/main/README.md#known-limits-in-v1x) first; some
+        gaps are deliberate v1.x deferrals.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the pain, not just the proposed solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like agentsync to do? CLI surface, config shape, behavior.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - New agent adapter
+        - Existing adapter coverage (a skipped/projected component)
+        - MCP / plugins / marketplaces
+        - Secrets
+        - Drift / reconcile
+        - Project-local config
+        - CLI / UX
+        - Other (note in description)
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you've tried, or other approaches you weighed.
+    validations:
+      required: false
