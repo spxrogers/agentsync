@@ -35,7 +35,7 @@ func setupPluginMarketplaceFixture(t *testing.T, tmp string) string {
 // TestDiff_IncludesPluginProjection is the regression for the preview-lies
 // bug: `diff` (and `status`) loaded the canonical model with source.Load,
 // which does NOT project installed plugins, while `apply` uses
-// source.LoadWithCache, which does. So a user with an installed plugin saw a
+// marketplace.LoadProjected, which does. So a user with an installed plugin saw a
 // `diff` that omitted the plugin's MCP servers / skills / commands entirely,
 // then `apply` wrote them anyway — the preview did not match the action.
 func TestDiff_IncludesPluginProjection(t *testing.T) {

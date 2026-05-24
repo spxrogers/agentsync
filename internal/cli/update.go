@@ -378,7 +378,7 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 	// plugins/<id>.toml must never diverge: if the bump overwrote the live
 	// cache and then the TOML write failed, the recorded version+SHA would
 	// stay old while the cache is new, and the immediate re-apply's
-	// LoadWithCache would hard-fail manifest-SHA verification — bricking the
+	// LoadProjected would hard-fail manifest-SHA verification — bricking the
 	// WHOLE update so other plugins' bumps never reach the agents. By staging
 	// in a temp dir and swapping in the cache only AFTER the TOML is durably
 	// written, a failure leaves both old (consistent) and the re-apply proceeds.

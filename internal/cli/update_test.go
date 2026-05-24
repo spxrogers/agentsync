@@ -55,7 +55,7 @@ func TestUpdate_ApplyRecordsFreshManifestSHA(t *testing.T) {
 // TestUpdate_ApplyBumpFailureLeavesCacheConsistent is the regression for the
 // applyPluginBump fetch-then-write window. It overwrote the LIVE plugin cache
 // before writing plugins/<id>.toml, so a TOML-write failure left the cache new
-// but the recorded version+SHA old. The immediate re-apply's LoadWithCache then
+// but the recorded version+SHA old. The immediate re-apply's LoadProjected then
 // hard-failed manifest-SHA verification — bricking the WHOLE update, so other
 // successfully-bumped plugins never reached the agents. A bump must be
 // all-or-nothing: on a write failure the live cache stays untouched and the

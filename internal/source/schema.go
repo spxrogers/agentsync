@@ -81,10 +81,10 @@ type PluginSpec struct {
 	Update      string   `toml:"update,omitempty"` // pinned | track | manual
 	Agents      []string `toml:"agents,omitempty"`
 	// Disabled, when true, suppresses the plugin's projection during
-	// LoadWithCache. `agentsync plugin disable <id>` sets this. Without
-	// honouring it here, the CLI's TOML write was a no-op: the loader
-	// still projected the plugin's MCP servers / skills / etc. into the
-	// canonical model and apply shipped them.
+	// marketplace.LoadProjected. `agentsync plugin disable <id>` sets this.
+	// Without honouring it there, the CLI's TOML write would be a no-op:
+	// projection would still surface the plugin's MCP servers / skills / etc.
+	// into the canonical model and apply would ship them.
 	Disabled bool `toml:"disabled,omitempty"`
 }
 
