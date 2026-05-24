@@ -52,6 +52,58 @@ func TestUpdate_ApplyRecordsFreshManifestSHA(t *testing.T) {
 	}
 }
 
+// TestUpdate_ApplyBumpFailureLeavesCacheConsistent is the regression for the
+// applyPluginBump fetch-then-write window. It overwrote the LIVE plugin cache
+// before writing plugins/<id>.toml, so a TOML-write failure left the cache new
+// but the recorded version+SHA old. The immediate re-apply's LoadWithCache then
+// hard-failed manifest-SHA verification — bricking the WHOLE update, so other
+// successfully-bumped plugins never reached the agents. A bump must be
+// all-or-nothing: on a write failure the live cache stays untouched and the
+// re-apply still proceeds.
+func TestUpdate_ApplyBumpFailureLeavesCacheConsistent(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	base := t.TempDir()
+
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+
+	// Install demo@1.0.0 (records version + sha256(plugin.json@1.0.0)).
+	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
+	mustRun(t, env, "marketplace", "add", mpDir)
+	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "apply")
+
+	// Turn plugins/demo.toml into a symlink: applyPluginBump can READ it
+	// (os.ReadFile follows the link), but its AtomicWrite refuses a symlink
+	// dest — a root-proof way to fail the TOML write AFTER the cache fetch,
+	// reproducing the exact inconsistency window.
+	home := filepath.Join(tmp, ".agentsync")
+	demoTOML := filepath.Join(home, "plugins", "demo.toml")
+	realTarget := filepath.Join(base, "demo-real.toml")
+	data, err := os.ReadFile(demoTOML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(realTarget, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(demoTOML); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realTarget, demoTOML); err != nil {
+		t.Fatal(err)
+	}
+
+	// Publish 2.0.0 → a pending forward bump whose TOML write will fail.
+	_ = makeVersionedMarketplace(t, base, "2.0.0")
+
+	// The bump fails to write its TOML, but that must NOT brick the re-apply.
+	if out, err := runCLI(t, env, "update", "--apply"); err != nil {
+		t.Fatalf("update --apply bricked by a half-applied bump (cache/TOML inconsistent): %v\n%s", err, out)
+	}
+}
+
 // TestUpdate_ApplyPartialFailureRescuesState is the regression for the
 // update --apply mirror discarding render.Apply's `written` set and skipping
 // the best-effort state save that the real `apply` performs on a mid-pipeline

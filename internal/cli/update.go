@@ -286,7 +286,6 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 		return fmt.Errorf("plugin %q not found in marketplace %q", b.ID, mpName)
 	}
 
-	// Re-fetch the plugin source into its cache directory.
 	cacheDir := pluginCacheDir(home, b.ID)
 	mpCacheRoot := marketplaceCacheDir(home, mpName)
 	src := mpEntry.Source
@@ -294,26 +293,63 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 		src.Relative = filepath.Join(mpCacheRoot, src.Relative)
 		src.RootDir = mpCacheRoot
 	}
+
+	// Fetch into a TEMP cache, not the live cache. The live cache and
+	// plugins/<id>.toml must never diverge: if the bump overwrote the live
+	// cache and then the TOML write failed, the recorded version+SHA would
+	// stay old while the cache is new, and the immediate re-apply's
+	// LoadWithCache would hard-fail manifest-SHA verification — bricking the
+	// WHOLE update so other plugins' bumps never reach the agents. By staging
+	// in a temp dir and swapping in the cache only AFTER the TOML is durably
+	// written, a failure leaves both old (consistent) and the re-apply proceeds.
+	if err := os.MkdirAll(filepath.Dir(cacheDir), 0o755); err != nil {
+		return fmt.Errorf("prepare cache dir for %s: %w", b.ID, err)
+	}
+	tmpCache, err := os.MkdirTemp(filepath.Dir(cacheDir), ".bump-"+b.ID+"-")
+	if err != nil {
+		return fmt.Errorf("temp cache for %s: %w", b.ID, err)
+	}
+	defer os.RemoveAll(tmpCache)
+
 	fetcher := marketplace.Dispatch(src)
-	if _, err := fetcher.Fetch(src, cacheDir); err != nil {
+	if _, err := fetcher.Fetch(src, tmpCache); err != nil {
 		return fmt.Errorf("fetch plugin %s: %w", b.ID, err)
 	}
 
-	// Update the plugin TOML. Recompute the manifest SHA from the freshly
-	// fetched cache exactly as `plugin install` does (computeManifestSHA),
-	// for every fetcher type. The previous code only set the SHA for git
-	// fetchers — and to result.HeadSHA, a git commit SHA rather than the
-	// sha256(plugin.json) that verifyPluginManifestSHA compares against —
-	// so npm/relative/strict plugins kept the stale pre-bump SHA and the
-	// immediate re-apply hard-failed "manifest SHA mismatch".
+	// Recompute the manifest SHA from the freshly fetched cache exactly as
+	// `plugin install` does (computeManifestSHA), for every fetcher type, so
+	// the recorded SHA matches the new plugin.json the re-apply will project.
+	prevTOML, _ := os.ReadFile(pluginPath) // for rollback if the cache swap fails
 	existing.Plugin.Version = b.To
-	if sha := computeManifestSHA(home, b.ID, mpEntry, nil, cacheDir); sha != "" {
+	if sha := computeManifestSHA(home, b.ID, mpEntry, nil, tmpCache); sha != "" {
 		existing.Plugin.ManifestSHA = sha
 	}
-
 	data, err := toml.Marshal(existing)
 	if err != nil {
 		return err
 	}
-	return iox.AtomicWrite(pluginPath, data, 0o644)
+	if err := iox.AtomicWrite(pluginPath, data, 0o644); err != nil {
+		return err
+	}
+
+	// TOML committed; swap the fetched cache into place. If the swap fails,
+	// roll the TOML back so cache (old) and TOML (old) stay consistent rather
+	// than leaving a new-SHA TOML over an old cache.
+	if err := swapDir(tmpCache, cacheDir); err != nil {
+		if prevTOML != nil {
+			_ = iox.AtomicWrite(pluginPath, prevTOML, 0o644)
+		}
+		return fmt.Errorf("commit plugin cache %s: %w", b.ID, err)
+	}
+	return nil
+}
+
+// swapDir replaces dst with src by removing dst and renaming src into place.
+// src and dst must be on the same filesystem (callers create src as a sibling
+// of dst). After a successful swap src no longer exists.
+func swapDir(src, dst string) error {
+	if err := os.RemoveAll(dst); err != nil {
+		return err
+	}
+	return os.Rename(src, dst)
 }
