@@ -69,6 +69,49 @@ func TestCapture_ReReferencesAndPreserves(t *testing.T) {
 	}
 }
 
+// TestCapture_FailsClosedOnLoadError proves the secret boundary fails CLOSED
+// when the current source cannot be loaded. A malformed file anywhere in the
+// tree makes source.Load error; the previous code then skipped both
+// re-referencing AND the warning and wrote the ingested values verbatim —
+// silently persisting a resolved cleartext secret into ~/.agentsync. Capture
+// must instead refuse to write and surface the load error.
+func TestCapture_FailsClosedOnLoadError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TOK", "live-secret-value")
+	writeFile(t, filepath.Join(home, "agentsync.toml"), "[secrets]\nbackend = \"env\"\n")
+	// Existing source: the server templated with the secret.
+	writeFile(t, filepath.Join(home, "mcp", "srv.toml"), ""+
+		"[server]\n"+
+		"type = \"stdio\"\n"+
+		"command = \"npx\"\n"+
+		"[server.env]\n"+
+		"GH = \"${secret:TOK}\"\n")
+	// An unrelated malformed file makes source.Load return an error.
+	writeFile(t, filepath.Join(home, "mcp", "broken.toml"), "[server\ncommand = \"x\"\n")
+
+	// Ingested-from-dest: apply resolved ${secret:TOK} to its cleartext.
+	ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+		ID: "srv",
+		Server: source.MCPServerSpec{
+			Type:    "stdio",
+			Command: "npx",
+			Env:     map[string]string{"GH": "live-secret-value"},
+		},
+	}}}
+
+	if _, err := capture.Capture(home, ingested, capture.Opts{}); err == nil {
+		t.Fatal("expected Capture to fail closed when source cannot be loaded, got nil error")
+	}
+	// The original templated source must be intact — no cleartext persisted.
+	got, ok, rerr := source.ReadMCP(home, "srv")
+	if rerr != nil {
+		t.Fatalf("read back: %v", rerr)
+	}
+	if ok && got.Server.Env["GH"] == "live-secret-value" {
+		t.Fatalf("LEAK: resolved cleartext secret persisted into source: GH=%q", got.Server.Env["GH"])
+	}
+}
+
 // TestCapture_FirstImportNoSource exercises the path where no canonical source
 // exists yet (first import): there is nothing to re-reference against, so the
 // ingested values are written verbatim and Capture must not error.
