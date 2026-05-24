@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/afero"
 	"github.com/spxrogers/agentsync/internal/marketplace"
+	"github.com/spxrogers/agentsync/internal/source"
 )
 
 // writeProjFixture lays down a plugins/<id>.toml and a cached plugin.json on a
@@ -109,6 +110,63 @@ func TestLoadProjected_EntryOverrideFromMatchingMarketplace(t *testing.T) {
 	if ids["from-m1"] {
 		t.Fatalf("override from the WRONG marketplace (m1) was applied: %v", ids)
 	}
+}
+
+// TestLoadProjectedExcluding_SuppressesProjection is the regression for a
+// project marker's [plugins] disabled being a no-op against rendered output:
+// projection ran before project.Merge, which only filtered the c.Plugins
+// record while the already-projected components stayed in the flat slices and
+// shipped. The fix skips projection for the marker-disabled plugins, keyed on
+// the SAME id (filename stem) that Merge filters on, so the two never skew.
+func TestLoadProjectedExcluding_SuppressesProjection(t *testing.T) {
+	home, cache := writeProjFixture(t,
+		"[plugin]\nid = \"foo@m\"\nversion = \"1\"\n", "foo",
+		`{"name":"foo","mcpServers":{"foo-srv":{"command":"x"}},"hooks":"run.sh"}`)
+
+	// Baseline: without exclusion the plugin's components are projected.
+	c, err := marketplace.LoadProjected(afero.NewOsFs(), home, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mcpIDs(c.MCPServers)["foo-srv"] || len(c.Hooks) != 1 {
+		t.Fatalf("baseline projection missing foo's components: mcp=%v hooks=%d", mcpIDs(c.MCPServers), len(c.Hooks))
+	}
+
+	// Excluding the filename-stem id "foo" (what the marker carries, matching
+	// Merge) must drop ALL of foo's projected components, not just the record.
+	c2, err := marketplace.LoadProjectedExcluding(afero.NewOsFs(), home, cache, []string{"foo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mcpIDs(c2.MCPServers)["foo-srv"] {
+		t.Errorf("marker-disabled plugin's MCP server still projected: %v", mcpIDs(c2.MCPServers))
+	}
+	if len(c2.Hooks) != 0 {
+		t.Errorf("marker-disabled plugin's hook still projected: %+v", c2.Hooks)
+	}
+}
+
+// TestLoadProjectedExcluding_UnknownIDIsNoOp confirms disabling a plugin that
+// isn't installed neither errors nor perturbs the rest of the projection.
+func TestLoadProjectedExcluding_UnknownIDIsNoOp(t *testing.T) {
+	home, cache := writeProjFixture(t,
+		"[plugin]\nid = \"keep@m\"\nversion = \"1\"\n", "keep",
+		`{"name":"keep","mcpServers":{"keep-srv":{"command":"x"}}}`)
+	c, err := marketplace.LoadProjectedExcluding(afero.NewOsFs(), home, cache, []string{"does-not-exist"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mcpIDs(c.MCPServers)["keep-srv"] {
+		t.Fatalf("disabling an unknown plugin dropped an unrelated one: %v", mcpIDs(c.MCPServers))
+	}
+}
+
+func mcpIDs(servers []source.MCPServer) map[string]bool {
+	ids := map[string]bool{}
+	for _, m := range servers {
+		ids[m.ID] = true
+	}
+	return ids
 }
 
 func TestLoadProjected_PluginExpandsToMCP(t *testing.T) {

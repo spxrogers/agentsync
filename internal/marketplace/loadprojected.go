@@ -28,6 +28,22 @@ import (
 // pluginCacheRoot is <home>/.state/cache/plugins; an empty root skips
 // projection (behaving like source.Load).
 func LoadProjected(fs afero.Fs, home, pluginCacheRoot string) (source.Canonical, error) {
+	return LoadProjectedExcluding(fs, home, pluginCacheRoot, nil)
+}
+
+// LoadProjectedExcluding is LoadProjected with an additional set of plugin IDs
+// to skip projecting — the plugins a project marker's `[plugins] disabled`
+// list names. Projection runs BEFORE project.Merge, so a marker-disabled
+// plugin whose components were already projected would still render even
+// though Merge drops its c.Plugins record; skipping projection here is what
+// actually suppresses the components.
+//
+// disabled is matched against pl.ID (the plugins/<id>.toml filename stem) —
+// exactly the key project.Merge filters records on (see project.Merge's
+// Plugins.Disabled block) — so the projection-skip and the record-filter can
+// never disagree (a half-disable that drops the record but ships the
+// components, or vice versa).
+func LoadProjectedExcluding(fs afero.Fs, home, pluginCacheRoot string, disabled []string) (source.Canonical, error) {
 	c, err := source.Load(fs, home)
 	if err != nil {
 		return c, err
@@ -35,9 +51,18 @@ func LoadProjected(fs afero.Fs, home, pluginCacheRoot string) (source.Canonical,
 	if pluginCacheRoot == "" {
 		return c, nil
 	}
+	disabledByMarker := make(map[string]bool, len(disabled))
+	for _, id := range disabled {
+		disabledByMarker[id] = true
+	}
 	for _, pl := range c.Plugins {
 		if pl.Plugin.Disabled {
 			// `plugin disable <id>` — skip projection entirely.
+			continue
+		}
+		if disabledByMarker[pl.ID] {
+			// `[plugins] disabled` in the active project marker — skip
+			// projection so the plugin's components never render here.
 			continue
 		}
 		id, mpName := splitPluginRefPkg(pl.Plugin.ID)

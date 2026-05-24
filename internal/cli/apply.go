@@ -50,27 +50,9 @@ func newApplyCmd() *cobra.Command {
 // applyRun is the lock-protected body of the apply command. It is split
 // out from newApplyCmd so the lock acquisition lives in one obvious place.
 func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFlag string) error {
-	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-	c, err := marketplace.LoadProjected(afero.NewOsFs(), home, pluginCacheRoot)
+	c, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag)
 	if err != nil {
 		return err
-	}
-
-	// Discover project marker (walk-up from cwd, or explicit --project).
-	sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag, c)
-	if err != nil {
-		return err
-	}
-
-	// When project scope active, merge overlay into canonical.
-	if sc == adapter.ScopeProject && projectRoot != "" {
-		marker, merr := project.Discover(projectRoot)
-		if merr != nil {
-			return fmt.Errorf("load project marker: %w", merr)
-		}
-		if marker != nil {
-			c = project.Merge(c, marker)
-		}
 	}
 
 	// Announce the effective scope. Scope is auto-detected by walking up from
@@ -273,6 +255,45 @@ func saveBestEffortState(s *state.Targets, statePath string, plan render.RenderP
 		}
 	}
 	return state.Save(statePath, s)
+}
+
+// loadProjectedForScope loads the canonical model with plugin projection AND
+// the active project overlay applied, returning the merged canonical plus the
+// resolved scope and project root. Every project-scope-aware command (apply,
+// status, diff, reconcile, update re-apply) goes through it so they project,
+// disable, and merge identically.
+//
+// The marker is discovered BEFORE projection on purpose. project.Merge can only
+// drop a marker-disabled plugin's c.Plugins record — the components projection
+// already appended to the flat slices would still render. So the disable has to
+// gate projection: marker.Plugins.Disabled is passed to LoadProjectedExcluding,
+// keyed on the same plugin id Merge filters on, and Merge still runs afterward
+// to drop the record (keeping report/explain listings honest).
+func loadProjectedForScope(fs afero.Fs, home, scopeFlag, projectFlag string) (source.Canonical, adapter.Scope, string, error) {
+	sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag, source.Canonical{})
+	if err != nil {
+		return source.Canonical{}, sc, projectRoot, err
+	}
+	var marker *project.Marker
+	if sc == adapter.ScopeProject && projectRoot != "" {
+		marker, err = project.Discover(projectRoot)
+		if err != nil {
+			return source.Canonical{}, sc, projectRoot, fmt.Errorf("load project marker: %w", err)
+		}
+	}
+	var disabled []string
+	if marker != nil {
+		disabled = marker.Plugins.Disabled
+	}
+	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+	c, err := marketplace.LoadProjectedExcluding(fs, home, pluginCacheRoot, disabled)
+	if err != nil {
+		return source.Canonical{}, sc, projectRoot, err
+	}
+	if marker != nil {
+		c = project.Merge(c, marker)
+	}
+	return c, sc, projectRoot, nil
 }
 
 // resolveProjectScope determines the effective scope and project root.

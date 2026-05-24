@@ -15,7 +15,6 @@ import (
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
-	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -193,24 +192,9 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 	// project state silently ignored, and \${secret:...\} references would
 	// land literally in agent native files.
 	if len(bumps) > 0 {
-		pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-		c2, err := marketplace.LoadProjected(afero.NewOsFs(), home, pluginCacheRoot)
+		c2, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag)
 		if err != nil {
 			return fmt.Errorf("reload source after upgrade: %w", err)
-		}
-
-		sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag, c2)
-		if err != nil {
-			return fmt.Errorf("resolve scope after update: %w", err)
-		}
-		if sc == adapter.ScopeProject && projectRoot != "" {
-			marker, merr := project.Discover(projectRoot)
-			if merr != nil {
-				return fmt.Errorf("load project marker after update: %w", merr)
-			}
-			if marker != nil {
-				c2 = project.Merge(c2, marker)
-			}
 		}
 
 		secBackend := secrets.SelectBackend(c2.Config.Secrets, home, userHome)
