@@ -1,8 +1,6 @@
 module github.com/spxrogers/agentsync
 
-go 1.24.0
-
-toolchain go1.26.2
+go 1.26.2
 
 require (
 	filippo.io/age v1.3.1
