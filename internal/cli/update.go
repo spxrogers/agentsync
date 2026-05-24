@@ -211,9 +211,14 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 		if err != nil {
 			return fmt.Errorf("plan after update: %w", err)
 		}
-		collisions, _, err := render.Apply(plan, reg, st, home, userHome, sc, projectRoot)
-		if err != nil {
-			return fmt.Errorf("apply after update: %w", err)
+		collisions, written, applyErr := render.Apply(plan, reg, st, home, userHome, sc, projectRoot)
+		if applyErr != nil {
+			// Mirror `apply`: if render.Apply fails mid-pipeline, the files
+			// that already landed must be recorded so the next apply doesn't
+			// treat them as foreign collisions. Without this best-effort save,
+			// a half-applied bump leaves the dest diverged from state.
+			_ = saveBestEffortState(st, statePath, plan, userHome, sc, projectRoot, written)
+			return fmt.Errorf("apply after update: %w", applyErr)
 		}
 		if len(collisions) > 0 {
 			ew := cmd.ErrOrStderr()

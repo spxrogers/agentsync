@@ -52,6 +52,66 @@ func TestUpdate_ApplyRecordsFreshManifestSHA(t *testing.T) {
 	}
 }
 
+// TestUpdate_ApplyPartialFailureRescuesState is the regression for the
+// update --apply mirror discarding render.Apply's `written` set and skipping
+// the best-effort state save that the real `apply` performs on a mid-pipeline
+// error. When the post-bump re-apply fails after some files already landed,
+// those files must be recorded so the next apply doesn't reclassify them as
+// foreign collisions and needlessly back them up.
+func TestUpdate_ApplyPartialFailureRescuesState(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+
+	// Marketplace publishes demo@2.0.0; a manually-pinned demo@1.0.0 → bump.
+	mpDir := makeVersionedMarketplace(t, t.TempDir(), "2.0.0")
+	mustRun(t, env, "marketplace", "add", mpDir)
+	home := filepath.Join(tmp, ".agentsync")
+	if err := os.MkdirAll(filepath.Join(home, "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileString(t, filepath.Join(home, "plugins", "demo.toml"),
+		"[plugin]\nid = \"demo@test-mp-v\"\nversion = \"1.0.0\"\nupdate = \"track\"\nagents = [\"*\"]\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A source MCP server lands in .claude.json during the re-apply (succeeds).
+	if err := os.MkdirAll(filepath.Join(home, "mcp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileString(t, filepath.Join(home, "mcp", "github.toml"),
+		"[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	// A source skill whose write fails — block the skills dir with a regular file.
+	skill := filepath.Join(home, "skills", "demo2", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skill), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileString(t, skill, "---\nname: demo2\ndescription: d\n---\nbody\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".claude", "skills"), []byte("blocker"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runCLI(t, env, "update", "--apply"); err == nil {
+		t.Fatal("expected update --apply to fail when the skills dir is blocked")
+	}
+
+	st, err := readFileString(t, filepath.Join(home, ".state", "targets.json"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if !strings.Contains(st, "/.claude.json") || !strings.Contains(st, "mcpServers") {
+		t.Fatalf("update --apply partial-failure rescue did not record landed .claude.json keys:\n%s", st)
+	}
+}
+
 func readFileString(t *testing.T, path string) (string, error) {
 	t.Helper()
 	data, err := os.ReadFile(path)
