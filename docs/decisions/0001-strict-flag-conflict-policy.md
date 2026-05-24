@@ -80,3 +80,9 @@ This intentionally differs from the spec text on both points:
   non-interactive `apply` / `status` stay deterministic, and the error already
   gives the operator a clear, scriptable decision. Revisit only if real usage
   shows the error is too blunt.
+- **Read-only commands degrade, they don't hard-fail.** The conflict is fatal
+  for the *mutating* commands (`apply`, `reconcile`, `import`, `update`) — they
+  must never act on ambiguity. The *diagnostic* commands (`status`, `diff`,
+  `explain`) resolve it leniently (entry-wins) and log a warning, so they still
+  show state rather than refusing to run on the very conflict you ran them to
+  understand. Implemented via `marketplace.LoadProjectedLenient`.

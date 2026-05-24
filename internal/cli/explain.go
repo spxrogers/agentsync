@@ -26,7 +26,9 @@ func newExplainCmd() *cobra.Command {
 			pluginID := args[0]
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-			c, err := marketplace.LoadProjected(afero.NewOsFs(), home, pluginCacheRoot)
+			// Read-only: a strict plugin.json/entry conflict degrades to a
+			// warning + entry-wins so explain still shows coverage.
+			c, err := marketplace.LoadProjectedLenient(afero.NewOsFs(), home, pluginCacheRoot, nil)
 			if err != nil {
 				return err
 			}

@@ -41,7 +41,7 @@ func newDiffCmd() *cobra.Command {
 			// plugin-derived MCP server / skill / command and silently
 			// disagrees with what apply will write.
 			userHome := paths.HomeDir(paths.OSEnv{})
-			c, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag)
+			c, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag, true)
 			if err != nil {
 				return err
 			}

@@ -192,7 +192,7 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 	// project state silently ignored, and \${secret:...\} references would
 	// land literally in agent native files.
 	if len(bumps) > 0 {
-		c2, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag)
+		c2, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag, false)
 		if err != nil {
 			return fmt.Errorf("reload source after upgrade: %w", err)
 		}

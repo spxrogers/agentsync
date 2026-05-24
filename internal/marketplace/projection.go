@@ -48,7 +48,7 @@ type ProjectionResult struct {
 // ${CLAUDE_PLUGIN_ROOT} in command/url strings is replaced with cacheDir so
 // non-Claude adapters can resolve binary paths.
 func Project(entry PluginEntry, cacheDir string) (ProjectionResult, error) {
-	return projectWithFuncs(entry, cacheDir, os.ReadFile, os.ReadDir)
+	return projectWithFuncs(entry, cacheDir, os.ReadFile, os.ReadDir, false)
 }
 
 // ProjectWithReader is like Project but uses a caller-supplied readFile function
@@ -56,12 +56,15 @@ func Project(entry PluginEntry, cacheDir string) (ProjectionResult, error) {
 // filesystem use in tests. Convention-based discovery (skills/ directory scan)
 // is disabled when using ProjectWithReader; use Project for full behavior.
 func ProjectWithReader(entry PluginEntry, cacheDir string, readFile func(string) ([]byte, error)) (ProjectionResult, error) {
-	return projectWithFuncs(entry, cacheDir, readFile, nil)
+	return projectWithFuncs(entry, cacheDir, readFile, nil, false)
 }
 
 // projectWithFuncs is the internal implementation shared by Project and ProjectWithReader.
-// listDir may be nil to disable convention-based skills discovery.
-func projectWithFuncs(entry PluginEntry, cacheDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error)) (ProjectionResult, error) {
+// listDir may be nil to disable convention-based skills discovery. When lenient
+// is true, a strict-mode same-name conflict is resolved entry-wins with a logged
+// warning instead of a hard error — used by read-only/diagnostic commands that
+// must still show state (see resolveConflicts).
+func projectWithFuncs(entry PluginEntry, cacheDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error), lenient bool) (ProjectionResult, error) {
 	var pr ProjectionResult
 
 	// Always honour plugin.json when present (a missing one is fine for a
@@ -86,7 +89,7 @@ func projectWithFuncs(entry PluginEntry, cacheDir string, readFile func(string) 
 		return pr, err
 	}
 	strict := entry.Strict == nil || *entry.Strict
-	if err := resolveConflicts(&pr, strict); err != nil {
+	if err := resolveConflicts(&pr, strict, lenient); err != nil {
 		return pr, err
 	}
 	return pr, nil
@@ -100,21 +103,21 @@ func projectWithFuncs(entry PluginEntry, cacheDir string, readFile func(string) 
 // run. Hooks have no override key, so they are deduped only on EXACT content
 // (two genuinely-distinct hooks for one event both survive) and are not subject
 // to the conflict policy.
-func resolveConflicts(pr *ProjectionResult, strict bool) error {
+func resolveConflicts(pr *ProjectionResult, strict, lenient bool) error {
 	var err error
-	if pr.MCPServers, err = dedupOrConflict(pr.MCPServers, func(s source.MCPServer) string { return s.ID }, strict, "mcp server"); err != nil {
+	if pr.MCPServers, err = dedupOrConflict(pr.MCPServers, func(s source.MCPServer) string { return s.ID }, strict, lenient, "mcp server"); err != nil {
 		return err
 	}
-	if pr.LSPServers, err = dedupOrConflict(pr.LSPServers, func(s source.LSPServer) string { return s.ID }, strict, "lsp server"); err != nil {
+	if pr.LSPServers, err = dedupOrConflict(pr.LSPServers, func(s source.LSPServer) string { return s.ID }, strict, lenient, "lsp server"); err != nil {
 		return err
 	}
-	if pr.Skills, err = dedupOrConflict(pr.Skills, func(s source.Skill) string { return s.Name }, strict, "skill"); err != nil {
+	if pr.Skills, err = dedupOrConflict(pr.Skills, func(s source.Skill) string { return s.Name }, strict, lenient, "skill"); err != nil {
 		return err
 	}
-	if pr.Subagents, err = dedupOrConflict(pr.Subagents, func(s source.Subagent) string { return s.Name }, strict, "subagent"); err != nil {
+	if pr.Subagents, err = dedupOrConflict(pr.Subagents, func(s source.Subagent) string { return s.Name }, strict, lenient, "subagent"); err != nil {
 		return err
 	}
-	if pr.Commands, err = dedupOrConflict(pr.Commands, func(c source.Command) string { return c.Name }, strict, "command"); err != nil {
+	if pr.Commands, err = dedupOrConflict(pr.Commands, func(c source.Command) string { return c.Name }, strict, lenient, "command"); err != nil {
 		return err
 	}
 	pr.Hooks = dedupHooks(pr.Hooks)
@@ -124,14 +127,17 @@ func resolveConflicts(pr *ProjectionResult, strict bool) error {
 // dedupOrConflict collapses same-key components produced by the union. When two
 // entries share a key (a plugin.json definition AND a marketplace-entry one):
 //   - identical content → silently dedup to one.
-//   - differing content, strict mode → a hard error (refuse to guess which
-//     definition the operator meant; the packaging is ambiguous).
-//   - differing content, non-strict mode → the entry wins (last occurrence
-//     kept) — the documented lenient curator override.
+//   - differing content, strict mode → a CONFLICT. Fatal (lenient=false, the
+//     mutating commands) returns a hard error refusing to guess. Lenient
+//     (lenient=true, read-only/diagnostic commands like status/diff/explain)
+//     resolves it entry-wins with a logged warning so the command can still show
+//     state instead of refusing to run on a conflict it exists to surface.
+//   - differing content, non-strict mode → the entry wins (the documented
+//     lenient curator override).
 //
 // Keeping the LAST occurrence yields entry-wins because applyEntryOverrides runs
 // after applyManifest; order is preserved by the position of that last entry.
-func dedupOrConflict[T any](items []T, key func(T) string, strict bool, kind string) ([]T, error) {
+func dedupOrConflict[T any](items []T, key func(T) string, strict, lenient bool, kind string) ([]T, error) {
 	if len(items) < 2 {
 		return items, nil
 	}
@@ -142,9 +148,13 @@ func dedupOrConflict[T any](items []T, key func(T) string, strict bool, kind str
 		lastIdx[k] = i
 		if prev, ok := first[k]; ok {
 			if strict && !reflect.DeepEqual(prev, it) {
-				return nil, fmt.Errorf("plugin %s %q is defined twice with different content "+
-					"(plugin.json and the marketplace entry disagree); resolve it upstream, or set "+
-					`"strict": false on the marketplace entry to let the entry override`, kind, k)
+				if !lenient {
+					return nil, fmt.Errorf("plugin %s %q is defined twice with different content "+
+						"(plugin.json and the marketplace entry disagree); resolve it upstream, or set "+
+						`"strict": false on the marketplace entry to let the entry override`, kind, k)
+				}
+				slog.Warn("plugin component conflict resolved entry-wins (strict; shown leniently)",
+					"kind", kind, "name", k)
 			}
 			continue
 		}

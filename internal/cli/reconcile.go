@@ -71,7 +71,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 	userHome := paths.HomeDir(paths.OSEnv{})
 	// Project plugins like apply does so drift classification covers
 	// plugin-managed components instead of reporting them as untracked.
-	c, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag)
+	c, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag, false)
 	if err != nil {
 		return err
 	}

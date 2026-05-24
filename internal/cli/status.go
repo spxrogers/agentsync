@@ -35,7 +35,7 @@ func newStatusCmd() *cobra.Command {
 			// same plugin-projected components `apply` writes; source.Load
 			// alone would report plugin-managed files/keys as untracked.
 			userHome := paths.HomeDir(paths.OSEnv{})
-			c, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag)
+			c, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag, true)
 			if err != nil {
 				return err
 			}

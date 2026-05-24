@@ -28,7 +28,17 @@ import (
 // pluginCacheRoot is <home>/.state/cache/plugins; an empty root skips
 // projection (behaving like source.Load).
 func LoadProjected(fs afero.Fs, home, pluginCacheRoot string) (source.Canonical, error) {
-	return LoadProjectedExcluding(fs, home, pluginCacheRoot, nil)
+	return loadProjected(fs, home, pluginCacheRoot, nil, false)
+}
+
+// LoadProjectedLenient is LoadProjected for read-only/diagnostic commands
+// (status, diff, explain): a strict same-name plugin.json/entry conflict is
+// resolved entry-wins with a logged warning instead of a hard error, so those
+// commands still show state rather than refusing to run on a conflict they
+// exist to surface. Mutating commands (apply, reconcile, import, update) use the
+// fatal LoadProjected/LoadProjectedExcluding so they never act on ambiguity.
+func LoadProjectedLenient(fs afero.Fs, home, pluginCacheRoot string, disabled []string) (source.Canonical, error) {
+	return loadProjected(fs, home, pluginCacheRoot, disabled, true)
 }
 
 // LoadProjectedExcluding is LoadProjected with an additional set of plugin IDs
@@ -44,6 +54,12 @@ func LoadProjected(fs afero.Fs, home, pluginCacheRoot string) (source.Canonical,
 // never disagree (a half-disable that drops the record but ships the
 // components, or vice versa).
 func LoadProjectedExcluding(fs afero.Fs, home, pluginCacheRoot string, disabled []string) (source.Canonical, error) {
+	return loadProjected(fs, home, pluginCacheRoot, disabled, false)
+}
+
+// loadProjected is the shared implementation. lenient controls how a strict
+// same-name plugin.json/entry conflict is handled (see LoadProjectedLenient).
+func loadProjected(fs afero.Fs, home, pluginCacheRoot string, disabled []string, lenient bool) (source.Canonical, error) {
 	c, err := source.Load(fs, home)
 	if err != nil {
 		return c, err
@@ -78,7 +94,7 @@ func LoadProjectedExcluding(fs afero.Fs, home, pluginCacheRoot string, disabled 
 		if err := verifyPluginManifestSHA(fs, pluginDir, pl.Plugin.ManifestSHA, id); err != nil {
 			return c, err
 		}
-		proj, perr := Project(resolveInstalledEntry(home, id, mpName), pluginDir)
+		proj, perr := projectWithFuncs(resolveInstalledEntry(home, id, mpName), pluginDir, os.ReadFile, os.ReadDir, lenient)
 		if perr != nil {
 			return c, fmt.Errorf("project plugin %s: %w", id, perr)
 		}

@@ -50,7 +50,7 @@ func newApplyCmd() *cobra.Command {
 // applyRun is the lock-protected body of the apply command. It is split
 // out from newApplyCmd so the lock acquisition lives in one obvious place.
 func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFlag string) error {
-	c, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag)
+	c, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag, false)
 	if err != nil {
 		return err
 	}
@@ -269,7 +269,11 @@ func saveBestEffortState(s *state.Targets, statePath string, plan render.RenderP
 // gate projection: marker.Plugins.Disabled is passed to LoadProjectedExcluding,
 // keyed on the same plugin id Merge filters on, and Merge still runs afterward
 // to drop the record (keeping report/explain listings honest).
-func loadProjectedForScope(fs afero.Fs, home, scopeFlag, projectFlag string) (source.Canonical, adapter.Scope, string, error) {
+// lenient selects the read-only/diagnostic projection: a strict same-name
+// plugin.json/entry conflict is resolved entry-wins with a warning rather than a
+// hard error, so status/diff still show state. Mutating callers pass false so a
+// conflict aborts before any write.
+func loadProjectedForScope(fs afero.Fs, home, scopeFlag, projectFlag string, lenient bool) (source.Canonical, adapter.Scope, string, error) {
 	sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag, source.Canonical{})
 	if err != nil {
 		return source.Canonical{}, sc, projectRoot, err
@@ -286,7 +290,11 @@ func loadProjectedForScope(fs afero.Fs, home, scopeFlag, projectFlag string) (so
 		disabled = marker.Plugins.Disabled
 	}
 	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-	c, err := marketplace.LoadProjectedExcluding(fs, home, pluginCacheRoot, disabled)
+	load := marketplace.LoadProjectedExcluding
+	if lenient {
+		load = marketplace.LoadProjectedLenient
+	}
+	c, err := load(fs, home, pluginCacheRoot, disabled)
 	if err != nil {
 		return source.Canonical{}, sc, projectRoot, err
 	}
