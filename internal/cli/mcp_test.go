@@ -59,6 +59,20 @@ func TestMCP_AddRejectsDuplicates(t *testing.T) {
 	}
 }
 
+// TestMCP_AddRejectsSeparatorOnlyAgents is the regression for a whitespace/
+// separator-only --agents (e.g. " , , ") passing the empty guard — which only
+// checked TrimSpace != "" — then splitting to an empty allowlist, which
+// targetsAgent treats as "all enabled agents": the silent opposite of intent.
+func TestMCP_AddRejectsSeparatorOnlyAgents(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	_, _ = runCLI(t, env, "init")
+	out, err := runCLI(t, env, "mcp", "add", "g", "--command", "x", "--agents", " , , ")
+	if err == nil {
+		t.Fatalf("separator-only --agents should be rejected, not silently mean all agents; got:\n%s", out)
+	}
+}
+
 func TestMCP_AddHTTPRequiresURL(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

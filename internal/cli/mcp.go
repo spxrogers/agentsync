@@ -66,8 +66,10 @@ func mcpAddRun(cmd *cobra.Command, home, id, serverType, command, argsCSV, url, 
 	// An explicitly empty --agents previously fell through to a nil allowlist,
 	// which targetsAgent treats as "all enabled agents" — the silent opposite
 	// of what a user passing "" likely intends. Reject it: use "*" for all, or
-	// a comma-separated list.
-	if cmd.Flags().Changed("agents") && strings.TrimSpace(agentsCSV) == "" {
+	// a comma-separated list. Check the SPLIT result, not just TrimSpace, so a
+	// separator/whitespace-only value like " , , " (which splits to nothing and
+	// would silently mean "all agents") is rejected too.
+	if cmd.Flags().Changed("agents") && len(splitAgents(agentsCSV)) == 0 {
 		return fmt.Errorf(`--agents cannot be empty; pass "*" for all enabled agents or a comma-separated allowlist`)
 	}
 	if err := validateMCPSpec(serverType, command, url); err != nil {
