@@ -117,9 +117,9 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 	}
 
 	if opts.Warn != nil {
-		if missing := secrets.UnresolvedSecretRefs(&cur, sec); len(missing) > 0 {
+		if missing := secrets.UnresolvedSecretRefs(&cur, sec, secrets.EnvBackend{}); len(missing) > 0 {
 			fmt.Fprintf(opts.Warn,
-				"warning: could not re-reference secret(s) %s (secrets backend unavailable); "+
+				"warning: could not re-reference %s (secrets backend or env var unavailable); "+
 					"the written-back source file may contain cleartext — review it before committing\n",
 				strings.Join(missing, ", "))
 		}

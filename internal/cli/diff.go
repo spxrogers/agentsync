@@ -105,10 +105,11 @@ func newDiffCmd() *cobra.Command {
 			// redacted — CollectResolved silently skips unresolvable refs — so
 			// printing the diff would leak it. Refuse with an actionable message
 			// rather than risk emitting a credential to stdout / logs.
-			if missing := secrets.UnresolvedSecretRefs(&c, secBackend); len(missing) > 0 {
-				return fmt.Errorf("diff: cannot resolve secret reference(s) %s; "+
-					"the destination file may contain a cleartext secret that diff cannot redact. "+
-					"Unlock or configure your secrets backend ([secrets] in agentsync.toml) and retry",
+			if missing := secrets.UnresolvedSecretRefs(&c, secBackend, envBackend); len(missing) > 0 {
+				return fmt.Errorf("diff: cannot resolve reference(s) %s; "+
+					"the destination file may contain a cleartext secret/env value that diff cannot redact "+
+					"(an env var set at apply time but unset now, or a locked secrets backend). "+
+					"Set the env var(s) / unlock the backend ([secrets] in agentsync.toml) and retry",
 					strings.Join(missing, ", "))
 			}
 			redact := secrets.CollectResolved(&c, secBackend, envBackend)

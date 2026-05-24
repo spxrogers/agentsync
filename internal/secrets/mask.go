@@ -65,32 +65,47 @@ func CollectResolved(c *source.Canonical, sec, env Resolver) map[string]string {
 	return out
 }
 
-// UnresolvedSecretRefs returns the sorted, de-duplicated set of ${secret:KEY}
-// reference keys in c that sec cannot resolve. Callers that print content
-// derived from a destination file written by a prior apply (notably
-// `agentsync diff`) use this to fail closed: if a secret reference cannot be
-// resolved now, the cleartext value substituted into that on-disk file on the
-// last apply cannot be redacted, so the safe action is to refuse rather than
-// leak it to stdout / logs / screenshots.
+// UnresolvedSecretRefs returns the sorted, de-duplicated set of ${secret:…} /
+// ${env:…} references in c that cannot be resolved now (formatted "secret:KEY"
+// / "env:KEY"). Callers that print or write content derived from a destination
+// file a prior apply wrote (notably `agentsync diff`) use this to fail closed:
+// if a reference cannot be resolved now, the cleartext value substituted into
+// that on-disk file on the last apply cannot be redacted, so the safe action is
+// to refuse rather than leak it.
 //
-// ${env:…} references are intentionally excluded — the env backend is always
-// available, and an unresolved env ref is not a credential-leak risk.
+// ${env:…} refs are included: an env var that was set at apply time (so its
+// value landed in the dest in cleartext) can be UNSET at diff/capture time, and
+// the redaction map (CollectResolved) skips it precisely then — exactly the
+// case that would leak. They are not "always available".
 //
 // Walks the single walkSecretFields field set, shared with SubstituteCanonical,
 // CollectResolved, and ReReferenceCanonical.
-func UnresolvedSecretRefs(c *source.Canonical, sec Resolver) []string {
+func UnresolvedSecretRefs(c *source.Canonical, sec, env Resolver) []string {
 	if c == nil {
 		return nil
 	}
 	missing := map[string]bool{}
 	walkSecretFields(c, func(_ secretFieldLoc, s string) string {
 		for _, m := range re.FindAllStringSubmatch(s, -1) {
-			if len(m) < 3 || m[1] != "secret" {
+			if len(m) < 3 {
 				continue
 			}
-			key := m[2]
-			if _, err := sec.Resolve(key); err != nil {
-				missing[key] = true
+			kind, key := m[1], m[2]
+			var r Resolver
+			switch kind {
+			case "secret":
+				r = sec
+			case "env":
+				r = env
+			default:
+				continue
+			}
+			if r == nil {
+				missing[kind+":"+key] = true
+				continue
+			}
+			if _, err := r.Resolve(key); err != nil {
+				missing[kind+":"+key] = true
 			}
 		}
 		return s
