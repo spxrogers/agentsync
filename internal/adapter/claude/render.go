@@ -13,7 +13,7 @@ import (
 // Pure function: returns the same output for the same input (disk reads are
 // treated as fixed inputs for the purposes of the merge-json-keys strategy).
 func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string) ([]adapter.FileOp, []adapter.Skip, error) {
-	c := r.Canonical()
+	c := r.Canonical() //nolint:forbidigo // sanctioned render egress: project the resolved model into FileOps (never written back to source)
 	paths := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
 
 	var ops []adapter.FileOp

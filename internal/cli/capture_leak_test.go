@@ -58,6 +58,13 @@ func writeSource(t *testing.T, home, rel, content string) string {
 // canonical source must end up with the ${secret:…} placeholder restored and no
 // cleartext written. One missing field in the walker would surface here as a
 // leak in exactly that row.
+// Project-overlay secret fields are covered at the unit level
+// (secrets.TestReReferenceCanonical_ProjectOverlay + the walker-visitation
+// test), not here: no dest->source capture path carries a Project overlay —
+// import is user-scope (adapter.ScopeUser) and Capture writes top-level
+// source files (mcp/<id>.toml, lsp/<id>.toml, hooks/<event>.toml), never a
+// project overlay. So the overlay leak surface lives entirely in the walker /
+// ReReferenceCanonical, which the secrets unit tests exercise directly.
 func TestCapture_ImportNoSecretLeak(t *testing.T) {
 	cases := []struct {
 		name     string // sub-test name

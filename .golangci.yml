@@ -60,34 +60,40 @@ linters:
       # foreign-collision backup. If you need to add a path here, the bar
       # is "this write does NOT target a file the user could plausibly
       # have hand-managed before agentsync was installed."
+      #
+      # Each is text-scoped to the AtomicWrite rule so it does NOT also
+      # suppress the other forbidigo rules (notably secrets.Resolved.Canonical)
+      # in these files — a whole-file [forbidigo] exclusion would silently
+      # un-fence a future Resolved-unwrap-then-write in e.g. reconcile.go.
       - path: '(^|/)internal/iox/.*'
         linters: [forbidigo]
+        text: 'iox\.AtomicWrite is reserved'
       - path: '(^|/)internal/render/writer\.go$'
         linters: [forbidigo]
+        text: 'iox\.AtomicWrite is reserved'
       - path: '(^|/)internal/source/writer\.go$'
         linters: [forbidigo]
+        text: 'iox\.AtomicWrite is reserved'
       - path: '(^|/)internal/state/store\.go$'
         linters: [forbidigo]
+        text: 'iox\.AtomicWrite is reserved'
       # secrets/age.go writes secrets.age under ~/.agentsync/ via the
       # atomic path so a Ctrl-C during re-encrypt can't truncate the file.
       # Same canonical-source category, not a native destination.
       - path: '(^|/)internal/secrets/age\.go$'
         linters: [forbidigo]
+        text: 'iox\.AtomicWrite is reserved'
       # CLI files writing to ~/.agentsync/* (canonical source).
       - path: '(^|/)internal/cli/(plugin|marketplace|agent|reconcile|update)\.go$'
         linters: [forbidigo]
+        text: 'iox\.AtomicWrite is reserved'
       # The PassThroughWriter test helper deliberately delegates to
       # iox.AtomicWrite — that's its whole job.
       - path: '(^|/)internal/adapter/testwriter\.go$'
         linters: [forbidigo]
-      # secrets.Resolved.Canonical() is the intended render egress: the two
-      # adapter Render entry points unwrap the resolved model to project it into
-      # destination FileOps. Scope this exclusion to THAT rule (via text) so the
-      # adapters still can't call iox.AtomicWrite directly.
-      - path: '(^|/)internal/adapter/(claude|opencode)/render\.go$'
-        linters: [forbidigo]
-        text: 'unwrap secrets\.Resolved'
+        text: 'iox\.AtomicWrite is reserved'
       # The secrets package's own tests assert on Resolved.Canonical() output.
+      # Test-only, not a leak vector that ships; text-scoped to the rule.
       - path: '(^|/)internal/secrets/.*_test\.go$'
         linters: [forbidigo]
         text: 'unwrap secrets\.Resolved'
