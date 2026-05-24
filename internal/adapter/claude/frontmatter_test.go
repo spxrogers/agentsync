@@ -1,10 +1,31 @@
 package claude_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
 )
+
+// TestParseFrontmatter_LargeIntPrecision is the regression for YAML frontmatter
+// integers > 2^53 losing precision: sigs.k8s.io/yaml decodes every number as
+// float64, so 9007199254740993 (2^53+1) became 9007199254740992 on render and
+// on source write-back. The decode must preserve the integer exactly.
+func TestParseFrontmatter_LargeIntPrecision(t *testing.T) {
+	const big = "9007199254740993" // 2^53 + 1: first int float64 can't represent
+	in := []byte("---\nmax_tokens: " + big + "\nname: x\n---\nbody\n")
+	fm, body, err := claude.ParseFrontmatter(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := claude.EncodeFrontmatter(fm, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), big) {
+		t.Fatalf("large int corrupted on round-trip; want %s in:\n%s", big, out)
+	}
+}
 
 func TestParseFrontmatter_Standard(t *testing.T) {
 	input := []byte(`---
