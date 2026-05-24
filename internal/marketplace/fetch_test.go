@@ -490,6 +490,43 @@ func TestNPMFetcher_RejectsInsecureTarballURL(t *testing.T) {
 	}
 }
 
+// TestNPMFetcher_RejectsInsecureRedirect is the regression for the npm client
+// following an https→http (or loopback→remote-http) redirect without
+// re-checking the scheme. checkURLScheme validates the registry and the
+// metadata tarball URL once, but Go's default redirect policy then follows a
+// 3xx to a plaintext http target — the exact transport downgrade the scheme
+// gate exists to prevent. The tarball URL is served over loopback http
+// (allowed); the redirect points at a remote http host, which must be refused
+// on the hop, before any dial succeeds.
+func TestNPMFetcher_RejectsInsecureRedirect(t *testing.T) {
+	t.Setenv("AGENTSYNC_ALLOW_INSECURE_URLS", "")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/redirect") {
+			http.Redirect(w, r, "http://cdn.evil.invalid/pkg/1.0.0.tgz", http.StatusFound)
+			return
+		}
+		meta := map[string]any{
+			"versions": map[string]any{
+				"1.0.0": map[string]any{
+					"version": "1.0.0",
+					"dist":    map[string]any{"tarball": "http://" + r.Host + "/redirect/1.0.0.tgz"},
+				},
+			},
+			"dist-tags": map[string]any{"latest": "1.0.0"},
+		}
+		_ = json.NewEncoder(w).Encode(meta)
+	}))
+	defer srv.Close()
+
+	dst := t.TempDir()
+	src := marketplace.Source{Kind: "npm", Package: "redirpkg", Version: "1.0.0", Registry: srv.URL}
+	fetcher := &marketplace.NPMFetcher{HTTPClient: srv.Client()}
+	_, err := fetcher.Fetch(src, dst)
+	if err == nil || !strings.Contains(err.Error(), "insecure scheme") {
+		t.Fatalf("https→http redirect tarball should be refused on the hop; got err=%v", err)
+	}
+}
+
 // makeNPMTarballWithEntry builds an in-memory npm-style .tgz with one
 // arbitrary entry name, bypassing the conventional "package/" prefix.
 // Used to construct tarballs with traversal entries.

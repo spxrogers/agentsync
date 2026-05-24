@@ -111,10 +111,28 @@ func (f *NPMFetcher) Fetch(src Source, into string) (FetchResult, error) {
 }
 
 func (f *NPMFetcher) httpClient() *http.Client {
-	if f.HTTPClient != nil {
-		return f.HTTPClient
+	base := f.HTTPClient
+	if base == nil {
+		base = http.DefaultClient
 	}
-	return http.DefaultClient
+	// Return a shallow copy with a scheme-revalidating redirect policy. The
+	// one-time checkURLScheme on the registry/tarball URL is defeated if a
+	// hostile-but-https registry 302s the tarball to a plaintext http:// target
+	// (transport downgrade). Re-check every hop; refuse insecure ones before
+	// the dial. Copying avoids mutating the caller's (or the global default)
+	// client. CheckRedirect replaces the stdlib's implicit 10-hop limit, so we
+	// re-impose it.
+	c := *base
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := checkURLScheme(req.URL.String()); err != nil {
+			return err
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &c
 }
 
 func (f *NPMFetcher) fetchMeta(client *http.Client, url string) (*npmMetadata, error) {
