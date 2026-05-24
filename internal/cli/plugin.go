@@ -294,7 +294,12 @@ func pluginRemoveRun(cmd *cobra.Command, args []string) error {
 	home := paths.AgentsyncHome(paths.OSEnv{})
 
 	pluginPath := filepath.Join(home, "plugins", id+".toml")
-	if err := os.Remove(pluginPath); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(pluginPath); err != nil {
+		// Match upgrade/enable/disable: a typo'd or already-removed id is an
+		// error, not a cheerful "removed plugin X" no-op.
+		if os.IsNotExist(err) {
+			return fmt.Errorf("plugin %q is not installed", id)
+		}
 		return fmt.Errorf("remove %s: %w", pluginPath, err)
 	}
 

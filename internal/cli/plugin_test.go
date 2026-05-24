@@ -534,6 +534,12 @@ func TestPlugin_Remove(t *testing.T) {
 	if strings.Contains(listOut, "demo") {
 		t.Errorf("plugin still in list after remove: %s", listOut)
 	}
+
+	// Removing a nonexistent plugin errors (consistent with upgrade/enable/disable),
+	// rather than printing a misleading "removed plugin X".
+	if _, err := runCLI(t, env, "plugin", "remove", "demo"); err == nil {
+		t.Fatal("removing an already-removed plugin should error")
+	}
 }
 
 func TestPlugin_Upgrade(t *testing.T) {
