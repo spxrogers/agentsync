@@ -74,9 +74,20 @@ func newStatusCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "no agents enabled; run `agentsync agent add claude` (or opencode)")
 				return nil
 			}
-			// status hashes the rendered TEMPLATED source for drift; wrap as a
-			// render-only Resolved without substituting (no backend needed).
-			plan, err := render.Plan(secrets.ForRender(c), reg, agents, sc, projectRoot, s, userHome)
+			// apply WRITES (and RecordOpsState HASHES) the secret-RESOLVED
+			// content, so status must hash the resolved source too — otherwise a
+			// synced ${secret:…}/${env:…} item compares templated-vs-resolved and
+			// classifies as phantom "pending" forever. Resolve like apply; fall
+			// back to the templated render only when the backend is unavailable
+			// (locked age key / CI), preserving offline status at the cost of the
+			// pre-existing false-pending in that degraded mode. Resolved values
+			// are only hashed here, never printed.
+			rendered := secrets.ForRender(c)
+			secBackend := secrets.SelectBackend(c.Config.Secrets, home, userHome)
+			if resolved, serr := secrets.SubstituteCanonical(c, secBackend, secrets.EnvBackend{}); serr == nil {
+				rendered = resolved
+			}
+			plan, err := render.Plan(rendered, reg, agents, sc, projectRoot, s, userHome)
 			if err != nil {
 				return err
 			}
