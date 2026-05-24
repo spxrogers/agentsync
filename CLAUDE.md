@@ -23,6 +23,26 @@ resolved at apply time from an age-encrypted vault.
   aspirational and not wired in v1.0 (`apply --strict/--force/--agent` flags, an
   `agentsync skill` command) — trust the code over the spec on the CLI surface.
 
+## Keep the docs in sync — non-negotiable
+
+Docs are part of the contract, not an afterthought. **No commit may change an
+interface, a contract, the canonical schema, the CLI surface, or load-bearing
+logic and leave the docs out of date.** If you change behavior, update the docs
+in the *same* commit. A reviewer should never have to wonder whether the prose
+or the code is the source of truth. Treat a stale doc as a bug.
+
+When you touch… | …also update in the same commit
+--- | ---
+the `Adapter` interface / `DestWriter` / render or capture contracts | `docs/architecture.md` (§3–§5), `docs/components.md`
+a CLI command, subcommand, or flag | `docs/user-guide.md` command reference, `README.md` quickstart
+agent/component coverage (a `Skip` goes native, a new adapter, a new component) | `docs/capability-matrix.md`, the matrices in `README.md` + `docs/user-guide.md`
+the canonical schema / `~/.agentsync/` layout | `docs/concepts.md`, `docs/architecture.md` (§2), the layout block in `docs/user-guide.md`
+the secret-handling invariants | the section below, `SECURITY.md`
+anything user-visible | `CHANGELOG.md` (under `[Unreleased]`)
+
+If a change makes a sentence in those docs false, the change is not done until
+the sentence is fixed.
+
 ## Mental map of the code
 
 - **`internal/source`** — the canonical model (`source.Canonical`). The TOML
