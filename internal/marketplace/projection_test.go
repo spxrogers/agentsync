@@ -174,6 +174,192 @@ func TestProject_NonStrict_EntryComponents(t *testing.T) {
 	}
 }
 
+// TestProject_NonStrict_UnionsPluginJSON is the regression for non-strict mode
+// dropping the plugin's own plugin.json components. Non-strict must mean
+// "plugin.json PLUS entry additions", not "entry replaces plugin.json", so a
+// non-strict entry never silently loses the plugin's declared components — and
+// an upstream strict:true→false flip can't drop them.
+func TestProject_NonStrict_UnionsPluginJSON(t *testing.T) {
+	cache := t.TempDir()
+	d := filepath.Join(cache, ".claude-plugin")
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "plugin.json"),
+		[]byte(`{"name":"ns","mcpServers":{"base-srv":{"command":"b"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := false
+	entry := marketplace.PluginEntry{
+		Name:       "ns",
+		Strict:     &f,
+		MCPServers: map[string]any{"extra-srv": map[string]any{"command": "e"}},
+	}
+	pr, err := marketplace.Project(entry, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, m := range pr.MCPServers {
+		ids[m.ID] = true
+	}
+	if !ids["base-srv"] {
+		t.Fatalf("non-strict dropped the plugin.json component base-srv: %v", ids)
+	}
+	if !ids["extra-srv"] {
+		t.Fatalf("non-strict entry override extra-srv missing: %v", ids)
+	}
+}
+
+// Under NON-strict mode, a same-named skill declared by both plugin.json and
+// the entry collapses to ONE entry with the entry's body winning — otherwise
+// two canonical Skills with the same Name render to the same dest path and the
+// cross-agent divergence guard aborts the whole apply.
+func TestProject_NonStrictConflict_Skill_EntryWins(t *testing.T) {
+	cacheDir := "/cache"
+	files := map[string][]byte{
+		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"):  []byte(`{"name":"p","skills":["./skills/base"]}`),
+		filepath.Join(cacheDir, "skills", "base", "SKILL.md"):     []byte("---\nname: shared\n---\nFROM PLUGIN_JSON\n"),
+		filepath.Join(cacheDir, "skills", "override", "SKILL.md"): []byte("---\nname: shared\n---\nFROM ENTRY\n"),
+	}
+	f := false
+	entry := marketplace.PluginEntry{Name: "p", Strict: &f, Skills: "./skills/override"}
+	pr, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	var body string
+	for _, s := range pr.Skills {
+		if s.Name == "shared" {
+			n++
+			body = s.Body
+		}
+	}
+	if n != 1 {
+		t.Fatalf("skill \"shared\" count = %d, want 1 (non-strict must dedup same-name)", n)
+	}
+	if !strings.Contains(body, "FROM ENTRY") {
+		t.Errorf("entry override did not win; body = %q", body)
+	}
+}
+
+// Under NON-strict mode, a same-ID MCP server declared by both plugin.json and
+// the entry collapses to one, entry winning.
+func TestProject_NonStrictConflict_MCP_EntryWins(t *testing.T) {
+	cacheDir := "/cache"
+	files := map[string][]byte{
+		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"): []byte(`{"name":"p","mcpServers":{"srv":{"command":"base"}}}`),
+	}
+	f := false
+	entry := marketplace.PluginEntry{Name: "p", Strict: &f, MCPServers: map[string]any{"srv": map[string]any{"command": "entry"}}}
+	pr, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.MCPServers) != 1 {
+		t.Fatalf("mcp count = %d, want 1 (dedup same id)", len(pr.MCPServers))
+	}
+	if got := pr.MCPServers[0].Server.Command; got != "entry" {
+		t.Errorf("entry override did not win; command = %q, want entry", got)
+	}
+}
+
+// Under STRICT mode (the default), a same-name component with DIFFERING content
+// in plugin.json vs the entry is an ambiguous packaging conflict and must be a
+// hard error rather than a silent guess.
+func TestProject_StrictConflict_Errors(t *testing.T) {
+	cacheDir := "/cache"
+	files := map[string][]byte{
+		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"): []byte(`{"name":"p","mcpServers":{"srv":{"command":"base"}}}`),
+	}
+	// Strict defaults to true (nil).
+	entry := marketplace.PluginEntry{Name: "p", MCPServers: map[string]any{"srv": map[string]any{"command": "entry"}}}
+	_, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
+	if err == nil {
+		t.Fatal("strict mode must error on a differing same-name conflict")
+	}
+	if !strings.Contains(err.Error(), "defined twice with different content") {
+		t.Errorf("error should explain the conflict; got: %v", err)
+	}
+}
+
+// Even under strict mode, an IDENTICAL same-name component in both places is not
+// a conflict — it collapses to one without error.
+func TestProject_StrictConflict_IdenticalDedups(t *testing.T) {
+	cacheDir := "/cache"
+	files := map[string][]byte{
+		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"): []byte(`{"name":"p","mcpServers":{"srv":{"command":"same"}}}`),
+	}
+	entry := marketplace.PluginEntry{Name: "p", MCPServers: map[string]any{"srv": map[string]any{"command": "same"}}}
+	pr, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatalf("identical same-name component must not error under strict: %v", err)
+	}
+	if len(pr.MCPServers) != 1 {
+		t.Fatalf("mcp count = %d, want 1 (identical dedups)", len(pr.MCPServers))
+	}
+}
+
+// A server defined in both plugin.json and the entry that is semantically
+// identical but differs only by nil-vs-empty env/headers must NOT be a strict
+// conflict. parseMCPSpec built nil when the key was absent and an empty map when
+// present-but-empty; reflect.DeepEqual treated those as different, so an
+// otherwise-identical server spuriously hard-errored under strict.
+func TestProject_StrictConflict_NilVsEmptyMapNotAConflict(t *testing.T) {
+	cacheDir := "/cache"
+	files := map[string][]byte{
+		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"): []byte(`{"name":"p","mcpServers":{"srv":{"command":"x"}}}`),
+	}
+	// Entry specifies an explicit empty env (and headers); semantically the same
+	// server as plugin.json's, which omits them.
+	entry := marketplace.PluginEntry{Name: "p", MCPServers: map[string]any{
+		"srv": map[string]any{"command": "x", "env": map[string]any{}, "headers": map[string]any{}},
+	}}
+	pr, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatalf("nil-vs-empty env/headers must not be a strict conflict: %v", err)
+	}
+	if len(pr.MCPServers) != 1 {
+		t.Fatalf("mcp count = %d, want 1", len(pr.MCPServers))
+	}
+}
+
+// Identical hooks declared by both plugin.json and the entry must collapse to
+// one, otherwise the hook is registered twice in settings.json and runs twice.
+func TestProject_DedupsIdenticalHooks(t *testing.T) {
+	cacheDir := "/cache"
+	files := map[string][]byte{
+		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"): []byte(`{"name":"p","hooks":"run.sh"}`),
+	}
+	entry := marketplace.PluginEntry{Name: "p", Hooks: "run.sh"}
+	pr, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.Hooks) != 1 {
+		t.Fatalf("hooks = %d, want 1 (identical hooks must dedup)", len(pr.Hooks))
+	}
+}
+
+// Hooks that differ in any field are genuinely distinct and must BOTH survive —
+// dedup is exact-content only, never an event-keyed override that could silently
+// drop a legitimate second hook.
+func TestProject_DistinctHooksCoexist(t *testing.T) {
+	cacheDir := "/cache"
+	files := map[string][]byte{
+		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"): []byte(`{"name":"p","hooks":"a.sh"}`),
+	}
+	entry := marketplace.PluginEntry{Name: "p", Hooks: "b.sh"}
+	pr, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.Hooks) != 2 {
+		t.Fatalf("hooks = %d, want 2 (distinct commands must both survive)", len(pr.Hooks))
+	}
+}
+
 func TestProject_Strict_MissingPluginJSON(t *testing.T) {
 	// Strict mode but no plugin.json — should return empty result, no error.
 	cache := t.TempDir()

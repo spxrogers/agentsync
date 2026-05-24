@@ -41,6 +41,37 @@ func TestComputePendingBumps_TrackMode_Bumps(t *testing.T) {
 	}
 }
 
+// TestComputePendingBumps_TrackMode_NoDowngrade is the regression for
+// computeBump using raw string inequality: a marketplace that rolls back to an
+// OLDER version was reported (and auto-applied) as a "bump" — a silent
+// downgrade. Track mode must only bump strictly forward.
+func TestComputePendingBumps_TrackMode_NoDowngrade(t *testing.T) {
+	plugins := []source.Plugin{
+		{ID: "demo", Plugin: source.PluginSpec{ID: "demo@test-mp", Version: "2.0.0", Update: "track"}},
+	}
+	fetched := map[string]map[string]marketplace.PluginEntry{
+		"test-mp": {"demo": {Name: "demo", Version: "1.5.0"}},
+	}
+	if bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched); len(bumps) != 0 {
+		t.Fatalf("expected no bump for a rollback/downgrade, got %d: %+v", len(bumps), bumps)
+	}
+}
+
+// TestComputePendingBumps_NonSemverTracksLatest verifies that when versions
+// are not comparable as semver, track mode still follows any change so an
+// exotic versioning scheme isn't stranded on its first version.
+func TestComputePendingBumps_NonSemverTracksLatest(t *testing.T) {
+	plugins := []source.Plugin{
+		{ID: "demo", Plugin: source.PluginSpec{ID: "demo@test-mp", Version: "stable", Update: "track"}},
+	}
+	fetched := map[string]map[string]marketplace.PluginEntry{
+		"test-mp": {"demo": {Name: "demo", Version: "edge"}},
+	}
+	if bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched); len(bumps) != 1 {
+		t.Fatalf("expected track-latest fallback to bump on non-semver change, got %d", len(bumps))
+	}
+}
+
 func TestComputePendingBumps_PinnedMode_NoBump(t *testing.T) {
 	plugins := []source.Plugin{
 		{

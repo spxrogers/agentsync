@@ -25,6 +25,9 @@ type PluginRow struct {
 	Commands int `json:"commands"`
 	// Skips is the number of components the adapter explicitly skipped.
 	Skips int `json:"skips"`
+	// Disabled is true when the plugin is disabled for this scope (e.g. by a
+	// project marker's [plugins] disabled). Its components are not rendered.
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 // TranslationReport holds all plugin×agent rows.
@@ -68,6 +71,10 @@ func (r TranslationReport) PrintText(w io.Writer) {
 		rows := byPlugin[plug]
 		sort.Slice(rows, func(i, j int) bool { return rows[i].Agent < rows[j].Agent })
 		for _, row := range rows {
+			if row.Disabled {
+				fmt.Fprintf(w, "  (disabled by project)\n")
+				continue
+			}
 			fmt.Fprintf(w, "  %-10s %s (%d mcp, %d commands)\n",
 				row.Agent, coverageMark(row.Coverage), row.MCP, row.Commands)
 		}
@@ -138,6 +145,17 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 		label := plug.Plugin.ID
 		if label == "" {
 			label = plug.ID
+		}
+		// A disabled plugin (e.g. project-marker [plugins] disabled) contributes
+		// no rendered components — emit a single row marking it disabled rather
+		// than per-agent rows with misleading global counts.
+		if plug.Plugin.Disabled {
+			report.Rows = append(report.Rows, PluginRow{
+				Plugin:   label,
+				Coverage: "disabled",
+				Disabled: true,
+			})
+			continue
 		}
 		for _, agName := range agents {
 			res, ok := plan.PerAgent[agName]

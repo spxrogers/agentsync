@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/source"
@@ -28,21 +29,26 @@ type ProjectionResult struct {
 	LSPServers []source.LSPServer
 }
 
-// Project loads the plugin's components and returns them as canonical entries.
-//
-// Strict mode (entry.Strict == nil || *entry.Strict):
-//   - Reads cacheDir/.claude-plugin/plugin.json for the primary component list.
+// Project loads the plugin's components and returns them as canonical entries:
+//   - Reads cacheDir/.claude-plugin/plugin.json (when present) for the primary
+//     component list; a missing plugin.json is fine (a curator-defined plugin
+//     may declare everything in the entry).
 //   - If the manifest lists no skills, falls back to convention-based discovery:
 //     scans cacheDir/skills/*/ for SKILL.md files.
-//   - Then merges in any component fields on the PluginEntry itself (overrides).
+//   - Then overlays any component fields on the PluginEntry itself.
 //
-// Non-strict mode:
-//   - Uses only the PluginEntry's inlined component fields.
+// This is a UNION: plugin.json PLUS entry additions. The entry.Strict flag
+// governs how a same-name CONFLICT between the two is resolved (see
+// resolveConflicts): strict (the default) errors so a packaging disagreement is
+// never silently guessed; non-strict lets the entry override. Union semantics
+// never silently drop a plugin's declared components — the pre-Strict-policy
+// non-strict path used to IGNORE plugin.json entirely, dropping a plugin's own
+// components after an upstream strict-flip.
 //
-// In both cases, ${CLAUDE_PLUGIN_ROOT} in command/url strings is replaced with
-// cacheDir so non-Claude adapters can resolve binary paths.
+// ${CLAUDE_PLUGIN_ROOT} in command/url strings is replaced with cacheDir so
+// non-Claude adapters can resolve binary paths.
 func Project(entry PluginEntry, cacheDir string) (ProjectionResult, error) {
-	return projectWithFuncs(entry, cacheDir, os.ReadFile, os.ReadDir)
+	return projectWithFuncs(entry, cacheDir, os.ReadFile, os.ReadDir, false)
 }
 
 // ProjectWithReader is like Project but uses a caller-supplied readFile function
@@ -50,40 +56,135 @@ func Project(entry PluginEntry, cacheDir string) (ProjectionResult, error) {
 // filesystem use in tests. Convention-based discovery (skills/ directory scan)
 // is disabled when using ProjectWithReader; use Project for full behavior.
 func ProjectWithReader(entry PluginEntry, cacheDir string, readFile func(string) ([]byte, error)) (ProjectionResult, error) {
-	return projectWithFuncs(entry, cacheDir, readFile, nil)
+	return projectWithFuncs(entry, cacheDir, readFile, nil, false)
 }
 
 // projectWithFuncs is the internal implementation shared by Project and ProjectWithReader.
-// listDir may be nil to disable convention-based skills discovery.
-func projectWithFuncs(entry PluginEntry, cacheDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error)) (ProjectionResult, error) {
+// listDir may be nil to disable convention-based skills discovery. When lenient
+// is true, a strict-mode same-name conflict is resolved entry-wins with a logged
+// warning instead of a hard error — used by read-only/diagnostic commands that
+// must still show state (see resolveConflicts).
+func projectWithFuncs(entry PluginEntry, cacheDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error), lenient bool) (ProjectionResult, error) {
 	var pr ProjectionResult
-	strict := entry.Strict == nil || *entry.Strict
 
-	if strict {
-		manifestPath := filepath.Join(cacheDir, ".claude-plugin", "plugin.json")
-		data, err := readFile(manifestPath)
-		if err != nil && !os.IsNotExist(err) {
-			return pr, fmt.Errorf("read plugin.json: %w", err)
+	// Always honour plugin.json when present (a missing one is fine for a
+	// curator-defined plugin), then overlay the entry's component config. Union
+	// semantics — plugin.json PLUS entry additions/overrides — regardless of the
+	// Strict flag, so a non-strict entry never drops the plugin's own components.
+	manifestPath := filepath.Join(cacheDir, ".claude-plugin", "plugin.json")
+	data, err := readFile(manifestPath)
+	if err != nil && !os.IsNotExist(err) {
+		return pr, fmt.Errorf("read plugin.json: %w", err)
+	}
+	if err == nil {
+		var manifest PluginManifest
+		if err := json.Unmarshal(data, &manifest); err != nil {
+			return pr, fmt.Errorf("parse plugin.json: %w", err)
 		}
-		if err == nil {
-			var manifest PluginManifest
-			if err := json.Unmarshal(data, &manifest); err != nil {
-				return pr, fmt.Errorf("parse plugin.json: %w", err)
-			}
-			if err := applyManifest(manifest, &pr, cacheDir, readFile, listDir); err != nil {
-				return pr, err
-			}
-		}
-		// Merge entry-level overrides on top of manifest components.
-		if err := applyEntryOverrides(entry, &pr, cacheDir, readFile); err != nil {
-			return pr, err
-		}
-	} else {
-		if err := applyEntryFull(entry, &pr, cacheDir, readFile); err != nil {
+		if err := applyManifest(manifest, &pr, cacheDir, readFile, listDir); err != nil {
 			return pr, err
 		}
 	}
+	if err := applyEntryOverrides(entry, &pr, cacheDir, readFile); err != nil {
+		return pr, err
+	}
+	strict := entry.Strict == nil || *entry.Strict
+	if err := resolveConflicts(&pr, strict, lenient); err != nil {
+		return pr, err
+	}
 	return pr, nil
+}
+
+// resolveConflicts collapses same-identity components that the union (plugin.json
+// PLUS entry) can produce, applying the Strict-flag conflict policy. Without
+// collapsing, an entry that re-declares a same-named plugin.json
+// skill/subagent/command yields TWO canonical entries that render to the SAME
+// dest path — and apply's cross-agent divergence guard then aborts the whole
+// run. Hooks have no override key, so they are deduped only on EXACT content
+// (two genuinely-distinct hooks for one event both survive) and are not subject
+// to the conflict policy.
+func resolveConflicts(pr *ProjectionResult, strict, lenient bool) error {
+	var err error
+	if pr.MCPServers, err = dedupOrConflict(pr.MCPServers, func(s source.MCPServer) string { return s.ID }, strict, lenient, "mcp server"); err != nil {
+		return err
+	}
+	if pr.LSPServers, err = dedupOrConflict(pr.LSPServers, func(s source.LSPServer) string { return s.ID }, strict, lenient, "lsp server"); err != nil {
+		return err
+	}
+	if pr.Skills, err = dedupOrConflict(pr.Skills, func(s source.Skill) string { return s.Name }, strict, lenient, "skill"); err != nil {
+		return err
+	}
+	if pr.Subagents, err = dedupOrConflict(pr.Subagents, func(s source.Subagent) string { return s.Name }, strict, lenient, "subagent"); err != nil {
+		return err
+	}
+	if pr.Commands, err = dedupOrConflict(pr.Commands, func(c source.Command) string { return c.Name }, strict, lenient, "command"); err != nil {
+		return err
+	}
+	pr.Hooks = dedupHooks(pr.Hooks)
+	return nil
+}
+
+// dedupOrConflict collapses same-key components produced by the union. When two
+// entries share a key (a plugin.json definition AND a marketplace-entry one):
+//   - identical content → silently dedup to one.
+//   - differing content, strict mode → a CONFLICT. Fatal (lenient=false, the
+//     mutating commands) returns a hard error refusing to guess. Lenient
+//     (lenient=true, read-only/diagnostic commands like status/diff/explain)
+//     resolves it entry-wins with a logged warning so the command can still show
+//     state instead of refusing to run on a conflict it exists to surface.
+//   - differing content, non-strict mode → the entry wins (the documented
+//     lenient curator override).
+//
+// Keeping the LAST occurrence yields entry-wins because applyEntryOverrides runs
+// after applyManifest; order is preserved by the position of that last entry.
+func dedupOrConflict[T any](items []T, key func(T) string, strict, lenient bool, kind string) ([]T, error) {
+	if len(items) < 2 {
+		return items, nil
+	}
+	first := make(map[string]T, len(items))
+	lastIdx := make(map[string]int, len(items))
+	for i, it := range items {
+		k := key(it)
+		lastIdx[k] = i
+		if prev, ok := first[k]; ok {
+			if strict && !reflect.DeepEqual(prev, it) {
+				if !lenient {
+					return nil, fmt.Errorf("plugin %s %q is defined twice with different content "+
+						"(plugin.json and the marketplace entry disagree); resolve it upstream, or set "+
+						`"strict": false on the marketplace entry to let the entry override`, kind, k)
+				}
+				slog.Warn("plugin component conflict resolved entry-wins (strict; shown leniently)",
+					"kind", kind, "name", k)
+			}
+			continue
+		}
+		first[k] = it
+	}
+	out := make([]T, 0, len(items))
+	for i, it := range items {
+		if lastIdx[key(it)] == i {
+			out = append(out, it)
+		}
+	}
+	return out, nil
+}
+
+// dedupHooks removes exact-duplicate hooks, preserving order. Hooks have no
+// override key, so only byte-identical entries are collapsed.
+func dedupHooks(hooks []source.Hook) []source.Hook {
+	if len(hooks) < 2 {
+		return hooks
+	}
+	seen := make(map[source.Hook]bool, len(hooks))
+	out := make([]source.Hook, 0, len(hooks))
+	for _, h := range hooks {
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		out = append(out, h)
+	}
+	return out
 }
 
 // resolvePluginRoot replaces the ${CLAUDE_PLUGIN_ROOT} placeholder with cacheDir.
@@ -292,11 +393,6 @@ func applyEntryOverrides(entry PluginEntry, pr *ProjectionResult, cacheDir strin
 	}
 	applyHooks(entry.Hooks, pr, cacheDir)
 	return nil
-}
-
-// applyEntryFull applies all component fields from a non-strict PluginEntry.
-func applyEntryFull(entry PluginEntry, pr *ProjectionResult, cacheDir string, readFile func(string) ([]byte, error)) error {
-	return applyEntryOverrides(entry, pr, cacheDir, readFile)
 }
 
 // markdownEntry holds the parsed result of a single markdown file.
@@ -518,6 +614,17 @@ func parseMCPSpec(raw any, cacheDir string) source.MCPServerSpec {
 			}
 		}
 	}
+	// Normalise present-but-empty maps to nil so an explicit `"env":{}` /
+	// `"headers":{}` compares equal to an omitted one. The union conflict check
+	// uses reflect.DeepEqual, which treats a nil map and an empty map as
+	// different — without this, two semantically-identical servers (one omitting
+	// env, the other declaring it empty) spuriously trip the strict conflict.
+	if len(spec.Env) == 0 {
+		spec.Env = nil
+	}
+	if len(spec.Headers) == 0 {
+		spec.Headers = nil
+	}
 	return spec
 }
 
@@ -556,6 +663,15 @@ func parseLSPSpec(raw any, cacheDir string) source.LSPServerSpec {
 				spec.Headers[k] = resolvePluginRoot(s, cacheDir)
 			}
 		}
+	}
+	// See parseMCPSpec: normalise empty maps to nil so the reflect.DeepEqual
+	// conflict check treats an explicit empty env/headers as equal to an omitted
+	// one.
+	if len(spec.Env) == 0 {
+		spec.Env = nil
+	}
+	if len(spec.Headers) == 0 {
+		spec.Headers = nil
 	}
 	return spec
 }

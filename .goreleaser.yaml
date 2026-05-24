@@ -48,6 +48,13 @@ nfpms:
     formats: [deb, rpm]
     section: utils
     description: Centrally manage AI coding-agent configurations.
+    # Stable, arch-qualified, version-less asset names (e.g.
+    # agentsync_linux_amd64.deb) so the README's
+    # releases/latest/download/<name> URLs resolve. Without this the default
+    # name carries the version, which `latest/download/` can't address.
+    # .ConventionalExtension expands to .deb / .rpm per format. VERIFY the
+    # emitted names match the README at the first tagged release.
+    file_name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}{{ .ConventionalExtension }}"
 
 # --------------------------------------------------------------------------
 # Distribution / publishing blocks — deliberately NOT enabled yet.

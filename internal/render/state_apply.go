@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -98,6 +99,41 @@ func PruneStaleState(s *state.Targets, userHome, agent string, scope adapter.Sco
 			delete(s.Keys, key)
 		}
 	}
+}
+
+// OrphanFiles returns the absolute dest paths that agent+scope+project still
+// OWNS in state as whole-file (replace-strategy) entries but the current plan's
+// ops no longer render — i.e. the source component was removed since the last
+// apply. The same detection PruneStaleState uses, surfaced so diagnostics
+// (status/diff/reconcile) can report a dest the next apply would prune instead
+// of falsely reporting "clean". Returns absolute paths, sorted.
+func OrphanFiles(s *state.Targets, userHome, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) []string {
+	if s == nil {
+		return nil
+	}
+	prefix := fmt.Sprintf("%s:%s:%s:", agent, scope.String(), paths.HomeRelative(userHome, project))
+	current := map[string]struct{}{}
+	for _, op := range ops {
+		if op.Action != "" && op.Action != "write" {
+			continue
+		}
+		if isKeyMerge(op.MergeStrategy) {
+			continue
+		}
+		current[paths.HomeRelative(userHome, op.Path)] = struct{}{}
+	}
+	var out []string
+	for key := range s.Files {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		path := strings.TrimPrefix(key, prefix)
+		if _, ok := current[path]; !ok {
+			out = append(out, paths.FromHomeRelative(userHome, path))
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // RecordOpsState updates s with hashes for files and keys produced by ops.

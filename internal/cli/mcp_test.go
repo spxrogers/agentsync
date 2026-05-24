@@ -59,6 +59,20 @@ func TestMCP_AddRejectsDuplicates(t *testing.T) {
 	}
 }
 
+// TestMCP_AddRejectsSeparatorOnlyAgents is the regression for a whitespace/
+// separator-only --agents (e.g. " , , ") passing the empty guard — which only
+// checked TrimSpace != "" — then splitting to an empty allowlist, which
+// targetsAgent treats as "all enabled agents": the silent opposite of intent.
+func TestMCP_AddRejectsSeparatorOnlyAgents(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	_, _ = runCLI(t, env, "init")
+	out, err := runCLI(t, env, "mcp", "add", "g", "--command", "x", "--agents", " , , ")
+	if err == nil {
+		t.Fatalf("separator-only --agents should be rejected, not silently mean all agents; got:\n%s", out)
+	}
+}
+
 func TestMCP_AddHTTPRequiresURL(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
@@ -66,6 +80,21 @@ func TestMCP_AddHTTPRequiresURL(t *testing.T) {
 	_, err := runCLI(t, env, "mcp", "add", "x", "--type", "http")
 	if err == nil {
 		t.Fatal("http add without --url should fail")
+	}
+}
+
+// TestMCP_AddRejectsEmptyAgents is the regression for an explicitly empty
+// --agents silently becoming "all agents" (nil allowlist) instead of erroring.
+func TestMCP_AddRejectsEmptyAgents(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	_, _ = runCLI(t, env, "init")
+	_, err := runCLI(t, env, "mcp", "add", "x", "--command", "npx", "--agents", "")
+	if err == nil {
+		t.Fatal("mcp add with explicitly empty --agents should be rejected")
+	}
+	if !strings.Contains(err.Error(), "--agents cannot be empty") {
+		t.Fatalf("expected empty-agents error, got: %v", err)
 	}
 }
 

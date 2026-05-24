@@ -5,7 +5,10 @@ package jsonkeys
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
+
+	"sigs.k8s.io/yaml"
 )
 
 // DecodeObject unmarshals JSON object bytes into a map, preserving numbers as
@@ -28,6 +31,65 @@ func DecodeObject(data []byte) (map[string]any, error) {
 		m = map[string]any{}
 	}
 	return m, nil
+}
+
+// DecodeYAML parses YAML (e.g. component frontmatter) into a map, preserving
+// integer precision beyond 2^53. A plain yaml.Unmarshal into interface{} decodes
+// every number as float64, silently rounding a large integer (snowflake id,
+// nanosecond timestamp) — and since yaml.Marshal then re-emits the rounded
+// value, the corruption is persisted on render and on source write-back. This
+// routes YAML→JSON (which keeps the integer literal), decodes with UseNumber,
+// then converts each json.Number to int64 (or float64) so yaml.Marshal re-emits
+// a bare integer. Empty/null input yields an empty map; a non-mapping document
+// is an error (frontmatter must be a mapping).
+func DecodeYAML(yml []byte) (map[string]any, error) {
+	jb, err := yaml.YAMLToJSON(yml)
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(jb))
+	dec.UseNumber()
+	var raw any
+	if err := dec.Decode(&raw); err != nil {
+		return nil, err
+	}
+	if raw == nil {
+		return map[string]any{}, nil
+	}
+	m, ok := convertJSONNumbers(raw).(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("yaml document is not a mapping")
+	}
+	return m, nil
+}
+
+// convertJSONNumbers walks v, replacing every json.Number with an int64 (when
+// it parses as an integer) or float64 otherwise, recursing through maps and
+// slices. This keeps large integers exact while leaving non-numeric values
+// untouched.
+func convertJSONNumbers(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, vv := range x {
+			x[k] = convertJSONNumbers(vv)
+		}
+		return x
+	case []any:
+		for i, vv := range x {
+			x[i] = convertJSONNumbers(vv)
+		}
+		return x
+	case json.Number:
+		if i, err := x.Int64(); err == nil {
+			return i
+		}
+		if f, err := x.Float64(); err == nil {
+			return f
+		}
+		return x.String()
+	default:
+		return v
+	}
 }
 
 // MergeKeys merges ours into existing, removing ownedPointers that are no

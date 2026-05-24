@@ -50,13 +50,17 @@ type Result struct {
 //     server's exposure or clear its enablement;
 //  3. writes through internal/source/writer.go (never iox.AtomicWrite directly).
 //
-// When the current source fails to load, re-reference + field-preservation are
-// skipped and the ingested values are written as-is. Note source.Load returns
-// no error for an empty/absent home, so this is rare; the ordinary "nothing to
-// reference" case (an item with no existing source counterpart, e.g. adopting a
-// foreign dest item) still runs steps 1–2 as no-ops. Such an item carries no
-// secret WE substituted (apply only substitutes from a source ${secret:…}), so
-// writing it verbatim is correct, not a leak.
+// The current source MUST load for Capture to run: re-referencing and
+// source-only field preservation both read it. source.Load returns an empty
+// Canonical (no error) for an empty/absent home — the first-import / "adopt a
+// foreign dest item" case — so steps 1–2 run as harmless no-ops there, which is
+// correct (apply only substitutes from a source ${secret:…}, so a brand-new
+// item carries no secret WE resolved). But source.Load DOES error on any
+// malformed file anywhere in the tree, and that is exactly when a user is most
+// likely re-importing. Writing in that state would skip re-referencing and
+// persist a resolved cleartext secret into ~/.agentsync (a committed dotfiles
+// repo) with no warning. So Capture fails CLOSED: it refuses to write and
+// surfaces the load error rather than risk leaking a credential.
 func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error) {
 	var res Result
 	if ingested == nil {
@@ -64,19 +68,19 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 	}
 
 	cur, cerr := source.Load(afero.NewOsFs(), home)
-	var sec secrets.Resolver
-	if cerr == nil {
-		userHome := paths.HomeDir(paths.OSEnv{})
-		sec = secrets.SelectBackend(cur.Config.Secrets, home, userHome)
-		secrets.ReReferenceCanonical(ingested, &cur, sec, secrets.EnvBackend{})
+	if cerr != nil {
+		return res, fmt.Errorf("load canonical source to re-reference secrets: %w; "+
+			"refusing to write back — writing now could persist a resolved cleartext "+
+			"secret into ~/.agentsync; fix the source error and retry", cerr)
 	}
+	userHome := paths.HomeDir(paths.OSEnv{})
+	sec := secrets.SelectBackend(cur.Config.Secrets, home, userHome)
+	secrets.ReReferenceCanonical(ingested, &cur, sec, secrets.EnvBackend{})
 
 	for _, m := range ingested.MCPServers {
-		if cerr == nil {
-			if existing, ok, rerr := source.ReadMCP(home, m.ID); rerr == nil && ok {
-				m.Server.Agents = existing.Server.Agents
-				m.Server.Enabled = existing.Server.Enabled
-			}
+		if existing, ok, rerr := source.ReadMCP(home, m.ID); rerr == nil && ok {
+			m.Server.Agents = existing.Server.Agents
+			m.Server.Enabled = existing.Server.Enabled
 		}
 		if err := source.WriteMCP(home, m.ID, m); err != nil {
 			return res, fmt.Errorf("write mcp %s: %w", m.ID, err)
@@ -85,11 +89,9 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 	}
 
 	for _, ls := range ingested.LSPServers {
-		if cerr == nil {
-			if existing, ok, rerr := source.ReadLSP(home, ls.ID); rerr == nil && ok {
-				ls.Spec.Agents = existing.Spec.Agents
-				ls.Spec.Enabled = existing.Spec.Enabled
-			}
+		if existing, ok, rerr := source.ReadLSP(home, ls.ID); rerr == nil && ok {
+			ls.Spec.Agents = existing.Spec.Agents
+			ls.Spec.Enabled = existing.Spec.Enabled
 		}
 		if err := source.WriteLSP(home, ls); err != nil {
 			return res, fmt.Errorf("write lsp %s: %w", ls.ID, err)
@@ -114,10 +116,10 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 		res.Written = append(res.Written, "hooks/"+event+".toml")
 	}
 
-	if cerr == nil && opts.Warn != nil {
-		if missing := secrets.UnresolvedSecretRefs(&cur, sec); len(missing) > 0 {
+	if opts.Warn != nil {
+		if missing := secrets.UnresolvedSecretRefs(&cur, sec, secrets.EnvBackend{}); len(missing) > 0 {
 			fmt.Fprintf(opts.Warn,
-				"warning: could not re-reference secret(s) %s (secrets backend unavailable); "+
+				"warning: could not re-reference %s (secrets backend or env var unavailable); "+
 					"the written-back source file may contain cleartext — review it before committing\n",
 				strings.Join(missing, ", "))
 		}

@@ -94,7 +94,8 @@ func Discover(cwd string) (*Marker, error) {
 //   - Agents allowlist on Marker filters base.Config.Agents to only those
 //     listed (intersect with enabled). Empty list = use all enabled.
 //   - MCP entries on Marker are appended; collisions on .ID replace base.
-//   - Plugins.Disabled removes plugins from base by ID.
+//   - Plugins.Disabled marks plugins disabled by ID (components are already
+//     suppressed by the projector; the record is kept so it shows as disabled).
 //   - Plugins.Enabled is reserved for v1.x (currently a no-op since plugins
 //     are enabled-by-default).
 //   - Memory.Import paths are read relative to Marker.Root and appended to
@@ -141,19 +142,23 @@ func Merge(base source.Canonical, m *Marker) source.Canonical {
 		out.MCPServers = merged
 	}
 
-	// Plugins.Disabled: remove plugins from base by ID.
+	// Plugins.Disabled: mark plugins disabled by ID. The projector
+	// (LoadProjectedExcluding) has already suppressed their components, so we do
+	// NOT drop the record here — we keep it with Disabled set so status/explain
+	// can show the plugin as disabled-by-project rather than silently omitting it.
 	if len(m.Plugins.Disabled) > 0 {
 		block := map[string]bool{}
 		for _, id := range m.Plugins.Disabled {
 			block[id] = true
 		}
-		var kept []source.Plugin
-		for _, p := range out.Plugins {
-			if !block[p.ID] {
-				kept = append(kept, p)
+		marked := make([]source.Plugin, len(out.Plugins))
+		copy(marked, out.Plugins)
+		for i := range marked {
+			if block[marked[i].ID] {
+				marked[i].Plugin.Disabled = true
 			}
 		}
-		out.Plugins = kept
+		out.Plugins = marked
 	}
 
 	// Memory imports: read project-relative files and append.

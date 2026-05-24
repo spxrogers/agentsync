@@ -1,6 +1,9 @@
 package marketplace
 
 import (
+	"strconv"
+	"strings"
+
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -125,12 +128,77 @@ func computeBump(pl source.Plugin, spec source.PluginSpec, entry PluginEntry, mo
 	if latestVersion == "" || latestVersion == spec.Version {
 		return nil
 	}
+	// Only bump FORWARD. With raw string inequality a marketplace rollback to
+	// an older version was auto-applied as a silent "downgrade bump". When both
+	// versions parse as dotted-numeric semver, suppress the bump if the fetched
+	// version is strictly OLDER. If the cores are equal (e.g. a prerelease
+	// suffix differs) or either version is non-semver, fall back to
+	// track-latest (any change bumps) so an exotic scheme isn't stranded.
+	if cmp, ok := compareSemver(spec.Version, latestVersion); ok && cmp > 0 {
+		return nil
+	}
 	return &Bump{
 		ID:         pl.ID,
 		From:       spec.Version,
 		To:         latestVersion,
 		UpdateMode: mode,
 	}
+}
+
+// compareSemver compares two dotted-numeric versions, returning (-1|0|1, true)
+// when BOTH parse as a numeric release core, or (0, false) when either does
+// not. A leading "v" and any -prerelease/+build suffix are ignored; only the
+// release core (MAJOR.MINOR.PATCH…) is compared. It is intentionally minimal —
+// a non-comparable result lets the caller fall back to track-latest.
+func compareSemver(a, b string) (int, bool) {
+	pa, oka := parseNumericVersion(a)
+	pb, okb := parseNumericVersion(b)
+	if !oka || !okb {
+		return 0, false
+	}
+	n := len(pa)
+	if len(pb) > n {
+		n = len(pb)
+	}
+	for i := 0; i < n; i++ {
+		var x, y int
+		if i < len(pa) {
+			x = pa[i]
+		}
+		if i < len(pb) {
+			y = pb[i]
+		}
+		if x != y {
+			if x < y {
+				return -1, true
+			}
+			return 1, true
+		}
+	}
+	return 0, true
+}
+
+// parseNumericVersion parses "v1.2.3", "1.2.3-rc1", or "1.2" into numeric
+// release-core components ([]int). It returns false if any core component is
+// non-numeric, which signals the caller to fall back to string semantics.
+func parseNumericVersion(v string) ([]int, bool) {
+	v = strings.TrimPrefix(v, "v")
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	if v == "" {
+		return nil, false
+	}
+	parts := strings.Split(v, ".")
+	out := make([]int, len(parts))
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return nil, false
+		}
+		out[i] = n
+	}
+	return out, true
 }
 
 // splitPluginRefPkg splits "name@marketplace" into (name, marketplace).

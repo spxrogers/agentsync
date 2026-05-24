@@ -173,6 +173,57 @@ func TestWriter_KeyLevelBackup(t *testing.T) {
 	}
 }
 
+// TestWriter_KeyLevelBackup_ForeignNonObjectAtOwnedKey is the regression for
+// silent data loss: when the existing dest holds a SCALAR or ARRAY at a
+// top-level key agentsync owns as an object (e.g. mcpServers), overlayOwned
+// replaces it wholesale, but maybeBackupKeyOp's per-child pointer loop never
+// fired (getPointer can't descend a scalar/array), so the foreign value was
+// overwritten with NO backup — violating the "back up foreign content before
+// overwrite" invariant.
+func TestWriter_KeyLevelBackup_ForeignNonObjectAtOwnedKey(t *testing.T) {
+	cases := []struct {
+		name   string
+		dest   string
+		marker string
+	}{
+		{"scalar", `{"mcpServers": "surprise-foreign-value", "preserveMe": "keep"}`, "surprise-foreign-value"},
+		{"array", `{"mcpServers": ["foreign-array-entry"], "preserveMe": "keep"}`, "foreign-array-entry"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			home := filepath.Join(tmp, ".agentsync")
+			_ = os.MkdirAll(home, 0o755)
+			dest := filepath.Join(tmp, ".claude.json")
+			_ = os.WriteFile(dest, []byte(tc.dest), 0o644)
+
+			st := state.New()
+			w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
+			ours := []byte(`{"mcpServers":{"github":{"command":"npx"}}}`)
+			op := adapter.FileOp{
+				Action:        "write",
+				Path:          dest,
+				Content:       ours,
+				MergeStrategy: "merge-json-keys",
+				Mode:          0o644,
+				SourceID:      "mcp/github.toml",
+			}
+			final := []byte(`{"mcpServers":{"github":{"command":"npx"}},"preserveMe":"keep"}` + "\n")
+			if err := w.Write(op, final); err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+			reports := w.Reports()
+			if len(reports) == 0 {
+				t.Fatal("expected a foreign-collision backup before wholesale-replacing the owned key, got none")
+			}
+			got, _ := os.ReadFile(reports[0].BackupTo)
+			if !strings.Contains(string(got), tc.marker) {
+				t.Fatalf("backup missing the foreign value %q; got:\n%s", tc.marker, got)
+			}
+		})
+	}
+}
+
 // TestWriter_NoCollisionWhenAlreadyOwned asserts that when state already
 // records the file (file-level FileEntry), no backup is written even if
 // the bytes differ — that's just an in-place update by an owning agent.
@@ -287,6 +338,80 @@ func TestRenderApply_MultipleMergeOpsSamePathAllApplied(t *testing.T) {
 		if _, ok := got[key]; !ok {
 			t.Fatalf("merge op for %q was dropped; settings.json = %s", key, data)
 		}
+	}
+}
+
+// TestRenderApply_SharedWriteDivergence locks in the cross-adapter shared-write
+// contract. render.Apply dedups identical whole-file writes to the same path
+// (claude and opencode render byte-identical SKILL.md), keeping the first.
+// That is data-safe ONLY while the content is identical; if two adapters ever
+// render the same path with DIFFERENT bytes, silently dropping one is data
+// loss. The dedup must fail loud on divergence instead.
+func TestRenderApply_SharedWriteDivergence(t *testing.T) {
+	newPlan := func(dest, claudeBody, opencodeBody string) render.RenderPlan {
+		return render.RenderPlan{PerAgent: map[string]render.AgentResult{
+			"claude":   {Ops: []adapter.FileOp{{Action: "write", Path: dest, Content: []byte(claudeBody), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
+			"opencode": {Ops: []adapter.FileOp{{Action: "write", Path: dest, Content: []byte(opencodeBody), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
+		}}
+	}
+
+	t.Run("divergent fails loud", func(t *testing.T) {
+		tmp := t.TempDir()
+		home := filepath.Join(tmp, ".agentsync")
+		_ = os.MkdirAll(home, 0o755)
+		dest := filepath.Join(tmp, ".claude", "skills", "x", "SKILL.md")
+		_ = os.MkdirAll(filepath.Dir(dest), 0o755)
+		reg := adapter.NewRegistry()
+		_ = reg.Register(&fakeJSONApply{name: "claude"})
+		_ = reg.Register(&fakeJSONApply{name: "opencode"})
+
+		_, _, err := render.Apply(newPlan(dest, "shared-body", "DIVERGENT-body"), reg, state.New(), home, tmp, adapter.ScopeUser, "")
+		if err == nil {
+			t.Fatal("expected divergent shared-write to fail loud, got nil error")
+		}
+		if !strings.Contains(err.Error(), dest) {
+			t.Fatalf("error should name the divergent path; got: %v", err)
+		}
+	})
+
+	t.Run("identical dedups cleanly", func(t *testing.T) {
+		tmp := t.TempDir()
+		home := filepath.Join(tmp, ".agentsync")
+		_ = os.MkdirAll(home, 0o755)
+		dest := filepath.Join(tmp, ".claude", "skills", "x", "SKILL.md")
+		_ = os.MkdirAll(filepath.Dir(dest), 0o755)
+		reg := adapter.NewRegistry()
+		_ = reg.Register(&fakeJSONApply{name: "claude"})
+		_ = reg.Register(&fakeJSONApply{name: "opencode"})
+
+		if _, _, err := render.Apply(newPlan(dest, "shared-body", "shared-body"), reg, state.New(), home, tmp, adapter.ScopeUser, ""); err != nil {
+			t.Fatalf("identical shared-write should dedup cleanly, got: %v", err)
+		}
+		data, err := os.ReadFile(dest)
+		if err != nil || string(data) != "shared-body" {
+			t.Fatalf("want deduped single write 'shared-body'; got %q err=%v", data, err)
+		}
+	})
+}
+
+// TestPreviewCollisions_SharedWriteDivergence ensures `apply --dry-run`'s
+// preview fails loud on divergent shared-path content, matching Apply — so the
+// dry-run can't show a clean preview that the real apply then aborts on.
+func TestPreviewCollisions_SharedWriteDivergence(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, ".claude", "skills", "x", "SKILL.md")
+	_ = os.MkdirAll(filepath.Dir(dest), 0o755)
+	reg := adapter.NewRegistry()
+	_ = reg.Register(&fakeJSONApply{name: "claude"})
+	_ = reg.Register(&fakeJSONApply{name: "opencode"})
+	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+		"claude":   {Ops: []adapter.FileOp{{Action: "write", Path: dest, Content: []byte("A"), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
+		"opencode": {Ops: []adapter.FileOp{{Action: "write", Path: dest, Content: []byte("B"), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
+	}}
+	if _, err := render.PreviewCollisions(plan, reg, state.New(), home, tmp, adapter.ScopeUser, ""); err == nil {
+		t.Fatal("expected dry-run preview to fail loud on divergent shared-path content")
 	}
 }
 

@@ -161,9 +161,39 @@ GITHUB_TOKEN = "${secret:github.token}"
 	if err == nil {
 		t.Fatalf("diff must fail closed when a secret ref is unresolvable; got nil err, out:\n%s", out)
 	}
-	if !strings.Contains(err.Error(), "cannot resolve secret reference") ||
+	if !strings.Contains(err.Error(), "cannot resolve reference") ||
 		!strings.Contains(err.Error(), "github.token") {
 		t.Fatalf("expected fail-closed message naming the unresolved key; got: %v", err)
+	}
+}
+
+// TestDiff_FailsClosedOnUnsetEnvSecret is the regression for diff leaking an
+// env-backed secret's cleartext: apply substitutes ${env:VAR} into the dest in
+// cleartext; if VAR is unset when diff later runs, the redaction map (which
+// skips now-unresolvable refs) omitted it and diff printed the cleartext. The
+// fail-closed guard must cover ${env:…}, not just ${secret:…}.
+func TestDiff_FailsClosedOnUnsetEnvSecret(t *testing.T) {
+	tmp := t.TempDir()
+	const secret = "ZZZ_SUPER_SECRET_TOKEN_ZZZ"
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "MYTOK": secret}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n[server.env]\nTOKEN=\"${env:MYTOK}\"\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err) // dest now holds the resolved cleartext
+	}
+
+	// Run diff with MYTOK UNSET — the dest still holds the cleartext.
+	_ = os.Unsetenv("MYTOK")
+	out, _ := runCLI(t, map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}, "diff")
+	if strings.Contains(out, secret) {
+		t.Fatalf("diff leaked the env-backed secret cleartext to stdout:\n%s", out)
 	}
 }
 

@@ -81,10 +81,10 @@ type PluginSpec struct {
 	Update      string   `toml:"update,omitempty"` // pinned | track | manual
 	Agents      []string `toml:"agents,omitempty"`
 	// Disabled, when true, suppresses the plugin's projection during
-	// LoadWithCache. `agentsync plugin disable <id>` sets this. Without
-	// honouring it here, the CLI's TOML write was a no-op: the loader
-	// still projected the plugin's MCP servers / skills / etc. into the
-	// canonical model and apply shipped them.
+	// marketplace.LoadProjected. `agentsync plugin disable <id>` sets this.
+	// Without honouring it there, the CLI's TOML write would be a no-op:
+	// projection would still surface the plugin's MCP servers / skills / etc.
+	// into the canonical model and apply would ship them.
 	Disabled bool `toml:"disabled,omitempty"`
 }
 
@@ -153,20 +153,3 @@ type Memory struct {
 	Body      string            // resolved AGENTS.md after @import expansion
 	Fragments map[string]string // path -> body, keyed by repo-relative path under memory/
 }
-
-// PluginProjection is the set of canonical entries contributed by one plugin.
-// It mirrors marketplace.ProjectionResult but lives in the source package to
-// avoid an import cycle (marketplace already imports source).
-type PluginProjection struct {
-	MCPServers []MCPServer
-	Skills     []Skill
-	Subagents  []Subagent
-	Commands   []Command
-	Hooks      []Hook
-	LSPServers []LSPServer
-}
-
-// PluginProjector is a function that, given a plugin ID and its on-disk cache
-// directory, returns the canonical entries contributed by that plugin.
-// Pass nil to LoadWithCache to skip projection entirely.
-type PluginProjector func(id, cacheDir string) (PluginProjection, error)

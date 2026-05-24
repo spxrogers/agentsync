@@ -14,10 +14,8 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/drift"
 	"github.com/spxrogers/agentsync/internal/paths"
-	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
-	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 	"github.com/tailscale/hujson"
 )
@@ -36,26 +34,10 @@ func newStatusCmd() *cobra.Command {
 			// Load WITH the plugin cache so drift classification sees the
 			// same plugin-projected components `apply` writes; source.Load
 			// alone would report plugin-managed files/keys as untracked.
-			pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
 			userHome := paths.HomeDir(paths.OSEnv{})
-			c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
+			c, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag, true)
 			if err != nil {
 				return err
-			}
-
-			sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag, c)
-			if err != nil {
-				return err
-			}
-
-			if sc == adapter.ScopeProject && projectRoot != "" {
-				marker, merr := project.Discover(projectRoot)
-				if merr != nil {
-					return fmt.Errorf("load project marker: %w", merr)
-				}
-				if marker != nil {
-					c = project.Merge(c, marker)
-				}
 			}
 
 			statePath := filepath.Join(home, ".state", "targets.json")
@@ -74,9 +56,20 @@ func newStatusCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "no agents enabled; run `agentsync agent add claude` (or opencode)")
 				return nil
 			}
-			// status hashes the rendered TEMPLATED source for drift; wrap as a
-			// render-only Resolved without substituting (no backend needed).
-			plan, err := render.Plan(secrets.ForRender(c), reg, agents, sc, projectRoot, s, userHome)
+			// apply WRITES (and RecordOpsState HASHES) the secret-RESOLVED
+			// content, so status must hash the resolved source too — otherwise a
+			// synced ${secret:…}/${env:…} item compares templated-vs-resolved and
+			// classifies as phantom "pending" forever. Resolve like apply; fall
+			// back to the templated render only when the backend is unavailable
+			// (locked age key / CI), preserving offline status at the cost of the
+			// pre-existing false-pending in that degraded mode. Resolved values
+			// are only hashed here, never printed.
+			rendered := secrets.ForRender(c)
+			secBackend := secrets.SelectBackend(c.Config.Secrets, home, userHome)
+			if resolved, serr := secrets.SubstituteCanonical(c, secBackend, secrets.EnvBackend{}); serr == nil {
+				rendered = resolved
+			}
+			plan, err := render.Plan(rendered, reg, agents, sc, projectRoot, s, userHome)
 			if err != nil {
 				return err
 			}
@@ -124,6 +117,15 @@ func newStatusCmd() *cobra.Command {
 						cls := drift.Classify(hsrc, happlied, hdest)
 						fmt.Fprintf(w, "  %-20s %s#%s\n", cls, op.Path, ptr)
 					}
+				}
+				// orphans: whole-file dests this agent still owns in state but no
+				// longer renders (the source component was removed). Without this,
+				// status reported nothing for them — falsely "clean" — though the
+				// file lingers and the next apply / a reconcile would act on it.
+				for _, orphan := range render.OrphanFiles(s, userHome, name, sc, projectRoot, res.Ops) {
+					happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, orphan)].SHA256
+					cls := drift.Classify("", happlied, hashFile(orphan))
+					fmt.Fprintf(w, "  %-20s %s\n", cls, orphan)
 				}
 			}
 			return nil

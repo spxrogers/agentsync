@@ -177,8 +177,11 @@ func checkSecrets(w io.Writer, cfg source.SecretsConfig, home string) int {
 		fmt.Fprintf(w, "  identity   %s — not readable (%v)\n", idPath, err)
 		return fails + 1
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		fmt.Fprintf(w, "  identity   %s — too permissive (%v); chmod 600\n", idPath, info.Mode().Perm())
+	// Use the same check apply/verify use so doctor never disagrees: it honors
+	// AGENTSYNC_AGE_SKIP_PERM_CHECK=1 and the Windows ACL caveat, unlike the
+	// previous inline 0o077 mask which falsely failed an opted-out 0644 key.
+	if permErr := secrets.CheckIdentityPermissions(idPath); permErr != nil {
+		fmt.Fprintf(w, "  identity   %s — too permissive (%v); chmod 600 (or set AGENTSYNC_AGE_SKIP_PERM_CHECK=1)\n", idPath, info.Mode().Perm())
 		return fails + 1
 	}
 	fmt.Fprintf(w, "  identity   ok (%s)\n", idPath)

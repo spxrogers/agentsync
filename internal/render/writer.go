@@ -237,6 +237,39 @@ func (w *Writer) maybeBackupKeyOp(op adapter.FileOp) error {
 	var backupPath string
 	portableProject := paths.HomeRelative(w.userHome, w.project)
 	portablePath := paths.HomeRelative(w.userHome, op.Path)
+
+	// Foreign type-mismatch at an owned top-level key. agentsync owns a
+	// section (mcpServers/hooks/lspServers/mcp) at child-object granularity,
+	// so CollectPointers only yields second-level pointers (/mcpServers/<id>).
+	// If the existing file holds a SCALAR or ARRAY at that key instead of an
+	// object, overlayOwned (jsonkeys) replaces it wholesale, yet the per-child
+	// loop below never fires (getPointer can't descend a non-object) — silently
+	// destroying foreign content. An owned key can never be a non-object in
+	// state (agentsync always writes objects there), so a non-object existing
+	// value is unambiguously foreign: back it up before the overwrite.
+	for k, ov := range ours {
+		if _, ourObj := ov.(map[string]any); !ourObj {
+			continue // scalar/array in ours is covered by the pointer loop
+		}
+		ev, present := existingMap[k]
+		if !present {
+			continue
+		}
+		if _, evObj := ev.(map[string]any); evObj {
+			continue // both objects: per-child conflicts handled below
+		}
+		if backupPath == "" {
+			dest, err := w.backup(op.Path, existing)
+			if err != nil {
+				return err
+			}
+			backupPath = dest
+		}
+		w.reports = append(w.reports, CollisionReport{
+			Agent: w.agent, Path: op.Path, Pointer: "/" + escapeJSONPointer(k), BackupTo: backupPath,
+		})
+	}
+
 	for _, ptr := range CollectPointers(ours, "") {
 		stateKey := fmt.Sprintf("%s:%s:%s:%s:%s", w.agent, w.scope.String(), portableProject, portablePath, ptr)
 		if _, owned := w.state.Keys[stateKey]; owned {
@@ -334,6 +367,28 @@ func backupPathFor(src, backupRoot string) string {
 		return filepath.Join(backupRoot, "_escaped", filepath.Base(cleaned))
 	}
 	return dest
+}
+
+// BackupFile copies the file at path into <home>/.state/backups/<ts>/ verbatim
+// (0600) and returns the backup path. It is the standalone analog of the apply
+// Writer's per-collision backup, for callers (reconcile's interactive orphan
+// delete) that must preserve a file before a destructive action so no choice
+// loses content. Returns ("", nil) when path is missing.
+func BackupFile(home, path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read %s for backup: %w", path, err)
+	}
+	now := time.Now().UTC()
+	ts := fmt.Sprintf("%s-%09d", now.Format("20060102T150405Z"), now.Nanosecond())
+	dest := backupPathFor(path, filepath.Join(home, ".state", "backups", ts))
+	if err := iox.AtomicWrite(dest, data, 0o600); err != nil {
+		return "", fmt.Errorf("backup %s: %w", path, err)
+	}
+	return dest, nil
 }
 
 // bytesEqual returns true iff a and b have identical contents.

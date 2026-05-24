@@ -5,8 +5,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
@@ -120,14 +122,42 @@ func decryptToMap(cfg source.SecretsConfig, home string) (map[string]any, error)
 	return m, nil
 }
 
-// encryptMap marshals m as TOML and encrypts to secrets.age.
+// encryptMap marshals m as TOML and encrypts to secrets.age, verifying the
+// result is decryptable by the configured identity (see writeSecretsVerified).
 func encryptMap(m map[string]any, cfg source.SecretsConfig, home string) error {
 	plain, err := toml.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("marshal secrets TOML: %w", err)
 	}
+	return writeSecretsVerified(plain, cfg, home)
+}
+
+// writeSecretsVerified encrypts plain to the age store and then verifies the
+// configured identity_file can actually decrypt the result, rolling back the
+// previous store on failure. Without this, a recipient that does not match the
+// identity (a typo, or a key swap) silently re-encrypts the whole store to a
+// key the user cannot read — locking them out of their own secrets with a
+// cheerful "set" message.
+func writeSecretsVerified(plain []byte, cfg source.SecretsConfig, home string) error {
 	agePath := resolveAgePath(cfg, home)
-	return secrets.Encrypt(plain, cfg.Recipient, agePath)
+	prev, hadPrev := []byte(nil), false
+	if data, err := os.ReadFile(agePath); err == nil {
+		prev, hadPrev = data, true
+	}
+	if err := secrets.Encrypt(plain, cfg.Recipient, agePath); err != nil {
+		return err
+	}
+	if _, err := secrets.Decrypt(agePath, resolveIdentityPath(cfg, home)); err != nil {
+		// Roll back so a misconfiguration can never destroy access to the store.
+		if hadPrev {
+			_ = os.WriteFile(agePath, prev, 0o600)
+		} else {
+			_ = os.Remove(agePath)
+		}
+		return fmt.Errorf("the new secrets would be unreadable by identity_file (recipient %q does not match it); "+
+			"refusing to lock you out — check [secrets].recipient and identity_file: %w", cfg.Recipient, err)
+	}
+	return nil
 }
 
 // setNestedKey sets a dotted key in a nested map, creating intermediate maps
@@ -209,6 +239,25 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 		// Always remove cleartext tmp; errors ignored.
 		_ = os.Remove(tmpPath)
 	}()
+	// A plain defer does NOT run when the process dies on an unhandled signal —
+	// and aborting the editor with Ctrl-C (SIGINT) is the normal way to bail on
+	// an edit, which would otherwise leave the decrypted secrets on disk. Remove
+	// the cleartext tmp on SIGINT/SIGTERM before exiting.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	editDone := make(chan struct{})
+	go func() {
+		select {
+		case <-sigCh:
+			_ = os.Remove(tmpPath)
+			os.Exit(130) // 128 + SIGINT
+		case <-editDone:
+		}
+	}()
+	defer func() {
+		signal.Stop(sigCh)
+		close(editDone)
+	}()
 	if _, err := tmpFile.Write(plain); err != nil {
 		_ = tmpFile.Close()
 		return err
@@ -230,12 +279,18 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("editor: %w", err)
 	}
 
-	// Read back edited bytes and re-encrypt.
+	// Read back edited bytes, validate they parse as TOML (so a typo doesn't
+	// silently encrypt a broken store), and re-encrypt with the
+	// identity-can-decrypt verification.
 	edited, err := os.ReadFile(tmpPath)
 	if err != nil {
 		return fmt.Errorf("read edited tmp: %w", err)
 	}
-	if err := secrets.Encrypt(edited, cfg.Recipient, agePath); err != nil {
+	var check map[string]any
+	if err := toml.Unmarshal(edited, &check); err != nil {
+		return fmt.Errorf("edited secrets are not valid TOML (not saved): %w", err)
+	}
+	if err := writeSecretsVerified(edited, cfg, home); err != nil {
 		return fmt.Errorf("re-encrypt: %w", err)
 	}
 

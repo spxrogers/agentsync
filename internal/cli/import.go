@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/capture"
+	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
@@ -135,6 +136,15 @@ func importRun(cmd *cobra.Command, args []string) error {
 	if a == nil {
 		return fmt.Errorf("adapter %q not registered; valid agents: %s", agentName, validAgents)
 	}
+	// Gate codex/cursor the same way `agent add` does: they're registered as
+	// noop adapters, so Ingest returns an empty canonical and import would
+	// otherwise fail with a misleading "<component> not found in native config".
+	// Tell the user the agent is unimplemented instead.
+	if !v1Supported[agentName] && os.Getenv("AGENTSYNC_ALLOW_UNIMPLEMENTED") != "1" {
+		return fmt.Errorf("agent %q is not yet implemented in v1.0 "+
+			"(codex is planned for v1.1, cursor for v1.2); "+
+			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to import from its noop adapter anyway", agentName)
+	}
 
 	c, err := a.Ingest(adapter.ScopeUser, "")
 	if err != nil {
@@ -211,7 +221,7 @@ func importRun(cmd *cobra.Command, args []string) error {
 // canonical claims, and diff against the actual on-disk contents.
 func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []string {
 	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-	c, err := source.LoadWithCache(loaderFsForState(), home, pluginCacheRoot)
+	c, err := marketplace.LoadProjected(loaderFsForState(), home, pluginCacheRoot)
 	if err != nil {
 		return nil
 	}
@@ -274,7 +284,7 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) err
 
 	// Build a fresh canonical from disk and render only this agent.
 	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-	c, err := source.LoadWithCache(loaderFsForState(), home, pluginCacheRoot)
+	c, err := marketplace.LoadProjected(loaderFsForState(), home, pluginCacheRoot)
 	if err != nil {
 		return err
 	}

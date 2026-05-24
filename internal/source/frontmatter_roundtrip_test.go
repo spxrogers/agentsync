@@ -3,10 +3,42 @@ package source_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/source"
 )
+
+// TestWriteSubagent_PreservesLargeIntFrontmatter is the source-side regression
+// for YAML frontmatter integers > 2^53 losing precision (the YAML twin of the
+// jsonkeys large-int fix). renderFrontmatter + ParseFrontmatter must preserve
+// the exact integer rather than round it through float64.
+func TestWriteSubagent_PreservesLargeIntFrontmatter(t *testing.T) {
+	home := t.TempDir()
+	const big = int64(9007199254740993) // 2^53 + 1: first int float64 can't represent
+	sa := source.Subagent{
+		Name:        "big",
+		Frontmatter: map[string]any{"description": "d", "max_tokens": big},
+		Body:        "body\n",
+	}
+	if err := source.WriteSubagent(home, sa); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "agents", "big.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "9007199254740993") {
+		t.Fatalf("large int corrupted on write:\n%s", data)
+	}
+	fm, _, err := source.ParseFrontmatter(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := fm["max_tokens"].(int64); !ok || got != big {
+		t.Fatalf("large int corrupted on read: %#v (want int64 %d)", fm["max_tokens"], big)
+	}
+}
 
 // TestWriteSubagent_PreservesListAndMapFrontmatter is the regression for the
 // import write-back corruption: renderFrontmatter emitted Go fmt syntax (%v)

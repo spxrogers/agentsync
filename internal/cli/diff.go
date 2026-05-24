@@ -10,12 +10,9 @@ import (
 	"github.com/sergi/go-diff/diffmatchpatch"
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
-	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/paths"
-	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
-	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
@@ -43,26 +40,10 @@ func newDiffCmd() *cobra.Command {
 			// plugins exactly as `apply` does — otherwise diff omits every
 			// plugin-derived MCP server / skill / command and silently
 			// disagrees with what apply will write.
-			pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
 			userHome := paths.HomeDir(paths.OSEnv{})
-			c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
+			c, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag, true)
 			if err != nil {
 				return err
-			}
-
-			sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag, c)
-			if err != nil {
-				return err
-			}
-
-			if sc == adapter.ScopeProject && projectRoot != "" {
-				marker, merr := project.Discover(projectRoot)
-				if merr != nil {
-					return fmt.Errorf("load project marker: %w", merr)
-				}
-				if marker != nil {
-					c = project.Merge(c, marker)
-				}
 			}
 
 			statePath := filepath.Join(home, ".state", "targets.json")
@@ -105,10 +86,11 @@ func newDiffCmd() *cobra.Command {
 			// redacted — CollectResolved silently skips unresolvable refs — so
 			// printing the diff would leak it. Refuse with an actionable message
 			// rather than risk emitting a credential to stdout / logs.
-			if missing := secrets.UnresolvedSecretRefs(&c, secBackend); len(missing) > 0 {
-				return fmt.Errorf("diff: cannot resolve secret reference(s) %s; "+
-					"the destination file may contain a cleartext secret that diff cannot redact. "+
-					"Unlock or configure your secrets backend ([secrets] in agentsync.toml) and retry",
+			if missing := secrets.UnresolvedSecretRefs(&c, secBackend, envBackend); len(missing) > 0 {
+				return fmt.Errorf("diff: cannot resolve reference(s) %s; "+
+					"the destination file may contain a cleartext secret/env value that diff cannot redact "+
+					"(an env var set at apply time but unset now, or a locked secrets backend). "+
+					"Set the env var(s) / unlock the backend ([secrets] in agentsync.toml) and retry",
 					strings.Join(missing, ", "))
 			}
 			redact := secrets.CollectResolved(&c, secBackend, envBackend)

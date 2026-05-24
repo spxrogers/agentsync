@@ -35,7 +35,7 @@ func setupPluginMarketplaceFixture(t *testing.T, tmp string) string {
 // TestDiff_IncludesPluginProjection is the regression for the preview-lies
 // bug: `diff` (and `status`) loaded the canonical model with source.Load,
 // which does NOT project installed plugins, while `apply` uses
-// source.LoadWithCache, which does. So a user with an installed plugin saw a
+// marketplace.LoadProjected, which does. So a user with an installed plugin saw a
 // `diff` that omitted the plugin's MCP servers / skills / commands entirely,
 // then `apply` wrote them anyway — the preview did not match the action.
 func TestDiff_IncludesPluginProjection(t *testing.T) {
@@ -76,6 +76,50 @@ func TestStatus_IncludesPluginProjection(t *testing.T) {
 	}
 	if !strings.Contains(out, "demo-mcp") {
 		t.Fatalf("status omitted plugin-projected demo-mcp; got:\n%s", out)
+	}
+}
+
+// TestProjectMarker_DisablesPluginProjection is the end-to-end guard for the
+// project-marker disable being a no-op against rendered output: projection ran
+// before project.Merge, so a marker that "disabled" a plugin only dropped its
+// record while its MCP/skills/hooks still shipped into the project tree. With
+// the fix the marker's disabled list gates projection, so the components vanish.
+func TestProjectMarker_DisablesPluginProjection(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	fixture := setupPluginMarketplaceFixture(t, tmp)
+
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	mustRun(t, env, "marketplace", "add", fixture)
+	mustRun(t, env, "plugin", "install", "demo@test-mp")
+
+	// A project whose marker disables the demo plugin.
+	proj := filepath.Join(tmp, "proj")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proj, ".agentsync.toml"),
+		[]byte("[plugins]\ndisabled = [\"demo\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sanity: at user scope the plugin's MCP server IS projected.
+	out, err := runCLI(t, env, "diff")
+	if err != nil {
+		t.Fatalf("diff (user): %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "demo-mcp") {
+		t.Fatalf("user-scope diff should include demo-mcp; got:\n%s", out)
+	}
+
+	// In the project that disables demo, the projected component must not appear.
+	out, err = runCLI(t, env, "diff", "--project", proj)
+	if err != nil {
+		t.Fatalf("diff (project): %v\n%s", err, out)
+	}
+	if strings.Contains(out, "demo-mcp") {
+		t.Fatalf("project marker [plugins] disabled did not suppress demo-mcp; got:\n%s", out)
 	}
 }
 

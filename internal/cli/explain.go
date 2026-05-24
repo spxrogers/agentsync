@@ -3,10 +3,12 @@ package cli
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
@@ -24,7 +26,9 @@ func newExplainCmd() *cobra.Command {
 			pluginID := args[0]
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-			c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
+			// Read-only: a strict plugin.json/entry conflict degrades to a
+			// warning + entry-wins so explain still shows coverage.
+			c, err := marketplace.LoadProjectedLenient(afero.NewOsFs(), home, pluginCacheRoot, nil)
 			if err != nil {
 				return err
 			}
@@ -59,13 +63,17 @@ func newExplainCmd() *cobra.Command {
 			}
 			filtered.Plugins = matchedPlugins
 
-			// Collect enabled agents.
+			// Collect enabled agents. Sort so `explain --json` row order is
+			// deterministic — PrintJSON emits rows in this slice order verbatim
+			// (unlike PrintText, which sorts), so an unsorted map walk here
+			// leaked nondeterministic ordering into the JSON output.
 			var agents []string
 			for name, ag := range c.Config.Agents {
 				if ag.Enabled {
 					agents = append(agents, name)
 				}
 			}
+			sort.Strings(agents)
 
 			reg := registryFactory()
 			statePath := filepath.Join(home, ".state", "targets.json")

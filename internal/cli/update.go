@@ -1,10 +1,9 @@
 package cli
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -16,7 +15,6 @@ import (
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
-	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -39,7 +37,9 @@ plugins have newer versions available, and prints the pending bumps.
 By default, update is read-only (it does NOT touch agent configs). Use
 --apply to immediately upgrade all track-mode plugins and apply the result.
 Use --auto-safe to only bump plugins whose translation is non-lossy (requires
---apply).
+--apply). "Non-lossy" means the candidate version introduces no new translation
+loss (adapter skip) for an enabled agent, judged by projecting the plugin
+exactly as apply does and diffing the skips.
 
 When --apply is set, the same scope/project resolution as 'agentsync apply'
 is used (auto-detect from cwd, --scope project, --project <path>) so the
@@ -59,7 +59,10 @@ re-render lands in the right place when running inside a project.`,
 	return cmd
 }
 
-func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag string) error {
+func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFlag string) error {
+	if autoSafe && !doApply {
+		return fmt.Errorf("--auto-safe requires --apply (it only filters which bumps are applied)")
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	userHome := paths.HomeDir(paths.OSEnv{})
 	statePath := filepath.Join(home, ".state", "targets.json")
@@ -124,7 +127,7 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 	}
 
 	// Compute fresh manifest SHAs for installed plugins (for SHA drift detection).
-	freshSHAs := computeFreshPluginSHAs(home, c.Plugins)
+	freshSHAs := computeFreshPluginSHAs(home, c.Plugins, fetched, cmd.OutOrStdout())
 
 	// Detect re-uploaded (same version, different SHA) plugins.
 	shaWarnings := marketplace.DetectSHADrift(c.Plugins, freshSHAs)
@@ -136,6 +139,22 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 
 	// Compute pending bumps.
 	bumps := marketplace.ComputePendingBumps(st, c.Marketplaces, c.Plugins, fetched)
+
+	// --auto-safe: drop bumps whose candidate version would introduce a new
+	// translation loss (an adapter Skip) for any enabled agent. Each bump is
+	// evaluated by projecting the plugin's installed vs candidate manifest and
+	// diffing the skip identities a render emits; comparing both under identical
+	// conditions makes any render quirk cancel, so the delta is exactly the
+	// bump's effect. Evaluation failures are treated as lossy (conservative).
+	if autoSafe {
+		safe, lossy := filterSafeBumps(home, bumps, fetched, c.Config, userHome, cmd.OutOrStdout())
+		for _, b := range lossy {
+			fmt.Fprintf(cmd.OutOrStdout(),
+				"auto-safe: skipping lossy bump %s %s → %s (candidate version drops translation for an agent)\n",
+				b.ID, b.From, b.To)
+		}
+		bumps = safe
+	}
 
 	if len(bumps) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "all plugins are up to date")
@@ -173,24 +192,9 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 	// project state silently ignored, and \${secret:...\} references would
 	// land literally in agent native files.
 	if len(bumps) > 0 {
-		pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-		c2, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
+		c2, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag, false)
 		if err != nil {
 			return fmt.Errorf("reload source after upgrade: %w", err)
-		}
-
-		sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag, c2)
-		if err != nil {
-			return fmt.Errorf("resolve scope after update: %w", err)
-		}
-		if sc == adapter.ScopeProject && projectRoot != "" {
-			marker, merr := project.Discover(projectRoot)
-			if merr != nil {
-				return fmt.Errorf("load project marker after update: %w", merr)
-			}
-			if marker != nil {
-				c2 = project.Merge(c2, marker)
-			}
 		}
 
 		secBackend := secrets.SelectBackend(c2.Config.Secrets, home, userHome)
@@ -211,9 +215,14 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 		if err != nil {
 			return fmt.Errorf("plan after update: %w", err)
 		}
-		collisions, _, err := render.Apply(plan, reg, st, home, userHome, sc, projectRoot)
-		if err != nil {
-			return fmt.Errorf("apply after update: %w", err)
+		collisions, written, applyErr := render.Apply(plan, reg, st, home, userHome, sc, projectRoot)
+		if applyErr != nil {
+			// Mirror `apply`: if render.Apply fails mid-pipeline, the files
+			// that already landed must be recorded so the next apply doesn't
+			// treat them as foreign collisions. Without this best-effort save,
+			// a half-applied bump leaves the dest diverged from state.
+			_ = saveBestEffortState(st, statePath, plan, userHome, sc, projectRoot, written)
+			return fmt.Errorf("apply after update: %w", applyErr)
 		}
 		if len(collisions) > 0 {
 			ew := cmd.ErrOrStderr()
@@ -239,21 +248,81 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 	return nil
 }
 
-// computeFreshPluginSHAs reads each installed plugin's cached plugin.json and
-// computes its sha256 hex.  Returns a map of plugin ID → sha hex.  Missing or
-// unreadable plugin.json files are silently skipped (they may not be cached yet).
-func computeFreshPluginSHAs(home string, plugins []source.Plugin) map[string]string {
+// computeFreshPluginSHAs re-fetches each installed plugin's CURRENT upstream
+// manifest and computes the SHA the same way `plugin install` recorded it
+// (computeManifestSHA: sha256(plugin.json) when present, else sha256(entry)).
+// The result feeds marketplace.DetectSHADrift, which flags a plugin re-uploaded
+// at the SAME version with DIFFERENT content (tamper / upstream rollback at the
+// same tag).
+//
+// Crucially it must NOT read the plugin's installed cache: that is
+// byte-identical to what produced the recorded SHA, so drift would be
+// structurally undetectable (the original dead-code bug). For a Relative source
+// the fresh content already lives in this run's freshly re-fetched marketplace
+// cache, so we read it in place (no extra fetch). For git/npm sources we fetch
+// into a throwaway temp dir so the installed cache is never clobbered. A fetch
+// failure is warned and skipped — a read-only poll must not fail because one
+// upstream is unreachable, and an un-fetchable plugin is unknown, not "clean".
+//
+// Plugins with no recorded SHA (legacy / hand-managed) are skipped: DetectSHADrift
+// ignores them anyway, so there is no point paying to re-fetch them.
+func computeFreshPluginSHAs(home string, plugins []source.Plugin, fetched map[string]map[string]marketplace.PluginEntry, warn io.Writer) map[string]string {
 	out := make(map[string]string, len(plugins))
 	for _, pl := range plugins {
-		id := pl.ID
-		cacheDir := pluginCacheDir(home, id)
-		pluginJSONPath := filepath.Join(cacheDir, ".claude-plugin", "plugin.json")
-		data, err := os.ReadFile(pluginJSONPath)
-		if err != nil {
+		if pl.Plugin.ManifestSHA == "" {
 			continue
 		}
-		h := sha256.Sum256(data)
-		out[id] = hex.EncodeToString(h[:])
+		_, mpName := splitPluginRef(pl.Plugin.ID)
+		if mpName == "" {
+			mpName = "default"
+		}
+		entries, ok := fetched[mpName]
+		if !ok {
+			continue
+		}
+		mpEntry, ok := entries[pl.ID]
+		if !ok {
+			continue
+		}
+		// Drift detection is a SAME-version re-upload check. If the upstream now
+		// advertises a DIFFERENT version, that's a pending bump (handled by
+		// ComputePendingBumps), not a re-upload — comparing the recorded SHA
+		// against a different version's manifest would be a false positive.
+		if mpEntry.Version != "" && mpEntry.Version != pl.Plugin.Version {
+			continue
+		}
+		mpCacheRoot := marketplaceCacheDir(home, mpName)
+		src := mpEntry.Source
+
+		// Relative source: read the freshly re-fetched marketplace cache in
+		// place — the plugin.json lives at <mpCacheRoot>/<relative>/.claude-plugin/.
+		if src.Relative != "" {
+			relCacheDir := filepath.Join(mpCacheRoot, src.Relative)
+			if sha := computeManifestSHA(home, pl.ID, mpEntry, nil, relCacheDir); sha != "" {
+				out[pl.ID] = sha
+			}
+			continue
+		}
+
+		// git/npm source: fetch into a throwaway temp dir.
+		tmp, err := os.MkdirTemp("", "agentsync-drift-")
+		if err != nil {
+			if warn != nil {
+				fmt.Fprintf(warn, "warning: drift check for %s skipped: %v\n", pl.ID, err)
+			}
+			continue
+		}
+		if _, ferr := marketplace.Dispatch(src).Fetch(src, tmp); ferr != nil {
+			if warn != nil {
+				fmt.Fprintf(warn, "warning: drift check for %s skipped (re-fetch failed): %v\n", pl.ID, ferr)
+			}
+			_ = os.RemoveAll(tmp)
+			continue
+		}
+		if sha := computeManifestSHA(home, pl.ID, mpEntry, nil, tmp); sha != "" {
+			out[pl.ID] = sha
+		}
+		_ = os.RemoveAll(tmp)
 	}
 	return out
 }
@@ -281,7 +350,6 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 		return fmt.Errorf("plugin %q not found in marketplace %q", b.ID, mpName)
 	}
 
-	// Re-fetch the plugin source into its cache directory.
 	cacheDir := pluginCacheDir(home, b.ID)
 	mpCacheRoot := marketplaceCacheDir(home, mpName)
 	src := mpEntry.Source
@@ -289,26 +357,182 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 		src.Relative = filepath.Join(mpCacheRoot, src.Relative)
 		src.RootDir = mpCacheRoot
 	}
+
+	// Fetch into a TEMP cache, not the live cache. The live cache and
+	// plugins/<id>.toml must never diverge: if the bump overwrote the live
+	// cache and then the TOML write failed, the recorded version+SHA would
+	// stay old while the cache is new, and the immediate re-apply's
+	// LoadProjected would hard-fail manifest-SHA verification — bricking the
+	// WHOLE update so other plugins' bumps never reach the agents. By staging
+	// in a temp dir and swapping in the cache only AFTER the TOML is durably
+	// written, a failure leaves both old (consistent) and the re-apply proceeds.
+	if err := os.MkdirAll(filepath.Dir(cacheDir), 0o755); err != nil {
+		return fmt.Errorf("prepare cache dir for %s: %w", b.ID, err)
+	}
+	tmpCache, err := os.MkdirTemp(filepath.Dir(cacheDir), ".bump-"+b.ID+"-")
+	if err != nil {
+		return fmt.Errorf("temp cache for %s: %w", b.ID, err)
+	}
+	defer func() { _ = os.RemoveAll(tmpCache) }()
+
 	fetcher := marketplace.Dispatch(src)
-	if _, err := fetcher.Fetch(src, cacheDir); err != nil {
+	if _, err := fetcher.Fetch(src, tmpCache); err != nil {
 		return fmt.Errorf("fetch plugin %s: %w", b.ID, err)
 	}
 
-	// Update the plugin TOML. Recompute the manifest SHA from the freshly
-	// fetched cache exactly as `plugin install` does (computeManifestSHA),
-	// for every fetcher type. The previous code only set the SHA for git
-	// fetchers — and to result.HeadSHA, a git commit SHA rather than the
-	// sha256(plugin.json) that verifyPluginManifestSHA compares against —
-	// so npm/relative/strict plugins kept the stale pre-bump SHA and the
-	// immediate re-apply hard-failed "manifest SHA mismatch".
+	// Recompute the manifest SHA from the freshly fetched cache exactly as
+	// `plugin install` does (computeManifestSHA), for every fetcher type, so
+	// the recorded SHA matches the new plugin.json the re-apply will project.
+	prevTOML, _ := os.ReadFile(pluginPath) // for rollback if the cache swap fails
 	existing.Plugin.Version = b.To
-	if sha := computeManifestSHA(home, b.ID, mpEntry, nil, cacheDir); sha != "" {
+	if sha := computeManifestSHA(home, b.ID, mpEntry, nil, tmpCache); sha != "" {
 		existing.Plugin.ManifestSHA = sha
 	}
-
 	data, err := toml.Marshal(existing)
 	if err != nil {
 		return err
 	}
-	return iox.AtomicWrite(pluginPath, data, 0o644)
+	if err := iox.AtomicWrite(pluginPath, data, 0o644); err != nil {
+		return err
+	}
+
+	// TOML committed; swap the fetched cache into place. If the swap fails,
+	// roll the TOML back so cache (old) and TOML (old) stay consistent rather
+	// than leaving a new-SHA TOML over an old cache.
+	if err := swapDir(tmpCache, cacheDir); err != nil {
+		if prevTOML != nil {
+			_ = iox.AtomicWrite(pluginPath, prevTOML, 0o644)
+		}
+		return fmt.Errorf("commit plugin cache %s: %w", b.ID, err)
+	}
+	return nil
+}
+
+// swapDir replaces dst with src by removing dst and renaming src into place.
+// src and dst must be on the same filesystem (callers create src as a sibling
+// of dst). After a successful swap src no longer exists.
+func swapDir(src, dst string) error {
+	if err := os.RemoveAll(dst); err != nil {
+		return err
+	}
+	return os.Rename(src, dst)
+}
+
+// filterSafeBumps partitions bumps into those whose candidate version adds no
+// new translation losses (safe) and those that do (lossy), for `update
+// --auto-safe`. An evaluation error is conservatively treated as lossy so a
+// fetch/parse failure can never cause a lossy bump to slip through.
+func filterSafeBumps(home string, bumps []marketplace.Bump, fetched map[string]map[string]marketplace.PluginEntry, cfg source.Config, userHome string, warn io.Writer) (safe, lossy []marketplace.Bump) {
+	reg := registryFactory()
+	var agents []string
+	for name, ag := range cfg.Agents {
+		if ag.Enabled {
+			agents = append(agents, name)
+		}
+	}
+	for _, b := range bumps {
+		isLossy, err := bumpIsLossy(home, b, fetched, cfg, reg, agents, userHome)
+		if err != nil {
+			fmt.Fprintf(warn, "warning: auto-safe: cannot evaluate %s (%v); excluding to be safe\n", b.ID, err)
+			lossy = append(lossy, b)
+			continue
+		}
+		if isLossy {
+			lossy = append(lossy, b)
+		} else {
+			safe = append(safe, b)
+		}
+	}
+	return safe, lossy
+}
+
+// bumpIsLossy reports whether applying b introduces a new adapter Skip (a
+// translation loss) for any enabled agent. It renders the plugin's installed
+// (current cache) vs candidate (freshly fetched) projection in isolation and
+// returns true if the candidate emits a skip identity the current one did not.
+// Rendering both under identical conditions cancels any pipeline quirk, so the
+// delta is exactly the bump's effect.
+func bumpIsLossy(home string, b marketplace.Bump, fetched map[string]map[string]marketplace.PluginEntry, cfg source.Config, reg *adapter.Registry, agents []string, userHome string) (bool, error) {
+	existing, err := readPluginTOML(filepath.Join(home, "plugins", b.ID+".toml"))
+	if err != nil {
+		return false, err
+	}
+	_, mpName := splitPluginRef(existing.Plugin.ID)
+	if mpName == "" {
+		mpName = "default"
+	}
+	entries, ok := fetched[mpName]
+	if !ok {
+		return false, fmt.Errorf("marketplace %q not in fetched index", mpName)
+	}
+	mpEntry, ok := entries[b.ID]
+	if !ok {
+		return false, fmt.Errorf("plugin %q not found in marketplace %q", b.ID, mpName)
+	}
+
+	oldSkips, err := projectedSkips(mpEntry, pluginCacheDir(home, b.ID), cfg, reg, agents, userHome)
+	if err != nil {
+		return false, err
+	}
+
+	// Fetch the candidate into a throwaway temp dir (never the live cache).
+	mpCacheRoot := marketplaceCacheDir(home, mpName)
+	src := mpEntry.Source
+	if src.Relative != "" {
+		src.Relative = filepath.Join(mpCacheRoot, src.Relative)
+		src.RootDir = mpCacheRoot
+	}
+	tmp, err := os.MkdirTemp("", "agentsync-autosafe-")
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	if _, err := marketplace.Dispatch(src).Fetch(src, tmp); err != nil {
+		return false, fmt.Errorf("fetch candidate %s: %w", b.ID, err)
+	}
+	newSkips, err := projectedSkips(mpEntry, tmp, cfg, reg, agents, userHome)
+	if err != nil {
+		return false, err
+	}
+
+	for id := range newSkips {
+		if !oldSkips[id] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// projectedSkips projects a plugin via marketplace.Project — the SAME single
+// projector apply now uses (marketplace.LoadProjected) — and returns the set of
+// "agent\x00component\x00name" skip identities rendering just that plugin's
+// components for the given agents would emit. Using apply's projector keeps the
+// lossiness decision faithful to what apply will actually render. Skips are
+// structural (independent of resolved secret values), so the templated render
+// is sufficient and no secrets backend is required.
+func projectedSkips(entry marketplace.PluginEntry, cacheDir string, cfg source.Config, reg *adapter.Registry, agents []string, userHome string) (map[string]bool, error) {
+	proj, err := marketplace.Project(entry, cacheDir)
+	if err != nil {
+		return nil, err
+	}
+	mini := source.Canonical{
+		Config:     cfg,
+		MCPServers: proj.MCPServers,
+		Skills:     proj.Skills,
+		Subagents:  proj.Subagents,
+		Commands:   proj.Commands,
+		Hooks:      proj.Hooks,
+		LSPServers: proj.LSPServers,
+	}
+	plan, err := render.Plan(secrets.ForRender(mini), reg, agents, adapter.ScopeUser, "", nil, userHome)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for name, res := range plan.PerAgent {
+		for _, sk := range res.Skips {
+			out[name+"\x00"+sk.Component+"\x00"+sk.Name] = true
+		}
+	}
+	return out, nil
 }

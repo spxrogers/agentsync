@@ -37,14 +37,16 @@ Centrally manage AI coding-agent configurations across Claude Code, OpenCode, Co
 
 ### Linux
 
+Pick the package for your architecture (`amd64` or `arm64`).
+
 Debian/Ubuntu:
 
-    curl -fsSL https://github.com/spxrogers/agentsync/releases/latest/download/agentsync.deb -o agentsync.deb
+    curl -fsSL https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_amd64.deb -o agentsync.deb
     sudo dpkg -i agentsync.deb
 
 RPM:
 
-    sudo rpm -i https://github.com/spxrogers/agentsync/releases/latest/download/agentsync.rpm
+    sudo rpm -i https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_amd64.rpm
 
 Arch (AUR):
 
@@ -71,7 +73,7 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 ## Known limits in v1.x
 
 - **OpenCode hooks**: OpenCode hooks are JS/TS plugins, not declarative shell commands. agentsync v1 does NOT auto-translate Claude hooks to OpenCode. Hand-author a small JS/TS plugin if you need a hook on OpenCode.
-- **Cursor user-level rules**: Cursor stores user-level rules in app-local storage (not the filesystem). agentsync's Cursor adapter manages project-scope rules only.
+- **Cursor / Codex adapters**: not implemented in v1 — both register as no-op adapters (Codex planned for v1.1, Cursor for v1.2), and `agent add codex`/`cursor` is rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. Cursor also stores user-level rules in app-local storage (not the filesystem), so even the planned adapter will manage project-scope rules only.
 - **LSP projection beyond Claude**: OpenCode/Codex/Cursor LSP support is deferred. Claude plugins that include LSP servers install correctly on Claude itself; on other agents you'll see `lsp server X skipped` in the apply translation report.
 - **codex / cursor agent registration**: `agent add codex` and `agent add cursor` are rejected in v1.0 because their adapters are noops. Set `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` to register anyway (apply will silently emit zero ops for them).
 - **TOML / JSONC comment preservation**: comments in `~/.agentsync/mcp/*.toml` and in agent-side `opencode.json` are NOT preserved across reconcile `[w]`rite-back or import. Hand-edited comments survive in unrelated sections; the rewritten section will be re-emitted without comments. Deferred to v1.x.

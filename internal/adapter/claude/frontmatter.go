@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"sigs.k8s.io/yaml"
+
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 )
 
 // ParseFrontmatter extracts the YAML frontmatter and the markdown body. If
@@ -31,12 +33,9 @@ func ParseFrontmatter(data []byte) (map[string]any, string, error) {
 	yml := rest[:end]
 	body := rest[end+len("\n---\n"):]
 
-	var fm map[string]any
-	if err := yaml.Unmarshal(yml, &fm); err != nil {
+	fm, err := jsonkeys.DecodeYAML(yml)
+	if err != nil {
 		return nil, "", fmt.Errorf("parse yaml frontmatter: %w", err)
-	}
-	if fm == nil {
-		fm = map[string]any{}
 	}
 	return fm, string(body), nil
 }

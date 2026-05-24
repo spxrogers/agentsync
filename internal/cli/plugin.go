@@ -294,7 +294,12 @@ func pluginRemoveRun(cmd *cobra.Command, args []string) error {
 	home := paths.AgentsyncHome(paths.OSEnv{})
 
 	pluginPath := filepath.Join(home, "plugins", id+".toml")
-	if err := os.Remove(pluginPath); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(pluginPath); err != nil {
+		// Match upgrade/enable/disable: a typo'd or already-removed id is an
+		// error, not a cheerful "removed plugin X" no-op.
+		if os.IsNotExist(err) {
+			return fmt.Errorf("plugin %q is not installed", id)
+		}
 		return fmt.Errorf("remove %s: %w", pluginPath, err)
 	}
 
@@ -495,20 +500,23 @@ func searchAllMarketplaces(home, pluginID string) ([]byte, marketplace.PluginEnt
 	return nil, marketplace.PluginEntry{}, fmt.Errorf("plugin %q not found in any cached marketplace", pluginID)
 }
 
-// computeManifestSHA computes a sha256 over the plugin.json bytes (strict) or
-// the raw marketplace entry bytes (non-strict).
+// computeManifestSHA records the SHA that the loader's verifyPluginManifestSHA
+// will later re-check. The loader ALWAYS recomputes sha256(plugin.json) and has
+// no strict flag to branch on, so the recorded SHA MUST use the same formula
+// whenever a plugin.json exists — keying on the strict flag instead recorded
+// sha256(entry) for non-strict plugins and then hard-failed the very next apply
+// with a bogus "manifest SHA mismatch". So: hash plugin.json when present (both
+// strict and non-strict), and only fall back to hashing the marketplace entry
+// for an entry-only plugin with no plugin.json — a case the loader skips
+// verifying anyway (missing plugin.json → nil).
 func computeManifestSHA(home, id string, entry marketplace.PluginEntry, mpData []byte, cacheDir string) string {
-	strict := entry.Strict == nil || *entry.Strict
-	if strict {
-		pluginJSONPath := filepath.Join(cacheDir, ".claude-plugin", "plugin.json")
-		data, err := os.ReadFile(pluginJSONPath)
-		if err != nil {
-			return ""
-		}
+	pluginJSONPath := filepath.Join(cacheDir, ".claude-plugin", "plugin.json")
+	if data, err := os.ReadFile(pluginJSONPath); err == nil {
 		h := sha256.Sum256(data)
 		return hex.EncodeToString(h[:])
 	}
-	// Non-strict: SHA over the marketplace entry bytes (re-marshal entry for stability).
+	// No plugin.json (entry-only plugin): SHA over the marketplace entry bytes
+	// (re-marshal for stability).
 	entryBytes, err := json.Marshal(entry)
 	if err != nil {
 		return ""

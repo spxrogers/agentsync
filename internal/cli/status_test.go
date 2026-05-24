@@ -79,6 +79,71 @@ func TestStatus_DriftOnReplaceFile(t *testing.T) {
 	}
 }
 
+// TestStatus_SecretItemCleanAfterApply is the regression for status reporting
+// phantom "pending" drift forever for a secret-bearing MCP server after a clean
+// apply. status hashed the TEMPLATED source ("${env:MY_TOKEN}") while state and
+// the dest hold the RESOLVED value apply wrote, so hsrc != happlied == hdest →
+// Pending. status must render with secrets resolved (matching apply) so a
+// synced secret item classifies Clean.
+func TestStatus_SecretItemCleanAfterApply(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "MY_TOKEN": "ghp_resolved_secret"}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatalf("agent add: %v", err)
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n[server.env]\nTOKEN=\"${env:MY_TOKEN}\"\n"), 0o644)
+
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "pending") {
+		t.Fatalf("status reported phantom pending for a synced secret item:\n%s", out)
+	}
+	if !strings.Contains(out, "clean") {
+		t.Fatalf("expected the synced secret item to classify clean:\n%s", out)
+	}
+}
+
+// TestStatus_ReportsOrphanedFile is the regression for status reporting clean
+// while a whole-file dest agentsync owns but no longer renders (its source
+// component was removed) lingers on disk — invisible to status, though the next
+// apply or a reconcile would act on it.
+func TestStatus_ReportsOrphanedFile(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	skill := filepath.Join(tmp, ".agentsync", "skills", "demo", "SKILL.md")
+	_ = os.MkdirAll(filepath.Dir(skill), 0o755)
+	_ = os.WriteFile(skill, []byte("---\nname: demo\ndescription: d\n---\nbody\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	// Remove the source skill; the rendered dest SKILL.md is now owned-but-unrendered.
+	_ = os.RemoveAll(filepath.Join(tmp, ".agentsync", "skills", "demo"))
+
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "orphan") {
+		t.Fatalf("status should report the orphaned dest file; got:\n%s", out)
+	}
+}
+
 func TestStatus_CleanAfterApply(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

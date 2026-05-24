@@ -122,11 +122,11 @@ func TestCollectResolved_SkipsUnresolved(t *testing.T) {
 }
 
 // TestUnresolvedSecretRefs_FlagsUnresolvable is the regression for the
-// diff-leak: CollectResolved silently skips ${secret:…} refs the backend
-// cannot resolve (age key locked/absent), so the cleartext value already on
-// disk would print unredacted. UnresolvedSecretRefs surfaces those keys so
-// `diff` can fail closed instead of leaking. ${env:…} refs are intentionally
-// ignored — the env backend is always available and is not a leak risk.
+// diff-leak: CollectResolved silently skips refs the backend cannot resolve, so
+// the cleartext value already on disk would print unredacted.
+// UnresolvedSecretRefs surfaces those keys so `diff` can fail closed instead of
+// leaking. Both ${secret:…} (locked/absent key) and ${env:…} (var unset now but
+// set at apply time) must be flagged.
 func TestUnresolvedSecretRefs_FlagsUnresolvable(t *testing.T) {
 	c := source.Canonical{
 		MCPServers: []source.MCPServer{
@@ -139,24 +139,27 @@ func TestUnresolvedSecretRefs_FlagsUnresolvable(t *testing.T) {
 		},
 		Hooks: []source.Hook{{Command: "echo ${secret:other.key}"}},
 	}
-	// Backend resolves github.token but NOT other.key (mimics a partially
-	// available backend / locked identity for some keys).
+	// sec resolves github.token but NOT other.key; env resolves nothing (MY_HOST
+	// unset) — mimics a partially-available backend and an env var unset since
+	// apply.
 	sec := mapBackend{"github.token": "ghp_x"}
-	got := secrets.UnresolvedSecretRefs(&c, sec)
-	if len(got) != 1 || got[0] != "other.key" {
-		t.Fatalf("want [other.key], got %v", got)
+	env := mapBackend{}
+	got := secrets.UnresolvedSecretRefs(&c, sec, env)
+	want := []string{"env:MY_HOST", "secret:other.key"}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("want %v, got %v", want, got)
 	}
 }
 
-// TestUnresolvedSecretRefs_NoneWhenAllResolve confirms the common case does
-// not trip the fail-closed guard: every ${secret:…} resolves, and ${env:…}
-// refs are ignored entirely.
+// TestUnresolvedSecretRefs_NoneWhenAllResolve confirms the common case does not
+// trip the fail-closed guard: every ${secret:…} AND ${env:…} resolves.
 func TestUnresolvedSecretRefs_NoneWhenAllResolve(t *testing.T) {
 	c := source.Canonical{
 		Hooks: []source.Hook{{Command: "echo ${secret:a} ${env:B}"}},
 	}
 	sec := mapBackend{"a": "secret-a"}
-	if got := secrets.UnresolvedSecretRefs(&c, sec); len(got) != 0 {
+	env := mapBackend{"B": "env-b"}
+	if got := secrets.UnresolvedSecretRefs(&c, sec, env); len(got) != 0 {
 		t.Fatalf("want none, got %v", got)
 	}
 }
