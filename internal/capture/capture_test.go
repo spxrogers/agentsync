@@ -69,6 +69,22 @@ func TestCapture_ReReferencesAndPreserves(t *testing.T) {
 	}
 }
 
+// TestCapture_RejectsTraversalID is the regression for an arbitrary-file-write
+// primitive via import/capture: an ingested component id/event (taken from a
+// foreign / synced / project-supplied native config) was joined straight into a
+// source path with no validation, so `import claude:mcp:'../../../x'` wrote a
+// .toml OUTSIDE ~/.agentsync. The source write boundary must reject traversal.
+func TestCapture_RejectsTraversalID(t *testing.T) {
+	home := t.TempDir()
+	ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+		ID:     "../../../../escape",
+		Server: source.MCPServerSpec{Type: "stdio", Command: "x"},
+	}}}
+	if _, err := capture.Capture(home, ingested, capture.Opts{}); err == nil {
+		t.Fatal("capture must reject a traversal component id, got nil error")
+	}
+}
+
 // TestCapture_FailsClosedOnLoadError proves the secret boundary fails CLOSED
 // when the current source cannot be loaded. A malformed file anywhere in the
 // tree makes source.Load error; the previous code then skipped both

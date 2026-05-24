@@ -63,6 +63,27 @@ func TestImport_RejectsUnimplementedAgent(t *testing.T) {
 	}
 }
 
+// TestImport_RejectsTraversalSelector is the end-to-end regression for the
+// arbitrary-file-write via import: a foreign native config can carry a
+// path-traversal mcpServers key, and `import claude:mcp:<that>` joined it into
+// the source path with no validation, writing a .toml outside ~/.agentsync.
+func TestImport_RejectsTraversalSelector(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	claudeJSON := filepath.Join(tmp, ".claude.json")
+	_ = os.WriteFile(claudeJSON, []byte(`{"mcpServers":{"../../../../escape":{"type":"stdio","command":"x"}}}`), 0o644)
+
+	if _, err := runCLI(t, env, "import", "claude:mcp:../../../../escape"); err == nil {
+		t.Fatal("import of a path-traversal mcp id must be rejected")
+	}
+}
+
 // TestImport_MCPFromClaude verifies that import claude:mcp:<id> reads the MCP
 // server from .claude.json and writes it to the canonical source.
 func TestImport_MCPFromClaude(t *testing.T) {

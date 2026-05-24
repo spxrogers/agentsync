@@ -22,16 +22,38 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spxrogers/agentsync/internal/iox"
 	"sigs.k8s.io/yaml"
 )
 
+// validateComponentID rejects a component id/name/event that would not produce
+// a clean file path under its source subdirectory. This is the single
+// dest->source write boundary, reached by `import` and `reconcile` write-back
+// with ids/keys taken from a NATIVE config — which may be foreign, synced, or
+// project-supplied. Without this, an id like "../../../tmp/x" joined into the
+// path is an arbitrary-file-write (on write) / read (on read) primitive.
+// Mirrors the CLI's validateMCPID; here it guards every Write*/Read* so no
+// caller can bypass it.
+func validateComponentID(kind, id string) error {
+	if id == "" {
+		return fmt.Errorf("%s id is empty", kind)
+	}
+	if strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") || filepath.IsAbs(id) {
+		return fmt.Errorf("%s id %q contains a path component", kind, id)
+	}
+	return nil
+}
+
 // ReadMCP reads mcp/<id>.toml from home. ok is false when the file does not
 // exist. Used by reconcile write-back to preserve source-only fields
 // (agents/enabled) that the rendered destination spec doesn't carry.
 func ReadMCP(home, id string) (m MCPServer, ok bool, err error) {
+	if verr := validateComponentID("mcp", id); verr != nil {
+		return MCPServer{}, false, verr
+	}
 	data, rerr := os.ReadFile(filepath.Join(home, "mcp", id+".toml"))
 	if rerr != nil {
 		if os.IsNotExist(rerr) {
@@ -50,6 +72,9 @@ func ReadMCP(home, id string) (m MCPServer, ok bool, err error) {
 // exist. Mirrors ReadMCP: used by capture to preserve source-only LSP fields
 // (agents/enabled) that the rendered destination spec doesn't carry.
 func ReadLSP(home, id string) (ls LSPServer, ok bool, err error) {
+	if verr := validateComponentID("lsp", id); verr != nil {
+		return LSPServer{}, false, verr
+	}
 	data, rerr := os.ReadFile(filepath.Join(home, "lsp", id+".toml"))
 	if rerr != nil {
 		if os.IsNotExist(rerr) {
@@ -66,6 +91,9 @@ func ReadLSP(home, id string) (ls LSPServer, ok bool, err error) {
 
 // WriteMCP writes mcp/<id>.toml from m into home. Overwrites atomically.
 func WriteMCP(home, id string, m MCPServer) error {
+	if err := validateComponentID("mcp", id); err != nil {
+		return err
+	}
 	body, err := toml.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("marshal mcp %s: %w", id, err)
@@ -75,6 +103,9 @@ func WriteMCP(home, id string, m MCPServer) error {
 
 // WritePlugin writes plugins/<id>.toml from p into home. Overwrites atomically.
 func WritePlugin(home, id string, p Plugin) error {
+	if err := validateComponentID("plugin", id); err != nil {
+		return err
+	}
 	body, err := toml.Marshal(p)
 	if err != nil {
 		return fmt.Errorf("marshal plugin %s: %w", id, err)
@@ -84,6 +115,9 @@ func WritePlugin(home, id string, p Plugin) error {
 
 // WriteMarketplace writes marketplaces/<name>.toml from m into home. Overwrites atomically.
 func WriteMarketplace(home, name string, m Marketplace) error {
+	if err := validateComponentID("marketplace", name); err != nil {
+		return err
+	}
 	body, err := toml.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("marshal marketplace %s: %w", name, err)
@@ -93,6 +127,9 @@ func WriteMarketplace(home, name string, m Marketplace) error {
 
 // WriteSkill writes skills/<name>/SKILL.md from sk into home. Overwrites atomically.
 func WriteSkill(home string, sk Skill) error {
+	if err := validateComponentID("skill", sk.Name); err != nil {
+		return err
+	}
 	dir := filepath.Join(home, "skills", sk.Name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir skills/%s: %w", sk.Name, err)
@@ -103,6 +140,9 @@ func WriteSkill(home string, sk Skill) error {
 
 // WriteSubagent writes agents/<name>.md from sa into home. Overwrites atomically.
 func WriteSubagent(home string, sa Subagent) error {
+	if err := validateComponentID("subagent", sa.Name); err != nil {
+		return err
+	}
 	dir := filepath.Join(home, "agents")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir agents: %w", err)
@@ -113,6 +153,9 @@ func WriteSubagent(home string, sa Subagent) error {
 
 // WriteCommand writes commands/<name>.md from cm into home. Overwrites atomically.
 func WriteCommand(home string, cm Command) error {
+	if err := validateComponentID("command", cm.Name); err != nil {
+		return err
+	}
 	dir := filepath.Join(home, "commands")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir commands: %w", err)
@@ -134,6 +177,9 @@ type hookEntryOut struct {
 
 // WriteHooks writes hooks/<event>.toml for the given event. Overwrites atomically.
 func WriteHooks(home, event string, hooks []Hook) error {
+	if err := validateComponentID("hook event", event); err != nil {
+		return err
+	}
 	dir := filepath.Join(home, "hooks")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir hooks: %w", err)
@@ -160,6 +206,9 @@ type lspFileOut struct {
 
 // WriteLSP writes lsp/<id>.toml from ls into home. Overwrites atomically.
 func WriteLSP(home string, ls LSPServer) error {
+	if err := validateComponentID("lsp", ls.ID); err != nil {
+		return err
+	}
 	dir := filepath.Join(home, "lsp")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir lsp: %w", err)

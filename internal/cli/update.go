@@ -266,10 +266,10 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 
 // computeFreshPluginSHAs re-fetches each installed plugin's CURRENT upstream
 // manifest and computes the SHA the same way `plugin install` recorded it
-// (computeManifestSHA: sha256(plugin.json) for strict entries, sha256(entry)
-// for non-strict). The result feeds marketplace.DetectSHADrift, which flags a
-// plugin re-uploaded at the SAME version with DIFFERENT content (tamper /
-// upstream rollback at the same tag).
+// (computeManifestSHA: sha256(plugin.json) when present, else sha256(entry)).
+// The result feeds marketplace.DetectSHADrift, which flags a plugin re-uploaded
+// at the SAME version with DIFFERENT content (tamper / upstream rollback at the
+// same tag).
 //
 // Crucially it must NOT read the plugin's installed cache: that is
 // byte-identical to what produced the recorded SHA, so drift would be
