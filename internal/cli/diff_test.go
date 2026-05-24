@@ -190,7 +190,7 @@ func TestDiff_FailsClosedOnUnsetEnvSecret(t *testing.T) {
 	}
 
 	// Run diff with MYTOK UNSET — the dest still holds the cleartext.
-	os.Unsetenv("MYTOK")
+	_ = os.Unsetenv("MYTOK")
 	out, _ := runCLI(t, map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}, "diff")
 	if strings.Contains(out, secret) {
 		t.Fatalf("diff leaked the env-backed secret cleartext to stdout:\n%s", out)
