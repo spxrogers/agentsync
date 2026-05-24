@@ -4,10 +4,8 @@ on:
   push:
     branches: [main]
 
-# Single source of truth for the Go toolchain. go.mod's `go` directive
-# specifies the language version; `toolchain` specifies the actual build
-# toolchain. setup-go reads the `go` directive and Go itself honours the
-# toolchain directive at runtime.
+# Single source of truth for the Go version: go.mod's `go` directive.
+# setup-go reads it via go-version-file below.
 env:
   GO_VERSION_FILE: go.mod
 
@@ -47,24 +45,17 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
-    # GOTOOLCHAIN=local pins the analyser to whatever Go setup-go installed
-    # (the language version from go.mod's `go` directive). Without this,
-    # Go's auto-toolchain logic upgrades to the `toolchain` directive at
-    # runtime and golangci-lint then panics analysing stdlib it wasn't
-    # compiled against.
-    env:
-      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with:
-          # Pin to a v2 we've validated against this config locally. Bump
-          # deliberately when upgrading; "latest" can change config syntax
-          # under us. Action @v8 is the first that supports binary v2.
-          version: v2.5.0
+          # Pin a known-good golangci-lint. Its release binary must be built
+          # with a Go >= our go.mod version, or it can't parse our export
+          # data; v2.12.2 ships built with Go 1.26. Bump deliberately.
+          version: v2.12.2
 
   goreleaser-snapshot:
     name: goreleaser-snapshot (cross-build matrix)
