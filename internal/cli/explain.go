@@ -9,6 +9,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -73,7 +74,7 @@ func newExplainCmd() *cobra.Command {
 				return err
 			}
 
-			plan, err := render.Plan(filtered, reg, agents, adapter.ScopeUser, "", s, paths.HomeDir(paths.OSEnv{}))
+			plan, err := render.Plan(secrets.ForRender(filtered), reg, agents, adapter.ScopeUser, "", s, paths.HomeDir(paths.OSEnv{}))
 			if err != nil {
 				return err
 			}

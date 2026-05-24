@@ -18,6 +18,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -103,7 +104,9 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 			agents = append(agents, name)
 		}
 	}
-	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, userHome)
+	// reconcile hashes the rendered TEMPLATED source for drift; wrap as a
+	// render-only Resolved without substituting (no backend needed).
+	plan, err := render.Plan(secrets.ForRender(c), reg, agents, sc, projectRoot, s, userHome)
 	if err != nil {
 		return err
 	}

@@ -4,6 +4,7 @@
 package adapter
 
 import (
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -63,7 +64,11 @@ type Adapter interface {
 	Name() string
 	Capabilities() Capability
 	Detect() (bool, error)
-	Render(c source.Canonical, scope Scope, project string) ([]FileOp, []Skip, error)
+	// Render projects the resolved canonical (secrets already substituted to
+	// cleartext, or wrapped templated for a preview) into destination FileOps.
+	// It accepts only secrets.Resolved — never a raw source.Canonical — so the
+	// render egress is type-distinct from the dest->source write path.
+	Render(r secrets.Resolved, scope Scope, project string) ([]FileOp, []Skip, error)
 	Ingest(scope Scope, project string) (source.Canonical, error)
 	// KeyMergeStrategy returns this adapter's single JSON-key-merge strategy
 	// ("merge-json-keys" for claude, "merge-jsonc-keys" for opencode), or ""

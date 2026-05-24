@@ -81,7 +81,11 @@ func newDiffCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "no agents enabled; run `agentsync agent add claude` (or opencode)")
 				return nil
 			}
-			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, userHome)
+			// diff renders the TEMPLATED canonical (it masks the destination's
+			// resolved cleartext separately, below); wrap as a render-only
+			// Resolved without substituting so it works even when the secrets
+			// backend is locked.
+			plan, err := render.Plan(secrets.ForRender(c), reg, agents, sc, projectRoot, s, userHome)
 			if err != nil {
 				return err
 			}

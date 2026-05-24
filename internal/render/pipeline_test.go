@@ -7,6 +7,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/noop"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -19,7 +20,7 @@ type countingAdapter struct {
 	renderOps []adapter.FileOp
 }
 
-func (c *countingAdapter) Render(source.Canonical, adapter.Scope, string) ([]adapter.FileOp, []adapter.Skip, error) {
+func (c *countingAdapter) Render(secrets.Resolved, adapter.Scope, string) ([]adapter.FileOp, []adapter.Skip, error) {
 	return c.renderOps, nil, nil
 }
 
@@ -33,7 +34,7 @@ func TestPipeline_PlanEmpty(t *testing.T) {
 	_ = reg.Register(noop.New("claude"))
 	_ = reg.Register(noop.New("opencode"))
 
-	plan, err := render.Plan(source.Canonical{}, reg, []string{"claude", "opencode"}, adapter.ScopeUser, "", nil, "/tmp")
+	plan, err := render.Plan(secrets.ForRender(source.Canonical{}), reg, []string{"claude", "opencode"}, adapter.ScopeUser, "", nil, "/tmp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +49,7 @@ func TestPipeline_PlanEmpty(t *testing.T) {
 func TestPipeline_UnknownAgentError(t *testing.T) {
 	reg := adapter.NewRegistry()
 	_ = reg.Register(noop.New("claude"))
-	_, err := render.Plan(source.Canonical{}, reg, []string{"missing"}, adapter.ScopeUser, "", nil, "/tmp")
+	_, err := render.Plan(secrets.ForRender(source.Canonical{}), reg, []string{"missing"}, adapter.ScopeUser, "", nil, "/tmp")
 	if err == nil {
 		t.Fatal("expected error for unknown adapter")
 	}
@@ -122,7 +123,7 @@ func TestPipeline_OwnedKeysInjected(t *testing.T) {
 	key := "claude:user::${HOME}/.claude.json:/mcpServers/github"
 	s.Keys[key] = state.KeyEntry{SHA256: "abc123", AppliedAt: time.Now()}
 
-	plan, err := render.Plan(source.Canonical{}, reg, []string{"claude"}, adapter.ScopeUser, "", s, home)
+	plan, err := render.Plan(secrets.ForRender(source.Canonical{}), reg, []string{"claude"}, adapter.ScopeUser, "", s, home)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -195,8 +195,9 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 
 		secBackend := secrets.SelectBackend(c2.Config.Secrets, home, userHome)
 		envBackend := secrets.EnvBackend{}
-		if err := secrets.SubstituteCanonical(&c2, secBackend, envBackend); err != nil {
-			return fmt.Errorf("substitute secrets after update: %w", err)
+		resolved, serr := secrets.SubstituteCanonical(c2, secBackend, envBackend)
+		if serr != nil {
+			return fmt.Errorf("substitute secrets after update: %w", serr)
 		}
 
 		agents := []string{}
@@ -206,7 +207,7 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 			}
 		}
 		reg := registryFactory()
-		plan, err := render.Plan(c2, reg, agents, sc, projectRoot, st, userHome)
+		plan, err := render.Plan(resolved, reg, agents, sc, projectRoot, st, userHome)
 		if err != nil {
 			return fmt.Errorf("plan after update: %w", err)
 		}

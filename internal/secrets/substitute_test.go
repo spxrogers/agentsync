@@ -28,11 +28,12 @@ func TestSubstituteCanonical_MCPEnv(t *testing.T) {
 		},
 	}
 
-	if err := secrets.SubstituteCanonical(&c, sec, env); err != nil {
+	r, err := secrets.SubstituteCanonical(c, sec, env)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	srv := c.MCPServers[0].Server
+	srv := r.Canonical().MCPServers[0].Server
 	if srv.Env["GITHUB_TOKEN"] != "ghp_abc" {
 		t.Errorf("GITHUB_TOKEN = %q, want ghp_abc", srv.Env["GITHUB_TOKEN"])
 	}
@@ -58,7 +59,7 @@ func TestSubstituteCanonical_UnresolvedReturnsError(t *testing.T) {
 		},
 	}
 
-	err := secrets.SubstituteCanonical(&c, sec, env)
+	_, err := secrets.SubstituteCanonical(c, sec, env)
 	if err == nil {
 		t.Fatal("expected error for unresolved secret reference")
 	}
@@ -74,11 +75,12 @@ func TestSubstituteCanonical_HookCommand(t *testing.T) {
 		},
 	}
 
-	if err := secrets.SubstituteCanonical(&c, sec, env); err != nil {
+	r, err := secrets.SubstituteCanonical(c, sec, env)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if c.Hooks[0].Command != "sign --key=sk_live_xyz" {
-		t.Errorf("hook command = %q, want resolved", c.Hooks[0].Command)
+	if got := r.Canonical().Hooks[0].Command; got != "sign --key=sk_live_xyz" {
+		t.Errorf("hook command = %q, want resolved", got)
 	}
 }
 
@@ -93,10 +95,11 @@ func TestSubstituteCanonical_NoRefs(t *testing.T) {
 		},
 	}
 
-	if err := secrets.SubstituteCanonical(&c, sec, env); err != nil {
+	r, err := secrets.SubstituteCanonical(c, sec, env)
+	if err != nil {
 		t.Fatalf("unexpected error for canonical without refs: %v", err)
 	}
-	if c.MCPServers[0].Server.Env["FOO"] != "bar" {
+	if r.Canonical().MCPServers[0].Server.Env["FOO"] != "bar" {
 		t.Errorf("plain env mutated unexpectedly")
 	}
 }

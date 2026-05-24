@@ -5,6 +5,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -27,7 +28,7 @@ func TestIngest_RoundTripsMCPAndSkills(t *testing.T) {
 		}},
 	}
 	a := claude.New(claude.Options{TargetRoot: tmp})
-	ops, _, err := a.Render(in, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestIngest_RoundTripsSubagentsAndCommands(t *testing.T) {
 		}},
 	}
 	a := claude.New(claude.Options{TargetRoot: tmp})
-	ops, _, err := a.Render(in, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestIngest_RoundTripsHooksAndLSP(t *testing.T) {
 		}},
 	}
 	a := claude.New(claude.Options{TargetRoot: tmp})
-	ops, _, err := a.Render(in, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestIngest_RoundTripsMemory(t *testing.T) {
 		Memory: source.Memory{Body: "# Agent Memory\n\nRemember: always be helpful.\n"},
 	}
 	a := claude.New(claude.Options{TargetRoot: tmp})
-	ops, _, err := a.Render(in, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}

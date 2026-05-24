@@ -5,6 +5,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/noop"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -14,7 +15,7 @@ func TestNoop_Implements(t *testing.T) {
 
 func TestNoop_Render(t *testing.T) {
 	a := noop.New("test")
-	ops, skips, err := a.Render(source.Canonical{}, adapter.ScopeUser, "")
+	ops, skips, err := a.Render(secrets.ForRender(source.Canonical{}), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatal(err)
 	}

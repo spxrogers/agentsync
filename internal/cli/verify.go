@@ -49,7 +49,7 @@ func newVerifyCmd() *cobra.Command {
 			if os.Getenv("AGENTSYNC_ALLOW_OFFLINE_VERIFY") != "1" {
 				secBackend := secrets.SelectBackend(c.Config.Secrets, home, paths.HomeDir(paths.OSEnv{}))
 				envBackend := secrets.EnvBackend{}
-				if err := secrets.SubstituteCanonical(&c, secBackend, envBackend); err != nil {
+				if _, err := secrets.SubstituteCanonical(c, secBackend, envBackend); err != nil {
 					return fmt.Errorf("verify ${secret:}/${env:} resolution: %w", err)
 				}
 			}

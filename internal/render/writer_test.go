@@ -9,6 +9,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -25,7 +26,7 @@ type fakeJSONApply struct {
 func (f *fakeJSONApply) Name() string                     { return f.name }
 func (f *fakeJSONApply) Capabilities() adapter.Capability { return 0 }
 func (f *fakeJSONApply) Detect() (bool, error)            { return true, nil }
-func (f *fakeJSONApply) Render(_ source.Canonical, _ adapter.Scope, _ string) ([]adapter.FileOp, []adapter.Skip, error) {
+func (f *fakeJSONApply) Render(_ secrets.Resolved, _ adapter.Scope, _ string) ([]adapter.FileOp, []adapter.Skip, error) {
 	return nil, nil, nil
 }
 

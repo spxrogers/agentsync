@@ -16,6 +16,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 	"github.com/tailscale/hujson"
@@ -73,7 +74,9 @@ func newStatusCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "no agents enabled; run `agentsync agent add claude` (or opencode)")
 				return nil
 			}
-			plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, userHome)
+			// status hashes the rendered TEMPLATED source for drift; wrap as a
+			// render-only Resolved without substituting (no backend needed).
+			plan, err := render.Plan(secrets.ForRender(c), reg, agents, sc, projectRoot, s, userHome)
 			if err != nil {
 				return err
 			}

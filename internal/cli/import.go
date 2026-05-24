@@ -16,6 +16,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/capture"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -218,7 +219,7 @@ func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []str
 	if a == nil {
 		return nil
 	}
-	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	if err != nil {
 		return nil
 	}
@@ -281,7 +282,7 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) err
 	if a == nil {
 		return fmt.Errorf("adapter %q not registered", agentName)
 	}
-	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	if err != nil {
 		return err
 	}
