@@ -1,4 +1,4 @@
-# 0001 — `strict` flag is a conflict policy on a plugin.json + entry union
+# 2026-05-24 — `strict` flag is a conflict policy on a plugin.json + entry union
 
 - **Status:** Accepted — 2026-05-24
 - **Area:** plugin projection (`internal/marketplace/projection.go`)
