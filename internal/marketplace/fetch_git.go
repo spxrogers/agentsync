@@ -197,6 +197,26 @@ func extractSubdir(dir, subPath string) error {
 		return fmt.Errorf("subdir %s is not a directory", subPath)
 	}
 
+	// Symlink-escape guard. go-git materializes committed symlinks, so subPath
+	// (or an intermediate component) can be a symlink that the lexical
+	// containment check above cannot catch and the os.Stat above happily
+	// FOLLOWED. Resolve all symlinks and re-verify containment, then copy from
+	// the RESOLVED path — otherwise a crafted git-subdir plugin could point its
+	// subdir at /etc or ~/.ssh and slurp host files into the cache (and from
+	// there into agent config). This runs before rejectSymlinks(into), which
+	// only sees the post-extraction tree of regular files.
+	resolvedSub, err := filepath.EvalSymlinks(fullSub)
+	if err != nil {
+		return fmt.Errorf("resolve subdir %s: %w", subPath, err)
+	}
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return fmt.Errorf("resolve clone root: %w", err)
+	}
+	if !pathContains(resolvedDir, resolvedSub) {
+		return fmt.Errorf("subdir %q resolves outside the repository root via a symlink (refusing escape)", subPath)
+	}
+
 	tmp := dir + ".subdir_tmp"
 	old := dir + ".subdir_old"
 
@@ -205,7 +225,7 @@ func extractSubdir(dir, subPath string) error {
 	_ = os.RemoveAll(tmp)
 	_ = os.RemoveAll(old)
 
-	if err := copyDir(fullSub, tmp); err != nil {
+	if err := copyDir(resolvedSub, tmp); err != nil {
 		_ = os.RemoveAll(tmp)
 		return fmt.Errorf("copy subdir to tmp: %w", err)
 	}
