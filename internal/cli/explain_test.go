@@ -102,6 +102,54 @@ func TestExplain_JSONOutput(t *testing.T) {
 	}
 }
 
+// TestExplain_JSONAgentOrderDeterministic guards the sorted-row contract for
+// `explain --json`: PrintJSON emits rows in the agents-slice order verbatim, and
+// that slice was built from an unsorted map walk, so multi-agent JSON output was
+// nondeterministic (spurious diffs). Rows must be sorted by agent.
+func TestExplain_JSONAgentOrderDeterministic(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+
+	fixture := setupExplainFixture(t, tmp)
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []string{"claude", "opencode"} {
+		if _, err := runCLI(t, env, "agent", "add", a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "explain", "demo@test-mp", "--json")
+	if err != nil {
+		t.Fatalf("explain --json: %v\n%s", err, out)
+	}
+	var result struct {
+		Rows []struct {
+			Agent string `json:"agent"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("not valid JSON: %v\n%s", err, out)
+	}
+	if len(result.Rows) < 2 {
+		t.Fatalf("expected >=2 agent rows; got %d:\n%s", len(result.Rows), out)
+	}
+	for i := 1; i < len(result.Rows); i++ {
+		if result.Rows[i-1].Agent > result.Rows[i].Agent {
+			t.Fatalf("explain --json rows not sorted by agent (nondeterministic): %q before %q",
+				result.Rows[i-1].Agent, result.Rows[i].Agent)
+		}
+	}
+}
+
 // setupExplainFixture creates a minimal local marketplace with a single demo plugin.
 func setupExplainFixture(t *testing.T, tmp string) string {
 	t.Helper()

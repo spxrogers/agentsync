@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
@@ -60,13 +61,17 @@ func newExplainCmd() *cobra.Command {
 			}
 			filtered.Plugins = matchedPlugins
 
-			// Collect enabled agents.
+			// Collect enabled agents. Sort so `explain --json` row order is
+			// deterministic — PrintJSON emits rows in this slice order verbatim
+			// (unlike PrintText, which sorts), so an unsorted map walk here
+			// leaked nondeterministic ordering into the JSON output.
 			var agents []string
 			for name, ag := range c.Config.Agents {
 				if ag.Enabled {
 					agents = append(agents, name)
 				}
 			}
+			sort.Strings(agents)
 
 			reg := registryFactory()
 			statePath := filepath.Join(home, ".state", "targets.json")
