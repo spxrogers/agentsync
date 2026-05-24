@@ -183,6 +183,16 @@ type pluginManifestJSON struct {
 	Agents     json.RawMessage            `json:"agents"`
 }
 
+// ProjectPluginCache projects a plugin's cached plugin.json into canonical
+// components exactly as apply does (LoadWithCache → projectPlugins →
+// readPluginProjection): plugin.json only — no marketplace-entry overrides and
+// no manifest-SHA check. `update --auto-safe` uses this so its lossiness
+// decision reflects what apply will actually render, rather than diverging via
+// marketplace.Project (which applies entry overrides the apply loader ignores).
+func ProjectPluginCache(cacheDir string) (PluginProjection, error) {
+	return readPluginProjection(afero.NewOsFs(), cacheDir)
+}
+
 // readPluginProjection reads <pluginCacheDir>/.claude-plugin/plugin.json and
 // builds a PluginProjection. MCP and LSP server entries are parsed inline to
 // avoid the source↔marketplace import cycle. Skills, commands, and subagents

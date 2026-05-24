@@ -38,9 +38,9 @@ plugins have newer versions available, and prints the pending bumps.
 By default, update is read-only (it does NOT touch agent configs). Use
 --apply to immediately upgrade all track-mode plugins and apply the result.
 Use --auto-safe to only bump plugins whose translation is non-lossy (requires
---apply). "Non-lossy" is judged by comparing the plugin's installed vs candidate
-manifest content; a loss introduced solely by a CHANGED inline marketplace-entry
-override on a non-strict plugin (rare) may not be detected.
+--apply). "Non-lossy" means the candidate version introduces no new translation
+loss (adapter skip) for an enabled agent, judged by projecting the plugin
+exactly as apply does and diffing the skips.
 
 When --apply is set, the same scope/project resolution as 'agentsync apply'
 is used (auto-detect from cwd, --scope project, --project <path>) so the
@@ -486,13 +486,7 @@ func bumpIsLossy(home string, b marketplace.Bump, fetched map[string]map[string]
 		return false, fmt.Errorf("plugin %q not found in marketplace %q", b.ID, mpName)
 	}
 
-	// NOTE: the OLD baseline projects the installed cache with the CURRENT
-	// (candidate) marketplace entry, because the entry active at install time
-	// isn't persisted in plugins/<id>.toml. So a loss introduced purely by a
-	// CHANGED inline entry override (non-strict plugins) applies to both
-	// baselines and cancels in the delta — that narrow case isn't detected.
-	// Content-driven losses (the common case) are caught.
-	oldSkips, err := projectedSkips(mpEntry, pluginCacheDir(home, b.ID), cfg, reg, agents, userHome)
+	oldSkips, err := projectedSkips(pluginCacheDir(home, b.ID), cfg, reg, agents, userHome)
 	if err != nil {
 		return false, err
 	}
@@ -512,7 +506,7 @@ func bumpIsLossy(home string, b marketplace.Bump, fetched map[string]map[string]
 	if _, err := marketplace.Dispatch(src).Fetch(src, tmp); err != nil {
 		return false, fmt.Errorf("fetch candidate %s: %w", b.ID, err)
 	}
-	newSkips, err := projectedSkips(mpEntry, tmp, cfg, reg, agents, userHome)
+	newSkips, err := projectedSkips(tmp, cfg, reg, agents, userHome)
 	if err != nil {
 		return false, err
 	}
@@ -525,13 +519,15 @@ func bumpIsLossy(home string, b marketplace.Bump, fetched map[string]map[string]
 	return false, nil
 }
 
-// projectedSkips projects a plugin manifest from cacheDir and returns the set of
-// "agent\x00component\x00name" skip identities that rendering just that plugin's
-// components for the given agents would emit. Skips are structural (they don't
-// depend on resolved secret values), so the templated render is sufficient and
-// no secrets backend is required.
-func projectedSkips(entry marketplace.PluginEntry, cacheDir string, cfg source.Config, reg *adapter.Registry, agents []string, userHome string) (map[string]bool, error) {
-	proj, err := marketplace.Project(entry, cacheDir)
+// projectedSkips projects a plugin's cached plugin.json the SAME way apply does
+// (source.ProjectPluginCache) and returns the set of "agent\x00component\x00name"
+// skip identities rendering just that plugin's components for the given agents
+// would emit. Using apply's projection (not marketplace.Project) keeps the
+// lossiness decision faithful to what apply will actually render. Skips are
+// structural (independent of resolved secret values), so the templated render
+// is sufficient and no secrets backend is required.
+func projectedSkips(cacheDir string, cfg source.Config, reg *adapter.Registry, agents []string, userHome string) (map[string]bool, error) {
+	proj, err := source.ProjectPluginCache(cacheDir)
 	if err != nil {
 		return nil, err
 	}
