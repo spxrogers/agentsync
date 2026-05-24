@@ -83,7 +83,67 @@ func projectWithFuncs(entry PluginEntry, cacheDir string, readFile func(string) 
 	if err := applyEntryOverrides(entry, &pr, cacheDir, readFile); err != nil {
 		return pr, err
 	}
+	dedupProjection(&pr)
 	return pr, nil
+}
+
+// dedupProjection collapses same-identity components that the union (plugin.json
+// PLUS entry overrides) can produce. Without it, an entry that overrides a
+// same-named plugin.json skill/subagent/command yields TWO canonical entries
+// that render to the SAME dest path — and apply's cross-agent divergence guard
+// then aborts the whole run rather than letting the override win. MCP/LSP dups
+// only ever last-win at the render map, but deduping here keeps the component
+// count honest too.
+//
+// Precedence matches the documented "inline override wins" rule: name/id-keyed
+// components keep the LAST occurrence (the entry is applied after plugin.json),
+// while hooks — which have no override key — are deduped only on EXACT content,
+// so two genuinely-distinct hooks for the same event both survive.
+func dedupProjection(pr *ProjectionResult) {
+	pr.MCPServers = dedupLastWins(pr.MCPServers, func(s source.MCPServer) string { return s.ID })
+	pr.LSPServers = dedupLastWins(pr.LSPServers, func(s source.LSPServer) string { return s.ID })
+	pr.Skills = dedupLastWins(pr.Skills, func(s source.Skill) string { return s.Name })
+	pr.Subagents = dedupLastWins(pr.Subagents, func(s source.Subagent) string { return s.Name })
+	pr.Commands = dedupLastWins(pr.Commands, func(c source.Command) string { return c.Name })
+	pr.Hooks = dedupHooks(pr.Hooks)
+}
+
+// dedupLastWins returns items with same-key duplicates removed, keeping the last
+// occurrence of each key and preserving the order in which those last
+// occurrences appear.
+func dedupLastWins[T any](items []T, key func(T) string) []T {
+	if len(items) < 2 {
+		return items
+	}
+	lastIdx := make(map[string]int, len(items))
+	for i, it := range items {
+		lastIdx[key(it)] = i
+	}
+	out := make([]T, 0, len(items))
+	for i, it := range items {
+		if lastIdx[key(it)] == i {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// dedupHooks removes exact-duplicate hooks, preserving order. Hooks have no
+// override key, so only byte-identical entries are collapsed.
+func dedupHooks(hooks []source.Hook) []source.Hook {
+	if len(hooks) < 2 {
+		return hooks
+	}
+	seen := make(map[source.Hook]bool, len(hooks))
+	out := make([]source.Hook, 0, len(hooks))
+	for _, h := range hooks {
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		out = append(out, h)
+	}
+	return out
 }
 
 // resolvePluginRoot replaces the ${CLAUDE_PLUGIN_ROOT} placeholder with cacheDir.

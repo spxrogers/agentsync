@@ -211,6 +211,95 @@ func TestProject_NonStrict_UnionsPluginJSON(t *testing.T) {
 	}
 }
 
+// When plugin.json and the entry both declare a same-named skill, the union
+// must collapse to ONE entry with the entry's body winning — otherwise two
+// canonical Skills with the same Name render to the same dest path and the
+// cross-agent divergence guard aborts the whole apply (regression from the
+// union-projection change).
+func TestProject_DedupsSameNameSkill_EntryWins(t *testing.T) {
+	cacheDir := "/cache"
+	files := map[string][]byte{
+		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"):  []byte(`{"name":"p","skills":["./skills/base"]}`),
+		filepath.Join(cacheDir, "skills", "base", "SKILL.md"):     []byte("---\nname: shared\n---\nFROM PLUGIN_JSON\n"),
+		filepath.Join(cacheDir, "skills", "override", "SKILL.md"): []byte("---\nname: shared\n---\nFROM ENTRY\n"),
+	}
+	entry := marketplace.PluginEntry{Name: "p", Skills: "./skills/override"}
+	pr, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	var body string
+	for _, s := range pr.Skills {
+		if s.Name == "shared" {
+			n++
+			body = s.Body
+		}
+	}
+	if n != 1 {
+		t.Fatalf("skill \"shared\" count = %d, want 1 (union must dedup same-name)", n)
+	}
+	if !strings.Contains(body, "FROM ENTRY") {
+		t.Errorf("entry override did not win; body = %q", body)
+	}
+}
+
+// A same-ID MCP server declared by both plugin.json and the entry must collapse
+// to one, with the entry winning (matches render's last-write and keeps the
+// component count honest).
+func TestProject_DedupsSameIDMCP_EntryWins(t *testing.T) {
+	cacheDir := "/cache"
+	files := map[string][]byte{
+		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"): []byte(`{"name":"p","mcpServers":{"srv":{"command":"base"}}}`),
+	}
+	entry := marketplace.PluginEntry{Name: "p", MCPServers: map[string]any{"srv": map[string]any{"command": "entry"}}}
+	pr, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.MCPServers) != 1 {
+		t.Fatalf("mcp count = %d, want 1 (dedup same id)", len(pr.MCPServers))
+	}
+	if got := pr.MCPServers[0].Server.Command; got != "entry" {
+		t.Errorf("entry override did not win; command = %q, want entry", got)
+	}
+}
+
+// Identical hooks declared by both plugin.json and the entry must collapse to
+// one, otherwise the hook is registered twice in settings.json and runs twice.
+func TestProject_DedupsIdenticalHooks(t *testing.T) {
+	cacheDir := "/cache"
+	files := map[string][]byte{
+		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"): []byte(`{"name":"p","hooks":"run.sh"}`),
+	}
+	entry := marketplace.PluginEntry{Name: "p", Hooks: "run.sh"}
+	pr, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.Hooks) != 1 {
+		t.Fatalf("hooks = %d, want 1 (identical hooks must dedup)", len(pr.Hooks))
+	}
+}
+
+// Hooks that differ in any field are genuinely distinct and must BOTH survive —
+// dedup is exact-content only, never an event-keyed override that could silently
+// drop a legitimate second hook.
+func TestProject_DistinctHooksCoexist(t *testing.T) {
+	cacheDir := "/cache"
+	files := map[string][]byte{
+		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"): []byte(`{"name":"p","hooks":"a.sh"}`),
+	}
+	entry := marketplace.PluginEntry{Name: "p", Hooks: "b.sh"}
+	pr, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.Hooks) != 2 {
+		t.Fatalf("hooks = %d, want 2 (distinct commands must both survive)", len(pr.Hooks))
+	}
+}
+
 func TestProject_Strict_MissingPluginJSON(t *testing.T) {
 	// Strict mode but no plugin.json — should return empty result, no error.
 	cache := t.TempDir()
