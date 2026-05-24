@@ -70,9 +70,13 @@ This intentionally differs from the spec text on both points:
 - A marketplace that previously relied on `strict: false` to *replace* a
   plugin's component now gets a union; an incompatible same-name component
   surfaces as an error under the default and as an entry-win under
-  `strict: false`.
-- **Deferred:** an interactive "override / keep" prompt at `plugin install` /
-  `upgrade` that persists the operator's choice (so non-interactive `apply` /
-  `status` stay deterministic) was scoped out of this change. Until it lands,
-  `strict` is the resolution mechanism: a strict conflict is an actionable
-  error that names both ways out (fix upstream, or set `strict: false`).
+  `strict: false`. Stricter-by-default is intentional: a loud, actionable
+  error beats a silently-wrong merge.
+- **Resolution mechanism (decided, not a stopgap):** the strict conflict
+  *error* is the resolution path. It names both ways out — fix the packaging
+  upstream, or set `strict: false` on the entry to let it override. An
+  interactive "override / keep" prompt at `plugin install` / `upgrade` was
+  considered and **declined**: it would need persisted per-component choices so
+  non-interactive `apply` / `status` stay deterministic, and the error already
+  gives the operator a clear, scriptable decision. Revisit only if real usage
+  shows the error is too blunt.
