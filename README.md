@@ -37,14 +37,16 @@ Centrally manage AI coding-agent configurations across Claude Code, OpenCode, Co
 
 ### Linux
 
+Pick the package for your architecture (`amd64` or `arm64`).
+
 Debian/Ubuntu:
 
-    curl -fsSL https://github.com/spxrogers/agentsync/releases/latest/download/agentsync.deb -o agentsync.deb
+    curl -fsSL https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_amd64.deb -o agentsync.deb
     sudo dpkg -i agentsync.deb
 
 RPM:
 
-    sudo rpm -i https://github.com/spxrogers/agentsync/releases/latest/download/agentsync.rpm
+    sudo rpm -i https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_amd64.rpm
 
 Arch (AUR):
 
