@@ -140,39 +140,53 @@ func buildAgentsSection(agents map[string]map[string]any) string {
 }
 
 func writeAgents(p string, raw []byte, agents map[string]map[string]any) error {
-	// Round-trip: regenerate the [agents] block using inline table format,
-	// then splice it into the raw bytes preserving comments outside the section.
-	newSection := buildAgentsSection(agents)
-	rawStr := string(raw)
-	start := strings.Index(rawStr, "[agents]")
-	if start < 0 {
-		// no [agents] section yet; append.
-		return iox.AtomicWrite(p, []byte(rawStr+"\n"+newSection), 0o644)
-	}
-	// Find the next top-level section header that is NOT part of [agents.*].
-	// We scan line-by-line from after the [agents] line to find the first
-	// line that starts with "[" but is NOT "[agents" (which would be a sub-table).
-	afterAgents := rawStr[start+len("[agents]"):]
-	tailIdx := -1
-	lines := strings.Split(afterAgents, "\n")
-	byteOffset := 0
-	for i, line := range lines {
-		if i == 0 {
-			byteOffset += len(line) + 1
-			continue
+	// Round-trip: regenerate the [agents] block in inline-table format, then
+	// splice it back in preserving everything OUTSIDE the agents config.
+	//
+	// We work line-by-line and drop every agents-owned line — both the inline
+	// `[agents]` header form AND the idiomatic `[agents.<name>]` sub-table form
+	// — then reinsert the regenerated block where the first agents section was.
+	// The old string-search for a literal "[agents]" missed the sub-table form
+	// entirely: it appended a second [agents] block while leaving the
+	// sub-tables, defining agents.<name> twice and bricking the config (go-toml
+	// rejects the duplicate on the next load).
+	newSection := strings.TrimRight(buildAgentsSection(agents), "\n")
+	newLines := strings.Split(newSection, "\n")
+
+	lines := strings.Split(string(raw), "\n")
+	out := make([]string, 0, len(lines)+len(newLines))
+	insertAt := -1
+	inAgents := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			// New section header: agents-owned iff it's [agents] or [agents.*].
+			inAgents = trimmed == "[agents]" || strings.HasPrefix(trimmed, "[agents.")
+			if inAgents {
+				if insertAt < 0 {
+					insertAt = len(out) // first agents section → reinsert here
+				}
+				continue // drop the header
+			}
 		}
-		if strings.HasPrefix(line, "[") && !strings.HasPrefix(line, "[agents") {
-			tailIdx = byteOffset
-			break
+		if inAgents {
+			continue // drop lines inside an agents section
 		}
-		byteOffset += len(line) + 1
+		out = append(out, line)
 	}
-	var tail string
-	if tailIdx >= 0 {
-		tail = "\n" + afterAgents[tailIdx:]
+
+	if insertAt < 0 {
+		// No agents section existed; append after a blank-line separator.
+		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
+			out = append(out, "")
+		}
+		out = append(out, newLines...)
+	} else {
+		tail := append([]string(nil), out[insertAt:]...)
+		out = append(out[:insertAt], newLines...)
+		out = append(out, tail...)
 	}
-	out := rawStr[:start] + newSection + tail
-	return iox.AtomicWrite(p, []byte(out), 0o644)
+	return iox.AtomicWrite(p, []byte(strings.Join(out, "\n")), 0o644)
 }
 
 func agentAddRun(cmd *cobra.Command, args []string) error {
