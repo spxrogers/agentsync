@@ -242,11 +242,26 @@ func TestMerge_PluginsDisabled(t *testing.T) {
 		},
 	}
 	out := project.Merge(base, m)
-	if len(out.Plugins) != 1 {
-		t.Fatalf("expected 1 plugin after disable, got %d: %v", len(out.Plugins), out.Plugins)
+	// Records are KEPT (so status/explain can show them) but marked Disabled;
+	// the projector already suppressed their components upstream.
+	if len(out.Plugins) != 3 {
+		t.Fatalf("expected all 3 plugin records kept, got %d: %v", len(out.Plugins), out.Plugins)
 	}
-	if out.Plugins[0].ID != "lint" {
-		t.Fatalf("expected lint to remain; got %q", out.Plugins[0].ID)
+	got := map[string]bool{}
+	for _, p := range out.Plugins {
+		got[p.ID] = p.Plugin.Disabled
+	}
+	if !got["screenshot"] || !got["deploy"] {
+		t.Errorf("screenshot and deploy should be marked disabled; got %v", got)
+	}
+	if got["lint"] {
+		t.Errorf("lint should remain enabled; got disabled")
+	}
+	// Base must not be mutated.
+	for _, p := range base.Plugins {
+		if p.Plugin.Disabled {
+			t.Errorf("Merge mutated base plugin %q", p.ID)
+		}
 	}
 }
 

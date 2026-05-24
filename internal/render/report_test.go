@@ -80,6 +80,29 @@ func TestBuildReport_WithPlugin(t *testing.T) {
 	}
 }
 
+// A plugin disabled for the scope (e.g. project marker [plugins] disabled) is
+// shown as a single disabled row, not omitted and not given misleading
+// per-agent counts.
+func TestBuildReport_DisabledPlugin(t *testing.T) {
+	c := source.Canonical{
+		Plugins: []source.Plugin{
+			{ID: "demo", Plugin: source.PluginSpec{ID: "demo@test-mp", Disabled: true}},
+		},
+	}
+	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{"claude": {}}}
+	report := render.BuildReport(c, plan, []string{"claude"})
+	if len(report.Rows) != 1 {
+		t.Fatalf("expected 1 disabled row, got %d: %+v", len(report.Rows), report.Rows)
+	}
+	row := report.Rows[0]
+	if !row.Disabled || row.Coverage != "disabled" {
+		t.Errorf("expected disabled row, got %+v", row)
+	}
+	if row.Plugin != "demo@test-mp" {
+		t.Errorf("plugin = %q, want demo@test-mp", row.Plugin)
+	}
+}
+
 func TestBuildReport_PartialCoverage(t *testing.T) {
 	c := source.Canonical{
 		// One server renders (MCP>0) and one component is skipped → partial.
