@@ -41,7 +41,7 @@ type PluginEntry struct {
 	Keywords    []string `json:"keywords,omitempty"`
 	Category    string   `json:"category,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
-	Strict      *bool    `json:"strict,omitempty"` // accepted for compat; no longer changes projection (Project unions plugin.json + entry)
+	Strict      *bool    `json:"strict,omitempty"` // conflict policy on the plugin.json+entry union (default true): strict errors on a same-name conflict, non-strict lets the entry override. See marketplace.resolveConflicts.
 
 	// Component config can be inlined here (overlaid on plugin.json):
 	Skills     any            `json:"skills,omitempty"`   // string | []string

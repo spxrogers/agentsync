@@ -211,19 +211,19 @@ func TestProject_NonStrict_UnionsPluginJSON(t *testing.T) {
 	}
 }
 
-// When plugin.json and the entry both declare a same-named skill, the union
-// must collapse to ONE entry with the entry's body winning — otherwise two
-// canonical Skills with the same Name render to the same dest path and the
-// cross-agent divergence guard aborts the whole apply (regression from the
-// union-projection change).
-func TestProject_DedupsSameNameSkill_EntryWins(t *testing.T) {
+// Under NON-strict mode, a same-named skill declared by both plugin.json and
+// the entry collapses to ONE entry with the entry's body winning — otherwise
+// two canonical Skills with the same Name render to the same dest path and the
+// cross-agent divergence guard aborts the whole apply.
+func TestProject_NonStrictConflict_Skill_EntryWins(t *testing.T) {
 	cacheDir := "/cache"
 	files := map[string][]byte{
 		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"):  []byte(`{"name":"p","skills":["./skills/base"]}`),
 		filepath.Join(cacheDir, "skills", "base", "SKILL.md"):     []byte("---\nname: shared\n---\nFROM PLUGIN_JSON\n"),
 		filepath.Join(cacheDir, "skills", "override", "SKILL.md"): []byte("---\nname: shared\n---\nFROM ENTRY\n"),
 	}
-	entry := marketplace.PluginEntry{Name: "p", Skills: "./skills/override"}
+	f := false
+	entry := marketplace.PluginEntry{Name: "p", Strict: &f, Skills: "./skills/override"}
 	pr, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
 	if err != nil {
 		t.Fatal(err)
@@ -237,22 +237,22 @@ func TestProject_DedupsSameNameSkill_EntryWins(t *testing.T) {
 		}
 	}
 	if n != 1 {
-		t.Fatalf("skill \"shared\" count = %d, want 1 (union must dedup same-name)", n)
+		t.Fatalf("skill \"shared\" count = %d, want 1 (non-strict must dedup same-name)", n)
 	}
 	if !strings.Contains(body, "FROM ENTRY") {
 		t.Errorf("entry override did not win; body = %q", body)
 	}
 }
 
-// A same-ID MCP server declared by both plugin.json and the entry must collapse
-// to one, with the entry winning (matches render's last-write and keeps the
-// component count honest).
-func TestProject_DedupsSameIDMCP_EntryWins(t *testing.T) {
+// Under NON-strict mode, a same-ID MCP server declared by both plugin.json and
+// the entry collapses to one, entry winning.
+func TestProject_NonStrictConflict_MCP_EntryWins(t *testing.T) {
 	cacheDir := "/cache"
 	files := map[string][]byte{
 		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"): []byte(`{"name":"p","mcpServers":{"srv":{"command":"base"}}}`),
 	}
-	entry := marketplace.PluginEntry{Name: "p", MCPServers: map[string]any{"srv": map[string]any{"command": "entry"}}}
+	f := false
+	entry := marketplace.PluginEntry{Name: "p", Strict: &f, MCPServers: map[string]any{"srv": map[string]any{"command": "entry"}}}
 	pr, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
 	if err != nil {
 		t.Fatal(err)
@@ -262,6 +262,42 @@ func TestProject_DedupsSameIDMCP_EntryWins(t *testing.T) {
 	}
 	if got := pr.MCPServers[0].Server.Command; got != "entry" {
 		t.Errorf("entry override did not win; command = %q, want entry", got)
+	}
+}
+
+// Under STRICT mode (the default), a same-name component with DIFFERING content
+// in plugin.json vs the entry is an ambiguous packaging conflict and must be a
+// hard error rather than a silent guess.
+func TestProject_StrictConflict_Errors(t *testing.T) {
+	cacheDir := "/cache"
+	files := map[string][]byte{
+		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"): []byte(`{"name":"p","mcpServers":{"srv":{"command":"base"}}}`),
+	}
+	// Strict defaults to true (nil).
+	entry := marketplace.PluginEntry{Name: "p", MCPServers: map[string]any{"srv": map[string]any{"command": "entry"}}}
+	_, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
+	if err == nil {
+		t.Fatal("strict mode must error on a differing same-name conflict")
+	}
+	if !strings.Contains(err.Error(), "defined twice with different content") {
+		t.Errorf("error should explain the conflict; got: %v", err)
+	}
+}
+
+// Even under strict mode, an IDENTICAL same-name component in both places is not
+// a conflict — it collapses to one without error.
+func TestProject_StrictConflict_IdenticalDedups(t *testing.T) {
+	cacheDir := "/cache"
+	files := map[string][]byte{
+		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"): []byte(`{"name":"p","mcpServers":{"srv":{"command":"same"}}}`),
+	}
+	entry := marketplace.PluginEntry{Name: "p", MCPServers: map[string]any{"srv": map[string]any{"command": "same"}}}
+	pr, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatalf("identical same-name component must not error under strict: %v", err)
+	}
+	if len(pr.MCPServers) != 1 {
+		t.Fatalf("mcp count = %d, want 1 (identical dedups)", len(pr.MCPServers))
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/source"
@@ -34,14 +35,15 @@ type ProjectionResult struct {
 //     may declare everything in the entry).
 //   - If the manifest lists no skills, falls back to convention-based discovery:
 //     scans cacheDir/skills/*/ for SKILL.md files.
-//   - Then overlays any component fields on the PluginEntry itself; an inline
-//     override of a same-named component wins (last-write at render).
+//   - Then overlays any component fields on the PluginEntry itself.
 //
-// This is a UNION: plugin.json PLUS entry additions/overrides. The entry.Strict
-// flag no longer changes projection — it used to make "non-strict" IGNORE
-// plugin.json entirely, which silently dropped a plugin's own components
-// whenever the marketplace entry was non-strict (and after an upstream
-// strict-flip). Union semantics never drop the plugin's declared components.
+// This is a UNION: plugin.json PLUS entry additions. The entry.Strict flag
+// governs how a same-name CONFLICT between the two is resolved (see
+// resolveConflicts): strict (the default) errors so a packaging disagreement is
+// never silently guessed; non-strict lets the entry override. Union semantics
+// never silently drop a plugin's declared components — the pre-Strict-policy
+// non-strict path used to IGNORE plugin.json entirely, dropping a plugin's own
+// components after an upstream strict-flip.
 //
 // ${CLAUDE_PLUGIN_ROOT} in command/url strings is replaced with cacheDir so
 // non-Claude adapters can resolve binary paths.
@@ -83,41 +85,70 @@ func projectWithFuncs(entry PluginEntry, cacheDir string, readFile func(string) 
 	if err := applyEntryOverrides(entry, &pr, cacheDir, readFile); err != nil {
 		return pr, err
 	}
-	dedupProjection(&pr)
+	strict := entry.Strict == nil || *entry.Strict
+	if err := resolveConflicts(&pr, strict); err != nil {
+		return pr, err
+	}
 	return pr, nil
 }
 
-// dedupProjection collapses same-identity components that the union (plugin.json
-// PLUS entry overrides) can produce. Without it, an entry that overrides a
-// same-named plugin.json skill/subagent/command yields TWO canonical entries
-// that render to the SAME dest path — and apply's cross-agent divergence guard
-// then aborts the whole run rather than letting the override win. MCP/LSP dups
-// only ever last-win at the render map, but deduping here keeps the component
-// count honest too.
-//
-// Precedence matches the documented "inline override wins" rule: name/id-keyed
-// components keep the LAST occurrence (the entry is applied after plugin.json),
-// while hooks — which have no override key — are deduped only on EXACT content,
-// so two genuinely-distinct hooks for the same event both survive.
-func dedupProjection(pr *ProjectionResult) {
-	pr.MCPServers = dedupLastWins(pr.MCPServers, func(s source.MCPServer) string { return s.ID })
-	pr.LSPServers = dedupLastWins(pr.LSPServers, func(s source.LSPServer) string { return s.ID })
-	pr.Skills = dedupLastWins(pr.Skills, func(s source.Skill) string { return s.Name })
-	pr.Subagents = dedupLastWins(pr.Subagents, func(s source.Subagent) string { return s.Name })
-	pr.Commands = dedupLastWins(pr.Commands, func(c source.Command) string { return c.Name })
+// resolveConflicts collapses same-identity components that the union (plugin.json
+// PLUS entry) can produce, applying the Strict-flag conflict policy. Without
+// collapsing, an entry that re-declares a same-named plugin.json
+// skill/subagent/command yields TWO canonical entries that render to the SAME
+// dest path — and apply's cross-agent divergence guard then aborts the whole
+// run. Hooks have no override key, so they are deduped only on EXACT content
+// (two genuinely-distinct hooks for one event both survive) and are not subject
+// to the conflict policy.
+func resolveConflicts(pr *ProjectionResult, strict bool) error {
+	var err error
+	if pr.MCPServers, err = dedupOrConflict(pr.MCPServers, func(s source.MCPServer) string { return s.ID }, strict, "mcp server"); err != nil {
+		return err
+	}
+	if pr.LSPServers, err = dedupOrConflict(pr.LSPServers, func(s source.LSPServer) string { return s.ID }, strict, "lsp server"); err != nil {
+		return err
+	}
+	if pr.Skills, err = dedupOrConflict(pr.Skills, func(s source.Skill) string { return s.Name }, strict, "skill"); err != nil {
+		return err
+	}
+	if pr.Subagents, err = dedupOrConflict(pr.Subagents, func(s source.Subagent) string { return s.Name }, strict, "subagent"); err != nil {
+		return err
+	}
+	if pr.Commands, err = dedupOrConflict(pr.Commands, func(c source.Command) string { return c.Name }, strict, "command"); err != nil {
+		return err
+	}
 	pr.Hooks = dedupHooks(pr.Hooks)
+	return nil
 }
 
-// dedupLastWins returns items with same-key duplicates removed, keeping the last
-// occurrence of each key and preserving the order in which those last
-// occurrences appear.
-func dedupLastWins[T any](items []T, key func(T) string) []T {
+// dedupOrConflict collapses same-key components produced by the union. When two
+// entries share a key (a plugin.json definition AND a marketplace-entry one):
+//   - identical content → silently dedup to one.
+//   - differing content, strict mode → a hard error (refuse to guess which
+//     definition the operator meant; the packaging is ambiguous).
+//   - differing content, non-strict mode → the entry wins (last occurrence
+//     kept) — the documented lenient curator override.
+//
+// Keeping the LAST occurrence yields entry-wins because applyEntryOverrides runs
+// after applyManifest; order is preserved by the position of that last entry.
+func dedupOrConflict[T any](items []T, key func(T) string, strict bool, kind string) ([]T, error) {
 	if len(items) < 2 {
-		return items
+		return items, nil
 	}
+	first := make(map[string]T, len(items))
 	lastIdx := make(map[string]int, len(items))
 	for i, it := range items {
-		lastIdx[key(it)] = i
+		k := key(it)
+		lastIdx[k] = i
+		if prev, ok := first[k]; ok {
+			if strict && !reflect.DeepEqual(prev, it) {
+				return nil, fmt.Errorf("plugin %s %q is defined twice with different content "+
+					"(plugin.json and the marketplace entry disagree); resolve it upstream, or set "+
+					`"strict": false on the marketplace entry to let the entry override`, kind, k)
+			}
+			continue
+		}
+		first[k] = it
 	}
 	out := make([]T, 0, len(items))
 	for i, it := range items {
@@ -125,7 +156,7 @@ func dedupLastWins[T any](items []T, key func(T) string) []T {
 			out = append(out, it)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // dedupHooks removes exact-duplicate hooks, preserving order. Hooks have no
