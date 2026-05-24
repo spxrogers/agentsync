@@ -124,6 +124,50 @@ func TestReconcile_Writeback_PreservesSourceOnlyFields(t *testing.T) {
 	}
 }
 
+// TestReconcile_Writeback_OpenCodeMCP is the regression for opencode MCP
+// write-back being dead: opencode renders MCP under the JSON key "mcp"
+// (pointers /mcp/<id>), but writeBackKeyItem only matched the claude shape
+// "mcpServers", so reconcile [w]rite-back of a drifted opencode MCP server
+// always errored "only /mcpServers/* items can be written back" — the user
+// could never persist an opencode MCP edit.
+func TestReconcile_Writeback_OpenCodeMCP(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "opencode"); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\nagents=[\"opencode\"]\nenabled=true\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	// Drift the opencode dest command so write-back must rewrite the source.
+	dst := filepath.Join(tmp, ".config", "opencode", "opencode.json")
+	body, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read opencode dest: %v", err)
+	}
+	if !strings.Contains(string(body), `"npx"`) {
+		t.Fatalf("opencode dest missing expected mcp command:\n%s", body)
+	}
+	_ = os.WriteFile(dst, []byte(strings.Replace(string(body), `"npx"`, `"npm"`, 1)), 0o644)
+
+	if _, err := runCLI(t, env, "reconcile", "--auto-writeback"); err != nil {
+		t.Fatalf("reconcile --auto-writeback (opencode mcp): %v", err)
+	}
+	src, _ := os.ReadFile(mcp)
+	if !strings.Contains(string(src), "npm") {
+		t.Fatalf("opencode mcp write-back didn't capture the dest edit:\n%s", src)
+	}
+	if !strings.Contains(string(src), "agents") || !strings.Contains(string(src), "enabled") {
+		t.Fatalf("opencode mcp write-back dropped source-only agents/enabled fields:\n%s", src)
+	}
+}
+
 // TestReconcile_AutoFlagsMutuallyExclusive is the regression for both
 // --auto-writeback and --auto-override being silently accepted (writeback
 // wins) despite being exact opposites.

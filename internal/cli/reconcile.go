@@ -441,13 +441,17 @@ func writeBackItem(cmd *cobra.Command, home string, it reconcileItem) error {
 // — the next apply would then destroy the user's edit.
 func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 	dest := readJSONFile(it.op.Path)
-	// Expected ptr shape: /mcpServers/<serverID>/...
+	// Expected ptr shape: /mcpServers/<serverID>/... (claude) or
+	// /mcp/<serverID>/... (opencode). Both render MCP entries with identical
+	// lowercase field names, so the reconstruction below is shape-identical;
+	// only the top-level container key differs per adapter.
 	parts := strings.SplitN(strings.TrimPrefix(it.ptr, "/"), "/", 3)
-	if len(parts) >= 2 && parts[0] == "mcpServers" {
+	if len(parts) >= 2 && (parts[0] == "mcpServers" || parts[0] == "mcp") {
+		topKey := parts[0]
 		serverID := parts[1]
-		mcpServers, _ := dest["mcpServers"].(map[string]any)
+		mcpServers, _ := dest[topKey].(map[string]any)
 		if mcpServers == nil {
-			return fmt.Errorf("mcpServers not found in destination")
+			return fmt.Errorf("%s not found in destination", topKey)
 		}
 		specRaw, ok := mcpServers[serverID]
 		if !ok {
@@ -456,7 +460,7 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 			// match — but persisting that requires source-side mutation
 			// which isn't safe to do silently here. Surface as an error
 			// so the user can pick [d]elete-source via a follow-up flow.
-			return fmt.Errorf("destination dropped %s/%s — no write-back possible; remove the source manually or use [o]verride to push canonical back", parts[0], serverID)
+			return fmt.Errorf("destination dropped %s/%s — no write-back possible; remove the source manually or use [o]verride to push canonical back", topKey, serverID)
 		}
 		// Round-trip through JSON to get a typed spec.
 		specBytes, err := json.Marshal(specRaw)
@@ -480,7 +484,7 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 	}
 	// Unsupported pointer shape (hooks, lsp, …). DO NOT silently no-op —
 	// the success message would be a lie.
-	return fmt.Errorf("write-back for pointer %q is not implemented in v1; only /mcpServers/* items can be written back today — choose [o]verride to push canonical to the dest, or [i]gnore to suppress this item", it.ptr)
+	return fmt.Errorf("write-back for pointer %q is not implemented in v1; only /mcpServers/* and /mcp/* items can be written back today — choose [o]verride to push canonical to the dest, or [i]gnore to suppress this item", it.ptr)
 }
 
 // writeBackFileItem handles file-level (replace strategy) items by copying
