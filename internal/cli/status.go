@@ -136,6 +136,15 @@ func newStatusCmd() *cobra.Command {
 						fmt.Fprintf(w, "  %-20s %s#%s\n", cls, op.Path, ptr)
 					}
 				}
+				// orphans: whole-file dests this agent still owns in state but no
+				// longer renders (the source component was removed). Without this,
+				// status reported nothing for them — falsely "clean" — though the
+				// file lingers and the next apply / a reconcile would act on it.
+				for _, orphan := range render.OrphanFiles(s, userHome, name, sc, projectRoot, res.Ops) {
+					happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, orphan)].SHA256
+					cls := drift.Classify("", happlied, hashFile(orphan))
+					fmt.Fprintf(w, "  %-20s %s\n", cls, orphan)
+				}
 			}
 			return nil
 		},

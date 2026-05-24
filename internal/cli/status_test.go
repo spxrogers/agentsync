@@ -113,6 +113,37 @@ func TestStatus_SecretItemCleanAfterApply(t *testing.T) {
 	}
 }
 
+// TestStatus_ReportsOrphanedFile is the regression for status reporting clean
+// while a whole-file dest agentsync owns but no longer renders (its source
+// component was removed) lingers on disk — invisible to status, though the next
+// apply or a reconcile would act on it.
+func TestStatus_ReportsOrphanedFile(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	skill := filepath.Join(tmp, ".agentsync", "skills", "demo", "SKILL.md")
+	_ = os.MkdirAll(filepath.Dir(skill), 0o755)
+	_ = os.WriteFile(skill, []byte("---\nname: demo\ndescription: d\n---\nbody\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	// Remove the source skill; the rendered dest SKILL.md is now owned-but-unrendered.
+	_ = os.RemoveAll(filepath.Join(tmp, ".agentsync", "skills", "demo"))
+
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "orphan") {
+		t.Fatalf("status should report the orphaned dest file; got:\n%s", out)
+	}
+}
+
 func TestStatus_CleanAfterApply(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
