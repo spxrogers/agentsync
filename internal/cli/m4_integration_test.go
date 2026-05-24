@@ -152,13 +152,14 @@ func TestIntegration_M4_SHAPinning(t *testing.T) {
 		t.Errorf("demo.toml missing manifest_sha field; got:\n%s", tomlData)
 	}
 
-	// Re-upload: change plugin.json content without changing version.
+	// Re-upload: the UPSTREAM marketplace serves different bytes at the SAME
+	// version. update re-fetches the marketplace and compares the fresh upstream
+	// manifest SHA against the recorded one. (Tampering the installed cache
+	// instead would be a LOCAL tamper — caught by verifyPluginManifestSHA at
+	// apply/load time, not by the read-only update poll.)
 	reuploadedJSON := `{"name":"demo","version":"1.0.0","mcpServers":{"demo-mcp":{"command":"different-echo"}}}`
-	// Write the re-uploaded content into the plugin's cache dir directly
-	// (simulating the marketplace having served different bytes at same version).
-	cachePluginJSON := filepath.Join(home, ".state", "cache", "plugins", "demo", ".claude-plugin", "plugin.json")
-	if err := os.WriteFile(cachePluginJSON, []byte(reuploadedJSON), 0o644); err != nil {
-		t.Fatalf("write re-uploaded plugin.json to cache: %v", err)
+	if err := os.WriteFile(filepath.Join(plugDir, "plugin.json"), []byte(reuploadedJSON), 0o644); err != nil {
+		t.Fatalf("re-upload plugin.json in the marketplace fixture: %v", err)
 	}
 
 	// update should detect SHA drift and emit a warning.
