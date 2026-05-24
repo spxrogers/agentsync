@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -15,7 +16,7 @@ func (stub) Capabilities() adapter.Capability { return 0 }
 
 func (stub) Detect() (bool, error) { return false, nil }
 
-func (stub) Render(source.Canonical, adapter.Scope, string) ([]adapter.FileOp, []adapter.Skip, error) {
+func (stub) Render(secrets.Resolved, adapter.Scope, string) ([]adapter.FileOp, []adapter.Skip, error) {
 	return nil, nil, nil
 }
 

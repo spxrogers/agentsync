@@ -83,11 +83,14 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		fmt.Fprintln(cmd.ErrOrStderr(), "scope: user")
 	}
 
-	// Resolve ${secret:...} and ${env:...} references before rendering.
+	// Resolve ${secret:...} and ${env:...} references before rendering. The
+	// result is a secrets.Resolved — the only thing adapters render from — and
+	// c is left templated for the report / agent enumeration below.
 	userHome := paths.HomeDir(paths.OSEnv{})
 	secBackend := secrets.SelectBackend(c.Config.Secrets, home, userHome)
 	envBackend := secrets.EnvBackend{}
-	if err := secrets.SubstituteCanonical(&c, secBackend, envBackend); err != nil {
+	resolved, err := secrets.SubstituteCanonical(c, secBackend, envBackend)
+	if err != nil {
 		return err
 	}
 
@@ -125,7 +128,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	}
 
 	if dryRun {
-		plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, userHome)
+		plan, err := render.Plan(resolved, reg, agents, sc, projectRoot, s, userHome)
 		if err != nil {
 			return err
 		}
@@ -173,7 +176,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	// Real apply: render + write. The writer constructed inside
 	// render.Apply enforces the foreign-collision backup invariant on
 	// every destination write — there is no separate guard pass.
-	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, userHome)
+	plan, err := render.Plan(resolved, reg, agents, sc, projectRoot, s, userHome)
 	if err != nil {
 		return err
 	}

@@ -12,11 +12,13 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/capture"
 	"github.com/spxrogers/agentsync/internal/drift"
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -102,7 +104,9 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 			agents = append(agents, name)
 		}
 	}
-	plan, err := render.Plan(c, reg, agents, sc, projectRoot, s, userHome)
+	// reconcile hashes the rendered TEMPLATED source for drift; wrap as a
+	// render-only Resolved without substituting (no backend needed).
+	plan, err := render.Plan(secrets.ForRender(c), reg, agents, sc, projectRoot, s, userHome)
 	if err != nil {
 		return err
 	}
@@ -463,22 +467,16 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 		if err := json.Unmarshal(specBytes, &spec); err != nil {
 			return fmt.Errorf("unmarshal mcp spec %s: %w", serverID, err)
 		}
-		// Preserve source-only fields (agents/enabled) that the rendered
-		// destination spec never carries — otherwise writing a dest edit
-		// back silently drops the user's targeting/enablement config.
-		if existing, ok, rerr := source.ReadMCP(home, serverID); rerr == nil && ok {
-			spec.Agents = existing.Server.Agents
-			spec.Enabled = existing.Server.Enabled
+		// The spec was reconstructed from the destination, where apply wrote any
+		// ${secret:…} as resolved cleartext and which never carries source-only
+		// fields (agents/enabled). capture.Capture re-references the secrets and
+		// preserves those fields before writing — the same single boundary import
+		// uses, so the two paths can't drift apart again.
+		single := source.Canonical{MCPServers: []source.MCPServer{{ID: serverID, Server: spec}}}
+		if _, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
+			return err
 		}
-		m := source.MCPServer{ID: serverID, Server: spec}
-		// The spec was reconstructed from the destination, where apply wrote
-		// any ${secret:…} as resolved cleartext. Re-reference known secrets
-		// back to their placeholder before persisting to source — otherwise
-		// write-back leaks the live token into ~/.agentsync (same hole that
-		// `import` guards against).
-		rc := source.Canonical{MCPServers: []source.MCPServer{m}}
-		reReferenceSecretsAgainstSource(cmd, home, &rc)
-		return source.WriteMCP(home, serverID, rc.MCPServers[0])
+		return nil
 	}
 	// Unsupported pointer shape (hooks, lsp, …). DO NOT silently no-op —
 	// the success message would be a lie.

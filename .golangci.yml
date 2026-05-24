@@ -39,6 +39,16 @@ linters:
         # (canonical source, agentsync's own state, plugin TOMLs).
         - pattern: '^iox\.AtomicWrite$'
           msg: "use render.Writer / adapter.DestWriter for native-destination writes; iox.AtomicWrite is reserved for canonical-source / state / plugin-cache writes"
+        # secrets.Resolved.Canonical() is the render-only egress for the resolved
+        # apply model. Unwrapping a Resolved to a writable source.Canonical and
+        # persisting it would reintroduce the cleartext-secret-into-source leak
+        # the type split exists to prevent. Only the adapter Render entry points
+        # (and the secrets package's own tests) may call it; the exclusions list
+        # below whitelists them. The type wall makes passing a Resolved DIRECTLY
+        # to a source writer a compile error; this rule fences the one accessor
+        # that could otherwise launder it.
+        - pattern: '^secrets\.Resolved\.Canonical$'
+          msg: "do not unwrap secrets.Resolved to source.Canonical outside an adapter's Render; persisting it would leak resolved cleartext into ~/.agentsync. Render from the Resolved; capture writes the templated source.Canonical."
   exclusions:
     rules:
       # main.go can use os.UserHomeDir if needed.
@@ -50,26 +60,43 @@ linters:
       # foreign-collision backup. If you need to add a path here, the bar
       # is "this write does NOT target a file the user could plausibly
       # have hand-managed before agentsync was installed."
+      #
+      # Each is text-scoped to the AtomicWrite rule so it does NOT also
+      # suppress the other forbidigo rules (notably secrets.Resolved.Canonical)
+      # in these files — a whole-file [forbidigo] exclusion would silently
+      # un-fence a future Resolved-unwrap-then-write in e.g. reconcile.go.
       - path: '(^|/)internal/iox/.*'
         linters: [forbidigo]
+        text: 'iox\.AtomicWrite is reserved'
       - path: '(^|/)internal/render/writer\.go$'
         linters: [forbidigo]
+        text: 'iox\.AtomicWrite is reserved'
       - path: '(^|/)internal/source/writer\.go$'
         linters: [forbidigo]
+        text: 'iox\.AtomicWrite is reserved'
       - path: '(^|/)internal/state/store\.go$'
         linters: [forbidigo]
+        text: 'iox\.AtomicWrite is reserved'
       # secrets/age.go writes secrets.age under ~/.agentsync/ via the
       # atomic path so a Ctrl-C during re-encrypt can't truncate the file.
       # Same canonical-source category, not a native destination.
       - path: '(^|/)internal/secrets/age\.go$'
         linters: [forbidigo]
+        text: 'iox\.AtomicWrite is reserved'
       # CLI files writing to ~/.agentsync/* (canonical source).
       - path: '(^|/)internal/cli/(plugin|marketplace|agent|reconcile|update)\.go$'
         linters: [forbidigo]
+        text: 'iox\.AtomicWrite is reserved'
       # The PassThroughWriter test helper deliberately delegates to
       # iox.AtomicWrite — that's its whole job.
       - path: '(^|/)internal/adapter/testwriter\.go$'
         linters: [forbidigo]
+        text: 'iox\.AtomicWrite is reserved'
+      # The secrets package's own tests assert on Resolved.Canonical() output.
+      # Test-only, not a leak vector that ships; text-scoped to the rule.
+      - path: '(^|/)internal/secrets/.*_test\.go$'
+        linters: [forbidigo]
+        text: 'unwrap secrets\.Resolved'
 
 formatters:
   enable:

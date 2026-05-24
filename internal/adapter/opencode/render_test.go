@@ -7,6 +7,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/opencode"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -24,7 +25,7 @@ func TestRender_MCP(t *testing.T) {
 		},
 	}}}
 	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
-	ops, _, _ := a.Render(c, adapter.ScopeUser, "")
+	ops, _, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	var found bool
 	for _, op := range ops {
 		if strings.HasSuffix(op.Path, "opencode.json") {
@@ -57,7 +58,7 @@ func TestRender_MCP_PreservesHeaders(t *testing.T) {
 		},
 	}}}
 	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
-	ops, _, _ := a.Render(c, adapter.ScopeUser, "")
+	ops, _, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	for _, op := range ops {
 		if !strings.HasSuffix(op.Path, "opencode.json") {
 			continue
@@ -83,7 +84,7 @@ func TestRender_MCP_SkipsDisabled(t *testing.T) {
 		},
 	}}}
 	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
-	ops, _, _ := a.Render(c, adapter.ScopeUser, "")
+	ops, _, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	for _, op := range ops {
 		if strings.HasSuffix(op.Path, "opencode.json") {
 			t.Fatal("should not emit op for disabled server")
@@ -99,7 +100,7 @@ func TestRender_MCP_SkipsOtherAgents(t *testing.T) {
 		},
 	}}}
 	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
-	ops, _, _ := a.Render(c, adapter.ScopeUser, "")
+	ops, _, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	for _, op := range ops {
 		if strings.HasSuffix(op.Path, "opencode.json") {
 			t.Fatal("should not emit op for claude-only server")
@@ -116,7 +117,7 @@ func TestRender_Memory(t *testing.T) {
 		Memory: source.Memory{Body: "# Agent memory\n\nThis is the memory.\n"},
 	}
 	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
-	ops, _, _ := a.Render(c, adapter.ScopeUser, "")
+	ops, _, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	var found bool
 	for _, op := range ops {
 		if strings.HasSuffix(op.Path, "AGENTS.md") {
@@ -137,7 +138,7 @@ func TestRender_Memory(t *testing.T) {
 func TestRender_Memory_Empty(t *testing.T) {
 	c := source.Canonical{}
 	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
-	ops, _, _ := a.Render(c, adapter.ScopeUser, "")
+	ops, _, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	for _, op := range ops {
 		if strings.HasSuffix(op.Path, "AGENTS.md") {
 			t.Fatal("should not emit AGENTS.md op when memory is empty")
@@ -153,7 +154,7 @@ func TestRender_Memory_FragmentExpansion(t *testing.T) {
 		},
 	}
 	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
-	ops, _, _ := a.Render(c, adapter.ScopeUser, "")
+	ops, _, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	for _, op := range ops {
 		if strings.HasSuffix(op.Path, "AGENTS.md") {
 			if strings.Contains(string(op.Content), "@import") {
@@ -177,7 +178,7 @@ func TestRender_Skill(t *testing.T) {
 		Body:        "Skill body.\n",
 	}}}
 	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
-	ops, _, _ := a.Render(c, adapter.ScopeUser, "")
+	ops, _, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	var found bool
 	for _, op := range ops {
 		if strings.HasSuffix(op.Path, "SKILL.md") && strings.Contains(op.Path, "my-skill") {
@@ -211,7 +212,7 @@ func TestRender_Subagent_FrontmatterMunge(t *testing.T) {
 		Body: "Review code.\n",
 	}}}
 	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
-	ops, skips, _ := a.Render(c, adapter.ScopeUser, "")
+	ops, skips, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	// verify file content
 	var op *adapter.FileOp
 	for i, o := range ops {
@@ -255,7 +256,7 @@ func TestRender_Subagent_PreservesDescriptionAndModel(t *testing.T) {
 		Body: "Help with things.\n",
 	}}}
 	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
-	ops, _, _ := a.Render(c, adapter.ScopeUser, "")
+	ops, _, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	var found bool
 	for _, op := range ops {
 		if strings.HasSuffix(op.Path, "/agents/helper.md") {
@@ -289,7 +290,7 @@ func TestRender_Command_FrontmatterMunge(t *testing.T) {
 		Body: "Summarize the given file.\n",
 	}}}
 	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
-	ops, skips, _ := a.Render(c, adapter.ScopeUser, "")
+	ops, skips, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	var op *adapter.FileOp
 	for i, o := range ops {
 		if strings.HasSuffix(o.Path, "/commands/summarize.md") {
@@ -330,7 +331,7 @@ func TestRender_Command_BodyPreserved(t *testing.T) {
 		Body:        "Run the linter on $ARGUMENTS.\n",
 	}}}
 	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
-	ops, _, _ := a.Render(c, adapter.ScopeUser, "")
+	ops, _, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	var found bool
 	for _, op := range ops {
 		if strings.HasSuffix(op.Path, "/commands/lint.md") {
@@ -355,7 +356,7 @@ func TestRender_HooksAndLSP_Skipped(t *testing.T) {
 		LSPServers: []source.LSPServer{{ID: "gopls", Spec: source.LSPServerSpec{Command: "gopls"}}},
 	}
 	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
-	_, skips, err := a.Render(c, adapter.ScopeUser, "")
+	_, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,7 +11,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/paths"
-	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
@@ -51,14 +51,14 @@ func (p RenderPlan) Total() int {
 // userHome (the user's $HOME, paths.HomeDir) is required so OwnedKeys
 // lookups match the HOME-relative form state stores. It is NOT the agentsync
 // home — dest files live under $HOME, not under ~/.agentsync.
-func Plan(c source.Canonical, reg *adapter.Registry, agents []string, scope adapter.Scope, project string, s *state.Targets, userHome string) (RenderPlan, error) {
+func Plan(r secrets.Resolved, reg *adapter.Registry, agents []string, scope adapter.Scope, project string, s *state.Targets, userHome string) (RenderPlan, error) {
 	out := RenderPlan{PerAgent: map[string]AgentResult{}}
 	for _, name := range agents {
 		a := reg.Lookup(name)
 		if a == nil {
 			return out, fmt.Errorf("adapter %q not registered", name)
 		}
-		ops, skips, err := a.Render(c, scope, project)
+		ops, skips, err := a.Render(r, scope, project)
 		if err != nil {
 			return out, fmt.Errorf("render %s: %w", name, err)
 		}

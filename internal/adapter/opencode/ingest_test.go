@@ -6,6 +6,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/opencode"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -23,7 +24,7 @@ func TestIngest_RoundTripsMCP(t *testing.T) {
 		}},
 	}
 	a := opencode.New(opencode.Options{TargetRoot: tmp})
-	ops, _, err := a.Render(in, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -64,7 +65,7 @@ func TestIngest_RoundTripsMCPHeaders(t *testing.T) {
 		}},
 	}
 	a := opencode.New(opencode.Options{TargetRoot: tmp})
-	ops, _, err := a.Render(in, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -90,7 +91,7 @@ func TestIngest_RoundTripsMemory(t *testing.T) {
 		Memory: source.Memory{Body: "# Memory\n\nAlways be helpful.\n"},
 	}
 	a := opencode.New(opencode.Options{TargetRoot: tmp})
-	ops, _, err := a.Render(in, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -126,7 +127,7 @@ func TestIngest_RoundTripsSubagentsAndCommands(t *testing.T) {
 		}},
 	}
 	a := opencode.New(opencode.Options{TargetRoot: tmp})
-	ops, _, err := a.Render(in, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -168,7 +169,7 @@ func TestIngest_JSONC_WithComments(t *testing.T) {
 		}},
 	}
 	a := opencode.New(opencode.Options{TargetRoot: tmp})
-	ops, _, err := a.Render(in, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}

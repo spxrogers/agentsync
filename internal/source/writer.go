@@ -2,6 +2,18 @@
 // These are called by the reconcile command when the user selects [w]rite-back,
 // and by the import command to capture native edits.
 //
+// SECRET-SAFETY INVARIANT (read before adding a caller): these Write* helpers
+// take only the TEMPLATED source types (source.Canonical / its sub-structs) and
+// perform NO secret re-referencing. apply substitutes ${secret:…} to cleartext
+// into destinations, so any canonical reconstructed from a destination holds
+// live credentials. The ONLY sanctioned dest->source write path is
+// capture.Capture, which calls secrets.ReReferenceCanonical first. Do NOT pass
+// these helpers a value obtained by unwrapping secrets.Resolved.Canonical() — it
+// is the resolved (cleartext) apply model and would leak the secret into source.
+// This API is intentionally not lint-fenced (it is the legitimate templated
+// writer Capture is built on), so this discipline is the guard; see CLAUDE.md
+// "Secret-handling invariants" and internal/secrets/resolved.go.
+//
 // v1 trade-off: TOML comments in the original file are not preserved on
 // write-back. Comment-preserving mutation is deferred to v1.x.
 package source
@@ -32,6 +44,24 @@ func ReadMCP(home, id string) (m MCPServer, ok bool, err error) {
 	}
 	m.ID = id
 	return m, true, nil
+}
+
+// ReadLSP reads lsp/<id>.toml from home. ok is false when the file does not
+// exist. Mirrors ReadMCP: used by capture to preserve source-only LSP fields
+// (agents/enabled) that the rendered destination spec doesn't carry.
+func ReadLSP(home, id string) (ls LSPServer, ok bool, err error) {
+	data, rerr := os.ReadFile(filepath.Join(home, "lsp", id+".toml"))
+	if rerr != nil {
+		if os.IsNotExist(rerr) {
+			return LSPServer{}, false, nil
+		}
+		return LSPServer{}, false, fmt.Errorf("read lsp %s: %w", id, rerr)
+	}
+	var lf lspFileOut
+	if uerr := toml.Unmarshal(data, &lf); uerr != nil {
+		return LSPServer{}, false, fmt.Errorf("parse lsp %s: %w", id, uerr)
+	}
+	return LSPServer{ID: id, Spec: lf.Server}, true, nil
 }
 
 // WriteMCP writes mcp/<id>.toml from m into home. Overwrites atomically.

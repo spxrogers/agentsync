@@ -7,6 +7,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -26,7 +27,7 @@ func TestRender_MCP_UserScope(t *testing.T) {
 		}},
 	}
 	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
-	ops, skips, err := a.Render(c, adapter.ScopeUser, "")
+	ops, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +71,7 @@ func TestRender_MCP_AgentsAllowlist(t *testing.T) {
 		}},
 	}
 	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
-	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +93,7 @@ func TestRender_Memory(t *testing.T) {
 		},
 	}
 	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
-	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +123,7 @@ func TestRender_Skills(t *testing.T) {
 		}},
 	}
 	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
-	ops, _, _ := a.Render(c, adapter.ScopeUser, "")
+	ops, _, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	var found *adapter.FileOp
 	for i, op := range ops {
 		if strings.Contains(op.Path, "/skills/review/SKILL.md") {
@@ -148,7 +149,7 @@ func TestRender_LSP_WritesSettingsJSON(t *testing.T) {
 		}},
 	}
 	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
-	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +196,7 @@ func TestRender_LSP_WritesSettingsJSON(t *testing.T) {
 func TestRender_LSP_EmptyProducesNoOp(t *testing.T) {
 	c := source.Canonical{}
 	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
-	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +215,7 @@ func TestRender_Hooks_WritesSettingsJSON(t *testing.T) {
 		},
 	}
 	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
-	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +262,7 @@ func TestRender_Hooks_WritesSettingsJSON(t *testing.T) {
 func TestRender_Hooks_EmptyProducesNoOp(t *testing.T) {
 	c := source.Canonical{}
 	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
-	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +282,7 @@ func TestRender_Commands(t *testing.T) {
 		}},
 	}
 	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
-	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +312,7 @@ func TestRender_Subagents(t *testing.T) {
 		}},
 	}
 	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
-	ops, _, err := a.Render(c, adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatal(err)
 	}

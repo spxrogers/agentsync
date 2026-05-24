@@ -141,6 +141,11 @@ type LSPServerSpec struct {
 	Env     map[string]string `toml:"env,omitempty"`
 	URL     string            `toml:"url,omitempty"`
 	Headers map[string]string `toml:"headers,omitempty"`
+	// Agents / Enabled mirror MCPServerSpec: they are source-only targeting
+	// fields that the rendered destination never carries, so capture must
+	// preserve them (via source.ReadLSP) rather than reset them from the dest.
+	Agents  []string `toml:"agents,omitempty"`  // ["*"] or ["claude",...]; empty = all
+	Enabled *bool    `toml:"enabled,omitempty"` // nil means default-on
 }
 
 // Memory mirrors memory/AGENTS.md and memory/fragments/.

@@ -5,11 +5,13 @@ import (
 	"fmt"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
-// Render converts canonical source into FileOps for OpenCode.
-func (a *Adapter) Render(c source.Canonical, scope adapter.Scope, project string) ([]adapter.FileOp, []adapter.Skip, error) {
+// Render converts the resolved canonical into FileOps for OpenCode.
+func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string) ([]adapter.FileOp, []adapter.Skip, error) {
+	c := r.Canonical() //nolint:forbidigo // sanctioned render egress: project the resolved model into FileOps (never written back to source)
 	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
 	var ops []adapter.FileOp
 	var skips []adapter.Skip

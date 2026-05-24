@@ -9,6 +9,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -16,7 +17,7 @@ import (
 // applyOnce runs the real plan→apply→prune→record cycle the apply command uses.
 func applyOnce(t *testing.T, reg *adapter.Registry, c source.Canonical, st *state.Targets, home, userHome string) {
 	t.Helper()
-	plan, err := render.Plan(c, reg, []string{"claude"}, adapter.ScopeUser, "", st, userHome)
+	plan, err := render.Plan(secrets.ForRender(c), reg, []string{"claude"}, adapter.ScopeUser, "", st, userHome)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
