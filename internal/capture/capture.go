@@ -50,8 +50,13 @@ type Result struct {
 //     server's exposure or clear its enablement;
 //  3. writes through internal/source/writer.go (never iox.AtomicWrite directly).
 //
-// When the current source can't be loaded (first import, nothing to reference),
-// steps 1–2 are skipped and the ingested values are written as-is.
+// When the current source fails to load, re-reference + field-preservation are
+// skipped and the ingested values are written as-is. Note source.Load returns
+// no error for an empty/absent home, so this is rare; the ordinary "nothing to
+// reference" case (an item with no existing source counterpart, e.g. adopting a
+// foreign dest item) still runs steps 1–2 as no-ops. Such an item carries no
+// secret WE substituted (apply only substitutes from a source ${secret:…}), so
+// writing it verbatim is correct, not a leak.
 func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error) {
 	var res Result
 	if ingested == nil {
