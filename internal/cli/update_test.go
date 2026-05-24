@@ -206,6 +206,90 @@ func TestUpdate_DetectsManifestSHADrift(t *testing.T) {
 	}
 }
 
+// makeAutoSafeMarketplace writes a marketplace with two track-mode plugins at
+// the given version. "cleanp" only ever ships an MCP server (both claude and
+// opencode translate it). "lossyp" ships an MCP server, and at 2.0.0 ALSO ships
+// an LSP server — which opencode skips — so bumping lossyp 1.0.0→2.0.0 is lossy.
+func makeAutoSafeMarketplace(t *testing.T, dir, version string) string {
+	t.Helper()
+	mpDir := filepath.Join(dir, "fixture-autosafe-mp")
+	mpcp := filepath.Join(mpDir, ".claude-plugin")
+	if err := os.MkdirAll(mpcp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mpJSON := `{"name":"as-mp","owner":{"name":"t"},"plugins":[` +
+		`{"name":"cleanp","source":"./plugins/cleanp","version":"` + version + `"},` +
+		`{"name":"lossyp","source":"./plugins/lossyp","version":"` + version + `"}]}`
+	if err := os.WriteFile(filepath.Join(mpcp, "marketplace.json"), []byte(mpJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writePlugin := func(name, pluginJSON string) {
+		d := filepath.Join(mpDir, "plugins", name, ".claude-plugin")
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "plugin.json"), []byte(pluginJSON), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writePlugin("cleanp", `{"name":"cleanp","version":"`+version+`","mcpServers":{"svc":{"command":"echo"}}}`)
+	lossyJSON := `{"name":"lossyp","version":"` + version + `","mcpServers":{"svc":{"command":"echo"}}}`
+	if version == "2.0.0" {
+		lossyJSON = `{"name":"lossyp","version":"2.0.0","mcpServers":{"svc":{"command":"echo"}},"lspServers":{"gopls":{"command":"gopls"}}}`
+	}
+	writePlugin("lossyp", lossyJSON)
+	return mpDir
+}
+
+// TestUpdate_AutoSafe is the regression for the --auto-safe flag being a silent
+// no-op (its value was discarded). It must (a) error without --apply, and
+// (b) apply a non-lossy bump while skipping a lossy one (a bump that introduces
+// a new translation Skip for an enabled agent).
+func TestUpdate_AutoSafe(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	base := t.TempDir()
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	mustRun(t, env, "agent", "add", "opencode")
+
+	mpDir := makeAutoSafeMarketplace(t, base, "1.0.0")
+	mustRun(t, env, "marketplace", "add", mpDir)
+	mustRun(t, env, "plugin", "install", "cleanp@as-mp")
+	mustRun(t, env, "plugin", "install", "lossyp@as-mp")
+	mustRun(t, env, "apply")
+
+	// Publish 2.0.0: lossyp gains an opencode-skipped LSP server; cleanp stays MCP-only.
+	_ = makeAutoSafeMarketplace(t, base, "2.0.0")
+
+	// (a) --auto-safe without --apply must error.
+	if _, err := runCLI(t, env, "update", "--auto-safe"); err == nil {
+		t.Fatal("--auto-safe without --apply should error")
+	}
+
+	// (b) --auto-safe --apply applies the clean bump, skips the lossy one.
+	out, err := runCLI(t, env, "update", "--auto-safe", "--apply")
+	if err != nil {
+		t.Fatalf("update --auto-safe --apply: %v\n%s", err, out)
+	}
+	home := filepath.Join(tmp, ".agentsync")
+	cleanTOML, _ := readFileString(t, filepath.Join(home, "plugins", "cleanp.toml"))
+	lossyTOML, _ := readFileString(t, filepath.Join(home, "plugins", "lossyp.toml"))
+	if !strings.Contains(cleanTOML, "2.0.0") {
+		t.Errorf("clean bump should have applied; cleanp.toml:\n%s", cleanTOML)
+	}
+	if strings.Contains(lossyTOML, "2.0.0") {
+		t.Errorf("lossy bump should have been skipped; lossyp.toml:\n%s", lossyTOML)
+	}
+	if !strings.Contains(out, "skipping lossy bump lossyp") {
+		t.Errorf("expected auto-safe to report skipping lossyp; got:\n%s", out)
+	}
+	// Drift detection must NOT false-positive on the pending bumps (version changed).
+	if strings.Contains(out, "manifest-sha-mismatch") {
+		t.Errorf("pending bump must not be reported as a same-version re-upload; got:\n%s", out)
+	}
+}
+
 func readFileString(t *testing.T, path string) (string, error) {
 	t.Helper()
 	data, err := os.ReadFile(path)

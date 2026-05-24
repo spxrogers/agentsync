@@ -58,7 +58,10 @@ re-render lands in the right place when running inside a project.`,
 	return cmd
 }
 
-func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag string) error {
+func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFlag string) error {
+	if autoSafe && !doApply {
+		return fmt.Errorf("--auto-safe requires --apply (it only filters which bumps are applied)")
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	userHome := paths.HomeDir(paths.OSEnv{})
 	statePath := filepath.Join(home, ".state", "targets.json")
@@ -135,6 +138,22 @@ func updateRun(cmd *cobra.Command, doApply, _ bool, scopeFlag, projectFlag strin
 
 	// Compute pending bumps.
 	bumps := marketplace.ComputePendingBumps(st, c.Marketplaces, c.Plugins, fetched)
+
+	// --auto-safe: drop bumps whose candidate version would introduce a new
+	// translation loss (an adapter Skip) for any enabled agent. Each bump is
+	// evaluated by projecting the plugin's installed vs candidate manifest and
+	// diffing the skip identities a render emits; comparing both under identical
+	// conditions makes any render quirk cancel, so the delta is exactly the
+	// bump's effect. Evaluation failures are treated as lossy (conservative).
+	if autoSafe {
+		safe, lossy := filterSafeBumps(home, bumps, fetched, c.Config, userHome, cmd.OutOrStdout())
+		for _, b := range lossy {
+			fmt.Fprintf(cmd.OutOrStdout(),
+				"auto-safe: skipping lossy bump %s %s → %s (candidate version drops translation for an agent)\n",
+				b.ID, b.From, b.To)
+		}
+		bumps = safe
+	}
 
 	if len(bumps) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "all plugins are up to date")
@@ -279,6 +298,13 @@ func computeFreshPluginSHAs(home string, plugins []source.Plugin, fetched map[st
 		if !ok {
 			continue
 		}
+		// Drift detection is a SAME-version re-upload check. If the upstream now
+		// advertises a DIFFERENT version, that's a pending bump (handled by
+		// ComputePendingBumps), not a re-upload — comparing the recorded SHA
+		// against a different version's manifest would be a false positive.
+		if mpEntry.Version != "" && mpEntry.Version != pl.Plugin.Version {
+			continue
+		}
 		mpCacheRoot := marketplaceCacheDir(home, mpName)
 		src := mpEntry.Source
 
@@ -404,4 +430,121 @@ func swapDir(src, dst string) error {
 		return err
 	}
 	return os.Rename(src, dst)
+}
+
+// filterSafeBumps partitions bumps into those whose candidate version adds no
+// new translation losses (safe) and those that do (lossy), for `update
+// --auto-safe`. An evaluation error is conservatively treated as lossy so a
+// fetch/parse failure can never cause a lossy bump to slip through.
+func filterSafeBumps(home string, bumps []marketplace.Bump, fetched map[string]map[string]marketplace.PluginEntry, cfg source.Config, userHome string, warn io.Writer) (safe, lossy []marketplace.Bump) {
+	reg := registryFactory()
+	var agents []string
+	for name, ag := range cfg.Agents {
+		if ag.Enabled {
+			agents = append(agents, name)
+		}
+	}
+	for _, b := range bumps {
+		isLossy, err := bumpIsLossy(home, b, fetched, cfg, reg, agents, userHome)
+		if err != nil {
+			fmt.Fprintf(warn, "warning: auto-safe: cannot evaluate %s (%v); excluding to be safe\n", b.ID, err)
+			lossy = append(lossy, b)
+			continue
+		}
+		if isLossy {
+			lossy = append(lossy, b)
+		} else {
+			safe = append(safe, b)
+		}
+	}
+	return safe, lossy
+}
+
+// bumpIsLossy reports whether applying b introduces a new adapter Skip (a
+// translation loss) for any enabled agent. It renders the plugin's installed
+// (current cache) vs candidate (freshly fetched) projection in isolation and
+// returns true if the candidate emits a skip identity the current one did not.
+// Rendering both under identical conditions cancels any pipeline quirk, so the
+// delta is exactly the bump's effect.
+func bumpIsLossy(home string, b marketplace.Bump, fetched map[string]map[string]marketplace.PluginEntry, cfg source.Config, reg *adapter.Registry, agents []string, userHome string) (bool, error) {
+	existing, err := readPluginTOML(filepath.Join(home, "plugins", b.ID+".toml"))
+	if err != nil {
+		return false, err
+	}
+	_, mpName := splitPluginRef(existing.Plugin.ID)
+	if mpName == "" {
+		mpName = "default"
+	}
+	entries, ok := fetched[mpName]
+	if !ok {
+		return false, fmt.Errorf("marketplace %q not in fetched index", mpName)
+	}
+	mpEntry, ok := entries[b.ID]
+	if !ok {
+		return false, fmt.Errorf("plugin %q not found in marketplace %q", b.ID, mpName)
+	}
+
+	oldSkips, err := projectedSkips(mpEntry, pluginCacheDir(home, b.ID), cfg, reg, agents, userHome)
+	if err != nil {
+		return false, err
+	}
+
+	// Fetch the candidate into a throwaway temp dir (never the live cache).
+	mpCacheRoot := marketplaceCacheDir(home, mpName)
+	src := mpEntry.Source
+	if src.Relative != "" {
+		src.Relative = filepath.Join(mpCacheRoot, src.Relative)
+		src.RootDir = mpCacheRoot
+	}
+	tmp, err := os.MkdirTemp("", "agentsync-autosafe-")
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	if _, err := marketplace.Dispatch(src).Fetch(src, tmp); err != nil {
+		return false, fmt.Errorf("fetch candidate %s: %w", b.ID, err)
+	}
+	newSkips, err := projectedSkips(mpEntry, tmp, cfg, reg, agents, userHome)
+	if err != nil {
+		return false, err
+	}
+
+	for id := range newSkips {
+		if !oldSkips[id] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// projectedSkips projects a plugin manifest from cacheDir and returns the set of
+// "agent\x00component\x00name" skip identities that rendering just that plugin's
+// components for the given agents would emit. Skips are structural (they don't
+// depend on resolved secret values), so the templated render is sufficient and
+// no secrets backend is required.
+func projectedSkips(entry marketplace.PluginEntry, cacheDir string, cfg source.Config, reg *adapter.Registry, agents []string, userHome string) (map[string]bool, error) {
+	proj, err := marketplace.Project(entry, cacheDir)
+	if err != nil {
+		return nil, err
+	}
+	mini := source.Canonical{
+		Config:     cfg,
+		MCPServers: proj.MCPServers,
+		Skills:     proj.Skills,
+		Subagents:  proj.Subagents,
+		Commands:   proj.Commands,
+		Hooks:      proj.Hooks,
+		LSPServers: proj.LSPServers,
+	}
+	plan, err := render.Plan(secrets.ForRender(mini), reg, agents, adapter.ScopeUser, "", nil, userHome)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for name, res := range plan.PerAgent {
+		for _, sk := range res.Skips {
+			out[name+"\x00"+sk.Component+"\x00"+sk.Name] = true
+		}
+	}
+	return out, nil
 }
