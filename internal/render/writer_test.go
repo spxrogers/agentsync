@@ -173,6 +173,57 @@ func TestWriter_KeyLevelBackup(t *testing.T) {
 	}
 }
 
+// TestWriter_KeyLevelBackup_ForeignNonObjectAtOwnedKey is the regression for
+// silent data loss: when the existing dest holds a SCALAR or ARRAY at a
+// top-level key agentsync owns as an object (e.g. mcpServers), overlayOwned
+// replaces it wholesale, but maybeBackupKeyOp's per-child pointer loop never
+// fired (getPointer can't descend a scalar/array), so the foreign value was
+// overwritten with NO backup — violating the "back up foreign content before
+// overwrite" invariant.
+func TestWriter_KeyLevelBackup_ForeignNonObjectAtOwnedKey(t *testing.T) {
+	cases := []struct {
+		name   string
+		dest   string
+		marker string
+	}{
+		{"scalar", `{"mcpServers": "surprise-foreign-value", "preserveMe": "keep"}`, "surprise-foreign-value"},
+		{"array", `{"mcpServers": ["foreign-array-entry"], "preserveMe": "keep"}`, "foreign-array-entry"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			home := filepath.Join(tmp, ".agentsync")
+			_ = os.MkdirAll(home, 0o755)
+			dest := filepath.Join(tmp, ".claude.json")
+			_ = os.WriteFile(dest, []byte(tc.dest), 0o644)
+
+			st := state.New()
+			w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
+			ours := []byte(`{"mcpServers":{"github":{"command":"npx"}}}`)
+			op := adapter.FileOp{
+				Action:        "write",
+				Path:          dest,
+				Content:       ours,
+				MergeStrategy: "merge-json-keys",
+				Mode:          0o644,
+				SourceID:      "mcp/github.toml",
+			}
+			final := []byte(`{"mcpServers":{"github":{"command":"npx"}},"preserveMe":"keep"}` + "\n")
+			if err := w.Write(op, final); err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+			reports := w.Reports()
+			if len(reports) == 0 {
+				t.Fatal("expected a foreign-collision backup before wholesale-replacing the owned key, got none")
+			}
+			got, _ := os.ReadFile(reports[0].BackupTo)
+			if !strings.Contains(string(got), tc.marker) {
+				t.Fatalf("backup missing the foreign value %q; got:\n%s", tc.marker, got)
+			}
+		})
+	}
+}
+
 // TestWriter_NoCollisionWhenAlreadyOwned asserts that when state already
 // records the file (file-level FileEntry), no backup is written even if
 // the bytes differ — that's just an in-place update by an owning agent.
