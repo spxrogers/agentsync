@@ -353,6 +353,75 @@ func TestPlugin_InstallFromLocalMarketplace(t *testing.T) {
 // plugin whose source tree contains a plugin.json hard-failed the very next
 // apply with a bogus "manifest SHA mismatch", and `plugin upgrade` (same
 // formula) couldn't fix it.
+// makeHookMarketplace builds a marketplace whose plugin's plugin.json declares
+// a hook — used to prove plugin-declared hooks reach apply.
+func makeHookMarketplace(t *testing.T, dir string) string {
+	t.Helper()
+	mpDir := filepath.Join(dir, "fixture-hook-mp")
+	mpcp := filepath.Join(mpDir, ".claude-plugin")
+	if err := os.MkdirAll(mpcp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mpJSON := `{"name":"hook-mp","owner":{"name":"t"},"plugins":[{"name":"hookp","source":"./plugins/hookp"}]}`
+	if err := os.WriteFile(filepath.Join(mpcp, "marketplace.json"), []byte(mpJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pdir := filepath.Join(mpDir, "plugins", "hookp", ".claude-plugin")
+	if err := os.MkdirAll(pdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pluginJSON := `{"name":"hookp","version":"1.0.0","hooks":{"PostToolUse":{"command":"echo plugin-hook-fired","matcher":"Bash"}}}`
+	if err := os.WriteFile(filepath.Join(pdir, "plugin.json"), []byte(pluginJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return mpDir
+}
+
+// TestPlugin_HookReachesApply is the regression for the apply loader silently
+// dropping plugin.json-declared hooks (its projection had no hooks field). A
+// plugin that ships a hook must have it written to the agent's config.
+func TestPlugin_HookReachesApply(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	mpDir := makeHookMarketplace(t, t.TempDir())
+	mustRun(t, env, "marketplace", "add", mpDir)
+	mustRun(t, env, "plugin", "install", "hookp@hook-mp")
+	mustRun(t, env, "apply")
+
+	data, err := os.ReadFile(filepath.Join(tmp, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatalf("claude settings.json not written: %v", err)
+	}
+	if !strings.Contains(string(data), "plugin-hook-fired") {
+		t.Fatalf("plugin-declared hook did not reach claude settings.json:\n%s", data)
+	}
+}
+
+// TestPlugin_EntryOverrideReachesApply is the regression for the apply loader
+// ignoring marketplace-entry inline component overrides. inline-plugin is
+// strict:false with an inline mcpServers (inline-srv) in its marketplace entry;
+// that server must reach the agent's config.
+func TestPlugin_EntryOverrideReachesApply(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	mustRun(t, env, "marketplace", "add", mpDir)
+	mustRun(t, env, "plugin", "install", "inline-plugin@test-mp")
+	mustRun(t, env, "apply")
+
+	data, err := os.ReadFile(filepath.Join(tmp, ".claude.json"))
+	if err != nil {
+		t.Fatalf(".claude.json not written: %v", err)
+	}
+	if !strings.Contains(string(data), "inline-srv") {
+		t.Fatalf("marketplace-entry inline MCP override did not reach .claude.json:\n%s", data)
+	}
+}
+
 func TestPlugin_NonStrictInstallThenApply(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

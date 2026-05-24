@@ -194,7 +194,7 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 	// land literally in agent native files.
 	if len(bumps) > 0 {
 		pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-		c2, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
+		c2, err := marketplace.LoadProjected(afero.NewOsFs(), home, pluginCacheRoot)
 		if err != nil {
 			return fmt.Errorf("reload source after upgrade: %w", err)
 		}
@@ -486,7 +486,7 @@ func bumpIsLossy(home string, b marketplace.Bump, fetched map[string]map[string]
 		return false, fmt.Errorf("plugin %q not found in marketplace %q", b.ID, mpName)
 	}
 
-	oldSkips, err := projectedSkips(pluginCacheDir(home, b.ID), cfg, reg, agents, userHome)
+	oldSkips, err := projectedSkips(mpEntry, pluginCacheDir(home, b.ID), cfg, reg, agents, userHome)
 	if err != nil {
 		return false, err
 	}
@@ -506,7 +506,7 @@ func bumpIsLossy(home string, b marketplace.Bump, fetched map[string]map[string]
 	if _, err := marketplace.Dispatch(src).Fetch(src, tmp); err != nil {
 		return false, fmt.Errorf("fetch candidate %s: %w", b.ID, err)
 	}
-	newSkips, err := projectedSkips(tmp, cfg, reg, agents, userHome)
+	newSkips, err := projectedSkips(mpEntry, tmp, cfg, reg, agents, userHome)
 	if err != nil {
 		return false, err
 	}
@@ -519,15 +519,15 @@ func bumpIsLossy(home string, b marketplace.Bump, fetched map[string]map[string]
 	return false, nil
 }
 
-// projectedSkips projects a plugin's cached plugin.json the SAME way apply does
-// (source.ProjectPluginCache) and returns the set of "agent\x00component\x00name"
-// skip identities rendering just that plugin's components for the given agents
-// would emit. Using apply's projection (not marketplace.Project) keeps the
+// projectedSkips projects a plugin via marketplace.Project — the SAME single
+// projector apply now uses (marketplace.LoadProjected) — and returns the set of
+// "agent\x00component\x00name" skip identities rendering just that plugin's
+// components for the given agents would emit. Using apply's projector keeps the
 // lossiness decision faithful to what apply will actually render. Skips are
 // structural (independent of resolved secret values), so the templated render
 // is sufficient and no secrets backend is required.
-func projectedSkips(cacheDir string, cfg source.Config, reg *adapter.Registry, agents []string, userHome string) (map[string]bool, error) {
-	proj, err := source.ProjectPluginCache(cacheDir)
+func projectedSkips(entry marketplace.PluginEntry, cacheDir string, cfg source.Config, reg *adapter.Registry, agents []string, userHome string) (map[string]bool, error) {
+	proj, err := marketplace.Project(entry, cacheDir)
 	if err != nil {
 		return nil, err
 	}

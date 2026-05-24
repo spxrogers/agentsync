@@ -11,11 +11,11 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
-	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
@@ -45,7 +45,7 @@ func newDiffCmd() *cobra.Command {
 			// disagrees with what apply will write.
 			pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
 			userHome := paths.HomeDir(paths.OSEnv{})
-			c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
+			c, err := marketplace.LoadProjected(afero.NewOsFs(), home, pluginCacheRoot)
 			if err != nil {
 				return err
 			}

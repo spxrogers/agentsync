@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/capture"
+	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
@@ -220,7 +221,7 @@ func importRun(cmd *cobra.Command, args []string) error {
 // canonical claims, and diff against the actual on-disk contents.
 func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []string {
 	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-	c, err := source.LoadWithCache(loaderFsForState(), home, pluginCacheRoot)
+	c, err := marketplace.LoadProjected(loaderFsForState(), home, pluginCacheRoot)
 	if err != nil {
 		return nil
 	}
@@ -283,7 +284,7 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) err
 
 	// Build a fresh canonical from disk and render only this agent.
 	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-	c, err := source.LoadWithCache(loaderFsForState(), home, pluginCacheRoot)
+	c, err := marketplace.LoadProjected(loaderFsForState(), home, pluginCacheRoot)
 	if err != nil {
 		return err
 	}

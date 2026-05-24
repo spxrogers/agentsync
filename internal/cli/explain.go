@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
@@ -24,7 +25,7 @@ func newExplainCmd() *cobra.Command {
 			pluginID := args[0]
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-			c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
+			c, err := marketplace.LoadProjected(afero.NewOsFs(), home, pluginCacheRoot)
 			if err != nil {
 				return err
 			}

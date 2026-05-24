@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
@@ -50,7 +51,7 @@ func newApplyCmd() *cobra.Command {
 // out from newApplyCmd so the lock acquisition lives in one obvious place.
 func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFlag string) error {
 	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-	c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
+	c, err := marketplace.LoadProjected(afero.NewOsFs(), home, pluginCacheRoot)
 	if err != nil {
 		return err
 	}

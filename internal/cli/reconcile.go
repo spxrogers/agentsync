@@ -15,6 +15,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/capture"
 	"github.com/spxrogers/agentsync/internal/drift"
 	"github.com/spxrogers/agentsync/internal/iox"
+	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
@@ -73,7 +74,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 	// Project plugins like apply does so drift classification covers
 	// plugin-managed components instead of reporting them as untracked.
 	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-	c, err := source.LoadWithCache(afero.NewOsFs(), home, pluginCacheRoot)
+	c, err := marketplace.LoadProjected(afero.NewOsFs(), home, pluginCacheRoot)
 	if err != nil {
 		return err
 	}
