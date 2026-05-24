@@ -69,6 +69,21 @@ func TestMCP_AddHTTPRequiresURL(t *testing.T) {
 	}
 }
 
+// TestMCP_AddRejectsEmptyAgents is the regression for an explicitly empty
+// --agents silently becoming "all agents" (nil allowlist) instead of erroring.
+func TestMCP_AddRejectsEmptyAgents(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	_, _ = runCLI(t, env, "init")
+	_, err := runCLI(t, env, "mcp", "add", "x", "--command", "npx", "--agents", "")
+	if err == nil {
+		t.Fatal("mcp add with explicitly empty --agents should be rejected")
+	}
+	if !strings.Contains(err.Error(), "--agents cannot be empty") {
+		t.Fatalf("expected empty-agents error, got: %v", err)
+	}
+}
+
 func TestMCP_ListAndRemove(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
