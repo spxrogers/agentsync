@@ -614,6 +614,17 @@ func parseMCPSpec(raw any, cacheDir string) source.MCPServerSpec {
 			}
 		}
 	}
+	// Normalise present-but-empty maps to nil so an explicit `"env":{}` /
+	// `"headers":{}` compares equal to an omitted one. The union conflict check
+	// uses reflect.DeepEqual, which treats a nil map and an empty map as
+	// different — without this, two semantically-identical servers (one omitting
+	// env, the other declaring it empty) spuriously trip the strict conflict.
+	if len(spec.Env) == 0 {
+		spec.Env = nil
+	}
+	if len(spec.Headers) == 0 {
+		spec.Headers = nil
+	}
 	return spec
 }
 
@@ -652,6 +663,15 @@ func parseLSPSpec(raw any, cacheDir string) source.LSPServerSpec {
 				spec.Headers[k] = resolvePluginRoot(s, cacheDir)
 			}
 		}
+	}
+	// See parseMCPSpec: normalise empty maps to nil so the reflect.DeepEqual
+	// conflict check treats an explicit empty env/headers as equal to an omitted
+	// one.
+	if len(spec.Env) == 0 {
+		spec.Env = nil
+	}
+	if len(spec.Headers) == 0 {
+		spec.Headers = nil
 	}
 	return spec
 }

@@ -301,6 +301,30 @@ func TestProject_StrictConflict_IdenticalDedups(t *testing.T) {
 	}
 }
 
+// A server defined in both plugin.json and the entry that is semantically
+// identical but differs only by nil-vs-empty env/headers must NOT be a strict
+// conflict. parseMCPSpec built nil when the key was absent and an empty map when
+// present-but-empty; reflect.DeepEqual treated those as different, so an
+// otherwise-identical server spuriously hard-errored under strict.
+func TestProject_StrictConflict_NilVsEmptyMapNotAConflict(t *testing.T) {
+	cacheDir := "/cache"
+	files := map[string][]byte{
+		filepath.Join(cacheDir, ".claude-plugin", "plugin.json"): []byte(`{"name":"p","mcpServers":{"srv":{"command":"x"}}}`),
+	}
+	// Entry specifies an explicit empty env (and headers); semantically the same
+	// server as plugin.json's, which omits them.
+	entry := marketplace.PluginEntry{Name: "p", MCPServers: map[string]any{
+		"srv": map[string]any{"command": "x", "env": map[string]any{}, "headers": map[string]any{}},
+	}}
+	pr, err := marketplace.ProjectWithReader(entry, cacheDir, fakeFS(files))
+	if err != nil {
+		t.Fatalf("nil-vs-empty env/headers must not be a strict conflict: %v", err)
+	}
+	if len(pr.MCPServers) != 1 {
+		t.Fatalf("mcp count = %d, want 1", len(pr.MCPServers))
+	}
+}
+
 // Identical hooks declared by both plugin.json and the entry must collapse to
 // one, otherwise the hook is registered twice in settings.json and runs twice.
 func TestProject_DedupsIdenticalHooks(t *testing.T) {
