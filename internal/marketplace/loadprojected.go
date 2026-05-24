@@ -40,7 +40,7 @@ func LoadProjected(fs afero.Fs, home, pluginCacheRoot string) (source.Canonical,
 			// `plugin disable <id>` — skip projection entirely.
 			continue
 		}
-		id, _ := splitPluginRefPkg(pl.Plugin.ID)
+		id, mpName := splitPluginRefPkg(pl.Plugin.ID)
 		if id == "" {
 			id = pl.ID
 		}
@@ -53,7 +53,7 @@ func LoadProjected(fs afero.Fs, home, pluginCacheRoot string) (source.Canonical,
 		if err := verifyPluginManifestSHA(fs, pluginDir, pl.Plugin.ManifestSHA, id); err != nil {
 			return c, err
 		}
-		proj, perr := Project(resolveInstalledEntry(home, pl.Plugin.ID), pluginDir)
+		proj, perr := Project(resolveInstalledEntry(home, id, mpName), pluginDir)
 		if perr != nil {
 			return c, fmt.Errorf("project plugin %s: %w", id, perr)
 		}
@@ -68,19 +68,27 @@ func LoadProjected(fs afero.Fs, home, pluginCacheRoot string) (source.Canonical,
 }
 
 // resolveInstalledEntry finds the marketplace entry for an installed plugin
-// (id or id@marketplace) by scanning the cached marketplace.json files and
-// matching on the marketplace's own `name` field plus the plugin name. This is
-// what carries entry-level inline overrides into projection.
+// (id, scoped to marketplace mpName) by scanning the cached marketplace.json
+// files and matching on the marketplace's own `name` field plus the plugin
+// name. This is what carries entry-level inline overrides into projection.
 //
-// On any failure (no marketplace cache, unparseable json, or the plugin not
-// found — e.g. after `marketplace remove`) it falls back to a bare strict entry
-// so projection degrades to plugin.json-only rather than failing the whole
-// load. The entry reflects the marketplace's CURRENT version of the plugin,
-// which can differ from the installed version until the next `update`.
-func resolveInstalledEntry(home, pluginID string) PluginEntry {
-	id, mpName := splitPluginRefPkg(pluginID)
-	if id == "" {
-		id = pluginID
+// A bare id (mpName == "") is NOT resolved: guessing the first cached
+// marketplace that happens to contain a same-named plugin would inject that
+// marketplace's inline overrides as foreign config. It falls back to a bare
+// strict entry (plugin.json-only). The same fallback applies on any failure
+// (no marketplace cache, unparseable json, plugin not found — e.g. after
+// `marketplace remove`), so projection degrades to plugin.json-only rather than
+// failing the whole load.
+//
+// CAVEAT: the entry reflects the marketplace's CURRENT version of the plugin,
+// which can differ from the installed version until the next `update`. If an
+// upstream version flips a plugin strict:true→false, Project's non-strict path
+// ignores the installed plugin.json and the plugin's components drop out until
+// the cache is re-synced. (See PR notes — non-strict is entry-authoritative by
+// marketplace.Project's contract.)
+func resolveInstalledEntry(home, id, mpName string) PluginEntry {
+	if mpName == "" {
+		return PluginEntry{Name: id}
 	}
 	cacheRoot := filepath.Join(home, ".state", "cache", "marketplaces")
 	dirs, err := os.ReadDir(cacheRoot)
@@ -99,7 +107,7 @@ func resolveInstalledEntry(home, pluginID string) PluginEntry {
 		if json.Unmarshal(data, &mp) != nil {
 			continue
 		}
-		if mpName != "" && mp.Name != mpName {
+		if mp.Name != mpName {
 			continue
 		}
 		for _, e := range mp.Plugins {

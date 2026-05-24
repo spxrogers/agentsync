@@ -35,6 +35,82 @@ func writeProjFixture(t *testing.T, pluginTOML, id, pluginJSON string) (string, 
 	return home, cacheRoot
 }
 
+// writeMarketplaceCache writes a cached marketplace.json under
+// <home>/.state/cache/marketplaces/<dir>/.claude-plugin/.
+func writeMarketplaceCache(t *testing.T, home, dir, marketplaceJSON string) {
+	t.Helper()
+	d := filepath.Join(home, ".state", "cache", "marketplaces", dir, ".claude-plugin")
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "marketplace.json"), []byte(marketplaceJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestLoadProjected_BareIDDoesNotPickForeignMarketplaceEntry is the regression
+// for resolveInstalledEntry, when the installed plugin id has no @marketplace
+// (only reachable via a hand-edited plugins/<id>.toml), matching the FIRST
+// cached marketplace that happens to contain a same-named plugin — injecting
+// that marketplace's inline overrides as foreign config. A bare id must fall
+// back to plugin.json-only projection, never guess a marketplace.
+func TestLoadProjected_BareIDDoesNotPickForeignMarketplaceEntry(t *testing.T) {
+	home, cache := writeProjFixture(t,
+		"[plugin]\nid = \"x\"\nversion = \"1\"\n", "x",
+		`{"name":"x","mcpServers":{"real-srv":{"command":"r"}}}`)
+	writeMarketplaceCache(t, home, "aaa",
+		`{"name":"aaa","owner":{"name":"t"},"plugins":[{"name":"x","source":"./x","strict":false,"mcpServers":{"foreign-from-aaa":{"command":"f"}}}]}`)
+	writeMarketplaceCache(t, home, "zzz",
+		`{"name":"zzz","owner":{"name":"t"},"plugins":[{"name":"x","source":"./x","strict":false,"mcpServers":{"foreign-from-zzz":{"command":"f"}}}]}`)
+
+	c, err := marketplace.LoadProjected(afero.NewOsFs(), home, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, m := range c.MCPServers {
+		ids[m.ID] = true
+	}
+	if ids["foreign-from-aaa"] || ids["foreign-from-zzz"] {
+		t.Fatalf("bare-id plugin picked a foreign marketplace entry: %v", ids)
+	}
+	if !ids["real-srv"] {
+		t.Fatalf("bare-id plugin should project its own plugin.json (real-srv); got: %v", ids)
+	}
+}
+
+// TestLoadProjected_EntryOverrideFromMatchingMarketplace verifies a strict
+// plugin's inline marketplace-entry override is applied on top of plugin.json,
+// resolved from the marketplace whose name matches the installed id@marketplace.
+func TestLoadProjected_EntryOverrideFromMatchingMarketplace(t *testing.T) {
+	home, cache := writeProjFixture(t,
+		"[plugin]\nid = \"p@m2\"\nversion = \"1\"\n", "p",
+		`{"name":"p","mcpServers":{"base-srv":{"command":"b"}}}`)
+	// Two marketplaces define p differently; the installed id pins m2.
+	writeMarketplaceCache(t, home, "m1",
+		`{"name":"m1","owner":{"name":"t"},"plugins":[{"name":"p","source":"./p","mcpServers":{"from-m1":{"command":"x"}}}]}`)
+	writeMarketplaceCache(t, home, "m2",
+		`{"name":"m2","owner":{"name":"t"},"plugins":[{"name":"p","source":"./p","mcpServers":{"from-m2":{"command":"x"}}}]}`)
+
+	c, err := marketplace.LoadProjected(afero.NewOsFs(), home, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, m := range c.MCPServers {
+		ids[m.ID] = true
+	}
+	if !ids["base-srv"] {
+		t.Fatalf("strict plugin.json component dropped: %v", ids)
+	}
+	if !ids["from-m2"] {
+		t.Fatalf("override from the matching marketplace (m2) not applied: %v", ids)
+	}
+	if ids["from-m1"] {
+		t.Fatalf("override from the WRONG marketplace (m1) was applied: %v", ids)
+	}
+}
+
 func TestLoadProjected_PluginExpandsToMCP(t *testing.T) {
 	home, cache := writeProjFixture(t,
 		"[plugin]\nid = \"x@m\"\nversion = \"1\"\n", "x",
@@ -90,8 +166,12 @@ func TestLoadProjected_RejectsTraversalComponentName(t *testing.T) {
 	if err := os.WriteFile(skill, []byte("---\nname: ../../evil\n---\nbody\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := marketplace.LoadProjected(afero.NewOsFs(), home, cache); err == nil {
+	_, err := marketplace.LoadProjected(afero.NewOsFs(), home, cache)
+	if err == nil {
 		t.Fatal("expected error for a component name with a traversal segment")
+	}
+	if !strings.Contains(err.Error(), "traversal") && !strings.Contains(err.Error(), "path separator") {
+		t.Fatalf("error should name the traversal/separator problem; got: %v", err)
 	}
 }
 
