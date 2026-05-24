@@ -32,9 +32,17 @@ type Resolved struct {
 func ForRender(c source.Canonical) Resolved { return Resolved{c: c} }
 
 // Canonical returns the underlying model for the render layer to read. It is
-// the render-only egress: adapters consume it to produce destination FileOps.
-// It deliberately does not help the reverse direction — callers that persist to
-// source take a source.Canonical directly and so cannot be fed a Resolved.
+// the render-only egress: the adapter Render entry points consume it to project
+// the resolved model into destination FileOps.
+//
+// It returns a writable source.Canonical, so this accessor is the one seam that
+// could otherwise launder resolved cleartext back toward source. The type wall
+// makes passing a Resolved DIRECTLY to source.Write* / capture.Capture a compile
+// error; this accessor is additionally fenced by a forbidigo rule
+// (.golangci.yml) that forbids secrets.Resolved.Canonical outside the adapter
+// Render files, so non-render code can't unwrap-then-write. The dest->source
+// direction goes through ReReferenceCanonical + capture.Capture on a templated
+// source.Canonical, never through here.
 func (r Resolved) Canonical() source.Canonical { return r.c }
 
 // cloneForResolve copies c so SubstituteCanonical can resolve secrets into the

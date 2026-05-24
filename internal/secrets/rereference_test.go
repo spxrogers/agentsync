@@ -89,3 +89,48 @@ func TestReReferenceCanonical_FieldPositional(t *testing.T) {
 		t.Errorf("hook command not re-referenced: got %q", ingested.Hooks[0].Command)
 	}
 }
+
+// TestReReferenceCanonical_ProjectOverlay proves the field-positional restore
+// recurses into the project overlay: a project-scope secret field is matched to
+// its project-scope source counterpart (the secretFieldLoc carries a scope
+// marker so a user-scope server of the same ID can't be mismatched against it).
+func TestReReferenceCanonical_ProjectOverlay(t *testing.T) {
+	sec := fakeResolver{"PTOK": "proj-secret"}
+	env := fakeResolver{}
+
+	against := &source.Canonical{
+		// Same ID at user scope, NOT templated — must not be matched against the
+		// project-scope field below.
+		MCPServers: []source.MCPServer{{
+			ID:     "psrv",
+			Server: source.MCPServerSpec{Env: map[string]string{"K": "user-literal"}},
+		}},
+		Project: &source.Canonical{
+			MCPServers: []source.MCPServer{{
+				ID:     "psrv",
+				Server: source.MCPServerSpec{Env: map[string]string{"K": "${secret:PTOK}"}},
+			}},
+		},
+	}
+	ingested := &source.Canonical{
+		MCPServers: []source.MCPServer{{
+			ID:     "psrv",
+			Server: source.MCPServerSpec{Env: map[string]string{"K": "user-literal"}},
+		}},
+		Project: &source.Canonical{
+			MCPServers: []source.MCPServer{{
+				ID:     "psrv",
+				Server: source.MCPServerSpec{Env: map[string]string{"K": "proj-secret"}},
+			}},
+		},
+	}
+
+	ReReferenceCanonical(ingested, against, sec, env)
+
+	if got := ingested.Project.MCPServers[0].Server.Env["K"]; got != "${secret:PTOK}" {
+		t.Errorf("project-overlay secret not re-referenced: got %q", got)
+	}
+	if got := ingested.MCPServers[0].Server.Env["K"]; got != "user-literal" {
+		t.Errorf("user-scope non-secret field corrupted by project-scope match: got %q", got)
+	}
+}

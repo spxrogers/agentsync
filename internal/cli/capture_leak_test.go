@@ -254,15 +254,17 @@ func TestCapture_PreservesSourceOnlyFields(t *testing.T) {
 		{
 			name:   "mcp",
 			srcRel: "mcp/srv.toml",
+			// enabled = true keeps the server rendering (so import can find it)
+			// while still exercising preservation of the explicit enabled flag.
 			srcBody: "[server]\ntype = \"stdio\"\ncommand = \"npx\"\n" +
-				"agents = [\"claude\"]\n",
+				"agents = [\"claude\"]\nenabled = true\n",
 			selector: "claude:mcp:srv",
 		},
 		{
 			name:   "lsp",
 			srcRel: "lsp/srv.toml",
 			srcBody: "[server]\ncommand = \"gopls\"\n" +
-				"agents = [\"claude\"]\n",
+				"agents = [\"claude\"]\nenabled = true\n",
 			selector: "claude:lsp:srv",
 		},
 	} {
@@ -281,6 +283,9 @@ func TestCapture_PreservesSourceOnlyFields(t *testing.T) {
 			}
 			if !strings.Contains(string(got), "agents") || !strings.Contains(string(got), "claude") {
 				t.Fatalf("capture dropped the source-only agents allowlist for %s (broadens exposure):\n%s", tc.name, got)
+			}
+			if !strings.Contains(string(got), "enabled") {
+				t.Fatalf("capture dropped the source-only enabled flag for %s:\n%s", tc.name, got)
 			}
 		})
 	}

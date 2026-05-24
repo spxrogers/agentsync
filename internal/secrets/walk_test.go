@@ -120,12 +120,23 @@ func TestWalkerVisitsEveryCoveredField(t *testing.T) {
 				Headers: map[string]string{"H": "lsp-header"},
 			},
 		}},
+		// Project overlay: the walker must recurse into it so project-scope
+		// secret fields are covered too (apply substitutes them; capture
+		// re-references them). Sentinels below prove the recursion visits them.
+		Project: &source.Canonical{
+			MCPServers: []source.MCPServer{{
+				ID:     "psrv",
+				Server: source.MCPServerSpec{Command: "proj-command", Env: map[string]string{"P": "proj-env"}},
+			}},
+			Hooks: []source.Hook{{Event: "PostToolUse", Type: "command", Command: "proj-hook"}},
+		},
 	}
 	want := map[string]bool{
 		"mcp-command": false, "mcp-url": false, "mcp-arg0": false, "mcp-arg1": false,
 		"mcp-env": false, "mcp-header": false, "hook-command": false,
 		"lsp-command": false, "lsp-url": false, "lsp-arg0": false,
 		"lsp-env": false, "lsp-header": false,
+		"proj-command": false, "proj-env": false, "proj-hook": false,
 	}
 	walkSecretFields(c, func(_ secretFieldLoc, s string) string {
 		if _, ok := want[s]; ok {

@@ -39,6 +39,16 @@ linters:
         # (canonical source, agentsync's own state, plugin TOMLs).
         - pattern: '^iox\.AtomicWrite$'
           msg: "use render.Writer / adapter.DestWriter for native-destination writes; iox.AtomicWrite is reserved for canonical-source / state / plugin-cache writes"
+        # secrets.Resolved.Canonical() is the render-only egress for the resolved
+        # apply model. Unwrapping a Resolved to a writable source.Canonical and
+        # persisting it would reintroduce the cleartext-secret-into-source leak
+        # the type split exists to prevent. Only the adapter Render entry points
+        # (and the secrets package's own tests) may call it; the exclusions list
+        # below whitelists them. The type wall makes passing a Resolved DIRECTLY
+        # to a source writer a compile error; this rule fences the one accessor
+        # that could otherwise launder it.
+        - pattern: '^secrets\.Resolved\.Canonical$'
+          msg: "do not unwrap secrets.Resolved to source.Canonical outside an adapter's Render; persisting it would leak resolved cleartext into ~/.agentsync. Render from the Resolved; capture writes the templated source.Canonical."
   exclusions:
     rules:
       # main.go can use os.UserHomeDir if needed.
@@ -70,6 +80,17 @@ linters:
       # iox.AtomicWrite — that's its whole job.
       - path: '(^|/)internal/adapter/testwriter\.go$'
         linters: [forbidigo]
+      # secrets.Resolved.Canonical() is the intended render egress: the two
+      # adapter Render entry points unwrap the resolved model to project it into
+      # destination FileOps. Scope this exclusion to THAT rule (via text) so the
+      # adapters still can't call iox.AtomicWrite directly.
+      - path: '(^|/)internal/adapter/(claude|opencode)/render\.go$'
+        linters: [forbidigo]
+        text: 'unwrap secrets\.Resolved'
+      # The secrets package's own tests assert on Resolved.Canonical() output.
+      - path: '(^|/)internal/secrets/.*_test\.go$'
+        linters: [forbidigo]
+        text: 'unwrap secrets\.Resolved'
 
 formatters:
   enable:
