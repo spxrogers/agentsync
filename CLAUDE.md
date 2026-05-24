@@ -67,5 +67,7 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
 
 - `just build` / `just test-fast`; full gate `just test-release` (hermetic container).
 - FS-touching tests refuse to run on host without `AGENTSYNC_TEST_IN_CONTAINER=1`.
-- `golangci-lint` 2.5.0 panics on Go ≥ 1.26 host toolchains; run lint as
-  `GOTOOLCHAIN=go1.25.10 golangci-lint run ./...` until the linter is upgraded.
+- Lint with `just lint` (`golangci-lint run ./...`); CI pins **golangci-lint
+  v2.12.2**, whose release binary is built with Go 1.26, so it parses our export
+  data natively — no `GOTOOLCHAIN` override needed. A local install built with
+  Go < 1.26 will refuse to run against this module; install v2.12.2 to match CI.
