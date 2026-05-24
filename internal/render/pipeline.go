@@ -368,7 +368,8 @@ func Apply(
 						return allReports, written, fmt.Errorf(
 							"agent %q renders different content than an earlier agent for the same path %s; "+
 								"refusing to silently drop one (shared paths must render identical bytes)",
-							name, op.Path)
+							name, op.Path,
+						)
 					}
 					continue
 				}

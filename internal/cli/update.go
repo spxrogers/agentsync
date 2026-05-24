@@ -309,7 +309,7 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 	if err != nil {
 		return fmt.Errorf("temp cache for %s: %w", b.ID, err)
 	}
-	defer os.RemoveAll(tmpCache)
+	defer func() { _ = os.RemoveAll(tmpCache) }()
 
 	fetcher := marketplace.Dispatch(src)
 	if _, err := fetcher.Fetch(src, tmpCache); err != nil {
