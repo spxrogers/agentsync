@@ -346,6 +346,35 @@ func TestPlugin_InstallFromLocalMarketplace(t *testing.T) {
 	}
 }
 
+// TestPlugin_NonStrictInstallThenApply is the regression for the manifest-SHA
+// strict/non-strict asymmetry: install recorded sha256(entry-bytes) for a
+// non-strict plugin, but the loader's verifyPluginManifestSHA always recomputes
+// sha256(plugin.json) and has no strict flag to branch on — so a non-strict
+// plugin whose source tree contains a plugin.json hard-failed the very next
+// apply with a bogus "manifest SHA mismatch", and `plugin upgrade` (same
+// formula) couldn't fix it.
+func TestPlugin_NonStrictInstallThenApply(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+	// inline-plugin is strict:false and its source (./plugins/demo) has a plugin.json.
+	if _, err := runCLI(t, env, "plugin", "install", "inline-plugin@test-mp"); err != nil {
+		t.Fatalf("plugin install (non-strict): %v", err)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply after installing a non-strict plugin must not fail on a manifest-SHA mismatch: %v\n%s", err, out)
+	}
+}
+
 func TestPlugin_List(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
