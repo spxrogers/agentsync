@@ -157,7 +157,10 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		// before overwrite. The dry-run previously hid this; users only
 		// found out which files were about to be backed up after the
 		// real apply ran.
-		previews := render.PreviewCollisions(plan, reg, s, home, userHome, sc, projectRoot)
+		previews, perr := render.PreviewCollisions(plan, reg, s, home, userHome, sc, projectRoot)
+		if perr != nil {
+			return perr
+		}
 		if len(previews) > 0 {
 			fmt.Fprintln(w)
 			fmt.Fprintf(w, "Foreign collisions: %d (the real apply will back these up before overwriting)\n", len(previews))

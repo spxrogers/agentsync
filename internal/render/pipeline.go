@@ -104,12 +104,12 @@ func PreviewCollisions(
 	userHome string,
 	scope adapter.Scope,
 	project string,
-) []CollisionReport {
+) ([]CollisionReport, error) {
 	if st == nil {
-		return nil
+		return nil, nil
 	}
 	var all []CollisionReport
-	seen := map[string]bool{}
+	seen := map[string][]byte{}
 	for _, name := range reg.Names() {
 		res, ok := p.PerAgent[name]
 		if !ok {
@@ -120,14 +120,21 @@ func PreviewCollisions(
 			if op.Action != "" && op.Action != "write" {
 				continue
 			}
-			// Mirror Apply's dedup: only whole-file replace writes are
-			// collapsed by path. Key-merge ops all run; the writer's
-			// per-path backedUp guard prevents a duplicate collision report.
+			// Mirror Apply's dedup AND its divergence guard: only whole-file
+			// replace writes are collapsed by path; identical content dedups,
+			// but divergent content for the same path fails loud — otherwise
+			// --dry-run would show a clean preview that the real apply rejects.
 			if !isKeyMerge(op.MergeStrategy) {
-				if seen[op.Path] {
+				if prev, ok := seen[op.Path]; ok {
+					if !bytes.Equal(prev, op.Content) {
+						return all, fmt.Errorf(
+							"agent %q renders different content than an earlier agent for the same path %s; "+
+								"refusing to silently drop one (shared paths must render identical bytes)",
+							name, op.Path)
+					}
 					continue
 				}
-				seen[op.Path] = true
+				seen[op.Path] = op.Content
 			}
 			// We don't have the post-merge finalBytes here without
 			// re-running the adapter. For preview purposes a conservative
@@ -139,7 +146,7 @@ func PreviewCollisions(
 		}
 		all = append(all, w.Reports()...)
 	}
-	return all
+	return all, nil
 }
 
 // ownedKeysFor returns the JSON-pointer strings owned by agentsync for a given

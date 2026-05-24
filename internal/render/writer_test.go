@@ -394,6 +394,27 @@ func TestRenderApply_SharedWriteDivergence(t *testing.T) {
 	})
 }
 
+// TestPreviewCollisions_SharedWriteDivergence ensures `apply --dry-run`'s
+// preview fails loud on divergent shared-path content, matching Apply — so the
+// dry-run can't show a clean preview that the real apply then aborts on.
+func TestPreviewCollisions_SharedWriteDivergence(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, ".claude", "skills", "x", "SKILL.md")
+	_ = os.MkdirAll(filepath.Dir(dest), 0o755)
+	reg := adapter.NewRegistry()
+	_ = reg.Register(&fakeJSONApply{name: "claude"})
+	_ = reg.Register(&fakeJSONApply{name: "opencode"})
+	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+		"claude":   {Ops: []adapter.FileOp{{Action: "write", Path: dest, Content: []byte("A"), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
+		"opencode": {Ops: []adapter.FileOp{{Action: "write", Path: dest, Content: []byte("B"), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
+	}}
+	if _, err := render.PreviewCollisions(plan, reg, state.New(), home, tmp, adapter.ScopeUser, ""); err == nil {
+		t.Fatal("expected dry-run preview to fail loud on divergent shared-path content")
+	}
+}
+
 // TestRenderApply_FullPathBacksUpAcrossAgents exercises the integrated
 // path: render.Apply constructs one writer per agent, each agent's
 // Apply routes through it, and the union of reports is returned.
