@@ -7,6 +7,64 @@ import (
 	"testing"
 )
 
+// TestReconcile_OrphanFile is the regression/feature test for the maintainer
+// decision that agentsync should PROMPT to delete or preserve an orphaned dest
+// file (a whole-file dest agentsync owns but no source component renders
+// anymore). [r]emove backs up then deletes + prunes state; [k]eep leaves it.
+func TestReconcile_OrphanFile(t *testing.T) {
+	setup := func(t *testing.T) (env map[string]string, dest string) {
+		t.Helper()
+		tmp := t.TempDir()
+		env = map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+		mustRun(t, env, "init")
+		mustRun(t, env, "agent", "add", "claude")
+		skill := filepath.Join(tmp, ".agentsync", "skills", "demo", "SKILL.md")
+		_ = os.MkdirAll(filepath.Dir(skill), 0o755)
+		_ = os.WriteFile(skill, []byte("---\nname: demo\ndescription: d\n---\nbody\n"), 0o644)
+		mustRun(t, env, "apply")
+		dest = filepath.Join(tmp, ".claude", "skills", "demo", "SKILL.md")
+		if _, err := os.Stat(dest); err != nil {
+			t.Fatalf("dest skill not written by apply: %v", err)
+		}
+		// Remove the source component → the dest is now an orphan.
+		_ = os.RemoveAll(filepath.Join(tmp, ".agentsync", "skills", "demo"))
+		return env, dest
+	}
+
+	t.Run("remove backs up and deletes", func(t *testing.T) {
+		env, dest := setup(t)
+		out, err := runCLIWithStdin(t, env, "r", "reconcile")
+		if err != nil {
+			t.Fatalf("reconcile: %v\n%s", err, out)
+		}
+		if _, err := os.Stat(dest); !os.IsNotExist(err) {
+			t.Fatalf("orphan dest should have been removed; stat err=%v\n%s", err, out)
+		}
+		// A backup of the removed file must exist.
+		backups := filepath.Join(env["AGENTSYNC_TARGET_ROOT"], ".agentsync", ".state", "backups")
+		found := false
+		_ = filepath.Walk(backups, func(p string, fi os.FileInfo, e error) error {
+			if e == nil && !fi.IsDir() && strings.HasSuffix(p, "SKILL.md") {
+				found = true
+			}
+			return nil
+		})
+		if !found {
+			t.Fatalf("expected a backup of the removed orphan under %s", backups)
+		}
+	})
+
+	t.Run("keep preserves the file", func(t *testing.T) {
+		env, dest := setup(t)
+		if _, err := runCLIWithStdin(t, env, "k", "reconcile"); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+		if _, err := os.Stat(dest); err != nil {
+			t.Fatalf("orphan dest should have been kept; stat err=%v", err)
+		}
+	})
+}
+
 func TestReconcile_NoDrift(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
