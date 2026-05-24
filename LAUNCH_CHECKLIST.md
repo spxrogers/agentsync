@@ -21,15 +21,14 @@ the adapter-coverage and comment-preservation items can be addressed any time
 These all need to exist before flipping the GitHub repo public. Without them,
 the project looks like an abandoned experiment instead of a v1.0.
 
-- [ ] **`LICENSE`** — pick one. MIT or Apache-2.0 most likely; Apache-2.0 if you
-      want explicit patent grant, MIT if you want the shortest possible license.
+- [x] **`LICENSE`** — done: MIT (`LICENSE` at repo root).
 - [ ] **`CONTRIBUTING.md`** — at minimum: "this is personal-first /
       OSS-shareable, PRs welcome but no SLA, here's how to run tests
       (`just test-release`), here's the commit-message convention." Can be
       brief.
-- [ ] **`SECURITY.md`** — disclosure process. Especially relevant given age key
-      handling: tell users what to do if they find a way to leak secrets,
-      bypass the lock, or trick the per-key merge.
+- [x] **`SECURITY.md`** — done: disclosure process + threat model
+      (`SECURITY.md` at repo root) covering age key handling, untrusted
+      marketplaces/plugins, and destination writes.
 - [ ] **`CODE_OF_CONDUCT.md`** — optional but expected on most public OSS.
       Contributor Covenant is fine.
 - [ ] **`CHANGELOG.md`** — start at v1.0.0. Future releases append; keeps users
@@ -167,14 +166,13 @@ artifact distributed publicly.
       Document or design.
 - [ ] **OpenCode command frontmatter munge** → drops `argument-hint` with a
       Skip note. No OpenCode equivalent. Likely permanent; just document.
-- [ ] **Codex (`v1.1`) and Cursor (`v1.2`) adapters** — still NoopAdapter in
-      `internal/cli/registry_internal.go`. A user can today run
-      `agentsync agent add codex` and apply will silently produce 0 ops.
-      Decide whether to:
-      - Reject `agent add codex` / `cursor` with "not yet supported in v1.0"
-      - Accept the no-op and document
-      - Wait until v1.1 / v1.2 plans land
-      Currently leans toward (b) but worth an explicit choice before public.
+- [x] **Codex (`v1.1`) and Cursor (`v1.2`) adapters** — decision made and
+      shipped (see §4.5): they remain NoopAdapter in
+      `internal/cli/registry_internal.go`, but `agent add codex` / `cursor` is
+      now **rejected** with a "not yet supported in v1" message
+      (override via `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` for plan/spec work), so a
+      user can no longer silently register a no-op agent. Promoting either
+      adapter to real translation is deferred to v1.1 (Codex) / v1.2 (Cursor).
 
 ## §5 — One real correctness gap to verify
 
