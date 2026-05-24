@@ -2,6 +2,18 @@
 // These are called by the reconcile command when the user selects [w]rite-back,
 // and by the import command to capture native edits.
 //
+// SECRET-SAFETY INVARIANT (read before adding a caller): these Write* helpers
+// take only the TEMPLATED source types (source.Canonical / its sub-structs) and
+// perform NO secret re-referencing. apply substitutes ${secret:…} to cleartext
+// into destinations, so any canonical reconstructed from a destination holds
+// live credentials. The ONLY sanctioned dest->source write path is
+// capture.Capture, which calls secrets.ReReferenceCanonical first. Do NOT pass
+// these helpers a value obtained by unwrapping secrets.Resolved.Canonical() — it
+// is the resolved (cleartext) apply model and would leak the secret into source.
+// This API is intentionally not lint-fenced (it is the legitimate templated
+// writer Capture is built on), so this discipline is the guard; see CLAUDE.md
+// "Secret-handling invariants" and internal/secrets/resolved.go.
+//
 // v1 trade-off: TOML comments in the original file are not preserved on
 // write-back. Comment-preserving mutation is deferred to v1.x.
 package source

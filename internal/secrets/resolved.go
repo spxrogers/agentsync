@@ -43,6 +43,17 @@ func ForRender(c source.Canonical) Resolved { return Resolved{c: c} }
 // Render files, so non-render code can't unwrap-then-write. The dest->source
 // direction goes through ReReferenceCanonical + capture.Capture on a templated
 // source.Canonical, never through here.
+//
+// ACCEPTED RESIDUAL (documented, intentional): the forbidigo fence is a static
+// matcher, so interface dispatch, struct embedding, and reflection can defeat
+// it; and source.Write* is itself not fenced. So a DELIBERATE two-step
+// laundering (defeat the fence to get a writable source.Canonical, then call a
+// source writer that skips re-referencing) remains possible. No innocent
+// mistake produces this, and capture.Capture always re-references, so every real
+// import/reconcile flow is safe. Fencing the whole source.Write* API was
+// declined (it fights the legitimate write path and is bypassable one level
+// down). If you find yourself unwrapping a Resolved outside an adapter Render,
+// stop — you almost certainly want capture.Capture instead.
 func (r Resolved) Canonical() source.Canonical { return r.c }
 
 // cloneForResolve copies c so SubstituteCanonical can resolve secrets into the
