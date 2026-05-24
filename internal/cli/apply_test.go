@@ -79,6 +79,27 @@ func TestApply_AnnouncesScope(t *testing.T) {
 	}
 }
 
+// TestScope_UserWithProjectConflicts is the regression for resolveProjectScope
+// silently honoring --project and ignoring an explicit --scope user (it would
+// resolve project scope anyway). Contradictory flags must error.
+func TestScope_UserWithProjectConflicts(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	proj := filepath.Join(tmp, "proj")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runCLI(t, env, "status", "--scope", "user", "--project", proj)
+	if err == nil {
+		t.Fatal("expected --scope user combined with --project to be rejected")
+	}
+	if !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("expected a scope-conflict error, got: %v", err)
+	}
+}
+
 func TestApply_DryRunEmptyHome(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

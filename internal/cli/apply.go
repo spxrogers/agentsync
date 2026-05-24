@@ -274,8 +274,13 @@ func saveBestEffortState(s *state.Targets, statePath string, plan render.RenderP
 // resolveProjectScope determines the effective scope and project root.
 // Priority: --project flag > --scope flag > cwd walk-up auto-detect.
 func resolveProjectScope(scopeFlag, projectFlag string, _ source.Canonical) (adapter.Scope, string, error) {
-	// Explicit --project always implies project scope.
+	// Explicit --project always implies project scope, so an explicit
+	// --scope user alongside it is contradictory — refuse rather than
+	// silently honor --project and ignore the user's --scope.
 	if projectFlag != "" {
+		if scopeFlag == "user" {
+			return adapter.ScopeUser, "", fmt.Errorf("--scope user conflicts with --project (which implies project scope); pass only one")
+		}
 		abs, err := filepath.Abs(projectFlag)
 		if err != nil {
 			return adapter.ScopeUser, "", fmt.Errorf("resolve --project path: %w", err)
