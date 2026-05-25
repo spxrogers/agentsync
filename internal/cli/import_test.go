@@ -203,6 +203,50 @@ func TestImport_PartialFailureStillSeedsWritten(t *testing.T) {
 	}
 }
 
+// TestImport_IntraComponentPartialFailureSeedsWritten is the regression for an
+// intra-component partial failure: importing a whole component (e.g.
+// claude:command) writes item k, then item k+1 fails. The already-written item
+// must still be seeded into state, or the next apply treats it as
+// ForeignCollision and overwrites the file just imported from. Previously the
+// importer returned nil ids on a mid-loop failure, dropping the written item.
+func TestImport_IntraComponentPartialFailureSeedsWritten(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	// Two native commands; ReadDir ingests them alphabetically, so a-cmd is
+	// written before z-cmd.
+	cmdDir := filepath.Join(tmp, ".claude", "commands")
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"a-cmd", "z-cmd"} {
+		if err := os.WriteFile(filepath.Join(cmdDir, n+".md"),
+			[]byte("---\nname: "+n+"\n---\nbody\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Block z-cmd's source write: pre-create commands/z-cmd.md as a non-empty
+	// directory so the atomic rename onto it fails mid-import.
+	blocked := filepath.Join(tmp, ".agentsync", "commands", "z-cmd.md")
+	if err := os.MkdirAll(filepath.Join(blocked, "occupied"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runCLI(t, env, "import", "claude:command"); err == nil {
+		t.Fatal("expected partial import to surface the z-cmd write error")
+	}
+	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
+	stData, _ := os.ReadFile(statePath)
+	if !strings.Contains(string(stData), "a-cmd") {
+		t.Fatalf("intra-component partial import left the written a-cmd unseeded (foreign-collision hazard); state:\n%s", stData)
+	}
+}
+
 // TestImport_UnknownAgent verifies that an unknown agent returns an error.
 func TestImport_UnknownAgent(t *testing.T) {
 	tmp := t.TempDir()

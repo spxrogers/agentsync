@@ -51,6 +51,12 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **Partial `import` seeds the items it already wrote** — when importing a whole
+  component (e.g. `import claude:command`) or a whole agent, a write that failed
+  partway left the *already-written* items unseeded in state, so the next
+  `apply` saw them as foreign-collision and backed up / overwrote the very file
+  they were just imported from. The written items are now seeded even on a
+  partial failure (and the command still exits non-zero).
 - **`[updates] default_mode` is honored** — the config knob (written into the
   generated `agentsync.toml` by `init`) was parsed but never consulted:
   `update` hardcoded `track` for any plugin without an explicit `update` mode,
