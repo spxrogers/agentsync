@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/adapter/opencode"
 	"github.com/spxrogers/agentsync/internal/capture"
 	"github.com/spxrogers/agentsync/internal/drift"
 	"github.com/spxrogers/agentsync/internal/iox"
@@ -554,9 +555,11 @@ func writeBackItem(cmd *cobra.Command, home string, it reconcileItem) error {
 func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 	dest := readJSONFile(it.op.Path)
 	// Expected ptr shape: /mcpServers/<serverID>/... (claude) or
-	// /mcp/<serverID>/... (opencode). Both render MCP entries with identical
-	// lowercase field names, so the reconstruction below is shape-identical;
-	// only the top-level container key differs per adapter.
+	// /mcp/<serverID>/... (opencode). The container key also tells us the dest
+	// shape: Claude's `mcpServers` value matches the canonical model 1:1, but
+	// OpenCode's `mcp` value is its NATIVE shape (command as a string array,
+	// `environment` not `env`, type local|remote), so it must be translated
+	// through the adapter's inverse-of-Render rather than unmarshaled directly.
 	parts := strings.SplitN(strings.TrimPrefix(it.ptr, "/"), "/", 3)
 	if len(parts) >= 2 && (parts[0] == "mcpServers" || parts[0] == "mcp") {
 		topKey := parts[0]
@@ -574,14 +577,23 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 			// so the user can pick [d]elete-source via a follow-up flow.
 			return fmt.Errorf("destination dropped %s/%s — no write-back possible; remove the source manually or use [o]verride to push canonical back", topKey, serverID)
 		}
-		// Round-trip through JSON to get a typed spec.
-		specBytes, err := json.Marshal(specRaw)
-		if err != nil {
-			return fmt.Errorf("marshal mcp spec %s: %w", serverID, err)
-		}
 		var spec source.MCPServerSpec
-		if err := json.Unmarshal(specBytes, &spec); err != nil {
-			return fmt.Errorf("unmarshal mcp spec %s: %w", serverID, err)
+		if topKey == "mcp" {
+			// OpenCode native shape → canonical, via the single adapter translator.
+			rawMap, _ := specRaw.(map[string]any)
+			if rawMap == nil {
+				return fmt.Errorf("opencode mcp spec %s is not an object", serverID)
+			}
+			spec = opencode.IngestMCPSpec(rawMap)
+		} else {
+			// Claude's mcpServers value matches the canonical model 1:1.
+			specBytes, err := json.Marshal(specRaw)
+			if err != nil {
+				return fmt.Errorf("marshal mcp spec %s: %w", serverID, err)
+			}
+			if err := json.Unmarshal(specBytes, &spec); err != nil {
+				return fmt.Errorf("unmarshal mcp spec %s: %w", serverID, err)
+			}
 		}
 		// The spec was reconstructed from the destination, where apply wrote any
 		// ${secret:…} as resolved cleartext and which never carries source-only

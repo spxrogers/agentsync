@@ -58,6 +58,21 @@ the **planned** projection per the design spec; their adapters are no-ops today.
   Claude plugins that bundle LSP servers install correctly on Claude itself; on
   other agents you'll see `lsp server X skipped` in the report.
 
+## How OpenCode MCP servers are projected
+
+OpenCode's native MCP schema differs from the canonical model, so the adapter
+translates rather than copying fields verbatim:
+
+- **transport** — canonical `type = "stdio"` → OpenCode `"type": "local"`;
+  `"http"`/`"sse"` → `"type": "remote"`. OpenCode has no separate SSE transport,
+  so a `sse` server normalizes to `http` if it is later captured back via
+  `import`/`reconcile` (an apply-only flow is unaffected).
+- **command** — canonical `command` + `args` are flattened into OpenCode's single
+  `command` string array (`["npx", "-y", "pkg"]`), and split back on ingest.
+- **environment** — canonical `env` is written under OpenCode's `environment`
+  key (not `env`).
+- **remote** — `url` and `headers` carry through unchanged.
+
 ## Escape hatches
 
 You control fan-out explicitly:

@@ -36,14 +36,7 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 						if !ok {
 							continue
 						}
-						m := source.MCPServer{ID: id, Server: source.MCPServerSpec{
-							Type:    asStr(spec["type"]),
-							Command: asStr(spec["command"]),
-							Args:    asStrSlice(spec["args"]),
-							Env:     asStrMap(spec["env"]),
-							URL:     asStr(spec["url"]),
-							Headers: asStrMap(spec["headers"]),
-						}}
+						m := source.MCPServer{ID: id, Server: IngestMCPSpec(spec)}
 						c.MCPServers = append(c.MCPServers, m)
 					}
 				}
@@ -119,6 +112,60 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 }
 
 func asStr(v any) string { s, _ := v.(string); return s }
+
+// IngestMCPSpec translates one OpenCode-native MCP server spec — the value
+// under opencode.json `/mcp/<id>` — into the canonical MCPServerSpec. It is the
+// exact inverse of opencodeMCPSpec (Render). Exported so reconcile's key-level
+// write-back reconstructs an opencode MCP server through the SAME translation
+// the adapter uses, rather than assuming the dest shape matches the canonical
+// model (it doesn't: command is an array, env is `environment`, type is
+// local/remote).
+func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
+	command, args := opencodeIngestCommand(raw["command"])
+	return source.MCPServerSpec{
+		Type:    canonicalMCPType(asStr(raw["type"])),
+		Command: command,
+		Args:    args,
+		Env:     asStrMap(raw["environment"]),
+		URL:     asStr(raw["url"]),
+		Headers: asStrMap(raw["headers"]),
+	}
+}
+
+// canonicalMCPType maps OpenCode's transport ("local"/"remote") back to the
+// canonical model's stdio/http. OpenCode has no separate sse transport, so a
+// remote server normalises to "http" on write-back (an apply-only flow is
+// unaffected — render maps both http and sse to "remote"). An unrecognised
+// value is preserved verbatim.
+func canonicalMCPType(opencodeType string) string {
+	switch opencodeType {
+	case "local":
+		return "stdio"
+	case "remote":
+		return "http"
+	default:
+		return opencodeType
+	}
+}
+
+// opencodeIngestCommand splits OpenCode's command — a string array
+// [command, ...args] — into the canonical command + args. A bare string is
+// tolerated for hand-edited configs. A single-element array yields no args so
+// the value round-trips cleanly (render flattens command+nil-args back to it).
+func opencodeIngestCommand(v any) (command string, args []string) {
+	if s, ok := v.(string); ok {
+		return s, nil
+	}
+	arr := asStrSlice(v)
+	switch len(arr) {
+	case 0:
+		return "", nil
+	case 1:
+		return arr[0], nil
+	default:
+		return arr[0], arr[1:]
+	}
+}
 
 func asStrSlice(v any) []string {
 	arr, ok := v.([]any)

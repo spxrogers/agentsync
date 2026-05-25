@@ -51,6 +51,14 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **OpenCode MCP servers render in OpenCode's native schema** — the adapter
+  previously wrote `type` verbatim (`stdio`/`http`), `command` as a bare string
+  with a separate `args` array, and `env`, none of which match OpenCode's config
+  schema — so a rendered `opencode.json` could fail to load the server. MCP
+  servers now project to `type: "local"|"remote"`, `command` as a string array,
+  and `environment`, with ingest/reconcile inverting the translation through one
+  shared helper. (`reconcile` write-back of an OpenCode MCP edit previously also
+  crashed unmarshaling the array `command`.)
 - **Secret never leaks on a structural native edit (security)** — write-back
   (`import` / `reconcile`) re-referenced `${secret:…}` strictly by field
   position, so a native edit that shifted structure — prepending an MCP/LSP arg,

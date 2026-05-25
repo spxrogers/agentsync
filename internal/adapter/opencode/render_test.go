@@ -21,6 +21,7 @@ func TestRender_MCP(t *testing.T) {
 		ID: "github",
 		Server: source.MCPServerSpec{
 			Type: "stdio", Command: "npx", Args: []string{"-y", "x"},
+			Env:    map[string]string{"TOKEN": "abc"},
 			Agents: []string{"opencode"}, Enabled: &enabled,
 		},
 	}}}
@@ -36,8 +37,21 @@ func TestRender_MCP(t *testing.T) {
 			var ours map[string]any
 			_ = json.Unmarshal(op.Content, &ours)
 			mcp := ours["mcp"].(map[string]any)["github"].(map[string]any)
-			if mcp["command"] != "npx" {
-				t.Fatalf("command = %v", mcp["command"])
+			// OpenCode's native schema: type local|remote, command as a string
+			// ARRAY ([command, ...args]), and `environment` (not `env`).
+			if mcp["type"] != "local" {
+				t.Fatalf("type = %v, want \"local\"", mcp["type"])
+			}
+			cmd, ok := mcp["command"].([]any)
+			if !ok || len(cmd) != 3 || cmd[0] != "npx" || cmd[1] != "-y" || cmd[2] != "x" {
+				t.Fatalf("command = %v, want [\"npx\",\"-y\",\"x\"] array", mcp["command"])
+			}
+			if _, hasEnv := mcp["env"]; hasEnv {
+				t.Fatalf("must use \"environment\", not \"env\": %v", mcp)
+			}
+			env, ok := mcp["environment"].(map[string]any)
+			if !ok || env["TOKEN"] != "abc" {
+				t.Fatalf("environment = %v, want {TOKEN: abc}", mcp["environment"])
 			}
 		}
 	}
@@ -66,6 +80,12 @@ func TestRender_MCP_PreservesHeaders(t *testing.T) {
 		var ours map[string]any
 		_ = json.Unmarshal(op.Content, &ours)
 		mcp := ours["mcp"].(map[string]any)["remote"].(map[string]any)
+		if mcp["type"] != "remote" {
+			t.Fatalf("type = %v, want \"remote\"", mcp["type"])
+		}
+		if mcp["url"] != "https://mcp.example.com" {
+			t.Fatalf("url = %v", mcp["url"])
+		}
 		h, ok := mcp["headers"].(map[string]any)
 		if !ok || h["Authorization"] != "Bearer tok" {
 			t.Fatalf("opencode MCP dropped headers: %v", mcp)

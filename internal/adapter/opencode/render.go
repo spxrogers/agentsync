@@ -69,26 +69,7 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, erro
 		if !agentTargeted("opencode", m.Server.Agents) {
 			continue
 		}
-		spec := map[string]any{}
-		if m.Server.Type != "" {
-			spec["type"] = m.Server.Type
-		}
-		if m.Server.Command != "" {
-			spec["command"] = m.Server.Command
-		}
-		if len(m.Server.Args) > 0 {
-			spec["args"] = m.Server.Args
-		}
-		if len(m.Server.Env) > 0 {
-			spec["env"] = m.Server.Env
-		}
-		if m.Server.URL != "" {
-			spec["url"] = m.Server.URL
-		}
-		if len(m.Server.Headers) > 0 {
-			spec["headers"] = m.Server.Headers
-		}
-		mcp[m.ID] = spec
+		mcp[m.ID] = opencodeMCPSpec(m.Server)
 	}
 	if len(mcp) == 0 {
 		return nil, nil
@@ -106,6 +87,58 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, erro
 		SourceID:      "mcp/* (multiple)",
 		MergeStrategy: "merge-jsonc-keys",
 	}}, nil
+}
+
+// opencodeMCPSpec projects a canonical MCP server into OpenCode's native shape
+// (https://opencode.ai/config.json): `type` is "local" or "remote", a local
+// server's `command` is a string ARRAY ([command, ...args]), env vars live under
+// `environment` (not `env`), and a remote server carries `url`/`headers`. The
+// canonical model instead keeps command/args split and uses stdio/http/sse, so
+// translate. Ingest (canonicalMCPType / opencodeIngestCommand) inverts this.
+func opencodeMCPSpec(s source.MCPServerSpec) map[string]any {
+	spec := map[string]any{}
+	if isRemoteMCP(s) {
+		spec["type"] = "remote"
+		if s.URL != "" {
+			spec["url"] = s.URL
+		}
+		if len(s.Headers) > 0 {
+			spec["headers"] = s.Headers
+		}
+		return spec
+	}
+	spec["type"] = "local"
+	if cmd := commandArray(s); len(cmd) > 0 {
+		spec["command"] = cmd
+	}
+	if len(s.Env) > 0 {
+		spec["environment"] = s.Env
+	}
+	return spec
+}
+
+// isRemoteMCP decides whether a canonical server maps to OpenCode's "remote"
+// type. OpenCode collapses http and sse into a single "remote" transport; an
+// untyped server is classified by whether it carries a URL but no command.
+func isRemoteMCP(s source.MCPServerSpec) bool {
+	switch s.Type {
+	case "http", "sse":
+		return true
+	case "stdio":
+		return false
+	default:
+		return s.URL != "" && s.Command == ""
+	}
+}
+
+// commandArray flattens a canonical command + args into OpenCode's single
+// command string array.
+func commandArray(s source.MCPServerSpec) []string {
+	var cmd []string
+	if s.Command != "" {
+		cmd = append(cmd, s.Command)
+	}
+	return append(cmd, s.Args...)
 }
 
 func agentTargeted(name string, agents []string) bool {
