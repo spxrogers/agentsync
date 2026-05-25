@@ -2,6 +2,36 @@ package cli
 
 import "testing"
 
+// TestEditorArgv covers the regression where a whitespace-only $EDITOR made
+// strings.Fields return an empty slice and the indexing panicked. It must fall
+// back to vi, and split flags out of the executable path.
+func TestEditorArgv(t *testing.T) {
+	cases := []struct {
+		env  string
+		want []string
+	}{
+		{"", []string{"vi", "/f"}},
+		{"   ", []string{"vi", "/f"}},
+		{"\t", []string{"vi", "/f"}},
+		{"nano", []string{"nano", "/f"}},
+		{"code --wait", []string{"code", "--wait", "/f"}},
+		{"  vim -u NONE ", []string{"vim", "-u", "NONE", "/f"}},
+	}
+	for _, tc := range cases {
+		got := editorArgv(tc.env, "/f")
+		if len(got) != len(tc.want) {
+			t.Errorf("editorArgv(%q) = %v, want %v", tc.env, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("editorArgv(%q) = %v, want %v", tc.env, got, tc.want)
+				break
+			}
+		}
+	}
+}
+
 // TestValidateMCPID_RejectsDegenerate mirrors source.ValidateComponentID: a
 // lone "." or an all-whitespace id passes the separator/traversal check but
 // would author mcp/..toml or "mcp/ .toml" — confusing artifacts no later

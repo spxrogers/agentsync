@@ -51,6 +51,10 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **`secrets edit` no longer panics on a blank `$EDITOR`** — the `$EDITOR`
+  word-split introduced above indexed an empty `strings.Fields` result, so a
+  whitespace-only `EDITOR` (e.g. `EDITOR="   "`) crashed with an index panic;
+  it now falls back to `vi`.
 - **`secrets edit` honors a `$EDITOR` with flags** — `EDITOR="code --wait"`
   (or `vim -u NONE`, `emacsclient -c`, …) was treated as a single executable
   path and failed; `$EDITOR` is now word-split. This is the command that steers

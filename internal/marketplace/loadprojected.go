@@ -262,8 +262,9 @@ func resolveInstalledEntry(home, id, mpName string) PluginEntry {
 // the pin is an entry-only plugin (no cached bodies to hash).
 //
 // A pre-tree-hash pin (a bare sha256 hex with no tree: prefix) covered only
-// plugin.json and cannot certify the bodies, so it is REFUSED with a re-pin
-// instruction rather than silently honoured.
+// plugin.json; it is verified under that PRIOR scheme (sha256 of plugin.json)
+// so existing installs are not broken — a re-install or `plugin upgrade`
+// rewrites it as a tree hash that then covers the bodies.
 func verifyPluginManifestSHA(fs afero.Fs, pluginCacheDir, expected, id string) error {
 	if expected == "" {
 		return nil

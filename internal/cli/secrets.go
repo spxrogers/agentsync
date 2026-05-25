@@ -182,6 +182,18 @@ func setNestedKey(m map[string]any, dottedKey, value string) {
 	setNestedKey(subMap, parts[1], value)
 }
 
+// editorArgv builds the editor argv from $EDITOR and the file to edit. $EDITOR
+// may be empty, whitespace-only, or carry flags ("code --wait"); it is
+// word-split, with a "vi" fallback when it yields no words — so the launch
+// never panics indexing an empty split (the bug a bare strings.Fields had).
+func editorArgv(editorEnv, file string) []string {
+	parts := strings.Fields(editorEnv)
+	if len(parts) == 0 {
+		parts = []string{"vi"}
+	}
+	return append(parts, file)
+}
+
 // getNestedKey retrieves a dotted key from a nested map, returning the raw
 // value so the caller can enforce the string-only contract (apply rejects
 // non-string leaves; `get` must not print a value apply would refuse).
@@ -267,15 +279,8 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 	// Open $EDITOR (default: vi). $EDITOR commonly carries flags
 	// ("code --wait", "vim -u NONE", "emacsclient -c"); split on whitespace so
 	// they aren't treated as part of the executable path (which fails outright).
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		editor = "vi"
-	}
-	editorParts := strings.Fields(editor)
-	editorArgs := make([]string, 0, len(editorParts))
-	editorArgs = append(editorArgs, editorParts[1:]...)
-	editorArgs = append(editorArgs, tmpPath)
-	editorCmd := exec.Command(editorParts[0], editorArgs...) //nolint:gosec
+	argv := editorArgv(os.Getenv("EDITOR"), tmpPath)
+	editorCmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec
 	editorCmd.Stdin = os.Stdin
 	editorCmd.Stdout = os.Stdout
 	editorCmd.Stderr = os.Stderr
