@@ -1,8 +1,6 @@
 package marketplace
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -211,12 +209,18 @@ func resolveInstalledEntry(home, id, mpName string) PluginEntry {
 	return PluginEntry{Name: id}
 }
 
-// verifyPluginManifestSHA checks the on-disk plugin.json against the SHA
-// recorded in plugins/<id>.toml at install. A mismatch means the plugin cache
-// was tampered with (or hand-edited) since install. Returns nil when: expected
-// is empty (legacy/hand-managed), AGENTSYNC_ALLOW_PLUGIN_DRIFT=1, or the cached
-// plugin.json is missing. (Moved here from the source loader so projection and
-// verification live in one package.)
+// verifyPluginManifestSHA checks the on-disk plugin cache against the SHA
+// recorded in plugins/<id>.toml at install/update. A mismatch means the cache
+// was tampered with (or upstream rolled) since the pin was recorded. The pin is
+// a PluginTreeHash over EVERY projected component body (not just plugin.json),
+// so a tampered SKILL.md / command markdown with an unchanged plugin.json is
+// caught. Returns nil when: expected is empty (hand-managed),
+// AGENTSYNC_ALLOW_PLUGIN_DRIFT=1, the cache dir is gone (nothing to verify), or
+// the pin is an entry-only plugin (no cached bodies to hash).
+//
+// A pre-tree-hash pin (a bare sha256 hex with no tree: prefix) covered only
+// plugin.json and cannot certify the bodies, so it is REFUSED with a re-pin
+// instruction rather than silently honoured.
 func verifyPluginManifestSHA(fs afero.Fs, pluginCacheDir, expected, id string) error {
 	if expected == "" {
 		return nil
@@ -224,18 +228,29 @@ func verifyPluginManifestSHA(fs afero.Fs, pluginCacheDir, expected, id string) e
 	if os.Getenv("AGENTSYNC_ALLOW_PLUGIN_DRIFT") == "1" {
 		return nil
 	}
-	data, err := afero.ReadFile(fs, filepath.Join(pluginCacheDir, ".claude-plugin", "plugin.json"))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
+	// Entry-only plugins ship no cached bodies; the marketplace entry that
+	// defines them isn't available here, so there is nothing to recompute.
+	if strings.HasPrefix(expected, entryHashPrefix) {
+		return nil
+	}
+	if strings.HasPrefix(expected, treeHashPrefix) {
+		if _, err := fs.Stat(pluginCacheDir); errors.Is(err, os.ErrNotExist) {
+			return nil // cache gone; projection will surface the absence
 		}
-		return fmt.Errorf("verify plugin %s manifest SHA: %w", id, err)
+		got, err := PluginTreeHash(fs, pluginCacheDir)
+		if err != nil {
+			return fmt.Errorf("verify plugin %s manifest SHA: %w", id, err)
+		}
+		if got != expected {
+			return fmt.Errorf("plugin %s manifest SHA mismatch (cache tampered or upstream rolled): "+
+				"want %s got %s; run `agentsync plugin upgrade %s` to accept the new manifest, "+
+				"or set AGENTSYNC_ALLOW_PLUGIN_DRIFT=1 to bypass this check", id, expected, got, id)
+		}
+		return nil
 	}
-	sum := sha256.Sum256(data)
-	if got := hex.EncodeToString(sum[:]); got != expected {
-		return fmt.Errorf("plugin %s manifest SHA mismatch (cache tampered or upstream rolled): "+
-			"want %s got %s; run `agentsync plugin upgrade %s` to accept the new manifest, "+
-			"or set AGENTSYNC_ALLOW_PLUGIN_DRIFT=1 to bypass this check", id, expected, got, id)
-	}
-	return nil
+	// Legacy bare-hex pin: covered only plugin.json, so it cannot certify the
+	// component bodies. Refuse with an actionable re-pin instruction.
+	return fmt.Errorf("plugin %s is pinned with a pre-tree-hash manifest SHA that does not cover "+
+		"component bodies; run `agentsync plugin upgrade %s` (or `agentsync update`) to re-pin it, "+
+		"or set AGENTSYNC_ALLOW_PLUGIN_DRIFT=1 to bypass once", id, id)
 }

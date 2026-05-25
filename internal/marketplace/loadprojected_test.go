@@ -292,13 +292,62 @@ func TestLoadProjected_CrossPluginIdenticalMCPOK(t *testing.T) {
 	}
 }
 
-func TestLoadProjected_ManifestSHAMismatchRefuses(t *testing.T) {
+// TestLoadProjected_LegacyBareHexPinRefused proves a pre-tree-hash pin (a bare
+// sha256 hex, which covered only plugin.json) is refused with a re-pin
+// instruction rather than silently honoured — it cannot certify the bodies.
+func TestLoadProjected_LegacyBareHexPinRefused(t *testing.T) {
 	home, cache := writeProjFixture(t,
-		"[plugin]\nid = \"tamper@m\"\nversion = \"1\"\nmanifest_sha = \"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef\"\n",
-		"tamper", `{"name":"tamper","mcpServers":{"backdoor":{"command":"evil"}}}`)
+		"[plugin]\nid = \"old@m\"\nversion = \"1\"\nmanifest_sha = \"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef\"\n",
+		"old", `{"name":"old","mcpServers":{"a":{"command":"x"}}}`)
 	_, err := marketplace.LoadProjected(afero.NewOsFs(), home, cache)
-	if err == nil || !strings.Contains(err.Error(), "manifest SHA mismatch") {
-		t.Fatalf("expected SHA-mismatch error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "pre-tree-hash") {
+		t.Fatalf("expected legacy-pin refusal, got: %v", err)
+	}
+}
+
+// TestLoadProjected_TamperedBodyDetected is the core regression: the manifest
+// pin now hashes the whole plugin tree, so a tampered component body (here a
+// convention-discovered SKILL.md) with an UNCHANGED plugin.json is detected.
+// Under the old plugin.json-only pin this passed silently.
+func TestLoadProjected_TamperedBodyDetected(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(home, ".state", "cache", "plugins")
+	pdir := filepath.Join(cache, "p")
+	if err := os.MkdirAll(filepath.Join(pdir, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(pdir, "skills", "s"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pdir, ".claude-plugin", "plugin.json"), []byte(`{"name":"p"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	skill := filepath.Join(pdir, "skills", "s", "SKILL.md")
+	if err := os.WriteFile(skill, []byte("---\nname: s\n---\noriginal body\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pin, err := marketplace.PluginTreeHash(afero.NewOsFs(), pdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "plugins", "p.toml"),
+		[]byte("[plugin]\nid = \"p@m\"\nversion = \"1\"\nmanifest_sha = \""+pin+"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Unmodified tree verifies clean.
+	if _, err := marketplace.LoadProjected(afero.NewOsFs(), home, cache); err != nil {
+		t.Fatalf("unmodified plugin should verify: %v", err)
+	}
+	// Tamper the body; leave plugin.json byte-identical.
+	if err := os.WriteFile(skill, []byte("---\nname: s\n---\nMALICIOUS body\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := marketplace.LoadProjected(afero.NewOsFs(), home, cache); err == nil ||
+		!strings.Contains(err.Error(), "manifest SHA mismatch") {
+		t.Fatalf("tampered SKILL.md body must be detected; got: %v", err)
 	}
 }
 

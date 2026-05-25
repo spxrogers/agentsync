@@ -199,9 +199,12 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
 4. **First-apply backups** — the `foreign-collision` case copies the pre-existing
    destination into `.state/backups/<ts>/` before writing. Symlinked
    destinations are refused by default.
-5. **Manifest-SHA pinning** — every plugin records the marketplace-published
-   manifest SHA, so a re-uploaded version is detected as drift rather than
-   silently consumed.
+5. **Manifest-SHA pinning** — every plugin records a `tree:v1:` content hash
+   over its *entire* cache tree (every projected component body — skills,
+   command/subagent markdown — not just `plugin.json`, excluding `.git/`), so a
+   re-uploaded version *or* a tampered component body is detected as drift
+   rather than silently consumed. (An entry-only plugin with no cached bodies is
+   pinned over its marketplace entry.)
 
 ---
 

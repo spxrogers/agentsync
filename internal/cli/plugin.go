@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/marketplace"
@@ -511,18 +510,21 @@ func searchAllMarketplaces(home, pluginID string) ([]byte, marketplace.PluginEnt
 // verifying anyway (missing plugin.json → nil).
 func computeManifestSHA(home, id string, entry marketplace.PluginEntry, mpData []byte, cacheDir string) string {
 	pluginJSONPath := filepath.Join(cacheDir, ".claude-plugin", "plugin.json")
-	if data, err := os.ReadFile(pluginJSONPath); err == nil {
-		h := sha256.Sum256(data)
-		return hex.EncodeToString(h[:])
+	if _, err := os.Stat(pluginJSONPath); err == nil {
+		// Hash the whole cache tree (every projected component body, not just
+		// plugin.json) so the pin certifies what projection actually ships.
+		h, herr := marketplace.PluginTreeHash(afero.NewOsFs(), cacheDir)
+		if herr != nil {
+			return ""
+		}
+		return h
 	}
-	// No plugin.json (entry-only plugin): SHA over the marketplace entry bytes
-	// (re-marshal for stability).
-	entryBytes, err := json.Marshal(entry)
+	// No plugin.json (entry-only plugin): pin the marketplace entry instead.
+	h, err := marketplace.PluginEntryHash(entry)
 	if err != nil {
 		return ""
 	}
-	h := sha256.Sum256(entryBytes)
-	return hex.EncodeToString(h[:])
+	return h
 }
 
 // readPluginTOML reads and parses a plugins/<id>.toml file.
