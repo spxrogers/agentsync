@@ -51,6 +51,14 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **Deregistered agents no longer orphan native config silently** — after
+  `agent remove` (or `agent disable` without `--purge`), the agent's rendered
+  native config and state keys lingered with no diagnostic (`status`/`apply`
+  only iterate enabled agents), and `disable --purge` was unreachable once the
+  agent was deregistered. `status` now surfaces an orphaned agent's leftover
+  state, and `agent disable <name> --purge` works for an already-removed agent
+  (purge reads state, so it doesn't need the agent registered). Removal stays
+  non-destructive by default.
 - **Write-back refuses to persist a moved or rotated secret (security)** — secret
   re-reference matches by value, so it could not restore a `${secret:…}`
   reference when the user *moved* a secret into a field whose source counterpart

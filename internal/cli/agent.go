@@ -296,9 +296,17 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 	if err != nil {
 		return err
 	}
+	home := paths.AgentsyncHome(paths.OSEnv{})
 	v, ok := agents[name]
 	if !ok {
-		return fmt.Errorf("agent %q not registered", name)
+		// Not registered. A removed (or never-registered) agent can still own
+		// orphaned destination files + state keys; `--purge` is the reachable
+		// cleanup path for it, working purely from state. Without --purge there
+		// is nothing to disable.
+		if purge {
+			return purgeAgentDests(cmd, name, home)
+		}
+		return fmt.Errorf("agent %q not registered (pass --purge to clean up an already-removed agent's leftover files)", name)
 	}
 	v["enabled"] = false
 	agents[name] = v
@@ -314,7 +322,6 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 	// The whole disable command (including this purge) already runs under the
 	// global lock via lockedRun, so call purge directly — re-acquiring here
 	// would deadlock on the re-entrant flock.
-	home := paths.AgentsyncHome(paths.OSEnv{})
 	return purgeAgentDests(cmd, name, home)
 }
 
