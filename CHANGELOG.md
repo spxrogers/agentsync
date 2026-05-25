@@ -49,6 +49,20 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 - **Documentation set** — user guide, concepts, architecture, capability matrix,
   and component map under [`docs/`](docs/).
 
+### Fixed
+
+- **Marketplace slug never empty** — `marketplace add` derives its slug by
+  sanitising *before* applying the `"marketplace"` fallback, and only adopts a
+  declared `marketplace.json` name when it sanitises to something usable. A
+  punctuation-only source or name (e.g. `...`) no longer authors
+  `marketplaces/.toml` and a stray `marketplaces/_` cache directory.
+- **Degenerate component ids rejected** — `mcp add .`, `mcp add " "`, and any
+  write of a component whose id is a bare `.` or all-whitespace now error
+  instead of authoring a confusing `mcp/..toml` / `mcp/ .toml` in the canonical
+  source. Enforced centrally in `source.ValidateComponentID` (covering MCP, LSP,
+  hook events, plugins, skills, subagents, commands) and mirrored in the CLI
+  `mcp add` gate.
+
 ### Known limitations
 
 Documented v1.x trade-offs rather than bugs — see the

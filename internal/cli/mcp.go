@@ -170,6 +170,9 @@ func validateMCPID(id string) error {
 	if id == "" {
 		return fmt.Errorf("mcp id is empty")
 	}
+	if strings.TrimSpace(id) == "" || id == "." {
+		return fmt.Errorf("mcp id %q is empty or a bare '.'", id)
+	}
 	if strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") {
 		return fmt.Errorf("mcp id %q contains a path component", id)
 	}
