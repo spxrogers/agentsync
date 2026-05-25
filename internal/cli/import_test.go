@@ -22,6 +22,73 @@ func TestImport_InvalidSelector(t *testing.T) {
 	}
 }
 
+// TestImport_TrailingColonRejected guards against a footgun: a trailing colon
+// (claude:mcp:) parsed to an empty name, which silently meant "bulk import all"
+// — surprising for a typo. It must be rejected like an empty component is.
+func TestImport_TrailingColonRejected(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "import", "claude:mcp:"); err == nil {
+		t.Fatal("expected trailing-colon selector to be rejected, not treated as bulk")
+	}
+}
+
+// TestImport_PartialFailureStillSeedsWritten is the regression for a partial
+// full-agent import: when a later component fails after an earlier one was
+// already written to the canonical source, the written component must still be
+// seeded into state — otherwise the next apply treats it as ForeignCollision
+// and overwrites the file the user just imported from.
+func TestImport_PartialFailureStillSeedsWritten(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	// Native config: an MCP server (imported first, cleanly).
+	if err := os.WriteFile(filepath.Join(tmp, ".claude.json"),
+		[]byte(`{"mcpServers":{"github":{"type":"stdio","command":"gh-mcp"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// ... and a skill (imported after mcp in the full-agent order).
+	skillDir := filepath.Join(tmp, ".claude", "skills", "deploy")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: deploy\n---\nDeploy stuff.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Force the skill write to fail: pre-create ~/.agentsync/skills/deploy as a
+	// FILE so WriteSkill's MkdirAll(skills/deploy) errors mid-import.
+	if err := os.MkdirAll(filepath.Join(tmp, ".agentsync", "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".agentsync", "skills", "deploy"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Full-agent import: mcp succeeds (written to canonical), skill then fails.
+	if _, err := runCLI(t, env, "import", "claude"); err == nil {
+		t.Fatal("expected partial import to surface the skill write error")
+	}
+	// The mcp that WAS written must be seeded, or the next apply foreign-collides
+	// and overwrites .claude.json.
+	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
+	stData, _ := os.ReadFile(statePath)
+	if !strings.Contains(string(stData), "/mcpServers/github") {
+		t.Fatalf("partial import left the written mcp unseeded (foreign-collision hazard); state:\n%s", stData)
+	}
+}
+
 // TestImport_UnknownAgent verifies that an unknown agent returns an error.
 func TestImport_UnknownAgent(t *testing.T) {
 	tmp := t.TempDir()

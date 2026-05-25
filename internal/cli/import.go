@@ -172,29 +172,26 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// filter, so MCP/LSP/hook capture still routes through capture.Capture
 	// (secret re-referencing + source-only field preservation) — see the
 	// importer bodies. Text components write directly via source.Write*.
+	var importErr error
 	switch component {
 	case "":
-		if err := importAllComponents(cmd, home, agentName, c, dryRun); err != nil {
-			return err
-		}
+		importErr = importAllComponents(cmd, home, agentName, c, dryRun)
 	default:
 		n, err := importComponent(cmd, home, c, component, name, dryRun)
-		if err != nil {
-			return err
-		}
+		importErr = err
 		// A bulk component import (no name) that matched nothing is not an
 		// error — report it and exit cleanly. A named import that matched
 		// nothing already returned a "not found" error above.
-		if n == 0 && name == "" {
+		if err == nil && n == 0 && name == "" {
 			fmt.Fprintf(cmd.OutOrStdout(), "no %s found in %s native config\n", component, agentName)
 		}
 	}
 
 	// A dry-run wrote nothing, so there is no state to seed and the
 	// foreign-collision warning below would describe the pre-import world.
-	// Stop here with just the preview.
+	// Stop here with just the preview (surfacing any selector/not-found error).
 	if dryRun {
-		return nil
+		return importErr
 	}
 
 	// Seed state with the destination's current content hash so the next
@@ -204,8 +201,14 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// content — because the canonical→render pipeline may translate the
 	// content slightly (frontmatter normalization, etc.) and we want the
 	// next apply to compare against the file that exists today.
+	//
+	// Run this even when importErr != nil: a bulk/full-agent import can fail
+	// partway after already writing earlier components to the canonical, and
+	// those writes MUST be seeded or the next apply foreign-collides and
+	// overwrites the file they were just imported from. Re-rendering the
+	// (partially-updated) canonical seeds exactly what was written.
 	if seedErr := seedStateFromCurrentDest(home, agentName, reg); seedErr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: import succeeded but state seed failed: %v\n", seedErr)
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: import state seed failed: %v\n", seedErr)
 	}
 
 	// Warn if the destination file has additional pointers / files
@@ -220,7 +223,9 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 		}
 		fmt.Fprintf(ew, "  Run `agentsync import %s` to capture the agent's full config, or accept the backup on next apply.\n", agentName)
 	}
-	return nil
+	// Surface a partial-import error after seeding so the command still exits
+	// non-zero, but the components that were written are now owned.
+	return importErr
 }
 
 // unimportedDestPointers returns a list of human-readable labels for
@@ -233,7 +238,10 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 // canonical claims, and diff against the actual on-disk contents.
 func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []string {
 	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-	c, err := marketplace.LoadProjected(loaderFsForState(), home, pluginCacheRoot)
+	// Lenient: this is a post-import diagnostic re-render. A strict plugin
+	// conflict (unrelated to the import) must not abort it — matching the
+	// read-only commands (status/diff/explain).
+	c, err := marketplace.LoadProjectedLenient(loaderFsForState(), home, pluginCacheRoot, nil)
 	if err != nil {
 		return nil
 	}
@@ -294,9 +302,11 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) err
 		return err
 	}
 
-	// Build a fresh canonical from disk and render only this agent.
+	// Build a fresh canonical from disk and render only this agent. Lenient: a
+	// strict plugin conflict must not block seeding (which would leave the
+	// just-imported dest exposed to a ForeignCollision overwrite on next apply).
 	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-	c, err := marketplace.LoadProjected(loaderFsForState(), home, pluginCacheRoot)
+	c, err := marketplace.LoadProjectedLenient(loaderFsForState(), home, pluginCacheRoot, nil)
 	if err != nil {
 		return err
 	}
@@ -377,6 +387,11 @@ func parseSelector(sel string) (agentName, component, name string, err error) {
 	// "claude:" is a typo, not a request to import the whole agent.
 	if len(parts) >= 2 && component == "" {
 		return "", "", "", fmt.Errorf("invalid selector %q: component must be non-empty", sel)
+	}
+	// "claude:mcp:" (trailing colon) is a typo, not a bulk request. Drop the
+	// colon for a bulk import (claude:mcp) or supply a name (claude:mcp:github).
+	if len(parts) == 3 && name == "" {
+		return "", "", "", fmt.Errorf("invalid selector %q: trailing colon with no name; use %q to import every %s, or supply a name", sel, agentName+":"+component, component)
 	}
 	return agentName, component, name, nil
 }
