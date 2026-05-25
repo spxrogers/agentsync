@@ -10,6 +10,28 @@ import (
 // TestVerify_UninitializedHomeErrors is the regression for verify printing a
 // false "ok" (exit 0) when run before `init` — source.Load tolerates a
 // missing home, so the user got a green light on a non-existent config.
+func TestVerify_HalfInitMissingToml(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	// Scaffold component dirs/files but NO agentsync.toml (the half-init an
+	// authoring command leaves when run before `init`). verify must flag it
+	// rather than report a false "ok: schema valid".
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "x.toml")
+	if err := os.MkdirAll(filepath.Dir(mcp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"y\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runCLI(t, env, "verify")
+	if err == nil {
+		t.Fatal("verify on a home missing agentsync.toml must error")
+	}
+	if !strings.Contains(err.Error(), "agentsync.toml") || !strings.Contains(err.Error(), "init") {
+		t.Fatalf("error should name agentsync.toml + point at init; got: %v", err)
+	}
+}
+
 func TestVerify_UninitializedHomeErrors(t *testing.T) {
 	tmp := t.TempDir()
 	// Note: no `init` — the agentsync home does not exist.

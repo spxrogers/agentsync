@@ -51,6 +51,17 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **`apply` is a true no-op when nothing changed** — the writer now skips the
+  atomic write when a destination already holds the exact bytes apply would
+  write, so a clean re-apply no longer churns file mtimes (which misled
+  mtime-watching tooling and made a no-op look like real work). `apply` reports
+  `up to date: N ops, no changes` instead of `applied: N ops` in that case.
+- **`verify` rejects a half-initialized home** — a home with component files but
+  no `agentsync.toml` (an authoring command run before `init`) reported a false
+  `ok: schema valid`; `verify` now requires the config marker.
+- **`agent add`/`disable` preserve section spacing** — regenerating the
+  `[agents]` block dropped the blank line before the next section, collapsing the
+  file's formatting over repeated edits; a single separator is now kept.
 - **Shared MCP/LSP write-back no longer silently last-writer-wins** — a server
   fanned out to multiple agents (`agents = ["*"]`) and edited *differently* in
   each native config produced two `reconcile` write-back items targeting one

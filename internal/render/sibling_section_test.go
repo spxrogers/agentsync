@@ -21,7 +21,7 @@ func applyOnce(t *testing.T, reg *adapter.Registry, c source.Canonical, st *stat
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if _, _, err := render.Apply(plan, reg, st, home, userHome, adapter.ScopeUser, ""); err != nil {
+	if _, _, _, err := render.Apply(plan, reg, st, home, userHome, adapter.ScopeUser, ""); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	for name, res := range plan.PerAgent {

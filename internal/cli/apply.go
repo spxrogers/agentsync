@@ -166,7 +166,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	if err != nil {
 		return err
 	}
-	collisions, written, applyErr := render.Apply(plan, reg, s, home, userHome, sc, projectRoot)
+	collisions, written, unchanged, applyErr := render.Apply(plan, reg, s, home, userHome, sc, projectRoot)
 	if len(collisions) > 0 {
 		ew := cmd.ErrOrStderr()
 		fmt.Fprintf(ew, "agentsync: backed up %d pre-existing target(s) before overwriting:\n", len(collisions))
@@ -213,7 +213,14 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	_ = render.PruneBackups(home, render.DefaultBackupKeep)
 
 	w := cmd.OutOrStdout()
-	fmt.Fprintln(w, "applied:", plan.Total(), "ops")
+	// Report a clean no-op distinctly from real work: when every destination
+	// path already held our exact bytes (write skipped, no mtime churn), say so
+	// instead of the misleading "applied: N ops".
+	if len(written) > 0 && len(unchanged) == len(written) {
+		fmt.Fprintf(w, "up to date: %d ops, no changes\n", plan.Total())
+	} else {
+		fmt.Fprintln(w, "applied:", plan.Total(), "ops")
+	}
 	report := render.BuildReport(c, plan, agents)
 	if len(report.Rows) > 0 {
 		fmt.Fprintln(w)

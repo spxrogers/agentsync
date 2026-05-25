@@ -215,7 +215,7 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 		if err != nil {
 			return fmt.Errorf("plan after update: %w", err)
 		}
-		collisions, written, applyErr := render.Apply(plan, reg, st, home, userHome, sc, projectRoot)
+		collisions, written, _, applyErr := render.Apply(plan, reg, st, home, userHome, sc, projectRoot)
 		if applyErr != nil {
 			// Mirror `apply`: if render.Apply fails mid-pipeline, the files
 			// that already landed must be recorded so the next apply doesn't

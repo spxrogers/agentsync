@@ -1,6 +1,7 @@
 package render
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -85,7 +86,8 @@ type Writer struct {
 
 	backupRoot string          // <home>/.state/backups/<ts>; created lazily
 	backedUp   map[string]bool // path → already-backed-up this run
-	wrote      map[string]bool // path → destination actually written this run
+	wrote      map[string]bool // path → destination owned/written this run
+	unchanged  map[string]bool // path → already held our exact bytes (write skipped)
 	reports    []CollisionReport
 	// dryRun, when true, skips both the destination write AND the backup
 	// write. The reports slice is still populated so callers can preview
@@ -132,6 +134,7 @@ func NewWriter(st *state.Targets, home, userHome string, scope adapter.Scope, pr
 		backupRoot: filepath.Join(home, ".state", "backups", ts),
 		backedUp:   map[string]bool{},
 		wrote:      map[string]bool{},
+		unchanged:  map[string]bool{},
 	}
 }
 
@@ -154,9 +157,27 @@ func (w *Writer) Reports() []CollisionReport { return w.reports }
 // attempted must not be recorded as owned (that would suppress its backup).
 func (w *Writer) Wrote() map[string]bool { return w.wrote }
 
+// Unchanged returns the set of destination paths that already held exactly the
+// bytes apply would write, so the atomic write (and its mtime churn) was
+// skipped. apply uses it to report "up to date" instead of "applied: N ops".
+func (w *Writer) Unchanged() map[string]bool { return w.unchanged }
+
 // Write satisfies adapter.DestWriter. finalBytes is the post-merge content
 // for merge ops, or op.Content for replace ops.
 func (w *Writer) Write(op adapter.FileOp, finalBytes []byte) error {
+	// Convergence short-circuit: if the destination already holds exactly the
+	// bytes we'd write, skip the write so a no-op apply doesn't churn the file's
+	// mtime (which misleads mtime-watching tooling and makes a clean re-apply
+	// look like real work). The post-condition (dest == finalBytes) already
+	// holds, so still mark it owned for state recording; nothing is overwritten,
+	// so there is nothing to back up. Skipped under dry-run (no read needed).
+	if !w.dryRun {
+		if cur, err := os.ReadFile(op.Path); err == nil && bytes.Equal(cur, finalBytes) {
+			w.wrote[op.Path] = true
+			w.unchanged[op.Path] = true
+			return nil
+		}
+	}
 	if err := w.maybeBackup(op, finalBytes); err != nil {
 		return err
 	}

@@ -184,6 +184,13 @@ func writeAgents(p string, raw []byte, agents map[string]map[string]any) error {
 	} else {
 		tail := append([]string(nil), out[insertAt:]...)
 		out = append(out[:insertAt], newLines...)
+		// Keep a blank line between the regenerated [agents] block and whatever
+		// section follows, so repeated agent edits don't collapse the file's
+		// section spacing. The loop above drops blank lines inside the agents
+		// section, so a single separator is re-added each run (no accumulation).
+		if len(tail) > 0 && strings.TrimSpace(tail[0]) != "" {
+			out = append(out, "")
+		}
 		out = append(out, tail...)
 	}
 	return iox.AtomicWrite(p, []byte(strings.Join(out, "\n")), 0o644)
