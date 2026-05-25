@@ -1,11 +1,79 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// mcpKeySHA returns the seeded state hash for /mcpServers/<id>, or "".
+func mcpKeySHA(t *testing.T, statePath, id string) string {
+	t.Helper()
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	var st struct {
+		Keys map[string]struct {
+			SHA256 string `json:"sha256"`
+		} `json:"keys"`
+	}
+	if err := json.Unmarshal(data, &st); err != nil {
+		t.Fatalf("parse state: %v", err)
+	}
+	for k, v := range st.Keys {
+		if strings.HasSuffix(k, "/mcpServers/"+id) {
+			return v.SHA256
+		}
+	}
+	return ""
+}
+
+// TestImport_DoesNotReseedUnimportedSibling is the regression for the
+// drift-masking bug: seedStateFromCurrentDest re-rendered the WHOLE canonical
+// and re-stamped every pointer, so importing one item silently re-seeded an
+// un-imported, drifted sibling at its drifted hash — turning its Drift into
+// Pending and causing the next apply to revert the user's edit with no backup.
+// Seeding must be scoped to only the items actually imported.
+func TestImport_DoesNotReseedUnimportedSibling(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	// Canonical owns foo; apply it so state is seeded for /mcpServers/foo.
+	if _, err := runCLI(t, env, "mcp", "add", "foo", "--command", "foo-orig"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
+	before := mcpKeySHA(t, statePath, "foo")
+	if before == "" {
+		t.Fatal("setup: foo not seeded after apply")
+	}
+
+	// Drift foo in the dest AND add a native bar to import.
+	claudeJSON := filepath.Join(tmp, ".claude.json")
+	if err := os.WriteFile(claudeJSON,
+		[]byte(`{"mcpServers":{"foo":{"type":"stdio","command":"DRIFTED"},"bar":{"type":"stdio","command":"bar-cmd"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Import ONLY bar — foo's drift must be preserved (its state untouched).
+	if _, err := runCLI(t, env, "import", "claude:mcp:bar"); err != nil {
+		t.Fatalf("import bar: %v", err)
+	}
+	if after := mcpKeySHA(t, statePath, "foo"); after != before {
+		t.Fatalf("importing bar re-seeded the un-imported sibling foo (masking its drift): before=%s after=%s", before, after)
+	}
+}
 
 // TestImport_InvalidSelector verifies that malformed selectors are rejected.
 func TestImport_InvalidSelector(t *testing.T) {
