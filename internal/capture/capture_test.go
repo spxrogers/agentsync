@@ -189,6 +189,52 @@ func TestCapture_AllowsLegitWriteBacks(t *testing.T) {
 	}
 }
 
+// TestCapture_SingleItemNotRefusedByUnrelatedSecret is the regression for a
+// false-refusal: a single-item write-back (import claude:mcp:alpha) must NOT be
+// blocked because a DIFFERENT source server (beta) has a ${secret:} the leak
+// scan thinks is "missing" — only the items being written are relevant.
+func TestCapture_SingleItemNotRefusedByUnrelatedSecret(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AT", "alpha_secret_value")
+	t.Setenv("BT", "beta_secret_value")
+	writeFile(t, filepath.Join(home, "agentsync.toml"), "[secrets]\nbackend = \"env\"\n")
+	writeFile(t, filepath.Join(home, "mcp", "alpha.toml"),
+		"[server]\ntype=\"stdio\"\ncommand=\"a\"\n[server.env]\nK = \"${secret:AT}\"\n")
+	writeFile(t, filepath.Join(home, "mcp", "beta.toml"),
+		"[server]\ntype=\"stdio\"\ncommand=\"b\"\n[server.env]\nK = \"${secret:BT}\"\n")
+	// Capture only alpha (unchanged secret value as apply wrote it).
+	ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+		ID:     "alpha",
+		Server: source.MCPServerSpec{Type: "stdio", Command: "a", Env: map[string]string{"K": "alpha_secret_value"}},
+	}}}
+	if _, err := capture.Capture(home, ingested, capture.Opts{}); err != nil {
+		t.Fatalf("single-item write-back must not be refused by an unrelated server's secret: %v", err)
+	}
+	got, _, _ := source.ReadMCP(home, "alpha")
+	if got.Server.Env["K"] != "${secret:AT}" {
+		t.Fatalf("alpha secret not re-referenced: %q", got.Server.Env["K"])
+	}
+}
+
+// TestCapture_RemovingSecretFieldAllowed is the regression for a false-refusal:
+// removing a secret-bearing field entirely (the server is now public) is safe —
+// there is no cleartext to persist — so capture must allow it, not refuse.
+func TestCapture_RemovingSecretFieldAllowed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TOK", "live_secret_value")
+	writeFile(t, filepath.Join(home, "agentsync.toml"), "[secrets]\nbackend = \"env\"\n")
+	writeFile(t, filepath.Join(home, "mcp", "srv.toml"),
+		"[server]\ntype=\"stdio\"\ncommand=\"npx\"\n[server.env]\nAUTH = \"${secret:TOK}\"\n")
+	// Dest had the env removed (server no longer needs auth).
+	ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+		ID:     "srv",
+		Server: source.MCPServerSpec{Type: "stdio", Command: "npx"},
+	}}}
+	if _, err := capture.Capture(home, ingested, capture.Opts{}); err != nil {
+		t.Fatalf("removing a secret field (no residual cleartext) must be allowed: %v", err)
+	}
+}
+
 // TestCapture_RejectsTraversalID is the regression for an arbitrary-file-write
 // primitive via import/capture: an ingested component id/event (taken from a
 // foreign / synced / project-supplied native config) was joined straight into a

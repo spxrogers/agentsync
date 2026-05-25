@@ -45,21 +45,17 @@ func ResidualSecretCleartext(ingested, against *source.Canonical, sec, env Resol
 		return nil
 	}
 	secretVals := sourceSecretValues(against, sec) // resolved value -> placeholder
-
-	// Source ${secret:K} placeholders referenced by each group.
-	srcPlaceholders := map[secretGroup][]string{}
+	srcByLoc := make(map[secretFieldLoc]string)
 	walkSecretFields(against, func(loc secretFieldLoc, s string) string {
-		if phs := secretPlaceholders(s); len(phs) > 0 {
-			srcPlaceholders[groupOf(loc)] = append(srcPlaceholders[groupOf(loc)], phs...)
-		}
+		srcByLoc[loc] = s
 		return s
 	})
-
-	// All ingested field values, per group.
-	ingestedByGroup := map[secretGroup][]string{}
+	// Per-group concatenation of the ingested fields, so a secret legitimately
+	// SHIFTED within a group (its placeholder restored at a new position) is not
+	// mistaken for one rotated away.
+	groupText := map[secretGroup]string{}
 	walkSecretFields(ingested, func(loc secretFieldLoc, s string) string {
-		g := groupOf(loc)
-		ingestedByGroup[g] = append(ingestedByGroup[g], s)
+		groupText[groupOf(loc)] += "\x00" + s
 		return s
 	})
 
@@ -72,26 +68,35 @@ func ResidualSecretCleartext(ingested, against *source.Canonical, sec, env Resol
 		}
 	}
 
-	// VALUE prong: a live vault secret value sits verbatim in an ingested field.
-	for g, vals := range ingestedByGroup {
-		for _, s := range vals {
-			for v := range secretVals {
-				if strings.Contains(s, v) {
-					flag(g)
-				}
-			}
-		}
-	}
-	// SLOT prong: a ${secret:K} the source group referenced no longer appears
-	// anywhere in the ingested group (rotated / edited away).
-	for g, phs := range srcPlaceholders {
-		joined := strings.Join(ingestedByGroup[g], "\x00")
-		for _, ph := range phs {
-			if !strings.Contains(joined, ph) {
+	walkSecretFields(ingested, func(loc secretFieldLoc, s string) string {
+		g := groupOf(loc)
+		// VALUE prong: a live vault secret value sits verbatim in this field —
+		// a known secret moved/embedded where re-reference couldn't mask it.
+		for v := range secretVals {
+			if strings.Contains(s, v) {
 				flag(g)
+				return s
 			}
 		}
-	}
+		// SLOT prong: this field's OWN source counterpart was a ${secret:K} slot,
+		// but the field now holds a non-empty value that is NOT the placeholder
+		// AND the placeholder is gone from the whole group — an in-place
+		// rotation/edit to cleartext that re-reference couldn't match. Keying on
+		// THIS field's counterpart (not the whole source) means a single-item
+		// write-back isn't refused over an unrelated server's secret, and a field
+		// removed entirely (absent / empty here) isn't mistaken for a rotation;
+		// the group check spares a legitimately shifted-and-restored secret.
+		if s == "" {
+			return s
+		}
+		for _, ph := range secretPlaceholders(srcByLoc[loc]) {
+			if !strings.Contains(s, ph) && !strings.Contains(groupText[g], ph) {
+				flag(g)
+				return s
+			}
+		}
+		return s
+	})
 	return leaks
 }
 

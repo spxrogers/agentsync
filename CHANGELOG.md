@@ -84,9 +84,12 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   secret-bearing field to a value the vault no longer knows — leaving the live
   credential as cleartext in the canonical (committed) source. `capture.Capture`
   (`import`/`reconcile` write-back) now runs a fail-closed backstop: if a
-  resolved secret would still be written, or a `${secret:K}` the source
-  referenced has vanished from the captured server/hook, it refuses the
-  write-back and tells the user to update the vault or edit the source directly.
+  resolved secret would still be written, or a `${secret:K}` a captured server's
+  own field rotated away from, it refuses the write-back and tells the user to
+  update the vault or edit the source directly. The check is scoped to the
+  fields actually being written and to each field's own counterpart, so a
+  single-item `import`/reconcile isn't blocked by an unrelated server's secret,
+  and removing a credential field (no residual cleartext) is allowed.
 - **`secrets edit` no longer panics on a blank `$EDITOR`** — the `$EDITOR`
   word-split introduced above indexed an empty `strings.Fields` result, so a
   whitespace-only `EDITOR` (e.g. `EDITOR="   "`) crashed with an index panic;
