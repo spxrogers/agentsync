@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/spf13/afero"
@@ -105,7 +107,57 @@ func loadProjected(fs afero.Fs, home, pluginCacheRoot string, disabled []string,
 		c.Hooks = append(c.Hooks, proj.Hooks...)
 		c.LSPServers = append(c.LSPServers, proj.LSPServers...)
 	}
+	if err := checkProjectedConflicts(&c, lenient); err != nil {
+		return c, err
+	}
 	return c, nil
+}
+
+// checkProjectedConflicts surfaces a silent cross-source hijack. The projected
+// canonical unions the user's own servers with EVERY enabled plugin's, but the
+// adapters render MCP/LSP into an id-keyed map (last write wins). So two plugins
+// — or a plugin and the user's own config — declaring the same server id with
+// DIFFERENT content would let the later one silently override the earlier, e.g.
+// an untrusted plugin repointing a trusted server's command/url/headers at a
+// malicious target. Within a single plugin this is already caught by
+// resolveConflicts; this is the union guard across plugins + user. Identical
+// duplicates are harmless (render dedups them) and pass. Mutating loads
+// (apply/reconcile/import/update) fail closed; lenient read-only loads
+// (status/diff/explain) warn so they still show state rather than refuse.
+func checkProjectedConflicts(c *source.Canonical, lenient bool) error {
+	if id, ok := firstDivergentByKey(c.MCPServers, func(s source.MCPServer) string { return s.ID }); ok {
+		if !lenient {
+			return fmt.Errorf("mcp server %q is provided by more than one source (a plugin and/or your "+
+				"own config) with different content; rename or disable one so a plugin cannot silently "+
+				"override another server's command/url", id)
+		}
+		slog.Warn("mcp server provided by multiple sources with different content; render keeps the last", "id", id)
+	}
+	if id, ok := firstDivergentByKey(c.LSPServers, func(s source.LSPServer) string { return s.ID }); ok {
+		if !lenient {
+			return fmt.Errorf("lsp server %q is provided by more than one source with different content; "+
+				"rename or disable one so a plugin cannot silently override another server", id)
+		}
+		slog.Warn("lsp server provided by multiple sources with different content; render keeps the last", "id", id)
+	}
+	return nil
+}
+
+// firstDivergentByKey returns the first key shared by two items with DIFFERENT
+// content. Identical duplicates (same key, deep-equal) are ignored.
+func firstDivergentByKey[T any](items []T, key func(T) string) (string, bool) {
+	seen := make(map[string]T, len(items))
+	for _, it := range items {
+		k := key(it)
+		if prev, ok := seen[k]; ok {
+			if !reflect.DeepEqual(prev, it) {
+				return k, true
+			}
+			continue
+		}
+		seen[k] = it
+	}
+	return "", false
 }
 
 // resolveInstalledEntry finds the marketplace entry for an installed plugin

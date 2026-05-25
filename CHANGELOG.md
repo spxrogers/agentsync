@@ -51,6 +51,14 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **Cross-plugin MCP/LSP server collisions no longer silently clobber** — two
+  plugins (or a plugin and your own config) declaring the same MCP/LSP server id
+  with *different* content were unioned and rendered into an id-keyed map
+  last-wins, letting a later/untrusted plugin silently repoint a trusted
+  server's `command`/`url`/`headers`. Projection now refuses such a divergent
+  collision on mutating loads (apply/reconcile/import/update) and warns on
+  read-only ones (status/diff/explain); identical duplicates still dedup. (Skill/
+  command/subagent name collisions were already surfaced as a hard apply error.)
 - **Frontmatter parser accepts a closing fence at EOF / empty frontmatter** — a
   skill/subagent/command markdown file whose closing `---` sits at end-of-file
   with no trailing newline (common: editors strip it; frontmatter-only files),
