@@ -143,6 +143,11 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
   `just test-bdd`, `just test-live` (network, opt-in, not in the release gate).
 - Go version is `go.mod`'s `go` directive (currently **1.26.2**); CI reads it via
   `go-version-file`. Bump in one place.
+- **CI checks all failing within seconds with zero steps run** (run annotation:
+  "The job was not started because recent account payments have failed or your
+  spending limit needs to be increased") is GitHub Actions quota / spending-limit
+  exhaustion, not a code or workflow problem. Call it out and move on — don't dig
+  through logs or spend tokens trying to debug it. 🥲
 
 ## Code conventions
 
