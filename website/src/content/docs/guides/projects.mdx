@@ -1,0 +1,65 @@
+---
+title: Project-local config
+description: Give a repo its own overlay with a .agentsync.toml marker — extra MCP servers, disabled plugins, and merged memory, scoped to that project.
+sidebar:
+  order: 6
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+
+A repo can carry its own config overlay. Drop a `.agentsync.toml` marker at its
+root; agentsync finds it by walking up from your current directory.
+
+## The marker file
+
+```toml title="myrepo/.agentsync.toml"
+agents = ["claude", "opencode"]   # subset of agents for this project
+
+[[mcp]]
+id      = "company-api"
+type    = "stdio"
+command = "npx"
+args    = ["-y", "@company/mcp"]
+
+[plugins]
+disabled = ["screenshot"]         # turn off a user-level plugin here
+```
+
+A project overlay can:
+
+- **add** project-only MCP servers,
+- **disable** a user-level plugin for this repo,
+- **merge** extra memory on top of your user-level memory,
+- **narrow** the set of agents the project applies to.
+
+## Apply from inside the repo
+
+```bash frame="terminal"
+cd ~/code/myrepo
+agentsync apply               # auto-detects project scope
+ls .claude/settings.json      # project-scope config landed
+```
+
+The overlay merges *onto* your user config — it doesn't replace it. User-level
+servers and plugins still apply unless the project disables them.
+
+## Forcing a scope
+
+agentsync auto-detects scope by looking for the marker, but you can be explicit:
+
+```bash
+agentsync apply --scope user           # ignore any project marker
+agentsync apply --scope project        # require project scope
+agentsync apply --project ~/code/myrepo  # point at a specific repo
+```
+
+<Aside type="note">
+	`--scope` and `--project` work on `apply`, `status`, `diff`, `reconcile`, and
+	`update` — anywhere the active config set matters.
+</Aside>
+
+<LinkCard
+	title="Scope & the project marker"
+	description="How discovery and merge work under the hood."
+	href="/concepts/#scope--the-project-marker"
+/>

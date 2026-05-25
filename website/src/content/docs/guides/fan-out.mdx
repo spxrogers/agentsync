@@ -1,0 +1,67 @@
+---
+title: Multi-agent fan-out
+description: Not every agent supports every component. agentsync marks each translation native, projected, or skipped — and never pretends otherwise.
+sidebar:
+  order: 8
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+
+Not every agent supports every component, and agentsync never pretends otherwise.
+Each component is marked one of three ways per agent:
+
+| Symbol | Meaning |
+|:--:|---|
+| ✓ | **native** — full fidelity; the agent has the concept directly |
+| ◐ | **projected** — translated with documented, reported loss |
+| ✗ | **skipped** — no honest translation; logged in the apply report |
+
+## The component matrix
+
+| Component | Claude | OpenCode | Codex (v1.1) | Cursor (v1.2) |
+|---|:--:|:--:|:--:|:--:|
+| MCP server | ✓ | ✓ | ◐ | ◐ |
+| Memory | ✓ | ✓ | ◐ | ◐ |
+| Skill | ✓ | ✓ | ◐ | ✗ |
+| Subagent | ✓ | ◐ | ◐ | ✗ |
+| Slash command | ✓ | ◐ | ✗ | ◐ |
+| Hook | ✓ | ✗ | ◐ | ◐ |
+| LSP server | ✓ | ✗ | ✗ | ✗ |
+
+<Aside type="tip" title="The ◐ and ✗ cells are features, not bugs">
+	agentsync refuses to invent a translation that would mislead you. Every ◐ and ✗
+	is printed in the apply report and queryable with
+	`agentsync explain <plugin> --json`.
+</Aside>
+
+## Reading the report
+
+Every `apply`, `verify`, and `explain` ends with a coverage report, per plugin per
+agent:
+
+```
+plugin: atlassian@anthropic
+  claude    ✓ full    (1 mcp, 5 commands)
+  opencode  ◐ partial (1 mcp; 5 commands → projected)
+```
+
+- **✓ native** — the component landed with full fidelity.
+- **◐ projected** — it landed, but with documented loss (e.g. an OpenCode slash
+  command drops its `argument-hint`).
+- **✗ skipped** — no honest translation exists, so nothing was written; the skip
+  is logged, never silent.
+
+## Why OpenCode skips hooks and LSP
+
+- **Hooks** — OpenCode hooks are JS/TS plugins that subscribe to events, not
+  declarative shell commands like Claude's. There's no mechanical translation;
+  hand-author a small plugin if you need a hook on OpenCode.
+- **LSP** — projection of LSP servers to non-Claude agents is deferred. Claude
+  plugins that bundle LSP servers install correctly on Claude; on other agents
+  you'll see `lsp server X skipped` in the report.
+
+<LinkCard
+	title="Capability matrix"
+	description="Native paths, the reasoning behind each ◐/✗, and how OpenCode MCP servers are projected."
+	href="/reference/capability-matrix/"
+/>

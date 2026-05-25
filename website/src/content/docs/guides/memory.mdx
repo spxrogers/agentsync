@@ -1,0 +1,59 @@
+---
+title: Memory
+description: Keep one canonical memory file and compose it from reusable fragments; agentsync renders it to each agent's native memory file.
+sidebar:
+  order: 3
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+
+Your canonical memory lives in `memory/AGENTS.md` and renders to each agent's
+native memory file — `CLAUDE.md` for Claude, `AGENTS.md` for OpenCode.
+
+## Compose from fragments
+
+Keep the top-level file small and pull in reusable pieces with `@import`:
+
+```markdown title="~/.agentsync/memory/AGENTS.md"
+# Coding conventions
+
+@import ./fragments/style.md
+@import ./fragments/security-rules.md
+```
+
+```text title="layout"
+~/.agentsync/memory/
+├── AGENTS.md
+└── fragments/
+    ├── style.md
+    └── security-rules.md
+```
+
+At apply time agentsync expands the imports and writes the fully-composed memory
+into each agent's native file. Edit a fragment once and every agent's memory
+updates on the next `apply`.
+
+<Aside type="tip" title="Fragments are reusable">
+	A fragment like `security-rules.md` can be imported by several memory files (for
+	example a user-level memory and a project overlay). Define the rule once, use it
+	everywhere.
+</Aside>
+
+## Per-agent rendering
+
+| Agent | Native memory file |
+| --- | --- |
+| Claude Code | `CLAUDE.md` |
+| OpenCode | `AGENTS.md` |
+| Codex (planned) | `~/.codex/AGENTS.md` |
+| Cursor (planned) | `AGENTS.md` |
+
+Memory is **✓ native** on Claude and OpenCode — it carries across with full
+fidelity. See the [capability matrix](/reference/capability-matrix/) for the
+planned agents.
+
+<LinkCard
+	title="Project-local memory"
+	description="A repo's .agentsync.toml overlay can merge extra memory on top of your user-level memory."
+	href="/guides/projects/"
+/>

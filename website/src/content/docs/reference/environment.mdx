@@ -1,0 +1,42 @@
+---
+title: Environment variables
+description: Every AGENTSYNC_* environment override — what it does and when you'd reach for it.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+agentsync reads a handful of environment overrides. The common ones come first;
+the rest are escape hatches you'll rarely need.
+
+## Common
+
+| Env var | Purpose |
+| --- | --- |
+| `AGENTSYNC_HOME` | Override the `~/.agentsync/` location (absolute path). |
+| `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations (e.g. chezmoi-managed files). |
+| `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://` / `git://` plugin & marketplace sources. |
+| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `verify` skip secret resolution (CI without an age key). |
+
+## All overrides
+
+| Env var | Purpose |
+| --- | --- |
+| `AGENTSYNC_HOME` | Override `~/.agentsync/` location (absolute path). |
+| `AGENTSYNC_TARGET_ROOT` | Redirect `$HOME` for testing (used by the hermetic test container). |
+| `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Permit writes to symlinked destination files (resolves the link first). |
+| `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://` and `git://` plugin / marketplace sources. |
+| `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` | Accept `agent add codex` / `cursor` despite the no-op adapters. |
+| `AGENTSYNC_ALLOW_PLUGIN_DRIFT=1` | Bypass the plugin-cache manifest-SHA check (after hand-editing). |
+| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Skip `${secret:…}` resolution in `verify` (CI without an age key). |
+| `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` | Skip the 0600 mode check on the age identity file (ACL'd NFS). |
+| `AGENTSYNC_MAX_TARBALL_MB=<N>` | Override the per-tarball decompressed-bytes cap (default 512; 0 disables). |
+| `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |
+
+<Aside type="caution" title="The ALLOW_* flags loosen a safety default">
+	Each `AGENTSYNC_ALLOW_*` flag disables a guard that exists for a reason —
+	MITM protection on insecure URLs, strand-protection on symlinked destinations,
+	tamper-detection on the plugin cache. Set them deliberately and scope them
+	narrowly (e.g. a single command invocation), not globally in your shell profile.
+</Aside>

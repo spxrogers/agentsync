@@ -1,0 +1,93 @@
+---
+title: MCP servers
+description: Add stdio and http/sse MCP servers once and fan them out to every agent — with per-server agent allowlists and secret-referenced env.
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem, Aside, LinkCard } from '@astrojs/starlight/components';
+
+An MCP server is the most common thing you'll manage. Add it once; by default it
+fans out to **all enabled agents**.
+
+## Add a server
+
+<Tabs>
+	<TabItem label="stdio">
+		```bash
+		agentsync mcp add github \
+		  --command npx \
+		  --args "-y,@modelcontextprotocol/server-github" \
+		  --env "GITHUB_TOKEN=\${secret:github.token}"
+		```
+	</TabItem>
+	<TabItem label="http / sse">
+		```bash
+		agentsync mcp add linear --type http --url https://mcp.linear.app/sse
+		```
+	</TabItem>
+	<TabItem label="scoped fan-out">
+		```bash
+		agentsync mcp add company-api \
+		  --command npx --args "-y,@company/mcp" \
+		  --agents "claude,opencode"
+		```
+	</TabItem>
+</Tabs>
+
+```bash
+agentsync mcp list
+agentsync mcp remove github
+```
+
+## What it writes
+
+Each server becomes one small, hand-editable file at `~/.agentsync/mcp/<name>.toml`:
+
+```toml title="~/.agentsync/mcp/github.toml"
+[server]
+type    = "stdio"
+command = "npx"
+args    = ["-y", "@modelcontextprotocol/server-github"]
+
+[server.env]
+GITHUB_TOKEN = "${secret:github.token}"
+
+# source-only: which agents this server fans out to ("*" = all enabled)
+agents = ["*"]
+```
+
+You can edit this file by hand or via the CLI — both are first-class.
+
+## Controlling fan-out
+
+By default a server fans out to all enabled agents (`agents = ["*"]`). Narrow it
+with an allowlist, either on the CLI (`--agents "claude,opencode"`) or by editing
+the `agents` array in the TOML.
+
+<Aside type="note" title="How OpenCode MCP differs">
+	OpenCode's native MCP schema isn't a field-for-field copy of the canonical
+	model. The adapter translates: `type = "stdio"` → `"local"`, `http`/`sse` →
+	`"remote"`; `command` + `args` flatten into one `command` string array; `env`
+	is written under OpenCode's `environment` key. OpenCode has no separate SSE
+	transport, so an `sse` server normalizes to `http` if it's later captured back.
+	Full detail in the [capability matrix](/reference/capability-matrix/#how-opencode-mcp-servers-are-projected).
+</Aside>
+
+## Use a secret, not a literal
+
+Never put a credential in the TOML. Reference it:
+
+```toml
+[server.env]
+GITHUB_TOKEN = "${secret:github.token}"
+```
+
+agentsync resolves `${secret:…}` at apply time and writes the value into native
+config — but never captures the cleartext back into your source.
+
+<LinkCard
+	title="Set up secrets"
+	description="Create an age vault, store the token, and reference it safely."
+	href="/guides/secrets/"
+/>

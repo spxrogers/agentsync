@@ -1,0 +1,35 @@
+---
+title: Recipes
+description: Short, end-to-end walkthroughs for the things people actually do with agentsync — dotfiles, team onboarding, CI verification, and adopting a populated machine.
+sidebar:
+  order: 0
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Task-shaped walkthroughs that string the commands together for a real goal. Each
+one is short and copy-pasteable. If you're still learning the verbs, start with
+[the daily loop](/guides/daily-loop/) first.
+
+<CardGrid>
+	<LinkCard
+		title="Commit your config to dotfiles"
+		description="Put ~/.agentsync/ under version control with chezmoi and sync it across machines safely."
+		href="/recipes/dotfiles/"
+	/>
+	<LinkCard
+		title="Onboard a teammate"
+		description="Hand someone a repo and have their agents configured in two commands."
+		href="/recipes/team-onboarding/"
+	/>
+	<LinkCard
+		title="Verify config in CI"
+		description="Fail a pipeline when a config is invalid or a secret reference is unresolved."
+		href="/recipes/ci-verification/"
+	/>
+	<LinkCard
+		title="Adopt a populated machine"
+		description="Bring an existing Claude / OpenCode setup under management without losing anything."
+		href="/recipes/adopt-existing/"
+	/>
+</CardGrid>

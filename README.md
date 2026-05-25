@@ -8,7 +8,7 @@ Define your MCP servers, memory, skills, and marketplace plugins once in
 `~/.agentsync/`. Run `agentsync apply`. They land — correctly translated — in
 Claude Code, OpenCode, and (soon) Codex CLI and Cursor.
 
-[Quickstart](#quickstart) · [Install](#install) · **[User guide](docs/user-guide.md)** · [Docs](docs/) · [Known limits](#known-limits-in-v1x)
+[Quickstart](#quickstart) · [Install](#install) · **[Docs site → agentsync.cc](https://agentsync.cc)** · [User guide](docs/user-guide.md) · [Known limits](#known-limits-in-v1x)
 
 </div>
 
@@ -47,6 +47,10 @@ New here? The **[User guide](docs/user-guide.md)** takes you 0→100.
     agentsync apply
 
 ## Documentation
+
+The full docs are published with search and rendered diagrams at
+**[agentsync.cc](https://agentsync.cc)** (source in [`website/`](website/)). The
+canonical markdown also lives in [`docs/`](docs/):
 
 | Doc | What it covers |
 | --- | --- |

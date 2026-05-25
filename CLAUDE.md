@@ -34,14 +34,24 @@ or the code is the source of truth. Treat a stale doc as a bug.
 When you touch… | …also update in the same commit
 --- | ---
 the `Adapter` interface / `DestWriter` / render or capture contracts | `docs/architecture.md` (§3–§5), `docs/components.md`
-a CLI command, subcommand, or flag | `docs/user-guide.md` command reference, `README.md` quickstart
-agent/component coverage (a `Skip` goes native, a new adapter, a new component) | `docs/capability-matrix.md`, the matrices in `README.md` + `docs/user-guide.md`
+a CLI command, subcommand, or flag | `docs/user-guide.md` command reference, `README.md` quickstart, `website/src/content/docs/reference/cli.mdx`
+agent/component coverage (a `Skip` goes native, a new adapter, a new component) | `docs/capability-matrix.md`, the matrices in `README.md` + `docs/user-guide.md` + `website/src/content/docs/guides/fan-out.mdx`
 the canonical schema / `~/.agentsync/` layout | `docs/concepts.md`, `docs/architecture.md` (§2), the layout block in `docs/user-guide.md`
 the secret-handling invariants | the section below, `SECURITY.md`
 anything user-visible | `CHANGELOG.md` (under `[Unreleased]`)
 
 If a change makes a sentence in those docs false, the change is not done until
 the sentence is fixed.
+
+**The docs website (`website/`).** The published site at
+[agentsync.cc](https://agentsync.cc) is an Astro Starlight project. Its four
+**contract pages** (concepts, architecture, components, capability matrix) are
+*generated* from `docs/*.md` by `website/scripts/sync-docs.mjs` at build time, so
+they can never drift — never hand-edit the generated copies (they're gitignored).
+The rest of the site (getting-started, guides, recipes, reference, FAQ) is
+authored prose that is the source of truth for *itself*; when you change the CLI
+surface or agent coverage, update the website pages listed in the table above in
+the same commit, just like the `docs/` files. See `website/README.md`.
 
 ## Mental map of the code
 

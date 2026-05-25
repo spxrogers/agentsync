@@ -1,0 +1,78 @@
+---
+title: Already have configs?
+description: Bring an existing Claude or OpenCode setup under agentsync management with import — no retyping required.
+sidebar:
+  order: 5
+---
+
+import { Steps, Aside, LinkCard } from '@astrojs/starlight/components';
+
+Most people don't start clean — you arrive with servers and plugins already
+configured in Claude or OpenCode. Bring them under management instead of retyping
+them.
+
+<Steps>
+
+1. **See what's on disk** vs. what agentsync would write.
+
+   ```bash
+   agentsync status
+   ```
+
+2. **Import** native config into your canonical source.
+
+   ```bash
+   agentsync import claude --dry-run       # preview what a full import would write
+   agentsync import claude                 # the agent's full native config
+   ```
+
+3. **Apply** to fan it out to your other agents.
+
+   ```bash
+   agentsync apply
+   ```
+
+</Steps>
+
+## The import selector
+
+Import uses a selector grammar: `<agent>[:<component>[:<name>]]`. Drop parts from
+the right to widen the scope.
+
+| Selector | Imports |
+| --- | --- |
+| `claude` | the agent's **full** native config (MCP, skills, subagents, commands, hooks, LSP, memory) |
+| `claude:mcp` | **every** MCP server |
+| `claude:mcp:github` | a **single** MCP server |
+| `opencode:mcp:linear` | a single server from a different agent |
+
+```bash
+agentsync import claude
+agentsync import claude:mcp
+agentsync import claude:mcp:github
+agentsync import opencode:mcp:linear
+```
+
+A bulk import that finds nothing for a component reports it and exits cleanly
+rather than erroring. Add `--dry-run` to list the source files an import *would*
+write without touching `~/.agentsync/`.
+
+<Aside type="caution" title="The first apply on a populated machine">
+	On a machine that already has native config, the **first** `apply` sees files it
+	didn't write and treats them as a `foreign-collision`: it **backs each one up**
+	to `~/.agentsync/.state/backups/<timestamp>/` *before* writing. Nothing is lost.
+	Preview which files will be backed up with `agentsync apply --dry-run` first.
+</Aside>
+
+## Why import, then apply?
+
+Import pulls a native edit *into* your canonical source — re-referencing any
+resolved secret back to `${secret:…}` form on the way in, so credentials never get
+committed. Once it's in `~/.agentsync/`, a normal `apply` fans it out to every
+other enabled agent.
+
+<LinkCard
+	title="The daily loop"
+	description="Now that your config is under management, here's the rhythm of day-to-day use."
+	href="/guides/daily-loop/"
+/>

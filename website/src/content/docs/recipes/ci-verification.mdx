@@ -1,0 +1,63 @@
+---
+title: Verify config in CI
+description: Run agentsync verify in a pipeline to catch invalid config and unresolved secret references before they reach a machine.
+sidebar:
+  order: 3
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Goal:** fail a pipeline when your committed `~/.agentsync/` config is invalid or
+references a secret that doesn't exist — before it ever reaches a real machine.
+
+`verify` validates the config and surfaces every unresolved `${secret:…}` /
+`${env:…}` reference.
+
+```bash
+agentsync verify
+```
+
+## In CI without an age key
+
+CI runners usually don't have your age identity, so secret *resolution* would
+fail. Set `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` to validate structure and reference
+syntax while skipping the actual decryption:
+
+```bash
+AGENTSYNC_ALLOW_OFFLINE_VERIFY=1 agentsync verify
+```
+
+This still catches schema errors and malformed references — it just doesn't prove
+the vault contains each key.
+
+## A GitHub Actions example
+
+```yaml title=".github/workflows/agentsync-verify.yml"
+name: agentsync verify
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      AGENTSYNC_HOME: ${{ github.workspace }}/.agentsync
+      AGENTSYNC_ALLOW_OFFLINE_VERIFY: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go install github.com/spxrogers/agentsync/cmd/agentsync@latest
+      - run: agentsync verify
+```
+
+<Aside type="tip" title="Point AGENTSYNC_HOME at the repo">
+	If your dotfiles repo *is* `~/.agentsync/`, set `AGENTSYNC_HOME` to the checked-
+	out path so `verify` reads the committed config rather than a non-existent home
+	directory on the runner.
+</Aside>
+
+<Aside type="note" title="apply is for machines, verify is for CI">
+	Don't `apply` in CI — it writes agent config to the runner's home directory,
+	which is throwaway. `verify` is the read-only, machine-independent check that
+	belongs in a pipeline.
+</Aside>

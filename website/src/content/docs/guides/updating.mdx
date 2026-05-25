@@ -1,0 +1,62 @@
+---
+title: Updating from the network
+description: update is the only networked verb — it refreshes the marketplace cache and version pins without touching agent config. apply then renders offline.
+sidebar:
+  order: 7
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+
+`update` is the **only** command that touches the network. It polls marketplaces,
+refreshes the local cache, and recomputes version pins — without touching any
+agent config. `apply` then renders from that cache, so it's always fast, offline,
+and reproducible.
+
+```bash
+agentsync update                       # refresh cache + show pending plugin bumps
+agentsync update --apply               # refresh, then apply
+agentsync update --apply --auto-safe   # same, auto-resolving only safe changes
+```
+
+## Why the split matters
+
+```mermaid
+flowchart LR
+    NET["marketplaces<br/>+ npm registry"] -->|update (network)| CACHE[".state/cache/"]
+    CACHE -->|apply (offline)| AGENTS["agent configs"]
+```
+
+Separating "fetch" from "render" means:
+
+- **`apply` is deterministic** — same cache in, same config out, no surprise
+  network changes mid-apply.
+- **`apply` works offline** — on a plane, in a locked-down CI runner, anywhere.
+- **Upgrades are intentional** — you see pending plugin bumps from `update` before
+  they take effect.
+
+<Aside type="note" title="Manifest-SHA pinning">
+	Every plugin records a content hash over its entire cache tree. A re-uploaded
+	version *or* a tampered component body is detected as drift rather than silently
+	consumed. See [Architecture §7](/internals/architecture/#7-safety-primitives).
+</Aside>
+
+## Scheduling refreshes
+
+agentsync ships **no daemon**. Want nightly refreshes? Wire the one-liner into
+your own scheduler:
+
+```bash
+agentsync update --apply --auto-safe
+```
+
+| Platform | Mechanism |
+| --- | --- |
+| macOS | `launchd` agent |
+| Linux | `cron` or a `systemd` timer |
+| Windows | Task Scheduler |
+
+<LinkCard
+	title="The daily loop"
+	description="How --auto-safe interacts with the drift classifier."
+	href="/guides/daily-loop/"
+/>

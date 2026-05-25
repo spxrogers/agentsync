@@ -48,6 +48,12 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   state file with portable (`${HOME}`-relative) keys.
 - **Documentation set** — user guide, concepts, architecture, capability matrix,
   and component map under [`docs/`](docs/).
+- **Documentation website** (`website/`) — an Astro Starlight site published to
+  [agentsync.cc](https://agentsync.cc) via GitHub Pages. Expands the user guide
+  into task-shaped getting-started, guides, recipes, and reference sections with
+  full-text search and rendered Mermaid diagrams. The four contract docs
+  (concepts, architecture, components, capability matrix) are mirrored from
+  `docs/*.md` at build time so the site can never drift from the in-repo source.
 
 ### Fixed
 

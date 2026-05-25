@@ -1,0 +1,162 @@
+---
+title: CLI commands
+description: Every agentsync command, its purpose, and its key flags. agentsync <command> --help is always authoritative.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note">
+	This is the beta command surface. `agentsync <command> --help` is always
+	authoritative. A global `-v` / `--verbose` enables verbose logging on any
+	command.
+</Aside>
+
+## At a glance
+
+| Command | Purpose | Key flags / args |
+|---|---|---|
+| `init [<git-url>]` | Create `~/.agentsync/`; optionally clone a bootstrap repo. | |
+| `doctor` | Diagnose setup: PATH, home/state writability, schema, secrets backend. | |
+| `verify` | Validate config; surface unresolved `${secret:}` / `${env:}` refs. | |
+| `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry. | `disable --purge` |
+| `mcp add\|remove\|list <name>` | Manage MCP servers. | `--type --command --args --url --env --agents` |
+| `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
+| `plugin install\|upgrade\|enable\|disable\|remove\|list <id>` | Manage plugins. | `install <id[@marketplace]>` |
+| `secrets set\|get\|edit <key>` | Manage age-encrypted secrets. | `set --stdin` |
+| `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
+| `apply` | Render source → write agent configs (offline). | `--dry-run --scope --project` |
+| `status` | Summarize drift / pending across agents. | `--scope --project` |
+| `diff [<path>]` | Show pending / drift changes; secrets redacted. | `--scope --project` |
+| `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
+| `import <agent>[:<component>[:<name>]]` | Capture native config into source. | `--dry-run` |
+| `explain <plugin>` | Show a plugin's per-agent translation coverage. | `--json` |
+
+---
+
+## Setup & diagnostics
+
+### `init [<git-url>]`
+Creates the `~/.agentsync/` directory and its layout. Pass a git URL to clone an
+existing bootstrap config instead of starting empty.
+
+### `doctor`
+A health check: verifies your `PATH`, that home and state directories are
+writable, that the config schema parses, and that the secrets backend is reachable.
+Run it first when something feels off.
+
+### `verify`
+Validates the canonical config and surfaces **every** unresolved `${secret:…}` /
+`${env:…}` reference. Ideal for CI — see
+[Verify config in CI](/recipes/ci-verification/). Pair with
+`AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` on runners without an age key.
+
+---
+
+## Building your config
+
+### `agent`
+Manage which agents agentsync applies to.
+
+```bash
+agentsync agent add claude        # register
+agentsync agent list              # registry + enabled state
+agentsync agent disable opencode  # stop applying (keeps source)
+agentsync agent disable opencode --purge   # also remove what it wrote
+```
+
+<Aside type="caution">
+	`agent add codex` / `agent add cursor` are rejected in beta — their adapters are
+	no-ops. Override with `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` if you really want to
+	register them (apply emits zero ops for them).
+</Aside>
+
+### `mcp`
+Manage MCP servers. Full guide: [MCP servers](/guides/mcp-servers/).
+
+```bash
+agentsync mcp add github --command npx --args "-y,@modelcontextprotocol/server-github"
+agentsync mcp add linear --type http --url https://mcp.linear.app/sse
+agentsync mcp list
+agentsync mcp remove github
+```
+
+Flags: `--type` (`stdio`|`http`|`sse`), `--command`, `--args`, `--url`, `--env`,
+`--agents`.
+
+### `marketplace` & `plugin`
+Manage plugin registries and the plugins drawn from them. Full guide:
+[Marketplaces & plugins](/guides/plugins/).
+
+```bash
+agentsync marketplace add github:anthropics/claude-plugins-official
+agentsync plugin install atlassian@anthropic
+agentsync plugin list
+```
+
+### `secrets`
+Manage the age-encrypted vault. Full guide: [Secrets](/guides/secrets/).
+
+```bash
+agentsync secrets set github.token --stdin
+agentsync secrets get github.token
+agentsync secrets edit
+```
+
+---
+
+## The apply / capture loop
+
+### `apply`
+Renders the source and writes each agent's native config. **Offline** — it never
+touches the network. `--dry-run` runs the full pipeline and prints the plan and
+translation report without writing a byte.
+
+```bash
+agentsync apply --dry-run
+agentsync apply
+```
+
+### `status`
+Summarizes what's out of sync across all agents — pending source changes and
+destination drift.
+
+### `diff [<path>]`
+Shows the pending / drift changes in detail. **Resolved secrets are redacted**, so
+a piped diff can't leak credentials. Pass a path to scope the diff.
+
+### `reconcile`
+The interactive merge UX for drift and conflicts. Full guide:
+[The daily loop](/guides/daily-loop/). Non-interactive flags: `--auto-writeback`,
+`--auto-override`, `--auto-safe`.
+
+### `import <agent>[:<component>[:<name>]]`
+Captures native config back into your canonical source. Drop parts of the selector
+to widen scope. Full guide: [Already have configs?](/getting-started/existing-configs/).
+
+### `update`
+**The only networked verb.** Refreshes the marketplace cache and recomputes
+version pins, then optionally applies. Full guide:
+[Updating from the network](/guides/updating/).
+
+```bash
+agentsync update
+agentsync update --apply --auto-safe
+```
+
+### `explain <plugin>`
+Prints a plugin's per-agent translation coverage without applying. Add `--json`
+for machine-readable output.
+
+---
+
+## Flags that work across commands
+
+| Flag | Applies to | Effect |
+|---|---|---|
+| `--scope user\|project` | apply, status, diff, reconcile, update | Force the config scope. |
+| `--project <path>` | apply, status, diff, reconcile, update | Apply a specific project's overlay. |
+| `--dry-run` | apply, import | Preview without writing. |
+| `--auto-safe` | reconcile, update | Auto-resolve only no-risk changes. |
+| `-v`, `--verbose` | all | Verbose logging. |
