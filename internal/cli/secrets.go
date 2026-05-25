@@ -272,7 +272,9 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 		editor = "vi"
 	}
 	editorParts := strings.Fields(editor)
-	editorArgs := append(editorParts[1:], tmpPath)
+	editorArgs := make([]string, 0, len(editorParts))
+	editorArgs = append(editorArgs, editorParts[1:]...)
+	editorArgs = append(editorArgs, tmpPath)
 	editorCmd := exec.Command(editorParts[0], editorArgs...) //nolint:gosec
 	editorCmd.Stdin = os.Stdin
 	editorCmd.Stdout = os.Stdout
