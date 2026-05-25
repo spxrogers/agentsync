@@ -73,18 +73,22 @@ func ReReferenceCanonical(c *source.Canonical, against *source.Canonical, sec, e
 		//    (the bug a blind value-wide replace would cause):
 		//      - counterpart TEMPLATED but changed → the secret is genuinely this
 		//        field's; re-reference its resolved cleartext (substring ok).
-		//      - NO counterpart (shifted/renamed) → re-reference only when the
-		//        WHOLE value is a known secret, never a substring, so an unrelated
-		//        new field that merely contains a secret value is left alone.
+		//      - NO counterpart (shifted/renamed) → re-reference any embedded
+		//        known-secret cleartext (substring). A relocated field (renamed
+		//        env/header key, renamed server id, shifted arg index) carries the
+		//        secret to a location with no source counterpart, and the secret is
+		//        frequently EMBEDDED in a larger value (e.g. "Bearer <token>"), so a
+		//        whole-value-only match would persist the credential cleartext into
+		//        the canonical source. Leaking a live credential into a committed
+		//        dotfiles repo is far worse than over-masking a genuinely-unrelated
+		//        new field that merely contains a secret value, so mask substrings.
 		//      - counterpart is a LITERAL → leave it exactly as written.
 		//    Only ${secret:…} is inverted (never ${env:…}, matching restoreField).
 		switch {
 		case hasCounterpart && strings.Contains(srcVal, "${secret:"):
 			return MaskResolved(ingested, secretVals)
 		case !hasCounterpart:
-			if ph, ok := secretVals[ingested]; ok {
-				return ph
-			}
+			return MaskResolved(ingested, secretVals)
 		}
 		return ingested
 	})

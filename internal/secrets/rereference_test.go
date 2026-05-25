@@ -168,6 +168,24 @@ func TestReReferenceCanonical_ValueFallbackOnStructuralShift(t *testing.T) {
 		}
 	})
 
+	t.Run("renamed header embeds the secret in a larger value", func(t *testing.T) {
+		// A renamed header key has no source counterpart, and the secret is
+		// embedded in "Bearer <token>" — a whole-value-only match would miss it
+		// and persist the cleartext. The substring fallback must re-reference it.
+		against := &source.Canonical{MCPServers: []source.MCPServer{{
+			ID:     "srv",
+			Server: source.MCPServerSpec{Headers: map[string]string{"Authorization": "Bearer ${secret:T}"}},
+		}}}
+		ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+			ID:     "srv",
+			Server: source.MCPServerSpec{Headers: map[string]string{"Auth": "Bearer " + live}},
+		}}}
+		ReReferenceCanonical(ingested, against, sec, env)
+		if got := ingested.MCPServers[0].Server.Headers["Auth"]; got != "Bearer ${secret:T}" {
+			t.Fatalf("embedded secret in a relocated header not re-referenced (leak): %q", got)
+		}
+	})
+
 	t.Run("idempotent: re-referenced value resolves back unchanged", func(t *testing.T) {
 		against := &source.Canonical{MCPServers: []source.MCPServer{{
 			ID:     "srv",
