@@ -2,10 +2,14 @@ package secrets
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/source"
 )
+
+// secretMarker matches a ${secret:K} reference only (not ${env:…}).
+var secretMarker = regexp.MustCompile(`\$\{secret:[A-Za-z0-9._-]+\}`)
 
 // secretGroup identifies one server/hook-event in the canonical (scope+kind+id),
 // independent of intra-group position (arg index, env/header key). Re-reference
@@ -70,34 +74,77 @@ func ResidualSecretCleartext(ingested, against *source.Canonical, sec, env Resol
 
 	walkSecretFields(ingested, func(loc secretFieldLoc, s string) string {
 		g := groupOf(loc)
-		// VALUE prong: a live vault secret value sits verbatim in this field —
-		// a known secret moved/embedded where re-reference couldn't mask it.
+		src := srcByLoc[loc]
+		// VALUE prong (field-local): a live vault secret value present in THIS
+		// field that is NOT already part of the field's own source counterpart —
+		// i.e. a known secret moved/embedded here. A literal the user already had
+		// in source (even one that coincidentally equals another secret's value)
+		// is pre-existing, not a new leak, so it must not be refused.
 		for v := range secretVals {
-			if strings.Contains(s, v) {
+			if strings.Contains(s, v) && !strings.Contains(src, v) {
 				flag(g)
 				return s
 			}
 		}
-		// SLOT prong: this field's OWN source counterpart was a ${secret:K} slot,
-		// but the field now holds a non-empty value that is NOT the placeholder
-		// AND the placeholder is gone from the whole group — an in-place
-		// rotation/edit to cleartext that re-reference couldn't match. Keying on
-		// THIS field's counterpart (not the whole source) means a single-item
-		// write-back isn't refused over an unrelated server's secret, and a field
-		// removed entirely (absent / empty here) isn't mistaken for a rotation;
-		// the group check spares a legitimately shifted-and-restored secret.
-		if s == "" {
+		// SLOT prong: the field's source counterpart was a ${secret:K} slot, the
+		// ingested value still has that slot's literal SHAPE with non-placeholder
+		// content (a rotation/edit to cleartext re-reference couldn't match — NOT
+		// a trim that removes the slot, which leaves no cleartext), AND the
+		// placeholder is gone from the whole group (so a secret legitimately
+		// SHIFTED elsewhere in the group, or an unrelated server's secret on a
+		// single-item write-back, isn't flagged).
+		if s == "" || !strings.Contains(src, "${secret:") {
 			return s
 		}
-		for _, ph := range secretPlaceholders(srcByLoc[loc]) {
-			if !strings.Contains(s, ph) && !strings.Contains(groupText[g], ph) {
-				flag(g)
-				return s
+		if fieldRetainsRotatedSecret(src, s) {
+			for _, ph := range secretPlaceholders(src) {
+				if !strings.Contains(groupText[g], ph) {
+					flag(g)
+					return s
+				}
 			}
 		}
 		return s
 	})
 	return leaks
+}
+
+// fieldRetainsRotatedSecret reports whether `ingested` matches the literal
+// SHAPE of the source template `src` (each ${secret:K} standing for any run)
+// with at least one slot holding non-placeholder cleartext. That distinguishes
+// a ROTATION/edit ("a=${secret:K}" -> "a=newtoken", shape kept, slot has
+// cleartext) from a TRIM that removes the secret and its surrounding context
+// ("a=${secret:K} b=x" -> "b=x", shape broken -> no match -> not a leak).
+func fieldRetainsRotatedSecret(src, ingested string) bool {
+	segs := secretMarker.Split(src, -1)
+	if len(segs) < 2 {
+		return false // no ${secret:} marker in the counterpart
+	}
+	var pat strings.Builder
+	pat.WriteString("^")
+	for i, seg := range segs {
+		if i > 0 {
+			pat.WriteString("(.*)")
+		}
+		pat.WriteString(regexp.QuoteMeta(seg))
+	}
+	pat.WriteString("$")
+	rx, err := regexp.Compile(pat.String())
+	if err != nil {
+		return true // can't build the matcher; fail safe (refuse)
+	}
+	caps := rx.FindStringSubmatch(ingested)
+	if caps == nil {
+		return false // shape broken (trim/restructure) — no cleartext slot
+	}
+	for _, cap := range caps[1:] {
+		// A slot is cleartext if, after removing any ${secret:…}/${env:…}
+		// placeholders that re-reference restored, non-whitespace remains.
+		if strings.TrimSpace(re.ReplaceAllString(cap, "")) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // secretPlaceholders extracts the ${secret:K} markers in s (ignores ${env:…}).

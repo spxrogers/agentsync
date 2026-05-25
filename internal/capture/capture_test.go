@@ -235,6 +235,72 @@ func TestCapture_RemovingSecretFieldAllowed(t *testing.T) {
 	}
 }
 
+// TestCapture_TrimmedEmbeddedSecretAllowed is the regression for a false-refusal:
+// trimming a secret OUT of a still-present field (the field keeps non-secret
+// text) leaves no cleartext, so capture must allow it — the SLOT prong must
+// distinguish a trim (slot+context removed) from a rotation (slot holds a new
+// value).
+func TestCapture_TrimmedEmbeddedSecretAllowed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("T", "real_token_value")
+	writeFile(t, filepath.Join(home, "agentsync.toml"), "[secrets]\nbackend = \"env\"\n")
+	writeFile(t, filepath.Join(home, "mcp", "srv.toml"),
+		"[server]\ntype=\"stdio\"\ncommand=\"serve --tok=${secret:T}\"\n")
+	// User dropped the --tok flag in the dest; nothing cleartext remains.
+	ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+		ID:     "srv",
+		Server: source.MCPServerSpec{Type: "stdio", Command: "serve"},
+	}}}
+	if _, err := capture.Capture(home, ingested, capture.Opts{}); err != nil {
+		t.Fatalf("trimming a secret out of a field (no cleartext) must be allowed: %v", err)
+	}
+}
+
+// TestCapture_UnchangedLiteralCollidingWithSecretAllowed is the regression for a
+// false-refusal: an UNCHANGED literal in one server that coincidentally contains
+// another server's secret value must not be refused (it was already in source;
+// re-reference deliberately leaves such literals byte-for-byte).
+func TestCapture_UnchangedLiteralCollidingWithSecretAllowed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("T", "tok12345abc")
+	writeFile(t, filepath.Join(home, "agentsync.toml"), "[secrets]\nbackend = \"env\"\n")
+	writeFile(t, filepath.Join(home, "mcp", "a.toml"),
+		"[server]\ntype=\"stdio\"\ncommand=\"a\"\n[server.env]\nK = \"${secret:T}\"\n")
+	writeFile(t, filepath.Join(home, "mcp", "b.toml"),
+		"[server]\ntype=\"stdio\"\ncommand=\"run --note=tok12345abc-extra\"\n")
+	ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+		ID:     "b",
+		Server: source.MCPServerSpec{Type: "stdio", Command: "run --note=tok12345abc-extra"},
+	}}}
+	if _, err := capture.Capture(home, ingested, capture.Opts{}); err != nil {
+		t.Fatalf("unchanged literal that merely contains another secret's value must be allowed: %v", err)
+	}
+	if got, _, _ := source.ReadMCP(home, "b"); got.Server.Command != "run --note=tok12345abc-extra" {
+		t.Fatalf("literal must be left byte-for-byte, got: %q", got.Server.Command)
+	}
+}
+
+// TestCapture_RefusesEmbeddedRotation locks that the shape-aware SLOT still
+// catches a genuine rotation of an EMBEDDED secret to a vault-unknown value
+// (the leak it must keep refusing while allowing trims above).
+func TestCapture_RefusesEmbeddedRotation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("T", "old_token_value")
+	writeFile(t, filepath.Join(home, "agentsync.toml"), "[secrets]\nbackend = \"env\"\n")
+	writeFile(t, filepath.Join(home, "mcp", "srv.toml"),
+		"[server]\ntype=\"stdio\"\ncommand=\"serve --tok=${secret:T}\"\n")
+	ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+		ID:     "srv",
+		Server: source.MCPServerSpec{Type: "stdio", Command: "serve --tok=ROTATED_UNVAULTED_TOKEN"},
+	}}}
+	if _, err := capture.Capture(home, ingested, capture.Opts{}); err == nil {
+		t.Fatal("rotating an embedded secret to a new value must be refused")
+	}
+	if raw, _ := os.ReadFile(filepath.Join(home, "mcp", "srv.toml")); strings.Contains(string(raw), "ROTATED_UNVAULTED_TOKEN") {
+		t.Fatalf("rotated cleartext must not be persisted:\n%s", raw)
+	}
+}
+
 // TestCapture_RejectsTraversalID is the regression for an arbitrary-file-write
 // primitive via import/capture: an ingested component id/event (taken from a
 // foreign / synced / project-supplied native config) was joined straight into a
