@@ -308,8 +308,9 @@ agentsync explain atlassian@anthropic
 agentsync explain atlassian@anthropic --json
 ```
 
-Control fan-out per plugin with `agents = [...]` or per-component
-`[plugin.overrides.<agent>]` in the plugin's TOML file.
+Control fan-out per plugin with `agents = [...]` in the plugin's TOML file. (A
+per-component `[plugin.overrides.<agent>]` table was specced but is **not wired
+in v1** — the projector does not consult it; use the `agents` allowlist.)
 
 ### Secrets
 

@@ -68,10 +68,15 @@ type Skill struct {
 }
 
 // Plugin mirrors plugins/<id>.toml.
+//
+// NOTE: a per-agent `[plugin.overrides.<agent>]` table is NOT wired in v1 — the
+// projector does not consult it. It was previously a struct field that never
+// parsed and was read nowhere, so it has been removed rather than left as a
+// silent no-op. (Per-agent fan-out is still controllable via a component's
+// `agents` allowlist.)
 type Plugin struct {
-	ID        string                       `toml:"-"`
-	Plugin    PluginSpec                   `toml:"plugin"`
-	Overrides map[string]PluginOverrideSet `toml:"plugin.overrides"` // per-agent
+	ID     string     `toml:"-"`
+	Plugin PluginSpec `toml:"plugin"`
 }
 
 type PluginSpec struct {
@@ -87,10 +92,6 @@ type PluginSpec struct {
 	// into the canonical model and apply would ship them.
 	Disabled bool `toml:"disabled,omitempty"`
 }
-
-// PluginOverrideSet captures per-agent component overrides for one plugin.
-// e.g. [plugin.overrides.cursor] commands = "skip"
-type PluginOverrideSet map[string]string // component -> action ("skip" today; future: "force", etc.)
 
 // Marketplace mirrors marketplaces/<name>.toml.
 type Marketplace struct {

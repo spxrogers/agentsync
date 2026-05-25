@@ -79,8 +79,9 @@ You control fan-out explicitly:
 
 - `agents = ["claude", "opencode"]` on an MCP server or plugin entry → fan out
   only to those agents.
-- `[plugin.overrides.<agent>]` with `component = "skip"` → drop one component
-  for one agent.
+
+(A per-component `[plugin.overrides.<agent>]` skip was specced but is **not
+wired in v1** — the projector does not consult it. Use the `agents` allowlist.)
 
 ---
 
