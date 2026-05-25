@@ -48,3 +48,17 @@ func TestAgent_OrphanVisibilityAndReachablePurge(t *testing.T) {
 		t.Fatalf("after purge, no orphan should remain; got:\n%s", out2)
 	}
 }
+
+// TestAgent_DisablePurgeRejectsUnknownName proves `disable <bogus> --purge`
+// validates the name (consistent with add/enable) instead of reporting a
+// misleading "purged ... 0 files" success.
+func TestAgent_DisablePurgeRejectsUnknownName(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "disable", "not-an-agent", "--purge"); err == nil {
+		t.Fatal("disable --purge of an unknown agent must error, not report success")
+	}
+}

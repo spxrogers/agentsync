@@ -306,11 +306,14 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	v, ok := agents[name]
 	if !ok {
-		// Not registered. A removed (or never-registered) agent can still own
-		// orphaned destination files + state keys; `--purge` is the reachable
-		// cleanup path for it, working purely from state. Without --purge there
-		// is nothing to disable.
+		// Not registered. A removed agent can still own orphaned destination
+		// files + state keys; `--purge` is the reachable cleanup path for it,
+		// working purely from state. Still reject a name that was never a valid
+		// agent, so `disable bogus --purge` doesn't report a misleading success.
 		if purge {
+			if err := validateAgent(name); err != nil {
+				return err
+			}
 			return purgeAgentDests(cmd, name, home)
 		}
 		return fmt.Errorf("agent %q not registered (pass --purge to clean up an already-removed agent's leftover files)", name)

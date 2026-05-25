@@ -51,6 +51,11 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **`agent disable --purge` validates the name; `doctor` names a half-init** —
+  `disable <bogus> --purge` reported a misleading "purged 0 files" success for
+  any string; it now rejects an unknown agent like the other subcommands (a
+  removed-but-valid agent still purges). `doctor` now flags a home missing
+  `agentsync.toml` instead of calling the schema "ok", matching `verify`.
 - **`apply` is a true no-op when nothing changed** — the writer now skips the
   atomic write when a destination already holds the exact bytes apply would
   write, so a clean re-apply no longer churns file mtimes (which misled
