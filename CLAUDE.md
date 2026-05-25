@@ -150,8 +150,13 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
   No `pkg/errors`.
 - **Imports** grouped stdlib / third-party / internal; gofumpt + goimports
   formatting (`just fmt`).
-- **`time.Now()`** is forbidden in `internal/state` and `internal/render` (inject
-  a clock for testability) — enforced by `forbidigo`.
+- **`time.Now()`** in `internal/render`/`internal/state` is confined to
+  informational metadata (state `AppliedAt`, backup-dir names) — it never feeds a
+  content hash or the drift classifier, so it calls `time.Now().UTC()` directly
+  rather than through an injected clock. Keep any new timestamp in these packages
+  out of hashed/compared content for the same reason. (There is no `forbidigo`
+  rule enforcing this, and `internal/cli` uses `time.Now().UTC()` freely for
+  fetch/import timestamps.)
 - **Commits**: conventional commits with scope, e.g.
   `feat(adapter): …`, `fix(secrets): …`, `test(drift): …`, `docs(readme): …`.
 
