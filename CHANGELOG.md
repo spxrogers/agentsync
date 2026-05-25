@@ -51,6 +51,18 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **`secrets edit` honors a `$EDITOR` with flags** — `EDITOR="code --wait"`
+  (or `vim -u NONE`, `emacsclient -c`, …) was treated as a single executable
+  path and failed; `$EDITOR` is now word-split. This is the command that steers
+  users away from the argv-leaking `set key=value` form, so its breakage
+  mattered.
+- **`secrets get`/`edit` match apply's vault contract** — `get` now errors on a
+  non-string leaf instead of printing a Go-formatted value apply would refuse,
+  and `edit` validates the saved buffer with the same `flatten` check apply uses
+  (string-only leaves, no quoted-key-vs-table collisions) so it can't encrypt a
+  vault that every later apply would reject. `secrets set --stdin` now trims a
+  single trailing newline (not all of them), preserving a secret that
+  legitimately ends in newlines.
 - **Partial `import` seeds the items it already wrote** — when importing a whole
   component (e.g. `import claude:command`) or a whole agent, a write that failed
   partway left the *already-written* items unseeded in state, so the next

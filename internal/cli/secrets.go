@@ -182,23 +182,21 @@ func setNestedKey(m map[string]any, dottedKey, value string) {
 	setNestedKey(subMap, parts[1], value)
 }
 
-// getNestedKey retrieves a dotted key from a nested map.
-func getNestedKey(m map[string]any, dottedKey string) (string, bool) {
+// getNestedKey retrieves a dotted key from a nested map, returning the raw
+// value so the caller can enforce the string-only contract (apply rejects
+// non-string leaves; `get` must not print a value apply would refuse).
+func getNestedKey(m map[string]any, dottedKey string) (any, bool) {
 	parts := strings.SplitN(dottedKey, ".", 2)
 	v, ok := m[parts[0]]
 	if !ok {
-		return "", false
+		return nil, false
 	}
 	if len(parts) == 1 {
-		s, ok := v.(string)
-		if !ok {
-			return fmt.Sprint(v), true
-		}
-		return s, true
+		return v, true
 	}
 	sub, ok := v.(map[string]any)
 	if !ok {
-		return "", false
+		return nil, false
 	}
 	return getNestedKey(sub, parts[1])
 }
@@ -266,12 +264,16 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Open $EDITOR (default: vi).
+	// Open $EDITOR (default: vi). $EDITOR commonly carries flags
+	// ("code --wait", "vim -u NONE", "emacsclient -c"); split on whitespace so
+	// they aren't treated as part of the executable path (which fails outright).
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
 		editor = "vi"
 	}
-	editorCmd := exec.Command(editor, tmpPath) //nolint:gosec
+	editorParts := strings.Fields(editor)
+	editorArgs := append(editorParts[1:], tmpPath)
+	editorCmd := exec.Command(editorParts[0], editorArgs...) //nolint:gosec
 	editorCmd.Stdin = os.Stdin
 	editorCmd.Stdout = os.Stdout
 	editorCmd.Stderr = os.Stderr
@@ -279,16 +281,17 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("editor: %w", err)
 	}
 
-	// Read back edited bytes, validate they parse as TOML (so a typo doesn't
-	// silently encrypt a broken store), and re-encrypt with the
-	// identity-can-decrypt verification.
+	// Read back edited bytes and validate with the SAME contract apply uses
+	// (valid TOML + flatten: string-only leaves, no dup/colliding keys), so a
+	// typo — or a `"a.b"` quoted key colliding with a `[a] b` table, or a
+	// non-string value — is rejected here instead of being happily encrypted and
+	// then failing every apply.
 	edited, err := os.ReadFile(tmpPath)
 	if err != nil {
 		return fmt.Errorf("read edited tmp: %w", err)
 	}
-	var check map[string]any
-	if err := toml.Unmarshal(edited, &check); err != nil {
-		return fmt.Errorf("edited secrets are not valid TOML (not saved): %w", err)
+	if err := secrets.ValidateVaultTOML(edited); err != nil {
+		return fmt.Errorf("edited secrets are invalid (not saved): %w", err)
 	}
 	if err := writeSecretsVerified(edited, cfg, home); err != nil {
 		return fmt.Errorf("re-encrypt: %w", err)
@@ -315,7 +318,11 @@ func secretsGet(cmd *cobra.Command, args []string) error {
 	if !ok {
 		return fmt.Errorf("secret %q not found", args[0])
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), v)
+	s, isStr := v.(string)
+	if !isStr {
+		return fmt.Errorf("secret %q is not a string value (%T); secret values must be quoted strings (apply rejects non-string secrets)", args[0], v)
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), s)
 	return nil
 }
 
@@ -369,8 +376,11 @@ func resolveSecretKeyValue(cmd *cobra.Command, arg string, useStdin bool) (strin
 		if err != nil {
 			return "", "", fmt.Errorf("read secret from stdin: %w", err)
 		}
-		v := strings.TrimRight(string(raw), "\n")
-		v = strings.TrimRight(v, "\r")
+		// Strip a SINGLE trailing newline (the shell/echo/heredoc artifact),
+		// not all of them, so a secret that legitimately ends in newline(s)
+		// (e.g. a PEM block) isn't silently truncated.
+		v := strings.TrimSuffix(string(raw), "\n")
+		v = strings.TrimSuffix(v, "\r")
 		return key, v, nil
 	}
 
