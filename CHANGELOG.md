@@ -51,6 +51,11 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **`reconcile` exits non-zero when a write-back fails** — a `[w]rite-back` that
+  errored (e.g. an unsupported `/hooks/*` pointer) printed a `write-back error`
+  line but `reconcile` still exited 0, so `reconcile --auto-writeback && deploy`
+  proceeded as if the dest edit had been captured (the next apply would then
+  clobber it). A failed write-back now exits non-zero.
 - **Plugin manifest pin covers component bodies (tree hash)** — the integrity
   pin recorded in `plugins/<id>.toml` previously hashed only
   `.claude-plugin/plugin.json`, so a tampered or re-uploaded component body

@@ -135,6 +135,11 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 	// autoSkipped counts items an --auto-* mode left unresolved, so the run
 	// ends with a summary instead of silently doing nothing.
 	autoSkipped := 0
+	// writeBackFailed counts [w]rite-back attempts that errored. A failed
+	// write-back did NOT persist the user's dest edit, so the run must exit
+	// non-zero rather than report success (a scripted `reconcile --auto-writeback
+	// && deploy` must not proceed, and the next apply would clobber the edit).
+	writeBackFailed := 0
 
 	br := bufio.NewReader(in)
 
@@ -281,6 +286,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 			// write-back: persist destination value into the canonical source.
 			if err := writeBackItem(cmd, home, it); err != nil {
 				fmt.Fprintf(w, "  write-back error: %v\n", err)
+				writeBackFailed++
 			} else {
 				fmt.Fprintf(w, "  write-back: %s\n", itemLabel(it))
 			}
@@ -346,6 +352,11 @@ done:
 
 	if autoSkipped > 0 {
 		fmt.Fprintf(w, "%d item(s) left unresolved; run `agentsync reconcile` interactively to handle them\n", autoSkipped)
+	}
+	// A write-back that errored did NOT persist the edit; surface it as a
+	// non-zero exit so callers (and scripts) don't treat the sync as complete.
+	if writeBackFailed > 0 {
+		return fmt.Errorf("reconcile: %d item(s) failed to write back", writeBackFailed)
 	}
 	return nil
 }

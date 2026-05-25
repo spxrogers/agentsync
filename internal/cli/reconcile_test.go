@@ -366,16 +366,50 @@ func TestReconcile_WriteBackUnsupportedReturnsError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dst := filepath.Join(tmp, ".claude.json")
+	dst := filepath.Join(tmp, ".claude", "settings.json")
 	body, _ := os.ReadFile(dst)
 	// Drift the hook in the destination so reconcile classifies it as Drift.
 	_ = os.WriteFile(dst, []byte(strings.Replace(string(body), `echo pre`, `echo edited`, 1)), 0o644)
 
 	// Press w (write-back this item, single).
-	out, _ := runCLIWithStdin(t, env, "w\n", "reconcile")
+	out, err := runCLIWithStdin(t, env, "w\n", "reconcile")
 	// Should NOT silently print success for the hook write-back.
 	if strings.Contains(out, "write-back: ") && !strings.Contains(out, "write-back error") {
 		t.Fatalf("hook write-back must surface an error, not silent success; got:\n%s", out)
+	}
+	// And it must exit non-zero — a failed write-back did not persist the edit.
+	if err == nil {
+		t.Fatalf("interactive write-back of an unsupported item must exit non-zero; got nil err, out:\n%s", out)
+	}
+}
+
+// TestReconcile_AutoWritebackFailureExitsNonZero is the regression for a silent
+// failure on the SCRIPTABLE path: `reconcile --auto-writeback` printed a
+// "write-back error" line but still exited 0, so `reconcile --auto-writeback &&
+// deploy` proceeded as if the dest edit had been captured (the next apply would
+// then clobber it). A failed write-back must exit non-zero.
+func TestReconcile_AutoWritebackFailureExitsNonZero(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	hookDir := filepath.Join(tmp, ".agentsync", "hooks")
+	_ = os.MkdirAll(hookDir, 0o755)
+	_ = os.WriteFile(filepath.Join(hookDir, "PreToolUse.toml"),
+		[]byte("[[hook]]\nmatcher = \"*\"\ntype = \"command\"\ncommand = \"echo pre\"\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(tmp, ".claude", "settings.json")
+	body, _ := os.ReadFile(dst)
+	_ = os.WriteFile(dst, []byte(strings.Replace(string(body), `echo pre`, `echo edited`, 1)), 0o644)
+
+	if _, err := runCLI(t, env, "reconcile", "--auto-writeback"); err == nil {
+		t.Fatal("reconcile --auto-writeback with a failed write-back must exit non-zero")
 	}
 }
 
