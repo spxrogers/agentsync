@@ -51,6 +51,11 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **Nested memory fragments load** — `@import ./fragments/<name>` accepts a
+  nested path (e.g. `sub/frag.md`), but fragments were read non-recursively and
+  keyed by basename, so a nested fragment never loaded and its directive stayed
+  literal in the rendered memory. Fragments are now walked recursively and keyed
+  by their slash path under `memory/fragments/`.
 - **Cross-plugin MCP/LSP server collisions no longer silently clobber** — two
   plugins (or a plugin and your own config) declaring the same MCP/LSP server id
   with *different* content were unioned and rendered into an id-keyed map

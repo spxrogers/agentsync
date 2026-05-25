@@ -417,20 +417,34 @@ func loadMemory(fs afero.Fs, home string) (Memory, error) {
 
 	m.Fragments = map[string]string{}
 	fragDir := filepath.Join(home, "memory", "fragments")
-	entries, err := afero.ReadDir(fs, fragDir)
-	if err == nil {
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
+	// Walk recursively and key each fragment by its slash-separated path UNDER
+	// memory/fragments/, because the @import directive accepts
+	// "./fragments/<name>" where <name> may contain "/" (a nested fragment).
+	// A flat, basename-only read silently never loaded those, leaving the
+	// directive literal in the rendered memory.
+	werr := afero.Walk(fs, fragDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil // no fragments/ dir is fine
 			}
-			data, err := afero.ReadFile(fs, filepath.Join(fragDir, e.Name()))
-			if err != nil {
-				return m, fmt.Errorf("read fragment %s: %w", e.Name(), err)
-			}
-			m.Fragments[e.Name()] = string(data)
+			return err
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return m, fmt.Errorf("read memory/fragments: %w", err)
+		if info.IsDir() {
+			return nil
+		}
+		data, rerr := afero.ReadFile(fs, path)
+		if rerr != nil {
+			return fmt.Errorf("read fragment %s: %w", path, rerr)
+		}
+		rel, rerr := filepath.Rel(fragDir, path)
+		if rerr != nil {
+			return rerr
+		}
+		m.Fragments[filepath.ToSlash(rel)] = string(data)
+		return nil
+	})
+	if werr != nil {
+		return m, fmt.Errorf("read memory/fragments: %w", werr)
 	}
 	return m, nil
 }

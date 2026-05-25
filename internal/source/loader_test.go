@@ -78,6 +78,30 @@ func TestLoad_SkillWithFenceAtEOF(t *testing.T) {
 	}
 }
 
+// TestLoad_NestedMemoryFragments proves fragments in subdirectories are loaded
+// and keyed by their path under memory/fragments/, matching the @import regex
+// which accepts "./fragments/<name>" where <name> may contain "/". Previously
+// the loader read fragments non-recursively (basename only), so a nested
+// fragment was never loaded and its @import silently stayed literal.
+func TestLoad_NestedMemoryFragments(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	_ = afero.WriteFile(fs, "/home/.agentsync/agentsync.toml", []byte(""), 0o644)
+	_ = afero.WriteFile(fs, "/home/.agentsync/memory/AGENTS.md", []byte("Top\n@import ./fragments/sub/frag.md\n"), 0o644)
+	_ = afero.WriteFile(fs, "/home/.agentsync/memory/fragments/sub/frag.md", []byte("nested body"), 0o644)
+	_ = afero.WriteFile(fs, "/home/.agentsync/memory/fragments/top.md", []byte("top body"), 0o644)
+
+	c, err := source.Load(fs, "/home/.agentsync")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, ok := c.Memory.Fragments["sub/frag.md"]; !ok || got != "nested body" {
+		t.Fatalf("nested fragment not loaded under its sub-path: %#v", c.Memory.Fragments)
+	}
+	if got, ok := c.Memory.Fragments["top.md"]; !ok || got != "top body" {
+		t.Fatalf("flat fragment regressed: %#v", c.Memory.Fragments)
+	}
+}
+
 // contains is a small substring helper so the new test reads cleanly
 // without bringing in strings.Contains for one call.
 func contains(haystack, needle string) bool {

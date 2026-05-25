@@ -151,5 +151,5 @@ type LSPServerSpec struct {
 // Memory mirrors memory/AGENTS.md and memory/fragments/.
 type Memory struct {
 	Body      string            // resolved AGENTS.md after @import expansion
-	Fragments map[string]string // path -> body, keyed by repo-relative path under memory/
+	Fragments map[string]string // body, keyed by slash path under memory/fragments/ (loaded recursively)
 }
