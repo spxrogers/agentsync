@@ -275,8 +275,8 @@ func (w *Writer) maybeBackupKeyOp(op adapter.FileOp) error {
 		if _, owned := w.state.Keys[stateKey]; owned {
 			continue
 		}
-		ev := getPointer(existingMap, ptr)
-		if ev == nil {
+		ev, present := getPointerOK(existingMap, ptr)
+		if !present {
 			continue
 		}
 		ov := getPointer(ours, ptr)

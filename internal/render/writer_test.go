@@ -224,6 +224,44 @@ func TestWriter_KeyLevelBackup_ForeignNonObjectAtOwnedKey(t *testing.T) {
 	}
 }
 
+// TestWriter_KeyLevelBackup_ForeignNullAtOwnedPointer is the regression for a
+// gap in the foreign-collision backup: a hand-authored dest holding an explicit
+// `null` at a second-level pointer agentsync is about to write (e.g.
+// `mcpServers.github = null`) collapsed to the same nil as an ABSENT pointer in
+// getPointer, so the per-child loop skipped the backup and overlayOwned then
+// overwrote the user's explicit null with no backup. A present value — even
+// null — is foreign content and must be backed up before the overwrite.
+func TestWriter_KeyLevelBackup_ForeignNullAtOwnedPointer(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, ".claude.json")
+	_ = os.WriteFile(dest, []byte(`{"mcpServers":{"github":null},"preserveMe":"keep"}`), 0o644)
+
+	st := state.New()
+	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
+	ours := []byte(`{"mcpServers":{"github":{"command":"npx"}}}`)
+	op := adapter.FileOp{
+		Action:        "write",
+		Path:          dest,
+		Content:       ours,
+		MergeStrategy: "merge-json-keys",
+		Mode:          0o644,
+		SourceID:      "mcp/github.toml",
+	}
+	final := []byte(`{"mcpServers":{"github":{"command":"npx"}},"preserveMe":"keep"}` + "\n")
+	if err := w.Write(op, final); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	reports := w.Reports()
+	if len(reports) == 0 {
+		t.Fatal("expected a foreign-collision backup for an explicit null at an owned pointer, got none")
+	}
+	if reports[0].Pointer != "/mcpServers/github" {
+		t.Fatalf("want collision at /mcpServers/github; got %+v", reports[0])
+	}
+}
+
 // TestWriter_NoCollisionWhenAlreadyOwned asserts that when state already
 // records the file (file-level FileEntry), no backup is written even if
 // the bytes differ — that's just an in-place update by an owning agent.

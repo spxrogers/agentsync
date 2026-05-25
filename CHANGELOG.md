@@ -51,6 +51,12 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **Foreign-collision backup covers explicit `null`** — a hand-authored
+  destination holding an explicit `null` at a JSON pointer agentsync is about to
+  write (e.g. `mcpServers.github = null` in `~/.claude.json`) is now backed up
+  before being overwritten, instead of being silently replaced. Previously an
+  absent pointer and a present-`null` pointer were indistinguishable to the
+  collision check.
 - **Marketplace slug never empty** — `marketplace add` derives its slug by
   sanitising *before* applying the `"marketplace"` fallback, and only adopts a
   declared `marketplace.json` name when it sanitises to something usable. A
