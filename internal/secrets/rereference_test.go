@@ -191,6 +191,68 @@ func TestReReferenceCanonical_ValueFallbackOnStructuralShift(t *testing.T) {
 	})
 }
 
+// TestReReferenceCanonical_NoOverMaskSubstringLiteral is the regression for an
+// over-mask the value-based fallback introduced: a field the user authored as a
+// LITERAL that merely CONTAINS a secret's value as a substring must not be
+// rewritten into a ${secret:…} reference. Here server "b"'s command is a literal
+// that contains server "a"'s resolved secret value; capturing an unchanged "b"
+// must leave it byte-for-byte, while "a"'s genuine templated field is restored.
+func TestReReferenceCanonical_NoOverMaskSubstringLiteral(t *testing.T) {
+	sec := fakeResolver{"TOK": "tok12345abc"}
+	env := fakeResolver{}
+	against := &source.Canonical{MCPServers: []source.MCPServer{
+		{ID: "a", Server: source.MCPServerSpec{Env: map[string]string{"K": "${secret:TOK}"}}},
+		{ID: "b", Server: source.MCPServerSpec{Command: "run --note=tok12345abc-extra"}},
+	}}
+	ingested := &source.Canonical{MCPServers: []source.MCPServer{
+		{ID: "a", Server: source.MCPServerSpec{Env: map[string]string{"K": "tok12345abc"}}},
+		{ID: "b", Server: source.MCPServerSpec{Command: "run --note=tok12345abc-extra"}},
+	}}
+	ReReferenceCanonical(ingested, against, sec, env)
+	if got := ingested.MCPServers[0].Server.Env["K"]; got != "${secret:TOK}" {
+		t.Errorf("server a templated secret not restored: %q", got)
+	}
+	if got := ingested.MCPServers[1].Server.Command; got != "run --note=tok12345abc-extra" {
+		t.Fatalf("over-mask: server b's literal command rewritten to %q", got)
+	}
+}
+
+// TestReReferenceCanonical_NoOverMaskCrossScopeLiteral proves a user-scope
+// secret that is structurally shifted is still re-referenced even when the same
+// value appears as a PROJECT-scope literal (the per-field decision is keyed by
+// scope, so the project literal does not disable the user-scope safety net).
+func TestReReferenceCanonical_NoOverMaskCrossScopeLiteral(t *testing.T) {
+	sec := fakeResolver{"TOK": "tok12345abc"}
+	env := fakeResolver{}
+	against := &source.Canonical{
+		MCPServers: []source.MCPServer{
+			{ID: "u", Server: source.MCPServerSpec{Args: []string{"--tok", "${secret:TOK}"}}},
+		},
+		Project: &source.Canonical{
+			MCPServers: []source.MCPServer{
+				{ID: "p", Server: source.MCPServerSpec{Command: "tok12345abc"}}, // literal
+			},
+		},
+	}
+	ingested := &source.Canonical{
+		MCPServers: []source.MCPServer{
+			{ID: "u", Server: source.MCPServerSpec{Args: []string{"--verbose", "--tok", "tok12345abc"}}},
+		},
+		Project: &source.Canonical{
+			MCPServers: []source.MCPServer{
+				{ID: "p", Server: source.MCPServerSpec{Command: "tok12345abc"}},
+			},
+		},
+	}
+	ReReferenceCanonical(ingested, against, sec, env)
+	if got := ingested.MCPServers[0].Server.Args[2]; got != "${secret:TOK}" {
+		t.Errorf("user-scope shifted secret not re-referenced (cross-scope literal disabled the net): %q", got)
+	}
+	if got := ingested.Project.MCPServers[0].Server.Command; got != "tok12345abc" {
+		t.Errorf("project-scope literal over-masked: %q", got)
+	}
+}
+
 // TestReReferenceCanonical_ProjectOverlay proves the field-positional restore
 // recurses into the project overlay: a project-scope secret field is matched to
 // its project-scope source counterpart (the secretFieldLoc carries a scope
