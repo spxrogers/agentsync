@@ -147,7 +147,7 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
   "The job was not started because recent account payments have failed or your
   spending limit needs to be increased") is GitHub Actions quota / spending-limit
   exhaustion, not a code or workflow problem. Call it out and move on — don't dig
-  through logs or spend tokens trying to debug it.
+  through logs or spend tokens trying to debug it. 🥲
 
 ## Code conventions
 
