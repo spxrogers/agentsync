@@ -51,10 +51,16 @@ func collectStateSeedPointers(m map[string]any) []string {
 	return render.CollectPointers(m, "")
 }
 
-// hashAtPointer returns the SHA-256 of the JSON-marshaled value at ptr,
-// or the empty string if no value exists there.
+// hashAtPointer returns the SHA-256 of the JSON-marshaled value at ptr, or the
+// empty string when no value exists there. The empty sentinel (rather than
+// hashing a synthesized null) lets the seed loop SKIP an absent pointer, which
+// matches render.RecordOpsState skipping never-landed pointers — a present-null
+// value still hashes.
 func hashAtPointer(m map[string]any, ptr string) string {
-	v := getJSONPointer(m, ptr)
+	v, ok := getJSONPointer(m, ptr)
+	if !ok {
+		return ""
+	}
 	data, err := json.Marshal(v)
 	if err != nil {
 		return ""
@@ -63,13 +69,14 @@ func hashAtPointer(m map[string]any, ptr string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// getJSONPointer resolves a "/a/b/c" RFC 6901 pointer against m. Returns
-// nil if any segment is missing. We re-implement here rather than
-// exporting render.getPointer because keeping that helper unexported
-// preserves the current package boundary.
-func getJSONPointer(m map[string]any, ptr string) any {
+// getJSONPointer resolves a "/a/b/c" RFC 6901 pointer against m. The bool is
+// false when any segment is missing — distinct from a present value that
+// happens to be null. We re-implement here rather than exporting
+// render.getPointer because keeping that helper unexported preserves the
+// current package boundary.
+func getJSONPointer(m map[string]any, ptr string) (any, bool) {
 	if ptr == "" || ptr[0] != '/' {
-		return m
+		return m, true
 	}
 	parts := strings.Split(ptr[1:], "/")
 	for i, p := range parts {
@@ -82,11 +89,15 @@ func getJSONPointer(m map[string]any, ptr string) any {
 	for _, p := range parts {
 		mm, ok := cur.(map[string]any)
 		if !ok {
-			return nil
+			return nil, false
 		}
-		cur = mm[p]
+		v, exists := mm[p]
+		if !exists {
+			return nil, false
+		}
+		cur = v
 	}
-	return cur
+	return cur, true
 }
 
 // newImportCmd returns the "import" subcommand.
@@ -341,10 +352,17 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) err
 				continue
 			}
 			for _, ptr := range collectStateSeedPointers(ours) {
+				h := hashAtPointer(existing, ptr)
+				if h == "" {
+					// Pointer absent on disk — skip rather than seed a phantom
+					// entry, matching render.RecordOpsState's skip of never-landed
+					// pointers (a present-null value hashes and is seeded).
+					continue
+				}
 				key := fmt.Sprintf("%s:%s:%s:%s:%s",
 					agentName, adapter.ScopeUser.String(), "", paths.HomeRelative(userHome, op.Path), ptr)
 				st.Keys[key] = state.KeyEntry{
-					SHA256:    hashAtPointer(existing, ptr),
+					SHA256:    h,
 					AppliedAt: now,
 					SourceID:  op.SourceID,
 				}
@@ -485,6 +503,13 @@ func importMCP(cmd *cobra.Command, home string, c source.Canonical, name string,
 		}
 		return 0, nil
 	}
+	// Validate ids up front (before any write, and in dry-run) so the preview
+	// matches a real import and a bulk write is atomic on a bad id.
+	for _, m := range matched {
+		if err := source.ValidateComponentID("mcp", m.ID); err != nil {
+			return 0, err
+		}
+	}
 	if !dryRun {
 		single := source.Canonical{MCPServers: matched}
 		if _, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
@@ -511,6 +536,11 @@ func importSkill(cmd *cobra.Command, home string, c source.Canonical, name strin
 		return 0, nil
 	}
 	for _, sk := range matched {
+		if err := source.ValidateComponentID("skill", sk.Name); err != nil {
+			return 0, err
+		}
+	}
+	for _, sk := range matched {
 		if !dryRun {
 			if err := source.WriteSkill(home, sk); err != nil {
 				return 0, fmt.Errorf("write skill %s: %w", sk.Name, err)
@@ -535,6 +565,11 @@ func importSubagent(cmd *cobra.Command, home string, c source.Canonical, name st
 		return 0, nil
 	}
 	for _, sa := range matched {
+		if err := source.ValidateComponentID("subagent", sa.Name); err != nil {
+			return 0, err
+		}
+	}
+	for _, sa := range matched {
 		if !dryRun {
 			if err := source.WriteSubagent(home, sa); err != nil {
 				return 0, fmt.Errorf("write subagent %s: %w", sa.Name, err)
@@ -557,6 +592,11 @@ func importCommand(cmd *cobra.Command, home string, c source.Canonical, name str
 			return 0, fmt.Errorf("command %q not found in native config", name)
 		}
 		return 0, nil
+	}
+	for _, cm := range matched {
+		if err := source.ValidateComponentID("command", cm.Name); err != nil {
+			return 0, err
+		}
 	}
 	for _, cm := range matched {
 		if !dryRun {
@@ -585,6 +625,11 @@ func importHook(cmd *cobra.Command, home string, c source.Canonical, name string
 			return 0, fmt.Errorf("hook event %q not found in native config", name)
 		}
 		return 0, nil
+	}
+	for _, h := range matched {
+		if err := source.ValidateComponentID("hook event", h.Event); err != nil {
+			return 0, err
+		}
 	}
 	if !dryRun {
 		single := source.Canonical{Hooks: matched}
@@ -619,6 +664,11 @@ func importLSP(cmd *cobra.Command, home string, c source.Canonical, name string,
 			return 0, fmt.Errorf("lsp server %q not found in native config", name)
 		}
 		return 0, nil
+	}
+	for _, ls := range matched {
+		if err := source.ValidateComponentID("lsp", ls.ID); err != nil {
+			return 0, err
+		}
 	}
 	if !dryRun {
 		single := source.Canonical{LSPServers: matched}

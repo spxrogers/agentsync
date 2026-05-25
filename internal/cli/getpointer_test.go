@@ -23,3 +23,21 @@ func TestGetPointerValue_DecodesRFC6901(t *testing.T) {
 		t.Fatalf("did not decode ~1: nil for /mcpServers/a~1b")
 	}
 }
+
+// TestHashAtPointer_AbsentVsNull verifies the import seed distinguishes an
+// ABSENT pointer (return "" so the seed loop skips it, matching
+// render.RecordOpsState) from a present-but-null value (which hashes). Before
+// the fix, an absent pointer hashed sha256("null") and got seeded as a phantom.
+func TestHashAtPointer_AbsentVsNull(t *testing.T) {
+	m := map[string]any{"mcpServers": map[string]any{"github": map[string]any{"command": "x"}}}
+	if h := hashAtPointer(m, "/mcpServers/github"); h == "" {
+		t.Fatal("present pointer must hash non-empty")
+	}
+	if h := hashAtPointer(m, "/mcpServers/absent"); h != "" {
+		t.Fatalf("absent pointer must return the empty sentinel, got %q", h)
+	}
+	mn := map[string]any{"k": nil}
+	if h := hashAtPointer(mn, "/k"); h == "" {
+		t.Fatal("present-null must hash, not be treated as absent")
+	}
+}

@@ -39,6 +39,52 @@ func TestImport_TrailingColonRejected(t *testing.T) {
 	}
 }
 
+// TestImport_DryRunRejectsInvalidID is the regression for a misleading preview:
+// --dry-run skipped the writers' validation, so it cheerfully previewed
+// "would import mcp/../escape.toml" for a traversal id that a real import
+// rejects. The preview must match what a real run accepts.
+func TestImport_DryRunRejectsInvalidID(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".claude.json"),
+		[]byte(`{"mcpServers":{"../escape":{"type":"stdio","command":"x"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "import", "claude:mcp:../escape", "--dry-run"); err == nil {
+		t.Fatal("dry-run should reject an invalid component id, not preview it")
+	}
+}
+
+// TestImport_RejectsColonInID rejects a native component id containing ':',
+// which would write an mcp/ns:gh.toml that is an illegal filename on Windows —
+// the canonical source is meant to be portable/committable across machines.
+func TestImport_RejectsColonInID(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".claude.json"),
+		[]byte(`{"mcpServers":{"ns:gh":{"type":"stdio","command":"x"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "import", "claude:mcp:ns:gh"); err == nil {
+		t.Fatal("a colon in a component id is not portable; import must reject it")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, ".agentsync", "mcp", "ns:gh.toml")); err == nil {
+		t.Fatal("import wrote an unportable mcp/ns:gh.toml")
+	}
+}
+
 // TestImport_PartialFailureStillSeedsWritten is the regression for a partial
 // full-agent import: when a later component fails after an earlier one was
 // already written to the canonical source, the written component must still be
