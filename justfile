@@ -62,14 +62,15 @@ test-fast:
 test-live:
     AGENTSYNC_LIVE_PLUGIN_TEST=1 go test -tags=live -count=1 -v ./internal/marketplace/...
 
-# Run golangci-lint over every package.
+# Run golangci-lint over every package. Pinned via `go run` (matches CI's
+# golangci-lint-action version) so no separate install/PATH step is needed.
 lint:
-    golangci-lint run ./...
+    go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
 
 # Format Go sources with gofmt + gofumpt.
 fmt:
     gofmt -w -s .
-    go run mvdan.cc/gofumpt@latest -w .
+    go run mvdan.cc/gofumpt@v0.10.0 -w .
 
 # Run `go mod tidy`.
 tidy:
