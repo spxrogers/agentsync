@@ -25,7 +25,7 @@ func TestComputePendingBumps_TrackMode_Bumps(t *testing.T) {
 		},
 	}
 
-	bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched)
+	bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched, "")
 	if len(bumps) != 1 {
 		t.Fatalf("expected 1 bump, got %d", len(bumps))
 	}
@@ -52,7 +52,7 @@ func TestComputePendingBumps_TrackMode_NoDowngrade(t *testing.T) {
 	fetched := map[string]map[string]marketplace.PluginEntry{
 		"test-mp": {"demo": {Name: "demo", Version: "1.5.0"}},
 	}
-	if bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched); len(bumps) != 0 {
+	if bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched, ""); len(bumps) != 0 {
 		t.Fatalf("expected no bump for a rollback/downgrade, got %d: %+v", len(bumps), bumps)
 	}
 }
@@ -67,7 +67,7 @@ func TestComputePendingBumps_NonSemverTracksLatest(t *testing.T) {
 	fetched := map[string]map[string]marketplace.PluginEntry{
 		"test-mp": {"demo": {Name: "demo", Version: "edge"}},
 	}
-	if bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched); len(bumps) != 1 {
+	if bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched, ""); len(bumps) != 1 {
 		t.Fatalf("expected track-latest fallback to bump on non-semver change, got %d", len(bumps))
 	}
 }
@@ -90,7 +90,7 @@ func TestComputePendingBumps_PinnedMode_NoBump(t *testing.T) {
 		},
 	}
 
-	bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched)
+	bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched, "")
 	if len(bumps) != 0 {
 		t.Errorf("pinned plugin should not bump, got %d bumps", len(bumps))
 	}
@@ -113,7 +113,7 @@ func TestComputePendingBumps_ManualMode_NoBump(t *testing.T) {
 		},
 	}
 
-	bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched)
+	bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched, "")
 	if len(bumps) != 0 {
 		t.Errorf("manual plugin should not bump, got %d bumps", len(bumps))
 	}
@@ -137,9 +137,28 @@ func TestComputePendingBumps_DefaultMode_Bumps(t *testing.T) {
 		},
 	}
 
-	bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched)
+	bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched, "")
 	if len(bumps) != 1 {
 		t.Fatalf("default update mode should bump, got %d", len(bumps))
+	}
+}
+
+// TestComputePendingBumps_DefaultModePinned_NoBump proves [updates] default_mode
+// is honored: a plugin with no explicit `update` inherits the canonical default,
+// so default_mode="pinned" suppresses the auto-bump it would otherwise receive.
+func TestComputePendingBumps_DefaultModePinned_NoBump(t *testing.T) {
+	plugins := []source.Plugin{
+		{ID: "d", Plugin: source.PluginSpec{ID: "d@test-mp", Version: "1.0.0", Update: ""}},
+	}
+	fetched := map[string]map[string]marketplace.PluginEntry{
+		"test-mp": {"d": {Name: "d", Version: "2.0.0"}},
+	}
+	if bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched, "pinned"); len(bumps) != 0 {
+		t.Fatalf("default_mode=pinned must suppress the bump, got %d: %+v", len(bumps), bumps)
+	}
+	// Sanity: an explicit default of "track" still bumps.
+	if bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched, "track"); len(bumps) != 1 {
+		t.Fatalf("default_mode=track must allow the bump, got %d", len(bumps))
 	}
 }
 
@@ -160,7 +179,7 @@ func TestComputePendingBumps_AlreadyLatest_NoBump(t *testing.T) {
 		},
 	}
 
-	bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched)
+	bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched, "")
 	if len(bumps) != 0 {
 		t.Errorf("already-latest plugin should not bump, got %d bumps", len(bumps))
 	}
@@ -180,7 +199,7 @@ func TestComputePendingBumps_NoMarketplace_NoBump(t *testing.T) {
 	}
 	fetched := map[string]map[string]marketplace.PluginEntry{} // empty
 
-	bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched)
+	bumps := marketplace.ComputePendingBumps(nil, nil, plugins, fetched, "")
 	if len(bumps) != 0 {
 		t.Errorf("plugin with no matching marketplace should not bump, got %d", len(bumps))
 	}

@@ -81,14 +81,20 @@ func ComputePendingBumps(
 	_ []source.Marketplace,
 	plugins []source.Plugin,
 	fetched map[string]map[string]PluginEntry,
+	defaultMode string,
 ) []Bump {
 	var out []Bump
 
 	for _, pl := range plugins {
 		spec := pl.Plugin
 
-		// Resolve effective update mode.
+		// Resolve effective update mode: a plugin's own `update` wins; otherwise
+		// the canonical `[updates] default_mode` (so a user who sets it to
+		// "pinned" is not silently auto-bumped); otherwise "track".
 		mode := spec.Update
+		if mode == "" {
+			mode = defaultMode
+		}
 		if mode == "" {
 			mode = "track"
 		}

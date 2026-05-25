@@ -51,6 +51,11 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **`[updates] default_mode` is honored** — the config knob (written into the
+  generated `agentsync.toml` by `init`) was parsed but never consulted:
+  `update` hardcoded `track` for any plugin without an explicit `update` mode,
+  so a user who set `default_mode = "pinned"` still had default-mode plugins
+  auto-bumped. The canonical default now flows into bump computation.
 - **`reconcile` exits non-zero when a write-back fails** — a `[w]rite-back` that
   errored (e.g. an unsupported `/hooks/*` pointer) printed a `write-back error`
   line but `reconcile` still exited 0, so `reconcile --auto-writeback && deploy`

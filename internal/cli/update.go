@@ -138,7 +138,7 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 	}
 
 	// Compute pending bumps.
-	bumps := marketplace.ComputePendingBumps(st, c.Marketplaces, c.Plugins, fetched)
+	bumps := marketplace.ComputePendingBumps(st, c.Marketplaces, c.Plugins, fetched, c.Config.Updates.DefaultMode)
 
 	// --auto-safe: drop bumps whose candidate version would introduce a new
 	// translation loss (an adapter Skip) for any enabled agent. Each bump is
