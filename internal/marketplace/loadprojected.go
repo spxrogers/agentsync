@@ -125,7 +125,7 @@ func loadProjected(fs afero.Fs, home, pluginCacheRoot string, disabled []string,
 // (apply/reconcile/import/update) fail closed; lenient read-only loads
 // (status/diff/explain) warn so they still show state rather than refuse.
 func checkProjectedConflicts(c *source.Canonical, lenient bool) error {
-	if id, ok := firstDivergentByKey(c.MCPServers, func(s source.MCPServer) string { return s.ID }); ok {
+	if id, ok := firstDivergentByKey(c.MCPServers, func(s source.MCPServer) string { return s.ID }, sameMCPRender); ok {
 		if !lenient {
 			return fmt.Errorf("mcp server %q is provided by more than one source (a plugin and/or your "+
 				"own config) with different content; rename or disable one so a plugin cannot silently "+
@@ -133,7 +133,7 @@ func checkProjectedConflicts(c *source.Canonical, lenient bool) error {
 		}
 		slog.Warn("mcp server provided by multiple sources with different content; render keeps the last", "id", id)
 	}
-	if id, ok := firstDivergentByKey(c.LSPServers, func(s source.LSPServer) string { return s.ID }); ok {
+	if id, ok := firstDivergentByKey(c.LSPServers, func(s source.LSPServer) string { return s.ID }, sameLSPRender); ok {
 		if !lenient {
 			return fmt.Errorf("lsp server %q is provided by more than one source with different content; "+
 				"rename or disable one so a plugin cannot silently override another server", id)
@@ -143,14 +143,14 @@ func checkProjectedConflicts(c *source.Canonical, lenient bool) error {
 	return nil
 }
 
-// firstDivergentByKey returns the first key shared by two items with DIFFERENT
-// content. Identical duplicates (same key, deep-equal) are ignored.
-func firstDivergentByKey[T any](items []T, key func(T) string) (string, bool) {
+// firstDivergentByKey returns the first key shared by two items the sameRender
+// predicate considers DIFFERENT. Duplicates that render identically are ignored.
+func firstDivergentByKey[T any](items []T, key func(T) string, sameRender func(a, b T) bool) (string, bool) {
 	seen := make(map[string]T, len(items))
 	for _, it := range items {
 		k := key(it)
 		if prev, ok := seen[k]; ok {
-			if !reflect.DeepEqual(prev, it) {
+			if !sameRender(prev, it) {
 				return k, true
 			}
 			continue
@@ -158,6 +158,47 @@ func firstDivergentByKey[T any](items []T, key func(T) string) (string, bool) {
 		seen[k] = it
 	}
 	return "", false
+}
+
+// sameMCPRender / sameLSPRender compare only the fields that reach the agent
+// destination — the ones a hijack would repoint (type/command/args/url/env/
+// headers). The source-only `agents`/`enabled` targeting metadata is excluded:
+// render strips it and capture preserves it, so two sources differing ONLY on it
+// are not a divergent override. nil and empty collections compare equal.
+func sameMCPRender(a, b source.MCPServer) bool {
+	return reflect.DeepEqual(mcpRenderFields(a.Server), mcpRenderFields(b.Server))
+}
+
+func mcpRenderFields(s source.MCPServerSpec) source.MCPServerSpec {
+	out := source.MCPServerSpec{Type: s.Type, Command: s.Command, URL: s.URL}
+	if len(s.Args) > 0 {
+		out.Args = s.Args
+	}
+	if len(s.Env) > 0 {
+		out.Env = s.Env
+	}
+	if len(s.Headers) > 0 {
+		out.Headers = s.Headers
+	}
+	return out
+}
+
+func sameLSPRender(a, b source.LSPServer) bool {
+	return reflect.DeepEqual(lspRenderFields(a.Spec), lspRenderFields(b.Spec))
+}
+
+func lspRenderFields(s source.LSPServerSpec) source.LSPServerSpec {
+	out := source.LSPServerSpec{Command: s.Command, URL: s.URL}
+	if len(s.Args) > 0 {
+		out.Args = s.Args
+	}
+	if len(s.Env) > 0 {
+		out.Env = s.Env
+	}
+	if len(s.Headers) > 0 {
+		out.Headers = s.Headers
+	}
+	return out
 }
 
 // resolveInstalledEntry finds the marketplace entry for an installed plugin

@@ -273,6 +273,28 @@ func TestLoadProjected_CrossPluginMCPCollisionConflicts(t *testing.T) {
 	}
 }
 
+// TestLoadProjected_SameRenderDiffMetadataOK proves the cross-source conflict
+// guard compares only RENDER-relevant fields: a user server and a plugin server
+// with identical command/args/env/url/headers that differ only on the
+// source-only `agents`/`enabled` targeting metadata (which capture preserves and
+// render strips) must NOT be flagged as a divergent hijack.
+func TestLoadProjected_SameRenderDiffMetadataOK(t *testing.T) {
+	home, cache := writeProjFixture(t,
+		"[plugin]\nid = \"p@m\"\nversion = \"1\"\n", "p",
+		`{"name":"p","mcpServers":{"shared":{"command":"npx"}}}`)
+	if err := os.MkdirAll(filepath.Join(home, "mcp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// User's own server: same command, plus source-only agents + enabled.
+	if err := os.WriteFile(filepath.Join(home, "mcp", "shared.toml"),
+		[]byte("[server]\ncommand = \"npx\"\nagents = [\"*\"]\nenabled = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := marketplace.LoadProjected(afero.NewOsFs(), home, cache); err != nil {
+		t.Fatalf("same render content with differing source-only metadata must not conflict: %v", err)
+	}
+}
+
 // TestLoadProjected_CrossPluginIdenticalMCPOK proves two plugins declaring the
 // SAME server with IDENTICAL content do not error — render would dedup them.
 func TestLoadProjected_CrossPluginIdenticalMCPOK(t *testing.T) {
