@@ -92,6 +92,65 @@ func TestSecretsGetSet(t *testing.T) {
 	}
 }
 
+// TestSecretsGet_RejectsNonStringLeaf proves `get` enforces apply's string-only
+// contract: a non-string leaf (number/bool/table) errors rather than printing a
+// Go-formatted value apply would later refuse.
+func TestSecretsGet_RejectsNonStringLeaf(t *testing.T) {
+	env, agePath, _, id := setupSecretsEnv(t)
+	plain := []byte("[svc]\nport = 8080\nname = \"ok\"\n")
+	if err := secrets_pkg.Encrypt(plain, id.Recipient().String(), agePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "secrets", "get", "svc.port"); err == nil {
+		t.Fatal("get of a non-string leaf must error (matches apply's flatten contract)")
+	}
+	// A string leaf in the same vault still works.
+	if out, err := runCLI(t, env, "secrets", "get", "svc.name"); err != nil || !strings.Contains(out, "ok") {
+		t.Fatalf("get of a string leaf must succeed: err=%v out=%q", err, out)
+	}
+}
+
+// TestSecretsEdit_EditorWithArgs proves $EDITOR carrying flags ("code --wait")
+// is word-split, not treated as a single executable path.
+func TestSecretsEdit_EditorWithArgs(t *testing.T) {
+	env, agePath, _, id := setupSecretsEnv(t)
+	if err := secrets_pkg.Encrypt([]byte("[a]\nb = \"orig\"\n"), id.Recipient().String(), agePath); err != nil {
+		t.Fatal(err)
+	}
+	// An "editor" script that writes fixed content to its LAST argument.
+	dir := t.TempDir()
+	ed := filepath.Join(dir, "ed.sh")
+	if err := os.WriteFile(ed, []byte("#!/bin/sh\nfor a in \"$@\"; do f=\"$a\"; done\nprintf '[edited]\\nval = \"yes\"\\n' > \"$f\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EDITOR", ed+" --wait")
+	if out, err := runCLI(t, env, "secrets", "edit"); err != nil {
+		t.Fatalf("secrets edit with $EDITOR carrying a flag must work: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "secrets", "get", "edited.val"); err != nil || !strings.Contains(out, "yes") {
+		t.Fatalf("edit did not save via the flagged editor: err=%v out=%q", err, out)
+	}
+}
+
+// TestSecretsEdit_RejectsCollidingKeys proves `edit` validates against apply's
+// flatten contract: a quoted "a.b" key colliding with a [a] b table is refused
+// (not silently encrypted into a vault apply would reject).
+func TestSecretsEdit_RejectsCollidingKeys(t *testing.T) {
+	env, agePath, _, id := setupSecretsEnv(t)
+	if err := secrets_pkg.Encrypt([]byte("[a]\nb = \"orig\"\n"), id.Recipient().String(), agePath); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	ed := filepath.Join(dir, "ed.sh")
+	if err := os.WriteFile(ed, []byte("#!/bin/sh\nfor a in \"$@\"; do f=\"$a\"; done\nprintf '\"x.y\" = \"one\"\\n[x]\\ny = \"two\"\\n' > \"$f\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EDITOR", ed)
+	if _, err := runCLI(t, env, "secrets", "edit"); err == nil {
+		t.Fatal("edit must reject a flatten-colliding vault rather than save it")
+	}
+}
+
 // TestSecretsSet_RejectsRecipientIdentityMismatch is the regression for
 // `secrets set` re-encrypting the whole store to a recipient the configured
 // identity_file cannot decrypt — silently locking the user out of their own

@@ -335,14 +335,15 @@ func Apply(
 	userHome string,
 	scope adapter.Scope,
 	project string,
-) ([]CollisionReport, map[string]bool, error) {
+) ([]CollisionReport, map[string]bool, map[string]bool, error) {
 	written := map[string]bool{}
+	unchanged := map[string]bool{}
 	if st == nil {
 		// Defensive: a nil state would make every write look like a
 		// foreign collision and produce duplicate backups. Callers that
 		// don't yet have a state object should construct an empty one
 		// (state.New) rather than passing nil.
-		return nil, written, fmt.Errorf("render.Apply: nil state")
+		return nil, written, unchanged, fmt.Errorf("render.Apply: nil state")
 	}
 
 	var allReports []CollisionReport
@@ -354,7 +355,7 @@ func Apply(
 		}
 		a := reg.Lookup(name)
 		if a == nil {
-			return allReports, written, fmt.Errorf("adapter %q not registered at apply", name)
+			return allReports, written, unchanged, fmt.Errorf("adapter %q not registered at apply", name)
 		}
 		var deduped []adapter.FileOp
 		for _, op := range res.Ops {
@@ -373,7 +374,7 @@ func Apply(
 					// dropping one agent's bytes would be data loss — so fail
 					// loud rather than pick a winner.
 					if !bytes.Equal(prev, op.Content) {
-						return allReports, written, fmt.Errorf(
+						return allReports, written, unchanged, fmt.Errorf(
 							"agent %q renders different content than an earlier agent for the same path %s; "+
 								"refusing to silently drop one (shared paths must render identical bytes)",
 							name, op.Path,
@@ -391,9 +392,12 @@ func Apply(
 		for path := range w.Wrote() {
 			written[path] = true
 		}
+		for path := range w.Unchanged() {
+			unchanged[path] = true
+		}
 		if err != nil {
-			return allReports, written, fmt.Errorf("apply %s: %w", name, err)
+			return allReports, written, unchanged, fmt.Errorf("apply %s: %w", name, err)
 		}
 	}
-	return allReports, written, nil
+	return allReports, written, unchanged, nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/adapter/opencode"
 	"github.com/spxrogers/agentsync/internal/capture"
 	"github.com/spxrogers/agentsync/internal/drift"
 	"github.com/spxrogers/agentsync/internal/iox"
@@ -134,6 +135,16 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 	// autoSkipped counts items an --auto-* mode left unresolved, so the run
 	// ends with a summary instead of silently doing nothing.
 	autoSkipped := 0
+	// writeBackFailed counts [w]rite-back attempts that errored. A failed
+	// write-back did NOT persist the user's dest edit, so the run must exit
+	// non-zero rather than report success (a scripted `reconcile --auto-writeback
+	// && deploy` must not proceed, and the next apply would clobber the edit).
+	writeBackFailed := 0
+	// writtenSources records, per canonical source file written this run, the
+	// bytes that landed — so a SECOND write-back to the same file (a server/skill
+	// that fanned out to multiple agents, each drifted differently) is detected
+	// instead of silently last-writer-wins clobbering the first.
+	writtenSources := map[string][]byte{}
 
 	br := bufio.NewReader(in)
 
@@ -278,10 +289,8 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 		switch action {
 		case 'w':
 			// write-back: persist destination value into the canonical source.
-			if err := writeBackItem(cmd, home, it); err != nil {
-				fmt.Fprintf(w, "  write-back error: %v\n", err)
-			} else {
-				fmt.Fprintf(w, "  write-back: %s\n", itemLabel(it))
+			if attemptWriteBack(cmd, w, home, it, writtenSources) {
+				writeBackFailed++
 			}
 		case 'o':
 			// override: queue a re-apply of this item's op.
@@ -345,6 +354,11 @@ done:
 
 	if autoSkipped > 0 {
 		fmt.Fprintf(w, "%d item(s) left unresolved; run `agentsync reconcile` interactively to handle them\n", autoSkipped)
+	}
+	// A write-back that errored did NOT persist the edit; surface it as a
+	// non-zero exit so callers (and scripts) don't treat the sync as complete.
+	if writeBackFailed > 0 {
+		return fmt.Errorf("reconcile: %d item(s) failed to write back", writeBackFailed)
 	}
 	return nil
 }
@@ -535,6 +549,70 @@ func readChar(r *bufio.Reader) (byte, error) {
 // writeBackItem persists the current destination value for item it back into
 // the canonical source (~/.agentsync/). Only MCP-server items are fully
 // supported in v1; other item types fall back to a raw file copy.
+// attemptWriteBack writes one item back and guards against silent
+// last-writer-wins when a single reconcile run writes the SAME canonical source
+// file from more than one agent. A server/skill that fans out to claude AND
+// opencode produces two drift items pointing at one source file
+// (mcp/<id>.toml, …); if the user edited the two destinations DIFFERENTLY, the
+// second capture would clobber the first with no warning and leave the first
+// agent stuck in `conflict`. So: if a prior write this run produced this source
+// file and this write changes it, revert to the first write and report a
+// conflict (counted as a failure → non-zero exit) for the user to resolve.
+// Returns true on failure/conflict.
+func attemptWriteBack(cmd *cobra.Command, w io.Writer, home string, it reconcileItem, writtenSources map[string][]byte) bool {
+	srcFile := itemSourceFile(home, it)
+	var prior []byte
+	priorWritten := false
+	if srcFile != "" {
+		prior, priorWritten = writtenSources[srcFile]
+	}
+	if err := writeBackItem(cmd, home, it); err != nil {
+		fmt.Fprintf(w, "  write-back error: %v\n", err)
+		return true
+	}
+	if srcFile != "" {
+		if after, rerr := os.ReadFile(srcFile); rerr == nil {
+			if priorWritten && string(prior) != string(after) {
+				_ = iox.AtomicWrite(srcFile, prior, 0o644) // revert to the first write
+				rel, _ := filepath.Rel(home, srcFile)
+				fmt.Fprintf(w, "  conflict: %s — another agent drifted the same source (%s) to a different "+
+					"value this run; kept the first write and skipped this one. Make the agents agree, or "+
+					"reconcile one at a time, then re-run.\n", itemLabel(it), rel)
+				return true
+			}
+			writtenSources[srcFile] = after
+		}
+	}
+	fmt.Fprintf(w, "  write-back: %s\n", itemLabel(it))
+	return false
+}
+
+// itemSourceFile returns the absolute canonical source file a write-back item
+// targets, so two agents writing the same component can be detected. Both the
+// claude (/mcpServers/<id>) and opencode (/mcp/<id>) pointers map to the SAME
+// mcp/<id>.toml. Returns "" for items with no single source-of-record.
+func itemSourceFile(home string, it reconcileItem) string {
+	if it.ptr == "" {
+		if it.op.SourceID == "" || strings.HasSuffix(it.op.SourceID, "(multiple)") {
+			return ""
+		}
+		return filepath.Join(home, it.op.SourceID)
+	}
+	parts := strings.SplitN(strings.TrimPrefix(it.ptr, "/"), "/", 3)
+	if len(parts) < 2 || parts[1] == "" {
+		return ""
+	}
+	switch parts[0] {
+	case "mcpServers", "mcp":
+		return filepath.Join(home, "mcp", parts[1]+".toml")
+	case "lspServers", "lsp":
+		return filepath.Join(home, "lsp", parts[1]+".toml")
+	case "hooks":
+		return filepath.Join(home, "hooks", parts[1]+".toml")
+	}
+	return ""
+}
+
 func writeBackItem(cmd *cobra.Command, home string, it reconcileItem) error {
 	if it.ptr != "" {
 		return writeBackKeyItem(cmd, home, it)
@@ -554,9 +632,11 @@ func writeBackItem(cmd *cobra.Command, home string, it reconcileItem) error {
 func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 	dest := readJSONFile(it.op.Path)
 	// Expected ptr shape: /mcpServers/<serverID>/... (claude) or
-	// /mcp/<serverID>/... (opencode). Both render MCP entries with identical
-	// lowercase field names, so the reconstruction below is shape-identical;
-	// only the top-level container key differs per adapter.
+	// /mcp/<serverID>/... (opencode). The container key also tells us the dest
+	// shape: Claude's `mcpServers` value matches the canonical model 1:1, but
+	// OpenCode's `mcp` value is its NATIVE shape (command as a string array,
+	// `environment` not `env`, type local|remote), so it must be translated
+	// through the adapter's inverse-of-Render rather than unmarshaled directly.
 	parts := strings.SplitN(strings.TrimPrefix(it.ptr, "/"), "/", 3)
 	if len(parts) >= 2 && (parts[0] == "mcpServers" || parts[0] == "mcp") {
 		topKey := parts[0]
@@ -574,14 +654,23 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 			// so the user can pick [d]elete-source via a follow-up flow.
 			return fmt.Errorf("destination dropped %s/%s — no write-back possible; remove the source manually or use [o]verride to push canonical back", topKey, serverID)
 		}
-		// Round-trip through JSON to get a typed spec.
-		specBytes, err := json.Marshal(specRaw)
-		if err != nil {
-			return fmt.Errorf("marshal mcp spec %s: %w", serverID, err)
-		}
 		var spec source.MCPServerSpec
-		if err := json.Unmarshal(specBytes, &spec); err != nil {
-			return fmt.Errorf("unmarshal mcp spec %s: %w", serverID, err)
+		if topKey == "mcp" {
+			// OpenCode native shape → canonical, via the single adapter translator.
+			rawMap, _ := specRaw.(map[string]any)
+			if rawMap == nil {
+				return fmt.Errorf("opencode mcp spec %s is not an object", serverID)
+			}
+			spec = opencode.IngestMCPSpec(rawMap)
+		} else {
+			// Claude's mcpServers value matches the canonical model 1:1.
+			specBytes, err := json.Marshal(specRaw)
+			if err != nil {
+				return fmt.Errorf("marshal mcp spec %s: %w", serverID, err)
+			}
+			if err := json.Unmarshal(specBytes, &spec); err != nil {
+				return fmt.Errorf("unmarshal mcp spec %s: %w", serverID, err)
+			}
 		}
 		// The spec was reconstructed from the destination, where apply wrote any
 		// ${secret:…} as resolved cleartext and which never carries source-only

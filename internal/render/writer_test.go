@@ -71,6 +71,43 @@ func (f *fakeJSONApply) Apply(ops []adapter.FileOp, w adapter.DestWriter) error 
 	return nil
 }
 
+// TestWriter_SkipsUnchangedWrite proves the convergence short-circuit: writing
+// the exact bytes a file already holds is a no-op — recorded as Unchanged (so
+// apply can report "up to date"), still owned (Wrote), and not backed up.
+func TestWriter_SkipsUnchangedWrite(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, "note.md")
+	content := []byte("stable content\n")
+	if err := os.WriteFile(dest, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st := state.New()
+	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
+	op := adapter.FileOp{Action: "write", Path: dest, Content: content, Mode: 0o644, SourceID: "note.md"}
+	if err := w.Write(op, content); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !w.Unchanged()[dest] {
+		t.Fatalf("identical write should be recorded Unchanged; got %v", w.Unchanged())
+	}
+	if !w.Wrote()[dest] {
+		t.Fatalf("an unchanged file must still be marked owned (Wrote) for state recording")
+	}
+	if len(w.Reports()) != 0 {
+		t.Fatalf("no backup should occur on a no-op write; got %v", w.Reports())
+	}
+	// A genuinely different write is NOT unchanged.
+	w2 := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
+	if err := w2.Write(op, []byte("different\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if w2.Unchanged()[dest] {
+		t.Fatal("a changed write must not be recorded Unchanged")
+	}
+}
+
 // TestWriter_FileLevelBackup is the regression for the HIGH-severity
 // finding: a pre-existing native file with no state entry is copied to
 // <home>/.state/backups/<ts>/ before the writer's iox.AtomicWrite
@@ -224,6 +261,44 @@ func TestWriter_KeyLevelBackup_ForeignNonObjectAtOwnedKey(t *testing.T) {
 	}
 }
 
+// TestWriter_KeyLevelBackup_ForeignNullAtOwnedPointer is the regression for a
+// gap in the foreign-collision backup: a hand-authored dest holding an explicit
+// `null` at a second-level pointer agentsync is about to write (e.g.
+// `mcpServers.github = null`) collapsed to the same nil as an ABSENT pointer in
+// getPointer, so the per-child loop skipped the backup and overlayOwned then
+// overwrote the user's explicit null with no backup. A present value — even
+// null — is foreign content and must be backed up before the overwrite.
+func TestWriter_KeyLevelBackup_ForeignNullAtOwnedPointer(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, ".claude.json")
+	_ = os.WriteFile(dest, []byte(`{"mcpServers":{"github":null},"preserveMe":"keep"}`), 0o644)
+
+	st := state.New()
+	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
+	ours := []byte(`{"mcpServers":{"github":{"command":"npx"}}}`)
+	op := adapter.FileOp{
+		Action:        "write",
+		Path:          dest,
+		Content:       ours,
+		MergeStrategy: "merge-json-keys",
+		Mode:          0o644,
+		SourceID:      "mcp/github.toml",
+	}
+	final := []byte(`{"mcpServers":{"github":{"command":"npx"}},"preserveMe":"keep"}` + "\n")
+	if err := w.Write(op, final); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	reports := w.Reports()
+	if len(reports) == 0 {
+		t.Fatal("expected a foreign-collision backup for an explicit null at an owned pointer, got none")
+	}
+	if reports[0].Pointer != "/mcpServers/github" {
+		t.Fatalf("want collision at /mcpServers/github; got %+v", reports[0])
+	}
+}
+
 // TestWriter_NoCollisionWhenAlreadyOwned asserts that when state already
 // records the file (file-level FileEntry), no backup is written even if
 // the bytes differ — that's just an in-place update by an owning agent.
@@ -322,7 +397,7 @@ func TestRenderApply_MultipleMergeOpsSamePathAllApplied(t *testing.T) {
 			}},
 		},
 	}
-	if _, _, err := render.Apply(plan, reg, state.New(), home, tmp, adapter.ScopeUser, ""); err != nil {
+	if _, _, _, err := render.Apply(plan, reg, state.New(), home, tmp, adapter.ScopeUser, ""); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -365,7 +440,7 @@ func TestRenderApply_SharedWriteDivergence(t *testing.T) {
 		_ = reg.Register(&fakeJSONApply{name: "claude"})
 		_ = reg.Register(&fakeJSONApply{name: "opencode"})
 
-		_, _, err := render.Apply(newPlan(dest, "shared-body", "DIVERGENT-body"), reg, state.New(), home, tmp, adapter.ScopeUser, "")
+		_, _, _, err := render.Apply(newPlan(dest, "shared-body", "DIVERGENT-body"), reg, state.New(), home, tmp, adapter.ScopeUser, "")
 		if err == nil {
 			t.Fatal("expected divergent shared-write to fail loud, got nil error")
 		}
@@ -384,7 +459,7 @@ func TestRenderApply_SharedWriteDivergence(t *testing.T) {
 		_ = reg.Register(&fakeJSONApply{name: "claude"})
 		_ = reg.Register(&fakeJSONApply{name: "opencode"})
 
-		if _, _, err := render.Apply(newPlan(dest, "shared-body", "shared-body"), reg, state.New(), home, tmp, adapter.ScopeUser, ""); err != nil {
+		if _, _, _, err := render.Apply(newPlan(dest, "shared-body", "shared-body"), reg, state.New(), home, tmp, adapter.ScopeUser, ""); err != nil {
 			t.Fatalf("identical shared-write should dedup cleanly, got: %v", err)
 		}
 		data, err := os.ReadFile(dest)
@@ -442,7 +517,7 @@ func TestRenderApply_FullPathBacksUpAcrossAgents(t *testing.T) {
 		},
 	}
 	st := state.New()
-	reports, _, err := render.Apply(plan, reg, st, home, tmp, adapter.ScopeUser, "")
+	reports, _, _, err := render.Apply(plan, reg, st, home, tmp, adapter.ScopeUser, "")
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

@@ -50,6 +50,13 @@ func DetectSHADrift(plugins []source.Plugin, freshSHAs map[string]string) []SHAW
 		if recorded == "" || recorded == freshSHA {
 			continue
 		}
+		// A pre-tree-hash (legacy bare-hex) pin and a freshly computed tree:v1:
+		// hash are different SCHEMES; their difference is a format change, not a
+		// re-upload. The legacy pin is verified under the prior scheme at apply,
+		// so skip the cross-scheme comparison to avoid a false re-upload warning.
+		if strings.HasPrefix(recorded, treeHashPrefix) != strings.HasPrefix(freshSHA, treeHashPrefix) {
+			continue
+		}
 		out = append(out, SHAWarning{
 			ID:          pl.ID,
 			Version:     pl.Plugin.Version,
@@ -74,14 +81,20 @@ func ComputePendingBumps(
 	_ []source.Marketplace,
 	plugins []source.Plugin,
 	fetched map[string]map[string]PluginEntry,
+	defaultMode string,
 ) []Bump {
 	var out []Bump
 
 	for _, pl := range plugins {
 		spec := pl.Plugin
 
-		// Resolve effective update mode.
+		// Resolve effective update mode: a plugin's own `update` wins; otherwise
+		// the canonical `[updates] default_mode` (so a user who sets it to
+		// "pinned" is not silently auto-bumped); otherwise "track".
 		mode := spec.Update
+		if mode == "" {
+			mode = defaultMode
+		}
 		if mode == "" {
 			mode = "track"
 		}

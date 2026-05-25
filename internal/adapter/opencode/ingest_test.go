@@ -42,8 +42,40 @@ func TestIngest_RoundTripsMCP(t *testing.T) {
 	if srv.Command != "npx" {
 		t.Fatalf("command = %q, want npx", srv.Command)
 	}
+	// The command array [npx -y x] must split back into command + args so a
+	// reconcile write-back doesn't fold the flags into the command string.
+	if len(srv.Args) != 2 || srv.Args[0] != "-y" || srv.Args[1] != "x" {
+		t.Fatalf("args = %v, want [-y x]", srv.Args)
+	}
+	if srv.Type != "stdio" {
+		t.Fatalf("type = %q, want stdio (from OpenCode \"local\")", srv.Type)
+	}
 	if srv.Env["TOKEN"] != "abc" {
 		t.Fatalf("env token missing: %+v", srv.Env)
+	}
+}
+
+// TestRender_MCP_SSEMapsToRemote proves the canonical "sse" transport renders as
+// OpenCode "remote" (OpenCode has no separate sse transport).
+func TestRender_MCP_SSEMapsToRemote(t *testing.T) {
+	c := source.Canonical{MCPServers: []source.MCPServer{{
+		ID:     "stream",
+		Server: source.MCPServerSpec{Type: "sse", URL: "https://sse.example.com"},
+	}}}
+	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	out, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if len(out.MCPServers) != 1 || out.MCPServers[0].Server.URL != "https://sse.example.com" {
+		t.Fatalf("sse->remote round-trip lost the server: %+v", out.MCPServers)
 	}
 }
 

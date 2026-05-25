@@ -90,7 +90,11 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 					fmt.Fprintf(cmd.OutOrStdout(), "warning: marketplace name %q is reserved\n", mp.Name)
 				}
 			}
-			mpName = sanitizeSlug(mp.Name)
+			// Only adopt the declared name if it sanitises to something usable;
+			// a name like "..." sanitises to "" and would author marketplaces/.toml.
+			if s := sanitizeSlug(mp.Name); s != "" {
+				mpName = s
+			}
 		}
 	}
 
@@ -306,10 +310,14 @@ func deriveMarketplaceSlug(rawURL string) string {
 		s = strings.ReplaceAll(s, "--", "-")
 	}
 	s = strings.Trim(s, "-")
+	// Sanitise FIRST, then fall back: a punctuation-only source (e.g. "...")
+	// survives the trim above but sanitises to "", which would otherwise write
+	// marketplaces/.toml and a marketplaces/_ cache dir.
+	s = sanitizeSlug(s)
 	if s == "" {
 		s = "marketplace"
 	}
-	return sanitizeSlug(s)
+	return s
 }
 
 // sanitizeSlug makes a string safe for use as a filename.

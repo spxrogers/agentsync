@@ -547,10 +547,13 @@ func importAllComponents(cmd *cobra.Command, home, agentName string, c source.Ca
 	total := 0
 	for _, comp := range importComponentOrder {
 		ids, err := importComponent(cmd, home, c, comp, "", dryRun)
+		// Seed whatever WAS written even on error: a component can fail partway
+		// after writing earlier items, and those must be owned or the next apply
+		// foreign-collides on a file just imported from.
+		imp.add(comp, ids)
 		if err != nil {
 			return imp, err
 		}
-		imp.add(comp, ids)
 		if len(ids) > 0 {
 			counts[comp] = len(ids)
 			total += len(ids)
@@ -596,8 +599,10 @@ func importMCP(cmd *cobra.Command, home string, c source.Canonical, name string,
 	}
 	if !dryRun {
 		single := source.Canonical{MCPServers: matched}
-		if _, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
-			return nil, err
+		if res, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
+			// Seed the servers capture DID write before failing, so a partial
+			// import doesn't leave them foreign-collided on the next apply.
+			return idsFromWritten(res.Written), err
 		}
 	}
 	ids := make([]string, len(matched))
@@ -606,6 +611,17 @@ func importMCP(cmd *cobra.Command, home string, c source.Canonical, name string,
 		ids[i] = m.ID
 	}
 	return ids, nil
+}
+
+// idsFromWritten extracts component ids/events from capture.Capture's
+// Result.Written paths ("mcp/<id>.toml", "lsp/<id>.toml", "hooks/<event>.toml"),
+// so a partial capture seeds exactly what was written.
+func idsFromWritten(written []string) []string {
+	out := make([]string, 0, len(written))
+	for _, w := range written {
+		out = append(out, strings.TrimSuffix(filepath.Base(w), ".toml"))
+	}
+	return out
 }
 
 func importSkill(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) ([]string, error) {
@@ -630,7 +646,9 @@ func importSkill(cmd *cobra.Command, home string, c source.Canonical, name strin
 	for _, sk := range matched {
 		if !dryRun {
 			if err := source.WriteSkill(home, sk); err != nil {
-				return nil, fmt.Errorf("write skill %s: %w", sk.Name, err)
+				// Return the names already written so the caller seeds them;
+				// otherwise the next apply foreign-collides on a file just imported.
+				return names, fmt.Errorf("write skill %s: %w", sk.Name, err)
 			}
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%s skills/%s/SKILL.md\n", importVerb(dryRun), sk.Name)
@@ -661,7 +679,7 @@ func importSubagent(cmd *cobra.Command, home string, c source.Canonical, name st
 	for _, sa := range matched {
 		if !dryRun {
 			if err := source.WriteSubagent(home, sa); err != nil {
-				return nil, fmt.Errorf("write subagent %s: %w", sa.Name, err)
+				return names, fmt.Errorf("write subagent %s: %w", sa.Name, err)
 			}
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%s agents/%s.md\n", importVerb(dryRun), sa.Name)
@@ -692,7 +710,7 @@ func importCommand(cmd *cobra.Command, home string, c source.Canonical, name str
 	for _, cm := range matched {
 		if !dryRun {
 			if err := source.WriteCommand(home, cm); err != nil {
-				return nil, fmt.Errorf("write command %s: %w", cm.Name, err)
+				return names, fmt.Errorf("write command %s: %w", cm.Name, err)
 			}
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%s commands/%s.md\n", importVerb(dryRun), cm.Name)
@@ -726,8 +744,8 @@ func importHook(cmd *cobra.Command, home string, c source.Canonical, name string
 	}
 	if !dryRun {
 		single := source.Canonical{Hooks: matched}
-		if _, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
-			return nil, err
+		if res, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
+			return idsFromWritten(res.Written), err
 		}
 	}
 	// One file per event; report each, preserving first-seen order.
@@ -765,8 +783,8 @@ func importLSP(cmd *cobra.Command, home string, c source.Canonical, name string,
 	}
 	if !dryRun {
 		single := source.Canonical{LSPServers: matched}
-		if _, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
-			return nil, err
+		if res, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
+			return idsFromWritten(res.Written), err
 		}
 	}
 	ids := make([]string, 0, len(matched))

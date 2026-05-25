@@ -22,8 +22,11 @@ can resolve secrets into native config files. Areas of particular interest:
   `agentsync diff`.
 - **Untrusted marketplaces / plugins**: a marketplace or plugin you add is
   treated as untrusted input. Fetchers reject symlinks (npm/relative/git),
-  cap decompressed tarball size, verify plugin manifest SHAs, and bound
-  manifest-listed component paths and names to the plugin cache.
+  cap decompressed tarball size, and bound manifest-listed component paths and
+  names to the plugin cache. Each installed plugin is pinned with a content
+  hash over its *entire* cache tree (every projected component body, not just
+  `plugin.json`), so a tampered or re-uploaded body is detected at apply rather
+  than silently consumed.
 - **Destination writes**: writes are atomic and refuse to clobber symlinked
   destinations by default; pre-existing foreign files are backed up before
   overwrite.

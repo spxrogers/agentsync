@@ -77,6 +77,21 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 	sec := secrets.SelectBackend(cur.Config.Secrets, home, userHome)
 	secrets.ReReferenceCanonical(ingested, &cur, sec, secrets.EnvBackend{})
 
+	// Fail-closed backstop: re-reference matches by value and cannot tell a
+	// moved/rotated secret from a deliberate literal edit, so it can leave a
+	// resolved credential as cleartext (a secret moved into a literal-counterpart
+	// field, or a rotated value the vault no longer knows). Rather than guess and
+	// risk persisting a live credential into ~/.agentsync, refuse the whole
+	// write-back and tell the user exactly which fields to resolve (update the
+	// vault, or edit the canonical source directly).
+	if leaks := secrets.ResidualSecretCleartext(ingested, &cur, sec, secrets.EnvBackend{}); len(leaks) > 0 {
+		return res, fmt.Errorf("refusing to write back: a resolved secret would be persisted as "+
+			"cleartext into ~/.agentsync at %s — re-reference could not restore the ${secret:…} "+
+			"reference (the value was moved or rotated). Update the vault (`agentsync secrets set`) "+
+			"and/or edit the canonical source directly, then retry; set AGENTSYNC_ALLOW_PLUGIN_DRIFT "+
+			"is NOT a bypass here", strings.Join(leaks, ", "))
+	}
+
 	for _, m := range ingested.MCPServers {
 		if existing, ok, rerr := source.ReadMCP(home, m.ID); rerr == nil && ok {
 			m.Server.Agents = existing.Server.Agents

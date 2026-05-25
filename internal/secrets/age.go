@@ -90,6 +90,19 @@ func (b *AgeBackend) Resolve(dottedKey string) (string, error) {
 // rather than coerced via fmt.Sprint: a TOML `token = 0123` would otherwise
 // resolve to "123" (or "83" for octal) and an array to Go's "[a b]" syntax,
 // substituting a silently-wrong credential into the user's agent config.
+// ValidateVaultTOML parses decrypted vault bytes as TOML and applies the exact
+// contract apply uses at resolve time (flatten: string-only leaves, no
+// dup/colliding keys). `secrets edit` calls it so a vault that apply would later
+// refuse is rejected at save time rather than silently encrypted.
+func ValidateVaultTOML(data []byte) error {
+	var m map[string]any
+	if err := toml.Unmarshal(data, &m); err != nil {
+		return fmt.Errorf("not valid TOML: %w", err)
+	}
+	_, err := flatten("", m)
+	return err
+}
+
 func flatten(prefix string, m map[string]any) (map[string]string, error) {
 	out := map[string]string{}
 	for k, v := range m {

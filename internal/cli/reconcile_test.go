@@ -366,16 +366,123 @@ func TestReconcile_WriteBackUnsupportedReturnsError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dst := filepath.Join(tmp, ".claude.json")
+	dst := filepath.Join(tmp, ".claude", "settings.json")
 	body, _ := os.ReadFile(dst)
 	// Drift the hook in the destination so reconcile classifies it as Drift.
 	_ = os.WriteFile(dst, []byte(strings.Replace(string(body), `echo pre`, `echo edited`, 1)), 0o644)
 
 	// Press w (write-back this item, single).
-	out, _ := runCLIWithStdin(t, env, "w\n", "reconcile")
+	out, err := runCLIWithStdin(t, env, "w\n", "reconcile")
 	// Should NOT silently print success for the hook write-back.
 	if strings.Contains(out, "write-back: ") && !strings.Contains(out, "write-back error") {
 		t.Fatalf("hook write-back must surface an error, not silent success; got:\n%s", out)
+	}
+	// And it must exit non-zero — a failed write-back did not persist the edit.
+	if err == nil {
+		t.Fatalf("interactive write-back of an unsupported item must exit non-zero; got nil err, out:\n%s", out)
+	}
+}
+
+// TestReconcile_AutoWritebackFailureExitsNonZero is the regression for a silent
+// failure on the SCRIPTABLE path: `reconcile --auto-writeback` printed a
+// "write-back error" line but still exited 0, so `reconcile --auto-writeback &&
+// deploy` proceeded as if the dest edit had been captured (the next apply would
+// then clobber it). A failed write-back must exit non-zero.
+func TestReconcile_AutoWritebackFailureExitsNonZero(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	hookDir := filepath.Join(tmp, ".agentsync", "hooks")
+	_ = os.MkdirAll(hookDir, 0o755)
+	_ = os.WriteFile(filepath.Join(hookDir, "PreToolUse.toml"),
+		[]byte("[[hook]]\nmatcher = \"*\"\ntype = \"command\"\ncommand = \"echo pre\"\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(tmp, ".claude", "settings.json")
+	body, _ := os.ReadFile(dst)
+	_ = os.WriteFile(dst, []byte(strings.Replace(string(body), `echo pre`, `echo edited`, 1)), 0o644)
+
+	if _, err := runCLI(t, env, "reconcile", "--auto-writeback"); err == nil {
+		t.Fatal("reconcile --auto-writeback with a failed write-back must exit non-zero")
+	}
+}
+
+// TestReconcile_SharedMCPDivergentWriteBackConflicts is the regression for a
+// silent last-writer-wins data loss: an MCP server fanned out to two agents
+// (agents=["*"]) edited DIFFERENTLY in each native config produced two
+// write-back items targeting one source file; the second silently clobbered the
+// first and left the first agent stuck in conflict. The run must now detect the
+// divergence, keep the first write, refuse the second, and exit non-zero.
+func TestReconcile_SharedMCPDivergentWriteBackConflicts(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	for _, a := range [][]string{{"init"}, {"agent", "add", "claude"}, {"agent", "add", "opencode"}} {
+		if _, err := runCLI(t, env, a...); err != nil {
+			t.Fatalf("%v: %v", a, err)
+		}
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "shared.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"orig\"\nagents=[\"*\"]\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	// Divergent edits in each agent's native config.
+	claudeDest := filepath.Join(tmp, ".claude.json")
+	ocDest := filepath.Join(tmp, ".config", "opencode", "opencode.json")
+	cb, _ := os.ReadFile(claudeDest)
+	_ = os.WriteFile(claudeDest, []byte(strings.Replace(string(cb), "orig", "CLAUDE_EDIT", 1)), 0o644)
+	ob, _ := os.ReadFile(ocDest)
+	_ = os.WriteFile(ocDest, []byte(strings.Replace(string(ob), "orig", "OC_EDIT", 1)), 0o644)
+
+	out, err := runCLI(t, env, "reconcile", "--auto-writeback")
+	if err == nil {
+		t.Fatalf("divergent shared-MCP write-back must NOT silently succeed; out:\n%s", out)
+	}
+	if !strings.Contains(out, "conflict") {
+		t.Fatalf("expected a conflict report; got:\n%s", out)
+	}
+	// Source kept exactly ONE consistent value (the first writer), not silently
+	// the second; and not a half-merged mess.
+	src, _ := os.ReadFile(mcp)
+	hasClaude := strings.Contains(string(src), "CLAUDE_EDIT")
+	hasOC := strings.Contains(string(src), "OC_EDIT")
+	if hasClaude == hasOC { // both or neither
+		t.Fatalf("source must hold exactly one writer's value after a conflict; got:\n%s", src)
+	}
+}
+
+// TestReconcile_SharedMCPIdenticalWriteBackOK proves the conflict guard does NOT
+// false-fire when both agents drifted the shared server to the SAME value.
+func TestReconcile_SharedMCPIdenticalWriteBackOK(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	for _, a := range [][]string{{"init"}, {"agent", "add", "claude"}, {"agent", "add", "opencode"}} {
+		if _, err := runCLI(t, env, a...); err != nil {
+			t.Fatalf("%v: %v", a, err)
+		}
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "shared.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"orig\"\nagents=[\"*\"]\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	for _, dest := range []string{filepath.Join(tmp, ".claude.json"), filepath.Join(tmp, ".config", "opencode", "opencode.json")} {
+		b, _ := os.ReadFile(dest)
+		_ = os.WriteFile(dest, []byte(strings.Replace(string(b), "orig", "SAME_EDIT", 1)), 0o644)
+	}
+	if _, err := runCLI(t, env, "reconcile", "--auto-writeback"); err != nil {
+		t.Fatalf("identical shared-MCP edits must not conflict: %v", err)
+	}
+	if src, _ := os.ReadFile(mcp); !strings.Contains(string(src), "SAME_EDIT") {
+		t.Fatalf("expected SAME_EDIT captured; got:\n%s", src)
 	}
 }
 

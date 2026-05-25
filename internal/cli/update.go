@@ -138,7 +138,7 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 	}
 
 	// Compute pending bumps.
-	bumps := marketplace.ComputePendingBumps(st, c.Marketplaces, c.Plugins, fetched)
+	bumps := marketplace.ComputePendingBumps(st, c.Marketplaces, c.Plugins, fetched, c.Config.Updates.DefaultMode)
 
 	// --auto-safe: drop bumps whose candidate version would introduce a new
 	// translation loss (an adapter Skip) for any enabled agent. Each bump is
@@ -215,7 +215,7 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 		if err != nil {
 			return fmt.Errorf("plan after update: %w", err)
 		}
-		collisions, written, applyErr := render.Apply(plan, reg, st, home, userHome, sc, projectRoot)
+		collisions, written, _, applyErr := render.Apply(plan, reg, st, home, userHome, sc, projectRoot)
 		if applyErr != nil {
 			// Mirror `apply`: if render.Apply fails mid-pipeline, the files
 			// that already landed must be recorded so the next apply doesn't

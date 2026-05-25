@@ -27,6 +27,81 @@ defauls_mode = "track"
 	}
 }
 
+// TestParseFrontmatter_ClosingFenceAtEOF guards the parser against two common
+// real-world shapes that previously returned "unterminated frontmatter":
+// a closing "---" at end-of-file with no trailing newline (editors strip it),
+// and an empty frontmatter block. Each must parse, not error.
+func TestParseFrontmatter_ClosingFenceAtEOF(t *testing.T) {
+	cases := []struct {
+		name     string
+		in       string
+		wantName any
+		wantBody string
+	}{
+		{"fence at EOF no trailing newline", "---\nname: demo\n---", "demo", ""},
+		{"fence at EOF with body no trailing newline", "---\nname: demo\n---\nbody", "demo", "body"},
+		{"normal with trailing newline", "---\nname: demo\n---\nbody\n", "demo", "body\n"},
+		{"empty frontmatter with body", "---\n---\nbody\n", nil, "body\n"},
+		{"empty frontmatter at EOF", "---\n---", nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fm, body, err := source.ParseFrontmatter([]byte(tc.in))
+			if err != nil {
+				t.Fatalf("ParseFrontmatter(%q) = error %v; want success", tc.in, err)
+			}
+			if fm["name"] != tc.wantName {
+				t.Errorf("name = %v, want %v", fm["name"], tc.wantName)
+			}
+			if body != tc.wantBody {
+				t.Errorf("body = %q, want %q", body, tc.wantBody)
+			}
+		})
+	}
+}
+
+// TestLoad_SkillWithFenceAtEOF proves the parser bug's blast radius: source.Load
+// is the entry point for every command, so a single benign SKILL.md whose
+// closing fence sits at EOF must not abort the whole load.
+func TestLoad_SkillWithFenceAtEOF(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	_ = afero.WriteFile(fs, "/home/.agentsync/agentsync.toml", []byte(""), 0o644)
+	// No trailing newline after the closing fence.
+	_ = afero.WriteFile(fs, "/home/.agentsync/skills/demo/SKILL.md",
+		[]byte("---\nname: demo\ndescription: x\n---"), 0o644)
+	c, err := source.Load(fs, "/home/.agentsync")
+	if err != nil {
+		t.Fatalf("Load aborted on a benign skill file: %v", err)
+	}
+	if len(c.Skills) != 1 || c.Skills[0].Name != "demo" {
+		t.Fatalf("skill not loaded: %+v", c.Skills)
+	}
+}
+
+// TestLoad_NestedMemoryFragments proves fragments in subdirectories are loaded
+// and keyed by their path under memory/fragments/, matching the @import regex
+// which accepts "./fragments/<name>" where <name> may contain "/". Previously
+// the loader read fragments non-recursively (basename only), so a nested
+// fragment was never loaded and its @import silently stayed literal.
+func TestLoad_NestedMemoryFragments(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	_ = afero.WriteFile(fs, "/home/.agentsync/agentsync.toml", []byte(""), 0o644)
+	_ = afero.WriteFile(fs, "/home/.agentsync/memory/AGENTS.md", []byte("Top\n@import ./fragments/sub/frag.md\n"), 0o644)
+	_ = afero.WriteFile(fs, "/home/.agentsync/memory/fragments/sub/frag.md", []byte("nested body"), 0o644)
+	_ = afero.WriteFile(fs, "/home/.agentsync/memory/fragments/top.md", []byte("top body"), 0o644)
+
+	c, err := source.Load(fs, "/home/.agentsync")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, ok := c.Memory.Fragments["sub/frag.md"]; !ok || got != "nested body" {
+		t.Fatalf("nested fragment not loaded under its sub-path: %#v", c.Memory.Fragments)
+	}
+	if got, ok := c.Memory.Fragments["top.md"]; !ok || got != "top body" {
+		t.Fatalf("flat fragment regressed: %#v", c.Memory.Fragments)
+	}
+}
+
 // contains is a small substring helper so the new test reads cleanly
 // without bringing in strings.Contains for one call.
 func contains(haystack, needle string) bool {

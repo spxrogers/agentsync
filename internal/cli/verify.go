@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
@@ -26,6 +27,17 @@ func newVerifyCmd() *cobra.Command {
 					return fmt.Errorf("agentsync home %s does not exist; run `agentsync init` first", home)
 				}
 				return fmt.Errorf("verify: stat %s: %w", home, err)
+			}
+			// A home dir can exist without agentsync.toml — an authoring command
+			// (e.g. `mcp add`) run before `init` scaffolds component dirs + .state
+			// but not the config. source.Load tolerates the missing file (empty
+			// Config), so without this guard verify reported a false "ok" on a
+			// half-initialized home. Require the config marker.
+			if _, err := os.Stat(filepath.Join(home, "agentsync.toml")); err != nil {
+				if os.IsNotExist(err) {
+					return fmt.Errorf("agentsync home %s is missing agentsync.toml (half-initialized); run `agentsync init`", home)
+				}
+				return fmt.Errorf("verify: stat agentsync.toml: %w", err)
 			}
 			c, err := source.Load(afero.NewOsFs(), home)
 			if err != nil {

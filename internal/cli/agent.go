@@ -184,6 +184,13 @@ func writeAgents(p string, raw []byte, agents map[string]map[string]any) error {
 	} else {
 		tail := append([]string(nil), out[insertAt:]...)
 		out = append(out[:insertAt], newLines...)
+		// Keep a blank line between the regenerated [agents] block and whatever
+		// section follows, so repeated agent edits don't collapse the file's
+		// section spacing. The loop above drops blank lines inside the agents
+		// section, so a single separator is re-added each run (no accumulation).
+		if len(tail) > 0 && strings.TrimSpace(tail[0]) != "" {
+			out = append(out, "")
+		}
 		out = append(out, tail...)
 	}
 	return iox.AtomicWrite(p, []byte(strings.Join(out, "\n")), 0o644)
@@ -296,9 +303,20 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 	if err != nil {
 		return err
 	}
+	home := paths.AgentsyncHome(paths.OSEnv{})
 	v, ok := agents[name]
 	if !ok {
-		return fmt.Errorf("agent %q not registered", name)
+		// Not registered. A removed agent can still own orphaned destination
+		// files + state keys; `--purge` is the reachable cleanup path for it,
+		// working purely from state. Still reject a name that was never a valid
+		// agent, so `disable bogus --purge` doesn't report a misleading success.
+		if purge {
+			if err := validateAgent(name); err != nil {
+				return err
+			}
+			return purgeAgentDests(cmd, name, home)
+		}
+		return fmt.Errorf("agent %q not registered (pass --purge to clean up an already-removed agent's leftover files)", name)
 	}
 	v["enabled"] = false
 	agents[name] = v
@@ -314,7 +332,6 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 	// The whole disable command (including this purge) already runs under the
 	// global lock via lockedRun, so call purge directly — re-acquiring here
 	// would deadlock on the re-entrant flock.
-	home := paths.AgentsyncHome(paths.OSEnv{})
 	return purgeAgentDests(cmd, name, home)
 }
 

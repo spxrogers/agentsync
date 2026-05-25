@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/afero"
@@ -54,6 +55,14 @@ func newStatusCmd() *cobra.Command {
 			}
 			if len(agents) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "no agents enabled; run `agentsync agent add claude` (or opencode)")
+				// Still surface orphaned state from a removed/disabled agent, so
+				// removing the LAST agent doesn't hide its leftover native config.
+				for _, a := range orphanedStateAgents(s, agents) {
+					fmt.Fprintf(cmd.ErrOrStderr(),
+						"warning: agent %q is not enabled but still owns tracked files/keys in state; its "+
+							"native config is orphaned. Run `agentsync agent disable %s --purge` to remove what agentsync wrote.\n",
+						a, a)
+				}
 				return nil
 			}
 			// apply WRITES (and RecordOpsState HASHES) the secret-RESOLVED
@@ -128,12 +137,53 @@ func newStatusCmd() *cobra.Command {
 					fmt.Fprintf(w, "  %-20s %s\n", cls, orphan)
 				}
 			}
+			// Surface agents that still own tracked state (and thus orphaned
+			// native config) but are no longer enabled — a removed, or
+			// disabled-not-purged, agent. status/apply otherwise iterate only the
+			// enabled set, so these would accumulate silently with no diagnostic.
+			for _, a := range orphanedStateAgents(s, agents) {
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"warning: agent %q is not enabled but still owns tracked files/keys in state; its "+
+						"native config is orphaned. Run `agentsync agent disable %s --purge` to remove what agentsync wrote.\n",
+					a, a)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: auto-detect from cwd)")
 	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
 	return cmd
+}
+
+// orphanedStateAgents returns, sorted, the agent names that appear as a state
+// key prefix ("agent:scope:…") but are not in the enabled set — i.e. agents
+// whose rendered native config and state entries linger after a `remove` or a
+// `disable` without `--purge`.
+func orphanedStateAgents(s *state.Targets, enabled []string) []string {
+	en := make(map[string]bool, len(enabled))
+	for _, n := range enabled {
+		en[n] = true
+	}
+	found := map[string]bool{}
+	collect := func(key string) {
+		if i := strings.IndexByte(key, ':'); i > 0 {
+			if a := key[:i]; !en[a] {
+				found[a] = true
+			}
+		}
+	}
+	for k := range s.Files {
+		collect(k)
+	}
+	for k := range s.Keys {
+		collect(k)
+	}
+	out := make([]string, 0, len(found))
+	for a := range found {
+		out = append(out, a)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // stateFileKey builds the state Files map key matching render.RecordOpsState.

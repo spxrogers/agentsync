@@ -10,6 +10,24 @@ import (
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
+// TestValidateComponentID_RejectsDegenerate guards the write boundary against
+// ids that are syntactically free of separators/traversal yet still produce a
+// nonsense file in the canonical source: a lone "." (→ "..toml") or an
+// all-whitespace id (→ " .toml"). Every Write*/Read* routes through
+// ValidateComponentID, so rejecting these here covers MCP/LSP/hook/plugin/
+// skill/subagent/command in one place.
+func TestValidateComponentID_RejectsDegenerate(t *testing.T) {
+	for _, id := range []string{".", " ", "   ", "\t", "\n"} {
+		if err := source.ValidateComponentID("mcp", id); err == nil {
+			t.Errorf("ValidateComponentID(%q) = nil; want error", id)
+		}
+	}
+	// Sanity: a normal id still passes.
+	if err := source.ValidateComponentID("mcp", "github"); err != nil {
+		t.Errorf("ValidateComponentID(%q) = %v; want nil", "github", err)
+	}
+}
+
 func TestWriteMCP_RoundTrip(t *testing.T) {
 	home := t.TempDir()
 

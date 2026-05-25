@@ -95,6 +95,17 @@ func checkHomeDir(w io.Writer, home string) int {
 		fmt.Fprintf(w, "  home dir   exists but is not a directory: %s\n", home)
 		return 1
 	}
+	// A home dir without agentsync.toml is half-initialized (e.g. an authoring
+	// command run before `init`); naming it explicitly, like `verify` does,
+	// avoids calling the schema "ok" on a config-less home.
+	if _, err := os.Stat(filepath.Join(home, "agentsync.toml")); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(w, "  home dir   missing agentsync.toml (half-initialized) — run `agentsync init`\n")
+			return 1
+		}
+		fmt.Fprintf(w, "  home dir   agentsync.toml unreadable: %v\n", err)
+		return 1
+	}
 	fmt.Fprintf(w, "  home dir   ok\n")
 	return 0
 }

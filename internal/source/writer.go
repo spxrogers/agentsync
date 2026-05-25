@@ -41,6 +41,13 @@ func ValidateComponentID(kind, id string) error {
 	if id == "" {
 		return fmt.Errorf("%s id is empty", kind)
 	}
+	// An all-whitespace id, or a lone ".", passes the separator/traversal checks
+	// below yet writes a nonsense file into the canonical source (" .toml",
+	// "..toml") that no command can address cleanly. Reject it as a degenerate
+	// name rather than persist the confusing artifact.
+	if strings.TrimSpace(id) == "" || id == "." {
+		return fmt.Errorf("%s id %q is empty or a bare '.'", kind, id)
+	}
 	// Reject path separators, traversal, and absolute paths (write-anywhere
 	// guard), plus ':' — the id becomes a filename, and a colon is illegal on
 	// Windows, so allowing it would make the canonical source non-portable.

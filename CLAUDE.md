@@ -86,7 +86,13 @@ being classified.
 preserves source-only fields the rendered dest never carries (MCP/LSP
 `agents`/`enabled`), and writes via `internal/source/writer.go`. `import` and
 `reconcile` write-back both call it. **Do not add a new dest→source write that
-bypasses it.**
+bypasses it.** After re-referencing, `capture.Capture` runs a **fail-closed
+backstop** (`secrets.ResidualSecretCleartext`): re-reference matches by value and
+cannot tell a *moved/rotated* secret from a deliberate literal edit, so if a live
+vault secret value would still be written verbatim, or a `${secret:K}` the source
+group referenced is now absent from the ingested group (rotated/edited away),
+Capture **refuses the whole write** rather than persist cleartext. It errs toward
+refusing; the user updates the vault or edits the canonical source directly.
 
 **3. Resolved vs templated types.** `secrets.SubstituteCanonical` returns
 `secrets.Resolved` (a wrapper, NOT assignable to `source.Canonical`); it is the
@@ -150,8 +156,13 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
   No `pkg/errors`.
 - **Imports** grouped stdlib / third-party / internal; gofumpt + goimports
   formatting (`just fmt`).
-- **`time.Now()`** is forbidden in `internal/state` and `internal/render` (inject
-  a clock for testability) — enforced by `forbidigo`.
+- **`time.Now()`** in `internal/render`/`internal/state` is confined to
+  informational metadata (state `AppliedAt`, backup-dir names) — it never feeds a
+  content hash or the drift classifier, so it calls `time.Now().UTC()` directly
+  rather than through an injected clock. Keep any new timestamp in these packages
+  out of hashed/compared content for the same reason. (There is no `forbidigo`
+  rule enforcing this, and `internal/cli` uses `time.Now().UTC()` freely for
+  fetch/import timestamps.)
 - **Commits**: conventional commits with scope, e.g.
   `feat(adapter): …`, `fix(secrets): …`, `test(drift): …`, `docs(readme): …`.
 
