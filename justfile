@@ -76,10 +76,35 @@ fmt:
 tidy:
     go mod tidy
 
+# --- Docs website (website/, Astro Starlight → agentsync.cc) ----------------
+# The site reads no Go; it's plain Node. `docs-dev`/`docs-build` install deps
+# on first run, and the predev/prebuild hooks regenerate the contract pages
+# mirrored from docs/*.md (see website/scripts/sync-docs.mjs).
+
+# Install the docs-site npm dependencies.
+docs-install:
+    cd website && npm install
+
+# Serve the docs site locally with hot reload at http://localhost:4321.
+docs-dev:
+    cd website && { [ -d node_modules ] || npm install; } && npm run dev
+
+# Build the production docs site into website/dist/.
+docs-build:
+    cd website && { [ -d node_modules ] || npm install; } && npm run build
+
+# Preview the built docs site locally.
+docs-preview:
+    cd website && npm run preview
+
+# Regenerate the contract pages mirrored from docs/*.md.
+docs-sync:
+    cd website && npm run sync:docs
+
 # Full CI gate: lint + the hermetic release suite + the cross-build matrix.
 ci: lint test-release
     goreleaser release --snapshot --skip=publish --clean
 
 # Remove generated artefacts (binaries, dist, coverage reports).
 clean:
-    rm -rf bin/ dist/ coverage.out coverage.html
+    rm -rf bin/ dist/ website/dist coverage.out coverage.html
