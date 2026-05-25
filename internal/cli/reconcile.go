@@ -140,6 +140,11 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 	// non-zero rather than report success (a scripted `reconcile --auto-writeback
 	// && deploy` must not proceed, and the next apply would clobber the edit).
 	writeBackFailed := 0
+	// writtenSources records, per canonical source file written this run, the
+	// bytes that landed — so a SECOND write-back to the same file (a server/skill
+	// that fanned out to multiple agents, each drifted differently) is detected
+	// instead of silently last-writer-wins clobbering the first.
+	writtenSources := map[string][]byte{}
 
 	br := bufio.NewReader(in)
 
@@ -284,11 +289,8 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 		switch action {
 		case 'w':
 			// write-back: persist destination value into the canonical source.
-			if err := writeBackItem(cmd, home, it); err != nil {
-				fmt.Fprintf(w, "  write-back error: %v\n", err)
+			if attemptWriteBack(cmd, w, home, it, writtenSources) {
 				writeBackFailed++
-			} else {
-				fmt.Fprintf(w, "  write-back: %s\n", itemLabel(it))
 			}
 		case 'o':
 			// override: queue a re-apply of this item's op.
@@ -547,6 +549,70 @@ func readChar(r *bufio.Reader) (byte, error) {
 // writeBackItem persists the current destination value for item it back into
 // the canonical source (~/.agentsync/). Only MCP-server items are fully
 // supported in v1; other item types fall back to a raw file copy.
+// attemptWriteBack writes one item back and guards against silent
+// last-writer-wins when a single reconcile run writes the SAME canonical source
+// file from more than one agent. A server/skill that fans out to claude AND
+// opencode produces two drift items pointing at one source file
+// (mcp/<id>.toml, …); if the user edited the two destinations DIFFERENTLY, the
+// second capture would clobber the first with no warning and leave the first
+// agent stuck in `conflict`. So: if a prior write this run produced this source
+// file and this write changes it, revert to the first write and report a
+// conflict (counted as a failure → non-zero exit) for the user to resolve.
+// Returns true on failure/conflict.
+func attemptWriteBack(cmd *cobra.Command, w io.Writer, home string, it reconcileItem, writtenSources map[string][]byte) bool {
+	srcFile := itemSourceFile(home, it)
+	var prior []byte
+	priorWritten := false
+	if srcFile != "" {
+		prior, priorWritten = writtenSources[srcFile]
+	}
+	if err := writeBackItem(cmd, home, it); err != nil {
+		fmt.Fprintf(w, "  write-back error: %v\n", err)
+		return true
+	}
+	if srcFile != "" {
+		if after, rerr := os.ReadFile(srcFile); rerr == nil {
+			if priorWritten && string(prior) != string(after) {
+				_ = iox.AtomicWrite(srcFile, prior, 0o644) // revert to the first write
+				rel, _ := filepath.Rel(home, srcFile)
+				fmt.Fprintf(w, "  conflict: %s — another agent drifted the same source (%s) to a different "+
+					"value this run; kept the first write and skipped this one. Make the agents agree, or "+
+					"reconcile one at a time, then re-run.\n", itemLabel(it), rel)
+				return true
+			}
+			writtenSources[srcFile] = after
+		}
+	}
+	fmt.Fprintf(w, "  write-back: %s\n", itemLabel(it))
+	return false
+}
+
+// itemSourceFile returns the absolute canonical source file a write-back item
+// targets, so two agents writing the same component can be detected. Both the
+// claude (/mcpServers/<id>) and opencode (/mcp/<id>) pointers map to the SAME
+// mcp/<id>.toml. Returns "" for items with no single source-of-record.
+func itemSourceFile(home string, it reconcileItem) string {
+	if it.ptr == "" {
+		if it.op.SourceID == "" || strings.HasSuffix(it.op.SourceID, "(multiple)") {
+			return ""
+		}
+		return filepath.Join(home, it.op.SourceID)
+	}
+	parts := strings.SplitN(strings.TrimPrefix(it.ptr, "/"), "/", 3)
+	if len(parts) < 2 || parts[1] == "" {
+		return ""
+	}
+	switch parts[0] {
+	case "mcpServers", "mcp":
+		return filepath.Join(home, "mcp", parts[1]+".toml")
+	case "lspServers", "lsp":
+		return filepath.Join(home, "lsp", parts[1]+".toml")
+	case "hooks":
+		return filepath.Join(home, "hooks", parts[1]+".toml")
+	}
+	return ""
+}
+
 func writeBackItem(cmd *cobra.Command, home string, it reconcileItem) error {
 	if it.ptr != "" {
 		return writeBackKeyItem(cmd, home, it)

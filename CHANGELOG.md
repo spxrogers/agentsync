@@ -51,6 +51,13 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **Shared MCP/LSP write-back no longer silently last-writer-wins** — a server
+  fanned out to multiple agents (`agents = ["*"]`) and edited *differently* in
+  each native config produced two `reconcile` write-back items targeting one
+  source file; the second silently clobbered the first and left the first agent
+  stuck in `conflict`. The run now detects the divergence, keeps the first
+  write, refuses the conflicting one with a clear message, and exits non-zero;
+  identical edits across agents still write cleanly.
 - **Deregistered agents no longer orphan native config silently** — after
   `agent remove` (or `agent disable` without `--purge`), the agent's rendered
   native config and state keys lingered with no diagnostic (`status`/`apply`
