@@ -51,6 +51,16 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **Write-back refuses to persist a moved or rotated secret (security)** — secret
+  re-reference matches by value, so it could not restore a `${secret:…}`
+  reference when the user *moved* a secret into a field whose source counterpart
+  is a literal (e.g. inlining a token onto a `command`), or *rotated* a
+  secret-bearing field to a value the vault no longer knows — leaving the live
+  credential as cleartext in the canonical (committed) source. `capture.Capture`
+  (`import`/`reconcile` write-back) now runs a fail-closed backstop: if a
+  resolved secret would still be written, or a `${secret:K}` the source
+  referenced has vanished from the captured server/hook, it refuses the
+  write-back and tells the user to update the vault or edit the source directly.
 - **`secrets edit` no longer panics on a blank `$EDITOR`** — the `$EDITOR`
   word-split introduced above indexed an empty `strings.Fields` result, so a
   whitespace-only `EDITOR` (e.g. `EDITOR="   "`) crashed with an index panic;

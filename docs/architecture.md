@@ -151,6 +151,14 @@ source-only fields (like an MCP server's `agents`/`enabled` list) that the
 rendered destination never carried. No other code path writes destination data
 back into the source.
 
+Re-reference matches by value, so it cannot distinguish a *moved or rotated*
+secret from a deliberate non-secret edit. As a **fail-closed backstop**,
+`capture.Capture` re-scans the about-to-be-written model
+(`secrets.ResidualSecretCleartext`): if a live vault secret value would still be
+written verbatim, or a `${secret:K}` the source referenced has vanished from the
+captured group (rotated/edited away), it **refuses the write** rather than risk
+persisting cleartext — directing the user to update the vault or edit the source.
+
 ---
 
 ## 6. Drift — the 3-way classifier
@@ -225,6 +233,13 @@ this hard to do by accident with three tiers of defense:
   skills, commands) physically cannot carry a substituted secret.
 - **Lint fence (defense-in-depth).** A `forbidigo` rule forbids unwrapping a
   `Resolved` outside the two adapter `Render` egress sites.
+- **Capture fail-closed backstop (defense-in-depth).** The *dest→source*
+  direction can't be type-enforced (it legitimately writes a templated
+  `source.Canonical`), and re-reference matches by value — so a secret *moved*
+  into a literal-counterpart field or *rotated* to a vault-unknown value can
+  evade restoration. `capture.Capture` re-scans the about-to-be-written model
+  (`secrets.ResidualSecretCleartext`) and **refuses to write** if a resolved
+  secret would persist, rather than guess.
 
 There is one **accepted residual**: a *deliberate* two-step laundering (defeat
 the lint fence to obtain a writable `source.Canonical`, then call a source writer
