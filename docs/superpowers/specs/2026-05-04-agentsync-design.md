@@ -389,7 +389,7 @@ agentsync import <selector>          # capture native edits into source
 agentsync explain <plugin> [--json]
 ```
 
-**Selector grammar** for `import` (and future per-item commands): `<agent>:<component>:<name>` — e.g. `claude:mcp:github`, `opencode:agent:reviewer`.
+**Selector grammar** for `import` (and future per-item commands): `<agent>[:<component>[:<name>]]` — e.g. `claude:mcp:github`, `opencode:agent:reviewer`. Dropping the name imports every entry of that component; dropping the component too imports the agent's full native config in one pass.
 
 ---
 
