@@ -322,6 +322,28 @@ Never put a credential in a config file. Reference it:
 GITHUB_TOKEN = "${secret:github.token}"
 ```
 
+First, create an age keypair. The vault is encrypted to the **recipient**
+(public key — safe to commit); decryption needs the **identity** (private key —
+per-machine). agentsync embeds age, but generating the key uses the `age-keygen`
+CLI (`brew install age`, `apt install age`, …):
+
+```bash
+mkdir -p ~/.config/agentsync
+age-keygen -o ~/.config/agentsync/age.key   # prints "Public key: age1…" to stderr
+chmod 600 ~/.config/agentsync/age.key        # agentsync refuses a group/other-readable identity
+```
+
+Then point `agentsync.toml` at it — `recipient` is the `age1…` public key
+`age-keygen` printed (agentsync encrypts to a single X25519 recipient, so use the
+age-keygen key, not an SSH key):
+
+```toml
+[secrets]
+backend       = "age"
+recipient     = "age1…"
+identity_file = "${env:HOME}/.config/agentsync/age.key"
+```
+
 Store the value in the age-encrypted vault — three ways:
 
 ```bash
