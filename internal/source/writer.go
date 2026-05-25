@@ -29,7 +29,7 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// validateComponentID rejects a component id/name/event that would not produce
+// ValidateComponentID rejects a component id/name/event that would not produce
 // a clean file path under its source subdirectory. This is the single
 // dest->source write boundary, reached by `import` and `reconcile` write-back
 // with ids/keys taken from a NATIVE config — which may be foreign, synced, or
@@ -37,12 +37,15 @@ import (
 // path is an arbitrary-file-write (on write) / read (on read) primitive.
 // Mirrors the CLI's validateMCPID; here it guards every Write*/Read* so no
 // caller can bypass it.
-func validateComponentID(kind, id string) error {
+func ValidateComponentID(kind, id string) error {
 	if id == "" {
 		return fmt.Errorf("%s id is empty", kind)
 	}
-	if strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") || filepath.IsAbs(id) {
-		return fmt.Errorf("%s id %q contains a path component", kind, id)
+	// Reject path separators, traversal, and absolute paths (write-anywhere
+	// guard), plus ':' — the id becomes a filename, and a colon is illegal on
+	// Windows, so allowing it would make the canonical source non-portable.
+	if strings.ContainsAny(id, `/\:`) || strings.Contains(id, "..") || filepath.IsAbs(id) {
+		return fmt.Errorf("%s id %q contains a path separator, '..', ':' or is absolute", kind, id)
 	}
 	return nil
 }
@@ -51,7 +54,7 @@ func validateComponentID(kind, id string) error {
 // exist. Used by reconcile write-back to preserve source-only fields
 // (agents/enabled) that the rendered destination spec doesn't carry.
 func ReadMCP(home, id string) (m MCPServer, ok bool, err error) {
-	if verr := validateComponentID("mcp", id); verr != nil {
+	if verr := ValidateComponentID("mcp", id); verr != nil {
 		return MCPServer{}, false, verr
 	}
 	data, rerr := os.ReadFile(filepath.Join(home, "mcp", id+".toml"))
@@ -72,7 +75,7 @@ func ReadMCP(home, id string) (m MCPServer, ok bool, err error) {
 // exist. Mirrors ReadMCP: used by capture to preserve source-only LSP fields
 // (agents/enabled) that the rendered destination spec doesn't carry.
 func ReadLSP(home, id string) (ls LSPServer, ok bool, err error) {
-	if verr := validateComponentID("lsp", id); verr != nil {
+	if verr := ValidateComponentID("lsp", id); verr != nil {
 		return LSPServer{}, false, verr
 	}
 	data, rerr := os.ReadFile(filepath.Join(home, "lsp", id+".toml"))
@@ -91,7 +94,7 @@ func ReadLSP(home, id string) (ls LSPServer, ok bool, err error) {
 
 // WriteMCP writes mcp/<id>.toml from m into home. Overwrites atomically.
 func WriteMCP(home, id string, m MCPServer) error {
-	if err := validateComponentID("mcp", id); err != nil {
+	if err := ValidateComponentID("mcp", id); err != nil {
 		return err
 	}
 	body, err := toml.Marshal(m)
@@ -103,7 +106,7 @@ func WriteMCP(home, id string, m MCPServer) error {
 
 // WritePlugin writes plugins/<id>.toml from p into home. Overwrites atomically.
 func WritePlugin(home, id string, p Plugin) error {
-	if err := validateComponentID("plugin", id); err != nil {
+	if err := ValidateComponentID("plugin", id); err != nil {
 		return err
 	}
 	body, err := toml.Marshal(p)
@@ -115,7 +118,7 @@ func WritePlugin(home, id string, p Plugin) error {
 
 // WriteMarketplace writes marketplaces/<name>.toml from m into home. Overwrites atomically.
 func WriteMarketplace(home, name string, m Marketplace) error {
-	if err := validateComponentID("marketplace", name); err != nil {
+	if err := ValidateComponentID("marketplace", name); err != nil {
 		return err
 	}
 	body, err := toml.Marshal(m)
@@ -127,7 +130,7 @@ func WriteMarketplace(home, name string, m Marketplace) error {
 
 // WriteSkill writes skills/<name>/SKILL.md from sk into home. Overwrites atomically.
 func WriteSkill(home string, sk Skill) error {
-	if err := validateComponentID("skill", sk.Name); err != nil {
+	if err := ValidateComponentID("skill", sk.Name); err != nil {
 		return err
 	}
 	dir := filepath.Join(home, "skills", sk.Name)
@@ -140,7 +143,7 @@ func WriteSkill(home string, sk Skill) error {
 
 // WriteSubagent writes agents/<name>.md from sa into home. Overwrites atomically.
 func WriteSubagent(home string, sa Subagent) error {
-	if err := validateComponentID("subagent", sa.Name); err != nil {
+	if err := ValidateComponentID("subagent", sa.Name); err != nil {
 		return err
 	}
 	dir := filepath.Join(home, "agents")
@@ -153,7 +156,7 @@ func WriteSubagent(home string, sa Subagent) error {
 
 // WriteCommand writes commands/<name>.md from cm into home. Overwrites atomically.
 func WriteCommand(home string, cm Command) error {
-	if err := validateComponentID("command", cm.Name); err != nil {
+	if err := ValidateComponentID("command", cm.Name); err != nil {
 		return err
 	}
 	dir := filepath.Join(home, "commands")
@@ -177,7 +180,7 @@ type hookEntryOut struct {
 
 // WriteHooks writes hooks/<event>.toml for the given event. Overwrites atomically.
 func WriteHooks(home, event string, hooks []Hook) error {
-	if err := validateComponentID("hook event", event); err != nil {
+	if err := ValidateComponentID("hook event", event); err != nil {
 		return err
 	}
 	dir := filepath.Join(home, "hooks")
@@ -206,7 +209,7 @@ type lspFileOut struct {
 
 // WriteLSP writes lsp/<id>.toml from ls into home. Overwrites atomically.
 func WriteLSP(home string, ls LSPServer) error {
-	if err := validateComponentID("lsp", ls.ID); err != nil {
+	if err := ValidateComponentID("lsp", ls.ID); err != nil {
 		return err
 	}
 	dir := filepath.Join(home, "lsp")

@@ -51,10 +51,16 @@ func collectStateSeedPointers(m map[string]any) []string {
 	return render.CollectPointers(m, "")
 }
 
-// hashAtPointer returns the SHA-256 of the JSON-marshaled value at ptr,
-// or the empty string if no value exists there.
+// hashAtPointer returns the SHA-256 of the JSON-marshaled value at ptr, or the
+// empty string when no value exists there. The empty sentinel (rather than
+// hashing a synthesized null) lets the seed loop SKIP an absent pointer, which
+// matches render.RecordOpsState skipping never-landed pointers — a present-null
+// value still hashes.
 func hashAtPointer(m map[string]any, ptr string) string {
-	v := getJSONPointer(m, ptr)
+	v, ok := getJSONPointer(m, ptr)
+	if !ok {
+		return ""
+	}
 	data, err := json.Marshal(v)
 	if err != nil {
 		return ""
@@ -63,13 +69,14 @@ func hashAtPointer(m map[string]any, ptr string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// getJSONPointer resolves a "/a/b/c" RFC 6901 pointer against m. Returns
-// nil if any segment is missing. We re-implement here rather than
-// exporting render.getPointer because keeping that helper unexported
-// preserves the current package boundary.
-func getJSONPointer(m map[string]any, ptr string) any {
+// getJSONPointer resolves a "/a/b/c" RFC 6901 pointer against m. The bool is
+// false when any segment is missing — distinct from a present value that
+// happens to be null. We re-implement here rather than exporting
+// render.getPointer because keeping that helper unexported preserves the
+// current package boundary.
+func getJSONPointer(m map[string]any, ptr string) (any, bool) {
 	if ptr == "" || ptr[0] != '/' {
-		return m
+		return m, true
 	}
 	parts := strings.Split(ptr[1:], "/")
 	for i, p := range parts {
@@ -82,11 +89,15 @@ func getJSONPointer(m map[string]any, ptr string) any {
 	for _, p := range parts {
 		mm, ok := cur.(map[string]any)
 		if !ok {
-			return nil
+			return nil, false
 		}
-		cur = mm[p]
+		v, exists := mm[p]
+		if !exists {
+			return nil, false
+		}
+		cur = v
 	}
-	return cur
+	return cur, true
 }
 
 // newImportCmd returns the "import" subcommand.
@@ -172,29 +183,28 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// filter, so MCP/LSP/hook capture still routes through capture.Capture
 	// (secret re-referencing + source-only field preservation) — see the
 	// importer bodies. Text components write directly via source.Write*.
+	var imp importedSet
+	var importErr error
 	switch component {
 	case "":
-		if err := importAllComponents(cmd, home, agentName, c, dryRun); err != nil {
-			return err
-		}
+		imp, importErr = importAllComponents(cmd, home, agentName, c, dryRun)
 	default:
-		n, err := importComponent(cmd, home, c, component, name, dryRun)
-		if err != nil {
-			return err
-		}
+		ids, err := importComponent(cmd, home, c, component, name, dryRun)
+		importErr = err
+		imp.add(component, ids)
 		// A bulk component import (no name) that matched nothing is not an
 		// error — report it and exit cleanly. A named import that matched
 		// nothing already returned a "not found" error above.
-		if n == 0 && name == "" {
+		if err == nil && len(ids) == 0 && name == "" {
 			fmt.Fprintf(cmd.OutOrStdout(), "no %s found in %s native config\n", component, agentName)
 		}
 	}
 
 	// A dry-run wrote nothing, so there is no state to seed and the
 	// foreign-collision warning below would describe the pre-import world.
-	// Stop here with just the preview.
+	// Stop here with just the preview (surfacing any selector/not-found error).
 	if dryRun {
-		return nil
+		return importErr
 	}
 
 	// Seed state with the destination's current content hash so the next
@@ -204,8 +214,15 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// content — because the canonical→render pipeline may translate the
 	// content slightly (frontmatter normalization, etc.) and we want the
 	// next apply to compare against the file that exists today.
-	if seedErr := seedStateFromCurrentDest(home, agentName, reg); seedErr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: import succeeded but state seed failed: %v\n", seedErr)
+	//
+	// Run this even when importErr != nil: a bulk/full-agent import can fail
+	// partway after already writing earlier components to the canonical, and
+	// those writes MUST be seeded or the next apply foreign-collides and
+	// overwrites the file they were just imported from. Seeding is scoped to
+	// imp (the items actually imported), so a partial failure seeds exactly what
+	// was written and an un-imported sibling's state is never re-stamped.
+	if seedErr := seedStateFromCurrentDest(home, agentName, reg, imp); seedErr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: import state seed failed: %v\n", seedErr)
 	}
 
 	// Warn if the destination file has additional pointers / files
@@ -220,7 +237,9 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 		}
 		fmt.Fprintf(ew, "  Run `agentsync import %s` to capture the agent's full config, or accept the backup on next apply.\n", agentName)
 	}
-	return nil
+	// Surface a partial-import error after seeding so the command still exits
+	// non-zero, but the components that were written are now owned.
+	return importErr
 }
 
 // unimportedDestPointers returns a list of human-readable labels for
@@ -233,7 +252,10 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 // canonical claims, and diff against the actual on-disk contents.
 func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []string {
 	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-	c, err := marketplace.LoadProjected(loaderFsForState(), home, pluginCacheRoot)
+	// Lenient: this is a post-import diagnostic re-render. A strict plugin
+	// conflict (unrelated to the import) must not abort it — matching the
+	// read-only commands (status/diff/explain).
+	c, err := marketplace.LoadProjectedLenient(loaderFsForState(), home, pluginCacheRoot, nil)
 	if err != nil {
 		return nil
 	}
@@ -283,7 +305,7 @@ func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []str
 // This makes the next \`apply\` non-destructive — the destination is
 // already known to agentsync, so any future divergence is real drift, not a
 // first-run foreign-collision.
-func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) error {
+func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry, imp importedSet) error {
 	statePath := filepath.Join(home, ".state", "targets.json")
 	// State keys are HOME-relative against the user's $HOME (paths.HomeDir),
 	// matching render.RecordOpsState — NOT the agentsync home, or apply
@@ -294,9 +316,14 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) err
 		return err
 	}
 
-	// Build a fresh canonical from disk and render only this agent.
+	// Build a fresh canonical from disk and render ONLY the items this import
+	// actually captured (imp). Lenient: a strict plugin conflict must not block
+	// seeding (which would leave the just-imported dest exposed to a
+	// ForeignCollision overwrite on next apply). Rendering the imported SUBSET —
+	// not the whole canonical — is what scopes the seed: an un-imported sibling
+	// isn't in the subset, so its state (and any drift it carries) is untouched.
 	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-	c, err := marketplace.LoadProjected(loaderFsForState(), home, pluginCacheRoot)
+	c, err := marketplace.LoadProjectedLenient(loaderFsForState(), home, pluginCacheRoot, nil)
 	if err != nil {
 		return err
 	}
@@ -304,7 +331,8 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) err
 	if a == nil {
 		return fmt.Errorf("adapter %q not registered", agentName)
 	}
-	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	sub := filterCanonicalTo(c, imp)
+	ops, _, err := a.Render(secrets.ForRender(sub), adapter.ScopeUser, "")
 	if err != nil {
 		return err
 	}
@@ -331,10 +359,17 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) err
 				continue
 			}
 			for _, ptr := range collectStateSeedPointers(ours) {
+				h := hashAtPointer(existing, ptr)
+				if h == "" {
+					// Pointer absent on disk — skip rather than seed a phantom
+					// entry, matching render.RecordOpsState's skip of never-landed
+					// pointers (a present-null value hashes and is seeded).
+					continue
+				}
 				key := fmt.Sprintf("%s:%s:%s:%s:%s",
 					agentName, adapter.ScopeUser.String(), "", paths.HomeRelative(userHome, op.Path), ptr)
 				st.Keys[key] = state.KeyEntry{
-					SHA256:    hashAtPointer(existing, ptr),
+					SHA256:    h,
 					AppliedAt: now,
 					SourceID:  op.SourceID,
 				}
@@ -359,6 +394,44 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry) err
 	return state.Save(statePath, st)
 }
 
+// filterCanonicalTo returns a copy of c containing only the components named in
+// imp — the items this import actually captured. Rendering THIS subset (rather
+// than the whole canonical) scopes state seeding to the imported items. A
+// reported-but-unwritten id simply won't be present in the re-loaded canonical,
+// so it self-corrects on a partial import. Config is intentionally omitted so no
+// settings op is emitted (settings are never imported).
+func filterCanonicalTo(c source.Canonical, imp importedSet) source.Canonical {
+	var sub source.Canonical
+	sub.MCPServers = filterByKey(c.MCPServers, imp.MCP, func(m source.MCPServer) string { return m.ID })
+	sub.LSPServers = filterByKey(c.LSPServers, imp.LSP, func(l source.LSPServer) string { return l.ID })
+	sub.Skills = filterByKey(c.Skills, imp.Skills, func(s source.Skill) string { return s.Name })
+	sub.Subagents = filterByKey(c.Subagents, imp.Subagents, func(s source.Subagent) string { return s.Name })
+	sub.Commands = filterByKey(c.Commands, imp.Commands, func(cm source.Command) string { return cm.Name })
+	sub.Hooks = filterByKey(c.Hooks, imp.HookEvents, func(h source.Hook) string { return h.Event })
+	if imp.Memory {
+		sub.Memory = c.Memory
+	}
+	return sub
+}
+
+// filterByKey returns the items whose key is in want (preserving order).
+func filterByKey[T any](items []T, want []string, key func(T) string) []T {
+	if len(want) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(want))
+	for _, w := range want {
+		set[w] = true
+	}
+	var out []T
+	for _, it := range items {
+		if set[key(it)] {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
 // parseSelector splits "agent[:component[:name]]" into its parts. A bare
 // "agent" (component == "") selects the whole config; "agent:component"
 // (name == "") selects every entry of that component.
@@ -378,6 +451,11 @@ func parseSelector(sel string) (agentName, component, name string, err error) {
 	if len(parts) >= 2 && component == "" {
 		return "", "", "", fmt.Errorf("invalid selector %q: component must be non-empty", sel)
 	}
+	// "claude:mcp:" (trailing colon) is a typo, not a bulk request. Drop the
+	// colon for a bulk import (claude:mcp) or supply a name (claude:mcp:github).
+	if len(parts) == 3 && name == "" {
+		return "", "", "", fmt.Errorf("invalid selector %q: trailing colon with no name; use %q to import every %s, or supply a name", sel, agentName+":"+component, component)
+	}
 	return agentName, component, name, nil
 }
 
@@ -396,12 +474,48 @@ func importVerb(dryRun bool) string {
 	return "imported"
 }
 
+// importedSet records which component identities an import actually captured,
+// so the state seeder can scope itself to exactly those items and not re-stamp
+// (and thereby mask drift on) un-imported siblings.
+type importedSet struct {
+	MCP        []string
+	LSP        []string
+	Skills     []string
+	Subagents  []string
+	Commands   []string
+	HookEvents []string
+	Memory     bool
+}
+
+// add routes a component's imported identities into the set.
+func (s *importedSet) add(component string, ids []string) {
+	switch component {
+	case "mcp":
+		s.MCP = append(s.MCP, ids...)
+	case "lsp":
+		s.LSP = append(s.LSP, ids...)
+	case "skill":
+		s.Skills = append(s.Skills, ids...)
+	case "agent", "subagent":
+		s.Subagents = append(s.Subagents, ids...)
+	case "command":
+		s.Commands = append(s.Commands, ids...)
+	case "hook":
+		s.HookEvents = append(s.HookEvents, ids...)
+	case "memory":
+		if len(ids) > 0 {
+			s.Memory = true
+		}
+	}
+}
+
 // importComponent imports one component class from c. When name is empty it
 // imports every entry of that component (the bulk form); when name is set it
 // imports just that entry and errors if it is absent. When dryRun is set it
-// writes nothing and only reports what it would write. It returns the number of
-// source items that were (or would be) written.
-func importComponent(cmd *cobra.Command, home string, c source.Canonical, component, name string, dryRun bool) (int, error) {
+// writes nothing and only reports what it would write. It returns the identities
+// (server id, skill/subagent/command name, hook event) that were (or would be)
+// imported; len is the item count.
+func importComponent(cmd *cobra.Command, home string, c source.Canonical, component, name string, dryRun bool) ([]string, error) {
 	switch component {
 	case "mcp":
 		return importMCP(cmd, home, c, name, dryRun)
@@ -418,30 +532,33 @@ func importComponent(cmd *cobra.Command, home string, c source.Canonical, compon
 	case "memory":
 		return importMemory(cmd, home, c, dryRun)
 	default:
-		return 0, fmt.Errorf("unknown component %q; valid: mcp, skill, agent, command, hook, lsp, memory", component)
+		return nil, fmt.Errorf("unknown component %q; valid: mcp, skill, agent, command, hook, lsp, memory", component)
 	}
 }
 
 // importAllComponents imports every importable component for the agent and
 // prints a one-line summary. Empty components are skipped silently; an agent
 // with nothing to import reports that and exits cleanly. dryRun is threaded
-// through so the preview writes nothing.
-func importAllComponents(cmd *cobra.Command, home, agentName string, c source.Canonical, dryRun bool) error {
+// through so the preview writes nothing. The returned set names everything
+// captured, so the caller can scope state seeding to it.
+func importAllComponents(cmd *cobra.Command, home, agentName string, c source.Canonical, dryRun bool) (importedSet, error) {
+	var imp importedSet
 	counts := map[string]int{}
 	total := 0
 	for _, comp := range importComponentOrder {
-		n, err := importComponent(cmd, home, c, comp, "", dryRun)
+		ids, err := importComponent(cmd, home, c, comp, "", dryRun)
 		if err != nil {
-			return err
+			return imp, err
 		}
-		if n > 0 {
-			counts[comp] = n
-			total += n
+		imp.add(comp, ids)
+		if len(ids) > 0 {
+			counts[comp] = len(ids)
+			total += len(ids)
 		}
 	}
 	if total == 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "no importable items found in %s native config\n", agentName)
-		return nil
+		return imp, nil
 	}
 	var parts []string
 	for _, comp := range importComponentOrder {
@@ -450,14 +567,14 @@ func importAllComponents(cmd *cobra.Command, home, agentName string, c source.Ca
 		}
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "%s %d item(s) from %s: %s\n", importVerb(dryRun), total, agentName, strings.Join(parts, ", "))
-	return nil
+	return imp, nil
 }
 
 // importMCP captures the MCP server named name (or all of them when name is
 // empty). Capture.Capture batches the whole slice in one call, so it
 // re-references secrets and preserves source-only fields for every server.
 // When dryRun is set it reports the targets without writing.
-func importMCP(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) (int, error) {
+func importMCP(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) ([]string, error) {
 	var matched []source.MCPServer
 	for _, m := range c.MCPServers {
 		if name == "" || m.ID == name {
@@ -466,23 +583,32 @@ func importMCP(cmd *cobra.Command, home string, c source.Canonical, name string,
 	}
 	if len(matched) == 0 {
 		if name != "" {
-			return 0, fmt.Errorf("mcp server %q not found in native config", name)
+			return nil, fmt.Errorf("mcp server %q not found in native config", name)
 		}
-		return 0, nil
+		return nil, nil
+	}
+	// Validate ids up front (before any write, and in dry-run) so the preview
+	// matches a real import and a bulk write is atomic on a bad id.
+	for _, m := range matched {
+		if err := source.ValidateComponentID("mcp", m.ID); err != nil {
+			return nil, err
+		}
 	}
 	if !dryRun {
 		single := source.Canonical{MCPServers: matched}
 		if _, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
-			return 0, err
+			return nil, err
 		}
 	}
-	for _, m := range matched {
+	ids := make([]string, len(matched))
+	for i, m := range matched {
 		fmt.Fprintf(cmd.OutOrStdout(), "%s mcp/%s.toml\n", importVerb(dryRun), m.ID)
+		ids[i] = m.ID
 	}
-	return len(matched), nil
+	return ids, nil
 }
 
-func importSkill(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) (int, error) {
+func importSkill(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) ([]string, error) {
 	var matched []source.Skill
 	for _, sk := range c.Skills {
 		if name == "" || sk.Name == name {
@@ -491,22 +617,29 @@ func importSkill(cmd *cobra.Command, home string, c source.Canonical, name strin
 	}
 	if len(matched) == 0 {
 		if name != "" {
-			return 0, fmt.Errorf("skill %q not found in native config", name)
+			return nil, fmt.Errorf("skill %q not found in native config", name)
 		}
-		return 0, nil
+		return nil, nil
 	}
+	for _, sk := range matched {
+		if err := source.ValidateComponentID("skill", sk.Name); err != nil {
+			return nil, err
+		}
+	}
+	names := make([]string, 0, len(matched))
 	for _, sk := range matched {
 		if !dryRun {
 			if err := source.WriteSkill(home, sk); err != nil {
-				return 0, fmt.Errorf("write skill %s: %w", sk.Name, err)
+				return nil, fmt.Errorf("write skill %s: %w", sk.Name, err)
 			}
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%s skills/%s/SKILL.md\n", importVerb(dryRun), sk.Name)
+		names = append(names, sk.Name)
 	}
-	return len(matched), nil
+	return names, nil
 }
 
-func importSubagent(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) (int, error) {
+func importSubagent(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) ([]string, error) {
 	var matched []source.Subagent
 	for _, sa := range c.Subagents {
 		if name == "" || sa.Name == name {
@@ -515,22 +648,29 @@ func importSubagent(cmd *cobra.Command, home string, c source.Canonical, name st
 	}
 	if len(matched) == 0 {
 		if name != "" {
-			return 0, fmt.Errorf("subagent %q not found in native config", name)
+			return nil, fmt.Errorf("subagent %q not found in native config", name)
 		}
-		return 0, nil
+		return nil, nil
 	}
+	for _, sa := range matched {
+		if err := source.ValidateComponentID("subagent", sa.Name); err != nil {
+			return nil, err
+		}
+	}
+	names := make([]string, 0, len(matched))
 	for _, sa := range matched {
 		if !dryRun {
 			if err := source.WriteSubagent(home, sa); err != nil {
-				return 0, fmt.Errorf("write subagent %s: %w", sa.Name, err)
+				return nil, fmt.Errorf("write subagent %s: %w", sa.Name, err)
 			}
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%s agents/%s.md\n", importVerb(dryRun), sa.Name)
+		names = append(names, sa.Name)
 	}
-	return len(matched), nil
+	return names, nil
 }
 
-func importCommand(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) (int, error) {
+func importCommand(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) ([]string, error) {
 	var matched []source.Command
 	for _, cm := range c.Commands {
 		if name == "" || cm.Name == name {
@@ -539,26 +679,34 @@ func importCommand(cmd *cobra.Command, home string, c source.Canonical, name str
 	}
 	if len(matched) == 0 {
 		if name != "" {
-			return 0, fmt.Errorf("command %q not found in native config", name)
+			return nil, fmt.Errorf("command %q not found in native config", name)
 		}
-		return 0, nil
+		return nil, nil
 	}
+	for _, cm := range matched {
+		if err := source.ValidateComponentID("command", cm.Name); err != nil {
+			return nil, err
+		}
+	}
+	names := make([]string, 0, len(matched))
 	for _, cm := range matched {
 		if !dryRun {
 			if err := source.WriteCommand(home, cm); err != nil {
-				return 0, fmt.Errorf("write command %s: %w", cm.Name, err)
+				return nil, fmt.Errorf("write command %s: %w", cm.Name, err)
 			}
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%s commands/%s.md\n", importVerb(dryRun), cm.Name)
+		names = append(names, cm.Name)
 	}
-	return len(matched), nil
+	return names, nil
 }
 
 // importHook captures hooks for the named event (or all events when name is
-// empty). name addresses an event, not an individual hook, so the count
-// returned is the number of hook entries written across all matched events.
-// When dryRun is set it reports the target event files without writing.
-func importHook(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) (int, error) {
+// empty). name addresses an event, not an individual hook. It returns the
+// DISTINCT events captured (one source file per event); the per-event line
+// still reports the entry count. When dryRun is set it reports the target event
+// files without writing.
+func importHook(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) ([]string, error) {
 	var matched []source.Hook
 	for _, h := range c.Hooks {
 		if name == "" || h.Event == name {
@@ -567,14 +715,19 @@ func importHook(cmd *cobra.Command, home string, c source.Canonical, name string
 	}
 	if len(matched) == 0 {
 		if name != "" {
-			return 0, fmt.Errorf("hook event %q not found in native config", name)
+			return nil, fmt.Errorf("hook event %q not found in native config", name)
 		}
-		return 0, nil
+		return nil, nil
+	}
+	for _, h := range matched {
+		if err := source.ValidateComponentID("hook event", h.Event); err != nil {
+			return nil, err
+		}
 	}
 	if !dryRun {
 		single := source.Canonical{Hooks: matched}
 		if _, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
-			return 0, err
+			return nil, err
 		}
 	}
 	// One file per event; report each, preserving first-seen order.
@@ -589,10 +742,10 @@ func importHook(cmd *cobra.Command, home string, c source.Canonical, name string
 	for _, ev := range order {
 		fmt.Fprintf(cmd.OutOrStdout(), "%s hooks/%s.toml (%d entries)\n", importVerb(dryRun), ev, perEvent[ev])
 	}
-	return len(matched), nil
+	return order, nil
 }
 
-func importLSP(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) (int, error) {
+func importLSP(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) ([]string, error) {
 	var matched []source.LSPServer
 	for _, ls := range c.LSPServers {
 		if name == "" || ls.ID == name {
@@ -601,33 +754,42 @@ func importLSP(cmd *cobra.Command, home string, c source.Canonical, name string,
 	}
 	if len(matched) == 0 {
 		if name != "" {
-			return 0, fmt.Errorf("lsp server %q not found in native config", name)
+			return nil, fmt.Errorf("lsp server %q not found in native config", name)
 		}
-		return 0, nil
+		return nil, nil
+	}
+	for _, ls := range matched {
+		if err := source.ValidateComponentID("lsp", ls.ID); err != nil {
+			return nil, err
+		}
 	}
 	if !dryRun {
 		single := source.Canonical{LSPServers: matched}
 		if _, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
-			return 0, err
+			return nil, err
 		}
 	}
+	ids := make([]string, 0, len(matched))
 	for _, ls := range matched {
 		fmt.Fprintf(cmd.OutOrStdout(), "%s lsp/%s.toml\n", importVerb(dryRun), ls.ID)
+		ids = append(ids, ls.ID)
 	}
-	return len(matched), nil
+	return ids, nil
 }
 
-func importMemory(cmd *cobra.Command, home string, c source.Canonical, dryRun bool) (int, error) {
+func importMemory(cmd *cobra.Command, home string, c source.Canonical, dryRun bool) ([]string, error) {
 	// Memory is a single block, not a named collection; nothing to write when
 	// the agent carries no memory (the common case during a full-agent import).
 	if strings.TrimSpace(c.Memory.Body) == "" {
-		return 0, nil
+		return nil, nil
 	}
 	if !dryRun {
 		if err := source.WriteMemory(home, c.Memory); err != nil {
-			return 0, fmt.Errorf("write memory: %w", err)
+			return nil, fmt.Errorf("write memory: %w", err)
 		}
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "%s memory/AGENTS.md\n", importVerb(dryRun))
-	return 1, nil
+	// A non-empty marker so importedSet.add flags memory was captured (it has no
+	// id; the seeder includes c.Memory when this is set).
+	return []string{"memory"}, nil
 }

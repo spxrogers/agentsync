@@ -1,11 +1,79 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// mcpKeySHA returns the seeded state hash for /mcpServers/<id>, or "".
+func mcpKeySHA(t *testing.T, statePath, id string) string {
+	t.Helper()
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	var st struct {
+		Keys map[string]struct {
+			SHA256 string `json:"sha256"`
+		} `json:"keys"`
+	}
+	if err := json.Unmarshal(data, &st); err != nil {
+		t.Fatalf("parse state: %v", err)
+	}
+	for k, v := range st.Keys {
+		if strings.HasSuffix(k, "/mcpServers/"+id) {
+			return v.SHA256
+		}
+	}
+	return ""
+}
+
+// TestImport_DoesNotReseedUnimportedSibling is the regression for the
+// drift-masking bug: seedStateFromCurrentDest re-rendered the WHOLE canonical
+// and re-stamped every pointer, so importing one item silently re-seeded an
+// un-imported, drifted sibling at its drifted hash — turning its Drift into
+// Pending and causing the next apply to revert the user's edit with no backup.
+// Seeding must be scoped to only the items actually imported.
+func TestImport_DoesNotReseedUnimportedSibling(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	// Canonical owns foo; apply it so state is seeded for /mcpServers/foo.
+	if _, err := runCLI(t, env, "mcp", "add", "foo", "--command", "foo-orig"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
+	before := mcpKeySHA(t, statePath, "foo")
+	if before == "" {
+		t.Fatal("setup: foo not seeded after apply")
+	}
+
+	// Drift foo in the dest AND add a native bar to import.
+	claudeJSON := filepath.Join(tmp, ".claude.json")
+	if err := os.WriteFile(claudeJSON,
+		[]byte(`{"mcpServers":{"foo":{"type":"stdio","command":"DRIFTED"},"bar":{"type":"stdio","command":"bar-cmd"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Import ONLY bar — foo's drift must be preserved (its state untouched).
+	if _, err := runCLI(t, env, "import", "claude:mcp:bar"); err != nil {
+		t.Fatalf("import bar: %v", err)
+	}
+	if after := mcpKeySHA(t, statePath, "foo"); after != before {
+		t.Fatalf("importing bar re-seeded the un-imported sibling foo (masking its drift): before=%s after=%s", before, after)
+	}
+}
 
 // TestImport_InvalidSelector verifies that malformed selectors are rejected.
 func TestImport_InvalidSelector(t *testing.T) {
@@ -19,6 +87,119 @@ func TestImport_InvalidSelector(t *testing.T) {
 	_, err := runCLI(t, env, "import", "badformat")
 	if err == nil {
 		t.Fatal("expected error for malformed selector; got nil")
+	}
+}
+
+// TestImport_TrailingColonRejected guards against a footgun: a trailing colon
+// (claude:mcp:) parsed to an empty name, which silently meant "bulk import all"
+// — surprising for a typo. It must be rejected like an empty component is.
+func TestImport_TrailingColonRejected(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "import", "claude:mcp:"); err == nil {
+		t.Fatal("expected trailing-colon selector to be rejected, not treated as bulk")
+	}
+}
+
+// TestImport_DryRunRejectsInvalidID is the regression for a misleading preview:
+// --dry-run skipped the writers' validation, so it cheerfully previewed
+// "would import mcp/../escape.toml" for a traversal id that a real import
+// rejects. The preview must match what a real run accepts.
+func TestImport_DryRunRejectsInvalidID(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".claude.json"),
+		[]byte(`{"mcpServers":{"../escape":{"type":"stdio","command":"x"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "import", "claude:mcp:../escape", "--dry-run"); err == nil {
+		t.Fatal("dry-run should reject an invalid component id, not preview it")
+	}
+}
+
+// TestImport_RejectsColonInID rejects a native component id containing ':',
+// which would write an mcp/ns:gh.toml that is an illegal filename on Windows —
+// the canonical source is meant to be portable/committable across machines.
+func TestImport_RejectsColonInID(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".claude.json"),
+		[]byte(`{"mcpServers":{"ns:gh":{"type":"stdio","command":"x"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "import", "claude:mcp:ns:gh"); err == nil {
+		t.Fatal("a colon in a component id is not portable; import must reject it")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, ".agentsync", "mcp", "ns:gh.toml")); err == nil {
+		t.Fatal("import wrote an unportable mcp/ns:gh.toml")
+	}
+}
+
+// TestImport_PartialFailureStillSeedsWritten is the regression for a partial
+// full-agent import: when a later component fails after an earlier one was
+// already written to the canonical source, the written component must still be
+// seeded into state — otherwise the next apply treats it as ForeignCollision
+// and overwrites the file the user just imported from.
+func TestImport_PartialFailureStillSeedsWritten(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	// Native config: an MCP server (imported first, cleanly).
+	if err := os.WriteFile(filepath.Join(tmp, ".claude.json"),
+		[]byte(`{"mcpServers":{"github":{"type":"stdio","command":"gh-mcp"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// ... and a skill (imported after mcp in the full-agent order).
+	skillDir := filepath.Join(tmp, ".claude", "skills", "deploy")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: deploy\n---\nDeploy stuff.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Force the skill write to fail: pre-create ~/.agentsync/skills/deploy as a
+	// FILE so WriteSkill's MkdirAll(skills/deploy) errors mid-import.
+	if err := os.MkdirAll(filepath.Join(tmp, ".agentsync", "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".agentsync", "skills", "deploy"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Full-agent import: mcp succeeds (written to canonical), skill then fails.
+	if _, err := runCLI(t, env, "import", "claude"); err == nil {
+		t.Fatal("expected partial import to surface the skill write error")
+	}
+	// The mcp that WAS written must be seeded, or the next apply foreign-collides
+	// and overwrites .claude.json.
+	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
+	stData, _ := os.ReadFile(statePath)
+	if !strings.Contains(string(stData), "/mcpServers/github") {
+		t.Fatalf("partial import left the written mcp unseeded (foreign-collision hazard); state:\n%s", stData)
 	}
 }
 
