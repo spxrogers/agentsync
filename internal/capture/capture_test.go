@@ -3,6 +3,7 @@ package capture_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/capture"
@@ -66,6 +67,50 @@ func TestCapture_ReReferencesAndPreserves(t *testing.T) {
 	}
 	if got.Server.Enabled == nil || *got.Server.Enabled {
 		t.Errorf("source-only enabled not preserved: %v", got.Server.Enabled)
+	}
+}
+
+// TestCapture_NoLeakOnStructuralEdit drives the full dest->source funnel for the
+// exact scenario that leaked: a user adds a flag to an MCP server's args in the
+// native UI (shifting the secret to a new index), then write-back is captured.
+// The positional re-reference misses the shifted index; the value-based fallback
+// must restore the ${secret:…} placeholder so the resolved credential is NEVER
+// persisted into ~/.agentsync.
+func TestCapture_NoLeakOnStructuralEdit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TOK", "ghp_live_credential_value")
+	writeFile(t, filepath.Join(home, "agentsync.toml"), "[secrets]\nbackend = \"env\"\n")
+	writeFile(t, filepath.Join(home, "mcp", "srv.toml"), ""+
+		"[server]\n"+
+		"type = \"stdio\"\n"+
+		"command = \"npx\"\n"+
+		"args = [\"--token\", \"${secret:TOK}\"]\n")
+
+	// Native edit prepended "--verbose"; the secret resolved to cleartext sits
+	// at the new index 2.
+	ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+		ID: "srv",
+		Server: source.MCPServerSpec{
+			Type:    "stdio",
+			Command: "npx",
+			Args:    []string{"--verbose", "--token", "ghp_live_credential_value"},
+		},
+	}}}
+
+	if _, err := capture.Capture(home, ingested, capture.Opts{}); err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(home, "mcp", "srv.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "ghp_live_credential_value") {
+		t.Fatalf("LEAK: resolved secret persisted into source:\n%s", raw)
+	}
+	got, _, _ := source.ReadMCP(home, "srv")
+	if len(got.Server.Args) != 3 || got.Server.Args[2] != "${secret:TOK}" {
+		t.Fatalf("shifted secret not re-referenced: %v", got.Server.Args)
 	}
 }
 

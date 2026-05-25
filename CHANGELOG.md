@@ -51,6 +51,15 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **Secret never leaks on a structural native edit (security)** — write-back
+  (`import` / `reconcile`) re-referenced `${secret:…}` strictly by field
+  position, so a native edit that shifted structure — prepending an MCP/LSP arg,
+  renaming an env/header key, or renaming a server id — moved the resolved
+  cleartext to a location with no source counterpart and silently persisted the
+  live credential into `~/.agentsync` (often a committed dotfiles repo). A
+  value-based fallback now restores the placeholder for any source-referenced
+  secret whose cleartext survives the positional pass, while still leaving a
+  value that coincidentally equals a non-templated source literal untouched.
 - **Foreign-collision backup covers explicit `null`** — a hand-authored
   destination holding an explicit `null` at a JSON pointer agentsync is about to
   write (e.g. `mcpServers.github = null` in `~/.claude.json`) is now backed up

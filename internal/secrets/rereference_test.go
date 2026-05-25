@@ -90,6 +90,107 @@ func TestReReferenceCanonical_FieldPositional(t *testing.T) {
 	}
 }
 
+// TestReReferenceCanonical_ValueFallbackOnStructuralShift is the regression for
+// a silent cleartext-secret leak: the positional restore matches a templated
+// source field to its ingested counterpart by location, so a native edit that
+// SHIFTS structure (prepend an MCP arg, rename an env key / server id) moves the
+// resolved cleartext to a location with no source counterpart — the positional
+// lookup misses and the resolved secret would be persisted into ~/.agentsync.
+// The value-based fallback must restore the placeholder in each of these cases.
+func TestReReferenceCanonical_ValueFallbackOnStructuralShift(t *testing.T) {
+	const live = "ghp_LIVE_SECRET_TOKEN"
+	sec := fakeResolver{"T": live}
+	env := fakeResolver{}
+
+	t.Run("arg index shift", func(t *testing.T) {
+		against := &source.Canonical{MCPServers: []source.MCPServer{{
+			ID:     "srv",
+			Server: source.MCPServerSpec{Type: "stdio", Command: "x", Args: []string{"--token", "${secret:T}"}},
+		}}}
+		ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+			ID:     "srv",
+			Server: source.MCPServerSpec{Type: "stdio", Command: "x", Args: []string{"--verbose", "--token", live}},
+		}}}
+		ReReferenceCanonical(ingested, against, sec, env)
+		for _, a := range ingested.MCPServers[0].Server.Args {
+			if a == live {
+				t.Fatalf("LEAK: resolved secret persisted in args: %v", ingested.MCPServers[0].Server.Args)
+			}
+		}
+		if ingested.MCPServers[0].Server.Args[2] != "${secret:T}" {
+			t.Errorf("shifted secret arg not re-referenced: %q", ingested.MCPServers[0].Server.Args[2])
+		}
+	})
+
+	t.Run("env key rename", func(t *testing.T) {
+		against := &source.Canonical{MCPServers: []source.MCPServer{{
+			ID:     "srv",
+			Server: source.MCPServerSpec{Env: map[string]string{"OLD": "${secret:T}"}},
+		}}}
+		ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+			ID:     "srv",
+			Server: source.MCPServerSpec{Env: map[string]string{"NEW": live}},
+		}}}
+		ReReferenceCanonical(ingested, against, sec, env)
+		if got := ingested.MCPServers[0].Server.Env["NEW"]; got != "${secret:T}" {
+			t.Errorf("renamed env secret not re-referenced: %q", got)
+		}
+	})
+
+	t.Run("server id rename", func(t *testing.T) {
+		against := &source.Canonical{MCPServers: []source.MCPServer{{
+			ID:     "old-id",
+			Server: source.MCPServerSpec{Env: map[string]string{"K": "${secret:T}"}},
+		}}}
+		ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+			ID:     "new-id",
+			Server: source.MCPServerSpec{Env: map[string]string{"K": live}},
+		}}}
+		ReReferenceCanonical(ingested, against, sec, env)
+		if got := ingested.MCPServers[0].Server.Env["K"]; got != "${secret:T}" {
+			t.Errorf("renamed-server env secret not re-referenced: %q", got)
+		}
+	})
+
+	t.Run("secret embedded in command, structurally changed", func(t *testing.T) {
+		against := &source.Canonical{MCPServers: []source.MCPServer{{
+			ID:     "srv",
+			Server: source.MCPServerSpec{Command: "auth --tok=${secret:T}"},
+		}}}
+		// User appended a flag to the command in the native UI.
+		ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+			ID:     "srv",
+			Server: source.MCPServerSpec{Command: "auth --tok=" + live + " --verbose"},
+		}}}
+		ReReferenceCanonical(ingested, against, sec, env)
+		if got := ingested.MCPServers[0].Server.Command; got != "auth --tok=${secret:T} --verbose" {
+			t.Errorf("embedded secret not re-referenced after edit: %q", got)
+		}
+	})
+
+	t.Run("idempotent: re-referenced value resolves back unchanged", func(t *testing.T) {
+		against := &source.Canonical{MCPServers: []source.MCPServer{{
+			ID:     "srv",
+			Server: source.MCPServerSpec{Args: []string{"${secret:T}"}},
+		}}}
+		ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+			ID:     "srv",
+			Server: source.MCPServerSpec{Args: []string{"pre", live}},
+		}}}
+		ReReferenceCanonical(ingested, against, sec, env)
+		// Re-render: the templated arg must resolve back to the same cleartext,
+		// so the next apply sees no spurious drift.
+		got := ingested.MCPServers[0].Server.Args[1]
+		if got != "${secret:T}" {
+			t.Fatalf("not re-referenced: %q", got)
+		}
+		resolved, _, _ := SubstituteRefs(got, sec, env)
+		if resolved != live {
+			t.Errorf("re-referenced value does not round-trip: %q -> %q", got, resolved)
+		}
+	})
+}
+
 // TestReReferenceCanonical_ProjectOverlay proves the field-positional restore
 // recurses into the project overlay: a project-scope secret field is matched to
 // its project-scope source counterpart (the secretFieldLoc carries a scope
