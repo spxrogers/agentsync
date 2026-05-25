@@ -51,6 +51,13 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **Frontmatter parser accepts a closing fence at EOF / empty frontmatter** — a
+  skill/subagent/command markdown file whose closing `---` sits at end-of-file
+  with no trailing newline (common: editors strip it; frontmatter-only files),
+  or an empty `---`/`---` block, previously returned `unterminated frontmatter`.
+  In `source.Load` that aborted the entire load — bricking *every* command — and
+  in the Claude adapter's ingest it silently dropped the component. Both
+  `ParseFrontmatter` implementations now accept these shapes.
 - **OpenCode MCP servers render in OpenCode's native schema** — the adapter
   previously wrote `type` verbatim (`stdio`/`http`), `command` as a bare string
   with a separate `args` array, and `env`, none of which match OpenCode's config

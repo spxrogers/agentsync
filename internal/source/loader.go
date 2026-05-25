@@ -369,17 +369,42 @@ func ParseFrontmatter(data []byte) (map[string]any, string, error) {
 		return map[string]any{}, string(data), nil
 	}
 	rest := data[len("---\n"):]
-	end := bytes.Index(rest, []byte("\n---\n"))
-	if end < 0 {
+	yml, body, ok := splitFrontmatterBody(rest)
+	if !ok {
 		return nil, "", fmt.Errorf("unterminated frontmatter")
 	}
-	yml := rest[:end]
-	body := rest[end+len("\n---\n"):]
+	// An empty frontmatter block ("---\n---\n…") is a valid empty mapping.
+	if len(bytes.TrimSpace(yml)) == 0 {
+		return map[string]any{}, string(body), nil
+	}
 	fm, err := jsonkeys.DecodeYAML(yml)
 	if err != nil {
 		return nil, "", fmt.Errorf("parse yaml frontmatter: %w", err)
 	}
 	return fm, string(body), nil
+}
+
+// splitFrontmatterBody splits the bytes AFTER the opening "---\n" into the YAML
+// frontmatter and the body. It accepts the closing "---" fence whether it sits
+// mid-file ("\n---\n"), at end-of-file with no trailing newline ("\n---"), or —
+// for an empty frontmatter mapping — as the very first line ("---\n…" or just
+// "---"). ok is false only when there is no closing fence at all. (Editors that
+// strip a trailing newline, and frontmatter-only files, are common; requiring a
+// trailing "\n" after the fence used to abort the whole source.Load.)
+func splitFrontmatterBody(rest []byte) (yml, body []byte, ok bool) {
+	switch {
+	case bytes.HasPrefix(rest, []byte("---\n")):
+		return nil, rest[len("---\n"):], true
+	case bytes.Equal(rest, []byte("---")):
+		return nil, nil, true
+	}
+	if i := bytes.Index(rest, []byte("\n---\n")); i >= 0 {
+		return rest[:i], rest[i+len("\n---\n"):], true
+	}
+	if bytes.HasSuffix(rest, []byte("\n---")) {
+		return rest[:len(rest)-len("\n---")], nil, true
+	}
+	return nil, nil, false
 }
 
 func loadMemory(fs afero.Fs, home string) (Memory, error) {
