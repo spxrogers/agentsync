@@ -1,6 +1,8 @@
 package marketplace_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -292,16 +294,30 @@ func TestLoadProjected_CrossPluginIdenticalMCPOK(t *testing.T) {
 	}
 }
 
-// TestLoadProjected_LegacyBareHexPinRefused proves a pre-tree-hash pin (a bare
-// sha256 hex, which covered only plugin.json) is refused with a re-pin
-// instruction rather than silently honoured — it cannot certify the bodies.
-func TestLoadProjected_LegacyBareHexPinRefused(t *testing.T) {
+// TestLoadProjected_LegacyPinVerifiesUnderPriorScheme proves a pre-tree-hash
+// pin (a bare sha256 hex over plugin.json) still VERIFIES under the prior scheme
+// rather than being refused — refusing it bricked existing installs whose only
+// remediation (`agentsync update`) does not re-pin a non-bumping plugin. An
+// untampered plugin.json passes; a changed plugin.json is a real mismatch.
+func TestLoadProjected_LegacyPinVerifiesUnderPriorScheme(t *testing.T) {
+	pluginJSON := `{"name":"old","mcpServers":{"a":{"command":"x"}}}`
+	sum := sha256.Sum256([]byte(pluginJSON))
+	legacy := hex.EncodeToString(sum[:])
+
 	home, cache := writeProjFixture(t,
+		"[plugin]\nid = \"old@m\"\nversion = \"1\"\nmanifest_sha = \""+legacy+"\"\n",
+		"old", pluginJSON)
+	if _, err := marketplace.LoadProjected(afero.NewOsFs(), home, cache); err != nil {
+		t.Fatalf("legacy pin with untampered plugin.json must verify, got: %v", err)
+	}
+
+	// A legacy pin that no longer matches plugin.json is a real tamper.
+	home2, cache2 := writeProjFixture(t,
 		"[plugin]\nid = \"old@m\"\nversion = \"1\"\nmanifest_sha = \"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef\"\n",
-		"old", `{"name":"old","mcpServers":{"a":{"command":"x"}}}`)
-	_, err := marketplace.LoadProjected(afero.NewOsFs(), home, cache)
-	if err == nil || !strings.Contains(err.Error(), "pre-tree-hash") {
-		t.Fatalf("expected legacy-pin refusal, got: %v", err)
+		"old", pluginJSON)
+	if _, err := marketplace.LoadProjected(afero.NewOsFs(), home2, cache2); err == nil ||
+		!strings.Contains(err.Error(), "manifest SHA mismatch") {
+		t.Fatalf("legacy pin mismatch must error, got: %v", err)
 	}
 }
 

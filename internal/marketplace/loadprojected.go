@@ -1,6 +1,8 @@
 package marketplace
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -248,9 +250,24 @@ func verifyPluginManifestSHA(fs afero.Fs, pluginCacheDir, expected, id string) e
 		}
 		return nil
 	}
-	// Legacy bare-hex pin: covered only plugin.json, so it cannot certify the
-	// component bodies. Refuse with an actionable re-pin instruction.
-	return fmt.Errorf("plugin %s is pinned with a pre-tree-hash manifest SHA that does not cover "+
-		"component bodies; run `agentsync plugin upgrade %s` (or `agentsync update`) to re-pin it, "+
-		"or set AGENTSYNC_ALLOW_PLUGIN_DRIFT=1 to bypass once", id, id)
+	// Legacy bare-hex pin (pre-tree-hash): verify under the PRIOR scheme
+	// (sha256 over plugin.json only) so existing installs keep working — they
+	// were never body-pinned, and refusing them would brick a plugin whose only
+	// offered remediation (`agentsync update`) does not re-pin a non-bumping
+	// plugin. Re-installing or `agentsync plugin upgrade <id>` rewrites the pin
+	// as a tree hash, which DOES cover the bodies going forward.
+	data, err := afero.ReadFile(fs, filepath.Join(pluginCacheDir, ".claude-plugin", "plugin.json"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("verify plugin %s manifest SHA: %w", id, err)
+	}
+	sum := sha256.Sum256(data)
+	if got := hex.EncodeToString(sum[:]); got != expected {
+		return fmt.Errorf("plugin %s manifest SHA mismatch (cache tampered or upstream rolled): "+
+			"want %s got %s; run `agentsync plugin upgrade %s` to accept the new manifest, "+
+			"or set AGENTSYNC_ALLOW_PLUGIN_DRIFT=1 to bypass this check", id, expected, got, id)
+	}
+	return nil
 }

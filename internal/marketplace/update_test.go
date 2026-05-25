@@ -237,6 +237,21 @@ func TestDetectSHADrift_Drift(t *testing.T) {
 	}
 }
 
+// TestDetectSHADrift_LegacyVsTreeSchemeSkipped guards against a false
+// "re-uploaded?" warning: a legacy bare-hex pin and a freshly computed
+// tree:v1: hash are different SCHEMES, so their difference is a format change,
+// not a re-upload. The legacy pin is verified under the prior scheme at apply;
+// drift detection must skip the cross-scheme comparison.
+func TestDetectSHADrift_LegacyVsTreeSchemeSkipped(t *testing.T) {
+	plugins := []source.Plugin{
+		{ID: "demo", Plugin: source.PluginSpec{ID: "demo@mp", Version: "1.0.0", ManifestSHA: "deadbeefdeadbeef"}},
+	}
+	warnings := marketplace.DetectSHADrift(plugins, map[string]string{"demo": "tree:v1:abc123"})
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warning for a legacy-vs-tree scheme difference, got %d: %+v", len(warnings), warnings)
+	}
+}
+
 func TestDetectSHADrift_NoRecordedSHA(t *testing.T) {
 	// If plugin has no recorded SHA, no warning (it may not have been installed with pinning).
 	plugins := []source.Plugin{

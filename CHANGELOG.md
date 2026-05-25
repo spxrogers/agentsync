@@ -57,9 +57,10 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   (`SKILL.md`, command/subagent markdown) with an unchanged `plugin.json` passed
   verification and was projected. The pin is now a `tree:v1:` hash over the
   whole plugin cache tree (excluding `.git/`), computed and verified by one
-  shared function. **Migration:** existing bare-hex pins are refused with a
-  re-pin instruction — run `agentsync update` (or `agentsync plugin upgrade
-  <id>`) to re-pin, or set `AGENTSYNC_ALLOW_PLUGIN_DRIFT=1` to bypass once.
+  shared function. **Migration:** existing pre-tree-hash (bare-hex) pins keep
+  verifying under the prior `plugin.json`-only scheme, so existing installs are
+  not broken; re-installing or `agentsync plugin upgrade <id>` rewrites the pin
+  as a tree hash that covers the bodies going forward.
 - **Nested memory fragments load** — `@import ./fragments/<name>` accepts a
   nested path (e.g. `sub/frag.md`), but fragments were read non-recursively and
   keyed by basename, so a nested fragment never loaded and its directive stayed
