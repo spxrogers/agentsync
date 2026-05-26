@@ -55,6 +55,14 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   (concepts, architecture, components, capability matrix) are mirrored from
   `docs/*.md` at build time so the site can never drift from the in-repo source.
 
+### Changed
+
+- **Capability matrix** — Cursor's planned projection now lists **subagents** as
+  ◐ projected (`.cursor/agents/`), reflecting Cursor's new subagent support
+  (previously skipped). No code change — Cursor remains a no-op adapter until its
+  v1.2 implementation. The matrices also drop the per-agent version suffixes (the
+  target version isn't material) and footnote Codex/Cursor as planned.
+
 ### Fixed
 
 - **`agent disable --purge` validates the name; `doctor` names a half-init** —

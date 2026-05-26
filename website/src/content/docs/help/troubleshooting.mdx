@@ -45,7 +45,7 @@ git ls-remote <marketplace-url>
 agentsync uses `go-git` and falls back to system `git` for sparse clones if needed.
 
 ### `agent add codex` / `cursor` is rejected
-Their adapters are no-ops in v1 (Codex → v1.1, Cursor → v1.2). Register anyway with
+Their adapters are no-ops in v1 — both are still planned. Register anyway with
 `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` — apply will emit zero ops for them.
 
 ---

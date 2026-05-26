@@ -46,10 +46,11 @@ it refuses to invent a translation that would mislead you. See
 
 ## When will Codex CLI and Cursor be supported?
 
-They're registered as no-op adapters today; Codex is planned for v1.1 and Cursor
-for v1.2. `agent add codex` / `agent add cursor` are rejected in beta unless you
-set `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. Cursor will manage project-scope rules only,
-since its user-level rules live in app-local storage.
+They're registered as no-op adapters today (both still planned). `agent add codex`
+/ `agent add cursor` are rejected in beta unless you set
+`AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. Cursor's planned coverage includes subagents
+(`.cursor/agents/`); its user-level *rules* live in app-local storage, so rules
+stay project-scope only.
 
 ## What about Continue, Gemini CLI, or Aider?
 

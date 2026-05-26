@@ -22,22 +22,21 @@ nothing is dropped silently.
 |---|---|---|
 | **Claude Code** | ✅ Full adapter | All seven components, including LSP. The reference implementation. |
 | **OpenCode** | ✅ Adapter (some components projected/skipped) | MCP, memory, skills, subagents, commands. Hooks and LSP are skipped with a warning. |
-| **Codex CLI** | 🔜 Planned (v1.1) | Registered as a no-op. `agent add codex` is rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. |
-| **Cursor** | 🔜 Planned (v1.2) | Registered as a no-op. Will manage project-scope rules only (user rules live in Cursor's app-local storage). |
+| **Codex CLI** | 🔜 Planned | Registered as a no-op. `agent add codex` is rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. |
+| **Cursor** | 🔜 Planned | Registered as a no-op. Planned coverage includes **subagents** (Cursor reads `.cursor/agents/` and `~/.cursor/agents/`). Rules stay project-scope only — user-level rules live in Cursor's app-local storage. |
 
 ---
 
 ## Component × agent
 
-Component support across agents. Codex (v1.1) and Cursor (v1.2) columns describe
-the **planned** projection per the design spec; their adapters are no-ops today.
+Component support across agents.
 
-| Component | Claude (v1.0) | OpenCode (v1.0) | Codex (v1.1) | Cursor (v1.2) |
+| Component | Claude | OpenCode | Codex[^planned] | Cursor[^planned] |
 |---|:--:|:--:|:--:|:--:|
 | **MCP server** | ✓ `~/.claude.json` | ✓ `opencode.json` | ◐ `config.toml` | ◐ `mcp.json` |
 | **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ◐ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` |
 | **Skill** | ✓ `~/.claude/skills/X/SKILL.md` | ✓ shared `.claude/skills/` | ◐ `~/.agents/skills/` | ✗ no skills concept |
-| **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ✗ |
+| **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/X.md` |
 | **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ✗ no custom commands | ◐ → `.cursor/rules/*.mdc` |
 | **Hook** | ✓ JSON in settings | ✗ skip (JS/TS plugins) | ◐ `hooks.json`, 5/9 events | ◐ `hooks.json`, ~6/9 events |
 | **LSP server** | ✓ native | ✗ skip (deferred) | ✗ no LSP concept | ✗ deferred |
@@ -73,6 +72,18 @@ translates rather than copying fields verbatim:
   key (not `env`).
 - **remote** — `url` and `headers` carry through unchanged.
 
+## How Cursor subagents are projected
+
+Cursor (planned) stores subagents as markdown-with-frontmatter in
+`.cursor/agents/` (project) and `~/.cursor/agents/` (user) — close to Claude's
+`~/.claude/agents/X.md`, so the projection is mechanical but lossy:
+
+- **frontmatter** — Cursor supports `name`, `description`, and `model`; it adds
+  `readonly` and `is_background` (no canonical counterpart) and has no equivalent
+  of Claude's per-subagent `tools` allowlist, which is dropped.
+- **compatibility paths** — Cursor also reads `.claude/agents/` and
+  `.codex/agents/`, with `.cursor/` taking precedence on name conflicts.
+
 ## Escape hatches
 
 You control fan-out explicitly:
@@ -103,3 +114,8 @@ in the [README](../README.md#known-limits-in-v1x); the highlights:
 - **Not on the roadmap**: Continue, Gemini CLI, Aider.
 
 See the [user guide](user-guide.md) to put this into practice.
+
+[^planned]: **Planned — not yet implemented.** The Codex and Cursor adapters are
+    registered as no-ops today, so these columns describe the *intended*
+    projection per the design spec. `agent add codex` / `agent add cursor` are
+    rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`.
