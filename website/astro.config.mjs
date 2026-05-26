@@ -40,17 +40,11 @@ export default defineConfig({
 				},
 			],
 			sidebar: [
-				// Promoted to a standalone top-level entry — the support matrix is
-				// the page people reach for most when evaluating fit.
-				{
-					label: 'Agent Capability matrix',
-					slug: 'reference/capability-matrix',
-					badge: { text: 'Support', variant: 'tip' },
-				},
 				{
 					label: 'Start here',
 					items: [
 						{ label: 'What is agentsync?', slug: 'getting-started/introduction' },
+						{ label: 'Agent Capability matrix', slug: 'reference/capability-matrix' },
 						{ label: 'The mental model', slug: 'getting-started/mental-model' },
 						{ label: 'Install', slug: 'getting-started/install' },
 						{ label: 'Your first sync', slug: 'getting-started/first-sync' },

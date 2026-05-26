@@ -66,9 +66,12 @@
 
 /* ---- Code & tables ---------------------------------------------------- */
 
+/* Wide tables (e.g. the capability matrix) scroll horizontally within the
+   content column instead of overflowing into the table of contents. */
 .sl-markdown-content table {
-	display: table;
-	width: 100%;
+	display: block;
+	max-width: 100%;
+	overflow-x: auto;
 }
 
 /* Tighten the legend symbols (✓ ◐ ✗) so the matrices read as a grid. */
