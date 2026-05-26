@@ -28,7 +28,9 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 - **Marketplaces & plugins** — all five plugin sources (relative, github, url,
   git-subdir, npm), `strict`-mode conflict policy, `${CLAUDE_PLUGIN_ROOT}`
   substitution, per-component projection, translation report, manifest-SHA
-  pinning, and update modes.
+  pinning, and update modes. `marketplace add` treats every marketplace
+  identically — no name is reserved. `marketplace remove` errors on an
+  unregistered or invalid name and points at `marketplace list`.
 - **Project-local overlays** — `.agentsync.toml` walk-up discovery, overlay
   merge, project-scope state tracking.
 - **age-encrypted secrets** — `${secret:…}`/`${env:…}` resolution at apply time,
@@ -43,6 +45,10 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   still captures one item. Empty scopes report a notice and exit cleanly.
   `import --dry-run` previews which source files an import would write without
   touching `~/.agentsync/`.
+  Plugin import resolves a marketplace from agentsync's own registered
+  marketplaces first, then the agent's native config, so `marketplace add` then
+  re-import captures plugins from any marketplace (including Claude built-ins
+  such as `claude-plugins-official`).
 - **Plugin import** — `import` now captures the agent's installed plugins and
   their marketplaces (Claude only in v1) via the new `plugin` component, so a
   full `import claude` reproduces a plugin-heavy setup in one pass. It reads

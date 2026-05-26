@@ -77,9 +77,10 @@ func TestImport_PluginsFromClaude(t *testing.T) {
 }
 
 // TestImport_PluginsWarnsUnregisteredMarketplace verifies the warn-and-skip
-// path: a plugin enabled from the auto-available 'claude-plugins-official'
-// marketplace (which Claude does not list in extraKnownMarketplaces) cannot be
-// resolved, so it is reported and skipped without failing the import.
+// path: a plugin whose marketplace is registered in neither Claude's native
+// config nor agentsync's own store (here 'claude-plugins-official', which Claude
+// does not list in extraKnownMarketplaces and the user has not `marketplace
+// add`ed) is reported and skipped without failing the import.
 func TestImport_PluginsWarnsUnregisteredMarketplace(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	writeClaudeSettings(t, tmp, map[string]any{
@@ -93,8 +94,61 @@ func TestImport_PluginsWarnsUnregisteredMarketplace(t *testing.T) {
 	if !strings.Contains(out, "claude-plugins-official") {
 		t.Fatalf("expected a warning naming the unregistered marketplace; got:\n%s", out)
 	}
+	if !strings.Contains(out, "nor agentsync") {
+		t.Fatalf("warning should reflect store-first resolution wording; got:\n%s", out)
+	}
 	if _, err := os.Stat(filepath.Join(tmp, ".agentsync", "plugins", "github.toml")); !os.IsNotExist(err) {
 		t.Fatalf("an unresolvable plugin must not be written; stat err=%v", err)
+	}
+}
+
+// TestImport_PluginsFromAgentsyncStore is the fix's core behavior: a plugin
+// enabled from a marketplace that is registered in agentsync's own store (via
+// `marketplace add`) but NOT in Claude's extraKnownMarketplaces is resolved from
+// the store and imported — no warning, no skip. This is exactly what the skip
+// warning's "marketplace add then re-import" remediation promises.
+func TestImport_PluginsFromAgentsyncStore(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeLocalMarketplace(t, t.TempDir()) // declared name "test-mp", plugin "demo"
+
+	// Register the marketplace in agentsync's store (this is the `marketplace add`
+	// the user runs). It is NOT added to Claude's native config below.
+	if out, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatalf("marketplace add: %v\n%s", err, out)
+	}
+
+	// Claude has the plugin enabled from test-mp but does not list test-mp in
+	// extraKnownMarketplaces — mirroring a built-in/auto marketplace.
+	writeClaudeSettings(t, tmp, map[string]any{
+		"enabledPlugins": map[string]any{"demo@test-mp": true},
+	})
+
+	// Dry-run previews the plugin only; the marketplace is already registered, so
+	// there is no marketplace line to "import".
+	dry, err := runCLI(t, env, "import", "claude:plugin", "--dry-run")
+	if err != nil {
+		t.Fatalf("import --dry-run: %v\n%s", err, dry)
+	}
+	if !strings.Contains(dry, "plugins/demo.toml") {
+		t.Fatalf("dry-run should preview the plugin; got:\n%s", dry)
+	}
+	if strings.Contains(dry, "marketplaces/test-mp.toml") {
+		t.Fatalf("already-registered marketplace must not be previewed for import; got:\n%s", dry)
+	}
+	if strings.Contains(dry, "skipping") {
+		t.Fatalf("registered marketplace must not be skipped; got:\n%s", dry)
+	}
+
+	// Real import writes the plugin TOML.
+	out, err := runCLI(t, env, "import", "claude:plugin")
+	if err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "skipping") {
+		t.Fatalf("registered marketplace must not be skipped; got:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, ".agentsync", "plugins", "demo.toml")); err != nil {
+		t.Fatalf("plugins/demo.toml not written from store-resolved marketplace: %v\n%s", err, out)
 	}
 }
 
@@ -140,6 +194,34 @@ func TestImport_PluginNamedSelector(t *testing.T) {
 
 	if _, err := runCLI(t, env, "import", "claude:plugin:nope"); err == nil {
 		t.Fatal("expected error importing a plugin that is not enabled")
+	}
+}
+
+// TestImport_PluginsStoreBeatsNativeConfig pins the store-first precedence: when
+// a marketplace is registered BOTH in agentsync's store and in the agent's
+// native config, import resolves it from the store and does not re-fetch — in
+// dry-run that means no "marketplaces/<mp>.toml" preview line (the native path
+// would print one), while the plugin still imports.
+func TestImport_PluginsStoreBeatsNativeConfig(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeLocalMarketplace(t, t.TempDir()) // declared name "test-mp", plugin "demo"
+
+	// Register the marketplace in agentsync's store.
+	if out, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatalf("marketplace add: %v\n%s", err, out)
+	}
+	// AND register the same marketplace in Claude's native config.
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("test-mp", mpDir, "demo"))
+
+	out, err := runCLI(t, env, "import", "claude:plugin", "--dry-run")
+	if err != nil {
+		t.Fatalf("import --dry-run: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "plugins/demo.toml") {
+		t.Fatalf("dry-run should preview the plugin; got:\n%s", out)
+	}
+	if strings.Contains(out, "marketplaces/test-mp.toml") {
+		t.Fatalf("store-registered marketplace must win (no marketplace preview line); got:\n%s", out)
 	}
 }
 

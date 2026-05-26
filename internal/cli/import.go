@@ -125,9 +125,11 @@ component too imports the agent's full native config in one pass. Use
 The plugin component captures the agent's installed plugins + their
 marketplaces (Claude only in v1): it re-fetches each marketplace and plugin
 into the agentsync cache and pins them, so a real import needs network access.
-A plugin whose marketplace is not registered in the agent's native config
-(e.g. the built-in 'claude-plugins-official') is reported and skipped; add it
-with 'agentsync marketplace add <source>' and re-import.
+A plugin's marketplace is resolved from agentsync's own registered marketplaces
+first, then the agent's native config; a plugin whose marketplace is registered
+in neither (e.g. a built-in like 'claude-plugins-official' you have not yet
+added) is reported and skipped. Register it with 'agentsync marketplace add
+<source>' and re-import.
 
 Examples:
   agentsync import claude                 # all importable components
@@ -837,10 +839,12 @@ func importMemory(cmd *cobra.Command, home string, c source.Canonical, dryRun bo
 // `import <agent>` stays clean for them). A real import needs network access to
 // re-fetch; --dry-run discovers and previews without fetching or writing.
 //
-// Plugins from an unregistered/auto marketplace — e.g. claude-plugins-official,
-// which Claude does not list in extraKnownMarketplaces — are reported and
-// skipped, as is a marketplace whose source type agentsync cannot fetch. name,
-// when non-empty, selects a single plugin (matched by its name or
+// A plugin's marketplace is resolved from agentsync's own registered
+// marketplaces first (so `marketplace add` then re-import captures plugins from
+// any marketplace, including Claude built-ins like claude-plugins-official),
+// then from the agent's native config. A plugin whose marketplace is registered
+// in neither — or one whose source type agentsync cannot fetch — is reported and
+// skipped. name, when non-empty, selects a single plugin (matched by its name or
 // "name@marketplace"); a no-match is an error. A fetch/install failure for one
 // marketplace or plugin warns and skips rather than aborts, so one bad item
 // does not strand the rest. Plugins are NOT dest-seeded into state (unlike the
@@ -885,15 +889,29 @@ func importPlugins(cmd *cobra.Command, home, agentName string, a adapter.Adapter
 	// Resolve (and, on a real run, fetch) each needed marketplace exactly once.
 	// The cached value is the agentsync marketplace name a plugin installs from;
 	// "" marks an unresolvable marketplace already warned about.
+	registered := registeredMarketplaceNames(home)
 	resolved := map[string]string{}
 	resolveMp := func(mpID string) (string, bool) {
 		if n, done := resolved[mpID]; done {
 			return n, n != ""
 		}
+		// Store-first: a marketplace already registered with `agentsync
+		// marketplace add` is authoritative and already cached, so its plugins
+		// install straight from it — no re-fetch, no marketplace-TOML rewrite, and
+		// (in dry-run) no marketplace preview line, since it is already in source.
+		// mpID doubles as the install/cache-dir key here; native marketplace ids
+		// are clean slugs, so a name that would need sanitizing simply misses the
+		// cache and degrades to a warn+skip in installPluginInto (no leak/crash).
+		if registered[mpID] {
+			resolved[mpID] = mpID
+			return mpID, true
+		}
+		// Fallback: discover the marketplace from the agent's native config,
+		// fetch it, and register it.
 		nm, known := mpByID[mpID]
 		if !known {
-			fmt.Fprintf(ew, "warning: skipping plugins from marketplace %q: not registered in %s's native config "+
-				"(e.g. the built-in 'claude-plugins-official'); run `agentsync marketplace add <source>` then re-import\n",
+			fmt.Fprintf(ew, "warning: skipping plugins from marketplace %q: registered in neither %s's "+
+				"native config nor agentsync; run `agentsync marketplace add <source>` then re-import\n",
 				mpID, agentName)
 			resolved[mpID] = ""
 			return "", false
@@ -911,7 +929,7 @@ func importPlugins(cmd *cobra.Command, home, agentName string, a adapter.Adapter
 			resolved[mpID] = mpID
 			return mpID, true
 		}
-		mpName, _, ferr := addMarketplaceSource(home, src, rawURL, ew)
+		mpName, _, ferr := addMarketplaceSource(home, src, rawURL)
 		if ferr != nil {
 			fmt.Fprintf(ew, "warning: skipping marketplace %q: %v\n", mpID, ferr)
 			resolved[mpID] = ""

@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -68,7 +67,7 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	mpName, headSHA, err := addMarketplaceSource(home, src, rawURL, cmd.ErrOrStderr())
+	mpName, headSHA, err := addMarketplaceSource(home, src, rawURL)
 	if err != nil {
 		return err
 	}
@@ -81,12 +80,12 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 // marketplaces/<name>.toml, and records the fetch in state. It returns the
 // resolved marketplace name (the declared name from marketplace.json, falling
 // back to a URL-derived slug) and the fetched head SHA. rawURL is the original
-// source string stored in the TOML; warnOut receives the reserved-name notice.
+// source string stored in the TOML.
 //
 // It does not print a success line or acquire the global lock — callers do.
 // Both `marketplace add` and `import` use it so the two produce byte-identical
 // canonical artifacts.
-func addMarketplaceSource(home string, src marketplace.Source, rawURL string, warnOut io.Writer) (mpName, headSHA string, err error) {
+func addMarketplaceSource(home string, src marketplace.Source, rawURL string) (mpName, headSHA string, err error) {
 	// Derive a slug for the marketplace.
 	slug := deriveMarketplaceSlug(rawURL)
 	cacheDir := marketplaceCacheDir(home, slug)
@@ -104,12 +103,6 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string, wa
 	if data, err := os.ReadFile(mpJSONPath); err == nil {
 		var mp marketplace.Marketplace
 		if json.Unmarshal(data, &mp) == nil && mp.Name != "" {
-			// Check reserved names.
-			for _, reserved := range marketplace.ReservedMarketplaceNames {
-				if mp.Name == reserved {
-					fmt.Fprintf(warnOut, "warning: marketplace name %q is reserved\n", mp.Name)
-				}
-			}
 			// Only adopt the declared name if it sanitises to something usable;
 			// a name like "..." sanitises to "" and would author marketplaces/.toml.
 			if s := sanitizeSlug(mp.Name); s != "" {
@@ -176,14 +169,26 @@ func newMarketplaceRemoveCmd() *cobra.Command {
 	}
 }
 
+// marketplaceListHint points users at the command that lists registered
+// marketplace names; used in `marketplace remove` error messages.
+const marketplaceListHint = "run: agentsync marketplace list to see registered names"
+
 func marketplaceRemoveRun(cmd *cobra.Command, args []string) error {
 	name := args[0]
 	if err := validateCacheKey("marketplace", name); err != nil {
-		return err
+		return fmt.Errorf("%w; %s", err, marketplaceListHint)
 	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 
 	tomlPath := filepath.Join(home, "marketplaces", name+".toml")
+	// Removing an unregistered name is a user mistake, not a silent no-op: report
+	// it and point at `marketplace list` rather than printing "removed".
+	if _, err := os.Stat(tomlPath); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("marketplace %q is not registered; %s", name, marketplaceListHint)
+		}
+		return fmt.Errorf("stat %s: %w", tomlPath, err)
+	}
 	if err := os.Remove(tomlPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove %s: %w", tomlPath, err)
 	}
@@ -256,6 +261,35 @@ func marketplaceListRun(cmd *cobra.Command, _ []string) error {
 }
 
 // ---- helpers ----------------------------------------------------------------
+
+// registeredMarketplaceNames returns the set of marketplace names registered in
+// ~/.agentsync/marketplaces/. Both each TOML's declared `name` field and its
+// filename stem map to true, so a native marketplace id matches whichever the
+// store recorded. It mirrors how `marketplace list` enumerates the store and
+// lets import resolve a plugin's marketplace from agentsync's own store before
+// the agent's native config. A missing or unreadable store yields an empty set.
+func registeredMarketplaceNames(home string) map[string]bool {
+	entries, err := os.ReadDir(filepath.Join(home, "marketplaces"))
+	if err != nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".toml") {
+			continue
+		}
+		out[strings.TrimSuffix(e.Name(), ".toml")] = true
+		data, err := os.ReadFile(filepath.Join(home, "marketplaces", e.Name()))
+		if err != nil {
+			continue
+		}
+		var mp marketplaceTOML
+		if toml.Unmarshal(data, &mp) == nil && mp.Marketplace.Name != "" {
+			out[mp.Marketplace.Name] = true
+		}
+	}
+	return out
+}
 
 // parseMarketplaceSource converts a user-provided URL/path string into a Source.
 // Handles:

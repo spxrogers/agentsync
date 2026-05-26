@@ -123,15 +123,3 @@ type PluginManifest struct {
 	Hooks       any            `json:"hooks,omitempty"`
 	LSPServers  map[string]any `json:"lspServers,omitempty"`
 }
-
-// ReservedMarketplaceNames are names that trigger a warning on `marketplace add`.
-var ReservedMarketplaceNames = []string{
-	"claude-code-marketplace",
-	"claude-code-plugins",
-	"claude-plugins-official",
-	"anthropic-marketplace",
-	"anthropic-plugins",
-	"agent-skills",
-	"knowledge-work-plugins",
-	"life-sciences",
-}
