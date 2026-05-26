@@ -155,6 +155,7 @@ agentsync import claude --dry-run       # preview what a full import would write
 agentsync import claude                 # the agent's full native config
 agentsync import claude:mcp             # every MCP server
 agentsync import claude:mcp:github      # a single MCP server
+agentsync import claude:plugin          # every installed plugin + marketplace
 agentsync import opencode:mcp:linear
 
 # Now it's in ~/.agentsync/ — apply to fan it out to your other agents.
@@ -163,9 +164,19 @@ agentsync apply
 
 Dropping the name imports every entry of a component; dropping the component
 too imports everything the agent has (MCP, skills, subagents, commands, hooks,
-LSP, and memory) in one pass. A bulk import that finds nothing for a component
-reports it and exits cleanly rather than erroring. Add `--dry-run` to list the
-source files an import would write without touching `~/.agentsync/`.
+LSP, memory, **and plugins**) in one pass. A bulk import that finds nothing for a
+component reports it and exits cleanly rather than erroring. Add `--dry-run` to
+list the source files an import would write without touching `~/.agentsync/`.
+
+**Plugins are a special case.** The `plugin` component (Claude only in v1) reads
+the agent's installed plugins and their marketplaces from its native config and
+re-fetches each one into the agentsync cache, pinning a manifest SHA — the same
+artifacts `marketplace add` + `plugin install` produce. Because it re-fetches, a
+real plugin import (not `--dry-run`) needs network access. A plugin installed
+from a marketplace that isn't registered in the agent's native config — most
+notably Claude's built-in `claude-plugins-official`, which doesn't appear in
+`extraKnownMarketplaces` — can't be resolved, so it's reported and skipped; add
+the marketplace with `agentsync marketplace add <source>` and re-import.
 
 On a populated machine, the **first** apply will see pre-existing native files it
 didn't write and treat them as `foreign-collision`: it backs each one up to
@@ -287,7 +298,7 @@ and every enabled agent gets the components it understands:
 agentsync marketplace add github:anthropics/claude-plugins-official
 agentsync plugin install atlassian@anthropic
 
-agentsync update           # fetch from the network (the only networked verb)
+agentsync update           # fetch from the network (refresh + re-pin plugins)
 agentsync apply            # render from cache → all agents
 ```
 
@@ -470,7 +481,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `status` | Summarize drift/pending across agents. | `--scope --project` |
 | `diff [<path>]` | Show pending/drift changes; secrets redacted. | `--scope --project` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
-| `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. | `--dry-run` |
+| `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. Includes `plugin` (Claude), which re-fetches installed plugins + marketplaces **(network)**. | `--dry-run` |
 | `explain <plugin>` | Show a plugin's per-agent translation coverage. | `--json` |
 
 Global: `-v/--verbose` for verbose logging on any command.

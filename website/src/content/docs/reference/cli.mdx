@@ -133,11 +133,16 @@ The interactive merge UX for drift and conflicts. Full guide:
 
 ### `import <agent>[:<component>[:<name>]]`
 Captures native config back into your canonical source. Drop parts of the selector
-to widen scope. Full guide: [Already have configs?](/getting-started/existing-configs/).
+to widen scope. The `plugin` component (Claude only in v1) captures installed
+plugins + their marketplaces by re-fetching them into the agentsync cache, so a
+real plugin import **uses the network**; a plugin from an unregistered or
+auto-available marketplace (e.g. `claude-plugins-official`) is reported and
+skipped. Full guide: [Already have configs?](/getting-started/existing-configs/).
 
 ### `update`
-**The only networked verb.** Refreshes the marketplace cache and recomputes
-version pins, then optionally applies. Full guide:
+**The main networked verb.** Refreshes the marketplace cache and recomputes
+version pins, then optionally applies. (`import`'s `plugin` component also reaches
+the network, to re-fetch the plugins it captures.) Full guide:
 [Updating from the network](/guides/updating/).
 
 ```bash

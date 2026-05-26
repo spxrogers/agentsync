@@ -137,11 +137,13 @@ per agent, what landed:
 - **◐ projected** — lossy but defensible translation, explicitly reported.
 - **✗ skipped** — no honest translation exists; logged so it's never silent.
 
-### Update (the only networked verb)
-`agentsync update` is the *only* command that touches the network: it polls
-marketplaces, refreshes the cache, and recomputes version pins. `apply` then
-runs entirely from cache. This split keeps `apply` fast, reproducible, and
-offline-safe.
+### Update (the networked verb)
+`agentsync update` is the command that touches the network in the daily loop: it
+polls marketplaces, refreshes the cache, and recomputes version pins. `apply`
+then runs entirely from cache. This split keeps `apply` fast, reproducible, and
+offline-safe. (The one other networked path is setup-time: `import`'s `plugin`
+component re-fetches the plugins + marketplaces it captures from an agent's
+native config.)
 
 ---
 

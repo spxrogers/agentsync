@@ -43,6 +43,15 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   still captures one item. Empty scopes report a notice and exit cleanly.
   `import --dry-run` previews which source files an import would write without
   touching `~/.agentsync/`.
+- **Plugin import** — `import` now captures the agent's installed plugins and
+  their marketplaces (Claude only in v1) via the new `plugin` component, so a
+  full `import claude` reproduces a plugin-heavy setup in one pass. It reads
+  Claude's native `enabledPlugins` / `extraKnownMarketplaces` and re-fetches each
+  marketplace + plugin into the agentsync cache (pinning a manifest SHA),
+  producing the same artifacts as `marketplace add` + `plugin install` — so a
+  real plugin import needs network access. Plugins from an unregistered or
+  auto-available marketplace (e.g. the built-in `claude-plugins-official`, which
+  Claude does not list in `extraKnownMarketplaces`) are reported and skipped.
 - **Safety primitives** — two-phase atomic writes, an apply lock, first-apply
   foreign-collision backups, symlinked-destination refusal, and a schema-versioned
   state file with portable (`${HOME}`-relative) keys.

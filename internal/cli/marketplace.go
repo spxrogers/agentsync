@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -67,6 +68,25 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	mpName, headSHA, err := addMarketplaceSource(home, src, rawURL, cmd.ErrOrStderr())
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "added marketplace %s (sha=%s)\n",
+		mpName, truncate(headSHA, 12))
+	return nil
+}
+
+// addMarketplaceSource fetches src into the marketplace cache, writes
+// marketplaces/<name>.toml, and records the fetch in state. It returns the
+// resolved marketplace name (the declared name from marketplace.json, falling
+// back to a URL-derived slug) and the fetched head SHA. rawURL is the original
+// source string stored in the TOML; warnOut receives the reserved-name notice.
+//
+// It does not print a success line or acquire the global lock — callers do.
+// Both `marketplace add` and `import` use it so the two produce byte-identical
+// canonical artifacts.
+func addMarketplaceSource(home string, src marketplace.Source, rawURL string, warnOut io.Writer) (mpName, headSHA string, err error) {
 	// Derive a slug for the marketplace.
 	slug := deriveMarketplaceSlug(rawURL)
 	cacheDir := marketplaceCacheDir(home, slug)
@@ -75,11 +95,11 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 	fetcher := marketplace.Dispatch(src)
 	result, err := fetcher.Fetch(src, cacheDir)
 	if err != nil {
-		return fmt.Errorf("fetch marketplace %s: %w", rawURL, err)
+		return "", "", fmt.Errorf("fetch marketplace %s: %w", rawURL, err)
 	}
 
 	// Read marketplace.json to extract the declared name.
-	mpName := slug
+	mpName = slug
 	mpJSONPath := filepath.Join(cacheDir, ".claude-plugin", "marketplace.json")
 	if data, err := os.ReadFile(mpJSONPath); err == nil {
 		var mp marketplace.Marketplace
@@ -87,7 +107,7 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 			// Check reserved names.
 			for _, reserved := range marketplace.ReservedMarketplaceNames {
 				if mp.Name == reserved {
-					fmt.Fprintf(cmd.OutOrStdout(), "warning: marketplace name %q is reserved\n", mp.Name)
+					fmt.Fprintf(warnOut, "warning: marketplace name %q is reserved\n", mp.Name)
 				}
 			}
 			// Only adopt the declared name if it sanitises to something usable;
@@ -119,11 +139,11 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 	}
 	data, err := toml.Marshal(mp)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	mpPath := filepath.Join(home, "marketplaces", mpName+".toml")
 	if err := iox.AtomicWrite(mpPath, data, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", mpPath, err)
+		return "", "", fmt.Errorf("write %s: %w", mpPath, err)
 	}
 
 	// Update state.json so the update command can track fetch timestamps and SHAs.
@@ -139,9 +159,7 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 	}
 	_ = state.Save(statePath, st) // best-effort; don't fail add on state write errors
 
-	fmt.Fprintf(cmd.OutOrStdout(), "added marketplace %s (sha=%s)\n",
-		mpName, truncate(result.HeadSHA, 12))
-	return nil
+	return mpName, result.HeadSHA, nil
 }
 
 // ---- remove -----------------------------------------------------------------

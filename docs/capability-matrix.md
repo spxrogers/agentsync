@@ -20,7 +20,7 @@ nothing is dropped silently.
 
 | Agent | Status in v1.0 / beta | Notes |
 |---|---|---|
-| **Claude Code** | ✅ Full adapter | All seven components, including LSP. The reference implementation. |
+| **Claude Code** | ✅ Full adapter | All seven components, including LSP. The reference implementation. Also the only agent whose installed **plugins + marketplaces** are captured by `import` (re-fetched from `enabledPlugins` / `extraKnownMarketplaces`). |
 | **OpenCode** | ✅ Adapter (some components projected/skipped) | MCP, memory, skills, subagents, commands. Hooks and LSP are skipped with a warning. |
 | **Codex CLI** | 🔜 Planned | Registered as a no-op. `agent add codex` is rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. |
 | **Cursor** | 🔜 Planned | Registered as a no-op. Planned coverage is broad — MCP, memory, skills, subagents, slash commands, and hooks all project (see the matrix); only LSP is unsupported. User-level rules/memory live in Cursor's app-local storage, so those stay project-scope. |

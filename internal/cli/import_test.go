@@ -803,8 +803,8 @@ func TestImport_UnknownComponent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := runCLI(t, env, "import", "claude:plugin:foo")
+	_, err := runCLI(t, env, "import", "claude:widget:foo")
 	if err == nil {
-		t.Fatal("expected error for unknown component 'plugin'; got nil")
+		t.Fatal("expected error for unknown component 'widget'; got nil")
 	}
 }

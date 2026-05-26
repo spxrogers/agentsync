@@ -106,9 +106,9 @@ keys.
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods; `ParseFrontmatter`/
   `EncodeFrontmatter`; `MergeKeys`.
 - **Depends on:** adapter, secrets, source, paths, iox, jsonkeys.
-- **Files:** `claude.go`, `render.go`, `ingest.go`, `apply.go`, `paths.go`,
-  `frontmatter.go`, `skill.go`, `command.go`, `subagent.go`, `hook.go`, `lsp.go`,
-  `memory.go`, `settings.go`.
+- **Files:** `claude.go`, `render.go`, `ingest.go`, `ingest_plugins.go`,
+  `apply.go`, `paths.go`, `frontmatter.go`, `skill.go`, `command.go`,
+  `subagent.go`, `hook.go`, `lsp.go`, `memory.go`, `settings.go`.
 
 ### `internal/adapter/opencode`
 The OpenCode adapter — MCP, memory, skills, subagents, commands via JSONC
