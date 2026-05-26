@@ -899,6 +899,9 @@ func importPlugins(cmd *cobra.Command, home, agentName string, a adapter.Adapter
 		// marketplace add` is authoritative and already cached, so its plugins
 		// install straight from it — no re-fetch, no marketplace-TOML rewrite, and
 		// (in dry-run) no marketplace preview line, since it is already in source.
+		// mpID doubles as the install/cache-dir key here; native marketplace ids
+		// are clean slugs, so a name that would need sanitizing simply misses the
+		// cache and degrades to a warn+skip in installPluginInto (no leak/crash).
 		if registered[mpID] {
 			resolved[mpID] = mpID
 			return mpID, true

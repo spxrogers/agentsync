@@ -197,6 +197,34 @@ func TestImport_PluginNamedSelector(t *testing.T) {
 	}
 }
 
+// TestImport_PluginsStoreBeatsNativeConfig pins the store-first precedence: when
+// a marketplace is registered BOTH in agentsync's store and in the agent's
+// native config, import resolves it from the store and does not re-fetch — in
+// dry-run that means no "marketplaces/<mp>.toml" preview line (the native path
+// would print one), while the plugin still imports.
+func TestImport_PluginsStoreBeatsNativeConfig(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeLocalMarketplace(t, t.TempDir()) // declared name "test-mp", plugin "demo"
+
+	// Register the marketplace in agentsync's store.
+	if out, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatalf("marketplace add: %v\n%s", err, out)
+	}
+	// AND register the same marketplace in Claude's native config.
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("test-mp", mpDir, "demo"))
+
+	out, err := runCLI(t, env, "import", "claude:plugin", "--dry-run")
+	if err != nil {
+		t.Fatalf("import --dry-run: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "plugins/demo.toml") {
+		t.Fatalf("dry-run should preview the plugin; got:\n%s", out)
+	}
+	if strings.Contains(out, "marketplaces/test-mp.toml") {
+		t.Fatalf("store-registered marketplace must win (no marketplace preview line); got:\n%s", out)
+	}
+}
+
 // TestImport_FullAgentIncludesPlugins verifies plugins are part of a full
 // `import claude`: the summary counts them and both file components and plugins
 // land in the canonical source.
