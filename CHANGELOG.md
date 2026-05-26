@@ -64,8 +64,16 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   also drop the per-agent version suffixes (the target version isn't material) and
   footnote Codex/Cursor as planned.
 - **Capability matrix** — corrected Codex **skills** from ◐ to ✓: Codex reads the
-  same `SKILL.md` format (no translation loss), matching the design spec. Documented
-  the one caveat — skills require `[features] skills = true` in `~/.codex/config.toml`.
+  same `SKILL.md` format (no translation loss), matching the design spec. (Codex
+  skills are on by default — they install under `~/.agents/skills/`; there is no
+  `[features] skills = true` master flag.)
+- **Capability matrix** — full sweep against each agent's current docs:
+  Codex/Cursor **MCP** and Codex **memory** are now ✓ (full-fidelity transforms);
+  Codex and Cursor gained real **slash commands** (◐ — Codex via deprecated,
+  global-only custom prompts; Cursor via frontmatter-less `.cursor/commands/`); and
+  Codex now mirrors Claude's declarative **hooks** JSON (◐ — ~11-event subset)
+  while Cursor added a declarative `.cursor/hooks.json` (◐ — event remap). Every ◐
+  cell now spells out its specific projection loss.
 
 ### Fixed
 

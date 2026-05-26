@@ -424,11 +424,11 @@ describe the intended projection.
 
 | Component | Claude | OpenCode | Codex | Cursor |
 |---|:--:|:--:|:--:|:--:|
-| MCP server | ✓ | ✓ | ◐ | ◐ |
-| Memory | ✓ | ✓ | ◐ | ◐ |
+| MCP server | ✓ | ✓ | ✓ | ✓ |
+| Memory | ✓ | ✓ | ✓ | ◐ |
 | Skill | ✓ | ✓ | ✓ | ✓ |
 | Subagent | ✓ | ◐ | ◐ | ◐ |
-| Slash command | ✓ | ◐ | ✗ | ◐ |
+| Slash command | ✓ | ◐ | ◐ | ◐ |
 | Hook | ✓ | ✗ | ◐ | ◐ |
 | LSP server | ✓ | ✗ | ✗ | ✗ |
 

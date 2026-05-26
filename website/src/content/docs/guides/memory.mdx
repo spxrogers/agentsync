@@ -43,14 +43,15 @@ updates on the next `apply`.
 
 | Agent | Native memory file |
 | --- | --- |
-| Claude Code | `CLAUDE.md` |
-| OpenCode | `AGENTS.md` |
+| Claude Code | `~/.claude/CLAUDE.md` |
+| OpenCode | `~/.config/opencode/AGENTS.md` |
 | Codex (planned) | `~/.codex/AGENTS.md` |
-| Cursor (planned) | `AGENTS.md` |
+| Cursor (planned) | `AGENTS.md` (project root) |
 
-Memory is **✓ native** on Claude and OpenCode — it carries across with full
-fidelity. See the [capability matrix](/reference/capability-matrix/) for the
-planned agents.
+Memory is **✓ native** on Claude and OpenCode — the same markdown, full fidelity —
+and on Codex's planned projection (`~/.codex/AGENTS.md`). Cursor keeps user-level
+rules in app-local storage, so memory projects to a project-root `AGENTS.md` only
+(◐). See the [capability matrix](/reference/capability-matrix/) for detail.
 
 <LinkCard
 	title="Project-local memory"
