@@ -426,7 +426,7 @@ describe the intended projection.
 |---|:--:|:--:|:--:|:--:|
 | MCP server | ✓ | ✓ | ◐ | ◐ |
 | Memory | ✓ | ✓ | ◐ | ◐ |
-| Skill | ✓ | ✓ | ◐ | ✓ |
+| Skill | ✓ | ✓ | ✓ | ✓ |
 | Subagent | ✓ | ◐ | ◐ | ◐ |
 | Slash command | ✓ | ◐ | ✗ | ◐ |
 | Hook | ✓ | ✗ | ◐ | ◐ |

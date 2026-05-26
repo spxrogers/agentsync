@@ -63,6 +63,9 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   code change — Cursor remains a no-op adapter until it's implemented. The matrices
   also drop the per-agent version suffixes (the target version isn't material) and
   footnote Codex/Cursor as planned.
+- **Capability matrix** — corrected Codex **skills** from ◐ to ✓: Codex reads the
+  same `SKILL.md` format (no translation loss), matching the design spec. Documented
+  the one caveat — skills require `[features] skills = true` in `~/.codex/config.toml`.
 
 ### Fixed
 

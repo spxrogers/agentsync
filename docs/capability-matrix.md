@@ -35,7 +35,7 @@ Component support across agents.
 |---|:--:|:--:|:--:|:--:|
 | **MCP server** | ✓ `~/.claude.json` | ✓ `opencode.json` | ◐ `config.toml` | ◐ `mcp.json` |
 | **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ◐ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` |
-| **Skill** | ✓ `~/.claude/skills/X/SKILL.md` | ✓ shared `.claude/skills/` | ◐ `~/.agents/skills/` | ✓ `.cursor/skills/` |
+| **Skill** | ✓ `~/.claude/skills/X/SKILL.md` | ✓ shared `.claude/skills/` | ✓ `~/.agents/skills/` | ✓ `.cursor/skills/` |
 | **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/X.md` |
 | **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ✗ no custom commands | ◐ → `.cursor/rules/*.mdc` |
 | **Hook** | ✓ JSON in settings | ✗ skip (JS/TS plugins) | ◐ `hooks.json`, 5/9 events | ◐ `hooks.json`, ~6/9 events |
@@ -88,6 +88,14 @@ layout, so projection is mechanical:
   per-subagent `tools` allowlist, which is dropped.
 - **Compatibility paths** — Cursor also reads the `.claude/` and `.codex/`
   equivalents, with `.cursor/` taking precedence on name conflicts.
+
+## How Codex skills are enabled
+
+Codex reads the same `SKILL.md` markdown as Claude (under `~/.agents/skills/`), so
+skills project with full fidelity (✓) — no translation loss. The one caveat is an
+opt-in: Codex gates skills behind `[features] skills = true` in
+`~/.codex/config.toml`, which the planned adapter sets so the projected skills are
+actually loaded.
 
 ## Escape hatches
 
