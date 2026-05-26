@@ -69,9 +69,9 @@ agentsync agent disable opencode --purge   # also remove what it wrote
 ```
 
 <Aside type="caution">
-	`agent add codex` / `agent add cursor` are rejected in beta — their adapters are
-	no-ops. Override with `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` if you really want to
-	register them (apply emits zero ops for them).
+	`agent add cursor` is rejected in beta — its adapter is still a no-op.
+	`agent add codex` works. Override with `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` if you
+	really want to register cursor anyway (apply emits zero ops for it).
 </Aside>
 
 ### `mcp`

@@ -70,7 +70,7 @@ type Adapter interface {
     Detect() (bool, error)          // is this agent installed?
     Render(r secrets.Resolved, scope Scope, project string) ([]FileOp, []Skip, error)
     Ingest(scope Scope, project string) (source.Canonical, error)
-    KeyMergeStrategy() string       // "merge-json-keys" | "merge-jsonc-keys" | ""
+    KeyMergeStrategy() string       // "merge-json-keys" | "merge-jsonc-keys" | "merge-toml-keys" | ""
     Apply(ops []FileOp, w DestWriter) error
 }
 ```
@@ -90,7 +90,21 @@ Two design points worth internalizing:
   guarantee.
 
 `Capability` is a bitmask, so the OpenCode adapter simply omits `CapHook` and
-`CapLSP` and the pipeline reports those components as skipped.
+`CapLSP` (and the Codex adapter omits `CapLSP` — Codex has no LSP concept) and
+the pipeline reports those components as skipped.
+
+**Key-merge strategies and on-disk format.** `KeyMergeStrategy` /
+`FileOp.MergeStrategy` name how an adapter co-owns keys inside a shared config
+file: `merge-json-keys` (Claude's `.claude.json`/`settings.json`),
+`merge-jsonc-keys` (OpenCode's comment-tolerant `opencode.json`), and
+`merge-toml-keys` (Codex's `config.toml`). The merge *currency* is always a
+`map[string]any` decoded from the rendered op's JSON `Content`, so the
+pipeline's pointer/ownership machinery (owned-key synthesis, orphan cleanup,
+per-pointer state hashing, foreign-collision backup) is format-agnostic; only
+the destination *file* is decoded/encoded per strategy — TOML for
+`merge-toml-keys` (`internal/adapter/codex/settings.go`), JSON otherwise. As
+with `opencode.json` and `mcp/*.toml`, the TOML round-trip does not preserve
+comments in the rewritten file (a documented v1 limit).
 
 One **optional** extension sits beside the core interface:
 
@@ -102,23 +116,29 @@ type PluginIngester interface {
 
 An adapter implements it only if the agent tracks installed plugins +
 marketplaces in its native config (Claude reads `enabledPlugins` /
-`extraKnownMarketplaces` from `settings.json`). `import` type-asserts for it: an
-adapter that doesn't implement it imports no plugins. It's kept off the core
-`Adapter` because the canonical schema doesn't otherwise depend on a native
-plugin concept, and only Claude has one in v1. The CLI maps each result onto an
+`extraKnownMarketplaces` from `settings.json`; Codex reads
+`[plugins."<name>@<source>"]` enable-state from `config.toml`). `import`
+type-asserts for it: an adapter that doesn't implement it imports no plugins.
+It's kept off the core `Adapter` because the canonical schema doesn't otherwise
+depend on a native plugin concept (OpenCode and the planned Cursor adapter don't
+implement it today). The CLI maps each result onto an
 agentsync marketplace source and re-fetches it through the same code path as
 `marketplace add` + `plugin install`, so a captured plugin lands as a normal
 `plugins/<id>.toml` + `marketplaces/<name>.toml` pair with a pinned manifest SHA.
 
-The planned **Codex** and **Cursor** adapters are the intended next implementors;
-both have native plugin systems, so the same import + apply fan-out (a plugin's
-components projected to every enabled agent via its capability matrix) applies
-unchanged once each implements `IngestPlugins`:
+The **Codex** adapter implements `IngestPlugins`; **Cursor** is the intended next
+implementor. Both have native plugin systems, so the same import + apply fan-out
+(a plugin's components projected to every enabled agent via its capability
+matrix) applies:
 
 - **Codex** records enable-state in `~/.codex/config.toml` under
-  `[plugins."<name>@<source>"]` tables, plus its own marketplace concept — the
-  same `name@source` shape Claude uses. `IngestPlugins` is "parse those TOML
-  tables + marketplace sources into `NativeMarketplace`/`NativePlugin`."
+  `[plugins."<name>@<source>"]` tables — the same `name@source` shape Claude
+  uses. `IngestPlugins` parses those TOML tables into `NativePlugin` records.
+  Unlike Claude, Codex records no marketplace *fetch source* in a documented
+  config location, so it returns no `NativeMarketplace`s; `import` resolves each
+  plugin's marketplace from agentsync's own registered marketplaces (warning +
+  skipping any it can't), exactly the path Claude's auto-available built-in
+  marketplace takes.
 - **Cursor** ships an even closer content schema — `.cursor-plugin/plugin.json` +
   `.cursor-plugin/marketplace.json`, near-identical to Claude's `.claude-plugin/*`
   (rules, skills, agents, commands, hooks, MCP) — so the projection layer largely

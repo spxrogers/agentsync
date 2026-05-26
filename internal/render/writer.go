@@ -207,7 +207,7 @@ func (w *Writer) maybeBackup(op adapter.FileOp, finalBytes []byte) error {
 		return nil
 	}
 	switch op.MergeStrategy {
-	case "merge-json-keys", "merge-jsonc-keys":
+	case "merge-json-keys", "merge-jsonc-keys", "merge-toml-keys":
 		return w.maybeBackupKeyOp(op)
 	default:
 		return w.maybeBackupFileOp(op, finalBytes)
@@ -240,9 +240,9 @@ func (w *Writer) maybeBackupKeyOp(op adapter.FileOp) error {
 	if err != nil || len(existing) == 0 {
 		return nil
 	}
-	var existingMap map[string]any
-	if err := json.Unmarshal(existing, &existingMap); err != nil {
-		// JSONC: best-effort. We don't replicate hujson.Standardize here
+	existingMap, err := decodeDestObject(op.MergeStrategy, existing)
+	if err != nil {
+		// JSONC/TOML: best-effort. We don't replicate hujson.Standardize here
 		// because the writer must stay neutral on adapter format quirks.
 		// If we can't parse the file we fall back to file-level treatment.
 		return w.maybeBackupFileOpForJSONCFallback(op)

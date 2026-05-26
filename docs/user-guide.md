@@ -6,7 +6,7 @@
 
 Define your MCP servers, memory, skills, and marketplace plugins *once*.
 Run `agentsync apply`. Watch them land — correctly translated — in Claude Code,
-OpenCode, and (soon) Codex and Cursor.
+OpenCode, and Codex CLI (with Cursor planned).
 
 [Why agentsync](#why-agentsync) · [Install](#install) · [Your first sync](#your-first-sync-5-minutes) · [Already have configs?](#already-have-configs) · [The daily loop](#the-daily-loop) · [Building your config](#building-your-config) · [Command reference](#command-reference)
 
@@ -250,8 +250,8 @@ agentsync agent disable opencode  # stop applying to it (keeps source)
 agentsync agent disable opencode --purge   # also remove what it wrote
 ```
 
-> `agent add codex` / `agent add cursor` are rejected in beta — their adapters
-> are no-ops (both still planned). See the [capability matrix](capability-matrix.md).
+> `agent add cursor` is rejected in beta — its adapter is still a no-op
+> (planned). `agent add codex` works. See the [capability matrix](capability-matrix.md).
 
 ### MCP servers
 
@@ -431,8 +431,8 @@ Not every agent supports every component, and agentsync never pretends
 otherwise. Each component is marked **✓ native**, **◐ projected** (lossy, but
 reported), or **✗ skipped** (no honest translation) per agent.
 
-Codex and Cursor are still **planned** (no-op adapters today); their columns
-describe the intended projection.
+Cursor is still **planned** (a no-op adapter today); its column describes the
+intended projection. Claude, OpenCode, and Codex are real adapters.
 
 | Component | Claude | OpenCode | Codex | Cursor |
 |---|:--:|:--:|:--:|:--:|

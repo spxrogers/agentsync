@@ -177,7 +177,7 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// Tell the user the agent is unimplemented instead.
 	if !v1Supported[agentName] && os.Getenv("AGENTSYNC_ALLOW_UNIMPLEMENTED") != "1" {
 		return fmt.Errorf("agent %q is not yet implemented in v1.0 "+
-			"(codex is planned for v1.1, cursor for v1.2); "+
+			"(cursor is planned for a later release); "+
 			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to import from its noop adapter anyway", agentName)
 	}
 

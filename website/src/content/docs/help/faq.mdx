@@ -45,11 +45,12 @@ it refuses to invent a translation that would mislead you. See the
 
 ## When will Codex CLI and Cursor be supported?
 
-They're registered as no-op adapters today (both still planned). `agent add codex`
-/ `agent add cursor` are rejected in beta unless you set
-`AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. Cursor's planned coverage includes skills and
-subagents (`.cursor/skills/`, `.cursor/agents/`); its user-level *rules* live in
-app-local storage, so rules stay project-scope only.
+**Codex CLI is supported** — MCP (into the TOML `~/.codex/config.toml`), memory,
+skills, subagents (◐), slash commands (◐, global-only), hooks (◐), and plugin
+import. **Cursor** is still a no-op adapter (planned), so `agent add cursor` is
+rejected in beta unless you set `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. Cursor's planned
+coverage includes skills and subagents (`.cursor/skills/`, `.cursor/agents/`); its
+user-level *rules* live in app-local storage, so rules stay project-scope only.
 
 ## What about Continue, Gemini CLI, or Aider?
 

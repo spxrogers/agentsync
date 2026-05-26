@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/pelletier/go-toml/v2"
+
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/secrets"
@@ -27,11 +29,46 @@ type AgentResult struct {
 	Skips []adapter.Skip
 }
 
-// isKeyMerge reports whether a MergeStrategy accumulates JSON pointers into a
-// shared file (rather than replacing the whole file). Such ops must never be
-// deduped by path — one agent emits several of them to the same destination.
+// isKeyMerge reports whether a MergeStrategy accumulates pointers into a shared
+// file (rather than replacing the whole file). Such ops must never be deduped by
+// path — one agent emits several of them to the same destination. The rendered
+// op.Content is always JSON regardless of the on-disk format (TOML for
+// merge-toml-keys); only the destination file is decoded per strategy via
+// decodeDestObject.
 func isKeyMerge(strategy string) bool {
-	return strategy == "merge-json-keys" || strategy == "merge-jsonc-keys"
+	return strategy == "merge-json-keys" ||
+		strategy == "merge-jsonc-keys" ||
+		strategy == "merge-toml-keys"
+}
+
+// decodeDestObject parses a destination config file into a generic map per the
+// op's merge strategy: TOML for merge-toml-keys (Codex config.toml), JSON
+// otherwise (.claude.json, settings.json, the standardized opencode.json,
+// hooks.json). The pointer-merge currency is always map[string]any, so callers
+// — the foreign-collision backup and post-apply state recording — treat both
+// on-disk formats uniformly. Empty input yields an empty map.
+func decodeDestObject(strategy string, data []byte) (map[string]any, error) {
+	if len(data) == 0 {
+		return map[string]any{}, nil
+	}
+	if strategy == "merge-toml-keys" {
+		var m map[string]any
+		if err := toml.Unmarshal(data, &m); err != nil {
+			return nil, err
+		}
+		if m == nil {
+			m = map[string]any{}
+		}
+		return m, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	return m, nil
 }
 
 // Total returns the total number of FileOps across all agents.

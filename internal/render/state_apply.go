@@ -45,12 +45,14 @@ func PruneStaleState(s *state.Targets, userHome, agent string, scope adapter.Sco
 		}
 		portable := paths.HomeRelative(userHome, op.Path)
 		switch op.MergeStrategy {
-		case "merge-json-keys", "merge-jsonc-keys":
+		case "merge-json-keys", "merge-jsonc-keys", "merge-toml-keys":
 			ptrs, ok := currentKeys[portable]
 			if !ok {
 				ptrs = map[string]struct{}{}
 				currentKeys[portable] = ptrs
 			}
+			// op.Content is always JSON (the pointer-merge currency), even when
+			// the destination file is TOML — so it is parsed as JSON here.
 			var ours map[string]any
 			if err := json.Unmarshal(op.Content, &ours); err == nil {
 				for _, p := range CollectPointers(ours, "") {
@@ -155,14 +157,16 @@ func RecordOpsState(s *state.Targets, userHome, agent string, scope adapter.Scop
 		}
 		portablePath := paths.HomeRelative(userHome, op.Path)
 		switch op.MergeStrategy {
-		case "merge-json-keys", "merge-jsonc-keys":
-			// Re-read final on-disk content and record per pointer.
+		case "merge-json-keys", "merge-jsonc-keys", "merge-toml-keys":
+			// Re-read final on-disk content and record per pointer. The
+			// destination is decoded per strategy (TOML for merge-toml-keys),
+			// while op.Content is always JSON.
 			data, err := os.ReadFile(op.Path)
 			if err != nil {
 				return fmt.Errorf("read post-apply %s: %w", op.Path, err)
 			}
-			var final map[string]any
-			if err := json.Unmarshal(data, &final); err != nil {
+			final, err := decodeDestObject(op.MergeStrategy, data)
+			if err != nil {
 				return fmt.Errorf("parse post-apply %s: %w", op.Path, err)
 			}
 			var ours map[string]any

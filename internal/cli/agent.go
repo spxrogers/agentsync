@@ -39,19 +39,20 @@ func boolStr(b bool) string {
 const validAgents = "claude, opencode, codex, cursor"
 
 // v1Supported lists agents whose adapter actually emits ops today.
-// codex and cursor are registered as NoopAdapter in registry_internal.go;
-// adding them silently would produce `applied: 0 ops` for those agents
-// with no diagnostic — so `agent add` rejects them with a status hint.
+// cursor is still registered as NoopAdapter in registry_internal.go;
+// adding it silently would produce `applied: 0 ops` for that agent
+// with no diagnostic — so `agent add` rejects it with a status hint.
 // (Allow override with AGENTSYNC_ALLOW_UNIMPLEMENTED=1 for plan/spec work.)
 var v1Supported = map[string]bool{
 	"claude":   true,
 	"opencode": true,
+	"codex":    true,
 }
 
 func newAgentCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "agent", Short: "manage which agents agentsync targets"}
 	cmd.AddCommand(
-		&cobra.Command{Use: "add <name>", Short: "register an agent (claude | opencode)", Args: cobra.ExactArgs(1), RunE: lockedRun(agentAddRun)},
+		&cobra.Command{Use: "add <name>", Short: "register an agent (claude | opencode | codex)", Args: cobra.ExactArgs(1), RunE: lockedRun(agentAddRun)},
 		&cobra.Command{Use: "remove <name>", Short: "unregister an agent", Args: cobra.ExactArgs(1), RunE: lockedRun(agentRemoveRun)},
 		&cobra.Command{Use: "list", Short: "list registered agents", Args: cobra.NoArgs, RunE: agentListRun},
 		newAgentEnableCmd(),
@@ -203,7 +204,7 @@ func agentAddRun(cmd *cobra.Command, args []string) error {
 	}
 	if !v1Supported[name] && os.Getenv("AGENTSYNC_ALLOW_UNIMPLEMENTED") != "1" {
 		return fmt.Errorf("agent %q is not yet implemented in v1.0 "+
-			"(codex is planned for v1.1, cursor for v1.2); "+
+			"(cursor is planned for a later release); "+
 			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to register anyway and accept noop apply", name)
 	}
 	p, raw, agents, err := readAgentsyncTOML()
