@@ -6,22 +6,25 @@ The source for **[agentsync.cc](https://agentsync.cc)** — an
 
 ## Develop
 
+This is a [bun](https://bun.sh) project. From the repo root you can also use the
+`just docs-*` recipes.
+
 ```bash
 cd website
-npm install
-npm run dev        # http://localhost:4321
+bun install
+bun run dev        # http://localhost:4321
 ```
 
 | Command | Action |
 | --- | --- |
-| `npm run dev` | Local dev server with hot reload. |
-| `npm run build` | Production build to `./dist/`. |
-| `npm run preview` | Serve the production build locally. |
-| `npm run sync:docs` | Regenerate the mirrored contract pages (see below). |
+| `bun run dev` | Local dev server with hot reload. |
+| `bun run build` | Production build to `./dist/`. |
+| `bun run preview` | Serve the production build locally. |
+| `bun run sync:docs` | Regenerate the mirrored contract pages (see below). |
 
 `predev` and `prebuild` run `sync:docs` automatically, so a plain
-`npm run dev` / `npm run build` always has the mirrored pages in place. Running
-`astro build` directly (bypassing the npm scripts) will not.
+`bun run dev` / `bun run build` always has the mirrored pages in place. Running
+`astro build` directly (bypassing the scripts) will not.
 
 ## Content layout
 
