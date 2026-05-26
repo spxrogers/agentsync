@@ -92,6 +92,41 @@ Two design points worth internalizing:
 `Capability` is a bitmask, so the OpenCode adapter simply omits `CapHook` and
 `CapLSP` and the pipeline reports those components as skipped.
 
+One **optional** extension sits beside the core interface:
+
+```go
+type PluginIngester interface {
+    IngestPlugins(scope Scope, project string) ([]NativeMarketplace, []NativePlugin, error)
+}
+```
+
+An adapter implements it only if the agent tracks installed plugins +
+marketplaces in its native config (Claude reads `enabledPlugins` /
+`extraKnownMarketplaces` from `settings.json`). `import` type-asserts for it: an
+adapter that doesn't implement it imports no plugins. It's kept off the core
+`Adapter` because the canonical schema doesn't otherwise depend on a native
+plugin concept, and only Claude has one in v1. The CLI maps each result onto an
+agentsync marketplace source and re-fetches it through the same code path as
+`marketplace add` + `plugin install`, so a captured plugin lands as a normal
+`plugins/<id>.toml` + `marketplaces/<name>.toml` pair with a pinned manifest SHA.
+
+The planned **Codex** and **Cursor** adapters are the intended next implementors;
+both have native plugin systems, so the same import + apply fan-out (a plugin's
+components projected to every enabled agent via its capability matrix) applies
+unchanged once each implements `IngestPlugins`:
+
+- **Codex** records enable-state in `~/.codex/config.toml` under
+  `[plugins."<name>@<source>"]` tables, plus its own marketplace concept — the
+  same `name@source` shape Claude uses. `IngestPlugins` is "parse those TOML
+  tables + marketplace sources into `NativeMarketplace`/`NativePlugin`."
+- **Cursor** ships an even closer content schema — `.cursor-plugin/plugin.json` +
+  `.cursor-plugin/marketplace.json`, near-identical to Claude's `.claude-plugin/*`
+  (rules, skills, agents, commands, hooks, MCP) — so the projection layer largely
+  transfers. The open question is where Cursor records local enable-state (not yet
+  documented; possibly app-local like its user rules).
+
+See the capability matrix for source links.
+
 ---
 
 ## 4. The apply pipeline (Source ▶ Destination)

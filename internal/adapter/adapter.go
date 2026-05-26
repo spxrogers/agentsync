@@ -87,6 +87,46 @@ type Adapter interface {
 	Apply(ops []FileOp, w DestWriter) error
 }
 
+// NativeSource describes where a natively-registered marketplace is fetched
+// from, in the agent's own vocabulary. `import` maps it onto an agentsync
+// marketplace source. Fields mirror Claude's extraKnownMarketplaces `source`
+// object; only the fields relevant to a given Type are populated.
+type NativeSource struct {
+	Type    string // "github" | "git" | "url" | "npm" | "file" | "directory" | …
+	Repo    string // "owner/repo" for github
+	URL     string // for git/url
+	Path    string // for file/directory
+	Ref     string // branch/tag/commit
+	Package string // for npm
+}
+
+// NativeMarketplace is a marketplace registered in an agent's native config,
+// as discovered by `import`. ID is the agent's own marketplace identifier (the
+// "@<marketplace>" half of a plugin reference), which need not match the name
+// declared inside the fetched marketplace.json.
+type NativeMarketplace struct {
+	ID     string
+	Source NativeSource
+}
+
+// NativePlugin is a plugin recorded in an agent's native config, as discovered
+// by `import`. Enabled is false for an explicitly-disabled entry.
+type NativePlugin struct {
+	Name          string // the "<plugin>" half of a plugin reference
+	MarketplaceID string // the marketplace it was installed from
+	Enabled       bool
+}
+
+// PluginIngester is an OPTIONAL extension to Adapter: an agent that tracks
+// installed plugins + marketplaces in its native config implements it so
+// `import` can capture them into the canonical source. import type-asserts for
+// it; an adapter that does not implement it simply imports no plugins. It is
+// kept off the core Adapter interface because only Claude has a native plugin
+// concept in v1 and the canonical schema does not otherwise depend on it.
+type PluginIngester interface {
+	IngestPlugins(scope Scope, project string) ([]NativeMarketplace, []NativePlugin, error)
+}
+
 // DestWriter is the single funnel for any write that targets a native agent
 // destination file (~/.claude.json, ~/.claude/agents/*.md, ~/.config/opencode/*,
 // etc). It enforces the foreign-collision backup invariant: a pre-existing

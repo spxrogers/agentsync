@@ -114,17 +114,26 @@ into ~/.agentsync/ as the canonical source of truth.
 
 Selector grammar: <agent>[:<component>[:<name>]]
   agent     - registered agent name (claude, opencode, codex, cursor)
-  component - mcp | skill | agent | command | hook | lsp | memory
-  name      - item name (server id, skill name, subagent name, hook event)
+  component - mcp | skill | agent | command | hook | lsp | memory | plugin
+  name      - item name (server id, skill/subagent/command name, hook event,
+              or plugin name)
 
 Dropping the name imports every entry of that component; dropping the
 component too imports the agent's full native config in one pass. Use
 --dry-run to preview which source files would be written, without writing.
 
+The plugin component captures the agent's installed plugins + their
+marketplaces (Claude only in v1): it re-fetches each marketplace and plugin
+into the agentsync cache and pins them, so a real import needs network access.
+A plugin whose marketplace is not registered in the agent's native config
+(e.g. the built-in 'claude-plugins-official') is reported and skipped; add it
+with 'agentsync marketplace add <source>' and re-import.
+
 Examples:
   agentsync import claude                 # all importable components
   agentsync import claude:mcp             # every MCP server
   agentsync import claude:mcp:github      # a single MCP server
+  agentsync import claude:plugin          # every installed plugin + marketplace
   agentsync import claude --dry-run       # preview without writing
   agentsync import opencode:agent:reviewer`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -187,9 +196,9 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	var importErr error
 	switch component {
 	case "":
-		imp, importErr = importAllComponents(cmd, home, agentName, c, dryRun)
+		imp, importErr = importAllComponents(cmd, home, a, agentName, c, dryRun)
 	default:
-		ids, err := importComponent(cmd, home, c, component, name, dryRun)
+		ids, err := importComponent(cmd, home, a, agentName, c, component, name, dryRun)
 		importErr = err
 		imp.add(component, ids)
 		// A bulk component import (no name) that matched nothing is not an
@@ -462,8 +471,10 @@ func parseSelector(sel string) (agentName, component, name string, err error) {
 // importComponentOrder lists the importable components in the order a
 // full-agent import walks them (and the order they appear in the summary).
 // "subagent" is an accepted alias for "agent" in selectors but is not listed
-// here to avoid importing subagents twice.
-var importComponentOrder = []string{"mcp", "lsp", "skill", "agent", "command", "hook", "memory"}
+// here to avoid importing subagents twice. "plugin" walks last because it
+// re-fetches from the network (see importPlugins), so the offline components
+// are captured first even if a plugin fetch later fails.
+var importComponentOrder = []string{"mcp", "lsp", "skill", "agent", "command", "hook", "memory", "plugin"}
 
 // importVerb is the past/conditional verb used in per-item and summary lines so
 // a --dry-run preview reads "would import …" instead of "imported …".
@@ -515,7 +526,7 @@ func (s *importedSet) add(component string, ids []string) {
 // writes nothing and only reports what it would write. It returns the identities
 // (server id, skill/subagent/command name, hook event) that were (or would be)
 // imported; len is the item count.
-func importComponent(cmd *cobra.Command, home string, c source.Canonical, component, name string, dryRun bool) ([]string, error) {
+func importComponent(cmd *cobra.Command, home string, a adapter.Adapter, agentName string, c source.Canonical, component, name string, dryRun bool) ([]string, error) {
 	switch component {
 	case "mcp":
 		return importMCP(cmd, home, c, name, dryRun)
@@ -531,8 +542,10 @@ func importComponent(cmd *cobra.Command, home string, c source.Canonical, compon
 		return importLSP(cmd, home, c, name, dryRun)
 	case "memory":
 		return importMemory(cmd, home, c, dryRun)
+	case "plugin":
+		return importPlugins(cmd, home, agentName, a, name, dryRun)
 	default:
-		return nil, fmt.Errorf("unknown component %q; valid: mcp, skill, agent, command, hook, lsp, memory", component)
+		return nil, fmt.Errorf("unknown component %q; valid: mcp, skill, agent, command, hook, lsp, memory, plugin", component)
 	}
 }
 
@@ -541,12 +554,12 @@ func importComponent(cmd *cobra.Command, home string, c source.Canonical, compon
 // with nothing to import reports that and exits cleanly. dryRun is threaded
 // through so the preview writes nothing. The returned set names everything
 // captured, so the caller can scope state seeding to it.
-func importAllComponents(cmd *cobra.Command, home, agentName string, c source.Canonical, dryRun bool) (importedSet, error) {
+func importAllComponents(cmd *cobra.Command, home string, a adapter.Adapter, agentName string, c source.Canonical, dryRun bool) (importedSet, error) {
 	var imp importedSet
 	counts := map[string]int{}
 	total := 0
 	for _, comp := range importComponentOrder {
-		ids, err := importComponent(cmd, home, c, comp, "", dryRun)
+		ids, err := importComponent(cmd, home, a, agentName, c, comp, "", dryRun)
 		// Seed whatever WAS written even on error: a component can fail partway
 		// after writing earlier items, and those must be owned or the next apply
 		// foreign-collides on a file just imported from.
@@ -810,4 +823,157 @@ func importMemory(cmd *cobra.Command, home string, c source.Canonical, dryRun bo
 	// A non-empty marker so importedSet.add flags memory was captured (it has no
 	// id; the seeder includes c.Memory when this is set).
 	return []string{"memory"}, nil
+}
+
+// importPlugins captures the agent's installed plugins + their marketplaces into
+// the canonical source. It is the read-back of `marketplace add` + `plugin
+// install`: for each enabled plugin whose marketplace is resolvable from the
+// agent's native config, it re-fetches the marketplace and the plugin into the
+// agentsync cache and writes marketplaces/<name>.toml + plugins/<id>.toml,
+// producing byte-identical artifacts to the manual commands.
+//
+// Only agents implementing adapter.PluginIngester have a native plugin concept
+// (Claude in v1); others import no plugins (not an error, so a full
+// `import <agent>` stays clean for them). A real import needs network access to
+// re-fetch; --dry-run discovers and previews without fetching or writing.
+//
+// Plugins from an unregistered/auto marketplace — e.g. claude-plugins-official,
+// which Claude does not list in extraKnownMarketplaces — are reported and
+// skipped, as is a marketplace whose source type agentsync cannot fetch. name,
+// when non-empty, selects a single plugin (matched by its name or
+// "name@marketplace"); a no-match is an error. A fetch/install failure for one
+// marketplace or plugin warns and skips rather than aborts, so one bad item
+// does not strand the rest. Plugins are NOT dest-seeded into state (unlike the
+// file components): they are a source-side declaration whose projected
+// components materialise as new dest files on the next apply.
+func importPlugins(cmd *cobra.Command, home, agentName string, a adapter.Adapter, name string, dryRun bool) ([]string, error) {
+	pi, ok := a.(adapter.PluginIngester)
+	if !ok {
+		return nil, nil
+	}
+	mps, plugins, err := pi.IngestPlugins(adapter.ScopeUser, "")
+	if err != nil {
+		return nil, fmt.Errorf("discover %s plugins: %w", agentName, err)
+	}
+
+	mpByID := make(map[string]adapter.NativeMarketplace, len(mps))
+	for _, m := range mps {
+		mpByID[m.ID] = m
+	}
+
+	var want []adapter.NativePlugin
+	for _, pl := range plugins {
+		if !pl.Enabled {
+			continue
+		}
+		if name != "" && pl.Name != name && pl.Name+"@"+pl.MarketplaceID != name {
+			continue
+		}
+		want = append(want, pl)
+	}
+	if len(want) == 0 {
+		if name != "" {
+			return nil, fmt.Errorf("plugin %q not found among %s's enabled plugins", name, agentName)
+		}
+		return nil, nil
+	}
+
+	out := cmd.OutOrStdout()
+	ew := cmd.ErrOrStderr()
+	verb := importVerb(dryRun)
+
+	// Resolve (and, on a real run, fetch) each needed marketplace exactly once.
+	// The cached value is the agentsync marketplace name a plugin installs from;
+	// "" marks an unresolvable marketplace already warned about.
+	resolved := map[string]string{}
+	resolveMp := func(mpID string) (string, bool) {
+		if n, done := resolved[mpID]; done {
+			return n, n != ""
+		}
+		nm, known := mpByID[mpID]
+		if !known {
+			fmt.Fprintf(ew, "warning: skipping plugins from marketplace %q: not registered in %s's native config "+
+				"(e.g. the built-in 'claude-plugins-official'); run `agentsync marketplace add <source>` then re-import\n",
+				mpID, agentName)
+			resolved[mpID] = ""
+			return "", false
+		}
+		src, rawURL, mappable := claudeSourceToAgentsync(nm.Source)
+		if !mappable {
+			fmt.Fprintf(ew, "warning: skipping marketplace %q: unsupported source type %q\n", mpID, nm.Source.Type)
+			resolved[mpID] = ""
+			return "", false
+		}
+		if dryRun {
+			// No fetch, so the declared agentsync name is unknown; preview by the
+			// native id. The real run resolves and prints the actual filename.
+			fmt.Fprintf(out, "%s marketplaces/%s.toml\n", verb, mpID)
+			resolved[mpID] = mpID
+			return mpID, true
+		}
+		mpName, _, ferr := addMarketplaceSource(home, src, rawURL, ew)
+		if ferr != nil {
+			fmt.Fprintf(ew, "warning: skipping marketplace %q: %v\n", mpID, ferr)
+			resolved[mpID] = ""
+			return "", false
+		}
+		fmt.Fprintf(out, "%s marketplaces/%s.toml\n", verb, mpName)
+		resolved[mpID] = mpName
+		return mpName, true
+	}
+
+	var ids []string
+	for _, pl := range want {
+		if pl.MarketplaceID == "" {
+			fmt.Fprintf(ew, "warning: skipping plugin %q: native config records no marketplace for it\n", pl.Name)
+			continue
+		}
+		// The plugin name becomes plugins/<name>.toml; validate it up front (and
+		// in dry-run) so a hostile native id can't escape the source dir and the
+		// preview matches a real import.
+		if verr := source.ValidateComponentID("plugin", pl.Name); verr != nil {
+			fmt.Fprintf(ew, "warning: skipping plugin %q: %v\n", pl.Name, verr)
+			continue
+		}
+		mpName, mpOK := resolveMp(pl.MarketplaceID)
+		if !mpOK {
+			continue
+		}
+		if dryRun {
+			fmt.Fprintf(out, "%s plugins/%s.toml\n", verb, pl.Name)
+			ids = append(ids, pl.Name)
+			continue
+		}
+		if _, ierr := installPluginInto(home, pl.Name, mpName); ierr != nil {
+			fmt.Fprintf(ew, "warning: skipping plugin %q from %q: %v\n", pl.Name, mpName, ierr)
+			continue
+		}
+		fmt.Fprintf(out, "%s plugins/%s.toml\n", verb, pl.Name)
+		ids = append(ids, pl.Name)
+	}
+	return ids, nil
+}
+
+// claudeSourceToAgentsync maps a native marketplace source (Claude's
+// extraKnownMarketplaces `source` object) onto an agentsync marketplace Source
+// plus the raw source string stored in marketplaces/<name>.toml. ok is false
+// for source kinds agentsync cannot fetch (npm/hostPattern/unknown) or a
+// well-formed kind missing its required field — the caller warns and skips.
+func claudeSourceToAgentsync(s adapter.NativeSource) (src marketplace.Source, rawURL string, ok bool) {
+	switch s.Type {
+	case "github":
+		raw := "github:" + s.Repo
+		if s.Ref != "" {
+			raw += "@" + s.Ref
+		}
+		return marketplace.Source{Kind: "github", Repo: s.Repo, Ref: s.Ref}, raw, s.Repo != ""
+	case "git":
+		return marketplace.Source{Kind: "url", URL: s.URL, Ref: s.Ref}, s.URL, s.URL != ""
+	case "url":
+		return marketplace.Source{Kind: "url", URL: s.URL}, s.URL, s.URL != ""
+	case "file", "directory":
+		return marketplace.Source{Relative: s.Path}, s.Path, s.Path != ""
+	default:
+		return marketplace.Source{}, "", false
+	}
 }

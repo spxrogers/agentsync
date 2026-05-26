@@ -41,21 +41,34 @@ the right to widen the scope.
 
 | Selector | Imports |
 | --- | --- |
-| `claude` | the agent's **full** native config (MCP, skills, subagents, commands, hooks, LSP, memory) |
+| `claude` | the agent's **full** native config (MCP, skills, subagents, commands, hooks, LSP, memory, plugins) |
 | `claude:mcp` | **every** MCP server |
 | `claude:mcp:github` | a **single** MCP server |
+| `claude:plugin` | every installed **plugin** + its marketplace (Claude only) |
 | `opencode:mcp:linear` | a single server from a different agent |
 
 ```bash
 agentsync import claude
 agentsync import claude:mcp
 agentsync import claude:mcp:github
+agentsync import claude:plugin
 agentsync import opencode:mcp:linear
 ```
 
 A bulk import that finds nothing for a component reports it and exits cleanly
 rather than erroring. Add `--dry-run` to list the source files an import *would*
 write without touching `~/.agentsync/`.
+
+<Aside type="note" title="Importing plugins reaches the network">
+	The `plugin` component (Claude only in v1) reads your installed plugins and
+	their marketplaces from Claude's native config and **re-fetches** each one into
+	the agentsync cache — the same artifacts `marketplace add` + `plugin install`
+	produce — so a real plugin import needs network access (`--dry-run` does not).
+	A plugin installed from a marketplace that isn't registered in Claude's native
+	config — most notably the built-in `claude-plugins-official`, which doesn't
+	appear in `extraKnownMarketplaces` — is reported and skipped; add it with
+	`agentsync marketplace add <source>` and re-import.
+</Aside>
 
 <Aside type="caution" title="The first apply on a populated machine">
 	On a machine that already has native config, the **first** `apply` sees files it

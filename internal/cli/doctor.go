@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
@@ -66,6 +67,14 @@ func newDoctorCmd() *cobra.Command {
 					continue
 				}
 				fmt.Fprintf(w, "  %-10s %s\n", agent.name, p)
+			}
+
+			fmt.Fprintln(w, "")
+			fmt.Fprintln(w, "Plugins")
+			if schemaOK {
+				checkPlugins(w, home)
+			} else {
+				fmt.Fprintln(w, "  skipped (schema invalid above)")
 			}
 
 			fmt.Fprintln(w, "")
@@ -151,6 +160,34 @@ func checkSchema(w io.Writer, home string) (source.Config, bool) {
 	fmt.Fprintf(w, "  schema     ok (%d mcp, %d plugin(s), %d marketplace(s))\n",
 		len(c.MCPServers), len(c.Plugins), len(c.Marketplaces))
 	return c.Config, true
+}
+
+// checkPlugins surfaces plugins installed natively in an agent (Claude in v1)
+// that are NOT declared in the canonical source — informational only, never a
+// failure: agentsync treats them as foreign-managed, and `import <agent>:plugin`
+// brings them under management. Probes every registered adapter (not just the
+// enabled set) so a fresh user with Claude plugins but no agentsync config still
+// sees the nudge.
+func checkPlugins(w io.Writer, home string) {
+	c, err := source.Load(afero.NewOsFs(), home)
+	if err != nil {
+		fmt.Fprintln(w, "  skipped (source not loadable)")
+		return
+	}
+	reg := registryFactory()
+	undeclared := undeclaredNativePlugins(c, reg, reg.Names())
+	if len(undeclared) == 0 {
+		fmt.Fprintln(w, "  ok (no undeclared native plugins)")
+		return
+	}
+	for _, name := range reg.Names() {
+		missing := undeclared[name]
+		if len(missing) == 0 {
+			continue
+		}
+		fmt.Fprintf(w, "  %-10s %d not in source: %s — run `agentsync import %s:plugin`\n",
+			name, len(missing), strings.Join(missing, ", "), name)
+	}
 }
 
 // checkSecrets validates the [secrets] block: backend present, identity

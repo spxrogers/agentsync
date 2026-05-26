@@ -1,15 +1,17 @@
 ---
 title: Updating from the network
-description: update is the only networked verb — it refreshes the marketplace cache and version pins without touching agent config. apply then renders offline.
+description: update is the networked verb of the daily loop — it refreshes the marketplace cache and version pins without touching agent config. apply then renders offline.
 sidebar:
   order: 7
 ---
 
 import { Aside, LinkCard } from '@astrojs/starlight/components';
 
-`update` is the **only** command that touches the network. It polls marketplaces,
-refreshes the local cache, and recomputes version pins — without touching any
-agent config. `apply` then renders from that cache, so it's always fast, offline,
+`update` is the command that touches the network in the daily loop. It polls
+marketplaces, refreshes the local cache, and recomputes version pins — without
+touching any agent config. (The one other networked path is setup-time:
+`import`'s `plugin` component re-fetches the plugins it captures from an agent's
+native config.) `apply` then renders from that cache, so it's always fast, offline,
 and reproducible.
 
 ```bash

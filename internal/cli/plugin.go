@@ -69,10 +69,25 @@ func pluginInstallRun(cmd *cobra.Command, args []string) error {
 	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 
+	spec, err := installPluginInto(home, id, mpName)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "installed plugin %s (version=%s sha=%s)\n",
+		id, spec.Version, truncate(spec.ManifestSHA, 12))
+	return nil
+}
+
+// installPluginInto fetches plugin id from the named marketplace into the
+// plugin cache and writes plugins/<id>.toml, returning the written spec. mpName
+// may be empty (the marketplace is then searched for across all caches). It
+// does not print or acquire the global lock — callers do. Both `plugin install`
+// and `import` use it so the two produce byte-identical canonical artifacts.
+func installPluginInto(home, id, mpName string) (pluginTOMLSpec, error) {
 	// Resolve marketplace.json from the marketplace cache.
 	mpData, mpEntry, err := resolveMarketplaceEntry(home, mpName, id)
 	if err != nil {
-		return err
+		return pluginTOMLSpec{}, err
 	}
 
 	// Compute cache path.
@@ -90,7 +105,7 @@ func pluginInstallRun(cmd *cobra.Command, args []string) error {
 	fetcher := marketplace.Dispatch(src)
 	result, err := fetcher.Fetch(src, cacheDir)
 	if err != nil {
-		return fmt.Errorf("fetch plugin %s: %w", id, err)
+		return pluginTOMLSpec{}, fmt.Errorf("fetch plugin %s: %w", id, err)
 	}
 
 	// Compute manifest SHA.
@@ -113,15 +128,12 @@ func pluginInstallRun(cmd *cobra.Command, args []string) error {
 	}
 	data, err := toml.Marshal(pluginTOML{Plugin: spec})
 	if err != nil {
-		return fmt.Errorf("marshal plugin toml: %w", err)
+		return pluginTOMLSpec{}, fmt.Errorf("marshal plugin toml: %w", err)
 	}
 	if err := iox.AtomicWrite(pluginPath, data, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", pluginPath, err)
+		return pluginTOMLSpec{}, fmt.Errorf("write %s: %w", pluginPath, err)
 	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "installed plugin %s (version=%s sha=%s)\n",
-		id, spec.Version, truncate(spec.ManifestSHA, 12))
-	return nil
+	return spec, nil
 }
 
 // ---- upgrade ----------------------------------------------------------------

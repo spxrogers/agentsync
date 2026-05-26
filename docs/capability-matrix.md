@@ -20,10 +20,10 @@ nothing is dropped silently.
 
 | Agent | Status in v1.0 / beta | Notes |
 |---|---|---|
-| **Claude Code** | ✅ Full adapter | All seven components, including LSP. The reference implementation. |
-| **OpenCode** | ✅ Adapter (some components projected/skipped) | MCP, memory, skills, subagents, commands. Hooks and LSP are skipped with a warning. |
-| **Codex CLI** | 🔜 Planned | Registered as a no-op. `agent add codex` is rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. |
-| **Cursor** | 🔜 Planned | Registered as a no-op. Planned coverage is broad — MCP, memory, skills, subagents, slash commands, and hooks all project (see the matrix); only LSP is unsupported. User-level rules/memory live in Cursor's app-local storage, so those stay project-scope. |
+| **Claude Code** | ✅ Full adapter | All seven components, including LSP. The reference implementation. Also the only agent **in v1** whose installed **plugins + marketplaces** are captured by `import` (re-fetched from `enabledPlugins` / `extraKnownMarketplaces`); the planned Codex and Cursor adapters both have native plugin systems and should do the same (see their rows). |
+| **OpenCode** | ✅ Adapter (some components projected/skipped) | MCP, memory, skills, subagents, commands. Hooks and LSP are skipped with a warning. No native plugin/marketplace concept, so nothing for plugin `import` to capture; it still *receives* plugin-projected components (skills, MCP, …) on `apply`. |
+| **Codex CLI** | 🔜 Planned | Registered as a no-op. `agent add codex` is rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. Codex **has a native plugin system**[^codex-plugins] — skills, apps, and MCP servers, with enable-state in `~/.codex/config.toml` as `[plugins."<name>@<source>"] enabled = …` and a marketplace concept — structurally close to Claude's. The Codex adapter should therefore implement the same `import <agent>:plugin` capture + cross-agent fan-out as Claude (its `[plugins.*]` enable-state maps onto agentsync's `PluginIngester`). |
+| **Cursor** | 🔜 Planned | Registered as a no-op. Planned coverage is broad — MCP, memory, skills, subagents, slash commands, and hooks all project (see the matrix); only LSP is unsupported. User-level rules/memory live in Cursor's app-local storage, so those stay project-scope. Cursor **has a native plugin system**[^cursor-plugins] (rules, skills, agents, commands, hooks, MCP servers) whose `.cursor-plugin/marketplace.json` + `.cursor-plugin/plugin.json` schema is almost identical to Claude's `.claude-plugin/*` — so projection largely carries over and the adapter should support `import <agent>:plugin` too. The open question is purely *where Cursor records local enable-state* (undocumented, possibly app-local like its rules); the plugin/marketplace content schema is already a near-match. |
 
 ---
 
@@ -178,3 +178,23 @@ See the [user guide](user-guide.md) to put this into practice.
     registered as no-ops today, so these columns describe the *intended*
     projection per the design spec. `agent add codex` / `agent add cursor` are
     rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`.
+
+[^codex-plugins]: Codex plugin system:
+    [developers.openai.com/codex/plugins](https://developers.openai.com/codex/plugins).
+    Enable-state lives in `~/.codex/config.toml` under
+    `[plugins."<name>@<source>"]` tables (an `enabled` bool) — the same
+    `name@source` shape as Claude's `enabledPlugins`, so a future Codex
+    `PluginIngester` parses those tables (plus its marketplace sources) into the
+    same `NativeMarketplace` / `NativePlugin` descriptors `import` already
+    consumes.
+
+[^cursor-plugins]: Cursor plugin system:
+    [cursor.com/docs/reference/plugins](https://cursor.com/docs/reference/plugins).
+    Plugins bundle rules, skills (`SKILL.md`), agents, commands, hooks, and MCP
+    servers; the manifest is `.cursor-plugin/plugin.json` and multi-plugin repos
+    use `.cursor-plugin/marketplace.json` — nearly identical to Claude's
+    `.claude-plugin/*`, so agentsync's projection layer largely transfers. Not
+    yet documented: where Cursor records which plugins are installed/enabled
+    locally (the `enabledPlugins`-equivalent a `PluginIngester` would read);
+    given Cursor keeps user rules in app-local storage, this may not be a plain
+    config file and needs investigation when the adapter is built.
