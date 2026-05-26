@@ -60,7 +60,7 @@ const jobs = [
   {
     src: 'capability-matrix.md',
     out: 'reference/capability-matrix.md',
-    title: 'Capability matrix',
+    title: 'Agent Capability matrix',
     description:
       'What each agent supports, per component — native, projected (lossy), or skipped.',
   },

@@ -40,6 +40,13 @@ export default defineConfig({
 				},
 			],
 			sidebar: [
+				// Promoted to a standalone top-level entry — the support matrix is
+				// the page people reach for most when evaluating fit.
+				{
+					label: 'Agent Capability matrix',
+					slug: 'reference/capability-matrix',
+					badge: { text: 'Support', variant: 'tip' },
+				},
 				{
 					label: 'Start here',
 					items: [
@@ -80,7 +87,6 @@ export default defineConfig({
 						{ label: 'CLI commands', slug: 'reference/cli' },
 						{ label: 'Configuration & layout', slug: 'reference/configuration' },
 						{ label: 'Environment variables', slug: 'reference/environment' },
-						{ label: 'Capability matrix', slug: 'reference/capability-matrix' },
 					],
 				},
 				{
