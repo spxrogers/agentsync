@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -42,6 +43,30 @@ func jsonUnmarshalLoose(data []byte, v *map[string]any) error {
 		return err
 	}
 	return json.Unmarshal(std, v)
+}
+
+// isKeyMergeStrategy reports whether a strategy co-owns keys inside a shared
+// destination file (rather than replacing the whole file), so the seed must
+// record per-pointer state.Keys ownership rather than a whole-file state.Files
+// entry. Mirrors render.isKeyMerge.
+func isKeyMergeStrategy(s string) bool {
+	return s == "merge-json-keys" || s == "merge-jsonc-keys" || s == "merge-toml-keys"
+}
+
+// decodeDestForSeed decodes a destination file into a generic map per the op's
+// merge strategy: TOML for merge-toml-keys (Codex config.toml), otherwise the
+// JSONC-tolerant loose reader (which standardizes comments/trailing commas in a
+// hand-edited opencode.json). A rendered op.Content is always JSON regardless of
+// the on-disk format, so callers still decode it with jsonUnmarshalLoose.
+func decodeDestForSeed(strategy string, data []byte, v *map[string]any) error {
+	if strategy == "merge-toml-keys" {
+		if len(data) == 0 {
+			*v = map[string]any{}
+			return nil
+		}
+		return toml.Unmarshal(data, v)
+	}
+	return jsonUnmarshalLoose(data, v)
 }
 
 // collectStateSeedPointers returns the JSON pointers we record state for
@@ -280,7 +305,7 @@ func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []str
 	}
 	var out []string
 	for _, op := range ops {
-		if op.MergeStrategy != "merge-json-keys" && op.MergeStrategy != "merge-jsonc-keys" {
+		if !isKeyMergeStrategy(op.MergeStrategy) {
 			continue
 		}
 		data, readErr := os.ReadFile(op.Path)
@@ -288,7 +313,7 @@ func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []str
 			continue
 		}
 		var existing map[string]any
-		if jsonErr := jsonUnmarshalLoose(data, &existing); jsonErr != nil {
+		if decErr := decodeDestForSeed(op.MergeStrategy, data, &existing); decErr != nil {
 			continue
 		}
 		var ours map[string]any
@@ -353,16 +378,17 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry, imp
 		if op.Action != "" && op.Action != "write" {
 			continue
 		}
-		switch op.MergeStrategy {
-		case "merge-json-keys", "merge-jsonc-keys":
+		switch {
+		case isKeyMergeStrategy(op.MergeStrategy):
 			// Per-key seed: hash the *current* value at each pointer the
-			// rendered op claims to own.
+			// rendered op claims to own. The dest is decoded per strategy (TOML
+			// for merge-toml-keys); op.Content is always JSON.
 			data, readErr := os.ReadFile(op.Path)
 			if readErr != nil {
 				continue // dest doesn't exist yet; nothing to seed
 			}
 			var existing map[string]any
-			if jsonErr := jsonUnmarshalLoose(data, &existing); jsonErr != nil {
+			if decErr := decodeDestForSeed(op.MergeStrategy, data, &existing); decErr != nil {
 				continue
 			}
 			var ours map[string]any

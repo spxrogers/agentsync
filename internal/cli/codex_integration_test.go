@@ -1,7 +1,9 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -104,6 +106,129 @@ command = "keep-me"
 	if other, _ := servers["other"].(map[string]any); other["command"] != "keep-me" {
 		t.Fatalf("orphan cleanup dropped foreign sibling mcp_servers.other: %#v", servers)
 	}
+}
+
+// TestImport_Codex_SeedsPerPointerOwnership is the regression for the
+// import-seed path missing the merge-toml-keys strategy: the codex MCP op was
+// seeded as a whole-file state.Files entry instead of per-pointer state.Keys,
+// so the imported server wasn't "owned" at pointer granularity and the next
+// apply over a hand-edit spuriously reported a foreign-collision + backup.
+func TestImport_Codex_SeedsPerPointerOwnership(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgDir := tmp + "/.codex"
+	_ = os.MkdirAll(cfgDir, 0o755)
+	cfgPath := cfgDir + "/config.toml"
+	if err := os.WriteFile(cfgPath, []byte(`model = "gpt-5.5"
+
+[mcp_servers.github]
+command = "orig"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runCLI(t, env, "import", "codex:mcp:github"); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	// State must record per-pointer ownership of /mcp_servers/github, and NOT a
+	// whole-file entry for config.toml.
+	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	var st struct {
+		Keys  map[string]json.RawMessage `json:"keys"`
+		Files map[string]json.RawMessage `json:"files"`
+	}
+	if err := json.Unmarshal(data, &st); err != nil {
+		t.Fatalf("parse state: %v", err)
+	}
+	var sawKey bool
+	for k := range st.Keys {
+		if strings.Contains(k, "/mcp_servers/github") {
+			sawKey = true
+		}
+	}
+	if !sawKey {
+		t.Fatalf("import did not seed per-pointer ownership of /mcp_servers/github; keys=%v", keysOf(st.Keys))
+	}
+	for k := range st.Files {
+		if strings.Contains(k, "config.toml") {
+			t.Fatalf("import seeded a whole-file entry for config.toml (should be per-pointer): %s", k)
+		}
+	}
+
+	// Behavioral proof: hand-edit the now-owned server and re-apply. Because the
+	// server is owned at pointer granularity, apply overwrites it WITHOUT a
+	// foreign-collision backup (the documented owned-key behavior) — with the
+	// bug it would spuriously back up.
+	if err := os.WriteFile(cfgPath, []byte(`model = "gpt-5.5"
+
+[mcp_servers.github]
+command = "hand-edited"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "backed up") {
+		t.Fatalf("apply spuriously backed up an owned, imported server:\n%s", out)
+	}
+}
+
+// TestImport_Codex_Plugin_UnresolvableMarketplace exercises `import codex:plugin`
+// end-to-end: Codex records plugin enable-state but no marketplace fetch source,
+// so a plugin whose marketplace isn't registered with agentsync is warned about
+// and skipped (not an error), and nothing is written to the canonical source.
+func TestImport_Codex_Plugin_UnresolvableMarketplace(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	cfgDir := tmp + "/.codex"
+	_ = os.MkdirAll(cfgDir, 0o755)
+	if err := os.WriteFile(cfgDir+"/config.toml", []byte(`[plugins."gmail@team-mp"]
+enabled = true
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "import", "codex:plugin")
+	if err != nil {
+		t.Fatalf("import codex:plugin should not error on an unresolvable marketplace: %v\n%s", err, out)
+	}
+	// The plugin's marketplace ("team-mp") is registered nowhere, so it is named
+	// in a skip warning rather than silently dropped.
+	if !strings.Contains(out, "team-mp") {
+		t.Fatalf("expected a warning naming the unresolvable marketplace; got:\n%s", out)
+	}
+	// Nothing should be written to the canonical source.
+	if entries, _ := os.ReadDir(tmp + "/.agentsync/plugins"); len(entries) != 0 {
+		t.Fatalf("expected no plugins/*.toml written; got %d entries", len(entries))
+	}
+}
+
+func keysOf(m map[string]json.RawMessage) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 func parseTOMLFile(t *testing.T, path string) map[string]any {
