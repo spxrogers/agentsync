@@ -35,7 +35,7 @@ When you touch… | …also update in the same commit
 --- | ---
 the `Adapter` interface / `DestWriter` / render or capture contracts | `docs/architecture.md` (§3–§5), `docs/components.md`
 a CLI command, subcommand, or flag | `docs/user-guide.md` command reference, `README.md` quickstart, `website/src/content/docs/reference/cli.mdx`
-agent/component coverage (a `Skip` goes native, a new adapter, a new component) | `docs/capability-matrix.md`, the matrices in `README.md` + `docs/user-guide.md` + `website/src/content/docs/guides/fan-out.mdx`
+agent/component coverage (a `Skip` goes native, a new adapter, a new component) | `docs/capability-matrix.md` (mirrored to the website), the matrices in `README.md` + `docs/user-guide.md`
 the canonical schema / `~/.agentsync/` layout | `docs/concepts.md`, `docs/architecture.md` (§2), the layout block in `docs/user-guide.md`
 the secret-handling invariants | the section below, `SECURITY.md`
 anything user-visible | `CHANGELOG.md` (under `[Unreleased]`)

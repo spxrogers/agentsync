@@ -61,7 +61,6 @@ export default defineConfig({
 						{ label: 'Secrets', slug: 'guides/secrets' },
 						{ label: 'Project-local config', slug: 'guides/projects' },
 						{ label: 'Updating from the network', slug: 'guides/updating' },
-						{ label: 'Multi-agent fan-out', slug: 'guides/fan-out' },
 						{ label: 'Cross-machine sync', slug: 'guides/cross-machine' },
 					],
 				},

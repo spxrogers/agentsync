@@ -45,6 +45,23 @@ Component support across agents.
 > translation that would mislead you. Every ◐ and ✗ is printed in the apply
 > report and queryable with `agentsync explain <plugin> --json`.
 
+## Reading the report
+
+Every `apply`, `verify`, and `explain` ends with a coverage report — per plugin,
+per agent — using the same three marks:
+
+```
+plugin: atlassian@anthropic
+  claude    ✓ full    (1 mcp, 5 commands)
+  opencode  ◐ partial (1 mcp; 5 commands → projected)
+```
+
+- **✓ native** — the component landed with full fidelity.
+- **◐ projected** — it landed, but with the documented loss below (e.g. an
+  OpenCode slash command drops its `argument-hint`).
+- **✗ skipped** — no honest translation exists, so nothing was written; the skip
+  is logged, never silent.
+
 ---
 
 ## What each ◐ loses

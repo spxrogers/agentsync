@@ -74,6 +74,9 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   Codex now mirrors Claude's declarative **hooks** JSON (◐ — ~11-event subset)
   while Cursor added a declarative `.cursor/hooks.json` (◐ — event remap). Every ◐
   cell now spells out its specific projection loss.
+- **Docs site** — folded the standalone "Multi-agent fan-out" guide (it duplicated
+  the matrix) into the capability matrix page, which gains a "Reading the report"
+  section.
 
 ### Fixed
 
