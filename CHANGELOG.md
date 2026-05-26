@@ -28,7 +28,8 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 - **Marketplaces & plugins** — all five plugin sources (relative, github, url,
   git-subdir, npm), `strict`-mode conflict policy, `${CLAUDE_PLUGIN_ROOT}`
   substitution, per-component projection, translation report, manifest-SHA
-  pinning, and update modes.
+  pinning, and update modes. `marketplace add` treats every marketplace
+  identically — no name is reserved.
 - **Project-local overlays** — `.agentsync.toml` walk-up discovery, overlay
   merge, project-scope state tracking.
 - **age-encrypted secrets** — `${secret:…}`/`${env:…}` resolution at apply time,

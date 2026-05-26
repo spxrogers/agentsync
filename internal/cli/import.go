@@ -911,7 +911,7 @@ func importPlugins(cmd *cobra.Command, home, agentName string, a adapter.Adapter
 			resolved[mpID] = mpID
 			return mpID, true
 		}
-		mpName, _, ferr := addMarketplaceSource(home, src, rawURL, ew)
+		mpName, _, ferr := addMarketplaceSource(home, src, rawURL)
 		if ferr != nil {
 			fmt.Fprintf(ew, "warning: skipping marketplace %q: %v\n", mpID, ferr)
 			resolved[mpID] = ""

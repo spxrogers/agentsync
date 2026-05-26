@@ -157,14 +157,3 @@ func TestPluginManifest_Parse(t *testing.T) {
 		t.Errorf("lspServers count = %d", len(pm.LSPServers))
 	}
 }
-
-func TestReservedMarketplaceNames(t *testing.T) {
-	if len(marketplace.ReservedMarketplaceNames) == 0 {
-		t.Fatal("ReservedMarketplaceNames is empty")
-	}
-	for _, name := range marketplace.ReservedMarketplaceNames {
-		if name == "" {
-			t.Fatal("empty reserved name")
-		}
-	}
-}

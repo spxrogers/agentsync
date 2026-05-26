@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -68,7 +67,7 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	mpName, headSHA, err := addMarketplaceSource(home, src, rawURL, cmd.ErrOrStderr())
+	mpName, headSHA, err := addMarketplaceSource(home, src, rawURL)
 	if err != nil {
 		return err
 	}
@@ -81,12 +80,12 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 // marketplaces/<name>.toml, and records the fetch in state. It returns the
 // resolved marketplace name (the declared name from marketplace.json, falling
 // back to a URL-derived slug) and the fetched head SHA. rawURL is the original
-// source string stored in the TOML; warnOut receives the reserved-name notice.
+// source string stored in the TOML.
 //
 // It does not print a success line or acquire the global lock — callers do.
 // Both `marketplace add` and `import` use it so the two produce byte-identical
 // canonical artifacts.
-func addMarketplaceSource(home string, src marketplace.Source, rawURL string, warnOut io.Writer) (mpName, headSHA string, err error) {
+func addMarketplaceSource(home string, src marketplace.Source, rawURL string) (mpName, headSHA string, err error) {
 	// Derive a slug for the marketplace.
 	slug := deriveMarketplaceSlug(rawURL)
 	cacheDir := marketplaceCacheDir(home, slug)
@@ -104,12 +103,6 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string, wa
 	if data, err := os.ReadFile(mpJSONPath); err == nil {
 		var mp marketplace.Marketplace
 		if json.Unmarshal(data, &mp) == nil && mp.Name != "" {
-			// Check reserved names.
-			for _, reserved := range marketplace.ReservedMarketplaceNames {
-				if mp.Name == reserved {
-					fmt.Fprintf(warnOut, "warning: marketplace name %q is reserved\n", mp.Name)
-				}
-			}
 			// Only adopt the declared name if it sanitises to something usable;
 			// a name like "..." sanitises to "" and would author marketplaces/.toml.
 			if s := sanitizeSlug(mp.Name); s != "" {

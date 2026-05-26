@@ -664,3 +664,49 @@ func TestPlugin_GitMarketplace(t *testing.T) {
 		t.Errorf("install output: %s", out)
 	}
 }
+
+// TestMarketplace_AddNameNoReservedWarning verifies `marketplace add` no longer
+// warns that a name is "reserved": a marketplace whose declared name was
+// formerly reserved (claude-plugins-official) is added cleanly. Treating every
+// marketplace identically is the whole point — there is no special-cased list.
+func TestMarketplace_AddNameNoReservedWarning(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A local marketplace whose declared name was previously "reserved".
+	mpDir := filepath.Join(t.TempDir(), "official-mp")
+	cp := filepath.Join(mpDir, ".claude-plugin")
+	if err := os.MkdirAll(cp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mpJSON := `{
+		"name": "claude-plugins-official",
+		"owner": {"name": "tester"},
+		"plugins": [{"name": "demo", "source": "./plugins/demo"}]
+	}`
+	if err := os.WriteFile(filepath.Join(cp, "marketplace.json"), []byte(mpJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pluginDir := filepath.Join(mpDir, "plugins", "demo", ".claude-plugin")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"),
+		[]byte(`{"name":"demo","version":"1.0.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "marketplace", "add", mpDir)
+	if err != nil {
+		t.Fatalf("marketplace add: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "added marketplace") {
+		t.Fatalf("expected success line; got:\n%s", out)
+	}
+	if strings.Contains(out, "reserved") {
+		t.Fatalf("a formerly-reserved name must no longer warn; got:\n%s", out)
+	}
+}
