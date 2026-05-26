@@ -44,7 +44,9 @@ existing bootstrap config instead of starting empty.
 ### `doctor`
 A health check: verifies your `PATH`, that home and state directories are
 writable, that the config schema parses, and that the secrets backend is reachable.
-Run it first when something feels off.
+It also lists plugins installed natively in an agent (Claude) that aren't in your
+source yet — run `import <agent>:plugin` to capture them. Run it first when
+something feels off.
 
 ### `verify`
 Validates the canonical config and surfaces **every** unresolved `${secret:…}` /

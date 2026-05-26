@@ -147,6 +147,20 @@ func newStatusCmd() *cobra.Command {
 						"native config is orphaned. Run `agentsync agent disable %s --purge` to remove what agentsync wrote.\n",
 					a, a)
 			}
+			// Nudge: plugins installed natively in an enabled agent but not yet
+			// declared in source. agentsync treats them as foreign-managed (never
+			// drift), so this is informational — it points at `import`.
+			undeclared := undeclaredNativePlugins(c, reg, agents)
+			for _, name := range reg.Names() {
+				missing := undeclared[name]
+				if len(missing) == 0 {
+					continue
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"note: %d plugin(s) installed in %s are not in your source (%s); "+
+						"run `agentsync import %s:plugin` to manage them.\n",
+					len(missing), name, strings.Join(missing, ", "), name)
+			}
 			return nil
 		},
 	}

@@ -52,6 +52,11 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   real plugin import needs network access. Plugins from an unregistered or
   auto-available marketplace (e.g. the built-in `claude-plugins-official`, which
   Claude does not list in `extraKnownMarketplaces`) are reported and skipped.
+- **Plugin nudge in `status` / `doctor`** — both now surface plugins installed
+  natively in an agent (Claude in v1) that aren't declared in your source,
+  pointing at `import <agent>:plugin`. Informational only: agentsync still treats
+  natively-installed plugins as foreign-managed, so this never blocks an apply or
+  auto-imports anything.
 - **Safety primitives** — two-phase atomic writes, an apply lock, first-apply
   foreign-collision backups, symlinked-destination refusal, and a schema-versioned
   state file with portable (`${HOME}`-relative) keys.

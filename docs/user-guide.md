@@ -469,7 +469,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | Command | Purpose | Key flags / args |
 |---|---|---|
 | `init [<git-url>]` | Create `~/.agentsync/`; optionally clone a bootstrap repo. | |
-| `doctor` | Diagnose setup: PATH, home/state writability, config schema, secrets backend. | |
+| `doctor` | Diagnose setup: PATH, home/state writability, config schema, secrets backend; flags natively-installed plugins missing from source. | |
 | `verify` | Validate config and surface every unresolved `${secret:}`/`${env:}` ref. | |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry. | `disable --purge` |
 | `mcp add\|remove\|list <name>` | Manage MCP servers. | `--type --command --args --url --env --agents` |
@@ -478,7 +478,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `secrets set\|get\|edit <key>` | Manage age-encrypted secrets. | `set --stdin` |
 | `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). | `--dry-run --scope --project` |
-| `status` | Summarize drift/pending across agents. | `--scope --project` |
+| `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. | `--scope --project` |
 | `diff [<path>]` | Show pending/drift changes; secrets redacted. | `--scope --project` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. Includes `plugin` (Claude), which re-fetches installed plugins + marketplaces **(network)**. | `--dry-run` |
