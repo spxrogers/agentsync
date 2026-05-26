@@ -101,6 +101,14 @@ docs-preview:
 docs-sync:
     cd website && bun run sync:docs
 
+# Publish the built docs site to the gh-pages branch — GitHub Pages "deploy from a
+# branch", which costs no GitHub Actions minutes. Builds, then force-pushes
+# website/dist as a single commit to origin/gh-pages. (.nojekyll + CNAME ship in
+# website/public/, so the output is served as-is.)
+docs-publish:
+    cd website && { [ -d node_modules ] || bun install; } && bun run build
+    REMOTE="$(git remote get-url origin)"; cd website/dist && git init -q && git add -A && git -c user.name="agentsync docs" -c user.email="docs@users.noreply.github.com" commit -qm "deploy agentsync.cc docs" && git push -f "$REMOTE" HEAD:gh-pages && rm -rf .git
+
 # Full CI gate: lint + the hermetic release suite + the cross-build matrix.
 ci: lint test-release
     goreleaser release --snapshot --skip=publish --clean
