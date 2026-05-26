@@ -48,6 +48,35 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   state file with portable (`${HOME}`-relative) keys.
 - **Documentation set** — user guide, concepts, architecture, capability matrix,
   and component map under [`docs/`](docs/).
+- **Documentation website** (`website/`) — an Astro Starlight site published to
+  [agentsync.cc](https://agentsync.cc) via GitHub Pages. Expands the user guide
+  into task-shaped getting-started, guides, recipes, and reference sections with
+  full-text search and rendered Mermaid diagrams. The four contract docs
+  (concepts, architecture, components, capability matrix) are mirrored from
+  `docs/*.md` at build time so the site can never drift from the in-repo source.
+
+### Changed
+
+- **Capability matrix** — Cursor's planned projection now covers **skills**
+  (✓ native, `.cursor/skills/`) and **subagents** (◐ projected, `.cursor/agents/`),
+  reflecting Cursor's new skill and subagent support (both previously skipped). No
+  code change — Cursor remains a no-op adapter until it's implemented. The matrices
+  also drop the per-agent version suffixes (the target version isn't material) and
+  footnote Codex/Cursor as planned.
+- **Capability matrix** — corrected Codex **skills** from ◐ to ✓: Codex reads the
+  same `SKILL.md` format (no translation loss), matching the design spec. (Codex
+  skills are on by default — they install under `~/.agents/skills/`; there is no
+  `[features] skills = true` master flag.)
+- **Capability matrix** — full sweep against each agent's current docs:
+  Codex/Cursor **MCP** and Codex **memory** are now ✓ (full-fidelity transforms);
+  Codex and Cursor gained real **slash commands** (◐ — Codex via deprecated,
+  global-only custom prompts; Cursor via frontmatter-less `.cursor/commands/`); and
+  Codex now mirrors Claude's declarative **hooks** JSON (◐ — ~11-event subset)
+  while Cursor added a declarative `.cursor/hooks.json` (◐ — event remap). Every ◐
+  cell now spells out its specific projection loss.
+- **Docs site** — folded the standalone "Multi-agent fan-out" guide (it duplicated
+  the matrix) into the capability matrix page, which gains a "Reading the report"
+  section.
 
 ### Fixed
 

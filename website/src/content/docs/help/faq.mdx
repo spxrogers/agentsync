@@ -1,0 +1,73 @@
+---
+title: FAQ
+description: Quick answers to the questions people ask most about agentsync — scope, safety, agent support, and the design choices behind them.
+sidebar:
+  order: 1
+---
+
+import { LinkCard } from '@astrojs/starlight/components';
+
+## Does agentsync sync my config across machines?
+
+No — it's deliberately single-machine. It manages one machine's agents from one
+canonical directory. To carry that directory across machines, use a dotfile
+manager like chezmoi. See [Cross-machine sync](/guides/cross-machine/).
+
+## Will agentsync overwrite changes an agent made to its own config?
+
+Not behind your back. agentsync records a hash of everything it writes. If a native
+file changes, that's **drift** — `status` and `diff` show it, and `reconcile` lets
+you adopt the edit or re-impose your source. The one exception is hand-edits to a
+key agentsync *already owns* in a shared file: run `reconcile` before the next
+`apply` to capture those. See [Troubleshooting](/help/troubleshooting/).
+
+## Can a secret leak into my committed dotfiles?
+
+The architecture makes that extremely hard. Resolved cleartext secrets are a
+distinct type the source writers literally cannot accept (a compile error), all
+write-backs funnel through one re-referencing path, and a fail-closed backstop
+refuses to write if a credential would persist. See the
+[security model](/internals/security/).
+
+## Why is there no background daemon?
+
+So that `apply` is fast, offline, and reproducible. `update` is the only command
+that touches the network; everything else reads a local cache. If you want
+scheduled refreshes, wire `agentsync update --apply --auto-safe` into cron,
+launchd, or systemd yourself. See [Updating from the network](/guides/updating/).
+
+## Why does the same component land differently on each agent?
+
+Because the agents genuinely differ. agentsync marks each translation **native (✓)**,
+**projected (◐)**, or **skipped (✗)** and prints the choice in the apply report —
+it refuses to invent a translation that would mislead you. See the
+[capability matrix](/reference/capability-matrix/) for the full per-agent breakdown.
+
+## When will Codex CLI and Cursor be supported?
+
+They're registered as no-op adapters today (both still planned). `agent add codex`
+/ `agent add cursor` are rejected in beta unless you set
+`AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. Cursor's planned coverage includes skills and
+subagents (`.cursor/skills/`, `.cursor/agents/`); its user-level *rules* live in
+app-local storage, so rules stay project-scope only.
+
+## What about Continue, Gemini CLI, or Aider?
+
+Not on the v1.x roadmap.
+
+## Are my TOML / JSONC comments preserved on a round-trip?
+
+Not yet. Comments in `mcp/*.toml` and in agent-side `opencode.json` are not
+preserved across a reconcile write-back or import **in the rewritten section** —
+comments in unrelated sections survive. This is a documented v1.x limitation.
+
+## Do I need the `age` CLI?
+
+Only to *generate* a keypair (`age-keygen`). agentsync embeds age for
+encryption/decryption itself. See [Secrets](/guides/secrets/).
+
+<LinkCard
+	title="Still stuck?"
+	description="The troubleshooting page covers concrete error scenarios and fixes."
+	href="/help/troubleshooting/"
+/>

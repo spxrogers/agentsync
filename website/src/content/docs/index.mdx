@@ -1,0 +1,121 @@
+---
+title: agentsync
+description: One source of truth for every AI coding agent on your machine. Define your MCP servers, memory, skills, and plugins once — apply them, correctly translated, to Claude Code, OpenCode, and more.
+template: splash
+hero:
+  tagline: Define your MCP servers, memory, skills, and plugins once. Run <code>agentsync apply</code>. They land — correctly translated — in every AI coding agent on your machine.
+  image:
+    file: ../../assets/agentsync-logo.svg
+  actions:
+    - text: Get started
+      link: /getting-started/introduction/
+      icon: right-arrow
+    - text: Your first sync
+      link: /getting-started/first-sync/
+      icon: rocket
+      variant: secondary
+    - text: View on GitHub
+      link: https://github.com/spxrogers/agentsync
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard, Aside, Steps } from '@astrojs/starlight/components';
+
+If you use more than one AI coding agent, you keep re-entering the same config in
+each one's native format, you forget to install a plugin everywhere, and your
+configs quietly drift apart. **agentsync fixes the fan-out.**
+
+<CardGrid>
+	<Card title="Edit once, apply everywhere" icon="pencil">
+		Add an MCP server or install a plugin a single time. It's projected into
+		each agent's native config — **fully** where the agent has the concept,
+		**lossily but reported** where it doesn't, **skipped (never silently)**
+		where it can't.
+	</Card>
+	<Card title="Bidirectional, chezmoi-style" icon="random">
+		When an agent edits its own config, agentsync detects the drift and offers a
+		merge: adopt the edit into your source, or re-impose the source. Nothing is
+		overwritten behind your back.
+	</Card>
+	<Card title="Secrets stay secret" icon="approve-check">
+		Reference <code>$&#123;secret:github.token&#125;</code>. agentsync resolves it
+		at apply time from an age-encrypted vault and **never** writes the cleartext
+		back into your (committable) source.
+	</Card>
+	<Card title="Offline & reproducible" icon="laptop">
+		<code>apply</code> never touches the network — it renders from a local cache.
+		Only <code>update</code> reaches out. Fast, deterministic, CI-friendly.
+	</Card>
+</CardGrid>
+
+## From zero to synced in five commands
+
+```bash frame="terminal" title="greenfield setup"
+agentsync init                          # create ~/.agentsync/
+agentsync agent add claude              # register the agents you use
+agentsync agent add opencode
+agentsync mcp add github \              # add a server once…
+  --command npx --args "-y,@modelcontextprotocol/server-github"
+agentsync apply                         # …it fans out to every agent
+```
+
+That `github` MCP server now lives in **both** `~/.claude.json` and
+`~/.config/opencode/opencode.json`, each in its own native shape.
+
+<Aside type="tip" title="Always preview first">
+	`agentsync apply --dry-run` prints the full translation report — what lands
+	natively (✓), what's projected with loss (◐), and what's skipped (✗) —
+	without writing a byte.
+</Aside>
+
+## Find your path
+
+<CardGrid>
+	<LinkCard
+		title="What is agentsync?"
+		description="The problem it solves and the promise it makes — in two minutes."
+		href="/getting-started/introduction/"
+	/>
+	<LinkCard
+		title="Your first sync"
+		description="The 5-minute greenfield path: start clean, end with a server live in two agents."
+		href="/getting-started/first-sync/"
+	/>
+	<LinkCard
+		title="Already have configs?"
+		description="Bring your existing Claude / OpenCode setup under management without retyping it."
+		href="/getting-started/existing-configs/"
+	/>
+	<LinkCard
+		title="The mental model"
+		description="Three states, one comparison. Read this once and everything clicks."
+		href="/getting-started/mental-model/"
+	/>
+	<LinkCard
+		title="Secrets"
+		description="Reference credentials safely with an age-encrypted vault that never leaks cleartext."
+		href="/guides/secrets/"
+	/>
+	<LinkCard
+		title="Capability matrix"
+		description="Exactly what each agent supports, per component — and what's lossy or deferred."
+		href="/reference/capability-matrix/"
+	/>
+</CardGrid>
+
+## Supported agents
+
+| Agent | Status | Component coverage |
+| --- | --- | --- |
+| **Claude Code** | ✓ full adapter | All seven components, including LSP. |
+| **OpenCode** | ✓ adapter | MCP, memory, skills, subagents, commands. Hooks + LSP skipped. |
+| **Codex CLI** | 🔜 planned | No-op today; `agent add codex` rejected unless overridden. |
+| **Cursor** | 🔜 planned | No-op today; will project skills, subagents + project-scope rules. |
+
+<Aside type="caution" title="Status: beta">
+	v1.0 ships Claude Code + OpenCode end-to-end. The tool is functional and tested
+	under `just test-release`; package-manager distribution and a few documented
+	trade-offs are still being finalized. Found a rough edge?
+	[Open an issue](https://github.com/spxrogers/agentsync/issues).
+</Aside>

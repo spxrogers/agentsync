@@ -8,7 +8,7 @@ Define your MCP servers, memory, skills, and marketplace plugins once in
 `~/.agentsync/`. Run `agentsync apply`. They land — correctly translated — in
 Claude Code, OpenCode, and (soon) Codex CLI and Cursor.
 
-[Quickstart](#quickstart) · [Install](#install) · **[User guide](docs/user-guide.md)** · [Docs](docs/) · [Known limits](#known-limits-in-v1x)
+[Quickstart](#quickstart) · [Install](#install) · **[Docs site → agentsync.cc](https://agentsync.cc)** · [User guide](docs/user-guide.md) · [Known limits](#known-limits-in-v1x)
 
 </div>
 
@@ -48,6 +48,10 @@ New here? The **[User guide](docs/user-guide.md)** takes you 0→100.
 
 ## Documentation
 
+The full docs are published with search and rendered diagrams at
+**[agentsync.cc](https://agentsync.cc)** (source in [`website/`](website/)). The
+canonical markdown also lives in [`docs/`](docs/):
+
 | Doc | What it covers |
 | --- | --- |
 | **[User guide](docs/user-guide.md)** | Install → first sync → daily loop → secrets → plugins → project config. |
@@ -63,8 +67,8 @@ New here? The **[User guide](docs/user-guide.md)** takes you 0→100.
 | --- | --- | --- |
 | **Claude Code** | ✓ full adapter | All seven components, incl. LSP. |
 | **OpenCode** | ✓ adapter | MCP, memory, skills, subagents, commands. Hooks + LSP skipped. |
-| **Codex CLI** | planned (v1.1) | No-op today; `agent add codex` rejected unless overridden. |
-| **Cursor** | planned (v1.2) | No-op today; will manage project-scope rules only. |
+| **Codex CLI** | planned | No-op today; `agent add codex` rejected unless overridden. |
+| **Cursor** | planned | No-op today; will project skills + subagents (`.cursor/skills/`, `.cursor/agents/`) and project-scope rules. |
 
 Full ✓/◐/✗ breakdown per component: **[capability matrix](docs/capability-matrix.md)**.
 
@@ -130,7 +134,7 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 ## Known limits in v1.x
 
 - **OpenCode hooks**: OpenCode hooks are JS/TS plugins, not declarative shell commands. agentsync v1 does NOT auto-translate Claude hooks to OpenCode. Hand-author a small JS/TS plugin if you need a hook on OpenCode.
-- **Cursor / Codex adapters**: not implemented in v1 — both register as no-op adapters (Codex planned for v1.1, Cursor for v1.2), and `agent add codex`/`cursor` is rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. Cursor also stores user-level rules in app-local storage (not the filesystem), so even the planned adapter will manage project-scope rules only.
+- **Cursor / Codex adapters**: not implemented in v1 — both register as no-op adapters (Codex planned for v1.1, Cursor for v1.2), and `agent add codex`/`cursor` is rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. Cursor's planned coverage includes skills and subagents (which it stores on the filesystem under `.cursor/skills/` and `.cursor/agents/`), but its user-level *rules* live in app-local storage (not the filesystem), so the adapter will manage rules at project scope only.
 - **LSP projection beyond Claude**: OpenCode/Codex/Cursor LSP support is deferred. Claude plugins that include LSP servers install correctly on Claude itself; on other agents you'll see `lsp server X skipped` in the apply translation report.
 - **codex / cursor agent registration**: `agent add codex` and `agent add cursor` are rejected in v1.0 because their adapters are noops. Set `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` to register anyway (apply will silently emit zero ops for them).
 - **TOML / JSONC comment preservation**: comments in `~/.agentsync/mcp/*.toml` and in agent-side `opencode.json` are NOT preserved across reconcile `[w]`rite-back or import. Hand-edited comments survive in unrelated sections; the rewritten section will be re-emitted without comments. Deferred to v1.x.

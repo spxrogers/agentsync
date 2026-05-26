@@ -1,0 +1,48 @@
+---
+title: Cross-machine sync
+description: agentsync is single-machine by design. Use chezmoi or any dotfile manager to carry ~/.agentsync/ across machines — and distribute the age key separately.
+sidebar:
+  order: 9
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+
+agentsync is deliberately **single-machine**. It manages one machine's agents from
+one canonical directory. To carry that directory across machines, use a dotfile
+manager — [chezmoi](https://www.chezmoi.io/) is the natural fit, but any will do.
+
+```bash
+chezmoi add ~/.agentsync
+```
+
+Now `~/.agentsync/` lives in your dotfiles repo and syncs like the rest of your
+config.
+
+## What's safe to sync, what isn't
+
+| Item | Sync it? | Why |
+| --- | --- | --- |
+| `~/.agentsync/**` (TOML, markdown, skills) | ✅ | Hand-editable source, no secrets in cleartext. |
+| `secrets/secrets.age` (the encrypted vault) | ✅ | Encrypted to your recipient; safe to commit. |
+| The age **identity** (private key) | ❌ | Per-machine. Distribute via your existing secret-sharing flow. |
+| `~/.agentsync/.state/` | ❌ (gitignored) | Machine-local bookkeeping; not portable as-is. |
+
+<Aside type="caution" title="The age identity is per-machine">
+	The encrypted secrets file is safe to sync. The age identity (private key) is
+	**not** — never commit it. Distribute it through 1Password, your machine-setup
+	repo, or whatever you already use for machine-local secrets.
+</Aside>
+
+## State is portable
+
+agentsync stores its last-applied hashes `${HOME}`-relative rather than with
+absolute paths, so the `.state/targets.json` bookkeeping is portable across
+machines if you ever do choose to carry it. On a fresh machine, the first `apply`
+simply re-establishes ownership of any pre-existing native files (backing them up
+first).
+
+<LinkCard
+	title="Adopt a populated machine"
+	description="A step-by-step recipe for bringing a second machine — with its own existing config — under management."
+	href="/recipes/adopt-existing/"
+/>

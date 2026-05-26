@@ -1,0 +1,74 @@
+---
+title: Onboard a teammate
+description: Ship a shared project overlay so a new teammate's agents are configured the moment they clone the repo.
+sidebar:
+  order: 2
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Goal:** a teammate clones your repo and their AI agents pick up the project's
+MCP servers and conventions with minimal setup.
+
+The lever here is the [project-local overlay](/guides/projects/): a
+`.agentsync.toml` marker committed at the repo root.
+
+<Steps>
+
+1. **Add a project marker** at the repo root and commit it:
+
+   ```toml title="myrepo/.agentsync.toml"
+   agents = ["claude", "opencode"]
+
+   [[mcp]]
+   id      = "company-api"
+   type    = "stdio"
+   command = "npx"
+   args    = ["-y", "@company/mcp"]
+
+   [plugins]
+   disabled = ["screenshot"]   # noisy for this repo
+   ```
+
+2. **Reference team secrets, don't embed them.** If `company-api` needs a token,
+   reference it so each teammate supplies their own value locally:
+
+   ```toml
+   [[mcp]]
+   id = "company-api"
+   # …
+   [mcp.env]
+   COMPANY_TOKEN = "${secret:company.token}"
+   ```
+
+3. **Document the one-time setup** in your repo's README: install agentsync, set
+   the team secret, then apply from inside the repo.
+
+</Steps>
+
+## What the teammate runs
+
+<Steps>
+
+1. **Install agentsync** ([install guide](/getting-started/install/)) and set the
+   shared secret locally:
+
+   ```bash
+   agentsync secrets set company.token --stdin < token.txt
+   ```
+
+2. **Apply from inside the repo** — the overlay merges onto their user config:
+
+   ```bash
+   cd myrepo
+   agentsync apply --dry-run
+   agentsync apply
+   ```
+
+</Steps>
+
+<Aside type="note" title="The overlay is additive">
+	The project marker merges *onto* each teammate's user-level config — it doesn't
+	wipe their personal servers or plugins. It only adds the project's servers,
+	disables what the project disables, and narrows the agent set if you set `agents`.
+</Aside>

@@ -1,0 +1,99 @@
+---
+title: Marketplaces & plugins
+description: Add a marketplace, install a plugin once, and every enabled agent gets the components it understands — fully, lossily, or skipped, with a per-agent report.
+sidebar:
+  order: 4
+---
+
+import { Steps, Aside, LinkCard } from '@astrojs/starlight/components';
+
+This is where agentsync earns its keep. A **plugin** is a bag of components — MCP
+servers, skills, subagents, commands, hooks, LSP servers. Install it once and
+every enabled agent gets the components it understands.
+
+## Install a plugin
+
+<Steps>
+
+1. **Add a marketplace** (a registry of plugins):
+
+   ```bash
+   agentsync marketplace add github:anthropics/claude-plugins-official
+   ```
+
+2. **Install a plugin** from it:
+
+   ```bash
+   agentsync plugin install atlassian@anthropic
+   ```
+
+3. **Fetch from the network** — `update` is the only networked verb:
+
+   ```bash
+   agentsync update
+   ```
+
+4. **Apply** — renders from the local cache to all agents:
+
+   ```bash
+   agentsync apply
+   ```
+
+</Steps>
+
+<Aside type="note" title="update fetches, apply renders">
+	`update` is the **only** command that touches the network. It refreshes the
+	local plugin cache and recomputes version pins. `apply` then renders entirely
+	from that cache — so it's fast, offline, and reproducible. See
+	[Updating from the network](/guides/updating/).
+</Aside>
+
+## The translation report
+
+Each component in a plugin is projected independently per agent — fully, lossily,
+or skipped — and the report tells you exactly which:
+
+```
+plugin: atlassian@anthropic
+  claude    ✓ full    (1 mcp, 5 commands)
+  opencode  ◐ partial (1 mcp; 5 commands → projected)
+```
+
+Inspect a plugin's coverage *without* applying:
+
+```bash
+agentsync explain atlassian@anthropic
+agentsync explain atlassian@anthropic --json
+```
+
+## Controlling per-plugin fan-out
+
+Limit a plugin to specific agents with an `agents = [...]` allowlist in its TOML
+file:
+
+```toml title="~/.agentsync/plugins/atlassian.toml"
+id     = "atlassian@anthropic"
+agents = ["claude"]   # only fan this plugin out to Claude
+```
+
+<Aside type="caution" title="Per-component overrides are not wired in v1">
+	A per-component `[plugin.overrides.<agent>]` table was specced but the projector
+	**does not consult it** in v1 — use the `agents` allowlist instead.
+</Aside>
+
+## Plugin lifecycle
+
+```bash
+agentsync plugin install <id[@marketplace]>
+agentsync plugin upgrade  <id>
+agentsync plugin enable   <id>
+agentsync plugin disable  <id>
+agentsync plugin remove   <id>
+agentsync plugin list
+```
+
+<LinkCard
+	title="Agent capability matrix"
+	description="What each agent supports per component, what each ◐ loses, and how to read the report."
+	href="/reference/capability-matrix/"
+/>

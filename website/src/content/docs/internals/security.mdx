@@ -1,0 +1,90 @@
+---
+title: Security model
+description: How agentsync prevents secret leaks, treats marketplaces as untrusted input, and writes destinations safely — plus how to report a vulnerability.
+sidebar:
+  order: 3
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+
+agentsync reads and writes coding-agent configuration on a single machine and can
+resolve secrets into native config files. That makes two things load-bearing:
+**resolved secrets must never be persisted back into your source**, and
+**marketplaces and plugins must be treated as untrusted input.**
+
+## The leak that must not happen
+
+The dangerous bug class is a *resolved cleartext secret being persisted into the
+canonical source* — often a committed dotfiles repo. agentsync prevents it with
+several tiers of defense, in increasing distance from the danger:
+
+| Tier | Guarantee |
+| --- | --- |
+| **Compile-enforced** | Secret substitution returns a `secrets.Resolved` wrapper that is *not* assignable to `source.Canonical`. Source writers and the capture path accept only the templated `source.Canonical`. Passing resolved data to a writer is a **compile error**, not a review check. |
+| **Value-invariant** | Substitution clones the model before resolving (no aliasing back to your templated copy), and the field walker only visits secret-bearing fields — so text components (memory, skills, commands) physically cannot carry a substituted secret. |
+| **Lint fence** | A `forbidigo` rule forbids unwrapping a `Resolved` outside the two adapter render egress sites. |
+| **Capture backstop** | The dest→source path re-references secrets to `${secret:…}`, then **re-scans** the about-to-be-written model and **refuses to write** if a resolved secret would persist (or a referenced key vanished) — rather than guess. |
+
+<Aside type="note" title="One funnel, one field list">
+	Every dest→source write-back goes through a single function
+	(`capture.Capture`), and every secret-bearing field is enumerated in exactly one
+	place (`walkSecretFields`). A reflection-based test fails if a new
+	string-shaped secret-bearing field is added without classification. Full detail
+	in the [architecture](/internals/architecture/#8-secrets--how-the-leak-is-prevented).
+</Aside>
+
+## age-encrypted secrets
+
+- The age **identity** file (private key) must be `0600`; agentsync refuses to
+  read a group/other-readable identity unless `AGENTSYNC_AGE_SKIP_PERM_CHECK=1`.
+- agentsync **never** writes decrypted secret values to durable storage and
+  **redacts** resolved `${secret:…}` values in `agentsync diff`.
+- `agentsync secrets set --stdin` keeps secret values off `argv`, shell history,
+  and process listings.
+
+## Untrusted marketplaces & plugins
+
+A marketplace or plugin you add is treated as untrusted input. At the network
+boundary, fetchers:
+
+- **reject symlinks** in npm / relative / git sources,
+- **cap** decompressed tarball size (`AGENTSYNC_MAX_TARBALL_MB`, default 512 MB),
+- **bound** manifest-listed component paths and names to the plugin cache,
+- **reject** `http://` / `git://` sources unless `AGENTSYNC_ALLOW_INSECURE_URLS=1`,
+- **pin** each plugin with a content hash over its *entire* cache tree (every
+  projected component body, not just `plugin.json`), so a tampered or re-uploaded
+  body is detected at apply rather than silently consumed.
+
+## Destination writes
+
+- Writes are **atomic** (two-phase: stage → fsync → rename).
+- agentsync refuses to clobber **symlinked destinations** by default (a rename
+  would replace the link with a regular file and strand your linked source);
+  override with `AGENTSYNC_ALLOW_SYMLINK_DEST=1`.
+- Pre-existing **foreign files** are backed up to `.state/backups/<ts>/` before
+  overwrite.
+
+## Sensitive files — don't commit these
+
+- your age **identity** file (private key),
+- decrypted secrets,
+- `~/.agentsync/.state/`.
+
+## Reporting a vulnerability
+
+<Aside type="caution" title="Report privately">
+	Please report security issues **privately** via GitHub's "Report a
+	vulnerability" button under the repository's **Security** tab (Security
+	Advisories), rather than opening a public issue. Include the affected version
+	(`agentsync --version`), repro steps, and impact. We aim to acknowledge reports
+	within a few days.
+</Aside>
+
+Until the first stable (`v1.0.0`) release, only the latest tagged version is
+supported for security fixes.
+
+<LinkCard
+	title="Architecture: how the leak is prevented"
+	description="The compile-time, value-invariant, and fail-closed details in full."
+	href="/internals/architecture/#8-secrets--how-the-leak-is-prevented"
+/>

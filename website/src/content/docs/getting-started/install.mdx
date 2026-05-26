@@ -1,0 +1,106 @@
+---
+title: Install
+description: Install agentsync from source today; Homebrew, Scoop, Chocolatey, and Linux packages light up with the first tagged release.
+sidebar:
+  order: 3
+---
+
+import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Pre-release">
+	The package-manager channels below are wired up in `.goreleaser.yaml` and
+	publish starting with the **first tagged release**. Until then, **build from
+	source** — it works today.
+</Aside>
+
+## From source (works today)
+
+```bash
+go install github.com/spxrogers/agentsync/cmd/agentsync@latest
+```
+
+Or clone and build:
+
+```bash
+git clone https://github.com/spxrogers/agentsync
+cd agentsync
+go build ./cmd/agentsync
+```
+
+You'll need Go ≥ 1.26.2 (the version pinned in `go.mod`).
+
+## Package managers
+
+<Tabs syncKey="os">
+	<TabItem label="macOS" icon="apple">
+		```bash
+		brew tap spxrogers/tap
+		brew install agentsync
+		```
+	</TabItem>
+	<TabItem label="Windows" icon="seti:windows">
+		Scoop:
+
+		```powershell
+		scoop bucket add spxrogers https://github.com/spxrogers/scoop-bucket
+		scoop install agentsync
+		```
+
+		Chocolatey:
+
+		```powershell
+		choco install agentsync
+		```
+	</TabItem>
+	<TabItem label="Linux" icon="linux">
+		Pick the package for your architecture (`amd64` or `arm64`).
+
+		Debian / Ubuntu:
+
+		```bash
+		curl -fsSL https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_amd64.deb -o agentsync.deb
+		sudo dpkg -i agentsync.deb
+		```
+
+		RPM:
+
+		```bash
+		sudo rpm -i https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_amd64.rpm
+		```
+
+		Arch (AUR):
+
+		```bash
+		yay -S agentsync-bin
+		```
+	</TabItem>
+</Tabs>
+
+## Verify
+
+```bash
+agentsync --version
+```
+
+## Run a health check
+
+Once installed, `doctor` confirms your environment is ready — PATH, home and
+state writability, config schema, and the secrets backend:
+
+```bash
+agentsync doctor
+```
+
+<Steps>
+
+1. **Install** the binary (above).
+
+2. **Initialize** your config directory:
+
+   ```bash
+   agentsync init
+   ```
+
+3. **Continue** to [your first sync](/getting-started/first-sync/).
+
+</Steps>

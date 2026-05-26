@@ -1,0 +1,79 @@
+---
+title: The daily loop
+description: The four commands that cover day-to-day use — apply, status, diff, reconcile — and how to resolve drift interactively or in scripts.
+sidebar:
+  order: 1
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+
+Four commands cover almost everything you do after the initial setup.
+
+| Command | When you run it |
+| --- | --- |
+| `agentsync apply` | After editing your source — push changes to agents. |
+| `agentsync status` | "What's out of sync?" — a summary across all agents. |
+| `agentsync diff` | "Show me exactly what changed." Secrets are redacted. |
+| `agentsync reconcile` | An agent edited its config — merge or override the drift. |
+
+## A typical session
+
+After an agent (or you) edited a native file out from under agentsync:
+
+```bash frame="terminal"
+agentsync status              # spot the drift
+agentsync diff claude         # inspect it (resolved secrets are masked)
+agentsync reconcile           # interactively resolve
+```
+
+## Inside `reconcile`
+
+For each drifting item, agentsync shows the source value, the on-disk value, and a
+menu:
+
+```
+~/.claude/settings.json#$.permissions.bash[2]   (drift)
+  source:      "Bash(git push:*)"
+  destination: "Bash(git push:*) Bash(npm publish:*)"
+
+  [w]rite-back   [o]verride   [s]kip   [i]gnore   [d]iff   [q]uit
+```
+
+| Key | Action |
+| --- | --- |
+| **`w`** | Adopt the destination edit into your source (`W` = all). |
+| **`o`** | Re-impose the source, discarding the edit (`O` = all). |
+| **`i`** | Stop tracking this path (adds it to `~/.agentsync/ignore.toml`). |
+| **`s`** / **`q`** | Skip / quit. |
+| **`d`** | Show a full diff for this item. |
+
+<Aside type="note" title="Write-back is secret-safe">
+	When you `[w]rite-back`, agentsync re-references any resolved secret to its
+	`${secret:…}` form before persisting — and refuses the write entirely if a live
+	cleartext credential would land in your source. See
+	[Secrets](/guides/secrets/) and the [security model](/internals/security/).
+</Aside>
+
+## Scripting it
+
+For non-interactive runs (cron, CI, a `update --apply`), drive reconcile with
+flags instead of the menu:
+
+| Flag | Behavior |
+| --- | --- |
+| `--auto-writeback` | Adopt every destination edit. |
+| `--auto-override` | Re-impose source everywhere, discarding edits. |
+| `--auto-safe` | Only auto-resolve changes that **can't lose work** (`converged`, `pending`). |
+
+```bash
+agentsync reconcile --auto-safe
+```
+
+`--auto-safe` is the conservative default for automation: it converges the
+no-risk cases and leaves anything that could discard work for a human.
+
+<LinkCard
+	title="What the drift classes mean"
+	description="clean, pending, drift, converged, conflict, new, foreign-collision, orphan… all nine, defined."
+	href="/concepts/#drift--the-3-way-classifier"
+/>

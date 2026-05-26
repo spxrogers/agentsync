@@ -1,0 +1,73 @@
+---
+title: Commit your config to dotfiles
+description: Put ~/.agentsync/ under version control with chezmoi, commit the encrypted vault, and keep the age identity out of git.
+sidebar:
+  order: 1
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Goal:** version-control your agentsync config and carry it across machines —
+without ever committing a cleartext secret or your private key.
+
+<Steps>
+
+1. **Make sure secrets are referenced, not embedded.** Scan your source for
+   anything that looks like a raw credential and convert it to a `${secret:…}`
+   reference (see [Secrets](/guides/secrets/)). `verify` will flag unresolved
+   references:
+
+   ```bash
+   agentsync verify
+   ```
+
+2. **Add the directory to chezmoi:**
+
+   ```bash
+   chezmoi add ~/.agentsync
+   ```
+
+3. **Confirm `.state/` is ignored.** agentsync gitignores its `.state/`
+   bookkeeping directory inside `~/.agentsync/`. The encrypted vault
+   (`secrets/secrets.age`) *is* tracked — that's intentional and safe.
+
+4. **Commit and push** through chezmoi as usual:
+
+   ```bash
+   chezmoi cd
+   git add . && git commit -m "agentsync config" && git push
+   ```
+
+</Steps>
+
+## On a new machine
+
+<Steps>
+
+1. **Pull your dotfiles** with chezmoi, which restores `~/.agentsync/`.
+
+2. **Place the age identity** (your private key) at the path your
+   `agentsync.toml` points to — distribute it through 1Password or your
+   machine-setup flow, **never** git:
+
+   ```bash
+   mkdir -p ~/.config/agentsync
+   # copy age.key into place, then:
+   chmod 600 ~/.config/agentsync/age.key
+   ```
+
+3. **Apply.** The first apply re-establishes ownership of any pre-existing native
+   config (backing it up first):
+
+   ```bash
+   agentsync apply --dry-run    # preview the backups + translation report
+   agentsync apply
+   ```
+
+</Steps>
+
+<Aside type="danger" title="Never commit the age identity">
+	The encrypted vault is safe to commit. The age **identity** (private key) is
+	per-machine and is your only way to decrypt secrets — keep it out of git and
+	back it up somewhere durable.
+</Aside>

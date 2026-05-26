@@ -1,0 +1,104 @@
+---
+title: What is agentsync?
+description: The fan-out problem agentsync solves, the promise it makes, and how the bidirectional, secret-safe model works at a glance.
+sidebar:
+  order: 1
+---
+
+import { Aside, Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+**agentsync is a single-machine CLI that centrally manages the configuration of
+your AI coding agents.** You keep one canonical config in `~/.agentsync/` — small,
+hand-editable TOML and markdown you can commit to a dotfiles repo — and agentsync
+projects it into each agent's *native* format.
+
+## The fan-out problem
+
+If you use more than one AI coding agent, you've felt this:
+
+- You add an MCP server to Claude, then hand-copy it into OpenCode's JSON, then
+  again into Codex's TOML.
+- You install a plugin in one agent and forget it in the others.
+- You hard-code a token into a config file and pray it never lands in git.
+- Your `~/.claude.json` and your OpenCode config slowly drift apart, and you have
+  no idea which one is "right."
+
+Every new agent multiplies the busywork and the number of places a secret can
+leak or a setting can go stale.
+
+## What agentsync does about it
+
+You keep **one canonical config** and agentsync fans it out. Add a server once; it
+lands everywhere. Install a plugin once; every agent that understands its
+components gets them. And because agents edit their own configs, agentsync is
+**bidirectional** — it notices when a native file drifts from what it last wrote
+and offers a chezmoi-style merge.
+
+<CardGrid>
+	<Card title="Edit once, apply everywhere" icon="pencil">
+		Each component is projected into each agent's native config — **fully** where
+		the agent has the concept, **lossily but reported** where it doesn't,
+		**skipped (never silently)** where it can't.
+	</Card>
+	<Card title="Bidirectional" icon="random">
+		When an agent edits its own config, agentsync detects the drift and offers a
+		merge: adopt the edit into your source, or re-impose the source. Nothing is
+		overwritten behind your back, and nothing is lost.
+	</Card>
+	<Card title="Secret-safe" icon="approve-check">
+		Reference <code>$&#123;secret:github.token&#125;</code>; agentsync resolves it
+		at apply time from an age-encrypted vault and **never** writes the cleartext
+		back into your source.
+	</Card>
+	<Card title="Offline apply" icon="laptop">
+		<code>apply</code> renders from a local cache and never touches the network.
+		Only <code>update</code> reaches out — so apply is fast and reproducible.
+	</Card>
+</CardGrid>
+
+<Aside type="tip" title="The promise">
+	Edit in one place, apply once, trust the result — with your secrets safe and
+	your drift visible.
+</Aside>
+
+## How it stays honest
+
+Not every agent supports every component, and agentsync never pretends otherwise.
+Every translation is marked **✓ native**, **◐ projected** (lossy but reported), or
+**✗ skipped** (no honest translation), and the choice is printed in the apply
+report. See the [capability matrix](/reference/capability-matrix/) for the full
+per-agent breakdown.
+
+## Status
+
+<Aside type="caution" title="Beta">
+	v1.0 ships **Claude Code** and **OpenCode** end-to-end. **Codex CLI** and
+	**Cursor** are registered as no-op adapters today (still planned). The tool is functional
+	and tested under `just test-release`; package-manager distribution and a few
+	documented trade-offs are still being finalized.
+</Aside>
+
+## Where to next
+
+<CardGrid>
+	<LinkCard
+		title="The mental model"
+		description="Three states, one comparison — the whole tool in 60 seconds."
+		href="/getting-started/mental-model/"
+	/>
+	<LinkCard
+		title="Install"
+		description="Build from source today; package managers light up at the first release."
+		href="/getting-started/install/"
+	/>
+	<LinkCard
+		title="Your first sync"
+		description="A 5-minute greenfield walkthrough."
+		href="/getting-started/first-sync/"
+	/>
+	<LinkCard
+		title="Concepts & glossary"
+		description="Every term, defined once."
+		href="/concepts/"
+	/>
+</CardGrid>

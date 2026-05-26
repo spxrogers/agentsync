@@ -1,0 +1,20 @@
+{
+  "name": "website",
+  "type": "module",
+  "version": "0.0.1",
+  "scripts": {
+    "sync:docs": "node scripts/sync-docs.mjs",
+    "predev": "npm run sync:docs",
+    "dev": "astro dev",
+    "prebuild": "npm run sync:docs",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.39.2",
+    "astro": "^6.3.1",
+    "astro-mermaid": "^2.0.1",
+    "mermaid": "^11.15.0",
+    "sharp": "^0.34.5"
+  }
+}

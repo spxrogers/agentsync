@@ -1,0 +1,91 @@
+---
+title: Configuration & layout
+description: The ~/.agentsync/ directory layout and the agentsync.toml schema — agents, update defaults, and the secrets backend.
+sidebar:
+  order: 2
+---
+
+import { FileTree, Aside } from '@astrojs/starlight/components';
+
+`~/.agentsync/` is just files. Use the CLI or edit them in `$EDITOR` — both are
+first-class. There is **no hidden internal representation**: the TOML structs that
+parse these files *are* the canonical model.
+
+## Directory layout
+
+<FileTree>
+
+- ~/.agentsync/
+  - agentsync.toml agents, update defaults, secrets backend
+  - mcp/
+    - **github.toml** one MCP server per file
+  - marketplaces/
+    - **anthropic.toml** one marketplace per file
+  - plugins/
+    - **atlassian.toml** one plugin enablement per file
+  - memory/
+    - AGENTS.md canonical memory
+    - fragments/ reusable `@import` pieces
+  - skills/
+    - my-skill/
+      - SKILL.md standalone skills
+  - secrets/
+    - secrets.age age-encrypted vault
+  - ignore.toml paths reconcile should stop tracking
+  - .state/ machine-local bookkeeping (gitignored)
+
+</FileTree>
+
+Override the directory's location with `AGENTSYNC_HOME`.
+
+## `agentsync.toml`
+
+The top-level config: which agents are registered, update defaults, and the
+secrets backend.
+
+```toml title="~/.agentsync/agentsync.toml"
+# Registered agents and whether each is enabled.
+[[agents]]
+name    = "claude"
+enabled = true
+
+[[agents]]
+name    = "opencode"
+enabled = true
+
+# Secrets backend — see the Secrets guide.
+[secrets]
+backend       = "age"
+recipient     = "age1…"                              # public key, safe to commit
+identity_file = "${env:HOME}/.config/agentsync/age.key"  # private key, per-machine
+```
+
+<Aside type="note">
+	Use the CLI (`agentsync agent add`, `agentsync secrets set`, …) and let it write
+	these files, or hand-edit them — agentsync re-reads the files either way. The
+	exact key set is validated by `agentsync verify` and surfaced by
+	`agentsync doctor`.
+</Aside>
+
+## Per-component files
+
+| File | Holds |
+| --- | --- |
+| `mcp/<name>.toml` | one MCP server ([guide](/guides/mcp-servers/)) |
+| `marketplaces/<name>.toml` | one marketplace ([guide](/guides/plugins/)) |
+| `plugins/<id>.toml` | one plugin enablement ([guide](/guides/plugins/)) |
+| `memory/AGENTS.md` + `fragments/` | canonical memory ([guide](/guides/memory/)) |
+| `skills/<name>/SKILL.md` | standalone skills |
+| `secrets/secrets.age` | the age-encrypted vault ([guide](/guides/secrets/)) |
+
+## Project overlay
+
+A repo can carry a `.agentsync.toml` marker at its root that merges onto your user
+config. See [Project-local config](/guides/projects/).
+
+## State
+
+`~/.agentsync/.state/` is gitignored machine-local bookkeeping: the last-applied
+hashes (`targets.json`) that make drift detection possible, the apply lock, the
+two-phase write staging dir, first-apply backups, and the marketplace/plugin
+cache. Keys are stored `${HOME}`-relative so state is portable across machines.

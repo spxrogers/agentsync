@@ -239,7 +239,7 @@ agentsync agent disable opencode --purge   # also remove what it wrote
 ```
 
 > `agent add codex` / `agent add cursor` are rejected in beta — their adapters
-> are no-ops (Codex is v1.1, Cursor v1.2). See the [capability matrix](capability-matrix.md).
+> are no-ops (both still planned). See the [capability matrix](capability-matrix.md).
 
 ### MCP servers
 
@@ -419,13 +419,16 @@ Not every agent supports every component, and agentsync never pretends
 otherwise. Each component is marked **✓ native**, **◐ projected** (lossy, but
 reported), or **✗ skipped** (no honest translation) per agent.
 
-| Component | Claude | OpenCode | Codex (v1.1) | Cursor (v1.2) |
+Codex and Cursor are still **planned** (no-op adapters today); their columns
+describe the intended projection.
+
+| Component | Claude | OpenCode | Codex | Cursor |
 |---|:--:|:--:|:--:|:--:|
-| MCP server | ✓ | ✓ | ◐ | ◐ |
-| Memory | ✓ | ✓ | ◐ | ◐ |
-| Skill | ✓ | ✓ | ◐ | ✗ |
-| Subagent | ✓ | ◐ | ◐ | ✗ |
-| Slash command | ✓ | ◐ | ✗ | ◐ |
+| MCP server | ✓ | ✓ | ✓ | ✓ |
+| Memory | ✓ | ✓ | ✓ | ◐ |
+| Skill | ✓ | ✓ | ✓ | ✓ |
+| Subagent | ✓ | ◐ | ◐ | ◐ |
+| Slash command | ✓ | ◐ | ◐ | ◐ |
 | Hook | ✓ | ✗ | ◐ | ◐ |
 | LSP server | ✓ | ✗ | ✗ | ✗ |
 

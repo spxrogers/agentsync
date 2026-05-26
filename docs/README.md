@@ -1,5 +1,11 @@
 # agentsync documentation
 
+> 🌐 **Prefer a browsable site with search?** These docs are published — expanded,
+> with full-text search and rendered diagrams — at **[agentsync.cc](https://agentsync.cc)**.
+> The source lives in [`../website/`](../website/); the four contract docs below
+> (concepts, architecture, components, capability matrix) are mirrored there
+> verbatim at build time, so this directory stays the source of truth.
+
 Start here. The docs are layered — read top-to-bottom to go from zero to fluent,
 or jump to whatever you need.
 

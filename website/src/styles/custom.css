@@ -1,0 +1,103 @@
+/* agentsync docs theme — teal accent, calm and content-first.
+   Brand gradient (teal → indigo) matches the logo; used sparingly. */
+
+:root {
+	/* Dark theme (default). */
+	--sl-color-accent-low: #0c3b3d;
+	--sl-color-accent: #15a39d;
+	--sl-color-accent-high: #a3e9e2;
+
+	--as-brand-from: #2dd4bf;
+	--as-brand-to: #6366f1;
+	--sl-content-width: 50rem;
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #c8efeb;
+	--sl-color-accent: #0c8c86;
+	--sl-color-accent-high: #0a4744;
+}
+
+/* ---- Hero (landing splash) -------------------------------------------- */
+
+.hero {
+	position: relative;
+}
+
+.hero h1 {
+	background: linear-gradient(135deg, var(--as-brand-from), var(--as-brand-to));
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+}
+
+/* Soft brand glow behind the hero — subtle, never loud. */
+.hero::before {
+	content: '';
+	position: absolute;
+	inset: -20% -10% auto -10%;
+	height: 360px;
+	z-index: -1;
+	background: radial-gradient(
+		60% 80% at 30% 0%,
+		color-mix(in oklab, var(--as-brand-from) 22%, transparent),
+		transparent 70%
+	);
+	pointer-events: none;
+}
+
+/* ---- Cards ------------------------------------------------------------ */
+
+.card {
+	border-radius: 0.75rem;
+	transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.card:hover {
+	border-color: var(--sl-color-accent);
+	transform: translateY(-2px);
+}
+
+/* Accent the small card icons with the brand color. */
+.card .icon {
+	color: var(--sl-color-accent-high);
+	background: color-mix(in oklab, var(--sl-color-accent) 22%, transparent);
+}
+
+/* ---- Code & tables ---------------------------------------------------- */
+
+/* Keep wide tables (e.g. the capability matrix) inside the content column by
+   letting cells — and the long file-path code spans inside them — wrap, rather
+   than forcing a horizontal scrollbar or bleeding into the table of contents.
+   A slightly smaller font keeps the dense matrices legible without wrapping. */
+.sl-markdown-content table {
+	display: table;
+	width: 100%;
+	font-size: var(--sl-text-sm);
+}
+
+.sl-markdown-content table :is(th, td) {
+	padding-inline: 0.5rem;
+	vertical-align: top;
+}
+
+/* Only the long file-path code spans break anywhere; plain text (agent names,
+   prose) keeps normal word-boundary wrapping so it doesn't shatter mid-word. */
+.sl-markdown-content table :is(th, td) code {
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
+/* ---- Misc ------------------------------------------------------------- */
+
+/* Brand-tinted external/site-title link in the header. */
+.site-title {
+	font-weight: 650;
+}
+
+/* Make Mermaid diagrams sit centered with a little breathing room. */
+.mermaid {
+	display: flex;
+	justify-content: center;
+	margin: 1.25rem 0;
+}

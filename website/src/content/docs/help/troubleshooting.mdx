@@ -1,0 +1,104 @@
+---
+title: Troubleshooting
+description: Concrete error scenarios, the documented v1.x trade-offs behind them, and how to fix or work around each.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Start with `agentsync doctor` — it checks PATH, home/state writability, the config
+schema, and the secrets backend in one pass. The scenarios below cover the rest.
+
+## Common scenarios
+
+### First apply backed up a pile of files
+Expected on a populated machine. agentsync sees pre-existing native config it
+didn't write and treats each as a `foreign-collision`: it backs the file up to
+`~/.agentsync/.state/backups/<ts>/` **before** writing. Nothing is lost. Run
+`agentsync apply --dry-run` first to preview which files will be backed up.
+
+### One-time backup churn after upgrading
+State keys are now stored `${HOME}`-relative (portable) instead of absolute. If you
+ran a pre-portability build, the first `apply` after upgrading won't recognize the
+old absolute-path entries, so every managed destination is treated as a
+`foreign-collision` once: current content is backed up, then re-owned. This is
+expected, non-destructive, and self-heals after that single apply.
+
+### `${secret:foo}` not resolving
+Confirm the key exists in the decrypted vault:
+
+```bash
+agentsync secrets get foo
+```
+
+age library errors (missing identity, wrong recipient, bad permissions) surface
+here too.
+
+### `update` can't fetch a marketplace
+Sanity-check the URL:
+
+```bash
+git ls-remote <marketplace-url>
+```
+
+agentsync uses `go-git` and falls back to system `git` for sparse clones if needed.
+
+### `agent add codex` / `cursor` is rejected
+Their adapters are no-ops in v1 — both are still planned. Register anyway with
+`AGENTSYNC_ALLOW_UNIMPLEMENTED=1` — apply will emit zero ops for them.
+
+---
+
+## Documented v1.x trade-offs
+
+These are deliberate, not regressions.
+
+### Owned-key hand-edits have no backup
+If you hand-edit a key agentsync **already owns** in a shared file (e.g. an MCP
+entry in `~/.claude.json` that agentsync wrote), the next `apply` overwrites it
+with **no** foreign-collision backup — agentsync considers it its own.
+
+<Aside type="tip" title="The fix">
+	Run `agentsync reconcile` **before** the next `apply`. The drift classifier
+	catches the edit and offers `[w]rite-back` to capture it into your source.
+</Aside>
+
+### Comment preservation
+Comments in `mcp/*.toml` and in agent-side `opencode.json` are **not** preserved
+across a reconcile write-back or import in the *rewritten* section. Comments in
+unrelated sections survive. Deferred to v1.x.
+
+### Insecure plugin / marketplace sources
+`http://` and `git://` sources are rejected by default to prevent a MITM swap.
+Override for internal mirrors only:
+
+```bash
+AGENTSYNC_ALLOW_INSECURE_URLS=1 agentsync update
+```
+
+### Symlinked destinations
+Rejected by default — a rename onto the path would replace the symlink with a
+regular file and strand your linked source. To write **through** the link (update
+the underlying file in place, keeping the link):
+
+```bash
+AGENTSYNC_ALLOW_SYMLINK_DEST=1 agentsync apply
+```
+
+### OpenCode hooks aren't auto-translated
+OpenCode hooks are JS/TS plugins, not declarative shell commands. agentsync does
+**not** auto-translate Claude hooks to OpenCode — hand-author a small JS/TS plugin
+if you need one. You'll see the hook reported as skipped for OpenCode.
+
+### LSP beyond Claude
+LSP projection to non-Claude agents is deferred. Claude plugins with LSP servers
+install correctly on Claude; elsewhere you'll see `lsp server X skipped` in the
+report.
+
+<Aside type="note" title="Found something not listed here?">
+	That's exactly the beta feedback we want —
+	[open an issue](https://github.com/spxrogers/agentsync/issues). The full
+	environment-override reference is on the
+	[Environment variables](/reference/environment/) page.
+</Aside>
