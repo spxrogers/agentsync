@@ -23,7 +23,7 @@ nothing is dropped silently.
 | **Claude Code** | ✅ Full adapter | All seven components, including LSP. The reference implementation. |
 | **OpenCode** | ✅ Adapter (some components projected/skipped) | MCP, memory, skills, subagents, commands. Hooks and LSP are skipped with a warning. |
 | **Codex CLI** | 🔜 Planned | Registered as a no-op. `agent add codex` is rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. |
-| **Cursor** | 🔜 Planned | Registered as a no-op. Planned coverage includes **subagents** (Cursor reads `.cursor/agents/` and `~/.cursor/agents/`). Rules stay project-scope only — user-level rules live in Cursor's app-local storage. |
+| **Cursor** | 🔜 Planned | Registered as a no-op. Planned coverage includes **skills** and **subagents** (Cursor reads `.cursor/skills/` and `.cursor/agents/`, plus the shared `~/.claude/` paths). Rules stay project-scope only — user-level rules live in Cursor's app-local storage. |
 
 ---
 
@@ -35,7 +35,7 @@ Component support across agents.
 |---|:--:|:--:|:--:|:--:|
 | **MCP server** | ✓ `~/.claude.json` | ✓ `opencode.json` | ◐ `config.toml` | ◐ `mcp.json` |
 | **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ◐ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` |
-| **Skill** | ✓ `~/.claude/skills/X/SKILL.md` | ✓ shared `.claude/skills/` | ◐ `~/.agents/skills/` | ✗ no skills concept |
+| **Skill** | ✓ `~/.claude/skills/X/SKILL.md` | ✓ shared `.claude/skills/` | ◐ `~/.agents/skills/` | ✓ `.cursor/skills/` |
 | **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/X.md` |
 | **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ✗ no custom commands | ◐ → `.cursor/rules/*.mdc` |
 | **Hook** | ✓ JSON in settings | ✗ skip (JS/TS plugins) | ◐ `hooks.json`, 5/9 events | ◐ `hooks.json`, ~6/9 events |
@@ -72,17 +72,22 @@ translates rather than copying fields verbatim:
   key (not `env`).
 - **remote** — `url` and `headers` carry through unchanged.
 
-## How Cursor subagents are projected
+## How Cursor skills and subagents are projected
 
-Cursor (planned) stores subagents as markdown-with-frontmatter in
-`.cursor/agents/` (project) and `~/.cursor/agents/` (user) — close to Claude's
-`~/.claude/agents/X.md`, so the projection is mechanical but lossy:
+Cursor (planned) reads both as markdown-with-frontmatter, close to Claude's
+layout, so projection is mechanical:
 
-- **frontmatter** — Cursor supports `name`, `description`, and `model`; it adds
-  `readonly` and `is_background` (no canonical counterpart) and has no equivalent
-  of Claude's per-subagent `tools` allowlist, which is dropped.
-- **compatibility paths** — Cursor also reads `.claude/agents/` and
-  `.codex/agents/`, with `.cursor/` taking precedence on name conflicts.
+- **Skills** — `SKILL.md` files under `.cursor/skills/` (and `~/.cursor/skills/`),
+  with the same `name` + `description` frontmatter and optional
+  `scripts/`/`references/`/`assets/` bundles as Claude — full fidelity, so skills
+  project natively (✓). Cursor's optional extras (`paths`,
+  `disable-model-invocation`, `metadata`) simply go unused.
+- **Subagents** — markdown under `.cursor/agents/`, close to Claude's
+  `~/.claude/agents/X.md` but lossy (◐): Cursor adds `readonly` and
+  `is_background` (no canonical counterpart) and has no equivalent of Claude's
+  per-subagent `tools` allowlist, which is dropped.
+- **Compatibility paths** — Cursor also reads the `.claude/` and `.codex/`
+  equivalents, with `.cursor/` taking precedence on name conflicts.
 
 ## Escape hatches
 

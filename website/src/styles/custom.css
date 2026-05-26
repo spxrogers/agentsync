@@ -66,18 +66,26 @@
 
 /* ---- Code & tables ---------------------------------------------------- */
 
-/* Wide tables (e.g. the capability matrix) scroll horizontally within the
-   content column instead of overflowing into the table of contents. */
+/* Keep wide tables (e.g. the capability matrix) inside the content column by
+   letting cells — and the long file-path code spans inside them — wrap, rather
+   than forcing a horizontal scrollbar or bleeding into the table of contents.
+   A slightly smaller font keeps the dense matrices legible without wrapping. */
 .sl-markdown-content table {
-	display: block;
-	max-width: 100%;
-	overflow-x: auto;
+	display: table;
+	width: 100%;
+	font-size: var(--sl-text-sm);
 }
 
-/* Tighten the legend symbols (✓ ◐ ✗) so the matrices read as a grid. */
-.sl-markdown-content table td,
-.sl-markdown-content table th {
+.sl-markdown-content table :is(th, td) {
+	padding-inline: 0.5rem;
 	vertical-align: top;
+}
+
+/* Only the long file-path code spans break anywhere; plain text (agent names,
+   prose) keeps normal word-boundary wrapping so it doesn't shatter mid-word. */
+.sl-markdown-content table :is(th, td) code {
+	white-space: normal;
+	overflow-wrap: anywhere;
 }
 
 /* ---- Misc ------------------------------------------------------------- */

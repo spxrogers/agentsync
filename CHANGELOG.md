@@ -57,11 +57,12 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Changed
 
-- **Capability matrix** — Cursor's planned projection now lists **subagents** as
-  ◐ projected (`.cursor/agents/`), reflecting Cursor's new subagent support
-  (previously skipped). No code change — Cursor remains a no-op adapter until its
-  v1.2 implementation. The matrices also drop the per-agent version suffixes (the
-  target version isn't material) and footnote Codex/Cursor as planned.
+- **Capability matrix** — Cursor's planned projection now covers **skills**
+  (✓ native, `.cursor/skills/`) and **subagents** (◐ projected, `.cursor/agents/`),
+  reflecting Cursor's new skill and subagent support (both previously skipped). No
+  code change — Cursor remains a no-op adapter until it's implemented. The matrices
+  also drop the per-agent version suffixes (the target version isn't material) and
+  footnote Codex/Cursor as planned.
 
 ### Fixed
 
