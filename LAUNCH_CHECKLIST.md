@@ -22,29 +22,30 @@ These all need to exist before flipping the GitHub repo public. Without them,
 the project looks like an abandoned experiment instead of a v1.0.
 
 - [x] **`LICENSE`** — done: MIT (`LICENSE` at repo root).
-- [ ] **`CONTRIBUTING.md`** — at minimum: "this is personal-first /
-      OSS-shareable, PRs welcome but no SLA, here's how to run tests
-      (`just test-release`), here's the commit-message convention." Can be
-      brief.
+- [x] **`CONTRIBUTING.md`** — done: present at repo root. Personal-first /
+      OSS-shareable framing, PRs-welcome / no-SLA, prerequisites + build/test
+      recipes (`just test-release` as the bar), conventional-commit convention.
 - [x] **`SECURITY.md`** — done: disclosure process + threat model
       (`SECURITY.md` at repo root) covering age key handling, untrusted
       marketplaces/plugins, and destination writes.
 - [ ] **`CODE_OF_CONDUCT.md`** — optional but expected on most public OSS.
       Contributor Covenant is fine.
-- [ ] **`CHANGELOG.md`** — start at v1.0.0. Future releases append; keeps users
-      and packagers honest.
-- [ ] **`.github/ISSUE_TEMPLATE/`** — at least bug-report and feature-request
-      templates. Pre-fills "what version", "what OS", "what's in your
-      `agentsync.toml`", which saves time on triage.
-- [ ] **`.github/pull_request_template.md`** — short template referencing
-      `just test-release` as the bar.
-- [ ] **GitHub repo description, topics, homepage URL** — set on the repo
-      Settings page. `cli`, `golang`, `claude-code`, `mcp`, `dotfiles`,
-      `dev-tools` are reasonable topics.
-- [ ] **Local clone path housekeeping** — current dev clone is at
-      `~/projects/opensync/` (predates rename). Either rename to `agentsync/`
-      or add a note in CONTRIBUTING.md so external contributors don't trip on
-      it.
+- [x] **`CHANGELOG.md`** — done: present at repo root. Keep-a-Changelog format
+      with an `[Unreleased]` (v1.0 beta) section; releases append from here.
+- [x] **`.github/ISSUE_TEMPLATE/`** — done: `bug_report.yml` +
+      `feature_request.yml` + `config.yml` (routes security reports to a
+      private advisory and usage questions to the user guide).
+- [x] **`.github/pull_request_template.md`** — done: summary / type / test-plan
+      / checklist sections; references `just test-release` as the release bar
+      and the secret-handling invariants.
+- [x] **GitHub repo description, topics, homepage URL** — done via `gh repo
+      edit`: description set, homepage → `https://agentsync.cc` (docsite
+      domain, site TBD), topics `cli` `golang` `claude-code` `mcp` `dotfiles`
+      `dev-tools`.
+- [x] **Local clone path housekeeping** — done: active dev clone is now
+      `~/projects/agentsync/`. (A stale pre-rename clone still sits at
+      `~/projects/opensync/` — harmless leftover, delete when convenient; it's
+      not part of the repo.)
 
 ## §2 — Make the repo public (gating)
 
