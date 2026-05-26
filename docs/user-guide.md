@@ -169,14 +169,15 @@ component reports it and exits cleanly rather than erroring. Add `--dry-run` to
 list the source files an import would write without touching `~/.agentsync/`.
 
 **Plugins are a special case.** The `plugin` component (Claude only in v1) reads
-the agent's installed plugins and their marketplaces from its native config and
-re-fetches each one into the agentsync cache, pinning a manifest SHA — the same
-artifacts `marketplace add` + `plugin install` produce. Because it re-fetches, a
-real plugin import (not `--dry-run`) needs network access. A plugin installed
-from a marketplace that isn't registered in the agent's native config — most
-notably Claude's built-in `claude-plugins-official`, which doesn't appear in
-`extraKnownMarketplaces` — can't be resolved, so it's reported and skipped; add
-the marketplace with `agentsync marketplace add <source>` and re-import.
+the agent's installed plugins and their marketplaces and re-fetches each one into
+the agentsync cache, pinning a manifest SHA — the same artifacts `marketplace
+add` + `plugin install` produce. Because it re-fetches, a real plugin import (not
+`--dry-run`) needs network access. A plugin's marketplace is resolved from
+agentsync's own registered marketplaces first, then the agent's native config. A
+plugin whose marketplace is registered in neither — for example a plugin from
+Claude's built-in `claude-plugins-official` (which doesn't appear in
+`extraKnownMarketplaces`) before you have registered it — is reported and
+skipped; register it with `agentsync marketplace add <source>` and re-import.
 
 On a populated machine, the **first** apply will see pre-existing native files it
 didn't write and treat them as `foreign-collision`: it backs each one up to

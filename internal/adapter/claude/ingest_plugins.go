@@ -17,9 +17,10 @@ import (
 // `marketplace add` + `plugin install` to capture them.
 //
 // The built-in `claude-plugins-official` marketplace is auto-available in
-// Claude and is NOT listed in extraKnownMarketplaces, so a plugin installed
-// from it appears in enabledPlugins with no resolvable source here; the CLI
-// warns and skips such plugins.
+// Claude and is NOT listed in extraKnownMarketplaces, so it has no resolvable
+// source here. The CLI resolves such a marketplace from agentsync's own
+// registered marketplaces instead (run `agentsync marketplace add <source>`);
+// only a marketplace registered in neither place is warned about and skipped.
 //
 // Parsing is lenient: a missing settings.json yields no plugins, and a
 // malformed one is treated as "no plugins discovered" rather than failing the

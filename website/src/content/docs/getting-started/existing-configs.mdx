@@ -61,13 +61,14 @@ write without touching `~/.agentsync/`.
 
 <Aside type="note" title="Importing plugins reaches the network">
 	The `plugin` component (Claude only in v1) reads your installed plugins and
-	their marketplaces from Claude's native config and **re-fetches** each one into
-	the agentsync cache — the same artifacts `marketplace add` + `plugin install`
-	produce — so a real plugin import needs network access (`--dry-run` does not).
-	A plugin installed from a marketplace that isn't registered in Claude's native
-	config — most notably the built-in `claude-plugins-official`, which doesn't
-	appear in `extraKnownMarketplaces` — is reported and skipped; add it with
-	`agentsync marketplace add <source>` and re-import.
+	their marketplaces and **re-fetches** each one into the agentsync cache — the
+	same artifacts `marketplace add` + `plugin install` produce — so a real plugin
+	import needs network access (`--dry-run` does not). A plugin's marketplace is
+	resolved from agentsync's own registered marketplaces first, then Claude's
+	native config. A plugin whose marketplace is registered in neither — for
+	example one from the built-in `claude-plugins-official` (which doesn't appear
+	in `extraKnownMarketplaces`) before you register it — is reported and skipped;
+	add it with `agentsync marketplace add <source>` and re-import.
 </Aside>
 
 <Aside type="caution" title="The first apply on a populated machine">

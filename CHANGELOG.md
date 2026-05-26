@@ -44,6 +44,10 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   still captures one item. Empty scopes report a notice and exit cleanly.
   `import --dry-run` previews which source files an import would write without
   touching `~/.agentsync/`.
+  Plugin import resolves a marketplace from agentsync's own registered
+  marketplaces first, then the agent's native config, so `marketplace add` then
+  re-import captures plugins from any marketplace (including Claude built-ins
+  such as `claude-plugins-official`).
 - **Plugin import** — `import` now captures the agent's installed plugins and
   their marketplaces (Claude only in v1) via the new `plugin` component, so a
   full `import claude` reproduces a plugin-heavy setup in one pass. It reads

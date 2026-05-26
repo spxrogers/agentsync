@@ -250,6 +250,35 @@ func marketplaceListRun(cmd *cobra.Command, _ []string) error {
 
 // ---- helpers ----------------------------------------------------------------
 
+// registeredMarketplaceNames returns the set of marketplace names registered in
+// ~/.agentsync/marketplaces/. Both each TOML's declared `name` field and its
+// filename stem map to true, so a native marketplace id matches whichever the
+// store recorded. It mirrors how `marketplace list` enumerates the store and
+// lets import resolve a plugin's marketplace from agentsync's own store before
+// the agent's native config. A missing or unreadable store yields an empty set.
+func registeredMarketplaceNames(home string) map[string]bool {
+	entries, err := os.ReadDir(filepath.Join(home, "marketplaces"))
+	if err != nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".toml") {
+			continue
+		}
+		out[strings.TrimSuffix(e.Name(), ".toml")] = true
+		data, err := os.ReadFile(filepath.Join(home, "marketplaces", e.Name()))
+		if err != nil {
+			continue
+		}
+		var mp marketplaceTOML
+		if toml.Unmarshal(data, &mp) == nil && mp.Marketplace.Name != "" {
+			out[mp.Marketplace.Name] = true
+		}
+	}
+	return out
+}
+
 // parseMarketplaceSource converts a user-provided URL/path string into a Source.
 // Handles:
 //   - github:owner/repo[@ref]     → github source

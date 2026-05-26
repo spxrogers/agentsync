@@ -137,8 +137,10 @@ The interactive merge UX for drift and conflicts. Full guide:
 Captures native config back into your canonical source. Drop parts of the selector
 to widen scope. The `plugin` component (Claude only in v1) captures installed
 plugins + their marketplaces by re-fetching them into the agentsync cache, so a
-real plugin import **uses the network**; a plugin from an unregistered or
-auto-available marketplace (e.g. `claude-plugins-official`) is reported and
+real plugin import **uses the network**. A plugin's marketplace is resolved from
+agentsync's own registered marketplaces first, then the agent's native config; a
+plugin whose marketplace is registered in neither (e.g. a built-in like
+`claude-plugins-official` you have not yet `marketplace add`ed) is reported and
 skipped. Full guide: [Already have configs?](/getting-started/existing-configs/).
 
 ### `update`
