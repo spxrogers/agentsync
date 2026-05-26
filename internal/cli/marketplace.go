@@ -169,14 +169,26 @@ func newMarketplaceRemoveCmd() *cobra.Command {
 	}
 }
 
+// marketplaceListHint points users at the command that lists registered
+// marketplace names; used in `marketplace remove` error messages.
+const marketplaceListHint = "run: agentsync marketplace list to see registered names"
+
 func marketplaceRemoveRun(cmd *cobra.Command, args []string) error {
 	name := args[0]
 	if err := validateCacheKey("marketplace", name); err != nil {
-		return err
+		return fmt.Errorf("%w; %s", err, marketplaceListHint)
 	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 
 	tomlPath := filepath.Join(home, "marketplaces", name+".toml")
+	// Removing an unregistered name is a user mistake, not a silent no-op: report
+	// it and point at `marketplace list` rather than printing "removed".
+	if _, err := os.Stat(tomlPath); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("marketplace %q is not registered; %s", name, marketplaceListHint)
+		}
+		return fmt.Errorf("stat %s: %w", tomlPath, err)
+	}
 	if err := os.Remove(tomlPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove %s: %w", tomlPath, err)
 	}

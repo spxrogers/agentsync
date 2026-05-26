@@ -315,6 +315,49 @@ func TestMarketplace_RemoveUpdatesState(t *testing.T) {
 	}
 }
 
+// TestMarketplace_RemoveUnknownNameErrors verifies that removing a valid but
+// unregistered marketplace name fails (rather than silently reporting success)
+// and points the user at `marketplace list`.
+func TestMarketplace_RemoveUnknownNameErrors(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "marketplace", "remove", "never-registered")
+	if err == nil {
+		t.Fatalf("removing an unregistered marketplace should error; got success:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "not registered") {
+		t.Errorf("error should say the marketplace is not registered; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "marketplace list") {
+		t.Errorf("error should hint at `marketplace list`; got: %v", err)
+	}
+}
+
+// TestMarketplace_RemoveInvalidNameHint verifies the invalid-name error (e.g. a
+// source URL passed where a name was expected) also points at `marketplace list`.
+func TestMarketplace_RemoveInvalidNameHint(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := runCLI(t, env, "marketplace", "remove", "github:anthropics/claude-plugins-official")
+	if err == nil {
+		t.Fatal("removing an invalid marketplace id should error")
+	}
+	if !strings.Contains(err.Error(), "path separators") {
+		t.Errorf("expected the path-separator validation error; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "marketplace list") {
+		t.Errorf("invalid-name error should also hint at `marketplace list`; got: %v", err)
+	}
+}
+
 // ---- plugin install/list/enable/disable/remove tests -----------------------
 
 func TestPlugin_InstallFromLocalMarketplace(t *testing.T) {
