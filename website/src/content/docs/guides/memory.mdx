@@ -39,6 +39,15 @@ updates on the next `apply`.
 	everywhere.
 </Aside>
 
+<Aside type="caution" title="Memory write-back is one-way when you use fragments">
+	The agent's native memory file is the *expanded* memory (every `@import` already
+	inlined), and that expansion can't be reversed into the original fragments. So
+	when `memory/fragments/` is in use, `import` skips memory (with a warning) and
+	`reconcile` refuses to write a native memory edit back — otherwise it would
+	flatten `AGENTS.md` and orphan your fragment files. A drifted native memory
+	still surfaces in `status`/`diff`; fold the change into `memory/` by hand.
+</Aside>
+
 ## Per-agent rendering
 
 | Agent | Native memory file |

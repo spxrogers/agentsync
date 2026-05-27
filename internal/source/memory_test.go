@@ -1,6 +1,8 @@
 package source_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -45,5 +47,58 @@ func TestExpandMemoryImports_UnknownFragmentLeftLiteral(t *testing.T) {
 	got := source.ExpandMemoryImports("@import ./fragments/missing.md\n", map[string]string{})
 	if !strings.Contains(got, "@import ./fragments/missing.md") {
 		t.Fatalf("unknown fragment directive should be preserved: %q", got)
+	}
+}
+
+// TestWriteMemory_RefusesWhenFragmentsExist guards the silent flatten-and-orphan
+// hazard: when canonical memory is composed of fragments, the value handed to
+// WriteMemory is the fully expanded memory (ingest can't de-resolve it), so
+// overwriting AGENTS.md would inline every @import and strand the fragment
+// files. WriteMemory must refuse and leave the source untouched.
+func TestWriteMemory_RefusesWhenFragmentsExist(t *testing.T) {
+	home := t.TempDir()
+	memDir := filepath.Join(home, "memory")
+	fragDir := filepath.Join(memDir, "fragments")
+	if err := os.MkdirAll(fragDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orig := "# Memory\n@import ./fragments/style.md\n"
+	if err := os.WriteFile(filepath.Join(memDir, "AGENTS.md"), []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fragDir, "style.md"), []byte("Be concise.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !source.MemoryHasFragments(home) {
+		t.Fatal("MemoryHasFragments should be true")
+	}
+
+	err := source.WriteMemory(home, source.Memory{Body: "# Memory\nBe concise.\n"})
+	if err == nil {
+		t.Fatal("WriteMemory must refuse to overwrite fragment-composed memory")
+	}
+	// Source must be untouched: AGENTS.md still has the @import, fragment intact.
+	got, _ := os.ReadFile(filepath.Join(memDir, "AGENTS.md"))
+	if string(got) != orig {
+		t.Fatalf("AGENTS.md was modified despite refusal: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(fragDir, "style.md")); err != nil {
+		t.Fatalf("fragment was orphaned/removed: %v", err)
+	}
+}
+
+// TestWriteMemory_WritesWhenNoFragments confirms the guard does not block the
+// normal (no-fragments) write.
+func TestWriteMemory_WritesWhenNoFragments(t *testing.T) {
+	home := t.TempDir()
+	if source.MemoryHasFragments(home) {
+		t.Fatal("MemoryHasFragments should be false on an empty home")
+	}
+	if err := source.WriteMemory(home, source.Memory{Body: "# Memory\n"}); err != nil {
+		t.Fatalf("WriteMemory should succeed without fragments: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(home, "memory", "AGENTS.md"))
+	if string(got) != "# Memory\n" {
+		t.Fatalf("memory not written: %q", got)
 	}
 }

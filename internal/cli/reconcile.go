@@ -722,6 +722,13 @@ func writeBackFileItem(home string, it reconcileItem) error {
 	if strings.HasSuffix(srcID, "(multiple)") {
 		return fmt.Errorf("write-back for %s is unsafe: the dest is the concatenation of multiple source fragments. Persisting the whole dest into one of them would strand the others. Edit the source fragments under %s/ directly, then apply", it.op.Path, home)
 	}
+	// Same hazard for fragment-composed memory: the rendered op's SourceID is
+	// the single "memory/AGENTS.md" (never the "(multiple)" marker), but the
+	// dest is the fully expanded memory. Writing it back would inline every
+	// @import and orphan the fragment files, so refuse.
+	if filepath.ToSlash(srcID) == "memory/AGENTS.md" && source.MemoryHasFragments(home) {
+		return fmt.Errorf("write-back for %s is unsafe: canonical memory is composed of fragments/, and the dest is the fully expanded memory. Persisting it would inline every @import and orphan the fragments. Edit the fragments under %s/memory/ directly, then apply", it.op.Path, home)
+	}
 	dest := filepath.Join(home, srcID)
 	// Defense-in-depth: srcID derives from a component Name, and AtomicWrite
 	// does no containment check. A "../" segment in the name would let this

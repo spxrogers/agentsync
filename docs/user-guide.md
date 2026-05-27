@@ -234,6 +234,10 @@ first-class. Layout:
 ~/.agentsync/
 ├── agentsync.toml            # agents, update defaults, secrets backend
 ├── mcp/<server>.toml         # one MCP server per file
+├── lsp/<server>.toml         # one LSP server per file
+├── agents/<name>.md          # one subagent per file
+├── commands/<name>.md        # one slash command per file
+├── hooks/<event>.toml        # one hook per file
 ├── marketplaces/<name>.toml  # one marketplace per file
 ├── plugins/<id>.toml         # one plugin enablement per file
 ├── memory/AGENTS.md          # canonical memory (+ fragments/*.md)
@@ -291,6 +295,14 @@ reusable fragments:
 @import ./fragments/style.md
 @import ./fragments/security-rules.md
 ```
+
+When you compose memory from fragments, edit the fragments directly — agentsync
+**will not write memory back the other way**. The agent's native file is the
+*expanded* memory (every `@import` already inlined), and that expansion can't be
+un-done into the original fragments, so `import` skips memory (with a warning) and
+`reconcile` refuses to write a memory edit back when fragments exist — rather than
+silently flatten `AGENTS.md` and orphan the fragment files. A drifted native
+memory still shows in `status`/`diff`; fold the change into `memory/` by hand.
 
 ### Marketplaces & plugins — the fan-out payoff
 

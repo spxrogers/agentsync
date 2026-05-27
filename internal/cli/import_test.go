@@ -620,6 +620,50 @@ func TestImport_MemoryFromClaude(t *testing.T) {
 	}
 }
 
+// TestImport_MemorySkippedWhenSourceUsesFragments guards the silent flatten-and-
+// orphan hazard: if the canonical memory is fragment-composed, importing the
+// (fully expanded) destination CLAUDE.md must NOT overwrite memory/AGENTS.md —
+// that would inline the @imports and orphan the fragment files. Import skips it
+// with a warning and leaves the source untouched.
+func TestImport_MemorySkippedWhenSourceUsesFragments(t *testing.T) {
+	tmp, env := importTestEnv(t)
+
+	// Canonical memory composed of a fragment.
+	memDir := filepath.Join(tmp, ".agentsync", "memory")
+	fragDir := filepath.Join(memDir, "fragments")
+	if err := os.MkdirAll(fragDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	srcAgents := "# Memory\n@import ./fragments/style.md\n"
+	if err := os.WriteFile(filepath.Join(memDir, "AGENTS.md"), []byte(srcAgents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fragDir, "style.md"), []byte("Be concise.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A native (expanded) CLAUDE.md to import.
+	if err := os.MkdirAll(filepath.Join(tmp, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".claude", "CLAUDE.md"), []byte("# Memory\nBe concise.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "import", "claude:memory")
+	if err != nil {
+		t.Fatalf("import should not error, just skip memory: %v\n%s", err, out)
+	}
+	// Source AGENTS.md must be untouched (still references the fragment).
+	got, _ := os.ReadFile(filepath.Join(memDir, "AGENTS.md"))
+	if string(got) != srcAgents {
+		t.Fatalf("fragment-composed memory was flattened by import: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(fragDir, "style.md")); err != nil {
+		t.Fatalf("fragment file was orphaned/removed: %v", err)
+	}
+}
+
 // TestImport_AllMCPFromClaude verifies the bulk component form: import
 // claude:mcp (no name) captures every native MCP server in one pass.
 func TestImport_AllMCPFromClaude(t *testing.T) {

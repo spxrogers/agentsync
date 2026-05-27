@@ -26,6 +26,12 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   Removing a skill (or one bundled file) from the source reclaims it from the
   destination on the next `apply` — a hand-edited orphan is backed up first, and
   now-empty skill directories are pruned up to the skills root.
+- **Memory fragment write-back guard** — when canonical memory is composed of
+  `memory/fragments/`, the native memory file is the fully expanded text, which
+  can't be de-resolved back into fragments. `import` now skips memory (with a
+  warning) and `reconcile`/`source.WriteMemory` refuse to write it back when
+  fragments exist, rather than silently flattening `AGENTS.md` and orphaning the
+  fragment files. Drift still surfaces in `status`/`diff`.
 - **Claude Code adapter** — full support for all seven components (MCP, memory,
   skill, subagent, command, hook, LSP) with per-key merge into `~/.claude.json`
   and `settings.json` that preserves foreign keys.

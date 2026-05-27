@@ -853,6 +853,15 @@ func importMemory(cmd *cobra.Command, home string, c source.Canonical, dryRun bo
 	if strings.TrimSpace(c.Memory.Body) == "" {
 		return nil, nil
 	}
+	// The ingested memory is the fully EXPANDED destination file. If the
+	// canonical memory is fragment-composed, writing that back would inline
+	// every @import and orphan the fragment files — so skip with a warning
+	// rather than silently flatten the user's structure. (Ingest cannot
+	// de-resolve which inlined text came from which fragment.)
+	if source.MemoryHasFragments(home) {
+		fmt.Fprintf(cmd.ErrOrStderr(), "agentsync: skipping memory import — canonical memory uses fragments/ (memory/AGENTS.md @imports them) and the imported memory is fully expanded; writing it back would inline the fragments and orphan their files. Edit memory/ directly, then apply.\n")
+		return nil, nil
+	}
 	if !dryRun {
 		if err := source.WriteMemory(home, c.Memory); err != nil {
 			return nil, fmt.Errorf("write memory: %w", err)

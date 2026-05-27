@@ -19,6 +19,14 @@ parse these files *are* the canonical model.
   - agentsync.toml agents, update defaults, secrets backend
   - mcp/
     - **github.toml** one MCP server per file
+  - lsp/
+    - **gopls.toml** one LSP server per file
+  - agents/
+    - **reviewer.md** one subagent per file
+  - commands/
+    - **review.md** one slash command per file
+  - hooks/
+    - **PreToolUse.toml** one hook per file
   - marketplaces/
     - **anthropic.toml** one marketplace per file
   - plugins/
@@ -75,6 +83,10 @@ identity_file = "${env:HOME}/.config/agentsync/age.key"  # private key, per-mach
 | File | Holds |
 | --- | --- |
 | `mcp/<name>.toml` | one MCP server ([guide](/guides/mcp-servers/)) |
+| `lsp/<name>.toml` | one LSP server |
+| `agents/<name>.md` | one subagent |
+| `commands/<name>.md` | one slash command |
+| `hooks/<event>.toml` | one hook |
 | `marketplaces/<name>.toml` | one marketplace ([guide](/guides/plugins/)) |
 | `plugins/<id>.toml` | one plugin enablement ([guide](/guides/plugins/)) |
 | `memory/AGENTS.md` + `fragments/` | canonical memory ([guide](/guides/memory/)) |

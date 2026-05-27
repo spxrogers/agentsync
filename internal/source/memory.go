@@ -1,11 +1,35 @@
 package source
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
 
 var memoryImportRe = regexp.MustCompile(`(?m)^@import\s+\./fragments/(\S+)\s*$`)
+
+// MemoryHasFragments reports whether the canonical memory at home is composed of
+// fragment files (memory/fragments/*). Write-back of memory (import / reconcile)
+// is UNSAFE when it is: the destination CLAUDE.md/AGENTS.md is the fully
+// EXPANDED memory, so persisting it back into memory/AGENTS.md would inline
+// every `@import` and strand the fragment files. Ingest cannot de-resolve the
+// expansion (which inlined text came from which fragment is unrecoverable), so
+// the only safe action is to refuse/skip the write-back — callers consult this.
+func MemoryHasFragments(home string) bool {
+	dir := filepath.Join(home, "memory", "fragments")
+	has := false
+	_ = filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		if info.Mode().IsRegular() {
+			has = true
+		}
+		return nil
+	})
+	return has
+}
 
 // maxMemoryImportDepth bounds recursive fragment expansion as a belt against
 // pathological nesting (cycles are already broken by the visiting set).

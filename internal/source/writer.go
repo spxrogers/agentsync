@@ -273,7 +273,17 @@ func WriteLSP(home string, ls LSPServer) error {
 }
 
 // WriteMemory writes memory/AGENTS.md from m into home. Overwrites atomically.
+//
+// It REFUSES when the canonical memory is fragment-composed (MemoryHasFragments)
+// because m.Body here is the fully EXPANDED memory (ingest cannot de-resolve the
+// `@import` expansion), so writing it would inline every fragment and orphan the
+// fragment files. This is the single chokepoint that makes the loss loud rather
+// than silent; the only caller (`import`) checks MemoryHasFragments first and
+// skips with a warning, so this refusal is defense-in-depth for future callers.
 func WriteMemory(home string, m Memory) error {
+	if MemoryHasFragments(home) {
+		return fmt.Errorf("refusing to overwrite memory/AGENTS.md: canonical memory is composed of fragments/ and the value to write is the expanded memory — persisting it would inline every @import and orphan the fragment files; edit memory/ directly")
+	}
 	dir := filepath.Join(home, "memory")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir memory: %w", err)
