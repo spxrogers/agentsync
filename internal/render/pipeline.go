@@ -379,6 +379,7 @@ func Apply(
 
 	var allReports []CollisionReport
 	seen := map[string][]byte{}
+	deletedSkillOrphans := map[string]struct{}{}
 	for _, name := range reg.Names() {
 		res, ok := p.PerAgent[name]
 		if !ok {
@@ -416,6 +417,17 @@ func Apply(
 				seen[op.Path] = op.Content
 			}
 			deduped = append(deduped, op)
+		}
+		// Reclaim skill files (a whole skill, or a single bundled file) that
+		// this agent owns in state but the source no longer renders. Deduped by
+		// path across agents that share a skills dir (claude + opencode →
+		// .claude/skills/), since the first agent's writer already removed it.
+		for _, del := range skillOrphanDeletes(st, userHome, name, scope, project, res.Ops) {
+			if _, done := deletedSkillOrphans[del.Path]; done {
+				continue
+			}
+			deletedSkillOrphans[del.Path] = struct{}{}
+			deduped = append(deduped, del)
 		}
 		w := NewWriter(st, home, userHome, scope, project, name)
 		err := a.Apply(deduped, w)

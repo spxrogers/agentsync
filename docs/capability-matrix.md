@@ -148,8 +148,10 @@ A few ✓ cells still change shape on the way out — same content, no loss:
   **plus any bundled `scripts/`/`references/`/`assets/` and nested files**, all
   carried verbatim (binary included, executable bit preserved) on apply, import,
   and reconcile — agentsync is not lossy for anything but the directory itself.
-  Codex installs them under `~/.agents/skills/` (enabled by default — no feature
-  flag), Cursor under `.cursor/skills/`, and both also read the shared
+  Removing a skill (or one bundled file) from the source reclaims it from each
+  destination on the next `apply` (drifted files backed up first; empty dirs
+  pruned). Codex installs them under `~/.agents/skills/` (enabled by default — no
+  feature flag), Cursor under `.cursor/skills/`, and both also read the shared
   `.claude/skills/`.
 
 ## Escape hatches

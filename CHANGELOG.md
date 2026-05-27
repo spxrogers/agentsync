@@ -23,6 +23,9 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   verbatim (binary included, executable bit preserved) end-to-end: across the
   canonical loader/writer, every adapter's render + ingest (Claude, OpenCode,
   Codex), plugin/marketplace projection, and `apply`/`import`/`reconcile`.
+  Removing a skill (or one bundled file) from the source reclaims it from the
+  destination on the next `apply` — a hand-edited orphan is backed up first, and
+  now-empty skill directories are pruned up to the skills root.
 - **Claude Code adapter** — full support for all seven components (MCP, memory,
   skill, subagent, command, hook, LSP) with per-key merge into `~/.claude.json`
   and `settings.json` that preserves foreign keys.

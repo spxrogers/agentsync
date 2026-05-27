@@ -2,6 +2,8 @@ package render
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -193,11 +195,76 @@ func (w *Writer) Write(op adapter.FileOp, finalBytes []byte) error {
 }
 
 // Delete satisfies adapter.DestWriter. Idempotent on missing files.
+//
+// Skill-orphan deletes (op.SourceID under "skills/", synthesized by Apply when a
+// skill or bundled file is removed from source) get two extra guarantees: a dest
+// that drifted from what agentsync last wrote is backed up before removal (the
+// never-destroy-unsynced-content invariant the write path enforces), and empty
+// skill directories left behind are pruned up to — but never including — the
+// agent's skills root. Other delete callers (agent disable --purge, reconcile
+// orphan removal) pass an empty SourceID and keep the plain idempotent remove.
 func (w *Writer) Delete(op adapter.FileOp) error {
+	if w.dryRun {
+		return nil
+	}
+	skillOrphan := strings.HasPrefix(op.SourceID, "skills/")
+	if skillOrphan {
+		if err := w.backupOrphanIfDrifted(op); err != nil {
+			return err
+		}
+	}
 	if err := os.Remove(op.Path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("delete %s: %w", op.Path, err)
 	}
+	if skillOrphan {
+		pruneEmptySkillDirs(op.Path, op.SourceID)
+	}
 	return nil
+}
+
+// backupOrphanIfDrifted copies a soon-to-be-deleted skill file to the backup
+// root iff its on-disk content is not exactly what agentsync last wrote (i.e.
+// the user hand-edited it). A file matching our last-applied hash is our own
+// output and is removed without a backup; anything else is preserved first so an
+// orphan delete can never silently destroy an unsynced edit.
+func (w *Writer) backupOrphanIfDrifted(op adapter.FileOp) error {
+	existing, err := os.ReadFile(op.Path)
+	if err != nil {
+		return nil // already gone (or unreadable): nothing to preserve
+	}
+	stateKey := fmt.Sprintf("%s:%s:%s:%s", w.agent, w.scope.String(),
+		paths.HomeRelative(w.userHome, w.project), paths.HomeRelative(w.userHome, op.Path))
+	if entry, owned := w.state.Files[stateKey]; owned {
+		sum := sha256.Sum256(existing)
+		if hex.EncodeToString(sum[:]) == entry.SHA256 {
+			return nil // unchanged since our last apply — safe to delete
+		}
+	}
+	dest, err := w.backup(op.Path, existing)
+	if err != nil {
+		return err
+	}
+	w.reports = append(w.reports, CollisionReport{Agent: w.agent, Path: op.Path, BackupTo: dest})
+	return nil
+}
+
+// pruneEmptySkillDirs removes now-empty directories left after deleting a skill
+// file, walking up from the file toward the skills root and stopping at the
+// first non-empty directory (os.Remove fails on a non-empty dir) or at the root
+// itself. The root is derived from sourceID ("skills/<name>/<rest>"): the dest
+// has exactly that many path components below it, so stripping them yields the
+// agent's skills directory, which is never removed.
+func pruneEmptySkillDirs(absPath, sourceID string) {
+	below := len(strings.Split(filepath.ToSlash(sourceID), "/")) - 1
+	root := absPath
+	for i := 0; i < below; i++ {
+		root = filepath.Dir(root)
+	}
+	for dir := filepath.Dir(absPath); len(dir) > len(root) && dir != root; dir = filepath.Dir(dir) {
+		if err := os.Remove(dir); err != nil {
+			return // non-empty (holds untracked files) or error: stop
+		}
+	}
 }
 
 // maybeBackup performs the foreign-collision check and conditionally

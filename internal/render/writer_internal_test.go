@@ -1,6 +1,7 @@
 package render
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -8,6 +9,55 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/state"
 )
+
+// TestPruneEmptySkillDirs_StopsAtSkillsRoot locks the boundary math: emptied
+// directories below the skills root are removed, the skills root and any
+// non-empty ancestor survive, and the SourceID's depth alone decides where to
+// stop (so the function never walks above the skill it owns).
+func TestPruneEmptySkillDirs_StopsAtSkillsRoot(t *testing.T) {
+	root := t.TempDir()
+	skills := filepath.Join(root, ".claude", "skills")
+	deep := filepath.Join(skills, "deploy", "scripts")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runSh := filepath.Join(deep, "run.sh")
+	if err := os.WriteFile(runSh, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the delete, then prune.
+	if err := os.Remove(runSh); err != nil {
+		t.Fatal(err)
+	}
+	pruneEmptySkillDirs(runSh, "skills/deploy/scripts/run.sh")
+
+	if _, err := os.Stat(filepath.Join(skills, "deploy")); !os.IsNotExist(err) {
+		t.Fatalf("empty skill dir was not pruned: %v", err)
+	}
+	if _, err := os.Stat(skills); err != nil {
+		t.Fatalf("skills root must survive pruning: %v", err)
+	}
+}
+
+// TestPruneEmptySkillDirs_KeepsNonEmptyDirs ensures a directory that still holds
+// other (e.g. untracked) files is never removed.
+func TestPruneEmptySkillDirs_KeepsNonEmptyDirs(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, ".agents", "skills", "deploy")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	removed := filepath.Join(skillDir, "SKILL.md")
+	kept := filepath.Join(skillDir, "user-notes.txt")
+	if err := os.WriteFile(kept, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pruneEmptySkillDirs(removed, "skills/deploy/SKILL.md")
+
+	if _, err := os.Stat(kept); err != nil {
+		t.Fatalf("non-empty skill dir holding an untracked file was wrongly pruned: %v", err)
+	}
+}
 
 // TestOwnedKeysFor_DisambiguatesColonPaths is the regression for the colon-
 // ambiguity bug PruneStaleState/orphanCleanupOps were hardened against but

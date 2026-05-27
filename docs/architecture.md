@@ -240,6 +240,18 @@ key:
 `drift.SafeForAutoApply(class)` is what `reconcile --auto-safe` consults — it
 auto-resolves only the cases that can't lose work (`converged`, `pending`).
 
+**Orphan reclamation on `apply`.** `apply` itself reclaims two kinds of orphan so
+a removed component doesn't linger in the destination: emptied key-merge sections
+(an MCP/hook/LSP section whose source went empty — cleaned via a synthesized
+empty-merge op) and **skill files** (a whole skill, or one bundled
+`scripts/`/`references/`/`assets/` file, removed from `~/.agentsync/skills/`). A
+skill is a directory under the Agent Skills spec, so removal must reclaim the
+whole tree; the writer deletes each orphaned file, **backs up an `orphan-drifted`
+dest first** (a hand-edit is never destroyed un-preserved), and prunes the
+now-empty directories up to — never including — the agent's skills root. Other
+replace-strategy orphans (subagents, commands) are still surfaced for the
+interactive `reconcile` loop rather than auto-deleted.
+
 **Granularity.** Structured files (JSON/JSONC/TOML) are tracked per **JSON
 pointer**, so agentsync can own `$.mcpServers.github` inside `~/.claude.json`
 without touching keys it didn't write. Those untouched keys are **foreign keys**
