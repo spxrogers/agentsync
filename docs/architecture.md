@@ -316,6 +316,12 @@ always re-references. The single field list lives in `walkSecretFields`
 (`internal/secrets/walk.go`); a reflection-based test fails if a new
 string-shaped secret-bearing field is added without classification.
 
+The MCP/LSP `Extra` passthrough maps (unmodeled native fields, carried verbatim)
+are a **deliberate exception**: they are not in `walkSecretFields`, so a
+`${secret:…}` in `Extra` is written literally rather than resolved. The leak
+backstop scans `Extra` separately (`scanExtraResidual`) and refuses a write that
+would persist a live secret value through it.
+
 > If you ever find yourself unwrapping a `secrets.Resolved` outside an adapter's
 > `Render`, stop — you almost certainly want `capture.Capture`. The full set of
 > invariants is in [`CLAUDE.md`](../CLAUDE.md) and [`SECURITY.md`](../SECURITY.md).

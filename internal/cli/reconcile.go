@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/adapter/codex"
 	"github.com/spxrogers/agentsync/internal/adapter/opencode"
 	"github.com/spxrogers/agentsync/internal/capture"
@@ -681,6 +682,12 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 			}
 			if err := json.Unmarshal(specBytes, &spec); err != nil {
 				return fmt.Errorf("unmarshal mcp spec %s: %w", serverID, err)
+			}
+			// json.Unmarshal into the struct drops unmodeled native keys; capture
+			// them into Extra so write-back is not field-lossy (matching ingest and
+			// the opencode/codex branches above).
+			if rawMap, ok := specRaw.(map[string]any); ok {
+				spec.Extra = claude.ExtraNativeKeys(rawMap, "type", "command", "args", "env", "url", "headers")
 			}
 		}
 		// The spec was reconstructed from the destination, where apply wrote any

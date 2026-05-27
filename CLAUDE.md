@@ -122,6 +122,17 @@ there** — every operation then picks it up automatically. `TestNewSecretFieldG
 (reflect-based) fails if a string-shaped field is added to those structs without
 being classified.
 
+> **Deliberate exception — `MCPServerSpec.Extra` / `LSPServerSpec.Extra`.** These
+> `map[string]any` passthrough maps hold unmodeled native fields verbatim and are
+> intentionally NOT in `walkSecretFields`: their values are never secret-resolved
+> (a `${secret:…}` there is written literally, not substituted) and never
+> re-referenced. The guard does not flag them (a `map[string]any` is not
+> "string-shaped"). The safety they'd otherwise lose is restored by the capture
+> leak backstop, which scans `Extra` (`secrets.ResidualSecretCleartext` →
+> `scanExtraResidual`) and refuses any write that would persist a live secret
+> value through it. If you ever make `Extra` secret-resolving, it MUST join
+> `walkSecretFields` (and the paired re-reference) like every other field.
+
 **2. One dest→source path.** All write-backs go through `capture.Capture`
 (`internal/capture`). It re-references secrets (`secrets.ReReferenceCanonical`),
 preserves source-only fields the rendered dest never carries (MCP/LSP

@@ -136,6 +136,7 @@ func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
 		Env:     asStrMap(raw["environment"]),
 		URL:     asStr(raw["url"]),
 		Headers: asStrMap(raw["headers"]),
+		Extra:   claude.ExtraNativeKeys(raw, "type", "command", "environment", "url", "headers", "enabled"),
 	}
 }
 

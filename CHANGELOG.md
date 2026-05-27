@@ -26,6 +26,14 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   Removing a skill (or one bundled file) from the source reclaims it from the
   destination on the next `apply` — a hand-edited orphan is backed up first, and
   now-empty skill directories are pruned up to the skills root.
+- **Unmodeled native MCP/LSP fields preserved (`Extra`)** — native server fields
+  agentsync doesn't model (e.g. `timeout`, `disabled`, `cwd`) are captured into a
+  passthrough `[server.extra]` table on import/reconcile and rendered back
+  verbatim, instead of being silently dropped (and then erased from the
+  destination on the next apply). `Extra` is verbatim only — values are never
+  secret-resolved (`${secret:…}` there is written literally) and never visited by
+  the secret walker; the capture leak backstop scans it and refuses any write that
+  would persist a live secret value through it.
 - **Memory fragment write-back guard** — when canonical memory is composed of
   `memory/fragments/`, the native memory file is the fully expanded text, which
   can't be de-resolved back into fragments. `import` now skips memory (with a

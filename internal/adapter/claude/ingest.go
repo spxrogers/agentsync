@@ -44,6 +44,7 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 					Env:     asStrMap(spec["env"]),
 					URL:     asStr(spec["url"]),
 					Headers: asStrMap(spec["headers"]),
+					Extra:   ExtraNativeKeys(spec, "type", "command", "args", "env", "url", "headers"),
 				}}
 				c.MCPServers = append(c.MCPServers, m)
 			}
@@ -164,6 +165,7 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 							Env:     asStrMap(spec["env"]),
 							URL:     asStr(spec["url"]),
 							Headers: asStrMap(spec["headers"]),
+							Extra:   ExtraNativeKeys(spec, "command", "args", "env", "url", "headers"),
 						},
 					})
 				}

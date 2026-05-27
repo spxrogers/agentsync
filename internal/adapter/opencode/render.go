@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
@@ -105,6 +106,7 @@ func opencodeMCPSpec(s source.MCPServerSpec) map[string]any {
 		if len(s.Headers) > 0 {
 			spec["headers"] = s.Headers
 		}
+		claude.MergeExtra(spec, s.Extra)
 		return spec
 	}
 	spec["type"] = "local"
@@ -114,6 +116,7 @@ func opencodeMCPSpec(s source.MCPServerSpec) map[string]any {
 	if len(s.Env) > 0 {
 		spec["environment"] = s.Env
 	}
+	claude.MergeExtra(spec, s.Extra)
 	return spec
 }
 

@@ -69,6 +69,12 @@ plugin: atlassian@anthropic
 Every projected (◐) cell above is a deliberate, reported translation. Here's what
 doesn't carry over.
 
+Note that **MCP/LSP capture is not field-lossy**: native server fields agentsync
+doesn't model (e.g. `timeout`, `disabled`, `cwd`) are preserved verbatim through a
+passthrough `[server.extra]` table on import/reconcile and re-rendered on apply,
+rather than dropped. (`Extra` is verbatim only — `${secret:…}` there is written
+literally, never resolved.)
+
 **OpenCode**
 
 - **Subagent** — Claude's `tools` allowlist is remapped onto OpenCode's

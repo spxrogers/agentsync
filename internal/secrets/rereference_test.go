@@ -315,3 +315,44 @@ func TestReReferenceCanonical_ProjectOverlay(t *testing.T) {
 		t.Errorf("user-scope non-secret field corrupted by project-scope match: got %q", got)
 	}
 }
+
+// TestResidualSecretCleartext_ExtraValue covers the passthrough-Extra leak
+// backstop: a live vault secret value that appears in an unmodeled Extra field
+// (never secret-walked or re-referenced) must be refused, while a literal the
+// source Extra already held is not a new leak. Env is shown already restored to
+// its placeholder by re-reference, so the ONLY residual cleartext is in Extra.
+func TestResidualSecretCleartext_ExtraValue(t *testing.T) {
+	sec := fakeResolver{"TOKEN": "tok_LIVE"}
+	env := fakeResolver{}
+
+	ingested := &source.Canonical{
+		MCPServers: []source.MCPServer{{
+			ID: "github",
+			Server: source.MCPServerSpec{
+				Type:  "stdio",
+				Env:   map[string]string{"TOKEN": "${secret:TOKEN}"}, // re-referenced
+				Extra: map[string]any{"authMirror": "tok_LIVE"},      // resolved value lingers here
+			},
+		}},
+	}
+	against := &source.Canonical{
+		MCPServers: []source.MCPServer{{
+			ID: "github",
+			Server: source.MCPServerSpec{
+				Type: "stdio",
+				Env:  map[string]string{"TOKEN": "${secret:TOKEN}"},
+				// Extra empty in source — the value is newly appearing.
+			},
+		}},
+	}
+	if leaks := ResidualSecretCleartext(ingested, against, sec, env); len(leaks) == 0 {
+		t.Fatal("expected refusal: a live secret value in Extra must be flagged")
+	}
+
+	// Now the literal was ALREADY in source Extra (a deliberate, pre-existing
+	// literal that happens to equal the value) → not a new leak.
+	against.MCPServers[0].Server.Extra = map[string]any{"authMirror": "tok_LIVE"}
+	if leaks := ResidualSecretCleartext(ingested, against, sec, env); len(leaks) != 0 {
+		t.Fatalf("pre-existing source Extra literal must not be flagged, got %v", leaks)
+	}
+}
