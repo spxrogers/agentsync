@@ -237,7 +237,9 @@ first-class. Layout:
 ├── marketplaces/<name>.toml  # one marketplace per file
 ├── plugins/<id>.toml         # one plugin enablement per file
 ├── memory/AGENTS.md          # canonical memory (+ fragments/*.md)
-├── skills/<name>/SKILL.md    # standalone skills
+├── skills/<name>/            # a skill is a DIRECTORY: SKILL.md + bundled
+│   ├── SKILL.md              #   scripts/, references/, assets/, nested files —
+│   └── scripts/ …            #   all carried verbatim, executable bit preserved
 └── secrets/secrets.age       # age-encrypted secrets
 ```
 

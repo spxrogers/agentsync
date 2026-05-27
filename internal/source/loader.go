@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -192,7 +193,8 @@ func loadSkills(fs afero.Fs, home string) ([]Skill, error) {
 		if !e.IsDir() {
 			continue
 		}
-		raw, err := afero.ReadFile(fs, filepath.Join(dir, e.Name(), "SKILL.md"))
+		skillDir := filepath.Join(dir, e.Name())
+		raw, err := afero.ReadFile(fs, filepath.Join(skillDir, "SKILL.md"))
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
@@ -203,9 +205,51 @@ func loadSkills(fs afero.Fs, home string) ([]Skill, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", e.Name(), err)
 		}
-		out = append(out, Skill{Name: e.Name(), Frontmatter: fm, Body: body})
+		files, err := ReadSkillFiles(fs, skillDir)
+		if err != nil {
+			return nil, fmt.Errorf("read bundled files for skill %s: %w", e.Name(), err)
+		}
+		out = append(out, Skill{Name: e.Name(), Frontmatter: fm, Body: body, Files: files})
 	}
 	return out, nil
+}
+
+// ReadSkillFiles walks skillDir and returns every regular file other than
+// SKILL.md as a SkillFile, with a slash-separated path relative to skillDir and
+// the file's permission bits preserved. It is the single bundled-file capture
+// implementation shared by the canonical loader and every adapter's Ingest, so
+// the "a skill is a directory, not just SKILL.md" rule cannot drift between
+// them. Non-regular files (symlinks, devices) are skipped — only real bundled
+// resources are captured. Results are sorted by path for deterministic ordering.
+func ReadSkillFiles(fs afero.Fs, skillDir string) ([]SkillFile, error) {
+	var files []SkillFile
+	walkErr := afero.Walk(fs, skillDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !info.Mode().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(skillDir, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "SKILL.md" {
+			return nil
+		}
+		data, err := afero.ReadFile(fs, path)
+		if err != nil {
+			return err
+		}
+		files = append(files, SkillFile{Path: rel, Content: data, Mode: uint32(info.Mode().Perm())})
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files, nil
 }
 
 // loadSubagents walks agents/<name>.md, parsing YAML frontmatter if present.

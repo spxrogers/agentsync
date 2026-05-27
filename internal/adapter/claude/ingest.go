@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/spf13/afero"
+
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/source"
 )
@@ -48,13 +50,14 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		}
 	}
 
-	// Skills from ~/.claude/skills/<name>/SKILL.md
+	// Skills from ~/.claude/skills/<name>/ (SKILL.md + bundled files)
 	if entries, err := os.ReadDir(p.SkillsDir); err == nil {
 		for _, e := range entries {
 			if !e.IsDir() {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(p.SkillsDir, e.Name(), "SKILL.md"))
+			skillDir := filepath.Join(p.SkillsDir, e.Name())
+			data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
 			if err != nil {
 				continue
 			}
@@ -62,7 +65,11 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			if err != nil {
 				continue
 			}
-			c.Skills = append(c.Skills, source.Skill{Name: e.Name(), Frontmatter: fm, Body: body})
+			files, err := source.ReadSkillFiles(afero.NewOsFs(), skillDir)
+			if err != nil {
+				continue
+			}
+			c.Skills = append(c.Skills, source.Skill{Name: e.Name(), Frontmatter: fm, Body: body, Files: files})
 		}
 	}
 

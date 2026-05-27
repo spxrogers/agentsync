@@ -5,10 +5,12 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/spf13/afero"
+	"github.com/tailscale/hujson"
+
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/source"
-	"github.com/tailscale/hujson"
 )
 
 // Ingest reads OpenCode's native config files and returns a partial
@@ -44,13 +46,14 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		}
 	}
 
-	// Skills from ~/.claude/skills/<name>/SKILL.md (shared with Claude)
+	// Skills from ~/.claude/skills/<name>/ (SKILL.md + bundled files; shared with Claude)
 	if entries, err := os.ReadDir(p.ClaudeSkillsDir); err == nil {
 		for _, e := range entries {
 			if !e.IsDir() {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(p.ClaudeSkillsDir, e.Name(), "SKILL.md"))
+			skillDir := filepath.Join(p.ClaudeSkillsDir, e.Name())
+			data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
 			if err != nil {
 				continue
 			}
@@ -58,7 +61,11 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			if err != nil {
 				continue
 			}
-			c.Skills = append(c.Skills, source.Skill{Name: e.Name(), Frontmatter: fm, Body: body})
+			files, err := source.ReadSkillFiles(afero.NewOsFs(), skillDir)
+			if err != nil {
+				continue
+			}
+			c.Skills = append(c.Skills, source.Skill{Name: e.Name(), Frontmatter: fm, Body: body, Files: files})
 		}
 	}
 

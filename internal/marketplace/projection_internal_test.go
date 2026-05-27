@@ -77,7 +77,7 @@ func TestLoadComponentEntry_RejectsTraversalName(t *testing.T) {
 	if _, err := loadMarkdownEntry("cmd.md", readFile); err == nil {
 		t.Fatal("expected loadMarkdownEntry to reject a traversal name")
 	}
-	if _, err := loadSkillEntry("skills/x", readFile); err == nil {
+	if _, err := loadSkillEntry("skills/x", readFile, nil); err == nil {
 		t.Fatal("expected loadSkillEntry to reject a traversal name")
 	}
 }

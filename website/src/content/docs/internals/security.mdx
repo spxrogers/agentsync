@@ -21,7 +21,7 @@ several tiers of defense, in increasing distance from the danger:
 | Tier | Guarantee |
 | --- | --- |
 | **Compile-enforced** | Secret substitution returns a `secrets.Resolved` wrapper that is *not* assignable to `source.Canonical`. Source writers and the capture path accept only the templated `source.Canonical`. Passing resolved data to a writer is a **compile error**, not a review check. |
-| **Value-invariant** | Substitution clones the model before resolving (no aliasing back to your templated copy), and the field walker only visits secret-bearing fields — so text components (memory, skills, commands) physically cannot carry a substituted secret. |
+| **Value-invariant** | Substitution clones the model before resolving (no aliasing back to your templated copy), and the field walker only visits secret-bearing fields — so text components (memory, skills incl. their bundled files, commands) physically cannot carry a substituted secret. |
 | **Lint fence** | A `forbidigo` rule forbids unwrapping a `Resolved` outside the two adapter render egress sites. |
 | **Capture backstop** | The dest→source path re-references secrets to `${secret:…}`, then **re-scans** the about-to-be-written model and **refuses to write** if a resolved secret would persist (or a referenced key vanished) — rather than guess. |
 

@@ -60,11 +60,28 @@ type MCPServerSpec struct {
 	Enabled *bool             `toml:"enabled,omitempty"` // nil means default-on
 }
 
-// Skill mirrors skills/<name>/SKILL.md (frontmatter + body).
+// Skill mirrors a skill directory skills/<name>/. Per the Agent Skills spec a
+// skill is a DIRECTORY whose only required member is SKILL.md (frontmatter +
+// body); it may also bundle scripts/, references/, assets/, and arbitrary
+// nested files. Files captures everything in the directory other than SKILL.md
+// so apply/import/reconcile are not lossy for those resources.
 type Skill struct {
 	Name        string         `toml:"-"` // dirname
 	Frontmatter map[string]any `toml:"-"` // YAML frontmatter parsed
 	Body        string         `toml:"-"` // markdown body
+	Files       []SkillFile    `toml:"-"` // bundled files other than SKILL.md
+}
+
+// SkillFile is one bundled resource inside a skill directory (e.g.
+// scripts/extract.py, references/REFERENCE.md, assets/logo.png). Content is
+// captured verbatim — never secret-substituted, never frontmatter-parsed — so
+// binary assets round-trip byte-for-byte. Path is relative to the skill
+// directory and slash-separated; Mode preserves the file's permission bits so
+// executable scripts keep their +x bit.
+type SkillFile struct {
+	Path    string `toml:"-"`
+	Content []byte `toml:"-"`
+	Mode    uint32 `toml:"-"`
 }
 
 // Plugin mirrors plugins/<id>.toml.

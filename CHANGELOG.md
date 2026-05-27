@@ -17,6 +17,12 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 - **Canonical source model** in `~/.agentsync/` — hand-editable TOML + markdown
   for agents, MCP servers, marketplaces, plugins, memory, and skills.
+- **Full Agent Skills directory support** — a skill is treated as a *directory*
+  per the [Agent Skills](https://agentskills.io) spec, not just its `SKILL.md`.
+  Bundled `scripts/`, `references/`, `assets/`, and nested files are carried
+  verbatim (binary included, executable bit preserved) end-to-end: across the
+  canonical loader/writer, every adapter's render + ingest (Claude, OpenCode,
+  Codex), plugin/marketplace projection, and `apply`/`import`/`reconcile`.
 - **Claude Code adapter** — full support for all seven components (MCP, memory,
   skill, subagent, command, hook, LSP) with per-key merge into `~/.claude.json`
   and `settings.json` that preserves foreign keys.

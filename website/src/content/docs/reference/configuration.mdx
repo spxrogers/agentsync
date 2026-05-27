@@ -27,8 +27,11 @@ parse these files *are* the canonical model.
     - AGENTS.md canonical memory
     - fragments/ reusable `@import` pieces
   - skills/
-    - my-skill/
-      - SKILL.md standalone skills
+    - my-skill/ a skill is a directory, not just SKILL.md
+      - SKILL.md required metadata + instructions
+      - scripts/ optional bundled code (kept verbatim, +x preserved)
+      - references/ optional bundled docs
+      - assets/ optional templates / data (binary OK)
   - secrets/
     - secrets.age age-encrypted vault
   - ignore.toml paths reconcile should stop tracking
@@ -75,7 +78,7 @@ identity_file = "${env:HOME}/.config/agentsync/age.key"  # private key, per-mach
 | `marketplaces/<name>.toml` | one marketplace ([guide](/guides/plugins/)) |
 | `plugins/<id>.toml` | one plugin enablement ([guide](/guides/plugins/)) |
 | `memory/AGENTS.md` + `fragments/` | canonical memory ([guide](/guides/memory/)) |
-| `skills/<name>/SKILL.md` | standalone skills |
+| `skills/<name>/` | one skill *directory* per the [Agent Skills](https://agentskills.io) spec — `SKILL.md` plus any bundled `scripts/`/`references/`/`assets/`/nested files, all carried verbatim |
 | `secrets/secrets.age` | the age-encrypted vault ([guide](/guides/secrets/)) |
 
 ## Project overlay

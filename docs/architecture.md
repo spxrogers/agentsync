@@ -50,7 +50,7 @@ consumes them — the schema is the contract between the two.
 source.Canonical
 ├── Config          (agentsync.toml: agents, update defaults, secrets backend)
 ├── MCPServers      (mcp/*.toml)
-├── Skills          (skills/*/SKILL.md)
+├── Skills          (skills/<name>/ — SKILL.md + bundled scripts/references/assets)
 ├── Subagents, Commands, Hooks, LSPServers
 ├── Plugins, Marketplaces   (plugins/*.toml, marketplaces/*.toml)
 ├── Memory          (memory/AGENTS.md + fragments/)
@@ -285,7 +285,8 @@ this hard to do by accident with three tiers of defense:
 - **Value-invariant (load-bearing).** Secret substitution clones the model
   before resolving (no aliasing back to the caller's templated copy), and the
   field walker only visits secret-bearing fields — so text components (memory,
-  skills, commands) physically cannot carry a substituted secret.
+  skills incl. their bundled files, commands) physically cannot carry a
+  substituted secret.
 - **Lint fence (defense-in-depth).** A `forbidigo` rule forbids unwrapping a
   `Resolved` outside the two adapter `Render` egress sites.
 - **Capture fail-closed backstop (defense-in-depth).** The *dest→source*

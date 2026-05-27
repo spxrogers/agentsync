@@ -733,7 +733,15 @@ func writeBackFileItem(home string, it reconcileItem) error {
 	if !withinDir(home, dest) {
 		return fmt.Errorf("write-back for %s escapes the source tree %s (SourceID %q has a traversal segment); refusing", it.op.Path, home, srcID)
 	}
-	return iox.AtomicWrite(dest, data, 0o644)
+	// Preserve the rendering op's mode so an executable bundled skill script
+	// (scripts/*.sh, scripts/*.py) keeps its +x bit through write-back. Text
+	// components (subagents/commands/memory) render with Mode 0o644, so this is
+	// a no-op for them; only bundled skill files carry a non-default mode.
+	mode := os.FileMode(it.op.Mode)
+	if mode == 0 {
+		mode = 0o644
+	}
+	return iox.AtomicWrite(dest, data, mode)
 }
 
 // withinDir reports whether path is dir itself or sits lexically inside it,

@@ -135,7 +135,10 @@ func WriteMarketplace(home, name string, m Marketplace) error {
 	return iox.AtomicWrite(filepath.Join(home, "marketplaces", name+".toml"), body, 0o644)
 }
 
-// WriteSkill writes skills/<name>/SKILL.md from sk into home. Overwrites atomically.
+// WriteSkill writes skills/<name>/SKILL.md plus every bundled file (scripts/,
+// references/, assets/, …) from sk into home. Each file is written atomically
+// with its preserved permission bits; bundled content is written verbatim
+// (never frontmatter-encoded), so binary assets round-trip byte-for-byte.
 func WriteSkill(home string, sk Skill) error {
 	if err := ValidateComponentID("skill", sk.Name); err != nil {
 		return err
@@ -145,7 +148,45 @@ func WriteSkill(home string, sk Skill) error {
 		return fmt.Errorf("mkdir skills/%s: %w", sk.Name, err)
 	}
 	content := renderFrontmatter(sk.Frontmatter) + sk.Body
-	return iox.AtomicWrite(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644)
+	if err := iox.AtomicWrite(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		return err
+	}
+	for _, f := range sk.Files {
+		if err := validateSkillFilePath(f.Path); err != nil {
+			return fmt.Errorf("skill %s: %w", sk.Name, err)
+		}
+		dest := filepath.Join(dir, filepath.FromSlash(f.Path))
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return fmt.Errorf("mkdir for skills/%s/%s: %w", sk.Name, f.Path, err)
+		}
+		mode := os.FileMode(f.Mode)
+		if mode == 0 {
+			mode = 0o644
+		}
+		if err := iox.AtomicWrite(dest, f.Content, mode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateSkillFilePath rejects a bundled-file path that would escape the skill
+// directory. Bundled paths derive from a directory walk (loader / ingest) or a
+// foreign native config, so a "../" segment must never be joined into an
+// arbitrary-file-write primitive — mirrors ValidateComponentID at the bundled
+// granularity.
+func validateSkillFilePath(rel string) error {
+	if rel == "" {
+		return fmt.Errorf("empty bundled-file path")
+	}
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(rel)))
+	if filepath.IsAbs(clean) || strings.HasPrefix(clean, "/") || clean == ".." || strings.HasPrefix(clean, "../") {
+		return fmt.Errorf("bundled-file path %q escapes the skill directory", rel)
+	}
+	if clean == "SKILL.md" {
+		return fmt.Errorf("bundled-file path %q collides with SKILL.md", rel)
+	}
+	return nil
 }
 
 // WriteSubagent writes agents/<name>.md from sa into home. Overwrites atomically.
