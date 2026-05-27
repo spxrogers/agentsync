@@ -158,3 +158,36 @@ func TestIngest_RoundTripsHooks(t *testing.T) {
 		t.Fatalf("hook roundtrip mismatch: %+v", h)
 	}
 }
+
+// TestIngest_RoundTripsHooks_MultiEventMultiGroup exercises the fragile parts of
+// the TOML arrays-of-tables round-trip: multiple matcher groups under one event
+// AND multiple events. Cross-event order is map-iteration-dependent, so assert
+// set membership, not slice order.
+func TestIngest_RoundTripsHooks_MultiEventMultiGroup(t *testing.T) {
+	in := source.Canonical{Hooks: []source.Hook{
+		{Event: "PreToolUse", Matcher: "Bash", Type: "command", Command: "a"},
+		{Event: "PreToolUse", Matcher: "Edit", Type: "command", Command: "b"},
+		{Event: "Stop", Type: "command", Command: "c"},
+	}}
+	out := roundTrip(t, in, adapter.ScopeUser, "")
+	if len(out.Hooks) != 3 {
+		t.Fatalf("expected 3 hooks round-tripped, got %d: %+v", len(out.Hooks), out.Hooks)
+	}
+	type key struct{ event, matcher, command string }
+	seen := map[key]bool{}
+	for _, h := range out.Hooks {
+		if h.Type != "command" {
+			t.Fatalf("hook type mangled: %+v", h)
+		}
+		seen[key{h.Event, h.Matcher, h.Command}] = true
+	}
+	for _, want := range []key{
+		{"PreToolUse", "Bash", "a"},
+		{"PreToolUse", "Edit", "b"},
+		{"Stop", "", "c"},
+	} {
+		if !seen[want] {
+			t.Fatalf("missing hook %+v after round-trip; got %+v", want, out.Hooks)
+		}
+	}
+}

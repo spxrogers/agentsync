@@ -372,6 +372,107 @@ func TestReconcile_Writeback_CodexMCP(t *testing.T) {
 	}
 }
 
+// TestDiffReconcile_Codex_BothSectionsVisible is the regression for key-merge
+// ops being deduped by path: Codex renders TWO merge-toml-keys ops to one
+// config.toml (/mcp_servers and /hooks). status/diff/reconcile must surface drift
+// in BOTH sections — deduping by path dropped the second op (hooks), so an edited
+// hook was invisible to diff/reconcile (only status, which doesn't dedup, saw it).
+func TestDiffReconcile_Codex_BothSectionsVisible(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	mcpDir := tmp + "/.agentsync/mcp"
+	_ = os.MkdirAll(mcpDir, 0o755)
+	_ = os.WriteFile(mcpDir+"/github.toml", []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
+	hooksDir := tmp + "/.agentsync/hooks"
+	_ = os.MkdirAll(hooksDir, 0o755)
+	_ = os.WriteFile(hooksDir+"/PreToolUse.toml",
+		[]byte("[[hook]]\ntype = \"command\"\ncommand = \"echo orig\"\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hand-edit the HOOK command in config.toml (the second-rendered section).
+	cfgPath := tmp + "/.codex/config.toml"
+	raw, _ := os.ReadFile(cfgPath)
+	if !strings.Contains(string(raw), "echo orig") {
+		t.Fatalf("setup: hook not applied to config.toml:\n%s", raw)
+	}
+	_ = os.WriteFile(cfgPath, []byte(strings.Replace(string(raw), "echo orig", "echo HACKED", 1)), 0o644)
+
+	// diff must show the hook section's drift, not just MCP (the second
+	// merge-toml-keys op to config.toml must not be deduped away).
+	out, err := runCLI(t, env, "diff")
+	if err != nil {
+		t.Fatalf("diff: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "config.toml#/hooks/PreToolUse") {
+		t.Fatalf("diff did not surface the edited hook section (deduped by path?):\n%s", out)
+	}
+
+	// status must too (it already iterates every key-merge op; this guards
+	// against a future regression and confirms diff/status stay consistent).
+	out, err = runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "config.toml#/hooks/PreToolUse") {
+		t.Fatalf("status did not surface the hook section:\n%s", out)
+	}
+}
+
+// TestApply_Codex_MCPAndHooks_Converge guards the two-merge-toml-keys-ops-on-one-
+// file interaction: renderMCP and renderHooks both target config.toml, each
+// owning a distinct section. A re-apply must converge (byte-identical, no churn)
+// and neither op may drop the other's section.
+func TestApply_Codex_MCPAndHooks_Converge(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	mcpDir := tmp + "/.agentsync/mcp"
+	_ = os.MkdirAll(mcpDir, 0o755)
+	_ = os.WriteFile(mcpDir+"/github.toml", []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
+	hooksDir := tmp + "/.agentsync/hooks"
+	_ = os.MkdirAll(hooksDir, 0o755)
+	_ = os.WriteFile(hooksDir+"/PreToolUse.toml",
+		[]byte("[[hook]]\nmatcher = \"Bash\"\ntype = \"command\"\ncommand = \"echo hi\"\n"), 0o644)
+
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := tmp + "/.codex/config.toml"
+	first, _ := os.ReadFile(cfgPath)
+	got := parseTOMLFile(t, cfgPath)
+	if got["mcp_servers"] == nil || got["hooks"] == nil {
+		t.Fatalf("config.toml missing a section after apply: %#v", got)
+	}
+
+	// Re-apply: both ops must converge to byte-identical content (no churn) and
+	// both sections must survive.
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("re-apply: %v\n%s", err, out)
+	}
+	second, _ := os.ReadFile(cfgPath)
+	if string(first) != string(second) {
+		t.Fatalf("re-apply churned config.toml:\n--- first ---\n%s\n--- second ---\n%s", first, second)
+	}
+	got = parseTOMLFile(t, cfgPath)
+	if got["mcp_servers"] == nil || got["hooks"] == nil {
+		t.Fatalf("a section was dropped on re-apply: %#v", got)
+	}
+}
+
 func parseTOMLFile(t *testing.T, path string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(path)

@@ -384,10 +384,11 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 		seen := map[string]bool{}
 		for _, op := range res.Ops {
 			if render.IsKeyMerge(op.MergeStrategy) {
-				if seen[op.Path] {
-					continue
-				}
-				seen[op.Path] = true
+				// NOT deduped by path: one agent emits several key-merge ops to one
+				// file (codex /mcp_servers + /hooks → config.toml; claude /hooks +
+				// /lspServers → settings.json), each a distinct section, so every op
+				// must be walked. Deduping by path dropped the second section's
+				// items (matching status's key loop and the apply pipeline).
 				var ours map[string]interface{}
 				_ = json.Unmarshal(op.Content, &ours)
 				final := readDestFile(op.MergeStrategy, op.Path)
@@ -695,7 +696,7 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 	}
 	// Unsupported pointer shape (hooks, lsp, …). DO NOT silently no-op —
 	// the success message would be a lie.
-	return fmt.Errorf("write-back for pointer %q is not implemented in v1; only /mcpServers/* and /mcp/* items can be written back today — choose [o]verride to push canonical to the dest, or [i]gnore to suppress this item", it.ptr)
+	return fmt.Errorf("write-back for pointer %q is not implemented in v1; only /mcpServers/* (claude), /mcp/* (opencode) and /mcp_servers/* (codex) items can be written back today — choose [o]verride to push canonical to the dest, or [i]gnore to suppress this item", it.ptr)
 }
 
 // writeBackFileItem handles file-level (replace strategy) items by copying
