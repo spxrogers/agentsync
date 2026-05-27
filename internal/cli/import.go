@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -42,6 +43,41 @@ func jsonUnmarshalLoose(data []byte, v *map[string]any) error {
 		return err
 	}
 	return json.Unmarshal(std, v)
+}
+
+// decodeDestBytes decodes a destination config file's bytes into a generic map
+// per the op's merge strategy: TOML for merge-toml-keys (Codex config.toml),
+// otherwise the JSONC-tolerant loose reader (which standardizes comments/trailing
+// commas in a hand-edited opencode.json). A rendered op.Content is always JSON
+// regardless of the on-disk format, so callers still decode op.Content with
+// jsonUnmarshalLoose. This is the single CLI-side dest decoder; the render
+// package has its own (decodeDestObject) whose JSON arm is plain encoding/json
+// because apply re-writes those dests as standard JSON. The key-merge predicate
+// is shared: render.IsKeyMerge.
+func decodeDestBytes(strategy string, data []byte, v *map[string]any) error {
+	if strategy == "merge-toml-keys" {
+		if len(data) == 0 {
+			*v = map[string]any{}
+			return nil
+		}
+		return toml.Unmarshal(data, v)
+	}
+	return jsonUnmarshalLoose(data, v)
+}
+
+// readDestFile reads a destination file and decodes it per the op's merge
+// strategy, swallowing read/parse errors into an empty map — the behavior the
+// drift diagnostics (status/diff/reconcile) want so a missing or transiently
+// unreadable dest classifies as "absent" rather than crashing. Replaces the
+// JSON-only readJSONFile so a TOML config.toml decodes correctly.
+func readDestFile(strategy, path string) map[string]any {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return map[string]any{}
+	}
+	m := map[string]any{}
+	_ = decodeDestBytes(strategy, data, &m)
+	return m
 }
 
 // collectStateSeedPointers returns the JSON pointers we record state for
@@ -177,7 +213,7 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// Tell the user the agent is unimplemented instead.
 	if !v1Supported[agentName] && os.Getenv("AGENTSYNC_ALLOW_UNIMPLEMENTED") != "1" {
 		return fmt.Errorf("agent %q is not yet implemented in v1.0 "+
-			"(codex is planned for v1.1, cursor for v1.2); "+
+			"(cursor is planned for a later release); "+
 			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to import from its noop adapter anyway", agentName)
 	}
 
@@ -280,7 +316,7 @@ func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []str
 	}
 	var out []string
 	for _, op := range ops {
-		if op.MergeStrategy != "merge-json-keys" && op.MergeStrategy != "merge-jsonc-keys" {
+		if !render.IsKeyMerge(op.MergeStrategy) {
 			continue
 		}
 		data, readErr := os.ReadFile(op.Path)
@@ -288,7 +324,7 @@ func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []str
 			continue
 		}
 		var existing map[string]any
-		if jsonErr := jsonUnmarshalLoose(data, &existing); jsonErr != nil {
+		if decErr := decodeDestBytes(op.MergeStrategy, data, &existing); decErr != nil {
 			continue
 		}
 		var ours map[string]any
@@ -353,16 +389,17 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry, imp
 		if op.Action != "" && op.Action != "write" {
 			continue
 		}
-		switch op.MergeStrategy {
-		case "merge-json-keys", "merge-jsonc-keys":
+		switch {
+		case render.IsKeyMerge(op.MergeStrategy):
 			// Per-key seed: hash the *current* value at each pointer the
-			// rendered op claims to own.
+			// rendered op claims to own. The dest is decoded per strategy (TOML
+			// for merge-toml-keys); op.Content is always JSON.
 			data, readErr := os.ReadFile(op.Path)
 			if readErr != nil {
 				continue // dest doesn't exist yet; nothing to seed
 			}
 			var existing map[string]any
-			if jsonErr := jsonUnmarshalLoose(data, &existing); jsonErr != nil {
+			if decErr := decodeDestBytes(op.MergeStrategy, data, &existing); decErr != nil {
 				continue
 			}
 			var ours map[string]any

@@ -118,8 +118,26 @@ round-trip (`tailscale/hujson`). Omits `CapHook`/`CapLSP` (skipped with a warnin
 - **Files:** `opencode.go`, `render.go`, `ingest.go`, `apply.go`, `paths.go`,
   `skill.go`, `subagent.go`, `command.go`, `memory.go`, `settings.go`.
 
+### `internal/adapter/codex`
+The Codex CLI adapter — MCP, memory, skills, subagents, slash commands, and
+hooks. MCP servers (`[mcp_servers.*]`) and hooks (inline `[hooks.*]`) both merge
+into the TOML `~/.codex/config.toml` via the `merge-toml-keys` strategy
+(`MergeTOML` in `settings.go`, which preserves the user's foreign keys) — so
+config.toml is the adapter's single key-merge file; skills land in the shared
+`~/.agents/skills/`; subagents project to Codex's TOML agent format and commands
+to global-only custom prompts.
+Implements `PluginIngester` (parses `[plugins."<name>@<source>"]` enable-state).
+Omits `CapLSP` (Codex has no LSP concept).
+- **Key:** `New(Options) *Adapter`; the `Adapter` + `PluginIngester` methods;
+  `MergeTOML`; `IngestMCPSpec`.
+- **Depends on:** adapter, adapter/claude (frontmatter helpers), secrets, source,
+  paths, iox, jsonkeys, go-toml/v2.
+- **Files:** `codex.go`, `render.go`, `mcp.go`, `ingest.go`, `ingest_plugins.go`,
+  `apply.go`, `paths.go`, `skill.go`, `command.go`, `subagent.go`, `hook.go`,
+  `memory.go`, `settings.go`.
+
 ### `internal/adapter/noop`
-Placeholder adapter for unimplemented agents (Codex, Cursor): detects true,
+Placeholder adapter for unimplemented agents (Cursor): detects true,
 renders nothing. `agent add` rejects these unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`.
 - **Depends on:** adapter, secrets, source. **Files:** `noop.go`.
 

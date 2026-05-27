@@ -27,7 +27,7 @@ the rest are escape hatches you'll rarely need.
 | `AGENTSYNC_TARGET_ROOT` | Redirect `$HOME` for testing (used by the hermetic test container). |
 | `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Permit writes to symlinked destination files (resolves the link first). |
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://` and `git://` plugin / marketplace sources. |
-| `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` | Accept `agent add codex` / `cursor` despite the no-op adapters. |
+| `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` | Accept `agent add cursor` despite the no-op adapter. |
 | `AGENTSYNC_ALLOW_PLUGIN_DRIFT=1` | Bypass the plugin-cache manifest-SHA check (after hand-editing). |
 | `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Skip `${secret:…}` resolution in `verify` (CI without an age key). |
 | `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` | Skip the 0600 mode check on the age identity file (ACL'd NFS). |

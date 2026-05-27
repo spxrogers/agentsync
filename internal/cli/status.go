@@ -98,7 +98,7 @@ func newStatusCmd() *cobra.Command {
 				// non-empty MergeStrategy silently dropped all replace-strategy
 				// files, so status reported no drift for them.
 				for _, op := range res.Ops {
-					if op.MergeStrategy == "merge-json-keys" || op.MergeStrategy == "merge-jsonc-keys" {
+					if render.IsKeyMerge(op.MergeStrategy) {
 						continue // covered key-by-key below
 					}
 					if seen[op.Path] {
@@ -113,12 +113,12 @@ func newStatusCmd() *cobra.Command {
 				}
 				// key-level: for each merge op, walk owned pointers
 				for _, op := range res.Ops {
-					if op.MergeStrategy != "merge-json-keys" && op.MergeStrategy != "merge-jsonc-keys" {
+					if !render.IsKeyMerge(op.MergeStrategy) {
 						continue
 					}
 					var ours map[string]any
 					_ = json.Unmarshal(op.Content, &ours)
-					final := readJSONFile(op.Path)
+					final := readDestFile(op.MergeStrategy, op.Path)
 					for _, ptr := range render.CollectPointers(ours, "") {
 						hsrc := hashAnyValue(getPointerValue(ours, ptr))
 						happlied := s.Keys[stateKeyKey(userHome, name, sc, projectRoot, op.Path, ptr)].SHA256
@@ -265,23 +265,6 @@ func standardizeJSONC(data []byte) ([]byte, error) {
 	}
 	v.Standardize()
 	return v.Pack(), nil
-}
-
-func readJSONFile(path string) map[string]any {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return map[string]any{}
-	}
-	m := map[string]any{}
-	// Accept JSONC: apply/ingest write and read these dests via hujson, so a
-	// user may legitimately have `//` comments or trailing commas in
-	// opencode.json. Reading them with plain encoding/json would fail and
-	// yield an empty map, making drift classification (status/diff/reconcile)
-	// report phantom conflicts for every owned pointer.
-	if std, serr := standardizeJSONC(data); serr == nil {
-		_ = json.Unmarshal(std, &m)
-	}
-	return m
 }
 
 func getPointerValue(m map[string]any, ptr string) any {

@@ -20,9 +20,9 @@ nothing is dropped silently.
 
 | Agent | Status in v1.0 / beta | Notes |
 |---|---|---|
-| **Claude Code** | ✅ Full adapter | All seven components, including LSP. The reference implementation. Also the only agent **in v1** whose installed **plugins + marketplaces** are captured by `import` (re-fetched from `enabledPlugins` / `extraKnownMarketplaces`); the planned Codex and Cursor adapters both have native plugin systems and should do the same (see their rows). |
+| **Claude Code** | ✅ Full adapter | All seven components, including LSP. The reference implementation. Its installed **plugins + marketplaces** are captured by `import` (re-fetched from `enabledPlugins` / `extraKnownMarketplaces`). Codex also captures plugin enable-state via `import` (see its row); the planned Cursor adapter has a native plugin system too and should do the same. |
 | **OpenCode** | ✅ Adapter (some components projected/skipped) | MCP, memory, skills, subagents, commands. Hooks and LSP are skipped with a warning. No native plugin/marketplace concept, so nothing for plugin `import` to capture; it still *receives* plugin-projected components (skills, MCP, …) on `apply`. |
-| **Codex CLI** | 🔜 Planned | Registered as a no-op. `agent add codex` is rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. Codex **has a native plugin system**[^codex-plugins] — skills, apps, and MCP servers, with enable-state in `~/.codex/config.toml` as `[plugins."<name>@<source>"] enabled = …` and a marketplace concept — structurally close to Claude's. The Codex adapter should therefore implement the same `import <agent>:plugin` capture + cross-agent fan-out as Claude (its `[plugins.*]` enable-state maps onto agentsync's `PluginIngester`). |
+| **Codex CLI** | ✅ Adapter (some components projected) | MCP, memory, skills, subagents, slash commands, and hooks. MCP servers and hooks both merge into the TOML `~/.codex/config.toml` (as `[mcp_servers.*]` / inline `[hooks.*]` tables — Codex's documented equivalent to a separate `hooks.json`), so config.toml is the adapter's single key-merge file and the user's other keys (`model`, `sandbox_mode`, `[plugins.*]`, …) are preserved; subagents project to Codex's TOML agent format and slash commands to global-only custom prompts (both ◐). Codex **has a native plugin system**[^codex-plugins] with enable-state in `~/.codex/config.toml` as `[plugins."<name>@<source>"] enabled = …`, so the adapter implements `PluginIngester`: `import codex:plugin` captures that enable-state. Codex records no marketplace *fetch source* in a documented config location, so each plugin's marketplace is resolved from agentsync's own registered marketplaces (`agentsync marketplace add <source>` first), warning + skipping any it can't — exactly how Claude's auto-available built-in marketplace is handled. |
 | **Cursor** | 🔜 Planned | Registered as a no-op. Planned coverage is broad — MCP, memory, skills, subagents, slash commands, and hooks all project (see the matrix); only LSP is unsupported. User-level rules/memory live in Cursor's app-local storage, so those stay project-scope. Cursor **has a native plugin system**[^cursor-plugins] (rules, skills, agents, commands, hooks, MCP servers) whose `.cursor-plugin/marketplace.json` + `.cursor-plugin/plugin.json` schema is almost identical to Claude's `.claude-plugin/*` — so projection largely carries over and the adapter should support `import <agent>:plugin` too. The open question is purely *where Cursor records local enable-state* (undocumented, possibly app-local like its rules); the plugin/marketplace content schema is already a near-match. |
 
 ---
@@ -31,14 +31,14 @@ nothing is dropped silently.
 
 Component support across agents.
 
-| Component | Claude | OpenCode | Codex[^planned] | Cursor[^planned] |
+| Component | Claude | OpenCode | Codex | Cursor[^planned] |
 |---|:--:|:--:|:--:|:--:|
 | **MCP server** | ✓ `~/.claude.json` | ✓ `opencode.json` | ✓ `config.toml` | ✓ `.cursor/mcp.json` |
 | **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ✓ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` |
 | **Skill** | ✓ `~/.claude/skills/X/SKILL.md` | ✓ shared `.claude/skills/` | ✓ `~/.agents/skills/` | ✓ `.cursor/skills/` |
 | **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/` |
 | **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ◐ `~/.codex/prompts/` | ◐ `.cursor/commands/` |
-| **Hook** | ✓ JSON in settings | ✗ skip (JS/TS plugins) | ◐ `~/.codex/hooks.json` | ◐ `.cursor/hooks.json` |
+| **Hook** | ✓ JSON in settings | ✗ skip (JS/TS plugins) | ◐ `config.toml` `[hooks.*]` | ◐ `.cursor/hooks.json` |
 | **LSP server** | ✓ native | ✗ skip (deferred) | ✗ no LSP concept | ✗ no LSP config |
 
 > The ◐/✗ cells are *features*, not bugs: agentsync refuses to invent a
@@ -77,19 +77,24 @@ doesn't carry over.
 - **Slash command** — Claude's `argument-hint` has no OpenCode field and is
   dropped; there's no command-level `allowed-tools` (scoping is per-agent instead).
 
-**Codex** *(planned)*
+**Codex**
 
 - **Subagent** — Codex custom agents are TOML, not markdown: the prose body
-  becomes `developer_instructions`, and there is no per-agent `tools` allowlist
-  (tool scoping is only expressible via `[mcp_servers]` / skill toggles), so the
-  allowlist is dropped.
+  becomes `developer_instructions`, the `description` + `model` frontmatter carry
+  over, and there is no per-agent `tools` allowlist (tool scoping is only
+  expressible via `[mcp_servers]` / skill toggles), so `tools` (and `color`) are
+  dropped with a reported skip.
 - **Slash command** — maps to Codex *custom prompts* (`~/.codex/prompts/*.md`),
-  which do preserve `argument-hint`, but they're global-only (no project scope),
-  can't be namespaced in subdirectories, and the feature is deprecated in favor of
-  skills.
-- **Hook** — Codex mirrors Claude's declarative hook JSON schema
-  (`~/.codex/hooks.json`), but recognizes ~11 lifecycle events; Claude events
-  outside that set have no target and drop.
+  which do preserve `description` + `argument-hint`, but they're global-only, so a
+  **project-scope** command has no target and is skipped; they also can't be
+  namespaced in subdirectories, and the feature is deprecated in favor of skills.
+- **Hook** — Codex mirrors Claude's declarative hook schema as inline `[hooks.*]`
+  tables in `~/.codex/config.toml` (Codex reads hooks from either a `hooks.json`
+  or inline `[hooks]` tables; agentsync uses the config.toml form so the adapter
+  has a single key-merge file), but recognizes a fixed set of lifecycle events
+  (SessionStart, SubagentStart, PreToolUse, PermissionRequest, PostToolUse,
+  Pre/PostCompact, UserPromptSubmit, SubagentStop, Stop); Claude events outside
+  that set (e.g. `SessionEnd`, `Notification`) have no target and drop.
 
 **Cursor** *(planned)*
 
@@ -160,8 +165,9 @@ wired in v1** — the projector does not consult it. Use the `agents` allowlist.
 These are documented trade-offs, not regressions. The authoritative list lives
 in the [README](../README.md#known-limits-in-v1x); the highlights:
 
-- **Comment preservation** — comments in `mcp/*.toml` and in `opencode.json` are
-  not preserved across a write-back/import round-trip in the rewritten section.
+- **Comment preservation** — comments in `mcp/*.toml`, in `opencode.json`, and in
+  Codex's `~/.codex/config.toml` are not preserved across a write-back/import
+  round-trip in the rewritten section.
 - **Owned-key hand-edits** — if you hand-edit an agentsync-owned key in a shared
   file, the next `apply` overwrites it with no backup (agentsync considers it its
   own). Run `agentsync reconcile` first to capture the edit.
@@ -174,10 +180,10 @@ in the [README](../README.md#known-limits-in-v1x); the highlights:
 
 See the [user guide](user-guide.md) to put this into practice.
 
-[^planned]: **Planned — not yet implemented.** The Codex and Cursor adapters are
-    registered as no-ops today, so these columns describe the *intended*
-    projection per the design spec. `agent add codex` / `agent add cursor` are
-    rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`.
+[^planned]: **Planned — not yet implemented.** The Cursor adapter is registered
+    as a no-op today, so its column describes the *intended* projection per the
+    design spec. `agent add cursor` is rejected unless
+    `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. (Codex graduated to a real adapter.)
 
 [^codex-plugins]: Codex plugin system:
     [developers.openai.com/codex/plugins](https://developers.openai.com/codex/plugins).

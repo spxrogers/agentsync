@@ -109,15 +109,17 @@ func newDiffCmd() *cobra.Command {
 					if filterPath != "" && op.Path != filterPath {
 						continue
 					}
-					if op.MergeStrategy == "merge-json-keys" || op.MergeStrategy == "merge-jsonc-keys" {
-						// Key-level diff: compare per pointer.
-						if seen[op.Path] {
-							continue
-						}
-						seen[op.Path] = true
+					if render.IsKeyMerge(op.MergeStrategy) {
+						// Key-level diff: compare per pointer. NOT deduped by path —
+						// one agent emits several key-merge ops to one file (codex
+						// writes /mcp_servers AND /hooks to config.toml; claude writes
+						// /hooks AND /lspServers to settings.json), each owning a
+						// distinct section, so every op must be walked. Deduping by
+						// path here dropped the second section's drift (status's key
+						// loop and the apply pipeline never path-dedup key-merge ops).
 						var ours map[string]interface{}
 						_ = json.Unmarshal(op.Content, &ours)
-						final := readJSONFile(op.Path)
+						final := readDestFile(op.MergeStrategy, op.Path)
 						for _, ptr := range render.CollectPointers(ours, "") {
 							srcVal := getPointerValue(ours, ptr)
 							dstVal := getPointerValue(final, ptr)

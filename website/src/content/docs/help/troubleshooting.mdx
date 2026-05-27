@@ -44,9 +44,10 @@ git ls-remote <marketplace-url>
 
 agentsync uses `go-git` and falls back to system `git` for sparse clones if needed.
 
-### `agent add codex` / `cursor` is rejected
-Their adapters are no-ops in v1 — both are still planned. Register anyway with
-`AGENTSYNC_ALLOW_UNIMPLEMENTED=1` — apply will emit zero ops for them.
+### `agent add cursor` is rejected
+The Cursor adapter is a no-op in v1 — still planned. (`agent add codex` works.)
+Register cursor anyway with `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` — apply will emit
+zero ops for it.
 
 ---
 
