@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 
@@ -31,48 +30,31 @@ func (a *Adapter) Apply(ops []adapter.FileOp, w adapter.DestWriter) error {
 }
 
 // applyWrite performs the per-op merge and hands post-merge bytes to the writer.
-// op.Content is always JSON (the pipeline's pointer-merge currency); the
-// destination FILE is TOML for config.toml (merge-toml-keys) and JSON for
-// hooks.json (merge-json-keys). The writer compares pre-merge op.Content against
-// the destination for collision detection, so we still pass the raw FileOp.
+// Codex has a single key-merge destination: ~/.codex/config.toml (both
+// [mcp_servers.*] and [hooks.*]), so the only merge strategy is merge-toml-keys;
+// everything else is a whole-file replace. op.Content is always JSON (the
+// pipeline's pointer-merge currency) even though the file is TOML. The writer
+// compares pre-merge op.Content against the destination for collision detection,
+// so we still pass the raw FileOp.
 func (a *Adapter) applyWrite(op adapter.FileOp, w adapter.DestWriter) error {
-	switch op.MergeStrategy {
-	case "merge-toml-keys":
-		existing, _ := os.ReadFile(op.Path)
-		ours, err := jsonkeys.DecodeObject(op.Content)
-		if err != nil {
-			return fmt.Errorf("parse our payload for %s: %w", op.Path, err)
-		}
-		out, err := MergeTOML(existing, ours, op.OwnedKeys)
-		if err != nil {
-			return err
-		}
-		return w.Write(op, out)
-	case "merge-json-keys":
-		existing := readJSONFile(op.Path)
-		ours, err := jsonkeys.DecodeObject(op.Content)
-		if err != nil {
-			return fmt.Errorf("parse our payload for %s: %w", op.Path, err)
-		}
-		merged, _, _ := jsonkeys.MergeKeys(existing, ours, op.OwnedKeys)
-		body, err := json.MarshalIndent(merged, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshal merged for %s: %w", op.Path, err)
-		}
-		return w.Write(op, append(body, '\n'))
-	default:
+	if op.MergeStrategy != "merge-toml-keys" {
 		return w.Write(op, op.Content)
 	}
-}
-
-func readJSONFile(path string) map[string]any {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return map[string]any{}
+	// A read error other than not-exist (e.g. a permission problem) must NOT be
+	// coerced to "empty file": MergeTOML would then merge our section into an
+	// empty map and the write would silently drop the user's foreign config.toml
+	// keys. Fail loud instead.
+	existing, err := os.ReadFile(op.Path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", op.Path, err)
 	}
-	m, err := jsonkeys.DecodeObject(data)
+	ours, err := jsonkeys.DecodeObject(op.Content)
 	if err != nil {
-		return map[string]any{}
+		return fmt.Errorf("parse our payload for %s: %w", op.Path, err)
 	}
-	return m
+	out, err := MergeTOML(existing, ours, op.OwnedKeys)
+	if err != nil {
+		return err
+	}
+	return w.Write(op, out)
 }

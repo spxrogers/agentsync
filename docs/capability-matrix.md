@@ -22,7 +22,7 @@ nothing is dropped silently.
 |---|---|---|
 | **Claude Code** | ✅ Full adapter | All seven components, including LSP. The reference implementation. Its installed **plugins + marketplaces** are captured by `import` (re-fetched from `enabledPlugins` / `extraKnownMarketplaces`). Codex also captures plugin enable-state via `import` (see its row); the planned Cursor adapter has a native plugin system too and should do the same. |
 | **OpenCode** | ✅ Adapter (some components projected/skipped) | MCP, memory, skills, subagents, commands. Hooks and LSP are skipped with a warning. No native plugin/marketplace concept, so nothing for plugin `import` to capture; it still *receives* plugin-projected components (skills, MCP, …) on `apply`. |
-| **Codex CLI** | ✅ Adapter (some components projected) | MCP, memory, skills, subagents, slash commands, and hooks. MCP servers merge into the TOML `~/.codex/config.toml` (the user's other keys — `model`, `sandbox_mode`, `[plugins.*]`, … — are preserved); subagents project to Codex's TOML agent format and slash commands to global-only custom prompts (both ◐); hooks mirror Claude's declarative JSON in `~/.codex/hooks.json`. Codex **has a native plugin system**[^codex-plugins] with enable-state in `~/.codex/config.toml` as `[plugins."<name>@<source>"] enabled = …`, so the adapter implements `PluginIngester`: `import codex:plugin` captures that enable-state. Codex records no marketplace *fetch source* in a documented config location, so each plugin's marketplace is resolved from agentsync's own registered marketplaces (`agentsync marketplace add <source>` first), warning + skipping any it can't — exactly how Claude's auto-available built-in marketplace is handled. |
+| **Codex CLI** | ✅ Adapter (some components projected) | MCP, memory, skills, subagents, slash commands, and hooks. MCP servers and hooks both merge into the TOML `~/.codex/config.toml` (as `[mcp_servers.*]` / inline `[hooks.*]` tables — Codex's documented equivalent to a separate `hooks.json`), so config.toml is the adapter's single key-merge file and the user's other keys (`model`, `sandbox_mode`, `[plugins.*]`, …) are preserved; subagents project to Codex's TOML agent format and slash commands to global-only custom prompts (both ◐). Codex **has a native plugin system**[^codex-plugins] with enable-state in `~/.codex/config.toml` as `[plugins."<name>@<source>"] enabled = …`, so the adapter implements `PluginIngester`: `import codex:plugin` captures that enable-state. Codex records no marketplace *fetch source* in a documented config location, so each plugin's marketplace is resolved from agentsync's own registered marketplaces (`agentsync marketplace add <source>` first), warning + skipping any it can't — exactly how Claude's auto-available built-in marketplace is handled. |
 | **Cursor** | 🔜 Planned | Registered as a no-op. Planned coverage is broad — MCP, memory, skills, subagents, slash commands, and hooks all project (see the matrix); only LSP is unsupported. User-level rules/memory live in Cursor's app-local storage, so those stay project-scope. Cursor **has a native plugin system**[^cursor-plugins] (rules, skills, agents, commands, hooks, MCP servers) whose `.cursor-plugin/marketplace.json` + `.cursor-plugin/plugin.json` schema is almost identical to Claude's `.claude-plugin/*` — so projection largely carries over and the adapter should support `import <agent>:plugin` too. The open question is purely *where Cursor records local enable-state* (undocumented, possibly app-local like its rules); the plugin/marketplace content schema is already a near-match. |
 
 ---
@@ -38,7 +38,7 @@ Component support across agents.
 | **Skill** | ✓ `~/.claude/skills/X/SKILL.md` | ✓ shared `.claude/skills/` | ✓ `~/.agents/skills/` | ✓ `.cursor/skills/` |
 | **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/` |
 | **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ◐ `~/.codex/prompts/` | ◐ `.cursor/commands/` |
-| **Hook** | ✓ JSON in settings | ✗ skip (JS/TS plugins) | ◐ `~/.codex/hooks.json` | ◐ `.cursor/hooks.json` |
+| **Hook** | ✓ JSON in settings | ✗ skip (JS/TS plugins) | ◐ `config.toml` `[hooks.*]` | ◐ `.cursor/hooks.json` |
 | **LSP server** | ✓ native | ✗ skip (deferred) | ✗ no LSP concept | ✗ no LSP config |
 
 > The ◐/✗ cells are *features*, not bugs: agentsync refuses to invent a
@@ -88,8 +88,10 @@ doesn't carry over.
   which do preserve `description` + `argument-hint`, but they're global-only, so a
   **project-scope** command has no target and is skipped; they also can't be
   namespaced in subdirectories, and the feature is deprecated in favor of skills.
-- **Hook** — Codex mirrors Claude's declarative hook JSON schema
-  (`~/.codex/hooks.json`), but recognizes a fixed set of lifecycle events
+- **Hook** — Codex mirrors Claude's declarative hook schema as inline `[hooks.*]`
+  tables in `~/.codex/config.toml` (Codex reads hooks from either a `hooks.json`
+  or inline `[hooks]` tables; agentsync uses the config.toml form so the adapter
+  has a single key-merge file), but recognizes a fixed set of lifecycle events
   (SessionStart, SubagentStart, PreToolUse, PermissionRequest, PostToolUse,
   Pre/PostCompact, UserPromptSubmit, SubagentStop, Stop); Claude events outside
   that set (e.g. `SessionEnd`, `Notification`) have no target and drop.

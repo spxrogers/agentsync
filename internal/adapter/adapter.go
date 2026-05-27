@@ -41,13 +41,31 @@ func (s Scope) String() string {
 
 // FileOp describes one destination-side change. Action is "write" or "delete".
 // Path is absolute (after AGENTSYNC_TARGET_ROOT redirection).
+//
+// CONTRACT — Content is ALWAYS JSON for a key-merge op, regardless of the
+// destination file's on-disk format. MergeStrategy names the on-disk format the
+// adapter's Apply and the render pipeline decode/encode against:
+//
+//	"replace" (default)   whole-file write; Content is the literal file bytes.
+//	"merge-json-keys"     shared JSON   (~/.claude.json, settings.json).
+//	"merge-jsonc-keys"    shared JSONC  (opencode.json; comments tolerated).
+//	"merge-toml-keys"     shared TOML   (~/.codex/config.toml).
+//
+// For every merge-* strategy, Content is the JSON projection of the owned
+// subtree ({"mcpServers": …} / {"hooks": …} / {"mcp_servers": …}) — the
+// pointer-merge "currency" the pipeline reasons over (OwnedKeys synthesis,
+// orphan cleanup, per-pointer state hashing, foreign-collision backup are all
+// format-agnostic). Only the DESTINATION file is parsed/emitted per strategy
+// (render.IsKeyMerge gates the classification; the adapter's Apply does the
+// format-specific merge). A new TOML/YAML-backed agent must keep Content JSON,
+// not emit the on-disk format here.
 type FileOp struct {
 	Action        string // "write" | "delete"
 	Path          string
 	Content       []byte
 	Mode          uint32
 	SourceID      string   // canonical source path that produced this op
-	MergeStrategy string   // "replace" (default) | "merge-json-keys"
+	MergeStrategy string   // "replace" (default) | "merge-json-keys" | "merge-jsonc-keys" | "merge-toml-keys"
 	OwnedKeys     []string // JSON pointers owned by agentsync; populated by Apply from state, not Render
 }
 

@@ -231,6 +231,147 @@ func keysOf(m map[string]json.RawMessage) []string {
 	return out
 }
 
+// TestStatusDiff_Codex_CleanAfterApply is the regression for status/diff/reconcile
+// not handling merge-toml-keys: they classified the JSON op.Content against the
+// raw TOML config.toml (and read the dest as JSON), so a clean, just-applied
+// config.toml showed permanent phantom drift and was never walked per-pointer.
+func TestStatusDiff_Codex_CleanAfterApply(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	mcpDir := tmp + "/.agentsync/mcp"
+	_ = os.MkdirAll(mcpDir, 0o755)
+	if err := os.WriteFile(mcpDir+"/github.toml",
+		[]byte("[server]\ntype = \"stdio\"\ncommand = \"npx\"\nargs = [\"-y\",\"x\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	// status must walk config.toml PER POINTER (proving merge-toml-keys is
+	// recognized) and report it clean — never conflict/drift.
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "config.toml#/mcp_servers/github") {
+		t.Fatalf("status did not classify config.toml per-pointer (merge-toml-keys unhandled):\n%s", out)
+	}
+	if strings.Contains(out, "conflict") || strings.Contains(out, "drift") {
+		t.Fatalf("status reports phantom drift/conflict for a clean config.toml:\n%s", out)
+	}
+
+	// diff must show no hunk for the converged config.toml.
+	out, err = runCLI(t, env, "diff")
+	if err != nil {
+		t.Fatalf("diff: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "--- source") && strings.Contains(out, "config.toml") {
+		t.Fatalf("diff shows a phantom hunk for a clean config.toml:\n%s", out)
+	}
+}
+
+// TestApply_Codex_HookOrphanCleanup is the regression for the orphan-cleanup
+// strategy mismatch: codex hooks once lived in a JSON hooks.json (merge-json-keys)
+// while the adapter's single KeyMergeStrategy() is merge-toml-keys, so removing
+// the last hook synthesized a merge-toml-keys cleanup op against the JSON file
+// and apply hard-failed on toml.Unmarshal. Hooks now live in config.toml, so
+// cleanup uses the right format and succeeds.
+func TestApply_Codex_HookOrphanCleanup(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	hooksDir := tmp + "/.agentsync/hooks"
+	_ = os.MkdirAll(hooksDir, 0o755)
+	hookFile := hooksDir + "/PreToolUse.toml"
+	if err := os.WriteFile(hookFile,
+		[]byte("[[hook]]\nmatcher = \"Bash\"\ntype = \"command\"\ncommand = \"echo hi\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := tmp + "/.codex/config.toml"
+	if got := parseTOMLFile(t, cfgPath); got["hooks"] == nil {
+		t.Fatalf("hook not applied to config.toml: %#v", got)
+	}
+
+	// Remove the only hook and re-apply: orphan cleanup must succeed (not
+	// hard-fail) and drop [hooks] from config.toml.
+	if err := os.Remove(hookFile); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply after removing last hook hard-failed (orphan-cleanup strategy mismatch): %v\n%s", err, out)
+	}
+	// The PreToolUse event (and its command) must be gone. An empty `[hooks]`
+	// table may remain — the same harmless artifact Claude leaves as `"hooks":{}`
+	// in settings.json (the merge removes the owned leaf, not the empty parent).
+	got := parseTOMLFile(t, cfgPath)
+	if hooks, ok := got["hooks"].(map[string]any); ok && hooks["PreToolUse"] != nil {
+		t.Fatalf("orphaned hook event not removed from config.toml: %#v", got)
+	}
+	raw, _ := os.ReadFile(cfgPath)
+	if strings.Contains(string(raw), "echo hi") {
+		t.Fatalf("orphaned hook command still present in config.toml:\n%s", raw)
+	}
+}
+
+// TestReconcile_Writeback_CodexMCP verifies reconcile [w]rite-back captures a
+// hand-edit to a Codex MCP server in config.toml. The dest is TOML and the
+// pointer is /mcp_servers/<id> (Codex's native key), so write-back must read the
+// dest as TOML and translate via codex.IngestMCPSpec — and capture.Capture must
+// preserve the source-only agents/enabled fields.
+func TestReconcile_Writeback_CodexMCP(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\nagents=[\"codex\"]\nenabled=true\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(tmp, ".codex", "config.toml")
+	body, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read codex dest: %v", err)
+	}
+	if !strings.Contains(string(body), `"npx"`) && !strings.Contains(string(body), `'npx'`) {
+		t.Fatalf("codex dest missing expected mcp command:\n%s", body)
+	}
+	// Drift the dest command so write-back must rewrite the source.
+	edited := strings.Replace(strings.Replace(string(body), `"npx"`, `"npm"`, 1), `'npx'`, `'npm'`, 1)
+	_ = os.WriteFile(dst, []byte(edited), 0o644)
+
+	if _, err := runCLI(t, env, "reconcile", "--auto-writeback"); err != nil {
+		t.Fatalf("reconcile --auto-writeback (codex mcp): %v", err)
+	}
+	src, _ := os.ReadFile(mcp)
+	if !strings.Contains(string(src), "npm") {
+		t.Fatalf("codex mcp write-back didn't capture the dest edit:\n%s", src)
+	}
+	if !strings.Contains(string(src), "agents") || !strings.Contains(string(src), "enabled") {
+		t.Fatalf("codex mcp write-back dropped source-only agents/enabled fields:\n%s", src)
+	}
+}
+
 func parseTOMLFile(t *testing.T, path string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(path)

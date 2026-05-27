@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/adapter/codex"
 	"github.com/spxrogers/agentsync/internal/adapter/opencode"
 	"github.com/spxrogers/agentsync/internal/capture"
 	"github.com/spxrogers/agentsync/internal/drift"
@@ -382,14 +383,14 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 		}
 		seen := map[string]bool{}
 		for _, op := range res.Ops {
-			if op.MergeStrategy == "merge-json-keys" || op.MergeStrategy == "merge-jsonc-keys" {
+			if render.IsKeyMerge(op.MergeStrategy) {
 				if seen[op.Path] {
 					continue
 				}
 				seen[op.Path] = true
 				var ours map[string]interface{}
 				_ = json.Unmarshal(op.Content, &ours)
-				final := readJSONFile(op.Path)
+				final := readDestFile(op.MergeStrategy, op.Path)
 				for _, ptr := range render.CollectPointers(ours, "") {
 					hsrc := hashAnyValue(getPointerValue(ours, ptr))
 					happlied := s.Keys[stateKeyKey(userHome, name, sc, projectRoot, op.Path, ptr)].SHA256
@@ -450,7 +451,7 @@ func collectOrphanFileItems(plan render.RenderPlan, reg *adapter.Registry, s *st
 			if op.Action != "" && op.Action != "write" {
 				continue
 			}
-			if op.MergeStrategy == "merge-json-keys" || op.MergeStrategy == "merge-jsonc-keys" {
+			if render.IsKeyMerge(op.MergeStrategy) {
 				continue
 			}
 			rendered[op.Path] = true
@@ -630,15 +631,16 @@ func writeBackItem(cmd *cobra.Command, home string, it reconcileItem) error {
 // the impression the hand-edit had been persisted when in fact it had not
 // — the next apply would then destroy the user's edit.
 func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
-	dest := readJSONFile(it.op.Path)
-	// Expected ptr shape: /mcpServers/<serverID>/... (claude) or
-	// /mcp/<serverID>/... (opencode). The container key also tells us the dest
-	// shape: Claude's `mcpServers` value matches the canonical model 1:1, but
-	// OpenCode's `mcp` value is its NATIVE shape (command as a string array,
-	// `environment` not `env`, type local|remote), so it must be translated
-	// through the adapter's inverse-of-Render rather than unmarshaled directly.
+	dest := readDestFile(it.op.MergeStrategy, it.op.Path)
+	// Expected ptr shape: /mcpServers/<serverID>/... (claude), /mcp/<serverID>/...
+	// (opencode), or /mcp_servers/<serverID>/... (codex). The container key also
+	// tells us the dest shape: Claude's `mcpServers` value matches the canonical
+	// model 1:1, but OpenCode's `mcp` and Codex's `mcp_servers` values are NATIVE
+	// shapes (OpenCode: command as a string array, `environment` not `env`, type
+	// local|remote; Codex: `http_headers`, url-implies-http), so they must be
+	// translated through the adapter's inverse-of-Render rather than unmarshaled.
 	parts := strings.SplitN(strings.TrimPrefix(it.ptr, "/"), "/", 3)
-	if len(parts) >= 2 && (parts[0] == "mcpServers" || parts[0] == "mcp") {
+	if len(parts) >= 2 && (parts[0] == "mcpServers" || parts[0] == "mcp" || parts[0] == "mcp_servers") {
 		topKey := parts[0]
 		serverID := parts[1]
 		mcpServers, _ := dest[topKey].(map[string]any)
@@ -655,14 +657,22 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 			return fmt.Errorf("destination dropped %s/%s — no write-back possible; remove the source manually or use [o]verride to push canonical back", topKey, serverID)
 		}
 		var spec source.MCPServerSpec
-		if topKey == "mcp" {
+		switch topKey {
+		case "mcp":
 			// OpenCode native shape → canonical, via the single adapter translator.
 			rawMap, _ := specRaw.(map[string]any)
 			if rawMap == nil {
 				return fmt.Errorf("opencode mcp spec %s is not an object", serverID)
 			}
 			spec = opencode.IngestMCPSpec(rawMap)
-		} else {
+		case "mcp_servers":
+			// Codex native shape (TOML-decoded map) → canonical.
+			rawMap, _ := specRaw.(map[string]any)
+			if rawMap == nil {
+				return fmt.Errorf("codex mcp spec %s is not an object", serverID)
+			}
+			spec = codex.IngestMCPSpec(rawMap)
+		default:
 			// Claude's mcpServers value matches the canonical model 1:1.
 			specBytes, err := json.Marshal(specRaw)
 			if err != nil {

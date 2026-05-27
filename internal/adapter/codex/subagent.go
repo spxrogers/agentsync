@@ -42,7 +42,7 @@ func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp
 			Model:                 fmString(s.Frontmatter, "model"),
 			DeveloperInstructions: s.Body,
 		}
-		if dropped := droppedKeys(s.Frontmatter, codexAgentKnownKeys); len(dropped) > 0 {
+		if dropped := droppedKeys(s.Frontmatter); len(dropped) > 0 {
 			skips = append(skips, adapter.Skip{
 				Component: "subagent-frontmatter",
 				Name:      s.Name,
@@ -72,12 +72,13 @@ func fmString(fm map[string]any, key string) string {
 	return s
 }
 
-// droppedKeys returns the sorted frontmatter keys NOT in known — the keys with
-// no projection target, reported in a Skip so the loss is never silent.
-func droppedKeys(fm map[string]any, known map[string]bool) []string {
+// droppedKeys returns the sorted frontmatter keys with no Codex projection
+// target (anything outside codexAgentKnownKeys), reported in a Skip so the loss
+// is never silent.
+func droppedKeys(fm map[string]any) []string {
 	var out []string
 	for k := range fm {
-		if !known[k] {
+		if !codexAgentKnownKeys[k] {
 			out = append(out, k)
 		}
 	}

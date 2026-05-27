@@ -9,12 +9,11 @@ import "path/filepath"
 // $HOME/.agents/skills. Everything else is rooted at $CODEX_HOME (~/.codex).
 type Paths struct {
 	ConfigDir  string // ~/.codex
-	Config     string // ~/.codex/config.toml (mcp_servers + plugin enables live here)
+	Config     string // ~/.codex/config.toml (mcp_servers + [hooks.*] + plugin enables live here)
 	Memory     string // AGENTS.md path
 	SkillsDir  string // ~/.agents/skills (shared cross-agent skills dir)
 	AgentsDir  string // ~/.codex/agents (subagent TOML)
 	PromptsDir string // ~/.codex/prompts (custom prompts → slash commands)
-	Hooks      string // ~/.codex/hooks.json
 }
 
 // ResolvePaths returns the Paths for the given target root and optional project.
@@ -30,7 +29,6 @@ func ResolvePaths(targetRoot, project string, projectScope bool) Paths {
 			SkillsDir:  filepath.Join(project, ".agents", "skills"),
 			AgentsDir:  filepath.Join(cfg, "agents"),
 			PromptsDir: filepath.Join(cfg, "prompts"),
-			Hooks:      filepath.Join(cfg, "hooks.json"),
 		}
 	}
 	cfg := filepath.Join(targetRoot, ".codex")
@@ -41,6 +39,5 @@ func ResolvePaths(targetRoot, project string, projectScope bool) Paths {
 		SkillsDir:  filepath.Join(targetRoot, ".agents", "skills"),
 		AgentsDir:  filepath.Join(cfg, "agents"),
 		PromptsDir: filepath.Join(cfg, "prompts"),
-		Hooks:      filepath.Join(cfg, "hooks.json"),
 	}
 }

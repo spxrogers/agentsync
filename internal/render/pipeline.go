@@ -29,13 +29,13 @@ type AgentResult struct {
 	Skips []adapter.Skip
 }
 
-// isKeyMerge reports whether a MergeStrategy accumulates pointers into a shared
+// IsKeyMerge reports whether a MergeStrategy accumulates pointers into a shared
 // file (rather than replacing the whole file). Such ops must never be deduped by
 // path — one agent emits several of them to the same destination. The rendered
 // op.Content is always JSON regardless of the on-disk format (TOML for
 // merge-toml-keys); only the destination file is decoded per strategy via
 // decodeDestObject.
-func isKeyMerge(strategy string) bool {
+func IsKeyMerge(strategy string) bool {
 	return strategy == "merge-json-keys" ||
 		strategy == "merge-jsonc-keys" ||
 		strategy == "merge-toml-keys"
@@ -51,21 +51,15 @@ func decodeDestObject(strategy string, data []byte) (map[string]any, error) {
 	if len(data) == 0 {
 		return map[string]any{}, nil
 	}
+	unmarshal := json.Unmarshal
 	if strategy == "merge-toml-keys" {
-		var m map[string]any
-		if err := toml.Unmarshal(data, &m); err != nil {
-			return nil, err
-		}
-		if m == nil {
-			m = map[string]any{}
-		}
-		return m, nil
+		unmarshal = toml.Unmarshal
 	}
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
+	m := map[string]any{}
+	if err := unmarshal(data, &m); err != nil {
 		return nil, err
 	}
-	if m == nil {
+	if m == nil { // e.g. a literal "null" document
 		m = map[string]any{}
 	}
 	return m, nil
@@ -102,7 +96,7 @@ func Plan(r secrets.Resolved, reg *adapter.Registry, agents []string, scope adap
 		}
 		if s != nil {
 			for i, op := range ops {
-				if isKeyMerge(op.MergeStrategy) {
+				if IsKeyMerge(op.MergeStrategy) {
 					owned := ownedKeysFor(s, name, scope, project, op.Path, userHome)
 					// Scope each op's OwnedKeys to the top-level sections THIS op
 					// writes. Several ops can target one file (claude writes
@@ -161,7 +155,7 @@ func PreviewCollisions(
 			// replace writes are collapsed by path; identical content dedups,
 			// but divergent content for the same path fails loud — otherwise
 			// --dry-run would show a clean preview that the real apply rejects.
-			if !isKeyMerge(op.MergeStrategy) {
+			if !IsKeyMerge(op.MergeStrategy) {
 				if prev, ok := seen[op.Path]; ok {
 					if !bytes.Equal(prev, op.Content) {
 						return all, fmt.Errorf(
@@ -275,7 +269,7 @@ func orphanCleanupOps(s *state.Targets, a adapter.Adapter, agent string, scope a
 	// sections' ops can no longer delete it.
 	renderedSections := map[string]map[string]struct{}{}
 	for _, op := range rendered {
-		if !isKeyMerge(op.MergeStrategy) {
+		if !IsKeyMerge(op.MergeStrategy) {
 			continue
 		}
 		pp := paths.HomeRelative(userHome, op.Path)
@@ -403,7 +397,7 @@ func Apply(
 			// hooks, AND lspServers to settings.json), and each must run —
 			// the adapter re-reads and merges per op. Deduping them by path
 			// silently dropped every merge op after the first.
-			if op.Action == "write" && !isKeyMerge(op.MergeStrategy) {
+			if op.Action == "write" && !IsKeyMerge(op.MergeStrategy) {
 				if prev, ok := seen[op.Path]; ok {
 					// Identical content is the safe, expected dedup (claude and
 					// opencode render byte-identical SKILL.md). Divergent content

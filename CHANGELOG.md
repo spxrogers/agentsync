@@ -23,18 +23,21 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 - **OpenCode adapter** — MCP, memory, skills, subagents, and commands via JSONC
   round-trip. Hooks and LSP are skipped with a warning.
 - **Codex CLI adapter** — MCP, memory, skills, subagents, slash commands, hooks,
-  and plugin import. MCP servers merge into the TOML `~/.codex/config.toml` via a
-  new `merge-toml-keys` strategy that preserves the user's foreign keys (`model`,
-  `sandbox_mode`, `[plugins.*]`, …); memory lands at `~/.codex/AGENTS.md` and
-  skills in the shared `~/.agents/skills/` (both full-fidelity). Subagents project
-  to Codex's TOML agent format (dropping the unsupported `tools`/`color`), slash
-  commands to global-only custom prompts (`~/.codex/prompts/`), and hooks mirror
-  Claude's declarative JSON in `~/.codex/hooks.json` for the events Codex
-  recognizes — every projection loss is reported in the apply translation report.
-  Implements `PluginIngester`: `import codex:plugin` captures the
+  and plugin import. MCP servers (`[mcp_servers.*]`) and hooks (inline `[hooks.*]`)
+  both merge into the TOML `~/.codex/config.toml` via a new `merge-toml-keys`
+  strategy that preserves the user's foreign keys (`model`, `sandbox_mode`,
+  `[plugins.*]`, …) — config.toml is the adapter's single key-merge file. Memory
+  lands at `~/.codex/AGENTS.md` and skills in the shared `~/.agents/skills/` (both
+  full-fidelity). Subagents project to Codex's TOML agent format (dropping the
+  unsupported `tools`/`color`), slash commands to global-only custom prompts
+  (`~/.codex/prompts/`), and hooks to the events Codex recognizes — every
+  projection loss is reported in the apply translation report. Implements
+  `PluginIngester`: `import codex:plugin` captures the
   `[plugins."<name>@<source>"]` enable-state. `agent add codex` now works (no
   longer gated behind `AGENTSYNC_ALLOW_UNIMPLEMENTED`); Cursor remains the only
-  no-op adapter.
+  no-op adapter. The `merge-toml-keys` strategy and the CLI's shared
+  `render.IsKeyMerge` predicate + TOML-aware dest decoder also extend
+  `status`/`diff`/`reconcile`/`import` to TOML destinations.
 - **Bidirectional drift** — a 3-way classifier (9 cases) at file and JSON-pointer
   granularity, surfaced via `status`/`diff` and resolved via an interactive
   `reconcile` loop with bulk hotkeys and `--auto-*` flags.

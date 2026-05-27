@@ -120,11 +120,12 @@ round-trip (`tailscale/hujson`). Omits `CapHook`/`CapLSP` (skipped with a warnin
 
 ### `internal/adapter/codex`
 The Codex CLI adapter — MCP, memory, skills, subagents, slash commands, and
-hooks. MCP servers merge into the TOML `~/.codex/config.toml` via the
-`merge-toml-keys` strategy (`MergeTOML` in `settings.go`, which preserves the
-user's foreign keys); hooks mirror Claude's declarative JSON in
-`~/.codex/hooks.json`; skills land in the shared `~/.agents/skills/`; subagents
-project to Codex's TOML agent format and commands to global-only custom prompts.
+hooks. MCP servers (`[mcp_servers.*]`) and hooks (inline `[hooks.*]`) both merge
+into the TOML `~/.codex/config.toml` via the `merge-toml-keys` strategy
+(`MergeTOML` in `settings.go`, which preserves the user's foreign keys) — so
+config.toml is the adapter's single key-merge file; skills land in the shared
+`~/.agents/skills/`; subagents project to Codex's TOML agent format and commands
+to global-only custom prompts.
 Implements `PluginIngester` (parses `[plugins."<name>@<source>"]` enable-state).
 Omits `CapLSP` (Codex has no LSP concept).
 - **Key:** `New(Options) *Adapter`; the `Adapter` + `PluginIngester` methods;

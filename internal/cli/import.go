@@ -45,20 +45,16 @@ func jsonUnmarshalLoose(data []byte, v *map[string]any) error {
 	return json.Unmarshal(std, v)
 }
 
-// isKeyMergeStrategy reports whether a strategy co-owns keys inside a shared
-// destination file (rather than replacing the whole file), so the seed must
-// record per-pointer state.Keys ownership rather than a whole-file state.Files
-// entry. Mirrors render.isKeyMerge.
-func isKeyMergeStrategy(s string) bool {
-	return s == "merge-json-keys" || s == "merge-jsonc-keys" || s == "merge-toml-keys"
-}
-
-// decodeDestForSeed decodes a destination file into a generic map per the op's
-// merge strategy: TOML for merge-toml-keys (Codex config.toml), otherwise the
-// JSONC-tolerant loose reader (which standardizes comments/trailing commas in a
-// hand-edited opencode.json). A rendered op.Content is always JSON regardless of
-// the on-disk format, so callers still decode it with jsonUnmarshalLoose.
-func decodeDestForSeed(strategy string, data []byte, v *map[string]any) error {
+// decodeDestBytes decodes a destination config file's bytes into a generic map
+// per the op's merge strategy: TOML for merge-toml-keys (Codex config.toml),
+// otherwise the JSONC-tolerant loose reader (which standardizes comments/trailing
+// commas in a hand-edited opencode.json). A rendered op.Content is always JSON
+// regardless of the on-disk format, so callers still decode op.Content with
+// jsonUnmarshalLoose. This is the single CLI-side dest decoder; the render
+// package has its own (decodeDestObject) whose JSON arm is plain encoding/json
+// because apply re-writes those dests as standard JSON. The key-merge predicate
+// is shared: render.IsKeyMerge.
+func decodeDestBytes(strategy string, data []byte, v *map[string]any) error {
 	if strategy == "merge-toml-keys" {
 		if len(data) == 0 {
 			*v = map[string]any{}
@@ -67,6 +63,21 @@ func decodeDestForSeed(strategy string, data []byte, v *map[string]any) error {
 		return toml.Unmarshal(data, v)
 	}
 	return jsonUnmarshalLoose(data, v)
+}
+
+// readDestFile reads a destination file and decodes it per the op's merge
+// strategy, swallowing read/parse errors into an empty map — the behavior the
+// drift diagnostics (status/diff/reconcile) want so a missing or transiently
+// unreadable dest classifies as "absent" rather than crashing. Replaces the
+// JSON-only readJSONFile so a TOML config.toml decodes correctly.
+func readDestFile(strategy, path string) map[string]any {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return map[string]any{}
+	}
+	m := map[string]any{}
+	_ = decodeDestBytes(strategy, data, &m)
+	return m
 }
 
 // collectStateSeedPointers returns the JSON pointers we record state for
@@ -305,7 +316,7 @@ func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []str
 	}
 	var out []string
 	for _, op := range ops {
-		if !isKeyMergeStrategy(op.MergeStrategy) {
+		if !render.IsKeyMerge(op.MergeStrategy) {
 			continue
 		}
 		data, readErr := os.ReadFile(op.Path)
@@ -313,7 +324,7 @@ func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []str
 			continue
 		}
 		var existing map[string]any
-		if decErr := decodeDestForSeed(op.MergeStrategy, data, &existing); decErr != nil {
+		if decErr := decodeDestBytes(op.MergeStrategy, data, &existing); decErr != nil {
 			continue
 		}
 		var ours map[string]any
@@ -379,7 +390,7 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry, imp
 			continue
 		}
 		switch {
-		case isKeyMergeStrategy(op.MergeStrategy):
+		case render.IsKeyMerge(op.MergeStrategy):
 			// Per-key seed: hash the *current* value at each pointer the
 			// rendered op claims to own. The dest is decoded per strategy (TOML
 			// for merge-toml-keys); op.Content is always JSON.
@@ -388,7 +399,7 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry, imp
 				continue // dest doesn't exist yet; nothing to seed
 			}
 			var existing map[string]any
-			if decErr := decodeDestForSeed(op.MergeStrategy, data, &existing); decErr != nil {
+			if decErr := decodeDestBytes(op.MergeStrategy, data, &existing); decErr != nil {
 				continue
 			}
 			var ours map[string]any

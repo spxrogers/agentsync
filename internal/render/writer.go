@@ -319,9 +319,12 @@ func (w *Writer) maybeBackupKeyOp(op adapter.FileOp) error {
 	return nil
 }
 
-// maybeBackupFileOpForJSONCFallback handles the rare case of a JSONC dest
-// whose stripped form fails standard JSON.Unmarshal — we conservatively
-// back up the whole file once if state has no entries claiming the path.
+// maybeBackupFileOpForJSONCFallback handles the rare case of a key-merge dest
+// that fails to decode as its declared format — a JSONC dest whose stripped
+// form still fails JSON.Unmarshal, or a merge-toml-keys config.toml the TOML
+// decoder rejects. In that case per-pointer collision detection isn't possible,
+// so we conservatively back up the whole file once if state has no entries
+// claiming the path.
 func (w *Writer) maybeBackupFileOpForJSONCFallback(op adapter.FileOp) error {
 	stateKeyPrefix := fmt.Sprintf("%s:%s:%s:%s:", w.agent, w.scope.String(),
 		paths.HomeRelative(w.userHome, w.project), paths.HomeRelative(w.userHome, op.Path))

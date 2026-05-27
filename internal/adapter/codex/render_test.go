@@ -254,13 +254,16 @@ func TestRender_Hooks_KnownAndUnknownEvents(t *testing.T) {
 	}}
 	a := codex.New(codex.Options{TargetRoot: t.TempDir()})
 	ops, skips, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
-	op := findOp(ops, "hooks.json")
+	// Hooks land as [hooks.*] in config.toml (Codex's single key-merge file), not
+	// a separate hooks.json — so the adapter has one merge strategy.
+	op := findOp(ops, "config.toml")
 	if op == nil {
-		t.Fatal("hooks.json op missing")
+		t.Fatal("config.toml hooks op missing")
 	}
-	if op.MergeStrategy != "merge-json-keys" {
-		t.Fatalf("merge strategy = %q, want merge-json-keys", op.MergeStrategy)
+	if op.MergeStrategy != "merge-toml-keys" {
+		t.Fatalf("merge strategy = %q, want merge-toml-keys", op.MergeStrategy)
 	}
+	// op.Content is still JSON (the pointer-merge currency); MergeTOML emits TOML.
 	var ours map[string]any
 	_ = json.Unmarshal(op.Content, &ours)
 	hooks := ours["hooks"].(map[string]any)

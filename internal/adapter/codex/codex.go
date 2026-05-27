@@ -31,10 +31,12 @@ func New(opts Options) *Adapter { return &Adapter{opts: opts} }
 func (a *Adapter) Name() string { return "codex" }
 
 // KeyMergeStrategy is codex's single key-merge strategy: TOML (config.toml),
-// which MUST be merged via go-toml, not strict JSON. Hooks land in a separate
-// hooks.json merged with the JSON strategy at apply time, but config.toml is
-// the file the render pipeline synthesizes orphan-cleanup ops for, so the
-// adapter's single strategy is the TOML one.
+// merged via go-toml (not strict JSON). config.toml is codex's ONLY key-merge
+// destination — both [mcp_servers.*] and [hooks.*] live there — so the single
+// strategy the render pipeline uses for orphan-cleanup synthesis is correct for
+// every key-merge path this adapter owns. (Hooks are written as inline
+// config.toml tables rather than a separate hooks.json precisely so there is one
+// strategy; see renderHooks.)
 func (a *Adapter) KeyMergeStrategy() string { return "merge-toml-keys" }
 
 func (a *Adapter) Capabilities() adapter.Capability {

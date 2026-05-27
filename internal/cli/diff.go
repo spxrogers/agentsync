@@ -109,7 +109,7 @@ func newDiffCmd() *cobra.Command {
 					if filterPath != "" && op.Path != filterPath {
 						continue
 					}
-					if op.MergeStrategy == "merge-json-keys" || op.MergeStrategy == "merge-jsonc-keys" {
+					if render.IsKeyMerge(op.MergeStrategy) {
 						// Key-level diff: compare per pointer.
 						if seen[op.Path] {
 							continue
@@ -117,7 +117,7 @@ func newDiffCmd() *cobra.Command {
 						seen[op.Path] = true
 						var ours map[string]interface{}
 						_ = json.Unmarshal(op.Content, &ours)
-						final := readJSONFile(op.Path)
+						final := readDestFile(op.MergeStrategy, op.Path)
 						for _, ptr := range render.CollectPointers(ours, "") {
 							srcVal := getPointerValue(ours, ptr)
 							dstVal := getPointerValue(final, ptr)

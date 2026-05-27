@@ -6,13 +6,14 @@ import (
 	"testing"
 )
 
-// TestReadJSONFile_ParsesJSONC is the regression for drift misclassification
+// TestReadDestFile_ParsesJSONC is the regression for drift misclassification
 // on hand-commented opencode.json. Apply/Ingest accept JSONC via hujson, so a
-// user may legitimately add `//` comments; readJSONFile (used by status/diff/
-// reconcile to read the on-disk dest) used plain encoding/json, which rejects
-// JSONC. The parse failed → empty map → every owned merge-jsonc-keys pointer
-// classified as a phantom Conflict.
-func TestReadJSONFile_ParsesJSONC(t *testing.T) {
+// user may legitimately add `//` comments; the dest reader (used by status/diff/
+// reconcile) must not use plain encoding/json, which rejects JSONC — a parse
+// failure → empty map → every owned merge-jsonc-keys pointer classified as a
+// phantom Conflict. readDestFile routes a non-TOML strategy through the
+// JSONC-tolerant loose reader.
+func TestReadDestFile_ParsesJSONC(t *testing.T) {
 	tmp := t.TempDir()
 	p := filepath.Join(tmp, "opencode.json")
 	content := `{
@@ -24,13 +25,33 @@ func TestReadJSONFile_ParsesJSONC(t *testing.T) {
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m := readJSONFile(p)
+	m := readDestFile("merge-jsonc-keys", p)
 	mcp, ok := m["mcp"].(map[string]any)
 	if !ok {
-		t.Fatalf("readJSONFile failed to parse JSONC: %v", m)
+		t.Fatalf("readDestFile failed to parse JSONC: %v", m)
 	}
 	if _, ok := mcp["github"]; !ok {
 		t.Fatalf("github server missing after JSONC parse: %v", mcp)
+	}
+}
+
+// TestReadDestFile_ParsesTOML covers the Codex config.toml path: a non-JSON
+// dest must decode via toml.Unmarshal, not the JSON reader (which would yield an
+// empty map and phantom drift for every owned merge-toml-keys pointer).
+func TestReadDestFile_ParsesTOML(t *testing.T) {
+	tmp := t.TempDir()
+	p := filepath.Join(tmp, "config.toml")
+	content := "model = \"gpt-5.5\"\n\n[mcp_servers.github]\ncommand = \"npx\"\n"
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := readDestFile("merge-toml-keys", p)
+	servers, ok := m["mcp_servers"].(map[string]any)
+	if !ok {
+		t.Fatalf("readDestFile failed to parse TOML: %v", m)
+	}
+	if _, ok := servers["github"]; !ok {
+		t.Fatalf("github server missing after TOML parse: %v", servers)
 	}
 }
 

@@ -119,7 +119,7 @@ func OrphanFiles(s *state.Targets, userHome, agent string, scope adapter.Scope, 
 		if op.Action != "" && op.Action != "write" {
 			continue
 		}
-		if isKeyMerge(op.MergeStrategy) {
+		if IsKeyMerge(op.MergeStrategy) {
 			continue
 		}
 		current[paths.HomeRelative(userHome, op.Path)] = struct{}{}

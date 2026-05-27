@@ -24,12 +24,19 @@ var codexHookEvents = map[string]bool{
 	"Stop":              true,
 }
 
-// renderHooks writes a single merge-json-keys op for ~/.codex/hooks.json. Codex
-// reads hooks from a declarative hooks.json whose schema matches Claude's
-// (event → matcher group → command handlers), so agentsync projects the same
-// shape. Per-event ownership: agentsync owns the entire array under each event
-// key it renders; foreign event keys the user authored are left untouched.
-// Canonical events Codex doesn't recognize are dropped with a Skip.
+// renderHooks writes a single merge-toml-keys op for ~/.codex/config.toml's
+// `[hooks.*]` tables. Codex reads hooks from either a hooks.json or inline
+// `[hooks]` tables in config.toml (the two are equivalent); agentsync uses the
+// config.toml form so Codex has a SINGLE key-merge destination/strategy — the
+// orphan-cleanup synthesis in the render pipeline applies one KeyMergeStrategy()
+// per adapter, so a second key-merge file in a different format (JSON hooks.json)
+// would be cleaned with the wrong (TOML) strategy and fail. op.Content is JSON
+// (`{"hooks": {<event>: [...]}}`) — the pointer-merge currency — and MergeTOML
+// emits it as `[[hooks.<event>]]` arrays-of-tables. The schema (event → matcher
+// group → command handlers) matches Claude's. Per-event ownership: agentsync owns
+// the entire array under each event key it renders; foreign event keys the user
+// authored are left untouched. Canonical events Codex doesn't recognize are
+// dropped with a Skip.
 func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []adapter.Skip, error) {
 	if len(c.Hooks) == 0 {
 		return nil, nil, nil
@@ -68,11 +75,11 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 	}
 	return []adapter.FileOp{{
 		Action:        "write",
-		Path:          p.Hooks,
+		Path:          p.Config,
 		Content:       append(body, '\n'),
 		Mode:          0o644,
 		SourceID:      "hooks/* (multiple)",
-		MergeStrategy: "merge-json-keys",
+		MergeStrategy: "merge-toml-keys",
 		OwnedKeys:     ownedKeys,
 	}}, skips, nil
 }
