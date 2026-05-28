@@ -6,6 +6,17 @@ import (
 )
 
 // Render converts the resolved canonical into FileOps for Codex CLI.
+//
+// Render projects each plugin's COMPONENTS (MCP, hooks, memory, skills,
+// subagents, commands) to Codex's native paths and intentionally does NOT
+// re-emit `[plugins."<name>@<source>"]` enable-state into ~/.codex/config.toml
+// — `IngestPlugins` reads those tables on `import` for discovery, but they
+// are NEVER written back on apply. This is the same cross-adapter invariant
+// the Claude adapter follows (`PluginIngester` is read-only by design); see
+// `internal/adapter/adapter.go` and `docs/architecture.md` § "PluginIngester
+// (read-only)" for the full rationale. Foreign `[plugins.*]` entries the user
+// set in Codex's UI are preserved by config.toml's merge-toml-keys writer
+// because this render claims no keys under that section.
 func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string) ([]adapter.FileOp, []adapter.Skip, error) {
 	c := r.Canonical() //nolint:forbidigo // sanctioned render egress: project the resolved model into FileOps (never written back to source)
 	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)

@@ -137,10 +137,34 @@ type NativePlugin struct {
 
 // PluginIngester is an OPTIONAL extension to Adapter: an agent that tracks
 // installed plugins + marketplaces in its native config implements it so
-// `import` can capture them into the canonical source. import type-asserts for
-// it; an adapter that does not implement it simply imports no plugins. It is
-// kept off the core Adapter interface because only Claude has a native plugin
-// concept in v1 and the canonical schema does not otherwise depend on it.
+// `import` can capture them into the canonical source. `import` type-asserts for
+// it; an adapter that does not implement it simply imports no plugins.
+//
+// **Read-only by design — asymmetric on purpose.** PluginIngester has no
+// `Render`-side counterpart, and `Adapter.Render` MUST NOT emit plugin-
+// enablement or marketplace-registry metadata back into the native config. The
+// invariant for every adapter (current and future) is:
+//
+//	import   — read enable-state + marketplace sources from native config
+//	apply    — fan out the plugin's COMPONENTS (skills, MCP, commands,
+//	           subagents, hooks, LSP) to the agent's native component paths
+//	           via the normal Render path. Plugin identity dissolves at the
+//	           projection boundary.
+//
+// Once a plugin's skills land at `~/.claude/skills/<name>/`, its MCP server in
+// `mcpServers`, its commands in `~/.claude/commands/<name>.md`, etc., the
+// consumer agent reads them as regular components — it doesn't need plugin-
+// manager metadata to use them. Writing enable-state back would (1) ping-pong
+// against the user's own `/plugin disable` in the agent's UI on every apply,
+// (2) blur ownership between agentsync (canonical source of truth) and the
+// agent's plugin manager, and (3) double-install with the agent's own plugin
+// install dir.
+//
+// The PluginIngester interface is kept off the core Adapter because the
+// canonical schema does not otherwise depend on a native plugin concept
+// (OpenCode has no plugins; the planned Cursor adapter has them but the
+// enable-state location is undocumented). See `docs/architecture.md` §
+// "PluginIngester (read-only)" for the full rationale.
 type PluginIngester interface {
 	IngestPlugins(scope Scope, project string) ([]NativeMarketplace, []NativePlugin, error)
 }

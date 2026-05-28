@@ -133,6 +133,19 @@ hooks, LSP servers. **Projection** translates each component independently into
 each target agent, which is where fan-out happens: install once, land on every
 enabled agent that supports the component.
 
+**Apply fans out the components, not the plugin itself.** agentsync owns
+plugins in `~/.agentsync/plugins/` and writes each plugin's *components* to the
+agent's native paths (skills to `~/.claude/skills/<name>/`, MCP to
+`mcpServers`, etc.). It deliberately does NOT write enablement metadata
+(Claude's `enabledPlugins`, Codex's `[plugins."x@y"]`) back to the agent's
+config — once the components land at native paths the agent reads them as
+regular components, and writing the enablement back would pick a fight with
+the agent's own `/plugin disable` UI on every apply. The `PluginIngester`
+interface is **read-only by design**: `import` captures plugin enable-state
+for discovery, `apply` never re-emits it. See
+[architecture.md § PluginIngester (read-only)](architecture.md#pluginingester-read-only)
+for the full rationale.
+
 ### Translation report & coverage
 Every `apply`, `verify`, and `explain` ends with a report showing, per plugin
 per agent, what landed:

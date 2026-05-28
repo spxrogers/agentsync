@@ -234,6 +234,18 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
 - **New agent** → add `internal/adapter/<name>/` implementing the `Adapter`
   interface and register it. `Render` must take `secrets.Resolved`; all writes
   go through `DestWriter`. The canonical schema does not change.
+- **New `PluginIngester`** → if the agent has a native plugin concept,
+  implement `IngestPlugins` (read side: native enable-state → canonical).
+  **Do NOT add a Render-side counterpart.** Apply fans out the plugin's
+  *components* (skills, MCP, commands, …) to the agent's native paths via
+  the normal Render path. Enablement metadata
+  (Claude's `enabledPlugins` / `extraKnownMarketplaces`, Codex's
+  `[plugins."x@y"]`, Cursor's TBD-equivalent) is NEVER written back —
+  doing so picks a fight with the agent's own `/plugin disable` UI and
+  double-installs against the agent's own plugin install dir. The asymmetry
+  is the invariant; see
+  [`docs/architecture.md`](docs/architecture.md#pluginingester-read-only) §
+  "PluginIngester (read-only)" and the doc comment on the interface itself.
 - **New dest→source write** → it must go through `capture.Capture`. Do not call
   `source.Write*` directly from a write-back path (it does not re-reference
   secrets). See the "Accepted residual" note above.
