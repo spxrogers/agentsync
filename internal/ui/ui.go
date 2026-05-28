@@ -20,6 +20,7 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -157,6 +158,72 @@ func Pad(s string, width int) string {
 		return s
 	}
 	return s + spaces(width-n)
+}
+
+// WarnWriter wraps a destination writer and styles "warning: " line prefixes
+// as a bold-yellow "⚠️ warning:" so every warning — whether emitted by the
+// CLI itself, by an adapter's Ingest, or by capture's re-reference path —
+// reads consistently. Lines that do not start with the literal "warning: "
+// prefix (e.g. pre-styled ANSI lines, indented continuation lines, or
+// "agentsync:" notes) pass through verbatim. The writer is line-buffered so a
+// callers' partial Write is held until a newline arrives — fmt.Fprintf in
+// practice always finishes a line per call, but buffering keeps a chunked
+// writer correct.
+type WarnWriter struct {
+	w   io.Writer
+	p   *Printer
+	buf []byte
+}
+
+// NewWarnWriter returns a *WarnWriter that flushes styled lines to w using p.
+// p's color decision is honored: with color off, the prefix becomes a plain
+// "⚠️ warning:" (the glyph is content, not decoration — same rule as the
+// curated glyph vocabulary above).
+func NewWarnWriter(w io.Writer, p *Printer) *WarnWriter {
+	return &WarnWriter{w: w, p: p}
+}
+
+const warnLinePrefix = "warning: "
+
+// Write line-buffers data, emitting completed lines through emit. Partial
+// trailing bytes are retained for the next Write. Always returns len(p), nil
+// (the contract callers like fmt.Fprintf expect).
+func (s *WarnWriter) Write(p []byte) (int, error) {
+	s.buf = append(s.buf, p...)
+	for {
+		idx := bytes.IndexByte(s.buf, '\n')
+		if idx < 0 {
+			break
+		}
+		s.emit(s.buf[:idx+1])
+		s.buf = s.buf[idx+1:]
+	}
+	return len(p), nil
+}
+
+// Flush emits any buffered partial line (no trailing \n) as-is. Call at end of
+// command if you've routed a writer that may not always end in \n; the import
+// path does always terminate, so this is defensive.
+func (s *WarnWriter) Flush() {
+	if len(s.buf) > 0 {
+		s.emit(s.buf)
+		s.buf = nil
+	}
+}
+
+// GlyphWarnEmoji is the colourful warning sign (with VS16) used as the warning
+// label prefix. Wider than one column in some terminals, which is fine — the
+// warning lines are not part of any padded layout.
+const GlyphWarnEmoji = "⚠️"
+
+func (s *WarnWriter) emit(line []byte) {
+	if !bytes.HasPrefix(line, []byte(warnLinePrefix)) {
+		_, _ = s.w.Write(line)
+		return
+	}
+	rest := line[len(warnLinePrefix):]
+	label := s.p.Yellow(s.p.Bold(GlyphWarnEmoji + " warning:"))
+	fmt.Fprintf(s.w, "%s %s", label, rest)
 }
 
 func spaces(n int) string {

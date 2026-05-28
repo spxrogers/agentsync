@@ -207,13 +207,25 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	if perr != nil {
 		return perr
 	}
-	io := &importIO{p: p, out: p.Out, err: p.Err, dryRun: dryRun}
+	// Wrap stderr once so every "warning: …" line — ours, the adapter's
+	// Ingest, capture's re-reference, etc. — picks up the same bold-yellow
+	// "⚠️ warning:" styling. Lines that don't start with "warning: " pass
+	// through unchanged, so indented continuations and "agentsync:" notes
+	// look the same as before.
+	warnW := ui.NewWarnWriter(p.Err, p)
+	io := &importIO{p: p, out: p.Out, err: warnW, dryRun: dryRun}
 
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	reg := registryFactory()
 	a := reg.Lookup(agentName)
 	if a == nil {
 		return fmt.Errorf("adapter %q not registered; valid agents: %s", agentName, validAgents)
+	}
+	// Route the adapter's Ingest warnings through the same styled writer.
+	// Adapters that don't implement the setter (the noop adapter today) keep
+	// writing to os.Stderr — fine, they emit no Ingest warnings anyway.
+	if s, ok := a.(adapterStderrSetter); ok {
+		s.SetStderr(warnW)
 	}
 	// Gate codex/cursor the same way `agent add` does: they're registered as
 	// noop adapters, so Ingest returns an empty canonical and import would
@@ -531,6 +543,11 @@ func importVerb(dryRun bool) string {
 	return "imported"
 }
 
+// adapterStderrSetter is the optional setter each concrete adapter
+// (claude/opencode/codex) implements, letting CLI commands route the
+// adapter's Ingest warnings through a styled writer.
+type adapterStderrSetter interface{ SetStderr(io.Writer) }
+
 // importIO bundles the styled printer, the streams it writes to, and the
 // dry-run flag so every importXxx function emits its per-item lines, section
 // headers, and warnings through one consistent shape — the same green ✓ /
@@ -572,10 +589,13 @@ func (i *importIO) flushSection() {
 	i.sectionShown = true
 }
 
-// warn prints a yellow "warning:" prefix followed by msg. msg should not be
-// trailing-newline'd; warn always appends \n.
+// warn emits a "warning: …" line. Styling (bold-yellow "⚠️ warning:") is
+// applied by the ui.WarnWriter wrapping i.err — emitting the plain prefix
+// here means adapter Ingest, capture, and importIO all share one styling
+// point, and no caller has to know about it. msg should not include a
+// trailing newline; warn appends one.
 func (i *importIO) warn(msg string) {
-	fmt.Fprintf(i.err, "%s %s\n", i.p.Yellow("warning:"), msg)
+	fmt.Fprintf(i.err, "warning: %s\n", msg)
 }
 
 // warnf is warn + fmt.Sprintf for the common "%v / %q" formatting.

@@ -33,6 +33,11 @@ func (a *Adapter) stderr() io.Writer {
 	return os.Stderr
 }
 
+// SetStderr replaces the warning sink the adapter writes Ingest warnings to,
+// so a CLI command can route adapter warnings through the same styled writer
+// it uses for its own output. See claude.Adapter.SetStderr for the contract.
+func (a *Adapter) SetStderr(w io.Writer) { a.opts.Stderr = w }
+
 func (a *Adapter) Name() string { return "opencode" }
 
 // KeyMergeStrategy is opencode's single key-merge strategy: JSONC

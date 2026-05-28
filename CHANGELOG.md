@@ -32,10 +32,14 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   (real) or cyan `→` (dry-run) prefix; the full-agent walk groups items under
   faint section headers (`mcp servers`, `skills`, …) printed lazily so an empty
   component is invisible; the summary line is bold (`imported N items from
-  claude`) with a faint per-component breakdown underneath; the
-  foreign-collision and plugin-resolution warnings use the same yellow
-  `warning:` prefix `apply` does. Wording is preserved (`imported X` /
-  `would import X`) so scripts grepping the output keep working.
+  claude`) with a faint per-component breakdown underneath. Every `warning:`
+  label — whether emitted by `import` itself, by an adapter's `Ingest` (the
+  lenient-YAML notices that used to lead the screen as plain text), or by
+  `capture`'s re-reference path — is restyled to a bold-yellow `⚠️ warning:`
+  by a single line-buffered writer (`ui.WarnWriter`) wrapping stderr; adapters
+  pick it up via a new optional `SetStderr(io.Writer)` setter so the routing
+  is invisible to non-CLI callers. Wording is preserved (`imported X` /
+  `would import X`, `warning: …`) so scripts grepping the output keep working.
 - **`status` explains its drift classes inline** — the formatted dashboard
   now prints a brief "What `apply` will do:" legend after the summary footer,
   with one action-focused line per drift class actually present (`new` → will
