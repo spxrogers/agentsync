@@ -17,6 +17,32 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 - **Canonical source model** in `~/.agentsync/` — hand-editable TOML + markdown
   for agents, MCP servers, marketplaces, plugins, memory, and skills.
+- **Full Agent Skills directory support** — a skill is treated as a *directory*
+  per the [Agent Skills](https://agentskills.io) spec, not just its `SKILL.md`.
+  Bundled `scripts/`, `references/`, `assets/`, and nested files are carried
+  verbatim (binary included, executable bit preserved) end-to-end: across the
+  canonical loader/writer, every adapter's render + ingest (Claude, OpenCode,
+  Codex), plugin/marketplace projection, and `apply`/`import`/`reconcile`.
+  Removing a skill (or one bundled file) from the source reclaims it from the
+  destination on the next `apply` — a hand-edited orphan is backed up first, and
+  now-empty skill directories are pruned up to the skills root.
+- **Unmodeled native MCP/LSP fields preserved (`Extra`)** — native server fields
+  agentsync doesn't model (e.g. `timeout`, `disabled`, `cwd`) are captured into a
+  passthrough `[server.extra]` table on import/reconcile and rendered back
+  verbatim, instead of being silently dropped (and then erased from the
+  destination on the next apply). `Extra` is verbatim only — values are never
+  secret-resolved (`${secret:…}` there is written literally) and never visited by
+  the secret walker; the capture leak backstop scans it and refuses any write that
+  would persist a live secret value through it.
+- **Bidirectional memory fragments** — `apply` wraps each inlined fragment in
+  HTML-comment boundary markers (`<!-- agentsync:fragment <name> -->` …) in the
+  native memory file, so `import`/`reconcile` can **reverse** the expansion: a
+  native edit inside a fragment block is captured back into that fragment file
+  with the `@import` structure preserved, instead of flattening `AGENTS.md` and
+  orphaning the fragments. When markers are absent (a fragment containing the
+  marker token disables them) or hand-mangled into an unbalanced/ambiguous state,
+  the write-back is refused rather than guessed; reverse paths are
+  traversal-checked. Drift still surfaces in `status`/`diff`.
 - **Claude Code adapter** — full support for all seven components (MCP, memory,
   skill, subagent, command, hook, LSP) with per-key merge into `~/.claude.json`
   and `settings.json` that preserves foreign keys.

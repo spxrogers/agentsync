@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/source"
@@ -85,7 +86,7 @@ func projectWithFuncs(entry PluginEntry, cacheDir string, readFile func(string) 
 			return pr, err
 		}
 	}
-	if err := applyEntryOverrides(entry, &pr, cacheDir, readFile); err != nil {
+	if err := applyEntryOverrides(entry, &pr, cacheDir, readFile, listDir); err != nil {
 		return pr, err
 	}
 	strict := entry.Strict == nil || *entry.Strict
@@ -281,7 +282,7 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 		if err != nil {
 			return err
 		}
-		skill, err := loadSkillEntry(p, readFile)
+		skill, err := loadSkillEntry(p, readFile, listDir)
 		if err != nil {
 			return fmt.Errorf("load skill %q: %w", sk, err)
 		}
@@ -343,7 +344,7 @@ func discoverSkillDirs(skillsDir string, listDir func(string) ([]os.DirEntry, er
 
 // applyEntryOverrides merges component fields from a PluginEntry into an
 // already-seeded ProjectionResult (strict mode overlay).
-func applyEntryOverrides(entry PluginEntry, pr *ProjectionResult, cacheDir string, readFile func(string) ([]byte, error)) error {
+func applyEntryOverrides(entry PluginEntry, pr *ProjectionResult, cacheDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error)) error {
 	for name, raw := range entry.MCPServers {
 		spec := parseMCPSpec(raw, cacheDir)
 		pr.MCPServers = append(pr.MCPServers, source.MCPServer{ID: name, Server: spec})
@@ -357,7 +358,7 @@ func applyEntryOverrides(entry PluginEntry, pr *ProjectionResult, cacheDir strin
 		if err != nil {
 			return err
 		}
-		skill, err := loadSkillEntry(p, readFile)
+		skill, err := loadSkillEntry(p, readFile, listDir)
 		if err != nil {
 			return fmt.Errorf("load skill %q: %w", sk, err)
 		}
@@ -406,7 +407,14 @@ type markdownEntry struct {
 // SKILL.md or a SKILL.md file directly. Returns nil (no error) if the file is
 // simply missing — the caller should skip that entry with a warning.
 // Returns an error only for real I/O problems or malformed frontmatter.
-func loadSkillEntry(path string, readFile func(string) ([]byte, error)) (*source.Skill, error) {
+//
+// A skill is a DIRECTORY, not just SKILL.md: when listDir is non-nil, every
+// other file under the skill directory (scripts/, references/, assets/, nested
+// files) is captured verbatim into Skill.Files so a plugin-bundled skill is not
+// lossy on apply. listDir is nil only on the ProjectWithReader/in-memory path
+// (tests), where bundled-file capture is disabled just like convention-based
+// discovery.
+func loadSkillEntry(path string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error)) (*source.Skill, error) {
 	// Try directory convention first: <path>/SKILL.md
 	skillPath := filepath.Join(path, "SKILL.md")
 	data, err := readFile(skillPath)
@@ -444,7 +452,74 @@ func loadSkillEntry(path string, readFile func(string) ([]byte, error)) (*source
 		return nil, err
 	}
 
-	return &source.Skill{Name: name, Frontmatter: fm, Body: body}, nil
+	var files []source.SkillFile
+	if listDir != nil {
+		files, err = collectSkillFiles(filepath.Dir(skillPath), readFile, listDir)
+		if err != nil {
+			return nil, fmt.Errorf("collect bundled files for skill %q: %w", name, err)
+		}
+	}
+
+	return &source.Skill{Name: name, Frontmatter: fm, Body: body, Files: files}, nil
+}
+
+// collectSkillFiles recursively gathers every regular file under skillDir other
+// than SKILL.md into source.SkillFile entries (slash-separated relative path,
+// preserved mode), sorted by path. It is the projection-layer analog of
+// source.ReadSkillFiles, implemented over the injected readFile/listDir funcs so
+// the in-memory test path can opt out by passing a nil listDir. Symlinks are
+// skipped — a fetched plugin repo is untrusted, and following a symlink (e.g.
+// skills/x/evil -> /etc) must never pull foreign content into the projection.
+func collectSkillFiles(skillDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error)) ([]source.SkillFile, error) {
+	var files []source.SkillFile
+	var walk func(dir string) error
+	walk = func(dir string) error {
+		entries, err := listDir(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		for _, e := range entries {
+			if e.Type()&os.ModeSymlink != 0 {
+				continue
+			}
+			full := filepath.Join(dir, e.Name())
+			if e.IsDir() {
+				if err := walk(full); err != nil {
+					return err
+				}
+				continue
+			}
+			if !e.Type().IsRegular() {
+				continue
+			}
+			rel, err := filepath.Rel(skillDir, full)
+			if err != nil {
+				return err
+			}
+			rel = filepath.ToSlash(rel)
+			if rel == "SKILL.md" {
+				continue
+			}
+			data, err := readFile(full)
+			if err != nil {
+				return err
+			}
+			mode := uint32(0o644)
+			if info, infoErr := e.Info(); infoErr == nil {
+				mode = uint32(info.Mode().Perm())
+			}
+			files = append(files, source.SkillFile{Path: rel, Content: data, Mode: mode})
+		}
+		return nil
+	}
+	if err := walk(skillDir); err != nil {
+		return nil, err
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files, nil
 }
 
 // loadMarkdownEntry reads a markdown file at path. Returns nil (no error) if

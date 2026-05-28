@@ -82,6 +82,7 @@ func cloneMCPServers(in []source.MCPServer) []source.MCPServer {
 		m.Server.Args = append([]string(nil), m.Server.Args...)
 		m.Server.Env = cloneStrMap(m.Server.Env)
 		m.Server.Headers = cloneStrMap(m.Server.Headers)
+		m.Server.Extra = cloneAnyMap(m.Server.Extra)
 		out[i] = m
 	}
 	return out
@@ -96,6 +97,7 @@ func cloneLSPServers(in []source.LSPServer) []source.LSPServer {
 		l.Spec.Args = append([]string(nil), l.Spec.Args...)
 		l.Spec.Env = cloneStrMap(l.Spec.Env)
 		l.Spec.Headers = cloneStrMap(l.Spec.Headers)
+		l.Spec.Extra = cloneAnyMap(l.Spec.Extra)
 		out[i] = l
 	}
 	return out
@@ -106,6 +108,21 @@ func cloneStrMap(in map[string]string) map[string]string {
 		return nil
 	}
 	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+// cloneAnyMap detaches the top level of a passthrough Extra map so the resolved
+// copy does not alias the caller's templated source. Resolve never mutates Extra
+// (it is not secret-walked), so a shallow copy is sufficient to keep the two
+// models independent.
+func cloneAnyMap(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
 	for k, v := range in {
 		out[k] = v
 	}

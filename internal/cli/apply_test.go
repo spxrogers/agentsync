@@ -332,3 +332,115 @@ func TestApply_NoFlag_WritesDestinations_M1(t *testing.T) {
 		t.Fatalf("apply in M1 should succeed; got err: %v\n%s", err, out)
 	}
 }
+
+// TestApply_SkillOrphanCleanup verifies apply converges the destination when a
+// skill — or a single bundled file within one — is removed from the canonical
+// source: the leftover dest files (and the empty dirs they leave) are reclaimed,
+// while a destination the user hand-edited is backed up before removal.
+func TestApply_SkillOrphanCleanup(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+
+	srcSkill := filepath.Join(tmp, ".agentsync", "skills", "deploy")
+	writeSkill := func() {
+		_ = os.MkdirAll(filepath.Join(srcSkill, "scripts"), 0o755)
+		_ = os.MkdirAll(filepath.Join(srcSkill, "references"), 0o755)
+		if err := os.WriteFile(filepath.Join(srcSkill, "SKILL.md"), []byte("---\nname: deploy\ndescription: d\n---\nbody\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(srcSkill, "scripts", "run.sh"), []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(srcSkill, "references", "REF.md"), []byte("# ref\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	destSkill := filepath.Join(tmp, ".claude", "skills", "deploy")
+	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
+
+	// 1. Apply the full skill directory.
+	writeSkill()
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply 1: %v\n%s", err, out)
+	}
+	for _, rel := range []string{"SKILL.md", "scripts/run.sh", "references/REF.md"} {
+		if !exists(filepath.Join(destSkill, filepath.FromSlash(rel))) {
+			t.Fatalf("apply 1 did not write %s", rel)
+		}
+	}
+
+	// 2. Remove a single bundled file from source; apply must reclaim it and
+	//    prune the now-empty references/ dir, leaving the rest intact.
+	if err := os.RemoveAll(filepath.Join(srcSkill, "references")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply 2: %v\n%s", err, out)
+	}
+	if exists(filepath.Join(destSkill, "references", "REF.md")) {
+		t.Fatal("orphaned bundled file references/REF.md was not deleted")
+	}
+	if exists(filepath.Join(destSkill, "references")) {
+		t.Fatal("empty references/ dir was not pruned")
+	}
+	if !exists(filepath.Join(destSkill, "SKILL.md")) || !exists(filepath.Join(destSkill, "scripts", "run.sh")) {
+		t.Fatal("apply 2 wrongly removed surviving skill files")
+	}
+
+	// 3. Remove the whole skill from source; apply must reclaim the entire
+	//    destination directory.
+	if err := os.RemoveAll(srcSkill); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply 3: %v\n%s", err, out)
+	}
+	if exists(destSkill) {
+		t.Fatalf("orphaned skill directory %s was not removed", destSkill)
+	}
+	// The skills root itself must survive (it may hold other skills).
+	if !exists(filepath.Join(tmp, ".claude", "skills")) {
+		t.Fatal("skills root was wrongly pruned")
+	}
+
+	// 4. Drift: re-apply, hand-edit the dest SKILL.md, then remove the source
+	//    skill. Apply must back the edit up before deleting it.
+	writeSkill()
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply 4: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(destSkill, "SKILL.md"), []byte("HAND EDITED\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(srcSkill); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply 5: %v\n%s", err, out)
+	}
+	if exists(destSkill) {
+		t.Fatal("drifted orphan skill was not removed")
+	}
+	if !backupContains(t, filepath.Join(tmp, ".agentsync", ".state", "backups"), "HAND EDITED\n") {
+		t.Fatal("hand-edited skill file was deleted without a backup")
+	}
+}
+
+// backupContains reports whether any file under root has the given content.
+func backupContains(t *testing.T, root, want string) bool {
+	t.Helper()
+	found := false
+	_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		data, rerr := os.ReadFile(p)
+		if rerr == nil && string(data) == want {
+			found = true
+		}
+		return nil
+	})
+	return found
+}

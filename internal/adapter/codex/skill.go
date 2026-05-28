@@ -1,33 +1,16 @@
 package codex
 
 import (
-	"fmt"
-	"path/filepath"
-
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
-// renderSkills writes each canonical skill to ~/.agents/skills/<name>/SKILL.md.
-// Codex reads personal skills from the shared cross-agent ~/.agents/skills
-// directory (not under ~/.codex), with the same frontmatter (name + description)
-// + body format Claude and OpenCode use, so this is a full-fidelity projection.
+// renderSkills writes each skill (SKILL.md plus its bundled scripts/references/
+// assets) to ~/.agents/skills/<name>/. Codex reads personal skills from the
+// shared cross-agent ~/.agents/skills directory (not under ~/.codex), with the
+// same SKILL.md format Claude and OpenCode use, so this is a full-fidelity
+// projection of the whole skill directory.
 func (a *Adapter) renderSkills(c source.Canonical, p Paths) ([]adapter.FileOp, error) {
-	var ops []adapter.FileOp
-	for _, s := range c.Skills {
-		body, err := claude.EncodeFrontmatter(s.Frontmatter, s.Body)
-		if err != nil {
-			return nil, fmt.Errorf("encode skill %s: %w", s.Name, err)
-		}
-		ops = append(ops, adapter.FileOp{
-			Action:        "write",
-			Path:          filepath.Join(p.SkillsDir, s.Name, "SKILL.md"),
-			Content:       body,
-			Mode:          0o644,
-			SourceID:      filepath.Join("skills", s.Name, "SKILL.md"),
-			MergeStrategy: "replace",
-		})
-	}
-	return ops, nil
+	return claude.SkillFileOps(c.Skills, p.SkillsDir)
 }

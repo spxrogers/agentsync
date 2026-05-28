@@ -53,6 +53,37 @@ authored prose that is the source of truth for *itself*; when you change the CLI
 surface or agent coverage, update the website pages listed in the table above in
 the same commit, just like the `docs/` files. See `website/README.md`.
 
+## Models must stay faithful to their on-disk artifacts — non-negotiable
+
+A whole class of silent bug: a canonical struct models a *subset* of the artifact
+it claims to represent, and every downstream piece (loader, adapters, writer,
+projection) faithfully mirrors that subset — so nothing fails a test, no
+invariant breaks, no lint fires, yet data is dropped. `source.Skill` once held
+only `SKILL.md` (frontmatter + body) and silently discarded the rest of the skill
+*directory* (`scripts/`, `references/`, `assets/`, nested files). It survived
+because the round-trip tests' oracle was the parsed model, not the filesystem —
+and a round-trip over an impoverished model is trivially "lossless." **The
+on-disk artifact — what the upstream spec actually defines — is the source of
+truth, never the struct that parses it.** Three rules follow:
+
+- **Fidelity tests anchor to the artifact, not the model.** For any component
+  backed by a file tree or a structured file, the round-trip test MUST start from
+  a *spec-complete* on-disk fixture (a skill with bundled files; an MCP server
+  with an unmodeled native key; memory with `fragments/`) and assert the *on-disk
+  result* survives — byte-for-byte where applicable. Asserting "the parsed model
+  round-trips" proves nothing about what the model can't see.
+- **Capture it or acknowledge it — never drop it silently.** If the model can't
+  represent part of an artifact, the loss MUST surface: through the translation
+  report, an `adapter.Skip`, a `◐` in the capability matrix, or (at minimum) an
+  explicit code comment + doc note. Reflective guards (cf. `TestNewSecretFieldGuard`)
+  are the gold standard. A silent drop is a bug, full stop. A *deliberate* subset
+  is fine only if it is written down where a reviewer will see it.
+- **Doc claims are not self-certifying.** Generation keeps the contract pages in
+  sync with `docs/*.md`, but nothing proves a prose *capability* claim is true in
+  code (the skills matrix asserted `scripts/`/`references/`/`assets/` support the
+  code never had). When you assert a capability, point to — or add — the test
+  that backs it.
+
 ## Mental map of the code
 
 - **`internal/source`** — the canonical model (`source.Canonical`). The TOML
@@ -90,6 +121,17 @@ exactly one place: `walkSecretFields` in `internal/secrets/walk.go` (MCP/LSP
 there** — every operation then picks it up automatically. `TestNewSecretFieldGuard`
 (reflect-based) fails if a string-shaped field is added to those structs without
 being classified.
+
+> **Deliberate exception — `MCPServerSpec.Extra` / `LSPServerSpec.Extra`.** These
+> `map[string]any` passthrough maps hold unmodeled native fields verbatim and are
+> intentionally NOT in `walkSecretFields`: their values are never secret-resolved
+> (a `${secret:…}` there is written literally, not substituted) and never
+> re-referenced. The guard does not flag them (a `map[string]any` is not
+> "string-shaped"). The safety they'd otherwise lose is restored by the capture
+> leak backstop, which scans `Extra` (`secrets.ResidualSecretCleartext` →
+> `scanExtraResidual`) and refuses any write that would persist a live secret
+> value through it. If you ever make `Extra` secret-resolving, it MUST join
+> `walkSecretFields` (and the paired re-reference) like every other field.
 
 **2. One dest→source path.** All write-backs go through `capture.Capture`
 (`internal/capture`). It re-references secrets (`secrets.ReReferenceCanonical`),

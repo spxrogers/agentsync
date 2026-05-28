@@ -47,7 +47,11 @@ The genius of the model is that **drift is just a hash comparison**:
 ### Canonical source (`~/.agentsync/`)
 The single directory you own and (optionally) commit to git. It holds small,
 hand-editable TOML files (one MCP server per file, one plugin per file) plus
-markdown for memory and skills. Override its location with `AGENTSYNC_HOME`.
+markdown for memory and skills. A **skill** follows the [Agent Skills](https://agentskills.io)
+spec — it is a *directory* `skills/<name>/` whose only required member is
+`SKILL.md`, and any bundled `scripts/`, `references/`, `assets/`, or nested files
+are carried verbatim (binary included), not just the `SKILL.md`. Override the
+canonical location with `AGENTSYNC_HOME`.
 There is **no hidden internal representation** — the Go structs that parse these
 TOML files *are* the canonical model.
 

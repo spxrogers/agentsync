@@ -106,7 +106,82 @@ func ResidualSecretCleartext(ingested, against *source.Canonical, sec, env Resol
 		}
 		return s
 	})
+
+	// Passthrough Extra is verbatim and NOT secret-walked (see
+	// source.MCPServerSpec.Extra), so the walk above can't see it. Scan it
+	// separately for the VALUE shape: a live vault secret value appearing in an
+	// Extra field that its source counterpart did not already hold — a resolved
+	// secret a native tool duplicated into an unmodeled field — must not be
+	// persisted as cleartext.
+	scanExtraResidual(ingested, against, "", secretVals, flag)
 	return leaks
+}
+
+// scanExtraResidual flags any secretGroup whose ingested passthrough Extra holds
+// a live vault secret value the source counterpart's Extra did not — the only
+// way a resolved secret can reach the verbatim, non-walked Extra. Recurses the
+// Project overlay so a project-scoped server is covered too.
+func scanExtraResidual(ingested, against *source.Canonical, scope string, secretVals map[string]string, flag func(secretGroup)) {
+	if ingested == nil {
+		return
+	}
+	srcMCP, srcLSP := map[string]string{}, map[string]string{}
+	if against != nil {
+		for _, m := range against.MCPServers {
+			srcMCP[m.ID] = joinExtraStrings(m.Server.Extra)
+		}
+		for _, l := range against.LSPServers {
+			srcLSP[l.ID] = joinExtraStrings(l.Spec.Extra)
+		}
+	}
+	scan := func(kind, id, srcExtra string, extra map[string]any) {
+		var ss []string
+		extraStrings(extra, &ss)
+		for _, s := range ss {
+			for v := range secretVals {
+				if v != "" && strings.Contains(s, v) && !strings.Contains(srcExtra, v) {
+					flag(secretGroup{scope: scope, kind: kind, id: id})
+					return
+				}
+			}
+		}
+	}
+	for _, m := range ingested.MCPServers {
+		scan("mcp", m.ID, srcMCP[m.ID], m.Server.Extra)
+	}
+	for _, l := range ingested.LSPServers {
+		scan("lsp", l.ID, srcLSP[l.ID], l.Spec.Extra)
+	}
+	if ingested.Project != nil {
+		var ap *source.Canonical
+		if against != nil {
+			ap = against.Project
+		}
+		scanExtraResidual(ingested.Project, ap, "project", secretVals, flag)
+	}
+}
+
+// extraStrings recursively collects every string leaf in a passthrough Extra
+// value (string, slice element, or nested-map value).
+func extraStrings(v any, out *[]string) {
+	switch t := v.(type) {
+	case string:
+		*out = append(*out, t)
+	case []any:
+		for _, e := range t {
+			extraStrings(e, out)
+		}
+	case map[string]any:
+		for _, e := range t {
+			extraStrings(e, out)
+		}
+	}
+}
+
+func joinExtraStrings(extra map[string]any) string {
+	var ss []string
+	extraStrings(extra, &ss)
+	return strings.Join(ss, "\x00")
 }
 
 // fieldRetainsRotatedSecret reports whether `ingested` matches the literal

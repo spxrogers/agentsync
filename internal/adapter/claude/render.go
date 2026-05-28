@@ -102,6 +102,7 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths, scope adapter.Scope) ([
 		if len(m.Server.Headers) > 0 {
 			spec["headers"] = m.Server.Headers
 		}
+		MergeExtra(spec, m.Server.Extra)
 		targeted[m.ID] = spec
 	}
 	if len(targeted) == 0 {

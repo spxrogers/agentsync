@@ -136,6 +136,61 @@ func TestProject_StrictPluginJSON_MultipleComponents(t *testing.T) {
 	}
 }
 
+// TestProject_SkillBundledFiles proves a plugin-bundled skill is projected as a
+// DIRECTORY: scripts/, references/, and nested files come along (with the
+// script's executable bit preserved), not just SKILL.md. This is the plugin/
+// apply-path guard against the "only SKILL.md survives" lossiness bug.
+func TestProject_SkillBundledFiles(t *testing.T) {
+	cache := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"x","skills":["pdf"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	skillDir := filepath.Join(cache, "pdf")
+	if err := os.MkdirAll(filepath.Join(skillDir, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(skillDir, "references"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: pdf\ndescription: pdfs\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "scripts", "extract.py"), []byte("print('hi')\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "references", "REF.md"), []byte("# ref\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, err := marketplace.Project(marketplace.PluginEntry{Name: "x"}, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.Skills) != 1 {
+		t.Fatalf("skills = %d, want 1", len(pr.Skills))
+	}
+	files := pr.Skills[0].Files
+	if len(files) != 2 {
+		t.Fatalf("bundled files = %d, want 2: %+v", len(files), files)
+	}
+	byPath := map[string]uint32{}
+	for _, f := range files {
+		byPath[f.Path] = f.Mode
+	}
+	if _, ok := byPath["references/REF.md"]; !ok {
+		t.Fatalf("references/REF.md not projected: %+v", files)
+	}
+	if mode, ok := byPath["scripts/extract.py"]; !ok {
+		t.Fatalf("scripts/extract.py not projected: %+v", files)
+	} else if mode&0o100 == 0 {
+		t.Fatalf("scripts/extract.py lost +x: %o", mode)
+	}
+}
+
 func TestProject_NonStrict_EntryComponents(t *testing.T) {
 	cache := t.TempDir()
 	f := false

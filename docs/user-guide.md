@@ -234,10 +234,16 @@ first-class. Layout:
 ~/.agentsync/
 ├── agentsync.toml            # agents, update defaults, secrets backend
 ├── mcp/<server>.toml         # one MCP server per file
+├── lsp/<server>.toml         # one LSP server per file
+├── agents/<name>.md          # one subagent per file
+├── commands/<name>.md        # one slash command per file
+├── hooks/<event>.toml        # one hook per file
 ├── marketplaces/<name>.toml  # one marketplace per file
 ├── plugins/<id>.toml         # one plugin enablement per file
 ├── memory/AGENTS.md          # canonical memory (+ fragments/*.md)
-├── skills/<name>/SKILL.md    # standalone skills
+├── skills/<name>/            # a skill is a DIRECTORY: SKILL.md + bundled
+│   ├── SKILL.md              #   scripts/, references/, assets/, nested files —
+│   └── scripts/ …            #   all carried verbatim, executable bit preserved
 └── secrets/secrets.age       # age-encrypted secrets
 ```
 
@@ -289,6 +295,24 @@ reusable fragments:
 @import ./fragments/style.md
 @import ./fragments/security-rules.md
 ```
+
+Fragments **round-trip both ways**. On `apply`, agentsync wraps each inlined
+fragment in HTML-comment boundary markers in the native file:
+
+```markdown
+<!-- agentsync:fragment style.md -->
+Be concise.
+<!-- /agentsync:fragment style.md -->
+```
+
+so `import`/`reconcile` can reverse the expansion — a native memory edit *inside*
+a fragment block is captured back into that **fragment file**, and the `@import`
+structure is preserved (the edit is never flattened into `AGENTS.md`). The
+markers read as metadata, not instructions. If the markers are missing (a
+fragment whose own text contains the marker token disables them) or were
+hand-mangled into an unbalanced/ambiguous state, agentsync refuses the write-back
+rather than guess; the drift still shows in `status`/`diff` and you fold it into
+`memory/` by hand.
 
 ### Marketplaces & plugins — the fan-out payoff
 

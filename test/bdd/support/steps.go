@@ -198,6 +198,15 @@ func (w *World) whenICreateProjectionTestMarketplace(dirRel, pluginID string) er
 	if err := os.WriteFile(filepath.Join(skillPath, "SKILL.md"), []byte(skillMD), 0o644); err != nil {
 		return err
 	}
+	// A skill is a DIRECTORY: a bundled script must project to the destination
+	// alongside SKILL.md, not be dropped. Written executable to also lock the
+	// +x-preservation path through projection → render → apply.
+	if err := os.MkdirAll(filepath.Join(skillPath, "scripts"), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(skillPath, "scripts", "run.sh"), []byte("#!/bin/sh\necho BODY_TOKEN_skill_script\n"), 0o755); err != nil {
+		return err
+	}
 
 	// agents/proj-agent.md
 	agentPath := filepath.Join(pluginRoot, "agents")

@@ -47,6 +47,55 @@ func TestIngest_RoundTripsMCPAndSkills(t *testing.T) {
 	}
 }
 
+// TestIngest_RoundTripsMCPExtra proves unmodeled native MCP fields survive the
+// apply→ingest round-trip via the passthrough Extra map, and that a modeled
+// field is NOT duplicated into Extra.
+func TestIngest_RoundTripsMCPExtra(t *testing.T) {
+	tmp := t.TempDir()
+	in := source.Canonical{
+		MCPServers: []source.MCPServer{{
+			ID: "github",
+			Server: source.MCPServerSpec{
+				Type:    "stdio",
+				Command: "npx",
+				Extra: map[string]any{
+					"timeout":  float64(30), // JSON numbers round-trip as float64
+					"disabled": true,
+					"cwd":      "/work",
+				},
+			},
+		}},
+	}
+	a := claude.New(claude.Options{TargetRoot: tmp})
+	ops, _, err := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	out, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if len(out.MCPServers) != 1 {
+		t.Fatalf("mcp = %d", len(out.MCPServers))
+	}
+	srv := out.MCPServers[0].Server
+	if srv.Command != "npx" {
+		t.Fatalf("modeled command lost: %q", srv.Command)
+	}
+	ex := srv.Extra
+	if ex["timeout"] != float64(30) || ex["disabled"] != true || ex["cwd"] != "/work" {
+		t.Fatalf("unmodeled fields not preserved via Extra: %+v", ex)
+	}
+	for _, k := range []string{"type", "command"} {
+		if _, dup := ex[k]; dup {
+			t.Fatalf("modeled key %q duplicated into Extra: %+v", k, ex)
+		}
+	}
+}
+
 func TestIngest_RoundTripsSubagentsAndCommands(t *testing.T) {
 	tmp := t.TempDir()
 	in := source.Canonical{

@@ -853,9 +853,32 @@ func importMemory(cmd *cobra.Command, home string, c source.Canonical, dryRun bo
 	if strings.TrimSpace(c.Memory.Body) == "" {
 		return nil, nil
 	}
-	if !dryRun {
-		if err := source.WriteMemory(home, c.Memory); err != nil {
-			return nil, fmt.Errorf("write memory: %w", err)
+	// The ingested memory is the rendered destination file. If apply wrote
+	// fragment markers, reverse them back into AGENTS.md + the fragment files so
+	// the round-trip is not lossy; otherwise fall back to the guard.
+	mem, hadMarkers, err := source.CollapseMemoryMarkers(c.Memory.Body)
+	switch {
+	case err != nil:
+		// Markers present but malformed/ambiguous — skip rather than guess.
+		fmt.Fprintf(cmd.ErrOrStderr(), "agentsync: skipping memory import — fragment markers could not be reversed (%v). Reconcile memory/ by hand, then apply.\n", err)
+		return nil, nil
+	case hadMarkers:
+		if !dryRun {
+			if werr := source.WriteMemory(home, mem); werr != nil {
+				return nil, fmt.Errorf("write memory: %w", werr)
+			}
+		}
+	case source.MemoryHasFragments(home):
+		// No markers (collision/legacy) but the source is fragment-composed:
+		// writing the expanded body would inline the @imports and orphan the
+		// fragment files — skip with a warning rather than flatten silently.
+		fmt.Fprintf(cmd.ErrOrStderr(), "agentsync: skipping memory import — canonical memory uses fragments/ and the imported memory has no reversible markers; writing it back would inline the fragments and orphan their files. Edit memory/ directly, then apply.\n")
+		return nil, nil
+	default:
+		if !dryRun {
+			if werr := source.WriteMemory(home, c.Memory); werr != nil {
+				return nil, fmt.Errorf("write memory: %w", werr)
+			}
 		}
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "%s memory/AGENTS.md\n", importVerb(dryRun))

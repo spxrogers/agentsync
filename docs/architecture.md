@@ -50,7 +50,7 @@ consumes them — the schema is the contract between the two.
 source.Canonical
 ├── Config          (agentsync.toml: agents, update defaults, secrets backend)
 ├── MCPServers      (mcp/*.toml)
-├── Skills          (skills/*/SKILL.md)
+├── Skills          (skills/<name>/ — SKILL.md + bundled scripts/references/assets)
 ├── Subagents, Commands, Hooks, LSPServers
 ├── Plugins, Marketplaces   (plugins/*.toml, marketplaces/*.toml)
 ├── Memory          (memory/AGENTS.md + fragments/)
@@ -240,6 +240,18 @@ key:
 `drift.SafeForAutoApply(class)` is what `reconcile --auto-safe` consults — it
 auto-resolves only the cases that can't lose work (`converged`, `pending`).
 
+**Orphan reclamation on `apply`.** `apply` itself reclaims two kinds of orphan so
+a removed component doesn't linger in the destination: emptied key-merge sections
+(an MCP/hook/LSP section whose source went empty — cleaned via a synthesized
+empty-merge op) and **skill files** (a whole skill, or one bundled
+`scripts/`/`references/`/`assets/` file, removed from `~/.agentsync/skills/`). A
+skill is a directory under the Agent Skills spec, so removal must reclaim the
+whole tree; the writer deletes each orphaned file, **backs up an `orphan-drifted`
+dest first** (a hand-edit is never destroyed un-preserved), and prunes the
+now-empty directories up to — never including — the agent's skills root. Other
+replace-strategy orphans (subagents, commands) are still surfaced for the
+interactive `reconcile` loop rather than auto-deleted.
+
 **Granularity.** Structured files (JSON/JSONC/TOML) are tracked per **JSON
 pointer**, so agentsync can own `$.mcpServers.github` inside `~/.claude.json`
 without touching keys it didn't write. Those untouched keys are **foreign keys**
@@ -285,7 +297,8 @@ this hard to do by accident with three tiers of defense:
 - **Value-invariant (load-bearing).** Secret substitution clones the model
   before resolving (no aliasing back to the caller's templated copy), and the
   field walker only visits secret-bearing fields — so text components (memory,
-  skills, commands) physically cannot carry a substituted secret.
+  skills incl. their bundled files, commands) physically cannot carry a
+  substituted secret.
 - **Lint fence (defense-in-depth).** A `forbidigo` rule forbids unwrapping a
   `Resolved` outside the two adapter `Render` egress sites.
 - **Capture fail-closed backstop (defense-in-depth).** The *dest→source*
@@ -302,6 +315,12 @@ directly) could leak. No innocent mistake produces it, and `capture.Capture`
 always re-references. The single field list lives in `walkSecretFields`
 (`internal/secrets/walk.go`); a reflection-based test fails if a new
 string-shaped secret-bearing field is added without classification.
+
+The MCP/LSP `Extra` passthrough maps (unmodeled native fields, carried verbatim)
+are a **deliberate exception**: they are not in `walkSecretFields`, so a
+`${secret:…}` in `Extra` is written literally rather than resolved. The leak
+backstop scans `Extra` separately (`scanExtraResidual`) and refuses a write that
+would persist a live secret value through it.
 
 > If you ever find yourself unwrapping a `secrets.Resolved` outside an adapter's
 > `Render`, stop — you almost certainly want `capture.Capture`. The full set of

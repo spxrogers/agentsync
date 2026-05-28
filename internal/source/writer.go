@@ -135,7 +135,10 @@ func WriteMarketplace(home, name string, m Marketplace) error {
 	return iox.AtomicWrite(filepath.Join(home, "marketplaces", name+".toml"), body, 0o644)
 }
 
-// WriteSkill writes skills/<name>/SKILL.md from sk into home. Overwrites atomically.
+// WriteSkill writes skills/<name>/SKILL.md plus every bundled file (scripts/,
+// references/, assets/, …) from sk into home. Each file is written atomically
+// with its preserved permission bits; bundled content is written verbatim
+// (never frontmatter-encoded), so binary assets round-trip byte-for-byte.
 func WriteSkill(home string, sk Skill) error {
 	if err := ValidateComponentID("skill", sk.Name); err != nil {
 		return err
@@ -145,7 +148,45 @@ func WriteSkill(home string, sk Skill) error {
 		return fmt.Errorf("mkdir skills/%s: %w", sk.Name, err)
 	}
 	content := renderFrontmatter(sk.Frontmatter) + sk.Body
-	return iox.AtomicWrite(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644)
+	if err := iox.AtomicWrite(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		return err
+	}
+	for _, f := range sk.Files {
+		if err := validateSkillFilePath(f.Path); err != nil {
+			return fmt.Errorf("skill %s: %w", sk.Name, err)
+		}
+		dest := filepath.Join(dir, filepath.FromSlash(f.Path))
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return fmt.Errorf("mkdir for skills/%s/%s: %w", sk.Name, f.Path, err)
+		}
+		mode := os.FileMode(f.Mode)
+		if mode == 0 {
+			mode = 0o644
+		}
+		if err := iox.AtomicWrite(dest, f.Content, mode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateSkillFilePath rejects a bundled-file path that would escape the skill
+// directory. Bundled paths derive from a directory walk (loader / ingest) or a
+// foreign native config, so a "../" segment must never be joined into an
+// arbitrary-file-write primitive — mirrors ValidateComponentID at the bundled
+// granularity.
+func validateSkillFilePath(rel string) error {
+	if rel == "" {
+		return fmt.Errorf("empty bundled-file path")
+	}
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(rel)))
+	if filepath.IsAbs(clean) || strings.HasPrefix(clean, "/") || clean == ".." || strings.HasPrefix(clean, "../") {
+		return fmt.Errorf("bundled-file path %q escapes the skill directory", rel)
+	}
+	if clean == "SKILL.md" {
+		return fmt.Errorf("bundled-file path %q collides with SKILL.md", rel)
+	}
+	return nil
 }
 
 // WriteSubagent writes agents/<name>.md from sa into home. Overwrites atomically.
@@ -231,13 +272,40 @@ func WriteLSP(home string, ls LSPServer) error {
 	return iox.AtomicWrite(filepath.Join(dir, ls.ID+".toml"), body, 0o644)
 }
 
-// WriteMemory writes memory/AGENTS.md from m into home. Overwrites atomically.
+// WriteMemory writes memory/AGENTS.md (m.Body) plus every fragment in
+// m.Fragments (memory/fragments/<name>, traversal-checked) into home. It is the
+// faithful inverse of loadMemory — a reverse-collapse (CollapseMemoryMarkers)
+// populates Fragments, so import/reconcile can restore a fragmented memory.
+//
+// It still REFUSES the one dangerous shape: a flattened body (no Fragments)
+// over a source that IS fragment-composed. That only happens when a native
+// memory edit could not be reversed (markers absent/disabled), where writing the
+// expanded body would inline every @import and orphan the fragment files; the
+// caller surfaces it rather than flatten silently.
 func WriteMemory(home string, m Memory) error {
+	if len(m.Fragments) == 0 && MemoryHasFragments(home) {
+		return fmt.Errorf("refusing to overwrite memory/AGENTS.md: canonical memory is composed of fragments/ and the value to write carries none (the expanded memory could not be reversed) — persisting it would inline every @import and orphan the fragment files; edit memory/ directly")
+	}
 	dir := filepath.Join(home, "memory")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir memory: %w", err)
 	}
-	return iox.AtomicWrite(filepath.Join(dir, "AGENTS.md"), []byte(m.Body), 0o644)
+	if err := iox.AtomicWrite(filepath.Join(dir, "AGENTS.md"), []byte(m.Body), 0o644); err != nil {
+		return err
+	}
+	for name, content := range m.Fragments {
+		if err := validateFragmentName(name); err != nil {
+			return fmt.Errorf("memory: %w", err)
+		}
+		dest := filepath.Join(dir, "fragments", filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return fmt.Errorf("mkdir for memory/fragments/%s: %w", name, err)
+		}
+		if err := iox.AtomicWrite(dest, []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // renderFrontmatter serialises a frontmatter map as a YAML block enclosed in

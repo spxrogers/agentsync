@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/adapter/codex"
 	"github.com/spxrogers/agentsync/internal/adapter/opencode"
 	"github.com/spxrogers/agentsync/internal/capture"
@@ -682,6 +683,12 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 			if err := json.Unmarshal(specBytes, &spec); err != nil {
 				return fmt.Errorf("unmarshal mcp spec %s: %w", serverID, err)
 			}
+			// json.Unmarshal into the struct drops unmodeled native keys; capture
+			// them into Extra so write-back is not field-lossy (matching ingest and
+			// the opencode/codex branches above).
+			if rawMap, ok := specRaw.(map[string]any); ok {
+				spec.Extra = claude.ExtraNativeKeys(rawMap, "type", "command", "args", "env", "url", "headers")
+			}
 		}
 		// The spec was reconstructed from the destination, where apply wrote any
 		// ${secret:…} as resolved cleartext and which never carries source-only
@@ -722,6 +729,23 @@ func writeBackFileItem(home string, it reconcileItem) error {
 	if strings.HasSuffix(srcID, "(multiple)") {
 		return fmt.Errorf("write-back for %s is unsafe: the dest is the concatenation of multiple source fragments. Persisting the whole dest into one of them would strand the others. Edit the source fragments under %s/ directly, then apply", it.op.Path, home)
 	}
+	// Memory is fragment-aware. If apply wrote fragment markers, reverse them
+	// into AGENTS.md + the fragment files instead of writing the expanded dest
+	// verbatim (which would put markers in the source and never restore the
+	// fragments). With no markers but a fragment-composed source, writing back
+	// would inline every @import and orphan the fragments — refuse.
+	if filepath.ToSlash(srcID) == "memory/AGENTS.md" {
+		mem, hadMarkers, cerr := source.CollapseMemoryMarkers(string(data))
+		switch {
+		case cerr != nil:
+			return fmt.Errorf("write-back for %s is unsafe: memory fragment markers could not be reversed (%w); reconcile memory/ by hand, then apply", it.op.Path, cerr)
+		case hadMarkers:
+			return source.WriteMemory(home, mem)
+		case source.MemoryHasFragments(home):
+			return fmt.Errorf("write-back for %s is unsafe: canonical memory is composed of fragments/ and the dest has no reversible markers. Persisting it would inline every @import and orphan the fragments. Edit the fragments under %s/memory/ directly, then apply", it.op.Path, home)
+		}
+		// No fragments: fall through to the plain verbatim write below.
+	}
 	dest := filepath.Join(home, srcID)
 	// Defense-in-depth: srcID derives from a component Name, and AtomicWrite
 	// does no containment check. A "../" segment in the name would let this
@@ -733,7 +757,15 @@ func writeBackFileItem(home string, it reconcileItem) error {
 	if !withinDir(home, dest) {
 		return fmt.Errorf("write-back for %s escapes the source tree %s (SourceID %q has a traversal segment); refusing", it.op.Path, home, srcID)
 	}
-	return iox.AtomicWrite(dest, data, 0o644)
+	// Preserve the rendering op's mode so an executable bundled skill script
+	// (scripts/*.sh, scripts/*.py) keeps its +x bit through write-back. Text
+	// components (subagents/commands/memory) render with Mode 0o644, so this is
+	// a no-op for them; only bundled skill files carry a non-default mode.
+	mode := os.FileMode(it.op.Mode)
+	if mode == 0 {
+		mode = 0o644
+	}
+	return iox.AtomicWrite(dest, data, mode)
 }
 
 // withinDir reports whether path is dir itself or sits lexically inside it,

@@ -39,6 +39,7 @@ func (a *Adapter) renderLSP(c source.Canonical, p Paths) ([]adapter.FileOp, erro
 		if len(lsp.Spec.Headers) > 0 {
 			spec["headers"] = lsp.Spec.Headers
 		}
+		MergeExtra(spec, lsp.Spec.Extra)
 		lspMap[lsp.ID] = spec
 		ownedKeys = append(ownedKeys, "/lspServers/"+lsp.ID)
 	}

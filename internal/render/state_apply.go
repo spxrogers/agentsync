@@ -138,6 +138,56 @@ func OrphanFiles(s *state.Targets, userHome, agent string, scope adapter.Scope, 
 	return out
 }
 
+// skillOrphanDeletes returns delete FileOps for skill files this agent owns in
+// state — entries whose SourceID is under "skills/" — that the current plan no
+// longer renders. It is how `apply` converges a destination when a whole skill,
+// or a single bundled file within one, is removed from the canonical source:
+// the leftover dest file is removed instead of lingering forever.
+//
+// Scoped deliberately to skills (the Agent Skills spec treats a skill as a whole
+// directory, so removal must reclaim the whole tree). Other replace-strategy
+// components (subagents/commands) keep their established reconcile-driven
+// cleanup. Each op carries the state SourceID + Mode so the writer can back up a
+// drifted dest before deleting and bound empty-directory pruning to the skills
+// root. Sorted deepest-path-first so a directory empties out before it is pruned.
+func skillOrphanDeletes(s *state.Targets, userHome, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) []adapter.FileOp {
+	if s == nil {
+		return nil
+	}
+	prefix := fmt.Sprintf("%s:%s:%s:", agent, scope.String(), paths.HomeRelative(userHome, project))
+	rendered := map[string]struct{}{}
+	for _, op := range ops {
+		if op.Action != "" && op.Action != "write" {
+			continue
+		}
+		if IsKeyMerge(op.MergeStrategy) {
+			continue
+		}
+		rendered[paths.HomeRelative(userHome, op.Path)] = struct{}{}
+	}
+	var out []adapter.FileOp
+	for key, entry := range s.Files {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if !strings.HasPrefix(entry.SourceID, "skills/") {
+			continue
+		}
+		path := strings.TrimPrefix(key, prefix)
+		if _, ok := rendered[path]; ok {
+			continue
+		}
+		out = append(out, adapter.FileOp{
+			Action:   "delete",
+			Path:     paths.FromHomeRelative(userHome, path),
+			SourceID: entry.SourceID,
+			Mode:     entry.Mode,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path > out[j].Path })
+	return out
+}
+
 // RecordOpsState updates s with hashes for files and keys produced by ops.
 // Caller is expected to call this AFTER a successful Apply.
 //

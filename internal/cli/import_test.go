@@ -599,6 +599,65 @@ func TestImport_LSPFromClaude(t *testing.T) {
 	}
 }
 
+// TestImport_MemoryReversesFragmentEdit is the bidirectional payoff: apply
+// writes fragment markers into the native memory file; a hand-edit inside a
+// fragment block is reversed by `import` back into the fragment FILE (not
+// flattened into AGENTS.md), and the @import structure survives.
+func TestImport_MemoryReversesFragmentEdit(t *testing.T) {
+	tmp, env := importTestEnv(t)
+
+	memDir := filepath.Join(tmp, ".agentsync", "memory")
+	fragDir := filepath.Join(memDir, "fragments")
+	if err := os.MkdirAll(fragDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	srcAgents := "# Memory\n@import ./fragments/style.md\n"
+	if err := os.WriteFile(filepath.Join(memDir, "AGENTS.md"), []byte(srcAgents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fragDir, "style.md"), []byte("Be concise.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// apply renders the marked memory to the native file.
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	dest := filepath.Join(tmp, ".claude", "CLAUDE.md")
+	rendered, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rendered), "<!-- agentsync:fragment style.md -->") {
+		t.Fatalf("apply did not emit fragment markers:\n%s", rendered)
+	}
+
+	// Hand-edit the content INSIDE the fragment block, then import it back.
+	edited := strings.Replace(string(rendered), "Be concise.", "Be very concise.", 1)
+	if edited == string(rendered) {
+		t.Fatal("test setup: fragment content not found in rendered memory")
+	}
+	if err := os.WriteFile(dest, []byte(edited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude:memory"); err != nil {
+		t.Fatalf("import: %v\n%s", err, out)
+	}
+
+	// The edit landed in the FRAGMENT file; AGENTS.md still @imports it.
+	frag, _ := os.ReadFile(filepath.Join(fragDir, "style.md"))
+	if string(frag) != "Be very concise.\n" {
+		t.Fatalf("fragment not updated by reverse-collapse: %q", frag)
+	}
+	agents, _ := os.ReadFile(filepath.Join(memDir, "AGENTS.md"))
+	if !strings.Contains(string(agents), "@import ./fragments/style.md") {
+		t.Fatalf("AGENTS.md lost its @import (flattened): %q", agents)
+	}
+	if strings.Contains(string(agents), "Be very concise") {
+		t.Fatalf("edit was flattened into AGENTS.md instead of the fragment: %q", agents)
+	}
+}
+
 // TestImport_MemoryFromClaude round-trips CLAUDE.md into memory/AGENTS.md.
 func TestImport_MemoryFromClaude(t *testing.T) {
 	tmp, env := importTestEnv(t)
@@ -617,6 +676,50 @@ func TestImport_MemoryFromClaude(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "Be concise") {
 		t.Fatalf("memory body not captured:\n%s", data)
+	}
+}
+
+// TestImport_MemorySkippedWhenSourceUsesFragments guards the silent flatten-and-
+// orphan hazard: if the canonical memory is fragment-composed, importing the
+// (fully expanded) destination CLAUDE.md must NOT overwrite memory/AGENTS.md —
+// that would inline the @imports and orphan the fragment files. Import skips it
+// with a warning and leaves the source untouched.
+func TestImport_MemorySkippedWhenSourceUsesFragments(t *testing.T) {
+	tmp, env := importTestEnv(t)
+
+	// Canonical memory composed of a fragment.
+	memDir := filepath.Join(tmp, ".agentsync", "memory")
+	fragDir := filepath.Join(memDir, "fragments")
+	if err := os.MkdirAll(fragDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	srcAgents := "# Memory\n@import ./fragments/style.md\n"
+	if err := os.WriteFile(filepath.Join(memDir, "AGENTS.md"), []byte(srcAgents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fragDir, "style.md"), []byte("Be concise.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A native (expanded) CLAUDE.md to import.
+	if err := os.MkdirAll(filepath.Join(tmp, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".claude", "CLAUDE.md"), []byte("# Memory\nBe concise.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "import", "claude:memory")
+	if err != nil {
+		t.Fatalf("import should not error, just skip memory: %v\n%s", err, out)
+	}
+	// Source AGENTS.md must be untouched (still references the fragment).
+	got, _ := os.ReadFile(filepath.Join(memDir, "AGENTS.md"))
+	if string(got) != srcAgents {
+		t.Fatalf("fragment-composed memory was flattened by import: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(fragDir, "style.md")); err != nil {
+		t.Fatalf("fragment file was orphaned/removed: %v", err)
 	}
 }
 

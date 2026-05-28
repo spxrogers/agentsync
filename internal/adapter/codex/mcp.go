@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -57,6 +58,7 @@ func codexMCPSpec(s source.MCPServerSpec) map[string]any {
 		if len(s.Headers) > 0 {
 			spec["http_headers"] = s.Headers
 		}
+		claude.MergeExtra(spec, s.Extra)
 		return spec
 	}
 	if s.Command != "" {
@@ -68,6 +70,7 @@ func codexMCPSpec(s source.MCPServerSpec) map[string]any {
 	if len(s.Env) > 0 {
 		spec["env"] = s.Env
 	}
+	claude.MergeExtra(spec, s.Extra)
 	return spec
 }
 
@@ -103,6 +106,7 @@ func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
 		Env:     asStrMap(raw["env"]),
 		URL:     url,
 		Headers: asStrMap(raw["http_headers"]),
+		Extra:   claude.ExtraNativeKeys(raw, "command", "args", "env", "url", "http_headers"),
 	}
 }
 

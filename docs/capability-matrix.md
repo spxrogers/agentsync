@@ -35,7 +35,7 @@ Component support across agents.
 |---|:--:|:--:|:--:|:--:|
 | **MCP server** | ✓ `~/.claude.json` | ✓ `opencode.json` | ✓ `config.toml` | ✓ `.cursor/mcp.json` |
 | **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ✓ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` |
-| **Skill** | ✓ `~/.claude/skills/X/SKILL.md` | ✓ shared `.claude/skills/` | ✓ `~/.agents/skills/` | ✓ `.cursor/skills/` |
+| **Skill** | ✓ `~/.claude/skills/X/` (dir) | ✓ shared `.claude/skills/` | ✓ `~/.agents/skills/` | ✓ `.cursor/skills/` |
 | **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/` |
 | **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ◐ `~/.codex/prompts/` | ◐ `.cursor/commands/` |
 | **Hook** | ✓ JSON in settings | ✗ skip (JS/TS plugins) | ◐ `config.toml` `[hooks.*]` | ◐ `.cursor/hooks.json` |
@@ -68,6 +68,12 @@ plugin: atlassian@anthropic
 
 Every projected (◐) cell above is a deliberate, reported translation. Here's what
 doesn't carry over.
+
+Note that **MCP/LSP capture is not field-lossy**: native server fields agentsync
+doesn't model (e.g. `timeout`, `disabled`, `cwd`) are preserved verbatim through a
+passthrough `[server.extra]` table on import/reconcile and re-rendered on apply,
+rather than dropped. (`Extra` is verbatim only — `${secret:…}` there is written
+literally, never resolved.)
 
 **OpenCode**
 
@@ -143,10 +149,16 @@ A few ✓ cells still change shape on the way out — same content, no loss:
 - **Cursor MCP** — `.cursor/mcp.json` uses the same `mcpServers` shape as Claude,
   down to `${env:…}` references.
 - **Codex memory** — the same markdown lands at `~/.codex/AGENTS.md`.
-- **Skills (Codex & Cursor)** — the same `SKILL.md` (name + description +
-  `scripts/`/`references/`/`assets/`). Codex installs them under `~/.agents/skills/`
-  (enabled by default — no feature flag), Cursor under `.cursor/skills/`, and both
-  also read the shared `.claude/skills/`.
+- **Skills (Codex & Cursor)** — the same skill *directory* per the
+  [Agent Skills](https://agentskills.io) spec: `SKILL.md` (name + description)
+  **plus any bundled `scripts/`/`references/`/`assets/` and nested files**, all
+  carried verbatim (binary included, executable bit preserved) on apply, import,
+  and reconcile — agentsync is not lossy for anything but the directory itself.
+  Removing a skill (or one bundled file) from the source reclaims it from each
+  destination on the next `apply` (drifted files backed up first; empty dirs
+  pruned). Codex installs them under `~/.agents/skills/` (enabled by default — no
+  feature flag), Cursor under `.cursor/skills/`, and both also read the shared
+  `.claude/skills/`.
 
 ## Escape hatches
 

@@ -48,6 +48,8 @@ Feature: Marketplaces and plugins
     Then the command succeeds
     And the file ".claude/skills/proj-skill/SKILL.md" exists
     And the file ".claude/skills/proj-skill/SKILL.md" contains "BODY_TOKEN_skill_proj-skill"
+    And the file ".claude/skills/proj-skill/scripts/run.sh" exists
+    And the file ".claude/skills/proj-skill/scripts/run.sh" contains "BODY_TOKEN_skill_script"
     And the file ".claude/agents/proj-agent.md" exists
     And the file ".claude/agents/proj-agent.md" contains "BODY_TOKEN_agent_proj-agent"
     And the file ".claude/commands/proj-cmd.md" exists
