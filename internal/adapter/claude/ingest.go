@@ -51,6 +51,8 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		}
 	}
 
+	warn := a.stderr()
+
 	// Skills from ~/.claude/skills/<name>/ (SKILL.md + bundled files)
 	if entries, err := os.ReadDir(p.SkillsDir); err == nil {
 		for _, e := range entries {
@@ -62,12 +64,19 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			if err != nil {
 				continue
 			}
-			fm, body, err := ParseFrontmatter(data)
+			fm, body, lenient, err := ParseFrontmatterWithReport(data)
 			if err != nil {
+				// A parse error used to silently drop the skill. Warn so the
+				// user knows their skill is being skipped and can fix the file.
+				fmt.Fprintf(warn, "warning: skipping skill %q: %v\n", e.Name(), err)
 				continue
+			}
+			if lenient {
+				fmt.Fprintf(warn, "warning: skill %q frontmatter is not strict YAML; parsed leniently (consider quoting values containing ': ')\n", e.Name())
 			}
 			files, err := source.ReadSkillFiles(afero.NewOsFs(), skillDir)
 			if err != nil {
+				fmt.Fprintf(warn, "warning: skipping skill %q: read bundled files: %v\n", e.Name(), err)
 				continue
 			}
 			c.Skills = append(c.Skills, source.Skill{Name: e.Name(), Frontmatter: fm, Body: body, Files: files})
@@ -84,11 +93,15 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			if err != nil {
 				continue
 			}
-			fm, body, err := ParseFrontmatter(data)
+			name := e.Name()[:len(e.Name())-len(".md")]
+			fm, body, lenient, err := ParseFrontmatterWithReport(data)
 			if err != nil {
+				fmt.Fprintf(warn, "warning: skipping subagent %q: %v\n", name, err)
 				continue
 			}
-			name := e.Name()[:len(e.Name())-len(".md")]
+			if lenient {
+				fmt.Fprintf(warn, "warning: subagent %q frontmatter is not strict YAML; parsed leniently (consider quoting values containing ': ')\n", name)
+			}
 			c.Subagents = append(c.Subagents, source.Subagent{Name: name, Frontmatter: fm, Body: body})
 		}
 	}
@@ -103,11 +116,15 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			if err != nil {
 				continue
 			}
-			fm, body, err := ParseFrontmatter(data)
+			name := e.Name()[:len(e.Name())-len(".md")]
+			fm, body, lenient, err := ParseFrontmatterWithReport(data)
 			if err != nil {
+				fmt.Fprintf(warn, "warning: skipping command %q: %v\n", name, err)
 				continue
 			}
-			name := e.Name()[:len(e.Name())-len(".md")]
+			if lenient {
+				fmt.Fprintf(warn, "warning: command %q frontmatter is not strict YAML; parsed leniently (consider quoting values containing ': ')\n", name)
+			}
 			c.Commands = append(c.Commands, source.Command{Name: name, Frontmatter: fm, Body: body})
 		}
 	}
