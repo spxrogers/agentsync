@@ -336,10 +336,11 @@ clones) and npm tarballs (registry HTTP, no `npm` binary required), writing them
 to `.state/cache/`. Everything else — including `apply` — reads only from that
 cache, which keeps `apply` fast, offline, and reproducible in CI.
 
-Untrusted-input hardening at this boundary: fetchers reject symlinks in
-tarballs, cap decompressed size (`AGENTSYNC_MAX_TARBALL_MB`), verify manifest
-SHAs, bound component paths to the plugin cache, and reject `http://`/`git://`
-sources unless `AGENTSYNC_ALLOW_INSECURE_URLS=1`.
+Untrusted-input hardening at this boundary: fetchers reject symlinks in tarballs
+(and confine git-cloned symlinks to the fetched tree, refusing any that escape),
+cap decompressed size (`AGENTSYNC_MAX_TARBALL_MB`), verify manifest SHAs, bound
+component paths to the plugin cache, and reject `http://`/`git://` sources unless
+`AGENTSYNC_ALLOW_INSECURE_URLS=1`.
 
 ---
 

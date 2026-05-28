@@ -198,6 +198,27 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   A structurally-broken file (e.g. unterminated fence) is still skipped, but now
   with an explicit `warning: skipping skill "<name>": <reason>` instead of a
   silent drop.
+- **Plugins pinned to an older commit sha now fetch** — the git fetcher
+  shallow-cloned (`depth 1`) the branch tip, so a marketplace entry pinning a
+  `sha` that lagged the head failed to check it out with `object not found`
+  (seen on `chrome-devtools-mcp`). A pinned sha now triggers a full clone so the
+  commit object is present.
+- **Plugins that group skills a level deeper now import** — plugin skill
+  discovery only scanned one level (`skills/<name>/SKILL.md`), so a plugin that
+  nests skills under a grouping directory (e.g. `notion`'s
+  `skills/notion/<category>/SKILL.md`) hit a grouping dir with no `SKILL.md` and
+  hard-failed the whole projection with `is a directory` — which bricked
+  `apply`/`status`/`diff`/`import` for that plugin, not just a warning. Discovery
+  now recurses to the leaf skills, and a `SKILL.md`-less directory is skipped
+  rather than read as a file.
+- **In-tree plugin symlinks no longer reject the whole plugin** — the git
+  fetcher refused *any* committed symlink, so a plugin shipping a harmless
+  in-tree link (e.g. `superpowers`' `AGENTS.md -> CLAUDE.md`) was skipped
+  entirely. A symlink whose resolved target stays inside the plugin tree is now
+  allowed; only one escaping the tree is refused (fail-closed on an unresolvable
+  link). The plugin content pin hashes such a symlink by its target path, so a
+  swapped target is still detected. The npm/relative fetchers still reject all
+  symlinks (their copy mechanism cannot preserve a link).
 - **`agent disable --purge` validates the name; `doctor` names a half-init** —
   `disable <bogus> --purge` reported a misleading "purged 0 files" success for
   any string; it now rejects an unknown agent like the other subcommands (a

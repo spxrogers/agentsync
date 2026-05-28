@@ -322,24 +322,62 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 	return nil
 }
 
-// discoverSkillDirs scans skillsDir for subdirectories and returns a list of
-// absolute paths to each subdirectory (each of which is expected to contain
-// a SKILL.md file). The caller resolves the actual SKILL.md via loadSkillEntry.
+// discoverSkillDirs walks skillsDir and returns the path of every directory that
+// directly contains a SKILL.md. It recurses through intermediate *grouping*
+// directories so a plugin that nests skills (e.g. notion's
+// skills/notion/<category>/SKILL.md) is discovered — the previous one-level scan
+// returned the grouping dir itself, which has no SKILL.md, and loadSkillEntry
+// then tried to read a directory as a file and hard-failed the whole projection.
+// A directory that holds a SKILL.md is treated as a leaf skill and NOT descended
+// into, so the skill's own bundled subdirs (scripts/, references/, assets/) are
+// left for collectSkillFiles rather than mistaken for nested skills. The caller
+// resolves the actual SKILL.md via loadSkillEntry.
 func discoverSkillDirs(skillsDir string, listDir func(string) ([]os.DirEntry, error)) ([]string, error) {
-	entries, err := listDir(skillsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+	var paths []string
+	var walk func(dir string) error
+	walk = func(dir string) error {
+		entries, err := listDir(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
 		}
+		hasSkillMD := false
+		var subdirs []string
+		for _, e := range entries {
+			if e.IsDir() {
+				subdirs = append(subdirs, filepath.Join(dir, e.Name()))
+				continue
+			}
+			if e.Name() == "SKILL.md" && e.Type().IsRegular() {
+				hasSkillMD = true
+			}
+		}
+		if hasSkillMD {
+			paths = append(paths, dir)
+			return nil // leaf skill; its subdirs are bundled files, not skills
+		}
+		for _, sd := range subdirs {
+			if err := walk(sd); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := walk(skillsDir); err != nil {
 		return nil, err
 	}
-	var paths []string
-	for _, e := range entries {
-		if e.IsDir() {
-			paths = append(paths, filepath.Join(skillsDir, e.Name()))
-		}
-	}
 	return paths, nil
+}
+
+// isDirVia reports whether path is a directory, probed through the injected
+// listDir: listing a directory succeeds, listing a regular file errors
+// (ENOTDIR), and a missing path errors (IsNotExist) — both treated as not a
+// directory.
+func isDirVia(path string, listDir func(string) ([]os.DirEntry, error)) bool {
+	_, err := listDir(path)
+	return err == nil
 }
 
 // applyEntryOverrides merges component fields from a PluginEntry into an
@@ -419,20 +457,28 @@ func loadSkillEntry(path string, readFile func(string) ([]byte, error), listDir 
 	skillPath := filepath.Join(path, "SKILL.md")
 	data, err := readFile(skillPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			// Try treating path itself as the file (e.g. skills/foo/SKILL.md directly).
-			data, err = readFile(path)
-			if err != nil {
-				if os.IsNotExist(err) {
-					slog.Warn("plugin skill file not found, skipping", "path", path)
-					return nil, nil
-				}
-				return nil, fmt.Errorf("read %s: %w", path, err)
-			}
-			skillPath = path
-		} else {
+		if !os.IsNotExist(err) {
 			return nil, fmt.Errorf("read %s: %w", skillPath, err)
 		}
+		// <path>/SKILL.md is absent. If `path` is itself a directory (a grouping
+		// dir, or a skill dir with no SKILL.md), there is nothing to load — skip
+		// with a warning rather than hard-fail trying to read a directory as a
+		// file (which surfaces as "is a directory", not os.IsNotExist). Otherwise
+		// treat `path` as a direct SKILL.md file (skills/foo/SKILL.md listed
+		// verbatim in the manifest).
+		if listDir != nil && isDirVia(path, listDir) {
+			slog.Warn("plugin skill path is a directory with no SKILL.md, skipping", "path", path)
+			return nil, nil
+		}
+		data, err = readFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				slog.Warn("plugin skill file not found, skipping", "path", path)
+				return nil, nil
+			}
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+		skillPath = path
 	}
 
 	fm, body, err := source.ParseFrontmatter(data)

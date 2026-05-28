@@ -191,6 +191,81 @@ func TestProject_SkillBundledFiles(t *testing.T) {
 	}
 }
 
+// TestProject_NestedSkillDiscovery is the regression for the notion plugin: its
+// skills are grouped a level deeper (skills/notion/<category>/SKILL.md). The old
+// one-level convention scan returned the grouping dir (skills/notion), which has
+// no SKILL.md, and loadSkillEntry then read a directory as a file and hard-failed
+// the whole projection ("is a directory") — bricking apply/status/diff for any
+// installed plugin shaped this way. Discovery must recurse to the leaf skills.
+func TestProject_NestedSkillDiscovery(t *testing.T) {
+	cache := t.TempDir()
+	// No plugin.json skills field → convention discovery runs.
+	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"notion"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	leaves := []string{"knowledge-capture", "meeting-intelligence"}
+	for _, leaf := range leaves {
+		d := filepath.Join(cache, "skills", "notion", leaf)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nname: " + leaf + "\ndescription: d\n---\nBody.\n"
+		if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pr, err := marketplace.Project(marketplace.PluginEntry{Name: "notion"}, cache)
+	if err != nil {
+		t.Fatalf("Project on nested skills should not fail: %v", err)
+	}
+	if len(pr.Skills) != 2 {
+		t.Fatalf("skills = %d, want 2: %+v", len(pr.Skills), pr.Skills)
+	}
+	got := map[string]bool{}
+	for _, s := range pr.Skills {
+		got[s.Name] = true
+	}
+	for _, leaf := range leaves {
+		if !got[leaf] {
+			t.Errorf("nested skill %q not discovered: %v", leaf, got)
+		}
+	}
+}
+
+// TestProject_GroupingDirNoSkillMD verifies a skills/ subtree that contains no
+// SKILL.md at all is simply skipped (no skills, no error) rather than crashing.
+func TestProject_GroupingDirNoSkillMD(t *testing.T) {
+	cache := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"empty"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A grouping dir with only a stray non-SKILL file deeper down.
+	d := filepath.Join(cache, "skills", "group", "sub")
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "README.md"), []byte("# nope\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, err := marketplace.Project(marketplace.PluginEntry{Name: "empty"}, cache)
+	if err != nil {
+		t.Fatalf("Project should skip a SKILL.md-less subtree, not fail: %v", err)
+	}
+	if len(pr.Skills) != 0 {
+		t.Fatalf("skills = %d, want 0: %+v", len(pr.Skills), pr.Skills)
+	}
+}
+
 func TestProject_NonStrict_EntryComponents(t *testing.T) {
 	cache := t.TempDir()
 	f := false

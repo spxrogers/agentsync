@@ -21,12 +21,16 @@ can resolve secrets into native config files. Areas of particular interest:
   values to durable storage and redacts resolved `${secret:...}` values in
   `agentsync diff`.
 - **Untrusted marketplaces / plugins**: a marketplace or plugin you add is
-  treated as untrusted input. Fetchers reject symlinks (npm/relative/git),
-  cap decompressed tarball size, and bound manifest-listed component paths and
-  names to the plugin cache. Each installed plugin is pinned with a content
-  hash over its *entire* cache tree (every projected component body, not just
-  `plugin.json`), so a tampered or re-uploaded body is detected at apply rather
-  than silently consumed.
+  treated as untrusted input. The npm/relative fetchers reject every symlink;
+  the git fetcher allows a symlink only when its resolved target stays inside the
+  fetched tree (an escaping link — `skills/x -> /etc` — is refused, as is an
+  unresolvable one), so a plugin's legitimate in-tree link is kept without
+  letting a read escape the cache. Fetchers also cap decompressed tarball size
+  and bound manifest-listed component paths and names to the plugin cache. Each
+  installed plugin is pinned with a content hash over its *entire* cache tree
+  (every projected component body, not just `plugin.json`; a cached symlink is
+  hashed by its target path), so a tampered or re-uploaded body — or a swapped
+  link target — is detected at apply rather than silently consumed.
 - **Destination writes**: writes are atomic and refuse to clobber symlinked
   destinations by default; pre-existing foreign files are backed up before
   overwrite.
