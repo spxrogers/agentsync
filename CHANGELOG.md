@@ -34,12 +34,15 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   secret-resolved (`${secret:…}` there is written literally) and never visited by
   the secret walker; the capture leak backstop scans it and refuses any write that
   would persist a live secret value through it.
-- **Memory fragment write-back guard** — when canonical memory is composed of
-  `memory/fragments/`, the native memory file is the fully expanded text, which
-  can't be de-resolved back into fragments. `import` now skips memory (with a
-  warning) and `reconcile`/`source.WriteMemory` refuse to write it back when
-  fragments exist, rather than silently flattening `AGENTS.md` and orphaning the
-  fragment files. Drift still surfaces in `status`/`diff`.
+- **Bidirectional memory fragments** — `apply` wraps each inlined fragment in
+  HTML-comment boundary markers (`<!-- agentsync:fragment <name> -->` …) in the
+  native memory file, so `import`/`reconcile` can **reverse** the expansion: a
+  native edit inside a fragment block is captured back into that fragment file
+  with the `@import` structure preserved, instead of flattening `AGENTS.md` and
+  orphaning the fragments. When markers are absent (a fragment containing the
+  marker token disables them) or hand-mangled into an unbalanced/ambiguous state,
+  the write-back is refused rather than guessed; reverse paths are
+  traversal-checked. Drift still surfaces in `status`/`diff`.
 - **Claude Code adapter** — full support for all seven components (MCP, memory,
   skill, subagent, command, hook, LSP) with per-key merge into `~/.claude.json`
   and `settings.json` that preserves foreign keys.

@@ -296,13 +296,23 @@ reusable fragments:
 @import ./fragments/security-rules.md
 ```
 
-When you compose memory from fragments, edit the fragments directly — agentsync
-**will not write memory back the other way**. The agent's native file is the
-*expanded* memory (every `@import` already inlined), and that expansion can't be
-un-done into the original fragments, so `import` skips memory (with a warning) and
-`reconcile` refuses to write a memory edit back when fragments exist — rather than
-silently flatten `AGENTS.md` and orphan the fragment files. A drifted native
-memory still shows in `status`/`diff`; fold the change into `memory/` by hand.
+Fragments **round-trip both ways**. On `apply`, agentsync wraps each inlined
+fragment in HTML-comment boundary markers in the native file:
+
+```markdown
+<!-- agentsync:fragment style.md -->
+Be concise.
+<!-- /agentsync:fragment style.md -->
+```
+
+so `import`/`reconcile` can reverse the expansion — a native memory edit *inside*
+a fragment block is captured back into that **fragment file**, and the `@import`
+structure is preserved (the edit is never flattened into `AGENTS.md`). The
+markers read as metadata, not instructions. If the markers are missing (a
+fragment whose own text contains the marker token disables them) or were
+hand-mangled into an unbalanced/ambiguous state, agentsync refuses the write-back
+rather than guess; the drift still shows in `status`/`diff` and you fold it into
+`memory/` by hand.
 
 ### Marketplaces & plugins — the fan-out payoff
 

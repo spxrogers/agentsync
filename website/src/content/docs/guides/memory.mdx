@@ -39,13 +39,17 @@ updates on the next `apply`.
 	everywhere.
 </Aside>
 
-<Aside type="caution" title="Memory write-back is one-way when you use fragments">
-	The agent's native memory file is the *expanded* memory (every `@import` already
-	inlined), and that expansion can't be reversed into the original fragments. So
-	when `memory/fragments/` is in use, `import` skips memory (with a warning) and
-	`reconcile` refuses to write a native memory edit back — otherwise it would
-	flatten `AGENTS.md` and orphan your fragment files. A drifted native memory
-	still surfaces in `status`/`diff`; fold the change into `memory/` by hand.
+<Aside type="tip" title="Fragments round-trip both ways">
+	On `apply`, agentsync wraps each inlined fragment in HTML-comment boundary
+	markers in the native file (`<!-- agentsync:fragment style.md -->` …
+	`<!-- /agentsync:fragment style.md -->`). They read as metadata, not
+	instructions, and let `import`/`reconcile` **reverse** the expansion: a native
+	memory edit made *inside* a fragment block is captured back into that fragment
+	file, with the `@import` structure preserved — never flattened into `AGENTS.md`.
+	If the markers are absent (a fragment whose text contains the marker token
+	disables them) or were hand-mangled into an unbalanced/ambiguous state,
+	agentsync refuses the write-back rather than guess; the drift still shows in
+	`status`/`diff` and you fold it in by hand.
 </Aside>
 
 ## Per-agent rendering

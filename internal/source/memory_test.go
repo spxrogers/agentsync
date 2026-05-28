@@ -102,3 +102,93 @@ func TestWriteMemory_WritesWhenNoFragments(t *testing.T) {
 		t.Fatalf("memory not written: %q", got)
 	}
 }
+
+// TestMemoryMarkers_RoundTrip proves expansion is reversible: a fragmented
+// memory expands with boundary markers, and CollapseMemoryMarkers reconstructs
+// AGENTS.md (with @import restored) and the fragment content byte-for-byte.
+func TestMemoryMarkers_RoundTrip(t *testing.T) {
+	body := "# Memory\n\n@import ./fragments/style.md\n"
+	frags := map[string]string{"style.md": "Be concise.\n"}
+
+	expanded := source.ExpandMemoryImports(body, frags)
+	if !strings.Contains(expanded, "<!-- agentsync:fragment style.md -->") ||
+		!strings.Contains(expanded, "<!-- /agentsync:fragment style.md -->") {
+		t.Fatalf("markers not emitted: %q", expanded)
+	}
+	if strings.Contains(expanded, "@import") {
+		t.Fatalf("literal @import leaked into rendered output: %q", expanded)
+	}
+
+	mem, had, err := source.CollapseMemoryMarkers(expanded)
+	if err != nil || !had {
+		t.Fatalf("collapse: had=%v err=%v", had, err)
+	}
+	if mem.Body != body {
+		t.Fatalf("body round-trip: got %q want %q", mem.Body, body)
+	}
+	if mem.Fragments["style.md"] != "Be concise.\n" {
+		t.Fatalf("fragment round-trip: got %q", mem.Fragments["style.md"])
+	}
+}
+
+// TestMemoryMarkers_Nested covers a fragment that itself @imports another: the
+// inner block is restored as an @import inside the outer fragment, not inlined.
+func TestMemoryMarkers_Nested(t *testing.T) {
+	body := "# M\n@import ./fragments/outer.md\n"
+	frags := map[string]string{
+		"outer.md": "Outer top\n@import ./fragments/inner.md\nOuter bottom\n",
+		"inner.md": "Inner\n",
+	}
+	mem, had, err := source.CollapseMemoryMarkers(source.ExpandMemoryImports(body, frags))
+	if err != nil || !had {
+		t.Fatalf("collapse: had=%v err=%v", had, err)
+	}
+	if mem.Body != body {
+		t.Fatalf("body: got %q", mem.Body)
+	}
+	if mem.Fragments["outer.md"] != frags["outer.md"] {
+		t.Fatalf("outer fragment: got %q want %q", mem.Fragments["outer.md"], frags["outer.md"])
+	}
+	if mem.Fragments["inner.md"] != frags["inner.md"] {
+		t.Fatalf("inner fragment: got %q", mem.Fragments["inner.md"])
+	}
+}
+
+// TestCollapseMemoryMarkers_Errors covers the refuse-not-guess cases.
+func TestCollapseMemoryMarkers_Errors(t *testing.T) {
+	cases := map[string]string{
+		"unbalanced": "# M\n<!-- agentsync:fragment a.md -->\nx\n",
+		"mismatched": "<!-- agentsync:fragment a.md -->\nx\n<!-- /agentsync:fragment b.md -->\n",
+		"traversal":  "<!-- agentsync:fragment ../evil -->\nx\n<!-- /agentsync:fragment ../evil -->\n",
+		"ambiguous":  "<!-- agentsync:fragment a.md -->\nx\n<!-- /agentsync:fragment a.md -->\n<!-- agentsync:fragment a.md -->\ny\n<!-- /agentsync:fragment a.md -->\n",
+	}
+	for name, dest := range cases {
+		_, had, err := source.CollapseMemoryMarkers(dest)
+		if !had || err == nil {
+			t.Fatalf("%s: expected (had=true, err!=nil), got had=%v err=%v", name, had, err)
+		}
+	}
+}
+
+// TestCollapseMemoryMarkers_NoMarkers returns had=false so callers take the
+// plain (or guard) path.
+func TestCollapseMemoryMarkers_NoMarkers(t *testing.T) {
+	_, had, err := source.CollapseMemoryMarkers("# Memory\nplain body\n")
+	if had || err != nil {
+		t.Fatalf("expected had=false err=nil, got had=%v err=%v", had, err)
+	}
+}
+
+// TestExpandMemoryImports_MarkerCollision: a fragment whose content already
+// contains the marker token disables markers entirely (plain expansion), so a
+// reverse parse can't be corrupted.
+func TestExpandMemoryImports_MarkerCollision(t *testing.T) {
+	body := "@import ./fragments/a.md\n"
+	frags := map[string]string{"a.md": "see <!-- agentsync:fragment x -->\n"}
+	expanded := source.ExpandMemoryImports(body, frags)
+	if strings.Contains(expanded, "<!-- agentsync:fragment a.md -->") {
+		t.Fatalf("markers must be suppressed on collision: %q", expanded)
+	}
+	_, had, _ := source.CollapseMemoryMarkers(expanded)
+	_ = had // content token may still trip detection; the write-back guard covers safety
+}

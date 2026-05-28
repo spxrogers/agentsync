@@ -173,7 +173,9 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		}
 	}
 
-	// Memory from CLAUDE.md (verbatim; fragments not de-resolved)
+	// Memory from CLAUDE.md (verbatim, including fragment markers). The reverse-
+	// collapse into AGENTS.md + fragment files happens in the write-back layer
+	// (source.CollapseMemoryMarkers, used by import/reconcile), not here.
 	if data, err := os.ReadFile(p.Memory); err == nil {
 		c.Memory.Body = string(data)
 	}

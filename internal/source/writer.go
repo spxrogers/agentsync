@@ -272,23 +272,40 @@ func WriteLSP(home string, ls LSPServer) error {
 	return iox.AtomicWrite(filepath.Join(dir, ls.ID+".toml"), body, 0o644)
 }
 
-// WriteMemory writes memory/AGENTS.md from m into home. Overwrites atomically.
+// WriteMemory writes memory/AGENTS.md (m.Body) plus every fragment in
+// m.Fragments (memory/fragments/<name>, traversal-checked) into home. It is the
+// faithful inverse of loadMemory — a reverse-collapse (CollapseMemoryMarkers)
+// populates Fragments, so import/reconcile can restore a fragmented memory.
 //
-// It REFUSES when the canonical memory is fragment-composed (MemoryHasFragments)
-// because m.Body here is the fully EXPANDED memory (ingest cannot de-resolve the
-// `@import` expansion), so writing it would inline every fragment and orphan the
-// fragment files. This is the single chokepoint that makes the loss loud rather
-// than silent; the only caller (`import`) checks MemoryHasFragments first and
-// skips with a warning, so this refusal is defense-in-depth for future callers.
+// It still REFUSES the one dangerous shape: a flattened body (no Fragments)
+// over a source that IS fragment-composed. That only happens when a native
+// memory edit could not be reversed (markers absent/disabled), where writing the
+// expanded body would inline every @import and orphan the fragment files; the
+// caller surfaces it rather than flatten silently.
 func WriteMemory(home string, m Memory) error {
-	if MemoryHasFragments(home) {
-		return fmt.Errorf("refusing to overwrite memory/AGENTS.md: canonical memory is composed of fragments/ and the value to write is the expanded memory — persisting it would inline every @import and orphan the fragment files; edit memory/ directly")
+	if len(m.Fragments) == 0 && MemoryHasFragments(home) {
+		return fmt.Errorf("refusing to overwrite memory/AGENTS.md: canonical memory is composed of fragments/ and the value to write carries none (the expanded memory could not be reversed) — persisting it would inline every @import and orphan the fragment files; edit memory/ directly")
 	}
 	dir := filepath.Join(home, "memory")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir memory: %w", err)
 	}
-	return iox.AtomicWrite(filepath.Join(dir, "AGENTS.md"), []byte(m.Body), 0o644)
+	if err := iox.AtomicWrite(filepath.Join(dir, "AGENTS.md"), []byte(m.Body), 0o644); err != nil {
+		return err
+	}
+	for name, content := range m.Fragments {
+		if err := validateFragmentName(name); err != nil {
+			return fmt.Errorf("memory: %w", err)
+		}
+		dest := filepath.Join(dir, "fragments", filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return fmt.Errorf("mkdir for memory/fragments/%s: %w", name, err)
+		}
+		if err := iox.AtomicWrite(dest, []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // renderFrontmatter serialises a frontmatter map as a YAML block enclosed in

@@ -729,12 +729,22 @@ func writeBackFileItem(home string, it reconcileItem) error {
 	if strings.HasSuffix(srcID, "(multiple)") {
 		return fmt.Errorf("write-back for %s is unsafe: the dest is the concatenation of multiple source fragments. Persisting the whole dest into one of them would strand the others. Edit the source fragments under %s/ directly, then apply", it.op.Path, home)
 	}
-	// Same hazard for fragment-composed memory: the rendered op's SourceID is
-	// the single "memory/AGENTS.md" (never the "(multiple)" marker), but the
-	// dest is the fully expanded memory. Writing it back would inline every
-	// @import and orphan the fragment files, so refuse.
-	if filepath.ToSlash(srcID) == "memory/AGENTS.md" && source.MemoryHasFragments(home) {
-		return fmt.Errorf("write-back for %s is unsafe: canonical memory is composed of fragments/, and the dest is the fully expanded memory. Persisting it would inline every @import and orphan the fragments. Edit the fragments under %s/memory/ directly, then apply", it.op.Path, home)
+	// Memory is fragment-aware. If apply wrote fragment markers, reverse them
+	// into AGENTS.md + the fragment files instead of writing the expanded dest
+	// verbatim (which would put markers in the source and never restore the
+	// fragments). With no markers but a fragment-composed source, writing back
+	// would inline every @import and orphan the fragments — refuse.
+	if filepath.ToSlash(srcID) == "memory/AGENTS.md" {
+		mem, hadMarkers, cerr := source.CollapseMemoryMarkers(string(data))
+		switch {
+		case cerr != nil:
+			return fmt.Errorf("write-back for %s is unsafe: memory fragment markers could not be reversed (%w); reconcile memory/ by hand, then apply", it.op.Path, cerr)
+		case hadMarkers:
+			return source.WriteMemory(home, mem)
+		case source.MemoryHasFragments(home):
+			return fmt.Errorf("write-back for %s is unsafe: canonical memory is composed of fragments/ and the dest has no reversible markers. Persisting it would inline every @import and orphan the fragments. Edit the fragments under %s/memory/ directly, then apply", it.op.Path, home)
+		}
+		// No fragments: fall through to the plain verbatim write below.
 	}
 	dest := filepath.Join(home, srcID)
 	// Defense-in-depth: srcID derives from a component Name, and AtomicWrite
