@@ -160,7 +160,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		report := render.BuildReport(c, plan, agents)
 		if len(report.Rows) > 0 {
 			fmt.Fprintln(w)
-			report.PrintText(w)
+			report.PrintTextStyled(w, p)
 		}
 		return nil
 	}
@@ -230,7 +230,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	report := render.BuildReport(c, plan, agents)
 	if len(report.Rows) > 0 {
 		fmt.Fprintln(w)
-		report.PrintText(w)
+		report.PrintTextStyled(w, p)
 	}
 	return nil
 }

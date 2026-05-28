@@ -9,6 +9,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 func TestBuildReport_NoPlugins(t *testing.T) {
@@ -169,6 +170,46 @@ func TestTranslationReport_PrintText(t *testing.T) {
 	}
 	if !strings.Contains(out, "✓ full") {
 		t.Errorf("missing full mark; got:\n%s", out)
+	}
+}
+
+// TestTranslationReport_PrintTextStyled locks in two contracts:
+//   - with color disabled, the styled renderer produces byte-identical output
+//     to PrintText (so the same fixture passes through either path), and
+//   - with color enabled, semantic ANSI is emitted around the right tokens
+//     (green for "full", bold for "plugin:").
+func TestTranslationReport_PrintTextStyled(t *testing.T) {
+	c := source.Canonical{
+		Plugins: []source.Plugin{
+			{ID: "demo", Plugin: source.PluginSpec{ID: "demo@test-mp", Version: "1.0.0"}},
+		},
+	}
+	plan := render.RenderPlan{
+		PerAgent: map[string]render.AgentResult{
+			"claude":   {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}},
+			"opencode": {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}},
+		},
+	}
+	report := render.BuildReport(c, plan, []string{"claude", "opencode"})
+
+	var plainBuf, plainStyledBuf, coloredBuf bytes.Buffer
+	report.PrintText(&plainBuf)
+	report.PrintTextStyled(&plainStyledBuf, ui.New(&plainStyledBuf, &plainStyledBuf, ui.ColorNever))
+	report.PrintTextStyled(&coloredBuf, ui.New(&coloredBuf, &coloredBuf, ui.ColorAlways))
+
+	if plainBuf.String() != plainStyledBuf.String() {
+		t.Errorf("PrintTextStyled under ColorNever must equal PrintText byte-for-byte\nPrintText:\n%q\nStyled:\n%q",
+			plainBuf.String(), plainStyledBuf.String())
+	}
+	colored := coloredBuf.String()
+	if !strings.Contains(colored, "\x1b[1m") {
+		t.Errorf("styled report should bold the 'plugin:' label; got:\n%s", colored)
+	}
+	if !strings.Contains(colored, "\x1b[32m") {
+		t.Errorf("a 'full' coverage row should render green; got:\n%s", colored)
+	}
+	if !strings.Contains(colored, "✓ full") {
+		t.Errorf("styled report should still carry the ✓ full glyph; got:\n%s", colored)
 	}
 }
 

@@ -24,7 +24,17 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   enables it only when stdout is a terminal and `NO_COLOR` is unset, while
   `--color=always|never` overrides. Glyphs are unconditional Unicode (matching
   the existing report output); piped output is byte-stable and never leaks raw
-  ANSI.
+  ANSI. The `apply` translation report is rendered through the same Printer:
+  bold "plugin:" labels, semantic color on the coverage marks (green=full,
+  yellow=partial, red=none), faint trailing counts. With color disabled the
+  output is byte-identical to before, so existing fixtures hold.
+- **Spinners on slow network ops** — `agentsync update` and `agentsync
+  marketplace add` animate a braille-frame spinner on stderr while
+  marketplace fetches and plugin-manifest pulls are in flight. The spinner is
+  a complete no-op on a non-terminal (CI logs, piped stderr, captured-output
+  tests) — no animation, no static fallback line — so byte-stable fixtures
+  stay byte-stable and grep'd output stays clean; the success line each
+  command already prints carries the result.
 - **`status --json` and `diff --json`** — emit machine-readable structured
   output (per-agent drift items + summary tally; per-hunk source/dest with
   pointer) for CI gates, dashboards, and scripts. Advisory diagnostics still

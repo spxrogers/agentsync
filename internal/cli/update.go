@@ -63,6 +63,10 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 	if autoSafe && !doApply {
 		return fmt.Errorf("--auto-safe requires --apply (it only filters which bumps are applied)")
 	}
+	p, err := newPrinter(cmd)
+	if err != nil {
+		return err
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	userHome := paths.HomeDir(paths.OSEnv{})
 	statePath := filepath.Join(home, ".state", "targets.json")
@@ -96,7 +100,9 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 		}
 
 		fetcher := marketplace.Dispatch(src)
+		stopSpin := p.Spin(fmt.Sprintf("fetching marketplace %s", mpName))
 		result, err := fetcher.Fetch(src, cacheDir)
+		stopSpin()
 		if err != nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "warning: re-fetch marketplace %s failed: %v\n", mpName, err)
 			continue
@@ -127,7 +133,9 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 	}
 
 	// Compute fresh manifest SHAs for installed plugins (for SHA drift detection).
+	stopSpin := p.Spin("checking plugin manifests")
 	freshSHAs := computeFreshPluginSHAs(home, c.Plugins, fetched, cmd.OutOrStdout())
+	stopSpin()
 
 	// Detect re-uploaded (same version, different SHA) plugins.
 	shaWarnings := marketplace.DetectSHADrift(c.Plugins, freshSHAs)

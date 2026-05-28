@@ -11,6 +11,7 @@ import (
 	"sort"
 
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 // PluginRow is one row in the translation report — one plugin × one agent.
@@ -47,12 +48,28 @@ func coverageMark(cov string) string {
 	}
 }
 
-// PrintText writes the human-readable report to w.
+// PrintText writes the human-readable report to w in its plain form.
 //
 //	plugin: demo@test-mp
 //	  claude    ✓ full   (1 mcp, 0 commands)
 //	  opencode  ✓ full   (1 mcp, 0 commands)
+//
+// Use PrintTextStyled to render the same report with semantic color via a
+// *ui.Printer. Plain output is byte-stable so existing test fixtures hold.
 func (r TranslationReport) PrintText(w io.Writer) {
+	r.printText(w, nil)
+}
+
+// PrintTextStyled writes the report with the same layout as PrintText, but
+// styled via p: bold "plugin:" labels, semantically colored coverage marks
+// (green=full, yellow=partial, red=none), and faint trailing counts. When p
+// has color disabled (non-TTY, NO_COLOR, --color=never), the output is
+// visually identical to PrintText — only ANSI is suppressed.
+func (r TranslationReport) PrintTextStyled(w io.Writer, p *ui.Printer) {
+	r.printText(w, p)
+}
+
+func (r TranslationReport) printText(w io.Writer, p *ui.Printer) {
 	// Group rows by plugin.
 	byPlugin := map[string][]PluginRow{}
 	pluginOrder := []string{}
@@ -67,17 +84,44 @@ func (r TranslationReport) PrintText(w io.Writer) {
 	sort.Strings(pluginOrder)
 
 	for _, plug := range pluginOrder {
-		fmt.Fprintf(w, "plugin: %s\n", plug)
+		if p != nil {
+			fmt.Fprintf(w, "%s %s\n", p.Bold("plugin:"), plug)
+		} else {
+			fmt.Fprintf(w, "plugin: %s\n", plug)
+		}
 		rows := byPlugin[plug]
 		sort.Slice(rows, func(i, j int) bool { return rows[i].Agent < rows[j].Agent })
 		for _, row := range rows {
 			if row.Disabled {
-				fmt.Fprintf(w, "  (disabled by project)\n")
+				if p != nil {
+					fmt.Fprintf(w, "  %s\n", p.Faint("(disabled by project)"))
+				} else {
+					fmt.Fprintf(w, "  (disabled by project)\n")
+				}
 				continue
 			}
-			fmt.Fprintf(w, "  %-10s %s (%d mcp, %d commands)\n",
-				row.Agent, coverageMark(row.Coverage), row.MCP, row.Commands)
+			mark := coverageMark(row.Coverage)
+			tail := fmt.Sprintf("(%d mcp, %d commands)", row.MCP, row.Commands)
+			if p != nil {
+				mark = colorCoverage(p, row.Coverage, mark)
+				tail = p.Faint(tail)
+			}
+			fmt.Fprintf(w, "  %-10s %s %s\n", row.Agent, mark, tail)
 		}
+	}
+}
+
+// colorCoverage maps a coverage string to its semantic color. The mark itself
+// (with trailing alignment padding) is colored as one unit, so a colored space
+// run doesn't shift the column that follows.
+func colorCoverage(p *ui.Printer, cov, mark string) string {
+	switch cov {
+	case "full":
+		return p.Green(mark)
+	case "partial":
+		return p.Yellow(mark)
+	default:
+		return p.Red(mark)
 	}
 }
 
