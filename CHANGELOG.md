@@ -198,6 +198,18 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   A structurally-broken file (e.g. unterminated fence) is still skipped, but now
   with an explicit `warning: skipping skill "<name>": <reason>` instead of a
   silent drop.
+- **Post-import warning scoped to in-scope sections, no false collision claim**
+  — the post-import "unimported destination items" warning walked *every*
+  second-level pointer in the dest file and predicted each one would "trigger
+  ForeignCollision on next apply" — including pointers under top-level sections
+  agentsync doesn't model at all (Claude Code's `skillUsage`, `tipsHistory`,
+  `oauthAccount`, `cachedGrowthBookFeatures`, runtime/telemetry state). For
+  merge-keys ops the prediction was factually wrong: the writer's per-pointer
+  OwnedKeys check fires only on keys the op claims, so foreign keys are
+  preserved untouched — they cannot collide. The warning now lists only
+  pointers under sections the canonical actually renders, and reads as a note
+  with accurate wording (no false collision claim, no unactionable "re-run
+  import" hint when the user just did).
 - **Plugins pinned to an older commit sha now fetch** — the git fetcher
   shallow-cloned (`depth 1`) the branch tip, so a marketplace entry pinning a
   `sha` that lagged the head failed to check it out with `object not found`

@@ -102,9 +102,14 @@ interface funnels all destination writes through the foreign-collision backup.
 ### `internal/adapter/claude`
 The reference adapter — all seven components including LSP, with per-key merge
 into shared JSON files (`~/.claude.json`, `settings.json`) that preserves foreign
-keys.
-- **Key:** `New(Options) *Adapter`; the `Adapter` methods; `ParseFrontmatter`/
-  `EncodeFrontmatter`; `MergeKeys`.
+keys. `IngestPlugins` reads `enabledPlugins` / `extraKnownMarketplaces` to
+discover plugins on `import`, but Render deliberately does NOT write those keys
+back: each plugin's components are projected to Claude's native paths
+(`~/.claude/skills/<name>/`, `mcpServers` in `.claude.json`, …), and the
+consumer agent reads them as regular components without needing plugin-manager
+metadata.
+- **Key:** `New(Options) *Adapter`; the `Adapter` + `PluginIngester` methods;
+  `ParseFrontmatter`/`EncodeFrontmatter`; `MergeKeys`.
 - **Depends on:** adapter, secrets, source, paths, iox, jsonkeys.
 - **Files:** `claude.go`, `render.go`, `ingest.go`, `ingest_plugins.go`,
   `apply.go`, `paths.go`, `frontmatter.go`, `skill.go`, `command.go`,

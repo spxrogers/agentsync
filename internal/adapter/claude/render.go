@@ -68,6 +68,21 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 		ops = append(ops, lspOps...)
 	}
 
+	// Plugin enablement (settings.json#/enabledPlugins) and the marketplace
+	// registry (settings.json#/extraKnownMarketplaces) are deliberately NOT
+	// rendered. agentsync projects each plugin's components (skills, MCP,
+	// subagents, commands, hooks, memory) to Claude Code's NATIVE paths
+	// (~/.claude/skills/<name>/, mcpServers in .claude.json, etc.), where
+	// Claude reads them as regular components — plugin attribution is
+	// agentsync's internal grouping and Claude doesn't need to know. Writing
+	// these back would (a) ping-pong against the user's /plugin disable in
+	// Claude Code's own UI on the next apply, (b) duplicate components Claude
+	// already serves from its install dir (~/.claude/plugins/<id>/...) for
+	// plugins originally Claude-installed, and (c) blur ownership: agentsync
+	// owns the user's *view*, not the consumer agent's plugin-manager state.
+	// The IngestPlugins read side still discovers plugins from these keys so
+	// import can capture them — the asymmetry is intentional.
+
 	return ops, skips, nil
 }
 
