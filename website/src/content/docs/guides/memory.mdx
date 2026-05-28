@@ -29,9 +29,32 @@ Keep the top-level file small and pull in reusable pieces with `@import`:
     └── security-rules.md
 ```
 
+…where each fragment holds a focused piece:
+
+```markdown title="~/.agentsync/memory/fragments/style.md"
+Prefer clarity over cleverness.
+```
+
+```markdown title="~/.agentsync/memory/fragments/security-rules.md"
+Never log secrets.
+```
+
 At apply time agentsync expands the imports and writes the fully-composed memory
-into each agent's native file. Edit a fragment once and every agent's memory
-updates on the next `apply`.
+into each agent's native file, wrapping each fragment in HTML-comment boundary
+markers (so the expansion can be reversed — see below):
+
+```markdown title="~/.claude/CLAUDE.md (rendered by apply)"
+# Coding conventions
+
+<!-- agentsync:fragment style.md -->
+Prefer clarity over cleverness.
+<!-- /agentsync:fragment style.md -->
+<!-- agentsync:fragment security-rules.md -->
+Never log secrets.
+<!-- /agentsync:fragment security-rules.md -->
+```
+
+Edit a fragment once and every agent's memory updates on the next `apply`.
 
 <Aside type="tip" title="Fragments are reusable">
 	A fragment like `security-rules.md` can be imported by several memory files (for
