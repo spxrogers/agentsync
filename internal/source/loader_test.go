@@ -60,6 +60,74 @@ func TestParseFrontmatter_ClosingFenceAtEOF(t *testing.T) {
 	}
 }
 
+// TestParseFrontmatterWithReport_BadYAMLDescription is the source-pkg twin of
+// the claude-adapter regression: a SKILL.md whose unquoted description contains
+// "Triggers on: X, Y" (bare ": ") makes sigs.k8s.io/yaml bail. The lenient
+// fallback must succeed, keep the full description string, and report Lenient.
+func TestParseFrontmatterWithReport_BadYAMLDescription(t *testing.T) {
+	input := []byte(`---
+name: gltf-transform
+description: Optimize and post-process GLB/glTF 3D models. Use when compressing models for web delivery, reducing file size, simplifying geometry, inspecting model stats, merging models, or converting textures. Triggers on: optimize GLB, compress model, reduce file size, simplify mesh, draco compression, meshopt, webp textures, inspect model, merge GLB, model optimization.
+---
+body
+`)
+	// Strict ParseFrontmatter must still fail — backward compat for callers that
+	// rely on the strict error to surface bad input.
+	if _, _, err := source.ParseFrontmatter(input); err == nil {
+		t.Fatalf("strict ParseFrontmatter accepted bad-YAML description; lenient must be opt-in")
+	}
+	fm, body, lenient, err := source.ParseFrontmatterWithReport(input)
+	if err != nil {
+		t.Fatalf("ParseFrontmatterWithReport: %v", err)
+	}
+	if !lenient {
+		t.Fatalf("Lenient must be true when strict YAML fails and lenient succeeds")
+	}
+	if fm["name"] != "gltf-transform" {
+		t.Fatalf("name not parsed leniently: %+v", fm)
+	}
+	desc, ok := fm["description"].(string)
+	if !ok {
+		t.Fatalf("description not a string: %T %v", fm["description"], fm["description"])
+	}
+	if !contains(desc, "Triggers on: optimize GLB") {
+		t.Fatalf("lenient description truncated at colon-space: %q", desc)
+	}
+	if !contains(desc, "model optimization.") {
+		t.Fatalf("lenient description missing tail: %q", desc)
+	}
+	if body != "body\n" {
+		t.Fatalf("body mismatch: %q", body)
+	}
+}
+
+// TestLoad_SkillWithBadYAMLDescription is the integration: source.Load with a
+// SKILL.md whose description carries a bare colon-space MUST NOT silently drop
+// the skill. With the lenient fallback wired into the loader, it loads with the
+// full description preserved.
+func TestLoad_SkillWithBadYAMLDescription(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	_ = afero.WriteFile(fs, "/home/.agentsync/agentsync.toml", []byte(""), 0o644)
+	_ = afero.WriteFile(fs, "/home/.agentsync/skills/gltf-transform/SKILL.md",
+		[]byte(`---
+name: gltf-transform
+description: Optimize and post-process GLB/glTF 3D models. Triggers on: optimize GLB, compress model.
+---
+body
+`), 0o644)
+	c, err := source.Load(fs, "/home/.agentsync")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.Skills) != 1 || c.Skills[0].Name != "gltf-transform" {
+		t.Fatalf("skill silently dropped: %+v", c.Skills)
+	}
+	desc, _ := c.Skills[0].Frontmatter["description"].(string)
+	if !contains(desc, "Triggers on: optimize GLB") {
+		t.Fatalf("description truncated: %q", desc)
+	}
+}
+
 // TestLoad_SkillWithFenceAtEOF proves the parser bug's blast radius: source.Load
 // is the entry point for every command, so a single benign SKILL.md whose
 // closing fence sits at EOF must not abort the whole load.

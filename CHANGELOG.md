@@ -142,6 +142,19 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **`import` no longer silently drops skills/subagents/commands with loose
+  frontmatter** — a component `.md` whose `description:` carried an unquoted
+  `Triggers on: X, Y` colon-space sequence broke `sigs.k8s.io/yaml` ("mapping
+  values are not allowed in this context"), and the `continue` in every
+  adapter's Ingest dropped the whole component without warning. The parser now
+  falls back to a line-oriented "key: rest-of-line" read on strict-YAML failure,
+  matching how Claude Code itself reads these files; the canonical write-back
+  re-emits a quoted, strict-YAML form, so the next `apply` round-trips cleanly.
+  A `warning: ... frontmatter is not strict YAML; parsed leniently` line is
+  printed to stderr for each lenient parse so the source of the leak is visible.
+  A structurally-broken file (e.g. unterminated fence) is still skipped, but now
+  with an explicit `warning: skipping skill "<name>": <reason>` instead of a
+  silent drop.
 - **`agent disable --purge` validates the name; `doctor` names a half-init** —
   `disable <bogus> --purge` reported a misleading "purged 0 files" success for
   any string; it now rejects an unknown agent like the other subcommands (a

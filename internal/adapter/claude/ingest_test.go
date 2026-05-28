@@ -1,6 +1,10 @@
 package claude_test
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -186,5 +190,76 @@ func TestIngest_RoundTripsMemory(t *testing.T) {
 	}
 	if out.Memory.Body != in.Memory.Body {
 		t.Fatalf("Memory roundtrip: got %q, want %q", out.Memory.Body, in.Memory.Body)
+	}
+}
+
+// TestIngest_LenientSkillNotSilentlyDropped is the regression for the bug
+// `agentsync import claude` exhibited: a SKILL.md whose description carries an
+// unquoted "Triggers on: X, Y" colon-space sequence broke sigs.k8s.io/yaml and
+// the silent `continue` in Ingest dropped the whole skill. Now: it loads via
+// the lenient fallback AND emits a warning to the configured Stderr so the
+// user is notified.
+func TestIngest_LenientSkillNotSilentlyDropped(t *testing.T) {
+	tmp := t.TempDir()
+	skillsDir := filepath.Join(tmp, ".claude", "skills")
+
+	// Three skills covering each path:
+	//   ok       — strict YAML, no warning
+	//   bad-yaml — colon-space in description, lenient succeeds → warning
+	//   broken   — actually malformed (unterminated fence), both parsers fail
+	//              → warning + dropped
+	if err := os.MkdirAll(filepath.Join(skillsDir, "ok"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(skillsDir, "bad-yaml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(skillsDir, "broken"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsDir, "ok", "SKILL.md"),
+		[]byte("---\nname: ok\ndescription: simple\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsDir, "bad-yaml", "SKILL.md"),
+		[]byte("---\nname: bad-yaml\ndescription: Does the thing. Triggers on: foo, bar, baz.\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsDir, "broken", "SKILL.md"),
+		[]byte("---\nname: broken\nno closing fence\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var warn bytes.Buffer
+	a := claude.New(claude.Options{TargetRoot: tmp, Stderr: &warn})
+	out, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	names := map[string]bool{}
+	for _, s := range out.Skills {
+		names[s.Name] = true
+	}
+	if !names["ok"] {
+		t.Errorf("strict-YAML skill 'ok' missing from Ingest: %v", names)
+	}
+	if !names["bad-yaml"] {
+		t.Errorf("bad-yaml skill silently dropped — lenient fallback didn't run: %v", names)
+	}
+	if names["broken"] {
+		t.Errorf("a structurally-broken skill should NOT load: %v", names)
+	}
+
+	got := warn.String()
+	if !strings.Contains(got, "bad-yaml") {
+		t.Errorf("Stderr missing warning for lenient skill 'bad-yaml':\n%s", got)
+	}
+	if !strings.Contains(got, "broken") {
+		t.Errorf("Stderr missing warning for dropped skill 'broken':\n%s", got)
+	}
+	// The 'ok' skill must NOT trigger a warning — strict YAML is silent.
+	if strings.Contains(got, "skill ok") || strings.Contains(got, "skill \"ok\"") {
+		t.Errorf("strict-YAML skill incorrectly produced a warning:\n%s", got)
 	}
 }
