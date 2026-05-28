@@ -31,7 +31,7 @@ import { Aside } from '@astrojs/starlight/components';
 | `diff [<path>]` | Show pending / drift changes; secrets redacted. | `--scope --project` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source. | `--dry-run` |
-| `explain <plugin>` | Show a plugin's per-agent translation coverage. | `--json` |
+| `explain [<plugin>...]` | Show per-agent translation coverage for one or more plugins. | `--all --list --json` |
 
 ---
 
@@ -165,9 +165,19 @@ agentsync update
 agentsync update --apply --auto-safe
 ```
 
-### `explain <plugin>`
-Prints a plugin's per-agent translation coverage without applying. Add `--json`
-for machine-readable output.
+### `explain [<plugin>...]`
+Prints per-agent translation coverage for one or more installed plugins, without
+applying. Pass space-separated plugin ids to explain just those, `--all` to
+explain every installed plugin, or `--list` to print just the set of installed
+ids (a quick reminder of what you can pass). Add `--json` for machine-readable
+output (rows for plugin/agent coverage, or a `plugins` array under `--list`).
+
+```bash
+agentsync explain atlassian@anthropic
+agentsync explain atlassian@anthropic superpowers@obra
+agentsync explain --all
+agentsync explain --list
+```
 
 ---
 
@@ -179,6 +189,6 @@ for machine-readable output.
 | `--project <path>` | apply, status, diff, reconcile, update | Apply a specific project's overlay. |
 | `--dry-run` | apply, import | Preview without writing. |
 | `--auto-safe` | reconcile, update | Auto-resolve only no-risk changes. |
-| `--json` | status, diff, explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). |
+| `--json` | status, diff, explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). `explain --list --json` emits a `plugins` array; `explain` with ids/`--all` emits the translation `rows`. |
 | `--color auto\|always\|never` | all | Control ANSI color + bold. Default `auto` (on for a TTY, off when piped/redirected; honors `NO_COLOR`). |
 | `-v`, `--verbose` | all | Verbose logging. |

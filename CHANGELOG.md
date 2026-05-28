@@ -15,6 +15,18 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Added
 
+- **`explain` accepts multiple plugins, `--all`, and `--list`** —
+  `agentsync explain` now takes a space-separated list of plugin ids
+  (`agentsync explain notion@official superpowers@obra`), and gains two flags:
+  `--all` renders coverage for every installed plugin, and `--list` prints just
+  the set of installed ids (a quick reminder of what you can pass without
+  jumping to `agentsync plugin list`). The text output is also rendered through
+  the styled UI: a bold header summarises how many plugins are being explained,
+  each plugin gets a `▸` section header (with version + a yellow `(disabled)`
+  marker when applicable), and per-agent rows use the same semantic glyph +
+  color vocabulary as `apply` and the capability matrix
+  (`✓ full` / `◐ partial` / `✗ none`). `--json` is unchanged in shape for the
+  default rows mode; with `--list` it emits a `plugins` array.
 - **Styled CLI output and a `--color` flag** — `agentsync status`, `diff`,
   `doctor`, and `apply` now render through a single presentation layer
   (`internal/ui`) with a curated semantic palette (green=synced, cyan=pending,

@@ -340,8 +340,11 @@ plugin: atlassian@anthropic
 Inspect any plugin's coverage without applying:
 
 ```bash
-agentsync explain atlassian@anthropic
-agentsync explain atlassian@anthropic --json
+agentsync explain atlassian@anthropic                   # one plugin
+agentsync explain atlassian@anthropic superpowers@obra  # space-separated
+agentsync explain --all                                 # every installed plugin
+agentsync explain --list                                # just the ids (skip rendering)
+agentsync explain atlassian@anthropic --json            # machine-readable
 ```
 
 Control fan-out per plugin with `agents = [...]` in the plugin's TOML file. (A
@@ -507,7 +510,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `diff [<path>]` | Show pending/drift changes; secrets redacted. | `--scope --project --json` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. Includes `plugin` (Claude), which re-fetches installed plugins + marketplaces **(network)**. | `--dry-run` |
-| `explain <plugin>` | Show a plugin's per-agent translation coverage. | `--json` |
+| `explain [<plugin>...]` | Show per-agent translation coverage for one or more plugins. | `--all --list --json` |
 
 Global: `-v/--verbose` for verbose logging on any command. `--color=auto|always|never`
 controls whether output is styled with ANSI color and bold (default `auto` — on
