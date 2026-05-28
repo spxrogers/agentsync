@@ -8,6 +8,7 @@ package marketplace
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -271,9 +272,14 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 	if len(skillPaths) == 0 && listDir != nil {
 		// Convention-based discovery: scan cacheDir/skills/*/SKILL.md
 		discovered, err := discoverSkillDirs(filepath.Join(cacheDir, "skills"), listDir)
-		if err != nil {
+		switch {
+		case errors.Is(err, errSkillSanityCap):
+			// Cap violations are deliberate refusals — propagate loudly. A
+			// quiet WARN would defeat the entire point of having the caps.
+			return err
+		case err != nil:
 			slog.Warn("plugin skills convention-discovery failed", "cacheDir", cacheDir, "error", err)
-		} else {
+		default:
 			skillPaths = discovered
 		}
 	}
@@ -322,6 +328,27 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 	return nil
 }
 
+// maxSkillDepth caps how many directories below skillsDir a SKILL.md may live.
+// 32 is absurdly generous (the deepest real plugin is 2 levels); the cap exists
+// purely as a backstop against a malformed or hostile plugin tarball.
+//
+// maxSkillLeaves caps the total skills a single plugin may ship. The largest
+// legitimate plugins ship a few dozen; 256 is "you have bigger problems than
+// this error" territory.
+//
+// Both fire with a deliberately loud error — a quiet skip would hide the bug.
+const (
+	maxSkillDepth  = 32
+	maxSkillLeaves = 256
+)
+
+// errSkillSanityCap marks a deliberate refusal from one of the two caps above.
+// The caller (Project's convention-discovery path) normally swallows
+// discoverSkillDirs errors with a warning so a transient filesystem hiccup
+// doesn't brick projection, but a cap violation is the OPPOSITE of transient:
+// it's the whole point. Caller propagates anything that wraps this sentinel.
+var errSkillSanityCap = errors.New("skill sanity cap exceeded")
+
 // discoverSkillDirs walks skillsDir and returns the path of every directory that
 // directly contains a SKILL.md. It recurses through intermediate *grouping*
 // directories so a plugin that nests skills (e.g. notion's
@@ -332,10 +359,33 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 // into, so the skill's own bundled subdirs (scripts/, references/, assets/) are
 // left for collectSkillFiles rather than mistaken for nested skills. The caller
 // resolves the actual SKILL.md via loadSkillEntry.
+//
+// Two sanity caps bound a pathological / hostile plugin tarball before it can
+// eat the host's stack, memory, or attention span: maxSkillDepth (refuse a
+// SKILL.md nested more than 32 directories below skillsDir) and maxSkillLeaves
+// (refuse a plugin shipping more than 256 skills total). Real plugins live
+// well under both, so these only fire on plugins that are either malformed or
+// actively trying something stupid.
 func discoverSkillDirs(skillsDir string, listDir func(string) ([]os.DirEntry, error)) ([]string, error) {
 	var paths []string
-	var walk func(dir string) error
-	walk = func(dir string) error {
+	var walk func(dir string, depth int) error
+	walk = func(dir string, depth int) error {
+		if depth > maxSkillDepth {
+			return fmt.Errorf("\n"+
+				"==============================================================\n"+
+				"  STOP. a plugin is nesting skills %d+ directories deep.\n"+
+				"  agentsync says NOPE.\n"+
+				"==============================================================\n"+
+				"  path: %s\n"+
+				"  cap:  maxSkillDepth = %d\n"+
+				"\n"+
+				"  the deepest legit plugin in the wild is 2 levels deep\n"+
+				"  (notion: skills/notion/<category>/SKILL.md). %d+ is not\n"+
+				"  \"edge case\" territory — it's \"did you fall asleep on the\n"+
+				"  mkdir key\" territory. restructure the plugin, not the cap.\n"+
+				"  [%w]",
+				maxSkillDepth+1, dir, maxSkillDepth, maxSkillDepth+1, errSkillSanityCap)
+		}
 		entries, err := listDir(dir)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -355,17 +405,33 @@ func discoverSkillDirs(skillsDir string, listDir func(string) ([]os.DirEntry, er
 			}
 		}
 		if hasSkillMD {
+			if len(paths) >= maxSkillLeaves {
+				return fmt.Errorf("\n"+
+					"==============================================================\n"+
+					"  STOP. a plugin is trying to ship more than %d skills.\n"+
+					"  agentsync says NOPE.\n"+
+					"==============================================================\n"+
+					"  cap:           maxSkillLeaves = %d\n"+
+					"  refused while trying to land skill at: %s\n"+
+					"\n"+
+					"  the largest legit Claude plugins ship a few dozen skills.\n"+
+					"  %d+ is either a plugin author who lost the plot or a\n"+
+					"  recursion bug about to eat your machine. either way,\n"+
+					"  agentsync refuses to project this. fix the plugin.\n"+
+					"  [%w]",
+					maxSkillLeaves, maxSkillLeaves, dir, maxSkillLeaves+1, errSkillSanityCap)
+			}
 			paths = append(paths, dir)
 			return nil // leaf skill; its subdirs are bundled files, not skills
 		}
 		for _, sd := range subdirs {
-			if err := walk(sd); err != nil {
+			if err := walk(sd, depth+1); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	if err := walk(skillsDir); err != nil {
+	if err := walk(skillsDir, 0); err != nil {
 		return nil, err
 	}
 	return paths, nil

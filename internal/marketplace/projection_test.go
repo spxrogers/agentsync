@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -263,6 +264,117 @@ func TestProject_GroupingDirNoSkillMD(t *testing.T) {
 	}
 	if len(pr.Skills) != 0 {
 		t.Fatalf("skills = %d, want 0: %+v", len(pr.Skills), pr.Skills)
+	}
+}
+
+// TestProject_DepthCap is the regression for the unbounded skill-tree recurse.
+// A pathological/hostile plugin tarball could nest a SKILL.md arbitrarily deep
+// and either drive a slow filesystem walk or — with the right inputs — start
+// stretching the goroutine stack for no good reason. 32 levels is already
+// "what are you doing" territory (real plugins are 2); 33+ must fail loudly,
+// not silently project a half-discovered subset.
+func TestProject_DepthCap(t *testing.T) {
+	cache := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"deep"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Build skills/d0/d1/.../d32/SKILL.md — 33 levels below skills/, one past cap.
+	deep := filepath.Join(cache, "skills")
+	for i := 0; i <= 32; i++ {
+		deep = filepath.Join(deep, "d"+strconv.Itoa(i))
+	}
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deep, "SKILL.md"),
+		[]byte("---\nname: deep\ndescription: d\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := marketplace.Project(marketplace.PluginEntry{Name: "deep"}, cache)
+	if err == nil {
+		t.Fatalf("33-deep skill tree should fail loudly, got nil error")
+	}
+	msg := err.Error()
+	// The error must name the cap, mention the limit, and read as the
+	// disparaging-humor STOP banner — not a generic "is a directory" surprise.
+	for _, want := range []string{"maxSkillDepth", "32", "STOP", "NOPE"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("depth-cap error missing %q; got:\n%s", want, msg)
+		}
+	}
+}
+
+// TestProject_LeafCap is the regression for the unbounded leaf count. A plugin
+// with hundreds of skills is either malformed (recursion bug found 200k phantom
+// leaves) or actively user-hostile; either way agentsync should refuse rather
+// than silently project a megabyte of phantom canonical entries.
+func TestProject_LeafCap(t *testing.T) {
+	cache := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"sprawl"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 257 sibling skills under skills/. The 257th must refuse.
+	for i := 0; i < 257; i++ {
+		d := filepath.Join(cache, "skills", "s"+strconv.Itoa(i))
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nname: s" + strconv.Itoa(i) + "\ndescription: d\n---\nBody.\n"
+		if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := marketplace.Project(marketplace.PluginEntry{Name: "sprawl"}, cache)
+	if err == nil {
+		t.Fatalf("plugin shipping 257 skills should fail loudly, got nil error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"maxSkillLeaves", "256", "STOP", "NOPE"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("leaf-cap error missing %q; got:\n%s", want, msg)
+		}
+	}
+}
+
+// TestProject_LeafCapAtExactly256 verifies the cap is inclusive — 256 skills
+// is fine, 257 is not (off-by-one guard). A bigger plugin than agentsync has
+// ever shipped works; one skill more does not.
+func TestProject_LeafCapAtExactly256(t *testing.T) {
+	cache := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"borderline"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 256; i++ {
+		d := filepath.Join(cache, "skills", "s"+strconv.Itoa(i))
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nname: s" + strconv.Itoa(i) + "\ndescription: d\n---\nBody.\n"
+		if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pr, err := marketplace.Project(marketplace.PluginEntry{Name: "borderline"}, cache)
+	if err != nil {
+		t.Fatalf("256 skills should land cleanly (cap is inclusive): %v", err)
+	}
+	if len(pr.Skills) != 256 {
+		t.Fatalf("skills = %d, want 256", len(pr.Skills))
 	}
 }
 

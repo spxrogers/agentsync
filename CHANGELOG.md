@@ -198,6 +198,17 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   A structurally-broken file (e.g. unterminated fence) is still skipped, but now
   with an explicit `warning: skipping skill "<name>": <reason>` instead of a
   silent drop.
+- **Plugin skill discovery now caps depth + leaf count** — `discoverSkillDirs`
+  recursed unboundedly looking for `SKILL.md`, which was fine for real plugins
+  (≤ 2 levels, few dozen skills at most) but left the host exposed to a
+  malformed or hostile plugin tarball: a deeply-nested tree could stretch the
+  goroutine stack and a wide tree could balloon the canonical projection in
+  memory. Two sanity caps now fail loudly with a deliberately disparaging
+  banner: `maxSkillDepth = 32` (refuse a `SKILL.md` more than 32 directories
+  deep) and `maxSkillLeaves = 256` (refuse a plugin shipping more than 256
+  skills). Both wrap an `errSkillSanityCap` sentinel so the convention-
+  discovery caller — which normally `slog.Warn`-and-skips transient filesystem
+  errors — propagates a cap violation instead of swallowing it.
 - **Post-import warning scoped to in-scope sections, no false collision claim**
   — the post-import "unimported destination items" warning walked *every*
   second-level pointer in the dest file and predicted each one would "trigger
