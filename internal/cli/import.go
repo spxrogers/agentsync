@@ -299,7 +299,7 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// own) are out of scope by design, and the merge-keys writer's per-
 	// pointer OwnedKeys check preserves them on apply rather than colliding.
 	if warnings := unimportedDestPointers(home, agentName, reg); len(warnings) > 0 {
-		fmt.Fprintln(io.err, "note: these items exist in the destination but agentsync did not capture them:")
+		io.note("these items exist in the destination but agentsync did not capture them:")
 		for _, w := range warnings {
 			fmt.Fprintf(io.err, "  %s\n", w)
 		}
@@ -633,6 +633,14 @@ func (i *importIO) flushSection() {
 // trailing newline; warn appends one.
 func (i *importIO) warn(msg string) {
 	fmt.Fprintf(i.err, "warning: %s\n", msg)
+}
+
+// note prints a cyan "note:" prefix followed by msg, for informational lines
+// that aren't problems — matches the styling status.go uses for the same
+// "this is FYI, not a warning" tier. msg should not include a trailing
+// newline; note appends one.
+func (i *importIO) note(msg string) {
+	fmt.Fprintf(i.err, "%s %s\n", i.p.Cyan("note:"), msg)
 }
 
 // warnf is warn + fmt.Sprintf for the common "%v / %q" formatting.
