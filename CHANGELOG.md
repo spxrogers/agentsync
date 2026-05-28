@@ -198,6 +198,50 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   A structurally-broken file (e.g. unterminated fence) is still skipped, but now
   with an explicit `warning: skipping skill "<name>": <reason>` instead of a
   silent drop.
+- **Plugin skill discovery now caps depth + leaf count** — `discoverSkillDirs`
+  recursed unboundedly looking for `SKILL.md`, which was fine for real plugins
+  (≤ 2 levels, few dozen skills at most) but left the host exposed to a
+  malformed or hostile plugin tarball: a deeply-nested tree could stretch the
+  goroutine stack and a wide tree could balloon the canonical projection in
+  memory. Two sanity caps now fail loudly with a deliberately disparaging
+  banner: `maxSkillDepth = 32` (refuse a `SKILL.md` more than 32 directories
+  deep) and `maxSkillLeaves = 256` (refuse a plugin shipping more than 256
+  skills). Both wrap an `errSkillSanityCap` sentinel so the convention-
+  discovery caller — which normally `slog.Warn`-and-skips transient filesystem
+  errors — propagates a cap violation instead of swallowing it.
+- **Post-import warning scoped to in-scope sections, no false collision claim**
+  — the post-import "unimported destination items" warning walked *every*
+  second-level pointer in the dest file and predicted each one would "trigger
+  ForeignCollision on next apply" — including pointers under top-level sections
+  agentsync doesn't model at all (Claude Code's `skillUsage`, `tipsHistory`,
+  `oauthAccount`, `cachedGrowthBookFeatures`, runtime/telemetry state). For
+  merge-keys ops the prediction was factually wrong: the writer's per-pointer
+  OwnedKeys check fires only on keys the op claims, so foreign keys are
+  preserved untouched — they cannot collide. The warning now lists only
+  pointers under sections the canonical actually renders, and reads as a note
+  with accurate wording (no false collision claim, no unactionable "re-run
+  import" hint when the user just did).
+- **Plugins pinned to an older commit sha now fetch** — the git fetcher
+  shallow-cloned (`depth 1`) the branch tip, so a marketplace entry pinning a
+  `sha` that lagged the head failed to check it out with `object not found`
+  (seen on `chrome-devtools-mcp`). A pinned sha now triggers a full clone so the
+  commit object is present.
+- **Plugins that group skills a level deeper now import** — plugin skill
+  discovery only scanned one level (`skills/<name>/SKILL.md`), so a plugin that
+  nests skills under a grouping directory (e.g. `notion`'s
+  `skills/notion/<category>/SKILL.md`) hit a grouping dir with no `SKILL.md` and
+  hard-failed the whole projection with `is a directory` — which bricked
+  `apply`/`status`/`diff`/`import` for that plugin, not just a warning. Discovery
+  now recurses to the leaf skills, and a `SKILL.md`-less directory is skipped
+  rather than read as a file.
+- **In-tree plugin symlinks no longer reject the whole plugin** — the git
+  fetcher refused *any* committed symlink, so a plugin shipping a harmless
+  in-tree link (e.g. `superpowers`' `AGENTS.md -> CLAUDE.md`) was skipped
+  entirely. A symlink whose resolved target stays inside the plugin tree is now
+  allowed; only one escaping the tree is refused (fail-closed on an unresolvable
+  link). The plugin content pin hashes such a symlink by its target path, so a
+  swapped target is still detected. The npm/relative fetchers still reject all
+  symlinks (their copy mechanism cannot preserve a link).
 - **`agent disable --purge` validates the name; `doctor` names a half-init** —
   `disable <bogus> --purge` reported a misleading "purged 0 files" success for
   any string; it now rejects an unknown agent like the other subcommands (a

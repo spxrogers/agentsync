@@ -35,8 +35,10 @@ const entryHashPrefix = treeHashPrefix + "entry:"
 //
 // The hash is sha256 over the sorted "<slash-relpath>\x00<sha256(content)>"
 // lines, so it captures file additions/removals as well as edits, and is
-// independent of walk order and OS path separators. A symlink is REFUSED (not
-// skipped): skipping one would let a swapped link target hide from the hash.
+// independent of walk order and OS path separators. A symlink is hashed by its
+// TARGET PATH (not followed): the fetcher already guarantees a cached symlink
+// stays in-tree, and hashing the link string — rather than skipping it — keeps
+// a swapped target from hiding from the pin.
 func PluginTreeHash(fs afero.Fs, cacheDir string) (string, error) {
 	var lines []string
 	err := afero.Walk(fs, cacheDir, func(path string, info os.FileInfo, walkErr error) error {
@@ -61,7 +63,15 @@ func PluginTreeHash(fs afero.Fs, cacheDir string) (string, error) {
 			return nil
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("plugin cache contains a symlink %q; refusing to hash", rel)
+			// Hash the link TARGET (without following it) so a swapped target
+			// changes the pin while no foreign content is read. The fetcher
+			// confines cached symlinks to the tree; this keeps tamper-detection.
+			target, lerr := readSymlinkTarget(fs, path)
+			if lerr != nil {
+				return fmt.Errorf("hash symlink %s: %w", rel, lerr)
+			}
+			lines = append(lines, rel+"\x00symlink\x00"+filepath.ToSlash(target))
+			return nil
 		}
 		data, rerr := afero.ReadFile(fs, path)
 		if rerr != nil {
@@ -77,6 +87,16 @@ func PluginTreeHash(fs afero.Fs, cacheDir string) (string, error) {
 	sort.Strings(lines)
 	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
 	return treeHashPrefix + hex.EncodeToString(sum[:]), nil
+}
+
+// readSymlinkTarget returns a symlink's target path via afero's optional
+// LinkReader (implemented by the OS filesystem the real fetch/verify paths use),
+// falling back to os.Readlink for a filesystem that does not advertise it.
+func readSymlinkTarget(fs afero.Fs, path string) (string, error) {
+	if lr, ok := fs.(afero.LinkReader); ok {
+		return lr.ReadlinkIfPossible(path)
+	}
+	return os.Readlink(path)
 }
 
 // PluginEntryHash pins an entry-only plugin — one with no cached plugin.json or

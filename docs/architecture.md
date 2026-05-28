@@ -106,6 +106,8 @@ the destination *file* is decoded/encoded per strategy — TOML for
 with `opencode.json` and `mcp/*.toml`, the TOML round-trip does not preserve
 comments in the rewritten file (a documented v1 limit).
 
+### PluginIngester (read-only)
+
 One **optional** extension sits beside the core interface:
 
 ```go
@@ -120,30 +122,85 @@ marketplaces in its native config (Claude reads `enabledPlugins` /
 `[plugins."<name>@<source>"]` enable-state from `config.toml`). `import`
 type-asserts for it: an adapter that doesn't implement it imports no plugins.
 It's kept off the core `Adapter` because the canonical schema doesn't otherwise
-depend on a native plugin concept (OpenCode and the planned Cursor adapter don't
-implement it today). The CLI maps each result onto an
-agentsync marketplace source and re-fetches it through the same code path as
+depend on a native plugin concept (OpenCode has no plugins; the planned Cursor
+adapter has them but the enable-state location is undocumented).
+
+#### The asymmetry is the invariant — read-only by design
+
+PluginIngester has **no `Render`-side counterpart**, and `Adapter.Render` MUST
+NOT emit plugin-enablement or marketplace-registry metadata back into the
+native config. This is the rule for every adapter, present and future:
+
+> **`import` reads the agent's plugin enable-state for discovery; `apply`
+> never writes it back. Apply fans out the plugin's _components_, not the
+> plugin itself.**
+
+Concretely, for each adapter:
+
+| direction       | what crosses the boundary                                                                                      |
+|---|---|
+| **import** (`Adapter` → canonical via `IngestPlugins`) | enable-state + marketplace sources, so agentsync can fetch the same plugins and own them in `~/.agentsync/plugins/`, `~/.agentsync/marketplaces/` |
+| **apply** (canonical → `Adapter` via `Render`)         | **only the plugin's projected components** — its skills go to the agent's skills path, its MCP server to `mcpServers`, its commands to the commands path, etc. **Never `enabledPlugins`, never `extraKnownMarketplaces`, never `[plugins."x@y"]`.** |
+
+Why the asymmetry rather than a tidy round-trip:
+
+- **Plugin identity dissolves at the projection boundary.** Once a plugin's
+  skills land at `~/.claude/skills/<name>/`, its MCP entry under `mcpServers`,
+  its commands at `~/.claude/commands/<name>.md`, the consumer agent reads
+  them through the same code path it uses for hand-authored components. It
+  does not need plugin-manager metadata to *use* a projected skill — the
+  plugin grouping is purely agentsync's internal bookkeeping.
+- **Ownership stays singular.** agentsync is the source of truth for which
+  plugins exist. The consumer agent's plugin manager is the source of truth
+  for whatever *the agent itself* installed locally. Writing
+  `enabledPlugins` back would blur this and pick a fight with the agent's
+  own UI: every user `/plugin disable` would be reverted by the next apply
+  (a ping-pong loop).
+- **No double-install.** If agentsync also wrote `enabledPlugins/X = true`,
+  the consumer agent would keep its own copy under
+  `~/.claude/plugins/<id>/...` alongside agentsync's projection at the
+  shared path — two copies of the same skill, served by different code
+  paths, with the agent's UI free to upgrade/disable one but not the other.
+
+The CLI's `import` maps each `NativePlugin` result onto an agentsync
+marketplace source and re-fetches it through the same code path as
 `marketplace add` + `plugin install`, so a captured plugin lands as a normal
-`plugins/<id>.toml` + `marketplaces/<name>.toml` pair with a pinned manifest SHA.
+`plugins/<id>.toml` + `marketplaces/<name>.toml` pair with a pinned manifest
+SHA. From then on, the projection layer drives every apply.
 
-The **Codex** adapter implements `IngestPlugins`; **Cursor** is the intended next
-implementor. Both have native plugin systems, so the same import + apply fan-out
-(a plugin's components projected to every enabled agent via its capability
-matrix) applies:
+#### Per-adapter
 
+The **Codex** adapter implements `IngestPlugins`; **Cursor** is the intended
+next implementor. Both have native plugin systems, so the same import + apply
+fan-out (a plugin's components projected to every enabled agent via its
+capability matrix) applies — and both follow the read-only-on-import,
+components-only-on-apply rule above:
+
+- **Claude** reads `enabledPlugins` / `extraKnownMarketplaces` on `import` and
+  deliberately leaves both keys untouched on `apply`. Foreign entries
+  (plugins the user enabled directly in Claude Code, marketplaces the user
+  added by hand) are preserved by the merge-keys writer because the render
+  doesn't claim those keys.
 - **Codex** records enable-state in `~/.codex/config.toml` under
   `[plugins."<name>@<source>"]` tables — the same `name@source` shape Claude
   uses. `IngestPlugins` parses those TOML tables into `NativePlugin` records.
   Unlike Claude, Codex records no marketplace *fetch source* in a documented
-  config location, so it returns no `NativeMarketplace`s; `import` resolves each
-  plugin's marketplace from agentsync's own registered marketplaces (warning +
-  skipping any it can't), exactly the path Claude's auto-available built-in
-  marketplace takes.
+  config location, so it returns no `NativeMarketplace`s; `import` resolves
+  each plugin's marketplace from agentsync's own registered marketplaces
+  (warning + skipping any it can't), exactly the path Claude's
+  auto-available built-in marketplace takes. The Codex render never emits
+  the `[plugins."x@y"]` tables back, matching the Claude rule.
+- **OpenCode** has no native plugin concept, so it implements neither side
+  — it still *receives* plugin-projected components (skills, MCP, …) on
+  `apply` like every other component, because that's the whole point.
 - **Cursor** ships an even closer content schema — `.cursor-plugin/plugin.json` +
-  `.cursor-plugin/marketplace.json`, near-identical to Claude's `.claude-plugin/*`
-  (rules, skills, agents, commands, hooks, MCP) — so the projection layer largely
-  transfers. The open question is where Cursor records local enable-state (not yet
-  documented; possibly app-local like its user rules).
+  `.cursor-plugin/marketplace.json`, near-identical to Claude's
+  `.claude-plugin/*` (rules, skills, agents, commands, hooks, MCP) — so the
+  projection layer largely transfers. The open question is where Cursor
+  records local enable-state (not yet documented; possibly app-local like
+  its user rules). When that's identified, the Cursor adapter implements
+  `PluginIngester` for it — and continues to NOT render it back, by the same
+  invariant.
 
 See the capability matrix for source links.
 
@@ -336,10 +393,11 @@ clones) and npm tarballs (registry HTTP, no `npm` binary required), writing them
 to `.state/cache/`. Everything else — including `apply` — reads only from that
 cache, which keeps `apply` fast, offline, and reproducible in CI.
 
-Untrusted-input hardening at this boundary: fetchers reject symlinks in
-tarballs, cap decompressed size (`AGENTSYNC_MAX_TARBALL_MB`), verify manifest
-SHAs, bound component paths to the plugin cache, and reject `http://`/`git://`
-sources unless `AGENTSYNC_ALLOW_INSECURE_URLS=1`.
+Untrusted-input hardening at this boundary: fetchers reject symlinks in tarballs
+(and confine git-cloned symlinks to the fetched tree, refusing any that escape),
+cap decompressed size (`AGENTSYNC_MAX_TARBALL_MB`), verify manifest SHAs, bound
+component paths to the plugin cache, and reject `http://`/`git://` sources unless
+`AGENTSYNC_ALLOW_INSECURE_URLS=1`.
 
 ---
 

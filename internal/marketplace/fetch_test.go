@@ -290,6 +290,95 @@ func TestGitFetcher_RejectsCommittedSymlink(t *testing.T) {
 	}
 }
 
+// TestGitFetcher_ChecksOutPinnedSHA is the regression for the chrome-devtools-mcp
+// failure: the marketplace pins each plugin to a commit sha, but the fetcher
+// shallow-cloned (depth 1) the branch tip, so checking out an older pinned sha
+// failed with "object not found". A pinned sha must trigger a full clone so the
+// commit object is present.
+func TestGitFetcher_ChecksOutPinnedSHA(t *testing.T) {
+	workDir := t.TempDir()
+	repo, err := gogit.PlainInit(workDir, false)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	w, err := repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := &object.Signature{Name: "t", Email: "t@t", When: time.Now()}
+	commit := func(content string) string {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(workDir, "f.txt"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Add("."); err != nil {
+			t.Fatalf("git add: %v", err)
+		}
+		h, err := w.Commit("c", &gogit.CommitOptions{Author: sig, Committer: sig})
+		if err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+		return h.String()
+	}
+	oldSHA := commit("v1")
+	commit("v2") // advance HEAD past the pinned commit
+
+	dst := t.TempDir()
+	src := marketplace.Source{Kind: "url", Repo: "file://" + workDir, SHA: oldSHA}
+	if _, err := marketplace.Dispatch(src).Fetch(src, dst); err != nil {
+		t.Fatalf("Fetch pinned sha: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dst, "f.txt"))
+	if err != nil {
+		t.Fatalf("read f.txt: %v", err)
+	}
+	if string(data) != "v1" {
+		t.Errorf("checked-out content = %q, want %q (pinned to the older commit)", data, "v1")
+	}
+}
+
+// TestGitFetcher_AllowsInTreeSymlink is the regression for the superpowers
+// refusal: a committed in-tree symlink (AGENTS.md -> CLAUDE.md) is safe and must
+// not get the whole plugin rejected. Only a symlink whose target escapes the
+// tree is refused.
+func TestGitFetcher_AllowsInTreeSymlink(t *testing.T) {
+	workDir := t.TempDir()
+	repo, err := gogit.PlainInit(workDir, false)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "CLAUDE.md"), []byte("doc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("CLAUDE.md", filepath.Join(workDir, "AGENTS.md")); err != nil {
+		t.Skipf("symlinks unsupported on this platform: %v", err)
+	}
+	w, err := repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Add("."); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	sig := &object.Signature{Name: "t", Email: "t@t", When: time.Now()}
+	if _, err := w.Commit("init", &gogit.CommitOptions{Author: sig, Committer: sig}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	dst := t.TempDir()
+	src := marketplace.Source{Kind: "url", Repo: "file://" + workDir}
+	if _, err := marketplace.Dispatch(src).Fetch(src, dst); err != nil {
+		t.Fatalf("in-tree symlink should not be rejected: %v", err)
+	}
+	fi, err := os.Lstat(filepath.Join(dst, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("AGENTS.md missing after fetch: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("AGENTS.md should be materialized as a symlink, got mode %v", fi.Mode())
+	}
+}
+
 func TestGitFetcher_Idempotent(t *testing.T) {
 	workDir := t.TempDir()
 	makeWorkRepo(t, workDir, "f.txt", "v1")
