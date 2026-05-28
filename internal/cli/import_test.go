@@ -31,6 +31,64 @@ func mcpKeySHA(t *testing.T, statePath, id string) string {
 	return ""
 }
 
+// TestImport_WarningScopedToModeledSections is the regression for the
+// post-import warning spamming the user with hundreds of out-of-scope items.
+// The previous warning walked every second-level pointer in the dest and
+// claimed each would "trigger ForeignCollision on next apply" — but for
+// merge-keys ops, the per-pointer OwnedKeys check fires only on keys the op
+// claims, so foreign top-level sections (Claude Code's runtime state — e.g.
+// `tipsHistory`, `skillUsage`, telemetry caches) are physically incapable of
+// colliding. They get preserved untouched. The scoped warning surfaces only
+// pointers under sections agentsync's canonical actually renders, and the
+// wording no longer makes the false collision claim.
+func TestImport_WarningScopedToModeledSections(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	// .claude.json with: one MCP we'll import (foo), a sibling MCP we won't
+	// (bar — agentsync MODELS mcpServers so this is in-scope), and a chunk of
+	// runtime state under top-level sections agentsync does not model at all
+	// (skillUsage, tipsHistory — out of scope, must not appear in the warning).
+	claudeJSON := filepath.Join(tmp, ".claude.json")
+	body := `{
+	  "mcpServers": {
+	    "foo": {"type": "stdio", "command": "f"},
+	    "bar": {"type": "stdio", "command": "b"}
+	  },
+	  "skillUsage": {"some-skill": 7},
+	  "tipsHistory": {"shift-tab": 12}
+	}`
+	if err := os.WriteFile(claudeJSON, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "import", "claude:mcp:foo")
+	if err != nil {
+		t.Fatalf("import: %v\n%s", err, out)
+	}
+
+	// In-scope sibling (mcpServers/bar) is flagged.
+	if !strings.Contains(out, "/mcpServers/bar") {
+		t.Errorf("in-scope foreign pointer /mcpServers/bar should be flagged; got:\n%s", out)
+	}
+	// Out-of-scope top-level sections are silent — these were the spam.
+	if strings.Contains(out, "skillUsage") {
+		t.Errorf("out-of-scope skillUsage must not be flagged; got:\n%s", out)
+	}
+	if strings.Contains(out, "tipsHistory") {
+		t.Errorf("out-of-scope tipsHistory must not be flagged; got:\n%s", out)
+	}
+	// The factually-wrong collision claim must be gone.
+	if strings.Contains(out, "ForeignCollision") {
+		t.Errorf("warning must not claim ForeignCollision (merge-keys preserves unowned keys); got:\n%s", out)
+	}
+}
+
 // TestImport_DoesNotReseedUnimportedSibling is the regression for the
 // drift-masking bug: seedStateFromCurrentDest re-rendered the WHOLE canonical
 // and re-stamped every pointer, so importing one item silently re-seeded an

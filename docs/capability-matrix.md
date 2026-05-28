@@ -20,10 +20,40 @@ nothing is dropped silently.
 
 | Agent | Status in v1.0 / beta | Notes |
 |---|---|---|
-| **Claude Code** | ✅ Full adapter | All seven components, including LSP. The reference implementation. Its installed **plugins + marketplaces** are captured by `import` (re-fetched from `enabledPlugins` / `extraKnownMarketplaces`). Codex also captures plugin enable-state via `import` (see its row); the planned Cursor adapter has a native plugin system too and should do the same. |
+| **Claude Code** | ✅ Full adapter | All seven components, including LSP. The reference implementation. Its installed **plugins + marketplaces** are captured by `import` (read from `enabledPlugins` / `extraKnownMarketplaces`); on `apply`, each plugin's components project to Claude's native paths and the enablement keys themselves are deliberately left untouched (`PluginIngester` is read-only — see the [shared invariant](#plugin-importapply-the-shared-invariant) below). |
 | **OpenCode** | ✅ Adapter (some components projected/skipped) | MCP, memory, skills, subagents, commands. Hooks and LSP are skipped with a warning. No native plugin/marketplace concept, so nothing for plugin `import` to capture; it still *receives* plugin-projected components (skills, MCP, …) on `apply`. |
-| **Codex CLI** | ✅ Adapter (some components projected) | MCP, memory, skills, subagents, slash commands, and hooks. MCP servers and hooks both merge into the TOML `~/.codex/config.toml` (as `[mcp_servers.*]` / inline `[hooks.*]` tables — Codex's documented equivalent to a separate `hooks.json`), so config.toml is the adapter's single key-merge file and the user's other keys (`model`, `sandbox_mode`, `[plugins.*]`, …) are preserved; subagents project to Codex's TOML agent format and slash commands to global-only custom prompts (both ◐). Codex **has a native plugin system**[^codex-plugins] with enable-state in `~/.codex/config.toml` as `[plugins."<name>@<source>"] enabled = …`, so the adapter implements `PluginIngester`: `import codex:plugin` captures that enable-state. Codex records no marketplace *fetch source* in a documented config location, so each plugin's marketplace is resolved from agentsync's own registered marketplaces (`agentsync marketplace add <source>` first), warning + skipping any it can't — exactly how Claude's auto-available built-in marketplace is handled. |
-| **Cursor** | 🔜 Planned | Registered as a no-op. Planned coverage is broad — MCP, memory, skills, subagents, slash commands, and hooks all project (see the matrix); only LSP is unsupported. User-level rules/memory live in Cursor's app-local storage, so those stay project-scope. Cursor **has a native plugin system**[^cursor-plugins] (rules, skills, agents, commands, hooks, MCP servers) whose `.cursor-plugin/marketplace.json` + `.cursor-plugin/plugin.json` schema is almost identical to Claude's `.claude-plugin/*` — so projection largely carries over and the adapter should support `import <agent>:plugin` too. The open question is purely *where Cursor records local enable-state* (undocumented, possibly app-local like its rules); the plugin/marketplace content schema is already a near-match. |
+| **Codex CLI** | ✅ Adapter (some components projected) | MCP, memory, skills, subagents, slash commands, and hooks. MCP servers and hooks both merge into the TOML `~/.codex/config.toml` (as `[mcp_servers.*]` / inline `[hooks.*]` tables — Codex's documented equivalent to a separate `hooks.json`), so config.toml is the adapter's single key-merge file and the user's other keys (`model`, `sandbox_mode`, `[plugins.*]`, …) are preserved; subagents project to Codex's TOML agent format and slash commands to global-only custom prompts (both ◐). Codex **has a native plugin system**[^codex-plugins] with enable-state in `~/.codex/config.toml` as `[plugins."<name>@<source>"] enabled = …`, so the adapter implements `PluginIngester`: `import codex:plugin` captures that enable-state. The render never re-emits those tables (same [invariant](#plugin-importapply-the-shared-invariant) as Claude). Codex records no marketplace *fetch source* in a documented config location, so each plugin's marketplace is resolved from agentsync's own registered marketplaces (`agentsync marketplace add <source>` first), warning + skipping any it can't — exactly how Claude's auto-available built-in marketplace is handled. |
+| **Cursor** | 🔜 Planned | Registered as a no-op. Planned coverage is broad — MCP, memory, skills, subagents, slash commands, and hooks all project (see the matrix); only LSP is unsupported. User-level rules/memory live in Cursor's app-local storage, so those stay project-scope. Cursor **has a native plugin system**[^cursor-plugins] (rules, skills, agents, commands, hooks, MCP servers) whose `.cursor-plugin/marketplace.json` + `.cursor-plugin/plugin.json` schema is almost identical to Claude's `.claude-plugin/*` — so projection largely carries over and the adapter should support `import <agent>:plugin` too. The open question is purely *where Cursor records local enable-state* (undocumented, possibly app-local like its rules); the plugin/marketplace content schema is already a near-match. When found, the Cursor `PluginIngester` reads it on import and — by the same [invariant](#plugin-importapply-the-shared-invariant) — never writes it back on apply. |
+
+## Plugin import/apply: the shared invariant
+
+The rule is the same for **every** adapter, present and future:
+
+> **`import` reads the agent's plugin enable-state for discovery; `apply`
+> never writes it back. Apply fans out the plugin's _components_, not the
+> plugin itself.**
+
+agentsync's `Adapter` interface has a `Render` (canonical → native components)
+and the optional `PluginIngester` extension is read-only (`IngestPlugins` —
+native plugin enable-state → canonical). There is no `RenderPlugins`. Each
+adapter handles the asymmetry the same way:
+
+| Adapter | reads on import (`PluginIngester`)              | writes on apply (`Render`)                   |
+|---|---|---|
+| Claude  | `settings.json#/enabledPlugins`, `…#/extraKnownMarketplaces` | components only (skills, MCP, commands, …); enable-state keys left untouched |
+| Codex   | `~/.codex/config.toml` `[plugins."<name>@<source>"]` | components only (MCP, hooks, memory, skills, …); `[plugins.*]` left untouched |
+| OpenCode | — (no native plugin concept)                    | components only (receives plugin-projected components like any user-authored component) |
+| Cursor (planned) | TBD (enable-state location not yet documented) | components only |
+
+Once a plugin's components materialise at native paths (`~/.claude/skills/<name>/`,
+`mcpServers` in the agent's config, `~/.codex/AGENTS.md`, …), the consumer
+agent reads them through the same code path it uses for hand-authored
+components. Plugin attribution is purely agentsync's internal bookkeeping. The
+write-back is omitted on purpose: it would pick a fight with the agent's own
+`/plugin disable` UI (ping-pong on every apply), blur ownership between
+agentsync and the agent's plugin manager, and double-install with the agent's
+own per-plugin install dir. See
+[architecture.md § PluginIngester (read-only)](architecture.md#pluginingester-read-only).
 
 ---
 

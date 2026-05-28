@@ -32,8 +32,17 @@ func (f *GitFetcher) Fetch(src Source, into string) (FetchResult, error) {
 	}
 
 	cloneOpts := &git.CloneOptions{
-		URL:   rawURL,
-		Depth: 1,
+		URL: rawURL,
+	}
+
+	// Shallow-clone for speed, but ONLY when no exact commit is pinned. A
+	// depth-1 clone fetches just the branch tip; checking out an older pinned
+	// sha then fails with "object not found" because that commit was never
+	// fetched (the symptom seen on chrome-devtools-mcp, whose marketplace entry
+	// pins a sha that lags the branch head). A sha pin needs full history so the
+	// commit object is present.
+	if src.SHA == "" {
+		cloneOpts.Depth = 1
 	}
 
 	// Attach a specific branch/tag ref when requested.
@@ -53,7 +62,12 @@ func (f *GitFetcher) Fetch(src Source, into string) (FetchResult, error) {
 		if err != nil {
 			return FetchResult{}, fmt.Errorf("git fetcher: worktree: %w", err)
 		}
-		pullOpts := &git.PullOptions{Depth: 1}
+		pullOpts := &git.PullOptions{}
+		if src.SHA == "" {
+			// Match the clone: stay shallow only when no exact sha is pinned, so
+			// a pinned commit's object is present for the checkout below.
+			pullOpts.Depth = 1
+		}
 		if src.Ref != "" && src.SHA == "" {
 			pullOpts.ReferenceName = resolveRefName(src.Ref)
 			pullOpts.SingleBranch = true
@@ -92,22 +106,35 @@ func (f *GitFetcher) Fetch(src Source, into string) (FetchResult, error) {
 		}
 	}
 
-	// go-git materializes committed symlinks on disk. Without this, a
-	// malicious plugin repo could ship a symlink (skills/x -> /etc) that the
-	// lexical component-path containment check cannot catch and os.ReadFile
-	// would follow off the cache. Reject any symlink in the fetched tree —
-	// the same stance npm/relative fetchers take. The .git dir is never
-	// projected, so skip it.
-	if err := rejectSymlinks(into); err != nil {
+	// go-git materializes committed symlinks on disk. A symlink whose target
+	// ESCAPES the fetched tree (skills/x -> /etc) would let os.ReadFile follow
+	// it off the cache and pull foreign host content into agent config — the
+	// lexical component-path containment check cannot catch that, so refuse it
+	// here. An IN-TREE symlink (e.g. superpowers' AGENTS.md -> CLAUDE.md) is
+	// safe and is allowed, so a plugin that legitimately uses one is no longer
+	// rejected wholesale. (The npm/relative fetchers still reject every symlink:
+	// their copy mechanism cannot preserve a link, and tarballs/local trees have
+	// no comparable legitimate use.) The .git dir is never projected, so skip it.
+	if err := rejectEscapingSymlinks(into); err != nil {
 		return FetchResult{}, err
 	}
 
 	return FetchResult{HeadSHA: headSHA}, nil
 }
 
-// rejectSymlinks walks root and returns an error if any entry is a symlink,
-// skipping the .git directory.
-func rejectSymlinks(root string) error {
+// rejectEscapingSymlinks walks root and returns an error for any symlink whose
+// fully-resolved target lies outside root, skipping the .git directory. An
+// in-tree symlink is permitted; an unresolvable (e.g. dangling) one is refused
+// rather than guessed (fail closed).
+func rejectEscapingSymlinks(root string) error {
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("git fetcher: resolve clone root %s: %w", root, err)
+	}
+	absRoot, err := filepath.Abs(resolvedRoot)
+	if err != nil {
+		return fmt.Errorf("git fetcher: abs clone root %s: %w", root, err)
+	}
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -115,12 +142,27 @@ func rejectSymlinks(root string) error {
 		if d.IsDir() && d.Name() == ".git" {
 			return filepath.SkipDir
 		}
-		if d.Type()&fs.ModeSymlink != 0 {
-			rel, relErr := filepath.Rel(root, path)
-			if relErr != nil {
-				rel = path
-			}
-			return fmt.Errorf("git fetcher: repository contains a symlink %q (refusing — plugin trees must contain only regular files and directories)", rel)
+		if d.Type()&fs.ModeSymlink == 0 {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			rel = path
+		}
+		// Fully resolve the link (this also defeats intermediate-symlink games)
+		// and require the target to stay within the clone. EvalSymlinks needs
+		// the target to exist; a dangling or otherwise unresolvable link is
+		// refused rather than guessed.
+		resolved, rerr := filepath.EvalSymlinks(path)
+		if rerr != nil {
+			return fmt.Errorf("git fetcher: cannot resolve symlink %q (refusing): %w", rel, rerr)
+		}
+		absResolved, rerr := filepath.Abs(resolved)
+		if rerr != nil {
+			return fmt.Errorf("git fetcher: abs symlink target for %q: %w", rel, rerr)
+		}
+		if !pathContains(absRoot, absResolved) {
+			return fmt.Errorf("git fetcher: symlink %q points outside the plugin tree (refusing — would escape the cache)", rel)
 		}
 		return nil
 	})
@@ -203,8 +245,9 @@ func extractSubdir(dir, subPath string) error {
 	// FOLLOWED. Resolve all symlinks and re-verify containment, then copy from
 	// the RESOLVED path — otherwise a crafted git-subdir plugin could point its
 	// subdir at /etc or ~/.ssh and slurp host files into the cache (and from
-	// there into agent config). This runs before rejectSymlinks(into), which
-	// only sees the post-extraction tree of regular files.
+	// there into agent config). This runs before rejectEscapingSymlinks(into),
+	// which only sees the post-extraction tree (subdir extraction copies via
+	// copyDir, which rejects every symlink).
 	resolvedSub, err := filepath.EvalSymlinks(fullSub)
 	if err != nil {
 		return fmt.Errorf("resolve subdir %s: %w", subPath, err)

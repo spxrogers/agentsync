@@ -292,16 +292,18 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 		io.warnf("import state seed failed: %v", seedErr)
 	}
 
-	// Warn if the destination file has additional pointers / files
-	// that the canonical does not own. Those will appear as
-	// ForeignCollision on the next apply and the user often expects
-	// import to have captured everything — not just the one named item.
+	// Warn if the destination file has additional pointers the canonical
+	// does not own. Scoped to top-level sections the canonical actually
+	// renders — pointers under sections agentsync doesn't model at all
+	// (Claude Code's runtime state, telemetry, settings agentsync doesn't
+	// own) are out of scope by design, and the merge-keys writer's per-
+	// pointer OwnedKeys check preserves them on apply rather than colliding.
 	if warnings := unimportedDestPointers(home, agentName, reg); len(warnings) > 0 {
-		io.warn("the following destination items are NOT in the canonical source and will trigger ForeignCollision on next apply:")
+		fmt.Fprintln(io.err, "note: these items exist in the destination but agentsync did not capture them:")
 		for _, w := range warnings {
 			fmt.Fprintf(io.err, "  %s\n", w)
 		}
-		fmt.Fprintf(io.err, "  Run `agentsync import %s` to capture the agent's full config, or accept the backup on next apply.\n", agentName)
+		fmt.Fprintln(io.err, "  agentsync will leave them alone on apply (it only writes keys it owns). Import an item by name if you want agentsync to manage it.")
 	}
 	// Surface a partial-import error after seeding so the command still exits
 	// non-zero, but the components that were written are now owned.
@@ -351,19 +353,54 @@ func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []str
 			continue
 		}
 		ownedPtrs := map[string]bool{}
+		ourSections := map[string]bool{}
+		for k := range ours {
+			ourSections[escapePointerSegment(k)] = true
+		}
 		for _, p := range collectStateSeedPointers(ours) {
 			ownedPtrs[p] = true
 		}
-		// Walk existing's second-level pointers and flag the ones
-		// canonical doesn't own. We borrow CollectPointers indirectly
-		// via collectStateSeedPointers for symmetry.
+		// Walk existing's second-level pointers and flag ones agentsync's
+		// canonical doesn't own — but ONLY under top-level sections the
+		// canonical actually renders (mirrors render.scopeOwnedToSections).
+		// Pointers under sections agentsync doesn't model at all (Claude
+		// Code's runtime state, telemetry, unmodeled settings) are out of
+		// scope: the merge-keys writer leaves them untouched on apply, so
+		// flagging them would be noise — and the previous "will trigger
+		// ForeignCollision" prediction for them was factually wrong (the
+		// per-pointer OwnedKeys check fires only for keys this op writes).
 		for _, p := range collectStateSeedPointers(existing) {
-			if !ownedPtrs[p] {
-				out = append(out, op.Path+"#"+p)
+			if ownedPtrs[p] {
+				continue
 			}
+			if !ourSections[firstPointerSegmentEsc(p)] {
+				continue
+			}
+			out = append(out, op.Path+"#"+p)
 		}
 	}
 	return out
+}
+
+// firstPointerSegmentEsc returns the first (already-escaped) segment of a JSON
+// pointer — "/enabledPlugins/foo@bar" → "enabledPlugins". Mirrors render's
+// firstPointerSegment so the import-scope filter agrees with the writer's
+// section-scoping of OwnedKeys.
+func firstPointerSegmentEsc(ptr string) string {
+	ptr = strings.TrimPrefix(ptr, "/")
+	if i := strings.IndexByte(ptr, '/'); i >= 0 {
+		return ptr[:i]
+	}
+	return ptr
+}
+
+// escapePointerSegment escapes a top-level map key into its JSON-pointer form
+// (~ → ~0, / → ~1), matching the encoding collectStateSeedPointers emits, so
+// the section set used for filtering agrees byte-for-byte.
+func escapePointerSegment(k string) string {
+	k = strings.ReplaceAll(k, "~", "~0")
+	k = strings.ReplaceAll(k, "/", "~1")
+	return k
 }
 
 // seedStateFromCurrentDest re-renders the canonical for agent and writes
@@ -639,7 +676,12 @@ var sectionLabel = map[string]string{
 
 // importedSet records which component identities an import actually captured,
 // so the state seeder can scope itself to exactly those items and not re-stamp
-// (and thereby mask drift on) un-imported siblings.
+// (and thereby mask drift on) un-imported siblings. Plugins + marketplaces are
+// intentionally NOT tracked here: the Claude adapter does not render
+// enabledPlugins or extraKnownMarketplaces back into settings.json (it projects
+// each plugin's components to native paths instead, where the consumer agent
+// serves them as regular components — see the comment at the bottom of
+// claude.Render), so there are no dest pointers to seed for them.
 type importedSet struct {
 	MCP        []string
 	LSP        []string
@@ -1048,13 +1090,16 @@ func importMemory(io *importIO, home string, c source.Canonical) ([]string, erro
 // marketplace or plugin warns and skips rather than aborts, so one bad item
 // does not strand the rest. Plugins are NOT dest-seeded into state (unlike the
 // file components): they are a source-side declaration whose projected
-// components materialise as new dest files on the next apply.
+// components materialise as new dest files on the next apply. The Claude
+// adapter intentionally does not render enabledPlugins / extraKnownMarketplaces
+// back into settings.json either (see the note at the bottom of claude.Render),
+// so there is nothing to seed there.
 func importPlugins(io *importIO, home, agentName string, a adapter.Adapter, name string) ([]string, error) {
 	pi, ok := a.(adapter.PluginIngester)
 	if !ok {
 		return nil, nil
 	}
-	mps, plugins, err := pi.IngestPlugins(adapter.ScopeUser, "")
+	mps, nativePlugins, err := pi.IngestPlugins(adapter.ScopeUser, "")
 	if err != nil {
 		return nil, fmt.Errorf("discover %s plugins: %w", agentName, err)
 	}
@@ -1065,7 +1110,7 @@ func importPlugins(io *importIO, home, agentName string, a adapter.Adapter, name
 	}
 
 	var want []adapter.NativePlugin
-	for _, pl := range plugins {
+	for _, pl := range nativePlugins {
 		if !pl.Enabled {
 			continue
 		}
