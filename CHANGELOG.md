@@ -28,7 +28,7 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   (`✓ full` / `◐ partial` / `✗ none`). `--json` is unchanged in shape for the
   default rows mode; with `--list` it emits a `plugins` array.
 - **Styled CLI output and a `--color` flag** — `agentsync status`, `diff`,
-  `doctor`, and `apply` now render through a single presentation layer
+  `doctor`, `apply`, and `import` now render through a single presentation layer
   (`internal/ui`) with a curated semantic palette (green=synced, cyan=pending,
   red=drift, yellow=needs-decision) and the same `✓ ◐ ✗ → •` glyph vocabulary
   the capability matrix already uses. `status` gains a one-line summary footer
@@ -40,6 +40,18 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   bold "plugin:" labels, semantic color on the coverage marks (green=full,
   yellow=partial, red=none), faint trailing counts. With color disabled the
   output is byte-identical to before, so existing fixtures hold.
+- **`import` joins the styled-output set** — per-item lines carry a green `✓`
+  (real) or cyan `→` (dry-run) prefix; the full-agent walk groups items under
+  faint section headers (`mcp servers`, `skills`, …) printed lazily so an empty
+  component is invisible; the summary line is bold (`imported N items from
+  claude`) with a faint per-component breakdown underneath. Every `warning:`
+  label — whether emitted by `import` itself, by an adapter's `Ingest` (the
+  lenient-YAML notices that used to lead the screen as plain text), or by
+  `capture`'s re-reference path — is restyled to a bold-yellow `⚠️ warning:`
+  by a single line-buffered writer (`ui.WarnWriter`) wrapping stderr; adapters
+  pick it up via a new optional `SetStderr(io.Writer)` setter so the routing
+  is invisible to non-CLI callers. Wording is preserved (`imported X` /
+  `would import X`, `warning: …`) so scripts grepping the output keep working.
 - **`status` explains its drift classes inline** — the formatted dashboard
   now prints a brief "What `apply` will do:" legend after the summary footer,
   with one action-focused line per drift class actually present (`new` → will

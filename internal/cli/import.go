@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 // loaderFsForState returns an afero.Fs suitable for re-loading the
@@ -201,11 +203,29 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 		return err
 	}
 
+	p, perr := newPrinter(cmd)
+	if perr != nil {
+		return perr
+	}
+	// Wrap stderr once so every "warning: …" line — ours, the adapter's
+	// Ingest, capture's re-reference, etc. — picks up the same bold-yellow
+	// "⚠️ warning:" styling. Lines that don't start with "warning: " pass
+	// through unchanged, so indented continuations and "agentsync:" notes
+	// look the same as before.
+	warnW := ui.NewWarnWriter(p.Err, p)
+	io := &importIO{p: p, out: p.Out, err: warnW, dryRun: dryRun}
+
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	reg := registryFactory()
 	a := reg.Lookup(agentName)
 	if a == nil {
 		return fmt.Errorf("adapter %q not registered; valid agents: %s", agentName, validAgents)
+	}
+	// Route the adapter's Ingest warnings through the same styled writer.
+	// Adapters that don't implement the setter (the noop adapter today) keep
+	// writing to os.Stderr — fine, they emit no Ingest warnings anyway.
+	if s, ok := a.(adapterStderrSetter); ok {
+		s.SetStderr(warnW)
 	}
 	// Gate codex/cursor the same way `agent add` does: they're registered as
 	// noop adapters, so Ingest returns an empty canonical and import would
@@ -234,16 +254,16 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	var importErr error
 	switch component {
 	case "":
-		imp, importErr = importAllComponents(cmd, home, a, agentName, c, dryRun)
+		imp, importErr = importAllComponents(io, home, a, agentName, c)
 	default:
-		ids, err := importComponent(cmd, home, a, agentName, c, component, name, dryRun)
+		ids, err := importComponent(io, home, a, agentName, c, component, name)
 		importErr = err
 		imp.add(component, ids)
 		// A bulk component import (no name) that matched nothing is not an
 		// error — report it and exit cleanly. A named import that matched
 		// nothing already returned a "not found" error above.
 		if err == nil && len(ids) == 0 && name == "" {
-			fmt.Fprintf(cmd.OutOrStdout(), "no %s found in %s native config\n", component, agentName)
+			io.infof("no %s found in %s native config", component, agentName)
 		}
 	}
 
@@ -269,7 +289,7 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// imp (the items actually imported), so a partial failure seeds exactly what
 	// was written and an un-imported sibling's state is never re-stamped.
 	if seedErr := seedStateFromCurrentDest(home, agentName, reg, imp); seedErr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: import state seed failed: %v\n", seedErr)
+		io.warnf("import state seed failed: %v", seedErr)
 	}
 
 	// Warn if the destination file has additional pointers the canonical
@@ -279,12 +299,11 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// own) are out of scope by design, and the merge-keys writer's per-
 	// pointer OwnedKeys check preserves them on apply rather than colliding.
 	if warnings := unimportedDestPointers(home, agentName, reg); len(warnings) > 0 {
-		ew := cmd.ErrOrStderr()
-		fmt.Fprintln(ew, "note: these items exist in the destination but agentsync did not capture them:")
+		io.note("these items exist in the destination but agentsync did not capture them:")
 		for _, w := range warnings {
-			fmt.Fprintf(ew, "  %s\n", w)
+			fmt.Fprintf(io.err, "  %s\n", w)
 		}
-		fmt.Fprintln(ew, "  agentsync will leave them alone on apply (it only writes keys it owns). Import an item by name if you want agentsync to manage it.")
+		fmt.Fprintln(io.err, "  agentsync will leave them alone on apply (it only writes keys it owns). Import an item by name if you want agentsync to manage it.")
 	}
 	// Surface a partial-import error after seeding so the command still exits
 	// non-zero, but the components that were written are now owned.
@@ -561,6 +580,108 @@ func importVerb(dryRun bool) string {
 	return "imported"
 }
 
+// adapterStderrSetter is the optional setter each concrete adapter
+// (claude/opencode/codex) implements, letting CLI commands route the
+// adapter's Ingest warnings through a styled writer.
+type adapterStderrSetter interface{ SetStderr(io.Writer) }
+
+// importIO bundles the styled printer, the streams it writes to, and the
+// dry-run flag so every importXxx function emits its per-item lines, section
+// headers, and warnings through one consistent shape — the same green ✓ /
+// cyan → vocabulary `apply` and `status` use. The lazy `section` header keeps
+// component groups from showing a name with no rows under it.
+type importIO struct {
+	p      *ui.Printer
+	out    io.Writer
+	err    io.Writer
+	dryRun bool
+	// section is the component label printed once just before the first item
+	// in a full-agent walk (e.g. "mcp servers", "skills"). Empty for a named
+	// or single-component import, where the indented item lines stand alone.
+	section      string
+	sectionShown bool
+}
+
+// item prints one "imported X" / "would import X" line, prefixed with a glyph
+// and indented for readability. suffix is appended after path (e.g.
+// " (3 entries)" for hooks). Calling this lazily flushes the section header
+// the first time, so an empty component prints nothing.
+func (i *importIO) item(path, suffix string) {
+	i.flushSection()
+	if i.dryRun {
+		fmt.Fprintf(i.out, "  %s would import %s%s\n", i.p.Cyan(ui.GlyphArrow), path, suffix)
+		return
+	}
+	fmt.Fprintf(i.out, "  %s imported %s%s\n", i.p.Green(ui.GlyphOK), path, suffix)
+}
+
+// flushSection prints the pending section header (if any) once. Callers should
+// not need to invoke this directly — item() and warn() do it for the writer
+// side; the full-agent walker resets section state between components.
+func (i *importIO) flushSection() {
+	if i.section == "" || i.sectionShown {
+		return
+	}
+	fmt.Fprintln(i.out, i.p.Faint(i.section))
+	i.sectionShown = true
+}
+
+// warn emits a "warning: …" line. Styling (bold-yellow "⚠️ warning:") is
+// applied by the ui.WarnWriter wrapping i.err — emitting the plain prefix
+// here means adapter Ingest, capture, and importIO all share one styling
+// point, and no caller has to know about it. msg should not include a
+// trailing newline; warn appends one.
+func (i *importIO) warn(msg string) {
+	fmt.Fprintf(i.err, "warning: %s\n", msg)
+}
+
+// note prints a cyan "note:" prefix followed by msg, for informational lines
+// that aren't problems — matches the styling status.go uses for the same
+// "this is FYI, not a warning" tier. msg should not include a trailing
+// newline; note appends one.
+func (i *importIO) note(msg string) {
+	fmt.Fprintf(i.err, "%s %s\n", i.p.Cyan("note:"), msg)
+}
+
+// warnf is warn + fmt.Sprintf for the common "%v / %q" formatting.
+func (i *importIO) warnf(format string, args ...any) {
+	i.warn(fmt.Sprintf(format, args...))
+}
+
+// note prints a yellow "agentsync:" prefix (matching apply.go) for diagnostics
+// that aren't warnings about user data but about how agentsync is proceeding.
+func (i *importIO) notef(format string, args ...any) {
+	fmt.Fprintf(i.err, "%s ", i.p.Yellow("agentsync:"))
+	fmt.Fprintf(i.err, format, args...)
+	if !strings.HasSuffix(format, "\n") {
+		fmt.Fprintln(i.err)
+	}
+}
+
+// info prints a faint informational line on stdout — for "nothing to do"
+// outcomes the user still wants confirmed, like "no importable items found".
+func (i *importIO) infof(format string, args ...any) {
+	fmt.Fprintf(i.out, "%s ", i.p.Faint(ui.GlyphInfo))
+	fmt.Fprintf(i.out, format, args...)
+	if !strings.HasSuffix(format, "\n") {
+		fmt.Fprintln(i.out)
+	}
+}
+
+// sectionLabel maps the internal component key to the friendly header shown in
+// a full-agent walk. Plural / two-word forms make the header scan as a heading,
+// not as a tag.
+var sectionLabel = map[string]string{
+	"mcp":     "mcp servers",
+	"lsp":     "lsp servers",
+	"skill":   "skills",
+	"agent":   "subagents",
+	"command": "commands",
+	"hook":    "hooks",
+	"memory":  "memory",
+	"plugin":  "plugins",
+}
+
 // importedSet records which component identities an import actually captured,
 // so the state seeder can scope itself to exactly those items and not re-stamp
 // (and thereby mask drift on) un-imported siblings. Plugins + marketplaces are
@@ -603,44 +724,51 @@ func (s *importedSet) add(component string, ids []string) {
 
 // importComponent imports one component class from c. When name is empty it
 // imports every entry of that component (the bulk form); when name is set it
-// imports just that entry and errors if it is absent. When dryRun is set it
-// writes nothing and only reports what it would write. It returns the identities
+// imports just that entry and errors if it is absent. The io carries the
+// dry-run flag (which writes nothing and only reports what it would write) and
+// the styled writers per-item lines go through. It returns the identities
 // (server id, skill/subagent/command name, hook event) that were (or would be)
 // imported; len is the item count.
-func importComponent(cmd *cobra.Command, home string, a adapter.Adapter, agentName string, c source.Canonical, component, name string, dryRun bool) ([]string, error) {
+func importComponent(io *importIO, home string, a adapter.Adapter, agentName string, c source.Canonical, component, name string) ([]string, error) {
 	switch component {
 	case "mcp":
-		return importMCP(cmd, home, c, name, dryRun)
+		return importMCP(io, home, c, name)
 	case "skill":
-		return importSkill(cmd, home, c, name, dryRun)
+		return importSkill(io, home, c, name)
 	case "agent", "subagent":
-		return importSubagent(cmd, home, c, name, dryRun)
+		return importSubagent(io, home, c, name)
 	case "command":
-		return importCommand(cmd, home, c, name, dryRun)
+		return importCommand(io, home, c, name)
 	case "hook":
-		return importHook(cmd, home, c, name, dryRun)
+		return importHook(io, home, c, name)
 	case "lsp":
-		return importLSP(cmd, home, c, name, dryRun)
+		return importLSP(io, home, c, name)
 	case "memory":
-		return importMemory(cmd, home, c, dryRun)
+		return importMemory(io, home, c)
 	case "plugin":
-		return importPlugins(cmd, home, agentName, a, name, dryRun)
+		return importPlugins(io, home, agentName, a, name)
 	default:
 		return nil, fmt.Errorf("unknown component %q; valid: mcp, skill, agent, command, hook, lsp, memory, plugin", component)
 	}
 }
 
-// importAllComponents imports every importable component for the agent and
-// prints a one-line summary. Empty components are skipped silently; an agent
-// with nothing to import reports that and exits cleanly. dryRun is threaded
-// through so the preview writes nothing. The returned set names everything
-// captured, so the caller can scope state seeding to it.
-func importAllComponents(cmd *cobra.Command, home string, a adapter.Adapter, agentName string, c source.Canonical, dryRun bool) (importedSet, error) {
+// importAllComponents imports every importable component for the agent. Each
+// non-empty component gets a faint section header above its items (printed
+// lazily so an empty component prints nothing), followed by a bold summary
+// line and a faint breakdown. dryRun is carried on the io so the preview
+// writes nothing. The returned set names everything captured, so the caller
+// can scope state seeding to it.
+func importAllComponents(io *importIO, home string, a adapter.Adapter, agentName string, c source.Canonical) (importedSet, error) {
 	var imp importedSet
 	counts := map[string]int{}
 	total := 0
 	for _, comp := range importComponentOrder {
-		ids, err := importComponent(cmd, home, a, agentName, c, comp, "", dryRun)
+		// Set up the lazy section header for this component. The header is
+		// printed by io.item() on the first row; if there are no rows, the
+		// header is silently dropped — so an empty component is invisible.
+		io.section = sectionLabel[comp]
+		io.sectionShown = false
+		ids, err := importComponent(io, home, a, agentName, c, comp, "")
 		// Seed whatever WAS written even on error: a component can fail partway
 		// after writing earlier items, and those must be owned or the next apply
 		// foreign-collides on a file just imported from.
@@ -653,25 +781,44 @@ func importAllComponents(cmd *cobra.Command, home string, a adapter.Adapter, age
 			total += len(ids)
 		}
 	}
+	// Clear the section state so any later non-walk caller (none today, but the
+	// io is reused for the seed/foreign-pointer warnings below) doesn't pick up
+	// a stale header.
+	io.section = ""
+	io.sectionShown = false
+
 	if total == 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "no importable items found in %s native config\n", agentName)
+		io.infof("no importable items found in %s native config", agentName)
 		return imp, nil
 	}
+
+	noun := "items"
+	if total == 1 {
+		noun = "item"
+	}
+	verb := importVerb(io.dryRun)
+	glyph := io.p.Green(ui.GlyphOK)
+	if io.dryRun {
+		glyph = io.p.Cyan(ui.GlyphArrow)
+	}
+	fmt.Fprintln(io.out, "")
+	fmt.Fprintf(io.out, "%s %s\n", glyph,
+		io.p.Bold(fmt.Sprintf("%s %d %s from %s", verb, total, noun, agentName)))
 	var parts []string
 	for _, comp := range importComponentOrder {
 		if counts[comp] > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", counts[comp], comp))
 		}
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "%s %d item(s) from %s: %s\n", importVerb(dryRun), total, agentName, strings.Join(parts, ", "))
+	fmt.Fprintf(io.out, "  %s\n", io.p.Faint(strings.Join(parts, "  ·  ")))
 	return imp, nil
 }
 
 // importMCP captures the MCP server named name (or all of them when name is
 // empty). Capture.Capture batches the whole slice in one call, so it
 // re-references secrets and preserves source-only fields for every server.
-// When dryRun is set it reports the targets without writing.
-func importMCP(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) ([]string, error) {
+// When io.dryRun is set it reports the targets without writing.
+func importMCP(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
 	var matched []source.MCPServer
 	for _, m := range c.MCPServers {
 		if name == "" || m.ID == name {
@@ -691,9 +838,9 @@ func importMCP(cmd *cobra.Command, home string, c source.Canonical, name string,
 			return nil, err
 		}
 	}
-	if !dryRun {
+	if !io.dryRun {
 		single := source.Canonical{MCPServers: matched}
-		if res, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
+		if res, err := capture.Capture(home, &single, capture.Opts{Warn: io.err}); err != nil {
 			// Seed the servers capture DID write before failing, so a partial
 			// import doesn't leave them foreign-collided on the next apply.
 			return idsFromWritten(res.Written), err
@@ -701,7 +848,7 @@ func importMCP(cmd *cobra.Command, home string, c source.Canonical, name string,
 	}
 	ids := make([]string, len(matched))
 	for i, m := range matched {
-		fmt.Fprintf(cmd.OutOrStdout(), "%s mcp/%s.toml\n", importVerb(dryRun), m.ID)
+		io.item(fmt.Sprintf("mcp/%s.toml", m.ID), "")
 		ids[i] = m.ID
 	}
 	return ids, nil
@@ -718,7 +865,7 @@ func idsFromWritten(written []string) []string {
 	return out
 }
 
-func importSkill(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) ([]string, error) {
+func importSkill(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
 	var matched []source.Skill
 	for _, sk := range c.Skills {
 		if name == "" || sk.Name == name {
@@ -738,20 +885,20 @@ func importSkill(cmd *cobra.Command, home string, c source.Canonical, name strin
 	}
 	names := make([]string, 0, len(matched))
 	for _, sk := range matched {
-		if !dryRun {
+		if !io.dryRun {
 			if err := source.WriteSkill(home, sk); err != nil {
 				// Return the names already written so the caller seeds them;
 				// otherwise the next apply foreign-collides on a file just imported.
 				return names, fmt.Errorf("write skill %s: %w", sk.Name, err)
 			}
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s skills/%s/SKILL.md\n", importVerb(dryRun), sk.Name)
+		io.item(fmt.Sprintf("skills/%s/SKILL.md", sk.Name), "")
 		names = append(names, sk.Name)
 	}
 	return names, nil
 }
 
-func importSubagent(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) ([]string, error) {
+func importSubagent(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
 	var matched []source.Subagent
 	for _, sa := range c.Subagents {
 		if name == "" || sa.Name == name {
@@ -771,18 +918,18 @@ func importSubagent(cmd *cobra.Command, home string, c source.Canonical, name st
 	}
 	names := make([]string, 0, len(matched))
 	for _, sa := range matched {
-		if !dryRun {
+		if !io.dryRun {
 			if err := source.WriteSubagent(home, sa); err != nil {
 				return names, fmt.Errorf("write subagent %s: %w", sa.Name, err)
 			}
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s agents/%s.md\n", importVerb(dryRun), sa.Name)
+		io.item(fmt.Sprintf("agents/%s.md", sa.Name), "")
 		names = append(names, sa.Name)
 	}
 	return names, nil
 }
 
-func importCommand(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) ([]string, error) {
+func importCommand(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
 	var matched []source.Command
 	for _, cm := range c.Commands {
 		if name == "" || cm.Name == name {
@@ -802,12 +949,12 @@ func importCommand(cmd *cobra.Command, home string, c source.Canonical, name str
 	}
 	names := make([]string, 0, len(matched))
 	for _, cm := range matched {
-		if !dryRun {
+		if !io.dryRun {
 			if err := source.WriteCommand(home, cm); err != nil {
 				return names, fmt.Errorf("write command %s: %w", cm.Name, err)
 			}
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s commands/%s.md\n", importVerb(dryRun), cm.Name)
+		io.item(fmt.Sprintf("commands/%s.md", cm.Name), "")
 		names = append(names, cm.Name)
 	}
 	return names, nil
@@ -816,9 +963,9 @@ func importCommand(cmd *cobra.Command, home string, c source.Canonical, name str
 // importHook captures hooks for the named event (or all events when name is
 // empty). name addresses an event, not an individual hook. It returns the
 // DISTINCT events captured (one source file per event); the per-event line
-// still reports the entry count. When dryRun is set it reports the target event
-// files without writing.
-func importHook(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) ([]string, error) {
+// still reports the entry count. When io.dryRun is set it reports the target
+// event files without writing.
+func importHook(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
 	var matched []source.Hook
 	for _, h := range c.Hooks {
 		if name == "" || h.Event == name {
@@ -836,9 +983,9 @@ func importHook(cmd *cobra.Command, home string, c source.Canonical, name string
 			return nil, err
 		}
 	}
-	if !dryRun {
+	if !io.dryRun {
 		single := source.Canonical{Hooks: matched}
-		if res, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
+		if res, err := capture.Capture(home, &single, capture.Opts{Warn: io.err}); err != nil {
 			return idsFromWritten(res.Written), err
 		}
 	}
@@ -852,12 +999,12 @@ func importHook(cmd *cobra.Command, home string, c source.Canonical, name string
 		perEvent[h.Event]++
 	}
 	for _, ev := range order {
-		fmt.Fprintf(cmd.OutOrStdout(), "%s hooks/%s.toml (%d entries)\n", importVerb(dryRun), ev, perEvent[ev])
+		io.item(fmt.Sprintf("hooks/%s.toml", ev), fmt.Sprintf(" (%d entries)", perEvent[ev]))
 	}
 	return order, nil
 }
 
-func importLSP(cmd *cobra.Command, home string, c source.Canonical, name string, dryRun bool) ([]string, error) {
+func importLSP(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
 	var matched []source.LSPServer
 	for _, ls := range c.LSPServers {
 		if name == "" || ls.ID == name {
@@ -875,21 +1022,21 @@ func importLSP(cmd *cobra.Command, home string, c source.Canonical, name string,
 			return nil, err
 		}
 	}
-	if !dryRun {
+	if !io.dryRun {
 		single := source.Canonical{LSPServers: matched}
-		if res, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
+		if res, err := capture.Capture(home, &single, capture.Opts{Warn: io.err}); err != nil {
 			return idsFromWritten(res.Written), err
 		}
 	}
 	ids := make([]string, 0, len(matched))
 	for _, ls := range matched {
-		fmt.Fprintf(cmd.OutOrStdout(), "%s lsp/%s.toml\n", importVerb(dryRun), ls.ID)
+		io.item(fmt.Sprintf("lsp/%s.toml", ls.ID), "")
 		ids = append(ids, ls.ID)
 	}
 	return ids, nil
 }
 
-func importMemory(cmd *cobra.Command, home string, c source.Canonical, dryRun bool) ([]string, error) {
+func importMemory(io *importIO, home string, c source.Canonical) ([]string, error) {
 	// Memory is a single block, not a named collection; nothing to write when
 	// the agent carries no memory (the common case during a full-agent import).
 	if strings.TrimSpace(c.Memory.Body) == "" {
@@ -902,10 +1049,10 @@ func importMemory(cmd *cobra.Command, home string, c source.Canonical, dryRun bo
 	switch {
 	case err != nil:
 		// Markers present but malformed/ambiguous — skip rather than guess.
-		fmt.Fprintf(cmd.ErrOrStderr(), "agentsync: skipping memory import — fragment markers could not be reversed (%v). Reconcile memory/ by hand, then apply.\n", err)
+		io.notef("skipping memory import — fragment markers could not be reversed (%v). Reconcile memory/ by hand, then apply.", err)
 		return nil, nil
 	case hadMarkers:
-		if !dryRun {
+		if !io.dryRun {
 			if werr := source.WriteMemory(home, mem); werr != nil {
 				return nil, fmt.Errorf("write memory: %w", werr)
 			}
@@ -914,16 +1061,16 @@ func importMemory(cmd *cobra.Command, home string, c source.Canonical, dryRun bo
 		// No markers (collision/legacy) but the source is fragment-composed:
 		// writing the expanded body would inline the @imports and orphan the
 		// fragment files — skip with a warning rather than flatten silently.
-		fmt.Fprintf(cmd.ErrOrStderr(), "agentsync: skipping memory import — canonical memory uses fragments/ and the imported memory has no reversible markers; writing it back would inline the fragments and orphan their files. Edit memory/ directly, then apply.\n")
+		io.notef("skipping memory import — canonical memory uses fragments/ and the imported memory has no reversible markers; writing it back would inline the fragments and orphan their files. Edit memory/ directly, then apply.")
 		return nil, nil
 	default:
-		if !dryRun {
+		if !io.dryRun {
 			if werr := source.WriteMemory(home, c.Memory); werr != nil {
 				return nil, fmt.Errorf("write memory: %w", werr)
 			}
 		}
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "%s memory/AGENTS.md\n", importVerb(dryRun))
+	io.item("memory/AGENTS.md", "")
 	// A non-empty marker so importedSet.add flags memory was captured (it has no
 	// id; the seeder includes c.Memory when this is set).
 	return []string{"memory"}, nil
@@ -955,7 +1102,7 @@ func importMemory(cmd *cobra.Command, home string, c source.Canonical, dryRun bo
 // adapter intentionally does not render enabledPlugins / extraKnownMarketplaces
 // back into settings.json either (see the note at the bottom of claude.Render),
 // so there is nothing to seed there.
-func importPlugins(cmd *cobra.Command, home, agentName string, a adapter.Adapter, name string, dryRun bool) ([]string, error) {
+func importPlugins(io *importIO, home, agentName string, a adapter.Adapter, name string) ([]string, error) {
 	pi, ok := a.(adapter.PluginIngester)
 	if !ok {
 		return nil, nil
@@ -987,10 +1134,6 @@ func importPlugins(cmd *cobra.Command, home, agentName string, a adapter.Adapter
 		return nil, nil
 	}
 
-	out := cmd.OutOrStdout()
-	ew := cmd.ErrOrStderr()
-	verb := importVerb(dryRun)
-
 	// Resolve (and, on a real run, fetch) each needed marketplace exactly once.
 	// The cached value is the agentsync marketplace name a plugin installs from;
 	// "" marks an unresolvable marketplace already warned about.
@@ -1015,32 +1158,32 @@ func importPlugins(cmd *cobra.Command, home, agentName string, a adapter.Adapter
 		// fetch it, and register it.
 		nm, known := mpByID[mpID]
 		if !known {
-			fmt.Fprintf(ew, "warning: skipping plugins from marketplace %q: registered in neither %s's "+
-				"native config nor agentsync; run `agentsync marketplace add <source>` then re-import\n",
+			io.warnf("skipping plugins from marketplace %q: registered in neither %s's "+
+				"native config nor agentsync; run `agentsync marketplace add <source>` then re-import",
 				mpID, agentName)
 			resolved[mpID] = ""
 			return "", false
 		}
 		src, rawURL, mappable := claudeSourceToAgentsync(nm.Source)
 		if !mappable {
-			fmt.Fprintf(ew, "warning: skipping marketplace %q: unsupported source type %q\n", mpID, nm.Source.Type)
+			io.warnf("skipping marketplace %q: unsupported source type %q", mpID, nm.Source.Type)
 			resolved[mpID] = ""
 			return "", false
 		}
-		if dryRun {
+		if io.dryRun {
 			// No fetch, so the declared agentsync name is unknown; preview by the
 			// native id. The real run resolves and prints the actual filename.
-			fmt.Fprintf(out, "%s marketplaces/%s.toml\n", verb, mpID)
+			io.item(fmt.Sprintf("marketplaces/%s.toml", mpID), "")
 			resolved[mpID] = mpID
 			return mpID, true
 		}
 		mpName, _, ferr := addMarketplaceSource(home, src, rawURL)
 		if ferr != nil {
-			fmt.Fprintf(ew, "warning: skipping marketplace %q: %v\n", mpID, ferr)
+			io.warnf("skipping marketplace %q: %v", mpID, ferr)
 			resolved[mpID] = ""
 			return "", false
 		}
-		fmt.Fprintf(out, "%s marketplaces/%s.toml\n", verb, mpName)
+		io.item(fmt.Sprintf("marketplaces/%s.toml", mpName), "")
 		resolved[mpID] = mpName
 		return mpName, true
 	}
@@ -1048,30 +1191,30 @@ func importPlugins(cmd *cobra.Command, home, agentName string, a adapter.Adapter
 	var ids []string
 	for _, pl := range want {
 		if pl.MarketplaceID == "" {
-			fmt.Fprintf(ew, "warning: skipping plugin %q: native config records no marketplace for it\n", pl.Name)
+			io.warnf("skipping plugin %q: native config records no marketplace for it", pl.Name)
 			continue
 		}
 		// The plugin name becomes plugins/<name>.toml; validate it up front (and
 		// in dry-run) so a hostile native id can't escape the source dir and the
 		// preview matches a real import.
 		if verr := source.ValidateComponentID("plugin", pl.Name); verr != nil {
-			fmt.Fprintf(ew, "warning: skipping plugin %q: %v\n", pl.Name, verr)
+			io.warnf("skipping plugin %q: %v", pl.Name, verr)
 			continue
 		}
 		mpName, mpOK := resolveMp(pl.MarketplaceID)
 		if !mpOK {
 			continue
 		}
-		if dryRun {
-			fmt.Fprintf(out, "%s plugins/%s.toml\n", verb, pl.Name)
+		if io.dryRun {
+			io.item(fmt.Sprintf("plugins/%s.toml", pl.Name), "")
 			ids = append(ids, pl.Name)
 			continue
 		}
 		if _, ierr := installPluginInto(home, pl.Name, mpName); ierr != nil {
-			fmt.Fprintf(ew, "warning: skipping plugin %q from %q: %v\n", pl.Name, mpName, ierr)
+			io.warnf("skipping plugin %q from %q: %v", pl.Name, mpName, ierr)
 			continue
 		}
-		fmt.Fprintf(out, "%s plugins/%s.toml\n", verb, pl.Name)
+		io.item(fmt.Sprintf("plugins/%s.toml", pl.Name), "")
 		ids = append(ids, pl.Name)
 	}
 	return ids, nil

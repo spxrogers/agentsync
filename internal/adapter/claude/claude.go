@@ -27,6 +27,13 @@ func (a *Adapter) stderr() io.Writer {
 	return os.Stderr
 }
 
+// SetStderr replaces the warning sink the adapter writes Ingest warnings to,
+// so a CLI command can route adapter warnings through the same styled writer
+// it uses for its own output. Adapters built via the registry default to
+// os.Stderr; commands that wrap stderr (e.g. `import` styling "warning:"
+// labels) call this to redirect.
+func (a *Adapter) SetStderr(w io.Writer) { a.opts.Stderr = w }
+
 // Adapter implements adapter.Adapter for Claude Code.
 type Adapter struct {
 	opts Options
