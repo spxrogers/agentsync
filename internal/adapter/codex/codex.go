@@ -9,6 +9,7 @@
 package codex
 
 import (
+	"io"
 	"os"
 	"os/exec"
 
@@ -20,6 +21,9 @@ type Options struct {
 	TargetRoot string // honors AGENTSYNC_TARGET_ROOT (real "/Users/x" in production)
 	// LookPath overrides exec.LookPath for testing. nil means use exec.LookPath.
 	LookPath func(file string) (string, error)
+	// Stderr receives Ingest warnings (lenient-YAML notices, dropped components).
+	// nil means os.Stderr.
+	Stderr io.Writer
 }
 
 // Adapter implements adapter.Adapter (and adapter.PluginIngester) for Codex CLI.
@@ -27,6 +31,14 @@ type Adapter struct{ opts Options }
 
 // New constructs a Codex adapter.
 func New(opts Options) *Adapter { return &Adapter{opts: opts} }
+
+// stderr returns the configured warning sink, defaulting to os.Stderr.
+func (a *Adapter) stderr() io.Writer {
+	if a.opts.Stderr != nil {
+		return a.opts.Stderr
+	}
+	return os.Stderr
+}
 
 func (a *Adapter) Name() string { return "codex" }
 

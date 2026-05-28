@@ -2,6 +2,7 @@
 package claude
 
 import (
+	"io"
 	"os"
 	"os/exec"
 
@@ -13,6 +14,17 @@ type Options struct {
 	TargetRoot string // honors AGENTSYNC_TARGET_ROOT (real "/Users/x" in production)
 	// LookPath overrides exec.LookPath for testing. nil means use exec.LookPath.
 	LookPath func(file string) (string, error)
+	// Stderr receives Ingest warnings (lenient-YAML notices, dropped components).
+	// nil means os.Stderr. Tests inject a bytes.Buffer to assert on warnings.
+	Stderr io.Writer
+}
+
+// stderr returns the configured warning sink, defaulting to os.Stderr.
+func (a *Adapter) stderr() io.Writer {
+	if a.opts.Stderr != nil {
+		return a.opts.Stderr
+	}
+	return os.Stderr
 }
 
 // Adapter implements adapter.Adapter for Claude Code.
