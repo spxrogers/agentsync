@@ -246,6 +246,55 @@ func renderStatusText(p *ui.Printer, model statusModel) {
 		fmt.Fprintln(p.Out, "")
 		fmt.Fprintln(p.Out, strings.Join(segs, "  ·  "))
 	}
+	renderStatusLegend(p, model.Summary)
+}
+
+// classLegend gives a one-line, action-focused explanation of what `apply`
+// will do for an item in each drift class. Phrased so each line reads as a
+// continuation of "apply will…". "clean" is intentionally omitted: the word
+// is self-evident and adding "no action" would just be noise; the legend
+// itself is also skipped entirely when the summary contains nothing but
+// "clean" items, so a fully-synced status report stays as terse as today.
+var classLegend = map[string]string{
+	"converged":         "no action (source and dest now match)",
+	"new":               "will be created",
+	"pending":           "will be updated to match source",
+	"drift":             "will be overwritten (use reconcile to keep the dest edit)",
+	"conflict":          "will be overwritten (use reconcile to merge the dest edit)",
+	"foreign-collision": "will be backed up and overwritten",
+	"orphan":            "will be deleted",
+	"orphan-drifted":    "will be deleted (a local edit will be lost)",
+}
+
+// renderStatusLegend prints a brief glossary of the drift classes that
+// actually appear in the summary. Each line is colored to match the per-item
+// dashboard above and prefixed with the same glyph, so the user can scan
+// from a body row to its meaning by shape and color, not just by word.
+func renderStatusLegend(p *ui.Printer, summary map[string]int) {
+	type entry struct {
+		cls, msg string
+	}
+	var rows []entry
+	for _, cls := range classOrder {
+		if summary[cls] == 0 {
+			continue
+		}
+		msg, ok := classLegend[cls]
+		if !ok {
+			continue
+		}
+		rows = append(rows, entry{cls, msg})
+	}
+	if len(rows) == 0 {
+		return
+	}
+	fmt.Fprintln(p.Out, "")
+	fmt.Fprintln(p.Out, p.Faint("What `apply` will do:"))
+	for _, r := range rows {
+		glyph, color := styleClass(p, r.cls)
+		label := ui.Pad(glyph+" "+r.cls, 20)
+		fmt.Fprintf(p.Out, "  %s %s\n", color(label), p.Faint(r.msg))
+	}
 }
 
 // emitStatusWarnings writes advisory diagnostics to stderr: orphaned state from

@@ -28,6 +28,16 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   bold "plugin:" labels, semantic color on the coverage marks (green=full,
   yellow=partial, red=none), faint trailing counts. With color disabled the
   output is byte-identical to before, so existing fixtures hold.
+- **`status` explains its drift classes inline** — the formatted dashboard
+  now prints a brief "What `apply` will do:" legend after the summary footer,
+  with one action-focused line per drift class actually present (`new` → will
+  be created; `pending` → will be updated to match source; `drift` → will be
+  overwritten, use `reconcile` to keep the dest edit; `foreign-collision` →
+  will be backed up and overwritten; etc.). Each line uses the same glyph and
+  color as the per-item rows above so you can scan from a row to its meaning
+  by shape and color. Suppressed entirely when only `clean` items exist (the
+  word is self-evident) and excluded from `--json` (the class field is the
+  machine contract).
 - **Spinners on slow network ops** — `agentsync update` and `agentsync
   marketplace add` animate a braille-frame spinner on stderr while
   marketplace fetches and plugin-manifest pulls are in flight. The spinner is

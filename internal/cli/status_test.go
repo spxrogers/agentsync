@@ -222,3 +222,56 @@ func TestStatus_JSONOutput(t *testing.T) {
 		t.Errorf("expected one agent 'claude'; got %#v", got.Agents)
 	}
 }
+
+// TestStatus_LegendExplainsDriftClasses locks in the legend contract: status
+// emits a brief "What `apply` will do:" glossary for every drift class that
+// actually appears in the summary, so a newcomer can scan from a row to its
+// meaning without leaving the terminal. The legend is suppressed entirely
+// when everything is clean (the word is self-evident) and entirely from
+// --json output (the class field is the machine-readable contract).
+func TestStatus_LegendExplainsDriftClasses(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	// Drift the dest so the summary contains a non-clean class.
+	dst := filepath.Join(tmp, ".claude.json")
+	body, _ := os.ReadFile(dst)
+	_ = os.WriteFile(dst, []byte(strings.ReplaceAll(string(body), `"npx"`, `"npm"`)), 0o644)
+
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "What `apply` will do:") {
+		t.Errorf("expected the legend header; got:\n%s", out)
+	}
+	// The drift class is present in the summary, so its explanation must appear.
+	if !strings.Contains(out, "will be overwritten") {
+		t.Errorf("expected the 'drift' legend line; got:\n%s", out)
+	}
+	// "clean" is self-evident and the legend must NOT list it (even though
+	// the summary footer counts clean items).
+	if strings.Contains(out, "clean ") && strings.Count(out, "clean") > 1 &&
+		strings.Contains(out, "no action") {
+		t.Errorf("legend should not list 'clean'; got:\n%s", out)
+	}
+	// --json must stay legend-free so the payload is parseable.
+	jsonOut, err := runCLI(t, env, "status", "--json")
+	if err != nil {
+		t.Fatalf("status --json: %v\n%s", err, jsonOut)
+	}
+	if strings.Contains(jsonOut, "What `apply` will do:") {
+		t.Errorf("--json must not include the legend; got:\n%s", jsonOut)
+	}
+}
