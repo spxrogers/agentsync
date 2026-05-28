@@ -503,13 +503,18 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `secrets set\|get\|edit <key>` | Manage age-encrypted secrets. | `set --stdin` |
 | `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). | `--dry-run --scope --project` |
-| `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. | `--scope --project` |
-| `diff [<path>]` | Show pending/drift changes; secrets redacted. | `--scope --project` |
+| `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. | `--scope --project --json` |
+| `diff [<path>]` | Show pending/drift changes; secrets redacted. | `--scope --project --json` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. Includes `plugin` (Claude), which re-fetches installed plugins + marketplaces **(network)**. | `--dry-run` |
 | `explain <plugin>` | Show a plugin's per-agent translation coverage. | `--json` |
 
-Global: `-v/--verbose` for verbose logging on any command.
+Global: `-v/--verbose` for verbose logging on any command. `--color=auto|always|never`
+controls whether output is styled with ANSI color and bold (default `auto` — on
+for a TTY, off when piped/redirected; honors `NO_COLOR`). `status --json` and
+`diff [<path>] --json` emit the structured report instead of the formatted one,
+suitable for CI gates and dashboards (`diff --json` masks the same resolved
+secrets the formatted diff does).
 
 ---
 

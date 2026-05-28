@@ -14,18 +14,38 @@ import (
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
+
+// diffHunk is one changed file or merged key. Source and Dest are the
+// secret-MASKED renderings; --json emits these verbatim, so the same redaction
+// that protects the formatted diff protects the JSON.
+type diffHunk struct {
+	Path    string `json:"path"`
+	Pointer string `json:"pointer,omitempty"`
+	Source  string `json:"source"`
+	Dest    string `json:"dest"`
+}
+
+type diffModel struct {
+	Hunks []diffHunk `json:"hunks"`
+}
 
 func newDiffCmd() *cobra.Command {
 	var (
 		scopeFlag   string
 		projectFlag string
+		jsonOut     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "diff [<path>]",
 		Short: "print unified diff between source-rendered content and destination",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			p, perr := newPrinter(cmd)
+			if perr != nil {
+				return perr
+			}
 			filterPath := ""
 			if len(args) == 1 {
 				fp, err := filepath.Abs(args[0])
@@ -59,7 +79,10 @@ func newDiffCmd() *cobra.Command {
 				}
 			}
 			if len(agents) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no agents enabled; run `agentsync agent add claude` (or opencode)")
+				if jsonOut {
+					return emitJSON(p.Out, diffModel{Hunks: []diffHunk{}})
+				}
+				fmt.Fprintln(p.Out, "no agents enabled; run `agentsync agent add claude` (or opencode)")
 				return nil
 			}
 			// diff renders the TEMPLATED canonical (it masks the destination's
@@ -95,10 +118,11 @@ func newDiffCmd() *cobra.Command {
 			}
 			redact := secrets.CollectResolved(&c, secBackend, envBackend)
 
-			dmp := diffmatchpatch.New()
-			w := cmd.OutOrStdout()
-			hasDiff := false
-
+			// Collect all hunks (masked src/dst) first, then render either the
+			// formatted diff or --json. Pretty rendering and JSON share the
+			// same masked strings, so the secret-leak guards above protect
+			// both modes.
+			var hunks []diffHunk
 			for _, name := range reg.Names() {
 				res, ok := plan.PerAgent[name]
 				if !ok {
@@ -121,18 +145,12 @@ func newDiffCmd() *cobra.Command {
 						_ = json.Unmarshal(op.Content, &ours)
 						final := readDestFile(op.MergeStrategy, op.Path)
 						for _, ptr := range render.CollectPointers(ours, "") {
-							srcVal := getPointerValue(ours, ptr)
-							dstVal := getPointerValue(final, ptr)
-							srcStr := secrets.MaskResolved(marshalPretty(srcVal), redact)
-							dstStr := secrets.MaskResolved(marshalPretty(dstVal), redact)
+							srcStr := secrets.MaskResolved(marshalPretty(getPointerValue(ours, ptr)), redact)
+							dstStr := secrets.MaskResolved(marshalPretty(getPointerValue(final, ptr)), redact)
 							if srcStr == dstStr {
 								continue
 							}
-							hasDiff = true
-							fmt.Fprintf(w, "--- source  %s#%s\n", op.Path, ptr)
-							fmt.Fprintf(w, "+++ dest    %s#%s\n", op.Path, ptr)
-							diffs := dmp.DiffMain(dstStr, srcStr, false)
-							fmt.Fprintln(w, dmp.DiffPrettyText(diffs))
+							hunks = append(hunks, diffHunk{Path: op.Path, Pointer: ptr, Source: srcStr, Dest: dstStr})
 						}
 					} else {
 						// File-level diff.
@@ -149,24 +167,67 @@ func newDiffCmd() *cobra.Command {
 						if srcStr == dstStr {
 							continue
 						}
-						hasDiff = true
-						fmt.Fprintf(w, "--- source  %s\n", op.Path)
-						fmt.Fprintf(w, "+++ dest    %s\n", op.Path)
-						diffs := dmp.DiffMain(dstStr, srcStr, false)
-						fmt.Fprintln(w, dmp.DiffPrettyText(diffs))
+						hunks = append(hunks, diffHunk{Path: op.Path, Source: srcStr, Dest: dstStr})
 					}
 				}
 			}
 
-			if !hasDiff {
-				fmt.Fprintln(w, "no diff")
+			if jsonOut {
+				return emitJSON(p.Out, diffModel{Hunks: hunks})
+			}
+
+			if len(hunks) == 0 {
+				fmt.Fprintln(p.Out, "no diff")
+				return nil
+			}
+
+			dmp := diffmatchpatch.New()
+			for _, h := range hunks {
+				label := h.Path
+				if h.Pointer != "" {
+					label = h.Path + "#" + h.Pointer
+				}
+				fmt.Fprintf(p.Out, "%s %s\n", p.Red("--- source"), label)
+				fmt.Fprintf(p.Out, "%s %s\n", p.Green("+++ dest  "), label)
+				diffs := dmp.DiffMain(h.Dest, h.Source, false)
+				fmt.Fprintln(p.Out, renderDiffText(p, diffs))
 			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: auto-detect from cwd)")
 	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the formatted diff")
 	return cmd
+}
+
+// renderDiffText turns a diffmatchpatch result into a printable string. In
+// color mode, insertions and deletions are highlighted green/red inline; in
+// plain mode (NO_COLOR, --color=never, or a non-terminal), inserts wrap as
+// {+text+} and deletes as [-text-] so the change is still legible when piped
+// to a file or grep. The previous implementation emitted raw ANSI in either
+// case, leaking escape codes into redirects.
+func renderDiffText(p *ui.Printer, diffs []diffmatchpatch.Diff) string {
+	var b strings.Builder
+	for _, d := range diffs {
+		switch d.Type {
+		case diffmatchpatch.DiffInsert:
+			if p.Color() {
+				b.WriteString(p.Green(d.Text))
+			} else {
+				b.WriteString("{+" + d.Text + "+}")
+			}
+		case diffmatchpatch.DiffDelete:
+			if p.Color() {
+				b.WriteString(p.Red(d.Text))
+			} else {
+				b.WriteString("[-" + d.Text + "-]")
+			}
+		default:
+			b.WriteString(d.Text)
+		}
+	}
+	return b.String()
 }
 
 func marshalPretty(v any) string {

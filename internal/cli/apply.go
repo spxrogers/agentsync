@@ -15,6 +15,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 func newApplyCmd() *cobra.Command {
@@ -50,6 +51,10 @@ func newApplyCmd() *cobra.Command {
 // applyRun is the lock-protected body of the apply command. It is split
 // out from newApplyCmd so the lock acquisition lives in one obvious place.
 func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFlag string) error {
+	p, err := newPrinter(cmd)
+	if err != nil {
+		return err
+	}
 	c, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag, false)
 	if err != nil {
 		return err
@@ -61,9 +66,9 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	// project tree the user didn't expect. The dry-run lists paths; the real
 	// apply otherwise printed only an op count.
 	if sc == adapter.ScopeProject {
-		fmt.Fprintf(cmd.ErrOrStderr(), "scope: project (%s)\n", projectRoot)
+		fmt.Fprintf(p.Err, "%s project (%s)\n", p.Faint("scope:"), projectRoot)
 	} else {
-		fmt.Fprintln(cmd.ErrOrStderr(), "scope: user")
+		fmt.Fprintf(p.Err, "%s user\n", p.Faint("scope:"))
 	}
 
 	// Resolve ${secret:...} and ${env:...} references before rendering. The
@@ -90,13 +95,13 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		// marker `agents` allowlist that intersects to nothing, so point
 		// there instead of at `agent add`.
 		if sc == adapter.ScopeProject {
-			fmt.Fprintf(cmd.ErrOrStderr(),
-				"agentsync: no agents are enabled after applying the project marker at %s; nothing to apply.\n"+
-					"  Check the [agents] allowlist in that project's .agentsync.toml.\n", projectRoot)
+			fmt.Fprintf(p.Err,
+				"%s no agents are enabled after applying the project marker at %s; nothing to apply.\n"+
+					"  Check the [agents] allowlist in that project's .agentsync.toml.\n", p.Yellow("agentsync:"), projectRoot)
 		} else {
-			fmt.Fprintln(cmd.ErrOrStderr(),
-				"agentsync: no agents are enabled in agentsync.toml; nothing to apply.\n"+
-					"  Run `agentsync agent add claude` (or opencode) to register an agent.")
+			fmt.Fprintf(p.Err,
+				"%s no agents are enabled in agentsync.toml; nothing to apply.\n"+
+					"  Run `agentsync agent add claude` (or opencode) to register an agent.\n", p.Yellow("agentsync:"))
 		}
 		return nil
 	}
@@ -115,24 +120,24 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		if err != nil {
 			return err
 		}
-		w := cmd.OutOrStdout()
-		fmt.Fprintf(w, "Plan: %d ops total across %d agent(s)\n", plan.Total(), len(plan.PerAgent))
+		w := p.Out
+		fmt.Fprintf(w, "%s %d ops total across %d agent(s)\n", p.Bold("Plan:"), plan.Total(), len(plan.PerAgent))
 		for _, name := range reg.Names() {
 			res, ok := plan.PerAgent[name]
 			if !ok {
 				continue
 			}
-			fmt.Fprintf(w, "  %-10s %d ops, %d skips\n", name, len(res.Ops), len(res.Skips))
+			fmt.Fprintf(w, "  %s %d ops, %d skips\n", p.Bold(ui.Pad(name, 10)), len(res.Ops), len(res.Skips))
 			// List every destination path so the user can see exactly
 			// what apply will touch. Without this the dry-run hides the
 			// most useful piece of information (which files will be
 			// written) behind an op count.
 			for _, op := range res.Ops {
-				if op.Action == "" || op.Action == "write" {
-					fmt.Fprintf(w, "    write %s\n", op.Path)
-				} else {
-					fmt.Fprintf(w, "    %-5s %s\n", op.Action, op.Path)
+				action := op.Action
+				if action == "" {
+					action = "write"
 				}
+				fmt.Fprintf(w, "    %s %s %s\n", p.Cyan(ui.GlyphArrow), p.Cyan(ui.Pad(action, 5)), op.Path)
 			}
 		}
 		// Foreign-collision preview: which destinations contain content
@@ -146,7 +151,8 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		}
 		if len(previews) > 0 {
 			fmt.Fprintln(w)
-			fmt.Fprintf(w, "Foreign collisions: %d (the real apply will back these up before overwriting)\n", len(previews))
+			fmt.Fprintf(w, "%s %d (the real apply will back these up before overwriting)\n",
+				p.Yellow(ui.GlyphWarn+" Foreign collisions:"), len(previews))
 			for _, r := range previews {
 				fmt.Fprintf(w, "  %s\n", r.String())
 			}
@@ -154,7 +160,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		report := render.BuildReport(c, plan, agents)
 		if len(report.Rows) > 0 {
 			fmt.Fprintln(w)
-			report.PrintText(w)
+			report.PrintTextStyled(w, p)
 		}
 		return nil
 	}
@@ -168,10 +174,10 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	}
 	collisions, written, unchanged, applyErr := render.Apply(plan, reg, s, home, userHome, sc, projectRoot)
 	if len(collisions) > 0 {
-		ew := cmd.ErrOrStderr()
-		fmt.Fprintf(ew, "agentsync: backed up %d pre-existing target(s) before overwriting:\n", len(collisions))
+		fmt.Fprintf(p.Err, "%s backed up %d pre-existing target(s) before overwriting:\n",
+			p.Yellow("agentsync:"), len(collisions))
 		for _, r := range collisions {
-			fmt.Fprintf(ew, "  %s\n", r.String())
+			fmt.Fprintf(p.Err, "  %s\n", r.String())
 		}
 	}
 
@@ -212,19 +218,19 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	// of a pre-existing native file). Best-effort; never fails the apply.
 	_ = render.PruneBackups(home, render.DefaultBackupKeep)
 
-	w := cmd.OutOrStdout()
+	w := p.Out
 	// Report a clean no-op distinctly from real work: when every destination
 	// path already held our exact bytes (write skipped, no mtime churn), say so
 	// instead of the misleading "applied: N ops".
 	if len(written) > 0 && len(unchanged) == len(written) {
-		fmt.Fprintf(w, "up to date: %d ops, no changes\n", plan.Total())
+		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green(fmt.Sprintf("up to date: %d ops, no changes", plan.Total())))
 	} else {
-		fmt.Fprintln(w, "applied:", plan.Total(), "ops")
+		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green(fmt.Sprintf("applied: %d ops", plan.Total())))
 	}
 	report := render.BuildReport(c, plan, agents)
 	if len(report.Rows) > 0 {
 		fmt.Fprintln(w)
-		report.PrintText(w)
+		report.PrintTextStyled(w, p)
 	}
 	return nil
 }

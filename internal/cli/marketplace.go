@@ -60,6 +60,10 @@ func newMarketplaceAddCmd() *cobra.Command {
 func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 	rawURL := args[0]
 	home := paths.AgentsyncHome(paths.OSEnv{})
+	p, err := newPrinter(cmd)
+	if err != nil {
+		return err
+	}
 
 	// Build the Source from the raw URL/path argument.
 	src, err := parseMarketplaceSource(rawURL)
@@ -67,7 +71,9 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	stopSpin := p.Spin(fmt.Sprintf("fetching marketplace %s", rawURL))
 	mpName, headSHA, err := addMarketplaceSource(home, src, rawURL)
+	stopSpin()
 	if err != nil {
 		return err
 	}
