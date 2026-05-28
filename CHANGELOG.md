@@ -16,7 +16,7 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 ### Added
 
 - **Styled CLI output and a `--color` flag** — `agentsync status`, `diff`,
-  `doctor`, and `apply` now render through a single presentation layer
+  `doctor`, `apply`, and `import` now render through a single presentation layer
   (`internal/ui`) with a curated semantic palette (green=synced, cyan=pending,
   red=drift, yellow=needs-decision) and the same `✓ ◐ ✗ → •` glyph vocabulary
   the capability matrix already uses. `status` gains a one-line summary footer
@@ -28,6 +28,14 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   bold "plugin:" labels, semantic color on the coverage marks (green=full,
   yellow=partial, red=none), faint trailing counts. With color disabled the
   output is byte-identical to before, so existing fixtures hold.
+- **`import` joins the styled-output set** — per-item lines carry a green `✓`
+  (real) or cyan `→` (dry-run) prefix; the full-agent walk groups items under
+  faint section headers (`mcp servers`, `skills`, …) printed lazily so an empty
+  component is invisible; the summary line is bold (`imported N items from
+  claude`) with a faint per-component breakdown underneath; the
+  foreign-collision and plugin-resolution warnings use the same yellow
+  `warning:` prefix `apply` does. Wording is preserved (`imported X` /
+  `would import X`) so scripts grepping the output keep working.
 - **`status` explains its drift classes inline** — the formatted dashboard
   now prints a brief "What `apply` will do:" legend after the summary footer,
   with one action-focused line per drift class actually present (`new` → will
