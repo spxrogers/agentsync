@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -225,5 +226,97 @@ func TestDiff_PathFilter(t *testing.T) {
 	}
 	if !strings.Contains(out, "no diff") {
 		t.Fatalf("filtered diff for non-matching path should report 'no diff'; got: %s", out)
+	}
+}
+
+// TestDiff_PlainModeUsesTextMarkers locks in the readability fix: the previous
+// diff path emitted raw ANSI unconditionally via diffmatchpatch's DiffPrettyText,
+// so piped/redirected output became "{ESC}[31m...{ESC}[0m..." gibberish.  Auto
+// color on a non-TTY pipe must instead use text markers ([-...-] / {+...+}) so
+// the change is legible without a terminal.
+func TestDiff_PlainModeUsesTextMarkers(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(tmp, ".claude.json")
+	body, _ := os.ReadFile(dst)
+	_ = os.WriteFile(dst, []byte(strings.ReplaceAll(string(body), `"npx"`, `"npm"`)), 0o644)
+
+	out, err := runCLI(t, env, "diff")
+	if err != nil {
+		t.Fatalf("diff: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "\x1b[") {
+		t.Fatalf("piped diff must not emit raw ANSI; got:\n%q", out)
+	}
+	if !strings.Contains(out, "[-") || !strings.Contains(out, "{+") {
+		t.Fatalf("plain diff should use text change markers; got:\n%s", out)
+	}
+}
+
+// TestDiff_JSONOutputMasksSecrets is the regression for diff --json leaking
+// resolved cleartext: the JSON path must mask through the SAME redaction the
+// formatted diff uses, so neither mode prints a substituted credential.
+func TestDiff_JSONOutputMasksSecrets(t *testing.T) {
+	const sentinel = "ghp_JSON_SENTINEL_DO_NOT_LEAK_456789"
+
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "GITHUB_TOKEN": sentinel}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	body := `[server]
+type = "stdio"
+command = "npx"
+
+[server.env]
+GITHUB_TOKEN = "${env:GITHUB_TOKEN}"
+`
+	_ = os.WriteFile(mcp, []byte(body), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Drift the dest so there is a hunk to emit.
+	dst := filepath.Join(tmp, ".claude.json")
+	dstBytes, _ := os.ReadFile(dst)
+	_ = os.WriteFile(dst, []byte(strings.ReplaceAll(string(dstBytes), `"npx"`, `"npm"`)), 0o644)
+
+	out, err := runCLI(t, env, "diff", "--json")
+	if err != nil {
+		t.Fatalf("diff --json: %v\n%s", err, out)
+	}
+	if strings.Contains(out, sentinel) {
+		t.Fatalf("SECURITY: diff --json leaked sentinel:\n%s", out)
+	}
+	var got struct {
+		Hunks []struct {
+			Path    string `json:"path"`
+			Pointer string `json:"pointer"`
+			Source  string `json:"source"`
+			Dest    string `json:"dest"`
+		} `json:"hunks"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("diff --json output not valid JSON: %v\n%s", err, out)
+	}
+	if len(got.Hunks) == 0 {
+		t.Fatalf("expected at least one hunk; got 0\n%s", out)
 	}
 }

@@ -122,11 +122,16 @@ agentsync apply
 
 ### `status`
 Summarizes what's out of sync across all agents — pending source changes and
-destination drift.
+destination drift. Pass `--json` to emit the structured drift report (per-agent
+items + a summary tally keyed by drift class) for CI gates or dashboards;
+advisory diagnostics still flow to stderr so the JSON payload stays clean.
 
 ### `diff [<path>]`
 Shows the pending / drift changes in detail. **Resolved secrets are redacted**, so
-a piped diff can't leak credentials. Pass a path to scope the diff.
+a piped diff can't leak credentials. Pass a path to scope the diff. Color is
+TTY-gated — piped output uses `[-…-]` / `{+…+}` text markers instead of raw
+ANSI. Pass `--json` for a structured hunk list (the same masked source/dest
+strings, so the redaction protects both modes).
 
 ### `reconcile`
 The interactive merge UX for drift and conflicts. Full guide:
@@ -168,4 +173,6 @@ for machine-readable output.
 | `--project <path>` | apply, status, diff, reconcile, update | Apply a specific project's overlay. |
 | `--dry-run` | apply, import | Preview without writing. |
 | `--auto-safe` | reconcile, update | Auto-resolve only no-risk changes. |
+| `--json` | status, diff, explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). |
+| `--color auto\|always\|never` | all | Control ANSI color + bold. Default `auto` (on for a TTY, off when piped/redirected; honors `NO_COLOR`). |
 | `-v`, `--verbose` | all | Verbose logging. |

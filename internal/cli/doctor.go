@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 func newDoctorCmd() *cobra.Command {
@@ -24,34 +24,37 @@ func newDoctorCmd() *cobra.Command {
 		Short: "diagnose first-run readiness: environment, schema, secrets, adapters",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			w := cmd.OutOrStdout()
+			p, err := newPrinter(cmd)
+			if err != nil {
+				return err
+			}
 			home := paths.AgentsyncHome(paths.OSEnv{})
 
-			fmt.Fprintln(w, "agentsync doctor")
-			fmt.Fprintln(w, "  AGENTSYNC_HOME:", home)
-			fmt.Fprintln(w, "  Go version:    ", runtime.Version())
-			fmt.Fprintln(w, "  OS / arch:     ", runtime.GOOS, runtime.GOARCH)
+			fmt.Fprintln(p.Out, p.Bold("agentsync doctor"))
+			fmt.Fprintln(p.Out, "  AGENTSYNC_HOME:", home)
+			fmt.Fprintln(p.Out, "  Go version:    ", runtime.Version())
+			fmt.Fprintln(p.Out, "  OS / arch:     ", runtime.GOOS, runtime.GOARCH)
 
-			fmt.Fprintln(w, "")
-			fmt.Fprintln(w, "Source repo")
+			fmt.Fprintln(p.Out, "")
+			p.Section("Source repo")
 			fails := 0
-			fails += checkHomeDir(w, home)
-			fails += checkStateDir(w, home)
-			cfg, schemaOK := checkSchema(w, home)
+			fails += checkHomeDir(p, home)
+			fails += checkStateDir(p, home)
+			cfg, schemaOK := checkSchema(p, home)
 			if !schemaOK {
 				fails++
 			}
 
-			fmt.Fprintln(w, "")
-			fmt.Fprintln(w, "Secrets")
+			fmt.Fprintln(p.Out, "")
+			p.Section("Secrets")
 			if schemaOK {
-				fails += checkSecrets(w, cfg.Secrets, home)
+				fails += checkSecrets(p, cfg.Secrets, home)
 			} else {
-				fmt.Fprintln(w, "  skipped (schema invalid above)")
+				fmt.Fprintln(p.Out, "  skipped (schema invalid above)")
 			}
 
-			fmt.Fprintln(w, "")
-			fmt.Fprintln(w, "Adapter detection (PATH-only)")
+			fmt.Fprintln(p.Out, "")
+			p.Section("Adapter detection (PATH-only)")
 			for _, agent := range []struct {
 				name string
 				bin  string
@@ -61,47 +64,64 @@ func newDoctorCmd() *cobra.Command {
 				{"codex", "codex"},
 				{"cursor", "cursor"},
 			} {
-				p, err := exec.LookPath(agent.bin)
-				if err != nil {
-					fmt.Fprintf(w, "  %-10s not found in PATH\n", agent.name)
+				path, lookErr := exec.LookPath(agent.bin)
+				if lookErr != nil {
+					fmt.Fprintf(p.Out, "  %s %-10s %s\n", p.Faint(ui.GlyphInfo), agent.name, p.Faint("not found in PATH"))
 					continue
 				}
-				fmt.Fprintf(w, "  %-10s %s\n", agent.name, p)
+				fmt.Fprintf(p.Out, "  %s %-10s %s\n", p.Green(ui.GlyphOK), agent.name, p.Faint(path))
 			}
 
-			fmt.Fprintln(w, "")
-			fmt.Fprintln(w, "Plugins")
+			fmt.Fprintln(p.Out, "")
+			p.Section("Plugins")
 			if schemaOK {
-				checkPlugins(w, home)
+				checkPlugins(p, home)
 			} else {
-				fmt.Fprintln(w, "  skipped (schema invalid above)")
+				fmt.Fprintln(p.Out, "  skipped (schema invalid above)")
 			}
 
-			fmt.Fprintln(w, "")
+			fmt.Fprintln(p.Out, "")
 			if fails > 0 {
-				fmt.Fprintf(w, "%d issue(s) detected — fix before running `agentsync apply`\n", fails)
+				fmt.Fprintf(p.Out, "%s %s\n", p.Red(ui.GlyphErr),
+					p.Red(fmt.Sprintf("%d issue(s) detected — fix before running `agentsync apply`", fails)))
 				return fmt.Errorf("doctor: %d issue(s) detected", fails)
 			}
-			fmt.Fprintln(w, "all checks passed")
+			fmt.Fprintf(p.Out, "%s %s\n", p.Green(ui.GlyphOK), p.Green("all checks passed"))
 			return nil
 		},
 	}
 }
 
+// okCheck / failCheck / warnCheck render one readiness line. The label carries
+// its own trailing alignment padding (e.g. "home dir   ") and is printed plain
+// immediately before the colored status, so the "<label><status>" substring the
+// doctor tests pin stays contiguous when color is off.
+func okCheck(p *ui.Printer, label, status string) {
+	fmt.Fprintf(p.Out, "  %s %s%s\n", p.Green(ui.GlyphOK), label, p.Green(status))
+}
+
+func failCheck(p *ui.Printer, label, status string) {
+	fmt.Fprintf(p.Out, "  %s %s%s\n", p.Red(ui.GlyphErr), label, p.Red(status))
+}
+
+func warnCheck(p *ui.Printer, label, status string) {
+	fmt.Fprintf(p.Out, "  %s %s%s\n", p.Yellow(ui.GlyphWarn), label, p.Yellow(status))
+}
+
 // checkHomeDir verifies that AGENTSYNC_HOME exists and is a directory.
 // Returns 1 if the check fails, 0 otherwise.
-func checkHomeDir(w io.Writer, home string) int {
+func checkHomeDir(p *ui.Printer, home string) int {
 	info, err := os.Stat(home)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(w, "  home dir   missing — run `agentsync init`\n")
+			failCheck(p, "home dir   ", "missing — run `agentsync init`")
 			return 1
 		}
-		fmt.Fprintf(w, "  home dir   unreadable: %v\n", err)
+		failCheck(p, "home dir   ", fmt.Sprintf("unreadable: %v", err))
 		return 1
 	}
 	if !info.IsDir() {
-		fmt.Fprintf(w, "  home dir   exists but is not a directory: %s\n", home)
+		failCheck(p, "home dir   ", fmt.Sprintf("exists but is not a directory: %s", home))
 		return 1
 	}
 	// A home dir without agentsync.toml is half-initialized (e.g. an authoring
@@ -109,56 +129,56 @@ func checkHomeDir(w io.Writer, home string) int {
 	// avoids calling the schema "ok" on a config-less home.
 	if _, err := os.Stat(filepath.Join(home, "agentsync.toml")); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(w, "  home dir   missing agentsync.toml (half-initialized) — run `agentsync init`\n")
+			failCheck(p, "home dir   ", "missing agentsync.toml (half-initialized) — run `agentsync init`")
 			return 1
 		}
-		fmt.Fprintf(w, "  home dir   agentsync.toml unreadable: %v\n", err)
+		failCheck(p, "home dir   ", fmt.Sprintf("agentsync.toml unreadable: %v", err))
 		return 1
 	}
-	fmt.Fprintf(w, "  home dir   ok\n")
+	okCheck(p, "home dir   ", "ok")
 	return 0
 }
 
 // checkStateDir verifies that .state/ is writable.
-func checkStateDir(w io.Writer, home string) int {
+func checkStateDir(p *ui.Printer, home string) int {
 	stateDir := filepath.Join(home, ".state")
 	if info, err := os.Stat(stateDir); err != nil {
-		fmt.Fprintf(w, "  .state/    missing — run `agentsync init`\n")
+		failCheck(p, ".state/    ", "missing — run `agentsync init`")
 		return 1
 	} else if !info.IsDir() {
-		fmt.Fprintf(w, "  .state/    exists but is not a directory\n")
+		failCheck(p, ".state/    ", "exists but is not a directory")
 		return 1
 	}
 	probe := filepath.Join(stateDir, ".doctor-write-probe")
 	if err := os.WriteFile(probe, []byte{}, 0o600); err != nil {
-		fmt.Fprintf(w, "  .state/    not writable: %v\n", err)
+		failCheck(p, ".state/    ", fmt.Sprintf("not writable: %v", err))
 		return 1
 	}
 	_ = os.Remove(probe)
-	fmt.Fprintf(w, "  .state/    ok (writable)\n")
+	okCheck(p, ".state/    ", "ok (writable)")
 
 	// Verify targets.json parses — the same load status/apply/diff/reconcile
 	// do. A corrupt state file makes every real command exit 1, so a readiness
 	// check that ignores it would falsely report healthy. A missing file is
 	// fine (state.Load returns an empty state on a fresh install).
 	if _, err := state.Load(filepath.Join(stateDir, "targets.json")); err != nil {
-		fmt.Fprintf(w, "  state file corrupt: %v\n", err)
+		failCheck(p, "state file ", fmt.Sprintf("corrupt: %v", err))
 		return 1
 	}
-	fmt.Fprintf(w, "  state file ok\n")
+	okCheck(p, "state file ", "ok")
 	return 0
 }
 
 // checkSchema validates agentsync.toml. Returns the parsed Config plus a
 // success flag so secrets checks can reuse it.
-func checkSchema(w io.Writer, home string) (source.Config, bool) {
+func checkSchema(p *ui.Printer, home string) (source.Config, bool) {
 	c, err := source.Load(afero.NewOsFs(), home)
 	if err != nil {
-		fmt.Fprintf(w, "  schema     invalid: %v\n", err)
+		failCheck(p, "schema     ", fmt.Sprintf("invalid: %v", err))
 		return source.Config{}, false
 	}
-	fmt.Fprintf(w, "  schema     ok (%d mcp, %d plugin(s), %d marketplace(s))\n",
-		len(c.MCPServers), len(c.Plugins), len(c.Marketplaces))
+	okCheck(p, "schema     ", fmt.Sprintf("ok (%d mcp, %d plugin(s), %d marketplace(s))",
+		len(c.MCPServers), len(c.Plugins), len(c.Marketplaces)))
 	return c.Config, true
 }
 
@@ -168,16 +188,16 @@ func checkSchema(w io.Writer, home string) (source.Config, bool) {
 // brings them under management. Probes every registered adapter (not just the
 // enabled set) so a fresh user with Claude plugins but no agentsync config still
 // sees the nudge.
-func checkPlugins(w io.Writer, home string) {
+func checkPlugins(p *ui.Printer, home string) {
 	c, err := source.Load(afero.NewOsFs(), home)
 	if err != nil {
-		fmt.Fprintln(w, "  skipped (source not loadable)")
+		fmt.Fprintln(p.Out, "  skipped (source not loadable)")
 		return
 	}
 	reg := registryFactory()
 	undeclared := undeclaredNativePlugins(c, reg, reg.Names())
 	if len(undeclared) == 0 {
-		fmt.Fprintln(w, "  ok (no undeclared native plugins)")
+		okCheck(p, "", "ok (no undeclared native plugins)")
 		return
 	}
 	for _, name := range reg.Names() {
@@ -185,34 +205,34 @@ func checkPlugins(w io.Writer, home string) {
 		if len(missing) == 0 {
 			continue
 		}
-		fmt.Fprintf(w, "  %-10s %d not in source: %s — run `agentsync import %s:plugin`\n",
-			name, len(missing), strings.Join(missing, ", "), name)
+		warnCheck(p, fmt.Sprintf("%-10s ", name), fmt.Sprintf("%d not in source: %s — run `agentsync import %s:plugin`",
+			len(missing), strings.Join(missing, ", "), name))
 	}
 }
 
 // checkSecrets validates the [secrets] block: backend present, identity
 // file exists with restrictive permissions, recipient set.
-func checkSecrets(w io.Writer, cfg source.SecretsConfig, home string) int {
+func checkSecrets(p *ui.Printer, cfg source.SecretsConfig, home string) int {
 	if cfg.Backend == "" {
-		fmt.Fprintf(w, "  backend    not configured (skip — no [secrets] block)\n")
+		fmt.Fprintf(p.Out, "  %s backend    %s\n", p.Faint(ui.GlyphInfo), p.Faint("not configured (skip — no [secrets] block)"))
 		return 0
 	}
 	if cfg.Backend != "age" {
-		fmt.Fprintf(w, "  backend    unsupported: %q (want \"age\")\n", cfg.Backend)
+		failCheck(p, "backend    ", fmt.Sprintf("unsupported: %q (want \"age\")", cfg.Backend))
 		return 1
 	}
-	fmt.Fprintf(w, "  backend    age\n")
+	okCheck(p, "backend    ", "age")
 
 	fails := 0
 	if cfg.Recipient == "" {
-		fmt.Fprintf(w, "  recipient  missing — set [secrets].recipient in agentsync.toml\n")
+		failCheck(p, "recipient  ", "missing — set [secrets].recipient in agentsync.toml")
 		fails++
 	} else {
-		fmt.Fprintf(w, "  recipient  set\n")
+		okCheck(p, "recipient  ", "set")
 	}
 
 	if cfg.IdentityFile == "" {
-		fmt.Fprintf(w, "  identity   missing — set [secrets].identity_file in agentsync.toml\n")
+		failCheck(p, "identity   ", "missing — set [secrets].identity_file in agentsync.toml")
 		return fails + 1
 	}
 	// Resolve identity_file the same way apply does (expanding ${env:HOME}/~
@@ -222,25 +242,25 @@ func checkSecrets(w io.Writer, cfg source.SecretsConfig, home string) int {
 	idPath := secrets.ResolveIdentityFile(cfg, home, userHome)
 	info, err := os.Stat(idPath)
 	if err != nil {
-		fmt.Fprintf(w, "  identity   %s — not readable (%v)\n", idPath, err)
+		failCheck(p, "identity   ", fmt.Sprintf("%s — not readable (%v)", idPath, err))
 		return fails + 1
 	}
 	// Use the same check apply/verify use so doctor never disagrees: it honors
 	// AGENTSYNC_AGE_SKIP_PERM_CHECK=1 and the Windows ACL caveat, unlike the
 	// previous inline 0o077 mask which falsely failed an opted-out 0644 key.
 	if permErr := secrets.CheckIdentityPermissions(idPath); permErr != nil {
-		fmt.Fprintf(w, "  identity   %s — too permissive (%v); chmod 600 (or set AGENTSYNC_AGE_SKIP_PERM_CHECK=1)\n", idPath, info.Mode().Perm())
+		failCheck(p, "identity   ", fmt.Sprintf("%s — too permissive (%v); chmod 600 (or set AGENTSYNC_AGE_SKIP_PERM_CHECK=1)", idPath, info.Mode().Perm()))
 		return fails + 1
 	}
-	fmt.Fprintf(w, "  identity   ok (%s)\n", idPath)
+	okCheck(p, "identity   ", fmt.Sprintf("ok (%s)", idPath))
 
 	// Age-encrypted file location — warn if missing (legitimate on a
 	// fresh install where the user hasn't called `secrets set` yet).
 	agePath := secrets.ResolveAgeFile(cfg, home, userHome)
 	if _, err := os.Stat(agePath); err != nil {
-		fmt.Fprintf(w, "  age file   %s — not yet created (run `agentsync secrets edit` to author)\n", agePath)
+		warnCheck(p, "age file   ", fmt.Sprintf("%s — not yet created (run `agentsync secrets edit` to author)", agePath))
 	} else {
-		fmt.Fprintf(w, "  age file   %s\n", agePath)
+		okCheck(p, "age file   ", agePath)
 	}
 	return fails
 }

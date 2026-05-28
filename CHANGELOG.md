@@ -15,6 +15,22 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Added
 
+- **Styled CLI output and a `--color` flag** — `agentsync status`, `diff`,
+  `doctor`, and `apply` now render through a single presentation layer
+  (`internal/ui`) with a curated semantic palette (green=synced, cyan=pending,
+  red=drift, yellow=needs-decision) and the same `✓ ◐ ✗ → •` glyph vocabulary
+  the capability matrix already uses. `status` gains a one-line summary footer
+  ("`5 clean · 2 drift`"). Color is TTY-gated by default — `--color=auto`
+  enables it only when stdout is a terminal and `NO_COLOR` is unset, while
+  `--color=always|never` overrides. Glyphs are unconditional Unicode (matching
+  the existing report output); piped output is byte-stable and never leaks raw
+  ANSI.
+- **`status --json` and `diff --json`** — emit machine-readable structured
+  output (per-agent drift items + summary tally; per-hunk source/dest with
+  pointer) for CI gates, dashboards, and scripts. Advisory diagnostics still
+  go to stderr so the JSON payload stays cleanly parseable.  `diff --json`
+  reuses the same redaction the formatted diff does, so resolved secrets are
+  masked in both modes.
 - **Canonical source model** in `~/.agentsync/` — hand-editable TOML + markdown
   for agents, MCP servers, marketplaces, plugins, memory, and skills.
 - **Full Agent Skills directory support** — a skill is treated as a *directory*
@@ -142,6 +158,13 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **`diff` no longer leaks raw ANSI into pipes** — the previous implementation
+  called `diffmatchpatch.DiffPrettyText` unconditionally, so `agentsync diff |
+  grep` (or any redirect to a file) accumulated `\x1b[31m…\x1b[0m` escape
+  sequences instead of readable text. The new color-aware renderer emits ANSI
+  only when stdout is a TTY (and `NO_COLOR` is unset), and falls back to
+  `[-…-]` / `{+…+}` text markers in plain mode so a piped diff is still legible
+  and `grep`-friendly.
 - **`agent disable --purge` validates the name; `doctor` names a half-init** —
   `disable <bogus> --purge` reported a misleading "purged 0 files" success for
   any string; it now rejects an unknown agent like the other subcommands (a

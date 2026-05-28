@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -169,5 +170,55 @@ func TestStatus_CleanAfterApply(t *testing.T) {
 	// After clean apply, should report clean or new (state recorded).
 	if strings.Contains(out, "drift") || strings.Contains(out, "conflict") {
 		t.Fatalf("status reported unexpected drift after clean apply: %s", out)
+	}
+}
+
+// TestStatus_JSONOutput locks in the contract that --json emits the structured
+// drift model: a per-agent items list keyed by drift class plus a summary
+// tally. Scripts (CI gates, dashboards) consume this — its shape and the
+// drift-class vocabulary are public.
+func TestStatus_JSONOutput(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	// Drift the dest so the model has a non-zero "drift" tally.
+	dst := filepath.Join(tmp, ".claude.json")
+	body, _ := os.ReadFile(dst)
+	_ = os.WriteFile(dst, []byte(strings.ReplaceAll(string(body), `"npx"`, `"npm"`)), 0o644)
+
+	out, err := runCLI(t, env, "status", "--json")
+	if err != nil {
+		t.Fatalf("status --json: %v\n%s", err, out)
+	}
+	var got struct {
+		Agents []struct {
+			Agent string `json:"agent"`
+			Items []struct {
+				Path    string `json:"path"`
+				Pointer string `json:"pointer"`
+				Class   string `json:"class"`
+			} `json:"items"`
+		} `json:"agents"`
+		Summary map[string]int `json:"summary"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("status --json: output not valid JSON: %v\noutput:\n%s", err, out)
+	}
+	if got.Summary["drift"] != 1 {
+		t.Errorf("expected summary.drift=1; got %v\noutput:%s", got.Summary, out)
+	}
+	if len(got.Agents) != 1 || got.Agents[0].Agent != "claude" {
+		t.Errorf("expected one agent 'claude'; got %#v", got.Agents)
 	}
 }

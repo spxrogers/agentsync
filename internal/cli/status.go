@@ -17,20 +17,49 @@ import (
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
+	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/spxrogers/agentsync/internal/ui"
 	"github.com/tailscale/hujson"
 )
+
+// statusItem is one tracked file or merged key and its drift classification.
+type statusItem struct {
+	Path string `json:"path"`
+	// Pointer is the RFC-6901 JSON pointer for a key-merge item; empty for a
+	// whole-file item.
+	Pointer string `json:"pointer,omitempty"`
+	Class   string `json:"class"`
+}
+
+// statusAgent groups one agent's tracked items.
+type statusAgent struct {
+	Agent string       `json:"agent"`
+	Items []statusItem `json:"items"`
+}
+
+// statusModel is the full drift report, rendered either as the formatted
+// dashboard or, under --json, verbatim. Summary tallies items by drift class.
+type statusModel struct {
+	Agents  []statusAgent  `json:"agents"`
+	Summary map[string]int `json:"summary"`
+}
 
 func newStatusCmd() *cobra.Command {
 	var (
 		scopeFlag   string
 		projectFlag string
+		jsonOut     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "report drift across registered agents",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			p, err := newPrinter(cmd)
+			if err != nil {
+				return err
+			}
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			// Load WITH the plugin cache so drift classification sees the
 			// same plugin-projected components `apply` writes; source.Load
@@ -54,15 +83,12 @@ func newStatusCmd() *cobra.Command {
 				}
 			}
 			if len(agents) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no agents enabled; run `agentsync agent add claude` (or opencode)")
-				// Still surface orphaned state from a removed/disabled agent, so
-				// removing the LAST agent doesn't hide its leftover native config.
-				for _, a := range orphanedStateAgents(s, agents) {
-					fmt.Fprintf(cmd.ErrOrStderr(),
-						"warning: agent %q is not enabled but still owns tracked files/keys in state; its "+
-							"native config is orphaned. Run `agentsync agent disable %s --purge` to remove what agentsync wrote.\n",
-						a, a)
+				if jsonOut {
+					emitStatusWarnings(p, c, reg, s, agents)
+					return emitJSON(p.Out, statusModel{Agents: []statusAgent{}, Summary: map[string]int{}})
 				}
+				fmt.Fprintln(p.Out, "no agents enabled; run `agentsync agent add claude` (or opencode)")
+				emitStatusWarnings(p, c, reg, s, agents)
 				return nil
 			}
 			// apply WRITES (and RecordOpsState HASHES) the secret-RESOLVED
@@ -83,90 +109,167 @@ func newStatusCmd() *cobra.Command {
 				return err
 			}
 
-			w := cmd.OutOrStdout()
-			for _, name := range reg.Names() {
-				res, ok := plan.PerAgent[name]
-				if !ok {
-					continue
-				}
-				fmt.Fprintf(w, "[%s]\n", name)
-				seen := map[string]bool{}
-				// file-level: for each op, classify. Only key-merge ops are
-				// handled key-by-key below; every other strategy (including
-				// "replace", used by skills/subagents/commands/memory) is a
-				// whole-file op and must be classified here. Skipping on any
-				// non-empty MergeStrategy silently dropped all replace-strategy
-				// files, so status reported no drift for them.
-				for _, op := range res.Ops {
-					if render.IsKeyMerge(op.MergeStrategy) {
-						continue // covered key-by-key below
-					}
-					if seen[op.Path] {
-						continue
-					}
-					seen[op.Path] = true
-					hsrc := hashContent(op.Content)
-					happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, op.Path)].SHA256
-					hdest := hashFile(op.Path)
-					cls := drift.Classify(hsrc, happlied, hdest)
-					fmt.Fprintf(w, "  %-20s %s\n", cls, op.Path)
-				}
-				// key-level: for each merge op, walk owned pointers
-				for _, op := range res.Ops {
-					if !render.IsKeyMerge(op.MergeStrategy) {
-						continue
-					}
-					var ours map[string]any
-					_ = json.Unmarshal(op.Content, &ours)
-					final := readDestFile(op.MergeStrategy, op.Path)
-					for _, ptr := range render.CollectPointers(ours, "") {
-						hsrc := hashAnyValue(getPointerValue(ours, ptr))
-						happlied := s.Keys[stateKeyKey(userHome, name, sc, projectRoot, op.Path, ptr)].SHA256
-						hdest := hashAnyValue(getPointerValue(final, ptr))
-						cls := drift.Classify(hsrc, happlied, hdest)
-						fmt.Fprintf(w, "  %-20s %s#%s\n", cls, op.Path, ptr)
-					}
-				}
-				// orphans: whole-file dests this agent still owns in state but no
-				// longer renders (the source component was removed). Without this,
-				// status reported nothing for them — falsely "clean" — though the
-				// file lingers and the next apply / a reconcile would act on it.
-				for _, orphan := range render.OrphanFiles(s, userHome, name, sc, projectRoot, res.Ops) {
-					happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, orphan)].SHA256
-					cls := drift.Classify("", happlied, hashFile(orphan))
-					fmt.Fprintf(w, "  %-20s %s\n", cls, orphan)
-				}
+			model := buildStatusModel(plan, reg.Names(), s, userHome, sc, projectRoot)
+			if jsonOut {
+				// JSON to stdout, advisory warnings to stderr — keeps the
+				// machine-readable payload cleanly parseable.
+				emitStatusWarnings(p, c, reg, s, agents)
+				return emitJSON(p.Out, model)
 			}
-			// Surface agents that still own tracked state (and thus orphaned
-			// native config) but are no longer enabled — a removed, or
-			// disabled-not-purged, agent. status/apply otherwise iterate only the
-			// enabled set, so these would accumulate silently with no diagnostic.
-			for _, a := range orphanedStateAgents(s, agents) {
-				fmt.Fprintf(cmd.ErrOrStderr(),
-					"warning: agent %q is not enabled but still owns tracked files/keys in state; its "+
-						"native config is orphaned. Run `agentsync agent disable %s --purge` to remove what agentsync wrote.\n",
-					a, a)
-			}
-			// Nudge: plugins installed natively in an enabled agent but not yet
-			// declared in source. agentsync treats them as foreign-managed (never
-			// drift), so this is informational — it points at `import`.
-			undeclared := undeclaredNativePlugins(c, reg, agents)
-			for _, name := range reg.Names() {
-				missing := undeclared[name]
-				if len(missing) == 0 {
-					continue
-				}
-				fmt.Fprintf(cmd.ErrOrStderr(),
-					"note: %d plugin(s) installed in %s are not in your source (%s); "+
-						"run `agentsync import %s:plugin` to manage them.\n",
-					len(missing), name, strings.Join(missing, ", "), name)
-			}
+			renderStatusText(p, model)
+			emitStatusWarnings(p, c, reg, s, agents)
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: auto-detect from cwd)")
 	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the formatted report")
 	return cmd
+}
+
+// buildStatusModel classifies every tracked file/key/orphan across agents into
+// the structured statusModel. It is the single source of truth both the
+// formatted dashboard and --json render from.
+func buildStatusModel(plan render.RenderPlan, names []string, s *state.Targets, userHome string, sc adapter.Scope, projectRoot string) statusModel {
+	model := statusModel{Summary: map[string]int{}}
+	for _, name := range names {
+		res, ok := plan.PerAgent[name]
+		if !ok {
+			continue
+		}
+		ag := statusAgent{Agent: name}
+		seen := map[string]bool{}
+		// file-level: every non-key-merge op is a whole-file item (including the
+		// "replace" strategy used by skills/subagents/commands/memory).
+		for _, op := range res.Ops {
+			if render.IsKeyMerge(op.MergeStrategy) {
+				continue // covered key-by-key below
+			}
+			if seen[op.Path] {
+				continue
+			}
+			seen[op.Path] = true
+			hsrc := hashContent(op.Content)
+			happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, op.Path)].SHA256
+			hdest := hashFile(op.Path)
+			cls := drift.Classify(hsrc, happlied, hdest).String()
+			ag.Items = append(ag.Items, statusItem{Path: op.Path, Class: cls})
+			model.Summary[cls]++
+		}
+		// key-level: walk owned pointers for each merge op.
+		for _, op := range res.Ops {
+			if !render.IsKeyMerge(op.MergeStrategy) {
+				continue
+			}
+			var ours map[string]any
+			_ = json.Unmarshal(op.Content, &ours)
+			final := readDestFile(op.MergeStrategy, op.Path)
+			for _, ptr := range render.CollectPointers(ours, "") {
+				hsrc := hashAnyValue(getPointerValue(ours, ptr))
+				happlied := s.Keys[stateKeyKey(userHome, name, sc, projectRoot, op.Path, ptr)].SHA256
+				hdest := hashAnyValue(getPointerValue(final, ptr))
+				cls := drift.Classify(hsrc, happlied, hdest).String()
+				ag.Items = append(ag.Items, statusItem{Path: op.Path, Pointer: ptr, Class: cls})
+				model.Summary[cls]++
+			}
+		}
+		// orphans: whole-file dests this agent still owns in state but no longer
+		// renders (the source component was removed). Without these, status
+		// reports nothing for a file that lingers and the next apply/reconcile
+		// would act on.
+		for _, orphan := range render.OrphanFiles(s, userHome, name, sc, projectRoot, res.Ops) {
+			happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, orphan)].SHA256
+			cls := drift.Classify("", happlied, hashFile(orphan)).String()
+			ag.Items = append(ag.Items, statusItem{Path: orphan, Class: cls})
+			model.Summary[cls]++
+		}
+		model.Agents = append(model.Agents, ag)
+	}
+	return model
+}
+
+// classOrder is the stable display order for the summary footer and groups the
+// drift classes by severity for coloring.
+var classOrder = []string{
+	"clean", "converged", "new", "pending",
+	"drift", "conflict", "foreign-collision", "orphan", "orphan-drifted",
+}
+
+// styleClass maps a drift class to its glyph and color. Green = synced, cyan =
+// a pending change apply will make, red = unexpected/destructive drift, yellow
+// = an orphan needing a decision.
+func styleClass(p *ui.Printer, cls string) (glyph string, color func(string) string) {
+	switch cls {
+	case "clean", "converged":
+		return ui.GlyphOK, p.Green
+	case "new", "pending":
+		return ui.GlyphArrow, p.Cyan
+	case "drift", "conflict", "foreign-collision", "orphan-drifted":
+		return ui.GlyphErr, p.Red
+	case "orphan":
+		return ui.GlyphWarn, p.Yellow
+	default:
+		return ui.GlyphInfo, p.Faint
+	}
+}
+
+// renderStatusText prints the formatted drift dashboard: a bold header per
+// agent, a glyph + color-coded class per item, and a one-line summary footer.
+func renderStatusText(p *ui.Printer, model statusModel) {
+	for _, ag := range model.Agents {
+		fmt.Fprintln(p.Out, p.Bold("["+ag.Agent+"]"))
+		for _, it := range ag.Items {
+			disp := it.Path
+			if it.Pointer != "" {
+				disp = it.Path + "#" + it.Pointer
+			}
+			glyph, color := styleClass(p, it.Class)
+			// Pad the plain "glyph class" to a fixed visible width BEFORE
+			// coloring so ANSI bytes never shift the path column.
+			label := ui.Pad(glyph+" "+it.Class, 20)
+			fmt.Fprintf(p.Out, "  %s %s\n", color(label), disp)
+		}
+	}
+
+	// Summary footer lists only non-zero classes, so the words "drift" /
+	// "conflict" / "pending" never appear when there is none of that state.
+	var segs []string
+	for _, cls := range classOrder {
+		n := model.Summary[cls]
+		if n == 0 {
+			continue
+		}
+		_, color := styleClass(p, cls)
+		segs = append(segs, color(fmt.Sprintf("%d %s", n, cls)))
+	}
+	if len(segs) > 0 {
+		fmt.Fprintln(p.Out, "")
+		fmt.Fprintln(p.Out, strings.Join(segs, "  ·  "))
+	}
+}
+
+// emitStatusWarnings writes advisory diagnostics to stderr: orphaned state from
+// a removed/disabled agent, and native plugins not yet declared in source.
+// These are not part of the status model (and not the --json payload).
+func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry, s *state.Targets, agents []string) {
+	for _, a := range orphanedStateAgents(s, agents) {
+		fmt.Fprintf(p.Err, "%s agent %q is not enabled but still owns tracked files/keys in state; its "+
+			"native config is orphaned. Run `agentsync agent disable %s --purge` to remove what agentsync wrote.\n",
+			p.Yellow("warning:"), a, a)
+	}
+	// Nudge: plugins installed natively in an enabled agent but not yet declared
+	// in source. agentsync treats them as foreign-managed (never drift), so this
+	// is informational — it points at `import`.
+	undeclared := undeclaredNativePlugins(c, reg, agents)
+	for _, name := range reg.Names() {
+		missing := undeclared[name]
+		if len(missing) == 0 {
+			continue
+		}
+		fmt.Fprintf(p.Err, "%s %d plugin(s) installed in %s are not in your source (%s); "+
+			"run `agentsync import %s:plugin` to manage them.\n",
+			p.Cyan("note:"), len(missing), name, strings.Join(missing, ", "), name)
+	}
 }
 
 // orphanedStateAgents returns, sorted, the agent names that appear as a state
