@@ -3,6 +3,7 @@ package cli_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -14,40 +15,54 @@ import (
 // emitted into the adapter's configured Stderr from inside
 // internal/adapter/<name>/ingest.go — must come out of the captured CLI
 // buffer with the bold-yellow "⚠️ warning:" prefix the user sees on every
-// other warning, NOT as plain "warning: …".
+// other warning, NOT as plain "warning: …", and NOT only as a styled
+// "warning:" that the CLI itself could have emitted.
 //
 // Three load-bearing pieces:
 //
-//	internal/adapter/adapter.go   — WarnSink extension interface
+//	internal/adapter/adapter.go   — WarnEmitter extension interface
 //	internal/ui/ui.go             — WarnWriter + RouteTo helper
 //	internal/cli/import.go        — wires them together once per run
 //
-// The routing primitive itself (RouteTo against a fake setter) is unit-tested
-// in internal/ui/routeto_test.go. This integration test is what proves the
-// wiring works end-to-end through a real adapter; it covers both the claude
-// and opencode WarnSink implementations.
+// The routing primitive itself (RouteTo against a fake setter, restore
+// closure, typed-nil guard, non-implementor) is unit-tested in
+// internal/ui/routeto_test.go. This integration test is what proves the
+// wiring works end-to-end through a real adapter; the per-adapter
+// behavioural nil-reset contract is pinned by TestSetStderr_NilResetsToDefault
+// in each adapter package.
 //
-// **Which assertion is load-bearing?** The negative one. The CLI's own
-// `importIO.warn` also writes through the same WarnWriter, so seeing a
-// styled `⚠️ warning:` somewhere in `out` doesn't by itself prove the
-// adapter line was routed — it could be a CLI-emitted warning being styled
-// independently. The substring `warning: skill "…"` is emitted EXCLUSIVELY
-// by the adapter's ingest path (claude/ingest.go's lenient-YAML notice for
-// skills, opencode/ingest.go's equivalent). If routing breaks, that plain
-// substring appears verbatim in the buffer; if routing works, the line
-// starts with the styled prefix and the plain form is byte-for-byte absent.
+// **Which assertion is load-bearing?** The same-line regex below
+// (styled "⚠️ warning:" prefix appearing on the same line as a
+// lenient-YAML-specific token). Reasoning:
 //
-// The styled-prefix positive check is kept as a smoke signal but is asserted
-// loosely on the user-visible token (⚠️ + "warning:") + the presence of the
-// two SGR codes (yellow + bold) — not on the exact concatenated ANSI byte
-// sequence, which is an implementation detail of ui.Printer's wrap order
-// that a correct refactor could shuffle.
+//   - A plain `"warning: …"` substring is not a sufficient negative: if
+//     the adapter's stderr falls back to the test-process's real
+//     os.Stderr (the failure mode the routing is meant to prevent), the
+//     warning would be invisible to the captured buffer, and a
+//     looser-positive ("the styled prefix appears anywhere in out")
+//     would pass for the wrong reason — the CLI's own importIO.warn
+//     writes through the SAME WarnWriter and emits its own styled
+//     prefixes for unrelated warnings.
+//   - The lenient-YAML notice ("frontmatter is not strict YAML; parsed
+//     leniently") is emitted ONLY by the adapter's Ingest path. Requiring
+//     it on the SAME line as the styled prefix proves the adapter line
+//     was both received AND styled — neither a CLI-only styled warning
+//     nor a routing-bypassed adapter warning matches the regex.
 func TestImport_StyledAdapterWarnings(t *testing.T) {
+	// Built once: the same-line regex requires the bold-yellow "⚠️ warning:"
+	// prefix (verbatim — the user-visible bytes) followed by anything up to
+	// the lenient-YAML phrase the adapter emits. ANSI byte order is not
+	// pinned, just the presence and the same-line locality.
+	styledAdapterWarn := regexp.MustCompile(
+		regexp.QuoteMeta(ui.GlyphWarnEmoji+" warning:") +
+			`[^\n]*frontmatter is not strict YAML`,
+	)
+
 	for _, agent := range []string{"claude", "opencode"} {
 		t.Run(agent, func(t *testing.T) {
 			tmp, env := importTestEnv(t)
 			if _, err := runCLI(t, env, "agent", "add", agent); err != nil {
-				t.Fatalf("agent add %s: %v", agent, err)
+				t.Fatalf("[%s] agent add: %v", agent, err)
 			}
 
 			// Both adapters emit a lenient-YAML warning when a skill's
@@ -63,52 +78,54 @@ func TestImport_StyledAdapterWarnings(t *testing.T) {
 			}
 
 			// --color=always forces ANSI on a non-TTY (the runCLI buffer is
-			// not a terminal). --color=auto would degrade to plain and the
-			// styling assertions below would pass for the wrong reason.
+			// not a terminal). Without it, --color=auto would degrade to
+			// plain and the styling assertion below would pass for the
+			// wrong reason.
 			out, err := runCLI(t, env, "import", agent+":skill:rebaser", "--color=always")
 			if err != nil {
-				t.Fatalf("import: %v\n%s", err, out)
+				t.Fatalf("[%s] import: %v\n%s", agent, err, out)
 			}
 
-			// LOAD-BEARING negative: the plain `warning: skill "rebaser"`
-			// substring originates only in the adapter's Ingest path. If it
-			// appears verbatim, routing was bypassed.
+			// LOAD-BEARING positive: the styled prefix and the
+			// adapter-specific lenient-YAML token must appear on the
+			// SAME line. This rules out two ways the routing could be
+			// silently broken:
+			//   1. Adapter Stderr falls back to the test-process's real
+			//      os.Stderr (so the warning is invisible to `out`) —
+			//      the regex wouldn't match because the lenient-YAML
+			//      phrase wouldn't be present at all.
+			//   2. Adapter writes plain "warning: …" to the captured
+			//      buffer somehow without going through the WarnWriter
+			//      restyle — the regex wouldn't match because the
+			//      styled prefix wouldn't lead the line.
+			if !styledAdapterWarn.MatchString(out) {
+				t.Fatalf("[%s] expected same-line styled prefix + adapter lenient-YAML phrase; got:\n%q",
+					agent, out)
+			}
+
+			// LOAD-BEARING negative: the plain `warning: skill "…"`
+			// substring originates only in the adapter's Ingest path. If
+			// it appears verbatim in `out`, routing wasn't bypassed via
+			// os.Stderr (the warning DID reach `out`) but was bypassed
+			// via the WarnWriter restyle (no prefix swap). This catches
+			// regressions in WarnWriter.emit or the line-buffer flush.
 			plainPrefix := "warning: skill \"rebaser\""
 			if strings.Contains(out, plainPrefix) {
-				t.Fatalf("plain %q appeared — adapter stderr is not being routed through the styled writer:\n%q",
-					plainPrefix, out)
-			}
-
-			// Smoke positive: the styled token shows up (user-visible glyph
-			// + word), and the two SGR codes the WarnWriter applies are both
-			// present. Asserted loosely so the test doesn't pin the exact
-			// SGR concatenation order — `Yellow(Bold(…))` produces a
-			// different byte sequence from `Bold(Yellow(…))` but is
-			// visually identical and equally correct.
-			styledToken := ui.GlyphWarnEmoji + " warning:"
-			if !strings.Contains(out, styledToken) {
-				t.Fatalf("expected the user-visible styled token %q in output; got:\n%q", styledToken, out)
-			}
-			const sgrYellow, sgrBold = "\x1b[33m", "\x1b[1m"
-			if !strings.Contains(out, sgrYellow) || !strings.Contains(out, sgrBold) {
-				t.Fatalf("expected both yellow (%q) and bold (%q) SGR codes in output; got:\n%q",
-					sgrYellow, sgrBold, out)
-			}
-			// And the adapter's specific warning body must survive the
-			// styling — otherwise the routing ate the line.
-			if !strings.Contains(out, "rebaser") {
-				t.Fatalf("styled prefix present but adapter warning body missing; routing may be malformed:\n%q", out)
+				t.Fatalf("[%s] plain %q appeared — adapter stderr reached the buffer but the WarnWriter restyle didn't fire:\n%q",
+					agent, plainPrefix, out)
 			}
 		})
 	}
 }
 
 // skillsRoot returns the on-disk directory each adapter scans for a
-// user-scope skill named "rebaser". Kept here rather than reaching into the
-// adapter packages so a future adapter that joins this test only needs one
-// case added. opencode intentionally shares ~/.claude/skills/ with claude —
-// see opencode.ResolvePaths → ClaudeSkillsDir; both adapters surface the
-// lenient-YAML warning from the same on-disk file.
+// user-scope skill named "rebaser". Kept here rather than reaching into
+// the adapter packages so a future adapter joining the table only needs
+// one case added. opencode intentionally shares ~/.claude/skills/ with
+// claude — see opencode.ResolvePaths → ClaudeSkillsDir; both adapters
+// surface the lenient-YAML warning from the same on-disk file. (codex
+// reads skills from ~/.agents/skills/, but the integration test gates
+// codex behind v1Supported so it isn't included today.)
 func skillsRoot(t *testing.T, tmp, agent string) string {
 	t.Helper()
 	switch agent {

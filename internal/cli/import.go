@@ -221,18 +221,21 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	if a == nil {
 		return fmt.Errorf("adapter %q not registered; valid agents: %s", agentName, validAgents)
 	}
-	// Route the adapter's Ingest warnings through the same styled writer.
-	// Adapters that don't implement adapter.WarnSink (the noop adapter today)
-	// are silently no-op'd by RouteTo — fine, they emit no Ingest warnings
-	// anyway. The deferred Unroute detaches the writer from the adapter on
-	// return — defensive against any caller that ever caches adapters
-	// across commands (today registryFactory() builds fresh each run). Flush
+	// Route the adapter's Ingest warnings through the same styled writer,
+	// and defer the restore so the adapter is detached before importRun
+	// returns. Idiomatic Go pair (mirrors log.SetOutput-via-defer and
+	// signal.Notify/Stop): the inner RouteTo(a) call runs now, returns a
+	// restore closure, and the outer () gets deferred. Adapters that don't
+	// implement adapter.WarnEmitter (the noop adapter today) yield a no-op
+	// restore closure, so the deferred call is always safe. Flush
 	// surrenders any partial unterminated line still in the WarnWriter's
-	// line-assembly buffer; all emitters terminate with \n today, so this is
-	// belt-and-suspenders.
-	warnW.RouteTo(a)
-	defer warnW.Unroute(a)
+	// line-assembly buffer; all emitters terminate with \n today, so this
+	// is belt-and-suspenders. Deferred order (LIFO): Flush first while the
+	// route is still live, then restore — though Flush writes through
+	// warnW.w directly, not via the adapter setter, so the two are order-
+	// independent in practice.
 	defer warnW.Flush()
+	defer warnW.RouteTo(a)()
 	// Gate codex/cursor the same way `agent add` does: they're registered as
 	// noop adapters, so Ingest returns an empty canonical and import would
 	// otherwise fail with a misleading "<component> not found in native config".

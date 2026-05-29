@@ -21,7 +21,7 @@ func TestAdapter_Identity(t *testing.T) {
 	var _ adapter.Adapter = a
 	// Compile-time pin: same drift-detection as the claude adapter — drops
 	// of SetStderr fail the build before RouteTo would silently no-op us.
-	var _ adapter.WarnSink = a
+	var _ adapter.WarnEmitter = a
 }
 
 func TestAdapter_Capabilities_HasExpected(t *testing.T) {

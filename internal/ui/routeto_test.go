@@ -21,58 +21,84 @@ func (f *fakeSetter) SetStderr(w io.Writer) {
 	f.lastNil = (w == nil)
 }
 
-// nonSetter has no SetStderr method; RouteTo/Unroute must silently no-op on
-// it (the "adapter doesn't implement WarnSink" path).
+// nonSetter has no SetStderr method; RouteTo must silently no-op on it
+// (the "adapter doesn't implement WarnEmitter" path).
 type nonSetter struct{}
 
-// TestWarnWriter_RouteTo_AndUnroute pins the routing primitive directly so
-// the contract is not piggy-backed on the import command's full setup. If
+// TestWarnWriter_RouteTo pins the routing primitive directly so the
+// contract is not piggy-backed on the import command's full setup. If
 // RouteTo ever drops its type-assert (or its structural interface drifts
-// from adapter.WarnSink in signature), this test fails immediately —
+// from adapter.WarnEmitter in signature), this test fails immediately —
 // independent of any --color flag, lenient-YAML fixture, or printer state.
-func TestWarnWriter_RouteTo_AndUnroute(t *testing.T) {
+// The restore-closure shape is also tested here: every RouteTo call
+// returns a callable closure, even on the no-op paths, so callers can
+// safely `defer warnW.RouteTo(a)()` without nil-checking.
+func TestWarnWriter_RouteTo(t *testing.T) {
 	p := New(&bytes.Buffer{}, &bytes.Buffer{}, ColorNever)
 	w := NewWarnWriter(&bytes.Buffer{}, p)
 
 	t.Run("RouteTo passes the writer to a SetStderr implementor", func(t *testing.T) {
 		var s fakeSetter
-		w.RouteTo(&s)
+		restore := w.RouteTo(&s)
 		if s.calls != 1 {
 			t.Fatalf("RouteTo: SetStderr should be called exactly once; got %d", s.calls)
 		}
 		if s.got != w {
 			t.Fatalf("RouteTo: SetStderr should receive the *WarnWriter; got %T", s.got)
 		}
+		if restore == nil {
+			t.Fatal("RouteTo must always return a non-nil restore closure")
+		}
+		restore()
+		if s.calls != 2 || !s.lastNil {
+			t.Fatalf("restore must call SetStderr(nil); got calls=%d lastNil=%v", s.calls, s.lastNil)
+		}
 	})
 
-	t.Run("Unroute passes nil to reset to default", func(t *testing.T) {
+	t.Run("restore is idempotent enough to defer safely", func(t *testing.T) {
 		var s fakeSetter
-		w.RouteTo(&s)
-		w.Unroute(&s)
-		if s.calls != 2 {
-			t.Fatalf("Unroute should issue a second SetStderr call; got total %d", s.calls)
-		}
-		if !s.lastNil {
-			t.Fatalf("Unroute must call SetStderr(nil); got non-nil writer %T", s.got)
+		restore := w.RouteTo(&s)
+		restore()
+		restore() // second call sends another SetStderr(nil); same end state.
+		if s.calls != 3 || !s.lastNil {
+			t.Fatalf("repeated restore should keep the setter at nil; got calls=%d lastNil=%v",
+				s.calls, s.lastNil)
 		}
 	})
 
-	t.Run("RouteTo on a non-implementor is a silent no-op", func(t *testing.T) {
-		// If the type assertion ever changes (e.g. someone replaces the
-		// structural setter with a named adapter.WarnSink and forgets to
-		// import-cycle-break), this case will fail because non-implementors
-		// would no longer compile, or RouteTo would panic on the assertion.
-		// Today: pure no-op.
-		w.RouteTo(&nonSetter{})
-		w.Unroute(&nonSetter{})
-		// No panic, no observable effect — the test passing IS the assertion.
+	t.Run("RouteTo on a non-implementor is a silent no-op with a callable restore", func(t *testing.T) {
+		// Restore is a no-op closure for non-implementors; callers can
+		// always `defer warnW.RouteTo(a)()` without checking.
+		restore := w.RouteTo(&nonSetter{})
+		if restore == nil {
+			t.Fatal("restore closure must be non-nil even on the no-op path")
+		}
+		restore() // must not panic.
 	})
 
-	t.Run("RouteTo with nil receiver-arg is a silent no-op", func(t *testing.T) {
-		// any(nil) carries no concrete type; the type-assert misses. Important
-		// because Adapter implementations may legitimately be nil during error
-		// paths (e.g. reg.Lookup of an unregistered agent).
-		w.RouteTo(nil)
-		w.Unroute(nil)
+	t.Run("RouteTo on untyped nil is a silent no-op", func(t *testing.T) {
+		// any(nil) carries no concrete type; the type-assert misses.
+		// Important because adapter implementations may legitimately be
+		// nil during error paths (e.g. reg.Lookup of an unregistered
+		// agent — though the actual caller short-circuits earlier).
+		restore := w.RouteTo(nil)
+		if restore == nil {
+			t.Fatal("restore closure must be non-nil even for nil arg")
+		}
+		restore()
+	})
+
+	t.Run("RouteTo on typed-nil pointer is a silent no-op (no panic)", func(t *testing.T) {
+		// var a *fakeSetter = nil; w.RouteTo(a) — the interface value
+		// carries the method set of *fakeSetter, so the type assertion
+		// SUCCEEDS, but calling SetStderr on a nil pointer would
+		// dereference and panic. RouteTo's reflect guard catches this.
+		// Without the guard, this test panics.
+		var nilSetter *fakeSetter
+		restore := w.RouteTo(nilSetter)
+		if restore == nil {
+			t.Fatal("restore closure must be non-nil even for typed-nil arg")
+		}
+		restore() // must not panic.
 	})
 }

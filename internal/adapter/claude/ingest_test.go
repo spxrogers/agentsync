@@ -2,6 +2,7 @@ package claude_test
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,27 +194,30 @@ func TestIngest_RoundTripsMemory(t *testing.T) {
 	}
 }
 
-// TestIngest_LenientSkillNotSilentlyDropped is the regression for the bug
-// `agentsync import claude` exhibited: a SKILL.md whose description carries an
-// unquoted "Triggers on: X, Y" colon-space sequence broke sigs.k8s.io/yaml and
-// the silent `continue` in Ingest dropped the whole skill. Now: it loads via
-// TestSetStderr_NilResetsToDefault pins the adapter.WarnSink contract: a
-// later SetStderr(nil) must not panic and must reset warnings away from the
-// previously-configured buffer (back to the os.Stderr default — verified
-// indirectly by asserting the previously-set buffer no longer receives the
-// warning a known-lenient skill triggers). Without this, the doc claim
-// in adapter.WarnSink is a paper promise: today's implementations satisfy
-// the contract by coincidence of the stderr() accessor's nil fallback,
-// not by the setter doing anything special, so the only thing keeping the
-// contract from silently regressing is this test.
+// TestSetStderr_NilResetsToDefault pins the adapter.WarnEmitter nil
+// contract: SetStderr(nil) MUST NOT panic AND MUST route subsequent
+// warnings back to the os.Stderr default — not to io.Discard, not to
+// the previously-set buffer, and not into the void. The test plants a
+// known-lenient skill, sets a buffer as the active sink, calls
+// SetStderr(nil), captures os.Stderr via a pipe for the duration of
+// the second Ingest, and asserts:
+//
+//   (a) the previously-set buffer no longer receives the warning, AND
+//   (b) os.Stderr DOES — proving the reset goes to the default, not
+//       silently elsewhere.
+//
+// Without (b), a faulty SetStderr(nil) that routes to io.Discard
+// would pass the (a)-only test while quietly dropping every future
+// warning the user needs to see. The behaviour is verified by the
+// break-tests recorded in the PR description; future adapters add a
+// parallel test in their own package (see opencode/ingest_test.go,
+// codex/codex_test.go).
 func TestSetStderr_NilResetsToDefault(t *testing.T) {
 	tmp := t.TempDir()
 	skillDir := filepath.Join(tmp, ".claude", "skills", "bad-yaml")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Same lenient-trigger fixture the LenientSkillNotSilentlyDropped test
-	// uses: a colon-space in the description.
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
 		[]byte("---\nname: bad-yaml\ndescription: Triggers on: rebase\n---\nbody\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -225,14 +229,55 @@ func TestSetStderr_NilResetsToDefault(t *testing.T) {
 	// Reset: a panic here is itself a contract failure.
 	a.SetStderr(nil)
 
-	if _, err := a.Ingest(adapter.ScopeUser, ""); err != nil {
-		t.Fatalf("Ingest after SetStderr(nil): %v", err)
-	}
+	captured := captureOsStderr(t, func() {
+		if _, err := a.Ingest(adapter.ScopeUser, ""); err != nil {
+			t.Fatalf("Ingest after SetStderr(nil): %v", err)
+		}
+	})
+
 	if warn.Len() > 0 {
 		t.Fatalf("SetStderr(nil) did not detach the previously-set buffer; got:\n%s", warn.String())
 	}
+	if !strings.Contains(captured, "frontmatter is not strict YAML") {
+		t.Fatalf("SetStderr(nil) must route to os.Stderr default; captured nothing matching the lenient-YAML notice:\n%s", captured)
+	}
 }
 
+// captureOsStderr swaps os.Stderr for a pipe, runs fn, then restores and
+// drains the pipe. Shared with the parallel SetStderr-nil tests in the
+// opencode and codex packages via a tiny per-package copy (each is a
+// `package foo_test` file, so a shared import would create cycles —
+// the cost of duplicating ~15 lines is acceptable for one test helper).
+//
+// Safe in a per-package `go test` invocation: Go's test binary runs
+// tests in a single goroutine within the package, and os.Stderr writes
+// are not interleaved with anything else during fn.
+func captureOsStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = w
+
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+
+	fn()
+	_ = w.Close()
+	os.Stderr = orig
+	return <-done
+}
+
+// TestIngest_LenientSkillNotSilentlyDropped is the regression for the bug
+// `agentsync import claude` exhibited: a SKILL.md whose description carries an
+// unquoted "Triggers on: X, Y" colon-space sequence broke sigs.k8s.io/yaml and
+// the silent `continue` in Ingest dropped the whole skill. Now: it loads via
 // the lenient fallback AND emits a warning to the configured Stderr so the
 // user is notified.
 func TestIngest_LenientSkillNotSilentlyDropped(t *testing.T) {

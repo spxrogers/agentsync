@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 
 	"golang.org/x/term"
 )
@@ -219,32 +220,78 @@ func (s *WarnWriter) Flush() {
 // warning lines are not part of any padded layout.
 const GlyphWarnEmoji = "⚠️"
 
-// stderrSetter is the structural shape of adapter.WarnSink. Duplicated here
-// so ui doesn't depend on the adapter package; the adapter-package test
-// suites pin each concrete adapter to adapter.WarnSink at compile time, so
-// drift between the two definitions fails to build.
+// stderrSetter is the structural shape of adapter.WarnEmitter. Duplicated
+// here so ui doesn't depend on the adapter package; each concrete adapter's
+// test suite pins itself against adapter.WarnEmitter at compile time, and
+// internal/cli/import_warn_routing_test.go pins a real adapter through
+// RouteTo at runtime, so drift between the two definitions fails the
+// build or the test rather than silently regressing to a no-op.
+//
+// TODO: when WarnEmitter grows a second method (a structured-diagnostic
+// sink, a `Verbose(io.Writer)`, etc.), the structural-duplicate-with-
+// compile-pin pattern stops being free. Move the interface to a neutral
+// package (e.g. internal/cliio) so ui and adapter both import one
+// definition.
 type stderrSetter interface{ SetStderr(w io.Writer) }
 
 // RouteTo wires this writer into anything that exposes a
-// `SetStderr(io.Writer)` setter (matching adapter.WarnSink). Non-implementors
-// are silently no-op'd, so callers can pass any adapter.Adapter without
-// type-asserting first. Pair with a deferred Unroute to detach on return.
-func (s *WarnWriter) RouteTo(a any) {
-	if v, ok := a.(stderrSetter); ok {
-		v.SetStderr(s)
+// SetStderr(io.Writer) setter (matching adapter.WarnEmitter) and returns a
+// restore function that detaches the writer when invoked. Idiomatic use
+// pairs with defer:
+//
+//	defer warnW.RouteTo(a)()
+//
+// The inner RouteTo(a) call evaluates immediately (wires the writer); the
+// outer () is the deferred restore. The returned function is always
+// safe to call — it's a no-op when the target doesn't implement the
+// setter, when the target is a typed-nil pointer, or when the target was
+// an untyped nil — so callers never need to type-assert or nil-check.
+//
+// Non-implementor cases that resolve to a silent no-op:
+//
+//   - untyped nil (`any(nil)`): the type-assert misses because the
+//     interface value carries no concrete type.
+//   - typed nil (`var a *T = nil; RouteTo(a)`): the type-assert SUCCEEDS
+//     because the interface value holds the method set of *T, but calling
+//     SetStderr would dereference the nil pointer. RouteTo guards
+//     against this via reflect.
+//   - any value whose dynamic type doesn't implement SetStderr.
+func (s *WarnWriter) RouteTo(a any) func() {
+	v, ok := s.setterOf(a)
+	if !ok {
+		return noopRestore
 	}
+	v.SetStderr(s)
+	return func() { v.SetStderr(nil) }
 }
 
-// Unroute reverses a prior RouteTo by passing nil to the same setter, which
-// per the adapter.WarnSink contract resets the implementor to its default
-// sink (os.Stderr). Defensive: today's adapters are constructed fresh per
-// command via registryFactory(), but a caller that ever caches adapters
-// shouldn't leak this WarnWriter past the command's lifetime. No-op when the
-// target doesn't implement the setter, mirroring RouteTo.
-func (s *WarnWriter) Unroute(a any) {
-	if v, ok := a.(stderrSetter); ok {
-		v.SetStderr(nil)
+// noopRestore is the restore function returned when RouteTo can't wire
+// anything. Shared so the non-implementor path doesn't allocate per call.
+var noopRestore = func() {}
+
+// setterOf returns the SetStderr setter on a, or (nil, false) when:
+//   - a is untyped nil,
+//   - a's dynamic type doesn't implement SetStderr, or
+//   - a is a typed-nil pointer (the interface holds a method set but
+//     calling on it would panic).
+//
+// The reflect check on the typed-nil case is the only non-trivial bit:
+// today's caller (import) always passes a real adapter from
+// registry.Lookup, which is never typed-nil — the guard is defence in
+// depth for future callers passing through error paths.
+func (s *WarnWriter) setterOf(a any) (stderrSetter, bool) {
+	if a == nil {
+		return nil, false
 	}
+	v, ok := a.(stderrSetter)
+	if !ok {
+		return nil, false
+	}
+	rv := reflect.ValueOf(a)
+	if rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return nil, false
+	}
+	return v, true
 }
 
 func (s *WarnWriter) emit(line []byte) {
