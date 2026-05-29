@@ -52,10 +52,12 @@ AGENTSYNC_TEST_IN_CONTAINER=1 go test ./internal/cli/ -run TestApply_FirstRun
 ## Lint & format
 
 ```bash
-just lint           # golangci-lint run ./...
-just fmt            # gofmt -s + gofumpt
-just tidy           # go mod tidy
+just lint           # format (gofmt -s + gofumpt) + tidy (go mod tidy) + golangci-lint
 ```
+
+`just lint` is the single pre-commit entry point — it rewrites your Go sources
+and `go.mod`/`go.sum` in place, then runs the linter. CI runs this exact recipe
+followed by `git diff --exit-code`, so commit whatever it changes.
 
 Test conventions enforced by lint (don't fight them):
 

@@ -43,19 +43,24 @@ jobs:
       - uses: extractions/setup-just@v3
       - run: just test-release
 
+  # Lint = format + tidy + golangci-lint, via the same `just lint` recipe
+  # contributors run locally, then a diff guard so an uncommitted format/tidy
+  # change fails the build (CI and local can't drift).
   lint:
+    name: lint (fmt + tidy + golangci-lint)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: ${{ env.GO_VERSION_FILE }}
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          # Pin a known-good golangci-lint. Its release binary must be built
-          # with a Go >= our go.mod version, or it can't parse our export
-          # data; v2.12.2 ships built with Go 1.26. Bump deliberately.
-          version: v2.12.2
+      - uses: extractions/setup-just@v3
+      # golangci-lint is pinned inside the recipe (v2.12.2 via `go run`); its
+      # build needs a Go >= our go.mod version to parse this module's export
+      # data, which setup-go guarantees.
+      - run: just lint
+      - name: Verify formatting & go.mod/go.sum are committed
+        run: git diff --exit-code
 
   goreleaser-snapshot:
     name: goreleaser-snapshot (cross-build matrix)
