@@ -4,6 +4,8 @@
 package adapter
 
 import (
+	"io"
+
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
@@ -167,6 +169,31 @@ type NativePlugin struct {
 // "PluginIngester (read-only)" for the full rationale.
 type PluginIngester interface {
 	IngestPlugins(scope Scope, project string) ([]NativeMarketplace, []NativePlugin, error)
+}
+
+// WarnSink is an OPTIONAL extension to Adapter: an adapter that emits Ingest
+// warnings (lenient-YAML notices, dropped components, "skill X frontmatter is
+// not strict YAML; parsed leniently", …) implements it so a CLI command can
+// redirect that stream away from os.Stderr — typically into a styled writer
+// like ui.WarnWriter that restyles "warning: " prefixes to bold-yellow
+// "⚠️ warning:". The contract is intentionally minimal: implementors swap the
+// destination, nothing else. A `nil` writer must reset back to the default
+// (os.Stderr) — implementations should treat `nil` as "go back to default"
+// rather than panicking. Adapters that emit no warnings can skip implementing
+// this entirely; ui.WarnWriter.RouteTo is a no-op for them, so callers don't
+// need to know who implements it.
+//
+// Kept off the core Adapter interface for the same reason as PluginIngester:
+// the canonical schema doesn't otherwise care which adapters emit warnings,
+// and third-party adapters shouldn't be forced to add a setter they don't
+// need. import is the only caller today; future Ingest-using commands
+// (reconcile, if it ever grows full-Ingest semantics) will use the same
+// helper.
+type WarnSink interface {
+	// SetStderr replaces the warning sink. The implementor MUST honor a nil
+	// argument as "reset to default" rather than panicking — callers may pass
+	// nil to undo a prior routing.
+	SetStderr(w io.Writer)
 }
 
 // DestWriter is the single funnel for any write that targets a native agent

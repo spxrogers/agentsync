@@ -222,11 +222,10 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 		return fmt.Errorf("adapter %q not registered; valid agents: %s", agentName, validAgents)
 	}
 	// Route the adapter's Ingest warnings through the same styled writer.
-	// Adapters that don't implement the setter (the noop adapter today) keep
-	// writing to os.Stderr — fine, they emit no Ingest warnings anyway.
-	if s, ok := a.(adapterStderrSetter); ok {
-		s.SetStderr(warnW)
-	}
+	// Adapters that don't implement adapter.WarnSink (the noop adapter today)
+	// are silently no-op'd by RouteTo — fine, they emit no Ingest warnings
+	// anyway.
+	warnW.RouteTo(a)
 	// Gate codex/cursor the same way `agent add` does: they're registered as
 	// noop adapters, so Ingest returns an empty canonical and import would
 	// otherwise fail with a misleading "<component> not found in native config".
@@ -579,11 +578,6 @@ func importVerb(dryRun bool) string {
 	}
 	return "imported"
 }
-
-// adapterStderrSetter is the optional setter each concrete adapter
-// (claude/opencode/codex) implements, letting CLI commands route the
-// adapter's Ingest warnings through a styled writer.
-type adapterStderrSetter interface{ SetStderr(io.Writer) }
 
 // importIO bundles the styled printer, the streams it writes to, and the
 // dry-run flag so every importXxx function emits its per-item lines, section

@@ -15,6 +15,19 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Added
 
+- **`adapter.WarnSink` extension interface** — formalises the optional
+  `SetStderr(io.Writer)` setter the claude / opencode / codex adapters added
+  alongside the `import` styling work, so future Ingest-using commands can
+  redirect adapter warnings through the styled `ui.WarnWriter` (bold-yellow
+  `⚠️ warning:`) without duplicating the type-assertion boilerplate. The
+  contract requires `nil` to reset to the default (`os.Stderr`). A new
+  `ui.WarnWriter.RouteTo(any)` helper handles the wiring in one line and
+  is a no-op for adapters that don't implement the sink, so callers pass
+  any `adapter.Adapter` and let the structural match decide. `import`
+  now uses the helper; an end-to-end regression test
+  (`TestImport_StyledAdapterWarnings`) forces `--color=always` and asserts
+  the adapter's own YAML-frontmatter warnings reach the buffer with the
+  styled prefix — locking the contract against silent regressions.
 - **`explain` accepts multiple plugins, `--all`, and `--list`** —
   `agentsync explain` now takes a space-separated list of plugin ids
   (`agentsync explain notion@official superpowers@obra`), and gains two flags:

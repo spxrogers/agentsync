@@ -216,6 +216,28 @@ func (s *WarnWriter) Flush() {
 // warning lines are not part of any padded layout.
 const GlyphWarnEmoji = "⚠️"
 
+// RouteTo wires the writer into anything that exposes a `SetStderr(io.Writer)`
+// setter (matching adapter.WarnSink, though ui does not import the adapter
+// package — the interface is structural). Adapters that don't implement the
+// setter are silently no-ops, so callers don't have to type-assert before
+// calling this; pass any adapter.Adapter and let the structural match decide.
+//
+// Typical use from a CLI command:
+//
+//	warnW := ui.NewWarnWriter(p.Err, p)
+//	warnW.RouteTo(a) // a is the Adapter returned from registry.Lookup
+//	c, err := a.Ingest(...)
+//
+// Every "warning: …" line the adapter writes during Ingest then picks up the
+// bold-yellow "⚠️ warning:" styling, identical to warnings the command emits
+// itself.
+func (s *WarnWriter) RouteTo(a any) {
+	type setter interface{ SetStderr(io.Writer) }
+	if v, ok := a.(setter); ok {
+		v.SetStderr(s)
+	}
+}
+
 func (s *WarnWriter) emit(line []byte) {
 	if !bytes.HasPrefix(line, []byte(warnLinePrefix)) {
 		_, _ = s.w.Write(line)

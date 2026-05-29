@@ -204,6 +204,36 @@ components-only-on-apply rule above:
 
 See the capability matrix for source links.
 
+### WarnSink (optional)
+
+A second optional extension lets a CLI command redirect the warnings an
+adapter's `Ingest` emits (lenient-YAML notices, dropped components, …) away
+from `os.Stderr`:
+
+```go
+type WarnSink interface {
+    SetStderr(w io.Writer)
+}
+```
+
+Concrete adapters (claude/opencode/codex) implement it on their `Adapter`
+type; the noop adapter doesn't (it emits no warnings). `import` is the only
+caller today: it wraps `cmd.ErrOrStderr()` in a `ui.WarnWriter` that
+restyles `"warning: "` line prefixes to bold-yellow `"⚠️ warning:"`, then
+calls `warnW.RouteTo(a)` to inject the wrapper into any adapter that
+implements `WarnSink`. The same wrapper backs `capture.Opts.Warn` and the
+command's own `io.warn` calls, so every warning the user sees during an
+import — adapter, capture, or CLI — shares one styling.
+
+The setter contract requires `nil` to reset to the default
+(`os.Stderr`) — implementors must not panic on `nil`.
+
+The interface is kept off the core `Adapter` for the same reason as
+`PluginIngester`: an adapter that emits no Ingest warnings shouldn't be
+forced to implement a setter it'll never use. `ui.WarnWriter.RouteTo`
+type-asserts structurally, so adding the setter to a new adapter is a
+single-method change with no caller updates required.
+
 ---
 
 ## 4. The apply pipeline (Source ▶ Destination)
