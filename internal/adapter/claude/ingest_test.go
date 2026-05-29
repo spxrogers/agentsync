@@ -213,7 +213,7 @@ func TestIngest_RoundTripsMemory(t *testing.T) {
 // parallel test in their own package (see opencode/ingest_test.go,
 // codex/codex_test.go).
 func TestSetStderr_NilResetsToDefault(t *testing.T) {
-	// Do NOT t.Parallel: captureOsStderr swaps the process-global
+	// Do NOT t.Parallel: adaptertest.CaptureOsStderr swaps the process-global
 	// os.Stderr. A parallel sibling running concurrently would race
 	// on the swap.
 	tmp := t.TempDir()
@@ -263,7 +263,7 @@ func TestSetStderr_NilResetsToDefault(t *testing.T) {
 // and the assertion fires.
 //
 // opencode and codex carry parallel snapshot tests using the same
-// SwapOnFirstWriteBuffer (and the same captureOsStderr helper), so
+// SwapOnFirstWriteBuffer (and the same adaptertest.CaptureOsStderr helper), so
 // drift in any single adapter's Ingest implementation is caught
 // per-package.
 func TestSetStderr_SnapshotAtIngestEntry(t *testing.T) {
