@@ -76,15 +76,27 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   Flush, and (c) a non-warning partial drains verbatim. Without
   this, Flush could silently become a no-op since every current
   emitter terminates with `\n`.
-- **Mid-Ingest snapshot contract pinned.** New
-  `TestSetStderr_SnapshotAtIngestEntry` in the claude adapter
-  package uses a custom writer that, on first emission, swaps the
-  adapter's `Stderr` to a sibling buffer; the snapshot taken at
-  Ingest entry (`warn := a.stderr()`) means subsequent warnings
-  still land in the original sink. A future refactor that re-reads
-  `a.stderr()` per warning would silently violate the documented
-  "configure stderr BEFORE Ingest" promise on `WarnEmitter`; this
-  test catches it.
+- **Mid-Ingest snapshot contract pinned per-adapter.**
+  `TestSetStderr_SnapshotAtIngestEntry` in each implementing
+  adapter's package (claude / opencode / codex) uses a custom
+  writer that, on first emission, swaps the adapter's `Stderr` to
+  a sibling buffer; the snapshot taken at Ingest entry (`warn :=
+  a.stderr()`) means subsequent warnings still land in the
+  original sink. A future refactor in ANY adapter's Ingest that
+  re-reads `a.stderr()` per warning would silently violate the
+  documented "configure stderr BEFORE Ingest" promise on
+  `WarnEmitter`; the per-adapter tests catch it independently
+  rather than relying on a single lead test + grep.
+- **Shared `internal/adapter/adaptertest` test helper package.**
+  Centralises `CaptureOsStderr(t, fn)` (the `os.Stderr`-pipe-swap
+  helper with the defer-cleanup invariants that round-3 demonstrated
+  must hold) and `SwapOnFirstWriteBuffer` (the writer that fires a
+  callback on first write, used by the snapshot tests). Follows the
+  stdlib `httptest` precedent: an ordinary package that takes
+  `*testing.T`. Eliminates three byte-identical 30-line copies
+  across the adapter test packages — a maintenance trap that
+  round-3 surfaced when the deferred-cleanup fix had to be applied
+  three times in lockstep.
 - **`explain` accepts multiple plugins, `--all`, and `--list`** —
   `agentsync explain` now takes a space-separated list of plugin ids
   (`agentsync explain notion@official superpowers@obra`), and gains two flags:

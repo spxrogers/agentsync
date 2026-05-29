@@ -230,10 +230,14 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// restore closure, so the deferred call is always safe. Flush
 	// surrenders any partial unterminated line still in the WarnWriter's
 	// line-assembly buffer; all emitters terminate with \n today, so this
-	// is belt-and-suspenders. Deferred order (LIFO): Flush first while the
-	// route is still live, then restore — though Flush writes through
-	// warnW.w directly, not via the adapter setter, so the two are order-
-	// independent in practice.
+	// is belt-and-suspenders.
+	//
+	// LIFO execution: the RouteTo defer (registered second) runs FIRST —
+	// the restore closure detaches the adapter — and Flush (registered
+	// first) runs SECOND, draining any partial line the WarnWriter held.
+	// The two are order-independent in practice because Flush writes
+	// through warnW.w directly (not via the adapter setter the restore
+	// just detached), but the order is worth knowing.
 	defer warnW.Flush()
 	defer warnW.RouteTo(a)()
 	// Gate codex/cursor the same way `agent add` does: they're registered as

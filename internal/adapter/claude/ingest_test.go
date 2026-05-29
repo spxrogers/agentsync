@@ -2,13 +2,13 @@ package claude_test
 
 import (
 	"bytes"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/adapter/adaptertest"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -232,7 +232,7 @@ func TestSetStderr_NilResetsToDefault(t *testing.T) {
 	// Reset: a panic here is itself a contract failure.
 	a.SetStderr(nil)
 
-	captured := captureOsStderr(t, func() {
+	captured := adaptertest.CaptureOsStderr(t, func() {
 		if _, err := a.Ingest(adapter.ScopeUser, ""); err != nil {
 			t.Fatalf("Ingest after SetStderr(nil): %v", err)
 		}
@@ -246,86 +246,26 @@ func TestSetStderr_NilResetsToDefault(t *testing.T) {
 	}
 }
 
-// captureOsStderr swaps os.Stderr for a pipe, runs fn, then restores and
-// drains the pipe. Shared with the parallel SetStderr-nil tests in the
-// opencode and codex packages via a tiny per-package copy (each is a
-// `package foo_test` file, so a shared import would create cycles —
-// the cost of duplicating ~15 lines is acceptable for one test helper).
-//
-// Safe in a per-package `go test` invocation: Go's test binary runs
-// tests in a single goroutine within the package, and os.Stderr writes
-// are not interleaved with anything else during fn.
-func captureOsStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	orig := os.Stderr
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	os.Stderr = w
-
-	// Deferred cleanup for the t.Fatalf / panic path: runtime.Goexit
-	// unwinds through defers but skips bare statements AFTER fn(), so a
-	// failed assertion inside fn would otherwise (a) leak the read
-	// goroutine blocked on an open pipe and (b) leave os.Stderr
-	// pointing at our closed write end, breaking later tests in the
-	// same package. The double Close on the happy path is harmless —
-	// os.File.Close returns an error on second call which we ignore.
-	defer func() { os.Stderr = orig }()
-	defer func() { _ = w.Close() }()
-
-	done := make(chan string, 1)
-	go func() {
-		var buf bytes.Buffer
-		_, _ = io.Copy(&buf, r)
-		done <- buf.String()
-	}()
-
-	fn()
-	// Explicit close on the happy path is required: the deferred close
-	// above runs only on function return, but `return <-done` blocks
-	// FIRST waiting for the goroutine's send, which itself waits for
-	// io.Copy to see EOF. Without this explicit close, the receive
-	// deadlocks against the still-open write end.
-	_ = w.Close()
-	return <-done
-}
-
-// midIngestSwapBuffer is a writer that, on its first Write call, swaps
-// the adapter's configured Stderr to a sibling buffer. If the adapter
-// snapshots `a.stderr()` at Ingest entry (the documented behaviour),
-// subsequent warnings still land in midIngestSwapBuffer because the
-// local `warn` variable inside Ingest holds the old reference. If the
-// adapter ever re-reads `a.stderr()` per-emission, subsequent warnings
-// land in the sibling buffer and this test catches it.
-type midIngestSwapBuffer struct {
-	bytes.Buffer
-	a       *claude.Adapter
-	sibling io.Writer
-	swapped bool
-}
-
-func (m *midIngestSwapBuffer) Write(p []byte) (int, error) {
-	if !m.swapped {
-		m.a.SetStderr(m.sibling)
-		m.swapped = true
-	}
-	return m.Buffer.Write(p)
-}
-
 // TestSetStderr_SnapshotAtIngestEntry pins the documented "configure
 // stderr BEFORE Ingest; don't depend on dynamic switching mid-Ingest"
 // contract on adapter.WarnEmitter. The interface promise is that
 // adapters snapshot the writer once at Ingest entry (`warn :=
 // a.stderr()` — see internal/adapter/claude/ingest.go:54). A future
 // refactor that re-reads `a.stderr()` per warning would silently
-// violate the doc; this test makes that a build failure instead.
+// violate the doc; this test makes that a test failure instead.
 //
 // The fixture plants two lenient-YAML skills so Ingest emits two
-// warnings in sequence. The first write swaps the adapter's stderr to
-// a sibling buffer — if the snapshot holds, the second warning still
-// lands in the primary; if it doesn't, the sibling receives the second
-// warning.
+// warnings in sequence. The first write to the primary buffer triggers
+// adaptertest.SwapOnFirstWriteBuffer.OnFirstWrite, which swaps the
+// adapter's stderr to a sibling buffer mid-emission. If the snapshot
+// holds, the second warning still lands in the primary; if the adapter
+// instead re-reads `a.stderr()` per warning, the sibling receives it
+// and the assertion fires.
+//
+// opencode and codex carry parallel snapshot tests using the same
+// SwapOnFirstWriteBuffer (and the same captureOsStderr helper), so
+// drift in any single adapter's Ingest implementation is caught
+// per-package.
 func TestSetStderr_SnapshotAtIngestEntry(t *testing.T) {
 	tmp := t.TempDir()
 	for _, name := range []string{"first", "second"} {
@@ -340,16 +280,16 @@ func TestSetStderr_SnapshotAtIngestEntry(t *testing.T) {
 	}
 
 	var sibling bytes.Buffer
-	primary := &midIngestSwapBuffer{sibling: &sibling}
+	primary := &adaptertest.SwapOnFirstWriteBuffer{}
 	a := claude.New(claude.Options{TargetRoot: tmp, Stderr: primary})
-	primary.a = a
+	primary.OnFirstWrite = func() { a.SetStderr(&sibling) }
 
 	if _, err := a.Ingest(adapter.ScopeUser, ""); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
 
-	if !primary.swapped {
-		t.Fatal("midIngestSwapBuffer's Write was never called — fixture didn't trigger the first warning")
+	if !primary.Fired() {
+		t.Fatal("OnFirstWrite was never called — fixture didn't trigger any warning")
 	}
 	if sibling.Len() > 0 {
 		t.Fatalf("snapshot contract violated: warnings emitted AFTER mid-Ingest SetStderr landed in the sibling buffer (%d bytes):\n%s",
