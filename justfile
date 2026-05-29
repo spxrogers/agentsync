@@ -62,19 +62,19 @@ test-fast:
 test-live:
     AGENTSYNC_LIVE_PLUGIN_TEST=1 go test -tags=live -count=1 -v ./internal/marketplace/...
 
-# Run golangci-lint over every package. Pinned via `go run` (matches CI's
-# golangci-lint-action version) so no separate install/PATH step is needed.
+# Rewrites Go sources (gofmt -s + gofumpt) and go.mod/go.sum (go mod tidy) in
+# place, then runs golangci-lint, pinned via `go run` (matches the version CI
+# runs) so it self-bootstraps with no separate install/PATH step. `go run
+# pkg@version` resolves gofumpt and golangci-lint outside the main module, so
+# neither lands in go.mod — only `go mod tidy`'s deliberate edits do. CI runs
+# this exact recipe and then `git diff --exit-code`, so any uncommitted
+# format/tidy change fails the build — local and CI can't drift.
+# The defacto entry point: format + tidy + lint, run before every commit.
 lint:
-    go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
-
-# Format Go sources with gofmt + gofumpt.
-fmt:
     gofmt -w -s .
     go run mvdan.cc/gofumpt@v0.10.0 -w .
-
-# Run `go mod tidy`.
-tidy:
     go mod tidy
+    go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
 
 # --- Docs website (website/, Astro Starlight → agentsync.cc) ----------------
 # The site reads no Go; it's a bun + Astro project. `docs-dev`/`docs-build`

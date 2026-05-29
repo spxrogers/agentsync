@@ -187,13 +187,16 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
 
 - `just build` / `just test-fast`; full gate `just test-release` (hermetic container).
 - FS-touching tests refuse to run on host without `AGENTSYNC_TEST_IN_CONTAINER=1`.
-- Lint with `just lint`, which runs golangci-lint via `go run
-  github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...` —
-  pinned to the version CI's `golangci-lint-action` uses, so it self-bootstraps
-  (no separate install or PATH step) and can't drift from CI. `go run pkg@version`
-  resolves the tool outside the main module, so `go.mod`/`go.sum` stay untouched;
-  it compiles with the local Go toolchain (≥ go.mod's **1.26.2**), so it parses
-  our export data natively — no `GOTOOLCHAIN` override needed.
+- Lint/format/tidy with `just lint` — the single dev entry point. It rewrites Go
+  sources (`gofmt -s` + gofumpt) and deliberately tidies `go.mod`/`go.sum`
+  (`go mod tidy`) in place, then runs golangci-lint via `go run
+  github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...`. The
+  linter self-bootstraps (no separate install or PATH step); `go run pkg@version`
+  resolves gofumpt and golangci-lint outside the main module, so *those* never
+  land in `go.mod`, and golangci-lint compiles with the local Go toolchain (≥
+  go.mod's **1.26.2**) so it parses our export data natively — no `GOTOOLCHAIN`
+  override needed. CI runs this exact recipe then `git diff --exit-code`, so an
+  uncommitted format/tidy change fails the build — local and CI can't drift.
 - `just test` (full unit/integration in container), `just test-e2e`,
   `just test-bdd`, `just test-live` (network, opt-in, not in the release gate).
 - Go version is `go.mod`'s `go` directive (currently **1.26.2**); CI reads it via
@@ -215,7 +218,7 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
 - **Errors** wrap with `fmt.Errorf("doing X: %w", err)`; match with `errors.Is/As`.
   No `pkg/errors`.
 - **Imports** grouped stdlib / third-party / internal; gofumpt + goimports
-  formatting (`just fmt`).
+  formatting (applied by `just lint`).
 - **`time.Now()`** in `internal/render`/`internal/state` is confined to
   informational metadata (state `AppliedAt`, backup-dir names) — it never feeds a
   content hash or the drift classifier, so it calls `time.Now().UTC()` directly
