@@ -197,6 +197,42 @@ func TestIngest_RoundTripsMemory(t *testing.T) {
 // `agentsync import claude` exhibited: a SKILL.md whose description carries an
 // unquoted "Triggers on: X, Y" colon-space sequence broke sigs.k8s.io/yaml and
 // the silent `continue` in Ingest dropped the whole skill. Now: it loads via
+// TestSetStderr_NilResetsToDefault pins the adapter.WarnSink contract: a
+// later SetStderr(nil) must not panic and must reset warnings away from the
+// previously-configured buffer (back to the os.Stderr default — verified
+// indirectly by asserting the previously-set buffer no longer receives the
+// warning a known-lenient skill triggers). Without this, the doc claim
+// in adapter.WarnSink is a paper promise: today's implementations satisfy
+// the contract by coincidence of the stderr() accessor's nil fallback,
+// not by the setter doing anything special, so the only thing keeping the
+// contract from silently regressing is this test.
+func TestSetStderr_NilResetsToDefault(t *testing.T) {
+	tmp := t.TempDir()
+	skillDir := filepath.Join(tmp, ".claude", "skills", "bad-yaml")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Same lenient-trigger fixture the LenientSkillNotSilentlyDropped test
+	// uses: a colon-space in the description.
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: bad-yaml\ndescription: Triggers on: rebase\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var warn bytes.Buffer
+	a := claude.New(claude.Options{TargetRoot: tmp, Stderr: &warn})
+
+	// Reset: a panic here is itself a contract failure.
+	a.SetStderr(nil)
+
+	if _, err := a.Ingest(adapter.ScopeUser, ""); err != nil {
+		t.Fatalf("Ingest after SetStderr(nil): %v", err)
+	}
+	if warn.Len() > 0 {
+		t.Fatalf("SetStderr(nil) did not detach the previously-set buffer; got:\n%s", warn.String())
+	}
+}
+
 // the lenient fallback AND emits a warning to the configured Stderr so the
 // user is notified.
 func TestIngest_LenientSkillNotSilentlyDropped(t *testing.T) {

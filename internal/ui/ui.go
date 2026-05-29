@@ -169,6 +169,9 @@ func Pad(s string, width int) string {
 // callers' partial Write is held until a newline arrives — fmt.Fprintf in
 // practice always finishes a line per call, but buffering keeps a chunked
 // writer correct.
+//
+// Not safe for concurrent use: the line-assembly buffer is unsynchronized.
+// One *WarnWriter per command invocation is the intended pattern.
 type WarnWriter struct {
 	w   io.Writer
 	p   *Printer
@@ -216,25 +219,31 @@ func (s *WarnWriter) Flush() {
 // warning lines are not part of any padded layout.
 const GlyphWarnEmoji = "⚠️"
 
-// RouteTo wires the writer into anything that exposes a `SetStderr(io.Writer)`
-// setter (matching adapter.WarnSink, though ui does not import the adapter
-// package — the interface is structural). Adapters that don't implement the
-// setter are silently no-ops, so callers don't have to type-assert before
-// calling this; pass any adapter.Adapter and let the structural match decide.
-//
-// Typical use from a CLI command:
-//
-//	warnW := ui.NewWarnWriter(p.Err, p)
-//	warnW.RouteTo(a) // a is the Adapter returned from registry.Lookup
-//	c, err := a.Ingest(...)
-//
-// Every "warning: …" line the adapter writes during Ingest then picks up the
-// bold-yellow "⚠️ warning:" styling, identical to warnings the command emits
-// itself.
+// stderrSetter is the structural shape of adapter.WarnSink. Duplicated here
+// so ui doesn't depend on the adapter package; the adapter-package test
+// suites pin each concrete adapter to adapter.WarnSink at compile time, so
+// drift between the two definitions fails to build.
+type stderrSetter interface{ SetStderr(w io.Writer) }
+
+// RouteTo wires this writer into anything that exposes a
+// `SetStderr(io.Writer)` setter (matching adapter.WarnSink). Non-implementors
+// are silently no-op'd, so callers can pass any adapter.Adapter without
+// type-asserting first. Pair with a deferred Unroute to detach on return.
 func (s *WarnWriter) RouteTo(a any) {
-	type setter interface{ SetStderr(io.Writer) }
-	if v, ok := a.(setter); ok {
+	if v, ok := a.(stderrSetter); ok {
 		v.SetStderr(s)
+	}
+}
+
+// Unroute reverses a prior RouteTo by passing nil to the same setter, which
+// per the adapter.WarnSink contract resets the implementor to its default
+// sink (os.Stderr). Defensive: today's adapters are constructed fresh per
+// command via registryFactory(), but a caller that ever caches adapters
+// shouldn't leak this WarnWriter past the command's lifetime. No-op when the
+// target doesn't implement the setter, mirroring RouteTo.
+func (s *WarnWriter) Unroute(a any) {
+	if v, ok := a.(stderrSetter); ok {
+		v.SetStderr(nil)
 	}
 }
 

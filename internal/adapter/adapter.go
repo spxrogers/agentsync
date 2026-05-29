@@ -172,27 +172,19 @@ type PluginIngester interface {
 }
 
 // WarnSink is an OPTIONAL extension to Adapter: an adapter that emits Ingest
-// warnings (lenient-YAML notices, dropped components, "skill X frontmatter is
-// not strict YAML; parsed leniently", …) implements it so a CLI command can
-// redirect that stream away from os.Stderr — typically into a styled writer
-// like ui.WarnWriter that restyles "warning: " prefixes to bold-yellow
-// "⚠️ warning:". The contract is intentionally minimal: implementors swap the
-// destination, nothing else. A `nil` writer must reset back to the default
-// (os.Stderr) — implementations should treat `nil` as "go back to default"
-// rather than panicking. Adapters that emit no warnings can skip implementing
-// this entirely; ui.WarnWriter.RouteTo is a no-op for them, so callers don't
-// need to know who implements it.
+// warnings implements it to let callers redirect the stream away from the
+// default (os.Stderr). Kept off the core Adapter for the same reason as
+// PluginIngester — adapters that emit no warnings shouldn't be forced to
+// implement a setter they'll never use. ui.WarnWriter.RouteTo type-asserts
+// for it, so callers don't need to know who implements it.
 //
-// Kept off the core Adapter interface for the same reason as PluginIngester:
-// the canonical schema doesn't otherwise care which adapters emit warnings,
-// and third-party adapters shouldn't be forced to add a setter they don't
-// need. import is the only caller today; future Ingest-using commands
-// (reconcile, if it ever grows full-Ingest semantics) will use the same
-// helper.
+// Implementations MUST treat a nil writer as "reset to default" rather than
+// panicking. The simplest (and current) realisation is to store the writer
+// in a field and have an accessor return os.Stderr when the field is nil;
+// any equivalent that survives SetStderr(nil) without losing future
+// warnings is fine. The behaviour is pinned by a SetStderr-nil-resets test
+// in each implementing adapter's package.
 type WarnSink interface {
-	// SetStderr replaces the warning sink. The implementor MUST honor a nil
-	// argument as "reset to default" rather than panicking — callers may pass
-	// nil to undo a prior routing.
 	SetStderr(w io.Writer)
 }
 

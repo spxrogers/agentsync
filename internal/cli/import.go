@@ -224,8 +224,15 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// Route the adapter's Ingest warnings through the same styled writer.
 	// Adapters that don't implement adapter.WarnSink (the noop adapter today)
 	// are silently no-op'd by RouteTo — fine, they emit no Ingest warnings
-	// anyway.
+	// anyway. The deferred Unroute detaches the writer from the adapter on
+	// return — defensive against any caller that ever caches adapters
+	// across commands (today registryFactory() builds fresh each run). Flush
+	// surrenders any partial unterminated line still in the WarnWriter's
+	// line-assembly buffer; all emitters terminate with \n today, so this is
+	// belt-and-suspenders.
 	warnW.RouteTo(a)
+	defer warnW.Unroute(a)
+	defer warnW.Flush()
 	// Gate codex/cursor the same way `agent add` does: they're registered as
 	// noop adapters, so Ingest returns an empty canonical and import would
 	// otherwise fail with a misleading "<component> not found in native config".

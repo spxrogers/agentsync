@@ -20,14 +20,30 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   alongside the `import` styling work, so future Ingest-using commands can
   redirect adapter warnings through the styled `ui.WarnWriter` (bold-yellow
   `⚠️ warning:`) without duplicating the type-assertion boilerplate. The
-  contract requires `nil` to reset to the default (`os.Stderr`). A new
-  `ui.WarnWriter.RouteTo(any)` helper handles the wiring in one line and
-  is a no-op for adapters that don't implement the sink, so callers pass
-  any `adapter.Adapter` and let the structural match decide. `import`
-  now uses the helper; an end-to-end regression test
-  (`TestImport_StyledAdapterWarnings`) forces `--color=always` and asserts
-  the adapter's own YAML-frontmatter warnings reach the buffer with the
-  styled prefix — locking the contract against silent regressions.
+  contract has three load-bearing pieces, all tested:
+  - `SetStderr(nil)` resets to the default (`os.Stderr`) and MUST NOT
+    panic. Pinned by `TestSetStderr_NilResetsToDefault` in the claude
+    adapter; break-verified to fail when the setter ignores nil.
+  - Each concrete adapter compile-pins itself against `adapter.WarnSink`
+    via `var _ adapter.WarnSink = a` in its identity test, so dropping
+    `SetStderr` fails the build instead of silently becoming a `RouteTo`
+    no-op.
+  - The caller owns lifetime. `ui.WarnWriter` gains a paired
+    `RouteTo(any)` / `Unroute(any)` and a `Flush()` method;
+    `internal/cli/import.go` uses `defer warnW.Unroute(a)` +
+    `defer warnW.Flush()` so a routed adapter is detached before the
+    command returns and any partial line in the line-assembly buffer is
+    drained. `WarnWriter` is documented as not safe for concurrent use
+    (one writer per command invocation, the existing pattern).
+  - `internal/ui` gains a direct unit test (`TestWarnWriter_RouteTo_AndUnroute`)
+    against a fake setter so the routing primitive is anchored
+    independent of the full `import` stack — drift on `RouteTo`/`Unroute`
+    fails there immediately, not just in the integration test.
+  - The end-to-end `TestImport_StyledAdapterWarnings` now covers both the
+    claude AND the opencode adapter via a table-driven subtest, and
+    asserts the styling loosely (`ui.GlyphWarnEmoji + " warning:"` plus
+    the SGR yellow + bold codes separately) so a correct refactor of the
+    SGR concatenation order doesn't spuriously fail.
 - **`explain` accepts multiple plugins, `--all`, and `--list`** —
   `agentsync explain` now takes a space-separated list of plugin ids
   (`agentsync explain notion@official superpowers@obra`), and gains two flags:

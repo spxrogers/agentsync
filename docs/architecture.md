@@ -206,9 +206,9 @@ See the capability matrix for source links.
 
 ### WarnSink (optional)
 
-A second optional extension lets a CLI command redirect the warnings an
-adapter's `Ingest` emits (lenient-YAML notices, dropped components, …) away
-from `os.Stderr`:
+A second optional extension lets callers redirect the warnings an adapter's
+`Ingest` emits (lenient-YAML notices, dropped components, …) away from
+`os.Stderr`:
 
 ```go
 type WarnSink interface {
@@ -216,23 +216,32 @@ type WarnSink interface {
 }
 ```
 
-Concrete adapters (claude/opencode/codex) implement it on their `Adapter`
-type; the noop adapter doesn't (it emits no warnings). `import` is the only
-caller today: it wraps `cmd.ErrOrStderr()` in a `ui.WarnWriter` that
-restyles `"warning: "` line prefixes to bold-yellow `"⚠️ warning:"`, then
-calls `warnW.RouteTo(a)` to inject the wrapper into any adapter that
-implements `WarnSink`. The same wrapper backs `capture.Opts.Warn` and the
-command's own `io.warn` calls, so every warning the user sees during an
-import — adapter, capture, or CLI — shares one styling.
+Concrete adapters (claude/opencode/codex) implement it; the noop adapter
+doesn't (it emits no warnings). Three contract rules every implementor
+honours:
 
-The setter contract requires `nil` to reset to the default
-(`os.Stderr`) — implementors must not panic on `nil`.
+1. **`SetStderr(nil)` resets to the default** (`os.Stderr`) — and MUST NOT
+   panic. Pinned by `TestSetStderr_NilResetsToDefault` in the claude
+   adapter package; future adapters add their own.
+2. **The setter must compile-pin against `adapter.WarnSink`.** Each
+   adapter's `claude_test.go` / `opencode_test.go` / `codex_test.go`
+   carries a `var _ adapter.WarnSink = a` line so dropping the method
+   fails the test build, not a runtime no-op.
+3. **The writer's lifetime is the caller's problem.** Today's caller
+   (`import`) `defer`s `WarnWriter.Unroute(a)` (which is `SetStderr(nil)`
+   via the structural type-assert) and `WarnWriter.Flush()` so partial
+   lines and dangling pointers don't escape the command.
 
-The interface is kept off the core `Adapter` for the same reason as
-`PluginIngester`: an adapter that emits no Ingest warnings shouldn't be
-forced to implement a setter it'll never use. `ui.WarnWriter.RouteTo`
-type-asserts structurally, so adding the setter to a new adapter is a
-single-method change with no caller updates required.
+`import` is the only caller today: it wraps `cmd.ErrOrStderr()` in a
+`ui.WarnWriter` that restyles `"warning: "` line prefixes to bold-yellow
+`"⚠️ warning:"`, then `warnW.RouteTo(a)` injects the wrapper. The same
+wrapper backs `capture.Opts.Warn` and the command's own `io.warn` calls,
+so every warning the user sees during an import — adapter, capture, or
+CLI — shares one styling.
+
+Kept off the core `Adapter` for the same reason as `PluginIngester`: an
+adapter that emits no Ingest warnings shouldn't be forced to implement a
+setter it'll never use.
 
 ---
 
