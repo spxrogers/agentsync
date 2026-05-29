@@ -61,6 +61,30 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   WarnWriter-bypass regressions. Break-verified.
 - `ui.WarnWriter` is documented as not safe for concurrent use (one
   writer per command invocation, the existing pattern).
+- **`captureOsStderr` cleanup is panic-safe.** The per-adapter
+  `os.Stderr`-pipe-swap helpers used by the nil-reset tests now
+  defer `w.Close()` and `os.Stderr = orig` BEFORE invoking `fn`, so
+  a `t.Fatalf` inside `fn` (which calls `runtime.Goexit`) no longer
+  leaks the read goroutine or leaves `os.Stderr` swapped for later
+  tests in the same package. Each helper also carries a "do not
+  `t.Parallel`" comment naming the global-state hazard.
+- **`Flush()` coverage.** New `TestWarnWriter_Flush` in
+  `internal/ui/routeto_test.go` covers the partial-line drain
+  path the `importRun` defer relies on: a `"warning: "` Write with
+  no trailing newline is asserted to (a) sit in the buffer until
+  Flush is called, (b) get styled with the bold-yellow prefix on
+  Flush, and (c) a non-warning partial drains verbatim. Without
+  this, Flush could silently become a no-op since every current
+  emitter terminates with `\n`.
+- **Mid-Ingest snapshot contract pinned.** New
+  `TestSetStderr_SnapshotAtIngestEntry` in the claude adapter
+  package uses a custom writer that, on first emission, swaps the
+  adapter's `Stderr` to a sibling buffer; the snapshot taken at
+  Ingest entry (`warn := a.stderr()`) means subsequent warnings
+  still land in the original sink. A future refactor that re-reads
+  `a.stderr()` per warning would silently violate the documented
+  "configure stderr BEFORE Ingest" promise on `WarnEmitter`; this
+  test catches it.
 - **`explain` accepts multiple plugins, `--all`, and `--list`** —
   `agentsync explain` now takes a space-separated list of plugin ids
   (`agentsync explain notion@official superpowers@obra`), and gains two flags:

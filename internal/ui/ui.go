@@ -266,19 +266,32 @@ func (s *WarnWriter) RouteTo(a any) func() {
 }
 
 // noopRestore is the restore function returned when RouteTo can't wire
-// anything. Shared so the non-implementor path doesn't allocate per call.
+// anything. Shared so the non-implementor path doesn't allocate per
+// call. Keep stateless: a future addition that captures state would
+// silently share that state across every no-op RouteTo call (every
+// command that runs against the noop adapter, every nil-setter test).
 var noopRestore = func() {}
 
-// setterOf returns the SetStderr setter on a, or (nil, false) when:
-//   - a is untyped nil,
-//   - a's dynamic type doesn't implement SetStderr, or
-//   - a is a typed-nil pointer (the interface holds a method set but
-//     calling on it would panic).
+// setterOf returns the SetStderr setter on a, or (nil, false) when a
+// cannot be safely called. The three rejection paths are distinct:
 //
-// The reflect check on the typed-nil case is the only non-trivial bit:
-// today's caller (import) always passes a real adapter from
-// registry.Lookup, which is never typed-nil — the guard is defence in
-// depth for future callers passing through error paths.
+//  1. `a == nil`: an UNTYPED nil any-value (no concrete type behind it).
+//     The bare `nil` check catches this; the later type-assert would
+//     also fail, but doing it explicitly documents the case.
+//  2. `a.(stderrSetter)` failure: a's dynamic type doesn't implement
+//     SetStderr — this is the "noop adapter" path. Today's caller
+//     can pass any adapter.Adapter; non-implementors get this path.
+//  3. `rv.IsNil()` on a Pointer kind: a TYPED-nil pointer (e.g.
+//     `var p *Adapter = nil`). The interface value carries *Adapter's
+//     method set, so the type-assert in (2) SUCCEEDS, but calling
+//     SetStderr on the nil pointer would dereference and panic. The
+//     reflect guard is the only check that catches this.
+//
+// Scope of the reflect guard: Pointer kind only. Map/Chan/Func/Slice/
+// Interface kinds can also be typed-nil and would panic similarly, but
+// no implementor today (all *Adapter) uses them, and the unidiomatic
+// shape would be a louder review signal than a runtime no-op. Widen
+// the guard if a non-pointer implementor ever lands.
 func (s *WarnWriter) setterOf(a any) (stderrSetter, bool) {
 	if a == nil {
 		return nil, false

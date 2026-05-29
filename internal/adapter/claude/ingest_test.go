@@ -213,6 +213,9 @@ func TestIngest_RoundTripsMemory(t *testing.T) {
 // parallel test in their own package (see opencode/ingest_test.go,
 // codex/codex_test.go).
 func TestSetStderr_NilResetsToDefault(t *testing.T) {
+	// Do NOT t.Parallel: captureOsStderr swaps the process-global
+	// os.Stderr. A parallel sibling running concurrently would race
+	// on the swap.
 	tmp := t.TempDir()
 	skillDir := filepath.Join(tmp, ".claude", "skills", "bad-yaml")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
@@ -261,6 +264,16 @@ func captureOsStderr(t *testing.T, fn func()) string {
 	}
 	os.Stderr = w
 
+	// Deferred cleanup for the t.Fatalf / panic path: runtime.Goexit
+	// unwinds through defers but skips bare statements AFTER fn(), so a
+	// failed assertion inside fn would otherwise (a) leak the read
+	// goroutine blocked on an open pipe and (b) leave os.Stderr
+	// pointing at our closed write end, breaking later tests in the
+	// same package. The double Close on the happy path is harmless —
+	// os.File.Close returns an error on second call which we ignore.
+	defer func() { os.Stderr = orig }()
+	defer func() { _ = w.Close() }()
+
 	done := make(chan string, 1)
 	go func() {
 		var buf bytes.Buffer
@@ -269,9 +282,85 @@ func captureOsStderr(t *testing.T, fn func()) string {
 	}()
 
 	fn()
+	// Explicit close on the happy path is required: the deferred close
+	// above runs only on function return, but `return <-done` blocks
+	// FIRST waiting for the goroutine's send, which itself waits for
+	// io.Copy to see EOF. Without this explicit close, the receive
+	// deadlocks against the still-open write end.
 	_ = w.Close()
-	os.Stderr = orig
 	return <-done
+}
+
+// midIngestSwapBuffer is a writer that, on its first Write call, swaps
+// the adapter's configured Stderr to a sibling buffer. If the adapter
+// snapshots `a.stderr()` at Ingest entry (the documented behaviour),
+// subsequent warnings still land in midIngestSwapBuffer because the
+// local `warn` variable inside Ingest holds the old reference. If the
+// adapter ever re-reads `a.stderr()` per-emission, subsequent warnings
+// land in the sibling buffer and this test catches it.
+type midIngestSwapBuffer struct {
+	bytes.Buffer
+	a       *claude.Adapter
+	sibling io.Writer
+	swapped bool
+}
+
+func (m *midIngestSwapBuffer) Write(p []byte) (int, error) {
+	if !m.swapped {
+		m.a.SetStderr(m.sibling)
+		m.swapped = true
+	}
+	return m.Buffer.Write(p)
+}
+
+// TestSetStderr_SnapshotAtIngestEntry pins the documented "configure
+// stderr BEFORE Ingest; don't depend on dynamic switching mid-Ingest"
+// contract on adapter.WarnEmitter. The interface promise is that
+// adapters snapshot the writer once at Ingest entry (`warn :=
+// a.stderr()` — see internal/adapter/claude/ingest.go:54). A future
+// refactor that re-reads `a.stderr()` per warning would silently
+// violate the doc; this test makes that a build failure instead.
+//
+// The fixture plants two lenient-YAML skills so Ingest emits two
+// warnings in sequence. The first write swaps the adapter's stderr to
+// a sibling buffer — if the snapshot holds, the second warning still
+// lands in the primary; if it doesn't, the sibling receives the second
+// warning.
+func TestSetStderr_SnapshotAtIngestEntry(t *testing.T) {
+	tmp := t.TempDir()
+	for _, name := range []string{"first", "second"} {
+		dir := filepath.Join(tmp, ".claude", "skills", name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nname: " + name + "\ndescription: Triggers on: rebase\n---\nbody\n"
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var sibling bytes.Buffer
+	primary := &midIngestSwapBuffer{sibling: &sibling}
+	a := claude.New(claude.Options{TargetRoot: tmp, Stderr: primary})
+	primary.a = a
+
+	if _, err := a.Ingest(adapter.ScopeUser, ""); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	if !primary.swapped {
+		t.Fatal("midIngestSwapBuffer's Write was never called — fixture didn't trigger the first warning")
+	}
+	if sibling.Len() > 0 {
+		t.Fatalf("snapshot contract violated: warnings emitted AFTER mid-Ingest SetStderr landed in the sibling buffer (%d bytes):\n%s",
+			sibling.Len(), sibling.String())
+	}
+	// Sanity: both warnings should be in primary (proving the snapshot
+	// is what protected, not that no second warning was emitted).
+	if strings.Count(primary.String(), "frontmatter is not strict YAML") < 2 {
+		t.Fatalf("expected BOTH lenient-YAML warnings in the original sink (snapshot); got:\n%s",
+			primary.String())
+	}
 }
 
 // TestIngest_LenientSkillNotSilentlyDropped is the regression for the bug

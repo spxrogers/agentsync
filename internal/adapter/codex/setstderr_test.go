@@ -19,6 +19,8 @@ import (
 // skills from the cross-agent ~/.agents/skills/ directory (see
 // codex.ResolvePaths → SkillsDir).
 func TestSetStderr_NilResetsToDefault(t *testing.T) {
+	// Do NOT t.Parallel: captureOsStderr swaps the process-global
+	// os.Stderr.
 	tmp := t.TempDir()
 	skillDir := filepath.Join(tmp, ".agents", "skills", "bad-yaml")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
@@ -62,6 +64,13 @@ func captureOsStderr(t *testing.T, fn func()) string {
 	}
 	os.Stderr = w
 
+	// Deferred cleanup so a t.Fatalf / panic inside fn doesn't leak
+	// the read goroutine and leave os.Stderr swapped — see the lead
+	// captureOsStderr in internal/adapter/claude/ingest_test.go for
+	// the full rationale. Double-close on the happy path is harmless.
+	defer func() { os.Stderr = orig }()
+	defer func() { _ = w.Close() }()
+
 	done := make(chan string, 1)
 	go func() {
 		var buf bytes.Buffer
@@ -70,7 +79,7 @@ func captureOsStderr(t *testing.T, fn func()) string {
 	}()
 
 	fn()
+	// Explicit close on the happy path: <-done blocks before defers run.
 	_ = w.Close()
-	os.Stderr = orig
 	return <-done
 }

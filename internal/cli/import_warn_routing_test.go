@@ -53,9 +53,17 @@ func TestImport_StyledAdapterWarnings(t *testing.T) {
 	// prefix (verbatim — the user-visible bytes) followed by anything up to
 	// the lenient-YAML phrase the adapter emits. ANSI byte order is not
 	// pinned, just the presence and the same-line locality.
+	//
+	// `[^\n\r]*` rather than `[^\n]*`: rejects both newline AND carriage-
+	// return between the prefix and the phrase. SGR bytes don't contain
+	// either, so this only matters as defence-in-depth against a future
+	// styling change that emits stray CRs — without the \r in the
+	// negated class, a `\r` between the prefix and the phrase would let
+	// the regex match across what the terminal would render as separate
+	// lines.
 	styledAdapterWarn := regexp.MustCompile(
 		regexp.QuoteMeta(ui.GlyphWarnEmoji+" warning:") +
-			`[^\n]*frontmatter is not strict YAML`,
+			`[^\n\r]*frontmatter is not strict YAML`,
 	)
 
 	for _, agent := range []string{"claude", "opencode"} {
