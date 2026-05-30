@@ -221,12 +221,25 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	if a == nil {
 		return fmt.Errorf("adapter %q not registered; valid agents: %s", agentName, validAgents)
 	}
-	// Route the adapter's Ingest warnings through the same styled writer.
-	// Adapters that don't implement the setter (the noop adapter today) keep
-	// writing to os.Stderr — fine, they emit no Ingest warnings anyway.
-	if s, ok := a.(adapterStderrSetter); ok {
-		s.SetStderr(warnW)
-	}
+	// Route the adapter's Ingest warnings through the same styled writer,
+	// and defer the restore so the adapter is detached before importRun
+	// returns. Idiomatic Go pair (mirrors log.SetOutput-via-defer and
+	// signal.Notify/Stop): the inner RouteTo(a) call runs now, returns a
+	// restore closure, and the outer () gets deferred. Adapters that don't
+	// implement adapter.WarnEmitter (the noop adapter today) yield a no-op
+	// restore closure, so the deferred call is always safe. Flush
+	// surrenders any partial unterminated line still in the WarnWriter's
+	// line-assembly buffer; all emitters terminate with \n today, so this
+	// is belt-and-suspenders.
+	//
+	// LIFO execution: the RouteTo defer (registered second) runs FIRST —
+	// the restore closure detaches the adapter — and Flush (registered
+	// first) runs SECOND, draining any partial line the WarnWriter held.
+	// The two are order-independent in practice because Flush writes
+	// through warnW.w directly (not via the adapter setter the restore
+	// just detached), but the order is worth knowing.
+	defer warnW.Flush()
+	defer warnW.RouteTo(a)()
 	// Gate codex/cursor the same way `agent add` does: they're registered as
 	// noop adapters, so Ingest returns an empty canonical and import would
 	// otherwise fail with a misleading "<component> not found in native config".
@@ -579,11 +592,6 @@ func importVerb(dryRun bool) string {
 	}
 	return "imported"
 }
-
-// adapterStderrSetter is the optional setter each concrete adapter
-// (claude/opencode/codex) implements, letting CLI commands route the
-// adapter's Ingest warnings through a styled writer.
-type adapterStderrSetter interface{ SetStderr(io.Writer) }
 
 // importIO bundles the styled printer, the streams it writes to, and the
 // dry-run flag so every importXxx function emits its per-item lines, section

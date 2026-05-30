@@ -15,6 +15,88 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Added
 
+- **`adapter.WarnEmitter` extension interface** — formalises the optional
+  `SetStderr(io.Writer)` setter the claude / opencode / codex adapters
+  added alongside the `import` styling work, so future Ingest-using
+  commands can redirect adapter warnings through the styled `ui.WarnWriter`
+  (bold-yellow `⚠️ warning:`) without duplicating the type-assertion
+  boilerplate. Named for the implementor (a *source* of warnings that
+  accepts a sink, mirroring `PluginIngester`), not the parameter.
+  The contract has four load-bearing pieces, all tested and break-verified:
+  - **`SetStderr(nil)` resets to the default (`os.Stderr`)** and MUST NOT
+    panic. Pinned by per-adapter `TestSetStderr_NilResetsToDefault`
+    tests (claude / opencode / codex) that capture `os.Stderr` via a
+    pipe and assert the warning actually lands there — a faulty
+    `SetStderr(nil)` routing to `io.Discard` would not pass.
+  - **Configure stderr BEFORE Ingest.** Adapters snapshot the writer at
+    Ingest entry, so dynamic switching mid-Ingest is ignored. Documented
+    on the interface.
+  - **Compile-pin against the interface.** Each adapter's identity test
+    carries `var _ adapter.WarnEmitter = a`; dropping the method fails
+    the build, not a runtime no-op.
+  - **Caller owns lifetime via a restore handle.** `ui.WarnWriter.RouteTo`
+    is now `func (s *WarnWriter) RouteTo(a any) func()` — it wires the
+    writer immediately and returns a restore closure. Idiomatic
+    `defer warnW.RouteTo(a)()` evaluates the inner `RouteTo(a)` now and
+    defers the returned restore (which calls `SetStderr(nil)`).
+    `ui.WarnWriter` gains a `Flush()` method;
+    `internal/cli/import.go` pairs `defer warnW.Flush()` with the
+    routed-restore so partial lines drain on return.
+- **Routing primitive safety guards.**
+  `ui.WarnWriter.RouteTo` is a silent no-op for: untyped-`nil`,
+  typed-nil pointers (caught via `reflect.IsNil` so the type-assert
+  doesn't lead to a `SetStderr` deref panic), and any value whose
+  dynamic type doesn't implement the setter. The restore closure is
+  always callable, so `defer warnW.RouteTo(a)()` is safe regardless of
+  what `a` is. Behaviour pinned by `TestWarnWriter_RouteTo` in
+  `internal/ui/routeto_test.go` (happy path + nil + typed-nil +
+  non-implementor + repeated-restore).
+- **End-to-end same-line regex anchor.** `TestImport_StyledAdapterWarnings`
+  is now table-driven across claude AND opencode and asserts that the
+  styled `⚠️ warning:` prefix appears on the SAME line as the
+  adapter-specific `"frontmatter is not strict YAML"` phrase. The
+  prior assertion looked for the styled prefix anywhere in the
+  output, which the CLI's own `importIO.warn` could satisfy; the
+  same-line anchor catches both the os.Stderr-fallback and the
+  WarnWriter-bypass regressions. Break-verified.
+- `ui.WarnWriter` is documented as not safe for concurrent use (one
+  writer per command invocation, the existing pattern).
+- **`captureOsStderr` cleanup is panic-safe.** The per-adapter
+  `os.Stderr`-pipe-swap helpers used by the nil-reset tests now
+  defer `w.Close()` and `os.Stderr = orig` BEFORE invoking `fn`, so
+  a `t.Fatalf` inside `fn` (which calls `runtime.Goexit`) no longer
+  leaks the read goroutine or leaves `os.Stderr` swapped for later
+  tests in the same package. Each helper also carries a "do not
+  `t.Parallel`" comment naming the global-state hazard.
+- **`Flush()` coverage.** New `TestWarnWriter_Flush` in
+  `internal/ui/routeto_test.go` covers the partial-line drain
+  path the `importRun` defer relies on: a `"warning: "` Write with
+  no trailing newline is asserted to (a) sit in the buffer until
+  Flush is called, (b) get styled with the bold-yellow prefix on
+  Flush, and (c) a non-warning partial drains verbatim. Without
+  this, Flush could silently become a no-op since every current
+  emitter terminates with `\n`.
+- **Mid-Ingest snapshot contract pinned per-adapter.**
+  `TestSetStderr_SnapshotAtIngestEntry` in each implementing
+  adapter's package (claude / opencode / codex) uses a custom
+  writer that, on first emission, swaps the adapter's `Stderr` to
+  a sibling buffer; the snapshot taken at Ingest entry (`warn :=
+  a.stderr()`) means subsequent warnings still land in the
+  original sink. A future refactor in ANY adapter's Ingest that
+  re-reads `a.stderr()` per warning would silently violate the
+  documented "configure stderr BEFORE Ingest" promise on
+  `WarnEmitter`; the per-adapter tests catch it independently
+  rather than relying on a single lead test + grep.
+- **Shared `internal/adapter/adaptertest` test helper package.**
+  Centralises `CaptureOsStderr(t, fn)` (the `os.Stderr`-pipe-swap
+  helper with the defer-cleanup invariants that round-3 demonstrated
+  must hold) and `SwapOnFirstWriteBuffer` (the writer that fires a
+  callback on first write, used by the snapshot tests). Follows the
+  stdlib `httptest` precedent: an ordinary package that takes
+  `*testing.T`. Eliminates three byte-identical 30-line copies
+  across the adapter test packages — a maintenance trap that
+  round-3 surfaced when the deferred-cleanup fix had to be applied
+  three times in lockstep.
 - **`explain` accepts multiple plugins, `--all`, and `--list`** —
   `agentsync explain` now takes a space-separated list of plugin ids
   (`agentsync explain notion@official superpowers@obra`), and gains two flags:

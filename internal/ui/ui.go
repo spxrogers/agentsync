@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 
 	"golang.org/x/term"
 )
@@ -169,6 +170,9 @@ func Pad(s string, width int) string {
 // callers' partial Write is held until a newline arrives — fmt.Fprintf in
 // practice always finishes a line per call, but buffering keeps a chunked
 // writer correct.
+//
+// Not safe for concurrent use: the line-assembly buffer is unsynchronized.
+// One *WarnWriter per command invocation is the intended pattern.
 type WarnWriter struct {
 	w   io.Writer
 	p   *Printer
@@ -215,6 +219,93 @@ func (s *WarnWriter) Flush() {
 // label prefix. Wider than one column in some terminals, which is fine — the
 // warning lines are not part of any padded layout.
 const GlyphWarnEmoji = "⚠️"
+
+// stderrSetter is the structural shape of adapter.WarnEmitter. Duplicated
+// here so ui doesn't depend on the adapter package; each concrete adapter's
+// test suite pins itself against adapter.WarnEmitter at compile time, and
+// internal/cli/import_warn_routing_test.go pins a real adapter through
+// RouteTo at runtime, so drift between the two definitions fails the
+// build or the test rather than silently regressing to a no-op.
+//
+// TODO: when WarnEmitter grows a second method (a structured-diagnostic
+// sink, a `Verbose(io.Writer)`, etc.), the structural-duplicate-with-
+// compile-pin pattern stops being free. Move the interface to a neutral
+// package (e.g. internal/cliio) so ui and adapter both import one
+// definition.
+type stderrSetter interface{ SetStderr(w io.Writer) }
+
+// RouteTo wires this writer into anything that exposes a
+// SetStderr(io.Writer) setter (matching adapter.WarnEmitter) and returns a
+// restore function that detaches the writer when invoked. Idiomatic use
+// pairs with defer:
+//
+//	defer warnW.RouteTo(a)()
+//
+// The inner RouteTo(a) call evaluates immediately (wires the writer); the
+// outer () is the deferred restore. The returned function is always
+// safe to call — it's a no-op when the target doesn't implement the
+// setter, when the target is a typed-nil pointer, or when the target was
+// an untyped nil — so callers never need to type-assert or nil-check.
+//
+// Non-implementor cases that resolve to a silent no-op:
+//
+//   - untyped nil (`any(nil)`): the type-assert misses because the
+//     interface value carries no concrete type.
+//   - typed nil (`var a *T = nil; RouteTo(a)`): the type-assert SUCCEEDS
+//     because the interface value holds the method set of *T, but calling
+//     SetStderr would dereference the nil pointer. RouteTo guards
+//     against this via reflect.
+//   - any value whose dynamic type doesn't implement SetStderr.
+func (s *WarnWriter) RouteTo(a any) func() {
+	v, ok := s.setterOf(a)
+	if !ok {
+		return noopRestore
+	}
+	v.SetStderr(s)
+	return func() { v.SetStderr(nil) }
+}
+
+// noopRestore is the restore function returned when RouteTo can't wire
+// anything. Shared so the non-implementor path doesn't allocate per
+// call. Keep stateless: a future addition that captures state would
+// silently share that state across every no-op RouteTo call (every
+// command that runs against the noop adapter, every nil-setter test).
+var noopRestore = func() {}
+
+// setterOf returns the SetStderr setter on a, or (nil, false) when a
+// cannot be safely called. The three rejection paths are distinct:
+//
+//  1. `a == nil`: an UNTYPED nil any-value (no concrete type behind it).
+//     The bare `nil` check catches this; the later type-assert would
+//     also fail, but doing it explicitly documents the case.
+//  2. `a.(stderrSetter)` failure: a's dynamic type doesn't implement
+//     SetStderr — this is the "noop adapter" path. Today's caller
+//     can pass any adapter.Adapter; non-implementors get this path.
+//  3. `rv.IsNil()` on a Pointer kind: a TYPED-nil pointer (e.g.
+//     `var p *Adapter = nil`). The interface value carries *Adapter's
+//     method set, so the type-assert in (2) SUCCEEDS, but calling
+//     SetStderr on the nil pointer would dereference and panic. The
+//     reflect guard is the only check that catches this.
+//
+// Scope of the reflect guard: Pointer kind only. Map/Chan/Func/Slice/
+// Interface kinds can also be typed-nil and would panic similarly, but
+// no implementor today (all *Adapter) uses them, and the unidiomatic
+// shape would be a louder review signal than a runtime no-op. Widen
+// the guard if a non-pointer implementor ever lands.
+func (s *WarnWriter) setterOf(a any) (stderrSetter, bool) {
+	if a == nil {
+		return nil, false
+	}
+	v, ok := a.(stderrSetter)
+	if !ok {
+		return nil, false
+	}
+	rv := reflect.ValueOf(a)
+	if rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return nil, false
+	}
+	return v, true
+}
 
 func (s *WarnWriter) emit(line []byte) {
 	if !bytes.HasPrefix(line, []byte(warnLinePrefix)) {

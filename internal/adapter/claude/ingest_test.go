@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/adapter/adaptertest"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -190,6 +191,115 @@ func TestIngest_RoundTripsMemory(t *testing.T) {
 	}
 	if out.Memory.Body != in.Memory.Body {
 		t.Fatalf("Memory roundtrip: got %q, want %q", out.Memory.Body, in.Memory.Body)
+	}
+}
+
+// TestSetStderr_NilResetsToDefault pins the adapter.WarnEmitter nil
+// contract: SetStderr(nil) MUST NOT panic AND MUST route subsequent
+// warnings back to the os.Stderr default — not to io.Discard, not to
+// the previously-set buffer, and not into the void. The test plants a
+// known-lenient skill, sets a buffer as the active sink, calls
+// SetStderr(nil), captures os.Stderr via a pipe for the duration of
+// the second Ingest, and asserts:
+//
+//   (a) the previously-set buffer no longer receives the warning, AND
+//   (b) os.Stderr DOES — proving the reset goes to the default, not
+//       silently elsewhere.
+//
+// Without (b), a faulty SetStderr(nil) that routes to io.Discard
+// would pass the (a)-only test while quietly dropping every future
+// warning the user needs to see. The behaviour is verified by the
+// break-tests recorded in the PR description; future adapters add a
+// parallel test in their own package (see opencode/ingest_test.go,
+// codex/codex_test.go).
+func TestSetStderr_NilResetsToDefault(t *testing.T) {
+	// Do NOT t.Parallel: adaptertest.CaptureOsStderr swaps the process-global
+	// os.Stderr. A parallel sibling running concurrently would race
+	// on the swap.
+	tmp := t.TempDir()
+	skillDir := filepath.Join(tmp, ".claude", "skills", "bad-yaml")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: bad-yaml\ndescription: Triggers on: rebase\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var warn bytes.Buffer
+	a := claude.New(claude.Options{TargetRoot: tmp, Stderr: &warn})
+
+	// Reset: a panic here is itself a contract failure.
+	a.SetStderr(nil)
+
+	captured := adaptertest.CaptureOsStderr(t, func() {
+		if _, err := a.Ingest(adapter.ScopeUser, ""); err != nil {
+			t.Fatalf("Ingest after SetStderr(nil): %v", err)
+		}
+	})
+
+	if warn.Len() > 0 {
+		t.Fatalf("SetStderr(nil) did not detach the previously-set buffer; got:\n%s", warn.String())
+	}
+	if !strings.Contains(captured, "frontmatter is not strict YAML") {
+		t.Fatalf("SetStderr(nil) must route to os.Stderr default; captured nothing matching the lenient-YAML notice:\n%s", captured)
+	}
+}
+
+// TestSetStderr_SnapshotAtIngestEntry pins the documented "configure
+// stderr BEFORE Ingest; don't depend on dynamic switching mid-Ingest"
+// contract on adapter.WarnEmitter. The interface promise is that
+// adapters snapshot the writer once at Ingest entry (`warn :=
+// a.stderr()` — see internal/adapter/claude/ingest.go:54). A future
+// refactor that re-reads `a.stderr()` per warning would silently
+// violate the doc; this test makes that a test failure instead.
+//
+// The fixture plants two lenient-YAML skills so Ingest emits two
+// warnings in sequence. The first write to the primary buffer triggers
+// adaptertest.SwapOnFirstWriteBuffer.OnFirstWrite, which swaps the
+// adapter's stderr to a sibling buffer mid-emission. If the snapshot
+// holds, the second warning still lands in the primary; if the adapter
+// instead re-reads `a.stderr()` per warning, the sibling receives it
+// and the assertion fires.
+//
+// opencode and codex carry parallel snapshot tests using the same
+// SwapOnFirstWriteBuffer (and the same adaptertest.CaptureOsStderr helper), so
+// drift in any single adapter's Ingest implementation is caught
+// per-package.
+func TestSetStderr_SnapshotAtIngestEntry(t *testing.T) {
+	tmp := t.TempDir()
+	for _, name := range []string{"first", "second"} {
+		dir := filepath.Join(tmp, ".claude", "skills", name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nname: " + name + "\ndescription: Triggers on: rebase\n---\nbody\n"
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var sibling bytes.Buffer
+	primary := &adaptertest.SwapOnFirstWriteBuffer{}
+	a := claude.New(claude.Options{TargetRoot: tmp, Stderr: primary})
+	primary.OnFirstWrite = func() { a.SetStderr(&sibling) }
+
+	if _, err := a.Ingest(adapter.ScopeUser, ""); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	if !primary.Fired() {
+		t.Fatal("OnFirstWrite was never called — fixture didn't trigger any warning")
+	}
+	if sibling.Len() > 0 {
+		t.Fatalf("snapshot contract violated: warnings emitted AFTER mid-Ingest SetStderr landed in the sibling buffer (%d bytes):\n%s",
+			sibling.Len(), sibling.String())
+	}
+	// Sanity: both warnings should be in primary (proving the snapshot
+	// is what protected, not that no second warning was emitted).
+	if strings.Count(primary.String(), "frontmatter is not strict YAML") < 2 {
+		t.Fatalf("expected BOTH lenient-YAML warnings in the original sink (snapshot); got:\n%s",
+			primary.String())
 	}
 }
 

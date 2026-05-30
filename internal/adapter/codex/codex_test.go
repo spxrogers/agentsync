@@ -23,6 +23,9 @@ func TestAdapter_Identity(t *testing.T) {
 	// Must satisfy both interfaces.
 	var _ adapter.Adapter = a
 	var _ adapter.PluginIngester = a
+	// Compile-time pin: drift on SetStderr fails the build before RouteTo
+	// would silently no-op us at runtime.
+	var _ adapter.WarnEmitter = a
 }
 
 func TestAdapter_Capabilities_HasExpected(t *testing.T) {

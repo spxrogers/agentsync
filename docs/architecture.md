@@ -204,6 +204,53 @@ components-only-on-apply rule above:
 
 See the capability matrix for source links.
 
+### WarnEmitter (optional)
+
+A second optional extension lets callers redirect the warnings an adapter's
+`Ingest` emits (lenient-YAML notices, dropped components, …) away from
+`os.Stderr`:
+
+```go
+type WarnEmitter interface {
+    SetStderr(w io.Writer)
+}
+```
+
+Concrete adapters (claude/opencode/codex) implement it; the noop adapter
+doesn't (it emits no warnings). Four contract rules every implementor
+honours:
+
+1. **`SetStderr(nil)` resets to the default** (`os.Stderr`) — and MUST
+   NOT panic. Pinned by per-adapter `TestSetStderr_NilResetsToDefault`
+   tests that capture `os.Stderr` via a pipe and assert the warning
+   actually lands there — a faulty `SetStderr(nil)` routing to
+   `io.Discard` would not pass.
+2. **Configure stderr BEFORE Ingest.** Adapters snapshot the writer at
+   Ingest entry (`warn := a.stderr()`), so calling `SetStderr` mid-Ingest
+   is ignored for the remainder of that call. The `RouteTo`-before-Ingest
+   pattern is the supported one; don't depend on dynamic switching.
+3. **Compile-pin against `adapter.WarnEmitter`.** Each adapter's
+   `claude_test.go` / `opencode_test.go` / `codex_test.go` carries a
+   `var _ adapter.WarnEmitter = a` line so dropping the method fails
+   the test build, not a runtime no-op.
+4. **The writer's lifetime is the caller's problem.** Today's caller
+   (`import`) uses the restore-handle pattern —
+   `defer warnW.RouteTo(a)()` evaluates the inner `RouteTo(a)` immediately
+   (wires the writer) and defers the returned restore closure (calls
+   `SetStderr(nil)` on the way out) — paired with `defer warnW.Flush()`
+   to drain any partial line in the WarnWriter's line-assembly buffer.
+
+`import` is the only caller today: it wraps `cmd.ErrOrStderr()` in a
+`ui.WarnWriter` that restyles `"warning: "` line prefixes to bold-yellow
+`"⚠️ warning:"`, then `defer warnW.RouteTo(a)()` injects the wrapper
+and arranges the restore. The same wrapper backs `capture.Opts.Warn`
+and the command's own `io.warn` calls, so every warning the user sees
+during an import — adapter, capture, or CLI — shares one styling.
+
+Kept off the core `Adapter` for the same reason as `PluginIngester`: an
+adapter that emits no Ingest warnings shouldn't be forced to implement a
+setter it'll never use.
+
 ---
 
 ## 4. The apply pipeline (Source ▶ Destination)

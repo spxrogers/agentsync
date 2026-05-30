@@ -18,6 +18,10 @@ func TestAdapter_Identity(t *testing.T) {
 		t.Fatalf("expected non-zero capabilities")
 	}
 	var _ adapter.Adapter = a
+	// Compile-time pin: a future refactor that drops SetStderr (or changes
+	// its signature) fails to build here, surfacing the drift before
+	// ui.WarnWriter.RouteTo would silently no-op the adapter at runtime.
+	var _ adapter.WarnEmitter = a
 }
 
 func TestAdapter_DetectsHomeDir(t *testing.T) {

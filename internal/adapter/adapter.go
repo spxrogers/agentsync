@@ -4,6 +4,8 @@
 package adapter
 
 import (
+	"io"
+
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
@@ -167,6 +169,34 @@ type NativePlugin struct {
 // "PluginIngester (read-only)" for the full rationale.
 type PluginIngester interface {
 	IngestPlugins(scope Scope, project string) ([]NativeMarketplace, []NativePlugin, error)
+}
+
+// WarnEmitter is an OPTIONAL extension to Adapter: an adapter that emits
+// Ingest warnings implements it to let callers redirect the stream away
+// from the default (os.Stderr). Implementors are SOURCES of warnings that
+// accept a sink — the name follows the PluginIngester precedent of
+// describing what the implementor does, not the parameter the method
+// takes. Kept off the core Adapter so adapters that emit no warnings
+// aren't forced to implement a setter they'll never use; ui.WarnWriter
+// type-asserts for it, so callers pass any adapter and let the structural
+// match decide.
+//
+// Implementations MUST:
+//
+//   - Treat a nil writer as "reset to default" — subsequent warnings go to
+//     os.Stderr (or whatever the implementor's pre-SetStderr default was),
+//     not to io.Discard or any silent sink. Pinned per-adapter by
+//     TestSetStderr_NilResetsToDefault tests that capture os.Stderr and
+//     assert the warning lands there.
+//   - Not panic on a nil writer.
+//
+// Configuring stderr is meant to happen BEFORE Ingest runs. Today's
+// adapters snapshot the writer at Ingest entry (warn := a.stderr()), so a
+// SetStderr call mid-Ingest is ignored for the remainder of that call.
+// Use RouteTo-before-Ingest (the import pattern); don't depend on dynamic
+// switching during a single Ingest invocation.
+type WarnEmitter interface {
+	SetStderr(w io.Writer)
 }
 
 // DestWriter is the single funnel for any write that targets a native agent
