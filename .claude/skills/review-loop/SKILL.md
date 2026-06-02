@@ -1,6 +1,7 @@
 ---
 name: review-loop
 description: Multi-round adversarial code review loop — four specialized agents (correctness, adversarial, API design, test rigor) run in parallel against a PR, repeated until all four return `CLEAN — ship it` or a budgeted number of rounds (default 5) is exhausted. Use when the user wants a thorough review of a substantive PR — new interfaces, contract changes, load-bearing refactors — and has signalled they want both correctness AND polish. Heavy: up to 5 rounds × 4 agents = 20 sub-invocations, so not for tiny bug fixes, WIP sketches, or doc-only PRs. Invoke explicitly; do not auto-trigger from a generic "review this" request unless the user names the high-bar mandate.
+disable-model-invocation: true
 ---
 
 # Review loop
