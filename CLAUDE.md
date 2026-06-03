@@ -84,6 +84,31 @@ truth, never the struct that parses it.** Three rules follow:
   code never had). When you assert a capability, point to — or add — the test
   that backs it.
 
+## Cross-reference upstream harness docs before guessing — non-negotiable
+
+agentsync targets third-party agent harnesses we don't control. What each one
+*supports*, and *where* that support lives (config-file locations, schema keys,
+default paths, capability coverage, native behavior), is defined by its upstream
+docs — not by us, and not by what we remember. Before you write or change an
+adapter, functionality, or documentation — or assert ANYTHING new about what a
+harness supports or where its config lives — cross-reference the canonical
+upstream documentation rather than guessing or extrapolating from memory.
+
+| Harness | Canonical docs |
+| --- | --- |
+| Claude Code | https://code.claude.com/docs/ |
+| Codex | https://developers.openai.com/codex/ |
+| OpenCode | https://opencode.ai/docs/ |
+| Cursor | https://cursor.com/docs |
+
+This is a guard against *new or unverified* claims, not a tax on every edit.
+Don't network-fetch these docs for routine iteration on an already-implemented,
+well-understood feature — only when you're about to introduce information that
+isn't already settled in the code or our own docs: a new config path, a newly
+claimed capability, a behavioral assumption about the native tool. When in doubt
+about something a harness does or where it keeps it, check the source above
+before writing it down.
+
 ## Mental map of the code
 
 - **`internal/source`** — the canonical model (`source.Canonical`). The TOML
