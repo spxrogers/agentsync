@@ -7,19 +7,39 @@ import (
 	"testing"
 )
 
-// TestIntegration_M5_ProjectOverlay exercises the full M5 project-local overlay
-// pipeline end-to-end:
+// scaffoldProjectMCP writes a project-scope MCP server into an already-created
+// project tree (<projectDir>/.agentsync/mcp/<id>.toml).
+func scaffoldProjectMCP(t *testing.T, projectDir, id, command string, args ...string) {
+	t.Helper()
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = `"` + a + `"`
+	}
+	body := "[server]\ntype = \"stdio\"\ncommand = \"" + command + "\"\n"
+	if len(quoted) > 0 {
+		body += "args = [" + strings.Join(quoted, ", ") + "]\n"
+	}
+	dir := filepath.Join(projectDir, ".agentsync", "mcp")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, id+".toml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestIntegration_Project_Overlay exercises the project-local source tree
+// end-to-end:
 //   - init + agent add claude (user scope)
-//   - .agentsync.toml with [[mcp]] in a project dir
+//   - init --scope project --project <dir> scaffolds <dir>/.agentsync/
+//   - a project-scope MCP server in <dir>/.agentsync/mcp/
 //   - chdir into project dir
-//   - apply (auto-detects project scope via walk-up)
-//   - verify <project>/.claude/settings.json contains proj-mcp
-func TestIntegration_M5_ProjectOverlay(t *testing.T) {
+//   - apply (auto-detects project scope via .agentsync/ walk-up)
+//   - verify <project>/.claude/settings.json contains the project MCP
+func TestIntegration_Project_Overlay(t *testing.T) {
 	tmpHome := t.TempDir()
 	projectDir := t.TempDir()
-	env := map[string]string{
-		"AGENTSYNC_TARGET_ROOT": tmpHome,
-	}
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
 
 	if _, err := runCLI(t, env, "init"); err != nil {
 		t.Fatal(err)
@@ -27,19 +47,10 @@ func TestIntegration_M5_ProjectOverlay(t *testing.T) {
 	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
 		t.Fatal(err)
 	}
-
-	// Write a .agentsync.toml with a flat [[mcp]] entry.
-	markerContent := `agents = ["claude"]
-
-[[mcp]]
-id      = "proj-mcp"
-type    = "stdio"
-command = "npx"
-args    = ["-y", "@proj/mcp"]
-`
-	if err := os.WriteFile(filepath.Join(projectDir, ".agentsync.toml"), []byte(markerContent), 0o644); err != nil {
+	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", projectDir); err != nil {
 		t.Fatal(err)
 	}
+	scaffoldProjectMCP(t, projectDir, "proj-mcp", "npx", "-y", "@proj/mcp")
 
 	// chdir into project dir so auto-detect kicks in.
 	origDir, err := os.Getwd()
@@ -51,13 +62,11 @@ args    = ["-y", "@proj/mcp"]
 		t.Fatal(err)
 	}
 
-	// apply — no --scope flag; auto-detect should find .agentsync.toml and use project scope.
 	out, err := runCLI(t, env, "apply")
 	if err != nil {
 		t.Fatalf("apply: %v\n%s", err, out)
 	}
 
-	// Verify project-scope settings.json was written under <projectDir>/.claude/
 	settingsPath := filepath.Join(projectDir, ".claude", "settings.json")
 	body, err := os.ReadFile(settingsPath)
 	if err != nil {
@@ -68,14 +77,14 @@ args    = ["-y", "@proj/mcp"]
 	}
 }
 
-// TestIntegration_M5_ExplicitProjectFlag verifies --project <path> works
-// without needing to chdir.
-func TestIntegration_M5_ExplicitProjectFlag(t *testing.T) {
+// TestIntegration_Project_HomeNotMistakenForProject guards the auto-detect
+// footgun: ~/.agentsync/ is itself a .agentsync/ directory, so running a command
+// from the home that owns it must NOT flip to project scope (which would stop
+// writing user-scope destinations). Here cwd == the target root, so walk-up finds
+// <root>/.agentsync (the user home) and must reject it as a project.
+func TestIntegration_Project_HomeNotMistakenForProject(t *testing.T) {
 	tmpHome := t.TempDir()
-	projectDir := t.TempDir()
-	env := map[string]string{
-		"AGENTSYNC_TARGET_ROOT": tmpHome,
-	}
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
 
 	if _, err := runCLI(t, env, "init"); err != nil {
 		t.Fatal(err)
@@ -83,20 +92,52 @@ func TestIntegration_M5_ExplicitProjectFlag(t *testing.T) {
 	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
 		t.Fatal(err)
 	}
-
-	markerContent := `agents = ["claude"]
-
-[[mcp]]
-id      = "api-mcp"
-type    = "stdio"
-command = "node"
-args    = ["server.js"]
-`
-	if err := os.WriteFile(filepath.Join(projectDir, ".agentsync.toml"), []byte(markerContent), 0o644); err != nil {
+	// A user-scope MCP server so apply writes the user dest (~/.claude.json).
+	mcpDir := filepath.Join(tmpHome, ".agentsync", "mcp")
+	if err := os.MkdirAll(mcpDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mcpDir, "u.toml"),
+		[]byte("[server]\ntype = \"stdio\"\ncommand = \"x\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Use --project flag to avoid needing to chdir.
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+	if err := os.Chdir(tmpHome); err != nil { // cwd == the home that owns .agentsync/
+		t.Fatal(err)
+	}
+
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	// User-scope dest must exist; no project dest under <tmpHome>/.claude/ may.
+	if _, err := os.Stat(filepath.Join(tmpHome, ".claude.json")); err != nil {
+		t.Fatalf("user-scope .claude.json not written — home was mistaken for a project: %v", err)
+	}
+}
+
+// TestIntegration_Project_ExplicitFlag verifies --project <path> works without
+// needing to chdir.
+func TestIntegration_Project_ExplicitFlag(t *testing.T) {
+	tmpHome := t.TempDir()
+	projectDir := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", projectDir); err != nil {
+		t.Fatal(err)
+	}
+	scaffoldProjectMCP(t, projectDir, "api-mcp", "node", "server.js")
+
 	out, err := runCLI(t, env, "apply", "--project", projectDir)
 	if err != nil {
 		t.Fatalf("apply --project: %v\n%s", err, out)
@@ -112,14 +153,13 @@ args    = ["server.js"]
 	}
 }
 
-// TestIntegration_M5_AgentsFilter verifies that marker agents = ["claude"]
-// filters out other agents, so only claude's project-scope files are written.
-func TestIntegration_M5_AgentsFilter(t *testing.T) {
+// TestIntegration_Project_AgentsFilter verifies that a project tree whose
+// agentsync.toml declares only claude restricts the project agent set, so
+// opencode's project-scope files are not written.
+func TestIntegration_Project_AgentsFilter(t *testing.T) {
 	tmpHome := t.TempDir()
 	projectDir := t.TempDir()
-	env := map[string]string{
-		"AGENTSYNC_TARGET_ROOT": tmpHome,
-	}
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
 
 	if _, err := runCLI(t, env, "init"); err != nil {
 		t.Fatal(err)
@@ -130,45 +170,32 @@ func TestIntegration_M5_AgentsFilter(t *testing.T) {
 	if _, err := runCLI(t, env, "agent", "add", "opencode"); err != nil {
 		t.Fatal(err)
 	}
-
-	// Marker restricts to claude only.
-	markerContent := `agents = ["claude"]
-`
-	if err := os.WriteFile(filepath.Join(projectDir, ".agentsync.toml"), []byte(markerContent), 0o644); err != nil {
+	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", projectDir); err != nil {
 		t.Fatal(err)
 	}
+	// Restrict the project agent set to claude only.
+	cfg := "[agents]\nclaude = { enabled = true }\n"
+	if err := os.WriteFile(filepath.Join(projectDir, ".agentsync", "agentsync.toml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scaffoldProjectMCP(t, projectDir, "only-claude", "node", "x.js")
 
-	out, err := runCLI(t, env, "apply", "--project", projectDir)
-	if err != nil {
-		t.Fatalf("apply: %v\n%s", err, out)
+	if _, err := runCLI(t, env, "apply", "--project", projectDir); err != nil {
+		t.Fatalf("apply: %v", err)
 	}
 
-	// Claude's project settings should exist.
-	claudeSettings := filepath.Join(projectDir, ".claude", "settings.json")
-	if _, err := os.Stat(claudeSettings); err != nil {
-		t.Logf("claude settings.json not found (may be OK if no MCP servers): %v", err)
-	}
-
-	// opencode's project config should NOT exist at <projectDir>/.opencode/
-	opencodeConfig := filepath.Join(projectDir, ".opencode")
-	if _, err := os.Stat(opencodeConfig); err == nil {
-		t.Fatalf("opencode project config unexpectedly written at %s", opencodeConfig)
-	}
-
-	// apply should mention only claude.
-	if strings.Contains(out, "opencode") {
-		t.Logf("note: opencode appeared in output; agents filter working if no MCP written: %s", out)
+	// opencode's project config should NOT exist.
+	if _, err := os.Stat(filepath.Join(projectDir, ".opencode")); err == nil {
+		t.Fatalf("opencode project config unexpectedly written")
 	}
 }
 
-// TestIntegration_M5_MemoryImport verifies that memory.import appends content
-// to the rendered memory file.
-func TestIntegration_M5_MemoryImport(t *testing.T) {
+// TestIntegration_Project_Memory verifies that a project tree's memory/AGENTS.md
+// renders to the agent's project-scope memory file.
+func TestIntegration_Project_Memory(t *testing.T) {
 	tmpHome := t.TempDir()
 	projectDir := t.TempDir()
-	env := map[string]string{
-		"AGENTSYNC_TARGET_ROOT": tmpHome,
-	}
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
 
 	if _, err := runCLI(t, env, "init"); err != nil {
 		t.Fatal(err)
@@ -176,34 +203,24 @@ func TestIntegration_M5_MemoryImport(t *testing.T) {
 	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
 		t.Fatal(err)
 	}
-
-	// Create an AGENTS.md in the project dir.
-	agentsMD := "# Project Rules\nAlways write tests first."
-	if err := os.WriteFile(filepath.Join(projectDir, "AGENTS.md"), []byte(agentsMD), 0o644); err != nil {
+	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", projectDir); err != nil {
+		t.Fatal(err)
+	}
+	mem := "# Project Rules\nAlways write tests first."
+	if err := os.WriteFile(filepath.Join(projectDir, ".agentsync", "memory", "AGENTS.md"), []byte(mem), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	markerContent := `agents = ["claude"]
-
-[memory]
-import = ["AGENTS.md"]
-`
-	if err := os.WriteFile(filepath.Join(projectDir, ".agentsync.toml"), []byte(markerContent), 0o644); err != nil {
-		t.Fatal(err)
+	if _, err := runCLI(t, env, "apply", "--project", projectDir); err != nil {
+		t.Fatalf("apply: %v", err)
 	}
 
-	out, err := runCLI(t, env, "apply", "--project", projectDir)
-	if err != nil {
-		t.Fatalf("apply: %v\n%s", err, out)
-	}
-
-	// Claude project-scope memory lands at <projectDir>/CLAUDE.md.
 	claudeMD := filepath.Join(projectDir, "CLAUDE.md")
 	body, err := os.ReadFile(claudeMD)
 	if err != nil {
 		t.Fatalf("read project CLAUDE.md: %v", err)
 	}
 	if !strings.Contains(string(body), "Project Rules") {
-		t.Fatalf("imported memory content not in CLAUDE.md: %s", body)
+		t.Fatalf("project memory content not in CLAUDE.md: %s", body)
 	}
 }

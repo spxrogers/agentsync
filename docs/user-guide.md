@@ -179,6 +179,15 @@ Claude's built-in `claude-plugins-official` (which doesn't appear in
 `extraKnownMarketplaces`) before you have registered it — is reported and
 skipped; register it with `agentsync marketplace add <source>` and re-import.
 
+**Importing a project's native config.** `import <agent> --scope project`
+(optionally `--project <path>`) reads the agent's *native project-scope* config
+(e.g. `<root>/.claude/`) and captures it into the project source tree
+`<root>/.agentsync/` rather than your user `~/.agentsync/`. It seeds central state
+with the project scope + root so the next apply doesn't treat those files as a
+foreign collision. Plugins are excluded: a named `import claude:plugin:<name>
+--scope project` errors, and a bulk `import claude:plugin --scope project`
+silently skips — plugins are a user-scope concept across the harnesses.
+
 On a populated machine, the **first** apply will see pre-existing native files it
 didn't write and treat them as `foreign-collision`: it backs each one up to
 `~/.agentsync/.state/backups/<timestamp>/` *before* writing. Nothing is lost.
@@ -246,6 +255,14 @@ first-class. Layout:
 │   └── scripts/ …            #   all carried verbatim, executable bit preserved
 └── secrets/secrets.age       # age-encrypted secrets
 ```
+
+A **project source tree** at a repo's `<root>/.agentsync/` has the *same*
+on-disk layout (created by `agentsync init --scope project`) — `agentsync.toml`
+plus `mcp/`, `lsp/`, `agents/`, `commands/`, `hooks/`, `memory/` (with
+`fragments/`), `skills/`, `plugins/`, and `secrets/`. The one difference: it has
+**no `.state/`** — apply records state centrally under `~/.agentsync/.state/`,
+keyed by project root. Commit the `.agentsync/` tree to the repo to share project
+agent config with collaborators. See [Project-local config](#project-local-config).
 
 ### Agents
 
@@ -404,22 +421,52 @@ your source — `agentsync diff` even redacts it so a piped diff can't leak it.
 
 ### Project-local config
 
-A repo can carry its own overlay. Drop a `.agentsync.toml` at its root; agentsync
-finds it by walking up from your current directory.
+A repo can carry its own **project source tree** — a `.agentsync/` directory at
+its root, with the same layout as your user `~/.agentsync/`. Commit it to share
+the project's agent config with collaborators. Scaffold it with:
+
+```bash
+cd ~/code/myrepo
+agentsync init --scope project        # creates ./.agentsync/
+# or target another path explicitly (implies project scope):
+agentsync init --project ~/code/myrepo
+```
+
+That writes `<root>/.agentsync/agentsync.toml` plus `mcp/`, `lsp/`, `skills/`,
+`agents/`, `commands/`, `hooks/`, `memory/`, `plugins/`, and `secrets/` — the
+same files as the user tree, minus `.state/` (apply records state centrally under
+`~/.agentsync/.state/`, keyed by project root). Author the project's config in
+this tree:
 
 ```toml
-# myrepo/.agentsync.toml
-agents = ["claude", "opencode"]   # subset for this project
+# myrepo/.agentsync/agentsync.toml
+[agents]
+claude = { enabled = true }       # subset for this project;
+                                  # leave [agents] empty to inherit the user's
+                                  # enabled agents
+```
 
-[[mcp]]
-id      = "company-api"
+```toml
+# myrepo/.agentsync/mcp/company-api.toml — same format as a user-scope mcp file
+[server]
 type    = "stdio"
 command = "npx"
 args    = ["-y", "@company/mcp"]
-
-[plugins]
-disabled = ["screenshot"]         # turn off a user-level plugin here
 ```
+
+```toml
+# myrepo/.agentsync/plugins/screenshot.toml — turn off a user-level plugin here
+[plugin]
+disabled = true
+```
+
+Author project memory directly in `<root>/.agentsync/memory/AGENTS.md` (compose
+it from `fragments/` just like the user tree).
+
+The project tree is **overlaid** onto your user canonical: a project entry
+replaces a user entry with the same id/name, new entries are appended, project
+memory is appended after user memory, and an empty project `[agents]` inherits
+the user's enabled agents.
 
 Apply from inside the repo and the overlay merges onto your user config:
 
@@ -429,7 +476,13 @@ agentsync apply               # auto-detects project scope
 ls .claude/settings.json      # project-scope config landed
 ```
 
-Force a scope explicitly with `--scope user|project` or `--project <path>`.
+Force a scope explicitly with `--scope user|project` or `--project <path>`
+(`--scope user` together with `--project` is an error).
+
+> **Upgrading from the old single-file marker?** The retired `.agentsync.toml`
+> marker at a repo root is no longer read — agentsync errors and tells you to run
+> `agentsync init --scope project` and move the settings into the `.agentsync/`
+> tree.
 
 ---
 
@@ -496,7 +549,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 
 | Command | Purpose | Key flags / args |
 |---|---|---|
-| `init [<git-url>]` | Create `~/.agentsync/`; optionally clone a bootstrap repo. | |
+| `init [<git-url>]` | Create `~/.agentsync/` (user scope); optionally clone a bootstrap repo. `--scope project` scaffolds a project tree at `<cwd>/.agentsync/` instead; `--project <path>` targets `<path>/.agentsync/` (implies project scope). A git-URL clone is user-scope only. | `--scope --project` |
 | `doctor` | Diagnose setup: PATH, home/state writability, config schema, secrets backend; flags natively-installed plugins missing from source. | |
 | `verify` | Validate config and surface every unresolved `${secret:}`/`${env:}` ref. | |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry. | `disable --purge` |
@@ -509,7 +562,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. | `--scope --project --json` |
 | `diff [<path>]` | Show pending/drift changes; secrets redacted. | `--scope --project --json` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
-| `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. Includes `plugin` (Claude), which re-fetches installed plugins + marketplaces **(network)**. | `--dry-run` |
+| `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. Includes `plugin` (Claude), which re-fetches installed plugins + marketplaces **(network)**. `--scope project` reads the agent's *native project-scope* config (e.g. `<root>/.claude/`) and captures it into the project tree `<root>/.agentsync/`, seeding central state with the project scope + root. Plugin import is user-scope only. | `--dry-run --scope --project` |
 | `explain [<plugin>...]` | Show per-agent translation coverage for one or more plugins. | `--all --list --json` |
 
 Global: `-v/--verbose` for verbose logging on any command. `--color=auto|always|never`

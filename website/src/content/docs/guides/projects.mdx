@@ -1,36 +1,111 @@
 ---
 title: Project-local config
-description: Give a repo its own overlay with a .agentsync.toml marker — extra MCP servers, disabled plugins, and merged memory, scoped to that project.
+description: Give a repo its own .agentsync/ source tree — extra MCP servers, disabled plugins, and project memory, scoped to that project and shareable with collaborators.
 sidebar:
   order: 6
 ---
 
-import { Aside, LinkCard } from '@astrojs/starlight/components';
+import { Aside, FileTree, LinkCard } from '@astrojs/starlight/components';
 
-A repo can carry its own config overlay. Drop a `.agentsync.toml` marker at its
-root; agentsync finds it by walking up from your current directory.
+A repo can carry its own **project source tree**: a `.agentsync/` directory at its
+root with the *same* on-disk layout as your user `~/.agentsync/`. Commit it to the
+repo to share the project's agent config with collaborators — when they clone and
+apply, they get the project's servers, plugins, and memory layered onto their own
+user config.
 
-## The marker file
+## Scaffold the project tree
 
-```toml title="myrepo/.agentsync.toml"
-agents = ["claude", "opencode"]   # subset of agents for this project
+```bash frame="terminal"
+cd ~/code/myrepo
+agentsync init --scope project        # creates ./.agentsync/
+```
 
-[[mcp]]
-id      = "company-api"
+Or target a specific path (this implies project scope):
+
+```bash
+agentsync init --project ~/code/myrepo   # creates ~/code/myrepo/.agentsync/
+```
+
+<Aside type="caution">
+	`--scope user` together with `--project` is an error. A git-URL clone argument
+	is only supported at user scope.
+</Aside>
+
+That writes a tree with the same files as the user tree — `agentsync.toml` plus
+`mcp/`, `lsp/`, `skills/`, `agents/`, `commands/`, `hooks/`, `memory/` (with
+`fragments/`), `plugins/`, and `secrets/`:
+
+<FileTree>
+
+- myrepo/
+  - .agentsync/
+    - agentsync.toml `[agents]` table (subset / inherit)
+    - mcp/
+      - **company-api.toml** project-only MCP servers
+    - plugins/
+      - **screenshot.toml** disable a user plugin here
+    - memory/
+      - AGENTS.md project memory (+ `fragments/`)
+    - skills/
+    - agents/
+    - commands/
+    - hooks/
+    - lsp/
+    - secrets/
+
+</FileTree>
+
+The one difference from the user tree: there is **no `.state/`**. Apply records
+state centrally under `~/.agentsync/.state/`, keyed by the project root.
+
+## Author the tree
+
+The project's enabled agents go in an `[agents]` table — leave it empty to inherit
+the user's enabled agents:
+
+```toml title="myrepo/.agentsync/agentsync.toml"
+[agents]
+claude = { enabled = true }       # subset for this project
+# (empty [agents] inherits the user's enabled agents)
+```
+
+A project-only MCP server is just an `mcp/<id>.toml` file, identical in format to
+a user-scope MCP file:
+
+```toml title="myrepo/.agentsync/mcp/company-api.toml"
+[server]
 type    = "stdio"
 command = "npx"
 args    = ["-y", "@company/mcp"]
-
-[plugins]
-disabled = ["screenshot"]         # turn off a user-level plugin here
 ```
 
-A project overlay can:
+Turn off a user-level plugin for this repo with a `plugins/<id>.toml`:
 
-- **add** project-only MCP servers,
-- **disable** a user-level plugin for this repo,
-- **merge** extra memory on top of your user-level memory,
-- **narrow** the set of agents the project applies to.
+```toml title="myrepo/.agentsync/plugins/screenshot.toml"
+[plugin]
+disabled = true
+```
+
+Author project memory directly in `memory/AGENTS.md` (compose it from `fragments/`
+just like the user tree):
+
+```markdown title="myrepo/.agentsync/memory/AGENTS.md"
+# Project conventions
+
+Run `just test` before pushing.
+```
+
+## How the overlay merges
+
+The project tree is **overlaid** onto your user canonical:
+
+- a project entry **replaces** a user entry with the same id/name,
+- new project entries are **appended**,
+- project memory is **appended after** user memory,
+- an empty project `[agents]` **inherits** the user's enabled agents.
+
+User-level servers and plugins still apply unless the project replaces or disables
+them.
 
 ## Apply from inside the repo
 
@@ -40,26 +115,54 @@ agentsync apply               # auto-detects project scope
 ls .claude/settings.json      # project-scope config landed
 ```
 
-The overlay merges *onto* your user config — it doesn't replace it. User-level
-servers and plugins still apply unless the project disables them.
+## Import a project's native config
+
+Already have native project-scope config (e.g. `<root>/.claude/`)? Capture it
+straight into the project tree:
+
+```bash
+cd ~/code/myrepo
+agentsync import claude --scope project        # → ./.agentsync/
+agentsync import claude --project ~/code/myrepo # explicit root
+```
+
+This reads the agent's native project-scope config and writes it into
+`<root>/.agentsync/`, seeding central state with the project scope + root so the
+next apply doesn't foreign-collide.
+
+<Aside type="note" title="Plugins are user-scope only">
+	Plugin import is user-scope only across the harnesses: a named
+	`import claude:plugin:<name> --scope project` errors, and a bulk
+	`import claude:plugin --scope project` silently skips.
+</Aside>
 
 ## Forcing a scope
 
-agentsync auto-detects scope by looking for the marker, but you can be explicit:
+agentsync auto-detects scope by looking for a `.agentsync/` tree, but you can be
+explicit:
 
 ```bash
-agentsync apply --scope user           # ignore any project marker
-agentsync apply --scope project        # require project scope
+agentsync apply --scope user             # ignore any project tree
+agentsync apply --scope project          # require project scope
 agentsync apply --project ~/code/myrepo  # point at a specific repo
 ```
 
 <Aside type="note">
-	`--scope` and `--project` work on `apply`, `status`, `diff`, `reconcile`, and
-	`update` — anywhere the active config set matters.
+	`--scope` and `--project` work on `init`, `import`, `apply`, `status`, `diff`,
+	`reconcile`, and `update` — anywhere the active config set matters.
+</Aside>
+
+<Aside type="caution" title="Upgrading from the old marker?">
+	The retired single-file `.agentsync.toml` marker at a repo root is **no longer
+	read**. agentsync errors and tells you to run `agentsync init --scope project`
+	and move the settings into the `.agentsync/` tree (`agents = [...]` → an
+	`[agents]` table; `[[mcp]]` entries → `mcp/<id>.toml` files; `[plugins]
+	disabled` → `plugins/<id>.toml` with `disabled = true`; `[memory] import` is
+	gone — author memory in `memory/AGENTS.md`).
 </Aside>
 
 <LinkCard
-	title="Scope & the project marker"
+	title="Scope & the project source tree"
 	description="How discovery and merge work under the hood."
-	href="/concepts/#scope--the-project-marker"
+	href="/concepts/#scope--the-project-source-tree"
 />

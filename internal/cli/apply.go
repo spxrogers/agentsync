@@ -273,53 +273,74 @@ func saveBestEffortState(s *state.Targets, statePath string, plan render.RenderP
 // loadProjectedForScope loads the canonical model with plugin projection AND
 // the active project overlay applied, returning the merged canonical plus the
 // resolved scope and project root. Every project-scope-aware command (apply,
-// status, diff, reconcile, update re-apply) goes through it so they project,
-// disable, and merge identically.
+// status, diff, reconcile, update re-apply) goes through it so they project and
+// overlay identically.
 //
-// The marker is discovered BEFORE projection on purpose. project.Merge can only
-// drop a marker-disabled plugin's c.Plugins record — the components projection
-// already appended to the flat slices would still render. So the disable has to
-// gate projection: marker.Plugins.Disabled is passed to LoadProjectedExcluding,
-// keyed on the same plugin id Merge filters on, and Merge still runs afterward
-// to drop the record (keeping report/explain listings honest).
-// lenient selects the read-only/diagnostic projection: a strict same-name
-// plugin.json/entry conflict is resolved entry-wins with a warning rather than a
-// hard error, so status/diff still show state. Mutating callers pass false so a
-// conflict aborts before any write.
+// At project scope the project's own source tree (<root>/.agentsync/) is loaded
+// as a full canonical and overlaid onto the user canonical via project.Merge —
+// a missing tree loads as empty, so the overlay is a no-op. lenient selects the
+// read-only/diagnostic projection: a strict same-name plugin.json/entry conflict
+// is resolved entry-wins with a warning rather than a hard error, so status/diff
+// still show state. Mutating callers pass false so a conflict aborts before any
+// write.
 func loadProjectedForScope(fs afero.Fs, home, scopeFlag, projectFlag string, lenient bool) (source.Canonical, adapter.Scope, string, error) {
-	sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag, source.Canonical{})
+	sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag)
 	if err != nil {
 		return source.Canonical{}, sc, projectRoot, err
-	}
-	var marker *project.Marker
-	if sc == adapter.ScopeProject && projectRoot != "" {
-		marker, err = project.Discover(projectRoot)
-		if err != nil {
-			return source.Canonical{}, sc, projectRoot, fmt.Errorf("load project marker: %w", err)
-		}
-	}
-	var disabled []string
-	if marker != nil {
-		disabled = marker.Plugins.Disabled
 	}
 	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
 	load := marketplace.LoadProjectedExcluding
 	if lenient {
 		load = marketplace.LoadProjectedLenient
 	}
+	// A project tree can suppress a (user- or project-scope) plugin's projected
+	// components in this repo by carrying plugins/<id>.toml with `disabled = true`
+	// — the dir-model successor to the M5 marker's `[plugins] disabled`. We read
+	// those ids first and exclude them from BOTH projections so the plugin's MCP/
+	// skills/hooks vanish at project scope (not just its record).
+	var disabled []string
+	projHome := ""
+	if sc == adapter.ScopeProject && projectRoot != "" {
+		projHome = project.Home(projectRoot)
+		disabled, err = projectDisabledPlugins(fs, projHome)
+		if err != nil {
+			return source.Canonical{}, sc, projectRoot, fmt.Errorf("read project plugin disables: %w", err)
+		}
+	}
 	c, err := load(fs, home, pluginCacheRoot, disabled)
 	if err != nil {
 		return source.Canonical{}, sc, projectRoot, err
 	}
-	if marker != nil {
-		c = project.Merge(c, marker)
+	if projHome != "" {
+		pc, perr := load(fs, projHome, pluginCacheRoot, disabled)
+		if perr != nil {
+			return source.Canonical{}, sc, projectRoot, fmt.Errorf("load project source %s: %w", projHome, perr)
+		}
+		c = project.Merge(c, pc)
 	}
 	return c, sc, projectRoot, nil
 }
 
+// projectDisabledPlugins returns the plugin ids a project tree marks disabled
+// (plugins/<id>.toml with `disabled = true`). A missing tree loads as empty.
+func projectDisabledPlugins(fs afero.Fs, projHome string) ([]string, error) {
+	pc, err := source.Load(fs, projHome)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, p := range pc.Plugins {
+		if p.Plugin.Disabled {
+			out = append(out, p.ID)
+		}
+	}
+	return out, nil
+}
+
 // resolveProjectScope determines the effective scope and project root.
-// Priority: --project flag > --scope flag > cwd walk-up auto-detect.
-func resolveProjectScope(scopeFlag, projectFlag string, _ source.Canonical) (adapter.Scope, string, error) {
+// Priority: --project flag > --scope flag > cwd walk-up auto-detect of a
+// <root>/.agentsync/ tree.
+func resolveProjectScope(scopeFlag, projectFlag string) (adapter.Scope, string, error) {
 	// Explicit --project always implies project scope, so an explicit
 	// --scope user alongside it is contradictory — refuse rather than
 	// silently honor --project and ignore the user's --scope.
@@ -334,32 +355,32 @@ func resolveProjectScope(scopeFlag, projectFlag string, _ source.Canonical) (ada
 		return adapter.ScopeProject, abs, nil
 	}
 
-	// --scope project without --project: walk up from cwd to find marker.
+	// --scope project without --project: walk up from cwd to find a project tree.
 	if scopeFlag == "project" {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return adapter.ScopeUser, "", fmt.Errorf("getwd: %w", err)
 		}
-		marker, err := project.Discover(cwd)
-		if err != nil {
-			return adapter.ScopeUser, "", fmt.Errorf("discover project marker: %w", err)
+		root, found, derr := discoverProjectTree(cwd)
+		if derr != nil {
+			return adapter.ScopeUser, "", fmt.Errorf("discover project: %w", derr)
 		}
-		if marker != nil {
-			return adapter.ScopeProject, marker.Root, nil
+		if found {
+			return adapter.ScopeProject, root, nil
 		}
-		// No marker found; fall through to user scope.
+		// No project tree found; fall through to user scope.
 		return adapter.ScopeUser, "", nil
 	}
 
 	// Default / --scope user: auto-detect from cwd.
 	if scopeFlag == "" || scopeFlag == "user" {
-		// Auto-detect: if cwd has a marker, default to project scope.
+		// Auto-detect: if cwd is inside a project tree, default to project scope.
 		if scopeFlag == "" {
 			cwd, err := os.Getwd()
 			if err == nil {
-				marker, merr := project.Discover(cwd)
-				if merr == nil && marker != nil {
-					return adapter.ScopeProject, marker.Root, nil
+				root, found, derr := discoverProjectTree(cwd)
+				if derr == nil && found {
+					return adapter.ScopeProject, root, nil
 				}
 			}
 		}
@@ -367,4 +388,54 @@ func resolveProjectScope(scopeFlag, projectFlag string, _ source.Canonical) (ada
 	}
 
 	return adapter.ScopeUser, "", fmt.Errorf("unknown --scope value %q; want user or project", scopeFlag)
+}
+
+// discoverProjectTree walks up from cwd for a <root>/.agentsync/ tree, but skips
+// the user's OWN canonical home: ~/.agentsync/ is itself a .agentsync/ directory,
+// so running from inside it (or from $HOME) must NOT be mistaken for a project —
+// that would silently flip every command to project scope and stop writing the
+// user-scope destinations. When the nearest match IS the user home, the search
+// continues above it for a genuine project ancestor.
+func discoverProjectTree(cwd string) (string, bool, error) {
+	agentsyncHome := paths.AgentsyncHome(paths.OSEnv{})
+	dir := cwd
+	for {
+		root, found, err := project.Discover(dir)
+		if err != nil || !found {
+			return "", false, err
+		}
+		if !sameDir(project.Home(root), agentsyncHome) {
+			return root, true, nil
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			return "", false, nil
+		}
+		dir = parent
+	}
+}
+
+// sameDir reports whether a and b name the same directory, comparing cleaned
+// absolute paths and (best-effort) their symlink-resolved forms so a symlinked
+// temp root (macOS /tmp → /private/tmp) doesn't cause a false mismatch.
+func sameDir(a, b string) bool {
+	ca, err := filepath.Abs(a)
+	if err != nil {
+		return false
+	}
+	cb, err := filepath.Abs(b)
+	if err != nil {
+		return false
+	}
+	ca, cb = filepath.Clean(ca), filepath.Clean(cb)
+	if ca == cb {
+		return true
+	}
+	if ra, rerr := filepath.EvalSymlinks(ca); rerr == nil {
+		ca = ra
+	}
+	if rb, rerr := filepath.EvalSymlinks(cb); rerr == nil {
+		cb = rb
+	}
+	return ca == cb
 }

@@ -95,8 +95,13 @@ identity_file = "${env:HOME}/.config/agentsync/age.key"  # private key, per-mach
 
 ## Project overlay
 
-A repo can carry a `.agentsync.toml` marker at its root that merges onto your user
-config. See [Project-local config](/guides/projects/).
+A repo can carry a **project source tree** — a `.agentsync/` directory at its root
+with the *same* layout as the user tree above (scaffolded by `agentsync init
+--scope project`), minus `.state/`. It overlays onto your user config: a project
+entry replaces a user entry with the same id/name, new entries are appended,
+project memory is appended after user memory, and an empty project `[agents]`
+inherits the user's enabled agents. Commit the `.agentsync/` tree to share it with
+collaborators. See [Project-local config](/guides/projects/).
 
 ## State
 

@@ -10,333 +10,264 @@ import (
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
-// ─── Task 1: Discover ────────────────────────────────────────────────────────
+// scaffold writes an empty project source tree at <root>/.agentsync/ so Discover
+// treats <root> as a project root. Returns the project home (<root>/.agentsync).
+func scaffold(t *testing.T, root string) string {
+	t.Helper()
+	home := filepath.Join(root, project.DirName)
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "agentsync.toml"), []byte("[agents]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
+
+// ─── Discover ────────────────────────────────────────────────────────────────
 
 func TestDiscover_FoundAtRoot(t *testing.T) {
 	tmp := t.TempDir()
+	scaffold(t, tmp)
 	deep := filepath.Join(tmp, "a", "b", "c")
 	if err := os.MkdirAll(deep, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(tmp, ".agentsync.toml"), []byte(`agents = ["claude"]`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	m, err := project.Discover(deep)
+	root, found, err := project.Discover(deep)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m == nil {
+	if !found {
 		t.Fatal("expected discovery")
 	}
-	if len(m.Agents) != 1 || m.Agents[0] != "claude" {
-		t.Fatalf("agents = %v", m.Agents)
-	}
-	if m.Root != tmp {
-		t.Fatalf("root = %q, want %q", m.Root, tmp)
+	if root != tmp {
+		t.Fatalf("root = %q, want %q", root, tmp)
 	}
 }
 
 func TestDiscover_FoundInCwd(t *testing.T) {
 	tmp := t.TempDir()
-	if err := os.WriteFile(filepath.Join(tmp, ".agentsync.toml"), []byte(`agents = ["codex"]`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	m, err := project.Discover(tmp)
+	scaffold(t, tmp)
+	root, found, err := project.Discover(tmp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m == nil {
-		t.Fatal("expected discovery in cwd")
-	}
-	if len(m.Agents) != 1 || m.Agents[0] != "codex" {
-		t.Fatalf("agents = %v", m.Agents)
+	if !found || root != tmp {
+		t.Fatalf("expected discovery in cwd; found=%v root=%q", found, root)
 	}
 }
 
 func TestDiscover_NotFound(t *testing.T) {
-	m, err := project.Discover(t.TempDir())
+	root, found, err := project.Discover(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m != nil {
-		t.Fatalf("expected nil marker, got %+v", m)
-	}
-}
-
-func TestDiscover_ParseError(t *testing.T) {
-	tmp := t.TempDir()
-	if err := os.WriteFile(filepath.Join(tmp, ".agentsync.toml"), []byte(`not valid toml ][`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, err := project.Discover(tmp)
-	if err == nil {
-		t.Fatal("expected parse error")
+	if found {
+		t.Fatalf("expected no project, got root=%q", root)
 	}
 }
 
 func TestDiscover_FirstMatchWins(t *testing.T) {
-	// parent has marker with agents=["claude"], child has marker with agents=["codex"]
 	parent := t.TempDir()
+	scaffold(t, parent)
 	child := filepath.Join(parent, "sub")
-	if err := os.MkdirAll(child, 0o755); err != nil {
+	childHome := filepath.Join(child, project.DirName)
+	if err := os.MkdirAll(childHome, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(parent, ".agentsync.toml"), []byte(`agents = ["claude"]`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(childHome, "agentsync.toml"), []byte("[agents]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(child, ".agentsync.toml"), []byte(`agents = ["codex"]`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	m, err := project.Discover(child)
+	root, found, err := project.Discover(child)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m == nil || len(m.Agents) == 0 || m.Agents[0] != "codex" {
-		t.Fatalf("expected child marker to win; agents = %v", m.Agents)
+	if !found || root != child {
+		t.Fatalf("expected nearest project to win; found=%v root=%q want %q", found, root, child)
 	}
 }
 
-// ─── Task 2: Merge ───────────────────────────────────────────────────────────
-
-// TestMerge_MemoryImport_RejectsTraversal is the regression for a committed
-// marker reading arbitrary host files into rendered memory via a "../" import
-// path. The escaping import must be skipped (its content must not appear).
-func TestMerge_MemoryImport_RejectsTraversal(t *testing.T) {
-	root := t.TempDir()
-	// A secret file OUTSIDE the project root.
-	parent := filepath.Dir(root)
-	secret := filepath.Join(parent, "secret.txt")
-	if err := os.WriteFile(secret, []byte("TOP-SECRET-HOST-FILE"), 0o600); err != nil {
+// A bare .agentsync.toml FILE (no .agentsync/ dir) is the retired M5 marker.
+// Discover must surface a migration error rather than silently ignore it — a
+// user upgrading from M5 would otherwise see their project config vanish.
+func TestDiscover_LegacyMarkerErrors(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, project.LegacyMarkerFile), []byte(`agents = ["claude"]`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// A legit in-root fragment that SHOULD be imported.
-	if err := os.WriteFile(filepath.Join(root, "ok.md"), []byte("legit-memory"), 0o644); err != nil {
+	_, _, err := project.Discover(tmp)
+	if err == nil {
+		t.Fatal("expected a migration error for a legacy .agentsync.toml marker")
+	}
+	if !strings.Contains(err.Error(), "init --scope project") {
+		t.Fatalf("error should point to migration; got %v", err)
+	}
+}
+
+// A .agentsync/ dir present alongside a stray legacy file: the dir wins, no error
+// (the dir is authoritative; the file is ignored).
+func TestDiscover_DirWinsOverLegacyFile(t *testing.T) {
+	tmp := t.TempDir()
+	scaffold(t, tmp)
+	if err := os.WriteFile(filepath.Join(tmp, project.LegacyMarkerFile), []byte(`agents = ["claude"]`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m := &project.Marker{
-		Root:   root,
-		Memory: project.ProjectMemorySection{Import: []string{"../secret.txt", "ok.md"}},
+	root, found, err := project.Discover(tmp)
+	if err != nil {
+		t.Fatalf("dir should win without error; got %v", err)
 	}
-	out := project.Merge(source.Canonical{}, m)
-	if strings.Contains(out.Memory.Body, "TOP-SECRET-HOST-FILE") {
-		t.Fatalf("traversal import leaked host file into memory: %q", out.Memory.Body)
-	}
-	if !strings.Contains(out.Memory.Body, "legit-memory") {
-		t.Fatalf("in-root import was dropped: %q", out.Memory.Body)
+	if !found || root != tmp {
+		t.Fatalf("found=%v root=%q", found, root)
 	}
 }
 
-func TestMerge_NilMarker(t *testing.T) {
-	base := source.Canonical{
-		Config: source.Config{
-			Agents: map[string]source.Agent{"claude": {Enabled: true}},
-		},
-	}
-	out := project.Merge(base, nil)
-	if len(out.Config.Agents) != 1 {
-		t.Fatalf("nil merge should return base unchanged; got %+v", out.Config.Agents)
+// Home derives the project canonical home from a project root.
+func TestHome(t *testing.T) {
+	got := project.Home("/repo")
+	want := filepath.Join("/repo", project.DirName)
+	if got != want {
+		t.Fatalf("Home = %q, want %q", got, want)
 	}
 }
 
-func TestMerge_AgentsFilter(t *testing.T) {
-	base := source.Canonical{
-		Config: source.Config{
-			Agents: map[string]source.Agent{
-				"claude":   {Enabled: true},
-				"codex":    {Enabled: true},
-				"opencode": {Enabled: true},
-			},
-		},
-	}
-	m := &project.Marker{
-		Agents: []string{"claude"},
-	}
-	out := project.Merge(base, m)
+// ─── Merge: overlay project canonical onto base ──────────────────────────────
+
+func TestMerge_AgentsReplaceWhenDeclared(t *testing.T) {
+	base := source.Canonical{Config: source.Config{Agents: map[string]source.Agent{
+		"claude": {Enabled: true}, "codex": {Enabled: true}, "opencode": {Enabled: true},
+	}}}
+	proj := source.Canonical{Config: source.Config{Agents: map[string]source.Agent{
+		"claude": {Enabled: true},
+	}}}
+	out := project.Merge(base, proj)
 	if len(out.Config.Agents) != 1 {
-		t.Fatalf("expected 1 agent after filter, got %d: %v", len(out.Config.Agents), out.Config.Agents)
+		t.Fatalf("project agent set should replace base; got %v", out.Config.Agents)
 	}
 	if _, ok := out.Config.Agents["claude"]; !ok {
-		t.Fatal("expected claude to be retained")
+		t.Fatal("claude should be retained")
 	}
 }
 
-func TestMerge_AgentsFilter_EmptyAllowlist(t *testing.T) {
-	// Empty Agents allowlist = use all enabled (no filtering)
-	base := source.Canonical{
-		Config: source.Config{
-			Agents: map[string]source.Agent{
-				"claude": {Enabled: true},
-				"codex":  {Enabled: true},
-			},
-		},
-	}
-	m := &project.Marker{
-		Agents: nil,
-	}
-	out := project.Merge(base, m)
+func TestMerge_AgentsInheritWhenProjectEmpty(t *testing.T) {
+	base := source.Canonical{Config: source.Config{Agents: map[string]source.Agent{
+		"claude": {Enabled: true}, "codex": {Enabled: true},
+	}}}
+	proj := source.Canonical{} // no agents declared
+	out := project.Merge(base, proj)
 	if len(out.Config.Agents) != 2 {
-		t.Fatalf("empty allowlist should retain all agents; got %d", len(out.Config.Agents))
+		t.Fatalf("empty project agents should inherit base; got %v", out.Config.Agents)
 	}
 }
 
-func TestMerge_MCPOverlay_Append(t *testing.T) {
-	base := source.Canonical{
-		MCPServers: []source.MCPServer{
-			{ID: "existing", Server: source.MCPServerSpec{Type: "stdio", Command: "echo"}},
-		},
-	}
-	m := &project.Marker{
-		MCP: []project.ProjectMCP{
-			{ID: "proj-mcp", Type: "stdio", Command: "npx", Args: []string{"-y", "@proj/mcp"}},
-		},
-	}
-	out := project.Merge(base, m)
-	if len(out.MCPServers) != 2 {
-		t.Fatalf("expected 2 MCP servers after append, got %d", len(out.MCPServers))
-	}
-	found := false
+func TestMerge_MCPOverlay_AppendAndReplace(t *testing.T) {
+	base := source.Canonical{MCPServers: []source.MCPServer{
+		{ID: "keep", Server: source.MCPServerSpec{Type: "stdio", Command: "old-keep"}},
+		{ID: "shadowed", Server: source.MCPServerSpec{Type: "stdio", Command: "user-cmd"}},
+	}}
+	proj := source.Canonical{MCPServers: []source.MCPServer{
+		{ID: "shadowed", Server: source.MCPServerSpec{Type: "stdio", Command: "proj-cmd"}},
+		{ID: "added", Server: source.MCPServerSpec{Type: "stdio", Command: "npx"}},
+	}}
+	out := project.Merge(base, proj)
+	got := map[string]string{}
 	for _, s := range out.MCPServers {
-		if s.ID == "proj-mcp" {
-			found = true
-			if s.Server.Command != "npx" {
-				t.Fatalf("proj-mcp command = %q", s.Server.Command)
-			}
-		}
+		got[s.ID] = s.Server.Command
 	}
-	if !found {
-		t.Fatal("proj-mcp not found in merged MCPServers")
+	if got["keep"] != "old-keep" || got["shadowed"] != "proj-cmd" || got["added"] != "npx" {
+		t.Fatalf("unexpected overlay result: %v", got)
+	}
+	if len(out.MCPServers) != 3 {
+		t.Fatalf("expected 3 servers, got %d", len(out.MCPServers))
 	}
 }
 
-func TestMerge_MCPOverlay_Replace(t *testing.T) {
+func TestMerge_ComponentsOverlayByName(t *testing.T) {
 	base := source.Canonical{
-		MCPServers: []source.MCPServer{
-			{ID: "existing", Server: source.MCPServerSpec{Type: "stdio", Command: "old-cmd"}},
+		Skills:    []source.Skill{{Name: "a", Body: "base-a"}, {Name: "b", Body: "base-b"}},
+		Subagents: []source.Subagent{{Name: "rev", Body: "base-rev"}},
+		Commands:  []source.Command{{Name: "deploy", Body: "base-deploy"}},
+		LSPServers: []source.LSPServer{
+			{ID: "gopls", Spec: source.LSPServerSpec{Command: "base"}},
 		},
 	}
-	m := &project.Marker{
-		MCP: []project.ProjectMCP{
-			{ID: "existing", Type: "stdio", Command: "new-cmd"},
-		},
+	proj := source.Canonical{
+		Skills:     []source.Skill{{Name: "b", Body: "proj-b"}, {Name: "c", Body: "proj-c"}},
+		Subagents:  []source.Subagent{{Name: "rev", Body: "proj-rev"}},
+		Commands:   []source.Command{{Name: "ship", Body: "proj-ship"}},
+		LSPServers: []source.LSPServer{{ID: "gopls", Spec: source.LSPServerSpec{Command: "proj"}}},
 	}
-	out := project.Merge(base, m)
-	if len(out.MCPServers) != 1 {
-		t.Fatalf("expected 1 MCP server after replace, got %d", len(out.MCPServers))
+	out := project.Merge(base, proj)
+	skills := map[string]string{}
+	for _, s := range out.Skills {
+		skills[s.Name] = s.Body
 	}
-	if out.MCPServers[0].Server.Command != "new-cmd" {
-		t.Fatalf("expected new-cmd, got %q", out.MCPServers[0].Server.Command)
+	if skills["a"] != "base-a" || skills["b"] != "proj-b" || skills["c"] != "proj-c" {
+		t.Fatalf("skills overlay wrong: %v", skills)
+	}
+	if len(out.Subagents) != 1 || out.Subagents[0].Body != "proj-rev" {
+		t.Fatalf("subagent overlay wrong: %+v", out.Subagents)
+	}
+	if len(out.Commands) != 2 {
+		t.Fatalf("commands should append: %+v", out.Commands)
+	}
+	if len(out.LSPServers) != 1 || out.LSPServers[0].Spec.Command != "proj" {
+		t.Fatalf("lsp overlay wrong: %+v", out.LSPServers)
 	}
 }
 
-func TestMerge_PluginsDisabled(t *testing.T) {
-	base := source.Canonical{
-		Plugins: []source.Plugin{
-			{ID: "screenshot"},
-			{ID: "deploy"},
-			{ID: "lint"},
-		},
+func TestMerge_HooksOverlayByEvent(t *testing.T) {
+	base := source.Canonical{Hooks: []source.Hook{
+		{Event: "PreToolUse", Command: "base-pre"},
+		{Event: "PostToolUse", Command: "base-post"},
+	}}
+	proj := source.Canonical{Hooks: []source.Hook{
+		{Event: "PreToolUse", Command: "proj-pre"},
+	}}
+	out := project.Merge(base, proj)
+	byEvent := map[string][]string{}
+	for _, h := range out.Hooks {
+		byEvent[h.Event] = append(byEvent[h.Event], h.Command)
 	}
-	m := &project.Marker{
-		Plugins: project.ProjectPluginsSection{
-			Disabled: []string{"screenshot", "deploy"},
-		},
+	// All hooks for an overridden event are replaced by the project's set.
+	if len(byEvent["PreToolUse"]) != 1 || byEvent["PreToolUse"][0] != "proj-pre" {
+		t.Fatalf("PreToolUse should be replaced: %v", byEvent)
 	}
-	out := project.Merge(base, m)
-	// Records are KEPT (so status/explain can show them) but marked Disabled;
-	// the projector already suppressed their components upstream.
-	if len(out.Plugins) != 3 {
-		t.Fatalf("expected all 3 plugin records kept, got %d: %v", len(out.Plugins), out.Plugins)
-	}
-	got := map[string]bool{}
-	for _, p := range out.Plugins {
-		got[p.ID] = p.Plugin.Disabled
-	}
-	if !got["screenshot"] || !got["deploy"] {
-		t.Errorf("screenshot and deploy should be marked disabled; got %v", got)
-	}
-	if got["lint"] {
-		t.Errorf("lint should remain enabled; got disabled")
-	}
-	// Base must not be mutated.
-	for _, p := range base.Plugins {
-		if p.Plugin.Disabled {
-			t.Errorf("Merge mutated base plugin %q", p.ID)
-		}
+	if len(byEvent["PostToolUse"]) != 1 || byEvent["PostToolUse"][0] != "base-post" {
+		t.Fatalf("PostToolUse should be inherited: %v", byEvent)
 	}
 }
 
-func TestMerge_MemoryImport(t *testing.T) {
-	tmp := t.TempDir()
-	agentsFile := filepath.Join(tmp, "AGENTS.md")
-	if err := os.WriteFile(agentsFile, []byte("# Project Agents\nDo stuff."), 0o644); err != nil {
-		t.Fatal(err)
+func TestMerge_MemoryAppends(t *testing.T) {
+	base := source.Canonical{Memory: source.Memory{Body: "# Base"}}
+	proj := source.Canonical{Memory: source.Memory{Body: "# Project"}}
+	out := project.Merge(base, proj)
+	if !strings.Contains(out.Memory.Body, "# Base") || !strings.Contains(out.Memory.Body, "# Project") {
+		t.Fatalf("memory should concatenate base then project: %q", out.Memory.Body)
 	}
-
-	base := source.Canonical{
-		Memory: source.Memory{Body: "# Base memory"},
-	}
-	m := &project.Marker{
-		Root: tmp,
-		Memory: project.ProjectMemorySection{
-			Import: []string{"AGENTS.md"},
-		},
-	}
-	out := project.Merge(base, m)
-	if out.Memory.Body == base.Memory.Body {
-		t.Fatal("memory body should have been extended")
-	}
-	if len(out.Memory.Body) <= len(base.Memory.Body) {
-		t.Fatalf("memory body not extended: %q", out.Memory.Body)
-	}
-	if !contains(out.Memory.Body, "Project Agents") {
-		t.Fatalf("imported content not in memory body: %q", out.Memory.Body)
+	if strings.Index(out.Memory.Body, "# Base") > strings.Index(out.Memory.Body, "# Project") {
+		t.Fatalf("base memory should come before project memory: %q", out.Memory.Body)
 	}
 }
 
-func TestMerge_MemoryImport_MissingFileSkipped(t *testing.T) {
-	tmp := t.TempDir()
-	base := source.Canonical{
-		Memory: source.Memory{Body: "# Base"},
-	}
-	m := &project.Marker{
-		Root: tmp,
-		Memory: project.ProjectMemorySection{
-			Import: []string{"nonexistent.md"},
-		},
-	}
-	out := project.Merge(base, m)
-	// Missing file is silently skipped; body unchanged.
-	if out.Memory.Body != base.Memory.Body {
-		t.Fatalf("missing import should be skipped; body = %q", out.Memory.Body)
+func TestMerge_MemoryProjectOnly(t *testing.T) {
+	base := source.Canonical{}
+	proj := source.Canonical{Memory: source.Memory{Body: "# Project"}}
+	out := project.Merge(base, proj)
+	if strings.TrimSpace(out.Memory.Body) != "# Project" {
+		t.Fatalf("project-only memory should pass through verbatim: %q", out.Memory.Body)
 	}
 }
 
 func TestMerge_DoesNotMutateBase(t *testing.T) {
-	base := source.Canonical{
-		MCPServers: []source.MCPServer{
-			{ID: "existing", Server: source.MCPServerSpec{Type: "stdio", Command: "cmd"}},
-		},
+	base := source.Canonical{MCPServers: []source.MCPServer{
+		{ID: "existing", Server: source.MCPServerSpec{Command: "cmd"}},
+	}}
+	orig := len(base.MCPServers)
+	proj := source.Canonical{MCPServers: []source.MCPServer{
+		{ID: "added", Server: source.MCPServerSpec{Command: "new"}},
+	}}
+	_ = project.Merge(base, proj)
+	if len(base.MCPServers) != orig {
+		t.Fatal("Merge mutated base MCPServers slice")
 	}
-	originalLen := len(base.MCPServers)
-	m := &project.Marker{
-		MCP: []project.ProjectMCP{
-			{ID: "new-srv", Type: "stdio", Command: "new"},
-		},
-	}
-	_ = project.Merge(base, m)
-	if len(base.MCPServers) != originalLen {
-		t.Fatalf("Merge mutated base MCPServers slice")
-	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		func() bool {
-			for i := 0; i <= len(s)-len(substr); i++ {
-				if s[i:i+len(substr)] == substr {
-					return true
-				}
-			}
-			return false
-		}())
 }

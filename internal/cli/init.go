@@ -10,6 +10,7 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/project"
 )
 
 const initialAgentsyncTOML = `# agentsync source-of-truth config
@@ -33,20 +34,39 @@ default_interval = "24h"
 `
 
 func newInitCmd() *cobra.Command {
-	return &cobra.Command{
+	var scopeFlag, projectFlag string
+	cmd := &cobra.Command{
 		Use:   "init [<git-url>]",
-		Short: "scaffold ~/.agentsync/ (or clone an existing source repo)",
-		Long: `init scaffolds ~/.agentsync/ with the canonical subdirectory layout and
-a stub agentsync.toml. If a git URL is supplied, init clones that repo
-into ~/.agentsync/ instead of scaffolding — for bootstrapping a new
-machine from an existing source-of-truth repo (typically chezmoi-
-managed).
+		Short: "scaffold ~/.agentsync/ (user) or <repo>/.agentsync/ (project)",
+		Long: `init scaffolds a canonical source tree with the standard subdirectory
+layout and a stub agentsync.toml.
 
-The destination must not exist or be empty; init refuses to overwrite
-a populated home so a careless re-run on a working install does not
-nuke it.`,
+At user scope (the default) it targets ~/.agentsync/. If a git URL is
+supplied, init clones that repo into ~/.agentsync/ instead of scaffolding —
+for bootstrapping a new machine from an existing source-of-truth repo
+(typically chezmoi-managed).
+
+With --scope project (or --project <path>) it scaffolds <path>/.agentsync/
+— a project-local source tree, with the same layout as ~/.agentsync/, that
+you commit to the repo to share project-scoped agent config with
+collaborators. Apply/import/status/diff auto-detect it by walking up from
+the current directory. A git-URL clone is only supported at user scope.
+
+The destination must not exist or be empty; init refuses to overwrite a
+populated home so a careless re-run on a working install does not nuke it.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			projectMode, projectRoot, err := initProjectRoot(scopeFlag, projectFlag)
+			if err != nil {
+				return err
+			}
+			if projectMode {
+				if len(args) == 1 {
+					return fmt.Errorf("init <git-url> clone is only supported at user scope; "+
+						"project scope scaffolds a %s/ tree", project.DirName)
+				}
+				return scaffoldProjectHome(cmd, projectRoot)
+			}
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			if err := guardEmptyHome(home); err != nil {
 				return err
@@ -56,6 +76,38 @@ nuke it.`,
 			}
 			return scaffoldHome(cmd, home)
 		},
+	}
+	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user)")
+	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+	return cmd
+}
+
+// initProjectRoot resolves whether init runs at project scope and, if so, the
+// project root whose <root>/.agentsync/ tree to scaffold. Unlike apply, init does
+// NOT auto-detect an existing project tree from cwd: scaffolding is an explicit
+// act, so project scope requires --scope project or --project <path>.
+func initProjectRoot(scopeFlag, projectFlag string) (projectMode bool, root string, err error) {
+	if projectFlag != "" {
+		if scopeFlag == "user" {
+			return false, "", fmt.Errorf("--scope user conflicts with --project (which implies project scope); pass only one")
+		}
+		abs, aerr := filepath.Abs(projectFlag)
+		if aerr != nil {
+			return false, "", fmt.Errorf("resolve --project path: %w", aerr)
+		}
+		return true, abs, nil
+	}
+	switch scopeFlag {
+	case "", "user":
+		return false, "", nil
+	case "project":
+		cwd, cerr := os.Getwd()
+		if cerr != nil {
+			return false, "", fmt.Errorf("getwd: %w", cerr)
+		}
+		return true, cwd, nil
+	default:
+		return false, "", fmt.Errorf("unknown --scope value %q; want user or project", scopeFlag)
 	}
 }
 
@@ -106,6 +158,66 @@ func scaffoldHome(cmd *cobra.Command, home string) error {
 	fmt.Fprintln(w, "  2. agentsync mcp add github ...      # author an MCP server")
 	fmt.Fprintln(w, "  3. agentsync apply --dry-run         # preview before writing")
 	fmt.Fprintln(w, "  4. agentsync apply                   # write to agent destinations")
+	return nil
+}
+
+const initialProjectAgentsyncTOML = `# agentsync project-scope config
+# Rendered into <repo>/.claude/, <repo>/.opencode/, <repo>/.codex/, … by
+# 'agentsync apply' when run inside this repo. Commit this .agentsync/ tree to
+# share project-scoped agent config with collaborators.
+
+[agents]
+# Leave this empty to inherit the agents you enabled at user scope, or pin a
+# subset for this project:
+# claude   = { enabled = true }
+# opencode = { enabled = true }
+
+# Author project components by adding files under this tree (mcp/<id>.toml,
+# skills/<name>/SKILL.md, agents/<name>.md, commands/<name>.md, hooks/<event>.toml,
+# lsp/<id>.toml, memory/AGENTS.md) or capture existing native config with
+# 'agentsync import <agent> --scope project'.
+`
+
+// scaffoldProjectHome populates an empty <root>/.agentsync/ project source tree
+// with the canonical subdirectory layout and a project-scope stub agentsync.toml.
+// Unlike the user-scope home it has no .state/ (apply records state centrally in
+// ~/.agentsync/.state, keyed by project root) and no .state .gitignore, so the
+// committed tree carries only the source the user authors.
+func scaffoldProjectHome(cmd *cobra.Command, root string) error {
+	home := project.Home(root)
+	if err := guardEmptyHome(home); err != nil {
+		return err
+	}
+	subs := []string{
+		"mcp", "lsp", "skills", "agents", "commands", "hooks",
+		"memory", "memory/fragments",
+	}
+	for _, sub := range subs {
+		if err := os.MkdirAll(filepath.Join(home, sub), 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", sub, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(home, "secrets"), 0o700); err != nil {
+		return fmt.Errorf("mkdir secrets: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "agentsync.toml"), []byte(initialProjectAgentsyncTOML), 0o644); err != nil {
+		return fmt.Errorf("write agentsync.toml: %w", err)
+	}
+	w := cmd.OutOrStdout()
+	fmt.Fprintln(w, "agentsync project source initialized at", home)
+	// A stray retired single-file marker would be silently ignored now; nudge
+	// the user to fold its settings into the new tree and delete it.
+	if fi, err := os.Stat(filepath.Join(root, project.LegacyMarkerFile)); err == nil && !fi.IsDir() {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"agentsync: a legacy %s is present at %s; it is no longer read — move its settings into %s/ and delete it.\n",
+			project.LegacyMarkerFile, root, project.DirName)
+	}
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Next steps:")
+	fmt.Fprintln(w, "  1. add project components under", home)
+	fmt.Fprintf(w, "     (or: agentsync import claude --scope project --project %s)\n", root)
+	fmt.Fprintf(w, "  2. agentsync apply --project %s --dry-run   # preview\n", root)
+	fmt.Fprintf(w, "  3. agentsync apply --project %s             # write project destinations\n", root)
 	return nil
 }
 
