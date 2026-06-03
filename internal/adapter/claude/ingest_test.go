@@ -202,9 +202,9 @@ func TestIngest_RoundTripsMemory(t *testing.T) {
 // SetStderr(nil), captures os.Stderr via a pipe for the duration of
 // the second Ingest, and asserts:
 //
-//   (a) the previously-set buffer no longer receives the warning, AND
-//   (b) os.Stderr DOES — proving the reset goes to the default, not
-//       silently elsewhere.
+//	(a) the previously-set buffer no longer receives the warning, AND
+//	(b) os.Stderr DOES — proving the reset goes to the default, not
+//	    silently elsewhere.
 //
 // Without (b), a faulty SetStderr(nil) that routes to io.Discard
 // would pass the (a)-only test while quietly dropping every future
