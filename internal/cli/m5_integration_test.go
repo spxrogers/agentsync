@@ -34,7 +34,7 @@ func scaffoldProjectMCP(t *testing.T, projectDir, id, command string, args ...st
 //   - init --scope project --project <dir> scaffolds <dir>/.agentsync/
 //   - a project-scope MCP server in <dir>/.agentsync/mcp/
 //   - chdir into project dir
-//   - apply (auto-detects project scope via .agentsync/ walk-up)
+//   - apply --scope project (walks up to the .agentsync/ tree from cwd)
 //   - verify <project>/.claude/settings.json contains the project MCP
 func TestIntegration_Project_Overlay(t *testing.T) {
 	tmpHome := t.TempDir()
@@ -62,7 +62,7 @@ func TestIntegration_Project_Overlay(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "apply")
+	out, err := runCLI(t, env, "apply", "--scope", "project")
 	if err != nil {
 		t.Fatalf("apply: %v\n%s", err, out)
 	}
@@ -74,6 +74,75 @@ func TestIntegration_Project_Overlay(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "proj-mcp") {
 		t.Fatalf("project-scope MCP not landed in settings.json: %s", body)
+	}
+}
+
+// TestIntegration_Scope_AmbiguousNonInteractiveErrors verifies that running with
+// no --scope inside a project tree, with no TTY (the test harness) and no way to
+// prompt, fails closed rather than silently picking a scope.
+func TestIntegration_Scope_AmbiguousNonInteractiveErrors(t *testing.T) {
+	tmpHome := t.TempDir()
+	projectDir := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", projectDir); err != nil {
+		t.Fatal(err)
+	}
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "apply") // no --scope, cwd is a project tree, non-TTY
+	if err == nil {
+		t.Fatalf("expected an ambiguous-scope error, got success:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "no scope was given") {
+		t.Fatalf("error should explain the ambiguity; got: %v", err)
+	}
+	// The --no-input flag forces the same fail-closed path explicitly.
+	if _, err := runCLI(t, env, "apply", "--no-input"); err == nil {
+		t.Fatal("expected --no-input to fail closed on ambiguous scope")
+	}
+}
+
+// TestIntegration_ScopeProject_NoTreeErrors verifies --scope project with no
+// project tree found (and --project at a treeless path) is a hard error, never a
+// silent fall back to user scope.
+func TestIntegration_ScopeProject_NoTreeErrors(t *testing.T) {
+	tmpHome := t.TempDir()
+	bare := t.TempDir() // no .agentsync/ tree here
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runCLI(t, env, "apply", "--project", bare); err == nil {
+		t.Fatal("expected --project at a treeless path to error")
+	}
+
+	origDir, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+	if err := os.Chdir(bare); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "apply", "--scope", "project"); err == nil {
+		t.Fatal("expected --scope project with no tree to error")
 	}
 }
 

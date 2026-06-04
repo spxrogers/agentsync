@@ -37,6 +37,7 @@ func NewRoot() *cobra.Command {
 `)
 	cmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose logging")
 	cmd.PersistentFlags().StringVar(&colorFlag, "color", "auto", "colorize output: auto | always | never")
+	cmd.PersistentFlags().Bool("no-input", false, "never prompt; fail instead when a choice is required (for headless/non-interactive use)")
 
 	cmd.AddCommand(
 		newInitCmd(),

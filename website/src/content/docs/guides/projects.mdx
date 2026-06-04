@@ -109,10 +109,13 @@ them.
 
 ## Apply from inside the repo
 
+Project scope is an explicit opt-in — pass `--scope project` (which walks up from
+cwd to the `.agentsync/` tree):
+
 ```bash frame="terminal"
 cd ~/code/myrepo
-agentsync apply               # auto-detects project scope
-ls .claude/settings.json      # project-scope config landed
+agentsync apply --scope project   # walks up to the .agentsync/ tree
+ls .claude/settings.json          # project-scope config landed
 ```
 
 ## Import a project's native config
@@ -136,20 +139,27 @@ next apply doesn't foreign-collide.
 	`import claude:plugin --scope project` silently skips.
 </Aside>
 
-## Forcing a scope
+## Choosing a scope
 
-agentsync auto-detects scope by looking for a `.agentsync/` tree, but you can be
-explicit:
+Commands default to **user** scope; project scope is always an explicit opt-in:
 
 ```bash
-agentsync apply --scope user             # ignore any project tree
-agentsync apply --scope project          # require project scope
+agentsync apply --scope user             # user config (the default)
+agentsync apply --scope project          # walk up from cwd to the .agentsync/ tree
 agentsync apply --project ~/code/myrepo  # point at a specific repo
 ```
 
+If you run a command with **no scope inside a project tree**, agentsync prompts
+you to choose project-vs-user (there is no default — you pick). In a
+non-interactive shell, or with the global `--no-input` flag, it errors instead of
+guessing. And `--scope project`/`--project` with no `.agentsync/` tree is a hard
+error pointing at `agentsync init --scope project` — never a silent fall back to
+user scope.
+
 <Aside type="note">
 	`--scope` and `--project` work on `init`, `import`, `apply`, `status`, `diff`,
-	`reconcile`, and `update` — anywhere the active config set matters.
+	`reconcile`, and `update` — anywhere the active config set matters. The global
+	`--no-input` flag makes any of them fail closed instead of prompting.
 </Aside>
 
 <Aside type="caution" title="Upgrading from the old marker?">

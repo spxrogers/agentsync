@@ -468,16 +468,23 @@ replaces a user entry with the same id/name, new entries are appended, project
 memory is appended after user memory, and an empty project `[agents]` inherits
 the user's enabled agents.
 
-Apply from inside the repo and the overlay merges onto your user config:
+Apply at project scope (an explicit opt-in) and the overlay merges onto your
+user config:
 
 ```bash
 cd ~/code/myrepo
-agentsync apply               # auto-detects project scope
-ls .claude/settings.json      # project-scope config landed
+agentsync apply --scope project   # walks up from cwd to the .agentsync/ tree
+ls .claude/settings.json          # project-scope config landed
 ```
 
-Force a scope explicitly with `--scope user|project` or `--project <path>`
-(`--scope user` together with `--project` is an error).
+Commands default to **user** scope. Project scope is never auto-applied: pass
+`--scope project` (walks up from cwd to find the tree) or `--project <path>`
+(`--scope user` together with `--project` is an error). If you run a command with
+no scope *inside* a project tree, agentsync **prompts** you to choose
+project-vs-user; in a non-interactive shell — or with the global `--no-input`
+flag — it errors instead of guessing. `--scope project` with no tree found (and
+`--project` at a path without a `.agentsync/` tree) is a hard error pointing you
+at `agentsync init --scope project` — it never silently falls back to user scope.
 
 > **Upgrading from the old single-file marker?** The retired `.agentsync.toml`
 > marker at a repo root is no longer read — agentsync errors and tells you to run

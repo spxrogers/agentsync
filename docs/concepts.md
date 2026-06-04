@@ -109,8 +109,12 @@ repo). A repo opts in by holding a `.agentsync/` **source tree** at its root —
 the same on-disk layout as `~/.agentsync/` (an `agentsync.toml` plus `mcp/`,
 `skills/`, `agents/`, `commands/`, `hooks/`, `lsp/`, `memory/`). Scaffold it with
 `agentsync init --scope project`; commit it to share project agent config with
-collaborators. Apply/import/status/diff walk up from the current directory to
-find it (or take `--project <path>`). The project tree is **overlaid** onto the
+collaborators. Project scope is always an **explicit opt-in** — pass `--scope
+project` (walks up from cwd for the tree) or `--project <path>`. Commands default
+to **user** scope; the one exception is that running with no scope *inside* a
+project tree is ambiguous, so agentsync **prompts** for project-vs-user (or, when
+non-interactive / `--no-input`, errors rather than guessing). It never silently
+acts on a tree it merely detected. The project tree is **overlaid** onto the
 user canonical: a project entry replaces a user entry with the same id/name, new
 entries are added, project memory is appended, and an empty `[agents]` inherits
 the user's enabled agents. A project `plugins/<id>.toml` with `disabled = true`

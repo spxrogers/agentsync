@@ -197,7 +197,7 @@ Examples:
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview which source files would be written, without writing")
-	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: auto-detect from cwd)")
+	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
 	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
 	return cmd
 }
@@ -208,7 +208,7 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projec
 	if err != nil {
 		return err
 	}
-	sc, projectRoot, err := resolveProjectScope(scopeFlag, projectFlag)
+	sc, projectRoot, err := resolveScope(cmd, scopeFlag, projectFlag, noInputFlag(cmd))
 	if err != nil {
 		return err
 	}

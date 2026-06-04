@@ -29,6 +29,13 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   inherits the user's enabled agents, and a project `plugins/<id>.toml` with
   `disabled = true` suppresses that plugin's components in the repo. Plugin import
   stays user-scope (plugins are a user-scope concept across the harnesses).
+- **Project scope is an explicit opt-in.** Commands default to **user** scope.
+  Project scope requires `--scope project` (walks up from cwd to the tree) or
+  `--project <path>`. Running with no scope *inside* a project tree is ambiguous,
+  so agentsync prompts project-vs-user (no default); a new global `--no-input`
+  flag — and a non-TTY stdin — makes it fail closed instead. `--scope
+  project`/`--project` with no `.agentsync/` tree is a hard error pointing at
+  `init --scope project`, never a silent downgrade to user scope.
 
 ### Changed
 
