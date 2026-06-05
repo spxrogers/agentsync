@@ -46,6 +46,43 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **Adapters fail loud on a project-scope call with no project root.** Every
+  adapter's `ResolvePaths` falls through to *user*-scope paths when the project
+  root is empty, so a `(ScopeProject, "")` reaching an adapter would silently
+  write the project overlay into the user's global config (or read it from
+  there). Every scope-resolving adapter method — `Render` and `Ingest` (claude,
+  opencode, codex), plus `IngestPlugins` (claude, codex) — now calls the shared
+  `adapter.RequireProjectRoot` first and returns `ErrProjectRootRequired`
+  instead. The CLI already guarantees a non-empty root for project scope, so
+  this is defense-in-depth against a future or non-CLI caller — turning a silent
+  wrong-scope I/O into a loud error.
+- **Claude project-scope MCP servers now target `<root>/.mcp.json`, not
+  `<root>/.claude/settings.json`.** Per the upstream Claude Code MCP-scope docs,
+  project-scope servers live in a repo-root `.mcp.json` (the file `claude mcp add
+  --scope project` writes and the team checks in); `settings.json` holds
+  hooks/LSP/permissions, never project MCP. The Claude adapter previously both
+  rendered and ingested project MCP at `settings.json`, so `apply --scope
+  project` wrote to a file Claude Code does not read project MCP from, and
+  `import claude:mcp --scope project` missed servers added via Claude's own
+  `--scope project` flow. Render and ingest now use `.mcp.json` at project scope
+  (top-level `mcpServers`, `merge-json-keys` so a hand-authored file's foreign
+  keys and unmodeled per-server fields like `timeout` survive); user scope
+  (`~/.claude.json`) is unchanged. If a prior version already wrote project MCP
+  into a project `settings.json`, the next `apply --scope project` of an
+  in-place upgrade removes that stale `mcpServers` block automatically via
+  orphan-key cleanup — agentsync still owns those keys in state, and foreign
+  keys in the file are preserved; if the state was not carried over (e.g. a
+  fresh clone), remove the block by hand.
+- **OpenCode project-scope config now targets `<root>/opencode.json`, not
+  `<root>/.opencode/opencode.json`.** Per the upstream OpenCode config docs, a
+  repo's JSON config is `opencode.json` at the project **root**; OpenCode does
+  not read `.opencode/opencode.json` (the `.opencode/` directory holds only the
+  `agents/`/`commands/`/`skills/` subdirs, which were already correct). The
+  adapter previously rendered/ingested project-scope MCP servers (the only
+  structured config it writes) at `.opencode/opencode.json`, so `apply --scope
+  project` wrote them where OpenCode never looks and `import`/`reconcile --scope
+  project` read the wrong file. Same class of bug as the Claude project-MCP fix
+  above; user scope (`~/.config/opencode/opencode.json`) is unchanged.
 - **`apply --scope project` now renders only project-scope items.** Previously
   `project.Merge` never populated `Canonical.Project`, so all three adapter
   `Render` methods wrote the full merged canonical (user + project items) into

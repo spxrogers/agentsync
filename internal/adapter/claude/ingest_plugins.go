@@ -27,6 +27,9 @@ import (
 // whole import (matching the hooks/LSP blocks in Ingest). Only a genuine read
 // error (e.g. a permission problem) is surfaced.
 func (a *Adapter) IngestPlugins(scope adapter.Scope, project string) ([]adapter.NativeMarketplace, []adapter.NativePlugin, error) {
+	if err := adapter.RequireProjectRoot(scope, project); err != nil {
+		return nil, nil, err
+	}
 	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
 	data, err := os.ReadFile(p.Settings)
 	if err != nil {

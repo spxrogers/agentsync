@@ -96,6 +96,15 @@ Two design points worth internalizing:
   doesn't yet own, before overwriting). A `forbidigo` lint rule fails any direct
   write outside the allowed packages, so a new adapter can't regress the backup
   guarantee.
+- **Project scope requires a project root.** Each adapter's `ResolvePaths` falls
+  through to *user*-scope paths when the project root is empty, so a
+  `(ScopeProject, "")` call would silently write the project overlay into the
+  user's global config. Every scope-resolving adapter method —
+  `Render`, `Ingest`, and `IngestPlugins` — calls `adapter.RequireProjectRoot`
+  first thing and returns `ErrProjectRootRequired` instead — a loud failure at
+  the narrowest waist rather than a silent wrong-scope I/O. The CLI's
+  `resolveScope` already guarantees a non-empty root for project scope, so this
+  is defense-in-depth against a future or non-CLI caller.
 
 `Capability` is a bitmask, so the OpenCode adapter simply omits `CapHook` and
 `CapLSP` (and the Codex adapter omits `CapLSP` — Codex has no LSP concept) and
@@ -103,7 +112,8 @@ the pipeline reports those components as skipped.
 
 **Key-merge strategies and on-disk format.** `KeyMergeStrategy` /
 `FileOp.MergeStrategy` name how an adapter co-owns keys inside a shared config
-file: `merge-json-keys` (Claude's `.claude.json`/`settings.json`),
+file: `merge-json-keys` (Claude's `.claude.json`/`settings.json`, and a
+project's repo-root `.mcp.json` for project-scope MCP servers),
 `merge-jsonc-keys` (OpenCode's comment-tolerant `opencode.json`), and
 `merge-toml-keys` (Codex's `config.toml`). The merge *currency* is always a
 `map[string]any` decoded from the rendered op's JSON `Content`, so the

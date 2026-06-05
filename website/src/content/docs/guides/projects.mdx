@@ -115,13 +115,14 @@ cwd to the `.agentsync/` tree):
 ```bash frame="terminal"
 cd ~/code/myrepo
 agentsync apply --scope project   # walks up to the .agentsync/ tree
-ls .claude/settings.json          # project-scope config landed
+ls .mcp.json                      # project-scope MCP servers landed (repo root)
 ```
 
 ## Import a project's native config
 
-Already have native project-scope config (e.g. `<root>/.claude/`)? Capture it
-straight into the project tree:
+Already have native project-scope config (e.g. `<root>/.claude/`, or a
+`<root>/.mcp.json` from `claude mcp add --scope project`)? Capture it straight
+into the project tree:
 
 ```bash
 cd ~/code/myrepo

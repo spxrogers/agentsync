@@ -27,7 +27,8 @@ func TestIntegration_Import_ProjectScope(t *testing.T) {
 	}
 
 	// Native project-scope config: a subagent under <proj>/.claude/agents/ and an
-	// MCP server in <proj>/.claude/settings.json (the project-scope MCP location).
+	// MCP server in <proj>/.mcp.json (the upstream project-scope MCP location —
+	// the file `claude mcp add --scope project` writes).
 	claudeDir := filepath.Join(proj, ".claude")
 	if err := os.MkdirAll(filepath.Join(claudeDir, "agents"), 0o755); err != nil {
 		t.Fatal(err)
@@ -36,7 +37,7 @@ func TestIntegration_Import_ProjectScope(t *testing.T) {
 		[]byte("---\ndescription: project reviewer\n---\nReview carefully.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"),
+	if err := os.WriteFile(filepath.Join(proj, ".mcp.json"),
 		[]byte(`{"mcpServers":{"projapi":{"command":"node","args":["s.js"]}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}

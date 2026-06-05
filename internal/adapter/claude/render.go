@@ -13,6 +13,9 @@ import (
 // Pure function: returns the same output for the same input (disk reads are
 // treated as fixed inputs for the purposes of the merge-json-keys strategy).
 func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string) ([]adapter.FileOp, []adapter.Skip, error) {
+	if err := adapter.RequireProjectRoot(scope, project); err != nil {
+		return nil, nil, err
+	}
 	c := r.Canonical() //nolint:forbidigo // sanctioned render egress: project the resolved model into FileOps (never written back to source)
 	paths := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
 
@@ -27,7 +30,7 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 	var ops []adapter.FileOp
 	var skips []adapter.Skip
 
-	// 1. MCP -> .claude.json (user) or settings.json (project)
+	// 1. MCP -> ~/.claude.json (user) or <proj>/.mcp.json (project)
 	if mcpOps, err := a.renderMCP(renderC, paths, scope); err != nil {
 		return nil, nil, err
 	} else {
@@ -94,9 +97,10 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 	return ops, skips, nil
 }
 
-// renderMCP converts canonical MCPServers to a FileOp targeting .claude.json
-// (user scope) or settings.json (project scope). The FileOp carries
-// MergeStrategy "merge-json-keys" so Apply can preserve foreign keys.
+// renderMCP converts canonical MCPServers to a FileOp targeting ~/.claude.json
+// (user scope) or <project>/.mcp.json (project scope — the upstream Claude Code
+// project-MCP location, NOT settings.json). The FileOp carries MergeStrategy
+// "merge-json-keys" so Apply preserves foreign keys in a hand-authored .mcp.json.
 func (a *Adapter) renderMCP(c source.Canonical, p Paths, scope adapter.Scope) ([]adapter.FileOp, error) {
 	targeted := map[string]any{}
 	for _, m := range c.MCPServers {
@@ -132,18 +136,16 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths, scope adapter.Scope) ([
 		return nil, nil
 	}
 
+	// dest is always non-empty here: Render rejects ScopeProject with an empty
+	// project root up front (adapter.RequireProjectRoot), so mcpDest cannot
+	// return "" by the time renderMCP runs.
+	dest := p.mcpDest(scope)
+
 	ours := map[string]any{"mcpServers": targeted}
 
 	body, err := json.MarshalIndent(ours, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal mcp: %w", err)
-	}
-
-	var dest string
-	if scope == adapter.ScopeProject {
-		dest = p.Settings
-	} else {
-		dest = p.DotClaude
 	}
 
 	return []adapter.FileOp{{

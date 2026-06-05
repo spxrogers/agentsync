@@ -478,7 +478,7 @@ user config:
 ```bash
 cd ~/code/myrepo
 agentsync apply --scope project   # walks up from cwd to the .agentsync/ tree
-ls .claude/settings.json          # project-scope config landed
+ls .mcp.json                      # project-scope MCP servers landed (repo root)
 ```
 
 Commands default to **user** scope. Project scope is never auto-applied: pass
