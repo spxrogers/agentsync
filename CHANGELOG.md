@@ -36,6 +36,13 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   flag — and a non-TTY stdin — makes it fail closed instead. `--scope
   project`/`--project` with no `.agentsync/` tree is a hard error pointing at
   `init --scope project`, never a silent downgrade to user scope.
+- **`verify --scope project` / `--project <path>`.** `verify` now takes the same
+  scope flags as `status`/`diff`/`apply`, so a project `.agentsync/` tree can be
+  schema-linted and have its `${secret:…}`/`${env:…}` references validated.
+  Project references resolve against the inherited user secrets backend exactly
+  as `apply` does (so the two never disagree), and the existing missing-home /
+  half-initialized guards now report the scope-appropriate `init` command.
+  Default stays user scope.
 
 ### Fixed
 

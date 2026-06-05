@@ -140,3 +140,116 @@ func TestVerify_UnknownAgent(t *testing.T) {
 		t.Fatal("verify should reject unknown agent name")
 	}
 }
+
+// TestVerify_HelpListsScopeFlags is the acceptance check that `verify --help`
+// now documents --scope and --project, matching status/diff.
+func TestVerify_HelpListsScopeFlags(t *testing.T) {
+	out, _ := runCLI(t, nil, "verify", "--help")
+	for _, flag := range []string{"--scope", "--project"} {
+		if !strings.Contains(out, flag) {
+			t.Fatalf("verify --help missing %q. Got:\n%s", flag, out)
+		}
+	}
+}
+
+// TestVerify_ProjectScope_OK schema-lints a project .agentsync/ tree and
+// resolves its references via --project (which implies project scope). The
+// project MCP server carries an ${env:} reference so the secret-resolution pass
+// is exercised, not just the schema decode.
+func TestVerify_ProjectScope_OK(t *testing.T) {
+	tmpHome := t.TempDir()
+	proj := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome, "PROJ_TOKEN": "s3cr3t"}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", proj); err != nil {
+		t.Fatal(err)
+	}
+	// A valid project-scope MCP server referencing an env var that is set, so
+	// the ${env:} resolution pass succeeds.
+	mcp := filepath.Join(proj, ".agentsync", "mcp", "projapi.toml")
+	body := "[server]\ntype = \"stdio\"\ncommand = \"node\"\nargs = [\"s.js\"]\nenv = { TOKEN = \"${env:PROJ_TOKEN}\" }\n"
+	if err := os.WriteFile(mcp, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "verify", "--project", proj)
+	if err != nil {
+		t.Fatalf("verify --project: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "ok") {
+		t.Fatalf("verify --project output missing 'ok': %s", out)
+	}
+}
+
+// TestVerify_ProjectScope_BadTOML asserts schema-linting reaches the project
+// tree: a malformed file under <proj>/.agentsync/ fails verify at project scope.
+func TestVerify_ProjectScope_BadTOML(t *testing.T) {
+	tmpHome := t.TempDir()
+	proj := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", proj); err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(proj, ".agentsync", "mcp", "broken.toml")
+	if err := os.WriteFile(bad, []byte("[server\nmissing-bracket"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runCLI(t, env, "verify", "--scope", "project", "--project", proj); err == nil {
+		t.Fatal("verify --scope project should fail on malformed project TOML")
+	}
+}
+
+// TestVerify_ProjectScope_HalfInit asserts the half-init guard adapts to the
+// project case: a <proj>/.agentsync/ directory with no agentsync.toml (so
+// source.Load tolerates it and would otherwise report a false "ok") is rejected
+// with a message naming agentsync.toml and the project init command.
+func TestVerify_ProjectScope_HalfInit(t *testing.T) {
+	tmpHome := t.TempDir()
+	proj := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	// A .agentsync/ tree exists (so scope resolution accepts the project root)
+	// but it has no agentsync.toml.
+	if err := os.MkdirAll(filepath.Join(proj, ".agentsync", "mcp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := runCLI(t, env, "verify", "--project", proj)
+	if err == nil {
+		t.Fatal("verify on a half-initialized project tree must error")
+	}
+	if !strings.Contains(err.Error(), "agentsync.toml") || !strings.Contains(err.Error(), "init") {
+		t.Fatalf("error should name agentsync.toml + point at init; got: %v", err)
+	}
+}
+
+// TestVerify_ProjectScope_NoTree asserts verify surfaces the shared
+// scope-resolution error when --project points at a path with no .agentsync/
+// tree, rather than silently degrading to user scope.
+func TestVerify_ProjectScope_NoTree(t *testing.T) {
+	tmpHome := t.TempDir()
+	proj := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runCLI(t, env, "verify", "--project", proj)
+	if err == nil {
+		t.Fatal("verify --project with no .agentsync/ tree should error")
+	}
+	if !strings.Contains(err.Error(), ".agentsync") {
+		t.Fatalf("error should mention the missing .agentsync/ tree; got: %v", err)
+	}
+}

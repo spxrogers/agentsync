@@ -558,7 +558,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 |---|---|---|
 | `init [<git-url>]` | Create `~/.agentsync/` (user scope); optionally clone a bootstrap repo. `--scope project` scaffolds a project tree at `<cwd>/.agentsync/` instead; `--project <path>` targets `<path>/.agentsync/` (implies project scope). A git-URL clone is user-scope only. | `--scope --project` |
 | `doctor` | Diagnose setup: PATH, home/state writability, config schema, secrets backend; flags natively-installed plugins missing from source. | |
-| `verify` | Validate config and surface every unresolved `${secret:}`/`${env:}` ref. | |
+| `verify` | Validate config and surface every unresolved `${secret:}`/`${env:}` ref. `--scope project`/`--project <path>` schema-lints the project tree and validates its references against the inherited user secrets backend. | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry. | `disable --purge` |
 | `mcp add\|remove\|list <name>` | Manage MCP servers. | `--type --command --args --url --env --agents` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
