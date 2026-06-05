@@ -469,10 +469,10 @@ func TestRenderApply_SharedWriteDivergence(t *testing.T) {
 	})
 }
 
-// TestPreviewCollisions_SharedWriteDivergence ensures `apply --dry-run`'s
-// preview fails loud on divergent shared-path content, matching Apply — so the
-// dry-run can't show a clean preview that the real apply then aborts on.
-func TestPreviewCollisions_SharedWriteDivergence(t *testing.T) {
+// TestPreviewApply_SharedWriteDivergence ensures `apply --dry-run`'s preview
+// fails loud on divergent shared-path content, matching Apply — so the dry-run
+// can't show a clean preview that the real apply then aborts on.
+func TestPreviewApply_SharedWriteDivergence(t *testing.T) {
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, ".agentsync")
 	_ = os.MkdirAll(home, 0o755)
@@ -485,8 +485,62 @@ func TestPreviewCollisions_SharedWriteDivergence(t *testing.T) {
 		"claude":   {Ops: []adapter.FileOp{{Action: "write", Path: dest, Content: []byte("A"), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
 		"opencode": {Ops: []adapter.FileOp{{Action: "write", Path: dest, Content: []byte("B"), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
 	}}
-	if _, err := render.PreviewCollisions(plan, reg, state.New(), home, tmp, adapter.ScopeUser, ""); err == nil {
+	if _, _, _, err := render.PreviewApply(plan, reg, state.New(), home, tmp, adapter.ScopeUser, ""); err == nil {
 		t.Fatal("expected dry-run preview to fail loud on divergent shared-path content")
+	}
+}
+
+// TestPreviewApply_SyncedVsWouldChange pins the synced/would-change verdict the
+// dry-run listing is built on: a destination already holding our exact bytes is
+// reported `unchanged` (labeled "synced"), a destination with different content
+// is reported in `wouldChange` (labeled "write"), and a missing destination —
+// which a real apply would create — is also `wouldChange`.
+func TestPreviewApply_SyncedVsWouldChange(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+
+	synced := filepath.Join(tmp, ".claude", "skills", "a", "SKILL.md")
+	changed := filepath.Join(tmp, ".claude", "skills", "b", "SKILL.md")
+	missing := filepath.Join(tmp, ".claude", "skills", "c", "SKILL.md")
+	for _, d := range []string{synced, changed} {
+		_ = os.MkdirAll(filepath.Dir(d), 0o755)
+	}
+	_ = os.WriteFile(synced, []byte("same\n"), 0o644)
+	_ = os.WriteFile(changed, []byte("old\n"), 0o644)
+
+	reg := adapter.NewRegistry()
+	_ = reg.Register(&fakeJSONApply{name: "claude"})
+	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+		"claude": {Ops: []adapter.FileOp{
+			{Action: "write", Path: synced, Content: []byte("same\n"), Mode: 0o644, SourceID: "skills/a/SKILL.md"},
+			{Action: "write", Path: changed, Content: []byte("new\n"), Mode: 0o644, SourceID: "skills/b/SKILL.md"},
+			{Action: "write", Path: missing, Content: []byte("new\n"), Mode: 0o644, SourceID: "skills/c/SKILL.md"},
+		}},
+	}}
+
+	_, unchanged, wouldChange, err := render.PreviewApply(plan, reg, state.New(), home, tmp, adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("PreviewApply: %v", err)
+	}
+	if !unchanged[synced] {
+		t.Errorf("a destination already holding our bytes must be Unchanged; got unchanged=%v", unchanged)
+	}
+	if wouldChange[synced] {
+		t.Errorf("a synced destination must NOT be in wouldChange; got %v", wouldChange)
+	}
+	if !wouldChange[changed] {
+		t.Errorf("a divergent destination must be in wouldChange; got %v", wouldChange)
+	}
+	if !wouldChange[missing] {
+		t.Errorf("a missing destination (apply would create it) must be in wouldChange; got %v", wouldChange)
+	}
+	// A dry-run must not have written or created anything.
+	if data, _ := os.ReadFile(changed); string(data) != "old\n" {
+		t.Errorf("dry-run mutated a live destination; got %q", data)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Errorf("dry-run created a destination it should only have previewed")
 	}
 }
 

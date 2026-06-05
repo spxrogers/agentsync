@@ -90,7 +90,12 @@ type Writer struct {
 	backedUp   map[string]bool // path → already-backed-up this run
 	wrote      map[string]bool // path → destination owned/written this run
 	unchanged  map[string]bool // path → already held our exact bytes (write skipped)
-	reports    []CollisionReport
+	// wouldChange is populated only under dryRun: path → the write would have
+	// created or modified the destination (it did not already hold our bytes).
+	// It is the complement of unchanged for the preview, letting `apply
+	// --dry-run` label each destination "write" vs "synced".
+	wouldChange map[string]bool
+	reports     []CollisionReport
 	// dryRun, when true, skips both the destination write AND the backup
 	// write. The reports slice is still populated so callers can preview
 	// the foreign-collisions a real apply would produce.
@@ -127,16 +132,17 @@ func NewWriter(st *state.Targets, home, userHome string, scope adapter.Scope, pr
 	now := time.Now().UTC()
 	ts := fmt.Sprintf("%s-%09d", now.Format("20060102T150405Z"), now.Nanosecond())
 	return &Writer{
-		state:      st,
-		home:       home,
-		userHome:   userHome,
-		scope:      scope,
-		project:    project,
-		agent:      agent,
-		backupRoot: filepath.Join(home, ".state", "backups", ts),
-		backedUp:   map[string]bool{},
-		wrote:      map[string]bool{},
-		unchanged:  map[string]bool{},
+		state:       st,
+		home:        home,
+		userHome:    userHome,
+		scope:       scope,
+		project:     project,
+		agent:       agent,
+		backupRoot:  filepath.Join(home, ".state", "backups", ts),
+		backedUp:    map[string]bool{},
+		wrote:       map[string]bool{},
+		unchanged:   map[string]bool{},
+		wouldChange: map[string]bool{},
 	}
 }
 
@@ -164,6 +170,13 @@ func (w *Writer) Wrote() map[string]bool { return w.wrote }
 // skipped. apply uses it to report "up to date" instead of "applied: N ops".
 func (w *Writer) Unchanged() map[string]bool { return w.unchanged }
 
+// WouldChange returns the set of destination paths a dry-run write would have
+// created or modified (the complement of Unchanged for the preview). It is only
+// populated when the writer is in dry-run mode; on a real apply it is empty
+// because the write is actually performed. `apply --dry-run` uses it to label
+// each planned destination "write" vs "synced".
+func (w *Writer) WouldChange() map[string]bool { return w.wouldChange }
+
 // Write satisfies adapter.DestWriter. finalBytes is the post-merge content
 // for merge ops, or op.Content for replace ops.
 func (w *Writer) Write(op adapter.FileOp, finalBytes []byte) error {
@@ -172,16 +185,24 @@ func (w *Writer) Write(op adapter.FileOp, finalBytes []byte) error {
 	// mtime (which misleads mtime-watching tooling and makes a clean re-apply
 	// look like real work). The post-condition (dest == finalBytes) already
 	// holds, so still mark it owned for state recording; nothing is overwritten,
-	// so there is nothing to back up. Skipped under dry-run (no read needed).
-	if !w.dryRun {
-		if cur, err := os.ReadFile(op.Path); err == nil && bytes.Equal(cur, finalBytes) {
-			w.wrote[op.Path] = true
-			w.unchanged[op.Path] = true
-			return nil
-		}
+	// so there is nothing to back up. The same read drives the dry-run preview:
+	// it is what lets `apply --dry-run` label a converged destination "synced"
+	// rather than "write".
+	if cur, err := os.ReadFile(op.Path); err == nil && bytes.Equal(cur, finalBytes) {
+		w.wrote[op.Path] = true
+		w.unchanged[op.Path] = true
+		return nil
 	}
+	// The write would create or change op.Path. Back up any foreign content
+	// first (a dry-run records the collision report but writes no backup).
 	if err := w.maybeBackup(op, finalBytes); err != nil {
 		return err
+	}
+	if w.dryRun {
+		// Preview only: record that this destination WOULD change so the
+		// dry-run can label it, and touch nothing on disk.
+		w.wouldChange[op.Path] = true
+		return nil
 	}
 	mode := os.FileMode(op.Mode)
 	if mode == 0 {

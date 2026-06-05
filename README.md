@@ -43,7 +43,7 @@ New here? The **[User guide](docs/user-guide.md)** takes you 0→100.
     agentsync agent add claude
     agentsync agent add opencode
     agentsync mcp add github --command npx --args "-y,@modelcontextprotocol/server-github"
-    agentsync apply --dry-run    # preview translation report before writing
+    agentsync apply --dry-run    # preview what would change vs. is already synced
     agentsync apply
 
 ## Documentation

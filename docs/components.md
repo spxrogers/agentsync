@@ -157,7 +157,8 @@ renders nothing. `agent add` rejects these unless `AGENTSYNC_ALLOW_UNIMPLEMENTED
 Orchestrates apply: canonical + registry → per-agent `FileOp`s/`Skip`s, runs
 collision detection and backups, records state, synthesizes cleanup ops for
 orphaned owned keys, and builds the translation report.
-- **Key:** `Plan`; `Apply`; `PreviewCollisions`; `Writer`
+- **Key:** `Plan`; `Apply`; `PreviewApply` (dry-run: collision preview +
+  synced/would-change verdict); `Writer`
   (`NewWriter`/`NewPreviewWriter`); `TranslationReport` (`PrintText`/`PrintJSON`);
   `BuildReport`; `RecordOpsState`; `OrphanFiles`; `PruneStaleState`;
   `BackupFile`/`PruneBackups`; `CollisionReport`.

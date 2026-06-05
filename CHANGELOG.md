@@ -57,6 +57,14 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Changed
 
+- **`apply --dry-run` now distinguishes already-synced destinations from pending
+  writes.** Previously every planned op was listed as `→ write`, even when the
+  destination already held exactly the bytes apply would write — so a dry-run on
+  an in-sync tree read like a wall of pending work. The preview now runs the real
+  apply pipeline through non-writing writers (so each merge is performed against
+  the on-disk destination, matching the eventual apply exactly) and labels each op
+  `✓ synced` or `→ write`; the summary line gains a `— N to write, M already
+  synced` tally. Nothing is written, exactly as before.
 - **The M5 single-file `.agentsync.toml` project marker is retired** (one project
   schema, not two). It is no longer read; `agentsync` surfaces a migration error
   pointing at `init --scope project` when it finds one. The marker's

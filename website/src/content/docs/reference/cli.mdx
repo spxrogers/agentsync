@@ -131,7 +131,10 @@ agentsync secrets edit
 ### `apply`
 Renders the source and writes each agent's native config. **Offline** — it never
 touches the network. `--dry-run` runs the full pipeline and prints the plan and
-translation report without writing a byte.
+translation report without writing a byte; each planned destination is labeled
+`✓ synced` (already holds our exact bytes) or `→ write` (would be created or
+changed), with a `— N to write, M already synced` tally, so an in-sync tree reads
+as a no-op rather than a list of pending writes.
 
 ```bash
 agentsync apply --dry-run

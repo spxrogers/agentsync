@@ -119,15 +119,18 @@ func Plan(r secrets.Resolved, reg *adapter.Registry, agents []string, scope adap
 	return out, nil
 }
 
-// PreviewCollisions runs the same per-file / per-pointer foreign-collision
-// check that Apply runs at write time, but writes nothing. It returns the
-// reports a real apply would have produced. Used by `apply --dry-run` so
-// the user can see — before committing — exactly which destination files
-// are about to be backed up and overwritten.
+// PreviewApply runs the apply pipeline through non-writing preview writers and
+// reports what a real apply would do, without touching disk. It returns the
+// foreign-collision reports a real apply would produce, plus the per-destination
+// convergence verdict: `unchanged` paths already hold exactly the bytes apply
+// would write (the dry-run shows them as "synced"), and `wouldChange` paths
+// would be created or modified (shown as "write"). Used by `apply --dry-run`.
 //
-// We have to re-run the deduplication that Apply does (path-level
-// first-writer-wins) so the dry-run preview matches what really happens.
-func PreviewCollisions(
+// It supersedes the older op.Content-only collision preview: because it runs the
+// real adapter Apply, each merge is performed for real (against the on-disk
+// destination), so the preview's synced/write verdict and collision set match
+// the eventual apply exactly rather than approximating it.
+func PreviewApply(
 	p RenderPlan,
 	reg *adapter.Registry,
 	st *state.Targets,
@@ -135,50 +138,9 @@ func PreviewCollisions(
 	userHome string,
 	scope adapter.Scope,
 	project string,
-) ([]CollisionReport, error) {
-	if st == nil {
-		return nil, nil
-	}
-	var all []CollisionReport
-	seen := map[string][]byte{}
-	for _, name := range reg.Names() {
-		res, ok := p.PerAgent[name]
-		if !ok {
-			continue
-		}
-		w := NewPreviewWriter(st, home, userHome, scope, project, name)
-		for _, op := range res.Ops {
-			if op.Action != "" && op.Action != "write" {
-				continue
-			}
-			// Mirror Apply's dedup AND its divergence guard: only whole-file
-			// replace writes are collapsed by path; identical content dedups,
-			// but divergent content for the same path fails loud — otherwise
-			// --dry-run would show a clean preview that the real apply rejects.
-			if !IsKeyMerge(op.MergeStrategy) {
-				if prev, ok := seen[op.Path]; ok {
-					if !bytes.Equal(prev, op.Content) {
-						return all, fmt.Errorf(
-							"agent %q renders different content than an earlier agent for the same path %s; "+
-								"refusing to silently drop one (shared paths must render identical bytes)",
-							name, op.Path,
-						)
-					}
-					continue
-				}
-				seen[op.Path] = op.Content
-			}
-			// We don't have the post-merge finalBytes here without
-			// re-running the adapter. For preview purposes a conservative
-			// "is something there that doesn't look exactly like our op"
-			// is sufficient — Apply's real maybeBackup will recompute and
-			// suppress the report if the on-disk content happens to match
-			// the post-merge bytes exactly.
-			_ = w.maybeBackup(op, op.Content)
-		}
-		all = append(all, w.Reports()...)
-	}
-	return all, nil
+) (reports []CollisionReport, unchanged, wouldChange map[string]bool, err error) {
+	reports, _, unchanged, wouldChange, err = applyPlan(p, reg, st, home, userHome, scope, project, true)
+	return reports, unchanged, wouldChange, err
 }
 
 // ownedKeysFor returns the JSON-pointer strings owned by agentsync for a given
@@ -367,17 +329,44 @@ func Apply(
 	scope adapter.Scope,
 	project string,
 ) ([]CollisionReport, map[string]bool, map[string]bool, error) {
-	written := map[string]bool{}
-	unchanged := map[string]bool{}
+	reports, written, unchanged, _, err := applyPlan(p, reg, st, home, userHome, scope, project, false)
+	return reports, written, unchanged, err
+}
+
+// applyPlan is the shared body of Apply and PreviewApply. With dryRun=false it
+// commits the plan through real Writers (the public Apply); with dryRun=true it
+// runs the identical pipeline — same dedup, same skill-orphan reclamation, same
+// per-op merge — through non-writing preview Writers, so the collision reports
+// and the synced/would-change verdicts a dry-run shows are computed by the very
+// code a real apply runs and can never disagree with it.
+//
+// It returns the union of CollisionReports plus three path sets: `written`
+// (committed this run; empty under dryRun), `unchanged` (the destination already
+// held our exact bytes), and `wouldChange` (a dry-run write that would create or
+// modify the destination; empty on a real apply, since the write is performed).
+// On adapter error the work done before the failure is reflected and not rolled
+// back (per-file writes are atomic, the plan as a whole is not transactional).
+func applyPlan(
+	p RenderPlan,
+	reg *adapter.Registry,
+	st *state.Targets,
+	home string,
+	userHome string,
+	scope adapter.Scope,
+	project string,
+	dryRun bool,
+) (reports []CollisionReport, written, unchanged, wouldChange map[string]bool, err error) {
+	written = map[string]bool{}
+	unchanged = map[string]bool{}
+	wouldChange = map[string]bool{}
 	if st == nil {
 		// Defensive: a nil state would make every write look like a
 		// foreign collision and produce duplicate backups. Callers that
 		// don't yet have a state object should construct an empty one
 		// (state.New) rather than passing nil.
-		return nil, written, unchanged, fmt.Errorf("render.Apply: nil state")
+		return nil, written, unchanged, wouldChange, fmt.Errorf("render.Apply: nil state")
 	}
 
-	var allReports []CollisionReport
 	seen := map[string][]byte{}
 	deletedSkillOrphans := map[string]struct{}{}
 	for _, name := range reg.Names() {
@@ -387,7 +376,7 @@ func Apply(
 		}
 		a := reg.Lookup(name)
 		if a == nil {
-			return allReports, written, unchanged, fmt.Errorf("adapter %q not registered at apply", name)
+			return reports, written, unchanged, wouldChange, fmt.Errorf("adapter %q not registered at apply", name)
 		}
 		var deduped []adapter.FileOp
 		for _, op := range res.Ops {
@@ -406,7 +395,7 @@ func Apply(
 					// dropping one agent's bytes would be data loss — so fail
 					// loud rather than pick a winner.
 					if !bytes.Equal(prev, op.Content) {
-						return allReports, written, unchanged, fmt.Errorf(
+						return reports, written, unchanged, wouldChange, fmt.Errorf(
 							"agent %q renders different content than an earlier agent for the same path %s; "+
 								"refusing to silently drop one (shared paths must render identical bytes)",
 							name, op.Path,
@@ -429,18 +418,26 @@ func Apply(
 			deletedSkillOrphans[del.Path] = struct{}{}
 			deduped = append(deduped, del)
 		}
-		w := NewWriter(st, home, userHome, scope, project, name)
-		err := a.Apply(deduped, w)
-		allReports = append(allReports, w.Reports()...)
+		var w *Writer
+		if dryRun {
+			w = NewPreviewWriter(st, home, userHome, scope, project, name)
+		} else {
+			w = NewWriter(st, home, userHome, scope, project, name)
+		}
+		aerr := a.Apply(deduped, w)
+		reports = append(reports, w.Reports()...)
 		for path := range w.Wrote() {
 			written[path] = true
 		}
 		for path := range w.Unchanged() {
 			unchanged[path] = true
 		}
-		if err != nil {
-			return allReports, written, unchanged, fmt.Errorf("apply %s: %w", name, err)
+		for path := range w.WouldChange() {
+			wouldChange[path] = true
+		}
+		if aerr != nil {
+			return reports, written, unchanged, wouldChange, fmt.Errorf("apply %s: %w", name, aerr)
 		}
 	}
-	return allReports, written, unchanged, nil
+	return reports, written, unchanged, wouldChange, nil
 }
