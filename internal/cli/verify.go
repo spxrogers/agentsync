@@ -7,18 +7,24 @@ import (
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
+	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
 func newVerifyCmd() *cobra.Command {
-	return &cobra.Command{
+	var scopeFlag, projectFlag string
+	cmd := &cobra.Command{
 		Use:   "verify",
-		Short: "schema-lint ~/.agentsync/ and validate secrets resolvability on demand",
+		Short: "schema-lint agentsync source and validate secrets resolvability on demand",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			home := paths.AgentsyncHome(paths.OSEnv{})
+			home, err := verifySourceHome(cmd, scopeFlag, projectFlag)
+			if err != nil {
+				return err
+			}
 			// source.Load tolerates a missing home and returns an empty model,
 			// so without this guard `verify` on an uninitialized machine
 			// printed a false "ok" and exited 0. Fail with a pointer to init.
@@ -69,6 +75,20 @@ func newVerifyCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
+	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+	return cmd
+}
+
+func verifySourceHome(cmd *cobra.Command, scopeFlag, projectFlag string) (string, error) {
+	sc, projectRoot, err := resolveScope(cmd, scopeFlag, projectFlag, noInputFlag(cmd))
+	if err != nil {
+		return "", err
+	}
+	if sc == adapter.ScopeProject {
+		return project.Home(projectRoot), nil
+	}
+	return paths.AgentsyncHome(paths.OSEnv{}), nil
 }
 
 // verifySecrets validates the [secrets] block beyond the schema decode:

@@ -20,7 +20,7 @@ import { Aside } from '@astrojs/starlight/components';
 |---|---|---|
 | `init [<git-url>]` | Create `~/.agentsync/`; optionally clone a bootstrap repo. `--scope project` / `--project <path>` scaffolds a project tree instead. | `--scope --project` |
 | `doctor` | Diagnose setup: PATH, home/state writability, schema, secrets backend. | |
-| `verify` | Validate config; surface unresolved `${secret:}` / `${env:}` refs. | |
+| `verify` | Validate config; surface unresolved `${secret:}` / `${env:}` refs. | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry. | `disable --purge` |
 | `mcp add\|remove\|list <name>` | Manage MCP servers. | `--type --command --args --url --env --agents` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
@@ -60,7 +60,9 @@ something feels off.
 
 ### `verify`
 Validates the canonical config and surfaces **every** unresolved `${secret:…}` /
-`${env:…}` reference. Ideal for CI — see
+`${env:…}` reference. Pass `--scope project` or `--project <path>` to validate a
+project-local `<root>/.agentsync/` source tree with the same schema and reference
+checks. Ideal for CI — see
 [Verify config in CI](/recipes/ci-verification/). Pair with
 `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` on runners without an age key.
 
@@ -204,8 +206,8 @@ agentsync explain --list
 
 | Flag | Applies to | Effect |
 |---|---|---|
-| `--scope user\|project` | init, import, apply, status, diff, reconcile, update | Force the config scope. |
-| `--project <path>` | init, import, apply, status, diff, reconcile, update | Target / apply a specific project's tree. |
+| `--scope user\|project` | init, verify, import, apply, status, diff, reconcile, update | Force the config scope. |
+| `--project <path>` | init, verify, import, apply, status, diff, reconcile, update | Target / apply a specific project's tree. |
 | `--dry-run` | apply, import | Preview without writing. |
 | `--auto-safe` | reconcile, update | Auto-resolve only no-risk changes. |
 | `--json` | status, diff, explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). `explain --list --json` emits a `plugins` array; `explain` with ids/`--all` emits the translation `rows`. |

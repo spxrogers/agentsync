@@ -140,3 +140,60 @@ func TestVerify_UnknownAgent(t *testing.T) {
 		t.Fatal("verify should reject unknown agent name")
 	}
 }
+
+func TestVerify_ProjectScope(t *testing.T) {
+	tmpHome := t.TempDir()
+	proj := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "init", "--project", proj); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "verify", "--project", proj)
+	if err != nil {
+		t.Fatalf("verify --project should validate the project tree: %v", err)
+	}
+	if !strings.Contains(out, "ok") {
+		t.Fatalf("verify output missing 'ok': %s", out)
+	}
+}
+
+func TestVerify_ProjectScopeBadTOML(t *testing.T) {
+	tmpHome := t.TempDir()
+	proj := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "init", "--project", proj); err != nil {
+		t.Fatal(err)
+	}
+
+	badPath := filepath.Join(proj, ".agentsync", "mcp", "broken.toml")
+	if err := os.MkdirAll(filepath.Dir(badPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(badPath, []byte("[server\nmissing-bracket"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := runCLI(t, env, "verify", "--project", proj)
+	if err == nil {
+		t.Fatal("verify --project should fail on malformed project TOML")
+	}
+}
+
+func TestVerify_HelpIncludesScopeFlags(t *testing.T) {
+	out, err := runCLI(t, nil, "verify", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--scope", "--project"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("verify help missing %s:\n%s", want, out)
+		}
+	}
+}

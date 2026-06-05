@@ -39,6 +39,11 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **`verify` now supports project scope.** `agentsync verify --scope project` and
+  `agentsync verify --project <path>` validate a project `<root>/.agentsync/`
+  source tree with the same schema and `${secret:…}` / `${env:…}` reference
+  checks as user scope, while preserving the existing user-scope default and
+  half-initialized guards.
 - **`apply --scope project` now renders only project-scope items.** Previously
   `project.Merge` never populated `Canonical.Project`, so all three adapter
   `Render` methods wrote the full merged canonical (user + project items) into
