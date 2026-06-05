@@ -294,7 +294,10 @@ Key stages:
 8. **Record** new hashes in `targets.json` (`internal/state`) and print the
    translation report.
 
-`--dry-run` runs steps 1–6 and prints the plan/report without writing.
+`--dry-run` runs steps 1–6, then a non-writing pass of step 7 (the writer's merge
++ convergence check, no disk write) so it can label each destination `✓ synced`
+vs `→ write` and preview foreign-collision backups, and prints the plan/report —
+all without writing a byte.
 
 ---
 

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 // TestApply_PartialFailureRescuesState exercises saveBestEffortState (the
@@ -298,6 +300,68 @@ func TestApply_DryRunListsDestinations(t *testing.T) {
 	}
 	if !strings.Contains(out, ".claude.json") {
 		t.Fatalf("dry-run did not list destination paths; got:\n%s", out)
+	}
+}
+
+// TestApply_DryRunLabelsSyncedVsWrite is the regression for the finding that
+// `apply --dry-run` labeled every op "write" even when the destination already
+// held our exact bytes — so a dry-run on an in-sync tree looked like pending
+// work. After a real apply everything is in sync, so the dry-run must label the
+// destinations "synced" (0 to write); editing one source then surfaces it as a
+// "write" while the untouched one stays "synced".
+func TestApply_DryRunLabelsSyncedVsWrite(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+
+	mkSkill := func(name, desc string) {
+		t.Helper()
+		p := filepath.Join(tmp, ".agentsync", "skills", name, "SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nname: " + name + "\ndescription: " + desc + "\n---\nbody\n"
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mkSkill("alpha", "first")
+	mkSkill("bravo", "second")
+
+	// Sync both skills to disk.
+	mustRun(t, env, "apply")
+
+	// A dry-run now finds both rendered skills already in sync.
+	out, err := runCLI(t, env, "apply", "--dry-run")
+	if err != nil {
+		t.Fatalf("apply --dry-run: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, ui.GlyphOK+" synced") {
+		t.Fatalf("dry-run did not label already-synced destinations; got:\n%s", out)
+	}
+	if !strings.Contains(out, "0 to write") {
+		t.Fatalf("dry-run summary did not report a clean no-op; got:\n%s", out)
+	}
+	if strings.Contains(out, ui.GlyphArrow+" write") {
+		t.Fatalf("dry-run labeled an in-sync destination as a write; got:\n%s", out)
+	}
+
+	// Edit one source: that skill must now show a pending write while the
+	// untouched one stays synced.
+	mkSkill("alpha", "edited")
+	out, err = runCLI(t, env, "apply", "--dry-run")
+	if err != nil {
+		t.Fatalf("apply --dry-run (after edit): %v\n%s", err, out)
+	}
+	if !strings.Contains(out, ui.GlyphArrow+" write") {
+		t.Fatalf("dry-run did not surface the pending write; got:\n%s", out)
+	}
+	if !strings.Contains(out, "1 to write") {
+		t.Fatalf("dry-run summary miscounted pending writes; got:\n%s", out)
+	}
+	if !strings.Contains(out, ui.GlyphOK+" synced") {
+		t.Fatalf("dry-run lost the still-synced destination; got:\n%s", out)
 	}
 }
 

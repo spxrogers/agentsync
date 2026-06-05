@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,24 +121,30 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		if err != nil {
 			return err
 		}
+		// Run the pipeline through non-writing preview writers so we know, per
+		// destination, whether the real apply would actually change it (and back
+		// up any foreign content first) or find it already in sync. Without this
+		// the dry-run labels every op "write" even when nothing would change.
+		previews, _, wouldChange, perr := render.PreviewApply(plan, reg, s, home, userHome, sc, projectRoot)
+		if perr != nil {
+			return perr
+		}
 		w := p.Out
-		fmt.Fprintf(w, "%s %d ops total across %d agent(s)\n", p.Bold("Plan:"), plan.Total(), len(plan.PerAgent))
+		toWrite, synced := planSyncCounts(plan, wouldChange)
+		fmt.Fprintf(w, "%s %d ops total across %d agent(s) — %d to write, %d already synced\n",
+			p.Bold("Plan:"), plan.Total(), len(plan.PerAgent), toWrite, synced)
 		for _, name := range reg.Names() {
 			res, ok := plan.PerAgent[name]
 			if !ok {
 				continue
 			}
 			fmt.Fprintf(w, "  %s %d ops, %d skips\n", p.Bold(ui.Pad(name, 10)), len(res.Ops), len(res.Skips))
-			// List every destination path so the user can see exactly
-			// what apply will touch. Without this the dry-run hides the
-			// most useful piece of information (which files will be
-			// written) behind an op count.
+			// List every destination path so the user can see exactly what
+			// apply will touch — and, for each, whether it would be written or
+			// is already in sync, so a clean re-apply reads as a no-op instead
+			// of a wall of "write"s.
 			for _, op := range res.Ops {
-				action := op.Action
-				if action == "" {
-					action = "write"
-				}
-				fmt.Fprintf(w, "    %s %s %s\n", p.Cyan(ui.GlyphArrow), p.Cyan(ui.Pad(action, 5)), op.Path)
+				printPlannedOp(w, p, op, wouldChange)
 			}
 		}
 		// Foreign-collision preview: which destinations contain content
@@ -145,10 +152,6 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		// before overwrite. The dry-run previously hid this; users only
 		// found out which files were about to be backed up after the
 		// real apply ran.
-		previews, perr := render.PreviewCollisions(plan, reg, s, home, userHome, sc, projectRoot)
-		if perr != nil {
-			return perr
-		}
 		if len(previews) > 0 {
 			fmt.Fprintln(w)
 			fmt.Fprintf(w, "%s %d (the real apply will back these up before overwriting)\n",
@@ -233,6 +236,49 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		report.PrintTextStyled(w, p)
 	}
 	return nil
+}
+
+// printPlannedOp renders one planned destination op in the `apply --dry-run`
+// listing. A write op whose destination already holds our exact bytes (it is
+// NOT in wouldChange, computed by render.PreviewApply) is labeled "synced" with
+// a green check, so a clean re-apply reads as a no-op instead of a wall of
+// pending "write"s; anything that would actually change keeps the cyan arrow.
+func printPlannedOp(w io.Writer, p *ui.Printer, op adapter.FileOp, wouldChange map[string]bool) {
+	if isSyncedOp(op, wouldChange) {
+		fmt.Fprintf(w, "    %s %s %s\n", p.Green(ui.GlyphOK), p.Green(ui.Pad("synced", 6)), op.Path)
+		return
+	}
+	action := op.Action
+	if action == "" {
+		action = "write"
+	}
+	fmt.Fprintf(w, "    %s %s %s\n", p.Cyan(ui.GlyphArrow), p.Cyan(ui.Pad(action, 6)), op.Path)
+}
+
+// isSyncedOp reports whether a planned op is a write the destination already
+// satisfies — i.e. a real apply would skip it. Delete ops, and any write whose
+// destination would be created or modified, are never "synced".
+func isSyncedOp(op adapter.FileOp, wouldChange map[string]bool) bool {
+	if op.Action != "" && op.Action != "write" {
+		return false
+	}
+	return !wouldChange[op.Path]
+}
+
+// planSyncCounts splits the plan's ops into how many a real apply would write
+// (or delete) versus how many are already in sync, so the dry-run summary line
+// can quantify what the per-op labels show.
+func planSyncCounts(plan render.RenderPlan, wouldChange map[string]bool) (toWrite, synced int) {
+	for _, res := range plan.PerAgent {
+		for _, op := range res.Ops {
+			if isSyncedOp(op, wouldChange) {
+				synced++
+			} else {
+				toWrite++
+			}
+		}
+	}
+	return toWrite, synced
 }
 
 // saveBestEffortState records hashes for the ops agentsync actually wrote

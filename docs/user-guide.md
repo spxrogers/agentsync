@@ -132,10 +132,14 @@ jq '.mcpServers.github' ~/.claude.json
 jq '.mcp.github'        ~/.config/opencode/opencode.json
 ```
 
-> **`apply --dry-run` is your friend.** It prints the full
-> [translation report](#multi-agent-fan-out) — what lands natively (✓), what's
-> projected with loss (◐), and what's skipped (✗) — without writing a byte. Run
-> it before every real apply until you trust the output.
+> **`apply --dry-run` is your friend.** It lists every destination the apply
+> would touch, labeling each `✓ synced` (already holds our exact bytes) or
+> `→ write` (would be created or changed) — with a `— N to write, M already
+> synced` tally — so a clean re-apply reads as a no-op instead of a wall of
+> "write"s. It also prints the full [translation report](#multi-agent-fan-out) —
+> what lands natively (✓), what's projected with loss (◐), and what's skipped
+> (✗) — and previews any foreign-collision backups, all without writing a byte.
+> Run it before every real apply until you trust the output.
 
 ---
 
