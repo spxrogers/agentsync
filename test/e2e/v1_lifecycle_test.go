@@ -76,9 +76,10 @@ func makeEnv(overrides map[string]string) []string {
 	return merged
 }
 
-// runner wraps exec.Command for a fixed binary + env.
+// runner wraps exec.Command for a fixed binary + env + working directory.
 type runner struct {
 	bin string
+	dir string
 	env []string
 	t   *testing.T
 }
@@ -87,6 +88,14 @@ func (r *runner) run(args ...string) (string, error) {
 	r.t.Helper()
 	cmd := exec.Command(r.bin, args...)
 	cmd.Env = r.env
+	// Run from the simulated $HOME (a tmp dir), the same way the BDD harness
+	// sets cmd.Dir = WorkDir. agentsync now commits a real .agentsync/ project
+	// tree at the repo root; without an explicit dir the subprocess would
+	// inherit this package's directory, and the no-scope project auto-discovery
+	// would walk up, find the repo tree, and fail with the "no scope was given"
+	// ambiguity. From the simulated home the no-scope commands resolve to user
+	// scope (the home's own .agentsync/ is excluded as the user source).
+	cmd.Dir = r.dir
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
@@ -167,7 +176,7 @@ func TestE2E_FullV1Lifecycle(t *testing.T) {
 		"HOME":                  home,
 		"PATH":                  filepath.Dir(bin) + string(filepath.ListSeparator) + os.Getenv("PATH"),
 	})
-	r := &runner{bin: bin, env: env, t: t}
+	r := &runner{bin: bin, dir: home, env: env, t: t}
 
 	// ── Phase 1: init ────────────────────────────────────────────────────────
 	out := r.mustRun("init")
