@@ -12,7 +12,8 @@ import (
 )
 
 // ErrProjectRootRequired is returned by RequireProjectRoot (and thus by every
-// adapter's Render/Ingest) when a project-scope call supplies no project root.
+// scope-resolving adapter method — Render, Ingest, and IngestPlugins) when a
+// project-scope call supplies no project root.
 var ErrProjectRootRequired = errors.New("adapter: project scope requires a non-empty project root")
 
 // RequireProjectRoot guards the adapter boundary against a project-scope call
@@ -23,7 +24,8 @@ var ErrProjectRootRequired = errors.New("adapter: project scope requires a non-e
 // CLI's resolveScope already guarantees a non-empty root for project scope; this
 // is the belt-and-suspenders that turns a future caller's mistake into a loud
 // error at the narrowest waist every read/write funnels through, instead of a
-// silent wrong-scope I/O. Adapters MUST call it first thing in Render and Ingest.
+// silent wrong-scope I/O. Adapters MUST call it first thing in every method that
+// resolves scope-dependent paths: Render, Ingest, and IngestPlugins.
 func RequireProjectRoot(scope Scope, project string) error {
 	if scope == ScopeProject && project == "" {
 		return ErrProjectRootRequired

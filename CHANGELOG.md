@@ -43,8 +43,8 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   adapter's `ResolvePaths` falls through to *user*-scope paths when the project
   root is empty, so a `(ScopeProject, "")` reaching an adapter would silently
   write the project overlay into the user's global config (or read it from
-  there). Every scope-resolving adapter method — `Render`, `Ingest`, and
-  `IngestPlugins` (claude, opencode, codex) — now calls the shared
+  there). Every scope-resolving adapter method — `Render` and `Ingest` (claude,
+  opencode, codex), plus `IngestPlugins` (claude, codex) — now calls the shared
   `adapter.RequireProjectRoot` first and returns `ErrProjectRootRequired`
   instead. The CLI already guarantees a non-empty root for project scope, so
   this is defense-in-depth against a future or non-CLI caller — turning a silent

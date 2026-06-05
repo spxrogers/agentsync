@@ -9,8 +9,9 @@ import (
 
 // TestRequireProjectRoot pins the adapter-boundary guard: only the
 // (ScopeProject, "") combination is rejected — every other pairing passes. This
-// is the single source of truth each adapter's Render/Ingest delegates to, so a
-// project-scope call with no root can never silently fall through to user paths.
+// is the single source of truth each adapter's Render/Ingest/IngestPlugins
+// delegates to, so a project-scope call with no root can never silently fall
+// through to user paths.
 func TestRequireProjectRoot(t *testing.T) {
 	tests := []struct {
 		name    string
