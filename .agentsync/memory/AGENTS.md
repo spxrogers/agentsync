@@ -23,6 +23,28 @@ resolved at apply time from an age-encrypted vault.
   aspirational and not wired in v1.0 (`apply --strict/--force/--agent` flags, an
   `agentsync skill` command) — trust the code over the spec on the CLI surface.
 
+## This repo is agentsync-managed — change `.agentsync/`, not the rendered files
+
+agentsync dogfoods itself: this repository's own agent configuration is managed
+by agentsync ([agentsync.cc](https://agentsync.cc)). The canonical source of
+truth is the project-scope **`.agentsync/`** tree at the repo root — memory
+(`.agentsync/memory/AGENTS.md`), skills (`.agentsync/skills/<name>/SKILL.md`),
+MCP servers, subagents, commands, hooks, and `agentsync.toml`.
+
+The native agent files are **rendered** from that tree by `agentsync apply
+--scope project`; they are build output, not sources — do not hand-edit them:
+
+- this file — `CLAUDE.md` (claude memory) and `AGENTS.md` (codex memory) — is a
+  passthrough render of `.agentsync/memory/AGENTS.md`;
+- `.claude/skills/…` and `.agents/skills/…` render from `.agentsync/skills/…`.
+
+**To change memory, skills, MCP config, or any agent setting in this repo, edit
+the canonical file under `.agentsync/` and re-render with `agentsync apply
+--scope project`.** A direct edit to a rendered file is overwritten on the next
+apply and surfaces as drift in `agentsync status --scope project`; to fold an
+edit already made in a native file back into the canonical source, capture it
+with `agentsync import`/`reconcile --scope project` instead.
+
 ## Keep the docs in sync — non-negotiable
 
 Docs are part of the contract, not an afterthought. **No commit may change an
