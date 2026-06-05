@@ -54,8 +54,16 @@ source.Canonical
 ├── Subagents, Commands, Hooks, LSPServers
 ├── Plugins, Marketplaces   (plugins/*.toml, marketplaces/*.toml)
 ├── Memory          (memory/AGENTS.md + fragments/)
-└── Project         (.agentsync.toml overlay, when in project scope)
+└── Project         (overlay loaded from a <root>/.agentsync/ tree, project scope)
 ```
+
+At **project scope** the same canonical is loaded a second time from the repo's
+`<root>/.agentsync/` tree (identical layout) and overlaid onto the user canonical
+by `project.Merge`: entries are merged by id/name (project wins), project memory
+is appended, an empty project `[agents]` inherits the user's enabled agents, and
+a project `plugins/<id>.toml` with `disabled = true` is excluded from projection
+in that repo. The retired M5 single-file `.agentsync.toml` marker is no longer
+read — `project.Discover` surfaces a migration error if it finds one.
 
 ---
 
@@ -261,7 +269,7 @@ setter it'll never use.
 ```mermaid
 flowchart TD
     A["cli: newApplyCmd"] --> B["source.Load(fs, home)"]
-    B --> P["project.Discover + Merge<br/>(if in project scope)"]
+    B --> P["project.Discover &lt;root&gt;/.agentsync/<br/>load + project.Merge (if project scope)"]
     P --> C["marketplace.LoadProjected<br/>(plugins → components, from cache)"]
     C --> SEC["secrets.SubstituteCanonical<br/>→ secrets.Resolved"]
     SEC --> REN["render.Plan<br/>(each adapter.Render → FileOps + Skips)"]
@@ -274,7 +282,8 @@ flowchart TD
 Key stages:
 
 1. **Load** the canonical source (`internal/source`).
-2. **Overlay** the project marker if the apply is project-scoped (`internal/project`).
+2. **Overlay** the project source tree (`<root>/.agentsync/`) if the apply is
+   project-scoped — load it and `project.Merge` it onto the user canonical (`internal/project`).
 3. **Project plugins** into components from the local cache (`internal/marketplace`).
 4. **Resolve secrets** — `${secret:…}`/`${env:…}` → `secrets.Resolved` (`internal/secrets`).
 5. **Plan** — each enabled adapter renders the resolved model into `FileOp`s and
@@ -459,7 +468,7 @@ flowchart TD
     SRC["internal/source — canonical model + loaders/writers"]
     SEC["internal/secrets — resolve / re-reference / mask"]
     MKT["internal/marketplace — fetch + project plugins"]
-    PRJ["internal/project — .agentsync.toml overlay"]
+    PRJ["internal/project — <root>/.agentsync/ tree overlay"]
     DRF["internal/drift — 3-way classifier (pure)"]
     ST["internal/state — targets.json"]
     INFRA["internal/iox · paths · jsonkeys · log"]

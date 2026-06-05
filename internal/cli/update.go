@@ -42,7 +42,7 @@ loss (adapter skip) for an enabled agent, judged by projecting the plugin
 exactly as apply does and diffing the skips.
 
 When --apply is set, the same scope/project resolution as 'agentsync apply'
-is used (auto-detect from cwd, --scope project, --project <path>) so the
+is used (--scope project or --project <path>; default user) so the
 re-render lands in the right place when running inside a project.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -54,7 +54,7 @@ re-render lands in the right place when running inside a project.`,
 	}
 	cmd.Flags().BoolVar(&apply, "apply", false, "upgrade plugins and apply to agents after polling")
 	cmd.Flags().BoolVar(&autoSafe, "auto-safe", false, "only bump plugins with non-lossy translation (requires --apply)")
-	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: auto-detect from cwd) — only used with --apply")
+	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree) — only used with --apply")
 	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project) — only used with --apply")
 	return cmd
 }
@@ -200,7 +200,7 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 	// project state silently ignored, and \${secret:...\} references would
 	// land literally in agent native files.
 	if len(bumps) > 0 {
-		c2, sc, projectRoot, err := loadProjectedForScope(afero.NewOsFs(), home, scopeFlag, projectFlag, false)
+		c2, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, scopeFlag, projectFlag, false)
 		if err != nil {
 			return fmt.Errorf("reload source after upgrade: %w", err)
 		}

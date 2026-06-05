@@ -18,6 +18,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/capture"
 	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -142,7 +143,10 @@ func getJSONPointer(m map[string]any, ptr string) (any, bool) {
 // Selector grammar: <agent>[:<component>[:<name>]]
 // e.g. claude (full config), claude:mcp (all servers), claude:mcp:github (one).
 func newImportCmd() *cobra.Command {
-	var dryRun bool
+	var (
+		dryRun                 bool
+		scopeFlag, projectFlag string
+	)
 	cmd := &cobra.Command{
 		Use:   "import <agent>[:<component>[:<name>]]",
 		Args:  cobra.ExactArgs(1),
@@ -184,21 +188,27 @@ Examples:
 			// neither, so it is read-only and skips the lock — matching
 			// `apply --dry-run`.
 			if dryRun {
-				return importRun(cmd, args, true)
+				return importRun(cmd, args, true, scopeFlag, projectFlag)
 			}
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			return withGlobalLock(home, func() error {
-				return importRun(cmd, args, false)
+				return importRun(cmd, args, false, scopeFlag, projectFlag)
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview which source files would be written, without writing")
+	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
+	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
 	return cmd
 }
 
-func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
+func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projectFlag string) error {
 	sel := args[0]
 	agentName, component, name, err := parseSelector(sel)
+	if err != nil {
+		return err
+	}
+	sc, projectRoot, err := resolveScope(cmd, scopeFlag, projectFlag, noInputFlag(cmd))
 	if err != nil {
 		return err
 	}
@@ -215,7 +225,16 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	warnW := ui.NewWarnWriter(p.Err, p)
 	io := &importIO{p: p, out: p.Out, err: warnW, dryRun: dryRun}
 
-	home := paths.AgentsyncHome(paths.OSEnv{})
+	// agentsyncHome is the user-scope home: it owns the central state file and
+	// plugin cache, and the global lock, regardless of import scope. srcHome is
+	// where captured config is WRITTEN — the user home, or a project tree's
+	// <root>/.agentsync/ at project scope.
+	agentsyncHome := paths.AgentsyncHome(paths.OSEnv{})
+	srcHome := agentsyncHome
+	if sc == adapter.ScopeProject {
+		srcHome = project.Home(projectRoot)
+		fmt.Fprintf(p.Err, "%s project (%s)\n", p.Faint("scope:"), projectRoot)
+	}
 	reg := registryFactory()
 	a := reg.Lookup(agentName)
 	if a == nil {
@@ -250,7 +269,7 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to import from its noop adapter anyway", agentName)
 	}
 
-	c, err := a.Ingest(adapter.ScopeUser, "")
+	c, err := a.Ingest(sc, projectRoot)
 	if err != nil {
 		return fmt.Errorf("ingest %s: %w", agentName, err)
 	}
@@ -267,9 +286,9 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	var importErr error
 	switch component {
 	case "":
-		imp, importErr = importAllComponents(io, home, a, agentName, c)
+		imp, importErr = importAllComponents(io, srcHome, a, agentName, c, sc)
 	default:
-		ids, err := importComponent(io, home, a, agentName, c, component, name)
+		ids, err := importComponent(io, srcHome, a, agentName, c, component, name, sc)
 		importErr = err
 		imp.add(component, ids)
 		// A bulk component import (no name) that matched nothing is not an
@@ -301,7 +320,7 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// overwrites the file they were just imported from. Seeding is scoped to
 	// imp (the items actually imported), so a partial failure seeds exactly what
 	// was written and an un-imported sibling's state is never re-stamped.
-	if seedErr := seedStateFromCurrentDest(home, agentName, reg, imp); seedErr != nil {
+	if seedErr := seedStateFromCurrentDest(agentsyncHome, srcHome, agentName, reg, imp, sc, projectRoot); seedErr != nil {
 		io.warnf("import state seed failed: %v", seedErr)
 	}
 
@@ -311,7 +330,7 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// (Claude Code's runtime state, telemetry, settings agentsync doesn't
 	// own) are out of scope by design, and the merge-keys writer's per-
 	// pointer OwnedKeys check preserves them on apply rather than colliding.
-	if warnings := unimportedDestPointers(home, agentName, reg); len(warnings) > 0 {
+	if warnings := unimportedDestPointers(agentsyncHome, srcHome, agentName, reg, sc, projectRoot); len(warnings) > 0 {
 		io.note("these items exist in the destination but agentsync did not capture them:")
 		for _, w := range warnings {
 			fmt.Fprintf(io.err, "  %s\n", w)
@@ -331,12 +350,12 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 //
 // We render canonical → ops, build the set of (path, pointer) pairs
 // canonical claims, and diff against the actual on-disk contents.
-func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []string {
-	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+func unimportedDestPointers(agentsyncHome, srcHome, agentName string, reg *adapter.Registry, sc adapter.Scope, projectRoot string) []string {
+	pluginCacheRoot := filepath.Join(agentsyncHome, ".state", "cache", "plugins")
 	// Lenient: this is a post-import diagnostic re-render. A strict plugin
 	// conflict (unrelated to the import) must not abort it — matching the
 	// read-only commands (status/diff/explain).
-	c, err := marketplace.LoadProjectedLenient(loaderFsForState(), home, pluginCacheRoot, nil)
+	c, err := marketplace.LoadProjectedLenient(loaderFsForState(), srcHome, pluginCacheRoot, nil)
 	if err != nil {
 		return nil
 	}
@@ -344,7 +363,7 @@ func unimportedDestPointers(home, agentName string, reg *adapter.Registry) []str
 	if a == nil {
 		return nil
 	}
-	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(c), sc, projectRoot)
 	if err != nil {
 		return nil
 	}
@@ -421,8 +440,10 @@ func escapePointerSegment(k string) string {
 // This makes the next \`apply\` non-destructive — the destination is
 // already known to agentsync, so any future divergence is real drift, not a
 // first-run foreign-collision.
-func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry, imp importedSet) error {
-	statePath := filepath.Join(home, ".state", "targets.json")
+func seedStateFromCurrentDest(agentsyncHome, srcHome, agentName string, reg *adapter.Registry, imp importedSet, sc adapter.Scope, projectRoot string) error {
+	// State lives centrally under the user-scope agentsync home regardless of
+	// import scope; only the KEYS carry scope + project root to disambiguate.
+	statePath := filepath.Join(agentsyncHome, ".state", "targets.json")
 	// State keys are HOME-relative against the user's $HOME (paths.HomeDir),
 	// matching render.RecordOpsState — NOT the agentsync home, or apply
 	// would never recognise the seeded entries as owned.
@@ -432,14 +453,15 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry, imp
 		return err
 	}
 
-	// Build a fresh canonical from disk and render ONLY the items this import
-	// actually captured (imp). Lenient: a strict plugin conflict must not block
-	// seeding (which would leave the just-imported dest exposed to a
-	// ForeignCollision overwrite on next apply). Rendering the imported SUBSET —
-	// not the whole canonical — is what scopes the seed: an un-imported sibling
-	// isn't in the subset, so its state (and any drift it carries) is untouched.
-	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
-	c, err := marketplace.LoadProjectedLenient(loaderFsForState(), home, pluginCacheRoot, nil)
+	// Build a fresh canonical from the SOURCE home we just wrote to (user or
+	// project tree) and render ONLY the items this import actually captured (imp).
+	// Lenient: a strict plugin conflict must not block seeding (which would leave
+	// the just-imported dest exposed to a ForeignCollision overwrite on next
+	// apply). Rendering the imported SUBSET — not the whole canonical — is what
+	// scopes the seed: an un-imported sibling isn't in the subset, so its state
+	// (and any drift it carries) is untouched.
+	pluginCacheRoot := filepath.Join(agentsyncHome, ".state", "cache", "plugins")
+	c, err := marketplace.LoadProjectedLenient(loaderFsForState(), srcHome, pluginCacheRoot, nil)
 	if err != nil {
 		return err
 	}
@@ -448,7 +470,7 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry, imp
 		return fmt.Errorf("adapter %q not registered", agentName)
 	}
 	sub := filterCanonicalTo(c, imp)
-	ops, _, err := a.Render(secrets.ForRender(sub), adapter.ScopeUser, "")
+	ops, _, err := a.Render(secrets.ForRender(sub), sc, projectRoot)
 	if err != nil {
 		return err
 	}
@@ -483,8 +505,7 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry, imp
 					// pointers (a present-null value hashes and is seeded).
 					continue
 				}
-				key := fmt.Sprintf("%s:%s:%s:%s:%s",
-					agentName, adapter.ScopeUser.String(), "", paths.HomeRelative(userHome, op.Path), ptr)
+				key := stateKeyKey(userHome, agentName, sc, projectRoot, op.Path, ptr)
 				st.Keys[key] = state.KeyEntry{
 					SHA256:    h,
 					AppliedAt: now,
@@ -497,8 +518,7 @@ func seedStateFromCurrentDest(home, agentName string, reg *adapter.Registry, imp
 				continue
 			}
 			sum := sha256.Sum256(data)
-			key := fmt.Sprintf("%s:%s:%s:%s",
-				agentName, adapter.ScopeUser.String(), "", paths.HomeRelative(userHome, op.Path))
+			key := stateFileKey(userHome, agentName, sc, projectRoot, op.Path)
 			st.Files[key] = state.FileEntry{
 				SHA256:    hex.EncodeToString(sum[:]),
 				Mode:      op.Mode,
@@ -737,7 +757,7 @@ func (s *importedSet) add(component string, ids []string) {
 // the styled writers per-item lines go through. It returns the identities
 // (server id, skill/subagent/command name, hook event) that were (or would be)
 // imported; len is the item count.
-func importComponent(io *importIO, home string, a adapter.Adapter, agentName string, c source.Canonical, component, name string) ([]string, error) {
+func importComponent(io *importIO, home string, a adapter.Adapter, agentName string, c source.Canonical, component, name string, sc adapter.Scope) ([]string, error) {
 	switch component {
 	case "mcp":
 		return importMCP(io, home, c, name)
@@ -754,6 +774,16 @@ func importComponent(io *importIO, home string, a adapter.Adapter, agentName str
 	case "memory":
 		return importMemory(io, home, c)
 	case "plugin":
+		// Plugins are a user-scope concept across the supported harnesses (Claude
+		// installs them under ~/.claude, not per-repo), so there is no coherent
+		// project-scope plugin import. Skip with a note rather than write a
+		// pinned plugin into a project tree the agent would never load from.
+		if sc == adapter.ScopeProject {
+			if name != "" {
+				return nil, fmt.Errorf("plugin import is not supported at project scope (plugins are user-scope); import it with --scope user")
+			}
+			return nil, nil
+		}
 		return importPlugins(io, home, agentName, a, name)
 	default:
 		return nil, fmt.Errorf("unknown component %q; valid: mcp, skill, agent, command, hook, lsp, memory, plugin", component)
@@ -766,7 +796,7 @@ func importComponent(io *importIO, home string, a adapter.Adapter, agentName str
 // line and a faint breakdown. dryRun is carried on the io so the preview
 // writes nothing. The returned set names everything captured, so the caller
 // can scope state seeding to it.
-func importAllComponents(io *importIO, home string, a adapter.Adapter, agentName string, c source.Canonical) (importedSet, error) {
+func importAllComponents(io *importIO, home string, a adapter.Adapter, agentName string, c source.Canonical, sc adapter.Scope) (importedSet, error) {
 	var imp importedSet
 	counts := map[string]int{}
 	total := 0
@@ -776,7 +806,7 @@ func importAllComponents(io *importIO, home string, a adapter.Adapter, agentName
 		// header is silently dropped — so an empty component is invisible.
 		io.section = sectionLabel[comp]
 		io.sectionShown = false
-		ids, err := importComponent(io, home, a, agentName, c, comp, "")
+		ids, err := importComponent(io, home, a, agentName, c, comp, "", sc)
 		// Seed whatever WAS written even on error: a component can fail partway
 		// after writing earlier items, and those must be owned or the next apply
 		// foreign-collides on a file just imported from.

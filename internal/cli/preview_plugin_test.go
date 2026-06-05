@@ -79,12 +79,12 @@ func TestStatus_IncludesPluginProjection(t *testing.T) {
 	}
 }
 
-// TestProjectMarker_DisablesPluginProjection is the end-to-end guard for the
-// project-marker disable being a no-op against rendered output: projection ran
-// before project.Merge, so a marker that "disabled" a plugin only dropped its
-// record while its MCP/skills/hooks still shipped into the project tree. With
-// the fix the marker's disabled list gates projection, so the components vanish.
-func TestProjectMarker_DisablesPluginProjection(t *testing.T) {
+// TestProjectTree_DisablesPluginProjection is the end-to-end guard that a
+// project tree can suppress a user-scope plugin's projected components in a repo.
+// The dir-model successor to the M5 marker's `[plugins] disabled`: a
+// plugins/<id>.toml with `disabled = true` in the project tree gates projection,
+// so the plugin's MCP/skills/hooks vanish at project scope (not just its record).
+func TestProjectTree_DisablesPluginProjection(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	fixture := setupPluginMarketplaceFixture(t, tmp)
@@ -94,13 +94,14 @@ func TestProjectMarker_DisablesPluginProjection(t *testing.T) {
 	mustRun(t, env, "marketplace", "add", fixture)
 	mustRun(t, env, "plugin", "install", "demo@test-mp")
 
-	// A project whose marker disables the demo plugin.
+	// A project tree that disables the demo plugin.
 	proj := filepath.Join(tmp, "proj")
-	if err := os.MkdirAll(proj, 0o755); err != nil {
+	mustRun(t, env, "init", "--scope", "project", "--project", proj)
+	if err := os.MkdirAll(filepath.Join(proj, ".agentsync", "plugins"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(proj, ".agentsync.toml"),
-		[]byte("[plugins]\ndisabled = [\"demo\"]\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(proj, ".agentsync", "plugins", "demo.toml"),
+		[]byte("[plugin]\ndisabled = true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

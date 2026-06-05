@@ -67,9 +67,7 @@ func TestApply_AnnouncesScope(t *testing.T) {
 	}
 
 	proj := filepath.Join(tmp, "proj")
-	if err := os.MkdirAll(proj, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	mustRun(t, env, "init", "--scope", "project", "--project", proj)
 	out2, err := runCLI(t, env, "apply", "--project", proj)
 	if err != nil {
 		t.Fatalf("apply --project: %v\n%s", err, out2)
@@ -79,7 +77,7 @@ func TestApply_AnnouncesScope(t *testing.T) {
 	}
 }
 
-// TestScope_UserWithProjectConflicts is the regression for resolveProjectScope
+// TestScope_UserWithProjectConflicts is the regression for resolveScope
 // silently honoring --project and ignoring an explicit --scope user (it would
 // resolve project scope anyway). Contradictory flags must error.
 func TestScope_UserWithProjectConflicts(t *testing.T) {

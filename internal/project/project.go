@@ -1,221 +1,172 @@
-// Package project handles project-scope overlays: .agentsync.toml at a repo
-// root, walk-up discovery from cwd, and merge against base canonical model.
+// Package project handles project-scope source trees: a <root>/.agentsync/
+// directory (same on-disk layout as the user-scope ~/.agentsync/), walk-up
+// discovery from cwd, and overlay merge against the user-scope canonical model.
+//
+// A project tree is a full canonical home rooted at a repository instead of
+// $HOME, so every existing loader/writer/capture path works unchanged by simply
+// pointing `home` at project.Home(root). The retired M5 single-file
+// .agentsync.toml marker is no longer a live schema; Discover surfaces a
+// migration error if it finds one (see Discover).
 package project
 
 import (
-	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/pelletier/go-toml/v2"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
-const MarkerFile = ".agentsync.toml"
+// DirName is the project-scope source directory at a repository root.
+const DirName = ".agentsync"
 
-// Marker is the parsed contents of a project's .agentsync.toml.
-type Marker struct {
-	Path    string                // absolute path of the marker file
-	Root    string                // dirname of Path
-	Agents  []string              `toml:"agents,omitempty"`
-	MCP     []ProjectMCP          `toml:"mcp,omitempty"` // [[mcp]] array-of-tables
-	Plugins ProjectPluginsSection `toml:"plugins,omitempty"`
-	Memory  ProjectMemorySection  `toml:"memory,omitempty"`
-}
+// LegacyMarkerFile is the retired M5 single-file project marker. It is no longer
+// loaded; Discover reports it so a user can migrate to a DirName tree.
+const LegacyMarkerFile = ".agentsync.toml"
 
-// ProjectMCP holds an MCP server entry from the marker file.
-// The marker uses a flat [[mcp]] array-of-tables where id, type, command,
-// args, url, headers, env and agents fields are all at the top level.
-type ProjectMCP struct {
-	ID      string            `toml:"id"`
-	Type    string            `toml:"type,omitempty"`
-	Command string            `toml:"command,omitempty"`
-	Args    []string          `toml:"args,omitempty"`
-	URL     string            `toml:"url,omitempty"`
-	Headers map[string]string `toml:"headers,omitempty"`
-	Env     map[string]string `toml:"env,omitempty"`
-	Agents  []string          `toml:"agents,omitempty"`
-	Enabled *bool             `toml:"enabled,omitempty"`
-}
+// Home returns the project canonical home (<root>/.agentsync) for a project root.
+func Home(root string) string { return filepath.Join(root, DirName) }
 
-// toMCPServer converts a ProjectMCP to a source.MCPServer.
-func (p ProjectMCP) toMCPServer() source.MCPServer {
-	return source.MCPServer{
-		ID: p.ID,
-		Server: source.MCPServerSpec{
-			Type:    p.Type,
-			Command: p.Command,
-			Args:    p.Args,
-			URL:     p.URL,
-			Headers: p.Headers,
-			Env:     p.Env,
-			Agents:  p.Agents,
-			Enabled: p.Enabled,
-		},
-	}
-}
-
-type ProjectPluginsSection struct {
-	Disabled []string `toml:"disabled,omitempty"`
-	Enabled  []string `toml:"enabled,omitempty"`
-}
-
-type ProjectMemorySection struct {
-	Import []string `toml:"import,omitempty"` // project-relative paths
-}
-
-// Discover walks up from cwd looking for MarkerFile. Returns (nil, nil) if
-// not found. Returns error on read or parse failure.
-func Discover(cwd string) (*Marker, error) {
-	dir := cwd
+// Discover walks up from start looking for a project source tree: a DirName
+// directory. Returns the project root (the directory CONTAINING DirName) and
+// found=true on the nearest match. Returns ("", false, nil) when no project
+// tree exists at or above start.
+//
+// If it encounters the retired single-file LegacyMarkerFile at a directory that
+// has no DirName tree, it returns a migration error rather than silently
+// ignoring it — a project that worked under M5 must not quietly lose its config.
+// A DirName tree always wins over a legacy file at the same directory.
+func Discover(start string) (root string, found bool, err error) {
+	dir := start
 	for {
-		candidate := filepath.Join(dir, MarkerFile)
-		if data, err := os.ReadFile(candidate); err == nil {
-			var m Marker
-			if err := toml.Unmarshal(data, &m); err != nil {
-				return nil, err
-			}
-			m.Path = candidate
-			m.Root = dir
-			return &m, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
+		treeInfo, statErr := os.Stat(filepath.Join(dir, DirName))
+		switch {
+		case statErr == nil && treeInfo.IsDir():
+			return dir, true, nil
+		case statErr != nil && !os.IsNotExist(statErr):
+			return "", false, fmt.Errorf("inspect %s: %w", filepath.Join(dir, DirName), statErr)
+		}
+		// No DirName tree here — a stray legacy marker is a migration prompt.
+		if fi, ferr := os.Stat(filepath.Join(dir, LegacyMarkerFile)); ferr == nil && !fi.IsDir() {
+			return "", false, fmt.Errorf(
+				"%s holds a legacy single-file %s marker, which is no longer read; "+
+					"recreate your project config as a %s/ tree (run `agentsync init --scope project` in that repo) "+
+					"and move the marker's settings into it",
+				dir, LegacyMarkerFile, DirName,
+			)
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return nil, nil
+			return "", false, nil
 		}
 		dir = parent
 	}
 }
 
-// Merge applies the project marker on top of base. Returns a new Canonical.
-//   - Agents allowlist on Marker filters base.Config.Agents to only those
-//     listed (intersect with enabled). Empty list = use all enabled.
-//   - MCP entries on Marker are appended; collisions on .ID replace base.
-//   - Plugins.Disabled marks plugins disabled by ID (components are already
-//     suppressed by the projector; the record is kept so it shows as disabled).
-//   - Plugins.Enabled is reserved for v1.x (currently a no-op since plugins
-//     are enabled-by-default).
-//   - Memory.Import paths are read relative to Marker.Root and appended to
-//     the base memory body (separated by a single blank line).
-func Merge(base source.Canonical, m *Marker) source.Canonical {
-	if m == nil {
+// Merge overlays the project-scope canonical `proj` onto the user-scope `base`,
+// returning a new Canonical. It never mutates base.
+//
+// Semantics (documented in docs/architecture.md §project overlay):
+//   - Agents: if proj declares any agents, its agent map REPLACES base's (the
+//     project picks its own agent set); an empty project agent map inherits base.
+//   - MCP / LSP / Skills / Subagents / Commands: overlaid by identity (ID or
+//     Name) — a project entry replaces a base entry with the same key, and a new
+//     key is appended. Order is base-first, then appended project entries.
+//   - Hooks: overlaid by Event — if the project declares any hook for an event,
+//     its hooks for that event REPLACE all base hooks for that event (hooks are a
+//     per-event set, not individually addressable).
+//   - Memory: base body then project body, concatenated (project appended).
+//   - Plugins / Marketplaces: project entries are not modeled at project scope in
+//     v1 and are inherited from base unchanged (see the migration note in
+//     docs/architecture.md). Config (Updates/Secrets) is inherited from base
+//     unless the project declares its own non-zero values.
+func Merge(base, proj source.Canonical) source.Canonical {
+	out := base // shallow copy; every slice/map we touch is replaced, not mutated
+
+	if len(proj.Config.Agents) > 0 {
+		agents := make(map[string]source.Agent, len(proj.Config.Agents))
+		for k, v := range proj.Config.Agents {
+			agents[k] = v
+		}
+		out.Config.Agents = agents
+	}
+	if proj.Config.Updates != (source.UpdateDefaults{}) {
+		out.Config.Updates = proj.Config.Updates
+	}
+	if proj.Config.Secrets != (source.SecretsConfig{}) {
+		out.Config.Secrets = proj.Config.Secrets
+	}
+
+	out.MCPServers = overlayByKey(base.MCPServers, proj.MCPServers, func(m source.MCPServer) string { return m.ID })
+	out.LSPServers = overlayByKey(base.LSPServers, proj.LSPServers, func(l source.LSPServer) string { return l.ID })
+	out.Skills = overlayByKey(base.Skills, proj.Skills, func(s source.Skill) string { return s.Name })
+	out.Subagents = overlayByKey(base.Subagents, proj.Subagents, func(s source.Subagent) string { return s.Name })
+	out.Commands = overlayByKey(base.Commands, proj.Commands, func(c source.Command) string { return c.Name })
+	out.Hooks = overlayHooks(base.Hooks, proj.Hooks)
+	out.Memory = overlayMemory(base.Memory, proj.Memory)
+	return out
+}
+
+// overlayByKey returns base with proj entries overlaid: a proj entry whose key
+// matches a base entry replaces it in place; a new key is appended. The result
+// is a fresh slice (base is never mutated).
+func overlayByKey[T any](base, proj []T, key func(T) string) []T {
+	if len(proj) == 0 {
 		return base
 	}
-	out := base // shallow copy is OK; we replace slices below
-
-	// Agents filter: intersect base agents with marker allowlist.
-	if len(m.Agents) > 0 {
-		allow := map[string]bool{}
-		for _, a := range m.Agents {
-			allow[a] = true
-		}
-		filtered := map[string]source.Agent{}
-		for name, ag := range base.Config.Agents {
-			if allow[name] {
-				filtered[name] = ag
-			}
-		}
-		out.Config.Agents = filtered
+	out := make([]T, len(base))
+	copy(out, base)
+	idx := make(map[string]int, len(out))
+	for i, it := range out {
+		idx[key(it)] = i
 	}
-
-	// MCP overlay: project entries replace base entries with same ID, or append.
-	if len(m.MCP) > 0 {
-		// Copy the base slice so we don't mutate it.
-		merged := make([]source.MCPServer, len(out.MCPServers))
-		copy(merged, out.MCPServers)
-		byID := map[string]int{}
-		for i, srv := range merged {
-			byID[srv.ID] = i
+	for _, it := range proj {
+		if i, ok := idx[key(it)]; ok {
+			out[i] = it
+		} else {
+			idx[key(it)] = len(out)
+			out = append(out, it)
 		}
-		for _, entry := range m.MCP {
-			srv := entry.toMCPServer()
-			if idx, exists := byID[srv.ID]; exists {
-				merged[idx] = srv
-			} else {
-				byID[srv.ID] = len(merged)
-				merged = append(merged, srv)
-			}
-		}
-		out.MCPServers = merged
-	}
-
-	// Plugins.Disabled: mark plugins disabled by ID. The projector
-	// (LoadProjectedExcluding) has already suppressed their components, so we do
-	// NOT drop the record here — we keep it with Disabled set so status/explain
-	// can show the plugin as disabled-by-project rather than silently omitting it.
-	if len(m.Plugins.Disabled) > 0 {
-		block := map[string]bool{}
-		for _, id := range m.Plugins.Disabled {
-			block[id] = true
-		}
-		marked := make([]source.Plugin, len(out.Plugins))
-		copy(marked, out.Plugins)
-		for i := range marked {
-			if block[marked[i].ID] {
-				marked[i].Plugin.Disabled = true
-			}
-		}
-		out.Plugins = marked
-	}
-
-	// Memory imports: read project-relative files and append.
-	if len(m.Memory.Import) > 0 {
-		body := out.Memory.Body
-		// Resolve the root through any symlinks once so a symlinked tmp root
-		// (e.g. macOS /tmp -> /private/tmp) doesn't cause false rejections of
-		// legitimate in-root imports below.
-		resolvedRoot := m.Root
-		if rr, err := filepath.EvalSymlinks(m.Root); err == nil {
-			resolvedRoot = rr
-		}
-		for _, rel := range m.Memory.Import {
-			// Containment: a committed marker's import path must not escape
-			// the project root. Without this, `import = ["../../etc/passwd"]`
-			// (or an absolute path) reads arbitrary host files into the
-			// rendered memory. Skip anything that resolves outside m.Root.
-			abs := filepath.Join(m.Root, rel)
-			if !importWithinRoot(m.Root, abs) {
-				continue
-			}
-			// Defense-in-depth: the lexical check above can't see a committed
-			// symlink under the root (leak.md -> /etc/passwd) — os.ReadFile
-			// would follow it off-root. Resolve symlinks and re-check against
-			// the resolved root before reading. Project markers come from
-			// cloned repos, so this path is attacker-influenced.
-			resolved, err := filepath.EvalSymlinks(abs)
-			if err != nil || !importWithinRoot(resolvedRoot, resolved) {
-				continue
-			}
-			data, err := os.ReadFile(resolved)
-			if err != nil {
-				continue
-			}
-			if body != "" && !strings.HasSuffix(body, "\n") {
-				body += "\n"
-			}
-			body += "\n" + string(data)
-		}
-		out.Memory.Body = body
 	}
 	return out
 }
 
-// importWithinRoot reports whether abs is the same path as root or sits
-// inside it (lexical, after Clean). Used to bound project memory imports.
-func importWithinRoot(root, abs string) bool {
-	root = filepath.Clean(root)
-	abs = filepath.Clean(abs)
-	if root == abs {
-		return true
+// overlayHooks replaces every base hook for an event the project also declares,
+// then appends project hooks for events base did not have. Hooks are a per-event
+// set, so a project that customises an event owns that event's whole set.
+func overlayHooks(base, proj []source.Hook) []source.Hook {
+	if len(proj) == 0 {
+		return base
 	}
-	rel, err := filepath.Rel(root, abs)
-	if err != nil {
-		return false
+	projEvents := map[string]bool{}
+	for _, h := range proj {
+		projEvents[h.Event] = true
 	}
-	return rel != ".." &&
-		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) &&
-		!filepath.IsAbs(rel)
+	out := make([]source.Hook, 0, len(base)+len(proj))
+	for _, h := range base {
+		if !projEvents[h.Event] {
+			out = append(out, h)
+		}
+	}
+	out = append(out, proj...)
+	return out
+}
+
+// overlayMemory concatenates base then project memory bodies (project appended),
+// separated by a blank line. Fragments are inherited from base; the project's
+// memory is already a resolved body by the time it reaches here.
+func overlayMemory(base, proj source.Memory) source.Memory {
+	out := base
+	pb := strings.TrimRight(proj.Body, "\n")
+	if pb == "" {
+		return out
+	}
+	if strings.TrimSpace(out.Body) == "" {
+		out.Body = proj.Body
+		return out
+	}
+	bb := strings.TrimRight(out.Body, "\n")
+	out.Body = bb + "\n\n" + pb
+	return out
 }

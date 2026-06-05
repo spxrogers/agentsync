@@ -15,6 +15,39 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Added
 
+- **Project scope for `init` and `import` + a project _source tree_.** Project
+  config now lives in a `<root>/.agentsync/` directory with the same on-disk
+  layout as `~/.agentsync/` (so every loader/writer/capture path works unchanged
+  by pointing `home` at it), replacing the M5 single-file `.agentsync.toml`
+  marker. `agentsync init --scope project [--project <path>]` scaffolds the tree
+  (defaults to the current directory); `agentsync import <agent> --scope project
+  [--project <path>]` captures native **project-scope** config (e.g.
+  `<root>/.claude/`) into it, seeding state with the project scope + root so the
+  next apply doesn't foreign-collide. `apply`/`status`/`diff`/`reconcile` load the
+  tree and overlay it on the user canonical (`project.Merge`): entries merge by
+  id/name (project wins), project memory is appended, an empty project `[agents]`
+  inherits the user's enabled agents, and a project `plugins/<id>.toml` with
+  `disabled = true` suppresses that plugin's components in the repo. Plugin import
+  stays user-scope (plugins are a user-scope concept across the harnesses).
+- **Project scope is an explicit opt-in.** Commands default to **user** scope.
+  Project scope requires `--scope project` (walks up from cwd to the tree) or
+  `--project <path>`. Running with no scope *inside* a project tree is ambiguous,
+  so agentsync prompts project-vs-user (no default); a new global `--no-input`
+  flag — and a non-TTY stdin — makes it fail closed instead. `--scope
+  project`/`--project` with no `.agentsync/` tree is a hard error pointing at
+  `init --scope project`, never a silent downgrade to user scope.
+
+### Changed
+
+- **The M5 single-file `.agentsync.toml` project marker is retired** (one project
+  schema, not two). It is no longer read; `agentsync` surfaces a migration error
+  pointing at `init --scope project` when it finds one. The marker's
+  `memory.import` field is dropped — author project memory directly in
+  `<root>/.agentsync/memory/AGENTS.md` (or `import … --scope project`), which also
+  removes the committed-marker memory-import path-traversal surface entirely.
+
+### Added (continued)
+
 - **`adapter.WarnEmitter` extension interface** — formalises the optional
   `SetStderr(io.Writer)` setter the claude / opencode / codex adapters
   added alongside the `import` styling work, so future Ingest-using

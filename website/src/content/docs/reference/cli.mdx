@@ -9,15 +9,16 @@ import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="note">
 	This is the beta command surface. `agentsync <command> --help` is always
-	authoritative. A global `-v` / `--verbose` enables verbose logging on any
-	command.
+	authoritative. Global flags: `-v` / `--verbose` enables verbose logging on any
+	command, and `--no-input` makes a command fail closed instead of prompting
+	(e.g. for the project-vs-user scope chooser) — use it in CI/headless runs.
 </Aside>
 
 ## At a glance
 
 | Command | Purpose | Key flags / args |
 |---|---|---|
-| `init [<git-url>]` | Create `~/.agentsync/`; optionally clone a bootstrap repo. | |
+| `init [<git-url>]` | Create `~/.agentsync/`; optionally clone a bootstrap repo. `--scope project` / `--project <path>` scaffolds a project tree instead. | `--scope --project` |
 | `doctor` | Diagnose setup: PATH, home/state writability, schema, secrets backend. | |
 | `verify` | Validate config; surface unresolved `${secret:}` / `${env:}` refs. | |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry. | `disable --purge` |
@@ -30,7 +31,7 @@ import { Aside } from '@astrojs/starlight/components';
 | `status` | Summarize drift / pending across agents. | `--scope --project` |
 | `diff [<path>]` | Show pending / drift changes; secrets redacted. | `--scope --project` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
-| `import <agent>[:<component>[:<name>]]` | Capture native config into source. | `--dry-run` |
+| `import <agent>[:<component>[:<name>]]` | Capture native config into source. `--scope project` captures the agent's native project-scope config into the project tree. | `--dry-run --scope --project` |
 | `explain [<plugin>...]` | Show per-agent translation coverage for one or more plugins. | `--all --list --json` |
 
 ---
@@ -38,8 +39,17 @@ import { Aside } from '@astrojs/starlight/components';
 ## Setup & diagnostics
 
 ### `init [<git-url>]`
-Creates the `~/.agentsync/` directory and its layout. Pass a git URL to clone an
-existing bootstrap config instead of starting empty.
+Creates the `~/.agentsync/` directory and its layout (user scope). Pass a git URL
+to clone an existing bootstrap config instead of starting empty (user scope only).
+
+`--scope project` scaffolds a **project source tree** at `<cwd>/.agentsync/`
+instead — the same on-disk layout as the user tree (`agentsync.toml` plus `mcp/`,
+`lsp/`, `skills/`, `agents/`, `commands/`, `hooks/`, `memory/` with `fragments/`,
+`plugins/`, `secrets/`), but **no `.state/`** (apply records state centrally under
+`~/.agentsync/.state/`, keyed by project root). `--project <path>` targets
+`<path>/.agentsync/` and implies project scope; `--scope user` together with
+`--project` is an error. Commit the `.agentsync/` tree to share project agent
+config with collaborators. Full guide: [Project-local config](/guides/projects/).
 
 ### `doctor`
 A health check: verifies your `PATH`, that home and state directories are
@@ -152,7 +162,16 @@ real plugin import **uses the network**. A plugin's marketplace is resolved from
 agentsync's own registered marketplaces first, then the agent's native config; a
 plugin whose marketplace is registered in neither (e.g. a built-in like
 `claude-plugins-official` you have not yet `marketplace add`ed) is reported and
-skipped. Full guide: [Already have configs?](/getting-started/existing-configs/).
+skipped.
+
+`--scope project` (optionally `--project <path>`) reads the agent's *native
+project-scope* config (e.g. `<root>/.claude/`) and captures it into the project
+source tree `<root>/.agentsync/` instead of your user tree, seeding central state
+with the project scope + root so the next apply doesn't foreign-collide. Plugin
+import is **user-scope only**: a named `import claude:plugin:<name> --scope
+project` errors, and a bulk `import claude:plugin --scope project` silently skips
+(plugins are a user-scope concept across the harnesses). Full guide:
+[Already have configs?](/getting-started/existing-configs/).
 
 ### `update`
 **The main networked verb.** Refreshes the marketplace cache and recomputes
@@ -185,8 +204,8 @@ agentsync explain --list
 
 | Flag | Applies to | Effect |
 |---|---|---|
-| `--scope user\|project` | apply, status, diff, reconcile, update | Force the config scope. |
-| `--project <path>` | apply, status, diff, reconcile, update | Apply a specific project's overlay. |
+| `--scope user\|project` | init, import, apply, status, diff, reconcile, update | Force the config scope. |
+| `--project <path>` | init, import, apply, status, diff, reconcile, update | Target / apply a specific project's tree. |
 | `--dry-run` | apply, import | Preview without writing. |
 | `--auto-safe` | reconcile, update | Auto-resolve only no-risk changes. |
 | `--json` | status, diff, explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). `explain --list --json` emits a `plugins` array; `explain` with ids/`--all` emits the translation `rows`. |

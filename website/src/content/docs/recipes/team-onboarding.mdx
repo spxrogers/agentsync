@@ -1,6 +1,6 @@
 ---
 title: Onboard a teammate
-description: Ship a shared project overlay so a new teammate's agents are configured the moment they clone the repo.
+description: Ship a shared .agentsync/ project tree so a new teammate's agents are configured the moment they clone the repo.
 sidebar:
   order: 2
 ---
@@ -10,39 +10,51 @@ import { Steps, Aside } from '@astrojs/starlight/components';
 **Goal:** a teammate clones your repo and their AI agents pick up the project's
 MCP servers and conventions with minimal setup.
 
-The lever here is the [project-local overlay](/guides/projects/): a
-`.agentsync.toml` marker committed at the repo root.
+The lever here is the [project source tree](/guides/projects/): a `.agentsync/`
+directory committed at the repo root, with the same layout as your user
+`~/.agentsync/`.
 
 <Steps>
 
-1. **Add a project marker** at the repo root and commit it:
+1. **Scaffold the project tree** at the repo root and commit it:
 
-   ```toml title="myrepo/.agentsync.toml"
-   agents = ["claude", "opencode"]
+   ```bash
+   cd myrepo
+   agentsync init --scope project    # creates ./.agentsync/
+   ```
 
-   [[mcp]]
-   id      = "company-api"
+2. **Set the project's agents** — an `[agents]` table (leave it empty to inherit
+   each teammate's enabled agents):
+
+   ```toml title="myrepo/.agentsync/agentsync.toml"
+   [agents]
+   claude   = { enabled = true }
+   opencode = { enabled = true }
+   ```
+
+3. **Add the project's MCP server** as its own file, and reference team secrets
+   rather than embedding them so each teammate supplies their own value locally:
+
+   ```toml title="myrepo/.agentsync/mcp/company-api.toml"
+   [server]
    type    = "stdio"
    command = "npx"
    args    = ["-y", "@company/mcp"]
 
-   [plugins]
-   disabled = ["screenshot"]   # noisy for this repo
-   ```
-
-2. **Reference team secrets, don't embed them.** If `company-api` needs a token,
-   reference it so each teammate supplies their own value locally:
-
-   ```toml
-   [[mcp]]
-   id = "company-api"
-   # …
-   [mcp.env]
+   [server.env]
    COMPANY_TOKEN = "${secret:company.token}"
    ```
 
-3. **Document the one-time setup** in your repo's README: install agentsync, set
-   the team secret, then apply from inside the repo.
+4. **Disable a noisy user plugin** for this repo, if needed:
+
+   ```toml title="myrepo/.agentsync/plugins/screenshot.toml"
+   [plugin]
+   disabled = true
+   ```
+
+5. **Commit the whole `.agentsync/` tree** and document the one-time setup in your
+   repo's README: install agentsync, set the team secret, then apply from inside
+   the repo.
 
 </Steps>
 
@@ -68,7 +80,8 @@ The lever here is the [project-local overlay](/guides/projects/): a
 </Steps>
 
 <Aside type="note" title="The overlay is additive">
-	The project marker merges *onto* each teammate's user-level config — it doesn't
-	wipe their personal servers or plugins. It only adds the project's servers,
-	disables what the project disables, and narrows the agent set if you set `agents`.
+	The project tree merges *onto* each teammate's user-level config — it doesn't
+	wipe their personal servers or plugins. A project entry replaces a user entry
+	with the same id/name, new entries are appended, and an empty project `[agents]`
+	inherits each teammate's own enabled agents.
 </Aside>

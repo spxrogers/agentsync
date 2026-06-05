@@ -219,9 +219,33 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
   linter self-bootstraps (no separate install or PATH step); `go run pkg@version`
   resolves gofumpt and golangci-lint outside the main module, so *those* never
   land in `go.mod`, and golangci-lint compiles with the local Go toolchain (≥
-  go.mod's **1.26.2**) so it parses our export data natively — no `GOTOOLCHAIN`
-  override needed. CI runs this exact recipe then `git diff --exit-code`, so an
-  uncommitted format/tidy change fails the build — local and CI can't drift.
+  go.mod's **1.26.2**) so it parses our export data natively. CI runs this exact
+  recipe then `git diff --exit-code`, so an uncommitted format/tidy change fails
+  the build — local and CI can't drift.
+  - **After running `just lint`, always re-stage any files it rewrote before
+    committing.** Because `gofmt -w`, `gofumpt -w`, and `go mod tidy` mutate
+    files in place, lint may silently reformat code that was already staged.
+    Check with `git diff --stat` (or `git diff`) after lint runs; if anything
+    changed, run `git add -u` (or `git add <file>…`) to stage the post-linted
+    versions. Pushing without re-staging means CI's `git diff --exit-code` step
+    will detect the same mutations and fail the lint job.
+  - **Container/cloud sessions — the golangci-lint toolchain quirk (READ THIS).**
+    In CI the base toolchain already matches go.mod, so `just lint` "just works"
+    with no `GOTOOLCHAIN` override. In a remote/cloud container the base `go` on
+    PATH is often an older **bootstrap** (e.g. go1.24.7); the go1.26.2 we
+    build/test with is itself an auto-downloaded toolchain selected from go.mod.
+    `golangci-lint@v2.12.2` pins `toolchain go1.25.11` in *its* module, so
+    `GOTOOLCHAIN=auto` builds the linter with **1.25.11** — and a linter built
+    with 1.25 then refuses our 1.26 export data with: *"the Go language version
+    (go1.25) used to build golangci-lint is lower than the targeted Go version
+    (1.26)."* This is NOT a code problem and NOT a reason to skip linting. Fix:
+    run it (and `go mod tidy`) with the **exact** matching toolchain forced —
+    `GOTOOLCHAIN=go1.26.2 go run
+    github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...`.
+    (`GOTOOLCHAIN=local` is the wrong lever — it drops to the bootstrap go, which
+    is *below* golangci-lint's `>=1.25` floor and fails differently. Force the
+    `go1.<minor>.<patch>` from go.mod's `go` directive; bump this alongside it.)
+
 - `just test` (full unit/integration in container), `just test-e2e`,
   `just test-bdd`, `just test-live` (network, opt-in, not in the release gate).
 - Go version is `go.mod`'s `go` directive (currently **1.26.2**); CI reads it via
