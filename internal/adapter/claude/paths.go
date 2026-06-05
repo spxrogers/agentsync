@@ -1,6 +1,10 @@
 package claude
 
-import "path/filepath"
+import (
+	"path/filepath"
+
+	"github.com/spxrogers/agentsync/internal/adapter"
+)
 
 // Paths resolves the destination paths for a given (scope, project, target-root).
 type Paths struct {
@@ -43,4 +47,17 @@ func ResolvePaths(targetRoot, project string, projectScope bool) Paths {
 		p.Memory = filepath.Join(project, "CLAUDE.md")
 	}
 	return p
+}
+
+// mcpDest returns the destination file for MCP servers at the given scope: the
+// user-global ~/.claude.json, or a project's repo-root .mcp.json. It returns ""
+// only for ScopeProject with no project root resolved (MCPProject unset);
+// callers MUST treat "" as "no MCP destination" — renderMCP skips it and Ingest's
+// ReadFile of "" simply finds nothing. Centralizing the scope→file choice keeps
+// renderMCP and Ingest from drifting apart on where project MCP lives.
+func (p Paths) mcpDest(scope adapter.Scope) string {
+	if scope == adapter.ScopeProject {
+		return p.MCPProject
+	}
+	return p.DotClaude
 }

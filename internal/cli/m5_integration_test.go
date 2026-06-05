@@ -293,3 +293,89 @@ func TestIntegration_Project_Memory(t *testing.T) {
 		t.Fatalf("project memory content not in CLAUDE.md: %s", body)
 	}
 }
+
+// TestIntegration_Project_OpenCode_MCP verifies project-scope apply writes
+// OpenCode MCP servers to <root>/opencode.json (the repo root), NOT to
+// <root>/.opencode/opencode.json — which OpenCode does not read. This is the
+// CLI/apply-level counterpart to the adapter-unit project-scope test.
+func TestIntegration_Project_OpenCode_MCP(t *testing.T) {
+	tmpHome := t.TempDir()
+	projectDir := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "opencode"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", projectDir); err != nil {
+		t.Fatal(err)
+	}
+	scaffoldProjectMCP(t, projectDir, "oc-mcp", "node", "server.js")
+
+	if out, err := runCLI(t, env, "apply", "--project", projectDir); err != nil {
+		t.Fatalf("apply --project: %v\n%s", err, out)
+	}
+
+	rootCfg := filepath.Join(projectDir, "opencode.json")
+	body, err := os.ReadFile(rootCfg)
+	if err != nil {
+		t.Fatalf("read project opencode.json at repo root: %v", err)
+	}
+	if !strings.Contains(string(body), "oc-mcp") {
+		t.Fatalf("project MCP not in <root>/opencode.json: %s", body)
+	}
+	if _, err := os.Stat(filepath.Join(projectDir, ".opencode", "opencode.json")); err == nil {
+		t.Fatal("project MCP wrongly written to .opencode/opencode.json (OpenCode does not read it)")
+	}
+}
+
+// TestIntegration_Project_MCPJsonDriftDetected verifies status at project scope
+// classifies a hand-edit to <root>/.mcp.json as drift — i.e. the project-MCP
+// dest is wired into the status/diff/reconcile drift path (which share the same
+// classifier) like any other dest, now that it lives at the repo root.
+func TestIntegration_Project_MCPJsonDriftDetected(t *testing.T) {
+	tmpHome := t.TempDir()
+	projectDir := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", projectDir); err != nil {
+		t.Fatal(err)
+	}
+	// Server id deliberately free of the substring "drift" so the drift
+	// assertion below can only match the drift *class*, never the id in the path.
+	scaffoldProjectMCP(t, projectDir, "apisrv", "npx", "-y", "@x/mcp")
+
+	if out, err := runCLI(t, env, "apply", "--project", projectDir); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	mcpPath := filepath.Join(projectDir, ".mcp.json")
+	body, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("read .mcp.json: %v", err)
+	}
+	// Hand-edit an agentsync-owned key to introduce drift.
+	modified := strings.ReplaceAll(string(body), `"npx"`, `"npm"`)
+	if modified == string(body) {
+		t.Fatal("fixture did not contain the expected command to drift")
+	}
+	if err := os.WriteFile(mcpPath, []byte(modified), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "status", "--project", projectDir)
+	if err != nil {
+		t.Fatalf("status --project: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "drift") {
+		t.Fatalf("status did not report drift on project .mcp.json:\n%s", out)
+	}
+}

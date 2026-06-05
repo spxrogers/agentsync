@@ -116,6 +116,28 @@ func TestRender_MCP_ProjectScope(t *testing.T) {
 	}
 }
 
+// TestRender_MCP_ProjectScope_EmptyProjectNoMCPOp pins the library-boundary
+// guard: ScopeProject with an empty project root (which the CLI never produces —
+// resolveScope guarantees a non-empty root) must NOT emit an MCP FileOp with an
+// empty Path. Without the guard renderMCP would write to "".
+func TestRender_MCP_ProjectScope_EmptyProjectNoMCPOp(t *testing.T) {
+	enabled := true
+	c := source.Canonical{MCPServers: []source.MCPServer{{
+		ID:     "x",
+		Server: source.MCPServerSpec{Command: "y", Enabled: &enabled},
+	}}}
+	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeProject, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range ops {
+		if op.Path == "" {
+			t.Fatalf("emitted a FileOp with empty Path (no MCP dest at project scope): %+v", op)
+		}
+	}
+}
+
 func TestRender_MCP_AgentsAllowlist(t *testing.T) {
 	enabled := true
 	c := source.Canonical{

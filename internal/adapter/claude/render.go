@@ -133,18 +133,20 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths, scope adapter.Scope) ([
 		return nil, nil
 	}
 
+	dest := p.mcpDest(scope)
+	if dest == "" {
+		// Defensive: ScopeProject with no resolved project root yields no MCP
+		// destination (MCPProject unset). The CLI never reaches here —
+		// resolveScope guarantees a non-empty project root — but guard the
+		// library boundary rather than emit a write op targeting "".
+		return nil, nil
+	}
+
 	ours := map[string]any{"mcpServers": targeted}
 
 	body, err := json.MarshalIndent(ours, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal mcp: %w", err)
-	}
-
-	var dest string
-	if scope == adapter.ScopeProject {
-		dest = p.MCPProject
-	} else {
-		dest = p.DotClaude
 	}
 
 	return []adapter.FileOp{{

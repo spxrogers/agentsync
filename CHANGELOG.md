@@ -50,8 +50,12 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   `--scope project` flow. Render and ingest now use `.mcp.json` at project scope
   (top-level `mcpServers`, `merge-json-keys` so a hand-authored file's foreign
   keys and unmodeled per-server fields like `timeout` survive); user scope
-  (`~/.claude.json`) is unchanged. A stale `mcpServers` block a prior version
-  wrote into a project `settings.json` is left untouched — remove it by hand.
+  (`~/.claude.json`) is unchanged. If a prior version already wrote project MCP
+  into a project `settings.json`, the next `apply --scope project` of an
+  in-place upgrade removes that stale `mcpServers` block automatically via
+  orphan-key cleanup — agentsync still owns those keys in state, and foreign
+  keys in the file are preserved; if the state was not carried over (e.g. a
+  fresh clone), remove the block by hand.
 - **OpenCode project-scope config now targets `<root>/opencode.json`, not
   `<root>/.opencode/opencode.json`.** Per the upstream OpenCode config docs, a
   repo's JSON config is `opencode.json` at the project **root**; OpenCode does

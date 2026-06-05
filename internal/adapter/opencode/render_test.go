@@ -26,11 +26,15 @@ func TestRender_MCP(t *testing.T) {
 			Agents: []string{"opencode"}, Enabled: &enabled,
 		},
 	}}}
-	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
+	root := t.TempDir()
+	a := opencode.New(opencode.Options{TargetRoot: root})
 	ops, _, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	// Exact path, not HasSuffix: a loose suffix would match both the user-scope
+	// .config/opencode/opencode.json and a project .opencode/opencode.json.
+	wantSettings := filepath.Join(root, ".config", "opencode", "opencode.json")
 	var found bool
 	for _, op := range ops {
-		if strings.HasSuffix(op.Path, "opencode.json") {
+		if op.Path == wantSettings {
 			found = true
 			if op.MergeStrategy != "merge-jsonc-keys" {
 				t.Fatalf("merge strategy = %q", op.MergeStrategy)
@@ -120,10 +124,12 @@ func TestRender_MCP_PreservesHeaders(t *testing.T) {
 			Headers: map[string]string{"Authorization": "Bearer tok"},
 		},
 	}}}
-	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
+	root := t.TempDir()
+	a := opencode.New(opencode.Options{TargetRoot: root})
 	ops, _, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	wantSettings := filepath.Join(root, ".config", "opencode", "opencode.json")
 	for _, op := range ops {
-		if !strings.HasSuffix(op.Path, "opencode.json") {
+		if op.Path != wantSettings {
 			continue
 		}
 		var ours map[string]any

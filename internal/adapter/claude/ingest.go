@@ -20,13 +20,9 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	var c source.Canonical
 
 	// MCP from ~/.claude.json (user) or <proj>/.mcp.json (project — the file
-	// `claude mcp add --scope project` writes; settings.json is never project MCP)
-	var mcpFile string
-	if scope == adapter.ScopeProject {
-		mcpFile = p.MCPProject
-	} else {
-		mcpFile = p.DotClaude
-	}
+	// `claude mcp add --scope project` writes; settings.json is never project MCP).
+	// mcpDest centralizes the scope→file choice shared with renderMCP.
+	mcpFile := p.mcpDest(scope)
 	if data, err := os.ReadFile(mcpFile); err == nil {
 		var top map[string]any
 		if err := json.Unmarshal(data, &top); err != nil {
