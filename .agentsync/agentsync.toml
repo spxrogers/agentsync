@@ -1,0 +1,15 @@
+# agentsync project-scope config
+# Rendered into <repo>/.claude/, <repo>/.opencode/, <repo>/.codex/, … by
+# 'agentsync apply' when run inside this repo. Commit this .agentsync/ tree to
+# share project-scoped agent config with collaborators.
+
+[agents]
+# Leave this empty to inherit the agents you enabled at user scope, or pin a
+# subset for this project:
+# claude   = { enabled = true }
+# opencode = { enabled = true }
+
+# Author project components by adding files under this tree (mcp/<id>.toml,
+# skills/<name>/SKILL.md, agents/<name>.md, commands/<name>.md, hooks/<event>.toml,
+# lsp/<id>.toml, memory/AGENTS.md) or capture existing native config with
+# 'agentsync import <agent> --scope project'.
