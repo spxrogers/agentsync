@@ -2,6 +2,7 @@ package claude_test
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -237,23 +238,20 @@ func TestRender_ProjectScope_OnlyProjectItems(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	skillPaths := map[string]bool{}
+	wantUserSkill := filepath.Join(projRoot, ".claude", "skills", "user-skill", "SKILL.md")
+	wantProjSkill := filepath.Join(projRoot, ".claude", "skills", "proj-review", "SKILL.md")
+
+	var gotProjSkill bool
 	for _, op := range ops {
-		if strings.Contains(op.Path, "/skills/") {
-			skillPaths[op.Path] = true
+		if op.Path == wantUserSkill {
+			t.Fatalf("user-scope skill must not be written at project scope: %s", op.Path)
+		}
+		if op.Path == wantProjSkill {
+			gotProjSkill = true
 		}
 	}
-	if skillPaths[strings.Join([]string{projRoot, ".claude", "skills", "user-skill", "SKILL.md"}, "/")] {
-		t.Fatalf("user-scope skill must not be written at project scope: %v", skillPaths)
-	}
-	found := false
-	for p := range skillPaths {
-		if strings.Contains(p, "proj-review") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("project skill not rendered at project scope: ops=%+v", ops)
+	if !gotProjSkill {
+		t.Fatalf("project skill not rendered at project scope; want op at %s, ops=%+v", wantProjSkill, ops)
 	}
 }
 

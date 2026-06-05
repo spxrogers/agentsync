@@ -16,7 +16,12 @@ type Canonical struct {
 	Plugins      []Plugin
 	Marketplaces []Marketplace
 	Memory       Memory
-	Project      *Canonical // nil for user-scope canonical; populated by M5 overlay
+	// Project holds the project-only canonical set by project.Merge. It is nil
+	// for a user-scope canonical (one loaded directly from ~/.agentsync/ without
+	// a project overlay). Scope-aware render paths (apply/status/diff/reconcile
+	// --scope project) render from Project instead of the merged canonical so
+	// user-scope items are not duplicated into the project directory.
+	Project *Canonical
 }
 
 // Config mirrors agentsync.toml at the root of ~/.agentsync/.

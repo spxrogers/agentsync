@@ -111,6 +111,7 @@ func Merge(base, proj source.Canonical) source.Canonical {
 	// also writing user-scope items there. secretFields/cloneForResolve already
 	// handle c.Project; this was simply never set.
 	projCopy := proj
+	projCopy.Project = nil // prevent accidental nesting if proj itself came from a Merge
 	out.Project = &projCopy
 
 	return out

@@ -2,6 +2,7 @@ package codex_test
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -287,6 +288,49 @@ func TestRender_Hooks_KnownAndUnknownEvents(t *testing.T) {
 // ---------------------------------------------------------------------------
 // LSP — always skipped
 // ---------------------------------------------------------------------------
+
+// TestRender_ProjectScope_OnlyProjectItems verifies that at project scope the
+// adapter renders only the project-overlay items (c.Project), not the merged
+// canonical that also includes user-scope items.
+func TestRender_ProjectScope_OnlyProjectItems(t *testing.T) {
+	projSkill := source.Skill{
+		Name:        "proj-skill",
+		Frontmatter: map[string]any{"name": "proj-skill", "description": "project skill"},
+		Body:        "Project skill.\n",
+	}
+	projRoot := t.TempDir()
+	projCanon := source.Canonical{Skills: []source.Skill{projSkill}}
+	merged := source.Canonical{
+		Skills: []source.Skill{
+			{Name: "user-skill", Frontmatter: map[string]any{"name": "user-skill"}, Body: "User skill.\n"},
+			projSkill,
+		},
+		Project: &projCanon,
+	}
+
+	a := codex.New(codex.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(secrets.ForRender(merged), adapter.ScopeProject, projRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Codex skills live under <project>/.agents/skills/ at project scope.
+	wantUserSkill := filepath.Join(projRoot, ".agents", "skills", "user-skill", "SKILL.md")
+	wantProjSkill := filepath.Join(projRoot, ".agents", "skills", "proj-skill", "SKILL.md")
+
+	var gotProjSkill bool
+	for _, op := range ops {
+		if op.Path == wantUserSkill {
+			t.Fatalf("user-scope skill must not be written at project scope: %s", op.Path)
+		}
+		if op.Path == wantProjSkill {
+			gotProjSkill = true
+		}
+	}
+	if !gotProjSkill {
+		t.Fatalf("project skill not rendered; want op at %s, ops=%+v", wantProjSkill, ops)
+	}
+}
 
 func TestRender_LSP_Skipped(t *testing.T) {
 	c := source.Canonical{LSPServers: []source.LSPServer{{ID: "gopls", Spec: source.LSPServerSpec{Command: "gopls"}}}}

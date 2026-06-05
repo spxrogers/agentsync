@@ -157,7 +157,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 				fmt.Fprintf(w, "  %s\n", r.String())
 			}
 		}
-		report := render.BuildReport(c, plan, agents)
+		report := render.BuildReport(reportCanonical(c, sc), plan, agents)
 		if len(report.Rows) > 0 {
 			fmt.Fprintln(w)
 			report.PrintTextStyled(w, p)
@@ -227,7 +227,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	} else {
 		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green(fmt.Sprintf("applied: %d ops", plan.Total())))
 	}
-	report := render.BuildReport(c, plan, agents)
+	report := render.BuildReport(reportCanonical(c, sc), plan, agents)
 	if len(report.Rows) > 0 {
 		fmt.Fprintln(w)
 		report.PrintTextStyled(w, p)
@@ -527,4 +527,15 @@ func sameDir(a, b string) bool {
 		cb = rb
 	}
 	return ca == cb
+}
+
+// reportCanonical returns the canonical to pass to render.BuildReport. At
+// project scope the report should reflect what was actually rendered (the
+// project-only overlay), not the merged canonical which includes user-scope
+// items the adapters never wrote to the project directory.
+func reportCanonical(c source.Canonical, sc adapter.Scope) source.Canonical {
+	if sc == adapter.ScopeProject && c.Project != nil {
+		return *c.Project
+	}
+	return c
 }
