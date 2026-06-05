@@ -39,6 +39,19 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Fixed
 
+- **Claude project-scope MCP servers now target `<root>/.mcp.json`, not
+  `<root>/.claude/settings.json`.** Per the upstream Claude Code MCP-scope docs,
+  project-scope servers live in a repo-root `.mcp.json` (the file `claude mcp add
+  --scope project` writes and the team checks in); `settings.json` holds
+  hooks/LSP/permissions, never project MCP. The Claude adapter previously both
+  rendered and ingested project MCP at `settings.json`, so `apply --scope
+  project` wrote to a file Claude Code does not read project MCP from, and
+  `import claude:mcp --scope project` missed servers added via Claude's own
+  `--scope project` flow. Render and ingest now use `.mcp.json` at project scope
+  (top-level `mcpServers`, `merge-json-keys` so a hand-authored file's foreign
+  keys and unmodeled per-server fields like `timeout` survive); user scope
+  (`~/.claude.json`) is unchanged. A stale `mcpServers` block a prior version
+  wrote into a project `settings.json` is left untouched — remove it by hand.
 - **`apply --scope project` now renders only project-scope items.** Previously
   `project.Merge` never populated `Canonical.Project`, so all three adapter
   `Render` methods wrote the full merged canonical (user + project items) into

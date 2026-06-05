@@ -63,7 +63,7 @@ Component support across agents.
 
 | Component | Claude | OpenCode | Codex | Cursor[^planned] |
 |---|:--:|:--:|:--:|:--:|
-| **MCP server** | ✓ `~/.claude.json` | ✓ `opencode.json` | ✓ `config.toml` | ✓ `.cursor/mcp.json` |
+| **MCP server** | ✓ `~/.claude.json` (user) · `.mcp.json` (project) | ✓ `opencode.json` | ✓ `config.toml` | ✓ `.cursor/mcp.json` |
 | **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ✓ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` |
 | **Skill** | ✓ `~/.claude/skills/X/` (dir) | ✓ shared `.claude/skills/` | ✓ `~/.agents/skills/` | ✓ `.cursor/skills/` |
 | **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/` |

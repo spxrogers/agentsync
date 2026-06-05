@@ -27,7 +27,7 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 	var ops []adapter.FileOp
 	var skips []adapter.Skip
 
-	// 1. MCP -> .claude.json (user) or settings.json (project)
+	// 1. MCP -> ~/.claude.json (user) or <proj>/.mcp.json (project)
 	if mcpOps, err := a.renderMCP(renderC, paths, scope); err != nil {
 		return nil, nil, err
 	} else {
@@ -94,9 +94,10 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 	return ops, skips, nil
 }
 
-// renderMCP converts canonical MCPServers to a FileOp targeting .claude.json
-// (user scope) or settings.json (project scope). The FileOp carries
-// MergeStrategy "merge-json-keys" so Apply can preserve foreign keys.
+// renderMCP converts canonical MCPServers to a FileOp targeting ~/.claude.json
+// (user scope) or <project>/.mcp.json (project scope — the upstream Claude Code
+// project-MCP location, NOT settings.json). The FileOp carries MergeStrategy
+// "merge-json-keys" so Apply preserves foreign keys in a hand-authored .mcp.json.
 func (a *Adapter) renderMCP(c source.Canonical, p Paths, scope adapter.Scope) ([]adapter.FileOp, error) {
 	targeted := map[string]any{}
 	for _, m := range c.MCPServers {
@@ -141,7 +142,7 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths, scope adapter.Scope) ([
 
 	var dest string
 	if scope == adapter.ScopeProject {
-		dest = p.Settings
+		dest = p.MCPProject
 	} else {
 		dest = p.DotClaude
 	}

@@ -2,6 +2,7 @@ package claude_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,6 +99,96 @@ func TestIngest_RoundTripsMCPExtra(t *testing.T) {
 		if _, dup := ex[k]; dup {
 			t.Fatalf("modeled key %q duplicated into Extra: %+v", k, ex)
 		}
+	}
+}
+
+// TestIngest_ProjectScopeMCP_ReadsMCPJSONNotSettings is artifact-anchored: it
+// writes a real <project>/.mcp.json (the upstream project-MCP location) AND a
+// <project>/.claude/settings.json carrying a different mcpServers block, then
+// ingests at project scope and asserts ONLY the .mcp.json server is captured —
+// settings.json's mcpServers is not read as project MCP.
+func TestIngest_ProjectScopeMCP_ReadsMCPJSONNotSettings(t *testing.T) {
+	proj := t.TempDir()
+	// Project MCP lives at the repo root in .mcp.json.
+	if err := os.WriteFile(filepath.Join(proj, ".mcp.json"),
+		[]byte(`{"mcpServers":{"projapi":{"command":"node","args":["s.js"]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A settings.json mcpServers block is a trap: it must NOT be read at project
+	// scope (settings.json holds hooks/LSP/permissions, never project MCP).
+	claudeDir := filepath.Join(proj, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"),
+		[]byte(`{"mcpServers":{"shouldNotImport":{"command":"trap"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
+	out, err := a.Ingest(adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if len(out.MCPServers) != 1 {
+		t.Fatalf("want exactly 1 MCP server (from .mcp.json), got %d: %+v", len(out.MCPServers), out.MCPServers)
+	}
+	if out.MCPServers[0].ID != "projapi" {
+		t.Fatalf("want %q from .mcp.json, got %q (settings.json mcpServers wrongly read?)", "projapi", out.MCPServers[0].ID)
+	}
+}
+
+// TestIngest_ProjectScopeMCP_PreservesExtra is artifact-anchored on a real
+// <project>/.mcp.json carrying an unmodeled native key (`timeout` — a
+// documented per-server .mcp.json field). It must survive ingest→render
+// verbatim via the passthrough Extra map, landing back in <project>/.mcp.json.
+func TestIngest_ProjectScopeMCP_PreservesExtra(t *testing.T) {
+	proj := t.TempDir()
+	if err := os.WriteFile(filepath.Join(proj, ".mcp.json"),
+		[]byte(`{"mcpServers":{"api":{"command":"node","timeout":600000}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
+	out, err := a.Ingest(adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if len(out.MCPServers) != 1 {
+		t.Fatalf("mcp = %d", len(out.MCPServers))
+	}
+	if got := out.MCPServers[0].Server.Extra["timeout"]; got != float64(600000) {
+		t.Fatalf("unmodeled timeout not captured into Extra: %+v", out.MCPServers[0].Server.Extra)
+	}
+
+	// Render the ingested overlay back at project scope; timeout must reappear
+	// in <project>/.mcp.json via MergeExtra.
+	projCanon := source.Canonical{MCPServers: out.MCPServers}
+	merged := source.Canonical{MCPServers: out.MCPServers, Project: &projCanon}
+	ops, _, err := a.Render(secrets.ForRender(merged), adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantMCP := filepath.Join(proj, ".mcp.json")
+	var content []byte
+	for _, op := range ops {
+		if op.Path == wantMCP {
+			content = op.Content
+		}
+	}
+	if content == nil {
+		t.Fatalf("no <project>/.mcp.json render op; ops=%+v", ops)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(content, &got); err != nil {
+		t.Fatal(err)
+	}
+	api, ok := got["mcpServers"].(map[string]any)["api"].(map[string]any)
+	if !ok {
+		t.Fatalf("api server missing on re-render: %v", got)
+	}
+	if api["timeout"] != float64(600000) {
+		t.Fatalf("timeout dropped on re-render: %+v", api)
 	}
 }
 

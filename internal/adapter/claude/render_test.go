@@ -58,6 +58,64 @@ func TestRender_MCP_UserScope(t *testing.T) {
 	}
 }
 
+// TestRender_MCP_ProjectScope verifies project-scope MCP servers target
+// <project>/.mcp.json — the upstream Claude Code project-MCP location — NOT
+// <project>/.claude/settings.json. The content keeps the {"mcpServers": …}
+// top-level shape and merge-json-keys strategy so a hand-authored .mcp.json's
+// foreign keys survive.
+func TestRender_MCP_ProjectScope(t *testing.T) {
+	enabled := true
+	projRoot := t.TempDir()
+	srv := source.MCPServer{
+		ID: "company-api",
+		Server: source.MCPServerSpec{
+			Type:    "stdio",
+			Command: "npx",
+			Args:    []string{"-y", "@company/mcp"},
+			Enabled: &enabled,
+		},
+	}
+	// At project scope apply renders only the project overlay (c.Project) —
+	// exactly what project.Merge produces. Mirror that here.
+	projCanon := source.Canonical{MCPServers: []source.MCPServer{srv}}
+	merged := source.Canonical{MCPServers: []source.MCPServer{srv}, Project: &projCanon}
+
+	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(secrets.ForRender(merged), adapter.ScopeProject, projRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantMCP := filepath.Join(projRoot, ".mcp.json")
+	wantSettings := filepath.Join(projRoot, ".claude", "settings.json")
+	var found *adapter.FileOp
+	for i, op := range ops {
+		if op.Path == wantSettings && strings.Contains(string(op.Content), "mcpServers") {
+			t.Fatalf("project MCP must not land in settings.json: %s", op.Path)
+		}
+		if op.Path == wantMCP {
+			found = &ops[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no <project>/.mcp.json op produced; ops=%+v", ops)
+	}
+	if found.MergeStrategy != "merge-json-keys" {
+		t.Fatalf("MergeStrategy = %q, want merge-json-keys", found.MergeStrategy)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(found.Content, &got); err != nil {
+		t.Fatalf("not valid json: %v", err)
+	}
+	servers, ok := got["mcpServers"].(map[string]any)
+	if !ok {
+		t.Fatalf("top-level mcpServers missing: %v", got)
+	}
+	if _, ok := servers["company-api"].(map[string]any); !ok {
+		t.Fatalf("company-api server missing under mcpServers: %v", servers)
+	}
+}
+
 func TestRender_MCP_AgentsAllowlist(t *testing.T) {
 	enabled := true
 	c := source.Canonical{

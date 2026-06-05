@@ -35,7 +35,7 @@ func scaffoldProjectMCP(t *testing.T, projectDir, id, command string, args ...st
 //   - a project-scope MCP server in <dir>/.agentsync/mcp/
 //   - chdir into project dir
 //   - apply --scope project (walks up to the .agentsync/ tree from cwd)
-//   - verify <project>/.claude/settings.json contains the project MCP
+//   - verify <project>/.mcp.json contains the project MCP
 func TestIntegration_Project_Overlay(t *testing.T) {
 	tmpHome := t.TempDir()
 	projectDir := t.TempDir()
@@ -67,13 +67,13 @@ func TestIntegration_Project_Overlay(t *testing.T) {
 		t.Fatalf("apply: %v\n%s", err, out)
 	}
 
-	settingsPath := filepath.Join(projectDir, ".claude", "settings.json")
-	body, err := os.ReadFile(settingsPath)
+	mcpPath := filepath.Join(projectDir, ".mcp.json")
+	body, err := os.ReadFile(mcpPath)
 	if err != nil {
-		t.Fatalf("read project settings.json: %v", err)
+		t.Fatalf("read project .mcp.json: %v", err)
 	}
 	if !strings.Contains(string(body), "proj-mcp") {
-		t.Fatalf("project-scope MCP not landed in settings.json: %s", body)
+		t.Fatalf("project-scope MCP not landed in .mcp.json: %s", body)
 	}
 }
 
@@ -212,13 +212,13 @@ func TestIntegration_Project_ExplicitFlag(t *testing.T) {
 		t.Fatalf("apply --project: %v\n%s", err, out)
 	}
 
-	settingsPath := filepath.Join(projectDir, ".claude", "settings.json")
-	body, err := os.ReadFile(settingsPath)
+	mcpPath := filepath.Join(projectDir, ".mcp.json")
+	body, err := os.ReadFile(mcpPath)
 	if err != nil {
-		t.Fatalf("read project settings.json: %v", err)
+		t.Fatalf("read project .mcp.json: %v", err)
 	}
 	if !strings.Contains(string(body), "api-mcp") {
-		t.Fatalf("project MCP (api-mcp) not in settings.json: %s", body)
+		t.Fatalf("project MCP (api-mcp) not in .mcp.json: %s", body)
 	}
 }
 

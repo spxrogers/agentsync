@@ -103,7 +103,8 @@ the pipeline reports those components as skipped.
 
 **Key-merge strategies and on-disk format.** `KeyMergeStrategy` /
 `FileOp.MergeStrategy` name how an adapter co-owns keys inside a shared config
-file: `merge-json-keys` (Claude's `.claude.json`/`settings.json`),
+file: `merge-json-keys` (Claude's `.claude.json`/`settings.json`, and a
+project's repo-root `.mcp.json` for project-scope MCP servers),
 `merge-jsonc-keys` (OpenCode's comment-tolerant `opencode.json`), and
 `merge-toml-keys` (Codex's `config.toml`). The merge *currency* is always a
 `map[string]any` decoded from the rendered op's JSON `Content`, so the

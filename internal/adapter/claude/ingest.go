@@ -19,10 +19,11 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
 	var c source.Canonical
 
-	// MCP from .claude.json (user) or settings.json (project)
+	// MCP from ~/.claude.json (user) or <proj>/.mcp.json (project — the file
+	// `claude mcp add --scope project` writes; settings.json is never project MCP)
 	var mcpFile string
 	if scope == adapter.ScopeProject {
-		mcpFile = p.Settings
+		mcpFile = p.MCPProject
 	} else {
 		mcpFile = p.DotClaude
 	}
