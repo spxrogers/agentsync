@@ -2,6 +2,7 @@ package opencode_test
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,24 @@ import (
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
+
+// TestProjectScope_EmptyProjectErrors pins the adapter-boundary guard for
+// OpenCode: a project-scope Render/Ingest with no project root must fail loudly
+// (adapter.ErrProjectRootRequired) rather than silently fall through to the
+// user-scope ~/.config/opencode/ paths.
+func TestProjectScope_EmptyProjectErrors(t *testing.T) {
+	c := source.Canonical{MCPServers: []source.MCPServer{{
+		ID:     "x",
+		Server: source.MCPServerSpec{Command: "y"},
+	}}}
+	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
+	if _, _, err := a.Render(secrets.ForRender(c), adapter.ScopeProject, ""); !errors.Is(err, adapter.ErrProjectRootRequired) {
+		t.Fatalf("Render: want ErrProjectRootRequired, got %v", err)
+	}
+	if _, err := a.Ingest(adapter.ScopeProject, ""); !errors.Is(err, adapter.ErrProjectRootRequired) {
+		t.Fatalf("Ingest: want ErrProjectRootRequired, got %v", err)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Task 4: MCP

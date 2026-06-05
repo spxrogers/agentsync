@@ -96,6 +96,15 @@ Two design points worth internalizing:
   doesn't yet own, before overwriting). A `forbidigo` lint rule fails any direct
   write outside the allowed packages, so a new adapter can't regress the backup
   guarantee.
+- **Project scope requires a project root.** Each adapter's `ResolvePaths` falls
+  through to *user*-scope paths when the project root is empty, so a
+  `(ScopeProject, "")` call would silently write the project overlay into the
+  user's global config. Every path-resolving adapter calls
+  `adapter.RequireProjectRoot` first thing in `Render`/`Ingest` and returns
+  `ErrProjectRootRequired` instead — a loud failure at the narrowest waist rather
+  than a silent wrong-scope write. The CLI's `resolveScope` already guarantees a
+  non-empty root for project scope, so this is defense-in-depth against a future
+  or non-CLI caller.
 
 `Capability` is a bitmask, so the OpenCode adapter simply omits `CapHook` and
 `CapLSP` (and the Codex adapter omits `CapLSP` — Codex has no LSP concept) and

@@ -2,6 +2,7 @@ package claude_test
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -116,25 +117,24 @@ func TestRender_MCP_ProjectScope(t *testing.T) {
 	}
 }
 
-// TestRender_MCP_ProjectScope_EmptyProjectNoMCPOp pins the library-boundary
-// guard: ScopeProject with an empty project root (which the CLI never produces —
-// resolveScope guarantees a non-empty root) must NOT emit an MCP FileOp with an
-// empty Path. Without the guard renderMCP would write to "".
-func TestRender_MCP_ProjectScope_EmptyProjectNoMCPOp(t *testing.T) {
+// TestProjectScope_EmptyProjectErrors pins the adapter-boundary guard: a
+// project-scope Render or Ingest with no project root must fail loudly with
+// adapter.ErrProjectRootRequired rather than silently fall through to USER-scope
+// paths (which would write the project overlay into the user's global config).
+// The CLI's resolveScope guarantees a non-empty root, so this guards a future or
+// non-CLI caller.
+func TestProjectScope_EmptyProjectErrors(t *testing.T) {
 	enabled := true
 	c := source.Canonical{MCPServers: []source.MCPServer{{
 		ID:     "x",
 		Server: source.MCPServerSpec{Command: "y", Enabled: &enabled},
 	}}}
 	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
-	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeProject, "")
-	if err != nil {
-		t.Fatal(err)
+	if _, _, err := a.Render(secrets.ForRender(c), adapter.ScopeProject, ""); !errors.Is(err, adapter.ErrProjectRootRequired) {
+		t.Fatalf("Render: want ErrProjectRootRequired, got %v", err)
 	}
-	for _, op := range ops {
-		if op.Path == "" {
-			t.Fatalf("emitted a FileOp with empty Path (no MCP dest at project scope): %+v", op)
-		}
+	if _, err := a.Ingest(adapter.ScopeProject, ""); !errors.Is(err, adapter.ErrProjectRootRequired) {
+		t.Fatalf("Ingest: want ErrProjectRootRequired, got %v", err)
 	}
 }
 

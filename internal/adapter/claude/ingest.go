@@ -16,6 +16,9 @@ import (
 // It is the inverse of Render: Ingest(Apply(Render(c))) round-trips to c
 // for the components agentsync manages.
 func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical, error) {
+	if err := adapter.RequireProjectRoot(scope, project); err != nil {
+		return source.Canonical{}, err
+	}
 	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
 	var c source.Canonical
 

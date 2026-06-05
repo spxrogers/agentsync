@@ -2,6 +2,7 @@ package codex_test
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,25 @@ import (
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
+
+// TestProjectScope_EmptyProjectErrors pins the adapter-boundary guard for Codex:
+// a project-scope Render/Ingest with no project root must fail loudly
+// (adapter.ErrProjectRootRequired) rather than silently fall through to the
+// user-scope ~/.codex/ paths.
+func TestProjectScope_EmptyProjectErrors(t *testing.T) {
+	enabled := true
+	c := source.Canonical{MCPServers: []source.MCPServer{{
+		ID:     "x",
+		Server: source.MCPServerSpec{Command: "y", Enabled: &enabled},
+	}}}
+	a := codex.New(codex.Options{TargetRoot: t.TempDir()})
+	if _, _, err := a.Render(secrets.ForRender(c), adapter.ScopeProject, ""); !errors.Is(err, adapter.ErrProjectRootRequired) {
+		t.Fatalf("Render: want ErrProjectRootRequired, got %v", err)
+	}
+	if _, err := a.Ingest(adapter.ScopeProject, ""); !errors.Is(err, adapter.ErrProjectRootRequired) {
+		t.Fatalf("Ingest: want ErrProjectRootRequired, got %v", err)
+	}
+}
 
 // findOp returns the first op whose path ends with suffix.
 func findOp(ops []adapter.FileOp, suffix string) *adapter.FileOp {

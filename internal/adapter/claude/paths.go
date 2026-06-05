@@ -50,11 +50,11 @@ func ResolvePaths(targetRoot, project string, projectScope bool) Paths {
 }
 
 // mcpDest returns the destination file for MCP servers at the given scope: the
-// user-global ~/.claude.json, or a project's repo-root .mcp.json. It returns ""
-// only for ScopeProject with no project root resolved (MCPProject unset);
-// callers MUST treat "" as "no MCP destination" — renderMCP skips it and Ingest's
-// ReadFile of "" simply finds nothing. Centralizing the scope→file choice keeps
-// renderMCP and Ingest from drifting apart on where project MCP lives.
+// user-global ~/.claude.json, or a project's repo-root .mcp.json. Centralizing
+// the scope→file choice keeps renderMCP and Ingest from drifting apart on where
+// project MCP lives. It would return "" for ScopeProject with no project root
+// (MCPProject unset), but Render and Ingest reject that case up front via
+// adapter.RequireProjectRoot, so callers never observe an empty result.
 func (p Paths) mcpDest(scope adapter.Scope) string {
 	if scope == adapter.ScopeProject {
 		return p.MCPProject

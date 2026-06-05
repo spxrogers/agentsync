@@ -4,11 +4,32 @@
 package adapter
 
 import (
+	"errors"
 	"io"
 
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
+
+// ErrProjectRootRequired is returned by RequireProjectRoot (and thus by every
+// adapter's Render/Ingest) when a project-scope call supplies no project root.
+var ErrProjectRootRequired = errors.New("adapter: project scope requires a non-empty project root")
+
+// RequireProjectRoot guards the adapter boundary against a project-scope call
+// with an empty project root. Every adapter resolves its destinations via a
+// ResolvePaths that falls through to USER-scope paths when project == "" — so a
+// caller reaching an adapter with (ScopeProject, "") would SILENTLY write the
+// project overlay into the user's global config (or read it from there). The
+// CLI's resolveScope already guarantees a non-empty root for project scope; this
+// is the belt-and-suspenders that turns a future caller's mistake into a loud
+// error at the narrowest waist every read/write funnels through, instead of a
+// silent wrong-scope I/O. Adapters MUST call it first thing in Render and Ingest.
+func RequireProjectRoot(scope Scope, project string) error {
+	if scope == ScopeProject && project == "" {
+		return ErrProjectRootRequired
+	}
+	return nil
+}
 
 // Capability is a bitmask of components an adapter can produce. M1's Claude
 // adapter is full-spectrum; M2's OpenCode adapter omits Hook + LSP.
@@ -88,6 +109,13 @@ type Adapter interface {
 	// cleartext, or wrapped templated for a preview) into destination FileOps.
 	// It accepts only secrets.Resolved — never a raw source.Canonical — so the
 	// render egress is type-distinct from the dest->source write path.
+	//
+	// CONTRACT — at ScopeProject the project root MUST be non-empty. Any adapter
+	// that resolves scope-dependent destinations MUST call RequireProjectRoot
+	// first thing in Render and Ingest and return ErrProjectRootRequired for an
+	// empty root, so a project-scope call can never silently fall through to
+	// user-scope destinations (the three real adapters do; a pure no-op adapter
+	// that resolves no paths has nothing to fall through to). See RequireProjectRoot.
 	Render(r secrets.Resolved, scope Scope, project string) ([]FileOp, []Skip, error)
 	Ingest(scope Scope, project string) (source.Canonical, error)
 	// KeyMergeStrategy returns this adapter's single JSON-key-merge strategy

@@ -22,6 +22,9 @@ import (
 // from `developer_instructions`. Project-scope slash commands are never written
 // (global-only), so they don't ingest at project scope either.
 func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical, error) {
+	if err := adapter.RequireProjectRoot(scope, project); err != nil {
+		return source.Canonical{}, err
+	}
 	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
 	var c source.Canonical
 

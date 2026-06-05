@@ -23,6 +23,9 @@ import (
 // `mode` key (which is dropped during ingest because it is an OpenCode-specific
 // artifact, not part of canonical).
 func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical, error) {
+	if err := adapter.RequireProjectRoot(scope, project); err != nil {
+		return source.Canonical{}, err
+	}
 	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
 	var c source.Canonical
 

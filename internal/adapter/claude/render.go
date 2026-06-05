@@ -13,6 +13,9 @@ import (
 // Pure function: returns the same output for the same input (disk reads are
 // treated as fixed inputs for the purposes of the merge-json-keys strategy).
 func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string) ([]adapter.FileOp, []adapter.Skip, error) {
+	if err := adapter.RequireProjectRoot(scope, project); err != nil {
+		return nil, nil, err
+	}
 	c := r.Canonical() //nolint:forbidigo // sanctioned render egress: project the resolved model into FileOps (never written back to source)
 	paths := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
 
@@ -133,14 +136,10 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths, scope adapter.Scope) ([
 		return nil, nil
 	}
 
+	// dest is always non-empty here: Render rejects ScopeProject with an empty
+	// project root up front (adapter.RequireProjectRoot), so mcpDest cannot
+	// return "" by the time renderMCP runs.
 	dest := p.mcpDest(scope)
-	if dest == "" {
-		// Defensive: ScopeProject with no resolved project root yields no MCP
-		// destination (MCPProject unset). The CLI never reaches here —
-		// resolveScope guarantees a non-empty project root — but guard the
-		// library boundary rather than emit a write op targeting "".
-		return nil, nil
-	}
 
 	ours := map[string]any{"mcpServers": targeted}
 

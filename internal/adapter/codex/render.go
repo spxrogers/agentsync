@@ -18,6 +18,9 @@ import (
 // set in Codex's UI are preserved by config.toml's merge-toml-keys writer
 // because this render claims no keys under that section.
 func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string) ([]adapter.FileOp, []adapter.Skip, error) {
+	if err := adapter.RequireProjectRoot(scope, project); err != nil {
+		return nil, nil, err
+	}
 	c := r.Canonical() //nolint:forbidigo // sanctioned render egress: project the resolved model into FileOps (never written back to source)
 	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
 
