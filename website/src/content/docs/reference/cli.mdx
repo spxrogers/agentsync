@@ -212,8 +212,8 @@ agentsync explain --list
 
 | Flag | Applies to | Effect |
 |---|---|---|
-| `--scope user\|project` | init, import, apply, status, diff, reconcile, update | Force the config scope. |
-| `--project <path>` | init, import, apply, status, diff, reconcile, update | Target / apply a specific project's tree. |
+| `--scope user\|project` | init, verify, import, apply, status, diff, reconcile, update | Force the config scope. |
+| `--project <path>` | init, verify, import, apply, status, diff, reconcile, update | Target / apply a specific project's tree. |
 | `--dry-run` | apply, import | Preview without writing. |
 | `--auto-safe` | reconcile, update | Auto-resolve only no-risk changes. |
 | `--json` | status, diff, explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). `explain --list --json` emits a `plugins` array; `explain` with ids/`--all` emits the translation `rows`. |
