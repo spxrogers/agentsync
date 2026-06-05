@@ -384,7 +384,8 @@ func resolveScope(cmd *cobra.Command, scopeFlag, projectFlag string, noInput boo
 		if !found {
 			return adapter.ScopeUser, "", fmt.Errorf(
 				"--scope project: no .agentsync/ project tree found at or above %s; "+
-					"run `agentsync init --scope project` to create one", cwd)
+					"run `agentsync init --scope project` to create one", cwd,
+			)
 		}
 		return adapter.ScopeProject, root, nil
 
@@ -407,7 +408,8 @@ func resolveScope(cmd *cobra.Command, scopeFlag, projectFlag string, noInput boo
 			return adapter.ScopeUser, "", fmt.Errorf(
 				"a .agentsync/ project tree was detected at %s but no scope was given; "+
 					"re-run with --scope project (apply it here) or --scope user (apply your user config) "+
-					"— cannot prompt (non-interactive)", root)
+					"— cannot prompt (non-interactive)", root,
+			)
 		}
 		return promptScopeChoice(cmd, root, userHome)
 

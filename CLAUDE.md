@@ -222,6 +222,13 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
   go.mod's **1.26.2**) so it parses our export data natively. CI runs this exact
   recipe then `git diff --exit-code`, so an uncommitted format/tidy change fails
   the build — local and CI can't drift.
+  - **After running `just lint`, always re-stage any files it rewrote before
+    committing.** Because `gofmt -w`, `gofumpt -w`, and `go mod tidy` mutate
+    files in place, lint may silently reformat code that was already staged.
+    Check with `git diff --stat` (or `git diff`) after lint runs; if anything
+    changed, run `git add -u` (or `git add <file>…`) to stage the post-linted
+    versions. Pushing without re-staging means CI's `git diff --exit-code` step
+    will detect the same mutations and fail the lint job.
   - **Container/cloud sessions — the golangci-lint toolchain quirk (READ THIS).**
     In CI the base toolchain already matches go.mod, so `just lint` "just works"
     with no `GOTOOLCHAIN` override. In a remote/cloud container the base `go` on
