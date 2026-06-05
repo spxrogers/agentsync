@@ -2,6 +2,7 @@ package claude_test
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -204,6 +205,53 @@ func TestRender_LSP_EmptyProducesNoOp(t *testing.T) {
 		if strings.HasSuffix(op.Path, "settings.json") && strings.Contains(string(op.Content), "\"lspServers\"") {
 			t.Fatalf("unexpected lspServers op when no LSP in canonical: %+v", op)
 		}
+	}
+}
+
+// TestRender_ProjectScope_OnlyProjectItems verifies that apply --scope project
+// writes only the project-overlay items (c.Project) to the project directory,
+// not the merged canonical that also includes user-scope items.
+func TestRender_ProjectScope_OnlyProjectItems(t *testing.T) {
+	projSkill := source.Skill{
+		Name:        "proj-review",
+		Frontmatter: map[string]any{"name": "proj-review", "description": "project skill"},
+		Body:        "Project review.\n",
+	}
+	projRoot := t.TempDir()
+	projCanon := source.Canonical{
+		Skills: []source.Skill{projSkill},
+	}
+	// Merged canonical has both a user skill and the project skill, with
+	// Project set to the project-only canonical — exactly what project.Merge
+	// produces after the fix.
+	merged := source.Canonical{
+		Skills: []source.Skill{
+			{Name: "user-skill", Frontmatter: map[string]any{"name": "user-skill"}, Body: "User skill.\n"},
+			projSkill,
+		},
+		Project: &projCanon,
+	}
+
+	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(secrets.ForRender(merged), adapter.ScopeProject, projRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantUserSkill := filepath.Join(projRoot, ".claude", "skills", "user-skill", "SKILL.md")
+	wantProjSkill := filepath.Join(projRoot, ".claude", "skills", "proj-review", "SKILL.md")
+
+	var gotProjSkill bool
+	for _, op := range ops {
+		if op.Path == wantUserSkill {
+			t.Fatalf("user-scope skill must not be written at project scope: %s", op.Path)
+		}
+		if op.Path == wantProjSkill {
+			gotProjSkill = true
+		}
+	}
+	if !gotProjSkill {
+		t.Fatalf("project skill not rendered at project scope; want op at %s, ops=%+v", wantProjSkill, ops)
 	}
 }
 
