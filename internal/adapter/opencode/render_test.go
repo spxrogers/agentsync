@@ -396,12 +396,13 @@ func TestRender_ProjectScope_OnlyProjectItems(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wantUserSkill := filepath.Join(projRoot, ".claude", "skills", "user-skill", "SKILL.md")
+	// OpenCode shares Claude's skills dir (.claude/skills/) at project scope.
+	wantExcluded := filepath.Join(projRoot, ".claude", "skills", "user-skill", "SKILL.md")
 	wantProjSkill := filepath.Join(projRoot, ".claude", "skills", "proj-skill", "SKILL.md")
 
 	var gotProjSkill bool
 	for _, op := range ops {
-		if op.Path == wantUserSkill {
+		if op.Path == wantExcluded {
 			t.Fatalf("user-scope skill must not be written at project scope: %s", op.Path)
 		}
 		if op.Path == wantProjSkill {
