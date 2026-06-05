@@ -136,6 +136,11 @@ func TestProjectScope_EmptyProjectErrors(t *testing.T) {
 	if _, err := a.Ingest(adapter.ScopeProject, ""); !errors.Is(err, adapter.ErrProjectRootRequired) {
 		t.Fatalf("Ingest: want ErrProjectRootRequired, got %v", err)
 	}
+	// IngestPlugins resolves scope-dependent paths too (reads settings.json), so
+	// it carries the same guard.
+	if _, _, err := a.IngestPlugins(adapter.ScopeProject, ""); !errors.Is(err, adapter.ErrProjectRootRequired) {
+		t.Fatalf("IngestPlugins: want ErrProjectRootRequired, got %v", err)
+	}
 }
 
 func TestRender_MCP_AgentsAllowlist(t *testing.T) {

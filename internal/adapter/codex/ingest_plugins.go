@@ -30,6 +30,9 @@ import (
 // one is treated as "no plugins discovered" rather than failing the whole
 // import. Only a genuine read error (e.g. a permission problem) is surfaced.
 func (a *Adapter) IngestPlugins(scope adapter.Scope, project string) ([]adapter.NativeMarketplace, []adapter.NativePlugin, error) {
+	if err := adapter.RequireProjectRoot(scope, project); err != nil {
+		return nil, nil, err
+	}
 	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
 	data, err := os.ReadFile(p.Config)
 	if err != nil {

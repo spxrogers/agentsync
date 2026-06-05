@@ -43,11 +43,12 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   adapter's `ResolvePaths` falls through to *user*-scope paths when the project
   root is empty, so a `(ScopeProject, "")` reaching an adapter would silently
   write the project overlay into the user's global config (or read it from
-  there). `Render` and `Ingest` on all three adapters (claude, opencode, codex)
-  now call the shared `adapter.RequireProjectRoot` first and return
-  `ErrProjectRootRequired` instead. The CLI already guarantees a non-empty root
-  for project scope, so this is defense-in-depth against a future or non-CLI
-  caller — turning a silent wrong-scope I/O into a loud error.
+  there). Every scope-resolving adapter method — `Render`, `Ingest`, and
+  `IngestPlugins` (claude, opencode, codex) — now calls the shared
+  `adapter.RequireProjectRoot` first and returns `ErrProjectRootRequired`
+  instead. The CLI already guarantees a non-empty root for project scope, so
+  this is defense-in-depth against a future or non-CLI caller — turning a silent
+  wrong-scope I/O into a loud error.
 - **Claude project-scope MCP servers now target `<root>/.mcp.json`, not
   `<root>/.claude/settings.json`.** Per the upstream Claude Code MCP-scope docs,
   project-scope servers live in a repo-root `.mcp.json` (the file `claude mcp add

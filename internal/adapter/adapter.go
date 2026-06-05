@@ -111,11 +111,13 @@ type Adapter interface {
 	// render egress is type-distinct from the dest->source write path.
 	//
 	// CONTRACT — at ScopeProject the project root MUST be non-empty. Any adapter
-	// that resolves scope-dependent destinations MUST call RequireProjectRoot
-	// first thing in Render and Ingest and return ErrProjectRootRequired for an
+	// method that resolves scope-dependent destinations MUST call
+	// RequireProjectRoot first thing and return ErrProjectRootRequired for an
 	// empty root, so a project-scope call can never silently fall through to
-	// user-scope destinations (the three real adapters do; a pure no-op adapter
-	// that resolves no paths has nothing to fall through to). See RequireProjectRoot.
+	// user-scope destinations. That covers Render and Ingest here, and
+	// IngestPlugins on the PluginIngester extension below; the three real
+	// adapters do all of these. (A pure no-op adapter that resolves no paths has
+	// nothing to fall through to.) See RequireProjectRoot.
 	Render(r secrets.Resolved, scope Scope, project string) ([]FileOp, []Skip, error)
 	Ingest(scope Scope, project string) (source.Canonical, error)
 	// KeyMergeStrategy returns this adapter's single JSON-key-merge strategy
@@ -196,6 +198,11 @@ type NativePlugin struct {
 // enable-state location is undocumented). See `docs/architecture.md` §
 // "PluginIngester (read-only)" for the full rationale.
 type PluginIngester interface {
+	// IngestPlugins resolves scope-dependent paths (it reads the agent's native
+	// config, which differs per scope), so — like Render/Ingest — it MUST call
+	// RequireProjectRoot first and return ErrProjectRootRequired for a
+	// project-scope call with no root, even though import only ever calls it at
+	// user scope today (plugins are a user-scope concept).
 	IngestPlugins(scope Scope, project string) ([]NativeMarketplace, []NativePlugin, error)
 }
 
