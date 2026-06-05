@@ -61,6 +61,54 @@ func TestRender_MCP(t *testing.T) {
 	}
 }
 
+// TestRender_MCP_ProjectScope verifies project-scope MCP servers target
+// <project>/opencode.json — OpenCode's documented project config location at the
+// repo ROOT — NOT <project>/.opencode/opencode.json (which OpenCode does not
+// read; the .opencode/ directory holds only the agents/commands/skills subdirs).
+func TestRender_MCP_ProjectScope(t *testing.T) {
+	enabled := true
+	projRoot := t.TempDir()
+	srv := source.MCPServer{
+		ID: "company-api",
+		Server: source.MCPServerSpec{
+			Type: "stdio", Command: "npx", Args: []string{"-y", "@company/mcp"},
+			Agents: []string{"opencode"}, Enabled: &enabled,
+		},
+	}
+	// At project scope apply renders only the project overlay (c.Project).
+	projCanon := source.Canonical{MCPServers: []source.MCPServer{srv}}
+	merged := source.Canonical{MCPServers: []source.MCPServer{srv}, Project: &projCanon}
+
+	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(secrets.ForRender(merged), adapter.ScopeProject, projRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantMCP := filepath.Join(projRoot, "opencode.json")
+	wrongMCP := filepath.Join(projRoot, ".opencode", "opencode.json")
+	var found bool
+	for _, op := range ops {
+		if op.Path == wrongMCP {
+			t.Fatalf("project MCP must not land in .opencode/opencode.json (OpenCode does not read it): %s", op.Path)
+		}
+		if op.Path == wantMCP {
+			found = true
+			if op.MergeStrategy != "merge-jsonc-keys" {
+				t.Fatalf("merge strategy = %q", op.MergeStrategy)
+			}
+			var ours map[string]any
+			_ = json.Unmarshal(op.Content, &ours)
+			if _, ok := ours["mcp"].(map[string]any)["company-api"]; !ok {
+				t.Fatalf("company-api missing under mcp: %v", ours)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no <project>/opencode.json op produced; ops=%+v", ops)
+	}
+}
+
 // TestRender_MCP_PreservesHeaders is the regression for OpenCode silently
 // dropping the `headers` of a remote MCP server — a server requiring an
 // Authorization header would render unauthenticated and broken, with no Skip.

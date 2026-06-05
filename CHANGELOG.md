@@ -52,6 +52,16 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   keys and unmodeled per-server fields like `timeout` survive); user scope
   (`~/.claude.json`) is unchanged. A stale `mcpServers` block a prior version
   wrote into a project `settings.json` is left untouched — remove it by hand.
+- **OpenCode project-scope config now targets `<root>/opencode.json`, not
+  `<root>/.opencode/opencode.json`.** Per the upstream OpenCode config docs, a
+  repo's JSON config is `opencode.json` at the project **root**; OpenCode does
+  not read `.opencode/opencode.json` (the `.opencode/` directory holds only the
+  `agents/`/`commands/`/`skills/` subdirs, which were already correct). The
+  adapter previously rendered/ingested project-scope MCP servers (the only
+  structured config it writes) at `.opencode/opencode.json`, so `apply --scope
+  project` wrote them where OpenCode never looks and `import`/`reconcile --scope
+  project` read the wrong file. Same class of bug as the Claude project-MCP fix
+  above; user scope (`~/.config/opencode/opencode.json`) is unchanged.
 - **`apply --scope project` now renders only project-scope items.** Previously
   `project.Merge` never populated `Canonical.Project`, so all three adapter
   `Render` methods wrote the full merged canonical (user + project items) into

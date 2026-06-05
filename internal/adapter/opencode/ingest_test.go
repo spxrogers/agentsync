@@ -2,6 +2,7 @@ package opencode_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -9,6 +10,40 @@ import (
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
+
+// TestIngest_ProjectScopeMCP_ReadsRootNotDotOpencode is artifact-anchored: it
+// writes a real <project>/opencode.json (OpenCode's project config location)
+// AND a <project>/.opencode/opencode.json trap, then ingests at project scope
+// and asserts ONLY the root file's server is captured — OpenCode does not read
+// .opencode/opencode.json, so neither does agentsync.
+func TestIngest_ProjectScopeMCP_ReadsRootNotDotOpencode(t *testing.T) {
+	proj := t.TempDir()
+	if err := os.WriteFile(filepath.Join(proj, "opencode.json"),
+		[]byte(`{"mcp":{"projapi":{"type":"local","command":["node","s.js"]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Trap: a server in .opencode/opencode.json must NOT be read.
+	dotDir := filepath.Join(proj, ".opencode")
+	if err := os.MkdirAll(dotDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dotDir, "opencode.json"),
+		[]byte(`{"mcp":{"shouldNotImport":{"type":"local","command":["trap"]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
+	out, err := a.Ingest(adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if len(out.MCPServers) != 1 {
+		t.Fatalf("want exactly 1 MCP server (from root opencode.json), got %d: %+v", len(out.MCPServers), out.MCPServers)
+	}
+	if out.MCPServers[0].ID != "projapi" {
+		t.Fatalf("want %q from <root>/opencode.json, got %q (.opencode/opencode.json wrongly read?)", "projapi", out.MCPServers[0].ID)
+	}
+}
 
 // TestIngest_RoundTripsMCP exercises: Render → Apply → Ingest for MCP servers.
 func TestIngest_RoundTripsMCP(t *testing.T) {
