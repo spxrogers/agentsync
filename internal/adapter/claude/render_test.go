@@ -207,6 +207,56 @@ func TestRender_LSP_EmptyProducesNoOp(t *testing.T) {
 	}
 }
 
+// TestRender_ProjectScope_OnlyProjectItems verifies that apply --scope project
+// writes only the project-overlay items (c.Project) to the project directory,
+// not the merged canonical that also includes user-scope items.
+func TestRender_ProjectScope_OnlyProjectItems(t *testing.T) {
+	projSkill := source.Skill{
+		Name:        "proj-review",
+		Frontmatter: map[string]any{"name": "proj-review", "description": "project skill"},
+		Body:        "Project review.\n",
+	}
+	projRoot := t.TempDir()
+	projCanon := source.Canonical{
+		Skills: []source.Skill{projSkill},
+	}
+	// Merged canonical has both a user skill and the project skill, with
+	// Project set to the project-only canonical — exactly what project.Merge
+	// produces after the fix.
+	merged := source.Canonical{
+		Skills: []source.Skill{
+			{Name: "user-skill", Frontmatter: map[string]any{"name": "user-skill"}, Body: "User skill.\n"},
+			projSkill,
+		},
+		Project: &projCanon,
+	}
+
+	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(secrets.ForRender(merged), adapter.ScopeProject, projRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	skillPaths := map[string]bool{}
+	for _, op := range ops {
+		if strings.Contains(op.Path, "/skills/") {
+			skillPaths[op.Path] = true
+		}
+	}
+	if skillPaths[strings.Join([]string{projRoot, ".claude", "skills", "user-skill", "SKILL.md"}, "/")] {
+		t.Fatalf("user-scope skill must not be written at project scope: %v", skillPaths)
+	}
+	found := false
+	for p := range skillPaths {
+		if strings.Contains(p, "proj-review") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("project skill not rendered at project scope: ops=%+v", ops)
+	}
+}
+
 func TestRender_Hooks_WritesSettingsJSON(t *testing.T) {
 	c := source.Canonical{
 		Hooks: []source.Hook{

@@ -37,6 +37,17 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
   project`/`--project` with no `.agentsync/` tree is a hard error pointing at
   `init --scope project`, never a silent downgrade to user scope.
 
+### Fixed
+
+- **`apply --scope project` now renders only project-scope items.** Previously
+  `project.Merge` never populated `Canonical.Project`, so all three adapter
+  `Render` methods wrote the full merged canonical (user + project items) into
+  the project directory. `apply --scope project` now correctly writes only the
+  project-overlay items (`<root>/.agentsync/` content) to `<root>/.claude/`,
+  mirroring how Claude Code, OpenCode, and Codex each read user-scope config
+  from their own global directories at runtime. This also fixes `status`,
+  `diff`, and `reconcile` at project scope, which use the same render path.
+
 ### Changed
 
 - **The M5 single-file `.agentsync.toml` project marker is retired** (one project

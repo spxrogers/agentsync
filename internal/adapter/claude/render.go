@@ -16,53 +16,61 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 	c := r.Canonical() //nolint:forbidigo // sanctioned render egress: project the resolved model into FileOps (never written back to source)
 	paths := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
 
+	// At project scope render only the project-overlay items; the merged
+	// canonical includes user-scope items that Claude Code already reads from
+	// ~/.claude/ and must not be duplicated into <project>/.claude/.
+	renderC := c
+	if scope == adapter.ScopeProject && c.Project != nil {
+		renderC = *c.Project
+	}
+
 	var ops []adapter.FileOp
 	var skips []adapter.Skip
 
 	// 1. MCP -> .claude.json (user) or settings.json (project)
-	if mcpOps, err := a.renderMCP(c, paths, scope); err != nil {
+	if mcpOps, err := a.renderMCP(renderC, paths, scope); err != nil {
 		return nil, nil, err
 	} else {
 		ops = append(ops, mcpOps...)
 	}
 
 	// 2. Memory -> CLAUDE.md
-	if memOps, err := a.renderMemory(c, paths); err != nil {
+	if memOps, err := a.renderMemory(renderC, paths); err != nil {
 		return nil, nil, err
 	} else {
 		ops = append(ops, memOps...)
 	}
 
 	// 3. Skills -> ~/.claude/skills/<name>/SKILL.md
-	if skillOps, err := a.renderSkills(c, paths); err != nil {
+	if skillOps, err := a.renderSkills(renderC, paths); err != nil {
 		return nil, nil, err
 	} else {
 		ops = append(ops, skillOps...)
 	}
 
 	// 4. Subagents -> ~/.claude/agents/<name>.md
-	if subagentOps, err := a.renderSubagents(c, paths); err != nil {
+	if subagentOps, err := a.renderSubagents(renderC, paths); err != nil {
 		return nil, nil, err
 	} else {
 		ops = append(ops, subagentOps...)
 	}
 
 	// 5. Commands -> ~/.claude/commands/<name>.md
-	if cmdOps, err := a.renderCommands(c, paths); err != nil {
+	if cmdOps, err := a.renderCommands(renderC, paths); err != nil {
 		return nil, nil, err
 	} else {
 		ops = append(ops, cmdOps...)
 	}
 
 	// 6. Hooks -> settings.json /hooks/<event>
-	if hookOps, err := a.renderHooks(c, paths); err != nil {
+	if hookOps, err := a.renderHooks(renderC, paths); err != nil {
 		return nil, nil, err
 	} else {
 		ops = append(ops, hookOps...)
 	}
 
 	// 7. LSP servers -> settings.json /lspServers/<id>
-	if lspOps, err := a.renderLSP(c, paths); err != nil {
+	if lspOps, err := a.renderLSP(renderC, paths); err != nil {
 		return nil, nil, err
 	} else {
 		ops = append(ops, lspOps...)

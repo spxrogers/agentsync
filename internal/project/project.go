@@ -105,6 +105,14 @@ func Merge(base, proj source.Canonical) source.Canonical {
 	out.Commands = overlayByKey(base.Commands, proj.Commands, func(c source.Command) string { return c.Name })
 	out.Hooks = overlayHooks(base.Hooks, proj.Hooks)
 	out.Memory = overlayMemory(base.Memory, proj.Memory)
+
+	// Store the project-only canonical so scope-aware render paths (apply
+	// --scope project) can render proj items to the project directory without
+	// also writing user-scope items there. secretFields/cloneForResolve already
+	// handle c.Project; this was simply never set.
+	projCopy := proj
+	out.Project = &projCopy
+
 	return out
 }
 

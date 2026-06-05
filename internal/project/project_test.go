@@ -271,3 +271,37 @@ func TestMerge_DoesNotMutateBase(t *testing.T) {
 		t.Fatal("Merge mutated base MCPServers slice")
 	}
 }
+
+// TestMerge_StoresProjectOverlay verifies that Merge populates out.Project with
+// the project-only canonical so scope-aware render paths can distinguish which
+// items originated from the project vs the user.
+func TestMerge_StoresProjectOverlay(t *testing.T) {
+	base := source.Canonical{
+		Skills:     []source.Skill{{Name: "user-skill", Body: "user"}},
+		MCPServers: []source.MCPServer{{ID: "user-mcp", Server: source.MCPServerSpec{Command: "user-cmd"}}},
+	}
+	proj := source.Canonical{
+		Skills:     []source.Skill{{Name: "proj-skill", Body: "proj"}},
+		MCPServers: []source.MCPServer{{ID: "proj-mcp", Server: source.MCPServerSpec{Command: "proj-cmd"}}},
+	}
+	out := project.Merge(base, proj)
+
+	// Merged result contains items from both scopes.
+	if len(out.Skills) != 2 {
+		t.Fatalf("expected 2 merged skills, got %d", len(out.Skills))
+	}
+	if len(out.MCPServers) != 2 {
+		t.Fatalf("expected 2 merged MCP servers, got %d", len(out.MCPServers))
+	}
+
+	// out.Project must be non-nil and hold only the project-scope items.
+	if out.Project == nil {
+		t.Fatal("Merge must set out.Project to the project-only canonical")
+	}
+	if len(out.Project.Skills) != 1 || out.Project.Skills[0].Name != "proj-skill" {
+		t.Fatalf("Project.Skills should contain only project skills: %+v", out.Project.Skills)
+	}
+	if len(out.Project.MCPServers) != 1 || out.Project.MCPServers[0].ID != "proj-mcp" {
+		t.Fatalf("Project.MCPServers should contain only project servers: %+v", out.Project.MCPServers)
+	}
+}
