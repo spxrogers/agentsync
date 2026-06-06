@@ -51,6 +51,13 @@ channels and a few documented trade-offs are tracked in
   as `apply` does (so the two never disagree), and the existing missing-home /
   half-initialized guards now report the scope-appropriate `init` command.
   Default stays user scope.
+- **`docs/comparison.md` — "How agentsync compares."** A new canonical doc
+  surveying the AI coding-agent config landscape (gaal, agentsmesh, rulesync,
+  ruler, ai-rulez, the MCP managers, the skills tools, the AGENTS.md standard),
+  with a feature matrix across the multi-agent / bidirectional / component-coverage
+  / secrets axes and an honest read on where agentsync is differentiated vs. where
+  it has real competition. Mirrored to the site at `/comparison/` via
+  `sync-docs.mjs` (sidebar: **Start here → How agentsync compares**).
 
 ### Fixed
 
