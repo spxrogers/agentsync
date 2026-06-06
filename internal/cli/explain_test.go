@@ -722,8 +722,8 @@ func TestExplain_DescribesAllComponentKinds(t *testing.T) {
 			mcp, lsp int
 		}{r.Coverage, r.MCP, r.LSP}
 	}
-	if g := got["claude"]; g.lsp != 1 || g.mcp != 0 || g.cov != "full" {
-		t.Errorf("claude row = %+v; want lsp=1 mcp=0 coverage=full", g)
+	if g := got["claude"]; g.lsp != 1 || g.mcp != 0 || g.cov != "none" {
+		t.Errorf("claude row = %+v; want lsp=1 mcp=0 coverage=none", g)
 	}
 	// Codex hosts the LSP (lsp=1) but cannot translate it → renders nothing → none.
 	if g := got["codex"]; g.lsp != 1 || g.cov != "none" {

@@ -50,7 +50,7 @@ func (a *Adapter) KeyMergeStrategy() string { return "merge-json-keys" }
 
 func (a *Adapter) Capabilities() adapter.Capability {
 	return adapter.CapMCP | adapter.CapMemory | adapter.CapSkill |
-		adapter.CapSubagent | adapter.CapCommand | adapter.CapHook | adapter.CapLSP
+		adapter.CapSubagent | adapter.CapCommand | adapter.CapHook
 }
 
 func (a *Adapter) Detect() (bool, error) {

@@ -102,7 +102,7 @@ interface funnels all destination writes through the foreign-collision backup.
 - **Files:** `adapter.go`, `registry.go`.
 
 ### `internal/adapter/claude`
-The reference adapter — all seven components including LSP, with per-key merge
+The reference adapter — MCP, memory, skills, subagents, commands, and hooks, with per-key merge
 into shared JSON files (`~/.claude.json`, `settings.json`, and a project's
 repo-root `.mcp.json` for project-scope MCP servers) that preserves foreign
 keys. `IngestPlugins` reads `enabledPlugins` / `extraKnownMarketplaces`

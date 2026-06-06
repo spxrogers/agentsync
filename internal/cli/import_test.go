@@ -714,8 +714,10 @@ func TestImport_HookFromClaude(t *testing.T) {
 	}
 }
 
-// TestImport_LSPFromClaude round-trips a settings.json lspServers entry.
-func TestImport_LSPFromClaude(t *testing.T) {
+// TestImport_LSPFromClaudeSettingsFails verifies that agentsync does not import
+// Claude settings.json#/lspServers as native LSP: Claude Code ignores that key
+// and only loads LSP servers from plugin manifests.
+func TestImport_LSPFromClaudeSettingsFails(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	settings := filepath.Join(tmp, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
@@ -724,15 +726,11 @@ func TestImport_LSPFromClaude(t *testing.T) {
 	if err := os.WriteFile(settings, []byte(`{"lspServers": {"gopls": {"command": "gopls", "args": ["-rpc"]}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := runCLI(t, env, "import", "claude:lsp:gopls"); err != nil {
-		t.Fatalf("import lsp: %v\n%s", err, out)
+	if out, err := runCLI(t, env, "import", "claude:lsp:gopls"); err == nil {
+		t.Fatalf("import lsp unexpectedly succeeded from ignored settings.json key:\n%s", out)
 	}
-	data, err := os.ReadFile(filepath.Join(tmp, ".agentsync", "lsp", "gopls.toml"))
-	if err != nil {
-		t.Fatalf("source lsp not written: %v", err)
-	}
-	if !strings.Contains(string(data), "gopls") {
-		t.Fatalf("lsp command not captured:\n%s", data)
+	if _, err := os.Stat(filepath.Join(tmp, ".agentsync", "lsp", "gopls.toml")); !os.IsNotExist(err) {
+		t.Fatalf("ignored Claude settings.json lspServers key was written to canonical source: %v", err)
 	}
 }
 
@@ -909,7 +907,9 @@ func TestImport_FullAgentFromClaude(t *testing.T) {
 		[]byte(`{"mcpServers": {"github": {"type": "stdio", "command": "npx"}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Hooks + LSP via settings.json.
+	// Hooks via settings.json. A stale lspServers key is present too, but Claude
+	// Code ignores that key, so full-agent import must not capture it as native
+	// LSP.
 	if err := os.WriteFile(filepath.Join(tmp, ".claude", "settings.json"), []byte(`{
 		"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi"}]}]},
 		"lspServers": {"gopls": {"command": "gopls"}}
@@ -939,10 +939,9 @@ func TestImport_FullAgentFromClaude(t *testing.T) {
 		t.Fatalf("full-agent import missing summary line; got: %s", out)
 	}
 
-	// Every component should have landed in the canonical source.
+	// Every importable component should have landed in the canonical source.
 	wantFiles := []string{
 		filepath.Join("mcp", "github.toml"),
-		filepath.Join("lsp", "gopls.toml"),
 		filepath.Join("hooks", "PreToolUse.toml"),
 		filepath.Join("agents", "reviewer.md"),
 		filepath.Join("commands", "review.md"),
@@ -953,6 +952,9 @@ func TestImport_FullAgentFromClaude(t *testing.T) {
 		if _, statErr := os.Stat(filepath.Join(tmp, ".agentsync", rel)); statErr != nil {
 			t.Fatalf("full-agent import did not write %s: %v", rel, statErr)
 		}
+	}
+	if _, statErr := os.Stat(filepath.Join(tmp, ".agentsync", "lsp", "gopls.toml")); !os.IsNotExist(statErr) {
+		t.Fatalf("full-agent import captured ignored Claude settings.json lspServers key: %v", statErr)
 	}
 }
 

@@ -387,7 +387,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 			if render.IsKeyMerge(op.MergeStrategy) {
 				// NOT deduped by path: one agent emits several key-merge ops to one
 				// file (codex /mcp_servers + /hooks → config.toml; claude /hooks +
-				// /lspServers → settings.json), each a distinct section, so every op
+				// settings.json), each a distinct section, so every op
 				// must be walked. Deduping by path dropped the second section's
 				// items (matching status's key loop and the apply pipeline).
 				var ours map[string]interface{}

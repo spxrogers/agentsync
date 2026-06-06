@@ -170,6 +170,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Claude LSP capability corrected.** Claude Code reads LSP servers from plugin
+  manifests, not `settings.json#/lspServers`; agentsync now reports canonical
+  Claude LSP servers as skipped instead of writing or importing a key Claude
+  silently ignores.
+
 - **Chocolatey publishing is back to a single GoReleaser run — the structural fix
   for the v0.7.1–v0.7.3 checksum-mismatch saga.** The release had split the
   Chocolatey `.nupkg` onto a separate `windows-latest` job that *rebuilt* the

@@ -91,7 +91,7 @@ func TestIngestPlugins_MissingSettings(t *testing.T) {
 
 // TestIngestPlugins_MalformedIsLenient treats an unparseable settings.json as
 // "no plugins discovered" rather than failing the whole import (matching the
-// hooks/LSP blocks in Ingest).
+// hooks block in Ingest).
 func TestIngestPlugins_MalformedIsLenient(t *testing.T) {
 	tmp := t.TempDir()
 	writeSettings(t, tmp, `{ this is : not json `)

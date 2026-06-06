@@ -47,12 +47,7 @@ func readSettings(t *testing.T, tmp string) map[string]any {
 	return m
 }
 
-// TestApply_MultiSectionSameFile_NoSiblingWipe is the regression for the
-// showstopper: claude writes hooks AND lspServers to settings.json as separate
-// key-merge ops. Each op received ALL owned pointers for the file, so on the
-// second apply the hooks op deleted the lsp pointer and vice versa — last op
-// wins, the other section is wiped.
-func TestApply_MultiSectionSameFile_NoSiblingWipe(t *testing.T) {
+func TestApply_ClaudeLSPSkipsSettingsJSON(t *testing.T) {
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, ".agentsync")
 	reg := adapter.NewRegistry()
@@ -65,48 +60,13 @@ func TestApply_MultiSectionSameFile_NoSiblingWipe(t *testing.T) {
 	}
 	st := state.New()
 	applyOnce(t, reg, c, st, home, tmp)
-	applyOnce(t, reg, c, st, home, tmp) // second apply is where the wipe happened
 
 	m := readSettings(t, tmp)
 	hooks, _ := m["hooks"].(map[string]any)
-	lsp, _ := m["lspServers"].(map[string]any)
 	if len(hooks) == 0 {
-		t.Fatalf("hooks section was wiped on re-apply: %+v", m)
+		t.Fatalf("hooks section was not rendered: %+v", m)
 	}
-	if len(lsp) == 0 {
-		t.Fatalf("lspServers section was wiped on re-apply: %+v", m)
-	}
-}
-
-// TestApply_WholeSectionRemoval_StillCleansUp guards the removal case that the
-// per-op-section scoping must not regress: removing ALL hooks (while keeping
-// the lsp server) must still delete the orphaned hook from settings.json, even
-// though another section's op still writes that file.
-func TestApply_WholeSectionRemoval_StillCleansUp(t *testing.T) {
-	tmp := t.TempDir()
-	home := filepath.Join(tmp, ".agentsync")
-	reg := adapter.NewRegistry()
-	if err := reg.Register(claude.New(claude.Options{TargetRoot: tmp})); err != nil {
-		t.Fatal(err)
-	}
-	st := state.New()
-	withHooks := source.Canonical{
-		Hooks:      []source.Hook{{Event: "Stop", Type: "command", Command: "echo x"}},
-		LSPServers: []source.LSPServer{{ID: "gopls", Spec: source.LSPServerSpec{Command: "gopls"}}},
-	}
-	applyOnce(t, reg, withHooks, st, home, tmp)
-
-	// Remove hooks entirely; keep the lsp server.
-	noHooks := source.Canonical{
-		LSPServers: []source.LSPServer{{ID: "gopls", Spec: source.LSPServerSpec{Command: "gopls"}}},
-	}
-	applyOnce(t, reg, noHooks, st, home, tmp)
-
-	m := readSettings(t, tmp)
-	if hooks, _ := m["hooks"].(map[string]any); len(hooks) != 0 {
-		t.Fatalf("removed hook section was not cleaned up: %+v", m["hooks"])
-	}
-	if lsp, _ := m["lspServers"].(map[string]any); len(lsp) == 0 {
-		t.Fatalf("lspServers wrongly removed when only hooks were dropped: %+v", m)
+	if _, ok := m["lspServers"]; ok {
+		t.Fatalf("Claude LSP must be skipped instead of written to ignored settings.json key: %+v", m)
 	}
 }

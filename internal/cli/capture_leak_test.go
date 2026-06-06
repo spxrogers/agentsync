@@ -102,29 +102,7 @@ func TestCapture_ImportNoSecretLeak(t *testing.T) {
 			selector: "claude:mcp:http",
 			wantRefs: []string{"${secret:LEAK_TOK}"},
 		},
-		{
-			name:   "lsp_stdio_command_args_env",
-			srcRel: "lsp/stdiolsp.toml",
-			srcBody: "" +
-				"[server]\n" +
-				"command = \"${secret:LEAK_TOK}\"\n" +
-				"args = [\"--key\", \"${secret:LEAK_TOK}\"]\n" +
-				"[server.env]\n" +
-				"LSP_KEY = \"${secret:LEAK_TOK}\"\n",
-			selector: "claude:lsp:stdiolsp",
-			wantRefs: []string{"${secret:LEAK_TOK}"},
-		},
-		{
-			name:   "lsp_http_url_headers",
-			srcRel: "lsp/httplsp.toml",
-			srcBody: "" +
-				"[server]\n" +
-				"url = \"${secret:LEAK_TOK}\"\n" +
-				"[server.headers]\n" +
-				"Authorization = \"Bearer ${secret:LEAK_TOK}\"\n",
-			selector: "claude:lsp:httplsp",
-			wantRefs: []string{"${secret:LEAK_TOK}"},
-		},
+
 		{
 			name:   "hook_command",
 			srcRel: "hooks/PreToolUse.toml",
@@ -249,8 +227,7 @@ func TestCapture_ReconcileNoSecretLeak(t *testing.T) {
 
 // TestCapture_PreservesSourceOnlyFields proves capture preserves the
 // source-only targeting fields (agents) that the rendered destination never
-// carries, for BOTH MCP and LSP — resetting them would silently broaden a
-// server's exposure.
+// carries for MCP — resetting them would silently broaden a server's exposure.
 func TestCapture_PreservesSourceOnlyFields(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -266,13 +243,6 @@ func TestCapture_PreservesSourceOnlyFields(t *testing.T) {
 			srcBody: "[server]\ntype = \"stdio\"\ncommand = \"npx\"\n" +
 				"agents = [\"claude\"]\nenabled = true\n",
 			selector: "claude:mcp:srv",
-		},
-		{
-			name:   "lsp",
-			srcRel: "lsp/srv.toml",
-			srcBody: "[server]\ncommand = \"gopls\"\n" +
-				"agents = [\"claude\"]\nenabled = true\n",
-			selector: "claude:lsp:srv",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
