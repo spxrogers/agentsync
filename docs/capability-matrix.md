@@ -218,7 +218,7 @@ in the [README](../README.md#known-limits); the highlights:
   `AGENTSYNC_ALLOW_INSECURE_URLS=1`.
 - **Symlinked destinations** are rejected by default; override with
   `AGENTSYNC_ALLOW_SYMLINK_DEST=1`.
-- **Not on the roadmap**: Continue, Gemini CLI, Aider.
+- **Planned (not yet implemented)**: Continue, Gemini CLI, Aider.
 
 See the [user guide](user-guide.md) to put this into practice.
 
