@@ -147,25 +147,6 @@ list. The reason these tools exist at all is that Claude Code's `CLAUDE.md`,
 skills, hooks, and subagents sit *outside* AGENTS.md, so a single Markdown
 standard doesn't make the fan-out problem go away.
 
-## Projects with similar names
-
-"agentsync" is a contested name in this space — several unrelated projects use
-`agentsync` / `agent-sync` / `agent_sync`. If you're searching, this is *this*
-agentsync ([agentsync.cc](https://agentsync.cc) / `spxrogers/agentsync`).
-Distinct, unrelated projects include:
-
-| Repo | Language | What it is |
-|---|---|---|
-| [`dallay/agentsync`](https://github.com/dallay/agentsync) | Rust | Symlink propagator, many agents, one-way |
-| [`chrisleekr/agentsync`](https://github.com/chrisleekr/agentsync) | TypeScript | age-encrypted machine-to-machine config *snapshots* |
-| [`claaslange/agentsync`](https://github.com/claaslange/agentsync) | TypeScript | Liquid-template instruction renderer (instructions only) |
-| [`yelmuratoff/agent_sync`](https://github.com/yelmuratoff/agent_sync) | Bash | Multi-component sync — note it installs to `~/.agentsync/` |
-| [`GowayLee/agent-sync`](https://github.com/GowayLee/agent-sync) | OCaml | Markdown symlink dedup |
-| [`ZacheryGlass/agent-sync`](https://github.com/ZacheryGlass/agent-sync) | Python | Bidirectional, state-tracked (two agents) |
-
-The `~/.agentsync/` home directory is shared with `yelmuratoff/agent_sync`, so if
-you run both, point one of them elsewhere.
-
 ## Sources
 
 Primary sources (repos / project sites), verified mid-2026:
