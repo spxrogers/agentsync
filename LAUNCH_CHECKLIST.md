@@ -1,18 +1,20 @@
-# Launch checklist — going public with agentsync v1.0
+# Launch checklist — agentsync v0.1.0
 
-Tracking what needs to happen between "v1.0 done in private" and "agentsync repo
-public, install commands work for users on macOS / Windows / Linux." Captured
-here so it doesn't have to live in head or in [issue #13](https://github.com/spxrogers/agentsync/issues/13).
+Tracking the work to ship agentsync publicly as **v0.1.0**: repo public, a tagged
+release, and install commands that work on macOS / Windows / Linux. Captured here
+so it doesn't have to live in head or in [issue #13](https://github.com/spxrogers/agentsync/issues/13).
 
-Everything here is intentionally **deferred**, not broken. v1.0 is functional
-end-to-end (tests green under `just test-release`); these items are about
-distribution plumbing, OSS hygiene, and a few documented v1 trade-offs that may
-warrant attention before the repo flips public.
+The repo is **public** and the v0.1.0 release tooling is wired: a tag-triggered
+`release.yml` runs goreleaser to publish the GitHub Release (binaries + checksums
++ deb/rpm) and a Homebrew cask. Remaining items are intentionally **deferred**,
+not broken: the rest of the package-manager channels (Scoop / Chocolatey / AUR)
+and a few documented trade-offs. agentsync is functional end-to-end (tests green
+under `just test-release`).
 
 Order is roughly "do first" → "do later." The OSS-hygiene block and the repo-
-public flip are gating; the goreleaser/companion-repo block builds on those;
-the adapter-coverage and comment-preservation items can be addressed any time
-(or shipped in v1.1 / v1.x with documented limitations as today).
+public flip were the gating steps; the goreleaser/companion-repo block builds on
+those; the adapter-coverage and comment-preservation items can be addressed any
+time (or shipped in a later release with documented limitations as today).
 
 ---
 
@@ -31,7 +33,7 @@ the project looks like an abandoned experiment instead of a v1.0.
 - [ ] **`CODE_OF_CONDUCT.md`** — optional but expected on most public OSS.
       Contributor Covenant is fine.
 - [x] **`CHANGELOG.md`** — done: present at repo root. Keep-a-Changelog format
-      with an `[Unreleased]` (v1.0 beta) section; releases append from here.
+      with a `[0.1.0]` section cut from `[Unreleased]`; future releases append here.
 - [x] **`.github/ISSUE_TEMPLATE/`** — done: `bug_report.yml` +
       `feature_request.yml` + `config.yml` (routes security reports to a
       private advisory and usage questions to the user guide).
@@ -49,32 +51,31 @@ the project looks like an abandoned experiment instead of a v1.0.
 
 ## §2 — Make the repo public (gating)
 
-- [ ] **GitHub repo Settings → Change visibility → Public.** Do this AFTER §1
-      lands but BEFORE §3 (goreleaser publishing fails on private repos and
-      Homebrew taps need a fetchable archive URL).
-- [ ] **Final pre-flip review.** Skim the README install commands, the
-      LAUNCH_CHECKLIST link in any Issues, and confirm no in-progress drafts
-      (e.g. `docs/superpowers/research/`) reference private context that
-      shouldn't ship.
+- [x] **GitHub repo Settings → Change visibility → Public.** Done — the repo is
+      public, which §3's goreleaser publishing and the Homebrew tap require.
+- [x] **Final pre-flip review.** Done — README install commands rewritten to
+      match what v0.1.0 actually ships; no private-context drafts ship.
 
 ## §3 — Distribution plumbing
 
-The `.goreleaser.yaml` already has all four publishing blocks present but
-commented out with `# TODO: enable when going public`. Each item below is
-"create the companion repo, uncomment the block, validate."
+A tag-triggered `.github/workflows/release.yml` runs `goreleaser release` on any
+`v*` tag (pushed via `just release vX.Y.Z`). The GitHub Release, deb/rpm, and
+Homebrew cask are enabled; Scoop / Chocolatey / AUR stay commented out in
+`.goreleaser.yaml` (tracked in [issue #13](https://github.com/spxrogers/agentsync/issues/13)).
 
-- [ ] **Tag a release** — `git tag v1.0.0 && git push origin v1.0.0`. CI runs
-      goreleaser; with no companion repos in place yet, this still produces
-      release artifacts on the GitHub Releases page (binaries + checksums + the
-      already-active `nfpms` deb/rpm packages).
-- [ ] **Homebrew tap** — create `spxrogers/homebrew-agentsync` repo. Uncomment
-      the `brews:` block in `.goreleaser.yaml`. Validate on a clean macOS box:
+- [x] **Tag a release** — `just release v0.1.0` (validates `v`+semver, then tags
+      and pushes; the push fires `release.yml`). Produces binaries + checksums +
+      the `nfpms` deb/rpm packages on the GitHub Releases page.
+- [x] **Homebrew tap** — created [`spxrogers/homebrew-tap`](https://github.com/spxrogers/homebrew-tap)
+      (seeded with README + LICENSE). `.goreleaser.yaml` publishes via
+      `homebrew_casks` (the `brews` formula stanza is deprecated) using the
+      `HOMEBREW_TAP_GITHUB_TOKEN` secret. Validate on a clean macOS box:
       ```
-      brew tap spxrogers/agentsync
+      brew tap spxrogers/tap
       brew install agentsync
       agentsync --version
       ```
-      *Highest user impact* — most v1.0 users are on macOS.
+      *Highest user impact* — most users are on macOS.
 - [ ] **Scoop bucket** — create `spxrogers/scoop-agentsync` (or similar)
       repo. Uncomment the `scoops:` block. Validate on a clean Windows box:
       ```
@@ -86,14 +87,14 @@ commented out with `# TODO: enable when going public`. Each item below is
       Windows box.
 - [ ] **AUR package** — uncomment the `aurs:` block. Lower priority; AUR users
       are typically comfortable installing from source.
-- [ ] **Linux native packages (apt / yum)** — `nfpms` is already active and
-      produces deb/rpm artifacts on every tagged release. Decide hosting:
-      attach to GitHub Releases (simplest), or stand up apt/yum repos
-      (`packagecloud.io` is the usual paid option, GitHub Pages with `apt-ftparchive`
-      is the unpaid one). README install commands assume the repo path
-      exists — update those when this is decided.
-- [ ] **Companion repo READMEs** — each Homebrew tap / Scoop bucket / AUR
-      repo needs at minimum a one-paragraph README + LICENSE.
+- [x] **Linux native packages (deb / rpm)** — `nfpms` is active and produces
+      deb/rpm artifacts on every tagged release, attached to the GitHub Releases
+      page (the simplest hosting). The README points install at
+      `releases/latest/download/agentsync_linux_<arch>.{deb,rpm}`, which the
+      version-less `nfpms` file names resolve. Standing up apt/yum repos
+      (`packagecloud.io`, or GitHub Pages + `apt-ftparchive`) stays deferred.
+- [x] **Companion repo READMEs** — the Homebrew tap ships a README + LICENSE.
+      The Scoop bucket / AUR repos will need the same when created.
 
 ## §4.5 — Audit findings addressed (second review wave)
 
@@ -167,13 +168,13 @@ artifact distributed publicly.
       Document or design.
 - [ ] **OpenCode command frontmatter munge** → drops `argument-hint` with a
       Skip note. No OpenCode equivalent. Likely permanent; just document.
-- [x] **Codex (`v1.1`) and Cursor (`v1.2`) adapters** — decision made and
-      shipped (see §4.5): they remain NoopAdapter in
-      `internal/cli/registry_internal.go`, but `agent add codex` / `cursor` is
-      now **rejected** with a "not yet supported in v1" message
-      (override via `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` for plan/spec work), so a
-      user can no longer silently register a no-op agent. Promoting either
-      adapter to real translation is deferred to v1.1 (Codex) / v1.2 (Cursor).
+- [x] **Codex adapter — shipped.** Codex now has a real adapter (no longer a
+      NoopAdapter); see the [capability matrix](docs/capability-matrix.md) for
+      its per-component coverage and documented lossy spots. **Cursor** remains a
+      NoopAdapter in `internal/cli/registry_internal.go`: `agent add cursor` is
+      **rejected** (override via `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` for plan/spec
+      work) so a user can't silently register a no-op agent. Promoting Cursor to
+      real translation stays deferred (planned).
 
 ## §5 — One real correctness gap to verify
 
@@ -245,11 +246,11 @@ expect comments to survive an agentsync round-trip; today they don't.
 
 ## After the checklist
 
-Once §1–§3 are green, agentsync is publicly installable on the three target
-platforms. §4–§6 are recurring polish items — not blockers — that can ship as
-documented limits in v1.0 and get promoted in v1.1 / v1.2 / v1.x.
+With §1–§3 green, agentsync is publicly installable: Homebrew on macOS, deb/rpm
+and prebuilt binaries on Linux, and prebuilt binaries on Windows. §4–§6 are
+recurring polish items — not blockers — that ship as documented limits and get
+promoted in later releases.
 
-The full v1.0 design lives at
-`docs/superpowers/specs/2026-05-04-agentsync-design.md`. Plans for v1.1 (Codex
-adapter) and v1.2 (Cursor adapter) are explicitly deferred until v1.0 ships
-publicly per the v1.0 overview document.
+The full design lives at
+`docs/superpowers/specs/2026-05-04-agentsync-design.md`. The Codex adapter has
+since shipped; the Cursor adapter remains planned.
