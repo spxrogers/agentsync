@@ -57,22 +57,45 @@ nfpms:
     file_name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}{{ .ConventionalExtension }}"
 
 # --------------------------------------------------------------------------
-# Distribution / publishing blocks — deliberately NOT enabled yet.
-# Uncomment these once companion repos are created and the user is ready
-# to go public. See PR body for context.
-# TODO: enable when going public
+# Homebrew — ENABLED (since v0.1.0). goreleaser's `brews` (formula) stanza is
+# deprecated; we publish a *cask* of the prebuilt binary instead. On every
+# tagged release it pushes Casks/agentsync.rb to the spxrogers/homebrew-tap
+# repo, so `brew tap spxrogers/tap && brew install agentsync` works on macOS.
+# The default Actions GITHUB_TOKEN can't write a *different* repo, so the
+# release workflow supplies HOMEBREW_TAP_GITHUB_TOKEN (a token with
+# contents:write on the tap). The post-install hook strips the macOS quarantine
+# xattr Gatekeeper would otherwise put on the unsigned binary.
 # --------------------------------------------------------------------------
 
-# brews:
-#   - name: agentsync
-#     repository:
-#       owner: spxrogers
-#       name: homebrew-tap
-#     homepage: https://github.com/spxrogers/agentsync
-#     description: Centrally manage AI coding-agent configurations
-#     license: MIT
-#     install: bin.install "agentsync"
-#     test: system "#{bin}/agentsync --version"
+homebrew_casks:
+  - name: agentsync
+    binaries: [agentsync]
+    repository:
+      owner: spxrogers
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/spxrogers/agentsync
+    description: Centrally manage AI coding-agent configurations
+    license: MIT
+    url:
+      verified: "github.com/spxrogers/agentsync/"
+    commit_author:
+      name: goreleaser-bot
+      email: goreleaser@users.noreply.github.com
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/agentsync"]
+          end
+
+# --------------------------------------------------------------------------
+# Remaining publishing channels — deliberately NOT enabled yet. Uncomment each
+# once its companion repo / credential exists and you're ready to ship it.
+# Tracked in https://github.com/spxrogers/agentsync/issues/13.
+# --------------------------------------------------------------------------
 
 # scoops:
 #   - name: agentsync

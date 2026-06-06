@@ -9,9 +9,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
-The v1.0 beta. Functional end-to-end (green under `just test-release`); remaining
-work before the `1.0.0` tag is distribution plumbing and a few documented
-trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
+## [0.1.0] — 2026-06-05
+
+The first public release (beta). Functional end-to-end (green under
+`just test-release`): Claude Code, OpenCode, and Codex adapters plus the full
+apply / status / diff / reconcile / import pipeline and an age-encrypted secret
+vault. Distributed as GitHub Release binaries (linux/darwin/windows ×
+amd64/arm64), checksums, deb/rpm packages, and a Homebrew cask
+(`brew tap spxrogers/tap && brew install agentsync`). Remaining package-manager
+channels and a few documented trade-offs are tracked in
+[issue #13](https://github.com/spxrogers/agentsync/issues/13); see also
+[Known limits](README.md#known-limits).
 
 ### Added
 
@@ -589,9 +597,11 @@ trade-offs (see [Known limits](README.md#known-limits-in-v1x)).
 
 ### Known limitations
 
-Documented v1.x trade-offs rather than bugs — see the
-[README](README.md#known-limits-in-v1x) and [capability matrix](docs/capability-matrix.md):
-Codex/Cursor adapters are no-ops (planned v1.1/v1.2); OpenCode hooks/LSP are
+Documented 0.x trade-offs rather than bugs — see the
+[README](README.md#known-limits) and [capability matrix](docs/capability-matrix.md):
+the Cursor adapter is a no-op (planned); Codex projections drop fields Codex has
+no target for (reported in the apply translation report); OpenCode hooks/LSP are
 skipped; TOML/JSONC comments are not preserved across write-back.
 
-[Unreleased]: https://github.com/spxrogers/agentsync/commits/main
+[Unreleased]: https://github.com/spxrogers/agentsync/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/spxrogers/agentsync/releases/tag/v0.1.0

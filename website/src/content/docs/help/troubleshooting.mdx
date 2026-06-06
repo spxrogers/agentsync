@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Concrete error scenarios, the documented v1.x trade-offs behind them, and how to fix or work around each.
+description: Concrete error scenarios, the documented trade-offs behind them, and how to fix or work around each.
 sidebar:
   order: 2
 ---
@@ -51,7 +51,7 @@ zero ops for it.
 
 ---
 
-## Documented v1.x trade-offs
+## Documented trade-offs
 
 These are deliberate, not regressions.
 
@@ -68,7 +68,7 @@ with **no** foreign-collision backup — agentsync considers it its own.
 ### Comment preservation
 Comments in `mcp/*.toml` and in agent-side `opencode.json` are **not** preserved
 across a reconcile write-back or import in the *rewritten* section. Comments in
-unrelated sections survive. Deferred to v1.x.
+unrelated sections survive. Deferred to a later release.
 
 ### Insecure plugin / marketplace sources
 `http://` and `git://` sources are rejected by default to prevent a MITM swap.
