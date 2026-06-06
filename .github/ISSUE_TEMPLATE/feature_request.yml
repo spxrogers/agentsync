@@ -8,8 +8,8 @@ body:
         agentsync is personal-first and OSS-shareable — breadth isn't a goal, so
         proposals that fit the existing model land fastest. Check the
         [capability matrix](../blob/main/docs/capability-matrix.md) and
-        [known limits](../blob/main/README.md#known-limits-in-v1x) first; some
-        gaps are deliberate v1.x deferrals.
+        [known limits](../blob/main/README.md#known-limits) first; some
+        gaps are deliberate deferrals.
   - type: textarea
     id: problem
     attributes:

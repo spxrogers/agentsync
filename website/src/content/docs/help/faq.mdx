@@ -54,13 +54,13 @@ user-level *rules* live in app-local storage, so rules stay project-scope only.
 
 ## What about Continue, Gemini CLI, or Aider?
 
-Not on the v1.x roadmap.
+Planned — on the roadmap, not yet implemented.
 
 ## Are my TOML / JSONC comments preserved on a round-trip?
 
 Not yet. Comments in `mcp/*.toml` and in agent-side `opencode.json` are not
 preserved across a reconcile write-back or import **in the rewritten section** —
-comments in unrelated sections survive. This is a documented v1.x limitation.
+comments in unrelated sections survive. This is a documented limitation.
 
 ## Do I need the `age` CLI?
 

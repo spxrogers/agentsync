@@ -1,0 +1,38 @@
+name: release
+# Tag-triggered publish. CI (ci.yml) only ever runs goreleaser in
+# `--snapshot --skip publish` mode to prove the cross-build stays viable; this
+# workflow is the one that actually cuts a GitHub Release and updates the
+# Homebrew tap. Push an annotated `vX.Y.Z` tag on a green `main` commit and
+# GoReleaser takes it from there.
+on:
+  push:
+    tags: ["v*"]
+
+# goreleaser needs to create the GitHub Release + upload assets in THIS repo.
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    name: goreleaser (publish)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # Full history + tags so goreleaser can build the changelog and derive
+        # the version from the tag.
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --clean
+        env:
+          # Creates the Release + uploads archives/checksums/deb/rpm here.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pushes Casks/agentsync.rb to spxrogers/homebrew-tap, a *different*
+          # repo the default GITHUB_TOKEN can't write — supply a PAT/scoped token
+          # with contents:write on the tap. If this secret is unset the brew step
+          # fails; everything else (GitHub Release, deb/rpm) still publishes.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

@@ -8,13 +8,14 @@ Define your MCP servers, memory, skills, and marketplace plugins once in
 `~/.agentsync/`. Run `agentsync apply`. They land — correctly translated — in
 Claude Code, OpenCode, and Codex CLI (with Cursor planned).
 
-[Quickstart](#quickstart) · [Install](#install) · **[Docs site → agentsync.cc](https://agentsync.cc)** · [User guide](docs/user-guide.md) · [Known limits](#known-limits-in-v1x)
+[Quickstart](#quickstart) · [Install](#install) · **[Docs site → agentsync.cc](https://agentsync.cc)** · [User guide](docs/user-guide.md) · [Known limits](#known-limits)
 
 </div>
 
-> **Status: beta.** v1.0 ships Claude Code + OpenCode end-to-end. The tool is
-> functional and tested under `just test-release`; package-manager distribution
-> and a few documented trade-offs are still being finalized.
+> **Status: beta (v0.1.0).** Ships Claude Code, OpenCode, and Codex end-to-end.
+> The tool is functional and tested under `just test-release`; the canonical
+> layout, CLI surface, and state schema are stabilizing toward `1.0.0` and may
+> still change. A few documented trade-offs remain (see [Known limits](#known-limits)).
 
 ---
 
@@ -74,29 +75,12 @@ Full ✓/◐/✗ breakdown per component: **[capability matrix](docs/capability-
 
 ## Install
 
-> **Pre-release:** the package-manager channels below are wired in
-> `.goreleaser.yaml` but are published starting with the first tagged release.
-> Until then, **build from source**:
->
->     go install github.com/spxrogers/agentsync/cmd/agentsync@latest
->
-> or clone and `go build ./cmd/agentsync`.
-
 ### macOS — Homebrew
 
     brew tap spxrogers/tap
     brew install agentsync
 
-### Windows — Scoop
-
-    scoop bucket add spxrogers https://github.com/spxrogers/scoop-bucket
-    scoop install agentsync
-
-### Windows — Chocolatey
-
-    choco install agentsync
-
-### Linux
+### Linux — deb / rpm
 
 Pick the package for your architecture (`amd64` or `arm64`).
 
@@ -109,9 +93,26 @@ RPM:
 
     sudo rpm -i https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_amd64.rpm
 
-Arch (AUR):
+### Any platform — prebuilt binary
 
-    yay -S agentsync-bin
+Download the archive for your OS/arch from the
+[latest release](https://github.com/spxrogers/agentsync/releases/latest)
+(`linux` / `darwin` / `windows` × `amd64` / `arm64`), extract it, and put the
+`agentsync` binary on your `PATH`. This is the install path for Windows until
+Scoop/Chocolatey land.
+
+### From source
+
+    go install github.com/spxrogers/agentsync/cmd/agentsync@latest
+
+or clone and `go build ./cmd/agentsync`.
+
+### Coming soon
+
+Scoop (Windows), Chocolatey (Windows), and AUR (Arch) packaging is wired in
+`.goreleaser.yaml` but not published yet — tracked in
+[issue #13](https://github.com/spxrogers/agentsync/issues/13). Until then, use the
+prebuilt binary or `go install` above.
 
 ## Cross-machine sync
 
@@ -131,18 +132,18 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 
 `agentsync diff` redacts every resolved `${secret:…}` value before printing, so a piped diff doesn't leak credentials to logs.
 
-## Known limits in v1.x
+## Known limits
 
-- **OpenCode hooks**: OpenCode hooks are JS/TS plugins, not declarative shell commands. agentsync v1 does NOT auto-translate Claude hooks to OpenCode. Hand-author a small JS/TS plugin if you need a hook on OpenCode.
+- **OpenCode hooks**: OpenCode hooks are JS/TS plugins, not declarative shell commands. agentsync does NOT auto-translate Claude hooks to OpenCode. Hand-author a small JS/TS plugin if you need a hook on OpenCode.
 - **Codex projections are lossy where Codex differs**: subagents project to Codex's TOML agent format (the `tools`/`color` frontmatter has no target and is dropped, reported in the apply report); slash commands map to Codex *custom prompts* which are global-only, so a **project-scope** command is skipped; hooks mirror Claude's declarative hook schema as inline `[hooks.*]` tables in `~/.codex/config.toml` but only for the events Codex recognizes (Claude's `SessionEnd`/`Notification` drop). All of these are surfaced in the translation report — nothing is dropped silently.
-- **Cursor adapter**: not implemented in v1 — registers as a no-op adapter (planned), and `agent add cursor` is rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. Cursor's planned coverage includes skills and subagents (which it stores on the filesystem under `.cursor/skills/` and `.cursor/agents/`), but its user-level *rules* live in app-local storage (not the filesystem), so the adapter will manage rules at project scope only.
+- **Cursor adapter**: not implemented yet — registers as a no-op adapter (planned), and `agent add cursor` is rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. Cursor's planned coverage includes skills and subagents (which it stores on the filesystem under `.cursor/skills/` and `.cursor/agents/`), but its user-level *rules* live in app-local storage (not the filesystem), so the adapter will manage rules at project scope only.
 - **LSP projection beyond Claude**: OpenCode/Cursor LSP support is deferred (Codex has no LSP concept at all). Claude plugins that include LSP servers install correctly on Claude itself; on other agents you'll see `lsp server X skipped` in the apply translation report.
-- **cursor agent registration**: `agent add cursor` is rejected in v1.0 because its adapter is a noop. Set `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` to register anyway (apply will silently emit zero ops for it).
-- **TOML / JSONC comment preservation**: comments in `~/.agentsync/mcp/*.toml`, in agent-side `opencode.json`, and in Codex's `~/.codex/config.toml` are NOT preserved across reconcile `[w]`rite-back or import / apply. Hand-edited comments survive in unrelated sections; the rewritten section will be re-emitted without comments. Deferred to v1.x.
+- **cursor agent registration**: `agent add cursor` is rejected because its adapter is a noop. Set `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` to register anyway (apply will silently emit zero ops for it).
+- **TOML / JSONC comment preservation**: comments in `~/.agentsync/mcp/*.toml`, in agent-side `opencode.json`, and in Codex's `~/.codex/config.toml` are NOT preserved across reconcile `[w]`rite-back or import / apply. Hand-edited comments survive in unrelated sections; the rewritten section will be re-emitted without comments. Deferred to a later release.
 - **Hand-edits to agentsync-owned keys** in shared agent files (e.g. an MCP server entry in `~/.claude.json` that agentsync owns): the next `apply` overwrites them with NO foreign-collision backup, because agentsync considers them its own. Use `agentsync reconcile` (the drift classifier catches the edit and offers `[w]`rite-back) BEFORE the next apply if you want to keep them.
 - **Plain-http / git:// plugin sources** are rejected by default to prevent MITM swap. Set `AGENTSYNC_ALLOW_INSECURE_URLS=1` for internal mirrors.
 - **Symlinked destinations** (e.g. `~/.claude.json` is a chezmoi symlink into your dotfiles repo) are rejected by default — a rename onto the path would replace the symlink with a regular file and strand your linked source. Set `AGENTSYNC_ALLOW_SYMLINK_DEST=1` to write through the symlink instead (the underlying file is updated in place; the link survives).
-- **Continue, Gemini CLI, Aider**: not on the v1.x roadmap.
+- **Continue, Gemini CLI, Aider**: planned — not yet implemented.
 
 ## Environment overrides
 
@@ -177,7 +178,7 @@ your real `~/.claude.json`, `~/.config/opencode/`, or `~/.agentsync/`.
 | Layer                                       | Question it answers                          | Command             |
 | ------------------------------------------- | -------------------------------------------- | ------------------- |
 | Unit + integration (`internal/*/*_test.go`) | Did I break an internal contract?            | `just test`         |
-| Lifecycle e2e (`test/e2e`, build tag `e2e`) | Does the binary survive the v1 happy path?   | `just test-e2e`     |
+| Lifecycle e2e (`test/e2e`, build tag `e2e`) | Does the binary survive the happy path?      | `just test-e2e`     |
 | BDD Gherkin lock (`test/bdd`, tag `bdd`)    | Are the spec's north-star behaviours intact? | `just test-bdd`     |
 | **All layers in one container run**         | Can I safely cut a release right now?        | `just test-release` |
 

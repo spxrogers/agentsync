@@ -18,7 +18,7 @@ nothing is dropped silently.
 
 ## Agent status
 
-| Agent | Status in v1.0 / beta | Notes |
+| Agent | Status (beta) | Notes |
 |---|---|---|
 | **Claude Code** | ✅ Full adapter | All seven components, including LSP. The reference implementation. Its installed **plugins + marketplaces** are captured by `import` (read from `enabledPlugins` / `extraKnownMarketplaces`); on `apply`, each plugin's components project to Claude's native paths and the enablement keys themselves are deliberately left untouched (`PluginIngester` is read-only — see the [shared invariant](#plugin-importapply-the-shared-invariant) below). |
 | **OpenCode** | ✅ Adapter (some components projected/skipped) | MCP, memory, skills, subagents, commands. Hooks and LSP are skipped with a warning. No native plugin/marketplace concept, so nothing for plugin `import` to capture; it still *receives* plugin-projected components (skills, MCP, …) on `apply`. |
@@ -202,10 +202,10 @@ wired in v1** — the projector does not consult it. Use the `agents` allowlist.
 
 ---
 
-## Known limits (v1.x)
+## Known limits
 
 These are documented trade-offs, not regressions. The authoritative list lives
-in the [README](../README.md#known-limits-in-v1x); the highlights:
+in the [README](../README.md#known-limits); the highlights:
 
 - **Comment preservation** — comments in `mcp/*.toml`, in `opencode.json`, and in
   Codex's `~/.codex/config.toml` are not preserved across a write-back/import
@@ -218,7 +218,7 @@ in the [README](../README.md#known-limits-in-v1x); the highlights:
   `AGENTSYNC_ALLOW_INSECURE_URLS=1`.
 - **Symlinked destinations** are rejected by default; override with
   `AGENTSYNC_ALLOW_SYMLINK_DEST=1`.
-- **Not on the roadmap**: Continue, Gemini CLI, Aider.
+- **Planned (not yet implemented)**: Continue, Gemini CLI, Aider.
 
 See the [user guide](user-guide.md) to put this into practice.
 
