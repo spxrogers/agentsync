@@ -3,12 +3,13 @@ dist/
 # generated types
 .astro/
 
-# contract docs mirrored from ../docs by scripts/sync-docs.mjs
+# canonical docs mirrored from ../docs by scripts/sync-docs.mjs
 # (regenerated on every dev/build — edit docs/*.md, never these copies)
 src/content/docs/concepts/index.md
 src/content/docs/internals/architecture.md
 src/content/docs/internals/components.md
 src/content/docs/reference/capability-matrix.md
+src/content/docs/comparison/index.md
 
 # dependencies
 node_modules/

@@ -14,6 +14,7 @@ or jump to whatever you need.
 | **[User guide](user-guide.md)** | Install agentsync and go from 0→100: first sync, daily loop, secrets, plugins, project config. | Users |
 | **[Concepts & glossary](concepts.md)** | Understand the three-state model, drift, reconcile, and every term in one page. | Everyone |
 | **[Capability matrix](capability-matrix.md)** | Know exactly what each agent supports and what's lossy or deferred. | Users · contributors |
+| **[How agentsync compares](comparison.md)** | See how agentsync stacks up against gaal, rulesync, agentsmesh, and the rest of the landscape. | Users · evaluators |
 | **[Architecture](architecture.md)** | See how the apply/capture pipelines, drift classifier, and secret invariants work. | Contributors |
 | **[Component map](components.md)** | Navigate the codebase package by package. | Contributors |
 
@@ -28,7 +29,7 @@ or jump to whatever you need.
 **Suggested reading order**
 
 1. New user → [User guide](user-guide.md) (skim [Concepts](concepts.md) when a term is unfamiliar).
-2. Evaluating fit → [Capability matrix](capability-matrix.md).
+2. Evaluating fit → [Capability matrix](capability-matrix.md) and [How agentsync compares](comparison.md).
 3. Contributing → [Concepts](concepts.md) → [Architecture](architecture.md) → [Component map](components.md) → [CONTRIBUTING](../CONTRIBUTING.md).
 
 ---

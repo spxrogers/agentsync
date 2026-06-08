@@ -44,6 +44,7 @@ export default defineConfig({
 					label: 'Start here',
 					items: [
 						{ label: 'What is agentsync?', slug: 'getting-started/introduction' },
+						{ label: 'How agentsync compares', slug: 'comparison' },
 						{ label: 'Agent Capability matrix', slug: 'reference/capability-matrix' },
 						{ label: 'The mental model', slug: 'getting-started/mental-model' },
 						{ label: 'Install', slug: 'getting-started/install' },

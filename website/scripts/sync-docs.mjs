@@ -1,8 +1,10 @@
-// Mirror the canonical contract docs from ../docs into the Starlight content
-// tree. These four pages are the in-repo "contract" (see CLAUDE.md) and stay
-// source-of-truth in docs/*.md; this script regenerates the site copies so the
-// website can never drift from them. The generated files are gitignored and
-// rebuilt on every `npm run dev` / `npm run build` (predev / prebuild hooks).
+// Mirror canonical docs from ../docs into the Starlight content tree. Four of
+// these are the in-repo "contract" pages (concepts, architecture, components,
+// capability matrix — see CLAUDE.md); the comparison page is mirrored the same
+// way. All stay source-of-truth in docs/*.md; this script regenerates the site
+// copies so the website can never drift from them. The generated files are
+// gitignored and rebuilt on every `npm run dev` / `npm run build` (predev /
+// prebuild hooks).
 //
 // Do NOT hand-edit the generated files — edit docs/*.md and re-run.
 
@@ -24,6 +26,7 @@ const pageMap = {
   'architecture.md': '/internals/architecture/',
   'components.md': '/internals/components/',
   'capability-matrix.md': '/reference/capability-matrix/',
+  'comparison.md': '/comparison/',
   'user-guide.md': '/getting-started/introduction/',
 };
 
@@ -64,6 +67,13 @@ const jobs = [
     description:
       'What each agent supports, per component — native, projected (lossy), or skipped.',
   },
+  {
+    src: 'comparison.md',
+    out: 'comparison/index.md',
+    title: 'How agentsync compares',
+    description:
+      'agentsync vs gaal, rulesync, agentsmesh, and the rest of the AI coding-agent config landscape — and the bidirectional, secret-safe combination that sets it apart.',
+  },
 ];
 
 function rewriteLinks(md) {
@@ -100,7 +110,7 @@ function mirrorNote(src) {
   return [
     ':::note[Mirrored from the repo]',
     `This page is generated from [\`docs/${src}\`](${GH_BLOB}/docs/${src}), the`,
-    'canonical in-repo contract doc. Edit that file, not this page.',
+    'canonical in-repo doc. Edit that file, not this page.',
     ':::',
     '',
     '',
