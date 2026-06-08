@@ -41,7 +41,7 @@ fidelity claim.
 
 | Tool | Lang | Agents | Mem | Sk | MCP | Sub | Cmd | Hooks | Bidirectional / drift | Secrets |
 |---|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|---|---|
-| ⭐️ **agentsync** ⭐️ *(this tool)* | **Go** | 3 (+Cursor planned) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ **3-state classifier + `reconcile`/`import` capture** | ✅ **age vault, `${secret:}`/`${env:}`, re-ref + leak backstop** |
+| ⭐️ **agentsync** ⭐️ *(this tool)* | **Go** | 3 (Cursor + more planned) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ **3-state classifier + `reconcile`/`import` capture** | ✅ **age vault, `${secret:}`/`${env:}`, re-ref + leak backstop** |
 | [agentsmesh](https://github.com/sampleXbro/agentsmesh) | TS/Py | 30+ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `generate`/`import`/`check` (lock-file drift in CI) | ❌ (defers to your store) |
 | [rulesync](https://github.com/dyoshikawa/rulesync) | TS | 25+ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ `generate` + `import` (one-shot ingest, no state model) | ❌ |
 | [gaal](https://github.com/getgaal/gaal) | **Go** | 17–20 | ◐ files | ✅ | ✅ | ❌ | ◐ files | ✅ | ❌ one-way (`--prune`, `init --import-all` bootstrap) | ❌ |
@@ -96,10 +96,11 @@ Be honest about the columns where agentsync doesn't lead:
   memory/skills/MCP/subagents/commands/hooks surface. Breadth alone is no longer a
   differentiator.
 - **Agent count is a column agentsync loses today.** agentsync targets **3
-  agents + Cursor (planned)**; gaal, ruler, rulesync, and agentsmesh advertise
-  17–32. The adapter architecture is built to add more — the coverage simply isn't
-  there yet. (See the [capability matrix](capability-matrix.md) for the current
-  set and what each component projects to.)
+  agents today** (Cursor, Continue, Gemini CLI, and Aider are planned); gaal,
+  ruler, rulesync, and agentsmesh advertise 17–32. The adapter architecture is
+  built to add more — the coverage simply isn't there yet. (See the
+  [capability matrix](capability-matrix.md) for the current set and what each
+  component projects to.)
 - **Skills sharing is commoditized — don't sell it.** Vercel's
   [`skills`](https://github.com/vercel-labs/skills) (~21k★),
   [`skillshare`](https://github.com/runkids/skillshare) (~2k★), and
