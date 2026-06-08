@@ -15,8 +15,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   surveying the AI coding-agent config landscape (gaal, agentsmesh, rulesync,
   ruler, ai-rulez, the MCP managers, the skills tools, the AGENTS.md standard),
   with a feature matrix across the multi-agent / bidirectional / component-coverage
-  / secrets axes and an honest read on where agentsync is differentiated vs. where
-  it has real competition. Mirrored to the site at `/comparison/` via
+  / secrets axes and an honest read on where agentsync is differentiated.
+  Mirrored to the site at `/comparison/` via
   `sync-docs.mjs` (sidebar: **Start here → How agentsync compares**).
 
 ## [0.1.0] — 2026-06-05

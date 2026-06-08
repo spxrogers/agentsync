@@ -52,6 +52,7 @@ fidelity claim.
 | [ai-config-sync-manager](https://github.com/slash9494/ai-config-sync-manager) | Node | 2 (CC↔Codex) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ true two-way host-aware translation + rollback | ◐ carries MCP bearer tokens |
 | [nicepkg/vsync](https://github.com/nicepkg/vsync) | TS | 4 | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ | ◐ one-way from a "source-of-truth" tool (+ import) | ◐ rewrites ref syntax, never expands |
 | [mcpup](https://github.com/mohammedsamin/mcpup) | **Go** | 13 | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ◐ per-client enable/disable + `doctor` drift | ◐ plain env |
+| [skillshare](https://skillshare.runkids.cc) | **Go** | 60+ | ◐ files | ✅ | ❌ | ✅ | ◐ files | ❌ | ❌ one-way (symlink/copy; `commit` checkpoints) | ❌ (skill security audit only) |
 
 **Adjacent / DIY worth knowing:** the **chezmoi pattern** (a dotfile manager +
 Go templates rendering per-agent files, *with* age/`private_` secrets — the
@@ -83,31 +84,6 @@ same bytes everywhere, no translation or secrets).
 - **Go + safety invariants.** `gaal`, `ai-rulez`, and `mcpup` are also Go, but
   none pairs the single-binary distribution with agentsync's secret/leak-guard
   architecture.
-
-## Where agentsync has real competition
-
-Be honest about the columns where agentsync doesn't lead:
-
-- **The "one config → many agents" premise is crowded.** gaal, agentsmesh,
-  rulesync, ruler, ai-rulez, caliber, amtiYo, and vsync all open with some version
-  of "the same MCP server configured three times in three JSON schemas." Lead with
-  secrets and drift, not the premise.
-- **Component breadth is matched.** agentsmesh and rulesync cover the same
-  memory/skills/MCP/subagents/commands/hooks surface. Breadth alone is no longer a
-  differentiator.
-- **Agent count is a column agentsync loses today.** agentsync targets **3
-  agents today** (Cursor, Continue, Gemini CLI, and Aider are planned); gaal,
-  ruler, rulesync, and agentsmesh advertise 17–32. The adapter architecture is
-  built to add more — the coverage simply isn't there yet. (See the
-  [capability matrix](capability-matrix.md) for the current set and what each
-  component projects to.)
-- **Skills sharing is commoditized — don't sell it.** Vercel's
-  [`skills`](https://github.com/vercel-labs/skills) (~21k★),
-  [`skillshare`](https://github.com/runkids/skillshare) (~2k★), and
-  [`skillkit`](https://github.com/rohitg00/skillkit) (~1.2k★) own this, Cursor
-  natively reads Claude/Codex skill directories, and `SKILL.md` is converging into
-  a standard. Skills are table stakes; agentsync's value is the *non-skill*
-  surface (MCP, subagents, hooks, memory) plus secrets and drift.
 
 ## The category map
 
