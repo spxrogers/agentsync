@@ -119,7 +119,18 @@ repo-root `.mcp.json` for project-scope MCP servers, Cursor's `.cursor/mcp.json`
 and Cline's `~/.cline/mcp.json`),
 `merge-jsonc-keys` (OpenCode's comment-tolerant `opencode.json`), and
 `merge-toml-keys` (Codex's `config.toml`). The Continue adapter co-owns no shared
-file (it projects one block file per item), so it has no key-merge strategy. The merge *currency* is always a
+file (it projects one block file per item), so it has no key-merge strategy.
+
+**Deep vs breadth-tier adapters.** The nine hand-written packages above are
+*deep* adapters — agent-specific, multi-component, often bidirectional. Beyond
+them, a single data-driven *generic* adapter (`internal/adapter/generic`) serves a
+long tail of agents from a verified `Spec` table — memory + (where expressible)
+MCP only, every other component reported as a skip. Both kinds implement the same
+`Adapter` interface and register identically, so the rest of the pipeline (plan,
+classify, write, capture, state) treats them uniformly. The set of valid agent
+names is derived from the deep package list **plus** `generic.Specs()` (see
+`internal/cli/agent.go` `allAgentNames`), so adding a breadth agent — a verified
+table row — needs no change to validation, `doctor`, or `init`. The merge *currency* is always a
 `map[string]any` decoded from the rendered op's JSON `Content`, so the
 pipeline's pointer/ownership machinery (owned-key synthesis, orphan cleanup,
 per-pointer state hashing, foreign-collision backup) is format-agnostic; only

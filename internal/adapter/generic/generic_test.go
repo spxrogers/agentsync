@@ -1,0 +1,329 @@
+package generic_test
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/adapter/generic"
+	"github.com/spxrogers/agentsync/internal/secrets"
+	"github.com/spxrogers/agentsync/internal/source"
+)
+
+func findOp(ops []adapter.FileOp, suffix string) *adapter.FileOp {
+	for i := range ops {
+		if strings.HasSuffix(filepath.ToSlash(ops[i].Path), suffix) {
+			return &ops[i]
+		}
+	}
+	return nil
+}
+
+func hasSkip(skips []adapter.Skip, component, name string) bool {
+	for _, s := range skips {
+		if s.Component == component && s.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// --- adapter-surface from spec ---
+
+func TestCapabilitiesAndStrategyFromSpec(t *testing.T) {
+	memOnly := generic.New(generic.Spec{Name: "mem", Memory: generic.FileTarget{Project: "AGENTS.md"}}, generic.Options{})
+	if got := memOnly.Capabilities(); got&adapter.CapMemory == 0 || got&adapter.CapMCP != 0 {
+		t.Fatalf("memory-only caps wrong: %v", got)
+	}
+	if memOnly.KeyMergeStrategy() != "" {
+		t.Fatalf("memory-only must have no key-merge strategy")
+	}
+	withMCP := generic.New(generic.Spec{Name: "x", MCP: generic.MCPTarget{Project: ".x/mcp.json"}}, generic.Options{})
+	if withMCP.Capabilities()&adapter.CapMCP == 0 {
+		t.Fatal("MCP cap missing")
+	}
+	if withMCP.KeyMergeStrategy() != "merge-json-keys" {
+		t.Fatal("MCP spec must use merge-json-keys")
+	}
+}
+
+func TestDetect(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, ".zed"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a := generic.New(generic.Spec{Name: "zed", DetectDir: ".zed"}, generic.Options{TargetRoot: tmp, LookPath: func(string) (string, error) { return "", errors.New("no") }})
+	if ok, _ := a.Detect(); !ok {
+		t.Fatal("Detect by dir failed")
+	}
+	b := generic.New(generic.Spec{Name: "z", DetectBin: "zbin"}, generic.Options{TargetRoot: t.TempDir(), LookPath: func(f string) (string, error) {
+		if f == "zbin" {
+			return "/usr/bin/zbin", nil
+		}
+		return "", errors.New("no")
+	}})
+	if ok, _ := b.Detect(); !ok {
+		t.Fatal("Detect by bin failed")
+	}
+}
+
+func TestProjectScopeGuard(t *testing.T) {
+	a := generic.New(generic.Spec{Name: "x", Memory: generic.FileTarget{Project: "AGENTS.md"}}, generic.Options{TargetRoot: t.TempDir()})
+	if _, _, err := a.Render(secrets.ForRender(source.Canonical{Memory: source.Memory{Body: "x\n"}}), adapter.ScopeProject, ""); !errors.Is(err, adapter.ErrProjectRootRequired) {
+		t.Fatalf("Render guard: %v", err)
+	}
+	if _, err := a.Ingest(adapter.ScopeProject, ""); !errors.Is(err, adapter.ErrProjectRootRequired) {
+		t.Fatalf("Ingest guard: %v", err)
+	}
+}
+
+// --- memory render: scope-aware ---
+
+func TestRender_Memory_ScopeAware(t *testing.T) {
+	tmp := t.TempDir()
+	spec := generic.Spec{Name: "amp", Memory: generic.FileTarget{User: ".config/amp/AGENTS.md", Project: "AGENTS.md"}}
+	a := generic.New(spec, generic.Options{TargetRoot: tmp})
+
+	uops, _, _ := a.Render(secrets.ForRender(source.Canonical{Memory: source.Memory{Body: "be terse\n"}}), adapter.ScopeUser, "")
+	if op := findOp(uops, ".config/amp/AGENTS.md"); op == nil || string(op.Content) != "be terse\n" {
+		t.Fatalf("user memory wrong: %+v", uops)
+	}
+
+	proj := t.TempDir()
+	pc := source.Canonical{Memory: source.Memory{Body: "be terse\n"}, Project: &source.Canonical{Memory: source.Memory{Body: "be terse\n"}}}
+	pops, _, _ := a.Render(secrets.ForRender(pc), adapter.ScopeProject, proj)
+	if op := findOp(pops, "AGENTS.md"); op == nil || op.Path != filepath.Join(proj, "AGENTS.md") {
+		t.Fatalf("project memory wrong: %+v", pops)
+	}
+}
+
+func TestRender_Memory_ScopeGapReported(t *testing.T) {
+	// Project-only memory: user scope should report a skip.
+	spec := generic.Spec{Name: "goose", Memory: generic.FileTarget{Project: ".goosehints"}}
+	a := generic.New(spec, generic.Options{TargetRoot: t.TempDir()})
+	ops, skips, _ := a.Render(secrets.ForRender(source.Canonical{Memory: source.Memory{Body: "x\n"}}), adapter.ScopeUser, "")
+	if findOp(ops, ".goosehints") != nil {
+		t.Fatal("project-only memory must not render at user scope")
+	}
+	if !hasSkip(skips, "memory", "goose") {
+		t.Fatalf("expected memory scope-gap skip, got %+v", skips)
+	}
+}
+
+// --- MCP dialects ---
+
+func mcpServers(t *testing.T, content []byte, rootKey string) map[string]any {
+	t.Helper()
+	var top map[string]any
+	if err := json.Unmarshal(content, &top); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, content)
+	}
+	m, ok := top[rootKey].(map[string]any)
+	if !ok {
+		t.Fatalf("root key %q missing: %v", rootKey, top)
+	}
+	return m
+}
+
+func TestRender_MCP_Dialects(t *testing.T) {
+	stdio := source.MCPServer{ID: "s", Server: source.MCPServerSpec{Type: "stdio", Command: "npx", Args: []string{"-y", "p"}, Env: map[string]string{"K": "v"}}}
+	remote := source.MCPServer{ID: "r", Server: source.MCPServerSpec{Type: "http", URL: "https://x/mcp", Headers: map[string]string{"A": "b"}}}
+	c := source.Canonical{MCPServers: []source.MCPServer{stdio, remote}}
+
+	cases := []struct {
+		name        string
+		mcp         generic.MCPTarget
+		rootKey     string
+		wantType    bool   // transport field present
+		stdioType   string // expected transport value for stdio
+		remoteURLK  string // expected remote url key
+		remoteValue string
+	}{
+		{"default-inferred", generic.MCPTarget{Project: ".a/mcp.json"}, "mcpServers", false, "", "url", ""},
+		{"claude-type", generic.MCPTarget{Project: ".b/mcp.json", TransportKey: "type"}, "mcpServers", true, "stdio", "url", "http"},
+		{"copilot-servers", generic.MCPTarget{Project: ".vscode/mcp.json", RootKey: "servers", TransportKey: "type"}, "servers", true, "stdio", "url", "http"},
+		{"copilot-cli-local", generic.MCPTarget{Project: ".c/mcp.json", TransportKey: "type", StdioValue: "local"}, "mcpServers", true, "local", "url", "http"},
+		{"zed-context", generic.MCPTarget{Project: ".zed/settings.json", RootKey: "context_servers"}, "context_servers", false, "", "url", ""},
+		{"qwen-httpurl", generic.MCPTarget{Project: ".qwen/settings.json", RemoteURLKey: "httpUrl"}, "mcpServers", false, "", "httpUrl", ""},
+		{"crush-mcp", generic.MCPTarget{Project: ".x/crush.json", RootKey: "mcp", TransportKey: "type"}, "mcp", true, "stdio", "url", "http"},
+	}
+	proj := t.TempDir()
+	pc := c
+	pc.Project = &c
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := generic.New(generic.Spec{Name: "t", MCP: tc.mcp}, generic.Options{TargetRoot: t.TempDir()})
+			ops, _, err := a.Render(secrets.ForRender(pc), adapter.ScopeProject, proj)
+			if err != nil {
+				t.Fatal(err)
+			}
+			op := findOp(ops, filepath.Base(tc.mcp.Project))
+			if op == nil {
+				t.Fatalf("mcp op missing: %+v", ops)
+			}
+			servers := mcpServers(t, op.Content, tc.rootKey)
+			sm := servers["s"].(map[string]any)
+			rm := servers["r"].(map[string]any)
+			if sm["command"] != "npx" {
+				t.Fatalf("stdio command wrong: %v", sm)
+			}
+			if tc.wantType {
+				if sm["type"] != tc.stdioType {
+					t.Fatalf("stdio transport value = %v, want %s", sm["type"], tc.stdioType)
+				}
+			} else if _, has := sm["type"]; has {
+				t.Fatalf("inferred dialect must not write a type field: %v", sm)
+			}
+			if rm[tc.remoteURLK] != "https://x/mcp" {
+				t.Fatalf("remote url key %q wrong: %v", tc.remoteURLK, rm)
+			}
+		})
+	}
+}
+
+func TestRender_MCP_SkipWhenUnsupported(t *testing.T) {
+	// Memory-only spec: an MCP server in canonical must be reported as a skip.
+	a := generic.New(generic.Spec{Name: "goose", Memory: generic.FileTarget{Project: ".goosehints"}}, generic.Options{TargetRoot: t.TempDir()})
+	proj := t.TempDir()
+	c := source.Canonical{MCPServers: []source.MCPServer{{ID: "g", Server: source.MCPServerSpec{Command: "x"}}}}
+	c.Project = &source.Canonical{MCPServers: c.MCPServers}
+	ops, skips, _ := a.Render(secrets.ForRender(c), adapter.ScopeProject, proj)
+	if findOp(ops, "mcp") != nil {
+		t.Fatal("memory-only spec must not write MCP")
+	}
+	if !hasSkip(skips, "mcp", "g") {
+		t.Fatalf("expected mcp skip, got %+v", skips)
+	}
+}
+
+func TestRender_UnsupportedComponentsSkipped(t *testing.T) {
+	a := generic.New(generic.Spec{Name: "x", Memory: generic.FileTarget{Project: "AGENTS.md"}}, generic.Options{TargetRoot: t.TempDir()})
+	proj := t.TempDir()
+	inner := source.Canonical{
+		Skills:     []source.Skill{{Name: "sk", Body: "x\n"}},
+		Subagents:  []source.Subagent{{Name: "sa", Body: "y\n"}},
+		Commands:   []source.Command{{Name: "cmd", Body: "z\n"}},
+		Hooks:      []source.Hook{{Event: "PreToolUse", Command: "e"}},
+		LSPServers: []source.LSPServer{{ID: "gopls"}},
+	}
+	c := inner
+	c.Project = &inner
+	_, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []struct{ comp, name string }{{"skill", "sk"}, {"subagent", "sa"}, {"command", "cmd"}, {"hook", "PreToolUse"}, {"lsp", "gopls"}} {
+		if !hasSkip(skips, w.comp, w.name) {
+			t.Errorf("expected %s skip for %q, got %+v", w.comp, w.name, skips)
+		}
+	}
+}
+
+// --- apply + round-trips ---
+
+func TestApply_MCP_PreservesForeign_AndRoundTrips(t *testing.T) {
+	tmp := t.TempDir()
+	spec := generic.Spec{Name: "factory", MCP: generic.MCPTarget{User: ".factory/mcp.json", TransportKey: "type"}}
+	a := generic.New(spec, generic.Options{TargetRoot: tmp})
+	mcpPath := filepath.Join(tmp, ".factory", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mcpPath, []byte(`{ "mcpServers": { "user-srv": { "command": "mine" } } }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := source.Canonical{MCPServers: []source.MCPServer{
+		{ID: "stdio", Server: source.MCPServerSpec{Type: "stdio", Command: "npx", Env: map[string]string{"K": "v"}}},
+		{ID: "remote", Server: source.MCPServerSpec{Type: "http", URL: "https://x/mcp", Headers: map[string]string{"A": "b"}}},
+	}}
+	ops, _, err := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatal(err)
+	}
+	// Foreign server preserved.
+	data, _ := os.ReadFile(mcpPath)
+	if !strings.Contains(string(data), "user-srv") {
+		t.Fatalf("foreign server clobbered: %s", data)
+	}
+	// Round-trip.
+	got, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]source.MCPServerSpec{}
+	for _, m := range got.MCPServers {
+		byID[m.ID] = m.Server
+	}
+	if s := byID["stdio"]; s.Type != "stdio" || s.Command != "npx" || s.Env["K"] != "v" {
+		t.Fatalf("stdio round-trip: %+v", s)
+	}
+	if s := byID["remote"]; s.Type != "http" || s.URL != "https://x/mcp" || s.Headers["A"] != "b" {
+		t.Fatalf("remote round-trip: %+v", s)
+	}
+}
+
+func TestRoundTrip_Memory(t *testing.T) {
+	tmp := t.TempDir()
+	a := generic.New(generic.Spec{Name: "x", Memory: generic.FileTarget{User: ".x/RULES.md"}}, generic.Options{TargetRoot: tmp})
+	ops, _, _ := a.Render(secrets.ForRender(source.Canonical{Memory: source.Memory{Body: "# Rules\n\nGo fast.\n"}}), adapter.ScopeUser, "")
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Memory.Body != "# Rules\n\nGo fast.\n" {
+		t.Fatalf("memory round-trip: %q", got.Memory.Body)
+	}
+}
+
+func TestRoundTrip_MCP_HttpUrlDialect(t *testing.T) {
+	tmp := t.TempDir()
+	spec := generic.Spec{Name: "qwen", MCP: generic.MCPTarget{User: ".qwen/settings.json", RemoteURLKey: "httpUrl"}}
+	a := generic.New(spec, generic.Options{TargetRoot: tmp})
+	in := source.Canonical{MCPServers: []source.MCPServer{{ID: "r", Server: source.MCPServerSpec{Type: "http", URL: "https://x/mcp"}}}}
+	ops, _, _ := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatal(err)
+	}
+	// On disk the remote URL is under httpUrl.
+	data, _ := os.ReadFile(filepath.Join(tmp, ".qwen", "settings.json"))
+	if !strings.Contains(string(data), `"httpUrl"`) {
+		t.Fatalf("remote url should use httpUrl key: %s", data)
+	}
+	got, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.MCPServers) != 1 || got.MCPServers[0].Server.URL != "https://x/mcp" || got.MCPServers[0].Server.Type != "http" {
+		t.Fatalf("httpUrl round-trip lost data: %+v", got.MCPServers)
+	}
+}
+
+// TestRoundTrip_Extra confirms unmodeled native MCP keys survive via Extra.
+func TestRoundTrip_Extra(t *testing.T) {
+	tmp := t.TempDir()
+	mcpPath := filepath.Join(tmp, ".a", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mcpPath, []byte(`{ "mcpServers": { "s": { "command": "x", "timeout": 9 } } }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := generic.New(generic.Spec{Name: "a", MCP: generic.MCPTarget{User: ".a/mcp.json"}}, generic.Options{TargetRoot: tmp})
+	got, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.MCPServers) != 1 || got.MCPServers[0].Server.Extra["timeout"] == nil {
+		t.Fatalf("Extra not captured: %+v", got.MCPServers)
+	}
+}

@@ -17,6 +17,7 @@ const initialAgentsyncTOML = `# agentsync source-of-truth config
 # Schema reference: https://github.com/spxrogers/agentsync#readme
 
 [agents]
+# Deep adapters (richest coverage):
 # claude   = { enabled = true,  scope = "user" }
 # opencode = { enabled = true,  scope = "user" }
 # codex    = { enabled = true,  scope = "user" }
@@ -26,6 +27,9 @@ const initialAgentsyncTOML = `# agentsync source-of-truth config
 # windsurf = { enabled = true,  scope = "user" }
 # roo      = { enabled = true,  scope = "user" }
 # cline    = { enabled = true,  scope = "user" }
+# …plus a breadth tier (memory + MCP) for amp, goose, qwen, warp, zed, kiro,
+# kilocode, junie, factory, copilot, crush, and more — see the capability matrix.
+# Run "agentsync agent add <name>" for any agent in "agentsync agent list".
 
 [updates]
 default_mode     = "track"        # pinned | track | manual

@@ -11,6 +11,22 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **Breadth tier — 22 more agents via a data-driven generic adapter
+  (`internal/adapter/generic`).** One `Adapter` implementation serves a long tail
+  of agents from a verified `Spec` table: **memory** (a rules file) for all, and
+  **MCP** wherever the agent reads a JSON server-map agentsync can express (dialect
+  knobs handle the variance — root key `mcpServers`/`servers`/`mcp`/`context_servers`,
+  transport `type`/`transport`/inferred, stdio value `stdio`/`local`, remote URL key
+  `url`/`httpUrl`/`serverUrl`). Agents added: amp, goose, qwen, warp, jules, junie,
+  openhands, amazonq, zed, kilocode, kiro, trae, jetbrains, firebase, antigravity,
+  augmentcode, copilot, copilot-cli, crush, factory, pi, mistral — taking agentsync
+  to **31 agents** (9 deep + 22 breadth). Each spec's paths were cross-referenced
+  against upstream docs and prior-art tools (ruler, rulesync); agents whose MCP is
+  an array/YAML/TOML/app-storage get memory-only with MCP reported as a skip.
+  Agent-name validation, `doctor` detection, and the `init` template are now
+  derived from the deep list + `generic.Specs()`, so adding a breadth agent is a
+  verified table row. (Aider and Firebender are deliberately deferred — see the
+  capability matrix.)
 - **Cline adapter (`internal/adapter/cline`).** A new real adapter for Cline,
   scope-asymmetric (informed by competitor prior art — no config-sync tool writes
   the VS Code globalStorage MCP path): MCP renders at **user scope** into the Cline

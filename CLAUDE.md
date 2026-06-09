@@ -5,8 +5,9 @@ Project memory for Claude Code / agent sessions working on agentsync.
 ## What this is
 
 agentsync is a single-machine Go CLI that centrally manages AI coding-agent
-configurations (Claude Code, OpenCode, Codex, Cursor, Gemini CLI, Continue,
-Windsurf, Roo Code, and Cline). The
+configurations (31 agents: nine deep adapters — Claude Code, OpenCode, Codex,
+Cursor, Gemini CLI, Continue, Windsurf, Roo Code, Cline — plus a 22-agent generic
+"breadth tier" for memory + MCP). The
 user keeps a canonical config in `~/.agentsync/` (small TOML + markdown,
 committable to a dotfiles repo); `agentsync apply` renders it into each agent's
 native config. It's bidirectional: native edits are detected as drift and merged
@@ -141,9 +142,10 @@ before writing it down.
 
 - **`internal/source`** — the canonical model (`source.Canonical`). The TOML
   structs here *are* the schema; there is no separate IR. Loaders + `Write*` helpers.
-- **`internal/adapter`** (+ `claude`, `opencode`, `noop`) — the per-agent
-  `Adapter` interface. `Render` takes `secrets.Resolved` (not raw source);
-  `Apply` writes only through `DestWriter`.
+- **`internal/adapter`** (+ deep packages `claude`, `opencode`, `codex`, `cursor`,
+  `gemini`, `continuedev`, `windsurf`, `roo`, `cline`; the data-driven `generic`
+  breadth tier; `noop`) — the per-agent `Adapter` interface. `Render` takes
+  `secrets.Resolved` (not raw source); `Apply` writes only through `DestWriter`.
 - **`internal/render`** — the apply pipeline (plan → classify → write → record
   state → translation report).
 - **`internal/capture`** — the *single* dest→source write-back funnel.
@@ -311,9 +313,14 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
 - **New secret-bearing canonical field** → add it ONLY to `walkSecretFields`
   (`internal/secrets/walk.go`). Every secret operation then picks it up; the
   reflect-based `TestNewSecretFieldGuard` fails if you forget.
-- **New agent** → add `internal/adapter/<name>/` implementing the `Adapter`
-  interface and register it. `Render` must take `secrets.Resolved`; all writes
-  go through `DestWriter`. The canonical schema does not change.
+- **New agent** → two options. For a rich, agent-specific agent, add a *deep*
+  package `internal/adapter/<name>/` implementing the `Adapter` interface and
+  register it (`Render` must take `secrets.Resolved`; all writes go through
+  `DestWriter`). For a long-tail agent that only needs memory + (same-shape) MCP,
+  add a *verified* `generic.Spec` row to `internal/adapter/generic/specs.go` — no
+  new package; agent-name validation/`doctor`/`init` derive from the deep list +
+  `generic.Specs()`. The canonical schema does not change. Either way, verify the
+  agent's config paths against its upstream docs before asserting them.
 - **New `PluginIngester`** → if the agent has a native plugin concept,
   implement `IngestPlugins` (read side: native enable-state → canonical).
   **Do NOT add a Render-side counterpart.** Apply fans out the plugin's

@@ -8,6 +8,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter/continuedev"
 	"github.com/spxrogers/agentsync/internal/adapter/cursor"
 	"github.com/spxrogers/agentsync/internal/adapter/gemini"
+	"github.com/spxrogers/agentsync/internal/adapter/generic"
 	"github.com/spxrogers/agentsync/internal/adapter/opencode"
 	"github.com/spxrogers/agentsync/internal/adapter/roo"
 	"github.com/spxrogers/agentsync/internal/adapter/windsurf"
@@ -29,5 +30,9 @@ var registryFactory = func() *adapter.Registry {
 	_ = r.Register(windsurf.New(windsurf.Options{TargetRoot: home}))
 	_ = r.Register(roo.New(roo.Options{TargetRoot: home}))
 	_ = r.Register(cline.New(cline.Options{TargetRoot: home}))
+	// Breadth tier: one generic adapter per verified Spec (memory + optional MCP).
+	for _, spec := range generic.Specs() {
+		_ = r.Register(generic.New(spec, generic.Options{TargetRoot: home}))
+	}
 	return r
 }

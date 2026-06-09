@@ -248,6 +248,22 @@ hooks/LSP have no Cline concept and are skipped. Emits no Ingest warnings
 - **Files:** `cline.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
   `paths.go`, `command.go`, `memory.go`.
 
+### `internal/adapter/generic`
+The **breadth-tier** adapter: one data-driven `Adapter` implementation that serves
+many agents from a table of verified `Spec`s (`specs.go`) rather than a package
+each. Covers **memory** (a rules/instructions file, plain markdown) and, where the
+agent reads a JSON server-map agentsync can express, **MCP** — every other
+component is reported as a skip. A `Spec` declares per-scope memory/MCP paths plus
+MCP "dialect" knobs that capture the tail's variance (top-level key
+`mcpServers`/`servers`/`mcp`/`context_servers`; transport field `type`/`transport`/
+inferred; stdio value `stdio`/`local`; remote URL key `url`/`httpUrl`/`serverUrl`).
+Breadth agents register through the normal registry and flow through apply/import
+(drift, secrets, capture). Adding an agent is a verified table row, not a package.
+- **Key:** `Spec`, `New(Spec, Options) *Adapter`; the `Adapter` methods; `Specs()`.
+- **Depends on:** adapter, adapter/claude (Extra helper), secrets, source, paths,
+  iox, jsonkeys.
+- **Files:** `generic.go`, `render.go`, `ingest.go`, `apply.go`, `specs.go`.
+
 ### `internal/adapter/noop`
 Placeholder adapter that detects true and renders nothing. Used as a registry
 stand-in in tests; no production agent is registered as a noop today (every valid

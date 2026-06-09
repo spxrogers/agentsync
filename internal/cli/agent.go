@@ -12,16 +12,24 @@ import (
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/adapter/generic"
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
-// agentBinaries maps an agent name to the executable agentsync should
-// look for on PATH at `agent add` time. Used to produce a warning when
-// the user registers an agent whose binary is not installed.
-var agentBinaries = map[string]string{
+// deepAdapterNames are the hand-written, agent-specific adapters (richer than the
+// breadth-tier generic specs). The full valid-agent set is these plus every
+// generic.Specs() entry — see allAgentNames.
+var deepAdapterNames = []string{
+	"claude", "opencode", "codex", "cursor", "gemini", "continue", "windsurf", "roo", "cline",
+}
+
+// deepAgentBinaries maps a deep adapter to the executable agentsync looks for on
+// PATH at `agent add` time (to warn when it's not installed). Breadth-tier agents
+// carry their binary in their Spec (see agentBinary).
+var deepAgentBinaries = map[string]string{
 	"claude":   "claude",
 	"opencode": "opencode",
 	"codex":    "codex",
@@ -33,32 +41,54 @@ var agentBinaries = map[string]string{
 	"cline":    "cline",
 }
 
+// allAgentNames returns every valid agent name — deep adapters plus breadth-tier
+// generic specs — sorted. Single source of truth for agent-name validation.
+func allAgentNames() []string {
+	names := append([]string(nil), deepAdapterNames...)
+	for _, s := range generic.Specs() {
+		names = append(names, s.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// isValidAgent reports whether name is a known agent (deep or breadth-tier).
+func isValidAgent(name string) bool {
+	for _, n := range allAgentNames() {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// validAgentsList is the comma-joined valid-agent set for error messages.
+func validAgentsList() string { return strings.Join(allAgentNames(), ", ") }
+
+// agentBinary returns the PATH executable to probe for name, or "" if none.
+func agentBinary(name string) string {
+	if b, ok := deepAgentBinaries[name]; ok {
+		return b
+	}
+	for _, s := range generic.Specs() {
+		if s.Name == name {
+			return s.DetectBin
+		}
+	}
+	return ""
+}
+
+// v1Supported reports whether name has a real (non-noop) adapter. Every valid
+// agent does today, so this is a guard for a hypothetical future noop-registered
+// agent (overridable with AGENTSYNC_ALLOW_UNIMPLEMENTED=1).
+func v1Supported(name string) bool { return isValidAgent(name) }
+
 // boolStr returns "true" or "false" as a string.
 func boolStr(b bool) string {
 	if b {
 		return "true"
 	}
 	return "false"
-}
-
-const validAgents = "claude, opencode, codex, cursor, gemini, continue, windsurf, roo, cline"
-
-// v1Supported lists agents whose adapter actually emits ops today. Every valid
-// agent (see validateAgent) now has a real adapter, so this gate is dormant —
-// it stays as a guard for any FUTURE agent added to the valid set but registered
-// as a noop placeholder: adding such an agent silently would produce `applied: 0
-// ops` with no diagnostic, so `agent add` / `import` reject it with a status
-// hint. (Allow override with AGENTSYNC_ALLOW_UNIMPLEMENTED=1 for plan/spec work.)
-var v1Supported = map[string]bool{
-	"claude":   true,
-	"opencode": true,
-	"codex":    true,
-	"cursor":   true,
-	"gemini":   true,
-	"continue": true,
-	"windsurf": true,
-	"roo":      true,
-	"cline":    true,
 }
 
 func newAgentCmd() *cobra.Command {
@@ -101,14 +131,14 @@ type agentsyncCfg struct {
 	// other top-level keys preserved verbatim via decoder
 }
 
-// agentName must be one of the recognized adapter names. M0 only accepts the
-// four — adding a new agent in v1.x is a code change, not a config change.
+// validateAgent reports whether name is a recognized adapter (deep or
+// breadth-tier). Adding a new agent is a code change (a new package or a
+// generic.Specs() entry), not a config change.
 func validateAgent(name string) error {
-	switch name {
-	case "claude", "opencode", "codex", "cursor", "gemini", "continue", "windsurf", "roo", "cline":
+	if isValidAgent(name) {
 		return nil
 	}
-	return fmt.Errorf("unknown agent %q; valid: %s", name, validAgents)
+	return fmt.Errorf("unknown agent %q; valid: %s", name, validAgentsList())
 }
 
 // readAgentsyncTOML returns the file path + raw bytes + parsed `agents` section.
@@ -214,7 +244,7 @@ func agentAddRun(cmd *cobra.Command, args []string) error {
 	if err := validateAgent(name); err != nil {
 		return err
 	}
-	if !v1Supported[name] && os.Getenv("AGENTSYNC_ALLOW_UNIMPLEMENTED") != "1" {
+	if !v1Supported(name) && os.Getenv("AGENTSYNC_ALLOW_UNIMPLEMENTED") != "1" {
 		return fmt.Errorf("agent %q has no implemented adapter yet; "+
 			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to register anyway and accept a no-op apply", name)
 	}
@@ -237,7 +267,7 @@ func agentAddRun(cmd *cobra.Command, args []string) error {
 	// don't want a hard reject — but a silent success when Claude Code
 	// isn't installed leaves them debugging "why didn't apply do
 	// anything?" later.
-	if bin, ok := agentBinaries[name]; ok {
+	if bin := agentBinary(name); bin != "" {
 		if _, err := exec.LookPath(bin); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(),
 				"warning: %s binary not found on PATH; "+
