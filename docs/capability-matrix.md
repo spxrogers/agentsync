@@ -27,6 +27,7 @@ nothing is dropped silently.
 | **Gemini CLI** | ✅ Adapter (some components projected) | MCP, memory, subagents, slash commands, and hooks. MCP and hooks both merge into `.gemini/settings.json` (MCP `mcpServers` with Gemini's `url`/`httpUrl` transport split; hooks under `hooks`, the same nested shape as Claude, with events remapped to Gemini's `BeforeTool`/`AfterTool`/… and unmapped ones dropped) — so settings.json is the adapter's single key-merge file and the user's other keys (`theme`, `model`, …) are preserved. Memory projects to `GEMINI.md` (`~/.gemini/GEMINI.md` at user scope, repo-root `GEMINI.md` at project scope — full fidelity). Slash commands become `.gemini/commands/<name>.toml` (`description` + `prompt`; `argument-hint`/`allowed-tools` drop), subagents `.gemini/agents/<name>.md` (Claude's `tools` vocabulary differs from Gemini's, so it and `color` drop). **Skills** (Gemini uses extensions, not Agent Skills) and **LSP** have no Gemini concept and are skipped. Gemini has no native plugin enable-state agentsync models, so there is no `PluginIngester`; it still *receives* plugin-projected components on `apply`. |
 | **Continue** | ✅ Adapter (some components projected) | MCP, memory, and slash commands — projected as Continue "blocks" (one file per item under `.continue/`, so the adapter owns no shared key-merge file). MCP servers each become a `.continue/mcpServers/<id>.yaml` block (stdio command/args/env; remote `streamable-http`/`sse` + `url` with auth headers under `requestOptions.headers` — full fidelity). Memory projects to `.continue/rules/agentsync.md`, a frontmatter-less rule Continue always applies (so it behaves as persistent memory; byte-clean round-trip). Slash commands become `.continue/prompts/<name>.md` prompt blocks (`name` + `description` + `invokable`; `argument-hint`/`allowed-tools` drop). **Skills, hooks, and LSP** have no Continue concept, and Continue's "agents" are top-level assistants rather than per-file **subagents**, so all four are skipped with a report. No `PluginIngester` (Continue composes blocks from its Hub + local files); it still *receives* plugin-projected components on `apply`. |
 | **Windsurf** | ✅ Adapter (scope-asymmetric) | MCP, memory, and slash commands — but split across scopes, mirroring Windsurf's own layout. **MCP is global-only** (`~/.codeium/windsurf/mcp_config.json`, JSON `mcpServers`; stdio command/args/env, remote `serverUrl` + `headers`), so it renders at **user scope** and is skipped (reported) at project scope. **Memory and commands are project-only**: memory → `.windsurf/rules/agentsync.md` (plain markdown rule — Windsurf rules carry no frontmatter; byte-clean) and commands → `.windsurf/workflows/<name>.md` (plain markdown workflows invoked as `/<name>`; command frontmatter drops), both skipped (reported) at user scope because Windsurf's global rules/workflows are app-managed. **Skills, subagents, hooks, and LSP** have no Windsurf concept and are skipped. No `PluginIngester`; it still *receives* plugin-projected components on `apply`. |
+| **Roo Code** | ✅ Adapter (some components projected) | MCP, memory, and slash commands — clean filesystem `.roo/` paths (rulesync and ruler converged on these). **MCP → `.roo/mcp.json`** (project-level, `mcpServers` with explicit `type: streamable-http`/`sse` for remote + `url`/`headers`; merge-by-server-name preserves foreign servers). Roo's *global* MCP lives in VS Code globalStorage (OS/editor-specific), which agentsync intentionally does **not** target — so user-scope MCP is reported as a skip. **Memory → `.roo/rules/agentsync.md`** (plain-markdown always-applied rule) and **commands → `.roo/commands/<name>.md`** (markdown + frontmatter — Roo keeps **both** `description` *and* `argument-hint`; only `allowed-tools` drops), both at **user and project scope** (`~/.roo/` + `<repo>/.roo/`). **Skills, hooks, and LSP** have no Roo concept, and Roo's "custom modes" are not per-file **subagents**, so all four are skipped. No `PluginIngester`; it still *receives* plugin-projected components on `apply`. |
 
 ## Plugin import/apply: the shared invariant
 
@@ -50,6 +51,7 @@ adapter handles the asymmetry the same way:
 | Gemini  | — (no native plugin enable-state agentsync models; uses extensions) | components only (MCP, memory, commands, subagents, hooks) |
 | Continue | — (no native plugin enable-state agentsync models; composes Hub + local blocks) | components only (MCP, memory, commands) |
 | Windsurf | — (no native plugin enable-state agentsync models)        | components only (MCP, memory, commands) |
+| Roo Code | — (no native plugin enable-state agentsync models)        | components only (MCP, memory, commands) |
 
 Once a plugin's components materialise at native paths (`~/.claude/skills/<name>/`,
 `mcpServers` in the agent's config, `~/.codex/AGENTS.md`, …), the consumer
@@ -67,15 +69,15 @@ own per-plugin install dir. See
 
 Component support across agents.
 
-| Component | Claude | OpenCode | Codex | Cursor | Gemini | Continue | Windsurf |
-|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
-| **MCP server** | ✓ `~/.claude.json` (user) · `.mcp.json` (project) | ✓ `opencode.json` | ✓ `config.toml` | ✓ `.cursor/mcp.json` | ✓ `.gemini/settings.json` | ✓ `.continue/mcpServers/` | ✓ `mcp_config.json` (user-only) |
-| **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ✓ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` | ✓ `GEMINI.md` | ✓ `.continue/rules/` | ◐ `.windsurf/rules/` (project-only) |
-| **Skill** | ✓ `~/.claude/skills/X/` (dir) | ✓ shared `.claude/skills/` | ✓ `~/.agents/skills/` | ✓ `.cursor/skills/` | ✗ no skills concept | ✗ no skills concept | ✗ no skills concept |
-| **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/` | ◐ `.gemini/agents/` | ✗ top-level assistants only | ✗ no subagent concept |
-| **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ◐ `~/.codex/prompts/` | ◐ `.cursor/commands/` | ◐ `.gemini/commands/` (TOML) | ◐ `.continue/prompts/` | ◐ `.windsurf/workflows/` (project-only) |
-| **Hook** | ✓ JSON in settings | ✗ skip (JS/TS plugins) | ◐ `config.toml` `[hooks.*]` | ◐ `.cursor/hooks.json` | ◐ `settings.json` `hooks` | ✗ no hook concept | ✗ no hook concept |
-| **LSP server** | ✓ native | ✗ skip (deferred) | ✗ no LSP concept | ✗ no LSP config | ✗ no LSP concept | ✗ no LSP concept | ✗ no LSP concept |
+| Component | Claude | OpenCode | Codex | Cursor | Gemini | Continue | Windsurf | Roo |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| **MCP server** | ✓ `~/.claude.json` (user) · `.mcp.json` (project) | ✓ `opencode.json` | ✓ `config.toml` | ✓ `.cursor/mcp.json` | ✓ `.gemini/settings.json` | ✓ `.continue/mcpServers/` | ✓ `mcp_config.json` (user-only) | ✓ `.roo/mcp.json` (project-only) |
+| **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ✓ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` | ✓ `GEMINI.md` | ✓ `.continue/rules/` | ◐ `.windsurf/rules/` (project-only) | ✓ `.roo/rules/` |
+| **Skill** | ✓ `~/.claude/skills/X/` (dir) | ✓ shared `.claude/skills/` | ✓ `~/.agents/skills/` | ✓ `.cursor/skills/` | ✗ no skills concept | ✗ no skills concept | ✗ no skills concept | ✗ no skills concept |
+| **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/` | ◐ `.gemini/agents/` | ✗ top-level assistants only | ✗ no subagent concept | ✗ custom modes only |
+| **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ◐ `~/.codex/prompts/` | ◐ `.cursor/commands/` | ◐ `.gemini/commands/` (TOML) | ◐ `.continue/prompts/` | ◐ `.windsurf/workflows/` (project-only) | ◐ `.roo/commands/` (`allowed-tools` dropped) |
+| **Hook** | ✓ JSON in settings | ✗ skip (JS/TS plugins) | ◐ `config.toml` `[hooks.*]` | ◐ `.cursor/hooks.json` | ◐ `settings.json` `hooks` | ✗ no hook concept | ✗ no hook concept | ✗ no hook concept |
+| **LSP server** | ✓ native | ✗ skip (deferred) | ✗ no LSP concept | ✗ no LSP config | ✗ no LSP concept | ✗ no LSP concept | ✗ no LSP concept | ✗ no LSP concept |
 
 > The ◐/✗ cells are *features*, not bugs: agentsync refuses to invent a
 > translation that would mislead you. Every ◐ and ✗ is printed in the apply
@@ -200,6 +202,17 @@ literally, never resolved.)
   config (just `serverUrl`), so a canonical `sse` server normalizes to `http` if
   later captured back via `import`/`reconcile`.
 
+**Roo Code**
+
+- **MCP scope** — `.roo/mcp.json` is project-level; Roo's *global* MCP lives in VS
+  Code globalStorage (OS/editor-specific), which agentsync does not target, so
+  user-scope MCP is reported as a skip. (rulesync and ruler make the same call.)
+- **Slash command** — `.roo/commands/*.md` keep `description` AND `argument-hint`
+  (Roo supports both); only `allowed-tools` (and any other unmodeled key) drops.
+- **Subagent / Hook / Skill / LSP** — Roo's "custom modes" are not per-file
+  subagents, and Roo has no hook, Agent-Skills, or LSP concept, so each is skipped
+  with a report.
+
 ## Why OpenCode skips hooks and LSP
 
 - **Hooks** — OpenCode hooks are JS/TS plugins that subscribe to events, not
@@ -242,6 +255,11 @@ A few ✓ cells still change shape on the way out — same content, no loss:
   frontmatter-less rule Continue always applies (byte-clean round-trip).
 - **Windsurf MCP** — `~/.codeium/windsurf/mcp_config.json` `mcpServers`: stdio
   command/args/env; remote `serverUrl` + `headers`.
+- **Roo MCP** — `.roo/mcp.json` `mcpServers`: stdio command/args/env; remote
+  explicit `type: streamable-http`/`sse` + `url` + `headers` (merge-by-server-name
+  preserves the user's own servers).
+- **Roo memory** — the body lands as `.roo/rules/agentsync.md`, a plain rule Roo
+  applies recursively (byte-clean round-trip), at user or project scope.
 - **Codex & Gemini memory** — the same markdown lands at `~/.codex/AGENTS.md` /
   `~/.gemini/GEMINI.md` (repo-root `GEMINI.md` at project scope).
 - **Skills (Codex & Cursor)** — the same skill *directory* per the

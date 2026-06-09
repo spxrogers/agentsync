@@ -6,13 +6,13 @@
 
 Define your MCP servers, memory, skills, and marketplace plugins once in
 `~/.agentsync/`. Run `agentsync apply`. They land — correctly translated — in
-Claude Code, OpenCode, Codex CLI, Cursor, Gemini CLI, Continue, and Windsurf.
+Claude Code, OpenCode, Codex CLI, Cursor, Gemini CLI, Continue, Windsurf, and Roo Code.
 
 [Quickstart](#quickstart) · [Install](#install) · **[Docs site → agentsync.cc](https://agentsync.cc)** · [User guide](docs/user-guide.md) · [Known limits](#known-limits)
 
 </div>
 
-> **Status: beta (v0.1.0).** Ships Claude Code, OpenCode, Codex, Cursor, Gemini CLI, Continue, and Windsurf end-to-end.
+> **Status: beta (v0.1.0).** Ships Claude Code, OpenCode, Codex, Cursor, Gemini CLI, Continue, Windsurf, and Roo Code end-to-end.
 > The tool is functional and tested under `just test-release`; the canonical
 > layout, CLI surface, and state schema are stabilizing toward `1.0.0` and may
 > still change. A few documented trade-offs remain (see [Known limits](#known-limits)).
@@ -73,6 +73,7 @@ canonical markdown also lives in [`docs/`](docs/):
 | **Gemini CLI** | ✓ adapter | MCP + hooks (◐) in `.gemini/settings.json`, memory (`GEMINI.md`), subagents (◐), slash commands (◐, TOML). No skills (uses extensions) or LSP concept. |
 | **Continue** | ✓ adapter | MCP (`.continue/mcpServers/`), memory (`.continue/rules/`), slash commands (◐, `.continue/prompts/`) — projected as Continue blocks. No skills/subagents/hooks/LSP concept. |
 | **Windsurf** | ✓ adapter | MCP (`~/.codeium/windsurf/mcp_config.json`, user scope), memory (◐, `.windsurf/rules/`, project scope), slash commands (◐, `.windsurf/workflows/`, project scope). No skills/subagents/hooks/LSP concept. |
+| **Roo Code** | ✓ adapter | MCP (`.roo/mcp.json`, project scope), memory (`.roo/rules/`) + slash commands (◐, `.roo/commands/`) at both scopes. No skills/subagents/hooks/LSP concept. |
 
 Full ✓/◐/✗ breakdown per component: **[capability matrix](docs/capability-matrix.md)**.
 
@@ -143,7 +144,8 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 - **Gemini CLI projections are lossy where Gemini differs**: MCP and memory are full-fidelity (`.gemini/settings.json` `mcpServers` with Gemini's `url`/`httpUrl` transport split; `GEMINI.md`). Subagents (`.gemini/agents/`) drop Claude's `tools` (Gemini's tool vocabulary differs) and `color`; slash commands become TOML (`.gemini/commands/*.toml`, `description` + `prompt`) so `argument-hint`/`allowed-tools` drop and Claude's `$ARGUMENTS` placeholder isn't auto-translated to Gemini's `{{args}}`; hooks live in `settings.json` (same nested shape as Claude) with events remapped (`PreToolUse`→`BeforeTool`, …) and unmapped events dropped. Skills have no Gemini concept (it uses extensions) and are skipped. All losses are surfaced in the translation report.
 - **Continue projections are lossy where Continue differs**: Continue composes "blocks" (one file per item under `.continue/`). MCP is full-fidelity (`.continue/mcpServers/<id>.yaml`, with remote auth headers under `requestOptions.headers`); memory lands as a frontmatter-less always-apply rule (`.continue/rules/agentsync.md`, byte-clean). Slash commands become prompt blocks (`.continue/prompts/*.md`) so `argument-hint`/`allowed-tools` drop. Continue has no Agent Skills, no per-file subagents (its "agents" are top-level assistants), no declarative hooks, and no LSP config, so those are skipped. All losses are surfaced in the translation report.
 - **Windsurf is scope-asymmetric**: Windsurf's MCP config is global-only (`~/.codeium/windsurf/mcp_config.json`), so MCP renders at **user scope** (skipped + reported at project scope); its rules/workflows live in the project `.windsurf/` tree (global rules are app-managed), so memory (`.windsurf/rules/`, plain markdown) and slash commands (`.windsurf/workflows/`, plain markdown — command frontmatter drops) render at **project scope** (skipped + reported at user scope). All skips are surfaced in the translation report.
-- **LSP projection beyond Claude**: OpenCode LSP support is deferred (Codex, Cursor, Gemini, Continue, and Windsurf have no LSP concept at all). Claude plugins that include LSP servers install correctly on Claude itself; on other agents you'll see `lsp server X skipped` in the apply translation report.
+- **Roo Code is project-MCP-only**: Roo's clean MCP file is project-level (`.roo/mcp.json`); its *global* MCP lives in VS Code globalStorage (OS/editor-specific), which agentsync does not write (matching every other config-sync tool) — so user-scope Roo MCP is reported as a skip. Memory (`.roo/rules/`) and commands (`.roo/commands/`, which keep `description` + `argument-hint`) work at both scopes.
+- **LSP projection beyond Claude**: OpenCode LSP support is deferred (Codex, Cursor, Gemini, Continue, Windsurf, and Roo have no LSP concept at all). Claude plugins that include LSP servers install correctly on Claude itself; on other agents you'll see `lsp server X skipped` in the apply translation report.
 - **TOML / JSONC comment preservation**: comments in `~/.agentsync/mcp/*.toml`, in agent-side `opencode.json`, and in Codex's `~/.codex/config.toml` are NOT preserved across reconcile `[w]`rite-back or import / apply. Hand-edited comments survive in unrelated sections; the rewritten section will be re-emitted without comments. Deferred to a later release.
 - **Hand-edits to agentsync-owned keys** in shared agent files (e.g. an MCP server entry in `~/.claude.json` that agentsync owns): the next `apply` overwrites them with NO foreign-collision backup, because agentsync considers them its own. Use `agentsync reconcile` (the drift classifier catches the edit and offers `[w]`rite-back) BEFORE the next apply if you want to keep them.
 - **Plain-http / git:// plugin sources** are rejected by default to prevent MITM swap. Set `AGENTSYNC_ALLOW_INSECURE_URLS=1` for internal mirrors.
