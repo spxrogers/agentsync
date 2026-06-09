@@ -210,10 +210,11 @@ read-only-on-import, components-only-on-apply rule above:
   (warning + skipping any it can't), exactly the path Claude's
   auto-available built-in marketplace takes. The Codex render never emits
   the `[plugins."x@y"]` tables back, matching the Claude rule.
-- **OpenCode** and **Gemini CLI** have no native plugin concept agentsync
-  models (Gemini uses extensions), so they implement neither side — both still
-  *receive* plugin-projected components (skills, MCP, …) on `apply` like every
-  other component, because that's the whole point.
+- **OpenCode**, **Gemini CLI**, and **Continue** have no native plugin concept
+  agentsync models (Gemini uses extensions; Continue composes Hub + local
+  blocks), so they implement neither side — all still *receive* plugin-projected
+  components (skills, MCP, …) on `apply` like every other component, because
+  that's the whole point.
 - **Cursor** ships a real adapter (MCP, memory, skills, subagents, commands,
   hooks) but implements no `PluginIngester` yet. Its plugin *content* schema —
   `.cursor-plugin/plugin.json` + `.cursor-plugin/marketplace.json`, near-identical

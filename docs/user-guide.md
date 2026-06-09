@@ -6,7 +6,7 @@
 
 Define your MCP servers, memory, skills, and marketplace plugins *once*.
 Run `agentsync apply`. Watch them land — correctly translated — in Claude Code,
-OpenCode, Codex CLI, Cursor, and Gemini CLI.
+OpenCode, Codex CLI, Cursor, Gemini CLI, and Continue.
 
 [Why agentsync](#why-agentsync) · [Install](#install) · [Your first sync](#your-first-sync-5-minutes) · [Already have configs?](#already-have-configs) · [The daily loop](#the-daily-loop) · [Building your config](#building-your-config) · [Command reference](#command-reference)
 
@@ -277,8 +277,8 @@ agentsync agent disable opencode  # stop applying to it (keeps source)
 agentsync agent disable opencode --purge   # also remove what it wrote
 ```
 
-> `agent add claude | opencode | codex | cursor | gemini` all work — every valid
-> agent has a real adapter. See the [capability matrix](capability-matrix.md).
+> `agent add claude | opencode | codex | cursor | gemini | continue` all work —
+> every valid agent has a real adapter. See the [capability matrix](capability-matrix.md).
 
 ### MCP servers
 
@@ -522,17 +522,17 @@ Not every agent supports every component, and agentsync never pretends
 otherwise. Each component is marked **✓ native**, **◐ projected** (lossy, but
 reported), or **✗ skipped** (no honest translation) per agent.
 
-Claude, OpenCode, Codex, Cursor, and Gemini CLI are all real adapters.
+Claude, OpenCode, Codex, Cursor, Gemini CLI, and Continue are all real adapters.
 
-| Component | Claude | OpenCode | Codex | Cursor | Gemini |
-|---|:--:|:--:|:--:|:--:|:--:|
-| MCP server | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Memory | ✓ | ✓ | ✓ | ◐ | ✓ |
-| Skill | ✓ | ✓ | ✓ | ✓ | ✗ |
-| Subagent | ✓ | ◐ | ◐ | ◐ | ◐ |
-| Slash command | ✓ | ◐ | ◐ | ◐ | ◐ |
-| Hook | ✓ | ✗ | ◐ | ◐ | ◐ |
-| LSP server | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Component | Claude | OpenCode | Codex | Cursor | Gemini | Continue |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|
+| MCP server | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Memory | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ |
+| Skill | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ |
+| Subagent | ✓ | ◐ | ◐ | ◐ | ◐ | ✗ |
+| Slash command | ✓ | ◐ | ◐ | ◐ | ◐ | ◐ |
+| Hook | ✓ | ✗ | ◐ | ◐ | ◐ | ✗ |
+| LSP server | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
 
 Full detail, native paths, and the reasoning behind each ◐/✗ are in the
 [capability matrix](capability-matrix.md).

@@ -43,9 +43,9 @@ Because the agents genuinely differ. agentsync marks each translation **native (
 it refuses to invent a translation that would mislead you. See the
 [capability matrix](/reference/capability-matrix/) for the full per-agent breakdown.
 
-## Are Codex CLI, Cursor, and Gemini CLI supported?
+## Are Codex CLI, Cursor, Gemini CLI, and Continue supported?
 
-**All three are supported.** **Codex CLI** — MCP (into the TOML
+**All four are supported.** **Codex CLI** — MCP (into the TOML
 `~/.codex/config.toml`), memory, skills, subagents (◐), slash commands (◐,
 global-only), hooks (◐), and plugin import. **Cursor** — MCP (`.cursor/mcp.json`,
 the same `mcpServers` shape as Claude), skills (`.cursor/skills/`), subagents (◐,
@@ -54,10 +54,12 @@ the same `mcpServers` shape as Claude), skills (`.cursor/skills/`), subagents (�
 **memory is project-scope only** (the repo-root `AGENTS.md`). **Gemini CLI** — MCP
 + hooks (◐) in `.gemini/settings.json`, memory (`GEMINI.md`), subagents (◐,
 `.gemini/agents/`), and slash commands (◐, TOML in `.gemini/commands/`); Gemini
-uses extensions rather than Agent Skills, so skills are skipped. No LSP concept on
-any of them.
+uses extensions rather than Agent Skills, so skills are skipped. **Continue** — MCP
+(`.continue/mcpServers/`), memory (`.continue/rules/`), and slash commands (◐,
+`.continue/prompts/`), projected as Continue blocks; skills/subagents/hooks have
+no Continue concept. No LSP concept on any of them.
 
-## What about Continue or Aider?
+## What about Aider?
 
 Planned — on the roadmap, not yet implemented.
 
