@@ -43,9 +43,9 @@ Because the agents genuinely differ. agentsync marks each translation **native (
 it refuses to invent a translation that would mislead you. See the
 [capability matrix](/reference/capability-matrix/) for the full per-agent breakdown.
 
-## Are Codex CLI, Cursor, Gemini CLI, Continue, Windsurf, and Roo Code supported?
+## Are Codex CLI, Cursor, Gemini CLI, Continue, Windsurf, Roo Code, and Cline supported?
 
-**All six are supported.** **Codex CLI** — MCP (into the TOML
+**All seven are supported.** **Codex CLI** — MCP (into the TOML
 `~/.codex/config.toml`), memory, skills, subagents (◐), slash commands (◐,
 global-only), hooks (◐), and plugin import. **Cursor** — MCP (`.cursor/mcp.json`,
 the same `mcpServers` shape as Claude), skills (`.cursor/skills/`), subagents (◐,
@@ -62,7 +62,9 @@ user scope, memory (`.windsurf/rules/`) and slash commands (`.windsurf/workflows
 at project scope (Windsurf's config is scope-asymmetric). **Roo Code** — MCP
 (`.roo/mcp.json`, project scope), memory (`.roo/rules/`), and slash commands
 (`.roo/commands/`, keeping `description` + `argument-hint`) at both scopes; its
-global MCP is VS Code app-storage (not targeted). No LSP concept on any of them.
+global MCP is VS Code app-storage (not targeted). **Cline** — MCP via the CLI's
+`~/.cline/mcp.json` (user scope), memory (`.clinerules/`) and slash commands
+(`.clinerules/workflows/`) at project scope. No LSP concept on any of them.
 
 ## What about Aider?
 

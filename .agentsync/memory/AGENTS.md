@@ -6,7 +6,7 @@ Project memory for Claude Code / agent sessions working on agentsync.
 
 agentsync is a single-machine Go CLI that centrally manages AI coding-agent
 configurations (Claude Code, OpenCode, Codex, Cursor, Gemini CLI, Continue,
-Windsurf, and Roo Code). The
+Windsurf, Roo Code, and Cline). The
 user keeps a canonical config in `~/.agentsync/` (small TOML + markdown,
 committable to a dotfiles repo); `agentsync apply` renders it into each agent's
 native config. It's bidirectional: native edits are detected as drift and merged
@@ -127,6 +127,7 @@ upstream documentation rather than guessing or extrapolating from memory.
 | Continue | https://docs.continue.dev/ |
 | Windsurf | https://docs.windsurf.com/ |
 | Roo Code | https://docs.roocode.com/ |
+| Cline | https://docs.cline.bot/ |
 
 This is a guard against *new or unverified* claims, not a tax on every edit.
 Don't network-fetch these docs for routine iteration on an already-implemented,

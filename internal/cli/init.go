@@ -25,6 +25,7 @@ const initialAgentsyncTOML = `# agentsync source-of-truth config
 # continue = { enabled = true,  scope = "user" }
 # windsurf = { enabled = true,  scope = "user" }
 # roo      = { enabled = true,  scope = "user" }
+# cline    = { enabled = true,  scope = "user" }
 
 [updates]
 default_mode     = "track"        # pinned | track | manual
