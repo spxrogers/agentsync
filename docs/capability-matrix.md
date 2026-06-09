@@ -24,6 +24,7 @@ nothing is dropped silently.
 | **OpenCode** | ✅ Adapter (some components projected/skipped) | MCP, memory, skills, subagents, commands. Hooks and LSP are skipped with a warning. No native plugin/marketplace concept, so nothing for plugin `import` to capture; it still *receives* plugin-projected components (skills, MCP, …) on `apply`. |
 | **Codex CLI** | ✅ Adapter (some components projected) | MCP, memory, skills, subagents, slash commands, and hooks. MCP servers and hooks both merge into the TOML `~/.codex/config.toml` (as `[mcp_servers.*]` / inline `[hooks.*]` tables — Codex's documented equivalent to a separate `hooks.json`), so config.toml is the adapter's single key-merge file and the user's other keys (`model`, `sandbox_mode`, `[plugins.*]`, …) are preserved; subagents project to Codex's TOML agent format and slash commands to global-only custom prompts (both ◐). Codex **has a native plugin system**[^codex-plugins] with enable-state in `~/.codex/config.toml` as `[plugins."<name>@<source>"] enabled = …`, so the adapter implements `PluginIngester`: `import codex:plugin` captures that enable-state. The render never re-emits those tables (same [invariant](#plugin-importapply-the-shared-invariant) as Claude). Codex records no marketplace *fetch source* in a documented config location, so each plugin's marketplace is resolved from agentsync's own registered marketplaces (`agentsync marketplace add <source>` first), warning + skipping any it can't — exactly how Claude's auto-available built-in marketplace is handled. |
 | **Cursor** | ✅ Adapter (some components projected) | MCP, memory, skills, subagents, slash commands, and hooks. MCP lands in `.cursor/mcp.json` (the same `mcpServers` shape as Claude — full fidelity) and hooks in `.cursor/hooks.json` (Claude's lifecycle events remapped to Cursor's camelCase names; the required top-level `version` is always emitted; events with no Cursor equivalent are dropped with a report). Memory projects to the repo-root `AGENTS.md` at **project scope only** — Cursor keeps user-level rules in app-local storage, so user-scope memory has no filesystem target (reported as a skip). Subagents project to `.cursor/agents/<name>.md` (Claude's `tools`/`color` have no Cursor field and drop); slash commands to `.cursor/commands/<name>.md` (plain markdown — frontmatter drops). Only LSP is unsupported (Cursor has no LSP concept). Cursor **has a native plugin system**[^cursor-plugins], but where it records local enable-state is undocumented, so the adapter implements **no `PluginIngester` yet** (plugin *discovery* on `import` is deferred); it still *receives* plugin-projected components (skills, MCP, …) on `apply` like any agent. |
+| **Gemini CLI** | ✅ Adapter (some components projected) | MCP, memory, subagents, slash commands, and hooks. MCP and hooks both merge into `.gemini/settings.json` (MCP `mcpServers` with Gemini's `url`/`httpUrl` transport split; hooks under `hooks`, the same nested shape as Claude, with events remapped to Gemini's `BeforeTool`/`AfterTool`/… and unmapped ones dropped) — so settings.json is the adapter's single key-merge file and the user's other keys (`theme`, `model`, …) are preserved. Memory projects to `GEMINI.md` (`~/.gemini/GEMINI.md` at user scope, repo-root `GEMINI.md` at project scope — full fidelity). Slash commands become `.gemini/commands/<name>.toml` (`description` + `prompt`; `argument-hint`/`allowed-tools` drop), subagents `.gemini/agents/<name>.md` (Claude's `tools` vocabulary differs from Gemini's, so it and `color` drop). **Skills** (Gemini uses extensions, not Agent Skills) and **LSP** have no Gemini concept and are skipped. Gemini has no native plugin enable-state agentsync models, so there is no `PluginIngester`; it still *receives* plugin-projected components on `apply`. |
 
 ## Plugin import/apply: the shared invariant
 
@@ -44,6 +45,7 @@ adapter handles the asymmetry the same way:
 | Codex   | `~/.codex/config.toml` `[plugins."<name>@<source>"]` | components only (MCP, hooks, memory, skills, …); `[plugins.*]` left untouched |
 | OpenCode | — (no native plugin concept)                    | components only (receives plugin-projected components like any user-authored component) |
 | Cursor  | — (PluginIngester deferred; native enable-state location undocumented) | components only (skills, MCP, commands, …) |
+| Gemini  | — (no native plugin enable-state agentsync models; uses extensions) | components only (MCP, memory, commands, subagents, hooks) |
 
 Once a plugin's components materialise at native paths (`~/.claude/skills/<name>/`,
 `mcpServers` in the agent's config, `~/.codex/AGENTS.md`, …), the consumer
@@ -61,15 +63,15 @@ own per-plugin install dir. See
 
 Component support across agents.
 
-| Component | Claude | OpenCode | Codex | Cursor |
-|---|:--:|:--:|:--:|:--:|
-| **MCP server** | ✓ `~/.claude.json` (user) · `.mcp.json` (project) | ✓ `opencode.json` | ✓ `config.toml` | ✓ `.cursor/mcp.json` |
-| **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ✓ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` |
-| **Skill** | ✓ `~/.claude/skills/X/` (dir) | ✓ shared `.claude/skills/` | ✓ `~/.agents/skills/` | ✓ `.cursor/skills/` |
-| **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/` |
-| **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ◐ `~/.codex/prompts/` | ◐ `.cursor/commands/` |
-| **Hook** | ✓ JSON in settings | ✗ skip (JS/TS plugins) | ◐ `config.toml` `[hooks.*]` | ◐ `.cursor/hooks.json` |
-| **LSP server** | ✓ native | ✗ skip (deferred) | ✗ no LSP concept | ✗ no LSP config |
+| Component | Claude | OpenCode | Codex | Cursor | Gemini |
+|---|:--:|:--:|:--:|:--:|:--:|
+| **MCP server** | ✓ `~/.claude.json` (user) · `.mcp.json` (project) | ✓ `opencode.json` | ✓ `config.toml` | ✓ `.cursor/mcp.json` | ✓ `.gemini/settings.json` |
+| **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ✓ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` | ✓ `GEMINI.md` |
+| **Skill** | ✓ `~/.claude/skills/X/` (dir) | ✓ shared `.claude/skills/` | ✓ `~/.agents/skills/` | ✓ `.cursor/skills/` | ✗ no skills concept |
+| **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/` | ◐ `.gemini/agents/` |
+| **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ◐ `~/.codex/prompts/` | ◐ `.cursor/commands/` | ◐ `.gemini/commands/` (TOML) |
+| **Hook** | ✓ JSON in settings | ✗ skip (JS/TS plugins) | ◐ `config.toml` `[hooks.*]` | ◐ `.cursor/hooks.json` | ◐ `settings.json` `hooks` |
+| **LSP server** | ✓ native | ✗ skip (deferred) | ✗ no LSP concept | ✗ no LSP config | ✗ no LSP concept |
 
 > The ◐/✗ cells are *features*, not bugs: agentsync refuses to invent a
 > translation that would mislead you. Every ◐ and ✗ is printed in the apply
@@ -149,6 +151,25 @@ literally, never resolved.)
   with no Cursor equivalent (e.g. `Notification`, `PostCompact`) are dropped with a
   report. The required top-level `version` is always emitted.
 
+**Gemini CLI**
+
+- **Subagent** — markdown under `.gemini/agents/`. Gemini recognizes
+  `name`/`description`/`model` (plus Gemini-only `kind`/`temperature`/`max_turns`/…
+  agentsync doesn't model); Claude's `tools` list uses a *different tool vocabulary*
+  (`read_file`/`grep_search`, not `Read`/`Grep`), so copying it verbatim would name
+  tools Gemini doesn't have — it and `color` are dropped with a report. `name` is
+  defaulted to the filename when absent (Gemini requires it).
+- **Slash command** — Gemini commands are TOML (`.gemini/commands/*.toml`) with
+  `description` + `prompt`. The body becomes `prompt` and `description` carries
+  over; `argument-hint`/`allowed-tools` have no Gemini field and drop. Gemini's
+  argument placeholder is `{{args}}` (not Claude's `$ARGUMENTS`/`$1`); the body is
+  written verbatim, so placeholder syntax is not auto-translated.
+- **Hook** — Gemini hooks live in `settings.json` under `hooks` in the *same nested
+  shape* as Claude, so only the event name is remapped (`PreToolUse`→`BeforeTool`,
+  `PostToolUse`→`AfterTool`, `UserPromptSubmit`→`BeforeAgent`, `Stop`→`AfterAgent`,
+  `PreCompact`→`PreCompress`); events with no Gemini equivalent (`SubagentStart`/
+  `SubagentStop`/`PostCompact`/`PermissionRequest`) are dropped with a report.
+
 ## Why OpenCode skips hooks and LSP
 
 - **Hooks** — OpenCode hooks are JS/TS plugins that subscribe to events, not
@@ -181,7 +202,11 @@ A few ✓ cells still change shape on the way out — same content, no loss:
   and streamable-HTTP both representable).
 - **Cursor MCP** — `.cursor/mcp.json` uses the same `mcpServers` shape as Claude,
   down to `${env:…}` references.
-- **Codex memory** — the same markdown lands at `~/.codex/AGENTS.md`.
+- **Gemini MCP** — `.gemini/settings.json` `mcpServers`: stdio keeps
+  command/args/env; a remote server uses Gemini's transport split — `url` for SSE,
+  `httpUrl` for HTTP streaming — both round-tripping the canonical `type`.
+- **Codex & Gemini memory** — the same markdown lands at `~/.codex/AGENTS.md` /
+  `~/.gemini/GEMINI.md` (repo-root `GEMINI.md` at project scope).
 - **Skills (Codex & Cursor)** — the same skill *directory* per the
   [Agent Skills](https://agentskills.io) spec: `SKILL.md` (name + description)
   **plus any bundled `scripts/`/`references/`/`assets/` and nested files**, all
@@ -221,7 +246,7 @@ in the [README](../README.md#known-limits); the highlights:
   `AGENTSYNC_ALLOW_INSECURE_URLS=1`.
 - **Symlinked destinations** are rejected by default; override with
   `AGENTSYNC_ALLOW_SYMLINK_DEST=1`.
-- **Planned (not yet implemented)**: Continue, Gemini CLI, Aider.
+- **Planned (not yet implemented)**: Continue, Aider.
 
 See the [user guide](user-guide.md) to put this into practice.
 

@@ -43,18 +43,21 @@ Because the agents genuinely differ. agentsync marks each translation **native (
 it refuses to invent a translation that would mislead you. See the
 [capability matrix](/reference/capability-matrix/) for the full per-agent breakdown.
 
-## Are Codex CLI and Cursor supported?
+## Are Codex CLI, Cursor, and Gemini CLI supported?
 
-**Both are supported.** **Codex CLI** — MCP (into the TOML `~/.codex/config.toml`),
-memory, skills, subagents (◐), slash commands (◐, global-only), hooks (◐), and
-plugin import. **Cursor** — MCP (`.cursor/mcp.json`, the same `mcpServers` shape as
-Claude), skills (`.cursor/skills/`), subagents (◐, `.cursor/agents/`), slash
-commands (◐, plain markdown), and hooks (◐, `.cursor/hooks.json`, with Claude's
-events remapped to Cursor's camelCase names). Cursor's user-level *rules* live in
-app-local storage, so **memory is project-scope only** (the repo-root `AGENTS.md`).
-No LSP concept on either.
+**All three are supported.** **Codex CLI** — MCP (into the TOML
+`~/.codex/config.toml`), memory, skills, subagents (◐), slash commands (◐,
+global-only), hooks (◐), and plugin import. **Cursor** — MCP (`.cursor/mcp.json`,
+the same `mcpServers` shape as Claude), skills (`.cursor/skills/`), subagents (◐,
+`.cursor/agents/`), slash commands (◐, plain markdown), and hooks (◐,
+`.cursor/hooks.json`); its user-level *rules* live in app-local storage, so
+**memory is project-scope only** (the repo-root `AGENTS.md`). **Gemini CLI** — MCP
++ hooks (◐) in `.gemini/settings.json`, memory (`GEMINI.md`), subagents (◐,
+`.gemini/agents/`), and slash commands (◐, TOML in `.gemini/commands/`); Gemini
+uses extensions rather than Agent Skills, so skills are skipped. No LSP concept on
+any of them.
 
-## What about Continue, Gemini CLI, or Aider?
+## What about Continue or Aider?
 
 Planned — on the roadmap, not yet implemented.
 

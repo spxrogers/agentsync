@@ -5,6 +5,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/adapter/codex"
 	"github.com/spxrogers/agentsync/internal/adapter/cursor"
+	"github.com/spxrogers/agentsync/internal/adapter/gemini"
 	"github.com/spxrogers/agentsync/internal/adapter/opencode"
 	"github.com/spxrogers/agentsync/internal/paths"
 )
@@ -19,5 +20,6 @@ var registryFactory = func() *adapter.Registry {
 	_ = r.Register(opencode.New(opencode.Options{TargetRoot: home}))
 	_ = r.Register(codex.New(codex.Options{TargetRoot: home}))
 	_ = r.Register(cursor.New(cursor.Options{TargetRoot: home}))
+	_ = r.Register(gemini.New(gemini.Options{TargetRoot: home}))
 	return r
 }

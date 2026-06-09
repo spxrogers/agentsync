@@ -165,6 +165,23 @@ out plugin components like every adapter.
 - **Files:** `cursor.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
   `paths.go`, `skill.go`, `command.go`, `subagent.go`, `hook.go`, `memory.go`.
 
+### `internal/adapter/gemini`
+The Gemini CLI adapter — MCP, memory, slash commands, subagents, and hooks. MCP
+(`mcpServers`, with Gemini's `url`/`httpUrl` transport split) and hooks (`hooks`,
+the same nested shape as Claude) both merge into `.gemini/settings.json` via
+`merge-json-keys` — settings.json is the adapter's single key-merge file, so the
+user's other keys (`theme`, `model`, …) are preserved. Memory projects to
+`GEMINI.md` (`~/.gemini/GEMINI.md` user / repo-root `GEMINI.md` project); commands
+to `.gemini/commands/<name>.toml` (`description` + `prompt`); subagents to
+`.gemini/agents/<name>.md`. Omits `CapSkill` (Gemini uses extensions, not Agent
+Skills) and `CapLSP` (no LSP concept) — both ✗ skip. No `PluginIngester` (no
+native plugin enable-state agentsync models).
+- **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
+- **Depends on:** adapter, adapter/claude (frontmatter helpers), secrets, source,
+  paths, iox, jsonkeys, go-toml/v2.
+- **Files:** `gemini.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
+  `paths.go`, `command.go`, `subagent.go`, `hook.go`, `memory.go`.
+
 ### `internal/adapter/noop`
 Placeholder adapter that detects true and renders nothing. Used as a registry
 stand-in in tests; no production agent is registered as a noop today (every valid

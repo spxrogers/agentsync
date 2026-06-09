@@ -21,6 +21,7 @@ const initialAgentsyncTOML = `# agentsync source-of-truth config
 # opencode = { enabled = true,  scope = "user" }
 # codex    = { enabled = true,  scope = "user" }
 # cursor   = { enabled = true,  scope = "user" }
+# gemini   = { enabled = true,  scope = "user" }
 
 [updates]
 default_mode     = "track"        # pinned | track | manual
