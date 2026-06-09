@@ -1,0 +1,159 @@
+package windsurf_test
+
+import (
+	"encoding/json"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/adapter/windsurf"
+	"github.com/spxrogers/agentsync/internal/secrets"
+	"github.com/spxrogers/agentsync/internal/source"
+)
+
+func findOp(ops []adapter.FileOp, suffix string) *adapter.FileOp {
+	for i := range ops {
+		if strings.HasSuffix(filepath.ToSlash(ops[i].Path), suffix) {
+			return &ops[i]
+		}
+	}
+	return nil
+}
+
+func hasSkip(skips []adapter.Skip, component, name string) bool {
+	for _, s := range skips {
+		if s.Component == component && s.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// ---------------------------------------------------------------------------
+// User scope: MCP renders; memory + commands are skipped (scope-asymmetric)
+// ---------------------------------------------------------------------------
+
+func TestRender_UserScope_MCPOnly(t *testing.T) {
+	enabled := true
+	c := source.Canonical{
+		MCPServers: []source.MCPServer{{ID: "github", Server: source.MCPServerSpec{Type: "stdio", Command: "npx", Args: []string{"-y", "x"}, Env: map[string]string{"T": "v"}, Enabled: &enabled}}},
+		Memory:     source.Memory{Body: "# mem\n"},
+		Commands:   []source.Command{{Name: "deploy", Body: "do it\n"}},
+	}
+	ops, skips, err := windsurf.New(windsurf.Options{TargetRoot: t.TempDir()}).Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := findOp(ops, ".codeium/windsurf/mcp_config.json")
+	if op == nil {
+		t.Fatal("mcp_config.json op missing at user scope")
+	}
+	if op.MergeStrategy != "merge-json-keys" {
+		t.Fatalf("merge strategy = %q, want merge-json-keys", op.MergeStrategy)
+	}
+	var ours map[string]any
+	_ = json.Unmarshal(op.Content, &ours)
+	srv := ours["mcpServers"].(map[string]any)["github"].(map[string]any)
+	if srv["command"] != "npx" || srv["env"].(map[string]any)["T"] != "v" {
+		t.Fatalf("stdio server malformed: %v", srv)
+	}
+	// memory + commands have no user-scope target → reported skips.
+	if !hasSkip(skips, "memory", "rules") {
+		t.Errorf("expected user-scope memory skip, got %+v", skips)
+	}
+	if !hasSkip(skips, "command", "deploy") {
+		t.Errorf("expected user-scope command skip, got %+v", skips)
+	}
+	if findOp(ops, "agentsync.md") != nil || findOp(ops, "deploy.md") != nil {
+		t.Fatalf("memory/commands must not render at user scope: %+v", ops)
+	}
+}
+
+func TestRender_MCP_RemoteServerUrl(t *testing.T) {
+	c := source.Canonical{MCPServers: []source.MCPServer{{
+		ID:     "figma",
+		Server: source.MCPServerSpec{Type: "http", URL: "https://mcp.figma.com/mcp", Headers: map[string]string{"API_KEY": "v"}},
+	}}}
+	ops, _, _ := windsurf.New(windsurf.Options{TargetRoot: t.TempDir()}).Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	op := findOp(ops, "mcp_config.json")
+	var ours map[string]any
+	_ = json.Unmarshal(op.Content, &ours)
+	srv := ours["mcpServers"].(map[string]any)["figma"].(map[string]any)
+	if srv["serverUrl"] != "https://mcp.figma.com/mcp" {
+		t.Fatalf("remote server must use serverUrl: %v", srv)
+	}
+	if _, hasCmd := srv["command"]; hasCmd {
+		t.Fatalf("remote server must not have command: %v", srv)
+	}
+	if h := srv["headers"].(map[string]any); h["API_KEY"] != "v" {
+		t.Fatalf("headers dropped: %v", srv)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Project scope: memory (rules) + commands (workflows) render; MCP skipped
+// ---------------------------------------------------------------------------
+
+func TestRender_ProjectScope_RulesAndWorkflows(t *testing.T) {
+	proj := t.TempDir()
+	projC := source.Canonical{
+		MCPServers: []source.MCPServer{{ID: "github", Server: source.MCPServerSpec{Command: "npx"}}},
+		Memory:     source.Memory{Body: "# Rules\n\nBe concise.\n"},
+		Commands:   []source.Command{{Name: "deploy", Frontmatter: map[string]any{"description": "Deploy", "argument-hint": "<env>"}, Body: "Run deploy.\n"}},
+	}
+	c := projC
+	c.Project = &projC
+	ops, skips, err := windsurf.New(windsurf.Options{TargetRoot: t.TempDir()}).Render(secrets.ForRender(c), adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Memory → .windsurf/rules/agentsync.md (plain body).
+	memOp := findOp(ops, ".windsurf/rules/agentsync.md")
+	if memOp == nil {
+		t.Fatal("rules/agentsync.md op missing at project scope")
+	}
+	if string(memOp.Content) != "# Rules\n\nBe concise.\n" {
+		t.Fatalf("memory should be plain body: %q", memOp.Content)
+	}
+	// Command → .windsurf/workflows/deploy.md (plain body; frontmatter dropped).
+	cmdOp := findOp(ops, ".windsurf/workflows/deploy.md")
+	if cmdOp == nil {
+		t.Fatal("workflows/deploy.md op missing")
+	}
+	if string(cmdOp.Content) != "Run deploy.\n" {
+		t.Fatalf("workflow should be plain body: %q", cmdOp.Content)
+	}
+	if !hasSkip(skips, "command-frontmatter", "deploy") {
+		t.Errorf("expected command-frontmatter skip, got %+v", skips)
+	}
+	// MCP has no project target → reported skip, no op.
+	if findOp(ops, "mcp_config.json") != nil {
+		t.Fatalf("MCP must not render at project scope: %+v", ops)
+	}
+	if !hasSkip(skips, "mcp", "github") {
+		t.Errorf("expected project-scope MCP skip, got %+v", skips)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Unsupported components always skipped
+// ---------------------------------------------------------------------------
+
+func TestRender_UnsupportedComponentsSkipped(t *testing.T) {
+	c := source.Canonical{
+		Skills:     []source.Skill{{Name: "demo", Frontmatter: map[string]any{"name": "demo"}, Body: "x\n"}},
+		Subagents:  []source.Subagent{{Name: "rev", Body: "y\n"}},
+		Hooks:      []source.Hook{{Event: "PreToolUse", Type: "command", Command: "echo"}},
+		LSPServers: []source.LSPServer{{ID: "gopls", Spec: source.LSPServerSpec{Command: "gopls"}}},
+	}
+	_, skips, err := windsurf.New(windsurf.Options{TargetRoot: t.TempDir()}).Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []struct{ comp, name string }{{"skill", "demo"}, {"subagent", "rev"}, {"hook", "PreToolUse"}, {"lsp", "gopls"}} {
+		if !hasSkip(skips, w.comp, w.name) {
+			t.Errorf("expected %s skip for %q, got %+v", w.comp, w.name, skips)
+		}
+	}
+}

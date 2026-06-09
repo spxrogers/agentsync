@@ -11,6 +11,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **Windsurf adapter (`internal/adapter/windsurf`).** A new real adapter for
+  Windsurf (Cascade), scope-asymmetric to match Windsurf's layout: MCP renders at
+  **user scope** into the global `~/.codeium/windsurf/mcp_config.json` (JSON
+  `mcpServers`; stdio command/args/env, remote `serverUrl` + `headers`), while
+  memory → `.windsurf/rules/agentsync.md` (plain markdown rule) and slash commands
+  → `.windsurf/workflows/<name>.md` (plain markdown workflows invoked as `/<name>`;
+  command frontmatter dropped) render at **project scope**. The non-applicable
+  scope reports a skip for each item, so nothing is dropped silently. Skills,
+  subagents, hooks, and LSP have no Windsurf concept and are skipped.
+  `agent add windsurf` / `import windsurf:…` work end-to-end.
 - **Continue adapter (`internal/adapter/continuedev`).** A new real adapter for
   Continue, projecting components as Continue "blocks" (one file per item under
   `.continue/`, so the adapter owns no shared key-merge file): MCP servers →

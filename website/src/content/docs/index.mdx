@@ -114,9 +114,10 @@ That `github` MCP server now lives in **both** `~/.claude.json` and
 | **Cursor** | ✓ adapter | MCP (`.cursor/mcp.json`), memory (◐, project-scope `AGENTS.md`), skills, subagents (◐), slash commands (◐), hooks (◐). No LSP concept. |
 | **Gemini CLI** | ✓ adapter | MCP + hooks (◐) in `.gemini/settings.json`, memory (`GEMINI.md`), subagents (◐), slash commands (◐, TOML). No skills (uses extensions) or LSP concept. |
 | **Continue** | ✓ adapter | MCP (`.continue/mcpServers/`), memory (`.continue/rules/`), slash commands (◐, `.continue/prompts/`). No skills/subagents/hooks/LSP concept. |
+| **Windsurf** | ✓ adapter | MCP (`~/.codeium/windsurf/mcp_config.json`, user scope), memory (◐, `.windsurf/rules/`) + slash commands (◐, `.windsurf/workflows/`) at project scope. No skills/subagents/hooks/LSP concept. |
 
 <Aside type="caution" title="Status: beta">
-	v1.0 ships Claude Code, OpenCode, Codex, Cursor, Gemini CLI, and Continue end-to-end. The tool is
+	v1.0 ships Claude Code, OpenCode, Codex, Cursor, Gemini CLI, Continue, and Windsurf end-to-end. The tool is
 	functional and tested under `just test-release`; package-manager distribution
 	and a few documented trade-offs are still being finalized. Found a rough edge?
 	[Open an issue](https://github.com/spxrogers/agentsync/issues).
