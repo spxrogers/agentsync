@@ -23,7 +23,7 @@ nothing is dropped silently.
 | **Claude Code** | ✅ Full adapter | All seven components, including LSP. The reference implementation. Its installed **plugins + marketplaces** are captured by `import` (read from `enabledPlugins` / `extraKnownMarketplaces`); on `apply`, each plugin's components project to Claude's native paths and the enablement keys themselves are deliberately left untouched (`PluginIngester` is read-only — see the [shared invariant](#plugin-importapply-the-shared-invariant) below). |
 | **OpenCode** | ✅ Adapter (some components projected/skipped) | MCP, memory, skills, subagents, commands. Hooks and LSP are skipped with a warning. No native plugin/marketplace concept, so nothing for plugin `import` to capture; it still *receives* plugin-projected components (skills, MCP, …) on `apply`. |
 | **Codex CLI** | ✅ Adapter (some components projected) | MCP, memory, skills, subagents, slash commands, and hooks. MCP servers and hooks both merge into the TOML `~/.codex/config.toml` (as `[mcp_servers.*]` / inline `[hooks.*]` tables — Codex's documented equivalent to a separate `hooks.json`), so config.toml is the adapter's single key-merge file and the user's other keys (`model`, `sandbox_mode`, `[plugins.*]`, …) are preserved; subagents project to Codex's TOML agent format and slash commands to global-only custom prompts (both ◐). Codex **has a native plugin system**[^codex-plugins] with enable-state in `~/.codex/config.toml` as `[plugins."<name>@<source>"] enabled = …`, so the adapter implements `PluginIngester`: `import codex:plugin` captures that enable-state. The render never re-emits those tables (same [invariant](#plugin-importapply-the-shared-invariant) as Claude). Codex records no marketplace *fetch source* in a documented config location, so each plugin's marketplace is resolved from agentsync's own registered marketplaces (`agentsync marketplace add <source>` first), warning + skipping any it can't — exactly how Claude's auto-available built-in marketplace is handled. |
-| **Cursor** | 🔜 Planned | Registered as a no-op. Planned coverage is broad — MCP, memory, skills, subagents, slash commands, and hooks all project (see the matrix); only LSP is unsupported. User-level rules/memory live in Cursor's app-local storage, so those stay project-scope. Cursor **has a native plugin system**[^cursor-plugins] (rules, skills, agents, commands, hooks, MCP servers) whose `.cursor-plugin/marketplace.json` + `.cursor-plugin/plugin.json` schema is almost identical to Claude's `.claude-plugin/*` — so projection largely carries over and the adapter should support `import <agent>:plugin` too. The open question is purely *where Cursor records local enable-state* (undocumented, possibly app-local like its rules); the plugin/marketplace content schema is already a near-match. When found, the Cursor `PluginIngester` reads it on import and — by the same [invariant](#plugin-importapply-the-shared-invariant) — never writes it back on apply. |
+| **Cursor** | ✅ Adapter (some components projected) | MCP, memory, skills, subagents, slash commands, and hooks. MCP lands in `.cursor/mcp.json` (the same `mcpServers` shape as Claude — full fidelity) and hooks in `.cursor/hooks.json` (Claude's lifecycle events remapped to Cursor's camelCase names; the required top-level `version` is always emitted; events with no Cursor equivalent are dropped with a report). Memory projects to the repo-root `AGENTS.md` at **project scope only** — Cursor keeps user-level rules in app-local storage, so user-scope memory has no filesystem target (reported as a skip). Subagents project to `.cursor/agents/<name>.md` (Claude's `tools`/`color` have no Cursor field and drop); slash commands to `.cursor/commands/<name>.md` (plain markdown — frontmatter drops). Only LSP is unsupported (Cursor has no LSP concept). Cursor **has a native plugin system**[^cursor-plugins], but where it records local enable-state is undocumented, so the adapter implements **no `PluginIngester` yet** (plugin *discovery* on `import` is deferred); it still *receives* plugin-projected components (skills, MCP, …) on `apply` like any agent. |
 
 ## Plugin import/apply: the shared invariant
 
@@ -43,7 +43,7 @@ adapter handles the asymmetry the same way:
 | Claude  | `settings.json#/enabledPlugins`, `…#/extraKnownMarketplaces` | components only (skills, MCP, commands, …); enable-state keys left untouched |
 | Codex   | `~/.codex/config.toml` `[plugins."<name>@<source>"]` | components only (MCP, hooks, memory, skills, …); `[plugins.*]` left untouched |
 | OpenCode | — (no native plugin concept)                    | components only (receives plugin-projected components like any user-authored component) |
-| Cursor (planned) | TBD (enable-state location not yet documented) | components only |
+| Cursor  | — (PluginIngester deferred; native enable-state location undocumented) | components only (skills, MCP, commands, …) |
 
 Once a plugin's components materialise at native paths (`~/.claude/skills/<name>/`,
 `mcpServers` in the agent's config, `~/.codex/AGENTS.md`, …), the consumer
@@ -61,7 +61,7 @@ own per-plugin install dir. See
 
 Component support across agents.
 
-| Component | Claude | OpenCode | Codex | Cursor[^planned] |
+| Component | Claude | OpenCode | Codex | Cursor |
 |---|:--:|:--:|:--:|:--:|
 | **MCP server** | ✓ `~/.claude.json` (user) · `.mcp.json` (project) | ✓ `opencode.json` | ✓ `config.toml` | ✓ `.cursor/mcp.json` |
 | **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ✓ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` |
@@ -132,19 +132,22 @@ literally, never resolved.)
   Pre/PostCompact, UserPromptSubmit, SubagentStop, Stop); Claude events outside
   that set (e.g. `SessionEnd`, `Notification`) have no target and drop.
 
-**Cursor** *(planned)*
+**Cursor**
 
 - **Memory** — project memory lands as `AGENTS.md`, but Cursor keeps *user-level*
   rules in app-local storage (not the filesystem), so user-scope memory has no
-  projection target.
-- **Subagent** — markdown under `.cursor/agents/`, but Claude's `tools` allowlist
-  is unsupported (the nearest analog is a coarse `readonly` boolean) and is dropped.
+  projection target (it is reported as a skip).
+- **Subagent** — markdown under `.cursor/agents/`. Cursor recognizes
+  `name`/`description`/`model`/`readonly`/`is_background`; Claude's `tools`
+  allowlist and `color` have no Cursor field and are dropped with a report.
 - **Slash command** — Cursor commands (`.cursor/commands/*.md`) are plain markdown
   with no frontmatter, so `argument-hint`, `description`, and `allowed-tools` are
   all dropped — only the prompt body survives.
-- **Hook** — Cursor uses a declarative `hooks.json` too, but with its own
-  (camelCase) event names and script-path handlers, so Claude's events are remapped
-  approximately and some have no Cursor equivalent.
+- **Hook** — Cursor uses a declarative `.cursor/hooks.json`, but with its own
+  camelCase event names and a flat entry shape, so Claude's events are remapped
+  (`PreToolUse`→`preToolUse`, `UserPromptSubmit`→`beforeSubmitPrompt`, …) and any
+  with no Cursor equivalent (e.g. `Notification`, `PostCompact`) are dropped with a
+  report. The required top-level `version` is always emitted.
 
 ## Why OpenCode skips hooks and LSP
 
@@ -222,11 +225,6 @@ in the [README](../README.md#known-limits); the highlights:
 
 See the [user guide](user-guide.md) to put this into practice.
 
-[^planned]: **Planned — not yet implemented.** The Cursor adapter is registered
-    as a no-op today, so its column describes the *intended* projection per the
-    design spec. `agent add cursor` is rejected unless
-    `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. (Codex graduated to a real adapter.)
-
 [^codex-plugins]: Codex plugin system:
     [developers.openai.com/codex/plugins](https://developers.openai.com/codex/plugins).
     Enable-state lives in `~/.codex/config.toml` under
@@ -245,4 +243,6 @@ See the [user guide](user-guide.md) to put this into practice.
     yet documented: where Cursor records which plugins are installed/enabled
     locally (the `enabledPlugins`-equivalent a `PluginIngester` would read);
     given Cursor keeps user rules in app-local storage, this may not be a plain
-    config file and needs investigation when the adapter is built.
+    config file. The Cursor adapter therefore ships **without** a `PluginIngester`
+    (plugin discovery on `import` is deferred until that location is documented);
+    it still fans out plugin *components* on `apply` like every other adapter.

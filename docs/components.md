@@ -145,9 +145,31 @@ Omits `CapLSP` (Codex has no LSP concept).
   `apply.go`, `paths.go`, `skill.go`, `command.go`, `subagent.go`, `hook.go`,
   `memory.go`, `settings.go`.
 
+### `internal/adapter/cursor`
+The Cursor adapter — MCP, memory, skills, subagents, slash commands, and hooks.
+MCP lands in `.cursor/mcp.json` (the same `mcpServers` shape as Claude) and hooks
+in `.cursor/hooks.json` (`{ "version": 1, "hooks": { … } }`) — both JSON, so the
+adapter's single key-merge strategy is `merge-json-keys`. The required hooks
+`version` is injected post-merge in `applyWrite` (never rendered into `op.Content`,
+so it is never an orphan-strippable owned key). Memory projects to the repo-root
+`AGENTS.md` at project scope only (user-level rules live in Cursor's app-local
+storage); skills to `.cursor/skills/`; subagents to `.cursor/agents/<name>.md`
+(`tools`/`color` dropped); commands to `.cursor/commands/<name>.md` (plain
+markdown — frontmatter dropped). Omits `CapLSP` (Cursor has no LSP concept).
+Implements no `PluginIngester` yet — Cursor's native plugin enable-state location
+is undocumented, so plugin discovery on `import` is deferred; `apply` still fans
+out plugin components like every adapter.
+- **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
+- **Depends on:** adapter, adapter/claude (frontmatter/skill/extra helpers),
+  secrets, source, paths, iox, jsonkeys, afero.
+- **Files:** `cursor.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
+  `paths.go`, `skill.go`, `command.go`, `subagent.go`, `hook.go`, `memory.go`.
+
 ### `internal/adapter/noop`
-Placeholder adapter for unimplemented agents (Cursor): detects true,
-renders nothing. `agent add` rejects these unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`.
+Placeholder adapter that detects true and renders nothing. Used as a registry
+stand-in in tests; no production agent is registered as a noop today (every valid
+agent has a real adapter). `agent add`/`import` still reject any future
+noop-registered agent unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`.
 - **Depends on:** adapter, secrets, source. **Files:** `noop.go`.
 
 ---

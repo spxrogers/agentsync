@@ -58,9 +58,9 @@ TOML files *are* the canonical model.
 ### Adapter
 A per-agent translator. Each adapter knows how to **render** the canonical model
 into one agent's native config format and how to **ingest** that native config
-back into the canonical model. Claude, OpenCode, and Codex are real adapters;
-Cursor is registered but no-op (see the [capability matrix](capability-matrix.md)).
-Adding an agent means adding an adapter — the canonical schema never changes.
+back into the canonical model. Claude, OpenCode, Codex, and Cursor are all real
+adapters (see the [capability matrix](capability-matrix.md)). Adding an agent
+means adding an adapter — the canonical schema never changes.
 
 ### Apply / Render
 `agentsync apply` runs the **render** pipeline: load the source → resolve

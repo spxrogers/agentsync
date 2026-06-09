@@ -5,7 +5,7 @@ Project memory for Claude Code / agent sessions working on agentsync.
 ## What this is
 
 agentsync is a single-machine Go CLI that centrally manages AI coding-agent
-configurations (Claude Code, OpenCode, Codex, and — planned — Cursor). The
+configurations (Claude Code, OpenCode, Codex, and Cursor). The
 user keeps a canonical config in `~/.agentsync/` (small TOML + markdown,
 committable to a dotfiles repo); `agentsync apply` renders it into each agent's
 native config. It's bidirectional: native edits are detected as drift and merged

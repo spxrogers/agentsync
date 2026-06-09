@@ -320,12 +320,13 @@ func TestImport_UnknownAgent(t *testing.T) {
 	}
 }
 
-// TestImport_RejectsUnimplementedAgent is the regression for import giving a
-// misleading "not found in native config" for cursor (registered as a noop
-// adapter whose Ingest returns empty), inconsistent with `agent add` which
-// rejects it with a clear "not yet implemented" message. (codex graduated to a
-// real adapter, so cursor is the remaining unimplemented agent.)
-func TestImport_RejectsUnimplementedAgent(t *testing.T) {
+// TestImport_CursorIsImplemented is the regression for cursor graduating from a
+// noop placeholder to a real adapter: `import cursor:…` must no longer be
+// gated as unimplemented. It proceeds to a real Ingest, which here finds no
+// .cursor/mcp.json and reports the component missing — NOT "no implemented
+// adapter". (claude, opencode, codex, and cursor are all real adapters now, so
+// no valid agent triggers the unimplemented gate.)
+func TestImport_CursorIsImplemented(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	if _, err := runCLI(t, env, "init"); err != nil {
@@ -333,17 +334,10 @@ func TestImport_RejectsUnimplementedAgent(t *testing.T) {
 	}
 	_, err := runCLI(t, env, "import", "cursor:mcp:github")
 	if err == nil {
-		t.Fatal("expected import from cursor (noop adapter) to be rejected; got nil")
+		t.Fatal("expected import of a non-existent server to fail; got nil")
 	}
-	if !strings.Contains(err.Error(), "not yet implemented") {
-		t.Fatalf("expected unimplemented-agent message, got: %v", err)
-	}
-
-	// The override still allows it (falls through to the empty-ingest path).
-	env["AGENTSYNC_ALLOW_UNIMPLEMENTED"] = "1"
-	_, err = runCLI(t, env, "import", "cursor:mcp:github")
-	if err == nil || strings.Contains(err.Error(), "not yet implemented") {
-		t.Fatalf("with override, cursor import should proceed (then fail 'not found'); got: %v", err)
+	if strings.Contains(err.Error(), "no implemented adapter") || strings.Contains(err.Error(), "not yet implemented") {
+		t.Fatalf("cursor is a real adapter now; import must not be gated as unimplemented, got: %v", err)
 	}
 }
 

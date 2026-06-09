@@ -43,14 +43,16 @@ Because the agents genuinely differ. agentsync marks each translation **native (
 it refuses to invent a translation that would mislead you. See the
 [capability matrix](/reference/capability-matrix/) for the full per-agent breakdown.
 
-## When will Codex CLI and Cursor be supported?
+## Are Codex CLI and Cursor supported?
 
-**Codex CLI is supported** — MCP (into the TOML `~/.codex/config.toml`), memory,
-skills, subagents (◐), slash commands (◐, global-only), hooks (◐), and plugin
-import. **Cursor** is still a no-op adapter (planned), so `agent add cursor` is
-rejected in beta unless you set `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. Cursor's planned
-coverage includes skills and subagents (`.cursor/skills/`, `.cursor/agents/`); its
-user-level *rules* live in app-local storage, so rules stay project-scope only.
+**Both are supported.** **Codex CLI** — MCP (into the TOML `~/.codex/config.toml`),
+memory, skills, subagents (◐), slash commands (◐, global-only), hooks (◐), and
+plugin import. **Cursor** — MCP (`.cursor/mcp.json`, the same `mcpServers` shape as
+Claude), skills (`.cursor/skills/`), subagents (◐, `.cursor/agents/`), slash
+commands (◐, plain markdown), and hooks (◐, `.cursor/hooks.json`, with Claude's
+events remapped to Cursor's camelCase names). Cursor's user-level *rules* live in
+app-local storage, so **memory is project-scope only** (the repo-root `AGENTS.md`).
+No LSP concept on either.
 
 ## What about Continue, Gemini CLI, or Aider?
 

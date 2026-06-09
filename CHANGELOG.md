@@ -11,6 +11,20 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **Cursor adapter (`internal/adapter/cursor`).** Cursor graduates from a
+  registered no-op to a full adapter: MCP servers → `.cursor/mcp.json` (the same
+  `mcpServers` shape as Claude, full fidelity), memory → repo-root `AGENTS.md`
+  (project scope only — Cursor keeps user-level rules in app-local storage),
+  skills → `.cursor/skills/<name>/` (whole-directory fidelity), subagents →
+  `.cursor/agents/<name>.md` (`tools`/`color` dropped with a report), slash
+  commands → `.cursor/commands/<name>.md` (plain markdown — frontmatter dropped),
+  and hooks → `.cursor/hooks.json` (Claude's lifecycle events remapped to Cursor's
+  camelCase names with the required top-level `version` always emitted; events
+  with no Cursor equivalent dropped with a report). LSP is unsupported (Cursor has
+  no LSP concept). `agent add cursor` / `import cursor:…` now work without
+  `AGENTSYNC_ALLOW_UNIMPLEMENTED`. Plugin discovery (`PluginIngester`) is deferred
+  — Cursor's native enable-state location is undocumented — but Cursor still
+  receives plugin-projected components on `apply` like every adapter.
 - **`docs/comparison.md` — "How agentsync compares."** A new canonical doc
   surveying the AI coding-agent config landscape (gaal, agentsmesh, rulesync,
   ruler, ai-rulez, the MCP managers, the skills tools, the AGENTS.md standard),

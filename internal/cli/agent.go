@@ -38,15 +38,17 @@ func boolStr(b bool) string {
 
 const validAgents = "claude, opencode, codex, cursor"
 
-// v1Supported lists agents whose adapter actually emits ops today.
-// cursor is still registered as NoopAdapter in registry_internal.go;
-// adding it silently would produce `applied: 0 ops` for that agent
-// with no diagnostic — so `agent add` rejects it with a status hint.
-// (Allow override with AGENTSYNC_ALLOW_UNIMPLEMENTED=1 for plan/spec work.)
+// v1Supported lists agents whose adapter actually emits ops today. Every valid
+// agent (see validateAgent) now has a real adapter, so this gate is dormant —
+// it stays as a guard for any FUTURE agent added to the valid set but registered
+// as a noop placeholder: adding such an agent silently would produce `applied: 0
+// ops` with no diagnostic, so `agent add` / `import` reject it with a status
+// hint. (Allow override with AGENTSYNC_ALLOW_UNIMPLEMENTED=1 for plan/spec work.)
 var v1Supported = map[string]bool{
 	"claude":   true,
 	"opencode": true,
 	"codex":    true,
+	"cursor":   true,
 }
 
 func newAgentCmd() *cobra.Command {
@@ -203,9 +205,8 @@ func agentAddRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if !v1Supported[name] && os.Getenv("AGENTSYNC_ALLOW_UNIMPLEMENTED") != "1" {
-		return fmt.Errorf("agent %q is not yet implemented in v1.0 "+
-			"(cursor is planned for a later release); "+
-			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to register anyway and accept noop apply", name)
+		return fmt.Errorf("agent %q has no implemented adapter yet; "+
+			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to register anyway and accept a no-op apply", name)
 	}
 	p, raw, agents, err := readAgentsyncTOML()
 	if err != nil {

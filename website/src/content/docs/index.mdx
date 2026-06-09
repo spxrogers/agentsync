@@ -111,11 +111,11 @@ That `github` MCP server now lives in **both** `~/.claude.json` and
 | **Claude Code** | ✓ full adapter | All seven components, including LSP. |
 | **OpenCode** | ✓ adapter | MCP, memory, skills, subagents, commands. Hooks + LSP skipped. |
 | **Codex CLI** | ✓ adapter | MCP (TOML `config.toml`), memory, skills, subagents (◐), slash commands (◐), hooks (◐) + plugin import. No LSP concept. |
-| **Cursor** | 🔜 planned | No-op today; will project skills, subagents + project-scope rules. |
+| **Cursor** | ✓ adapter | MCP (`.cursor/mcp.json`), memory (◐, project-scope `AGENTS.md`), skills, subagents (◐), slash commands (◐), hooks (◐). No LSP concept. |
 
 <Aside type="caution" title="Status: beta">
-	v1.0 ships Claude Code + OpenCode end-to-end. The tool is functional and tested
-	under `just test-release`; package-manager distribution and a few documented
-	trade-offs are still being finalized. Found a rough edge?
+	v1.0 ships Claude Code, OpenCode, Codex, and Cursor end-to-end. The tool is
+	functional and tested under `just test-release`; package-manager distribution
+	and a few documented trade-offs are still being finalized. Found a rough edge?
 	[Open an issue](https://github.com/spxrogers/agentsync/issues).
 </Aside>

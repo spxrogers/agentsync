@@ -86,10 +86,10 @@ agentsync agent disable opencode  # stop applying (keeps source)
 agentsync agent disable opencode --purge   # also remove what it wrote
 ```
 
-<Aside type="caution">
-	`agent add cursor` is rejected in beta — its adapter is still a no-op.
-	`agent add codex` works. Override with `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` if you
-	really want to register cursor anyway (apply emits zero ops for it).
+<Aside type="note">
+	All four valid agents — `claude`, `opencode`, `codex`, and `cursor` — have real
+	adapters and register normally. `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` exists only for
+	a future agent registered as a no-op placeholder (none today).
 </Aside>
 
 ### `mcp`
