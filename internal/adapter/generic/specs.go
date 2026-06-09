@@ -111,15 +111,25 @@ func Specs() []Spec {
 			Memory: FileTarget{Project: "AGENTS.md"},
 			MCP:    MCPTarget{User: ".config/crush/crush.json", Project: "crush.json", RootKey: "mcp", TransportKey: "type"},
 		},
-
-		// ---- Memory-only (MCP is array/YAML/TOML/app-storage/cloud — reported as a skip) ----
-
 		// Amp (Sourcegraph) — AGENTS.md (project + ~/.config/amp/AGENTS.md). MCP is
-		// a namespaced `amp.mcpServers` key in settings.json — not a top-level map.
+		// the namespaced `amp.mcpServers` key (a flat dotted key, not a nested map)
+		// in `~/.config/amp/settings.json` (JSONC — handled by the JSONC-tolerant merge).
 		{
 			Name: "amp", DetectBin: "amp", DetectDir: ".config/amp",
 			Memory: FileTarget{User: ".config/amp/AGENTS.md", Project: "AGENTS.md"},
+			MCP:    MCPTarget{User: ".config/amp/settings.json", RootKey: "amp.mcpServers"},
 		},
+		// Antigravity (Google) — AGENTS.md (+ GEMINI.md). MCP in
+		// `~/.gemini/config/mcp_config.json` (shared by the Antigravity IDE + CLI;
+		// per Google's codelab); remote servers use `serverUrl`. Global rules path
+		// is secondary-sourced, so memory stays project-scope.
+		{
+			Name: "antigravity", DetectBin: "agy", DetectDir: ".agent",
+			Memory: FileTarget{Project: "AGENTS.md"},
+			MCP:    MCPTarget{User: ".gemini/config/mcp_config.json", RemoteURLKey: "serverUrl"},
+		},
+
+		// ---- Memory-only (MCP is array/YAML/TOML/app-storage/cloud — reported as a skip) ----
 		// Goose (Block) — `.goosehints`. MCP lives in YAML `config.yaml` extensions.
 		{
 			Name: "goose", DetectBin: "goose", DetectDir: ".config/goose",
@@ -150,13 +160,6 @@ func Specs() []Spec {
 		{
 			Name: "augmentcode", DetectBin: "auggie", DetectDir: ".augment",
 			Memory: FileTarget{User: ".augment/rules/agentsync.md", Project: ".augment/rules/agentsync.md"},
-		},
-		// Antigravity (Google) — AGENTS.md (+ GEMINI.md). MCP remote uses
-		// `serverUrl` and the global path is secondary-sourced — omitted pending a
-		// primary doc.
-		{
-			Name: "antigravity", DetectBin: "agy", DetectDir: ".agent",
-			Memory: FileTarget{Project: "AGENTS.md"},
 		},
 		// Mistral (Vibe / Le Chat) — AGENTS.md (ruler default). MCP is TOML
 		// (`.vibe/config.toml`).

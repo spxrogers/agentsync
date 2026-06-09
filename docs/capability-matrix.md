@@ -98,6 +98,17 @@ reported as a skip. Breadth agents run through the same apply/import pipeline as
 the deep ones, so they get drift detection, secret resolution, and capture — not a
 one-way rules dump.
 
+**MCP coverage (15 of 22).** The MCP merge is **JSONC-tolerant** (hujson), so a
+commented settings file (Zed, Copilot's `.vscode/mcp.json`, Amp) is parsed and its
+foreign keys preserved rather than clobbered — and per-agent dialect knobs cover
+the variance: top-level key (`mcpServers` / `servers` / `mcp` / `context_servers` /
+the flat namespaced `amp.mcpServers`), transport field (`type` / `transport` /
+inferred), stdio value (`stdio` / `local`), and remote URL key (`url` / `httpUrl` /
+`serverUrl`). The seven memory-only agents are the ones whose MCP is genuinely
+**not** a JSON server-map — array (Trae), YAML (Goose), TOML (OpenHands, Mistral),
+IDE app-storage (JetBrains, AugmentCode), or cloud-dashboard (Jules) — where the
+generic engine refuses to invent a shape and reports a skip.
+
 Every path below was cross-referenced against the agent's upstream docs **and**
 prior-art config-sync tools (ruler, rulesync) before inclusion. A scope or
 component with no verified target is left out (and reported as a skip), never
@@ -105,7 +116,7 @@ guessed.
 
 | Agent | Memory (rules) | MCP |
 |---|---|---|
-| **amp** | `AGENTS.md` · `~/.config/amp/AGENTS.md` | ✗ namespaced `amp.mcpServers` (not a top-level map) |
+| **amp** | `AGENTS.md` · `~/.config/amp/AGENTS.md` | ✓ `~/.config/amp/settings.json` (namespaced `amp.mcpServers` key) |
 | **goose** | `.goosehints` | ✗ YAML `~/.config/goose/config.yaml` |
 | **qwen** | `QWEN.md` · `~/.qwen/QWEN.md` | ✓ `.qwen/settings.json` (remote key `httpUrl`) |
 | **warp** | `WARP.md` | ✓ `.warp/.mcp.json` · `~/.warp/.mcp.json` |
@@ -119,7 +130,7 @@ guessed.
 | **trae** | `.trae/rules/project_rules.md` | ✗ non-standard array shape |
 | **jetbrains** | `.aiassistant/rules/` | ✗ IDE app-storage |
 | **firebase** | `.idx/airules.md` | ✓ `.idx/mcp.json` (project) |
-| **antigravity** | `AGENTS.md` | ✗ `serverUrl`, global path single-sourced |
+| **antigravity** | `AGENTS.md` | ✓ `~/.gemini/config/mcp_config.json` (remote key `serverUrl`) |
 | **augmentcode** | `.augment/rules/` (+ user) | ✗ IDE app-storage |
 | **copilot** | `.github/copilot-instructions.md` | ✓ `.vscode/mcp.json` (`servers` key, `type`) |
 | **copilot-cli** | `AGENTS.md` | ✓ `~/.copilot/mcp-config.json` (`type`, stdio="local") |

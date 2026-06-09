@@ -46,8 +46,8 @@ func TestCapabilitiesAndStrategyFromSpec(t *testing.T) {
 	if withMCP.Capabilities()&adapter.CapMCP == 0 {
 		t.Fatal("MCP cap missing")
 	}
-	if withMCP.KeyMergeStrategy() != "merge-json-keys" {
-		t.Fatal("MCP spec must use merge-json-keys")
+	if withMCP.KeyMergeStrategy() != "merge-jsonc-keys" {
+		t.Fatal("MCP spec must use the JSONC-tolerant merge")
 	}
 }
 
@@ -266,6 +266,60 @@ func TestApply_MCP_PreservesForeign_AndRoundTrips(t *testing.T) {
 	}
 	if s := byID["remote"]; s.Type != "http" || s.URL != "https://x/mcp" || s.Headers["A"] != "b" {
 		t.Fatalf("remote round-trip: %+v", s)
+	}
+}
+
+// TestApply_JSONC_NamespacedKey_NoClobber is the regression for the JSONC-tolerant
+// merge: a hand-edited settings file with COMMENTS and a foreign key must survive
+// (not be clobbered), and a namespaced root key (Amp's `amp.mcpServers`) must work.
+func TestApply_JSONC_NamespacedKey_NoClobber(t *testing.T) {
+	tmp := t.TempDir()
+	spec := generic.Spec{Name: "amp", MCP: generic.MCPTarget{User: ".config/amp/settings.json", RootKey: "amp.mcpServers"}}
+	a := generic.New(spec, generic.Options{TargetRoot: tmp})
+
+	settings := filepath.Join(tmp, ".config", "amp", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A realistic JSONC settings file: line comment + foreign key + trailing comma.
+	if err := os.WriteFile(settings, []byte("{\n  // user prefs\n  \"amp.notifications.enabled\": true,\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	in := source.Canonical{MCPServers: []source.MCPServer{{ID: "github", Server: source.MCPServerSpec{Command: "npx", Args: []string{"-y", "x"}}}}}
+	ops, _, err := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ops[0].MergeStrategy != "merge-jsonc-keys" {
+		t.Fatalf("breadth MCP op must use merge-jsonc-keys, got %q", ops[0].MergeStrategy)
+	}
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Result must be valid strict JSON (comments stripped), with foreign key kept
+	// and our namespaced server map added.
+	data, _ := os.ReadFile(settings)
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("merged settings is not valid JSON: %v\n%s", err, data)
+	}
+	if got["amp.notifications.enabled"] != true {
+		t.Fatalf("foreign key clobbered: %v", got)
+	}
+	ns, ok := got["amp.mcpServers"].(map[string]any)
+	if !ok || ns["github"] == nil {
+		t.Fatalf("namespaced amp.mcpServers.github missing: %v", got)
+	}
+
+	// Round-trip back through the JSONC-tolerant ingest.
+	round, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(round.MCPServers) != 1 || round.MCPServers[0].ID != "github" || round.MCPServers[0].Server.Command != "npx" {
+		t.Fatalf("namespaced-key round-trip lost data: %+v", round.MCPServers)
 	}
 }
 

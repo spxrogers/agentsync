@@ -131,11 +131,14 @@ func (a *Adapter) Capabilities() adapter.Capability {
 	return c
 }
 
-// KeyMergeStrategy is merge-json-keys when the spec has an MCP file (the only
-// key-merge surface); otherwise "" (memory is a whole-file write).
+// KeyMergeStrategy is merge-jsonc-keys when the spec has an MCP file (the only
+// key-merge surface); otherwise "" (memory is a whole-file write). The breadth
+// tier always uses the JSONC-tolerant merge so a commented settings file (Zed,
+// Copilot's .vscode/mcp.json, Amp) is parsed rather than clobbered — hujson reads
+// plain JSON identically, so dedicated *.json MCP files are unaffected.
 func (a *Adapter) KeyMergeStrategy() string {
 	if a.spec.MCP.supported() {
-		return "merge-json-keys"
+		return "merge-jsonc-keys"
 	}
 	return ""
 }

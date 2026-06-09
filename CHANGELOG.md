@@ -14,10 +14,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 - **Breadth tier — 22 more agents via a data-driven generic adapter
   (`internal/adapter/generic`).** One `Adapter` implementation serves a long tail
   of agents from a verified `Spec` table: **memory** (a rules file) for all, and
-  **MCP** wherever the agent reads a JSON server-map agentsync can express (dialect
-  knobs handle the variance — root key `mcpServers`/`servers`/`mcp`/`context_servers`,
+  **MCP** wherever the agent reads a JSON server-map agentsync can express (15 of
+  the 22). Dialect knobs handle the variance — root key
+  `mcpServers`/`servers`/`mcp`/`context_servers`/the flat namespaced `amp.mcpServers`,
   transport `type`/`transport`/inferred, stdio value `stdio`/`local`, remote URL key
-  `url`/`httpUrl`/`serverUrl`). Agents added: amp, goose, qwen, warp, jules, junie,
+  `url`/`httpUrl`/`serverUrl` — and the merge is JSONC-tolerant (hujson) so a
+  commented settings file (Zed, Copilot, Amp) is preserved, not clobbered. Agents added: amp, goose, qwen, warp, jules, junie,
   openhands, amazonq, zed, kilocode, kiro, trae, jetbrains, firebase, antigravity,
   augmentcode, copilot, copilot-cli, crush, factory, pi, mistral — taking agentsync
   to **31 agents** (9 deep + 22 breadth). Each spec's paths were cross-referenced
