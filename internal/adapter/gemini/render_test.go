@@ -53,8 +53,8 @@ func TestRender_MCP_Stdio(t *testing.T) {
 	if op == nil {
 		t.Fatal("settings.json op missing")
 	}
-	if op.MergeStrategy != "merge-json-keys" {
-		t.Fatalf("merge strategy = %q, want merge-json-keys", op.MergeStrategy)
+	if op.MergeStrategy != "merge-jsonc-keys" {
+		t.Fatalf("merge strategy = %q, want merge-jsonc-keys", op.MergeStrategy)
 	}
 	var ours map[string]any
 	if err := json.Unmarshal(op.Content, &ours); err != nil {
