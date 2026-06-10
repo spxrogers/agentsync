@@ -31,10 +31,10 @@ func hasSkip(skips []adapter.Skip, component, name string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// User scope: MCP renders; memory + commands are skipped (scope-asymmetric)
+// User scope: MCP + global rules + global workflows all render
 // ---------------------------------------------------------------------------
 
-func TestRender_UserScope_MCPOnly(t *testing.T) {
+func TestRender_UserScope_MCPGlobalRulesAndWorkflows(t *testing.T) {
 	enabled := true
 	c := source.Canonical{
 		MCPServers: []source.MCPServer{{ID: "github", Server: source.MCPServerSpec{Type: "stdio", Command: "npx", Args: []string{"-y", "x"}, Env: map[string]string{"T": "v"}, Enabled: &enabled}}},
@@ -58,15 +58,21 @@ func TestRender_UserScope_MCPOnly(t *testing.T) {
 	if srv["command"] != "npx" || srv["env"].(map[string]any)["T"] != "v" {
 		t.Fatalf("stdio server malformed: %v", srv)
 	}
-	// memory + commands have no user-scope target → reported skips.
-	if !hasSkip(skips, "memory", "rules") {
-		t.Errorf("expected user-scope memory skip, got %+v", skips)
+	// memory → the global rules file (always-on, frontmatter-less, verbatim).
+	memOp := findOp(ops, filepath.Join(".codeium", "windsurf", "memories", "global_rules.md"))
+	if memOp == nil {
+		t.Fatalf("global_rules.md op missing at user scope: %+v", ops)
 	}
-	if !hasSkip(skips, "command", "deploy") {
-		t.Errorf("expected user-scope command skip, got %+v", skips)
+	if string(memOp.Content) != "# mem\n" {
+		t.Fatalf("global rules must be the verbatim body: %q", memOp.Content)
 	}
-	if findOp(ops, "agentsync.md") != nil || findOp(ops, "deploy.md") != nil {
-		t.Fatalf("memory/commands must not render at user scope: %+v", ops)
+	// commands → global workflows.
+	cmdOp := findOp(ops, filepath.Join(".codeium", "windsurf", "global_workflows", "deploy.md"))
+	if cmdOp == nil {
+		t.Fatalf("global_workflows/deploy.md op missing at user scope: %+v", ops)
+	}
+	if len(skips) != 0 {
+		t.Fatalf("no skips expected at user scope, got %+v", skips)
 	}
 }
 
@@ -108,13 +114,14 @@ func TestRender_ProjectScope_RulesAndWorkflows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Memory → .windsurf/rules/agentsync.md (plain body).
+	// Memory → .windsurf/rules/agentsync.md with the documented activation
+	// frontmatter (workspace rules declare their trigger in frontmatter).
 	memOp := findOp(ops, ".windsurf/rules/agentsync.md")
 	if memOp == nil {
 		t.Fatal("rules/agentsync.md op missing at project scope")
 	}
-	if string(memOp.Content) != "# Rules\n\nBe concise.\n" {
-		t.Fatalf("memory should be plain body: %q", memOp.Content)
+	if string(memOp.Content) != "---\ntrigger: always_on\n---\n\n# Rules\n\nBe concise.\n" {
+		t.Fatalf("memory rule must carry trigger: always_on frontmatter: %q", memOp.Content)
 	}
 	// Command → .windsurf/workflows/deploy.md (plain body; frontmatter dropped).
 	cmdOp := findOp(ops, ".windsurf/workflows/deploy.md")

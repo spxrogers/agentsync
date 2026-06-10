@@ -275,13 +275,14 @@ agent config with collaborators. See [Project-local config](#project-local-confi
 ```bash
 agentsync agent add claude        # register
 agentsync agent list              # see registry + enabled state
+agentsync agent list --all        # every supported agent (registered or not)
 agentsync agent disable opencode  # stop applying to it (keeps source)
 agentsync agent disable opencode --purge   # also remove what it wrote
 ```
 
 > All nine deep adapters (`claude`, `opencode`, `codex`, `cursor`, `gemini`,
 > `continue`, `windsurf`, `roo`, `cline`) plus 22 breadth-tier agents work with
-> `agent add` — run `agentsync agent list` for the full set, or see the
+> `agent add` — run `agentsync agent list --all` for the full set, or see the
 > [capability matrix](capability-matrix.md).
 
 ### MCP servers
@@ -531,19 +532,19 @@ Claude, OpenCode, Codex, Cursor, Gemini CLI, Continue, Windsurf, Roo Code, and C
 | Component | Claude | OpenCode | Codex | Cursor | Gemini | Continue | Windsurf | Roo | Cline |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
 | MCP server | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Memory | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✓ | ◐ |
+| Memory | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ✓ | ✓ | ◐ |
 | Skill | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
 | Subagent | ✓ | ◐ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ |
 | Slash command | ✓ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ |
 | Hook | ✓ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ |
 | LSP server | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
 
-(Some adapters are scope-asymmetric: Windsurf + Cline render MCP at user scope, memory + commands at project scope; Roo renders MCP at project scope only — VS Code agents keep global MCP in app-storage. See the [capability matrix](capability-matrix.md).)
+(Some adapters are scope-asymmetric: Windsurf's and Cline's MCP is global-only and renders at user scope — Windsurf memory + commands render at both scopes, Cline's at project scope; Roo renders MCP at project scope only — VS Code agents keep global MCP in app-storage. See the [capability matrix](capability-matrix.md).)
 
 Beyond these nine deep adapters, a **breadth tier** of 22 more agents (amp, goose,
 qwen, warp, zed, kiro, junie, factory, copilot, crush, …) is supported via one
 data-driven generic adapter — memory for all, MCP where the agent reads a JSON
-server-map. Run `agentsync agent list` to see them all; see the
+server-map. Run `agentsync agent list --all` to see them all; see the
 [capability matrix → Breadth tier](capability-matrix.md#breadth-tier) for per-agent
 coverage.
 

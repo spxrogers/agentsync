@@ -2,6 +2,7 @@ package generic_test
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -51,18 +52,35 @@ func TestSpecsTable(t *testing.T) {
 			}
 		}
 
-		// Dialect knobs only make sense when MCP is supported.
+		// Dialect knobs only make sense when MCP is supported. Enumerate via
+		// reflection so a NEW MCPTarget knob is covered automatically — the
+		// whole point of this guard (cf. TestNewSecretFieldGuard).
 		if !mcp {
-			if s.MCP.RootKey != "" || s.MCP.TransportKey != "" || s.MCP.StdioValue != "" || s.MCP.RemoteURLKey != "" {
-				t.Errorf("spec %q sets MCP dialect knobs but no MCP path", s.Name)
+			v := reflect.ValueOf(s.MCP)
+			tt := v.Type()
+			for i := 0; i < v.NumField(); i++ {
+				if tt.Field(i).Name == "User" || tt.Field(i).Name == "Project" {
+					continue
+				}
+				if v.Field(i).Kind() == reflect.String && v.Field(i).String() != "" {
+					t.Errorf("spec %q sets MCP dialect knob %s but no MCP path", s.Name, tt.Field(i).Name)
+				}
 			}
 		}
 		// StdioValue/RemoteValue only meaningful with a TransportKey.
 		if s.MCP.TransportKey == "" && (s.MCP.StdioValue != "" || s.MCP.RemoteValue != "") {
 			t.Errorf("spec %q sets transport values without a TransportKey", s.Name)
 		}
+		// SSEURLKey only meaningful alongside an explicit RemoteURLKey (the
+		// dual-URL dialect), and they must differ.
+		if s.MCP.SSEURLKey != "" && (s.MCP.RemoteURLKey == "" || s.MCP.SSEURLKey == s.MCP.RemoteURLKey) {
+			t.Errorf("spec %q SSEURLKey requires a distinct RemoteURLKey", s.Name)
+		}
 	}
-	if len(generic.Specs()) < 15 {
-		t.Fatalf("breadth tier unexpectedly small (%d) — did the table get truncated?", len(generic.Specs()))
+	// The breadth tier is exactly the documented 22 agents; the count is
+	// asserted across README/docs/comparison, so a row added or dropped here
+	// must update those in the same commit (this failure is the reminder).
+	if got := len(generic.Specs()); got != 22 {
+		t.Fatalf("breadth tier has %d specs, docs say 22 — update the docs and this pin together", got)
 	}
 }

@@ -139,19 +139,36 @@ func (a *Adapter) unsupportedSkips(c source.Canonical) []adapter.Skip {
 // mcpServerMap projects a canonical MCP server into the on-disk shape described
 // by the spec's MCPTarget dialect (root key handled by the caller; this builds
 // one server entry).
+//
+// Acknowledged subset (per the fidelity rule): the breadth tier projects the
+// canonical fields that fit the dialect's side of the transport split — a remote
+// server's Env and a stdio server's URL/Headers have no slot in any of these
+// dialects and are not written (such a canonical server is degenerate anyway);
+// unmodeled NATIVE keys round-trip via Extra.
 func mcpServerMap(t MCPTarget, s source.MCPServerSpec) map[string]any {
 	spec := map[string]any{}
 	remote := isRemote(s)
 	if t.TransportKey != "" {
-		if remote {
-			spec[t.TransportKey] = t.remoteValue()
-		} else {
+		switch {
+		case !remote:
 			spec[t.TransportKey] = t.stdioValue()
+		case s.Type == "sse":
+			// Every type-keyed dialect in the table (copilot, copilot-cli,
+			// factory, crush) documents "sse" as a transport value; writing the
+			// generic remoteValue ("http") would silently flip a captured
+			// native SSE server's transport on re-apply.
+			spec[t.TransportKey] = "sse"
+		default:
+			spec[t.TransportKey] = t.remoteValue()
 		}
 	}
 	if remote {
+		urlKey := t.remoteURLKey()
+		if s.Type == "sse" && t.SSEURLKey != "" {
+			urlKey = t.SSEURLKey
+		}
 		if s.URL != "" {
-			spec[t.remoteURLKey()] = s.URL
+			spec[urlKey] = s.URL
 		}
 		if len(s.Headers) > 0 {
 			spec["headers"] = s.Headers

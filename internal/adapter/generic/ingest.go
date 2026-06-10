@@ -56,17 +56,30 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 }
 
 // ingestMCPSpec is the inverse of mcpServerMap for the spec's dialect. When the
-// dialect names a transport field it is trusted (the stdio value maps to stdio,
-// everything else to its http/sse meaning); otherwise transport is inferred from
-// the presence of a remote URL.
+// dialect names a transport field it is trusted (the stdio value — or the
+// universal "stdio" alias several agents document alongside their own value —
+// maps to stdio, "sse" to sse, everything else to its http meaning); otherwise
+// transport is inferred from which URL field is present. For a dual-URL dialect
+// (SSEURLKey set), RemoteURLKey wins when both fields are present (the upstream
+// precedence) and a server read from SSEURLKey canonicalizes as `sse`.
+//
+// Acknowledged subset: asStr/asStrSlice/asStrMap capture only string-shaped
+// values — a non-string form of a MODELED key (e.g. Zed's legacy nested
+// `command` object) is not captured and, being a modeled key, is excluded from
+// Extra too; re-verify against upstream before teaching a dialect a second
+// shape.
 func ingestMCPSpec(t MCPTarget, raw map[string]any) source.MCPServerSpec {
 	url := asStr(raw[t.remoteURLKey()])
+	sseURL := ""
+	if t.SSEURLKey != "" {
+		sseURL = asStr(raw[t.SSEURLKey])
+	}
 	canonType := "stdio"
 	switch {
 	case t.TransportKey != "" && asStr(raw[t.TransportKey]) != "":
 		tv := asStr(raw[t.TransportKey])
 		switch {
-		case tv == t.stdioValue():
+		case tv == t.stdioValue() || tv == "stdio":
 			canonType = "stdio"
 		case tv == "sse":
 			canonType = "sse"
@@ -75,6 +88,13 @@ func ingestMCPSpec(t MCPTarget, raw map[string]any) source.MCPServerSpec {
 		}
 	case url != "":
 		canonType = "http"
+	case sseURL != "":
+		canonType = "sse"
+		url = sseURL
+	}
+	excluded := []string{t.TransportKey, "command", "args", "env", t.remoteURLKey(), "headers"}
+	if t.SSEURLKey != "" {
+		excluded = append(excluded, t.SSEURLKey)
 	}
 	return source.MCPServerSpec{
 		Type:    canonType,
@@ -83,7 +103,7 @@ func ingestMCPSpec(t MCPTarget, raw map[string]any) source.MCPServerSpec {
 		Env:     asStrMap(raw["env"]),
 		URL:     url,
 		Headers: asStrMap(raw["headers"]),
-		Extra:   claude.ExtraNativeKeys(raw, t.TransportKey, "command", "args", "env", t.remoteURLKey(), "headers"),
+		Extra:   claude.ExtraNativeKeys(raw, excluded...),
 	}
 }
 

@@ -60,7 +60,7 @@ func (a *Adapter) Name() string { return "gemini" }
 // settings.json is gemini's ONLY key-merge destination — both `mcpServers` and
 // `hooks` live there — so the single strategy the render pipeline uses for
 // orphan-cleanup synthesis is correct for every key-merge path this adapter owns.
-func (a *Adapter) KeyMergeStrategy() string { return "merge-json-keys" }
+func (a *Adapter) KeyMergeStrategy() string { return "merge-jsonc-keys" }
 
 func (a *Adapter) Capabilities() adapter.Capability {
 	return adapter.CapMCP | adapter.CapMemory | adapter.CapSubagent |

@@ -10,7 +10,11 @@ import (
 )
 
 // renderMCP projects canonical MCP servers into the Cline CLI's
-// `~/.cline/mcp.json` `mcpServers` object. Cline infers transport from the keys
+// `~/.cline/mcp.json` `mcpServers` object (the CLI's documented MCP config; see
+// docs.cline.bot → CLI MCP. Cline also documents a unified
+// `~/.cline/data/settings/cline_mcp_settings.json` store shared with the IDE
+// extension — agentsync deliberately targets the simpler mcp.json surface; do
+// not "fix" this to the settings store without re-verifying upstream). Cline infers transport from the keys
 // present (no `type` field): stdio keeps command/args/env; a remote server uses
 // `url` + `headers`. op.Content is JSON and the merge-json-keys strategy preserves
 // a hand-authored mcp.json's foreign servers. p.MCP is empty at project scope

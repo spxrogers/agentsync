@@ -6,18 +6,24 @@
 //   - MCP servers live ONLY in the global ~/.codeium/windsurf/mcp_config.json
 //     (a JSON `mcpServers` object). There is no project-level MCP file, so MCP is
 //     rendered at user scope and skipped (with a report) at project scope.
-//   - Rules (memory) and workflows (slash commands) live in the project tree
-//     under .windsurf/rules/ and .windsurf/workflows/ as PLAIN markdown (no
-//     frontmatter). Windsurf's global rules are app-managed, so memory/commands
-//     are rendered at project scope and skipped (with a report) at user scope.
+//   - Rules (memory): project scope renders a workspace rule at
+//     .windsurf/rules/agentsync.md carrying the documented `trigger: always_on`
+//     activation frontmatter; user scope renders the single global rules file
+//     ~/.codeium/windsurf/memories/global_rules.md (always-on, frontmatter-less).
+//   - Workflows (slash commands) are plain markdown at BOTH scopes:
+//     .windsurf/workflows/ (project) and ~/.codeium/windsurf/global_workflows/
+//     (user).
+//
+// (Upstream now documents `.devin/rules|workflows/` as the preferred workspace
+// layout with `.windsurf/` as the supported fallback; agentsync targets
+// `.windsurf/`, which every released version reads.)
 //
 // Skills, subagents, hooks, and LSP have no Windsurf concept and are skipped.
-// Because rules/workflows are plain markdown (no frontmatter parsing), the
-// adapter emits no Ingest warnings and therefore does not implement WarnEmitter.
 // See docs/capability-matrix.md for the per-component coverage and documented loss.
 package windsurf
 
 import (
+	"io"
 	"os"
 	"os/exec"
 
@@ -27,6 +33,8 @@ import (
 // Options configure the adapter at construction.
 type Options struct {
 	TargetRoot string // honors AGENTSYNC_TARGET_ROOT (real "/Users/x" in production)
+	// Stderr is the warning sink for Ingest; nil means os.Stderr.
+	Stderr io.Writer
 	// LookPath overrides exec.LookPath for testing. nil means use exec.LookPath.
 	LookPath func(file string) (string, error)
 }
@@ -36,6 +44,18 @@ type Adapter struct{ opts Options }
 
 // New constructs a Windsurf adapter.
 func New(opts Options) *Adapter { return &Adapter{opts: opts} }
+
+// stderr returns the configured warning sink, defaulting to os.Stderr.
+func (a *Adapter) stderr() io.Writer {
+	if a.opts.Stderr != nil {
+		return a.opts.Stderr
+	}
+	return os.Stderr
+}
+
+// SetStderr replaces the warning sink the adapter writes Ingest warnings to.
+// See claude.Adapter.SetStderr for the contract.
+func (a *Adapter) SetStderr(w io.Writer) { a.opts.Stderr = w }
 
 func (a *Adapter) Name() string { return "windsurf" }
 

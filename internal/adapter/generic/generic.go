@@ -50,6 +50,12 @@ type FileTarget struct {
 //     TransportKey == "".
 //   - RemoteURLKey: the per-server field holding a remote server's URL. Default
 //     "url"; some agents use "httpUrl" (Qwen) or "serverUrl" (Antigravity).
+//   - SSEURLKey: for Gemini-lineage agents that split remote transports across
+//     TWO url fields (Qwen: `httpUrl` = streamable HTTP, `url` = SSE), the field
+//     holding an SSE server's URL. "" = no split (SSE shares RemoteURLKey).
+//     When set, ingest reads both fields (RemoteURLKey wins when both are
+//     present, mirroring the upstream precedence) and render routes a canonical
+//     `sse` server to this key.
 type MCPTarget struct {
 	User         string
 	Project      string
@@ -58,6 +64,7 @@ type MCPTarget struct {
 	StdioValue   string
 	RemoteValue  string
 	RemoteURLKey string
+	SSEURLKey    string
 }
 
 // supported reports whether the spec declares an MCP file at any scope.

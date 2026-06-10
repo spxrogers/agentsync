@@ -10,7 +10,7 @@ import (
 )
 
 // renderCommands projects canonical slash commands into Cline workflows
-// (`.clinerules/workflows/<name>.md`, invoked as `/<name>`). Cline workflows are
+// (`.clinerules/workflows/<name>.md`, invoked as `/<name>.md`). Cline workflows are
 // PLAIN markdown (steps as prose, no frontmatter), so only the body survives: a
 // command's `description`/`argument-hint`/`allowed-tools` frontmatter is dropped
 // with a reported Skip. Workflows are project-scoped; at user scope
@@ -22,7 +22,7 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 			skips = append(skips, adapter.Skip{
 				Component: "command",
 				Name:      cmd.Name,
-				Reason:    "Cline workflows are project-scoped (.clinerules/workflows/); no user-scope filesystem target",
+				Reason:    "Cline's global workflows live in the non-XDG ~/Documents/Cline/Workflows path agentsync does not target; workflows project at project scope only (.clinerules/workflows/)",
 			})
 		}
 		return nil, skips, nil

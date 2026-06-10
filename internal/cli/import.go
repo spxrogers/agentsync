@@ -155,7 +155,7 @@ func newImportCmd() *cobra.Command {
 into ~/.agentsync/ as the canonical source of truth.
 
 Selector grammar: <agent>[:<component>[:<name>]]
-  agent     - registered agent name (claude, opencode, codex, cursor)
+  agent     - registered agent name (see "agentsync agent list")
   component - mcp | skill | agent | command | hook | lsp | memory | plugin
   name      - item name (server id, skill/subagent/command name, hook event,
               or plugin name)

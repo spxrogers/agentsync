@@ -82,6 +82,7 @@ Manage which agents agentsync applies to.
 ```bash
 agentsync agent add claude        # register
 agentsync agent list              # registry + enabled state
+agentsync agent list --all        # every supported agent (registered or not)
 agentsync agent disable opencode  # stop applying (keeps source)
 agentsync agent disable opencode --purge   # also remove what it wrote
 ```
@@ -89,7 +90,7 @@ agentsync agent disable opencode --purge   # also remove what it wrote
 <Aside type="note">
 	All 31 agents — nine deep adapters (`claude`, `opencode`, `codex`, `cursor`,
 	`gemini`, `continue`, `windsurf`, `roo`, `cline`) plus a 22-agent breadth tier
-	(`agentsync agent list`) — have real adapters and register normally.
+	(`agentsync agent list --all`) — have real adapters and register normally.
 	`AGENTSYNC_ALLOW_UNIMPLEMENTED=1` exists only for a future agent registered as a
 	no-op placeholder (none today).
 </Aside>

@@ -25,11 +25,12 @@ func Specs() []Spec {
 		// ---- MCP-enabled (verified JSON server-map dialects) ----
 
 		// Qwen Code — Gemini-CLI lineage. Native context file QWEN.md; MCP in
-		// settings.json (inferred transport; remote uses `httpUrl`, distinct from `url`).
+		// settings.json with the Gemini dual-URL split: `httpUrl` = streamable
+		// HTTP, `url` = SSE (httpUrl wins when both are present, per upstream).
 		{
 			Name: "qwen", DetectBin: "qwen", DetectDir: ".qwen",
 			Memory: FileTarget{User: ".qwen/QWEN.md", Project: "QWEN.md"},
-			MCP:    MCPTarget{User: ".qwen/settings.json", Project: ".qwen/settings.json", RemoteURLKey: "httpUrl"},
+			MCP:    MCPTarget{User: ".qwen/settings.json", Project: ".qwen/settings.json", RemoteURLKey: "httpUrl", SSEURLKey: "url"},
 		},
 		// Warp — WARP.md rules; MCP in `.warp/.mcp.json` (inferred). Global rules
 		// are app-managed (omitted).
@@ -38,10 +39,12 @@ func Specs() []Spec {
 			Memory: FileTarget{Project: "WARP.md"},
 			MCP:    MCPTarget{User: ".warp/.mcp.json", Project: ".warp/.mcp.json"},
 		},
-		// Junie (JetBrains) — current memory default is AGENTS.md; MCP `.junie/mcp/mcp.json`.
+		// Junie (JetBrains) — memory default is the project AGENTS.md (JetBrains
+		// documents no global guidelines file, so no user-scope memory target);
+		// MCP `.junie/mcp/mcp.json` at both scopes (documented).
 		{
 			Name: "junie", DetectBin: "junie", DetectDir: ".junie",
-			Memory: FileTarget{User: ".junie/AGENTS.md", Project: "AGENTS.md"},
+			Memory: FileTarget{Project: "AGENTS.md"},
 			MCP:    MCPTarget{User: ".junie/mcp/mcp.json", Project: ".junie/mcp/mcp.json"},
 		},
 		// Kiro (AWS) — steering markdown; MCP `.kiro/settings/mcp.json`.

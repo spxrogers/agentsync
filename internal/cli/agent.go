@@ -94,9 +94,9 @@ func boolStr(b bool) string {
 func newAgentCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "agent", Short: "manage which agents agentsync targets"}
 	cmd.AddCommand(
-		&cobra.Command{Use: "add <name>", Short: "register an agent (claude | opencode | codex)", Args: cobra.ExactArgs(1), RunE: lockedRun(agentAddRun)},
+		&cobra.Command{Use: "add <name>", Short: "register an agent (any supported agent; see `agent list --all`)", Args: cobra.ExactArgs(1), RunE: lockedRun(agentAddRun)},
 		&cobra.Command{Use: "remove <name>", Short: "unregister an agent", Args: cobra.ExactArgs(1), RunE: lockedRun(agentRemoveRun)},
-		&cobra.Command{Use: "list", Short: "list registered agents", Args: cobra.NoArgs, RunE: agentListRun},
+		newAgentListCmd(),
 		newAgentEnableCmd(),
 		newAgentDisableCmd(),
 	)
@@ -297,10 +297,39 @@ func agentRemoveRun(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func agentListRun(cmd *cobra.Command, _ []string) error {
+func newAgentListCmd() *cobra.Command {
+	var all bool
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "list registered agents (--all to list every supported agent)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return agentListRun(cmd, all)
+		},
+	}
+	cmd.Flags().BoolVar(&all, "all", false, "list every agent agentsync supports, marking which are registered")
+	return cmd
+}
+
+func agentListRun(cmd *cobra.Command, all bool) error {
 	_, _, agents, err := readAgentsyncTOML()
 	if err != nil {
 		return err
+	}
+	if all {
+		// The full supported set (deep adapters + breadth-tier specs), with
+		// each agent's registration state — the discovery surface `agent add`
+		// points at.
+		for _, n := range allAgentNames() {
+			if v, ok := agents[n]; ok {
+				enabled, _ := v["enabled"].(bool)
+				scope, _ := v["scope"].(string)
+				fmt.Fprintf(cmd.OutOrStdout(), "%-12s registered enabled=%t scope=%s\n", n, enabled, scope)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "%-12s available\n", n)
+			}
+		}
+		return nil
 	}
 	names := make([]string, 0, len(agents))
 	for n := range agents {
@@ -308,7 +337,7 @@ func agentListRun(cmd *cobra.Command, _ []string) error {
 	}
 	sort.Strings(names)
 	if len(names) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "(no agents registered; try: agentsync agent add claude)")
+		fmt.Fprintln(cmd.OutOrStdout(), "(no agents registered; try: agentsync agent add claude, or agentsync agent list --all)")
 		return nil
 	}
 	for _, n := range names {

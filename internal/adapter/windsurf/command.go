@@ -10,11 +10,12 @@ import (
 )
 
 // renderCommands projects canonical slash commands into Windsurf workflows
-// (`.windsurf/workflows/<name>.md`, invoked as `/<name>`). Windsurf workflows are
-// PLAIN markdown (title/description/steps as prose, no frontmatter), so only the
-// body survives: a command's `description`/`argument-hint`/`allowed-tools`
-// frontmatter has no Windsurf field and is dropped with a reported Skip. Workflows
-// are project-scoped; at user scope (p.WorkflowsDir == "") each command is skipped.
+// (invoked as `/<name>`): project scope → `.windsurf/workflows/<name>.md`, user
+// scope → `~/.codeium/windsurf/global_workflows/<name>.md` (both documented
+// filesystem locations). Windsurf workflows are PLAIN markdown (title/
+// description/steps as prose, no frontmatter), so only the body survives: a
+// command's `description`/`argument-hint`/`allowed-tools` frontmatter has no
+// Windsurf field and is dropped with a reported Skip.
 func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp, []adapter.Skip, error) {
 	if p.WorkflowsDir == "" {
 		var skips []adapter.Skip
@@ -22,7 +23,7 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 			skips = append(skips, adapter.Skip{
 				Component: "command",
 				Name:      cmd.Name,
-				Reason:    "Windsurf workflows are project-scoped (.windsurf/workflows/); no user-scope filesystem target",
+				Reason:    "no Windsurf workflows target at this scope",
 			})
 		}
 		return nil, skips, nil

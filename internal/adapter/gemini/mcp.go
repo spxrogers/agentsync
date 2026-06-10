@@ -40,7 +40,7 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, erro
 		Content:       append(body, '\n'),
 		Mode:          0o644,
 		SourceID:      "mcp/* (multiple)",
-		MergeStrategy: "merge-json-keys",
+		MergeStrategy: "merge-jsonc-keys",
 	}}, nil
 }
 
