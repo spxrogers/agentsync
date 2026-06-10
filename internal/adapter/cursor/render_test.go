@@ -331,6 +331,32 @@ func TestRender_Hooks_MapsEventsAndShape(t *testing.T) {
 	}
 }
 
+// TestRender_Hooks_SkipsNonCommandType: agentsync models only command hooks; a
+// canonical hook with another type must be skipped with a report rather than
+// rendered as a half-formed entry Cursor can't run.
+func TestRender_Hooks_SkipsNonCommandType(t *testing.T) {
+	c := source.Canonical{Hooks: []source.Hook{
+		{Event: "PreToolUse", Type: "prompt", Command: ""},
+		{Event: "SessionStart", Type: "command", Command: "echo ok"},
+	}}
+	a := cursor.New(cursor.Options{TargetRoot: t.TempDir()})
+	ops, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := findOp(ops, ".cursor/hooks.json")
+	if op == nil {
+		t.Fatal("hooks.json op missing (the command hook must still render)")
+	}
+	if strings.Contains(string(op.Content), "preToolUse") {
+		t.Fatalf("prompt-type hook must not render: %s", op.Content)
+	}
+	sk := hasSkip(skips, "hook", "PreToolUse")
+	if sk == nil || !strings.Contains(sk.Reason, `type "prompt"`) {
+		t.Fatalf("expected a typed skip for the prompt hook, got %+v", skips)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // LSP — always skipped
 // ---------------------------------------------------------------------------

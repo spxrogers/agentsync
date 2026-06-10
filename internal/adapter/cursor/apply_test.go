@@ -93,6 +93,28 @@ func TestApply_Hooks_PreservesForeignEvent(t *testing.T) {
 	}
 }
 
+// TestApply_Hooks_PreservesUserSetVersion pins the presence-only contract: the
+// injection asserts `version` when missing but a user-set value is a foreign key
+// and must survive apply verbatim, like every other foreign key.
+func TestApply_Hooks_PreservesUserSetVersion(t *testing.T) {
+	tmp := t.TempDir()
+	hooksPath := filepath.Join(tmp, ".cursor", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hooksPath, []byte(`{"version": 2, "hooks": {}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := source.Canonical{Hooks: []source.Hook{
+		{Event: "PreToolUse", Type: "command", Command: "echo hi"},
+	}}
+	read := applyAndRead(t, tmp, c)
+	got := read(filepath.Join(".cursor", "hooks.json"))
+	if jsonNum(got["version"]) != 2 {
+		t.Fatalf("user-set version must be preserved, got %v", got["version"])
+	}
+}
+
 // TestApply_MCP_PreservesForeignServer verifies merge-json-keys preserves a
 // hand-authored mcp.json's foreign server, and does NOT inject a version field
 // (that injection is hooks-only).
