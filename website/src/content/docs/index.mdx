@@ -114,7 +114,7 @@ That `github` MCP server now lives in **both** `~/.claude.json` and
 | **Cursor** | ✓ adapter | MCP (`.cursor/mcp.json`), memory (◐, project-scope `AGENTS.md`), skills, subagents (◐), slash commands (◐), hooks (◐). No LSP concept. |
 | **Gemini CLI** | ✓ adapter | MCP + hooks (◐) in `.gemini/settings.json`, memory (`GEMINI.md`), subagents (◐), slash commands (◐, TOML). No skills (uses extensions) or LSP concept. |
 | **Continue** | ✓ adapter | MCP (`.continue/mcpServers/`), memory (`.continue/rules/`), slash commands (◐, `.continue/prompts/`). No skills/subagents/hooks/LSP concept. |
-| **Windsurf** | ✓ adapter | MCP (`~/.codeium/windsurf/mcp_config.json`, user scope), memory (◐, `.windsurf/rules/`) + slash commands (◐, `.windsurf/workflows/`) at project scope. No skills/subagents/hooks/LSP concept. |
+| **Windsurf** | ✓ adapter | MCP (`~/.codeium/windsurf/mcp_config.json`, user scope), memory (`.windsurf/rules/` + global `memories/global_rules.md`) + slash commands (◐, `.windsurf/workflows/` + global `global_workflows/`) at both scopes. No skills/subagents/hooks/LSP concept. |
 | **Roo Code** | ✓ adapter | MCP (`.roo/mcp.json`, project scope), memory (`.roo/rules/`) + slash commands (◐, `.roo/commands/`) at both scopes. No skills/subagents/hooks/LSP concept. |
 | **Cline** | ✓ adapter | MCP (`~/.cline/mcp.json` CLI, user scope), memory (◐, `.clinerules/`) + slash commands (◐, `.clinerules/workflows/`) at project scope. No skills/subagents/hooks/LSP concept. |
 

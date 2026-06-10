@@ -34,15 +34,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   per-file subagents (Roo uses "custom modes") have no Roo target and are skipped.
   `agent add roo` / `import roo:…` work end-to-end.
 - **Windsurf adapter (`internal/adapter/windsurf`).** A new real adapter for
-  Windsurf (Cascade), scope-asymmetric to match Windsurf's layout: MCP renders at
-  **user scope** into the global `~/.codeium/windsurf/mcp_config.json` (JSON
-  `mcpServers`; stdio command/args/env, remote `serverUrl` + `headers`), while
-  memory → `.windsurf/rules/agentsync.md` (plain markdown rule) and slash commands
-  → `.windsurf/workflows/<name>.md` (plain markdown workflows invoked as `/<name>`;
-  command frontmatter dropped) render at **project scope**. The non-applicable
-  scope reports a skip for each item, so nothing is dropped silently. Skills,
-  subagents, hooks, and LSP have no Windsurf concept and are skipped.
-  `agent add windsurf` / `import windsurf:…` work end-to-end.
+  Windsurf (Cascade): MCP renders at **user scope** into the global
+  `~/.codeium/windsurf/mcp_config.json` (JSON `mcpServers`; stdio
+  command/args/env, remote `serverUrl` + `headers`; skipped + reported at project
+  scope — Windsurf has no project MCP file). Memory renders at **both** scopes:
+  project → `.windsurf/rules/agentsync.md` with the documented
+  `trigger: always_on` activation frontmatter (stripped on import; byte-clean
+  body), user → the global `~/.codeium/windsurf/memories/global_rules.md`
+  (always-on, frontmatter-less). Slash commands render at **both** scopes as
+  plain-markdown workflows (`.windsurf/workflows/`, global
+  `~/.codeium/windsurf/global_workflows/`; command frontmatter dropped with a
+  report). Skills, subagents, hooks, and LSP have no Windsurf concept and are
+  skipped. `agent add windsurf` / `import windsurf:…` work end-to-end.
 - **Continue adapter (`internal/adapter/continuedev`).** A new real adapter for
   Continue, projecting components as Continue "blocks" (one file per item under
   `.continue/`, so the adapter owns no shared key-merge file): MCP servers →
@@ -57,10 +60,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `continue` is a Go keyword; the agent name is still `continue`.)
 - **Gemini CLI adapter (`internal/adapter/gemini`).** A new real adapter for
   Google's Gemini CLI: MCP servers and lifecycle hooks both merge into
-  `.gemini/settings.json` (MCP under `mcpServers` with Gemini's `url`/`httpUrl`
+  `.gemini/settings.json` with a **JSONC-tolerant merge** — Gemini itself reads
+  settings.json as JSONC, so a commented file's foreign keys are preserved
+  rather than clobbered (comments are stripped on the first write, like
+  `opencode.json`) — (MCP under `mcpServers` with Gemini's `url`/`httpUrl`
   transport split; hooks under `hooks` in the same nested shape as Claude, with
   events remapped to `BeforeTool`/`AfterTool`/`BeforeAgent`/`AfterAgent`/… and
-  unmapped events dropped with a report), memory → `GEMINI.md`
+  unmapped events dropped with a report; import leaves hook events with
+  unrepresentable fields uncaptured, with a warning), memory → `GEMINI.md`
   (`~/.gemini/GEMINI.md` user / repo-root `GEMINI.md` project), slash commands →
   `.gemini/commands/<name>.toml` (`description` + `prompt`; `argument-hint`/
   `allowed-tools` dropped), and subagents → `.gemini/agents/<name>.md` (Claude's
