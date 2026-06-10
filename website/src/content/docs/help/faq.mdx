@@ -58,8 +58,9 @@ uses extensions rather than Agent Skills, so skills are skipped. **Continue** �
 (`.continue/mcpServers/`), memory (`.continue/rules/`), and slash commands (◐,
 `.continue/prompts/`), projected as Continue blocks; skills/subagents/hooks have
 no Continue concept. **Windsurf** — MCP (`~/.codeium/windsurf/mcp_config.json`) at
-user scope, memory (`.windsurf/rules/`) and slash commands (`.windsurf/workflows/`)
-at project scope (Windsurf's config is scope-asymmetric). No LSP concept on any of
+user scope only; memory (`.windsurf/rules/` with `trigger: always_on`, global
+`memories/global_rules.md`) and slash commands (`.windsurf/workflows/`, global
+`global_workflows/`) at both scopes. No LSP concept on any of
 them.
 
 ## What about Aider?

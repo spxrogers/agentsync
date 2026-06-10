@@ -534,7 +534,7 @@ Claude, OpenCode, Codex, Cursor, Gemini CLI, Continue, and Windsurf are all real
 | Hook | ✓ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ |
 | LSP server | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
 
-(Windsurf is scope-asymmetric: MCP renders at user scope, memory + commands at project scope — see the [capability matrix](capability-matrix.md).)
+(Windsurf's MCP is global-only and renders at user scope; memory + commands render at both scopes — see the [capability matrix](capability-matrix.md).)
 
 Full detail, native paths, and the reasoning behind each ◐/✗ are in the
 [capability matrix](capability-matrix.md).
