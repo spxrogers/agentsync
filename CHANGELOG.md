@@ -13,10 +13,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 - **Gemini CLI adapter (`internal/adapter/gemini`).** A new real adapter for
   Google's Gemini CLI: MCP servers and lifecycle hooks both merge into
-  `.gemini/settings.json` (MCP under `mcpServers` with Gemini's `url`/`httpUrl`
+  `.gemini/settings.json` with a **JSONC-tolerant merge** — Gemini itself reads
+  settings.json as JSONC, so a commented file's foreign keys are preserved
+  rather than clobbered (comments are stripped on the first write, like
+  `opencode.json`) — (MCP under `mcpServers` with Gemini's `url`/`httpUrl`
   transport split; hooks under `hooks` in the same nested shape as Claude, with
   events remapped to `BeforeTool`/`AfterTool`/`BeforeAgent`/`AfterAgent`/… and
-  unmapped events dropped with a report), memory → `GEMINI.md`
+  unmapped events dropped with a report; import leaves hook events with
+  unrepresentable fields uncaptured, with a warning), memory → `GEMINI.md`
   (`~/.gemini/GEMINI.md` user / repo-root `GEMINI.md` project), slash commands →
   `.gemini/commands/<name>.toml` (`description` + `prompt`; `argument-hint`/
   `allowed-tools` dropped), and subagents → `.gemini/agents/<name>.md` (Claude's
