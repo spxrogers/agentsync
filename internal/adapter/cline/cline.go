@@ -12,7 +12,9 @@
 //     (a non-XDG app path agentsync does not target), so memory renders at project
 //     scope only.
 //   - Workflows (slash commands): `.clinerules/workflows/<name>.md`, plain
-//     markdown invoked as `/<name>`. Project scope only.
+//     markdown invoked as `/<name>.md`. Project scope only (Cline's global
+//     rules/workflows live under the non-XDG ~/Documents/Cline/ path agentsync
+//     deliberately does not target).
 //
 // Skills, subagents, hooks, and LSP have no Cline concept and are skipped. Rules/
 // workflows are plain markdown (no frontmatter parsing), so the adapter emits no
