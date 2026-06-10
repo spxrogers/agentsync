@@ -527,7 +527,7 @@ Claude, OpenCode, Codex, Cursor, Gemini CLI, Continue, and Windsurf are all real
 | Component | Claude | OpenCode | Codex | Cursor | Gemini | Continue | Windsurf |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
 | MCP server | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Memory | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ |
+| Memory | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ✓ |
 | Skill | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
 | Subagent | ✓ | ◐ | ◐ | ◐ | ◐ | ✗ | ✗ |
 | Slash command | ✓ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ |

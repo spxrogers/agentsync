@@ -70,7 +70,7 @@ Component support across agents.
 | Component | Claude | OpenCode | Codex | Cursor | Gemini | Continue | Windsurf |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
 | **MCP server** | ✓ `~/.claude.json` (user) · `.mcp.json` (project) | ✓ `opencode.json` | ✓ `config.toml` | ✓ `.cursor/mcp.json` | ✓ `.gemini/settings.json` | ✓ `.continue/mcpServers/` | ✓ `mcp_config.json` (user-only) |
-| **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ✓ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` | ✓ `GEMINI.md` | ✓ `.continue/rules/` | ◐ `.windsurf/rules/` (project-only) |
+| **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ✓ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` | ✓ `GEMINI.md` | ✓ `.continue/rules/` | ✓ `.windsurf/rules/` + `global_rules.md` |
 | **Skill** | ✓ `~/.claude/skills/X/` (dir) | ✓ shared `.claude/skills/` | ✓ `~/.agents/skills/` | ✓ `.cursor/skills/` | ✗ no skills concept | ✗ no skills concept | ✗ no skills concept |
 | **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/` | ◐ `.gemini/agents/` | ✗ top-level assistants only | ✗ no subagent concept |
 | **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ◐ `~/.codex/prompts/` | ◐ `.cursor/commands/` | ◐ `.gemini/commands/` (TOML) | ◐ `.continue/prompts/` | ◐ `.windsurf/workflows/` (project-only) |
