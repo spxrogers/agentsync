@@ -1,10 +1,12 @@
 package cursor_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -106,6 +108,55 @@ func TestRoundTrip_Hooks(t *testing.T) {
 	want := []hk{{"PreToolUse", "Shell", "command", "echo a"}, {"SessionStart", "", "command", "echo b"}}
 	if g := norm(got.Hooks); !reflect.DeepEqual(g, want) {
 		t.Fatalf("hooks round-trip mismatch:\n got %+v\nwant %+v", g, want)
+	}
+}
+
+// TestIngest_Hooks_SkipsUnrepresentableEvents is the fidelity guard for the hooks
+// capture path: Cursor's documented entry schema is wider than source.Hook
+// (prompt-type hooks; timeout/failClosed/loop_limit fields), and apply owns the
+// whole per-event array — so capturing a lossy subset would let the next apply
+// rewrite the user's native entry without those fields. Ingest must instead leave
+// the WHOLE event uncaptured, with a warning, while still capturing sibling
+// events it can fully represent. Cursor-native events with no canonical
+// equivalent must warn too.
+func TestIngest_Hooks_SkipsUnrepresentableEvents(t *testing.T) {
+	tmp := t.TempDir()
+	hooksPath := filepath.Join(tmp, ".cursor", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	native := `{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [ { "command": "echo ok", "matcher": "Shell" } ],
+    "postToolUse": [ { "command": "echo slow", "timeout": 30 } ],
+    "sessionStart": [ { "type": "prompt", "prompt": "review the diff", "model": "fast" } ],
+    "afterFileEdit": [ { "command": "./format.sh" } ]
+  }
+}`
+	if err := os.WriteFile(hooksPath, []byte(native), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var warn bytes.Buffer
+	a := cursor.New(cursor.Options{TargetRoot: tmp, Stderr: &warn})
+	got, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(got.Hooks) != 1 || got.Hooks[0].Event != "PreToolUse" || got.Hooks[0].Command != "echo ok" {
+		t.Fatalf("only the fully-representable preToolUse event should be captured, got %+v", got.Hooks)
+	}
+	out := warn.String()
+	for _, wantMsg := range []string{
+		`unmodeled fields (timeout)`,
+		`"prompt"-type entry`,
+		`"afterFileEdit" has no canonical equivalent`,
+	} {
+		if !strings.Contains(out, wantMsg) {
+			t.Errorf("missing warning %q in:\n%s", wantMsg, out)
+		}
 	}
 }
 

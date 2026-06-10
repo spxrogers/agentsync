@@ -19,8 +19,8 @@ func TestName(t *testing.T) {
 }
 
 func TestKeyMergeStrategy(t *testing.T) {
-	if got := gemini.New(gemini.Options{}).KeyMergeStrategy(); got != "merge-json-keys" {
-		t.Fatalf("KeyMergeStrategy() = %q, want merge-json-keys", got)
+	if got := gemini.New(gemini.Options{}).KeyMergeStrategy(); got != "merge-jsonc-keys" {
+		t.Fatalf("KeyMergeStrategy() = %q, want merge-jsonc-keys", got)
 	}
 }
 
