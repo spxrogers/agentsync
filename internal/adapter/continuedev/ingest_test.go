@@ -1,7 +1,11 @@
 package continuedev_test
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -115,5 +119,102 @@ func TestRoundTrip_Command(t *testing.T) {
 	// Continue-specific frontmatter must not leak into the canonical model.
 	if _, ok := got.Commands[0].Frontmatter["invokable"]; ok {
 		t.Fatalf("invokable should not be captured into canonical: %+v", got.Commands[0].Frontmatter)
+	}
+}
+
+// TestIngest_NativeBlock_RequestOptionsFidelity is the artifact-anchored guard
+// for the requestOptions round trip: a hand-authored native block carrying
+// non-headers request options (timeout, verifySsl) must survive
+// ingest → re-render with those subkeys intact ON DISK — dropping them
+// silently would let the next apply destroy the user's block.
+func TestIngest_NativeBlock_RequestOptionsFidelity(t *testing.T) {
+	tmp := t.TempDir()
+	blockDir := filepath.Join(tmp, ".continue", "mcpServers")
+	if err := os.MkdirAll(blockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	native := `name: api
+version: 0.0.1
+schema: v1
+mcpServers:
+  - name: api
+    type: streamable-http
+    url: https://api.example.com/mcp
+    requestOptions:
+      timeout: 5000
+      verifySsl: false
+      headers:
+        Authorization: Bearer tok
+`
+	if err := os.WriteFile(filepath.Join(blockDir, "api.yaml"), []byte(native), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := continuedev.New(continuedev.Options{TargetRoot: tmp})
+	got, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.MCPServers) != 1 {
+		t.Fatalf("expected one server, got %+v", got.MCPServers)
+	}
+	srv := got.MCPServers[0].Server
+	if srv.Headers["Authorization"] != "Bearer tok" {
+		t.Fatalf("headers not captured: %+v", srv)
+	}
+	ro, ok := srv.Extra["requestOptions"].(map[string]any)
+	if !ok {
+		t.Fatalf("non-headers requestOptions must be preserved in Extra, got %+v", srv.Extra)
+	}
+	if _, ok := ro["timeout"]; !ok {
+		t.Fatalf("requestOptions.timeout lost on ingest: %+v", ro)
+	}
+	if _, ok := ro["headers"]; ok {
+		t.Fatalf("headers must live in the canonical Headers field, not Extra: %+v", ro)
+	}
+
+	// Re-render and assert the ON-DISK artifact still carries both the headers
+	// and the residual request options.
+	renderApply(t, a, got)
+	data, err := os.ReadFile(filepath.Join(blockDir, "api.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"timeout", "verifySsl", "Authorization", "Bearer tok"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("re-rendered block lost %q:\n%s", want, data)
+		}
+	}
+}
+
+// TestIngest_Prompts_SkipsNonInvokable: Continue only treats a prompt as a slash
+// command when `invokable: true`; capturing anything else (and re-applying it
+// with invokable forced true) would silently convert a user's plain prompt into
+// a slash command.
+func TestIngest_Prompts_SkipsNonInvokable(t *testing.T) {
+	tmp := t.TempDir()
+	promptsDir := filepath.Join(tmp, ".continue", "prompts")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"plain.md":   "---\nname: plain\ndescription: not invokable\n---\nbody\n",
+		"command.md": "---\nname: command\ndescription: a command\ninvokable: true\n---\nbody\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(promptsDir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var warn bytes.Buffer
+	a := continuedev.New(continuedev.Options{TargetRoot: tmp, Stderr: &warn})
+	got, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Commands) != 1 || got.Commands[0].Name != "command" {
+		t.Fatalf("only the invokable prompt should be captured, got %+v", got.Commands)
+	}
+	if !strings.Contains(warn.String(), `prompt "plain" is not invokable`) {
+		t.Fatalf("missing non-invokable warning:\n%s", warn.String())
 	}
 }

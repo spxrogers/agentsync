@@ -527,14 +527,14 @@ Claude, OpenCode, Codex, Cursor, Gemini CLI, Continue, Windsurf, and Roo Code ar
 | Component | Claude | OpenCode | Codex | Cursor | Gemini | Continue | Windsurf | Roo |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
 | MCP server | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Memory | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✓ |
+| Memory | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ✓ | ✓ |
 | Skill | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ |
 | Subagent | ✓ | ◐ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ |
 | Slash command | ✓ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ |
 | Hook | ✓ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ |
 | LSP server | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
 
-(Some adapters are scope-asymmetric: Windsurf renders MCP at user scope, memory + commands at project scope; Roo renders MCP at project scope only — its global MCP is VS Code app-storage. See the [capability matrix](capability-matrix.md).)
+(Some adapters are scope-asymmetric: Windsurf's MCP is global-only and renders at user scope, with memory + commands at both scopes; Roo renders MCP at project scope only — its global MCP is VS Code app-storage. See the [capability matrix](capability-matrix.md).)
 
 Full detail, native paths, and the reasoning behind each ◐/✗ are in the
 [capability matrix](capability-matrix.md).

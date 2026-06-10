@@ -51,6 +51,12 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, erro
 }
 
 // continueMCPServerMap builds the inner mcpServers entry for one server.
+// requestOptions is rebuilt by deep-merging the canonical Headers into any
+// non-headers requestOptions subkeys preserved in Extra (timeout, verifySsl,
+// proxy, …) — see IngestMCPSpec — so a captured native block's request options
+// survive the round trip instead of being shadowed by the headers map.
+// MergeExtra skips keys already present, so the explicit requestOptions here
+// wins over the Extra copy.
 func continueMCPServerMap(id string, s source.MCPServerSpec) map[string]any {
 	srv := map[string]any{"name": id}
 	if isRemote(s) {
@@ -58,8 +64,17 @@ func continueMCPServerMap(id string, s source.MCPServerSpec) map[string]any {
 		if s.URL != "" {
 			srv["url"] = s.URL
 		}
+		ro := map[string]any{}
+		if rest, ok := s.Extra["requestOptions"].(map[string]any); ok {
+			for k, v := range rest {
+				ro[k] = v
+			}
+		}
 		if len(s.Headers) > 0 {
-			srv["requestOptions"] = map[string]any{"headers": s.Headers}
+			ro["headers"] = s.Headers
+		}
+		if len(ro) > 0 {
+			srv["requestOptions"] = ro
 		}
 	} else {
 		srv["type"] = "stdio"
@@ -102,8 +117,11 @@ func continueTransport(s source.MCPServerSpec) string {
 // IngestMCPSpec translates one Continue-native server entry (a map under a block's
 // `mcpServers` list) into the canonical MCPServerSpec. Inverse of
 // continueMCPServerMap: `streamable-http` → http, `sse` → sse, otherwise stdio;
-// `requestOptions.headers` → canonical headers. Native keys agentsync doesn't
-// model (e.g. cwd) are preserved in Extra.
+// `requestOptions.headers` → canonical headers, and any OTHER requestOptions
+// subkey (timeout, verifySsl, proxy, …) is preserved verbatim in
+// Extra["requestOptions"] so the round trip can rebuild the full object —
+// dropping it silently would let the next apply destroy it on disk. Native keys
+// agentsync doesn't model (e.g. cwd) are preserved in Extra.
 func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
 	canonType := "stdio"
 	switch asStr(raw["type"]) {
@@ -113,8 +131,21 @@ func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
 		canonType = "sse"
 	}
 	var headers map[string]string
+	extra := claude.ExtraNativeKeys(raw, "name", "type", "command", "args", "env", "url", "requestOptions")
 	if ro, ok := raw["requestOptions"].(map[string]any); ok {
 		headers = asStrMap(ro["headers"])
+		residual := map[string]any{}
+		for k, v := range ro {
+			if k != "headers" {
+				residual[k] = v
+			}
+		}
+		if len(residual) > 0 {
+			if extra == nil {
+				extra = map[string]any{}
+			}
+			extra["requestOptions"] = residual
+		}
 	}
 	return source.MCPServerSpec{
 		Type:    canonType,
@@ -123,7 +154,7 @@ func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
 		Env:     asStrMap(raw["env"]),
 		URL:     asStr(raw["url"]),
 		Headers: headers,
-		Extra:   claude.ExtraNativeKeys(raw, "name", "type", "command", "args", "env", "url", "requestOptions"),
+		Extra:   extra,
 	}
 }
 

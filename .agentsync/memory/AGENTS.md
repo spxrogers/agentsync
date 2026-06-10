@@ -215,8 +215,8 @@ to a source writer is a **compile error**.
   memory) and `reconcile.writeBackFileItem` physically cannot carry a substituted
   secret.
 - **Lint fence (defense-in-depth):** a `forbidigo` rule forbids
-  `secrets.Resolved.Canonical` outside the two adapter Render egress sites
-  (line-scoped `//nolint`). Keep `iox.AtomicWrite` exclusions text-scoped so they
+  `secrets.Resolved.Canonical` outside the adapter Render egress sites (one
+  line-scoped `//nolint` per adapter's `Render`). Keep `iox.AtomicWrite` exclusions text-scoped so they
   never also exempt the `Canonical` rule.
 
 ### Accepted residual — WATCH OUT FOR THIS
