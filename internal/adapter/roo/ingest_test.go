@@ -1,9 +1,11 @@
 package roo_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -116,5 +118,41 @@ func TestRoundTrip_UserScope_RulesAndCommands(t *testing.T) {
 	}
 	if len(got.Commands) != 1 || got.Commands[0].Body != "g body\n" || got.Commands[0].Frontmatter["description"] != "G" {
 		t.Fatalf("user command round-trip lost data: %+v", got.Commands)
+	}
+}
+
+// TestIngest_Command_WarnsOnDroppedRooKeys: Roo commands may carry keys the
+// canonical command doesn't model (notably `mode`); ingest keeps the round-trip
+// clean by dropping them, but must say so — a captured command re-applies
+// without them.
+func TestIngest_Command_WarnsOnDroppedRooKeys(t *testing.T) {
+	tmp := t.TempDir()
+	proj := t.TempDir()
+	cmdDir := filepath.Join(proj, ".roo", "commands")
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\ndescription: Review code\nargument-hint: <file>\nmode: architect\n---\nReview it.\n"
+	if err := os.WriteFile(filepath.Join(cmdDir, "review.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var warn bytes.Buffer
+	a := roo.New(roo.Options{TargetRoot: tmp, Stderr: &warn})
+	got, err := a.Ingest(adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Commands) != 1 {
+		t.Fatalf("expected one command, got %+v", got.Commands)
+	}
+	fm := got.Commands[0].Frontmatter
+	if fm["description"] != "Review code" || fm["argument-hint"] != "<file>" {
+		t.Fatalf("modeled keys must be captured: %+v", fm)
+	}
+	if _, ok := fm["mode"]; ok {
+		t.Fatalf("mode must not be captured (no canonical home): %+v", fm)
+	}
+	if !strings.Contains(warn.String(), `command "review" frontmatter keys not modeled by agentsync dropped on import: mode`) {
+		t.Fatalf("expected dropped-keys warning:\n%s", warn.String())
 	}
 }

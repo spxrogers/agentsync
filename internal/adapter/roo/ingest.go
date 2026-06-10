@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
@@ -62,13 +64,21 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				fmt.Fprintf(warn, "warning: command %q frontmatter is not strict YAML; parsed leniently (consider quoting values containing ': ')\n", name)
 			}
 			// Keep only the canonical-relevant frontmatter (description,
-			// argument-hint); drop Roo-specific keys (e.g. mode) so the round-trip
-			// stays clean.
+			// argument-hint); Roo-specific keys (e.g. mode) have no canonical
+			// home and are dropped — with a warning, since a captured command
+			// re-applies without them.
 			cf := map[string]any{}
+			var dropped []string
 			for k, v := range fm {
 				if rooCommandKnownKeys[k] {
 					cf[k] = v
+				} else {
+					dropped = append(dropped, k)
 				}
+			}
+			if len(dropped) > 0 {
+				sort.Strings(dropped)
+				fmt.Fprintf(warn, "warning: command %q frontmatter keys not modeled by agentsync dropped on import: %s\n", name, strings.Join(dropped, ", "))
 			}
 			c.Commands = append(c.Commands, source.Command{Name: name, Frontmatter: cf, Body: body})
 		}

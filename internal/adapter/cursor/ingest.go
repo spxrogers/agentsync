@@ -121,11 +121,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		}
 	}
 
-	// Hooks from .cursor/hooks.json (camelCase events mapped back to canonical).
+	// Hooks from .cursor/hooks.json (camelCase events mapped back to canonical;
+	// unrepresentable events are skipped with a warning — see ingestHooks).
 	if data, err := os.ReadFile(p.Hooks); err == nil {
 		var top map[string]any
 		if json.Unmarshal(data, &top) == nil {
-			c.Hooks = append(c.Hooks, ingestHooks(top["hooks"])...)
+			c.Hooks = append(c.Hooks, ingestHooks(top["hooks"], warn)...)
 		}
 	}
 

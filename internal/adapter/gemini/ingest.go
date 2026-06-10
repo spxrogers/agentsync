@@ -1,7 +1,6 @@
 package gemini
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -23,11 +23,16 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
 	var c source.Canonical
+	warn := a.stderr()
 
-	// MCP (mcpServers) and hooks (hooks) both live in settings.json — parse once.
+	// MCP (mcpServers) and hooks (hooks) both live in settings.json — parse
+	// once. Gemini CLI reads settings.json as JSONC (comments are a documented,
+	// supported state of the file), so ingest must tolerate them too;
+	// DecodeJSONC also preserves json.Number so large foreign integers survive
+	// a later re-render unrounded.
 	if data, err := os.ReadFile(p.Settings); err == nil {
-		var top map[string]any
-		if err := json.Unmarshal(data, &top); err != nil {
+		top, err := jsonkeys.DecodeJSONC(data)
+		if err != nil {
 			return c, fmt.Errorf("parse %s: %w", p.Settings, err)
 		}
 		if servers, ok := top["mcpServers"].(map[string]any); ok {
@@ -39,10 +44,8 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				c.MCPServers = append(c.MCPServers, source.MCPServer{ID: id, Server: IngestMCPSpec(spec)})
 			}
 		}
-		c.Hooks = append(c.Hooks, ingestHooks(top["hooks"])...)
+		c.Hooks = append(c.Hooks, ingestHooks(top["hooks"], warn)...)
 	}
-
-	warn := a.stderr()
 
 	// Commands from .gemini/commands/<name>.toml (TOML → description + body).
 	if entries, err := os.ReadDir(p.CommandsDir); err == nil {
@@ -50,15 +53,17 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			if e.IsDir() || filepath.Ext(e.Name()) != ".toml" {
 				continue
 			}
+			name := e.Name()[:len(e.Name())-len(".toml")]
 			data, err := os.ReadFile(filepath.Join(p.CommandsDir, e.Name()))
 			if err != nil {
+				fmt.Fprintf(warn, "warning: skipping command %q: %v\n", name, err)
 				continue
 			}
 			var cf geminiCommandFile
-			if toml.Unmarshal(data, &cf) != nil {
+			if err := toml.Unmarshal(data, &cf); err != nil {
+				fmt.Fprintf(warn, "warning: skipping command %q: %v\n", name, err)
 				continue
 			}
-			name := e.Name()[:len(e.Name())-len(".toml")]
 			fm := map[string]any{}
 			if cf.Description != "" {
 				fm["description"] = cf.Description
