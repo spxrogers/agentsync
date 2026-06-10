@@ -46,18 +46,21 @@ func (a *Adapter) applyWrite(op adapter.FileOp, w adapter.DestWriter) error {
 		return fmt.Errorf("parse our payload for %s: %w", op.Path, err)
 	}
 	merged, _, _ := jsonkeys.MergeKeys(existing, ours, op.OwnedKeys)
-	// Cursor's `.cursor/hooks.json` REQUIRES a top-level integer `version` field
-	// (Cursor 3.x refuses to load ANY hooks from a file missing it). We
-	// (re)assert it here, AFTER the key-merge, rather than render it into
-	// op.Content: a top-level scalar in op.Content would be recorded as an owned
-	// key (CollectPointers yields "/version") and then stripped by the render
-	// pipeline's orphan-cleanup when the last canonical hook is removed —
-	// silently breaking a user's own foreign hook events left in the same file.
-	// Injecting it post-merge keeps version always present and never owned, even
-	// on the synthesized empty-`{}` orphan-cleanup op (which also runs through
-	// here for the hooks path).
+	// Cursor's documented `.cursor/hooks.json` schema requires a top-level
+	// integer `version` field. We assert it here, AFTER the key-merge, rather
+	// than render it into op.Content: a top-level scalar in op.Content would be
+	// recorded as an owned key (CollectPointers yields "/version") and then
+	// stripped by the render pipeline's orphan-cleanup when the last canonical
+	// hook is removed — silently breaking a user's own foreign hook events left
+	// in the same file. Injecting it post-merge keeps version always present and
+	// never owned, even on the synthesized empty-`{}` orphan-cleanup op (which
+	// also runs through here for the hooks path). Presence only: a user-set
+	// version is a foreign key and is preserved verbatim, like every other
+	// foreign key under merge-json-keys.
 	if filepath.Base(op.Path) == hooksFileName {
-		merged["version"] = cursorHooksVersion
+		if _, ok := merged["version"]; !ok {
+			merged["version"] = cursorHooksVersion
+		}
 	}
 	body, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {
