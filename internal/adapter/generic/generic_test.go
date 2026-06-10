@@ -327,3 +327,123 @@ func TestRoundTrip_Extra(t *testing.T) {
 		t.Fatalf("Extra not captured: %+v", got.MCPServers)
 	}
 }
+
+// TestRoundTrip_MCP_DualURLDialect covers the Gemini-lineage dual-URL split
+// (Qwen: httpUrl = streamable HTTP, url = SSE). A native SSE server must
+// canonicalize as sse with its URL captured — not as a corrupted stdio entry
+// with the url shunted into Extra — and re-render to the SAME native key.
+func TestRoundTrip_MCP_DualURLDialect(t *testing.T) {
+	tmp := t.TempDir()
+	mcpPath := filepath.Join(tmp, ".qwen", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	native := `{ "mcpServers": {
+  "sse-srv": { "url": "https://sse.example/mcp" },
+  "http-srv": { "httpUrl": "https://http.example/mcp" }
+} }`
+	if err := os.WriteFile(mcpPath, []byte(native), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	spec := generic.Spec{Name: "qwen", MCP: generic.MCPTarget{User: ".qwen/settings.json", RemoteURLKey: "httpUrl", SSEURLKey: "url"}}
+	a := generic.New(spec, generic.Options{TargetRoot: tmp})
+	got, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]source.MCPServerSpec{}
+	for _, m := range got.MCPServers {
+		byID[m.ID] = m.Server
+	}
+	if s := byID["sse-srv"]; s.Type != "sse" || s.URL != "https://sse.example/mcp" {
+		t.Fatalf("native SSE server corrupted on ingest: %+v", s)
+	}
+	if _, leaked := byID["sse-srv"].Extra["url"]; leaked {
+		t.Fatalf("sse url must be modeled, not Extra: %+v", byID["sse-srv"].Extra)
+	}
+	if s := byID["http-srv"]; s.Type != "http" || s.URL != "https://http.example/mcp" {
+		t.Fatalf("httpUrl server corrupted on ingest: %+v", s)
+	}
+
+	// Re-render: each server goes back to its own native key.
+	ops, _, err := a.Render(secrets.ForRender(got), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(mcpPath)
+	var top map[string]any
+	if err := json.Unmarshal(data, &top); err != nil {
+		t.Fatal(err)
+	}
+	servers := top["mcpServers"].(map[string]any)
+	sse := servers["sse-srv"].(map[string]any)
+	if sse["url"] != "https://sse.example/mcp" {
+		t.Fatalf("sse server must re-render under url: %v", sse)
+	}
+	if _, wrong := sse["httpUrl"]; wrong {
+		t.Fatalf("sse server must not gain httpUrl: %v", sse)
+	}
+	httpSrv := servers["http-srv"].(map[string]any)
+	if httpSrv["httpUrl"] != "https://http.example/mcp" {
+		t.Fatalf("http server must re-render under httpUrl: %v", httpSrv)
+	}
+}
+
+// TestRoundTrip_MCP_TransportAliases guards the two transport-mapping fixes:
+// a documented "stdio" alias in a dialect whose StdioValue differs (Copilot CLI
+// recommends type: "stdio" for cross-client compat alongside its own "local"),
+// and a native "sse" type surviving a capture→apply round trip instead of being
+// flipped to the generic remote value.
+func TestRoundTrip_MCP_TransportAliases(t *testing.T) {
+	tmp := t.TempDir()
+	mcpPath := filepath.Join(tmp, ".copilot", "mcp-config.json")
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	native := `{ "mcpServers": {
+  "alias-stdio": { "type": "stdio", "command": "npx", "args": ["-y", "x"] },
+  "sse-srv": { "type": "sse", "url": "https://sse.example/mcp" }
+} }`
+	if err := os.WriteFile(mcpPath, []byte(native), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	spec := generic.Spec{Name: "copilot-cli", MCP: generic.MCPTarget{User: ".copilot/mcp-config.json", TransportKey: "type", StdioValue: "local"}}
+	a := generic.New(spec, generic.Options{TargetRoot: tmp})
+	got, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]source.MCPServerSpec{}
+	for _, m := range got.MCPServers {
+		byID[m.ID] = m.Server
+	}
+	if s := byID["alias-stdio"]; s.Type != "stdio" || s.Command != "npx" {
+		t.Fatalf(`documented "stdio" alias must canonicalize as stdio (not a command-less http husk): %+v`, s)
+	}
+	if s := byID["sse-srv"]; s.Type != "sse" {
+		t.Fatalf("native sse type lost on ingest: %+v", s)
+	}
+
+	ops, _, err := a.Render(secrets.ForRender(got), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(mcpPath)
+	var top map[string]any
+	if err := json.Unmarshal(data, &top); err != nil {
+		t.Fatal(err)
+	}
+	servers := top["mcpServers"].(map[string]any)
+	if s := servers["alias-stdio"].(map[string]any); s["type"] != "local" || s["command"] != "npx" {
+		t.Fatalf("stdio server must re-render with the dialect's own stdio value and KEEP its command: %v", s)
+	}
+	if s := servers["sse-srv"].(map[string]any); s["type"] != "sse" {
+		t.Fatalf("sse transport must survive the round trip, not flip to http: %v", s)
+	}
+}

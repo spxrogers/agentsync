@@ -166,7 +166,7 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 - **Hand-edits to agentsync-owned keys** in shared agent files (e.g. an MCP server entry in `~/.claude.json` that agentsync owns): the next `apply` overwrites them with NO foreign-collision backup, because agentsync considers them its own. Use `agentsync reconcile` (the drift classifier catches the edit and offers `[w]`rite-back) BEFORE the next apply if you want to keep them.
 - **Plain-http / git:// plugin sources** are rejected by default to prevent MITM swap. Set `AGENTSYNC_ALLOW_INSECURE_URLS=1` for internal mirrors.
 - **Symlinked destinations** (e.g. `~/.claude.json` is a chezmoi symlink into your dotfiles repo) are rejected by default — a rename onto the path would replace the symlink with a regular file and strand your linked source. Set `AGENTSYNC_ALLOW_SYMLINK_DEST=1` to write through the symlink instead (the underlying file is updated in place; the link survives).
-- **Aider**: planned — not yet implemented.
+- **Aider** and **Firebender**: deliberately deferred — no faithful generic projection (Aider has no MCP and only an `.aider.conf.yml` `read:` pointer for memory; Firebender's config is unverified).
 
 ## Environment overrides
 

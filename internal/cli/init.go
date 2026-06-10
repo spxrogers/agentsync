@@ -29,7 +29,7 @@ const initialAgentsyncTOML = `# agentsync source-of-truth config
 # cline    = { enabled = true,  scope = "user" }
 # …plus a breadth tier (memory + MCP) for amp, goose, qwen, warp, zed, kiro,
 # kilocode, junie, factory, copilot, crush, and more — see the capability matrix.
-# Run "agentsync agent add <name>" for any agent in "agentsync agent list".
+# Run "agentsync agent add <name>" for any agent in "agentsync agent list --all".
 
 [updates]
 default_mode     = "track"        # pinned | track | manual

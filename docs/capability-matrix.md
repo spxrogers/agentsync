@@ -107,10 +107,10 @@ guessed.
 |---|---|---|
 | **amp** | `AGENTS.md` · `~/.config/amp/AGENTS.md` | ✗ namespaced `amp.mcpServers` (not a top-level map) |
 | **goose** | `.goosehints` | ✗ YAML `~/.config/goose/config.yaml` |
-| **qwen** | `QWEN.md` · `~/.qwen/QWEN.md` | ✓ `.qwen/settings.json` (remote key `httpUrl`) |
+| **qwen** | `QWEN.md` · `~/.qwen/QWEN.md` | ✓ `.qwen/settings.json` (dual-URL split: `httpUrl` = streamable HTTP, `url` = SSE) |
 | **warp** | `WARP.md` | ✓ `.warp/.mcp.json` · `~/.warp/.mcp.json` |
 | **jules** | `AGENTS.md` | ✗ dashboard-only (cloud) |
-| **junie** | `AGENTS.md` · `~/.junie/AGENTS.md` | ✓ `.junie/mcp/mcp.json` (+ user) |
+| **junie** | `AGENTS.md` (project; JetBrains documents no global guidelines file) | ✓ `.junie/mcp/mcp.json` (+ user) |
 | **openhands** | `AGENTS.md` | ✗ TOML `[mcp]` arrays |
 | **amazonq** | `.amazonq/rules/` | ✓ `.amazonq/mcp.json` · `~/.aws/amazonq/mcp.json` |
 | **zed** | `AGENTS.md` · `~/.config/zed/AGENTS.md` | ✓ settings.json `context_servers` |

@@ -16,8 +16,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   of agents from a verified `Spec` table: **memory** (a rules file) for all, and
   **MCP** wherever the agent reads a JSON server-map agentsync can express (dialect
   knobs handle the variance — root key `mcpServers`/`servers`/`mcp`/`context_servers`,
-  transport `type`/`transport`/inferred, stdio value `stdio`/`local`, remote URL key
-  `url`/`httpUrl`/`serverUrl`). Agents added: amp, goose, qwen, warp, jules, junie,
+  transport `type`/`transport`/inferred, stdio value `stdio`/`local` — with the
+  documented universal `"stdio"` alias accepted on import and a native `"sse"`
+  type preserved through capture/apply, remote URL key `url`/`httpUrl`/`serverUrl`,
+  and Qwen's Gemini-lineage dual-URL split: `httpUrl` = streamable HTTP, `url` = SSE). Agents added: amp, goose, qwen, warp, jules, junie,
   openhands, amazonq, zed, kilocode, kiro, trae, jetbrains, firebase, antigravity,
   augmentcode, copilot, copilot-cli, crush, factory, pi, mistral — taking agentsync
   to **31 agents** (9 deep + 22 breadth). Each spec's paths were cross-referenced
@@ -25,7 +27,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   an array/YAML/TOML/app-storage get memory-only with MCP reported as a skip.
   Agent-name validation, `doctor` detection, and the `init` template are now
   derived from the deep list + `generic.Specs()`, so adding a breadth agent is a
-  verified table row. (Aider and Firebender are deliberately deferred — see the
+  verified table row, and `agentsync agent list --all` prints the full supported
+  set with each agent's registration state. (Aider and Firebender are deliberately deferred — see the
   capability matrix.)
 - **Cline adapter (`internal/adapter/cline`).** A new real adapter for Cline,
   scope-asymmetric (informed by competitor prior art — no config-sync tool writes
