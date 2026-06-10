@@ -75,7 +75,7 @@ Component support across agents.
 | **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ✓ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` | ✓ `GEMINI.md` | ✓ `.continue/rules/` | ✓ `.windsurf/rules/` + `global_rules.md` | ✓ `.roo/rules/` |
 | **Skill** | ✓ `~/.claude/skills/X/` (dir) | ✓ shared `.claude/skills/` | ✓ `~/.agents/skills/` | ✓ `.cursor/skills/` | ✗ no skills concept | ✗ no skills concept | ✗ no skills concept | ✗ no skills concept |
 | **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/` | ◐ `.gemini/agents/` | ✗ top-level assistants only | ✗ no subagent concept | ✗ custom modes only |
-| **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ◐ `~/.codex/prompts/` | ◐ `.cursor/commands/` | ◐ `.gemini/commands/` (TOML) | ◐ `.continue/prompts/` | ◐ `.windsurf/workflows/` (project-only) | ◐ `.roo/commands/` (`allowed-tools` dropped) |
+| **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ◐ `~/.codex/prompts/` | ◐ `.cursor/commands/` | ◐ `.gemini/commands/` (TOML) | ◐ `.continue/prompts/` | ◐ `.windsurf/workflows/` + `global_workflows/` | ◐ `.roo/commands/` (`allowed-tools` dropped) |
 | **Hook** | ✓ JSON in settings | ✗ skip (JS/TS plugins) | ◐ `config.toml` `[hooks.*]` | ◐ `.cursor/hooks.json` | ◐ `settings.json` `hooks` | ✗ no hook concept | ✗ no hook concept | ✗ no hook concept |
 | **LSP server** | ✓ native | ✗ skip (deferred) | ✗ no LSP concept | ✗ no LSP config | ✗ no LSP concept | ✗ no LSP concept | ✗ no LSP concept | ✗ no LSP concept |
 
