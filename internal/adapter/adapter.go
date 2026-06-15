@@ -196,9 +196,9 @@ type NativePlugin struct {
 //
 // The PluginIngester interface is kept off the core Adapter because the
 // canonical schema does not otherwise depend on a native plugin concept
-// (OpenCode has no plugins; the planned Cursor adapter has them but the
-// enable-state location is undocumented). See `docs/architecture.md` §
-// "PluginIngester (read-only)" for the full rationale.
+// (OpenCode has no plugins; the Cursor adapter has them but its enable-state
+// location is undocumented, so it implements no PluginIngester yet). See
+// `docs/architecture.md` § "PluginIngester (read-only)" for the full rationale.
 type PluginIngester interface {
 	// IngestPlugins resolves scope-dependent paths (it reads the agent's native
 	// config, which differs per scope), so — like Render/Ingest — it MUST call

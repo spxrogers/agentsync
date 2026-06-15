@@ -19,8 +19,8 @@ const initialAgentsyncTOML = `# agentsync source-of-truth config
 [agents]
 # claude   = { enabled = true,  scope = "user" }
 # opencode = { enabled = true,  scope = "user" }
-# codex    = { enabled = false }   # v1.1
-# cursor   = { enabled = false }   # v1.2
+# codex    = { enabled = true,  scope = "user" }
+# cursor   = { enabled = true,  scope = "user" }
 
 [updates]
 default_mode     = "track"        # pinned | track | manual

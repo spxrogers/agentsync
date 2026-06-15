@@ -6,13 +6,13 @@
 
 Define your MCP servers, memory, skills, and marketplace plugins once in
 `~/.agentsync/`. Run `agentsync apply`. They land — correctly translated — in
-Claude Code, OpenCode, and Codex CLI (with Cursor planned).
+Claude Code, OpenCode, Codex CLI, and Cursor.
 
 [Quickstart](#quickstart) · [Install](#install) · **[Docs site → agentsync.cc](https://agentsync.cc)** · [User guide](docs/user-guide.md) · [Known limits](#known-limits)
 
 </div>
 
-> **Status: beta (v0.1.0).** Ships Claude Code, OpenCode, and Codex end-to-end.
+> **Status: beta (v0.1.0).** Ships Claude Code, OpenCode, Codex, and Cursor end-to-end.
 > The tool is functional and tested under `just test-release`; the canonical
 > layout, CLI surface, and state schema are stabilizing toward `1.0.0` and may
 > still change. A few documented trade-offs remain (see [Known limits](#known-limits)).
@@ -69,7 +69,7 @@ canonical markdown also lives in [`docs/`](docs/):
 | **Claude Code** | ✓ full adapter | All seven components, incl. LSP. |
 | **OpenCode** | ✓ adapter | MCP, memory, skills, subagents, commands. Hooks + LSP skipped. |
 | **Codex CLI** | ✓ adapter | MCP (TOML `config.toml`), memory, skills, subagents (◐), slash commands (◐, global-only), hooks (◐) + plugin import. No LSP concept. |
-| **Cursor** | planned | No-op today; will project skills + subagents (`.cursor/skills/`, `.cursor/agents/`) and project-scope rules. |
+| **Cursor** | ✓ adapter | MCP (`.cursor/mcp.json`), memory (◐, project-scope `AGENTS.md`), skills (`.cursor/skills/`), subagents (◐), slash commands (◐), hooks (◐, `.cursor/hooks.json`). No LSP concept. |
 
 Full ✓/◐/✗ breakdown per component: **[capability matrix](docs/capability-matrix.md)**.
 
@@ -136,9 +136,8 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 
 - **OpenCode hooks**: OpenCode hooks are JS/TS plugins, not declarative shell commands. agentsync does NOT auto-translate Claude hooks to OpenCode. Hand-author a small JS/TS plugin if you need a hook on OpenCode.
 - **Codex projections are lossy where Codex differs**: subagents project to Codex's TOML agent format (the `tools`/`color` frontmatter has no target and is dropped, reported in the apply report); slash commands map to Codex *custom prompts* which are global-only, so a **project-scope** command is skipped; hooks mirror Claude's declarative hook schema as inline `[hooks.*]` tables in `~/.codex/config.toml` but only for the events Codex recognizes (Claude's `SessionEnd`/`Notification` drop). All of these are surfaced in the translation report — nothing is dropped silently.
-- **Cursor adapter**: not implemented yet — registers as a no-op adapter (planned), and `agent add cursor` is rejected unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`. Cursor's planned coverage includes skills and subagents (which it stores on the filesystem under `.cursor/skills/` and `.cursor/agents/`), but its user-level *rules* live in app-local storage (not the filesystem), so the adapter will manage rules at project scope only.
-- **LSP projection beyond Claude**: OpenCode/Cursor LSP support is deferred (Codex has no LSP concept at all). Claude plugins that include LSP servers install correctly on Claude itself; on other agents you'll see `lsp server X skipped` in the apply translation report.
-- **cursor agent registration**: `agent add cursor` is rejected because its adapter is a noop. Set `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` to register anyway (apply will silently emit zero ops for it).
+- **Cursor projections are lossy where Cursor differs**: MCP and skills are full-fidelity (`.cursor/mcp.json` shares Claude's `mcpServers` shape; skills share the `SKILL.md` directory). Memory projects to the repo-root `AGENTS.md` at **project scope only** — Cursor keeps user-level rules in app-local storage, so user-scope memory is reported as a skip. Subagents (`.cursor/agents/`) drop Claude's `tools`/`color` (no Cursor field); slash commands (`.cursor/commands/`) are plain markdown so command frontmatter drops; hooks (`.cursor/hooks.json`) remap Claude's events to Cursor's camelCase names (events with no Cursor equivalent drop) and always carry the required top-level `version`. All losses are surfaced in the translation report.
+- **LSP projection beyond Claude**: OpenCode LSP support is deferred (Codex and Cursor have no LSP concept at all). Claude plugins that include LSP servers install correctly on Claude itself; on other agents you'll see `lsp server X skipped` in the apply translation report.
 - **TOML / JSONC comment preservation**: comments in `~/.agentsync/mcp/*.toml`, in agent-side `opencode.json`, and in Codex's `~/.codex/config.toml` are NOT preserved across reconcile `[w]`rite-back or import / apply. Hand-edited comments survive in unrelated sections; the rewritten section will be re-emitted without comments. Deferred to a later release.
 - **Hand-edits to agentsync-owned keys** in shared agent files (e.g. an MCP server entry in `~/.claude.json` that agentsync owns): the next `apply` overwrites them with NO foreign-collision backup, because agentsync considers them its own. Use `agentsync reconcile` (the drift classifier catches the edit and offers `[w]`rite-back) BEFORE the next apply if you want to keep them.
 - **Plain-http / git:// plugin sources** are rejected by default to prevent MITM swap. Set `AGENTSYNC_ALLOW_INSECURE_URLS=1` for internal mirrors.
@@ -153,7 +152,7 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 | `AGENTSYNC_TARGET_ROOT` | Redirect `$HOME` for testing (used by the hermetic test container). |
 | `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Permit writes to symlinked destination files (resolves the link first). |
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept http:// and git:// plugin / marketplace sources. |
-| `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` | Accept `agent add cursor` despite the noop adapter. |
+| `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` | Register an agent that has no implemented adapter yet (none today — every valid agent is real). |
 | `AGENTSYNC_ALLOW_PLUGIN_DRIFT=1` | Bypass the plugin-cache manifest-SHA check (after hand-editing). |
 | `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Skip `${secret:…}` resolution in `agentsync verify` (CI without an age key). |
 | `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` | Skip the 0600 mode check on the age identity file (ACL'd NFS). |

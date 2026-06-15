@@ -259,13 +259,13 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projec
 	// just detached), but the order is worth knowing.
 	defer warnW.Flush()
 	defer warnW.RouteTo(a)()
-	// Gate codex/cursor the same way `agent add` does: they're registered as
-	// noop adapters, so Ingest returns an empty canonical and import would
-	// otherwise fail with a misleading "<component> not found in native config".
-	// Tell the user the agent is unimplemented instead.
+	// Gate a future noop-registered agent the same way `agent add` does: a noop
+	// adapter's Ingest returns an empty canonical, so import would otherwise fail
+	// with a misleading "<component> not found in native config". Tell the user
+	// the agent is unimplemented instead. (All valid agents have real adapters
+	// today, so this is dormant — see v1Supported.)
 	if !v1Supported[agentName] && os.Getenv("AGENTSYNC_ALLOW_UNIMPLEMENTED") != "1" {
-		return fmt.Errorf("agent %q is not yet implemented in v1.0 "+
-			"(cursor is planned for a later release); "+
+		return fmt.Errorf("agent %q has no implemented adapter yet; "+
 			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to import from its noop adapter anyway", agentName)
 	}
 

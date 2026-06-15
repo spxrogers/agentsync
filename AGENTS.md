@@ -5,7 +5,7 @@ Project memory for Claude Code / agent sessions working on agentsync.
 ## What this is
 
 agentsync is a single-machine Go CLI that centrally manages AI coding-agent
-configurations (Claude Code, OpenCode, Codex, and — planned — Cursor). The
+configurations (Claude Code, OpenCode, Codex, and Cursor). The
 user keeps a canonical config in `~/.agentsync/` (small TOML + markdown,
 committable to a dotfiles repo); `agentsync apply` renders it into each agent's
 native config. It's bidirectional: native edits are detected as drift and merged
@@ -210,8 +210,8 @@ to a source writer is a **compile error**.
   memory) and `reconcile.writeBackFileItem` physically cannot carry a substituted
   secret.
 - **Lint fence (defense-in-depth):** a `forbidigo` rule forbids
-  `secrets.Resolved.Canonical` outside the two adapter Render egress sites
-  (line-scoped `//nolint`). Keep `iox.AtomicWrite` exclusions text-scoped so they
+  `secrets.Resolved.Canonical` outside the adapter Render egress sites (one
+  line-scoped `//nolint` per adapter's `Render`). Keep `iox.AtomicWrite` exclusions text-scoped so they
   never also exempt the `Canonical` rule.
 
 ### Accepted residual — WATCH OUT FOR THIS

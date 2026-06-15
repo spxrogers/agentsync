@@ -107,13 +107,14 @@ Two design points worth internalizing:
   is defense-in-depth against a future or non-CLI caller.
 
 `Capability` is a bitmask, so the OpenCode adapter simply omits `CapHook` and
-`CapLSP` (and the Codex adapter omits `CapLSP` — Codex has no LSP concept) and
-the pipeline reports those components as skipped.
+`CapLSP` (and the Codex and Cursor adapters omit `CapLSP` — neither has an LSP
+concept) and the pipeline reports those components as skipped.
 
 **Key-merge strategies and on-disk format.** `KeyMergeStrategy` /
 `FileOp.MergeStrategy` name how an adapter co-owns keys inside a shared config
-file: `merge-json-keys` (Claude's `.claude.json`/`settings.json`, and a
-project's repo-root `.mcp.json` for project-scope MCP servers),
+file: `merge-json-keys` (Claude's `.claude.json`/`settings.json`, a project's
+repo-root `.mcp.json` for project-scope MCP servers, and Cursor's
+`.cursor/mcp.json` + `.cursor/hooks.json`),
 `merge-jsonc-keys` (OpenCode's comment-tolerant `opencode.json`), and
 `merge-toml-keys` (Codex's `config.toml`). The merge *currency* is always a
 `map[string]any` decoded from the rendered op's JSON `Content`, so the
@@ -140,8 +141,9 @@ marketplaces in its native config (Claude reads `enabledPlugins` /
 `[plugins."<name>@<source>"]` enable-state from `config.toml`). `import`
 type-asserts for it: an adapter that doesn't implement it imports no plugins.
 It's kept off the core `Adapter` because the canonical schema doesn't otherwise
-depend on a native plugin concept (OpenCode has no plugins; the planned Cursor
-adapter has them but the enable-state location is undocumented).
+depend on a native plugin concept (OpenCode has no plugins; the Cursor adapter
+has them but its enable-state location is undocumented, so it implements no
+`PluginIngester` yet).
 
 #### The asymmetry is the invariant — read-only by design
 
@@ -188,11 +190,11 @@ SHA. From then on, the projection layer drives every apply.
 
 #### Per-adapter
 
-The **Codex** adapter implements `IngestPlugins`; **Cursor** is the intended
-next implementor. Both have native plugin systems, so the same import + apply
-fan-out (a plugin's components projected to every enabled agent via its
-capability matrix) applies — and both follow the read-only-on-import,
-components-only-on-apply rule above:
+The **Codex** adapter implements `IngestPlugins`; **Cursor** has a native plugin
+system too but does not implement it yet (its enable-state location is
+undocumented — see below). Both Codex and Claude project a plugin's components to
+every enabled agent via its capability matrix, and both follow the
+read-only-on-import, components-only-on-apply rule above:
 
 - **Claude** reads `enabledPlugins` / `extraKnownMarketplaces` on `import` and
   deliberately leaves both keys untouched on `apply`. Foreign entries
@@ -211,14 +213,16 @@ components-only-on-apply rule above:
 - **OpenCode** has no native plugin concept, so it implements neither side
   — it still *receives* plugin-projected components (skills, MCP, …) on
   `apply` like every other component, because that's the whole point.
-- **Cursor** ships an even closer content schema — `.cursor-plugin/plugin.json` +
-  `.cursor-plugin/marketplace.json`, near-identical to Claude's
-  `.claude-plugin/*` (rules, skills, agents, commands, hooks, MCP) — so the
-  projection layer largely transfers. The open question is where Cursor
-  records local enable-state (not yet documented; possibly app-local like
-  its user rules). When that's identified, the Cursor adapter implements
-  `PluginIngester` for it — and continues to NOT render it back, by the same
-  invariant.
+- **Cursor** ships a real adapter (MCP, memory, skills, subagents, commands,
+  hooks) but implements no `PluginIngester` yet. Its plugin *content* schema —
+  `.cursor-plugin/plugin.json` + `.cursor-plugin/marketplace.json`, near-identical
+  to Claude's `.claude-plugin/*` (rules, skills, agents, commands, hooks, MCP) —
+  means the projection layer largely transfers, but where Cursor records local
+  *enable-state* is undocumented (possibly app-local like its user rules), so
+  plugin discovery on `import` is deferred. When that location is identified the
+  Cursor adapter implements `PluginIngester` for it — and, by the same invariant,
+  still never renders it back. It already *receives* plugin-projected components
+  on `apply` like every other adapter.
 
 See the capability matrix for source links.
 
