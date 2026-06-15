@@ -41,7 +41,7 @@ fidelity claim.
 
 | Tool | Lang | Agents | Mem | Sk | MCP | Sub | Cmd | Hooks | Bidirectional / drift | Secrets |
 |---|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|---|---|
-| ⭐️ **agentsync** ⭐️ *(this tool)* | **Go** | 7 (Claude, OpenCode, Codex, Cursor, Gemini, Continue, Windsurf; more planned) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ **3-state classifier + `reconcile`/`import` capture** | ✅ **age vault, `${secret:}`/`${env:}`, re-ref + leak backstop** |
+| ⭐️ **agentsync** ⭐️ *(this tool)* | **Go** | 8 (Claude, OpenCode, Codex, Cursor, Gemini, Continue, Windsurf, Roo; more planned) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ **3-state classifier + `reconcile`/`import` capture** | ✅ **age vault, `${secret:}`/`${env:}`, re-ref + leak backstop** |
 | [agentsmesh](https://github.com/sampleXbro/agentsmesh) | TS/Py | 30+ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `generate`/`import`/`check` (lock-file drift in CI) | ❌ (defers to your store) |
 | [rulesync](https://github.com/dyoshikawa/rulesync) | TS | 25+ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ `generate` + `import` (one-shot ingest, no state model) | ❌ |
 | [gaal](https://github.com/getgaal/gaal) | **Go** | 17–20 | ◐ files | ✅ | ✅ | ❌ | ◐ files | ✅ | ❌ one-way (`--prune`, `init --import-all` bootstrap) | ❌ |

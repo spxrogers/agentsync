@@ -29,6 +29,7 @@ var agentBinaries = map[string]string{
 	"gemini":   "gemini",
 	"continue": "cn",
 	"windsurf": "windsurf",
+	"roo":      "roo",
 }
 
 // boolStr returns "true" or "false" as a string.
@@ -39,7 +40,7 @@ func boolStr(b bool) string {
 	return "false"
 }
 
-const validAgents = "claude, opencode, codex, cursor, gemini, continue, windsurf"
+const validAgents = "claude, opencode, codex, cursor, gemini, continue, windsurf, roo"
 
 // v1Supported lists agents whose adapter actually emits ops today. Every valid
 // agent (see validateAgent) now has a real adapter, so this gate is dormant —
@@ -55,6 +56,7 @@ var v1Supported = map[string]bool{
 	"gemini":   true,
 	"continue": true,
 	"windsurf": true,
+	"roo":      true,
 }
 
 func newAgentCmd() *cobra.Command {
@@ -101,7 +103,7 @@ type agentsyncCfg struct {
 // four — adding a new agent in v1.x is a code change, not a config change.
 func validateAgent(name string) error {
 	switch name {
-	case "claude", "opencode", "codex", "cursor", "gemini", "continue", "windsurf":
+	case "claude", "opencode", "codex", "cursor", "gemini", "continue", "windsurf", "roo":
 		return nil
 	}
 	return fmt.Errorf("unknown agent %q; valid: %s", name, validAgents)

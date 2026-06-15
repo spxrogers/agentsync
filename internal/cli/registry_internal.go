@@ -8,6 +8,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter/cursor"
 	"github.com/spxrogers/agentsync/internal/adapter/gemini"
 	"github.com/spxrogers/agentsync/internal/adapter/opencode"
+	"github.com/spxrogers/agentsync/internal/adapter/roo"
 	"github.com/spxrogers/agentsync/internal/adapter/windsurf"
 	"github.com/spxrogers/agentsync/internal/paths"
 )
@@ -25,5 +26,6 @@ var registryFactory = func() *adapter.Registry {
 	_ = r.Register(gemini.New(gemini.Options{TargetRoot: home}))
 	_ = r.Register(continuedev.New(continuedev.Options{TargetRoot: home}))
 	_ = r.Register(windsurf.New(windsurf.Options{TargetRoot: home}))
+	_ = r.Register(roo.New(roo.Options{TargetRoot: home}))
 	return r
 }

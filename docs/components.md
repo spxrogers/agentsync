@@ -215,6 +215,21 @@ warnings (rules/workflows are plain markdown), so it does not implement
 - **Files:** `windsurf.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
   `paths.go`, `command.go`, `memory.go`.
 
+### `internal/adapter/roo`
+The Roo Code adapter — MCP, memory, and slash commands via clean filesystem
+`.roo/` paths. MCP → `.roo/mcp.json` (project-level, `mcpServers` via
+`merge-json-keys`; remote uses explicit `type: streamable-http`/`sse`); memory →
+`.roo/rules/agentsync.md` (plain markdown rule) and commands →
+`.roo/commands/<name>.md` (markdown + frontmatter — keeps `description` +
+`argument-hint`), both at user *and* project scope. Roo's global MCP is VS Code
+globalStorage (not targeted — user-scope MCP is reported as a skip). Omits
+`CapSkill`/`CapSubagent`/`CapHook`/`CapLSP`. No `PluginIngester`.
+- **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
+- **Depends on:** adapter, adapter/claude (frontmatter/Extra helpers), secrets,
+  source, paths, iox, jsonkeys.
+- **Files:** `roo.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`, `paths.go`,
+  `command.go`, `memory.go`.
+
 ### `internal/adapter/noop`
 Placeholder adapter that detects true and renders nothing. Used as a registry
 stand-in in tests; no production agent is registered as a noop today (every valid

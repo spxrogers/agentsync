@@ -24,6 +24,7 @@ const initialAgentsyncTOML = `# agentsync source-of-truth config
 # gemini   = { enabled = true,  scope = "user" }
 # continue = { enabled = true,  scope = "user" }
 # windsurf = { enabled = true,  scope = "user" }
+# roo      = { enabled = true,  scope = "user" }
 
 [updates]
 default_mode     = "track"        # pinned | track | manual

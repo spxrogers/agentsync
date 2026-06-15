@@ -11,6 +11,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **Roo Code adapter (`internal/adapter/roo`).** A new real adapter for Roo Code,
+  built on the clean filesystem `.roo/` paths two other config-sync tools
+  (rulesync, ruler) independently converged on: MCP → project `.roo/mcp.json`
+  (`mcpServers` with explicit `type: streamable-http`/`sse` for remote;
+  merge-by-server-name preserves foreign servers), memory → `.roo/rules/agentsync.md`
+  (plain always-applied rule) and slash commands → `.roo/commands/<name>.md`
+  (markdown + frontmatter — keeps BOTH `description` and `argument-hint`; only
+  `allowed-tools` drops), both at user and project scope. Roo's global MCP lives in
+  VS Code globalStorage (OS/editor-specific), which agentsync intentionally does
+  not target, so user-scope MCP is reported as a skip. Skills, hooks, LSP, and
+  per-file subagents (Roo uses "custom modes") have no Roo target and are skipped.
+  `agent add roo` / `import roo:…` work end-to-end.
 - **Windsurf adapter (`internal/adapter/windsurf`).** A new real adapter for
   Windsurf (Cascade): MCP renders at **user scope** into the global
   `~/.codeium/windsurf/mcp_config.json` (JSON `mcpServers`; stdio
