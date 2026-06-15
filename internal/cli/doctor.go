@@ -55,26 +55,18 @@ func newDoctorCmd() *cobra.Command {
 
 			fmt.Fprintln(p.Out, "")
 			p.Section("Adapter detection (PATH-only)")
-			for _, agent := range []struct {
-				name string
-				bin  string
-			}{
-				{"claude", "claude"},
-				{"opencode", "opencode"},
-				{"codex", "codex"},
-				{"cursor", "cursor"},
-				{"gemini", "gemini"},
-				{"continue", "cn"},
-				{"windsurf", "windsurf"},
-				{"roo", "roo"},
-				{"cline", "cline"},
-			} {
-				path, lookErr := exec.LookPath(agent.bin)
-				if lookErr != nil {
-					fmt.Fprintf(p.Out, "  %s %-10s %s\n", p.Faint(ui.GlyphInfo), agent.name, p.Faint("not found in PATH"))
+			for _, name := range allAgentNames() {
+				bin := agentBinary(name)
+				if bin == "" {
+					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint("(no PATH binary; detected by config dir)"))
 					continue
 				}
-				fmt.Fprintf(p.Out, "  %s %-10s %s\n", p.Green(ui.GlyphOK), agent.name, p.Faint(path))
+				path, lookErr := exec.LookPath(bin)
+				if lookErr != nil {
+					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint("not found in PATH"))
+					continue
+				}
+				fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Green(ui.GlyphOK), name, p.Faint(path))
 			}
 
 			fmt.Fprintln(p.Out, "")

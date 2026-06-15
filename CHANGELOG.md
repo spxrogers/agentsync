@@ -11,6 +11,30 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **Breadth tier — 22 more agents via a data-driven generic adapter
+  (`internal/adapter/generic`).** One `Adapter` implementation serves a long tail
+  of agents from a verified `Spec` table: **memory** (a rules file) for all, and
+  **MCP** wherever the agent reads a JSON server-map agentsync can express (15 of
+  the 22). Dialect knobs handle the variance — root key
+  `mcpServers`/`servers`/`mcp`/`context_servers`/the flat namespaced `amp.mcpServers`,
+  transport `type`/`transport`/inferred, stdio value `stdio`/`local` — with the
+  documented universal `"stdio"` alias accepted on import and a native `"sse"`
+  type preserved through capture/apply, remote URL key `url`/`httpUrl`/`serverUrl`,
+  and Qwen's Gemini-lineage dual-URL split (`httpUrl` = streamable HTTP, `url` =
+  SSE) — and the merge is JSONC-tolerant (hujson): a commented settings file's
+  (Zed, Copilot, Amp) foreign keys and values are preserved rather than
+  clobbered, with comments stripped on the first agentsync write (the file is
+  re-emitted as plain JSON; the original is backed up — see Known limits). Agents added: amp, goose, qwen, warp, jules, junie,
+  openhands, amazonq, zed, kilocode, kiro, trae, jetbrains, firebase, antigravity,
+  augmentcode, copilot, copilot-cli, crush, factory, pi, mistral — taking agentsync
+  to **31 agents** (9 deep + 22 breadth). Each spec's paths were cross-referenced
+  against upstream docs and prior-art tools (ruler, rulesync); agents whose MCP is
+  an array/YAML/TOML/app-storage get memory-only with MCP reported as a skip.
+  Agent-name validation, `doctor` detection, and the `init` template are now
+  derived from the deep list + `generic.Specs()`, so adding a breadth agent is a
+  verified table row, and `agentsync agent list --all` prints the full supported
+  set with each agent's registration state. (Aider and Firebender are deliberately deferred — see the
+  capability matrix.)
 - **Cline adapter (`internal/adapter/cline`).** A new real adapter for Cline,
   scope-asymmetric (informed by competitor prior art — no config-sync tool writes
   the VS Code globalStorage MCP path): MCP renders at **user scope** into the Cline

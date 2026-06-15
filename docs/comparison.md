@@ -41,7 +41,7 @@ fidelity claim.
 
 | Tool | Lang | Agents | Mem | Sk | MCP | Sub | Cmd | Hooks | Bidirectional / drift | Secrets |
 |---|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|---|---|
-| ⭐️ **agentsync** ⭐️ *(this tool)* | **Go** | 9 (Claude, OpenCode, Codex, Cursor, Gemini, Continue, Windsurf, Roo, Cline; more planned) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ **3-state classifier + `reconcile`/`import` capture** | ✅ **age vault, `${secret:}`/`${env:}`, re-ref + leak backstop** |
+| ⭐️ **agentsync** ⭐️ *(this tool)* | **Go** | **31** (9 deep adapters + 22 breadth-tier) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ **3-state classifier + `reconcile`/`import` capture** | ✅ **age vault, `${secret:}`/`${env:}`, re-ref + leak backstop** |
 | [agentsmesh](https://github.com/sampleXbro/agentsmesh) | TS/Py | 30+ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `generate`/`import`/`check` (lock-file drift in CI) | ❌ (defers to your store) |
 | [rulesync](https://github.com/dyoshikawa/rulesync) | TS | 25+ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ `generate` + `import` (one-shot ingest, no state model) | ❌ |
 | [gaal](https://github.com/getgaal/gaal) | **Go** | 17–20 | ◐ files | ✅ | ✅ | ❌ | ◐ files | ✅ | ❌ one-way (`--prune`, `init --import-all` bootstrap) | ❌ |
@@ -84,6 +84,14 @@ same bytes everywhere, no translation or secrets).
 - **Go + safety invariants.** `gaal`, `ai-rulez`, and `mcpup` are also Go, but
   none pairs the single-binary distribution with agentsync's secret/leak-guard
   architecture.
+- **Breadth *and* depth.** The competitors' big agent counts ("30+", "25+") are
+  almost entirely **rules-file fan-out** — every tool that reads an instructions
+  file counts as an "agent." agentsync now matches that breadth (**31**: a 22-agent
+  data-driven generic tier for memory + same-shape MCP) *while also* keeping nine
+  **deep** adapters that do multi-component, bidirectional projection — and even
+  the breadth tier runs through the drift/secrets/capture pipeline, not a one-way
+  dump. Each breadth entry's paths are verified against upstream docs, so the count
+  is honest rather than a long list of unmaintained stubs.
 
 ## The category map
 

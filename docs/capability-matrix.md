@@ -29,6 +29,7 @@ nothing is dropped silently.
 | **Windsurf** | ✅ Adapter (scope-asymmetric MCP) | MCP, memory, and slash commands. **MCP is global-only** (`~/.codeium/windsurf/mcp_config.json`, JSON `mcpServers`; stdio command/args/env, remote `serverUrl` + `headers`), so it renders at **user scope** and is skipped (reported) at project scope. **Memory** renders at both scopes: project → `.windsurf/rules/agentsync.md` carrying the documented `trigger: always_on` activation frontmatter (workspace rules declare their trigger in frontmatter; ingest strips it, so the canonical body round-trips byte-clean); user → the single global rules file `~/.codeium/windsurf/memories/global_rules.md` (always-on, frontmatter-less, verbatim; Windsurf documents a 6,000-character limit it enforces itself). **Commands** render at both scopes as plain-markdown workflows invoked as `/<name>`: project `.windsurf/workflows/`, user `~/.codeium/windsurf/global_workflows/` (command frontmatter drops). Upstream now prefers `.devin/rules|workflows/` with `.windsurf/` as the supported fallback; agentsync targets `.windsurf/`, which every released version reads. **Skills, subagents, hooks, and LSP** have no Windsurf concept and are skipped. No `PluginIngester`; it still *receives* plugin-projected components on `apply`. |
 | **Roo Code** | ✅ Adapter (some components projected) | MCP, memory, and slash commands — clean filesystem `.roo/` paths (rulesync and ruler converged on these). **MCP → `.roo/mcp.json`** (project-level, `mcpServers` with explicit `type: streamable-http`/`sse` for remote + `url`/`headers`; merge-by-server-name preserves foreign servers). Roo's *global* MCP lives in VS Code globalStorage (OS/editor-specific), which agentsync intentionally does **not** target — so user-scope MCP is reported as a skip. **Memory → `.roo/rules/agentsync.md`** (plain-markdown always-applied rule) and **commands → `.roo/commands/<name>.md`** (markdown + frontmatter — Roo keeps **both** `description` *and* `argument-hint`; only `allowed-tools` drops), both at **user and project scope** (`~/.roo/` + `<repo>/.roo/`). **Skills, hooks, and LSP** have no Roo concept, and Roo's "custom modes" are not per-file **subagents**, so all four are skipped. No `PluginIngester`; it still *receives* plugin-projected components on `apply`. |
 | **Cline** | ✅ Adapter (scope-asymmetric) | MCP, memory, and slash commands. **MCP → `~/.cline/mcp.json`** at **user scope** — the Cline CLI's clean config (`mcpServers`, transport inferred: stdio command/args/env, remote `url` + `headers`). Cline has no project MCP file, and its VS Code-extension MCP lives in OS/editor-specific globalStorage no config-sync tool writes, so project-scope MCP is reported as a skip. **Memory → `.clinerules/agentsync.md`** (plain markdown — Cline concatenates `.clinerules/`) and **commands → `.clinerules/workflows/<name>.md`** (plain markdown workflows invoked as `/<name>.md`; command frontmatter drops), both at **project scope** (Cline's global rules and workflows live in `~/Documents/Cline/`, a non-XDG app path agentsync deliberately does not target). **Skills, subagents, hooks, and LSP** have no Cline concept and are skipped. No `PluginIngester`; it still *receives* plugin-projected components on `apply`. |
+| **Breadth tier (22 agents)** | ✅ Generic adapter (memory + MCP) | A long tail of agents supported by one data-driven [generic adapter](#breadth-tier) — **memory** (rules file) for all, **MCP** where the agent reads a JSON server-map agentsync can express. Each is a *verified* spec, not a hand-written package; see the [Breadth tier](#breadth-tier) table for per-agent coverage. They flow through the normal apply/import pipeline (drift, secrets, capture), unlike a one-way rules dump. |
 
 ## Plugin import/apply: the shared invariant
 
@@ -84,6 +85,69 @@ Component support across agents.
 > The ◐/✗ cells are *features*, not bugs: agentsync refuses to invent a
 > translation that would mislead you. Every ◐ and ✗ is printed in the apply
 > report and queryable with `agentsync explain <plugin> --json`.
+
+## Breadth tier
+
+The nine adapters above are **deep, agent-specific** packages. Beyond them,
+agentsync covers a long tail of agents through a single **data-driven generic
+adapter** (`internal/adapter/generic`): each agent is a *verified Spec* — a row in
+a table — rather than a hand-written package. The generic tier deliberately
+projects **memory** (the agent's rules/instructions file) and, where the agent
+reads a JSON server-map agentsync can express, **MCP**; every other component is
+reported as a skip. Breadth agents run through the same apply/import pipeline as
+the deep ones, so they get drift detection, secret resolution, and capture — not a
+one-way rules dump.
+
+**MCP coverage (15 of 22).** The MCP merge is **JSONC-tolerant** (hujson), so a
+commented settings file (Zed, Copilot's `.vscode/mcp.json`, Amp) is parsed and its
+foreign keys and values preserved rather than clobbered. The comments themselves
+are NOT preserved: the file is re-emitted as plain JSON on the first agentsync
+write, with keys re-sorted (the original is backed up) — for **Zed** that file is
+the user's whole editor `settings.json`, so expect the reformat (see Known
+limits). Per-agent dialect knobs cover
+the variance: top-level key (`mcpServers` / `servers` / `mcp` / `context_servers` /
+the flat namespaced `amp.mcpServers`), transport field (`type` / `transport` /
+inferred), stdio value (`stdio` / `local`), and remote URL key (`url` / `httpUrl` /
+`serverUrl`). The seven memory-only agents are the ones whose MCP is genuinely
+**not** a JSON server-map — array (Trae), YAML (Goose), TOML (OpenHands, Mistral),
+IDE app-storage (JetBrains, AugmentCode), or cloud-dashboard (Jules) — where the
+generic engine refuses to invent a shape and reports a skip.
+
+Every path below was cross-referenced against the agent's upstream docs **and**
+prior-art config-sync tools (ruler, rulesync) before inclusion. A scope or
+component with no verified target is left out (and reported as a skip), never
+guessed.
+
+| Agent | Memory (rules) | MCP |
+|---|---|---|
+| **amp** | `AGENTS.md` · `~/.config/amp/AGENTS.md` | ✓ `~/.config/amp/settings.json` (namespaced `amp.mcpServers` key) |
+| **goose** | `.goosehints` | ✗ YAML `~/.config/goose/config.yaml` |
+| **qwen** | `QWEN.md` · `~/.qwen/QWEN.md` | ✓ `.qwen/settings.json` (dual-URL split: `httpUrl` = streamable HTTP, `url` = SSE) |
+| **warp** | `WARP.md` | ✓ `.warp/.mcp.json` · `~/.warp/.mcp.json` |
+| **jules** | `AGENTS.md` | ✗ dashboard-only (cloud) |
+| **junie** | `AGENTS.md` (project; JetBrains documents no global guidelines file) | ✓ `.junie/mcp/mcp.json` (+ user) |
+| **openhands** | `AGENTS.md` | ✗ TOML `[mcp]` arrays |
+| **amazonq** | `.amazonq/rules/` | ✓ `.amazonq/mcp.json` · `~/.aws/amazonq/mcp.json` |
+| **zed** | `AGENTS.md` · `~/.config/zed/AGENTS.md` | ✓ settings.json `context_servers` |
+| **kilocode** | `.kilocode/rules/` | ✓ `.kilocode/mcp.json` (project) |
+| **kiro** | `.kiro/steering/` (+ user) | ✓ `.kiro/settings/mcp.json` (+ user) |
+| **trae** | `.trae/rules/project_rules.md` | ✗ non-standard array shape |
+| **jetbrains** | `.aiassistant/rules/` | ✗ IDE app-storage |
+| **firebase** | `.idx/airules.md` | ✓ `.idx/mcp.json` (project) |
+| **antigravity** | `AGENTS.md` | ✓ `~/.gemini/config/mcp_config.json` (remote key `serverUrl`; the shared IDE+CLI path is codelab-sourced — older installs read `~/.gemini/antigravity-cli/mcp_config.json`, where this write is a no-op; re-verify when Antigravity's docs firm up. Lives inside `~/.gemini/`, the deep Gemini adapter's directory, but a different file — no collision) |
+| **augmentcode** | `.augment/rules/` (+ user) | ✗ IDE app-storage |
+| **copilot** | `.github/copilot-instructions.md` | ✓ `.vscode/mcp.json` (`servers` key, `type`) |
+| **copilot-cli** | `AGENTS.md` | ✓ `~/.copilot/mcp-config.json` (`type`, stdio="local") |
+| **crush** | `AGENTS.md` | ✓ crush.json `mcp` key (+ user) |
+| **factory** | `AGENTS.md` | ✓ `.factory/mcp.json` · `~/.factory/mcp.json` (`type`) |
+| **pi** | `AGENTS.md` · `~/.pi/agent/AGENTS.md` | ✓ `~/.pi/agent/mcp.json` |
+| **mistral** | `AGENTS.md` | ✗ TOML `.vibe/config.toml` |
+
+**Deliberate exclusions:** **Aider** (no native MCP; memory only via an
+`.aider.conf.yml` `read:` pointer — needs a content+config-pointer adapter, out of
+the generic tier) and **Firebender** (single-sourced JSON-manifest model) are not
+included pending a faithful implementation. Replit/Rovo Dev are likewise deferred
+(cloud / config-string memory).
 
 ## Reading the report
 
@@ -324,9 +388,11 @@ These are documented trade-offs, not regressions. The authoritative list lives
 in the [README](../README.md#known-limits); the highlights:
 
 - **Comment preservation** — comments in `mcp/*.toml`, in `opencode.json`, in
-  Gemini's `.gemini/settings.json`, and in Codex's `~/.codex/config.toml` are not
-  preserved across a write-back/import round-trip; the JSONC files are re-emitted
-  as plain JSON (foreign keys preserved, comments stripped, original backed up).
+  Gemini's `.gemini/settings.json`, in the breadth tier's JSONC settings files
+  (Zed/Amp `settings.json`, Copilot `.vscode/mcp.json`), and in Codex's
+  `~/.codex/config.toml` are not preserved across a write-back/import round-trip;
+  the JSONC files are re-emitted as plain JSON (foreign keys preserved, comments
+  stripped, original backed up).
 - **Owned-key hand-edits** — if you hand-edit an agentsync-owned key in a shared
   file, the next `apply` overwrites it with no backup (agentsync considers it its
   own). Run `agentsync reconcile` first to capture the edit.
@@ -335,7 +401,8 @@ in the [README](../README.md#known-limits); the highlights:
   `AGENTSYNC_ALLOW_INSECURE_URLS=1`.
 - **Symlinked destinations** are rejected by default; override with
   `AGENTSYNC_ALLOW_SYMLINK_DEST=1`.
-- **Planned (not yet implemented)**: Aider.
+- **Planned / deferred**: Aider and Firebender (see [Breadth tier](#breadth-tier)
+  § "Deliberate exclusions").
 
 See the [user guide](user-guide.md) to put this into practice.
 

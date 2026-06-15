@@ -45,10 +45,11 @@ git ls-remote <marketplace-url>
 agentsync uses `go-git` and falls back to system `git` for sparse clones if needed.
 
 ### Which agents can I `agent add`?
-All nine valid agents — `claude`, `opencode`, `codex`, `cursor`, `gemini`,
-`continue`, `windsurf`, `roo`, and `cline` — have real adapters and register
-normally. (`AGENTSYNC_ALLOW_UNIMPLEMENTED=1` exists only for a hypothetical future
-agent registered as a no-op; none is today.)
+All 31 agents — nine deep adapters (`claude`, `opencode`, `codex`, `cursor`,
+`gemini`, `continue`, `windsurf`, `roo`, `cline`) plus a 22-agent breadth tier (run
+`agentsync agent list --all`) — have real adapters and register normally.
+(`AGENTSYNC_ALLOW_UNIMPLEMENTED=1` exists only for a hypothetical future agent
+registered as a no-op; none is today.)
 
 ---
 

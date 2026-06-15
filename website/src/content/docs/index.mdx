@@ -118,8 +118,14 @@ That `github` MCP server now lives in **both** `~/.claude.json` and
 | **Roo Code** | ✓ adapter | MCP (`.roo/mcp.json`, project scope), memory (`.roo/rules/`) + slash commands (◐, `.roo/commands/`) at both scopes. No skills/subagents/hooks/LSP concept. |
 | **Cline** | ✓ adapter | MCP (`~/.cline/mcp.json` CLI, user scope), memory (◐, `.clinerules/`) + slash commands (◐, `.clinerules/workflows/`) at project scope. No skills/subagents/hooks/LSP concept. |
 
+Plus a **breadth tier** of 22 more agents via one data-driven generic adapter
+(memory for all, MCP where the agent reads a JSON server-map): amp, goose, qwen,
+warp, jules, junie, openhands, amazonq, zed, kilocode, kiro, trae, jetbrains,
+firebase, antigravity, augmentcode, copilot, copilot-cli, crush, factory, pi,
+mistral. See the [capability matrix → Breadth tier](/reference/capability-matrix/#breadth-tier).
+
 <Aside type="caution" title="Status: beta">
-	v1.0 ships Claude Code, OpenCode, Codex, Cursor, Gemini CLI, Continue, Windsurf, Roo Code, and Cline end-to-end. The tool is
+	v1.0 ships 31 agents — nine deep adapters (Claude, OpenCode, Codex, Cursor, Gemini, Continue, Windsurf, Roo, Cline) plus a 22-agent breadth tier — end-to-end. The tool is
 	functional and tested under `just test-release`; package-manager distribution
 	and a few documented trade-offs are still being finalized. Found a rough edge?
 	[Open an issue](https://github.com/spxrogers/agentsync/issues).

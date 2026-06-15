@@ -238,7 +238,7 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projec
 	reg := registryFactory()
 	a := reg.Lookup(agentName)
 	if a == nil {
-		return fmt.Errorf("adapter %q not registered; valid agents: %s", agentName, validAgents)
+		return fmt.Errorf("adapter %q not registered; valid agents: %s", agentName, validAgentsList())
 	}
 	// Route the adapter's Ingest warnings through the same styled writer,
 	// and defer the restore so the adapter is detached before importRun
@@ -264,7 +264,7 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projec
 	// with a misleading "<component> not found in native config". Tell the user
 	// the agent is unimplemented instead. (All valid agents have real adapters
 	// today, so this is dormant — see v1Supported.)
-	if !v1Supported[agentName] && os.Getenv("AGENTSYNC_ALLOW_UNIMPLEMENTED") != "1" {
+	if !v1Supported(agentName) && os.Getenv("AGENTSYNC_ALLOW_UNIMPLEMENTED") != "1" {
 		return fmt.Errorf("agent %q has no implemented adapter yet; "+
 			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to import from its noop adapter anyway", agentName)
 	}
