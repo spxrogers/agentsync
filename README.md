@@ -6,13 +6,13 @@
 
 Define your MCP servers, memory, skills, and marketplace plugins once in
 `~/.agentsync/`. Run `agentsync apply`. They land — correctly translated — in
-Claude Code, OpenCode, Codex CLI, Cursor, and Gemini CLI.
+Claude Code, OpenCode, Codex CLI, Cursor, Gemini CLI, and Continue.
 
 [Quickstart](#quickstart) · [Install](#install) · **[Docs site → agentsync.cc](https://agentsync.cc)** · [User guide](docs/user-guide.md) · [Known limits](#known-limits)
 
 </div>
 
-> **Status: beta (v0.1.0).** Ships Claude Code, OpenCode, Codex, Cursor, and Gemini CLI end-to-end.
+> **Status: beta (v0.1.0).** Ships Claude Code, OpenCode, Codex, Cursor, Gemini CLI, and Continue end-to-end.
 > The tool is functional and tested under `just test-release`; the canonical
 > layout, CLI surface, and state schema are stabilizing toward `1.0.0` and may
 > still change. A few documented trade-offs remain (see [Known limits](#known-limits)).
@@ -71,6 +71,7 @@ canonical markdown also lives in [`docs/`](docs/):
 | **Codex CLI** | ✓ adapter | MCP (TOML `config.toml`), memory, skills, subagents (◐), slash commands (◐, global-only), hooks (◐) + plugin import. No LSP concept. |
 | **Cursor** | ✓ adapter | MCP (`.cursor/mcp.json`), memory (◐, project-scope `AGENTS.md`), skills (`.cursor/skills/`), subagents (◐), slash commands (◐), hooks (◐, `.cursor/hooks.json`). No LSP concept. |
 | **Gemini CLI** | ✓ adapter | MCP + hooks (◐) in `.gemini/settings.json`, memory (`GEMINI.md`), subagents (◐), slash commands (◐, TOML). No skills (uses extensions) or LSP concept. |
+| **Continue** | ✓ adapter | MCP (`.continue/mcpServers/`), memory (`.continue/rules/`), slash commands (◐, `.continue/prompts/`) — projected as Continue blocks. No skills/subagents/hooks/LSP concept. |
 
 Full ✓/◐/✗ breakdown per component: **[capability matrix](docs/capability-matrix.md)**.
 
@@ -139,12 +140,13 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 - **Codex projections are lossy where Codex differs**: subagents project to Codex's TOML agent format (the `tools`/`color` frontmatter has no target and is dropped, reported in the apply report); slash commands map to Codex *custom prompts* which are global-only, so a **project-scope** command is skipped; hooks mirror Claude's declarative hook schema as inline `[hooks.*]` tables in `~/.codex/config.toml` but only for the events Codex recognizes (Claude's `SessionEnd`/`Notification` drop). All of these are surfaced in the translation report — nothing is dropped silently.
 - **Cursor projections are lossy where Cursor differs**: MCP and skills are full-fidelity (`.cursor/mcp.json` shares Claude's `mcpServers` shape; skills share the `SKILL.md` directory). Memory projects to the repo-root `AGENTS.md` at **project scope only** — Cursor keeps user-level rules in app-local storage, so user-scope memory is reported as a skip. Subagents (`.cursor/agents/`) drop Claude's `tools`/`color` (no Cursor field); slash commands (`.cursor/commands/`) are plain markdown so command frontmatter drops; hooks (`.cursor/hooks.json`) remap Claude's events to Cursor's camelCase names (events with no Cursor equivalent drop) and always carry the required top-level `version`. All losses are surfaced in the translation report.
 - **Gemini CLI projections are lossy where Gemini differs**: MCP and memory are full-fidelity (`.gemini/settings.json` `mcpServers` with Gemini's `url`/`httpUrl` transport split; `GEMINI.md`). Subagents (`.gemini/agents/`) drop Claude's `tools` (Gemini's tool vocabulary differs) and `color`; slash commands become TOML (`.gemini/commands/*.toml`, `description` + `prompt`) so `argument-hint`/`allowed-tools` drop and Claude's `$ARGUMENTS` placeholder isn't auto-translated to Gemini's `{{args}}`; hooks live in `settings.json` (same nested shape as Claude) with events remapped (`PreToolUse`→`BeforeTool`, …) and unmapped events dropped. Skills have no Gemini concept (it uses extensions) and are skipped. All losses are surfaced in the translation report.
-- **LSP projection beyond Claude**: OpenCode LSP support is deferred (Codex, Cursor, and Gemini have no LSP concept at all). Claude plugins that include LSP servers install correctly on Claude itself; on other agents you'll see `lsp server X skipped` in the apply translation report.
+- **Continue projections are lossy where Continue differs**: Continue composes "blocks" (one file per item under `.continue/`). MCP is full-fidelity (`.continue/mcpServers/<id>.yaml`, with remote auth headers under `requestOptions.headers`); memory lands as a frontmatter-less always-apply rule (`.continue/rules/agentsync.md`, byte-clean). Slash commands become prompt blocks (`.continue/prompts/*.md`) so `argument-hint`/`allowed-tools` drop. Continue has no Agent Skills, no per-file subagents (its "agents" are top-level assistants), no declarative hooks, and no LSP config, so those are skipped. All losses are surfaced in the translation report.
+- **LSP projection beyond Claude**: OpenCode LSP support is deferred (Codex, Cursor, Gemini, and Continue have no LSP concept at all). Claude plugins that include LSP servers install correctly on Claude itself; on other agents you'll see `lsp server X skipped` in the apply translation report.
 - **TOML / JSONC comment preservation**: comments in `~/.agentsync/mcp/*.toml`, in agent-side `opencode.json`, in Gemini's `.gemini/settings.json`, and in Codex's `~/.codex/config.toml` are NOT preserved across reconcile `[w]`rite-back or import / apply. For TOML, hand-edited comments survive in unrelated sections; for the JSONC files the whole file is re-emitted as plain JSON on the first agentsync write (foreign keys and values are preserved; the original is backed up). Deferred to a later release.
 - **Hand-edits to agentsync-owned keys** in shared agent files (e.g. an MCP server entry in `~/.claude.json` that agentsync owns): the next `apply` overwrites them with NO foreign-collision backup, because agentsync considers them its own. Use `agentsync reconcile` (the drift classifier catches the edit and offers `[w]`rite-back) BEFORE the next apply if you want to keep them.
 - **Plain-http / git:// plugin sources** are rejected by default to prevent MITM swap. Set `AGENTSYNC_ALLOW_INSECURE_URLS=1` for internal mirrors.
 - **Symlinked destinations** (e.g. `~/.claude.json` is a chezmoi symlink into your dotfiles repo) are rejected by default — a rename onto the path would replace the symlink with a regular file and strand your linked source. Set `AGENTSYNC_ALLOW_SYMLINK_DEST=1` to write through the symlink instead (the underlying file is updated in place; the link survives).
-- **Continue, Aider**: planned — not yet implemented.
+- **Aider**: planned — not yet implemented.
 
 ## Environment overrides
 

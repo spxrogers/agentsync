@@ -11,6 +11,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **Continue adapter (`internal/adapter/continuedev`).** A new real adapter for
+  Continue, projecting components as Continue "blocks" (one file per item under
+  `.continue/`, so the adapter owns no shared key-merge file): MCP servers →
+  `.continue/mcpServers/<id>.yaml` (stdio command/args/env; remote
+  `streamable-http`/`sse` + `url` with auth headers under `requestOptions.headers`
+  — full fidelity), memory → `.continue/rules/agentsync.md` (a frontmatter-less
+  always-apply rule; byte-clean round-trip), and slash commands →
+  `.continue/prompts/<name>.md` prompt blocks (`name`/`description`/`invokable`;
+  `argument-hint`/`allowed-tools` dropped). Skills, per-file subagents, hooks, and
+  LSP have no Continue concept and are skipped with a report. `agent add continue`
+  / `import continue:…` work end-to-end. (Package is `continuedev` because
+  `continue` is a Go keyword; the agent name is still `continue`.)
 - **Gemini CLI adapter (`internal/adapter/gemini`).** A new real adapter for
   Google's Gemini CLI: MCP servers and lifecycle hooks both merge into
   `.gemini/settings.json` with a **JSONC-tolerant merge** — Gemini itself reads

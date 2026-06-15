@@ -182,6 +182,23 @@ native plugin enable-state agentsync models).
 - **Files:** `gemini.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
   `paths.go`, `command.go`, `subagent.go`, `hook.go`, `memory.go`.
 
+### `internal/adapter/continuedev`
+The Continue adapter (package `continuedev` — `continue` is a Go keyword; the
+agent name is still `continue`). MCP, memory, and slash commands, projected as
+Continue "blocks" — one file per item, so there is **no key-merge**
+(`KeyMergeStrategy()` returns `""`): MCP → `.continue/mcpServers/<id>.yaml`
+(stdio command/args/env; remote `streamable-http`/`sse` + `url` +
+`requestOptions.headers`); memory → `.continue/rules/agentsync.md` (a
+frontmatter-less always-apply rule); commands → `.continue/prompts/<name>.md`
+prompt blocks. Skills/subagents/hooks/LSP have no faithful Continue target and
+are skipped with a report. Omits `CapSkill`/`CapSubagent`/`CapHook`/`CapLSP`. No
+`PluginIngester`.
+- **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
+- **Depends on:** adapter, adapter/claude (frontmatter/Extra helpers), secrets,
+  source, paths, iox, sigs.k8s.io/yaml.
+- **Files:** `continue.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
+  `paths.go`, `command.go`, `memory.go`.
+
 ### `internal/adapter/noop`
 Placeholder adapter that detects true and renders nothing. Used as a registry
 stand-in in tests; no production agent is registered as a noop today (every valid
