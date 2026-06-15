@@ -11,6 +11,22 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **Gemini CLI adapter (`internal/adapter/gemini`).** A new real adapter for
+  Google's Gemini CLI: MCP servers and lifecycle hooks both merge into
+  `.gemini/settings.json` with a **JSONC-tolerant merge** — Gemini itself reads
+  settings.json as JSONC, so a commented file's foreign keys are preserved
+  rather than clobbered (comments are stripped on the first write, like
+  `opencode.json`) — (MCP under `mcpServers` with Gemini's `url`/`httpUrl`
+  transport split; hooks under `hooks` in the same nested shape as Claude, with
+  events remapped to `BeforeTool`/`AfterTool`/`BeforeAgent`/`AfterAgent`/… and
+  unmapped events dropped with a report; import leaves hook events with
+  unrepresentable fields uncaptured, with a warning), memory → `GEMINI.md`
+  (`~/.gemini/GEMINI.md` user / repo-root `GEMINI.md` project), slash commands →
+  `.gemini/commands/<name>.toml` (`description` + `prompt`; `argument-hint`/
+  `allowed-tools` dropped), and subagents → `.gemini/agents/<name>.md` (Claude's
+  `tools` vocabulary differs from Gemini's, so `tools`/`color` are dropped with a
+  report). Skills (Gemini uses extensions) and LSP have no Gemini concept and are
+  skipped. `agent add gemini` / `import gemini:…` work end-to-end.
 - **Cursor adapter (`internal/adapter/cursor`).** Cursor graduates from a
   registered no-op to a full adapter: MCP servers → `.cursor/mcp.json` (the same
   `mcpServers` shape as Claude, full fidelity), memory → repo-root `AGENTS.md`

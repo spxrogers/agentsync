@@ -63,6 +63,7 @@ func newDoctorCmd() *cobra.Command {
 				{"opencode", "opencode"},
 				{"codex", "codex"},
 				{"cursor", "cursor"},
+				{"gemini", "gemini"},
 			} {
 				path, lookErr := exec.LookPath(agent.bin)
 				if lookErr != nil {
