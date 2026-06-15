@@ -43,9 +43,9 @@ Because the agents genuinely differ. agentsync marks each translation **native (
 it refuses to invent a translation that would mislead you. See the
 [capability matrix](/reference/capability-matrix/) for the full per-agent breakdown.
 
-## Are Codex CLI, Cursor, Gemini CLI, and Continue supported?
+## Are Codex CLI, Cursor, Gemini CLI, Continue, and Windsurf supported?
 
-**All four are supported.** **Codex CLI** — MCP (into the TOML
+**All five are supported.** **Codex CLI** — MCP (into the TOML
 `~/.codex/config.toml`), memory, skills, subagents (◐), slash commands (◐,
 global-only), hooks (◐), and plugin import. **Cursor** — MCP (`.cursor/mcp.json`,
 the same `mcpServers` shape as Claude), skills (`.cursor/skills/`), subagents (◐,
@@ -57,7 +57,11 @@ the same `mcpServers` shape as Claude), skills (`.cursor/skills/`), subagents (�
 uses extensions rather than Agent Skills, so skills are skipped. **Continue** — MCP
 (`.continue/mcpServers/`), memory (`.continue/rules/`), and slash commands (◐,
 `.continue/prompts/`), projected as Continue blocks; skills/subagents/hooks have
-no Continue concept. No LSP concept on any of them.
+no Continue concept. **Windsurf** — MCP (`~/.codeium/windsurf/mcp_config.json`) at
+user scope only; memory (`.windsurf/rules/` with `trigger: always_on`, global
+`memories/global_rules.md`) and slash commands (`.windsurf/workflows/`, global
+`global_workflows/`) at both scopes. No LSP concept on any of
+them.
 
 ## What about Aider?
 

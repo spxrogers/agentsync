@@ -199,6 +199,22 @@ are skipped with a report. Omits `CapSkill`/`CapSubagent`/`CapHook`/`CapLSP`. No
 - **Files:** `continue.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
   `paths.go`, `command.go`, `memory.go`.
 
+### `internal/adapter/windsurf`
+The Windsurf (Cascade) adapter — MCP, memory, and slash commands, **scope-
+asymmetric** to match Windsurf's layout: MCP renders at user scope only
+(`~/.codeium/windsurf/mcp_config.json`, JSON `mcpServers` via `merge-json-keys`;
+remote uses `serverUrl`), while memory (`.windsurf/rules/agentsync.md`, plain
+markdown) and commands (`.windsurf/workflows/<name>.md`, plain markdown workflows)
+render at project scope only; the non-applicable scope reports a skip. Skills/
+subagents/hooks/LSP have no Windsurf concept and are skipped. Emits no Ingest
+warnings (rules/workflows are plain markdown), so it does not implement
+`WarnEmitter`. No `PluginIngester`.
+- **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
+- **Depends on:** adapter, adapter/claude (Extra helpers), secrets, source,
+  paths, iox, jsonkeys.
+- **Files:** `windsurf.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
+  `paths.go`, `command.go`, `memory.go`.
+
 ### `internal/adapter/noop`
 Placeholder adapter that detects true and renders nothing. Used as a registry
 stand-in in tests; no production agent is registered as a noop today (every valid
