@@ -11,6 +11,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **Cline adapter (`internal/adapter/cline`).** A new real adapter for Cline,
+  scope-asymmetric (informed by competitor prior art — no config-sync tool writes
+  the VS Code globalStorage MCP path): MCP renders at **user scope** into the Cline
+  CLI's clean `~/.cline/mcp.json` (`mcpServers`, transport inferred — stdio
+  command/args/env, remote `url` + `headers`; merge-by-server-name preserves
+  foreign servers), while memory → `.clinerules/agentsync.md` (plain markdown rule)
+  and slash commands → `.clinerules/workflows/<name>.md` (plain markdown workflows)
+  render at **project scope**. The non-applicable scope reports a skip. Skills,
+  subagents, hooks, and LSP have no Cline concept and are skipped. `agent add
+  cline` / `import cline:…` work end-to-end.
 - **Roo Code adapter (`internal/adapter/roo`).** A new real adapter for Roo Code,
   built on the clean filesystem `.roo/` paths two other config-sync tools
   (rulesync, ruler) independently converged on: MCP → project `.roo/mcp.json`

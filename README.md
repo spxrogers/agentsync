@@ -6,13 +6,13 @@
 
 Define your MCP servers, memory, skills, and marketplace plugins once in
 `~/.agentsync/`. Run `agentsync apply`. They land — correctly translated — in
-Claude Code, OpenCode, Codex CLI, Cursor, Gemini CLI, Continue, Windsurf, and Roo Code.
+Claude Code, OpenCode, Codex CLI, Cursor, Gemini CLI, Continue, Windsurf, Roo Code, and Cline.
 
 [Quickstart](#quickstart) · [Install](#install) · **[Docs site → agentsync.cc](https://agentsync.cc)** · [User guide](docs/user-guide.md) · [Known limits](#known-limits)
 
 </div>
 
-> **Status: beta (v0.1.0).** Ships Claude Code, OpenCode, Codex, Cursor, Gemini CLI, Continue, Windsurf, and Roo Code end-to-end.
+> **Status: beta (v0.1.0).** Ships Claude Code, OpenCode, Codex, Cursor, Gemini CLI, Continue, Windsurf, Roo Code, and Cline end-to-end.
 > The tool is functional and tested under `just test-release`; the canonical
 > layout, CLI surface, and state schema are stabilizing toward `1.0.0` and may
 > still change. A few documented trade-offs remain (see [Known limits](#known-limits)).
@@ -74,6 +74,7 @@ canonical markdown also lives in [`docs/`](docs/):
 | **Continue** | ✓ adapter | MCP (`.continue/mcpServers/`), memory (`.continue/rules/`), slash commands (◐, `.continue/prompts/`) — projected as Continue blocks. No skills/subagents/hooks/LSP concept. |
 | **Windsurf** | ✓ adapter | MCP (`~/.codeium/windsurf/mcp_config.json`, user scope), memory (◐, `.windsurf/rules/`, project scope), slash commands (◐, `.windsurf/workflows/`, project scope). No skills/subagents/hooks/LSP concept. |
 | **Roo Code** | ✓ adapter | MCP (`.roo/mcp.json`, project scope), memory (`.roo/rules/`) + slash commands (◐, `.roo/commands/`) at both scopes. No skills/subagents/hooks/LSP concept. |
+| **Cline** | ✓ adapter | MCP (`~/.cline/mcp.json` CLI, user scope), memory (◐, `.clinerules/`) + slash commands (◐, `.clinerules/workflows/`) at project scope. No skills/subagents/hooks/LSP concept. |
 
 Full ✓/◐/✗ breakdown per component: **[capability matrix](docs/capability-matrix.md)**.
 
@@ -146,7 +147,9 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 - **Windsurf MCP is scope-asymmetric**: Windsurf's MCP config is global-only (`~/.codeium/windsurf/mcp_config.json`), so MCP renders at **user scope** (skipped + reported at project scope). Memory and slash commands render at **both** scopes: project memory → `.windsurf/rules/agentsync.md` (with the documented `trigger: always_on` activation frontmatter; stripped on import), user memory → the global `~/.codeium/windsurf/memories/global_rules.md` (always-on, 6k-char limit enforced by Windsurf); commands → `.windsurf/workflows/` (project) / `~/.codeium/windsurf/global_workflows/` (user), plain markdown so command frontmatter drops. All losses are surfaced in the translation report.
 - **TOML / JSONC comment preservation**: comments in `~/.agentsync/mcp/*.toml`, in agent-side `opencode.json`, in Gemini's `.gemini/settings.json`, and in Codex's `~/.codex/config.toml` are NOT preserved across reconcile `[w]`rite-back or import / apply. For TOML, hand-edited comments survive in unrelated sections; for the JSONC files the whole file is re-emitted as plain JSON on the first agentsync write (foreign keys and values are preserved; the original is backed up). Deferred to a later release.
 - **Roo Code is project-MCP-only**: Roo's clean MCP file is project-level (`.roo/mcp.json`); its *global* MCP lives in VS Code globalStorage (OS/editor-specific), which agentsync does not write (matching every other config-sync tool) — so user-scope Roo MCP is reported as a skip. Memory (`.roo/rules/`) and commands (`.roo/commands/`, which keep `description` + `argument-hint`) work at both scopes.
-- **LSP projection beyond Claude**: OpenCode LSP support is deferred (Codex, Cursor, Gemini, Continue, Windsurf, and Roo have no LSP concept at all). Claude plugins that include LSP servers install correctly on Claude itself; on other agents you'll see `lsp server X skipped` in the apply translation report.
+- **Cline targets the CLI's MCP file**: Cline has no project MCP file and its VS Code-extension MCP lives in OS/editor-specific globalStorage (which no config-sync tool writes), so agentsync targets the Cline CLI's clean `~/.cline/mcp.json` at user scope (project-scope MCP reported as a skip). Memory (`.clinerules/`) + workflows (`.clinerules/workflows/`) render at project scope (Cline's global rules are a non-XDG `~/Documents/Cline/` path agentsync does not target).
+- **LSP projection beyond Claude**: OpenCode LSP support is deferred (Codex, Cursor, Gemini, Continue, Windsurf, Roo, and Cline have no LSP concept at all). Claude plugins that include LSP servers install correctly on Claude itself; on other agents you'll see `lsp server X skipped` in the apply translation report.
+- **TOML / JSONC comment preservation**: comments in `~/.agentsync/mcp/*.toml`, in agent-side `opencode.json`, in Gemini's `.gemini/settings.json`, and in Codex's `~/.codex/config.toml` are NOT preserved across reconcile `[w]`rite-back or import / apply. For TOML, hand-edited comments survive in unrelated sections; for the JSONC files the whole file is re-emitted as plain JSON on the first agentsync write (foreign keys and values are preserved; the original is backed up). Deferred to a later release.
 - **Hand-edits to agentsync-owned keys** in shared agent files (e.g. an MCP server entry in `~/.claude.json` that agentsync owns): the next `apply` overwrites them with NO foreign-collision backup, because agentsync considers them its own. Use `agentsync reconcile` (the drift classifier catches the edit and offers `[w]`rite-back) BEFORE the next apply if you want to keep them.
 - **Plain-http / git:// plugin sources** are rejected by default to prevent MITM swap. Set `AGENTSYNC_ALLOW_INSECURE_URLS=1` for internal mirrors.
 - **Symlinked destinations** (e.g. `~/.claude.json` is a chezmoi symlink into your dotfiles repo) are rejected by default — a rename onto the path would replace the symlink with a regular file and strand your linked source. Set `AGENTSYNC_ALLOW_SYMLINK_DEST=1` to write through the symlink instead (the underlying file is updated in place; the link survives).

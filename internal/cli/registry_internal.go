@@ -3,6 +3,7 @@ package cli
 import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
+	"github.com/spxrogers/agentsync/internal/adapter/cline"
 	"github.com/spxrogers/agentsync/internal/adapter/codex"
 	"github.com/spxrogers/agentsync/internal/adapter/continuedev"
 	"github.com/spxrogers/agentsync/internal/adapter/cursor"
@@ -27,5 +28,6 @@ var registryFactory = func() *adapter.Registry {
 	_ = r.Register(continuedev.New(continuedev.Options{TargetRoot: home}))
 	_ = r.Register(windsurf.New(windsurf.Options{TargetRoot: home}))
 	_ = r.Register(roo.New(roo.Options{TargetRoot: home}))
+	_ = r.Register(cline.New(cline.Options{TargetRoot: home}))
 	return r
 }

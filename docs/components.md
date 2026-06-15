@@ -230,6 +230,24 @@ globalStorage (not targeted — user-scope MCP is reported as a skip). Omits
 - **Files:** `roo.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`, `paths.go`,
   `command.go`, `memory.go`.
 
+### `internal/adapter/cline`
+The Cline adapter — MCP, memory, and slash commands, **scope-asymmetric**: MCP
+renders at user scope into the Cline CLI's clean `~/.cline/mcp.json`
+(`merge-json-keys`; transport inferred, no `type` — remote uses `url`+`headers`),
+while memory (`.clinerules/agentsync.md`, plain markdown) and commands
+(`.clinerules/workflows/<name>.md`, plain markdown) render at project scope; the
+non-applicable scope reports a skip. Cline has no project MCP file (its VS Code
+extension uses OS/editor-specific globalStorage agentsync does not write) and its
+global rules live in `~/Documents/Cline/` (also not targeted). Skills/subagents/
+hooks/LSP have no Cline concept and are skipped. Emits no Ingest warnings
+(rules/workflows are plain markdown), so it does not implement `WarnEmitter`. No
+`PluginIngester`.
+- **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
+- **Depends on:** adapter, adapter/claude (Extra helpers), secrets, source,
+  paths, iox, jsonkeys.
+- **Files:** `cline.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
+  `paths.go`, `command.go`, `memory.go`.
+
 ### `internal/adapter/noop`
 Placeholder adapter that detects true and renders nothing. Used as a registry
 stand-in in tests; no production agent is registered as a noop today (every valid

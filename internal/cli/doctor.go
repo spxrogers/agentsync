@@ -67,6 +67,7 @@ func newDoctorCmd() *cobra.Command {
 				{"continue", "cn"},
 				{"windsurf", "windsurf"},
 				{"roo", "roo"},
+				{"cline", "cline"},
 			} {
 				path, lookErr := exec.LookPath(agent.bin)
 				if lookErr != nil {
