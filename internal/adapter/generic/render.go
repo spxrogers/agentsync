@@ -99,7 +99,7 @@ func (a *Adapter) renderMCP(c source.Canonical, scope adapter.Scope, project str
 		Content:       append(body, '\n'),
 		Mode:          0o644,
 		SourceID:      "mcp/* (multiple)",
-		MergeStrategy: "merge-json-keys",
+		MergeStrategy: "merge-jsonc-keys",
 	}}, skips, nil
 }
 

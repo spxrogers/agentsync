@@ -1,12 +1,12 @@
 package generic
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -21,8 +21,11 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 
 	if mcpPath := a.mcpPath(scope, project); mcpPath != "" {
 		if data, err := os.ReadFile(mcpPath); err == nil {
-			var top map[string]any
-			if err := json.Unmarshal(data, &top); err != nil {
+			// JSONC-tolerant (shared jsonkeys.DecodeJSONC): comments/trailing
+			// commas in a hand-edited settings file (Zed, Copilot, Amp) ingest
+			// cleanly, and json.Number survives for large foreign integers.
+			top, err := jsonkeys.DecodeJSONC(data)
+			if err != nil {
 				return c, fmt.Errorf("parse %s: %w", mcpPath, err)
 			}
 			if servers, ok := top[a.spec.MCP.rootKey()].(map[string]any); ok {

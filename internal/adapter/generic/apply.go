@@ -1,8 +1,9 @@
 package generic
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -30,33 +31,29 @@ func (a *Adapter) Apply(ops []adapter.FileOp, w adapter.DestWriter) error {
 	return nil
 }
 
-// applyWrite merges merge-json-keys ops (the mcpServers file, preserving foreign
-// servers) and writes everything else (the memory file) whole.
+// applyWrite merges the mcpServers file (merge-jsonc-keys) and writes everything
+// else (the memory file) whole. The merge is JSONC-tolerant via the shared
+// jsonkeys.MergeJSONC engine (also behind OpenCode's opencode.json and Gemini's
+// settings.json): a hand-edited settings file with comments/trailing commas
+// (Zed, Copilot, Amp) is parsed and its foreign keys preserved rather than
+// clobbered; the rewritten file is re-emitted as plain JSON — comments are
+// stripped, a documented Known limit. Genuinely unparseable content refuses the
+// merge instead of being treated as empty.
 func (a *Adapter) applyWrite(op adapter.FileOp, w adapter.DestWriter) error {
-	if op.MergeStrategy != "merge-json-keys" {
+	if op.MergeStrategy != "merge-jsonc-keys" {
 		return w.Write(op, op.Content)
 	}
-	existing := readJSONFile(op.Path)
+	existing, err := os.ReadFile(op.Path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", op.Path, err)
+	}
 	ours, err := jsonkeys.DecodeObject(op.Content)
 	if err != nil {
 		return fmt.Errorf("parse our payload for %s: %w", op.Path, err)
 	}
-	merged, _, _ := jsonkeys.MergeKeys(existing, ours, op.OwnedKeys)
-	body, err := json.MarshalIndent(merged, "", "  ")
+	merged, err := jsonkeys.MergeJSONC(existing, ours, op.OwnedKeys)
 	if err != nil {
-		return fmt.Errorf("marshal merged for %s: %w", op.Path, err)
+		return fmt.Errorf("merge %s: %w", op.Path, err)
 	}
-	return w.Write(op, append(body, '\n'))
-}
-
-func readJSONFile(path string) map[string]any {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return map[string]any{}
-	}
-	m, err := jsonkeys.DecodeObject(data)
-	if err != nil {
-		return map[string]any{}
-	}
-	return m
+	return w.Write(op, merged)
 }

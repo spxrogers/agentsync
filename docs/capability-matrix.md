@@ -98,6 +98,21 @@ reported as a skip. Breadth agents run through the same apply/import pipeline as
 the deep ones, so they get drift detection, secret resolution, and capture — not a
 one-way rules dump.
 
+**MCP coverage (15 of 22).** The MCP merge is **JSONC-tolerant** (hujson), so a
+commented settings file (Zed, Copilot's `.vscode/mcp.json`, Amp) is parsed and its
+foreign keys and values preserved rather than clobbered. The comments themselves
+are NOT preserved: the file is re-emitted as plain JSON on the first agentsync
+write, with keys re-sorted (the original is backed up) — for **Zed** that file is
+the user's whole editor `settings.json`, so expect the reformat (see Known
+limits). Per-agent dialect knobs cover
+the variance: top-level key (`mcpServers` / `servers` / `mcp` / `context_servers` /
+the flat namespaced `amp.mcpServers`), transport field (`type` / `transport` /
+inferred), stdio value (`stdio` / `local`), and remote URL key (`url` / `httpUrl` /
+`serverUrl`). The seven memory-only agents are the ones whose MCP is genuinely
+**not** a JSON server-map — array (Trae), YAML (Goose), TOML (OpenHands, Mistral),
+IDE app-storage (JetBrains, AugmentCode), or cloud-dashboard (Jules) — where the
+generic engine refuses to invent a shape and reports a skip.
+
 Every path below was cross-referenced against the agent's upstream docs **and**
 prior-art config-sync tools (ruler, rulesync) before inclusion. A scope or
 component with no verified target is left out (and reported as a skip), never
@@ -105,7 +120,7 @@ guessed.
 
 | Agent | Memory (rules) | MCP |
 |---|---|---|
-| **amp** | `AGENTS.md` · `~/.config/amp/AGENTS.md` | ✗ namespaced `amp.mcpServers` (not a top-level map) |
+| **amp** | `AGENTS.md` · `~/.config/amp/AGENTS.md` | ✓ `~/.config/amp/settings.json` (namespaced `amp.mcpServers` key) |
 | **goose** | `.goosehints` | ✗ YAML `~/.config/goose/config.yaml` |
 | **qwen** | `QWEN.md` · `~/.qwen/QWEN.md` | ✓ `.qwen/settings.json` (dual-URL split: `httpUrl` = streamable HTTP, `url` = SSE) |
 | **warp** | `WARP.md` | ✓ `.warp/.mcp.json` · `~/.warp/.mcp.json` |
@@ -119,7 +134,7 @@ guessed.
 | **trae** | `.trae/rules/project_rules.md` | ✗ non-standard array shape |
 | **jetbrains** | `.aiassistant/rules/` | ✗ IDE app-storage |
 | **firebase** | `.idx/airules.md` | ✓ `.idx/mcp.json` (project) |
-| **antigravity** | `AGENTS.md` | ✗ `serverUrl`, global path single-sourced |
+| **antigravity** | `AGENTS.md` | ✓ `~/.gemini/config/mcp_config.json` (remote key `serverUrl`; the shared IDE+CLI path is codelab-sourced — older installs read `~/.gemini/antigravity-cli/mcp_config.json`, where this write is a no-op; re-verify when Antigravity's docs firm up. Lives inside `~/.gemini/`, the deep Gemini adapter's directory, but a different file — no collision) |
 | **augmentcode** | `.augment/rules/` (+ user) | ✗ IDE app-storage |
 | **copilot** | `.github/copilot-instructions.md` | ✓ `.vscode/mcp.json` (`servers` key, `type`) |
 | **copilot-cli** | `AGENTS.md` | ✓ `~/.copilot/mcp-config.json` (`type`, stdio="local") |
@@ -373,9 +388,11 @@ These are documented trade-offs, not regressions. The authoritative list lives
 in the [README](../README.md#known-limits); the highlights:
 
 - **Comment preservation** — comments in `mcp/*.toml`, in `opencode.json`, in
-  Gemini's `.gemini/settings.json`, and in Codex's `~/.codex/config.toml` are not
-  preserved across a write-back/import round-trip; the JSONC files are re-emitted
-  as plain JSON (foreign keys preserved, comments stripped, original backed up).
+  Gemini's `.gemini/settings.json`, in the breadth tier's JSONC settings files
+  (Zed/Amp `settings.json`, Copilot `.vscode/mcp.json`), and in Codex's
+  `~/.codex/config.toml` are not preserved across a write-back/import round-trip;
+  the JSONC files are re-emitted as plain JSON (foreign keys preserved, comments
+  stripped, original backed up).
 - **Owned-key hand-edits** — if you hand-edit an agentsync-owned key in a shared
   file, the next `apply` overwrites it with no backup (agentsync considers it its
   own). Run `agentsync reconcile` first to capture the edit.

@@ -255,10 +255,13 @@ each. Covers **memory** (a rules/instructions file, plain markdown) and, where t
 agent reads a JSON server-map agentsync can express, **MCP** — every other
 component is reported as a skip. A `Spec` declares per-scope memory/MCP paths plus
 MCP "dialect" knobs that capture the tail's variance (top-level key
-`mcpServers`/`servers`/`mcp`/`context_servers`; transport field `type`/`transport`/
-inferred; stdio value `stdio`/`local`; remote URL key `url`/`httpUrl`/`serverUrl`).
-Breadth agents register through the normal registry and flow through apply/import
-(drift, secrets, capture). Adding an agent is a verified table row, not a package.
+`mcpServers`/`servers`/`mcp`/`context_servers`/the flat namespaced `amp.mcpServers`;
+transport field `type`/`transport`/inferred; stdio value `stdio`/`local`; remote
+URL key `url`/`httpUrl`/`serverUrl`). The MCP merge is JSONC-tolerant (hujson), so a
+commented settings file (Zed/Copilot/Amp) is preserved, not clobbered (re-emitted
+as plain JSON, like OpenCode). Breadth agents register through the normal registry
+and flow through apply/import (drift, secrets, capture). Adding an agent is a
+verified table row, not a package.
 - **Key:** `Spec`, `New(Spec, Options) *Adapter`; the `Adapter` methods; `Specs()`.
 - **Depends on:** adapter, adapter/claude (Extra helper), secrets, source, paths,
   iox, jsonkeys.
