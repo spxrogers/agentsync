@@ -161,7 +161,7 @@ Primary sources (repos / project sites), verified mid-2026:
     agent that reads a config file. Of agentsync's, **9 are deep adapters**
     (multi-component, bidirectional projection — Claude Code, OpenCode, Codex,
     Cursor, Gemini CLI, Continue, Windsurf, Roo Code, Cline) and the rest a
-    data-driven **breadth tier** (memory + same-shape MCP). This breadth/depth
+    data-driven **breadth tier** (memory + same-shape MCP + Agent Skills). This breadth/depth
     split is common in the field: agentsmesh, for one, reaches almost all of its
     ~30 agents with memory + skills but the full multi-component surface
     (subagents, commands, hooks) for only ~9. It is not universal, though —
