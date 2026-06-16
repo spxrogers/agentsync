@@ -7,7 +7,7 @@ Project memory for Claude Code / agent sessions working on agentsync.
 agentsync is a single-machine Go CLI that centrally manages AI coding-agent
 configurations (31 agents: nine deep adapters — Claude Code, OpenCode, Codex,
 Cursor, Gemini CLI, Continue, Windsurf, Roo Code, Cline — plus a 22-agent generic
-"breadth tier" for memory + MCP). The
+"breadth tier" for memory + MCP + skills). The
 user keeps a canonical config in `~/.agentsync/` (small TOML + markdown,
 committable to a dotfiles repo); `agentsync apply` renders it into each agent's
 native config. It's bidirectional: native edits are detected as drift and merged
@@ -316,8 +316,8 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
 - **New agent** → two options. For a rich, agent-specific agent, add a *deep*
   package `internal/adapter/<name>/` implementing the `Adapter` interface and
   register it (`Render` must take `secrets.Resolved`; all writes go through
-  `DestWriter`). For a long-tail agent that only needs memory + (same-shape) MCP,
-  add a *verified* `generic.Spec` row to `internal/adapter/generic/specs.go` — no
+  `DestWriter`). For a long-tail agent that only needs memory + (same-shape) MCP
+  + skills, add a *verified* `generic.Spec` row to `internal/adapter/generic/specs.go` — no
   new package; agent-name validation/`doctor`/`init` derive from the deep list +
   `generic.Specs()`. The canonical schema does not change. Either way, verify the
   agent's config paths against its upstream docs before asserting them.
