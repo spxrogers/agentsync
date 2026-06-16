@@ -41,7 +41,7 @@ fidelity claim.
 
 | Tool | Lang | Agents | Mem | Sk | MCP | Sub | Cmd | Hooks | Bidirectional / drift | Secrets |
 |---|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|---|---|
-| ⭐️ **agentsync** ⭐️ *(this tool)* | **Go** | **31** (9 deep adapters + 22 breadth-tier) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ **3-state classifier + `reconcile`/`import` capture** | ✅ **age vault, `${secret:}`/`${env:}`, re-ref + leak backstop** |
+| ⭐️ **agentsync** ⭐️ *(this tool)* | **Go** | **30+**[^breadth] | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ **3-state classifier + `reconcile`/`import` capture** | ✅ **age vault, `${secret:}`/`${env:}`, re-ref + leak backstop** |
 | [agentsmesh](https://github.com/sampleXbro/agentsmesh) | TS/Py | 30+ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `generate`/`import`/`check` (lock-file drift in CI) | ❌ (defers to your store) |
 | [rulesync](https://github.com/dyoshikawa/rulesync) | TS | 25+ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ `generate` + `import` (one-shot ingest, no state model) | ❌ |
 | [gaal](https://github.com/getgaal/gaal) | **Go** | 17–20 | ◐ files | ✅ | ✅ | ❌ | ◐ files | ✅ | ❌ one-way (`--prune`, `init --import-all` bootstrap) | ❌ |
@@ -84,14 +84,20 @@ same bytes everywhere, no translation or secrets).
 - **Go + safety invariants.** `gaal`, `ai-rulez`, and `mcpup` are also Go, but
   none pairs the single-binary distribution with agentsync's secret/leak-guard
   architecture.
-- **Breadth *and* depth.** The competitors' big agent counts ("30+", "25+") are
-  almost entirely **rules-file fan-out** — every tool that reads an instructions
-  file counts as an "agent." agentsync now matches that breadth (**31**: a 22-agent
-  data-driven generic tier for memory + same-shape MCP) *while also* keeping nine
-  **deep** adapters that do multi-component, bidirectional projection — and even
-  the breadth tier runs through the drift/secrets/capture pipeline, not a one-way
-  dump. Each breadth entry's paths are verified against upstream docs, so the count
-  is honest rather than a long list of unmaintained stubs.
+- **Breadth *and* depth.** A big agent count is usually anchored by a
+  near-universal **memory/rules floor** — every tool that reads an instructions
+  file counts as an "agent" — but depth past that floor varies sharply, and a
+  headline number alone doesn't reveal it. agentsmesh, for instance, reaches
+  almost all ~30 of its agents with memory + skills yet delivers the full
+  multi-component surface (subagents, commands, hooks) to only ~9; rulesync, by
+  contrast, builds genuine per-tool adapters across a wide set, with coverage
+  that thins along its long tail. agentsync makes the same split explicit
+  (**31**: a 22-agent data-driven generic tier for memory + same-shape MCP)
+  *while also* keeping nine **deep** adapters that do multi-component,
+  bidirectional projection — and even the breadth tier runs through the
+  drift/secrets/capture pipeline, not a one-way dump. Each breadth entry's paths
+  are verified against upstream docs, so the count is honest rather than a long
+  list of unmaintained stubs.
 
 ## The category map
 
@@ -150,3 +156,15 @@ Primary sources (repos / project sites), verified mid-2026:
 [vercel-labs/skills](https://github.com/vercel-labs/skills),
 [skillshare](https://github.com/runkids/skillshare),
 [AGENTS.md](https://agents.md/).
+
+[^breadth]: Counted the same way the field's other large numbers are — every
+    agent that reads a config file. Of agentsync's, **9 are deep adapters**
+    (multi-component, bidirectional projection — Claude Code, OpenCode, Codex,
+    Cursor, Gemini CLI, Continue, Windsurf, Roo Code, Cline) and the rest a
+    data-driven **breadth tier** (memory + same-shape MCP). This breadth/depth
+    split is common in the field: agentsmesh, for one, reaches almost all of its
+    ~30 agents with memory + skills but the full multi-component surface
+    (subagents, commands, hooks) for only ~9. It is not universal, though —
+    rulesync builds genuine per-tool adapters across a wide set (with coverage
+    thinning along the long tail), so a big count doesn't *by itself* tell you
+    breadth-vs-depth.
