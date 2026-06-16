@@ -124,8 +124,9 @@ file (it projects one block file per item), so it has no key-merge strategy.
 **Deep vs breadth-tier adapters.** The nine hand-written packages above are
 *deep* adapters — agent-specific, multi-component, often bidirectional. Beyond
 them, a single data-driven *generic* adapter (`internal/adapter/generic`) serves a
-long tail of agents from a verified `Spec` table — memory + (where expressible)
-MCP only, every other component reported as a skip. Both kinds implement the same
+long tail of agents from a verified `Spec` table — memory, (where expressible)
+MCP, and (where the agent scans a `SKILL.md` directory) Agent Skills, every other
+component reported as a skip. Both kinds implement the same
 `Adapter` interface and register identically, so the rest of the pipeline (plan,
 classify, write, capture, state) treats them uniformly. The set of valid agent
 names is derived from the deep package list **plus** `generic.Specs()` (see
