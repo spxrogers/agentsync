@@ -41,7 +41,7 @@ fidelity claim.
 
 | Tool | Lang | Agents | Mem | Sk | MCP | Sub | Cmd | Hooks | Bidirectional / drift | Secrets |
 |---|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|---|---|
-| ⭐️ **agentsync** ⭐️ *(this tool)* | **Go** | **31** (9 deep adapters + 22 breadth-tier) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ **3-state classifier + `reconcile`/`import` capture** | ✅ **age vault, `${secret:}`/`${env:}`, re-ref + leak backstop** |
+| ⭐️ **agentsync** ⭐️ *(this tool)* | **Go** | **30+**[^breadth] | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ **3-state classifier + `reconcile`/`import` capture** | ✅ **age vault, `${secret:}`/`${env:}`, re-ref + leak backstop** |
 | [agentsmesh](https://github.com/sampleXbro/agentsmesh) | TS/Py | 30+ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `generate`/`import`/`check` (lock-file drift in CI) | ❌ (defers to your store) |
 | [rulesync](https://github.com/dyoshikawa/rulesync) | TS | 25+ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ `generate` + `import` (one-shot ingest, no state model) | ❌ |
 | [gaal](https://github.com/getgaal/gaal) | **Go** | 17–20 | ◐ files | ✅ | ✅ | ❌ | ◐ files | ✅ | ❌ one-way (`--prune`, `init --import-all` bootstrap) | ❌ |
@@ -150,3 +150,11 @@ Primary sources (repos / project sites), verified mid-2026:
 [vercel-labs/skills](https://github.com/vercel-labs/skills),
 [skillshare](https://github.com/runkids/skillshare),
 [AGENTS.md](https://agents.md/).
+
+[^breadth]: Counted the same way the field's other large numbers are — every
+    agent that reads a config file. Of agentsync's, **9 are deep adapters**
+    (multi-component, bidirectional projection — Claude Code, OpenCode, Codex,
+    Cursor, Gemini CLI, Continue, Windsurf, Roo Code, Cline) and the rest a
+    data-driven **breadth tier** (memory + same-shape MCP). The other large
+    counts here — agentsmesh, rulesync, ruler, skillshare — are likewise mostly
+    breadth (rules- or skills-file fan-out), not deep per-agent adapters.
