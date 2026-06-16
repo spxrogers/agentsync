@@ -3,6 +3,9 @@ package generic
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+
+	"github.com/spf13/afero"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
@@ -10,9 +13,9 @@ import (
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
-// Ingest reads this breadth-tier agent's memory + MCP back into a partial
-// canonical. Inverse of Render (memory + MCP only; the components the tier never
-// projects are simply not read).
+// Ingest reads this breadth-tier agent's memory, MCP, and skills back into a
+// partial canonical. Inverse of Render (memory + MCP + skills; the components the
+// tier never projects are simply not read).
 func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical, error) {
 	if err := adapter.RequireProjectRoot(scope, project); err != nil {
 		return source.Canonical{}, err
@@ -46,7 +49,45 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		}
 	}
 
+	if skillsDir := a.skillsPath(scope, project); skillsDir != "" {
+		c.Skills = append(c.Skills, a.ingestSkills(skillsDir)...)
+	}
+
 	return c, nil
+}
+
+// ingestSkills reads each <name>/SKILL.md subtree under the spec's Agent-Skills
+// root back into canonical skills (SKILL.md frontmatter + body + bundled files),
+// the inverse of renderSkills. Mirrors the deep adapters' skill ingest so a
+// breadth-tier round-trip is not lossy for bundled scripts/references/assets. A
+// skill whose SKILL.md is missing or unparseable is skipped (not fatal): a stray
+// directory in a shared skills root must not break import of the rest.
+func (a *Adapter) ingestSkills(skillsDir string) []source.Skill {
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		return nil
+	}
+	var skills []source.Skill
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		skillDir := filepath.Join(skillsDir, e.Name())
+		data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
+		if err != nil {
+			continue
+		}
+		fm, body, _, err := claude.ParseFrontmatterWithReport(data)
+		if err != nil {
+			continue
+		}
+		files, err := source.ReadSkillFiles(afero.NewOsFs(), skillDir)
+		if err != nil {
+			continue
+		}
+		skills = append(skills, source.Skill{Name: e.Name(), Frontmatter: fm, Body: body, Files: files})
+	}
+	return skills
 }
 
 // ingestMCPSpec is the inverse of mcpServerMap for the spec's dialect. When the

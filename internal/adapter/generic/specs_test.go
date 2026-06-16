@@ -40,7 +40,7 @@ func TestSpecsTable(t *testing.T) {
 		}
 
 		// Paths must be relative (joined under a scope root) and not escape it.
-		for _, p := range []string{s.Memory.User, s.Memory.Project, s.MCP.User, s.MCP.Project, s.DetectDir} {
+		for _, p := range []string{s.Memory.User, s.Memory.Project, s.MCP.User, s.MCP.Project, s.Skills.User, s.Skills.Project, s.DetectDir} {
 			if p == "" {
 				continue
 			}
@@ -82,5 +82,17 @@ func TestSpecsTable(t *testing.T) {
 	// must update those in the same commit (this failure is the reminder).
 	if got := len(generic.Specs()); got != 22 {
 		t.Fatalf("breadth tier has %d specs, docs say 22 — update the docs and this pin together", got)
+	}
+	// Skills coverage is also documented (capability matrix, README, user-guide):
+	// 18 of the 22 verified to natively scan an Agent-Skills directory. The other
+	// four (jules/openhands/amazonq/firebase) deliberately have no Skills target.
+	skillsCount := 0
+	for _, s := range generic.Specs() {
+		if s.Skills.User != "" || s.Skills.Project != "" {
+			skillsCount++
+		}
+	}
+	if skillsCount != 18 {
+		t.Fatalf("breadth tier has %d skills-capable specs, docs say 18 — update the docs and this pin together", skillsCount)
 	}
 }

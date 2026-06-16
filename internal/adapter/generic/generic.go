@@ -1,17 +1,21 @@
 // Package generic implements a data-driven "breadth-tier" adapter: one Go
 // implementation that supports many agents from a table of Specs, rather than a
 // hand-written package per agent. It is for the long tail of agents whose
-// agentsync surface is just a rules/memory file plus (optionally) an `mcpServers`
-// JSON — the same shape the deep adapters (Windsurf/Cline/Continue) already take.
+// agentsync surface is a rules/memory file plus (optionally) an `mcpServers`
+// JSON and/or an Agent-Skills (SKILL.md) directory — the same shapes the deep
+// adapters (Windsurf/Cline/Continue/Codex) already take.
 //
 // The DEEP adapters (claude, codex, cursor, gemini, opencode, continuedev,
 // windsurf, roo, cline) are NOT generic — they have richer, agent-specific
-// component support (skills, subagents, commands, hooks, …) and bidirectional
-// nuances that don't fit a table. The generic tier deliberately covers ONLY
-// memory + MCP, and reports every other component as a skip, so its coverage is
-// never overstated. Breadth-tier agents still flow through agentsync's normal
-// apply/import pipeline, so they inherit drift detection, secret resolution, and
-// capture — which a one-way "rules dump" (ruler/rulesync) does not provide.
+// component support (subagents, commands, hooks, …) and bidirectional nuances
+// that don't fit a table. The generic tier deliberately covers memory, MCP, and
+// Agent Skills (the open SKILL.md spec, where the agent natively scans a skills
+// directory), and reports every other component as a skip, so its coverage is
+// never overstated. Skills fit the table because their on-disk format is uniform
+// across agents — only the scanned directory varies, with no dialect to model.
+// Breadth-tier agents still flow through agentsync's normal apply/import
+// pipeline, so they inherit drift detection, secret resolution, and capture —
+// which a one-way "rules dump" (ruler/rulesync) does not provide.
 //
 // Each agent is one verified Spec (see specs.go); adding an agent is a data entry,
 // not a package. Every path in a Spec MUST be verified against the agent's
@@ -27,8 +31,10 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 )
 
-// FileTarget is a per-scope path for a single file component (relative to the
-// scope root). An empty path means the component is unsupported at that scope.
+// FileTarget is a per-scope path (relative to the scope root) for a file
+// component (Memory: a single markdown file) or a directory component (Skills:
+// the Agent-Skills root directory under which each skill is a <name>/SKILL.md
+// subtree). An empty path means the component is unsupported at that scope.
 type FileTarget struct {
 	User    string // path under the user home (targetRoot)
 	Project string // path under the project root
@@ -108,6 +114,7 @@ type Spec struct {
 	DetectDir string     // dir under targetRoot whose existence implies installed; "" to skip
 	Memory    FileTarget // rules/instructions file (plain markdown)
 	MCP       MCPTarget  // mcpServers JSON
+	Skills    FileTarget // Agent-Skills directory (SKILL.md dirs); empty = unsupported
 }
 
 // Options configure a generic adapter instance.
@@ -134,6 +141,9 @@ func (a *Adapter) Capabilities() adapter.Capability {
 	}
 	if a.spec.MCP.supported() {
 		c |= adapter.CapMCP
+	}
+	if a.spec.Skills.User != "" || a.spec.Skills.Project != "" {
+		c |= adapter.CapSkill
 	}
 	return c
 }
@@ -197,6 +207,21 @@ func (a *Adapter) mcpPath(scope adapter.Scope, project string) string {
 		return ""
 	}
 	return filepath.Join(a.opts.TargetRoot, a.spec.MCP.User)
+}
+
+// skillsPath resolves the absolute Agent-Skills root directory for the given
+// scope, or "" when the spec does not declare a skills target at that scope.
+func (a *Adapter) skillsPath(scope adapter.Scope, project string) string {
+	if scope == adapter.ScopeProject {
+		if a.spec.Skills.Project == "" {
+			return ""
+		}
+		return filepath.Join(project, a.spec.Skills.Project)
+	}
+	if a.spec.Skills.User == "" {
+		return ""
+	}
+	return filepath.Join(a.opts.TargetRoot, a.spec.Skills.User)
 }
 
 // agentTargeted reports whether the agents allowlist includes this agent.

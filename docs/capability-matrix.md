@@ -29,7 +29,7 @@ nothing is dropped silently.
 | **Windsurf** | ✅ Adapter (scope-asymmetric MCP) | MCP, memory, and slash commands. **MCP is global-only** (`~/.codeium/windsurf/mcp_config.json`, JSON `mcpServers`; stdio command/args/env, remote `serverUrl` + `headers`), so it renders at **user scope** and is skipped (reported) at project scope. **Memory** renders at both scopes: project → `.windsurf/rules/agentsync.md` carrying the documented `trigger: always_on` activation frontmatter (workspace rules declare their trigger in frontmatter; ingest strips it, so the canonical body round-trips byte-clean); user → the single global rules file `~/.codeium/windsurf/memories/global_rules.md` (always-on, frontmatter-less, verbatim; Windsurf documents a 6,000-character limit it enforces itself). **Commands** render at both scopes as plain-markdown workflows invoked as `/<name>`: project `.windsurf/workflows/`, user `~/.codeium/windsurf/global_workflows/` (command frontmatter drops). Upstream now prefers `.devin/rules|workflows/` with `.windsurf/` as the supported fallback; agentsync targets `.windsurf/`, which every released version reads. **Skills, subagents, hooks, and LSP** have no Windsurf concept and are skipped. No `PluginIngester`; it still *receives* plugin-projected components on `apply`. |
 | **Roo Code** | ✅ Adapter (some components projected) | MCP, memory, and slash commands — clean filesystem `.roo/` paths (rulesync and ruler converged on these). **MCP → `.roo/mcp.json`** (project-level, `mcpServers` with explicit `type: streamable-http`/`sse` for remote + `url`/`headers`; merge-by-server-name preserves foreign servers). Roo's *global* MCP lives in VS Code globalStorage (OS/editor-specific), which agentsync intentionally does **not** target — so user-scope MCP is reported as a skip. **Memory → `.roo/rules/agentsync.md`** (plain-markdown always-applied rule) and **commands → `.roo/commands/<name>.md`** (markdown + frontmatter — Roo keeps **both** `description` *and* `argument-hint`; only `allowed-tools` drops), both at **user and project scope** (`~/.roo/` + `<repo>/.roo/`). **Skills, hooks, and LSP** have no Roo concept, and Roo's "custom modes" are not per-file **subagents**, so all four are skipped. No `PluginIngester`; it still *receives* plugin-projected components on `apply`. |
 | **Cline** | ✅ Adapter (scope-asymmetric) | MCP, memory, and slash commands. **MCP → `~/.cline/mcp.json`** at **user scope** — the Cline CLI's clean config (`mcpServers`, transport inferred: stdio command/args/env, remote `url` + `headers`). Cline has no project MCP file, and its VS Code-extension MCP lives in OS/editor-specific globalStorage no config-sync tool writes, so project-scope MCP is reported as a skip. **Memory → `.clinerules/agentsync.md`** (plain markdown — Cline concatenates `.clinerules/`) and **commands → `.clinerules/workflows/<name>.md`** (plain markdown workflows invoked as `/<name>.md`; command frontmatter drops), both at **project scope** (Cline's global rules and workflows live in `~/Documents/Cline/`, a non-XDG app path agentsync deliberately does not target). **Skills, subagents, hooks, and LSP** have no Cline concept and are skipped. No `PluginIngester`; it still *receives* plugin-projected components on `apply`. |
-| **Breadth tier (22 agents)** | ✅ Generic adapter (memory + MCP) | A long tail of agents supported by one data-driven [generic adapter](#breadth-tier) — **memory** (rules file) for all, **MCP** where the agent reads a JSON server-map agentsync can express. Each is a *verified* spec, not a hand-written package; see the [Breadth tier](#breadth-tier) table for per-agent coverage. They flow through the normal apply/import pipeline (drift, secrets, capture), unlike a one-way rules dump. |
+| **Breadth tier (22 agents)** | ✅ Generic adapter (memory + MCP + skills) | A long tail of agents supported by one data-driven [generic adapter](#breadth-tier) — **memory** (rules file) for all, **MCP** where the agent reads a JSON server-map agentsync can express (15 of 22), and **Agent Skills** where the agent natively scans a `SKILL.md` directory (18 of 22). Each is a *verified* spec, not a hand-written package; see the [Breadth tier](#breadth-tier) table for per-agent coverage. They flow through the normal apply/import pipeline (drift, secrets, capture), unlike a one-way rules dump. |
 
 ## Plugin import/apply: the shared invariant
 
@@ -92,11 +92,11 @@ The nine adapters above are **deep, agent-specific** packages. Beyond them,
 agentsync covers a long tail of agents through a single **data-driven generic
 adapter** (`internal/adapter/generic`): each agent is a *verified Spec* — a row in
 a table — rather than a hand-written package. The generic tier deliberately
-projects **memory** (the agent's rules/instructions file) and, where the agent
-reads a JSON server-map agentsync can express, **MCP**; every other component is
-reported as a skip. Breadth agents run through the same apply/import pipeline as
-the deep ones, so they get drift detection, secret resolution, and capture — not a
-one-way rules dump.
+projects **memory** (the agent's rules/instructions file), **MCP** where the agent
+reads a JSON server-map agentsync can express, and **Agent Skills** where the agent
+natively scans a `SKILL.md` directory; every other component is reported as a skip.
+Breadth agents run through the same apply/import pipeline as the deep ones, so they
+get drift detection, secret resolution, and capture — not a one-way rules dump.
 
 **MCP coverage (15 of 22).** The MCP merge is **JSONC-tolerant** (hujson), so a
 commented settings file (Zed, Copilot's `.vscode/mcp.json`, Amp) is parsed and its
@@ -113,35 +113,52 @@ inferred), stdio value (`stdio` / `local`), and remote URL key (`url` / `httpUrl
 IDE app-storage (JetBrains, AugmentCode), or cloud-dashboard (Jules) — where the
 generic engine refuses to invent a shape and reports a skip.
 
+**Skills coverage (18 of 22).** Agent Skills are the open
+[agentskills.io](https://agentskills.io) spec — a skill is a *directory* (`SKILL.md`
+frontmatter + body, plus bundled `scripts/`/`references/`/`assets/`). Unlike MCP,
+the on-disk format is **uniform** across agents (there is no dialect to model);
+only the scanned directory varies, so the breadth tier reuses the *same* projection
+the deep adapters use (`claude.SkillFileOps`) — bundled files and executable bits
+survive byte-for-byte. Most agents read the cross-vendor **`.agents/skills/`**
+convention (the same directory Codex targets, so the render pipeline dedupes the
+byte-identical ops rather than fighting over the path); a few scan only their own
+`.<agent>/skills/` (Qwen, Junie, Kiro, Factory, Copilot's `.github/skills/`). The
+**four without skills** are the ones that don't natively scan a `SKILL.md`
+directory: **Jules** and **Firebase Studio** *publish* skills for *other* agents,
+**Amazon Q** consumes skills only through an MCP server (a different component), and
+**OpenHands** loads skills programmatically with no auto-scanned directory — each
+leaves Skills empty and reports a skip. Skills carry no secrets, so the projection
+is entirely off the secret-resolution path.
+
 Every path below was cross-referenced against the agent's upstream docs **and**
 prior-art config-sync tools (ruler, rulesync) before inclusion. A scope or
 component with no verified target is left out (and reported as a skip), never
 guessed.
 
-| Agent | Memory (rules) | MCP |
-|---|---|---|
-| **amp** | `AGENTS.md` · `~/.config/amp/AGENTS.md` | ✓ `~/.config/amp/settings.json` (namespaced `amp.mcpServers` key) |
-| **goose** | `.goosehints` | ✗ YAML `~/.config/goose/config.yaml` |
-| **qwen** | `QWEN.md` · `~/.qwen/QWEN.md` | ✓ `.qwen/settings.json` (dual-URL split: `httpUrl` = streamable HTTP, `url` = SSE) |
-| **warp** | `WARP.md` | ✓ `.warp/.mcp.json` · `~/.warp/.mcp.json` |
-| **jules** | `AGENTS.md` | ✗ dashboard-only (cloud) |
-| **junie** | `AGENTS.md` (project; JetBrains documents no global guidelines file) | ✓ `.junie/mcp/mcp.json` (+ user) |
-| **openhands** | `AGENTS.md` | ✗ TOML `[mcp]` arrays |
-| **amazonq** | `.amazonq/rules/` | ✓ `.amazonq/mcp.json` · `~/.aws/amazonq/mcp.json` |
-| **zed** | `AGENTS.md` · `~/.config/zed/AGENTS.md` | ✓ settings.json `context_servers` |
-| **kilocode** | `.kilocode/rules/` | ✓ `.kilocode/mcp.json` (project) |
-| **kiro** | `.kiro/steering/` (+ user) | ✓ `.kiro/settings/mcp.json` (+ user) |
-| **trae** | `.trae/rules/project_rules.md` | ✗ non-standard array shape |
-| **jetbrains** | `.aiassistant/rules/` | ✗ IDE app-storage |
-| **firebase** | `.idx/airules.md` | ✓ `.idx/mcp.json` (project) |
-| **antigravity** | `AGENTS.md` | ✓ `~/.gemini/config/mcp_config.json` (remote key `serverUrl`; the shared IDE+CLI path is codelab-sourced — older installs read `~/.gemini/antigravity-cli/mcp_config.json`, where this write is a no-op; re-verify when Antigravity's docs firm up. Lives inside `~/.gemini/`, the deep Gemini adapter's directory, but a different file — no collision) |
-| **augmentcode** | `.augment/rules/` (+ user) | ✗ IDE app-storage |
-| **copilot** | `.github/copilot-instructions.md` | ✓ `.vscode/mcp.json` (`servers` key, `type`) |
-| **copilot-cli** | `AGENTS.md` | ✓ `~/.copilot/mcp-config.json` (`type`, stdio="local") |
-| **crush** | `AGENTS.md` | ✓ crush.json `mcp` key (+ user) |
-| **factory** | `AGENTS.md` | ✓ `.factory/mcp.json` · `~/.factory/mcp.json` (`type`) |
-| **pi** | `AGENTS.md` · `~/.pi/agent/AGENTS.md` | ✓ `~/.pi/agent/mcp.json` |
-| **mistral** | `AGENTS.md` | ✗ TOML `.vibe/config.toml` |
+| Agent | Memory (rules) | MCP | Skills (`SKILL.md` dir) |
+|---|---|---|---|
+| **amp** | `AGENTS.md` · `~/.config/amp/AGENTS.md` | ✓ `~/.config/amp/settings.json` (namespaced `amp.mcpServers` key) | ✓ `.agents/skills/` · `~/.config/agents/skills/` |
+| **goose** | `.goosehints` | ✗ YAML `~/.config/goose/config.yaml` | ✓ `.agents/skills/` (+ user) |
+| **qwen** | `QWEN.md` · `~/.qwen/QWEN.md` | ✓ `.qwen/settings.json` (dual-URL split: `httpUrl` = streamable HTTP, `url` = SSE) | ✓ `.qwen/skills/` (+ user) |
+| **warp** | `WARP.md` | ✓ `.warp/.mcp.json` · `~/.warp/.mcp.json` | ✓ `.agents/skills/` (+ user) |
+| **jules** | `AGENTS.md` | ✗ dashboard-only (cloud) | ✗ publishes skills for other agents |
+| **junie** | `AGENTS.md` (project; JetBrains documents no global guidelines file) | ✓ `.junie/mcp/mcp.json` (+ user) | ✓ `.junie/skills/` (+ user) |
+| **openhands** | `AGENTS.md` | ✗ TOML `[mcp]` arrays | ✗ programmatic load (no auto-scanned dir) |
+| **amazonq** | `.amazonq/rules/` | ✓ `.amazonq/mcp.json` · `~/.aws/amazonq/mcp.json` | ✗ skills only via an MCP server |
+| **zed** | `AGENTS.md` · `~/.config/zed/AGENTS.md` | ✓ settings.json `context_servers` | ✓ `.agents/skills/` (+ user) |
+| **kilocode** | `.kilocode/rules/` | ✓ `.kilocode/mcp.json` (project) | ✓ `.agents/skills/` · `~/.kilo/skills/` |
+| **kiro** | `.kiro/steering/` (+ user) | ✓ `.kiro/settings/mcp.json` (+ user) | ✓ `.kiro/skills/` (+ user) |
+| **trae** | `.trae/rules/project_rules.md` | ✗ non-standard array shape | ✓ `.agents/skills/` (project only) |
+| **jetbrains** | `.aiassistant/rules/` | ✗ IDE app-storage | ✓ `.agents/skills/` (project; via configured agent) |
+| **firebase** | `.idx/airules.md` | ✓ `.idx/mcp.json` (project) | ✗ publishes skills for other agents |
+| **antigravity** | `AGENTS.md` | ✓ `~/.gemini/config/mcp_config.json` (remote key `serverUrl`; the shared IDE+CLI path is codelab-sourced — older installs read `~/.gemini/antigravity-cli/mcp_config.json`, where this write is a no-op; re-verify when Antigravity's docs firm up. Lives inside `~/.gemini/`, the deep Gemini adapter's directory, but a different file — no collision) | ✓ `.agents/skills/` (project; global path disputed, omitted) |
+| **augmentcode** | `.augment/rules/` (+ user) | ✗ IDE app-storage | ✓ `.agents/skills/` (+ user) |
+| **copilot** | `.github/copilot-instructions.md` | ✓ `.vscode/mcp.json` (`servers` key, `type`) | ✓ `.github/skills/` · `~/.copilot/skills/` |
+| **copilot-cli** | `AGENTS.md` | ✓ `~/.copilot/mcp-config.json` (`type`, stdio="local") | ✓ `.agents/skills/` (+ user) |
+| **crush** | `AGENTS.md` | ✓ crush.json `mcp` key (+ user) | ✓ `.agents/skills/` · `~/.config/crush/skills/` |
+| **factory** | `AGENTS.md` | ✓ `.factory/mcp.json` · `~/.factory/mcp.json` (`type`) | ✓ `.factory/skills/` (+ user) |
+| **pi** | `AGENTS.md` · `~/.pi/agent/AGENTS.md` | ✓ `~/.pi/agent/mcp.json` | ✓ `.agents/skills/` (+ user) |
+| **mistral** | `AGENTS.md` | ✗ TOML `.vibe/config.toml` | ✓ `.agents/skills/` · `~/.vibe/skills/` |
 
 **Deliberate exclusions:** **Aider** (no native MCP; memory only via an
 `.aider.conf.yml` `read:` pointer — needs a content+config-pointer adapter, out of
@@ -359,16 +376,19 @@ A few ✓ cells still change shape on the way out — same content, no loss:
   command/args/env; remote `url` + `headers` (transport inferred, no `type` key).
 - **Codex & Gemini memory** — the same markdown lands at `~/.codex/AGENTS.md` /
   `~/.gemini/GEMINI.md` (repo-root `GEMINI.md` at project scope).
-- **Skills (Codex & Cursor)** — the same skill *directory* per the
-  [Agent Skills](https://agentskills.io) spec: `SKILL.md` (name + description)
-  **plus any bundled `scripts/`/`references/`/`assets/` and nested files**, all
-  carried verbatim (binary included, executable bit preserved) on apply, import,
-  and reconcile — agentsync is not lossy for anything but the directory itself.
-  Removing a skill (or one bundled file) from the source reclaims it from each
-  destination on the next `apply` (drifted files backed up first; empty dirs
-  pruned). Codex installs them under `~/.agents/skills/` (enabled by default — no
-  feature flag), Cursor under `.cursor/skills/`, and both also read the shared
-  `.claude/skills/`.
+- **Skills (Codex, Cursor & 18 breadth-tier agents)** — the same skill *directory*
+  per the [Agent Skills](https://agentskills.io) spec: `SKILL.md` (name +
+  description) **plus any bundled `scripts/`/`references/`/`assets/` and nested
+  files**, all carried verbatim (binary included, executable bit preserved) on
+  apply, import, and reconcile — agentsync is not lossy for anything but the
+  directory itself. Removing a skill (or one bundled file) from the source reclaims
+  it from each destination on the next `apply` (drifted files backed up first;
+  empty dirs pruned). Codex installs them under `~/.agents/skills/` (enabled by
+  default — no feature flag), Cursor under `.cursor/skills/`, and both also read
+  the shared `.claude/skills/`. The breadth tier projects the *identical* directory
+  (via the shared `claude.SkillFileOps`) to each agent's verified skills path —
+  most to the cross-vendor `.agents/skills/`, which dedupes byte-for-byte against
+  Codex; see the [Breadth tier](#breadth-tier) table for the per-agent path.
 
 ## Escape hatches
 

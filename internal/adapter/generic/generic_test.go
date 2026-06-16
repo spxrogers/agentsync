@@ -1,6 +1,7 @@
 package generic_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/adapter/generic"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -48,6 +50,14 @@ func TestCapabilitiesAndStrategyFromSpec(t *testing.T) {
 	}
 	if withMCP.KeyMergeStrategy() != "merge-jsonc-keys" {
 		t.Fatal("MCP spec must use the JSONC-tolerant merge")
+	}
+	withSkills := generic.New(generic.Spec{Name: "x", Skills: generic.FileTarget{Project: ".agents/skills"}}, generic.Options{})
+	if withSkills.Capabilities()&adapter.CapSkill == 0 {
+		t.Fatal("Skill cap missing when a Skills target is declared")
+	}
+	// A skills target is a directory write, not a JSON key-merge surface.
+	if withSkills.KeyMergeStrategy() != "" {
+		t.Fatal("a skills-only spec must have no key-merge strategy")
 	}
 }
 
@@ -499,5 +509,142 @@ func TestRoundTrip_MCP_TransportAliases(t *testing.T) {
 	}
 	if s := servers["sse-srv"].(map[string]any); s["type"] != "sse" {
 		t.Fatalf("sse transport must survive the round trip, not flip to http: %v", s)
+	}
+}
+
+// --- skills ---
+
+// TestSkills_RoundTrip_Fidelity anchors to a spec-complete on-disk skill fixture
+// (SKILL.md + a bundled script with +x, a references file, and a BINARY asset)
+// and asserts the whole directory survives render→apply→ingest byte-for-byte —
+// per the "fidelity tests anchor to the artifact, not the model" rule. It also
+// pins the SKILL.md bytes to the shared claude.SkillFileOps projection, which is
+// what lets a breadth agent's .agents/skills tree dedupe with Codex's identical
+// ops rather than trip the pipeline's divergent-bytes guard.
+func TestSkills_RoundTrip_Fidelity(t *testing.T) {
+	proj := t.TempDir()
+	// goose targets the shared cross-vendor .agents/skills at both scopes.
+	spec := generic.Spec{Name: "goose", Skills: generic.FileTarget{User: ".agents/skills", Project: ".agents/skills"}}
+	a := generic.New(spec, generic.Options{TargetRoot: t.TempDir()})
+
+	bin := []byte{0x00, 0x01, 0x02, 0xff, 0xfe, 0x0a}
+	skill := source.Skill{
+		Name:        "pdf",
+		Frontmatter: map[string]any{"name": "pdf", "description": "work with PDFs"},
+		Body:        "# PDF\n\nDo the thing.\n",
+		Files: []source.SkillFile{
+			{Path: "scripts/run.sh", Content: []byte("#!/bin/sh\necho hi\n"), Mode: 0o755},
+			{Path: "references/REF.md", Content: []byte("# Ref\n"), Mode: 0o644},
+			{Path: "assets/logo.bin", Content: bin, Mode: 0o644},
+		},
+	}
+	inner := source.Canonical{Skills: []source.Skill{skill}}
+	c := inner
+	c.Project = &inner // project overlay carries the same skill
+
+	ops, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasSkip(skips, "skill", "pdf") {
+		t.Fatalf("a supported skills spec must not skip the skill: %+v", skips)
+	}
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatal(err)
+	}
+
+	skillDir := filepath.Join(proj, ".agents", "skills", "pdf")
+	// SKILL.md is exactly the shared projection (so it dedupes with Codex).
+	wantSkillMD, err := claude.EncodeFrontmatter(skill.Frontmatter, skill.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotSkillMD, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotSkillMD, wantSkillMD) {
+		t.Fatalf("SKILL.md not byte-identical to the shared claude.SkillFileOps projection")
+	}
+	// Bundled binary asset survives byte-for-byte; executable bit preserved.
+	gotBin, err := os.ReadFile(filepath.Join(skillDir, "assets", "logo.bin"))
+	if err != nil || !bytes.Equal(gotBin, bin) {
+		t.Fatalf("binary asset not preserved byte-for-byte: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(skillDir, "scripts", "run.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o100 == 0 {
+		t.Fatalf("executable bit dropped from bundled script: %v", info.Mode())
+	}
+
+	// Ingest back: the whole skill directory round-trips into canonical.
+	got, err := a.Ingest(adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Skills) != 1 || got.Skills[0].Name != "pdf" {
+		t.Fatalf("ingest skills: %+v", got.Skills)
+	}
+	gs := got.Skills[0]
+	if gs.Body != skill.Body {
+		t.Fatalf("ingested body mismatch: %q", gs.Body)
+	}
+	want := map[string]source.SkillFile{}
+	for _, f := range skill.Files {
+		want[f.Path] = f
+	}
+	if len(gs.Files) != len(want) {
+		t.Fatalf("ingest dropped bundled files: got %d want %d", len(gs.Files), len(want))
+	}
+	for _, f := range gs.Files {
+		w, ok := want[f.Path]
+		if !ok {
+			t.Fatalf("unexpected bundled file %q", f.Path)
+		}
+		if !bytes.Equal(f.Content, w.Content) {
+			t.Fatalf("bundled file %q content changed on round-trip", f.Path)
+		}
+		if f.Path == "scripts/run.sh" && f.Mode&0o100 == 0 {
+			t.Fatalf("ingested script lost +x: mode %o", f.Mode)
+		}
+	}
+}
+
+// TestSkills_ScopeGapSkip: a skills spec supported only at project scope must
+// report a skip (not a stray write) when applied at user scope.
+func TestSkills_ScopeGapSkip(t *testing.T) {
+	a := generic.New(generic.Spec{Name: "trae", Skills: generic.FileTarget{Project: ".agents/skills"}}, generic.Options{TargetRoot: t.TempDir()})
+	c := source.Canonical{Skills: []source.Skill{{Name: "sk", Body: "x\n"}}}
+	ops, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findOp(ops, "SKILL.md") != nil {
+		t.Fatal("project-only skills spec must not write at user scope")
+	}
+	if !hasSkip(skips, "skill", "sk") {
+		t.Fatalf("expected user-scope skill skip, got %+v", skips)
+	}
+}
+
+// TestSkills_UnsupportedSpecStillSkips: a spec with no Skills target must still
+// report skills present in canonical as a skip (coverage stays honest).
+func TestSkills_UnsupportedSpecStillSkips(t *testing.T) {
+	a := generic.New(generic.Spec{Name: "jules", Memory: generic.FileTarget{Project: "AGENTS.md"}}, generic.Options{TargetRoot: t.TempDir()})
+	proj := t.TempDir()
+	inner := source.Canonical{Skills: []source.Skill{{Name: "sk", Body: "x\n"}}}
+	c := inner
+	c.Project = &inner
+	ops, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findOp(ops, "SKILL.md") != nil {
+		t.Fatal("a spec with no Skills target must not write skills")
+	}
+	if !hasSkip(skips, "skill", "sk") {
+		t.Fatalf("expected skill skip for a skills-less spec, got %+v", skips)
 	}
 }

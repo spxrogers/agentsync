@@ -11,11 +11,13 @@ import (
 )
 
 // Render projects the canonical model into this breadth-tier agent's memory
-// (rules) file and, when the spec declares one, its mcpServers JSON. Every other
-// component (skills, subagents, commands, hooks, LSP) is reported as a skip: the
-// generic tier deliberately covers memory + MCP only. A component the spec does
-// not support at the requested scope (e.g. user-scope memory for a project-only
-// agent) is likewise reported as a skip rather than written somewhere wrong.
+// (rules) file, its mcpServers JSON, and its Agent-Skills directory — each when
+// the spec declares a target for it. Every other component (subagents, commands,
+// hooks, LSP), and skills/MCP for a spec that declares no target, is reported as
+// a skip: the generic tier deliberately covers memory + MCP + skills only. A
+// component the spec does not support at the requested scope (e.g. user-scope
+// memory for a project-only agent) is likewise reported as a skip rather than
+// written somewhere wrong.
 func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string) ([]adapter.FileOp, []adapter.Skip, error) {
 	if err := adapter.RequireProjectRoot(scope, project); err != nil {
 		return nil, nil, err
@@ -58,9 +60,50 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 		skips = append(skips, mcpSkips...)
 	}
 
+	// Skills → the agent's Agent-Skills directory (where the spec declares one).
+	if skOps, skSkips, err := a.renderSkills(renderC, scope, project); err != nil {
+		return nil, nil, err
+	} else {
+		ops = append(ops, skOps...)
+		skips = append(skips, skSkips...)
+	}
+
 	// Components the breadth tier does not project — reported, never silent.
 	skips = append(skips, a.unsupportedSkips(renderC)...)
 	return ops, skips, nil
+}
+
+// renderSkills projects each skill's whole directory (SKILL.md + bundled
+// scripts/references/assets, modes preserved) into the agent's Agent-Skills root
+// via the shared claude.SkillFileOps projection. Because every adapter projects
+// skills through that one deterministic helper, a breadth-tier skill tree is
+// BYTE-IDENTICAL to the deep adapters' — so when several agents share
+// `.agents/skills` (the cross-vendor convention Codex also targets) the render
+// pipeline dedupes the ops rather than fighting over the path. Reports a
+// scope-gap skip when the spec supports skills only at the other scope.
+//
+// Skills carry no secrets (the secret walker visits only MCP/LSP/Hook fields),
+// so this projection is entirely off the secret-resolution path.
+func (a *Adapter) renderSkills(c source.Canonical, scope adapter.Scope, project string) ([]adapter.FileOp, []adapter.Skip, error) {
+	if a.spec.Skills.User == "" && a.spec.Skills.Project == "" {
+		return nil, nil, nil // unsupported entirely → reported by unsupportedSkips
+	}
+	skillsDir := a.skillsPath(scope, project)
+	if skillsDir == "" {
+		var skips []adapter.Skip
+		for _, s := range c.Skills {
+			skips = append(skips, adapter.Skip{
+				Component: "skill", Name: s.Name,
+				Reason: fmt.Sprintf("%s skills have no %s-scope target", a.spec.Name, scope.String()),
+			})
+		}
+		return nil, skips, nil
+	}
+	ops, err := claude.SkillFileOps(c.Skills, skillsDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ops, nil, nil
 }
 
 // renderMCP builds the mcpServers JSON for the spec's shape, or reports skips when
@@ -116,10 +159,19 @@ func (a *Adapter) mcpSkipReason(scope adapter.Scope) string {
 func (a *Adapter) unsupportedSkips(c source.Canonical) []adapter.Skip {
 	var skips []adapter.Skip
 	reason := func(comp string) string {
-		return fmt.Sprintf("agentsync's breadth-tier adapter for %s projects memory + MCP only (no %s)", a.spec.Name, comp)
+		return fmt.Sprintf("agentsync's breadth-tier adapter for %s projects memory, MCP, and skills only (no %s)", a.spec.Name, comp)
 	}
-	for _, s := range c.Skills {
-		skips = append(skips, adapter.Skip{Component: "skill", Name: s.Name, Reason: reason("skills")})
+	// Skills are projected when the spec declares an Agent-Skills target; the
+	// scope-gap case is reported by renderSkills. Only a spec with NO skills
+	// target at all reports them here — the agent does not natively scan a
+	// SKILL.md directory (verified against its upstream docs).
+	if a.spec.Skills.User == "" && a.spec.Skills.Project == "" {
+		for _, s := range c.Skills {
+			skips = append(skips, adapter.Skip{
+				Component: "skill", Name: s.Name,
+				Reason: fmt.Sprintf("%s does not natively scan an Agent-Skills (SKILL.md) directory", a.spec.Name),
+			})
+		}
 	}
 	for _, s := range c.Subagents {
 		skips = append(skips, adapter.Skip{Component: "subagent", Name: s.Name, Reason: reason("subagents")})

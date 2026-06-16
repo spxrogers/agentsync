@@ -35,6 +35,23 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   verified table row, and `agentsync agent list --all` prints the full supported
   set with each agent's registration state. (Aider and Firebender are deliberately deferred — see the
   capability matrix.)
+- **Agent Skills in the breadth tier (18 of the 22 agents).** The generic adapter
+  now projects **Agent Skills** — the open [agentskills.io](https://agentskills.io)
+  `SKILL.md` directory spec — wherever the agent natively scans a skills directory,
+  via a new per-scope `Skills` target on each `Spec`. Because the on-disk skill
+  format is uniform (no dialect to model), the tier reuses the deep adapters' shared
+  `claude.SkillFileOps` projection, so bundled `scripts/`/`references/`/`assets/`
+  and executable bits round-trip byte-for-byte through apply/import/reconcile. Most
+  agents target the cross-vendor `.agents/skills/` convention — byte-identical to
+  Codex's, so the render pipeline dedupes the ops — while a few scan their own
+  dir (`.qwen/skills/`, `.junie/skills/`, `.kiro/skills/`, `.factory/skills/`,
+  Copilot's `.github/skills/`). Skills-capable: amp, goose, qwen, warp, junie,
+  kilocode, kiro, trae, jetbrains, antigravity, augmentcode, copilot, copilot-cli,
+  crush, factory, pi, zed, mistral. The four without are reported as a skip:
+  **jules** and **firebase** publish skills *for other* agents, **amazonq**
+  consumes skills only through an MCP server, and **openhands** loads skills
+  programmatically with no auto-scanned directory. Each path was cross-referenced
+  against the agent's upstream docs.
 - **Cline adapter (`internal/adapter/cline`).** A new real adapter for Cline,
   scope-asymmetric (informed by competitor prior art — no config-sync tool writes
   the VS Code globalStorage MCP path): MCP renders at **user scope** into the Cline

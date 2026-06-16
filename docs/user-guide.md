@@ -544,7 +544,8 @@ Claude, OpenCode, Codex, Cursor, Gemini CLI, Continue, Windsurf, Roo Code, and C
 Beyond these nine deep adapters, a **breadth tier** of 22 more agents (amp, goose,
 qwen, warp, zed, kiro, junie, factory, copilot, crush, …) is supported via one
 data-driven generic adapter — memory for all, MCP where the agent reads a JSON
-server-map. Run `agentsync agent list --all` to see them all; see the
+server-map, and Agent Skills (`SKILL.md` directories) where the agent natively scans
+a skills directory. Run `agentsync agent list --all` to see them all; see the
 [capability matrix → Breadth tier](capability-matrix.md#breadth-tier) for per-agent
 coverage.
 

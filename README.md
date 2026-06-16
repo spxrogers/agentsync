@@ -81,12 +81,13 @@ The nine **deep adapters** (rich, agent-specific, often bidirectional):
 | **Cline** | ✓ adapter | MCP (`~/.cline/mcp.json` CLI, user scope), memory (◐, `.clinerules/`) + slash commands (◐, `.clinerules/workflows/`) at project scope. No skills/subagents/hooks/LSP concept. |
 
 Plus a **breadth tier** of 22 more via one data-driven generic adapter — **memory**
-for all, **MCP** where the agent reads a JSON server-map: `amp`, `goose`, `qwen`,
-`warp`, `jules`, `junie`, `openhands`, `amazonq`, `zed`, `kilocode`, `kiro`,
-`trae`, `jetbrains`, `firebase`, `antigravity`, `augmentcode`, `copilot`,
-`copilot-cli`, `crush`, `factory`, `pi`, `mistral`. Each is a *verified* spec (paths
-cross-referenced against upstream docs + prior art), flowing through the same
-drift/secrets/capture pipeline as the deep adapters. See the
+for all, **MCP** where the agent reads a JSON server-map (15 of 22), and **Agent
+Skills** where the agent natively scans a `SKILL.md` directory (18 of 22): `amp`,
+`goose`, `qwen`, `warp`, `jules`, `junie`, `openhands`, `amazonq`, `zed`,
+`kilocode`, `kiro`, `trae`, `jetbrains`, `firebase`, `antigravity`, `augmentcode`,
+`copilot`, `copilot-cli`, `crush`, `factory`, `pi`, `mistral`. Each is a *verified*
+spec (paths cross-referenced against upstream docs + prior art), flowing through the
+same drift/secrets/capture pipeline as the deep adapters. See the
 [capability matrix → Breadth tier](docs/capability-matrix.md#breadth-tier).
 
 Full ✓/◐/✗ breakdown per component: **[capability matrix](docs/capability-matrix.md)**.
