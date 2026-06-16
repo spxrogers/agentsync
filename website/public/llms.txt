@@ -1,0 +1,57 @@
+# agentsync
+
+> One source of truth for every AI coding agent on your machine. Define your MCP servers, memory, skills, subagents, commands, and plugins once, run `agentsync apply`, and they land — correctly translated — in Claude Code, OpenCode, Codex, and more.
+
+agentsync is a single-machine Go CLI. You keep a canonical config (small TOML + markdown, committable to a dotfiles repo); `agentsync apply` renders it into each agent's native config. It is bidirectional: native edits are detected as drift and merged back into the source via `reconcile`/`import` — nothing is overwritten behind your back. Secrets are referenced as `${secret:...}` / `${env:...}` and resolved at apply time from an age-encrypted vault, so cleartext never reaches your committable source. `apply` is offline and deterministic (renders from a local cache); only `update` reaches the network.
+
+## Getting started
+
+- [What is agentsync?](https://agentsync.cc/getting-started/introduction/): The problem it solves and the promise it makes.
+- [How agentsync compares](https://agentsync.cc/comparison/): Where it sits relative to other config-management approaches.
+- [The mental model](https://agentsync.cc/getting-started/mental-model/): The three-state model (source / applied / dest) — read this once and everything clicks.
+- [Install](https://agentsync.cc/getting-started/install/): Getting the CLI onto your machine.
+- [Your first sync](https://agentsync.cc/getting-started/first-sync/): The 5-minute greenfield path — start clean, end with an MCP server live in two agents.
+- [Already have configs?](https://agentsync.cc/getting-started/existing-configs/): Bring an existing Claude / OpenCode setup under management without retyping it.
+
+## Guides
+
+- [The daily loop](https://agentsync.cc/guides/daily-loop/): The everyday edit → apply → reconcile workflow.
+- [MCP servers](https://agentsync.cc/guides/mcp-servers/): Define a server once and fan it out to every agent.
+- [Memory](https://agentsync.cc/guides/memory/): Manage agent memory (AGENTS.md / CLAUDE.md and fragments).
+- [Marketplaces & plugins](https://agentsync.cc/guides/plugins/): Install plugins and project their components across agents.
+- [Secrets](https://agentsync.cc/guides/secrets/): Reference credentials safely via an age-encrypted vault that never leaks cleartext.
+- [Project-local config](https://agentsync.cc/guides/projects/): Per-project overlays scoped to a repo's `.agentsync/` tree.
+- [Updating from the network](https://agentsync.cc/guides/updating/): How `update` refreshes the local cache.
+- [Cross-machine sync](https://agentsync.cc/guides/cross-machine/): Carry one canonical config across machines via dotfiles.
+
+## Recipes
+
+- [Recipes overview](https://agentsync.cc/recipes/): Index of end-to-end workflows.
+- [Commit your config to dotfiles](https://agentsync.cc/recipes/dotfiles/): Make your agent setup reproducible and version-controlled.
+- [Onboard a teammate](https://agentsync.cc/recipes/team-onboarding/): Share a known-good config across a team.
+- [Verify config in CI](https://agentsync.cc/recipes/ci-verification/): Catch drift and config errors in continuous integration.
+- [Adopt a populated machine](https://agentsync.cc/recipes/adopt-existing/): Import existing native configs into a canonical source.
+
+## Reference
+
+- [CLI commands](https://agentsync.cc/reference/cli/): Full command reference (init, agent, apply, status, diff, reconcile, import, doctor, verify, mcp, plugin, marketplace, update, secrets, explain).
+- [Configuration & layout](https://agentsync.cc/reference/configuration/): The canonical schema and the `~/.agentsync/` directory layout.
+- [Environment variables](https://agentsync.cc/reference/environment/): Variables that influence agentsync's behavior.
+- [Agent capability matrix](https://agentsync.cc/reference/capability-matrix/): Exactly what each agent supports per component — and what's lossy (◐) or skipped (✗).
+
+## Concepts & internals
+
+- [Concepts & glossary](https://agentsync.cc/concepts/): Every term and the three-state model defined.
+- [Architecture](https://agentsync.cc/internals/architecture/): Pipelines, the drift classifier, secret invariants, and package layering.
+- [Component map](https://agentsync.cc/internals/components/): Package-by-package map of the codebase.
+- [Security model](https://agentsync.cc/internals/security/): How resolved secrets are kept out of the committable source.
+
+## Help
+
+- [FAQ](https://agentsync.cc/help/faq/): Common questions.
+- [Troubleshooting](https://agentsync.cc/help/troubleshooting/): Diagnosing apply, drift, and secret issues.
+
+## Optional
+
+- [GitHub repository](https://github.com/spxrogers/agentsync): Source code and releases.
+- [Issue tracker](https://github.com/spxrogers/agentsync/issues): Report bugs or rough edges.

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "agentsync",
+  "description": "Single-machine Go CLI that centrally manages AI coding-agent configuration (Claude Code, OpenCode, Codex, and more!). Keep a canonical source, run `agentsync apply`, and it renders, correctly translated, into each agent's native config — bidirectionally, with secrets resolved from an age-encrypted vault.",
+  "folders": [
+    "docs",
+    "website/src/content/docs"
+  ],
+  "excludeFiles": [
+    "docs/README.md"
+  ],
+  "rules": [
+    "agentsync manages a canonical source under ~/.agentsync/ (project scope: a .agentsync/ tree at the repo root) — small TOML + markdown, committable to a dotfiles repo. `agentsync apply` renders it into each agent's native config; never hand-edit the rendered native files, edit the canonical source and re-apply.",
+    "It is bidirectional: native edits are detected as drift and folded back into the canonical source via `reconcile`/`import`, never overwritten silently.",
+    "Secrets are referenced as ${secret:...} / ${env:...} and resolved at apply time from an age-encrypted vault. Cleartext secrets are never persisted back into the canonical source.",
+    "`apply` is offline and deterministic — it renders from a local cache and never touches the network; only `update` reaches out.",
+    "Per-agent, per-component support varies — consult the capability matrix. Coverage that can't be fully represented is reported (lossy ◐) or skipped (✗), never dropped silently."
+  ]
+}
