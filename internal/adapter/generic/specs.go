@@ -73,6 +73,9 @@ func Specs() []Spec {
 			Name: "kilocode", DetectBin: "kilocode", DetectDir: ".kilocode",
 			Memory: FileTarget{Project: ".kilocode/rules/agentsync.md"},
 			MCP:    MCPTarget{Project: ".kilocode/mcp.json"},
+			// NB: skills live under ~/.kilo/skills (NOT .kilocode/) per upstream —
+			// the lone path where Kilo's skills dir differs from its config dir;
+			// project scope uses the shared cross-vendor .agents/skills.
 			Skills: FileTarget{User: ".kilo/skills", Project: ".agents/skills"},
 		},
 		// Amazon Q Developer CLI — project rules dir; MCP `.amazonq/mcp.json` (proj)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
+	"github.com/spxrogers/agentsync/internal/adapter/codex"
 	"github.com/spxrogers/agentsync/internal/adapter/generic"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -646,5 +647,211 @@ func TestSkills_UnsupportedSpecStillSkips(t *testing.T) {
 	}
 	if !hasSkip(skips, "skill", "sk") {
 		t.Fatalf("expected skill skip for a skills-less spec, got %+v", skips)
+	}
+}
+
+// skillOps returns only the skill FileOps (SourceID under "skills/"), keyed by
+// the path relative to the skills root, so two adapters writing the SAME skills
+// dir can be compared regardless of absolute prefix.
+func skillOps(ops []adapter.FileOp) map[string]adapter.FileOp {
+	out := map[string]adapter.FileOp{}
+	for _, op := range ops {
+		if strings.HasPrefix(filepath.ToSlash(op.SourceID), "skills/") {
+			out[filepath.ToSlash(op.SourceID)] = op
+		}
+	}
+	return out
+}
+
+// TestSkills_ByteIdenticalToCodex is the load-bearing dedup invariant made
+// explicit: when a breadth agent shares `.agents/skills` with Codex, the render
+// pipeline dedupes only because BOTH adapters emit byte-identical ops. This
+// renders the same skill through the generic `goose` adapter and the real Codex
+// deep adapter at the same project and asserts every skill FileOp matches on
+// path, content, mode, action, and merge strategy — so a future change to either
+// projection that breaks the identity fails here instead of erroring mid-apply.
+func TestSkills_ByteIdenticalToCodex(t *testing.T) {
+	proj := t.TempDir()
+	root := t.TempDir()
+	skill := source.Skill{
+		Name:        "pdf",
+		Frontmatter: map[string]any{"name": "pdf", "description": "work with PDFs"},
+		Body:        "# PDF\n\nbody\n",
+		Files: []source.SkillFile{
+			{Path: "scripts/run.sh", Content: []byte("#!/bin/sh\n"), Mode: 0o755},
+			{Path: "references/REF.md", Content: []byte("# ref\n"), Mode: 0o644},
+		},
+	}
+	inner := source.Canonical{Skills: []source.Skill{skill}}
+	c := inner
+	c.Project = &inner
+
+	// goose: project-scope skills target is the shared cross-vendor .agents/skills,
+	// exactly where Codex writes — so absolute paths coincide too.
+	gen := generic.New(generic.Spec{Name: "goose", Skills: generic.FileTarget{User: ".agents/skills", Project: ".agents/skills"}}, generic.Options{TargetRoot: root})
+	cdx := codex.New(codex.Options{TargetRoot: root})
+
+	gOps, _, err := gen.Render(secrets.ForRender(c), adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cOps, _, err := cdx.Render(secrets.ForRender(c), adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, cm := skillOps(gOps), skillOps(cOps)
+	if len(g) == 0 {
+		t.Fatal("generic produced no skill ops")
+	}
+	if len(g) != len(cm) {
+		t.Fatalf("skill op count differs: generic %d, codex %d", len(g), len(cm))
+	}
+	for id, go1 := range g {
+		co, ok := cm[id]
+		if !ok {
+			t.Fatalf("codex missing skill op %q", id)
+		}
+		if go1.Path != co.Path {
+			t.Fatalf("path differs for %q: generic %q vs codex %q (must coincide to dedupe)", id, go1.Path, co.Path)
+		}
+		if !bytes.Equal(go1.Content, co.Content) {
+			t.Fatalf("content differs for %q — pipeline would refuse this on apply", id)
+		}
+		if go1.Mode != co.Mode {
+			t.Fatalf("mode differs for %q: generic %o vs codex %o", id, go1.Mode, co.Mode)
+		}
+		if go1.Action != co.Action || go1.MergeStrategy != co.MergeStrategy {
+			t.Fatalf("action/merge differs for %q: %+v vs %+v", id, go1, co)
+		}
+	}
+}
+
+// TestSkills_IngestFromOnDiskTree anchors to the ARTIFACT, not the model (per the
+// CLAUDE.md fidelity rule): it hand-authors a real on-disk SKILL.md directory tree
+// — including a NESTED bundled file and an executable script — then ingests it and
+// asserts the canonical captures every byte and mode. Unlike the render→read
+// round-trip, the source of truth here is bytes on disk that no agentsync code
+// wrote, so it exercises the read side independently.
+func TestSkills_IngestFromOnDiskTree(t *testing.T) {
+	proj := t.TempDir()
+	skillDir := filepath.Join(proj, ".agents", "skills", "pdf")
+	mustWrite := func(rel string, mode os.FileMode, content []byte) {
+		t.Helper()
+		p := filepath.Join(skillDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, content, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite("SKILL.md", 0o644, []byte("---\nname: pdf\ndescription: work with PDFs\n---\n# PDF\n\nbody here\n"))
+	mustWrite("scripts/run.sh", 0o755, []byte("#!/bin/sh\necho hi\n"))
+	mustWrite("references/deep/NOTE.md", 0o644, []byte("# nested\n"))
+	bin := []byte{0x00, 0xff, 0x10, 0x0a}
+	mustWrite("assets/logo.bin", 0o644, []byte(bin))
+
+	a := generic.New(generic.Spec{Name: "goose", Skills: generic.FileTarget{Project: ".agents/skills"}}, generic.Options{TargetRoot: t.TempDir()})
+	got, err := a.Ingest(adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Skills) != 1 || got.Skills[0].Name != "pdf" {
+		t.Fatalf("ingest from on-disk tree: %+v", got.Skills)
+	}
+	s := got.Skills[0]
+	if s.Frontmatter["description"] != "work with PDFs" {
+		t.Fatalf("frontmatter not captured from disk: %+v", s.Frontmatter)
+	}
+	if !strings.Contains(s.Body, "body here") {
+		t.Fatalf("body not captured from disk: %q", s.Body)
+	}
+	files := map[string]source.SkillFile{}
+	for _, f := range s.Files {
+		files[f.Path] = f
+	}
+	// The NESTED file must survive with its slash-separated path.
+	if f, ok := files["references/deep/NOTE.md"]; !ok || !bytes.Equal(f.Content, []byte("# nested\n")) {
+		t.Fatalf("nested bundled file not captured: %+v", files)
+	}
+	if f, ok := files["assets/logo.bin"]; !ok || !bytes.Equal(f.Content, bin) {
+		t.Fatalf("binary asset not captured byte-for-byte from disk: %+v", f)
+	}
+	if f, ok := files["scripts/run.sh"]; !ok || f.Mode&0o100 == 0 {
+		t.Fatalf("executable bit not captured from disk: %+v", f)
+	}
+}
+
+// TestSkills_SpecPathsPinned pins each breadth agent's verified skills paths (the
+// count pin in specs_test.go guards quantity, not correctness) and asserts the
+// four agents that don't natively scan a SKILL.md dir declare NO skills target.
+func TestSkills_SpecPathsPinned(t *testing.T) {
+	type tgt struct{ user, project string }
+	want := map[string]tgt{
+		// shared cross-vendor .agents/skills (project), per-agent user dir
+		"goose":       {".agents/skills", ".agents/skills"},
+		"zed":         {".agents/skills", ".agents/skills"},
+		"warp":        {".agents/skills", ".agents/skills"},
+		"pi":          {".agents/skills", ".agents/skills"},
+		"augmentcode": {".agents/skills", ".agents/skills"},
+		"copilot-cli": {".agents/skills", ".agents/skills"},
+		"amp":         {".config/agents/skills", ".agents/skills"},
+		"crush":       {".config/crush/skills", ".agents/skills"},
+		"kilocode":    {".kilo/skills", ".agents/skills"},
+		"mistral":     {".vibe/skills", ".agents/skills"},
+		// project-only (no documented user skills dir)
+		"trae":        {"", ".agents/skills"},
+		"jetbrains":   {"", ".agents/skills"},
+		"antigravity": {"", ".agents/skills"},
+		// own-namespace dirs
+		"qwen":    {".qwen/skills", ".qwen/skills"},
+		"junie":   {".junie/skills", ".junie/skills"},
+		"kiro":    {".kiro/skills", ".kiro/skills"},
+		"factory": {".factory/skills", ".factory/skills"},
+		"copilot": {".copilot/skills", ".github/skills"},
+		// deliberately skills-less (verified: no native SKILL.md scan)
+		"jules":     {"", ""},
+		"openhands": {"", ""},
+		"amazonq":   {"", ""},
+		"firebase":  {"", ""},
+	}
+	for _, s := range generic.Specs() {
+		w, ok := want[s.Name]
+		if !ok {
+			t.Errorf("spec %q not pinned in TestSkills_SpecPathsPinned — add it", s.Name)
+			continue
+		}
+		if s.Skills.User != w.user || s.Skills.Project != w.project {
+			t.Errorf("spec %q skills paths = {%q,%q}, want {%q,%q}", s.Name, s.Skills.User, s.Skills.Project, w.user, w.project)
+		}
+	}
+}
+
+// TestSkills_SkippedAgentsEmitNothing: every breadth agent with no skills target
+// must, with a skill in canonical, write NO skill op and report a skip — so the
+// four deliberately-skipped agents (jules/openhands/amazonq/firebase) can never
+// silently grow a skills projection.
+func TestSkills_SkippedAgentsEmitNothing(t *testing.T) {
+	for _, s := range generic.Specs() {
+		if s.Skills.User != "" || s.Skills.Project != "" {
+			continue
+		}
+		t.Run(s.Name, func(t *testing.T) {
+			proj := t.TempDir()
+			a := generic.New(s, generic.Options{TargetRoot: t.TempDir()})
+			inner := source.Canonical{Skills: []source.Skill{{Name: "sk", Body: "x\n"}}}
+			c := inner
+			c.Project = &inner
+			ops, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeProject, proj)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if op := findOp(ops, "SKILL.md"); op != nil {
+				t.Fatalf("skills-less agent %q wrote a skill op: %s", s.Name, op.Path)
+			}
+			if !hasSkip(skips, "skill", "sk") {
+				t.Fatalf("skills-less agent %q did not report a skill skip", s.Name)
+			}
+		})
 	}
 }

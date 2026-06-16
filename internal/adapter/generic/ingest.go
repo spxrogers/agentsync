@@ -62,6 +62,15 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 // breadth-tier round-trip is not lossy for bundled scripts/references/assets. A
 // skill whose SKILL.md is missing or unparseable is skipped (not fatal): a stray
 // directory in a shared skills root must not break import of the rest.
+//
+// Deliberate no-diagnostics stance: unlike the deep adapters (which thread an
+// a.stderr() warn sink), the generic tier's Ingest has no diagnostics channel,
+// so a malformed/leniently-parsed SKILL.md is skipped silently — exactly as this
+// tier's MCP ingest silently skips a non-map server entry. This is acknowledged
+// (not an accidental silent drop): the lossy case is a *native* file the tier
+// can't parse, never a canonical component the tier fails to project. Threading a
+// warn sink through the breadth-tier Ingest is a deferred tier-wide change, not a
+// skills-specific one.
 func (a *Adapter) ingestSkills(skillsDir string) []source.Skill {
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {

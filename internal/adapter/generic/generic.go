@@ -36,8 +36,8 @@ import (
 // the Agent-Skills root directory under which each skill is a <name>/SKILL.md
 // subtree). An empty path means the component is unsupported at that scope.
 type FileTarget struct {
-	User    string // path under the user home (targetRoot)
-	Project string // path under the project root
+	User    string // file path or directory root under the user home (targetRoot)
+	Project string // file path or directory root under the project root
 }
 
 // MCPTarget describes an agent's MCP servers JSON file and its on-disk dialect.
@@ -112,9 +112,9 @@ type Spec struct {
 	Name      string     // agent name (Adapter.Name())
 	DetectBin string     // binary on PATH (best-effort); "" to skip
 	DetectDir string     // dir under targetRoot whose existence implies installed; "" to skip
-	Memory    FileTarget // rules/instructions file (plain markdown)
+	Memory    FileTarget // rules/instructions FILE path (plain markdown)
 	MCP       MCPTarget  // mcpServers JSON
-	Skills    FileTarget // Agent-Skills directory (SKILL.md dirs); empty = unsupported
+	Skills    FileTarget // Agent-Skills DIRECTORY root (holds <name>/SKILL.md subtrees); empty = unsupported
 }
 
 // Options configure a generic adapter instance.
