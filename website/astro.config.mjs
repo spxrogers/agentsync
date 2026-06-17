@@ -38,6 +38,17 @@ export default defineConfig({
 					tag: 'meta',
 					attrs: { property: 'og:image', content: 'https://agentsync.cc/og.png' },
 				},
+				{
+					// Context7 AI chat widget — loads asynchronously and renders a
+					// floating chat button on every page. data-library points at this
+					// project's Context7 docs source.
+					tag: 'script',
+					attrs: {
+						src: 'https://context7.com/widget.js',
+						'data-library': '/spxrogers/agentsync',
+						async: true,
+					},
+				},
 			],
 			sidebar: [
 				{
