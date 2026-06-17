@@ -283,6 +283,12 @@ func WriteLSP(home string, ls LSPServer) error {
 // expanded body would inline every @import and orphan the fragment files; the
 // caller surfaces it rather than flatten silently.
 func WriteMemory(home string, m Memory) error {
+	// Refuse to persist the reserved managed-banner marker into the canonical
+	// source (see checkReservedMarkers): a captured native edit that carries it
+	// surfaces here as a clear error instead of corrupting memory/.
+	if err := checkReservedMarkers(m.Body, m.Fragments); err != nil {
+		return err
+	}
 	if len(m.Fragments) == 0 && MemoryHasFragments(home) {
 		return fmt.Errorf("refusing to overwrite memory/AGENTS.md: canonical memory is composed of fragments/ and the value to write carries none (the expanded memory could not be reversed) — persisting it would inline every @import and orphan the fragment files; edit memory/ directly")
 	}

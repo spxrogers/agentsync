@@ -258,6 +258,30 @@ func TestMerge_MemoryProjectOnly(t *testing.T) {
 	}
 }
 
+// TestMerge_MemoryBannerInheritance: the stored project overlay inherits the
+// effective [memory] banner setting (project-scope render reads it off
+// out.Project), so a user-level opt-out reaches project files; an explicit
+// project setting overrides the inherited one.
+func TestMerge_MemoryBannerInheritance(t *testing.T) {
+	off, on := false, true
+	base := source.Canonical{Config: source.Config{Memory: source.MemoryConfig{Banner: &off}}}
+
+	// Project unset → overlay inherits the user's banner=false.
+	out := project.Merge(base, source.Canonical{})
+	if out.Project == nil || out.Project.Config.Memory.Banner == nil || *out.Project.Config.Memory.Banner {
+		t.Fatalf("project overlay should inherit user banner=false; got %+v", out.Project.Config.Memory)
+	}
+	if out.Config.MemoryBannerEnabled() {
+		t.Fatalf("merged config should report banner disabled")
+	}
+
+	// Explicit project banner=true overrides the inherited opt-out.
+	out2 := project.Merge(base, source.Canonical{Config: source.Config{Memory: source.MemoryConfig{Banner: &on}}})
+	if out2.Project == nil || out2.Project.Config.Memory.Banner == nil || !*out2.Project.Config.Memory.Banner {
+		t.Fatalf("explicit project banner=true should override; got %+v", out2.Project.Config.Memory)
+	}
+}
+
 func TestMerge_DoesNotMutateBase(t *testing.T) {
 	base := source.Canonical{MCPServers: []source.MCPServer{
 		{ID: "existing", Server: source.MCPServerSpec{Command: "cmd"}},

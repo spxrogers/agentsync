@@ -112,8 +112,14 @@ func TestRender_ProjectScope_RulesAndWorkflows(t *testing.T) {
 		t.Fatal(err)
 	}
 	memOp := findOp(ops, ".clinerules/agentsync.md")
-	if memOp == nil || string(memOp.Content) != "# Rules\n\nBe concise.\n" {
-		t.Fatalf("memory rule wrong: %+v", memOp)
+	if memOp == nil {
+		t.Fatal("memory rule op missing")
+	}
+	if !strings.HasPrefix(string(memOp.Content), "<!-- agentsync:managed memory-banner -->") {
+		t.Fatalf("expected managed banner prefix: %q", memOp.Content)
+	}
+	if source.StripManagedBanner(string(memOp.Content)) != "# Rules\n\nBe concise.\n" {
+		t.Fatalf("memory rule wrong (under managed banner): %+v", memOp)
 	}
 	cmdOp := findOp(ops, ".clinerules/workflows/deploy.md")
 	if cmdOp == nil || string(cmdOp.Content) != "Run deploy.\n" {

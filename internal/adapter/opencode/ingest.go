@@ -129,9 +129,9 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		}
 	}
 
-	// Memory from AGENTS.md (verbatim)
+	// Memory from AGENTS.md (managed-file banner stripped — see claude/ingest.go)
 	if data, err := os.ReadFile(p.Memory); err == nil {
-		c.Memory.Body = string(data)
+		c.Memory.Body = source.StripManagedBanner(string(data))
 	}
 
 	return c, nil

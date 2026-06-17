@@ -29,6 +29,18 @@ type Config struct {
 	Agents  map[string]Agent `toml:"agents"`
 	Updates UpdateDefaults   `toml:"updates"`
 	Secrets SecretsConfig    `toml:"secrets"`
+	Memory  MemoryConfig     `toml:"memory"`
+}
+
+// MemoryConfig mirrors the [memory] table in agentsync.toml.
+type MemoryConfig struct {
+	// Banner controls the agentsync "managed file" notice prepended to every
+	// rendered memory file (CLAUDE.md, AGENTS.md, …) — see RenderManagedMemory.
+	// It is ON by default; set `banner = false` to opt out. The field is a *bool
+	// so "unset" (nil → default-on) is distinguishable from "explicitly false",
+	// which the project-overlay merge needs to tell an explicit project override
+	// from an inherited default.
+	Banner *bool `toml:"banner,omitempty"`
 }
 
 type Agent struct {
@@ -186,6 +198,6 @@ type LSPServerSpec struct {
 
 // Memory mirrors memory/AGENTS.md and memory/fragments/.
 type Memory struct {
-	Body      string            // resolved AGENTS.md after @import expansion
-	Fragments map[string]string // body, keyed by slash path under memory/fragments/ (loaded recursively)
+	Body      string            // raw AGENTS.md (with @import directives); expansion happens at render via ExpandMemoryImports
+	Fragments map[string]string // fragment body, keyed by slash path under memory/fragments/ (loaded recursively)
 }

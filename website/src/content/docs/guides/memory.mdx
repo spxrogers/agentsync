@@ -75,6 +75,44 @@ Edit a fragment once and every agent's memory updates on the next `apply`.
 	`status`/`diff` and you fold it in by hand.
 </Aside>
 
+## The managed-file banner
+
+Every rendered memory file is prepended with a short agentsync notice — a
+blockquote naming the file and pointing edits back at the canonical source:
+
+```markdown title="~/.claude/CLAUDE.md (rendered by apply)"
+<!-- agentsync:managed memory-banner -->
+> **Managed by [agentsync](https://agentsync.cc) — do not edit `CLAUDE.md` directly.**
+> To change it, edit `.agentsync/memory/AGENTS.md` (or the relevant
+> `.agentsync/memory/fragments/*.md` fragment) and run `agentsync apply`.
+> Direct edits here are reported as drift and overwritten on the next apply.
+<!-- /agentsync:managed memory-banner -->
+
+# Coding conventions
+…
+```
+
+It nudges an agent (or a teammate) editing the native file toward the canonical
+source instead.
+
+<Aside type="note" title="The banner never enters your canonical source">
+	The banner is written by agentsync, not stored in `memory/AGENTS.md`. It is
+	wrapped in `<!-- agentsync:managed memory-banner -->` markers, stripped on
+	`import`/`reconcile` (and on ingest), and re-rendered on every `apply` — so it never compounds, and
+	because the text is static it never shows up as drift. It is on by default; opt
+	out with `[memory] banner = false` in `agentsync.toml` (see the
+	[configuration reference](/reference/configuration/)). The first `apply` after
+	upgrading adds the banner to existing memory files — a one-time `pending`.
+</Aside>
+
+<Aside type="caution" title="`agentsync:managed` is a reserved marker">
+	If your `memory/AGENTS.md` or a fragment contains the literal
+	`agentsync:managed` marker, agentsync errors and asks you to remove it, so it
+	can't collide with the banner. Capture is conservative in the other direction
+	too: it strips only agentsync's own banner, so any other content you keep is
+	never deleted.
+</Aside>
+
 ## Per-agent rendering
 
 | Agent | Native memory file |

@@ -59,7 +59,7 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	// Memory from .clinerules/agentsync.md (project scope; plain markdown).
 	if p.RulesDir != "" {
 		if data, err := os.ReadFile(filepath.Join(p.RulesDir, memoryRuleFile)); err == nil {
-			c.Memory.Body = string(data)
+			c.Memory.Body = source.StripManagedBanner(string(data)) // banner stripped — see claude/ingest.go
 		}
 	}
 

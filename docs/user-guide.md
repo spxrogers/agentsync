@@ -247,7 +247,7 @@ first-class. Layout:
 
 ```
 ~/.agentsync/
-├── agentsync.toml            # agents, update defaults, secrets backend
+├── agentsync.toml            # agents, update defaults, secrets backend, [memory] banner
 ├── mcp/<server>.toml         # one MCP server per file
 ├── lsp/<server>.toml         # one LSP server per file
 ├── agents/<name>.md          # one subagent per file
@@ -339,6 +339,25 @@ fragment whose own text contains the marker token disables them) or were
 hand-mangled into an unbalanced/ambiguous state, agentsync refuses the write-back
 rather than guess; the drift still shows in `status`/`diff` and you fold it into
 `memory/` by hand.
+
+**The managed banner.** Every rendered memory file is prepended with a short
+agentsync notice — a blockquote naming the file (e.g. `CLAUDE.md`) and pointing
+edits back at `.agentsync/memory/AGENTS.md` + `agentsync apply`. It is written by
+agentsync, **not** stored in your canonical `memory/AGENTS.md`: it is wrapped in
+`<!-- agentsync:managed memory-banner -->` markers, stripped on
+`import`/`reconcile`, and re-rendered each apply — so it never compounds and
+(being static) never shows as drift. It is on by default; opt out with a
+`[memory]` table in `agentsync.toml`:
+
+```toml
+[memory]
+banner = false
+```
+
+The `agentsync:managed` marker is **reserved** — if your `memory/AGENTS.md` or a
+fragment contains it, agentsync errors and asks you to remove it (so it can't
+collide with the banner). The reverse is safe too: capture only strips agentsync's
+own banner, so any other content you keep is never deleted.
 
 ### Marketplaces & plugins — the fan-out payoff
 

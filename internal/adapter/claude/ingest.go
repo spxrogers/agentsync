@@ -190,11 +190,14 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		}
 	}
 
-	// Memory from CLAUDE.md (verbatim, including fragment markers). The reverse-
-	// collapse into AGENTS.md + fragment files happens in the write-back layer
-	// (source.CollapseMemoryMarkers, used by import/reconcile), not here.
+	// Memory from CLAUDE.md. The agentsync managed-file banner is a render-time
+	// decoration with no canonical home, so it is stripped here (like Windsurf's
+	// activation frontmatter) — ingest yields the canonical model, which never
+	// carries the banner. Fragment markers, by contrast, are STRUCTURAL signal
+	// kept verbatim; their reverse-collapse into AGENTS.md + fragment files
+	// happens in the write-back layer (source.CollapseMemoryMarkers).
 	if data, err := os.ReadFile(p.Memory); err == nil {
-		c.Memory.Body = string(data)
+		c.Memory.Body = source.StripManagedBanner(string(data))
 	}
 
 	return c, nil

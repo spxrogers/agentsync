@@ -1075,14 +1075,20 @@ func importLSP(io *importIO, home string, c source.Canonical, name string) ([]st
 }
 
 func importMemory(io *importIO, home string, c source.Canonical) ([]string, error) {
+	// Backstop: every adapter's ingest already strips the agentsync managed-file
+	// banner (it has no canonical home), but strip again here at the write-back
+	// funnel so the notice can never reach memory/AGENTS.md regardless of how the
+	// canonical was assembled. It is re-injected on the next render and must not
+	// compound. (No-op when the banner is already absent.)
+	c.Memory.Body = source.StripManagedBanner(c.Memory.Body)
 	// Memory is a single block, not a named collection; nothing to write when
 	// the agent carries no memory (the common case during a full-agent import).
 	if strings.TrimSpace(c.Memory.Body) == "" {
 		return nil, nil
 	}
-	// The ingested memory is the rendered destination file. If apply wrote
-	// fragment markers, reverse them back into AGENTS.md + the fragment files so
-	// the round-trip is not lossy; otherwise fall back to the guard.
+	// If apply also wrote fragment markers, reverse them back into AGENTS.md +
+	// the fragment files so the round-trip is not lossy; otherwise fall back to
+	// the guard.
 	mem, hadMarkers, err := source.CollapseMemoryMarkers(c.Memory.Body)
 	switch {
 	case err != nil:

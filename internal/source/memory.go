@@ -107,6 +107,138 @@ func expandMemoryImports(body string, fragments map[string]string, visiting map[
 	})
 }
 
+// Managed-banner markers. Like the fragment markers above, these are reversible
+// HTML-comment delimiters: RenderManagedMemory injects the agentsync "managed
+// file" notice inside them on render, and StripManagedBanner removes the whole
+// block on capture (import/reconcile) so it NEVER lands in the canonical memory
+// source. The banner body between the markers is human-readable Markdown (a
+// blockquote) so an agent reading the rendered CLAUDE.md/AGENTS.md sees the
+// notice; the markers themselves are HTML comments the agent ignores.
+//
+// The namespace "agentsync:managed" is RESERVED. Each managed marker carries its
+// own identifier AFTER the namespace (here "memory-banner"), so if agentsync adds
+// more managed markers in future, each parses unambiguously and bidirectionally —
+// mirroring the per-name fragment markers above. Canonical memory (the AGENTS.md
+// body or any fragment) must not contain the namespace, and checkReservedMarkers
+// (called from loadMemory and WriteMemory) rejects a canonical that does — with a
+// message telling the user to remove/rename the offending content — rather than
+// letting it collide with the banner's markers. StripManagedBanner matches
+// agentsync's FULL rendered banner (derived from managedBannerFmt below), not the
+// bare markers, so a hand-edited native file carrying a user-authored
+// `<!-- agentsync:managed … -->` block — even one that begins like the banner — is
+// never stripped: it is left for checkReservedMarkers to reject loudly, never
+// silently deleted.
+const managedMarkerNamespace = "agentsync:managed"
+
+const (
+	managedStartMarker = "<!-- " + managedMarkerNamespace + " memory-banner -->"
+	managedEndMarker   = "<!-- /" + managedMarkerNamespace + " memory-banner -->"
+	// managedBannerFmt is the banner with a single %s for the destination file
+	// name. managedBanner renders it and managedBannerRe is DERIVED from it (see
+	// compileManagedBannerRe), so the rendered banner and the pattern that strips
+	// it are guaranteed to match the same text — they can never drift.
+	managedBannerFmt = managedStartMarker + "\n" +
+		"> **Managed by [agentsync](https://agentsync.cc) — do not edit `%s` directly.**\n" +
+		"> To change it, edit `.agentsync/memory/AGENTS.md` (or the relevant\n" +
+		"> `.agentsync/memory/fragments/*.md` fragment) and run `agentsync apply`.\n" +
+		"> Direct edits here are reported as drift and overwritten on the next apply.\n" +
+		managedEndMarker + "\n"
+)
+
+// managedBannerRe matches agentsync's full rendered banner: every static line
+// verbatim, the per-file name (%s) as a non-newline wildcard, CRLF-tolerant, plus
+// the blank-line separator RenderManagedMemory appends. It is derived from
+// managedBannerFmt so it tracks the banner text automatically. Matching the WHOLE
+// banner (not just the markers or its lead line) is what makes StripManagedBanner
+// safe: a block that differs from the banner in any STATIC line is not matched, so
+// a user-authored marker block is preserved rather than silently deleted. (The one
+// non-static span is the filename wildcard, so a block byte-identical to the banner
+// except for the file it names is still stripped — but such a block can never reach
+// the canonical source: checkReservedMarkers rejects the reserved namespace at both
+// load and capture, and only the boilerplate notice itself is matched, never the
+// user prose around it.)
+var managedBannerRe = compileManagedBannerRe()
+
+func compileManagedBannerRe() *regexp.Regexp {
+	body := strings.TrimSuffix(managedBannerFmt, "\n") // drop the template's own trailing newline
+	pre, post, _ := strings.Cut(body, "%s")
+	// Quote each literal half and make every embedded newline CRLF-tolerant; the
+	// %s (filename) becomes a non-newline run; consume the trailing separator.
+	quote := func(s string) string { return strings.ReplaceAll(regexp.QuoteMeta(s), "\n", `\r?\n`) }
+	return regexp.MustCompile(quote(pre) + `[^\r\n]*` + quote(post) + `(?:\r?\n){0,2}`)
+}
+
+// checkReservedMarkers rejects canonical memory that contains the reserved
+// managed-banner token. The token is owned by the managed-file banner
+// (RenderManagedMemory); a body or fragment carrying it would collide with the
+// banner's reversible markers, so agentsync errors and asks the user to fix it
+// rather than silently degrading. Called from loadMemory (authoring path) and
+// WriteMemory (capture path) so the violation surfaces at both boundaries.
+func checkReservedMarkers(body string, fragments map[string]string) error {
+	if strings.Contains(body, managedMarkerNamespace) {
+		return fmt.Errorf("memory/AGENTS.md contains the reserved marker %q, which is owned by agentsync's managed-file banner; remove or rephrase that text", managedMarkerNamespace)
+	}
+	for name, content := range fragments {
+		if strings.Contains(content, managedMarkerNamespace) {
+			return fmt.Errorf("memory fragment %q contains the reserved marker %q, which is owned by agentsync's managed-file banner; remove or rephrase that text (or rename the fragment if the marker is in its name)", name, managedMarkerNamespace)
+		}
+	}
+	return nil
+}
+
+// MemoryBannerEnabled reports whether the managed-file banner should be rendered
+// into memory files for this config. It is ON by default; only an explicit
+// `[memory] banner = false` in agentsync.toml disables it.
+func (cfg Config) MemoryBannerEnabled() bool {
+	return cfg.Memory.Banner == nil || *cfg.Memory.Banner
+}
+
+// managedBanner is the agentsync "managed file" notice prepended to a rendered
+// memory file, naming destFile (e.g. "CLAUDE.md"). It is STATIC apart from the
+// filename so it hashes identically on every render — drift compares the whole
+// rendered file, so a banner that varied (a version, a timestamp) would either
+// thrash the classifier or, worse, feed mutable data into hashed content.
+func managedBanner(destFile string) string {
+	return fmt.Sprintf(managedBannerFmt, destFile)
+}
+
+// RenderManagedMemory expands fragment imports (see ExpandMemoryImports) and,
+// when banner is true, PREPENDS the agentsync managed-file notice naming
+// destFile. The banner is wrapped in reversible markers (see managedMarkerNamespace)
+// so StripManagedBanner removes it on capture — it is therefore never part of
+// the canonical memory source and never compounds across applies. Every adapter
+// renders memory through this one helper so the notice is byte-identical across
+// agents.
+//
+// Returns plain expansion (no banner) when banner is false, destFile is empty,
+// or the memory already contains the reserved managed marker token (a belt-and-
+// suspenders guard; checkReservedMarkers already rejects such a canonical at load
+// time). Callers guard `body == ""` before calling, so the banner is only ever
+// attached to a non-empty memory file.
+func RenderManagedMemory(body string, fragments map[string]string, destFile string, banner bool) string {
+	expanded := ExpandMemoryImports(body, fragments)
+	if !banner || destFile == "" || strings.Contains(expanded, managedMarkerNamespace) {
+		return expanded
+	}
+	return managedBanner(destFile) + "\n" + expanded
+}
+
+// StripManagedBanner removes the managed-file banner block(s) RenderManagedMemory
+// injects, returning the memory content without it. It is the inverse half that
+// keeps the banner out of the canonical source: capture (import/reconcile) calls
+// it on a rendered memory file BEFORE CollapseMemoryMarkers, so neither the
+// banner nor the markers reach memory/AGENTS.md. It matches only agentsync's full
+// rendered banner (managedBannerRe), so a user-authored `<!-- agentsync:managed -->`
+// block — even one that opens like the banner — is left untouched and never
+// silently deleted (checkReservedMarkers rejects it loudly instead). It is
+// idempotent and a no-op on content that carries no banner.
+func StripManagedBanner(s string) string {
+	if !strings.Contains(s, managedStartMarker) {
+		return s
+	}
+	return managedBannerRe.ReplaceAllString(s, "")
+}
+
 // CollapseMemoryMarkers reverses ExpandMemoryImports' marker emission: it parses
 // a rendered memory file back into memory/AGENTS.md (with `@import` directives
 // restored where each fragment block was) plus the fragment files. It is how

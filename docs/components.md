@@ -61,7 +61,9 @@ memory-fragment expansion.
   `Memory`, `Project`); `Load(fs, home)`; `ParseFrontmatter`; the `Write*`
   family (`WriteMCP`, `WriteLSP`, `WritePlugin`, `WriteMarketplace`, `WriteSkill`,
   `WriteSubagent`, `WriteCommand`, `WriteHooks`, `WriteMemory`); `ReadMCP`/`ReadLSP`
-  (carry source-only fields); `ExpandMemoryImports`.
+  (carry source-only fields); `ExpandMemoryImports`; `RenderManagedMemory` /
+  `StripManagedBanner` (inject / strip the managed-file banner — see
+  `docs/architecture.md`).
 - **Depends on:** iox, jsonkeys.
 - **Files:** `schema.go`, `loader.go`, `writer.go`, `memory.go`.
 

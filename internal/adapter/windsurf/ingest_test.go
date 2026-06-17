@@ -106,8 +106,8 @@ func TestRoundTrip_GlobalRulesAndWorkflows_UserScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("global_rules.md not written: %v", err)
 	}
-	if string(onDisk) != in.Memory.Body {
-		t.Fatalf("global rules must be frontmatter-less verbatim body: %q", onDisk)
+	if source.StripManagedBanner(string(onDisk)) != in.Memory.Body {
+		t.Fatalf("global rules must be frontmatter-less verbatim body under the managed banner: %q", onDisk)
 	}
 	got, err := a.Ingest(adapter.ScopeUser, "")
 	if err != nil {
@@ -140,12 +140,21 @@ func TestRoundTrip_ProjectRule_FrontmatterStripped(t *testing.T) {
 	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
 		t.Fatal(err)
 	}
+	// The rendered rule carries BOTH the activation frontmatter (at byte 0) and
+	// the managed banner (after it); ingest must strip both back to the clean body.
+	onDisk, err := os.ReadFile(filepath.Join(proj, ".windsurf", "rules", "agentsync.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(onDisk), "---\ntrigger: always_on\n---\n") || !strings.Contains(string(onDisk), "<!-- agentsync:managed memory-banner -->") {
+		t.Fatalf("rendered rule should carry frontmatter + banner: %q", onDisk)
+	}
 	got, err := a.Ingest(adapter.ScopeProject, proj)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Memory.Body != body {
-		t.Fatalf("frontmatter must be stripped on ingest: %q", got.Memory.Body)
+		t.Fatalf("frontmatter and banner must both be stripped on ingest: %q", got.Memory.Body)
 	}
 
 	// Hand-changed trigger → body still captured, with a warning.

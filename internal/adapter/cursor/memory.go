@@ -1,6 +1,8 @@
 package cursor
 
 import (
+	"path/filepath"
+
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/source"
 )
@@ -20,7 +22,7 @@ func (a *Adapter) renderMemory(c source.Canonical, p Paths, scope adapter.Scope)
 			Reason:    "Cursor stores user-level rules in app-local storage; no filesystem projection target (use project scope for AGENTS.md)",
 		}}, nil
 	}
-	body := source.ExpandMemoryImports(c.Memory.Body, c.Memory.Fragments)
+	body := source.RenderManagedMemory(c.Memory.Body, c.Memory.Fragments, filepath.Base(p.Memory), c.Config.MemoryBannerEnabled())
 	return []adapter.FileOp{{
 		Action:        "write",
 		Path:          p.Memory,

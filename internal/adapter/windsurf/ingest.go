@@ -62,20 +62,21 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 
 	// Memory: the workspace rule at project scope (activation frontmatter
-	// stripped), the global rules file at user scope (frontmatter-less,
-	// captured verbatim).
+	// stripped), the global rules file at user scope (frontmatter-less). Both
+	// then drop the agentsync managed-file banner — a render-time decoration with
+	// no canonical home (see claude/ingest.go).
 	if p.RulesDir != "" {
 		if data, err := os.ReadFile(filepath.Join(p.RulesDir, memoryRuleFile)); err == nil {
 			body, exact := stripMemoryRuleFrontmatter(data)
 			if !exact {
 				fmt.Fprintf(warn, "warning: %s does not start with the agentsync-rendered `trigger: always_on` frontmatter; Windsurf activation metadata has no canonical home and is not captured\n", filepath.Join(p.RulesDir, memoryRuleFile))
 			}
-			c.Memory.Body = body
+			c.Memory.Body = source.StripManagedBanner(body)
 		}
 	}
 	if p.GlobalRules != "" {
 		if data, err := os.ReadFile(p.GlobalRules); err == nil {
-			c.Memory.Body = string(data)
+			c.Memory.Body = source.StripManagedBanner(string(data))
 		}
 	}
 

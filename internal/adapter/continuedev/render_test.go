@@ -128,8 +128,11 @@ func TestRender_Memory_PlainRule(t *testing.T) {
 	if op == nil {
 		t.Fatal("agentsync.md rule op missing")
 	}
-	if string(op.Content) != "# Rules\n\nBe concise.\n" {
-		t.Fatalf("memory should be written verbatim (no frontmatter): %q", op.Content)
+	if !strings.HasPrefix(string(op.Content), "<!-- agentsync:managed memory-banner -->") {
+		t.Fatalf("expected managed banner prefix: %q", op.Content)
+	}
+	if source.StripManagedBanner(string(op.Content)) != "# Rules\n\nBe concise.\n" {
+		t.Fatalf("memory body should be verbatim under the managed banner (no frontmatter): %q", op.Content)
 	}
 }
 

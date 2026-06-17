@@ -45,7 +45,7 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 
 	if memPath := a.memoryPath(scope, project); memPath != "" {
 		if data, err := os.ReadFile(memPath); err == nil {
-			c.Memory.Body = string(data)
+			c.Memory.Body = source.StripManagedBanner(string(data)) // banner stripped — see claude/ingest.go
 		}
 	}
 

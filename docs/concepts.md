@@ -66,7 +66,11 @@ means adding an adapter — the canonical schema never changes.
 `agentsync apply` runs the **render** pipeline: load the source → resolve
 secrets → ask each enabled adapter to project the model into a set of file
 operations → write them atomically → record hashes in state. Apply is
-**local-only and offline** — it never hits the network.
+**local-only and offline** — it never hits the network. Rendered memory files
+also get a short **managed banner** prepended (naming the file, pointing edits
+back at `.agentsync/memory/AGENTS.md` + `agentsync apply`); it lives only in the
+rendered file — stripped on ingest/capture, never written to the canonical
+source — and is on by default (`[memory] banner = false` opts out).
 
 ### Capture / Ingest / write-back
 The reverse direction. **Ingest** reads an agent's native config back into the
