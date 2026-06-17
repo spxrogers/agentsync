@@ -150,8 +150,13 @@ const (
 // the blank-line separator RenderManagedMemory appends. It is derived from
 // managedBannerFmt so it tracks the banner text automatically. Matching the WHOLE
 // banner (not just the markers or its lead line) is what makes StripManagedBanner
-// safe: a block that differs from the banner in any static line is not matched, so
-// a user-authored marker block is preserved rather than silently deleted.
+// safe: a block that differs from the banner in any STATIC line is not matched, so
+// a user-authored marker block is preserved rather than silently deleted. (The one
+// non-static span is the filename wildcard, so a block byte-identical to the banner
+// except for the file it names is still stripped — but such a block can never reach
+// the canonical source: checkReservedMarkers rejects the reserved namespace at both
+// load and capture, and only the boilerplate notice itself is matched, never the
+// user prose around it.)
 var managedBannerRe = compileManagedBannerRe()
 
 func compileManagedBannerRe() *regexp.Regexp {

@@ -391,6 +391,19 @@ func TestStripManagedBanner_CRLF(t *testing.T) {
 	}
 }
 
+// TestStripManagedBanner_CrossFilename locks the filename-wildcard contract: a
+// banner strips back to the clean body regardless of which file it names, so
+// capture works for every agent's destination (CLAUDE.md, GEMINI.md, the rule
+// files, …) without the stripper knowing the name.
+func TestStripManagedBanner_CrossFilename(t *testing.T) {
+	for _, name := range []string{"CLAUDE.md", "AGENTS.md", "GEMINI.md", "agentsync.md", "global_rules.md"} {
+		rendered := source.RenderManagedMemory("# Body\n\nkeep me\n", nil, name, true)
+		if got := source.StripManagedBanner(rendered); got != "# Body\n\nkeep me\n" {
+			t.Fatalf("%s: strip did not recover body: %q", name, got)
+		}
+	}
+}
+
 // TestRenderManagedMemory_Deterministic underpins the "banner never manufactures
 // drift" claim: the rendered bytes are identical across calls (no timestamp or
 // other nondeterminism), so the re-render / last-applied / on-disk hashes the
