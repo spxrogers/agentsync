@@ -133,6 +133,70 @@ func TestBuildReport_PartialCoverage(t *testing.T) {
 	}
 }
 
+// TestBuildReport_SkipDetails verifies that each skipped component's detail
+// (component, name, reason) is carried into the row, not just the count — and
+// that it survives JSON round-trip with the lowercase keys the CLI surface
+// promises. This is what lets `explain` list what is skipped instead of a bare
+// "(N skipped)".
+func TestBuildReport_SkipDetails(t *testing.T) {
+	c := source.Canonical{
+		MCPServers: []source.MCPServer{{ID: "github"}},
+		Plugins: []source.Plugin{
+			{ID: "demo", Plugin: source.PluginSpec{ID: "demo@test-mp"}},
+		},
+	}
+	skips := []adapter.Skip{
+		{Component: "lsp", Name: "gopls", Reason: "Codex has no LSP configuration concept"},
+		{Component: "hook", Name: "SessionEnd", Reason: "Codex does not recognize this lifecycle event"},
+	}
+	plan := render.RenderPlan{
+		PerAgent: map[string]render.AgentResult{
+			"codex": {
+				Ops:   []adapter.FileOp{{Action: "write", MergeStrategy: "merge-toml-keys"}},
+				Skips: skips,
+			},
+		},
+	}
+	report := render.BuildReport(c, plan, []string{"codex"})
+	if len(report.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(report.Rows))
+	}
+	row := report.Rows[0]
+	if row.Skips != 2 {
+		t.Errorf("Skips = %d, want 2", row.Skips)
+	}
+	if len(row.SkipDetails) != 2 {
+		t.Fatalf("SkipDetails len = %d, want 2: %+v", len(row.SkipDetails), row.SkipDetails)
+	}
+	if row.SkipDetails[0] != (render.SkipDetail{Component: "lsp", Name: "gopls", Reason: "Codex has no LSP configuration concept"}) {
+		t.Errorf("SkipDetails[0] = %+v, want the gopls lsp skip", row.SkipDetails[0])
+	}
+
+	// JSON surface: lowercase component/name/reason keys under skipDetails.
+	var buf bytes.Buffer
+	if err := report.PrintJSON(&buf); err != nil {
+		t.Fatalf("PrintJSON: %v", err)
+	}
+	var parsed struct {
+		Rows []struct {
+			SkipDetails []struct {
+				Component string `json:"component"`
+				Name      string `json:"name"`
+				Reason    string `json:"reason"`
+			} `json:"skipDetails"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("JSON parse: %v", err)
+	}
+	if len(parsed.Rows) != 1 || len(parsed.Rows[0].SkipDetails) != 2 {
+		t.Fatalf("JSON skipDetails not emitted: %s", buf.String())
+	}
+	if parsed.Rows[0].SkipDetails[1].Reason != "Codex does not recognize this lifecycle event" {
+		t.Errorf("JSON skipDetails[1].reason = %q", parsed.Rows[0].SkipDetails[1].Reason)
+	}
+}
+
 func TestTranslationReport_PrintText(t *testing.T) {
 	c := source.Canonical{
 		Plugins: []source.Plugin{

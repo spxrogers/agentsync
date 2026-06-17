@@ -373,6 +373,100 @@ func TestExplain_FlagConflicts(t *testing.T) {
 	}
 }
 
+// TestExplain_ListsSkips verifies that explain does not stop at a bare
+// "(N skipped)" tally — it lists each skipped component (label + reason) under
+// the agent row, in both text and JSON. The fixture ships an LSP server, which
+// Codex always skips (no LSP concept), so the skip is deterministic.
+func TestExplain_ListsSkips(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	fixture := setupExplainSkipFixture(t, tmp)
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "plugin", "install", "skipdemo@skip-mp"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "explain", "skipdemo@skip-mp")
+	if err != nil {
+		t.Fatalf("explain: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "skipped") {
+		t.Fatalf("expected a skipped tally; got:\n%s", out)
+	}
+	// The skip must be itemized, not just counted: the component and its reason.
+	if !strings.Contains(out, "lsp") {
+		t.Errorf("explain should name the skipped lsp component; got:\n%s", out)
+	}
+	if !strings.Contains(out, "Codex has no LSP configuration concept") {
+		t.Errorf("explain should print the skip reason; got:\n%s", out)
+	}
+
+	// JSON carries the same detail under skipDetails.
+	outJSON, err := runCLI(t, env, "explain", "skipdemo@skip-mp", "--json")
+	if err != nil {
+		t.Fatalf("explain --json: %v\n%s", err, outJSON)
+	}
+	var parsed struct {
+		Rows []struct {
+			SkipDetails []struct {
+				Component string `json:"component"`
+				Reason    string `json:"reason"`
+			} `json:"skipDetails"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal([]byte(outJSON), &parsed); err != nil {
+		t.Fatalf("explain --json not valid JSON: %v\n%s", err, outJSON)
+	}
+	found := false
+	for _, r := range parsed.Rows {
+		for _, sd := range r.SkipDetails {
+			if sd.Component == "lsp" && strings.Contains(sd.Reason, "no LSP configuration concept") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("explain --json missing the lsp skipDetail; got:\n%s", outJSON)
+	}
+}
+
+// setupExplainSkipFixture builds a marketplace whose single plugin ships an MCP
+// server plus an LSP server. Codex renders the MCP but skips the LSP, giving the
+// skip-listing test a deterministic partial-coverage row.
+func setupExplainSkipFixture(t *testing.T, tmp string) string {
+	t.Helper()
+	fixture := filepath.Join(tmp, "fixture-marketplace-explain-skip")
+	if err := os.MkdirAll(filepath.Join(fixture, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixture, ".claude-plugin", "marketplace.json"),
+		[]byte(`{"name":"skip-mp","owner":{"name":"x"},"plugins":[{"name":"skipdemo","source":"./plugins/skipdemo"}]}`),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	plugDir := filepath.Join(fixture, "plugins", "skipdemo", ".claude-plugin")
+	if err := os.MkdirAll(plugDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(plugDir, "plugin.json"),
+		[]byte(`{"name":"skipdemo","version":"1.0.0",`+
+			`"mcpServers":{"skip-mcp":{"command":"echo","args":["hi"]}},`+
+			`"lspServers":{"skip-lsp":{"command":"lang-server"}}}`),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	return fixture
+}
+
 // setupExplainFixture creates a minimal local marketplace with a single demo plugin.
 func setupExplainFixture(t *testing.T, tmp string) string {
 	t.Helper()

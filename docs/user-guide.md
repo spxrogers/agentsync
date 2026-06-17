@@ -377,10 +377,16 @@ LSP servers). Each is translated independently per agent — fully, lossily, or
 skipped — and the report tells you exactly which:
 
 ```
-plugin: atlassian@anthropic
-  claude    ✓ full    (1 mcp, 5 commands)
-  opencode  ◐ partial (1 mcp; 5 commands → projected)
+▸ atlassian@anthropic
+  → claude    ✓ full        1 mcp · 5 commands
+  → codex     ◐ partial     1 mcp · 5 commands  (1 skipped)
+      • lsp atlassian-lsp  Codex has no LSP configuration concept
 ```
+
+A `◐ partial` row is never a dead end: every skipped component is itemized
+beneath it (what it is, and why that agent could not translate it), so you can
+see exactly what loss `apply` would incur. `--json` carries the same breakdown
+under each row's `skipDetails` array.
 
 Inspect any plugin's coverage without applying:
 

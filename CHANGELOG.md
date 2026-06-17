@@ -11,6 +11,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **`explain` itemizes skipped components.** A `◐ partial` row that reports
+  `(N skipped)` is no longer a dead end: each skipped component is now listed
+  beneath the agent row as a faint `<component> <name>  <reason>` line — what the
+  agent could not translate, and why (e.g. `lsp atlassian-lsp  Codex has no LSP
+  configuration concept`). The structured surface gains a `skipDetails` array
+  (`{component, name, reason}`) on every `explain --json` row. The translation
+  report carries the detail end-to-end (`render.PluginRow.SkipDetails`) rather
+  than collapsing skips to a bare count; the same global attribution caveat as
+  the counts applies (the flattened canonical model does not tag a component with
+  its origin plugin, so the skips shown are the agent's across the whole model).
+
 - **Managed-file banner on rendered memory.** Every rendered memory file
   (`CLAUDE.md`, `AGENTS.md`, …) is now prepended with a short agentsync notice
   naming the file and pointing edits back at `.agentsync/memory/AGENTS.md` +
