@@ -572,5 +572,10 @@ func loadMemory(fs afero.Fs, home string) (Memory, error) {
 	if werr != nil {
 		return m, fmt.Errorf("read memory/fragments: %w", werr)
 	}
+	// Reject a canonical that uses the reserved managed-banner marker (see
+	// checkReservedMarkers): it would collide with the banner's reversible markers.
+	if err := checkReservedMarkers(m.Body, m.Fragments); err != nil {
+		return m, err
+	}
 	return m, nil
 }

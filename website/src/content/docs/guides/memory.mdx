@@ -105,6 +105,14 @@ source instead.
 	upgrading adds the banner to existing memory files — a one-time `pending`.
 </Aside>
 
+<Aside type="caution" title="`agentsync:managed` is a reserved marker">
+	If your `memory/AGENTS.md` or a fragment contains the literal
+	`agentsync:managed` marker, agentsync errors and asks you to remove it, so it
+	can't collide with the banner. Capture is conservative in the other direction
+	too: it strips only agentsync's own banner, so any other content you keep is
+	never deleted.
+</Aside>
+
 ## Per-agent rendering
 
 | Agent | Native memory file |

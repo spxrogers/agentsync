@@ -22,6 +22,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   drift. Rendered through one shared helper (`source.RenderManagedMemory`) so it is
   byte-identical across all 31 agents. On by default; opt out with `[memory] banner
   = false` in `agentsync.toml` (the project overlay inherits the user setting).
+  The marker `agentsync:managed` is **reserved**: agentsync rejects (with a clear
+  error, at load and at capture) any canonical memory whose body or a fragment
+  contains it, and the capture strip is anchored on the banner's own signature line
+  so a user-authored marker block is preserved verbatim — never silently deleted.
   **Behavior change:** the first `apply` after upgrading rewrites managed memory
   files to add the banner (a one-time `pending` in `status`).
 - **Breadth tier — 22 more agents via a data-driven generic adapter

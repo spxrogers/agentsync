@@ -78,7 +78,11 @@ compounds. Because the banner text is static (only the filename varies) it hashe
 identically on every render, so an untouched file still classifies `InSync` — the
 banner never manufactures drift. It is on by default; `[memory] banner = false`
 in `agentsync.toml` opts out (the project overlay inherits the user setting unless
-it sets its own).
+it sets its own). The `agentsync:managed` marker is **reserved**: `checkReservedMarkers`
+(in `loadMemory` and `WriteMemory`) rejects a canonical whose body or a fragment
+carries it rather than letting it collide with the banner's markers, and
+`StripManagedBanner` anchors on the banner's signature line so it removes only
+agentsync's own banner — a user-authored marker block is preserved, never deleted.
 
 ---
 

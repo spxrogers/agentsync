@@ -200,6 +200,36 @@ func TestRender_Memory(t *testing.T) {
 	}
 }
 
+// TestRender_Memory_BannerDisabled: with [memory] banner = false the rendered
+// memory carries no managed banner — the body is written verbatim.
+func TestRender_Memory_BannerDisabled(t *testing.T) {
+	off := false
+	c := source.Canonical{
+		Config: source.Config{Memory: source.MemoryConfig{Banner: &off}},
+		Memory: source.Memory{Body: "# Personal style\n\nBe concise.\n"},
+	}
+	a := claude.New(claude.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var memOp *adapter.FileOp
+	for i, op := range ops {
+		if strings.HasSuffix(op.Path, "/CLAUDE.md") {
+			memOp = &ops[i]
+		}
+	}
+	if memOp == nil {
+		t.Fatal("no CLAUDE.md op")
+	}
+	if strings.Contains(string(memOp.Content), "agentsync:managed") {
+		t.Fatalf("banner must be suppressed when [memory] banner=false: %s", memOp.Content)
+	}
+	if string(memOp.Content) != "# Personal style\n\nBe concise.\n" {
+		t.Fatalf("memory should be the verbatim body with no banner: %q", memOp.Content)
+	}
+}
+
 func TestRender_Skills(t *testing.T) {
 	c := source.Canonical{
 		Skills: []source.Skill{{

@@ -353,6 +353,11 @@ drift. It is on by default; opt out with a `[memory]` table in `agentsync.toml`:
 banner = false
 ```
 
+The `agentsync:managed` marker is **reserved** — if your `memory/AGENTS.md` or a
+fragment contains it, agentsync errors and asks you to remove it (so it can't
+collide with the banner). The reverse is safe too: capture only strips agentsync's
+own banner, so any other content you keep is never deleted.
+
 ### Marketplaces & plugins — the fan-out payoff
 
 This is where agentsync earns its keep. Add a marketplace, install a plugin once,

@@ -350,6 +350,98 @@ func TestManagedBanner_ArtifactRoundTrip(t *testing.T) {
 	}
 }
 
+// TestStripManagedBanner_PreservesUserAuthoredBlock is the regression for the
+// strip/render ownership asymmetry (PR #91 review): StripManagedBanner must
+// remove ONLY agentsync's own banner (anchored on its lead line), never an
+// arbitrary user-authored <!-- agentsync:managed --> block — deleting the latter
+// would be a silent data loss on capture.
+func TestStripManagedBanner_PreservesUserAuthoredBlock(t *testing.T) {
+	// A user's own block: same markers, but NOT the agentsync banner body.
+	user := "# Memory\n\n<!-- agentsync:managed -->\nmy own notes here\n<!-- /agentsync:managed -->\n\nrest\n"
+	if got := source.StripManagedBanner(user); got != user {
+		t.Fatalf("user-authored marker block must be preserved verbatim:\n got %q\nwant %q", got, user)
+	}
+	// agentsync's own banner IS stripped (and only it).
+	withBanner := source.RenderManagedMemory("# Memory\nbody\n", nil, "CLAUDE.md", true)
+	if !strings.Contains(withBanner, "agentsync:managed") {
+		t.Fatalf("expected a banner to strip: %q", withBanner)
+	}
+	if got := source.StripManagedBanner(withBanner); got != "# Memory\nbody\n" {
+		t.Fatalf("agentsync banner not stripped to clean body: %q", got)
+	}
+}
+
+// TestStripManagedBanner_CRLF: the banner strips cleanly even with CRLF line
+// endings (a Windows-authored or editor-rewritten native file).
+func TestStripManagedBanner_CRLF(t *testing.T) {
+	lf := source.RenderManagedMemory("# Body\n", nil, "CLAUDE.md", true)
+	crlf := strings.ReplaceAll(lf, "\n", "\r\n")
+	if got := source.StripManagedBanner(crlf); got != "# Body\r\n" {
+		t.Fatalf("CRLF strip left residue: %q", got)
+	}
+}
+
+// TestRenderManagedMemory_Deterministic underpins the "banner never manufactures
+// drift" claim: the rendered bytes are identical across calls (no timestamp or
+// other nondeterminism), so the re-render / last-applied / on-disk hashes the
+// drift classifier compares stay equal for an untouched file.
+func TestRenderManagedMemory_Deterministic(t *testing.T) {
+	body := "# Memory\n\n@import ./fragments/x.md\n"
+	frags := map[string]string{"x.md": "be terse\n"}
+	a := source.RenderManagedMemory(body, frags, "CLAUDE.md", true)
+	b := source.RenderManagedMemory(body, frags, "CLAUDE.md", true)
+	if a != b {
+		t.Fatalf("render not deterministic:\n a=%q\n b=%q", a, b)
+	}
+}
+
+// TestLoad_RejectsReservedMarker enforces the reserved-token contract (PR #91
+// review): canonical memory — the AGENTS.md body OR a fragment — must not contain
+// the managed-banner marker, or it would collide with the banner's reversible
+// markers. Load surfaces it as a clear error instead of silently degrading.
+func TestLoad_RejectsReservedMarker(t *testing.T) {
+	cases := []struct {
+		name     string
+		body     string
+		fragment string // written to fragments/bad.md when non-empty
+	}{
+		{"in body", "# M\nsee <!-- agentsync:managed --> here\n", ""},
+		{"in fragment", "# M\n", "oops <!-- agentsync:managed -->\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			fragDir := filepath.Join(home, "memory", "fragments")
+			if err := os.MkdirAll(fragDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, "memory", "AGENTS.md"), []byte(tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if tc.fragment != "" {
+				if err := os.WriteFile(filepath.Join(fragDir, "bad.md"), []byte(tc.fragment), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := source.Load(afero.NewOsFs(), home); err == nil || !strings.Contains(err.Error(), "reserved marker") {
+				t.Fatalf("Load should reject the reserved marker; got err=%v", err)
+			}
+		})
+	}
+}
+
+// TestWriteMemory_RejectsReservedMarker: the capture funnel (import/reconcile →
+// WriteMemory) refuses to persist the reserved managed-banner marker into the
+// canonical source, so a hand-edited native file carrying it errors loudly rather
+// than corrupting memory/.
+func TestWriteMemory_RejectsReservedMarker(t *testing.T) {
+	home := t.TempDir()
+	if err := source.WriteMemory(home, source.Memory{Body: "x <!-- agentsync:managed --> y\n"}); err == nil ||
+		!strings.Contains(err.Error(), "reserved marker") {
+		t.Fatalf("WriteMemory should reject the reserved marker; got err=%v", err)
+	}
+}
+
 // TestExpandMemoryImports_MarkerCollision: a fragment whose content already
 // contains the marker token disables markers entirely (plain expansion), so a
 // reverse parse can't be corrupted.

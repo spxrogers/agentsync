@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spxrogers/agentsync/internal/source"
 )
 
 // mcpKeySHA returns the seeded state hash for /mcpServers/<id>, or "".
@@ -364,6 +366,48 @@ func TestImport_RejectsTraversalSelector(t *testing.T) {
 
 // TestImport_MCPFromClaude verifies that import claude:mcp:<id> reads the MCP
 // server from .claude.json and writes it to the canonical source.
+// TestImport_MemoryStripsBanner: importing a native memory file that carries the
+// agentsync managed-file banner writes the banner-free body to the canonical
+// source — the banner must never round-trip back into memory/AGENTS.md.
+func TestImport_MemoryStripsBanner(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+
+	body := "# My rules\n\nBe concise.\n"
+	native := source.RenderManagedMemory(body, nil, "CLAUDE.md", true) // banner + body, as apply renders it
+	if !strings.Contains(native, "agentsync:managed") {
+		t.Fatal("test setup: expected a banner in native content")
+	}
+	memPath := filepath.Join(tmp, ".claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(memPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(memPath, []byte(native), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runCLI(t, env, "import", "claude:memory"); err != nil {
+		t.Fatalf("import claude:memory: %v\n%s", err, out)
+	}
+
+	got, err := os.ReadFile(filepath.Join(tmp, ".agentsync", "memory", "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("canonical memory not written: %v", err)
+	}
+	if string(got) != body {
+		t.Fatalf("canonical memory should be the banner-free body; got:\n%q", got)
+	}
+	if strings.Contains(string(got), "agentsync:managed") || strings.Contains(string(got), "Managed by [agentsync]") {
+		t.Fatalf("banner leaked into canonical memory:\n%s", got)
+	}
+}
+
 func TestImport_MCPFromClaude(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

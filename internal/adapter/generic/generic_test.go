@@ -100,7 +100,14 @@ func TestRender_Memory_ScopeAware(t *testing.T) {
 	a := generic.New(spec, generic.Options{TargetRoot: tmp})
 
 	uops, _, _ := a.Render(secrets.ForRender(source.Canonical{Memory: source.Memory{Body: "be terse\n"}}), adapter.ScopeUser, "")
-	if op := findOp(uops, ".config/amp/AGENTS.md"); op == nil || source.StripManagedBanner(string(op.Content)) != "be terse\n" {
+	uop := findOp(uops, ".config/amp/AGENTS.md")
+	if uop == nil {
+		t.Fatalf("user memory op missing: %+v", uops)
+	}
+	if !strings.HasPrefix(string(uop.Content), "<!-- agentsync:managed -->") {
+		t.Fatalf("expected managed banner prefix: %q", uop.Content)
+	}
+	if source.StripManagedBanner(string(uop.Content)) != "be terse\n" {
 		t.Fatalf("user memory wrong (under managed banner): %+v", uops)
 	}
 
