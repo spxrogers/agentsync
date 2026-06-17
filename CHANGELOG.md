@@ -136,6 +136,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   / secrets axes and an honest read on where agentsync is differentiated.
   Mirrored to the site at `/comparison/` via
   `sync-docs.mjs` (sidebar: **Start here → How agentsync compares**).
+- **Context7 AI chat widget on the docs site.** The published site at
+  [agentsync.cc](https://agentsync.cc) now loads the Context7 chat widget on
+  every page (an async floating chat button, wired to the
+  `/spxrogers/agentsync` Context7 source) via a `script` tag in Starlight's
+  `head` config (`website/astro.config.mjs`).
 
 ## [0.1.0] — 2026-06-05
 
