@@ -16,7 +16,9 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   naming the file and pointing edits back at `.agentsync/memory/AGENTS.md` +
   `agentsync apply`, so an agent (or human) editing the native file is told it is
   agentsync-managed. The banner lives only in the rendered file — it is wrapped in
-  reversible `<!-- agentsync:managed -->` markers, stripped on ingest and at the
+  reversible `<!-- agentsync:managed memory-banner -->` markers (the
+  `agentsync:managed` namespace carries a per-marker identifier so future managed
+  markers stay unambiguous), stripped on ingest and at the
   `import`/`reconcile` write-back funnels, and re-rendered each apply, so it never
   enters the canonical source, never compounds, and (being static) never shows as
   drift. Rendered through one shared helper (`source.RenderManagedMemory`) so it is

@@ -344,9 +344,10 @@ rather than guess; the drift still shows in `status`/`diff` and you fold it into
 agentsync notice — a blockquote naming the file (e.g. `CLAUDE.md`) and pointing
 edits back at `.agentsync/memory/AGENTS.md` + `agentsync apply`. It is written by
 agentsync, **not** stored in your canonical `memory/AGENTS.md`: it is wrapped in
-`<!-- agentsync:managed -->` markers, stripped on `import`/`reconcile`, and
-re-rendered each apply — so it never compounds and (being static) never shows as
-drift. It is on by default; opt out with a `[memory]` table in `agentsync.toml`:
+`<!-- agentsync:managed memory-banner -->` markers, stripped on
+`import`/`reconcile`, and re-rendered each apply — so it never compounds and
+(being static) never shows as drift. It is on by default; opt out with a
+`[memory]` table in `agentsync.toml`:
 
 ```toml
 [memory]

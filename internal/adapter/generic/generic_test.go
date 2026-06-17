@@ -104,7 +104,7 @@ func TestRender_Memory_ScopeAware(t *testing.T) {
 	if uop == nil {
 		t.Fatalf("user memory op missing: %+v", uops)
 	}
-	if !strings.HasPrefix(string(uop.Content), "<!-- agentsync:managed -->") {
+	if !strings.HasPrefix(string(uop.Content), "<!-- agentsync:managed memory-banner -->") {
 		t.Fatalf("expected managed banner prefix: %q", uop.Content)
 	}
 	if source.StripManagedBanner(string(uop.Content)) != "be terse\n" {

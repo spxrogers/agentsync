@@ -146,7 +146,7 @@ func TestRoundTrip_ProjectRule_FrontmatterStripped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(string(onDisk), "---\ntrigger: always_on\n---\n") || !strings.Contains(string(onDisk), "<!-- agentsync:managed -->") {
+	if !strings.HasPrefix(string(onDisk), "---\ntrigger: always_on\n---\n") || !strings.Contains(string(onDisk), "<!-- agentsync:managed memory-banner -->") {
 		t.Fatalf("rendered rule should carry frontmatter + banner: %q", onDisk)
 	}
 	got, err := a.Ingest(adapter.ScopeProject, proj)

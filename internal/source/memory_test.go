@@ -209,8 +209,8 @@ func TestRenderManagedMemory_PrependsBanner(t *testing.T) {
 	got := source.RenderManagedMemory(body, nil, "CLAUDE.md", true)
 
 	for _, want := range []string{
-		"<!-- agentsync:managed -->",
-		"<!-- /agentsync:managed -->",
+		"<!-- agentsync:managed memory-banner -->",
+		"<!-- /agentsync:managed memory-banner -->",
 		"do not edit `CLAUDE.md` directly",
 		".agentsync/memory/AGENTS.md",
 		"agentsync apply",
@@ -219,13 +219,13 @@ func TestRenderManagedMemory_PrependsBanner(t *testing.T) {
 			t.Fatalf("banner missing %q in:\n%s", want, got)
 		}
 	}
-	if !strings.HasPrefix(got, "<!-- agentsync:managed -->") {
-		t.Fatalf("banner must be prepended; got prefix %q", got[:min(40, len(got))])
+	if !strings.HasPrefix(got, "<!-- agentsync:managed memory-banner -->") {
+		t.Fatalf("banner must be prepended; got prefix %q", got[:min(48, len(got))])
 	}
 	if !strings.Contains(got, "Be concise.") {
 		t.Fatalf("memory body dropped: %s", got)
 	}
-	if strings.Index(got, "<!-- /agentsync:managed -->") > strings.Index(got, "Be concise.") {
+	if strings.Index(got, "<!-- /agentsync:managed memory-banner -->") > strings.Index(got, "Be concise.") {
 		t.Fatalf("banner must precede the body: %s", got)
 	}
 }
@@ -352,18 +352,28 @@ func TestManagedBanner_ArtifactRoundTrip(t *testing.T) {
 
 // TestStripManagedBanner_PreservesUserAuthoredBlock is the regression for the
 // strip/render ownership asymmetry (PR #91 review): StripManagedBanner must
-// remove ONLY agentsync's own banner (anchored on its lead line), never an
-// arbitrary user-authored <!-- agentsync:managed --> block — deleting the latter
-// would be a silent data loss on capture.
+// remove ONLY agentsync's own full banner, never an arbitrary user-authored
+// block in the reserved namespace — deleting the latter would be a silent data
+// loss on capture. Because the strip matches the WHOLE banner, even a block that
+// reuses the exact managed markers but differs in body is preserved (and then
+// rejected loudly by checkReservedMarkers, not deleted).
 func TestStripManagedBanner_PreservesUserAuthoredBlock(t *testing.T) {
-	// A user's own block: same markers, but NOT the agentsync banner body.
-	user := "# Memory\n\n<!-- agentsync:managed -->\nmy own notes here\n<!-- /agentsync:managed -->\n\nrest\n"
-	if got := source.StripManagedBanner(user); got != user {
-		t.Fatalf("user-authored marker block must be preserved verbatim:\n got %q\nwant %q", got, user)
+	cases := map[string]string{
+		// Bare markers (old namespace style), arbitrary body.
+		"bare markers": "# Memory\n\n<!-- agentsync:managed -->\nmy own notes here\n<!-- /agentsync:managed -->\n\nrest\n",
+		// The EXACT managed markers agentsync renders, but a body that is NOT the banner.
+		"exact markers": "# Memory\n\n<!-- agentsync:managed memory-banner -->\nmy own notes here\n<!-- /agentsync:managed memory-banner -->\n\nrest\n",
+		// Body that even opens like the banner's first line but then diverges.
+		"banner-like opener": "<!-- agentsync:managed memory-banner -->\n> **Managed by [agentsync](https://agentsync.cc) but I rewrote the rest**\n<!-- /agentsync:managed memory-banner -->\nkeep me\n",
+	}
+	for name, user := range cases {
+		if got := source.StripManagedBanner(user); got != user {
+			t.Fatalf("%s: user-authored block must be preserved verbatim:\n got %q\nwant %q", name, got, user)
+		}
 	}
 	// agentsync's own banner IS stripped (and only it).
 	withBanner := source.RenderManagedMemory("# Memory\nbody\n", nil, "CLAUDE.md", true)
-	if !strings.Contains(withBanner, "agentsync:managed") {
+	if !strings.Contains(withBanner, "agentsync:managed memory-banner") {
 		t.Fatalf("expected a banner to strip: %q", withBanner)
 	}
 	if got := source.StripManagedBanner(withBanner); got != "# Memory\nbody\n" {

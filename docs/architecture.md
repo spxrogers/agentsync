@@ -71,7 +71,9 @@ back at `.agentsync/memory/AGENTS.md` + `agentsync apply`. Every adapter renders
 memory through the one helper `source.RenderManagedMemory` (which wraps
 `ExpandMemoryImports`), so the banner is byte-identical across agents. It is a
 property of the *rendered destination file only* — it is wrapped in reversible
-`<!-- agentsync:managed -->` markers and stripped by `source.StripManagedBanner`
+`<!-- agentsync:managed memory-banner -->` markers (the `agentsync:managed`
+namespace carries a per-marker identifier so future managed markers stay
+unambiguous) and stripped by `source.StripManagedBanner`
 on the way back in (each adapter's ingest, plus a backstop at the `import` /
 `reconcile` write-back funnels), so it never enters the canonical source and never
 compounds. Because the banner text is static (only the filename varies) it hashes
@@ -81,8 +83,9 @@ in `agentsync.toml` opts out (the project overlay inherits the user setting unle
 it sets its own). The `agentsync:managed` marker is **reserved**: `checkReservedMarkers`
 (in `loadMemory` and `WriteMemory`) rejects a canonical whose body or a fragment
 carries it rather than letting it collide with the banner's markers, and
-`StripManagedBanner` anchors on the banner's signature line so it removes only
-agentsync's own banner — a user-authored marker block is preserved, never deleted.
+`StripManagedBanner` matches agentsync's full rendered banner (not the bare
+markers) so it removes only agentsync's own banner — a user-authored marker block
+is preserved, never deleted.
 
 ---
 

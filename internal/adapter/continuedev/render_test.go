@@ -128,7 +128,7 @@ func TestRender_Memory_PlainRule(t *testing.T) {
 	if op == nil {
 		t.Fatal("agentsync.md rule op missing")
 	}
-	if !strings.HasPrefix(string(op.Content), "<!-- agentsync:managed -->") {
+	if !strings.HasPrefix(string(op.Content), "<!-- agentsync:managed memory-banner -->") {
 		t.Fatalf("expected managed banner prefix: %q", op.Content)
 	}
 	if source.StripManagedBanner(string(op.Content)) != "# Rules\n\nBe concise.\n" {

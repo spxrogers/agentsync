@@ -63,7 +63,7 @@ func TestRender_UserScope_MCPGlobalRulesAndWorkflows(t *testing.T) {
 	if memOp == nil {
 		t.Fatalf("global_rules.md op missing at user scope: %+v", ops)
 	}
-	if !strings.HasPrefix(string(memOp.Content), "<!-- agentsync:managed -->") {
+	if !strings.HasPrefix(string(memOp.Content), "<!-- agentsync:managed memory-banner -->") {
 		t.Fatalf("expected managed banner prefix on global rules: %q", memOp.Content)
 	}
 	if source.StripManagedBanner(string(memOp.Content)) != "# mem\n" {
@@ -128,7 +128,7 @@ func TestRender_ProjectScope_RulesAndWorkflows(t *testing.T) {
 	if !strings.HasPrefix(string(memOp.Content), "---\ntrigger: always_on\n---\n") {
 		t.Fatalf("activation frontmatter must stay at byte 0: %q", memOp.Content)
 	}
-	if !strings.Contains(string(memOp.Content), "<!-- agentsync:managed -->") {
+	if !strings.Contains(string(memOp.Content), "<!-- agentsync:managed memory-banner -->") {
 		t.Fatalf("expected managed banner after the frontmatter: %q", memOp.Content)
 	}
 	if source.StripManagedBanner(string(memOp.Content)) != "---\ntrigger: always_on\n---\n\n# Rules\n\nBe concise.\n" {

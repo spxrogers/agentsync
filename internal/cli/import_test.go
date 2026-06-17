@@ -408,6 +408,47 @@ func TestImport_MemoryStripsBanner(t *testing.T) {
 	}
 }
 
+// TestImport_MemoryRejectsReservedMarker: importing a native memory file that
+// carries a user-authored block in the reserved `agentsync:managed` namespace is
+// rejected at the capture funnel (not silently stripped), so the reserved marker
+// never lands in the canonical source.
+func TestImport_MemoryRejectsReservedMarker(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A user-authored block reusing the reserved managed markers — NOT agentsync's
+	// banner — so the strip preserves it and the reserved-marker guard must reject.
+	native := "# My rules\n\n<!-- agentsync:managed memory-banner -->\nhand-written, not the banner\n<!-- /agentsync:managed memory-banner -->\n"
+	memPath := filepath.Join(tmp, ".claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(memPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(memPath, []byte(native), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "import", "claude:memory")
+	combined := out
+	if err != nil {
+		combined += err.Error()
+	}
+	if !strings.Contains(combined, "reserved marker") {
+		t.Fatalf("import should surface the reserved-marker error; err=%v out=%s", err, out)
+	}
+	// The reserved content must NOT have been persisted to the canonical source.
+	if data, rerr := os.ReadFile(filepath.Join(tmp, ".agentsync", "memory", "AGENTS.md")); rerr == nil {
+		if strings.Contains(string(data), "agentsync:managed") {
+			t.Fatalf("reserved marker leaked into canonical:\n%s", data)
+		}
+	}
+}
+
 func TestImport_MCPFromClaude(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

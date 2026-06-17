@@ -115,7 +115,7 @@ func TestRender_ProjectScope_RulesAndWorkflows(t *testing.T) {
 	if memOp == nil {
 		t.Fatal("memory rule op missing")
 	}
-	if !strings.HasPrefix(string(memOp.Content), "<!-- agentsync:managed -->") {
+	if !strings.HasPrefix(string(memOp.Content), "<!-- agentsync:managed memory-banner -->") {
 		t.Fatalf("expected managed banner prefix: %q", memOp.Content)
 	}
 	if source.StripManagedBanner(string(memOp.Content)) != "# Rules\n\nBe concise.\n" {
