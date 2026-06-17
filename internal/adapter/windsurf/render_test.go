@@ -63,8 +63,8 @@ func TestRender_UserScope_MCPGlobalRulesAndWorkflows(t *testing.T) {
 	if memOp == nil {
 		t.Fatalf("global_rules.md op missing at user scope: %+v", ops)
 	}
-	if string(memOp.Content) != "# mem\n" {
-		t.Fatalf("global rules must be the verbatim body: %q", memOp.Content)
+	if source.StripManagedBanner(string(memOp.Content)) != "# mem\n" {
+		t.Fatalf("global rules must be the verbatim body under the managed banner: %q", memOp.Content)
 	}
 	// commands → global workflows.
 	cmdOp := findOp(ops, filepath.Join(".codeium", "windsurf", "global_workflows", "deploy.md"))
@@ -120,8 +120,10 @@ func TestRender_ProjectScope_RulesAndWorkflows(t *testing.T) {
 	if memOp == nil {
 		t.Fatal("rules/agentsync.md op missing at project scope")
 	}
-	if string(memOp.Content) != "---\ntrigger: always_on\n---\n\n# Rules\n\nBe concise.\n" {
-		t.Fatalf("memory rule must carry trigger: always_on frontmatter: %q", memOp.Content)
+	// The activation frontmatter must stay at byte 0; the managed banner sits
+	// after it and strips back out to leave frontmatter + verbatim body.
+	if source.StripManagedBanner(string(memOp.Content)) != "---\ntrigger: always_on\n---\n\n# Rules\n\nBe concise.\n" {
+		t.Fatalf("memory rule must carry trigger: always_on frontmatter under the managed banner: %q", memOp.Content)
 	}
 	// Command → .windsurf/workflows/deploy.md (plain body; frontmatter dropped).
 	cmdOp := findOp(ops, ".windsurf/workflows/deploy.md")

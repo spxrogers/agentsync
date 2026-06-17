@@ -73,8 +73,8 @@ func TestRender_ProjectScope_All(t *testing.T) {
 	}
 	// Memory → .roo/rules/agentsync.md (plain body)
 	memOp := findOp(ops, ".roo/rules/agentsync.md")
-	if memOp == nil || string(memOp.Content) != "# Rules\n\nBe concise.\n" {
-		t.Fatalf("memory rule wrong: %+v", memOp)
+	if memOp == nil || source.StripManagedBanner(string(memOp.Content)) != "# Rules\n\nBe concise.\n" {
+		t.Fatalf("memory rule wrong (under managed banner): %+v", memOp)
 	}
 	// Command → .roo/commands/review.md; description + argument-hint KEPT; allowed-tools dropped
 	cmdOp := findOp(ops, ".roo/commands/review.md")

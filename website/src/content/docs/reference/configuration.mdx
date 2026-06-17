@@ -1,6 +1,6 @@
 ---
 title: Configuration & layout
-description: The ~/.agentsync/ directory layout and the agentsync.toml schema — agents, update defaults, and the secrets backend.
+description: The ~/.agentsync/ directory layout and the agentsync.toml schema — agents, update defaults, the secrets backend, and memory rendering options.
 sidebar:
   order: 2
 ---
@@ -16,7 +16,7 @@ parse these files *are* the canonical model.
 <FileTree>
 
 - ~/.agentsync/
-  - agentsync.toml agents, update defaults, secrets backend
+  - agentsync.toml agents, update defaults, secrets backend, [memory] banner
   - mcp/
     - **github.toml** one MCP server per file
   - lsp/
@@ -69,7 +69,18 @@ enabled = true
 backend       = "age"
 recipient     = "age1…"                              # public key, safe to commit
 identity_file = "${env:HOME}/.config/agentsync/age.key"  # private key, per-machine
+
+# Memory rendering options.
+[memory]
+banner = true   # default; set false to omit the managed-file banner from
+                # rendered memory files (CLAUDE.md, AGENTS.md, …)
 ```
+
+The `[memory] banner` notice that agentsync prepends to each rendered memory file
+points edits back at `.agentsync/memory/AGENTS.md` + `agentsync apply`. It lives
+only in the rendered file (stripped on capture, never written to your canonical
+source) and is on unless you set `banner = false`. See the
+[memory guide](/guides/memory/#the-managed-file-banner).
 
 <Aside type="note">
 	Use the CLI (`agentsync agent add`, `agentsync secrets set`, …) and let it write

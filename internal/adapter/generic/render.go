@@ -3,6 +3,7 @@ package generic
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
@@ -34,7 +35,7 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 	// Memory → the agent's rules file (plain markdown body).
 	if renderC.Memory.Body != "" {
 		if memPath := a.memoryPath(scope, project); memPath != "" {
-			body := source.ExpandMemoryImports(renderC.Memory.Body, renderC.Memory.Fragments)
+			body := source.RenderManagedMemory(renderC.Memory.Body, renderC.Memory.Fragments, filepath.Base(memPath), renderC.Config.MemoryBannerEnabled())
 			ops = append(ops, adapter.FileOp{
 				Action:        "write",
 				Path:          memPath,

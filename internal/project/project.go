@@ -79,8 +79,10 @@ func Discover(start string) (root string, found bool, err error) {
 //   - Memory: base body then project body, concatenated (project appended).
 //   - Plugins / Marketplaces: project entries are not modeled at project scope in
 //     v1 and are inherited from base unchanged (see the migration note in
-//     docs/architecture.md). Config (Updates/Secrets) is inherited from base
-//     unless the project declares its own non-zero values.
+//     docs/architecture.md). Config (Updates/Secrets/Memory) is inherited from
+//     base unless the project declares its own non-zero values; the effective
+//     [memory] setting is also propagated onto the stored project overlay so
+//     project-scope render honours a user-level managed-banner opt-out.
 func Merge(base, proj source.Canonical) source.Canonical {
 	out := base // shallow copy; every slice/map we touch is replaced, not mutated
 
@@ -97,6 +99,9 @@ func Merge(base, proj source.Canonical) source.Canonical {
 	if proj.Config.Secrets != (source.SecretsConfig{}) {
 		out.Config.Secrets = proj.Config.Secrets
 	}
+	if proj.Config.Memory != (source.MemoryConfig{}) {
+		out.Config.Memory = proj.Config.Memory
+	}
 
 	out.MCPServers = overlayByKey(base.MCPServers, proj.MCPServers, func(m source.MCPServer) string { return m.ID })
 	out.LSPServers = overlayByKey(base.LSPServers, proj.LSPServers, func(l source.LSPServer) string { return l.ID })
@@ -112,6 +117,11 @@ func Merge(base, proj source.Canonical) source.Canonical {
 	// handle c.Project; this was simply never set.
 	projCopy := proj
 	projCopy.Project = nil // prevent accidental nesting if proj itself came from a Merge
+	// Project-scope render reads renderC.Config.Memory off this overlay (renderC =
+	// *c.Project), so it must carry the EFFECTIVE banner setting: an explicit
+	// project [memory] override, else the inherited user setting. Without this a
+	// user-level `banner = false` would silently fail to reach project files.
+	projCopy.Config.Memory = out.Config.Memory
 	out.Project = &projCopy
 
 	return out

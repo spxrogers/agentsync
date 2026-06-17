@@ -48,12 +48,12 @@ consumes them — the schema is the contract between the two.
 
 ```
 source.Canonical
-├── Config          (agentsync.toml: agents, update defaults, secrets backend)
+├── Config          (agentsync.toml: agents, update defaults, secrets backend, [memory] banner)
 ├── MCPServers      (mcp/*.toml)
 ├── Skills          (skills/<name>/ — SKILL.md + bundled scripts/references/assets)
 ├── Subagents, Commands, Hooks, LSPServers
 ├── Plugins, Marketplaces   (plugins/*.toml, marketplaces/*.toml)
-├── Memory          (memory/AGENTS.md + fragments/)
+├── Memory          (memory/AGENTS.md + fragments/; rendered files get the managed banner — see below)
 └── Project         (overlay loaded from a <root>/.agentsync/ tree, project scope)
 ```
 
@@ -64,6 +64,21 @@ is appended, an empty project `[agents]` inherits the user's enabled agents, and
 a project `plugins/<id>.toml` with `disabled = true` is excluded from projection
 in that repo. The retired M5 single-file `.agentsync.toml` marker is no longer
 read — `project.Discover` surfaces a migration error if it finds one.
+
+**Managed memory banner.** Every rendered memory file (`CLAUDE.md`, `AGENTS.md`,
+…) is prepended with a short agentsync notice naming the file and pointing edits
+back at `.agentsync/memory/AGENTS.md` + `agentsync apply`. Every adapter renders
+memory through the one helper `source.RenderManagedMemory` (which wraps
+`ExpandMemoryImports`), so the banner is byte-identical across agents. It is a
+property of the *rendered destination file only* — it is wrapped in reversible
+`<!-- agentsync:managed -->` markers and stripped by `source.StripManagedBanner`
+on the way back in (each adapter's ingest, plus a backstop at the `import` /
+`reconcile` write-back funnels), so it never enters the canonical source and never
+compounds. Because the banner text is static (only the filename varies) it hashes
+identically on every render, so an untouched file still classifies `InSync` — the
+banner never manufactures drift. It is on by default; `[memory] banner = false`
+in `agentsync.toml` opts out (the project overlay inherits the user setting unless
+it sets its own).
 
 ---
 

@@ -100,8 +100,8 @@ func TestRender_Memory_ScopeAware(t *testing.T) {
 	a := generic.New(spec, generic.Options{TargetRoot: tmp})
 
 	uops, _, _ := a.Render(secrets.ForRender(source.Canonical{Memory: source.Memory{Body: "be terse\n"}}), adapter.ScopeUser, "")
-	if op := findOp(uops, ".config/amp/AGENTS.md"); op == nil || string(op.Content) != "be terse\n" {
-		t.Fatalf("user memory wrong: %+v", uops)
+	if op := findOp(uops, ".config/amp/AGENTS.md"); op == nil || source.StripManagedBanner(string(op.Content)) != "be terse\n" {
+		t.Fatalf("user memory wrong (under managed banner): %+v", uops)
 	}
 
 	proj := t.TempDir()

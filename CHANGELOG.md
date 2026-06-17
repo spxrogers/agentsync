@@ -11,6 +11,19 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **Managed-file banner on rendered memory.** Every rendered memory file
+  (`CLAUDE.md`, `AGENTS.md`, …) is now prepended with a short agentsync notice
+  naming the file and pointing edits back at `.agentsync/memory/AGENTS.md` +
+  `agentsync apply`, so an agent (or human) editing the native file is told it is
+  agentsync-managed. The banner lives only in the rendered file — it is wrapped in
+  reversible `<!-- agentsync:managed -->` markers, stripped on ingest and at the
+  `import`/`reconcile` write-back funnels, and re-rendered each apply, so it never
+  enters the canonical source, never compounds, and (being static) never shows as
+  drift. Rendered through one shared helper (`source.RenderManagedMemory`) so it is
+  byte-identical across all 31 agents. On by default; opt out with `[memory] banner
+  = false` in `agentsync.toml` (the project overlay inherits the user setting).
+  **Behavior change:** the first `apply` after upgrading rewrites managed memory
+  files to add the banner (a one-time `pending` in `status`).
 - **Breadth tier — 22 more agents via a data-driven generic adapter
   (`internal/adapter/generic`).** One `Adapter` implementation serves a long tail
   of agents from a verified `Spec` table: **memory** (a rules file) for all, and

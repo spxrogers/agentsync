@@ -32,8 +32,13 @@ func (a *Adapter) renderMemory(c source.Canonical, p Paths) ([]adapter.FileOp, [
 	if c.Memory.Body == "" {
 		return nil, nil, nil
 	}
-	body := source.ExpandMemoryImports(c.Memory.Body, c.Memory.Fragments)
+	banner := c.Config.MemoryBannerEnabled()
 	if p.RulesDir != "" {
+		// The managed banner goes AFTER the activation frontmatter so the `---`
+		// fence stays at byte 0 (Windsurf only parses frontmatter at the top of
+		// the file). Ingest strips the frontmatter and capture strips the banner,
+		// so both round-trip cleanly out of the canonical body.
+		body := source.RenderManagedMemory(c.Memory.Body, c.Memory.Fragments, memoryRuleFile, banner)
 		return []adapter.FileOp{{
 			Action:        "write",
 			Path:          filepath.Join(p.RulesDir, memoryRuleFile),
@@ -50,6 +55,7 @@ func (a *Adapter) renderMemory(c source.Canonical, p Paths) ([]adapter.FileOp, [
 			Reason:    "no Windsurf rules target at this scope",
 		}}, nil
 	}
+	body := source.RenderManagedMemory(c.Memory.Body, c.Memory.Fragments, filepath.Base(p.GlobalRules), banner)
 	return []adapter.FileOp{{
 		Action:        "write",
 		Path:          p.GlobalRules,

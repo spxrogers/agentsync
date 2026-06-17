@@ -735,6 +735,11 @@ func writeBackFileItem(home string, it reconcileItem) error {
 	// fragments). With no markers but a fragment-composed source, writing back
 	// would inline every @import and orphan the fragments — refuse.
 	if filepath.ToSlash(srcID) == "memory/AGENTS.md" {
+		// The rendered memory carries the agentsync managed-file banner
+		// (RenderManagedMemory). Strip it before anything else so it never enters
+		// the canonical source — both the fragment-marker reversal AND the plain
+		// verbatim fall-through below then operate on banner-free content.
+		data = []byte(source.StripManagedBanner(string(data)))
 		mem, hadMarkers, cerr := source.CollapseMemoryMarkers(string(data))
 		switch {
 		case cerr != nil:

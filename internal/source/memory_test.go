@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/afero"
+
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -176,6 +178,175 @@ func TestCollapseMemoryMarkers_NoMarkers(t *testing.T) {
 	_, had, err := source.CollapseMemoryMarkers("# Memory\nplain body\n")
 	if had || err != nil {
 		t.Fatalf("expected had=false err=nil, got had=%v err=%v", had, err)
+	}
+}
+
+// boolPtr is a local helper for the *bool banner setting.
+func boolPtr(b bool) *bool { return &b }
+
+// TestMemoryBannerEnabled: unset (nil) defaults ON; explicit true/false honoured.
+func TestMemoryBannerEnabled(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  source.Config
+		want bool
+	}{
+		{"unset defaults on", source.Config{}, true},
+		{"explicit true", source.Config{Memory: source.MemoryConfig{Banner: boolPtr(true)}}, true},
+		{"explicit false", source.Config{Memory: source.MemoryConfig{Banner: boolPtr(false)}}, false},
+	}
+	for _, tc := range cases {
+		if got := tc.cfg.MemoryBannerEnabled(); got != tc.want {
+			t.Errorf("%s: MemoryBannerEnabled() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestRenderManagedMemory_PrependsBanner: the banner is emitted, names the
+// destination file, sits BEFORE the memory body, and the body survives intact.
+func TestRenderManagedMemory_PrependsBanner(t *testing.T) {
+	body := "# My memory\n\nBe concise.\n"
+	got := source.RenderManagedMemory(body, nil, "CLAUDE.md", true)
+
+	for _, want := range []string{
+		"<!-- agentsync:managed -->",
+		"<!-- /agentsync:managed -->",
+		"do not edit `CLAUDE.md` directly",
+		".agentsync/memory/AGENTS.md",
+		"agentsync apply",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("banner missing %q in:\n%s", want, got)
+		}
+	}
+	if !strings.HasPrefix(got, "<!-- agentsync:managed -->") {
+		t.Fatalf("banner must be prepended; got prefix %q", got[:min(40, len(got))])
+	}
+	if !strings.Contains(got, "Be concise.") {
+		t.Fatalf("memory body dropped: %s", got)
+	}
+	if strings.Index(got, "<!-- /agentsync:managed -->") > strings.Index(got, "Be concise.") {
+		t.Fatalf("banner must precede the body: %s", got)
+	}
+}
+
+// TestRenderManagedMemory_SuppressedWhenDisabledOrEmpty: no banner when the
+// setting is off, the destination name is empty, or the memory already contains
+// the reserved managed token (collision guard).
+func TestRenderManagedMemory_SuppressedWhenDisabledOrEmpty(t *testing.T) {
+	body := "# Memory\nplain\n"
+	cases := []struct {
+		name     string
+		body     string
+		destFile string
+		banner   bool
+	}{
+		{"disabled", body, "CLAUDE.md", false},
+		{"empty dest name", body, "", true},
+		{"collision", "# Memory\nsee <!-- agentsync:managed --> note\n", "CLAUDE.md", true},
+	}
+	for _, tc := range cases {
+		got := source.RenderManagedMemory(tc.body, nil, tc.destFile, tc.banner)
+		if strings.Contains(got, "Managed by [agentsync]") {
+			t.Errorf("%s: banner should be suppressed, got:\n%s", tc.name, got)
+		}
+	}
+}
+
+// TestManagedBanner_RoundTripPlain proves a banner-prefixed plain memory file
+// strips back to EXACTLY the expanded body (byte-for-byte) — the property that
+// keeps the notice out of the canonical source.
+func TestManagedBanner_RoundTripPlain(t *testing.T) {
+	body := "# Memory\n\nLine one.\nLine two.\n"
+	rendered := source.RenderManagedMemory(body, nil, "AGENTS.md", true)
+	if !strings.Contains(rendered, "agentsync:managed") {
+		t.Fatalf("expected a banner: %s", rendered)
+	}
+	got := source.StripManagedBanner(rendered)
+	if got != body {
+		t.Fatalf("strip did not recover body byte-for-byte:\n got %q\nwant %q", got, body)
+	}
+}
+
+// TestStripManagedBanner_NoopAndIdempotent: stripping content with no banner is
+// a no-op, and stripping is idempotent.
+func TestStripManagedBanner_NoopAndIdempotent(t *testing.T) {
+	plain := "# Memory\nno banner here\n"
+	if got := source.StripManagedBanner(plain); got != plain {
+		t.Fatalf("no-op strip changed content: %q", got)
+	}
+	rendered := source.RenderManagedMemory("# M\nbody\n", nil, "CLAUDE.md", true)
+	once := source.StripManagedBanner(rendered)
+	twice := source.StripManagedBanner(once)
+	if once != twice {
+		t.Fatalf("strip not idempotent:\n once %q\ntwice %q", once, twice)
+	}
+}
+
+// TestManagedBanner_ArtifactRoundTrip is the fidelity guard (CLAUDE.md: anchor
+// to the on-disk artifact, not the parsed model). It starts from a spec-complete
+// memory tree on disk (AGENTS.md with an @import + a real fragment file), renders
+// it to a destination WITH the banner enabled, captures it back the way
+// import/reconcile do (StripManagedBanner → CollapseMemoryMarkers → WriteMemory),
+// and asserts the rebuilt canonical files are byte-identical to the originals —
+// and that the banner leaked into neither.
+func TestManagedBanner_ArtifactRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	memDir := filepath.Join(home, "memory")
+	fragDir := filepath.Join(memDir, "fragments")
+	if err := os.MkdirAll(fragDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Import sits last (a blank line immediately after an @import is consumed by
+	// expansion's `\s*$` — a documented fragment limitation, see memory.go — and
+	// is orthogonal to the banner under test here).
+	bodyOnDisk := "# Memory\n\nProject conventions.\n\n@import ./fragments/style.md\n"
+	fragOnDisk := "Be concise.\n"
+	if err := os.WriteFile(filepath.Join(memDir, "AGENTS.md"), []byte(bodyOnDisk), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fragDir, "style.md"), []byte(fragOnDisk), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := source.Load(afero.NewOsFs(), home)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	// Render to a destination file with the banner on (the default).
+	rendered := source.RenderManagedMemory(c.Memory.Body, c.Memory.Fragments, "CLAUDE.md", true)
+	if !strings.Contains(rendered, "agentsync:managed") || !strings.Contains(rendered, "agentsync:fragment style.md") {
+		t.Fatalf("rendered file missing banner and/or fragment markers:\n%s", rendered)
+	}
+
+	// Capture it back exactly as import/reconcile do.
+	stripped := source.StripManagedBanner(rendered)
+	if strings.Contains(stripped, "agentsync:managed") {
+		t.Fatalf("banner survived strip:\n%s", stripped)
+	}
+	mem, had, err := source.CollapseMemoryMarkers(stripped)
+	if err != nil || !had {
+		t.Fatalf("collapse: had=%v err=%v", had, err)
+	}
+
+	out := t.TempDir()
+	if err := source.WriteMemory(out, mem); err != nil {
+		t.Fatalf("write memory: %v", err)
+	}
+	gotBody, _ := os.ReadFile(filepath.Join(out, "memory", "AGENTS.md"))
+	gotFrag, _ := os.ReadFile(filepath.Join(out, "memory", "fragments", "style.md"))
+	if string(gotBody) != bodyOnDisk {
+		t.Fatalf("AGENTS.md round-trip drift:\n got %q\nwant %q", gotBody, bodyOnDisk)
+	}
+	if string(gotFrag) != fragOnDisk {
+		t.Fatalf("fragment round-trip drift:\n got %q\nwant %q", gotFrag, fragOnDisk)
+	}
+	// The banner must have leaked into NEITHER canonical file.
+	for name, data := range map[string][]byte{"AGENTS.md": gotBody, "style.md": gotFrag} {
+		if strings.Contains(string(data), "agentsync:managed") || strings.Contains(string(data), "Managed by [agentsync]") {
+			t.Fatalf("managed banner leaked into canonical %s:\n%s", name, data)
+		}
 	}
 }
 

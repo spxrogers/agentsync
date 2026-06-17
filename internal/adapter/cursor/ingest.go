@@ -134,7 +134,7 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	// Cursor's app-local storage, so p.Memory is empty at user scope).
 	if p.Memory != "" {
 		if data, err := os.ReadFile(p.Memory); err == nil {
-			c.Memory.Body = string(data)
+			c.Memory.Body = source.StripManagedBanner(string(data)) // banner stripped — see claude/ingest.go
 		}
 	}
 

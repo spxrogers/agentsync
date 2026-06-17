@@ -106,8 +106,8 @@ func TestRoundTrip_GlobalRulesAndWorkflows_UserScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("global_rules.md not written: %v", err)
 	}
-	if string(onDisk) != in.Memory.Body {
-		t.Fatalf("global rules must be frontmatter-less verbatim body: %q", onDisk)
+	if source.StripManagedBanner(string(onDisk)) != in.Memory.Body {
+		t.Fatalf("global rules must be frontmatter-less verbatim body under the managed banner: %q", onDisk)
 	}
 	got, err := a.Ingest(adapter.ScopeUser, "")
 	if err != nil {

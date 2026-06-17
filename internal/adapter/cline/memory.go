@@ -24,7 +24,7 @@ func (a *Adapter) renderMemory(c source.Canonical, p Paths) ([]adapter.FileOp, [
 			Reason:    "Cline global rules live in ~/Documents/Cline/ (a non-XDG app path agentsync does not target); memory projects at project scope only (.clinerules/)",
 		}}, nil
 	}
-	body := source.ExpandMemoryImports(c.Memory.Body, c.Memory.Fragments)
+	body := source.RenderManagedMemory(c.Memory.Body, c.Memory.Fragments, memoryRuleFile, c.Config.MemoryBannerEnabled())
 	return []adapter.FileOp{{
 		Action:        "write",
 		Path:          filepath.Join(p.RulesDir, memoryRuleFile),

@@ -84,9 +84,9 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		}
 	}
 
-	// Memory from .roo/rules/agentsync.md (plain markdown).
+	// Memory from .roo/rules/agentsync.md (banner stripped — see claude/ingest.go).
 	if data, err := os.ReadFile(filepath.Join(p.RulesDir, memoryRuleFile)); err == nil {
-		c.Memory.Body = string(data)
+		c.Memory.Body = source.StripManagedBanner(string(data))
 	}
 
 	return c, nil
