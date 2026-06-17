@@ -39,6 +39,25 @@ export default defineConfig({
 					attrs: { property: 'og:image', content: 'https://agentsync.cc/og.png' },
 				},
 				{
+					// Google Analytics (gtag.js) — loads asynchronously and runs on
+					// every page (Starlight injects `head` entries site-wide).
+					tag: 'script',
+					attrs: {
+						src: 'https://www.googletagmanager.com/gtag/js?id=G-3LE4ZX1TWF',
+						async: true,
+					},
+				},
+				{
+					// Initialize gtag and send the page_view config for every page.
+					tag: 'script',
+					content: [
+						'window.dataLayer = window.dataLayer || [];',
+						'function gtag(){dataLayer.push(arguments);}',
+						"gtag('js', new Date());",
+						"gtag('config', 'G-3LE4ZX1TWF');",
+					].join('\n'),
+				},
+				{
 					// Context7 AI chat widget — loads asynchronously and renders a
 					// floating chat button on every page. data-library points at this
 					// project's Context7 docs source.
