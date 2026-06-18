@@ -127,6 +127,21 @@ func TestSanitize(t *testing.T) {
 		{"pure control string collapses to empty", "\x1b\r\n\t", ""},
 		{"invalid UTF-8 byte normalized to U+FFFD", "a\xffb", "a\ufffdb"},
 		{"pre-existing U+FFFD preserved (rebuild is idempotent)", "a\ufffdb", "a\ufffdb"},
+		// Explicit bidi formatting controls (Trojan Source / CVE-2021-42574).
+		{"RLO (U+202E) bidi override stripped", "user\u202egpj.evil", "usergpj.evil"},
+		{"LRO (U+202D) bidi override stripped", "a\u202db", "ab"},
+		{"bidi embedding pair (U+202B/U+202C) stripped", "a\u202bb\u202cc", "abc"},
+		{"bidi isolates (U+2066\u2013U+2069) stripped", "a\u2066b\u2069c\u2067d\u2068e", "abcde"},
+		// Zero-width / invisible format runes.
+		{"zero-width space (U+200B) stripped", "a\u200bb", "ab"},
+		{"ZWNJ/ZWJ (U+200C/U+200D) stripped", "a\u200cb\u200dc", "abc"},
+		{"zero-width no-break space / BOM (U+FEFF) stripped", "a\ufeffb", "ab"},
+		// Legitimate non-Latin names survive byte-for-byte: implicit RTL/CJK is
+		// not an explicit formatting control, so it is preserved.
+		{"Arabic name preserved", "\u0645\u0631\u062d\u0628\u0627", "\u0645\u0631\u062d\u0628\u0627"},
+		{"Hebrew name preserved", "\u05e9\u05dc\u05d5\u05dd", "\u05e9\u05dc\u05d5\u05dd"},
+		{"CJK name preserved", "\u540d\u524d-\u30d7\u30e9\u30b0\u30a4\u30f3", "\u540d\u524d-\u30d7\u30e9\u30b0\u30a4\u30f3"},
+		{"ordinary RTL letters with implicit bidi preserved", "abc-\u0645\u0631\u062d\u0628\u0627", "abc-\u0645\u0631\u062d\u0628\u0627"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -49,6 +49,20 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`ui.Sanitize` now also strips deceptive bidi / zero-width runes, not just
+  terminal-control bytes.** Following up on the escape-injection fix below, the
+  same untrusted-name display boundary now removes the printable-but-deceptive
+  format runes: the explicit Unicode bidi controls (U+202A–U+202E, U+2066–U+2069
+  — the "Trojan Source" / CVE-2021-42574 class, where a crafted U+202E could
+  visually reorder a plugin id in `explain` output to read as a trusted name)
+  and the zero-width / invisible runes (U+200B–U+200D, U+FEFF) that can hide or
+  invisibly pad a name. Ordinary right-to-left scripts (Arabic, Hebrew) and CJK
+  are preserved byte-for-byte — only the explicit override/isolate controls are
+  removed, never the implicit direction of legitimate letters. Display *width*
+  (combining marks, wide-width runes skewing `Pad`/`visibleLen` column
+  alignment) remains an accepted, documented cosmetic limitation, not a spoofing
+  vector.
+
 - **agentsync sanitizes untrusted plugin/component names before rendering them
   to the terminal.** A fetched marketplace plugin's id, version, or a component
   name it supplies is attacker-influenced; rendered raw, a name carrying ANSI/

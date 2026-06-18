@@ -152,6 +152,14 @@ func (p *Printer) Section(title string) {
 // is single-width) rather than bytes, then returns the padded plain string.
 // Callers color the RESULT so that ANSI bytes never throw off the column —
 // padding is applied before any escape codes exist.
+//
+// Alignment is best-effort for non-ASCII: counting is per-rune, so wide/
+// ambiguous-width runes (CJK, emoji) and combining marks make the rune count
+// diverge from the actual display-cell width and skew the column. This is a
+// deliberate, purely cosmetic limitation — bringing in a grapheme-aware width
+// table (golang.org/x/text/width) was judged not worth the dependency for the
+// curated, mostly-ASCII output here. Sanitize removes the security-relevant
+// deceptive runes (bidi/zero-width) but does not normalize width.
 func Pad(s string, width int) string {
 	n := 0
 	for range s {
@@ -163,25 +171,44 @@ func Pad(s string, width int) string {
 	return s + spaces(width-n)
 }
 
-// Sanitize strips control characters from a string so untrusted text — a fetched
-// marketplace plugin's id, a plugin-supplied component name — can be rendered to
-// a terminal without smuggling escape sequences through it. It removes C0
-// controls (0x00–0x1F, which includes ESC 0x1B, CR, LF, TAB, BEL, and
-// backspace), DEL (0x7F), and C1 controls (0x80–0x9F). Neutralizing the ESC/CSI
-// introducer is the security-relevant part: a name like "\x1b[31mX" renders as
-// the inert literal "[31mX" rather than recoloring the terminal, clearing the
-// screen, or spoofing subsequent rows. Printable text (including non-ASCII
-// letters and ordinary spaces) passes through unchanged. Apply it at the display
-// boundary, before width/Pad calculation, so a stripped byte never throws off
-// column alignment.
+// Sanitize strips control characters and deceptive format runes from a string so
+// untrusted text — a fetched marketplace plugin's id, a plugin-supplied component
+// name — can be rendered to a terminal without smuggling escape sequences or
+// spoofed/hidden text through it. It removes:
+//
+//   - C0 controls (0x00–0x1F, which includes ESC 0x1B, CR, LF, TAB, BEL, and
+//     backspace), DEL (0x7F), and C1 controls (0x80–0x9F). Neutralizing the
+//     ESC/CSI introducer is the security-relevant part: a name like "\x1b[31mX"
+//     renders as the inert literal "[31mX" rather than recoloring the terminal,
+//     clearing the screen, or spoofing subsequent rows.
+//   - The explicit Unicode bidirectional formatting controls — the embedding/
+//     override set U+202A–U+202E (LRE/RLE/PDF/LRO/RLO) and the isolate set
+//     U+2066–U+2069 (LRI/RLI/FSI/PDI). These are the "Trojan Source"
+//     (CVE-2021-42574) class: U+202E and friends can visually reorder a plugin
+//     id so it reads as a trusted name while its bytes say otherwise.
+//   - Zero-width / invisible format runes — U+200B–U+200D (ZWSP/ZWNJ/ZWJ) and
+//     U+FEFF (zero-width no-break space / BOM) — which can hide characters or
+//     invisibly pad a name.
+//
+// Printable text passes through unchanged, including non-ASCII letters and
+// ordinary spaces. This deliberately leaves *implicit* bidi alone: ordinary
+// right-to-left scripts (Arabic, Hebrew) and CJK get their direction from the
+// letters themselves, not from the explicit override controls, so a legitimate
+// non-Latin name survives byte-for-byte — only the explicit formatting controls
+// an attacker would inject are removed. Apply Sanitize at the display boundary,
+// before width/Pad calculation, so a stripped rune never throws off column
+// alignment.
 //
 // Scanning is rune-level (not byte-level): byte-level stripping of the 0x80–0x9F
 // range would corrupt legitimate multibyte UTF-8 (a CJK rune's continuation
 // bytes live there). Invalid UTF-8 is normalized rather than passed verbatim — a
 // malformed byte decodes to U+FFFD and is re-emitted as U+FFFD, so a raw
 // 0x80–0x9F byte (a C1 CSI introducer on an 8-bit terminal) can never survive.
-// Sanitize does NOT touch bidi-override or zero-width runes (U+202E, U+200B, …):
-// those are a cosmetic spoofing concern, not a terminal-control one.
+//
+// What Sanitize does NOT do: it does not normalize display *width*. Combining
+// marks and wide/ambiguous-width runes still skew the rune-counting Pad/visibleLen
+// alignment; that is a purely cosmetic limitation, documented on Pad, not a
+// spoofing vector this function targets.
 func Sanitize(s string) string {
 	// Fast path: the overwhelmingly common case is clean text, so scan once and
 	// only allocate when there is something to change. We also rebuild on invalid
@@ -190,7 +217,7 @@ func Sanitize(s string) string {
 	// CSI introducer on an 8-bit terminal) can never pass through verbatim.
 	clean := true
 	for _, r := range s {
-		if isControl(r) || r == utf8.RuneError {
+		if shouldStrip(r) || r == utf8.RuneError {
 			clean = false
 			break
 		}
@@ -201,17 +228,44 @@ func Sanitize(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
-		if !isControl(r) {
+		if !shouldStrip(r) {
 			b.WriteRune(r) // WriteRune(RuneError) emits U+FFFD, normalizing bad bytes
 		}
 	}
 	return b.String()
 }
 
+// shouldStrip reports whether Sanitize removes r: either a terminal-control rune
+// (isControl) or a deceptive format rune (isDeceptiveFormat).
+func shouldStrip(r rune) bool {
+	return isControl(r) || isDeceptiveFormat(r)
+}
+
 // isControl reports whether r is a C0 control (incl. ESC/CR/LF/TAB), DEL, or a
 // C1 control — the runes that can carry terminal escape semantics.
 func isControl(r rune) bool {
 	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)
+}
+
+// isDeceptiveFormat reports whether r is a printable-but-deceptive format rune
+// that Sanitize strips: an explicit Unicode bidi formatting control (the
+// embedding/override set U+202A–U+202E and the isolate set U+2066–U+2069 — the
+// "Trojan Source" class) or a zero-width / invisible rune (U+200B–U+200D, U+FEFF).
+// It deliberately excludes ordinary RTL/CJK letters and the implicit-direction
+// marks, so legitimate non-Latin names are preserved.
+func isDeceptiveFormat(r rune) bool {
+	switch {
+	case r >= 0x202a && r <= 0x202e: // LRE, RLE, PDF, LRO, RLO
+		return true
+	case r >= 0x2066 && r <= 0x2069: // LRI, RLI, FSI, PDI
+		return true
+	case r >= 0x200b && r <= 0x200d: // ZWSP, ZWNJ, ZWJ
+		return true
+	case r == 0xfeff: // zero-width no-break space / BOM
+		return true
+	default:
+		return false
+	}
 }
 
 // WarnWriter wraps a destination writer and styles "warning: " line prefixes
