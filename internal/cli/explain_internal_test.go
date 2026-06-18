@@ -47,6 +47,22 @@ func TestEmitSkipDetails_EmptyIsNoOp(t *testing.T) {
 	}
 }
 
+// TestEmitSkipDetails_UnnamedComponentOnly exercises the empty-Name skip
+// through the full emitSkipDetails formatting path (not just skipLabel): a skip
+// with no name must render as a bare "<bullet> <component>  <reason>" line with
+// no dangling separator. ColorNever lets us pin the exact bytes.
+func TestEmitSkipDetails_UnnamedComponentOnly(t *testing.T) {
+	var buf bytes.Buffer
+	emitSkipDetails(&buf, ui.New(&buf, &buf, ui.ColorNever), []render.SkipDetail{
+		{Component: "hook", Reason: "unknown event"},
+	})
+	got := buf.String()
+	want := "      " + ui.GlyphInfo + " hook  unknown event\n"
+	if got != want {
+		t.Errorf("emitSkipDetails(unnamed) = %q, want %q", got, want)
+	}
+}
+
 // TestEmitSkipDetails_ColumnsAlignUnderColor is the regression guard for the
 // padding-before-color contract: the reason column must start at the same
 // visible offset for every skip line even though the lines carry ANSI (a yellow
