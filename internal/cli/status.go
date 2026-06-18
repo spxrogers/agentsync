@@ -315,9 +315,12 @@ func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry
 		if len(missing) == 0 {
 			continue
 		}
+		// Native plugin names come from the agent's own config (a plugin author
+		// can influence them), so sanitize before printing to keep terminal
+		// escapes out of the note. The agent `name` is a trusted registry id.
 		fmt.Fprintf(p.Err, "%s %d plugin(s) installed in %s are not in your source (%s); "+
 			"run `agentsync import %s:plugin` to manage them.\n",
-			p.Cyan("note:"), len(missing), name, strings.Join(missing, ", "), name)
+			p.Cyan("note:"), len(missing), name, ui.Sanitize(strings.Join(missing, ", ")), name)
 	}
 }
 

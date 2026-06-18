@@ -1,7 +1,8 @@
 // Package render — translation report.
 //
 // TranslationReport summarises, per plugin (or source component), how many
-// items each adapter rendered vs skipped. Emitted at the end of apply/verify.
+// items each adapter rendered vs skipped. Emitted at the end of apply (and
+// rendered per-plugin by explain); verify does not print it.
 package render
 
 import (
@@ -41,7 +42,7 @@ type PluginRow struct {
 	// SkipDetails enumerates the components behind Skips — what the adapter
 	// could not translate, and why — so a "(N skipped)" tally is never a dead
 	// end. Attribution follows the canonical+plan passed to BuildReport (see its
-	// doc): when the caller passes the whole flattened model (apply/verify), the
+	// doc): when the caller passes the whole flattened model (apply), the
 	// skips are the agent's across every component and are repeated under each
 	// plugin row; when the caller passes a per-plugin-scoped model (`explain
 	// <id>`, which re-projects one plugin in isolation), they are narrowed to
@@ -111,6 +112,10 @@ func (r TranslationReport) PrintTextStyled(w io.Writer, p *ui.Printer) {
 	r.printText(w, p)
 }
 
+// printText is the shared body of PrintText / PrintTextStyled. The only
+// untrusted token it renders is the plugin label (a fetched marketplace id),
+// which is passed through ui.Sanitize before reaching the terminal so a hostile
+// plugin cannot smuggle ANSI/control sequences into the report; see the loop.
 func (r TranslationReport) printText(w io.Writer, p *ui.Printer) {
 	// Group rows by plugin.
 	byPlugin := map[string][]PluginRow{}
@@ -126,10 +131,26 @@ func (r TranslationReport) printText(w io.Writer, p *ui.Printer) {
 	sort.Strings(pluginOrder)
 
 	for _, plug := range pluginOrder {
+		// The plugin label is the plugin id from fetched marketplace metadata
+		// (untrusted), so sanitize it before rendering to the terminal: a control
+		// sequence smuggled into a plugin id must not recolor/clear the screen or
+		// spoof rows in the translation report `apply` prints. Sanitizing strips
+		// embedded newlines too, so the id cannot forge an extra report line.
+		// Clean labels pass through unchanged, so the byte-stable plain fixtures
+		// still hold. (This text path is the one `apply` prints; `explain` renders
+		// its own report body and sanitizes the same untrusted source there.)
+		//
+		// Grouping and ordering still key on the RAW label (byPlugin,
+		// pluginOrder, sort.Strings): two distinct raw ids that sanitize to the
+		// same visible text therefore render as separate rows that merely look
+		// alike — a cosmetic spoof of the same class as the bidi/zero-width runes
+		// ui.Sanitize deliberately leaves, not a terminal-control escape, so it
+		// is an accepted residual.
+		label := ui.Sanitize(plug)
 		if p != nil {
-			fmt.Fprintf(w, "%s %s\n", p.Bold("plugin:"), plug)
+			fmt.Fprintf(w, "%s %s\n", p.Bold("plugin:"), label)
 		} else {
-			fmt.Fprintf(w, "plugin: %s\n", plug)
+			fmt.Fprintf(w, "plugin: %s\n", label)
 		}
 		rows := byPlugin[plug]
 		sort.Slice(rows, func(i, j int) bool { return rows[i].Agent < rows[j].Agent })
@@ -191,7 +212,7 @@ func (r TranslationReport) PrintJSON(w io.Writer) error {
 // BuildReport does NOT itself correlate a component to its origin plugin — the
 // projected canonical is flattened with no origin tag. Attribution is therefore
 // the caller's choice of what model+plan to pass:
-//   - apply/verify pass the whole flattened model, so every plugin row carries
+//   - apply passes the whole flattened model, so every plugin row carries
 //     the same global counts/skips (the documented summary behavior).
 //   - `explain <id>` re-projects ONE plugin in isolation
 //     (marketplace.ProjectInstalled) and passes a model+plan holding only that
@@ -200,7 +221,7 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 	var report TranslationReport
 
 	// The canonical is flattened (no origin-plugin tag), so the per-agent counts
-	// are computed over whatever model the caller scoped: apply/verify pass the
+	// are computed over whatever model the caller scoped: apply passes the
 	// whole model (one global summary repeated per plugin row), while `explain
 	// <id>` passes a model holding only one re-projected plugin's components.
 	//

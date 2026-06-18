@@ -15,6 +15,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 func newMarketplaceCmd() *cobra.Command {
@@ -78,7 +79,7 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "added marketplace %s (sha=%s)\n",
-		mpName, truncate(headSHA, 12))
+		ui.Sanitize(mpName), truncate(headSHA, 12))
 	return nil
 }
 
@@ -261,7 +262,7 @@ func marketplaceListRun(cmd *cobra.Command, _ []string) error {
 	for _, name := range names {
 		mp := mps[name]
 		fmt.Fprintf(cmd.OutOrStdout(), "%-20s url=%-40s sha=%s\n",
-			name, mp.URL, truncate(mp.HeadSHA, 12))
+			ui.Sanitize(name), mp.URL, truncate(mp.HeadSHA, 12))
 	}
 	return nil
 }

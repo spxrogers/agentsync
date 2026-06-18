@@ -30,7 +30,17 @@ can resolve secrets into native config files. Areas of particular interest:
   installed plugin is pinned with a content hash over its *entire* cache tree
   (every projected component body, not just `plugin.json`; a cached symlink is
   hashed by its target path), so a tampered or re-uploaded body — or a swapped
-  link target — is detected at apply rather than silently consumed.
+  link target — is detected at apply rather than silently consumed. A plugin's
+  id, version, and the component names it supplies are also untrusted *display*
+  input: agentsync sanitizes plugin- and native-config-derived metadata with
+  `ui.Sanitize` at every display boundary before it reaches the terminal,
+  stripping C0/C1 control bytes (ESC, CR, LF, …) so a hostile plugin cannot
+  smuggle terminal escape sequences (recoloring the screen, spoofing rows, or
+  setting the window title) into agentsync's own output. The invariant — not a
+  fixed list of commands — is that any terminal rendering of such metadata is
+  sanitized at the print boundary (today that spans `explain`, `apply`,
+  `plugin`, `marketplace`, `update`, `status`, and `doctor`). `explain --json`
+  keeps ids raw (a machine contract where the consumer owns escaping).
 - **Destination writes**: writes are atomic and refuse to clobber symlinked
   destinations by default; pre-existing foreign files are backed up before
   overwrite.

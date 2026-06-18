@@ -419,3 +419,32 @@ func TestUpdate_DryRunNoBump(t *testing.T) {
 		t.Errorf("dry-run update should not apply, got: %s", out)
 	}
 }
+
+// TestUpdate_SanitizesUntrustedBumpVersion proves the `update` pending-bumps
+// list strips terminal control bytes from the fetched candidate version. A
+// non-semver candidate triggers track-latest (any change bumps), so the hostile
+// version reaches the bump line and must be defanged before printing.
+func TestUpdate_SanitizesUntrustedBumpVersion(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	base := t.TempDir()
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
+	mustRun(t, env, "marketplace", "add", mpDir)
+	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "apply")
+	// Publish a non-semver candidate carrying control bytes -> a pending bump.
+	hostile := "9.9" + string(rune(0x1b)) + "[31m" + string(rune(0x0d))
+	_ = makeVersionedMarketplace(t, base, hostile)
+	out, err := runCLI(t, env, "update")
+	if err != nil {
+		t.Fatalf("update: %v\n%s", err, out)
+	}
+	if strings.ContainsRune(out, rune(0x1b)) || strings.ContainsRune(out, rune(0x0d)) {
+		t.Errorf("control byte from fetched bump version leaked into update output: %q", out)
+	}
+	if !strings.Contains(out, "pending bumps") {
+		t.Errorf("expected a pending bump to be listed; got:\n%s", out)
+	}
+}
