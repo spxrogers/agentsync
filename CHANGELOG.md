@@ -13,9 +13,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 - **`explain` itemizes skipped components.** A `◐ partial` row that reports
   `(N skipped)` is no longer a dead end: each skipped component is now listed
-  beneath the agent row as a faint `<component> <name>  <reason>` line — what the
-  agent could not translate, and why (e.g. `lsp atlassian-lsp  Codex has no LSP
-  configuration concept`). The structured surface gains a `skipDetails` array
+  beneath the agent row as an itemized `<component> <name>  <reason>` line (the
+  reason rendered faint) — what the agent could not translate, and why (e.g. `lsp
+  atlassian-lsp  Codex has no LSP configuration concept`). The structured surface
+  gains a `skipDetails` array
   (`{component, name, reason}`) on every `explain --json` row. The translation
   report carries the detail end-to-end (`render.PluginRow.SkipDetails`) rather
   than collapsing skips to a bare count; the same global attribution caveat as

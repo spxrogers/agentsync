@@ -197,6 +197,67 @@ func TestBuildReport_SkipDetails(t *testing.T) {
 	}
 }
 
+// TestBuildReport_SkipDetails_BaseBranch covers the no-plugins "(base)" branch
+// of BuildReport, which carries skip detail identically to the per-plugin
+// branch. Without this, the base-branch SkipDetails assignment is unexercised.
+func TestBuildReport_SkipDetails_BaseBranch(t *testing.T) {
+	c := source.Canonical{
+		MCPServers: []source.MCPServer{{ID: "github"}},
+		// No Plugins → BuildReport takes the "(base)" branch.
+	}
+	plan := render.RenderPlan{
+		PerAgent: map[string]render.AgentResult{
+			"codex": {
+				Ops:   []adapter.FileOp{{Action: "write", MergeStrategy: "merge-toml-keys"}},
+				Skips: []adapter.Skip{{Component: "lsp", Name: "gopls", Reason: "Codex has no LSP configuration concept"}},
+			},
+		},
+	}
+	report := render.BuildReport(c, plan, []string{"codex"})
+	if len(report.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(report.Rows))
+	}
+	row := report.Rows[0]
+	if row.Plugin != "(base)" {
+		t.Fatalf("plugin = %q, want (base) — this test must hit the no-plugins branch", row.Plugin)
+	}
+	if row.Skips != 1 || len(row.SkipDetails) != 1 {
+		t.Fatalf("base-branch skips not carried: Skips=%d SkipDetails=%+v", row.Skips, row.SkipDetails)
+	}
+	if row.SkipDetails[0] != (render.SkipDetail{Component: "lsp", Name: "gopls", Reason: "Codex has no LSP configuration concept"}) {
+		t.Errorf("SkipDetails[0] = %+v, want the gopls lsp skip", row.SkipDetails[0])
+	}
+}
+
+// TestBuildReport_SkipDetails_OmittedWhenEmpty pins the omitempty contract: a
+// row with zero skips must carry a nil SkipDetails AND emit no "skipDetails"
+// key in JSON. A regression making skipDetails() return a non-nil empty slice
+// would leak "skipDetails":[] onto every full-coverage row; this fails it.
+func TestBuildReport_SkipDetails_OmittedWhenEmpty(t *testing.T) {
+	c := source.Canonical{
+		Plugins: []source.Plugin{{ID: "demo", Plugin: source.PluginSpec{ID: "demo@test-mp"}}},
+	}
+	plan := render.RenderPlan{
+		PerAgent: map[string]render.AgentResult{
+			"claude": {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}}, // no skips
+		},
+	}
+	report := render.BuildReport(c, plan, []string{"claude"})
+	if len(report.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(report.Rows))
+	}
+	if report.Rows[0].SkipDetails != nil {
+		t.Errorf("SkipDetails = %+v, want nil for a no-skip row", report.Rows[0].SkipDetails)
+	}
+	var buf bytes.Buffer
+	if err := report.PrintJSON(&buf); err != nil {
+		t.Fatalf("PrintJSON: %v", err)
+	}
+	if strings.Contains(buf.String(), "skipDetails") {
+		t.Errorf("a no-skip row must omit the skipDetails key; got:\n%s", buf.String())
+	}
+}
+
 func TestTranslationReport_PrintText(t *testing.T) {
 	c := source.Canonical{
 		Plugins: []source.Plugin{

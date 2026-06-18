@@ -375,8 +375,10 @@ func TestExplain_FlagConflicts(t *testing.T) {
 
 // TestExplain_ListsSkips verifies that explain does not stop at a bare
 // "(N skipped)" tally — it lists each skipped component (label + reason) under
-// the agent row, in both text and JSON. The fixture ships an LSP server, which
-// Codex always skips (no LSP concept), so the skip is deterministic.
+// the agent row, in both text and JSON. The fixture ships an LSP server and a
+// hook on a lifecycle event Codex does not recognize; Codex skips both
+// deterministically (no LSP concept; unknown event), so the row is a stable
+// two-skip partial.
 func TestExplain_ListsSkips(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
@@ -419,6 +421,7 @@ func TestExplain_ListsSkips(t *testing.T) {
 		Rows []struct {
 			SkipDetails []struct {
 				Component string `json:"component"`
+				Name      string `json:"name"`
 				Reason    string `json:"reason"`
 			} `json:"skipDetails"`
 		} `json:"rows"`
@@ -426,22 +429,27 @@ func TestExplain_ListsSkips(t *testing.T) {
 	if err := json.Unmarshal([]byte(outJSON), &parsed); err != nil {
 		t.Fatalf("explain --json not valid JSON: %v\n%s", err, outJSON)
 	}
-	found := false
+	var lsp, hook bool
 	for _, r := range parsed.Rows {
 		for _, sd := range r.SkipDetails {
 			if sd.Component == "lsp" && strings.Contains(sd.Reason, "no LSP configuration concept") {
-				found = true
+				lsp = true
+			}
+			if sd.Component == "hook" && strings.Contains(sd.Reason, "does not recognize this lifecycle event") {
+				hook = true
 			}
 		}
 	}
-	if !found {
-		t.Errorf("explain --json missing the lsp skipDetail; got:\n%s", outJSON)
+	if !lsp || !hook {
+		t.Errorf("explain --json missing skipDetails (lsp=%v hook=%v); got:\n%s", lsp, hook, outJSON)
 	}
 }
 
 // setupExplainSkipFixture builds a marketplace whose single plugin ships an MCP
-// server plus an LSP server. Codex renders the MCP but skips the LSP, giving the
-// skip-listing test a deterministic partial-coverage row.
+// server, an LSP server, and a hook on a lifecycle event Codex does not
+// recognize. Codex renders the MCP but skips the LSP (no LSP concept) and the
+// hook (unknown event), giving the skip-listing test a deterministic two-skip
+// partial-coverage row.
 func setupExplainSkipFixture(t *testing.T, tmp string) string {
 	t.Helper()
 	fixture := filepath.Join(tmp, "fixture-marketplace-explain-skip")
@@ -460,7 +468,8 @@ func setupExplainSkipFixture(t *testing.T, tmp string) string {
 	if err := os.WriteFile(filepath.Join(plugDir, "plugin.json"),
 		[]byte(`{"name":"skipdemo","version":"1.0.0",`+
 			`"mcpServers":{"skip-mcp":{"command":"echo","args":["hi"]}},`+
-			`"lspServers":{"skip-lsp":{"command":"lang-server"}}}`),
+			`"lspServers":{"skip-lsp":{"command":"lang-server"}},`+
+			`"hooks":{"SessionEnd":"echo bye"}}`),
 		0o644); err != nil {
 		t.Fatal(err)
 	}
