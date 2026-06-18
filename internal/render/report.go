@@ -111,6 +111,10 @@ func (r TranslationReport) PrintTextStyled(w io.Writer, p *ui.Printer) {
 	r.printText(w, p)
 }
 
+// printText is the shared body of PrintText / PrintTextStyled. The only
+// untrusted token it renders is the plugin label (a fetched marketplace id),
+// which is passed through ui.Sanitize before reaching the terminal so a hostile
+// plugin cannot smuggle ANSI/control sequences into the report; see the loop.
 func (r TranslationReport) printText(w io.Writer, p *ui.Printer) {
 	// Group rows by plugin.
 	byPlugin := map[string][]PluginRow{}
@@ -129,11 +133,19 @@ func (r TranslationReport) printText(w io.Writer, p *ui.Printer) {
 		// The plugin label is the plugin id from fetched marketplace metadata
 		// (untrusted), so sanitize it before rendering to the terminal: a control
 		// sequence smuggled into a plugin id must not recolor/clear the screen or
-		// spoof rows in the apply/verify translation report. Clean labels pass
-		// through unchanged, so the byte-stable plain fixtures still hold. (The
-		// explain command sanitizes the same untrusted source at its own display
-		// sites; this covers the shared report path that apply/verify print
-		// through.)
+		// spoof rows in the translation report `apply` prints. Sanitizing strips
+		// embedded newlines too, so the id cannot forge an extra report line.
+		// Clean labels pass through unchanged, so the byte-stable plain fixtures
+		// still hold. (The explain command sanitizes the same untrusted source at
+		// its own display sites; this covers the shared report body explain
+		// reuses too.)
+		//
+		// Grouping and ordering still key on the RAW label (byPlugin,
+		// pluginOrder, sort.Strings): two distinct raw ids that sanitize to the
+		// same visible text therefore render as separate rows that merely look
+		// alike — a cosmetic spoof of the same class as the bidi/zero-width runes
+		// ui.Sanitize deliberately leaves, not a terminal-control escape, so it
+		// is an accepted residual.
 		label := ui.Sanitize(plug)
 		if p != nil {
 			fmt.Fprintf(w, "%s %s\n", p.Bold("plugin:"), label)

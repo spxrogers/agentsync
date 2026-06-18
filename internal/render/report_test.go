@@ -339,28 +339,36 @@ func TestTranslationReport_PrintTextStyled(t *testing.T) {
 }
 
 // TestTranslationReport_SanitizesUntrustedPluginLabel proves the shared
-// apply/verify translation report strips terminal control bytes from a plugin
-// id (untrusted fetched-marketplace metadata) before printing it, so a hostile
-// plugin cannot smuggle ANSI/escape sequences into agentsync's apply/verify
-// output. Both the plain (PrintText) and styled (PrintTextStyled) paths are
-// covered; the inert parameter residue ("[2J[31m") may survive as plain text.
+// translation report (printed by `apply`, and whose body `explain` reuses)
+// strips terminal control bytes from a plugin id (untrusted fetched-marketplace
+// metadata) before printing it, so a hostile plugin cannot smuggle ANSI/escape
+// sequences into agentsync's output. The payload also embeds a NEWLINE that
+// forges a second "plugin:" header line — sanitizing must drop it so the id
+// stays on its own line and cannot fabricate rows. Both the plain (PrintText)
+// and styled-under-ColorNever (PrintTextStyled) paths, and the disabled-plugin
+// row, are covered; the inert CSI-parameter residue ("[2J[31m") is plain text.
 func TestTranslationReport_SanitizesUntrustedPluginLabel(t *testing.T) {
-	// A plugin id carrying a screen-clear CSI, a color CSI, and a carriage
-	// return — the injection payload the report's display boundary must defang.
-	const evil = "evil\x1b[2J\x1b[31m\rname"
-	c := source.Canonical{
-		Plugins: []source.Plugin{
-			{ID: "evil", Plugin: source.PluginSpec{ID: evil, Version: "1.0.0"}},
-		},
-	}
-	plan := render.RenderPlan{
-		PerAgent: map[string]render.AgentResult{
-			"claude": {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}},
-		},
-	}
-	report := render.BuildReport(c, plan, []string{"claude"})
+	// A plugin id that tries to (a) clear the screen + set a color via CSI,
+	// (b) hide a carriage return, and (c) inject a \n to forge a SECOND plugin
+	// header row. Every control byte — including the \n — must be stripped.
+	const evil = "x\x1b[2J\x1b[31m\r\nplugin: SPOOFED"
+	const wantHeader = "plugin: x[2J[31mplugin: SPOOFED" // ESC/CR/LF gone, residue inert
 
-	assertClean := func(t *testing.T, where, out string) {
+	build := func(disabled bool) render.TranslationReport {
+		c := source.Canonical{Plugins: []source.Plugin{
+			{ID: "evil", Plugin: source.PluginSpec{ID: evil, Version: "1.0.0", Disabled: disabled}},
+		}}
+		plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+			"claude": {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}},
+		}}
+		return render.BuildReport(c, plan, []string{"claude"})
+	}
+
+	// assertNoInjection pins three things at once: no raw ESC/CR survives, the
+	// output is EXACTLY two lines (so the injected \n forged no third line), and
+	// the whole hostile id collapsed onto the one header line (wantHeader). The
+	// caller names the expected substring of the second (non-header) line.
+	assertNoInjection := func(t *testing.T, where, out, wantSecond string) {
 		t.Helper()
 		if strings.ContainsRune(out, '\x1b') {
 			t.Errorf("%s: ESC byte leaked into report output: %q", where, out)
@@ -368,19 +376,68 @@ func TestTranslationReport_SanitizesUntrustedPluginLabel(t *testing.T) {
 		if strings.ContainsRune(out, '\r') {
 			t.Errorf("%s: CR byte leaked into report output: %q", where, out)
 		}
-		// The label is neutralized but still recognizable as inert text.
-		if !strings.Contains(out, "plugin: evil[2J[31mname") {
-			t.Errorf("%s: sanitized plugin label not present: %q", where, out)
+		lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+		if len(lines) != 2 {
+			t.Fatalf("%s: newline injection — want exactly 2 lines (header + row), got %d: %q",
+				where, len(lines), out)
+		}
+		if lines[0] != wantHeader {
+			t.Errorf("%s: header line = %q, want %q", where, lines[0], wantHeader)
+		}
+		if !strings.Contains(lines[1], wantSecond) {
+			t.Errorf("%s: second line = %q, want it to contain %q", where, lines[1], wantSecond)
 		}
 	}
 
-	// Plain path (p == nil) and the styled path under ColorNever (p != nil, so no
-	// legitimate ANSI is emitted) — both must carry no raw ESC/CR from the id.
-	var plain, styled bytes.Buffer
-	report.PrintText(&plain)
-	report.PrintTextStyled(&styled, ui.New(&styled, &styled, ui.ColorNever))
-	assertClean(t, "PrintText", plain.String())
-	assertClean(t, "PrintTextStyled", styled.String())
+	t.Run("enabled plugin: plain and styled-ColorNever", func(t *testing.T) {
+		report := build(false)
+		var plain, styled bytes.Buffer
+		report.PrintText(&plain)
+		report.PrintTextStyled(&styled, ui.New(&styled, &styled, ui.ColorNever))
+		assertNoInjection(t, "PrintText", plain.String(), "claude")
+		assertNoInjection(t, "PrintTextStyled", styled.String(), "claude")
+	})
+
+	t.Run("disabled plugin header is sanitized too", func(t *testing.T) {
+		// A disabled plugin renders the (sanitized) header + a "(disabled…)"
+		// marker line instead of agent rows — the hostile id must be defanged on
+		// that path as well.
+		var plain bytes.Buffer
+		build(true).PrintText(&plain)
+		assertNoInjection(t, "PrintText(disabled)", plain.String(), "(disabled by project)")
+	})
+}
+
+// TestTranslationReport_JSONKeepsUntrustedLabelRaw pins the other half of the
+// contract: `--json` is a machine surface where the consumer owns escaping, so
+// PrintJSON must NOT strip control bytes from a plugin id (unlike the text
+// path). Asserting the hostile id round-trips byte-for-byte proves the sanitize
+// step is scoped to the terminal renderer and never leaks into the JSON.
+func TestTranslationReport_JSONKeepsUntrustedLabelRaw(t *testing.T) {
+	const evil = "x\x1b[2J\x1b[31m\r\nplugin: SPOOFED"
+	c := source.Canonical{Plugins: []source.Plugin{
+		{ID: "evil", Plugin: source.PluginSpec{ID: evil}},
+	}}
+	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+		"claude": {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}},
+	}}
+	report := render.BuildReport(c, plan, []string{"claude"})
+
+	var buf bytes.Buffer
+	if err := report.PrintJSON(&buf); err != nil {
+		t.Fatalf("PrintJSON: %v", err)
+	}
+	var got render.TranslationReport
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal PrintJSON output: %v", err)
+	}
+	if len(got.Rows) == 0 {
+		t.Fatal("no rows decoded from PrintJSON output")
+	}
+	if got.Rows[0].Plugin != evil {
+		t.Errorf("JSON must keep the id raw (consumer owns escaping): got %q, want %q",
+			got.Rows[0].Plugin, evil)
+	}
 }
 
 func TestTranslationReport_PrintJSON(t *testing.T) {
