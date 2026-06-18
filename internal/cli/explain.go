@@ -285,6 +285,11 @@ func explainPluginReport(fs afero.Fs, c source.Canonical, pl source.Plugin, agen
 		return render.BuildReport(scoped, render.RenderPlan{}, agents), nil
 	}
 
+	// The ok flag is intentionally ignored: ProjectInstalled returns ok=false
+	// only when projection is skipped wholesale (empty pluginCacheRoot, which
+	// explain never passes) or for a disabled plugin (already handled above). In
+	// any such case proj is the zero value, so the assignments below correctly
+	// yield an empty-component report rather than the stale flattened union.
 	proj, _, err := marketplace.ProjectInstalled(fs, home, pluginCacheRoot, pl, true)
 	if err != nil {
 		return render.TranslationReport{}, err

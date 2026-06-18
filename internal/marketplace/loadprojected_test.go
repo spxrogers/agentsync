@@ -163,6 +163,66 @@ func TestLoadProjectedExcluding_UnknownIDIsNoOp(t *testing.T) {
 	}
 }
 
+// TestProjectInstalled_ScopesToOnePlugin is the unit-level guard for the
+// per-plugin projection entry point `explain <id>` builds on: it must project
+// ONLY the named plugin's components, never the cross-plugin union the flattening
+// LoadProjected returns. Two plugins are installed; projecting one must surface
+// its own MCP server and not the other's.
+func TestProjectInstalled_ScopesToOnePlugin(t *testing.T) {
+	home, cache := twoPluginFixture(t,
+		`{"name":"a","mcpServers":{"a-srv":{"command":"x"}}}`,
+		`{"name":"b","mcpServers":{"b-srv":{"command":"y"}}}`)
+
+	plA := source.Plugin{ID: "a", Plugin: source.PluginSpec{ID: "a@m", Version: "1"}}
+	proj, ok, err := marketplace.ProjectInstalled(afero.NewOsFs(), home, cache, plA, true)
+	if err != nil {
+		t.Fatalf("ProjectInstalled(a): %v", err)
+	}
+	if !ok {
+		t.Fatal("ProjectInstalled(a): ok=false; want true for an installed, enabled plugin")
+	}
+	if !mcpIDs(proj.MCPServers)["a-srv"] {
+		t.Errorf("ProjectInstalled(a) missing its own server: %v", mcpIDs(proj.MCPServers))
+	}
+	if mcpIDs(proj.MCPServers)["b-srv"] {
+		t.Errorf("ProjectInstalled(a) leaked plugin b's server: %v", mcpIDs(proj.MCPServers))
+	}
+}
+
+// TestProjectInstalled_DisabledContributesNothing pins the ok=false arm: a
+// plugin disabled via `plugin disable` projects nothing, so explain never plans
+// over its components.
+func TestProjectInstalled_DisabledContributesNothing(t *testing.T) {
+	home, cache := writeProjFixture(t,
+		"[plugin]\nid = \"d@m\"\nversion = \"1\"\n", "d",
+		`{"name":"d","mcpServers":{"d-srv":{"command":"x"}}}`)
+	pl := source.Plugin{ID: "d", Plugin: source.PluginSpec{ID: "d@m", Version: "1", Disabled: true}}
+	proj, ok, err := marketplace.ProjectInstalled(afero.NewOsFs(), home, cache, pl, true)
+	if err != nil {
+		t.Fatalf("ProjectInstalled(disabled): %v", err)
+	}
+	if ok {
+		t.Error("ProjectInstalled(disabled): ok=true; want false")
+	}
+	if len(proj.MCPServers) != 0 {
+		t.Errorf("ProjectInstalled(disabled) projected components: %v", mcpIDs(proj.MCPServers))
+	}
+}
+
+// TestProjectInstalled_EmptyCacheRootSkips mirrors LoadProjected's empty-root
+// skip: with no plugin cache root there is nothing to project — ok=false, no
+// error.
+func TestProjectInstalled_EmptyCacheRootSkips(t *testing.T) {
+	pl := source.Plugin{ID: "x", Plugin: source.PluginSpec{ID: "x@m", Version: "1"}}
+	proj, ok, err := marketplace.ProjectInstalled(afero.NewOsFs(), t.TempDir(), "", pl, true)
+	if err != nil {
+		t.Fatalf("ProjectInstalled(empty root): %v", err)
+	}
+	if ok || len(proj.MCPServers) != 0 {
+		t.Errorf("empty cache root must contribute nothing; ok=%v servers=%v", ok, mcpIDs(proj.MCPServers))
+	}
+}
+
 func mcpIDs(servers []source.MCPServer) map[string]bool {
 	ids := map[string]bool{}
 	for _, m := range servers {

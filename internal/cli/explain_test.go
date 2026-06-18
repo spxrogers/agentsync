@@ -478,13 +478,16 @@ func TestExplain_ScopesToNamedPlugin(t *testing.T) {
 		}
 	}
 
-	// Explaining the clean plugin must not inherit the noisy plugin's LSP skip.
+	// Explaining the clean plugin must not inherit any of the noisy plugin's
+	// skips (its LSP nor its subagent — the two leak shapes from the bug report).
 	out, err := runCLI(t, env, "explain", "clean@cross-mp")
 	if err != nil {
 		t.Fatalf("explain clean: %v\n%s", err, out)
 	}
-	if strings.Contains(out, "skipped") || strings.Contains(out, "lsp") {
-		t.Errorf("explain clean@cross-mp leaked another plugin's skip; got:\n%s", out)
+	for _, leak := range []string{"skipped", "lsp", "subagent", "reviewer"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("explain clean@cross-mp leaked the noisy plugin's %q; got:\n%s", leak, out)
+		}
 	}
 	if !strings.Contains(out, "full") {
 		t.Errorf("explain clean@cross-mp should be full coverage; got:\n%s", out)
@@ -527,8 +530,9 @@ func TestExplain_ScopesToNamedPlugin(t *testing.T) {
 		}
 	}
 
-	// Inverse: the noisy plugin still surfaces ITS OWN lsp skip, so the scoping
-	// narrows attribution rather than hiding skips wholesale.
+	// Inverse: the noisy plugin still surfaces ITS OWN skips (both the lsp and the
+	// subagent), so the scoping narrows attribution rather than hiding skips
+	// wholesale.
 	outNoisy, err := runCLI(t, env, "explain", "noisy@cross-mp")
 	if err != nil {
 		t.Fatalf("explain noisy: %v\n%s", err, outNoisy)
@@ -536,13 +540,119 @@ func TestExplain_ScopesToNamedPlugin(t *testing.T) {
 	if !strings.Contains(outNoisy, "lsp") || !strings.Contains(outNoisy, "Codex has no LSP configuration concept") {
 		t.Errorf("explain noisy@cross-mp should surface its own lsp skip; got:\n%s", outNoisy)
 	}
+	if !strings.Contains(outNoisy, "subagent-frontmatter") || !strings.Contains(outNoisy, "reviewer") {
+		t.Errorf("explain noisy@cross-mp should surface its own subagent skip; got:\n%s", outNoisy)
+	}
+}
+
+// TestExplain_AllAttributesPerRow proves the per-plugin scoping holds in the
+// COMBINED report too: `explain --all` over a clean + noisy plugin must give each
+// plugin its own row counts/skips — the noisy plugin's LSP and subagent skips
+// must not bleed onto the clean plugin's row even though both rows share one
+// report. This is the multi-plugin code path the single-plugin regression does
+// not exercise.
+func TestExplain_AllAttributesPerRow(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	fixture := setupExplainCrossPluginFixture(t, tmp)
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"clean@cross-mp", "noisy@cross-mp"} {
+		if _, err := runCLI(t, env, "plugin", "install", id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := runCLI(t, env, "explain", "--all", "--json")
+	if err != nil {
+		t.Fatalf("explain --all --json: %v\n%s", err, out)
+	}
+	var parsed struct {
+		Rows []struct {
+			Plugin      string `json:"plugin"`
+			MCP         int    `json:"mcp"`
+			Skips       int    `json:"skips"`
+			SkipDetails []struct {
+				Component string `json:"component"`
+			} `json:"skipDetails"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("explain --all --json not valid JSON: %v\n%s", err, out)
+	}
+	var sawClean, sawNoisy bool
+	for _, r := range parsed.Rows {
+		switch r.Plugin {
+		case "clean@cross-mp":
+			sawClean = true
+			if r.MCP != 1 || r.Skips != 0 || len(r.SkipDetails) != 0 {
+				t.Errorf("clean row in --all leaked noisy's components: mcp=%d skips=%d details=%+v",
+					r.MCP, r.Skips, r.SkipDetails)
+			}
+		case "noisy@cross-mp":
+			sawNoisy = true
+			// noisy owns exactly its two skips (lsp + subagent-frontmatter).
+			if r.MCP != 1 || r.Skips != 2 {
+				t.Errorf("noisy row in --all has wrong own counts: mcp=%d skips=%d (want mcp=1 skips=2)",
+					r.MCP, r.Skips)
+			}
+		}
+	}
+	if !sawClean || !sawNoisy {
+		t.Fatalf("--all missing a plugin row (clean=%v noisy=%v):\n%s", sawClean, sawNoisy, out)
+	}
+}
+
+// TestExplain_DisabledPluginRendersMarker confirms a plugin disabled via
+// `plugin disable` still explains cleanly through the per-plugin path: it renders
+// the disabled marker (no agent rows, no crash) rather than projecting and
+// planning over the (now suppressed) plugin.
+func TestExplain_DisabledPluginRendersMarker(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	fixture := setupExplainFixture(t, tmp)
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "plugin", "disable", "demo"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "explain", "demo@test-mp")
+	if err != nil {
+		t.Fatalf("explain disabled: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "disabled") {
+		t.Errorf("explain of a disabled plugin should show the disabled marker; got:\n%s", out)
+	}
 }
 
 // setupExplainCrossPluginFixture builds a marketplace with two installable
 // plugins used by the cross-plugin scoping regression: "clean" ships a single
-// MCP server (Codex renders it fully), "noisy" ships an MCP plus an LSP server
-// Codex cannot translate (it skips the LSP). With both installed, explaining one
-// must not surface the other's components.
+// MCP server (Codex renders it fully), "noisy" ships an MCP plus two components
+// Codex cannot fully translate — an LSP server (no LSP concept) and a subagent
+// (Codex agents are TOML; the markdown `name` frontmatter is dropped). Both of
+// noisy's skips mirror the real-world report (leaked subagents *and* LSPs). With
+// both plugins installed, explaining one must not surface the other's components
+// or skips.
 func setupExplainCrossPluginFixture(t *testing.T, tmp string) string {
 	t.Helper()
 	fixture := filepath.Join(tmp, "fixture-marketplace-explain-cross")
@@ -572,7 +682,17 @@ func setupExplainCrossPluginFixture(t *testing.T, tmp string) string {
 	if err := os.WriteFile(filepath.Join(noisyDir, "plugin.json"),
 		[]byte(`{"name":"noisy","version":"1.0.0",`+
 			`"mcpServers":{"noisy-mcp":{"command":"echo","args":["hi"]}},`+
-			`"lspServers":{"noisy-lsp":{"command":"lang-server"}}}`),
+			`"lspServers":{"noisy-lsp":{"command":"lang-server"}},`+
+			`"agents":["./agents/reviewer.md"]}`),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	agentsDir := filepath.Join(fixture, "plugins", "noisy", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "reviewer.md"),
+		[]byte("---\nname: reviewer\ndescription: reviews code\n---\nReview carefully.\n"),
 		0o644); err != nil {
 		t.Fatal(err)
 	}
