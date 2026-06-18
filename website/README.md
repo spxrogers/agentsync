@@ -64,11 +64,16 @@ relevant page under `reference/` (the sync table in `CLAUDE.md` lists this).
 
 ## Deploy
 
-Pushing to `main` triggers the `docs` workflow, which builds `website/` and
-publishes `dist/` to GitHub Pages. The custom domain is set via
-[`public/CNAME`](public/CNAME). Pull requests build the site for validation but
-do not deploy.
+The site is served by GitHub Pages from the `gh-pages` branch ("deploy from a
+branch"), so serving it costs no GitHub Actions minutes. Cutting a release —
+pushing a `vX.Y.Z` tag — runs the [`release` workflow](../.github/workflows/release.yml),
+whose `docs` job rebuilds `website/` and force-pushes `dist/` to `gh-pages` once
+the CLI is published. The result: the live docs always track the latest released
+CLI. The custom domain is set via [`public/CNAME`](public/CNAME).
 
-One-time setup in the GitHub repo: **Settings → Pages → Source: GitHub Actions**,
-then add `agentsync.cc` as the custom domain (the `CNAME` file enforces it on each
-deploy).
+To redeploy out of band (e.g. a docs-only fix between releases), run
+`just docs-publish` locally — it does the same rebuild + force-push to `gh-pages`.
+
+One-time setup in the GitHub repo: **Settings → Pages → Source: Deploy from a
+branch → `gh-pages` / `(root)`**, with `agentsync.cc` as the custom domain (the
+`CNAME` file re-enforces it on each deploy).
