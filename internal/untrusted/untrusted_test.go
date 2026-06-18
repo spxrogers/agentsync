@@ -47,6 +47,25 @@ func TestText_Empty(t *testing.T) {
 	}
 }
 
+// TestJoin pins the Text-slice join used to build one display string from
+// several untrusted values (the status/doctor "undeclared native plugins" list):
+// every element is rendered through its sanitizing String(), so terminal escapes
+// are stripped per element while the caller's separator is emitted verbatim.
+func TestJoin(t *testing.T) {
+	ts := []Text{Wrap("demo\x1b[31m"), Wrap("ev\ril"), Wrap("ok")}
+	got := Join(ts, ", ")
+	want := "demo[31m, evil, ok"
+	if got != want {
+		t.Errorf("Join = %q, want sanitized %q", got, want)
+	}
+	if got := Join(nil, ", "); got != "" {
+		t.Errorf("Join(nil) = %q, want empty", got)
+	}
+	if got := Join([]Text{Wrap("solo")}, ", "); got != "solo" {
+		t.Errorf("Join(single) = %q, want %q (no trailing separator)", got, "solo")
+	}
+}
+
 // TestText_Wrap pins the boundary constructor: Wrap stores the bytes verbatim
 // (Unverified round-trips them) without sanitizing at construction — sanitization
 // happens at the display boundary (String), not at ingestion, so the raw value

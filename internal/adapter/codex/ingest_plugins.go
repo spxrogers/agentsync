@@ -9,6 +9,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // IngestPlugins discovers the plugins Codex records in ~/.codex/config.toml. The
@@ -60,7 +61,7 @@ func parsePluginTables(v any) []adapter.NativePlugin {
 	for key, raw := range m {
 		name, mpID := splitPluginKey(key)
 		out = append(out, adapter.NativePlugin{
-			Name:          name,
+			Name:          untrusted.Wrap(name),
 			MarketplaceID: mpID,
 			Enabled:       pluginEnabled(raw),
 		})

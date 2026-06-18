@@ -28,6 +28,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   established carve-outs (hex SHAs, `%q` URLs, user-supplied CLI args, enum modes)
   stay plain strings. `ui.Sanitize` is unchanged in behavior (it now delegates to
   `untrusted.Sanitize`).
+  - **Extended to native-ingested plugin names (#104).** The one untrusted source
+    left out of the by-type pass above — the plugin name an adapter's
+    `PluginIngester` reports, which `status`/`doctor` print in their "undeclared
+    native plugins" notes — is now carried as `untrusted.Text` end to end
+    (`adapter.NativePlugin.Name` → `undeclaredNativePlugins` → the print sites,
+    joined via the new `untrusted.Join`). The previous per-site `ui.Sanitize`
+    wrappers at those sinks are gone (the type sanitizes by construction), and a
+    new `TestUntrustedFieldGuard` over `adapter.NativePlugin` fails the build if a
+    future native-config string ships unclassified. No behavior change — the
+    notes still strip terminal escapes from a hostile plugin name.
 
 - **`explain` describes every component kind a plugin hosts, not just MCP +
   commands.** Each agent row's count tail previously read `N mcp · N commands`

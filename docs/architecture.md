@@ -457,11 +457,17 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    `fmt` strips the danger **by construction**; the raw value is reachable only
    via the explicit `Unverified()` (filesystem/lookup use, never display). The
    wire format is unchanged (`Text` is a string kind — `omitempty` and `--json`
-   raw output are preserved). Reflection-based `TestUntrustedFieldGuard`s
-   (`internal/{source,marketplace,render}`) fail the build if a new string field
-   on those structs is left unclassified, so a future metadata field can't ship
-   as a raw string a new print site would leak. Carve-outs (hex SHAs, `%q` URLs,
-   user-supplied CLI args, enum modes) stay plain strings. See `SECURITY.md`.
+   raw output are preserved). This also covers the **native-ingested** plugin
+   name: a `PluginIngester`'s `adapter.NativePlugin.Name` is `untrusted.Text`, so
+   the `status`/`doctor` "undeclared native plugins" notes that print it sanitize
+   by construction (via `untrusted.Join`) with no per-site `ui.Sanitize` wrapper.
+   Reflection-based `TestUntrustedFieldGuard`s
+   (`internal/{source,marketplace,render,adapter}`) fail the build if a new string
+   field on those structs is left unclassified, so a future metadata field can't
+   ship as a raw string a new print site would leak. Carve-outs (hex SHAs, `%q`
+   URLs, user-supplied CLI args, enum modes, and the `import`-only diagnostics
+   surface — native marketplace ids / source types) stay plain strings. See
+   `SECURITY.md`.
 
 ---
 

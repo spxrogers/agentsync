@@ -5,6 +5,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // undeclaredNativePlugins reports, per agent, the plugins enabled in that
@@ -22,12 +23,16 @@ import (
 // differ from the declared marketplace name agentsync keys its file on. Name
 // matching errs toward NOT nagging (a same-named plugin from another
 // marketplace counts as declared), which suits a nudge.
-func undeclaredNativePlugins(c source.Canonical, reg *adapter.Registry, agents []string) map[string][]string {
+// The native plugin name is carried as untrusted.Text end to end (a plugin
+// author influences it, and status/doctor print it), so matching/dedup keys off
+// its raw Unverified() value while the value handed to the print sites keeps the
+// Text wrapper and sanitizes on display.
+func undeclaredNativePlugins(c source.Canonical, reg *adapter.Registry, agents []string) map[string][]untrusted.Text {
 	declared := make(map[string]bool, len(c.Plugins))
 	for _, pl := range c.Plugins {
 		declared[pl.ID.Unverified()] = true
 	}
-	out := map[string][]string{}
+	out := map[string][]untrusted.Text{}
 	for _, name := range agents {
 		pi, ok := reg.Lookup(name).(adapter.PluginIngester)
 		if !ok {
@@ -37,17 +42,18 @@ func undeclaredNativePlugins(c source.Canonical, reg *adapter.Registry, agents [
 		if err != nil {
 			continue
 		}
-		var missing []string
+		var missing []untrusted.Text
 		seen := map[string]bool{}
 		for _, pl := range plugins {
-			if !pl.Enabled || declared[pl.Name] || seen[pl.Name] {
+			key := pl.Name.Unverified()
+			if !pl.Enabled || declared[key] || seen[key] {
 				continue
 			}
-			seen[pl.Name] = true
+			seen[key] = true
 			missing = append(missing, pl.Name)
 		}
 		if len(missing) > 0 {
-			sort.Strings(missing)
+			sort.Slice(missing, func(i, j int) bool { return missing[i] < missing[j] })
 			out[name] = missing
 		}
 	}

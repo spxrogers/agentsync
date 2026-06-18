@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
@@ -16,6 +15,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 	"github.com/spxrogers/agentsync/internal/ui"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 func newDoctorCmd() *cobra.Command {
@@ -203,9 +203,11 @@ func checkPlugins(p *ui.Printer, home string) {
 			continue
 		}
 		// Native plugin names are influenced by the plugin author (read from the
-		// agent's native config), so sanitize before printing.
+		// agent's native config); they are untrusted.Text and sanitize on display
+		// by construction (untrusted.Join renders each via its String()), so no
+		// manual ui.Sanitize is needed here.
 		warnCheck(p, fmt.Sprintf("%-10s ", name), fmt.Sprintf("%d not in source: %s — run `agentsync import %s:plugin`",
-			len(missing), ui.Sanitize(strings.Join(missing, ", ")), name))
+			len(missing), untrusted.Join(missing, ", "), name))
 	}
 }
 
