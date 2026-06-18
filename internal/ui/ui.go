@@ -252,9 +252,10 @@ func isControl(r rune) bool {
 // that Sanitize strips: an explicit Unicode bidi formatting control (the
 // embedding/override set U+202A–U+202E and the isolate set U+2066–U+2069 — the
 // "Trojan Source" class) or a zero-width / invisible rune (U+200B–U+200D, U+FEFF).
-// It deliberately excludes ordinary RTL/CJK letters and the implicit-direction
-// marks (U+200E/U+200F LRM/RLM, U+061C ALM), so legitimate non-Latin names are
-// preserved. Scope is the explicit bidi + zero-width spoofing set, not every
+// It deliberately excludes ordinary RTL/CJK letters and the benign directional
+// marks (U+200E/U+200F LRM/RLM, U+061C ALM) — which only set the direction of
+// adjacent neutrals and cannot reorder text the way the override/isolate controls
+// can — so legitimate non-Latin names are preserved. Scope is the explicit bidi + zero-width spoofing set, not every
 // default-ignorable or width-affecting rune: e.g. U+2028/U+2029 (line/paragraph
 // separators), U+00AD (soft hyphen), and U+2060 (word joiner) are knowingly left
 // alone — terminals don't act on them the way they do on CR/LF (which isControl
