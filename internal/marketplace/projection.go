@@ -686,7 +686,11 @@ type markdownEntry struct {
 // loadSkillEntry reads a skill path which may be either a directory containing
 // SKILL.md or a SKILL.md file directly. Returns nil (no error) if the file is
 // simply missing — the caller should skip that entry with a warning.
-// Returns an error only for real I/O problems or malformed frontmatter.
+// Returns an error only for real I/O problems or frontmatter neither the strict
+// nor the lenient YAML parser can read. Frontmatter is parsed the way Claude Code
+// reads it (source.ParseFrontmatterWithReport): a `description` with bare colons —
+// valid to Claude, invalid to strict YAML — is recovered leniently with a warning
+// rather than failing the projection.
 //
 // A skill is a DIRECTORY, not just SKILL.md: when listDir is non-nil, every
 // other file under the skill directory (scripts/, references/, assets/, nested
@@ -723,9 +727,12 @@ func loadSkillEntry(path string, readFile func(string) ([]byte, error), listDir 
 		skillPath = path
 	}
 
-	fm, body, err := source.ParseFrontmatter(data)
+	fm, body, lenient, err := source.ParseFrontmatterWithReport(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse frontmatter in %s: %w", skillPath, err)
+	}
+	if lenient {
+		slog.Warn("plugin skill frontmatter is not strict YAML; parsed leniently (consider quoting values containing ': ')", "path", skillPath)
 	}
 
 	// Derive name: prefer frontmatter "name" key, fall back to basename of the resolved path.
@@ -810,9 +817,13 @@ func collectSkillFiles(skillDir string, readFile func(string) ([]byte, error), l
 	return files, nil
 }
 
-// loadMarkdownEntry reads a markdown file at path. Returns nil (no error) if
-// the file is simply missing — the caller should skip that entry with a
-// warning. Returns an error for I/O failures or malformed frontmatter.
+// loadMarkdownEntry reads a markdown file at path (a command or subagent).
+// Returns nil (no error) if the file is simply missing — the caller should skip
+// that entry with a warning. Returns an error for I/O failures or frontmatter
+// neither the strict nor the lenient YAML parser can read. Like Claude Code (and
+// the adapter Ingest paths), it parses via source.ParseFrontmatterWithReport, so
+// a `description` containing bare colons — which strict YAML rejects but Claude
+// accepts — is recovered leniently with a warning instead of failing.
 func loadMarkdownEntry(path string, readFile func(string) ([]byte, error)) (*markdownEntry, error) {
 	data, err := readFile(path)
 	if err != nil {
@@ -823,9 +834,12 @@ func loadMarkdownEntry(path string, readFile func(string) ([]byte, error)) (*mar
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 
-	fm, body, err := source.ParseFrontmatter(data)
+	fm, body, lenient, err := source.ParseFrontmatterWithReport(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse frontmatter in %s: %w", path, err)
+	}
+	if lenient {
+		slog.Warn("plugin component frontmatter is not strict YAML; parsed leniently (consider quoting values containing ': ')", "path", path)
 	}
 
 	// Derive name: prefer frontmatter "name" key, fall back to basename without .md.

@@ -59,7 +59,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `{matcher, hooks:[{type, command}]}` shape (used by both `hooks/hooks.json` and
   inline `plugin.json` hooks), emitting one hook per command entry and dropping
   non-command hook types agentsync's command-only `Hook` model cannot represent
-  rather than projecting an empty hook.
+  rather than projecting an empty hook. Plugin component frontmatter is now read
+  the way Claude Code reads it (`source.ParseFrontmatterWithReport`, as the
+  adapter Ingest paths already do): a `description` containing bare colons —
+  valid to Claude, rejected by strict YAML with *"mapping values are not allowed
+  in this context"* — is recovered with a warning instead of aborting the whole
+  projection. (Newly surfaced by agent discovery: the official `pr-review-toolkit`
+  ships such an `agents/silent-failure-hunter.md`, which previously crashed
+  `explain --all` for every plugin once agents were discovered.)
 
 - **`explain <plugin>` now reports only that plugin's components.** `explain`
   previously stamped the *global* translation result onto every plugin row: the

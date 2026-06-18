@@ -210,6 +210,52 @@ func TestProject_ConventionAgents(t *testing.T) {
 	}
 }
 
+// TestProject_ConventionAgents_LenientFrontmatter is the regression for the
+// pr-review-toolkit crash: an official plugin ships an agent whose `description`
+// is an unquoted scalar with bare colon-space sequences (`Context: …`, `Daisy:
+// "…"`) — valid to Claude Code, rejected by strict YAML ("mapping values are not
+// allowed in this context"). Once agents/ is convention-discovered, that file is
+// loaded, and a strict parse aborted the WHOLE projection (so `explain --all`
+// died on one plugin). Projection must parse it the way Claude does (lenient
+// fallback), recovering the agent instead of crashing.
+func TestProject_ConventionAgents_LenientFrontmatter(t *testing.T) {
+	cache := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"pr-review-toolkit","version":"1.0.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cache, "agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Mirrors the real silent-failure-hunter.md: a single-line description with
+	// multiple bare ": " sequences that strict YAML cannot parse.
+	body := "---\n" +
+		"name: silent-failure-hunter\n" +
+		`description: Use this agent when reviewing code. Examples: Context: Daisy did X. Daisy: "review it?" Assistant: "on it"` + "\n" +
+		"---\n" +
+		"Hunt silent failures.\n"
+	if err := os.WriteFile(filepath.Join(cache, "agents", "silent-failure-hunter.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, err := marketplace.Project(marketplace.PluginEntry{Name: "pr-review-toolkit"}, cache)
+	if err != nil {
+		t.Fatalf("Project must parse Claude-valid (strict-YAML-invalid) frontmatter leniently, not fail: %v", err)
+	}
+	if len(pr.Subagents) != 1 {
+		t.Fatalf("subagents = %d, want 1 (lenient-parsed agent must be recovered)", len(pr.Subagents))
+	}
+	if pr.Subagents[0].Name != "silent-failure-hunter" {
+		t.Errorf("subagent name = %q, want silent-failure-hunter", pr.Subagents[0].Name)
+	}
+	if d, _ := pr.Subagents[0].Frontmatter["description"].(string); !strings.Contains(d, "Context: Daisy") {
+		t.Errorf("description not preserved verbatim through lenient parse: %q", d)
+	}
+}
+
 // TestProject_ManifestCommandsReplaceConvention verifies Claude Code's "replace"
 // semantics: when plugin.json DOES list `commands`, the default commands/ scan is
 // suppressed, so a command sitting in commands/ that the manifest deliberately
