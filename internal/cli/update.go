@@ -19,7 +19,6 @@ import (
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
-	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 func newUpdateCmd() *cobra.Command {
@@ -88,12 +87,15 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 	fetched := map[string]map[string]marketplace.PluginEntry{} // mpName → pluginName → entry
 
 	for _, mp := range c.Marketplaces {
+		// mpName is untrusted.Text: printed via %s it sanitizes itself, so the
+		// warnings/notices below need no explicit ui.Sanitize; Unverified() is the
+		// raw value for filesystem/map use.
 		mpName := mp.Name
-		cacheDir := marketplaceCacheDir(home, mpName)
+		cacheDir := marketplaceCacheDir(home, mpName.Unverified())
 
 		src, perr := parseMarketplaceSource(mp.Marketplace.URL)
 		if perr != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "warning: marketplace %s has unparseable URL %q: %v\n", ui.Sanitize(mpName), mp.Marketplace.URL, perr)
+			fmt.Fprintf(cmd.OutOrStdout(), "warning: marketplace %s has unparseable URL %q: %v\n", mpName, mp.Marketplace.URL, perr)
 			continue
 		}
 		if mp.Marketplace.Ref != "" {
@@ -105,12 +107,12 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 		result, err := fetcher.Fetch(src, cacheDir)
 		stopSpin()
 		if err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "warning: re-fetch marketplace %s failed: %v\n", ui.Sanitize(mpName), err)
+			fmt.Fprintf(cmd.OutOrStdout(), "warning: re-fetch marketplace %s failed: %v\n", mpName, err)
 			continue
 		}
 
 		// Update state with new fetch time and SHA.
-		st.Marketplaces[mpName] = state.Marketplace{
+		st.Marketplaces[mpName.Unverified()] = state.Marketplace{
 			URL:       mp.Marketplace.URL,
 			HeadSHA:   result.HeadSHA,
 			FetchedAt: time.Now().UTC(),
@@ -123,14 +125,14 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 			if json.Unmarshal(data, &mpDoc) == nil {
 				entries := make(map[string]marketplace.PluginEntry, len(mpDoc.Plugins))
 				for _, pe := range mpDoc.Plugins {
-					entries[pe.Name] = pe
+					entries[pe.Name.Unverified()] = pe
 				}
-				fetched[mpName] = entries
+				fetched[mpName.Unverified()] = entries
 			}
 		}
 
 		fmt.Fprintf(cmd.OutOrStdout(), "fetched marketplace %s (sha=%s)\n",
-			ui.Sanitize(mpName), truncate(result.HeadSHA, 12))
+			mpName, truncate(result.HeadSHA, 12))
 	}
 
 	// Compute fresh manifest SHAs for installed plugins (for SHA drift detection).
@@ -143,7 +145,7 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 	for _, w := range shaWarnings {
 		fmt.Fprintf(cmd.OutOrStdout(),
 			"warning: manifest-sha-mismatch plugin=%s version=%s recorded=%s fetched=%s (re-uploaded?)\n",
-			ui.Sanitize(w.ID), ui.Sanitize(w.Version), truncate(w.RecordedSHA, 12), truncate(w.FetchedSHA, 12))
+			w.ID, w.Version, truncate(w.RecordedSHA, 12), truncate(w.FetchedSHA, 12))
 	}
 
 	// Compute pending bumps.
@@ -160,7 +162,7 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 		for _, b := range lossy {
 			fmt.Fprintf(cmd.OutOrStdout(),
 				"auto-safe: skipping lossy bump %s %s → %s (candidate version drops translation for an agent)\n",
-				ui.Sanitize(b.ID), ui.Sanitize(b.From), ui.Sanitize(b.To))
+				b.ID, b.From, b.To)
 		}
 		bumps = safe
 	}
@@ -171,7 +173,7 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 		fmt.Fprintf(cmd.OutOrStdout(), "\npending bumps (%d):\n", len(bumps))
 		for _, b := range bumps {
 			fmt.Fprintf(cmd.OutOrStdout(), "  %-20s %s → %s  [%s]\n",
-				ui.Sanitize(b.ID), ui.Sanitize(b.From), ui.Sanitize(b.To), b.UpdateMode)
+				b.ID, b.From, b.To, b.UpdateMode)
 		}
 	}
 
@@ -190,10 +192,10 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 	// --apply: upgrade each plugin with a pending bump.
 	for _, b := range bumps {
 		if err := applyPluginBump(home, b, fetched); err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "warning: upgrade %s failed: %v\n", ui.Sanitize(b.ID), err)
+			fmt.Fprintf(cmd.OutOrStdout(), "warning: upgrade %s failed: %v\n", b.ID, err)
 		} else {
 			fmt.Fprintf(cmd.OutOrStdout(), "upgraded %s %s → %s\n",
-				ui.Sanitize(b.ID), ui.Sanitize(b.From), ui.Sanitize(b.To))
+				b.ID, b.From, b.To)
 		}
 	}
 
@@ -283,7 +285,10 @@ func computeFreshPluginSHAs(home string, plugins []source.Plugin, fetched map[st
 		if pl.Plugin.ManifestSHA == "" {
 			continue
 		}
-		_, mpName := splitPluginRef(pl.Plugin.ID)
+		// plID is the raw plugin id for filesystem/map use; pl.ID prints itself
+		// sanitized when used directly in the warnings below.
+		plID := pl.ID.Unverified()
+		_, mpName := splitPluginRef(pl.Plugin.ID.Unverified())
 		if mpName == "" {
 			mpName = "default"
 		}
@@ -291,7 +296,7 @@ func computeFreshPluginSHAs(home string, plugins []source.Plugin, fetched map[st
 		if !ok {
 			continue
 		}
-		mpEntry, ok := entries[pl.ID]
+		mpEntry, ok := entries[plID]
 		if !ok {
 			continue
 		}
@@ -299,7 +304,7 @@ func computeFreshPluginSHAs(home string, plugins []source.Plugin, fetched map[st
 		// advertises a DIFFERENT version, that's a pending bump (handled by
 		// ComputePendingBumps), not a re-upload — comparing the recorded SHA
 		// against a different version's manifest would be a false positive.
-		if mpEntry.Version != "" && mpEntry.Version != pl.Plugin.Version {
+		if !mpEntry.Version.Empty() && mpEntry.Version != pl.Plugin.Version {
 			continue
 		}
 		mpCacheRoot := marketplaceCacheDir(home, mpName)
@@ -309,8 +314,8 @@ func computeFreshPluginSHAs(home string, plugins []source.Plugin, fetched map[st
 		// place — the plugin.json lives at <mpCacheRoot>/<relative>/.claude-plugin/.
 		if src.Relative != "" {
 			relCacheDir := filepath.Join(mpCacheRoot, src.Relative)
-			if sha := computeManifestSHA(home, pl.ID, mpEntry, nil, relCacheDir); sha != "" {
-				out[pl.ID] = sha
+			if sha := computeManifestSHA(home, plID, mpEntry, nil, relCacheDir); sha != "" {
+				out[plID] = sha
 			}
 			continue
 		}
@@ -319,19 +324,19 @@ func computeFreshPluginSHAs(home string, plugins []source.Plugin, fetched map[st
 		tmp, err := os.MkdirTemp("", "agentsync-drift-")
 		if err != nil {
 			if warn != nil {
-				fmt.Fprintf(warn, "warning: drift check for %s skipped: %v\n", ui.Sanitize(pl.ID), err)
+				fmt.Fprintf(warn, "warning: drift check for %s skipped: %v\n", pl.ID, err)
 			}
 			continue
 		}
 		if _, ferr := marketplace.Dispatch(src).Fetch(src, tmp); ferr != nil {
 			if warn != nil {
-				fmt.Fprintf(warn, "warning: drift check for %s skipped (re-fetch failed): %v\n", ui.Sanitize(pl.ID), ferr)
+				fmt.Fprintf(warn, "warning: drift check for %s skipped (re-fetch failed): %v\n", pl.ID, ferr)
 			}
 			_ = os.RemoveAll(tmp)
 			continue
 		}
-		if sha := computeManifestSHA(home, pl.ID, mpEntry, nil, tmp); sha != "" {
-			out[pl.ID] = sha
+		if sha := computeManifestSHA(home, plID, mpEntry, nil, tmp); sha != "" {
+			out[plID] = sha
 		}
 		_ = os.RemoveAll(tmp)
 	}
@@ -340,14 +345,16 @@ func computeFreshPluginSHAs(home string, plugins []source.Plugin, fetched map[st
 
 // applyPluginBump re-fetches a single plugin and updates its plugins/<id>.toml.
 func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[string]marketplace.PluginEntry) error {
-	pluginPath := filepath.Join(home, "plugins", b.ID+".toml")
+	// bID is the raw id for path/map use; b.ID prints itself sanitized in errors.
+	bID := b.ID.Unverified()
+	pluginPath := filepath.Join(home, "plugins", bID+".toml")
 	existing, err := readPluginTOML(pluginPath)
 	if err != nil {
 		return err
 	}
 
 	// Find the marketplace entry for re-fetch.
-	_, mpName := splitPluginRef(existing.Plugin.ID)
+	_, mpName := splitPluginRef(existing.Plugin.ID.Unverified())
 	if mpName == "" {
 		mpName = "default"
 	}
@@ -356,12 +363,12 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 	if !ok {
 		return fmt.Errorf("marketplace %q not in fetched index", mpName)
 	}
-	mpEntry, ok := entries[b.ID]
+	mpEntry, ok := entries[bID]
 	if !ok {
 		return fmt.Errorf("plugin %q not found in marketplace %q", b.ID, mpName)
 	}
 
-	cacheDir := pluginCacheDir(home, b.ID)
+	cacheDir := pluginCacheDir(home, bID)
 	mpCacheRoot := marketplaceCacheDir(home, mpName)
 	src := mpEntry.Source
 	if src.Relative != "" {
@@ -380,7 +387,7 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 	if err := os.MkdirAll(filepath.Dir(cacheDir), 0o755); err != nil {
 		return fmt.Errorf("prepare cache dir for %s: %w", b.ID, err)
 	}
-	tmpCache, err := os.MkdirTemp(filepath.Dir(cacheDir), ".bump-"+b.ID+"-")
+	tmpCache, err := os.MkdirTemp(filepath.Dir(cacheDir), ".bump-"+bID+"-")
 	if err != nil {
 		return fmt.Errorf("temp cache for %s: %w", b.ID, err)
 	}
@@ -396,7 +403,7 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 	// the recorded SHA matches the new plugin.json the re-apply will project.
 	prevTOML, _ := os.ReadFile(pluginPath) // for rollback if the cache swap fails
 	existing.Plugin.Version = b.To
-	if sha := computeManifestSHA(home, b.ID, mpEntry, nil, tmpCache); sha != "" {
+	if sha := computeManifestSHA(home, bID, mpEntry, nil, tmpCache); sha != "" {
 		existing.Plugin.ManifestSHA = sha
 	}
 	data, err := toml.Marshal(existing)
@@ -444,7 +451,7 @@ func filterSafeBumps(home string, bumps []marketplace.Bump, fetched map[string]m
 	for _, b := range bumps {
 		isLossy, err := bumpIsLossy(home, b, fetched, cfg, reg, agents, userHome)
 		if err != nil {
-			fmt.Fprintf(warn, "warning: auto-safe: cannot evaluate %s (%v); excluding to be safe\n", ui.Sanitize(b.ID), err)
+			fmt.Fprintf(warn, "warning: auto-safe: cannot evaluate %s (%v); excluding to be safe\n", b.ID, err)
 			lossy = append(lossy, b)
 			continue
 		}
@@ -464,11 +471,12 @@ func filterSafeBumps(home string, bumps []marketplace.Bump, fetched map[string]m
 // Rendering both under identical conditions cancels any pipeline quirk, so the
 // delta is exactly the bump's effect.
 func bumpIsLossy(home string, b marketplace.Bump, fetched map[string]map[string]marketplace.PluginEntry, cfg source.Config, reg *adapter.Registry, agents []string, userHome string) (bool, error) {
-	existing, err := readPluginTOML(filepath.Join(home, "plugins", b.ID+".toml"))
+	bID := b.ID.Unverified()
+	existing, err := readPluginTOML(filepath.Join(home, "plugins", bID+".toml"))
 	if err != nil {
 		return false, err
 	}
-	_, mpName := splitPluginRef(existing.Plugin.ID)
+	_, mpName := splitPluginRef(existing.Plugin.ID.Unverified())
 	if mpName == "" {
 		mpName = "default"
 	}
@@ -476,12 +484,12 @@ func bumpIsLossy(home string, b marketplace.Bump, fetched map[string]map[string]
 	if !ok {
 		return false, fmt.Errorf("marketplace %q not in fetched index", mpName)
 	}
-	mpEntry, ok := entries[b.ID]
+	mpEntry, ok := entries[bID]
 	if !ok {
 		return false, fmt.Errorf("plugin %q not found in marketplace %q", b.ID, mpName)
 	}
 
-	oldSkips, err := projectedSkips(mpEntry, pluginCacheDir(home, b.ID), cfg, reg, agents, userHome)
+	oldSkips, err := projectedSkips(mpEntry, pluginCacheDir(home, bID), cfg, reg, agents, userHome)
 	if err != nil {
 		return false, err
 	}

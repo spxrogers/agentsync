@@ -11,6 +11,24 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **Untrusted plugin/marketplace metadata is now sanitized by type, not by
+  convention (`internal/untrusted`).** Issue #93 / PR #100 sanitized ~24 terminal
+  print sites by hand-wrapping each fetched id/version/marketplace-name in
+  `ui.Sanitize`, but nothing stopped the *next* `Fprintf` from printing one raw
+  and silently reintroducing the escape-injection class. Those fields are now the
+  defined string type `untrusted.Text`, whose `String()` sanitizes — so printing
+  one through `fmt` is safe **by construction**, and obtaining the raw bytes
+  requires the explicit, greppable `Unverified()` (filesystem/lookup use only).
+  The canonical TOML / marketplace.json wire format is unchanged (`Text` is a
+  string kind: `omitempty` still elides an empty value, and `--json` surfaces
+  still emit the raw value — the machine contract). Reflection-based
+  `TestUntrustedFieldGuard`s in `internal/{source,marketplace,render}` fail the
+  build if a new string field is added to the plugin/marketplace identity or
+  report-row structs without being classified untrusted-or-trusted, and the
+  established carve-outs (hex SHAs, `%q` URLs, user-supplied CLI args, enum modes)
+  stay plain strings. `ui.Sanitize` is unchanged in behavior (it now delegates to
+  `untrusted.Sanitize`).
+
 - **`explain` describes every component kind a plugin hosts, not just MCP +
   commands.** Each agent row's count tail previously read `N mcp · N commands`
   even for a plugin that ships only skills, subagents, hooks, or an LSP server —

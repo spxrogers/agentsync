@@ -16,6 +16,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/ui"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 func newExplainCmd() *cobra.Command {
@@ -101,14 +102,14 @@ func resolveExplainTargets(c source.Canonical, args []string, all bool) (matched
 	// (the @marketplace form and the short id).
 	byID := map[string]source.Plugin{}
 	for _, pl := range c.Plugins {
-		if pl.Plugin.ID != "" {
-			byID[pl.Plugin.ID] = pl
+		if !pl.Plugin.ID.Empty() {
+			byID[pl.Plugin.ID.Unverified()] = pl
 		}
-		if pl.ID != "" {
-			byID[pl.ID] = pl
+		if !pl.ID.Empty() {
+			byID[pl.ID.Unverified()] = pl
 		}
 	}
-	seen := map[string]bool{}
+	seen := map[untrusted.Text]bool{}
 	for _, want := range args {
 		pl, ok := byID[want]
 		if !ok {
@@ -141,8 +142,10 @@ func runExplainList(p *ui.Printer, c source.Canonical, jsonOut bool) error {
 		rows := make([]listRow, 0, len(plugins))
 		for _, pl := range plugins {
 			rows = append(rows, listRow{
-				ID:       explainLabel(pl),
-				Version:  pl.Plugin.Version,
+				// --json is the machine contract: emit the RAW id/version, the
+				// consumer owns escaping (Unverified bypasses display sanitization).
+				ID:       explainLabel(pl).Unverified(),
+				Version:  pl.Plugin.Version.Unverified(),
 				Disabled: pl.Plugin.Disabled,
 			})
 		}
@@ -164,13 +167,14 @@ func runExplainList(p *ui.Printer, c source.Canonical, jsonOut bool) error {
 	// contract, where the consumer owns escaping.)
 	maxLabel := 0
 	for _, pl := range plugins {
-		if n := visibleLen(ui.Sanitize(explainLabel(pl))); n > maxLabel {
+		if n := visibleLen(explainLabel(pl).String()); n > maxLabel {
 			maxLabel = n
 		}
 	}
 	for _, pl := range plugins {
-		label := ui.Sanitize(explainLabel(pl))
-		hasTrail := pl.Plugin.Version != "" || pl.Plugin.Disabled
+		// explainLabel/Version are untrusted.Text; String() sanitizes for display.
+		label := explainLabel(pl).String()
+		hasTrail := !pl.Plugin.Version.Empty() || pl.Plugin.Disabled
 		// Only pad the label when something follows it — a bare row with
 		// trailing spaces just leaves visible whitespace at end-of-line.
 		shown := label
@@ -178,8 +182,8 @@ func runExplainList(p *ui.Printer, c source.Canonical, jsonOut bool) error {
 			shown = ui.Pad(label, maxLabel)
 		}
 		line := fmt.Sprintf("  %s %s", p.Cyan(ui.GlyphInfo), shown)
-		if pl.Plugin.Version != "" {
-			line += "  " + p.Faint("v"+ui.Sanitize(pl.Plugin.Version))
+		if !pl.Plugin.Version.Empty() {
+			line += "  " + p.Faint("v"+pl.Plugin.Version.String())
 		}
 		if pl.Plugin.Disabled {
 			line += "  " + p.Yellow("(disabled)")
@@ -321,10 +325,10 @@ func explainPluginReport(fs afero.Fs, c source.Canonical, pl source.Plugin, agen
 // id and version come from fetched marketplace metadata (untrusted), so they are
 // sanitized before styling to keep terminal escapes out of the header.
 func emitPluginHeader(w io.Writer, p *ui.Printer, pl source.Plugin) {
-	label := ui.Sanitize(explainLabel(pl))
+	label := explainLabel(pl).String()
 	parts := []string{p.Bold(p.Cyan("▸") + " " + label)}
-	if pl.Plugin.Version != "" {
-		parts = append(parts, p.Faint("v"+ui.Sanitize(pl.Plugin.Version)))
+	if !pl.Plugin.Version.Empty() {
+		parts = append(parts, p.Faint("v"+pl.Plugin.Version.String()))
 	}
 	if pl.Plugin.Disabled {
 		parts = append(parts, p.Yellow("(disabled)"))
@@ -422,15 +426,15 @@ func emitSkipDetails(w io.Writer, p *ui.Printer, agent string, skips []render.Sk
 		"%s %s couldn't fully translate — reduced = rendered without some fields; dropped = not emitted:",
 		ui.GlyphArrow, agent,
 	)))
-	// A skip's Name comes from a fetched marketplace plugin (untrusted) and its
-	// Reason from an adapter (trusted) — sanitize both at this display boundary
-	// so neither can smuggle terminal escapes, and do it BEFORE width/Pad so a
-	// stripped byte can't skew the column. The component kind is adapter-fixed,
-	// so the whole label is safe to sanitize as one unit.
+	// A skip's Name is untrusted.Text and skipLabel sanitizes it (via String())
+	// while joining it to the adapter-fixed component kind, so labels are already
+	// terminal-safe here — and sanitized BEFORE width/Pad so a stripped byte can't
+	// skew the column. Reason (below) is adapter-authored (trusted) but still run
+	// through ui.Sanitize defensively.
 	labels := make([]string, len(skips))
 	width := 0
 	for i, s := range skips {
-		labels[i] = ui.Sanitize(skipLabel(s))
+		labels[i] = skipLabel(s)
 		if n := visibleLen(labels[i]); n > width {
 			width = n
 		}
@@ -491,10 +495,11 @@ func isReducedSkip(component string) bool {
 // the loss was field-level, so the label names the component kind plainly.
 func skipLabel(s render.SkipDetail) string {
 	kind := strings.TrimSuffix(s.Component, "-frontmatter")
-	if s.Name == "" {
+	if s.Name.Empty() {
 		return kind
 	}
-	return kind + " " + s.Name
+	// s.Name is untrusted.Text; String() sanitizes it for the display label.
+	return kind + " " + s.Name.String()
 }
 
 // coverageGlyphAndColor maps a coverage string to a glyph + semantic color
@@ -511,9 +516,10 @@ func coverageGlyphAndColor(p *ui.Printer, cov string) (string, func(string) stri
 }
 
 // explainLabel returns the human label for a plugin (the @marketplace form,
-// falling back to the short id).
-func explainLabel(pl source.Plugin) string {
-	if pl.Plugin.ID != "" {
+// falling back to the short id). Both candidates are untrusted.Text, so the
+// label stays untrusted: printed via %s / String() it sanitizes itself.
+func explainLabel(pl source.Plugin) untrusted.Text {
+	if !pl.Plugin.ID.Empty() {
 		return pl.Plugin.ID
 	}
 	return pl.ID

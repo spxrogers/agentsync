@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/afero"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // LoadProjected loads the canonical model and expands each installed plugin's
@@ -124,12 +125,12 @@ func ProjectInstalled(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugi
 // (pl.Plugin.Disabled), or disabled by the active project tree
 // (disabledByProject[pl.ID], the plugins/<id>.toml `disabled = true` flag).
 func projectOnePlugin(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugin, disabledByProject map[string]bool, lenient bool) (ProjectionResult, bool, error) {
-	if pl.Plugin.Disabled || disabledByProject[pl.ID] {
+	if pl.Plugin.Disabled || disabledByProject[pl.ID.Unverified()] {
 		return ProjectionResult{}, false, nil
 	}
-	id, mpName := splitPluginRefPkg(pl.Plugin.ID)
+	id, mpName := splitPluginRefPkg(pl.Plugin.ID.Unverified())
 	if id == "" {
-		id = pl.ID
+		id = pl.ID.Unverified()
 	}
 	// Defense-in-depth: a hand-edited plugins/<id>.toml whose id contains
 	// "../" must not let plugin.json reads escape the cache root.
@@ -255,12 +256,12 @@ func lspRenderFields(s source.LSPServerSpec) source.LSPServerSpec {
 // components; at worst a stale entry adds a slightly-ahead override.
 func resolveInstalledEntry(home, id, mpName string) PluginEntry {
 	if mpName == "" {
-		return PluginEntry{Name: id}
+		return PluginEntry{Name: untrusted.Wrap(id)}
 	}
 	cacheRoot := filepath.Join(home, ".state", "cache", "marketplaces")
 	dirs, err := os.ReadDir(cacheRoot)
 	if err != nil {
-		return PluginEntry{Name: id}
+		return PluginEntry{Name: untrusted.Wrap(id)}
 	}
 	for _, d := range dirs {
 		if !d.IsDir() {
@@ -278,12 +279,12 @@ func resolveInstalledEntry(home, id, mpName string) PluginEntry {
 			continue
 		}
 		for _, e := range mp.Plugins {
-			if e.Name == id {
+			if e.Name.Unverified() == id {
 				return e
 			}
 		}
 	}
-	return PluginEntry{Name: id}
+	return PluginEntry{Name: untrusted.Wrap(id)}
 }
 
 // verifyPluginManifestSHA checks the on-disk plugin cache against the SHA

@@ -15,6 +15,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/ui"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 func newPluginCmd() *cobra.Command {
@@ -39,12 +40,15 @@ type pluginTOML struct {
 }
 
 type pluginTOMLSpec struct {
-	ID          string   `toml:"id"`
-	Version     string   `toml:"version,omitempty"`
-	ManifestSHA string   `toml:"manifest_sha,omitempty"`
-	Update      string   `toml:"update,omitempty"`
-	Agents      []string `toml:"agents,omitempty"`
-	Disabled    bool     `toml:"disabled,omitempty"`
+	// ID/Version mirror source.PluginSpec and originate from fetched marketplace
+	// metadata, so they are untrusted.Text (sanitize-on-print). The SHA/update
+	// fields are agentsync-controlled and stay plain strings.
+	ID          untrusted.Text `toml:"id"`
+	Version     untrusted.Text `toml:"version,omitempty"`
+	ManifestSHA string         `toml:"manifest_sha,omitempty"`
+	Update      string         `toml:"update,omitempty"`
+	Agents      []string       `toml:"agents,omitempty"`
+	Disabled    bool           `toml:"disabled,omitempty"`
 }
 
 // ---- install ----------------------------------------------------------------
@@ -74,12 +78,12 @@ func pluginInstallRun(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	// spec.Version comes from the fetched plugin/marketplace manifest (untrusted),
-	// so sanitize it before printing — a control sequence in the version string
-	// must not smuggle terminal escapes into the status line. (id is the user's
-	// own argument and sha is hex, so neither needs it.)
+	// spec.Version is untrusted.Text from the fetched manifest, so printing it via
+	// %s sanitizes it by construction — a control sequence in the version string
+	// cannot smuggle terminal escapes into the status line. (id is the user's own
+	// argument and sha is hex, so neither needs it.)
 	fmt.Fprintf(cmd.OutOrStdout(), "installed plugin %s (version=%s sha=%s)\n",
-		id, ui.Sanitize(spec.Version), truncate(spec.ManifestSHA, 12))
+		id, spec.Version, truncate(spec.ManifestSHA, 12))
 	return nil
 }
 
@@ -122,14 +126,16 @@ func installPluginInto(home, id, mpName string) (pluginTOMLSpec, error) {
 	// Write plugins/<id>.toml.
 	pluginPath := filepath.Join(home, "plugins", id+".toml")
 	spec := pluginTOMLSpec{
-		ID:          id + "@" + resolveMarketplaceName(mpName),
+		// id/marketplace are validated cache keys; wrap the composed id as Text to
+		// match the canonical model (the ManifestSHA below stays a plain string).
+		ID:          untrusted.Wrap(id + "@" + resolveMarketplaceName(mpName)),
 		Version:     mpEntry.Version,
 		ManifestSHA: manifestSHA,
 		Update:      "track",
 		Agents:      []string{"*"},
 	}
 	if result.Version != "" {
-		spec.Version = result.Version
+		spec.Version = untrusted.Wrap(result.Version)
 	}
 	data, err := toml.Marshal(pluginTOML{Plugin: spec})
 	if err != nil {
@@ -167,7 +173,7 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
 	}
 
 	// Parse marketplace name from the stored id "name@marketplace".
-	_, mpName := splitPluginRef(existing.Plugin.ID)
+	_, mpName := splitPluginRef(existing.Plugin.ID.Unverified())
 
 	// Re-resolve marketplace entry.
 	mpData, mpEntry, err := resolveMarketplaceEntry(home, mpName, id)
@@ -197,11 +203,11 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
 	}
 
 	existing.Plugin.ManifestSHA = manifestSHA
-	if mpEntry.Version != "" {
+	if !mpEntry.Version.Empty() {
 		existing.Plugin.Version = mpEntry.Version
 	}
 	if result.Version != "" {
-		existing.Plugin.Version = result.Version
+		existing.Plugin.Version = untrusted.Wrap(result.Version)
 	}
 
 	data, err := toml.Marshal(existing)
@@ -374,7 +380,7 @@ func pluginListRun(cmd *cobra.Command, _ []string) error {
 			status = "disabled"
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%-20s version=%-10s sha=%-14s %s\n",
-			ui.Sanitize(name), ui.Sanitize(p.Version), truncate(p.ManifestSHA, 12), status)
+			ui.Sanitize(name), p.Version, truncate(p.ManifestSHA, 12), status)
 	}
 	return nil
 }
@@ -474,7 +480,7 @@ func resolveMarketplaceEntry(home, mpName, pluginID string) ([]byte, marketplace
 	}
 
 	for _, entry := range mp.Plugins {
-		if entry.Name == pluginID {
+		if entry.Name.Unverified() == pluginID {
 			return data, entry, nil
 		}
 	}
@@ -508,7 +514,7 @@ func searchAllMarketplaces(home, pluginID string) ([]byte, marketplace.PluginEnt
 			continue
 		}
 		for _, entry := range mp.Plugins {
-			if entry.Name == pluginID {
+			if entry.Name.Unverified() == pluginID {
 				return data, entry, nil
 			}
 		}

@@ -25,7 +25,7 @@ import (
 func undeclaredNativePlugins(c source.Canonical, reg *adapter.Registry, agents []string) map[string][]string {
 	declared := make(map[string]bool, len(c.Plugins))
 	for _, pl := range c.Plugins {
-		declared[pl.ID] = true
+		declared[pl.ID.Unverified()] = true
 	}
 	out := map[string][]string{}
 	for _, name := range agents {
