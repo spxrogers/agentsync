@@ -19,6 +19,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 func newUpdateCmd() *cobra.Command {
@@ -92,7 +93,7 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 
 		src, perr := parseMarketplaceSource(mp.Marketplace.URL)
 		if perr != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "warning: marketplace %s has unparseable URL %q: %v\n", mpName, mp.Marketplace.URL, perr)
+			fmt.Fprintf(cmd.OutOrStdout(), "warning: marketplace %s has unparseable URL %q: %v\n", ui.Sanitize(mpName), mp.Marketplace.URL, perr)
 			continue
 		}
 		if mp.Marketplace.Ref != "" {
@@ -104,7 +105,7 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 		result, err := fetcher.Fetch(src, cacheDir)
 		stopSpin()
 		if err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "warning: re-fetch marketplace %s failed: %v\n", mpName, err)
+			fmt.Fprintf(cmd.OutOrStdout(), "warning: re-fetch marketplace %s failed: %v\n", ui.Sanitize(mpName), err)
 			continue
 		}
 
@@ -129,7 +130,7 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 		}
 
 		fmt.Fprintf(cmd.OutOrStdout(), "fetched marketplace %s (sha=%s)\n",
-			mpName, truncate(result.HeadSHA, 12))
+			ui.Sanitize(mpName), truncate(result.HeadSHA, 12))
 	}
 
 	// Compute fresh manifest SHAs for installed plugins (for SHA drift detection).
@@ -142,7 +143,7 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 	for _, w := range shaWarnings {
 		fmt.Fprintf(cmd.OutOrStdout(),
 			"warning: manifest-sha-mismatch plugin=%s version=%s recorded=%s fetched=%s (re-uploaded?)\n",
-			w.ID, w.Version, truncate(w.RecordedSHA, 12), truncate(w.FetchedSHA, 12))
+			ui.Sanitize(w.ID), ui.Sanitize(w.Version), truncate(w.RecordedSHA, 12), truncate(w.FetchedSHA, 12))
 	}
 
 	// Compute pending bumps.
@@ -159,7 +160,7 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 		for _, b := range lossy {
 			fmt.Fprintf(cmd.OutOrStdout(),
 				"auto-safe: skipping lossy bump %s %s → %s (candidate version drops translation for an agent)\n",
-				b.ID, b.From, b.To)
+				ui.Sanitize(b.ID), ui.Sanitize(b.From), ui.Sanitize(b.To))
 		}
 		bumps = safe
 	}
@@ -169,7 +170,8 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 	} else {
 		fmt.Fprintf(cmd.OutOrStdout(), "\npending bumps (%d):\n", len(bumps))
 		for _, b := range bumps {
-			fmt.Fprintf(cmd.OutOrStdout(), "  %-20s %s → %s  [%s]\n", b.ID, b.From, b.To, b.UpdateMode)
+			fmt.Fprintf(cmd.OutOrStdout(), "  %-20s %s → %s  [%s]\n",
+				ui.Sanitize(b.ID), ui.Sanitize(b.From), ui.Sanitize(b.To), b.UpdateMode)
 		}
 	}
 
@@ -188,9 +190,10 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 	// --apply: upgrade each plugin with a pending bump.
 	for _, b := range bumps {
 		if err := applyPluginBump(home, b, fetched); err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "warning: upgrade %s failed: %v\n", b.ID, err)
+			fmt.Fprintf(cmd.OutOrStdout(), "warning: upgrade %s failed: %v\n", ui.Sanitize(b.ID), err)
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "upgraded %s %s → %s\n", b.ID, b.From, b.To)
+			fmt.Fprintf(cmd.OutOrStdout(), "upgraded %s %s → %s\n",
+				ui.Sanitize(b.ID), ui.Sanitize(b.From), ui.Sanitize(b.To))
 		}
 	}
 
@@ -316,13 +319,13 @@ func computeFreshPluginSHAs(home string, plugins []source.Plugin, fetched map[st
 		tmp, err := os.MkdirTemp("", "agentsync-drift-")
 		if err != nil {
 			if warn != nil {
-				fmt.Fprintf(warn, "warning: drift check for %s skipped: %v\n", pl.ID, err)
+				fmt.Fprintf(warn, "warning: drift check for %s skipped: %v\n", ui.Sanitize(pl.ID), err)
 			}
 			continue
 		}
 		if _, ferr := marketplace.Dispatch(src).Fetch(src, tmp); ferr != nil {
 			if warn != nil {
-				fmt.Fprintf(warn, "warning: drift check for %s skipped (re-fetch failed): %v\n", pl.ID, ferr)
+				fmt.Fprintf(warn, "warning: drift check for %s skipped (re-fetch failed): %v\n", ui.Sanitize(pl.ID), ferr)
 			}
 			_ = os.RemoveAll(tmp)
 			continue
@@ -441,7 +444,7 @@ func filterSafeBumps(home string, bumps []marketplace.Bump, fetched map[string]m
 	for _, b := range bumps {
 		isLossy, err := bumpIsLossy(home, b, fetched, cfg, reg, agents, userHome)
 		if err != nil {
-			fmt.Fprintf(warn, "warning: auto-safe: cannot evaluate %s (%v); excluding to be safe\n", b.ID, err)
+			fmt.Fprintf(warn, "warning: auto-safe: cannot evaluate %s (%v); excluding to be safe\n", ui.Sanitize(b.ID), err)
 			lossy = append(lossy, b)
 			continue
 		}

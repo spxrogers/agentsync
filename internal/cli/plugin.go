@@ -374,7 +374,7 @@ func pluginListRun(cmd *cobra.Command, _ []string) error {
 			status = "disabled"
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%-20s version=%-10s sha=%-14s %s\n",
-			name, p.Version, truncate(p.ManifestSHA, 12), status)
+			ui.Sanitize(name), ui.Sanitize(p.Version), truncate(p.ManifestSHA, 12), status)
 	}
 	return nil
 }

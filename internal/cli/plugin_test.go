@@ -797,3 +797,26 @@ func TestMarketplace_AddNameNoReservedWarning(t *testing.T) {
 		t.Fatalf("a formerly-reserved name must no longer warn; got:\n%s", out)
 	}
 }
+
+// TestPlugin_ListSanitizesUntrustedVersion proves `plugin list` strips terminal
+// control bytes from the persisted plugin version (originally fetched from the
+// untrusted manifest, decoded back from the TOML) before printing it.
+func TestPlugin_ListSanitizesUntrustedVersion(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	ver := "1.0" + string(rune(0x1b)) + "[31m" + string(rune(0x0d))
+	mpDir := makeVersionedMarketplace(t, t.TempDir(), ver)
+	mustRun(t, env, "marketplace", "add", mpDir)
+	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	out, err := runCLI(t, env, "plugin", "list")
+	if err != nil {
+		t.Fatalf("plugin list: %v\n%s", err, out)
+	}
+	if strings.ContainsRune(out, rune(0x1b)) || strings.ContainsRune(out, rune(0x0d)) {
+		t.Errorf("control byte from persisted version leaked into plugin list: %q", out)
+	}
+	if !strings.Contains(out, "version=1.0[31m") {
+		t.Errorf("sanitized version not present in plugin list: %q", out)
+	}
+}

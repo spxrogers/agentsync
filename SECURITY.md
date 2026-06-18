@@ -32,11 +32,12 @@ can resolve secrets into native config files. Areas of particular interest:
   hashed by its target path), so a tampered or re-uploaded body — or a swapped
   link target — is detected at apply rather than silently consumed. A plugin's
   id and the component names it supplies are also untrusted *display* input:
-  agentsync sanitizes them (`ui.Sanitize`) on the surfaces that render them to
-  the terminal — `explain`, the translation report `apply` prints, and the
-  `plugin install` status line — stripping C0/C1 control bytes (ESC, CR, LF, …)
-  so a hostile plugin cannot smuggle terminal escape sequences (recoloring the
-  screen, spoofing rows, or setting the window title) into agentsync's own
+  agentsync sanitizes that metadata (`ui.Sanitize`) wherever it renders it to
+  the terminal — `explain`, the `apply` translation report, and the status
+  output of `plugin` (install/list), `marketplace` (add/list), and `update`
+  (the pending-bump and upgrade lines) — stripping C0/C1 control bytes (ESC, CR,
+  LF, …) so a hostile plugin cannot smuggle terminal escape sequences (recoloring
+  the screen, spoofing rows, or setting the window title) into agentsync's own
   output. `explain --json` keeps ids raw (a machine contract where the consumer
   owns escaping).
 - **Destination writes**: writes are atomic and refuse to clobber symlinked
