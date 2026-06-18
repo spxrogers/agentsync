@@ -128,7 +128,9 @@ func TestSanitize(t *testing.T) {
 		{"invalid UTF-8 byte normalized to U+FFFD", "a\xffb", "a\ufffdb"},
 		{"pre-existing U+FFFD preserved (rebuild is idempotent)", "a\ufffdb", "a\ufffdb"},
 		// Explicit bidi formatting controls (Trojan Source / CVE-2021-42574).
-		{"RLO (U+202E) bidi override stripped", "user\u202egpj.evil", "usergpj.evil"},
+		// Cover both fences of the override range: U+202A (LRE) and U+202E (RLO).
+		{"LRE (U+202A) bidi embedding stripped (range lower fence)", "a\u202ab", "ab"},
+		{"RLO (U+202E) bidi override stripped (range upper fence)", "user\u202egpj.evil", "usergpj.evil"},
 		{"LRO (U+202D) bidi override stripped", "a\u202db", "ab"},
 		{"bidi embedding pair (U+202B/U+202C) stripped", "a\u202bb\u202cc", "abc"},
 		{"bidi isolates (U+2066\u2013U+2069) stripped", "a\u2066b\u2069c\u2067d\u2068e", "abcde"},
@@ -136,12 +138,28 @@ func TestSanitize(t *testing.T) {
 		{"zero-width space (U+200B) stripped", "a\u200bb", "ab"},
 		{"ZWNJ/ZWJ (U+200C/U+200D) stripped", "a\u200cb\u200dc", "abc"},
 		{"zero-width no-break space / BOM (U+FEFF) stripped", "a\ufeffb", "ab"},
+		// Mixed strip+preserve: prove a legitimate RTL letter survives WHILE the
+		// explicit override embedded between letters is removed (non-vacuous).
+		{"RTL letters survive while embedded override stripped", "\u0645\u202e\u0631", "\u0645\u0631"},
 		// Legitimate non-Latin names survive byte-for-byte: implicit RTL/CJK is
 		// not an explicit formatting control, so it is preserved.
 		{"Arabic name preserved", "\u0645\u0631\u062d\u0628\u0627", "\u0645\u0631\u062d\u0628\u0627"},
 		{"Hebrew name preserved", "\u05e9\u05dc\u05d5\u05dd", "\u05e9\u05dc\u05d5\u05dd"},
 		{"CJK name preserved", "\u540d\u524d-\u30d7\u30e9\u30b0\u30a4\u30f3", "\u540d\u524d-\u30d7\u30e9\u30b0\u30a4\u30f3"},
 		{"ordinary RTL letters with implicit bidi preserved", "abc-\u0645\u0631\u062d\u0628\u0627", "abc-\u0645\u0631\u062d\u0628\u0627"},
+		// Boundary preservation: runes adjacent to / just outside the stripped
+		// ranges, and benign format runes, must NOT be over-stripped. These guard
+		// the exact range fences in isDeceptiveFormat against an accidental widening.
+		{"implicit marks U+200E/U+200F (LRM/RLM) preserved", "a\u200eb\u200fc", "a\u200eb\u200fc"},
+		{"U+200A (hair space, below ZW range) preserved", "a\u200ab", "a\u200ab"},
+		{"U+200E adjacent above ZW range preserved", "a\u200eb", "a\u200eb"},
+		{"U+2029 (below override range) preserved", "a\u2029b", "a\u2029b"},
+		{"U+202F (above override range) preserved", "a\u202fb", "a\u202fb"},
+		{"U+2065 (below isolate range) preserved", "a\u2065b", "a\u2065b"},
+		{"U+206A (above isolate range) preserved", "a\u206ab", "a\u206ab"},
+		{"U+2060 (word joiner) preserved", "a\u2060b", "a\u2060b"},
+		{"U+00A0 (NBSP) preserved", "a\u00a0b", "a\u00a0b"},
+		{"U+FEFE (below BOM) preserved", "a\ufefeb", "a\ufefeb"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

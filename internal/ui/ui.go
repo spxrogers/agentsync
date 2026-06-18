@@ -206,9 +206,10 @@ func Pad(s string, width int) string {
 // 0x80–0x9F byte (a C1 CSI introducer on an 8-bit terminal) can never survive.
 //
 // What Sanitize does NOT do: it does not normalize display *width*. Combining
-// marks and wide/ambiguous-width runes still skew the rune-counting Pad/visibleLen
-// alignment; that is a purely cosmetic limitation, documented on Pad, not a
-// spoofing vector this function targets.
+// marks and wide/ambiguous-width runes still skew the rune-counting alignment of
+// Pad (and of the caller-side column counting in internal/cli's explain output);
+// that is a purely cosmetic limitation, documented on Pad, not a spoofing vector
+// this function targets.
 func Sanitize(s string) string {
 	// Fast path: the overwhelmingly common case is clean text, so scan once and
 	// only allocate when there is something to change. We also rebuild on invalid
@@ -252,7 +253,12 @@ func isControl(r rune) bool {
 // embedding/override set U+202A–U+202E and the isolate set U+2066–U+2069 — the
 // "Trojan Source" class) or a zero-width / invisible rune (U+200B–U+200D, U+FEFF).
 // It deliberately excludes ordinary RTL/CJK letters and the implicit-direction
-// marks, so legitimate non-Latin names are preserved.
+// marks (U+200E/U+200F LRM/RLM, U+061C ALM), so legitimate non-Latin names are
+// preserved. Scope is the explicit bidi + zero-width spoofing set, not every
+// default-ignorable or width-affecting rune: e.g. U+2028/U+2029 (line/paragraph
+// separators), U+00AD (soft hyphen), and U+2060 (word joiner) are knowingly left
+// alone — terminals don't act on them the way they do on CR/LF (which isControl
+// already strips), and width skew is an accepted cosmetic limitation (see Pad).
 func isDeceptiveFormat(r rune) bool {
 	switch {
 	case r >= 0x202a && r <= 0x202e: // LRE, RLE, PDF, LRO, RLO
