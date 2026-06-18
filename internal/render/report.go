@@ -1,7 +1,8 @@
 // Package render — translation report.
 //
 // TranslationReport summarises, per plugin (or source component), how many
-// items each adapter rendered vs skipped. Emitted at the end of apply/verify.
+// items each adapter rendered vs skipped. Emitted at the end of apply (and
+// rendered per-plugin by explain); verify does not print it.
 package render
 
 import (
@@ -41,7 +42,7 @@ type PluginRow struct {
 	// SkipDetails enumerates the components behind Skips — what the adapter
 	// could not translate, and why — so a "(N skipped)" tally is never a dead
 	// end. Attribution follows the canonical+plan passed to BuildReport (see its
-	// doc): when the caller passes the whole flattened model (apply/verify), the
+	// doc): when the caller passes the whole flattened model (apply), the
 	// skips are the agent's across every component and are repeated under each
 	// plugin row; when the caller passes a per-plugin-scoped model (`explain
 	// <id>`, which re-projects one plugin in isolation), they are narrowed to
@@ -136,9 +137,8 @@ func (r TranslationReport) printText(w io.Writer, p *ui.Printer) {
 		// spoof rows in the translation report `apply` prints. Sanitizing strips
 		// embedded newlines too, so the id cannot forge an extra report line.
 		// Clean labels pass through unchanged, so the byte-stable plain fixtures
-		// still hold. (The explain command sanitizes the same untrusted source at
-		// its own display sites; this covers the shared report body explain
-		// reuses too.)
+		// still hold. (This text path is the one `apply` prints; `explain` renders
+		// its own report body and sanitizes the same untrusted source there.)
 		//
 		// Grouping and ordering still key on the RAW label (byPlugin,
 		// pluginOrder, sort.Strings): two distinct raw ids that sanitize to the
@@ -212,7 +212,7 @@ func (r TranslationReport) PrintJSON(w io.Writer) error {
 // BuildReport does NOT itself correlate a component to its origin plugin — the
 // projected canonical is flattened with no origin tag. Attribution is therefore
 // the caller's choice of what model+plan to pass:
-//   - apply/verify pass the whole flattened model, so every plugin row carries
+//   - apply passes the whole flattened model, so every plugin row carries
 //     the same global counts/skips (the documented summary behavior).
 //   - `explain <id>` re-projects ONE plugin in isolation
 //     (marketplace.ProjectInstalled) and passes a model+plan holding only that
@@ -221,7 +221,7 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 	var report TranslationReport
 
 	// The canonical is flattened (no origin-plugin tag), so the per-agent counts
-	// are computed over whatever model the caller scoped: apply/verify pass the
+	// are computed over whatever model the caller scoped: apply passes the
 	// whole model (one global summary repeated per plugin row), while `explain
 	// <id>` passes a model holding only one re-projected plugin's components.
 	//

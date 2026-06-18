@@ -105,6 +105,15 @@ func makeVersionedMarketplace(t *testing.T, dir, version string) string {
 	t.Helper()
 	mpDir := filepath.Join(dir, "fixture-marketplace-v")
 
+	// JSON-encode the version so a value containing control bytes (used by the
+	// install-sanitization test) rides through the manifest as a valid escaped
+	// string; a normal version like "1.0.0" encodes to the same value as before.
+	vb, err := json.Marshal(version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verJSON := string(vb)
+
 	mpClaudePlugin := filepath.Join(mpDir, ".claude-plugin")
 	if err := os.MkdirAll(mpClaudePlugin, 0o755); err != nil {
 		t.Fatal(err)
@@ -113,7 +122,7 @@ func makeVersionedMarketplace(t *testing.T, dir, version string) string {
 		"name": "test-mp-v",
 		"owner": {"name": "tester"},
 		"plugins": [
-			{"name": "demo", "source": "./plugins/demo", "version": "` + version + `"}
+			{"name": "demo", "source": "./plugins/demo", "version": ` + verJSON + `}
 		]
 	}`
 	if err := os.WriteFile(filepath.Join(mpClaudePlugin, "marketplace.json"), []byte(mpJSON), 0o644); err != nil {
@@ -126,7 +135,7 @@ func makeVersionedMarketplace(t *testing.T, dir, version string) string {
 	}
 	pluginJSON := `{
 		"name": "demo",
-		"version": "` + version + `",
+		"version": ` + verJSON + `,
 		"mcpServers": {
 			"demo-mcp": {"command": "${CLAUDE_PLUGIN_ROOT}/run.sh"}
 		}
@@ -386,6 +395,41 @@ func TestPlugin_InstallFromLocalMarketplace(t *testing.T) {
 	pluginPath := filepath.Join(home, "plugins", "demo.toml")
 	if _, err := os.Stat(pluginPath); err != nil {
 		t.Fatalf("demo.toml not written: %v", err)
+	}
+}
+
+// TestPlugin_InstallSanitizesUntrustedVersion proves the `plugin install` status
+// line strips terminal control bytes from the fetched (untrusted) plugin
+// version, so a hostile marketplace cannot smuggle ANSI/escape sequences into
+// agentsync's install output. The version rides through the JSON manifest
+// (json-encoded by the fixture) and decodes to real control bytes in
+// spec.Version before the status line prints it.
+func TestPlugin_InstallSanitizesUntrustedVersion(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	// Built from code points so no literal control byte sits in the test source:
+	// "1.0" + ESC + "[31m" (a CSI color) + CR.
+	ver := "1.0" + string(rune(0x1b)) + "[31m" + string(rune(0x0d))
+	mpDir := makeVersionedMarketplace(t, t.TempDir(), ver)
+	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLI(t, env, "plugin", "install", "demo@test-mp-v")
+	if err != nil {
+		t.Fatalf("plugin install: %v\n%s", err, out)
+	}
+	if strings.ContainsRune(out, rune(0x1b)) {
+		t.Errorf("ESC byte from untrusted version leaked into install output: %q", out)
+	}
+	if strings.ContainsRune(out, rune(0x0d)) {
+		t.Errorf("CR byte from untrusted version leaked into install output: %q", out)
+	}
+	// The inert CSI-parameter residue survives as plain text.
+	if !strings.Contains(out, "version=1.0[31m") {
+		t.Errorf("sanitized version not present in install output: %q", out)
 	}
 }
 

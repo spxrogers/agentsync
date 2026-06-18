@@ -14,6 +14,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 func newPluginCmd() *cobra.Command {
@@ -73,8 +74,12 @@ func pluginInstallRun(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// spec.Version comes from the fetched plugin/marketplace manifest (untrusted),
+	// so sanitize it before printing — a control sequence in the version string
+	// must not smuggle terminal escapes into the status line. (id is the user's
+	// own argument and sha is hex, so neither needs it.)
 	fmt.Fprintf(cmd.OutOrStdout(), "installed plugin %s (version=%s sha=%s)\n",
-		id, spec.Version, truncate(spec.ManifestSHA, 12))
+		id, ui.Sanitize(spec.Version), truncate(spec.ManifestSHA, 12))
 	return nil
 }
 

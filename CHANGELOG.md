@@ -53,16 +53,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   to the terminal.** A fetched marketplace plugin's id, version, or a component
   name it supplies is attacker-influenced; rendered raw, a name carrying ANSI/
   escape sequences (CSI color, OSC title-set, `\r`/`\x1b`) could recolor the
-  terminal, clear the screen, or spoof rows when a user ran `agentsync explain`
-  or `apply`. The new `ui.Sanitize` strips C0/C1 control characters (incl. ESC,
-  CR, LF, TAB, DEL) at the display boundary — applied to `explain`'s skip
-  itemization (`emitSkipDetails`), plugin header, and `--list` text rows, and to
-  the shared translation report's plugin label that `apply` prints (`render`
-  `printText`) — before width/`Pad` so a stripped byte can't skew column
+  terminal, clear the screen, or spoof rows when a user ran `agentsync explain`,
+  `apply`, or `plugin install`. The new `ui.Sanitize` strips C0/C1 control
+  characters (incl. ESC, CR, LF, TAB, DEL) at the display boundary — applied to
+  `explain`'s skip itemization (`emitSkipDetails`), plugin header, and `--list`
+  text rows, to the shared translation report's plugin label that `apply` prints
+  (`render` `printText`), and to the fetched version on the `plugin install`
+  status line — before width/`Pad` so a stripped byte can't skew column
   alignment (and the `LF` strip stops an id forging an extra report line).
-  Printable text (incl. non-ASCII) is untouched, and `explain
-  --json` keeps ids/components raw (the machine contract, where the consumer
-  owns escaping). The rendered Codex agent TOML was already safe (the marshaller
+  Printable text (incl. non-ASCII) is untouched, and `explain --json` keeps
+  ids/components raw (the machine contract, where the consumer owns escaping).
+  The rendered Codex agent TOML was already safe (the marshaller
   escapes control bytes and the filename uses the canonical name).
 
 - **Codex subagents no longer report a spurious "dropped name".** The Codex
@@ -124,7 +125,7 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   (`marketplace.ProjectInstalled`) and builds its coverage row from only that
   plugin's own components, so each row — counts, coverage glyph, and skip
   details, in both text and `--json` — reflects exactly the plugin named.
-  (`apply`/`verify`'s end-of-run report still shows the per-agent summary across
+  (`apply`'s end-of-run report still shows the per-agent summary across
   the whole model.)
 
 - **Managed-file banner on rendered memory.** Every rendered memory file
