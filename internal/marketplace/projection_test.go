@@ -741,6 +741,56 @@ func TestProject_ConventionMarkdown_MalformedSkipped(t *testing.T) {
 	}
 }
 
+// TestProject_ConventionSkill_MalformedSkipped is the skills-path twin of
+// TestProject_ConventionMarkdown_MalformedSkipped. Skills load through a separate
+// helper (appendSkillEntries, not appendMarkdownComponents), so its
+// discovered-skip branch needs its own coverage — and the CHANGELOG explicitly
+// names skills/*/SKILL.md in the "one bad file can't brick every plugin" claim.
+// A convention-discovered SKILL.md that can't be parsed (unterminated frontmatter)
+// or has a traversal name is skipped; a valid sibling skill still projects.
+func TestProject_ConventionSkill_MalformedSkipped(t *testing.T) {
+	cache := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"p"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Valid skill.
+	if err := os.MkdirAll(filepath.Join(cache, "skills", "good"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "skills", "good", "SKILL.md"),
+		[]byte("---\nname: good-skill\ndescription: d\n---\nFine.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Unterminated frontmatter — not recovered by the lenient parser.
+	if err := os.MkdirAll(filepath.Join(cache, "skills", "broken"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "skills", "broken", "SKILL.md"),
+		[]byte("---\nname: broken\ndescription: oops\nno closing fence\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Hostile traversal name.
+	if err := os.MkdirAll(filepath.Join(cache, "skills", "evil"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "skills", "evil", "SKILL.md"),
+		[]byte("---\nname: ../../evil\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, err := marketplace.Project(marketplace.PluginEntry{Name: "p"}, cache)
+	if err != nil {
+		t.Fatalf("a malformed DISCOVERED skill must be skipped, not abort the projection: %v", err)
+	}
+	if len(pr.Skills) != 1 || pr.Skills[0].Name != "good-skill" {
+		t.Fatalf("expected only the good skill to survive the broken siblings; got %+v", pr.Skills)
+	}
+}
+
 // TestProject_ListedCommand_MalformedErrors pins the other half of the contract:
 // a manifest-LISTED command (the author named it explicitly) with malformed
 // frontmatter is still a HARD error — only convention-discovered files are
