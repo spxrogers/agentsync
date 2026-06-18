@@ -420,7 +420,8 @@ func emitSkipDetails(w io.Writer, p *ui.Printer, agent string, skips []render.Sk
 	}
 	fmt.Fprintf(w, "      %s\n", p.Faint(fmt.Sprintf(
 		"%s %s couldn't fully translate — reduced = rendered without some fields; dropped = not emitted:",
-		ui.GlyphArrow, agent)))
+		ui.GlyphArrow, agent,
+	)))
 	// A skip's Name comes from a fetched marketplace plugin (untrusted) and its
 	// Reason from an adapter (trusted) — sanitize both at this display boundary
 	// so neither can smuggle terminal escapes, and do it BEFORE width/Pad so a
