@@ -29,10 +29,12 @@ type PluginRow struct {
 	Skips int `json:"skips"`
 	// SkipDetails enumerates the components behind Skips — what the adapter
 	// could not translate, and why — so a "(N skipped)" tally is never a dead
-	// end. Same global attribution as the counts: because the canonical model
-	// is flattened (projection does not tag a component with its origin
-	// plugin), these are the agent's skips across the whole model, surfaced
-	// under every plugin row rather than narrowed to one plugin.
+	// end. Attribution follows the canonical+plan passed to BuildReport (see its
+	// doc): when the caller passes the whole flattened model (apply/verify), the
+	// skips are the agent's across every component and are repeated under each
+	// plugin row; when the caller passes a per-plugin-scoped model (`explain
+	// <id>`, which re-projects one plugin in isolation), they are narrowed to
+	// that plugin's own components.
 	SkipDetails []SkipDetail `json:"skipDetails,omitempty"`
 	// Disabled is true when the plugin is disabled for this scope (e.g. by a
 	// project marker's [plugins] disabled). Its components are not rendered.
@@ -162,17 +164,23 @@ func (r TranslationReport) PrintJSON(w io.Writer) error {
 }
 
 // BuildReport constructs a TranslationReport from the canonical model and a
-// RenderPlan.  It associates ops/skips with plugins by matching MCP server IDs
-// contributed by each plugin.
+// RenderPlan: one row per plugin (c.Plugins) × agent. Each row's counts come
+// from the model — MCP servers that target the agent (countMCPServers) and
+// len(c.Commands) — and its skips from plan.PerAgent[agent].Skips.
 //
-// For each plugin P and each agent A:
-//   - count MCP servers that appear in plan.PerAgent[A].Ops whose SourceID
-//     matches one of P's components.
-//   - coverage = full if skips==0 && mcp>0 (or no components), partial if
-//     skips>0 && mcp>0, none if mcp==0.
+// coverage = full when skips==0, partial when skips>0 but something rendered
+// (mcp>0 || commands>0), none otherwise. A disabled plugin yields a single
+// disabled-marker row. With no plugins installed, one "(base)" row per agent
+// summarizes the whole canonical.
 //
-// Plugins with no canonical entries (not yet cached) still generate rows with
-// coverage=none so the operator can see what's missing.
+// BuildReport does NOT itself correlate a component to its origin plugin — the
+// projected canonical is flattened with no origin tag. Attribution is therefore
+// the caller's choice of what model+plan to pass:
+//   - apply/verify pass the whole flattened model, so every plugin row carries
+//     the same global counts/skips (the documented summary behavior).
+//   - `explain <id>` re-projects ONE plugin in isolation
+//     (marketplace.ProjectInstalled) and passes a model+plan holding only that
+//     plugin's components, so its row reflects that plugin alone.
 func BuildReport(c source.Canonical, plan RenderPlan, agents []string) TranslationReport {
 	var report TranslationReport
 
@@ -236,9 +244,11 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 			if !ok {
 				continue
 			}
-			// For now we attribute all ops/skips equally to each plugin row
-			// since the canonical model is flattened.  A future version can
-			// tag ops with their origin plugin.
+			// Counts/skips are attributed per the canonical+plan passed in (see
+			// the doc-comment). apply/verify pass the whole flattened model, so
+			// every plugin row carries the same global numbers; `explain <id>`
+			// passes a model+plan scoped to one re-projected plugin, so its row
+			// reflects only that plugin's components.
 			row := PluginRow{
 				Plugin:      label,
 				Agent:       agName,

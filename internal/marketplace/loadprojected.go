@@ -72,32 +72,12 @@ func loadProjected(fs afero.Fs, home, pluginCacheRoot string, disabled []string,
 		disabledByProject[id] = true
 	}
 	for _, pl := range c.Plugins {
-		if pl.Plugin.Disabled {
-			// `plugin disable <id>` — skip projection entirely.
-			continue
-		}
-		if disabledByProject[pl.ID] {
-			// Disabled by the active project tree (plugins/<id>.toml
-			// disabled = true) — skip projection so its components never
-			// render in this repo.
-			continue
-		}
-		id, mpName := splitPluginRefPkg(pl.Plugin.ID)
-		if id == "" {
-			id = pl.ID
-		}
-		// Defense-in-depth: a hand-edited plugins/<id>.toml whose id contains
-		// "../" must not let plugin.json reads escape the cache root.
-		if strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") {
-			return c, fmt.Errorf("project plugin %q: id contains a path-traversal component", id)
-		}
-		pluginDir := filepath.Join(pluginCacheRoot, id)
-		if err := verifyPluginManifestSHA(fs, pluginDir, pl.Plugin.ManifestSHA, id); err != nil {
-			return c, err
-		}
-		proj, perr := projectWithFuncs(resolveInstalledEntry(home, id, mpName), pluginDir, os.ReadFile, os.ReadDir, lenient)
+		proj, ok, perr := projectOnePlugin(fs, home, pluginCacheRoot, pl, disabledByProject, lenient)
 		if perr != nil {
-			return c, fmt.Errorf("project plugin %s: %w", id, perr)
+			return c, perr
+		}
+		if !ok {
+			continue
 		}
 		c.MCPServers = append(c.MCPServers, proj.MCPServers...)
 		c.Skills = append(c.Skills, proj.Skills...)
@@ -110,6 +90,61 @@ func loadProjected(fs afero.Fs, home, pluginCacheRoot string, disabled []string,
 		return c, err
 	}
 	return c, nil
+}
+
+// ProjectInstalled projects ONE installed plugin's components in isolation,
+// running the exact per-plugin step loadProjected uses (disabled check,
+// id-traversal guard, manifest-SHA verification, plugin.json + marketplace-entry
+// union). ok is false when the plugin contributes nothing this load (it is
+// disabled via `plugin disable`).
+//
+// It exists so a diagnostic command can attribute components to the plugin that
+// actually contributes them instead of to the flattened union. The projected
+// canonical (LoadProjected) concatenates every plugin's components into one set
+// of flat slices with no origin-plugin tag, so a row built from that whole model
+// cannot tell which plugin a component (or skip) came from. `explain <id>` builds
+// a per-plugin plan from this projection rather than slicing the global
+// canonical, so its coverage/skip rows reflect only the named plugin.
+//
+// lenient mirrors LoadProjectedLenient (a strict plugin.json/entry conflict
+// degrades to entry-wins + a logged warning rather than a hard error), which is
+// what the read-only/diagnostic callers want.
+func ProjectInstalled(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugin, lenient bool) (ProjectionResult, bool, error) {
+	if pluginCacheRoot == "" {
+		return ProjectionResult{}, false, nil
+	}
+	return projectOnePlugin(fs, home, pluginCacheRoot, pl, nil, lenient)
+}
+
+// projectOnePlugin projects a single installed plugin into its ProjectionResult.
+// It is the one per-plugin projection step, shared by the flattening load
+// (loadProjected) and the per-plugin diagnostic path (ProjectInstalled), so the
+// two can never derive different components for the same plugin. ok is false when
+// the plugin contributes nothing this load: it is disabled via `plugin disable`
+// (pl.Plugin.Disabled), or disabled by the active project tree
+// (disabledByProject[pl.ID], the plugins/<id>.toml `disabled = true` flag).
+func projectOnePlugin(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugin, disabledByProject map[string]bool, lenient bool) (ProjectionResult, bool, error) {
+	if pl.Plugin.Disabled || disabledByProject[pl.ID] {
+		return ProjectionResult{}, false, nil
+	}
+	id, mpName := splitPluginRefPkg(pl.Plugin.ID)
+	if id == "" {
+		id = pl.ID
+	}
+	// Defense-in-depth: a hand-edited plugins/<id>.toml whose id contains
+	// "../" must not let plugin.json reads escape the cache root.
+	if strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") {
+		return ProjectionResult{}, false, fmt.Errorf("project plugin %q: id contains a path-traversal component", id)
+	}
+	pluginDir := filepath.Join(pluginCacheRoot, id)
+	if err := verifyPluginManifestSHA(fs, pluginDir, pl.Plugin.ManifestSHA, id); err != nil {
+		return ProjectionResult{}, false, err
+	}
+	proj, perr := projectWithFuncs(resolveInstalledEntry(home, id, mpName), pluginDir, os.ReadFile, os.ReadDir, lenient)
+	if perr != nil {
+		return ProjectionResult{}, false, fmt.Errorf("project plugin %s: %w", id, perr)
+	}
+	return proj, true, nil
 }
 
 // checkProjectedConflicts surfaces a silent cross-source hijack. The projected

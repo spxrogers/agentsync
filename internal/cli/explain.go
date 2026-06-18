@@ -49,9 +49,10 @@ func newExplainCmd() *cobra.Command {
 
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
+			fs := afero.NewOsFs()
 			// Read-only: a strict plugin.json/entry conflict degrades to a
 			// warning + entry-wins so explain still shows coverage.
-			c, err := marketplace.LoadProjectedLenient(afero.NewOsFs(), home, pluginCacheRoot, nil)
+			c, err := marketplace.LoadProjectedLenient(fs, home, pluginCacheRoot, nil)
 			if err != nil {
 				return err
 			}
@@ -78,7 +79,7 @@ func newExplainCmd() *cobra.Command {
 				return runExplainEmpty(p, jsonOut)
 			}
 
-			return runExplain(cmd.OutOrStdout(), p, c, wanted, home, jsonOut)
+			return runExplain(cmd.OutOrStdout(), p, fs, c, wanted, home, pluginCacheRoot, jsonOut)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "structured JSON output")
@@ -202,7 +203,15 @@ func runExplainEmpty(p *ui.Printer, jsonOut bool) error {
 // is reported under a styled header (id, version, disabled marker); the per-
 // agent rows reuse the same PrintTextStyled body apply uses, so the visual
 // vocabulary stays consistent.
-func runExplain(w io.Writer, p *ui.Printer, c source.Canonical, wanted []source.Plugin, home string, jsonOut bool) error {
+//
+// Crucially, each plugin's coverage is computed from THAT plugin's own projected
+// components, not from the flattened union of every installed plugin. The
+// projected canonical concatenates all plugins' components with no origin tag, so
+// a report built from it would stamp the same global MCP/command counts and skips
+// onto every plugin row — `explain notion` would show another plugin's skipped
+// subagents/LSPs. We re-project each requested plugin in isolation
+// (marketplace.ProjectInstalled) and build its plan from only those components.
+func runExplain(w io.Writer, p *ui.Printer, fs afero.Fs, c source.Canonical, wanted []source.Plugin, home, pluginCacheRoot string, jsonOut bool) error {
 	// Collect enabled agents. Sort so `--json` row order is deterministic
 	// (PrintJSON emits rows in this slice order verbatim).
 	var agents []string
@@ -220,21 +229,18 @@ func runExplain(w io.Writer, p *ui.Printer, c source.Canonical, wanted []source.
 		return err
 	}
 
-	// One shared plan over the full canonical: every plugin-row in the
-	// report already reads from the same per-agent op set today (BuildReport
-	// attributes counts globally — see its doc-comment). Planning per
-	// plugin would not change a row's numbers and would multiply work.
-	plan, err := render.Plan(secrets.ForRender(c), reg, agents, adapter.ScopeUser, "", s, paths.HomeDir(paths.OSEnv{}))
-	if err != nil {
-		return err
-	}
-
 	if jsonOut {
-		// Build one combined report whose rows cover exactly the requested
-		// plugins, in the order resolveExplainTargets returned them.
-		filtered := c
-		filtered.Plugins = wanted
-		report := render.BuildReport(filtered, plan, agents)
+		// One combined report whose rows cover exactly the requested plugins,
+		// in the order resolveExplainTargets returned them — each plugin's rows
+		// computed from its own components.
+		var report render.TranslationReport
+		for _, pl := range wanted {
+			pr, err := explainPluginReport(fs, c, pl, agents, reg, s, home, pluginCacheRoot)
+			if err != nil {
+				return err
+			}
+			report.Rows = append(report.Rows, pr.Rows...)
+		}
 		return report.PrintJSON(w)
 	}
 
@@ -251,15 +257,52 @@ func runExplain(w io.Writer, p *ui.Printer, c source.Canonical, wanted []source.
 		}
 		emitPluginHeader(w, p, pl)
 
-		filtered := c
-		filtered.Plugins = []source.Plugin{pl}
-		report := render.BuildReport(filtered, plan, agents)
+		report, err := explainPluginReport(fs, c, pl, agents, reg, s, home, pluginCacheRoot)
+		if err != nil {
+			return err
+		}
 		// The report already groups by plugin and renders one row per
 		// agent — emit it stripped of its own "plugin: …" header to avoid
 		// duplicating the one we just printed.
 		emitReportBody(w, p, report)
 	}
 	return nil
+}
+
+// explainPluginReport builds the translation report for a SINGLE plugin, scoped
+// to that plugin's own components. It re-projects the plugin in isolation and
+// plans over a canonical carrying only those components, so the resulting
+// coverage/skip rows reflect what this plugin contributes — never the flattened
+// union of every installed plugin. The base config (enabled agents, settings) is
+// preserved from c; only the component slices and the Plugins list are narrowed.
+//
+// A disabled plugin contributes nothing: BuildReport emits its single
+// disabled-marker row from c.Plugins alone, so no projection or plan is needed.
+func explainPluginReport(fs afero.Fs, c source.Canonical, pl source.Plugin, agents []string, reg *adapter.Registry, s *state.Targets, home, pluginCacheRoot string) (render.TranslationReport, error) {
+	scoped := c
+	scoped.Plugins = []source.Plugin{pl}
+	if pl.Plugin.Disabled {
+		return render.BuildReport(scoped, render.RenderPlan{}, agents), nil
+	}
+
+	proj, _, err := marketplace.ProjectInstalled(fs, home, pluginCacheRoot, pl, true)
+	if err != nil {
+		return render.TranslationReport{}, err
+	}
+	// Replace (not append to) the flattened component lists with only this
+	// plugin's, so the plan and the report's counts cover this plugin alone.
+	scoped.MCPServers = proj.MCPServers
+	scoped.Skills = proj.Skills
+	scoped.Subagents = proj.Subagents
+	scoped.Commands = proj.Commands
+	scoped.Hooks = proj.Hooks
+	scoped.LSPServers = proj.LSPServers
+
+	plan, err := render.Plan(secrets.ForRender(scoped), reg, agents, adapter.ScopeUser, "", s, paths.HomeDir(paths.OSEnv{}))
+	if err != nil {
+		return render.TranslationReport{}, err
+	}
+	return render.BuildReport(scoped, plan, agents), nil
 }
 
 // emitPluginHeader prints a styled "▸ <id>  v<version>  (disabled)" line.

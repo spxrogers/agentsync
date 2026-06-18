@@ -445,6 +445,140 @@ func TestExplain_ListsSkips(t *testing.T) {
 	}
 }
 
+// TestExplain_ScopesToNamedPlugin is the regression for cross-plugin leakage:
+// `explain <id>` must report only the named plugin's own components, never the
+// flattened union of every installed plugin. Before the fix, explain stamped the
+// global translation result onto every plugin row, so explaining one plugin
+// listed MCP counts and skipped components (subagents, LSPs) that belonged to a
+// different installed plugin.
+//
+// The fixture installs two plugins: "clean" (one MCP server Codex renders fully)
+// and "noisy" (one MCP plus an LSP server Codex cannot translate and skips).
+// Explaining "clean" must show full coverage, exactly one MCP, and no skips — the
+// noisy plugin's second MCP and its LSP skip must not leak in. The inverse
+// (explaining "noisy" surfaces its OWN lsp skip) confirms scoping narrows
+// attribution rather than suppressing skips wholesale.
+func TestExplain_ScopesToNamedPlugin(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	fixture := setupExplainCrossPluginFixture(t, tmp)
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"clean@cross-mp", "noisy@cross-mp"} {
+		if _, err := runCLI(t, env, "plugin", "install", id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Explaining the clean plugin must not inherit the noisy plugin's LSP skip.
+	out, err := runCLI(t, env, "explain", "clean@cross-mp")
+	if err != nil {
+		t.Fatalf("explain clean: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "skipped") || strings.Contains(out, "lsp") {
+		t.Errorf("explain clean@cross-mp leaked another plugin's skip; got:\n%s", out)
+	}
+	if !strings.Contains(out, "full") {
+		t.Errorf("explain clean@cross-mp should be full coverage; got:\n%s", out)
+	}
+
+	// JSON: clean's rows must carry exactly one MCP, full coverage, and zero skips.
+	outJSON, err := runCLI(t, env, "explain", "clean@cross-mp", "--json")
+	if err != nil {
+		t.Fatalf("explain clean --json: %v\n%s", err, outJSON)
+	}
+	var parsed struct {
+		Rows []struct {
+			Plugin      string `json:"plugin"`
+			Coverage    string `json:"coverage"`
+			MCP         int    `json:"mcp"`
+			Skips       int    `json:"skips"`
+			SkipDetails []struct {
+				Component string `json:"component"`
+			} `json:"skipDetails"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal([]byte(outJSON), &parsed); err != nil {
+		t.Fatalf("explain clean --json not valid JSON: %v\n%s", err, outJSON)
+	}
+	if len(parsed.Rows) == 0 {
+		t.Fatalf("explain clean --json returned zero rows:\n%s", outJSON)
+	}
+	for _, r := range parsed.Rows {
+		if r.Plugin != "clean@cross-mp" {
+			t.Errorf("explain clean@cross-mp returned a row for %q", r.Plugin)
+		}
+		if r.MCP != 1 {
+			t.Errorf("explain clean@cross-mp mcp = %d; want 1 (noisy's mcp must not leak in)", r.MCP)
+		}
+		if r.Skips != 0 || len(r.SkipDetails) != 0 {
+			t.Errorf("explain clean@cross-mp row has leaked skips: skips=%d details=%+v", r.Skips, r.SkipDetails)
+		}
+		if r.Coverage != "full" {
+			t.Errorf("explain clean@cross-mp coverage = %q; want full", r.Coverage)
+		}
+	}
+
+	// Inverse: the noisy plugin still surfaces ITS OWN lsp skip, so the scoping
+	// narrows attribution rather than hiding skips wholesale.
+	outNoisy, err := runCLI(t, env, "explain", "noisy@cross-mp")
+	if err != nil {
+		t.Fatalf("explain noisy: %v\n%s", err, outNoisy)
+	}
+	if !strings.Contains(outNoisy, "lsp") || !strings.Contains(outNoisy, "Codex has no LSP configuration concept") {
+		t.Errorf("explain noisy@cross-mp should surface its own lsp skip; got:\n%s", outNoisy)
+	}
+}
+
+// setupExplainCrossPluginFixture builds a marketplace with two installable
+// plugins used by the cross-plugin scoping regression: "clean" ships a single
+// MCP server (Codex renders it fully), "noisy" ships an MCP plus an LSP server
+// Codex cannot translate (it skips the LSP). With both installed, explaining one
+// must not surface the other's components.
+func setupExplainCrossPluginFixture(t *testing.T, tmp string) string {
+	t.Helper()
+	fixture := filepath.Join(tmp, "fixture-marketplace-explain-cross")
+	if err := os.MkdirAll(filepath.Join(fixture, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixture, ".claude-plugin", "marketplace.json"),
+		[]byte(`{"name":"cross-mp","owner":{"name":"x"},"plugins":[`+
+			`{"name":"clean","source":"./plugins/clean"},`+
+			`{"name":"noisy","source":"./plugins/noisy"}]}`),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	cleanDir := filepath.Join(fixture, "plugins", "clean", ".claude-plugin")
+	if err := os.MkdirAll(cleanDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cleanDir, "plugin.json"),
+		[]byte(`{"name":"clean","version":"1.0.0","mcpServers":{"clean-mcp":{"command":"echo","args":["hi"]}}}`),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	noisyDir := filepath.Join(fixture, "plugins", "noisy", ".claude-plugin")
+	if err := os.MkdirAll(noisyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(noisyDir, "plugin.json"),
+		[]byte(`{"name":"noisy","version":"1.0.0",`+
+			`"mcpServers":{"noisy-mcp":{"command":"echo","args":["hi"]}},`+
+			`"lspServers":{"noisy-lsp":{"command":"lang-server"}}}`),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	return fixture
+}
+
 // setupExplainSkipFixture builds a marketplace whose single plugin ships an MCP
 // server, an LSP server, and a hook on a lifecycle event Codex does not
 // recognize. Codex renders the MCP but skips the LSP (no LSP concept) and the

@@ -321,7 +321,9 @@ Persists last-applied hashes and plugin/marketplace pins to
 Models the Claude marketplace/plugin format, fetches sources, and projects plugin
 manifests into canonical components.
 - **Key:** `Marketplace`, `PluginEntry`, `Source`, `PluginManifest`;
-  `ProjectionResult`; `Project`/`ProjectWithReader`; `Fetcher` (interface) with
+  `ProjectionResult`; `Project`/`ProjectWithReader`; `ProjectInstalled`
+  (one installed plugin in isolation — lets `explain <id>` attribute coverage to
+  the named plugin rather than the flattened union); `Fetcher` (interface) with
   `GitFetcher`/`NPMFetcher`/`RelativeFetcher`; `LoadProjected`/
   `LoadProjectedLenient`/`LoadProjectedExcluding`.
 - **Depends on:** source, log.

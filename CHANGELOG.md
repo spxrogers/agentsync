@@ -19,9 +19,22 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   gains a `skipDetails` array
   (`{component, name, reason}`) on every `explain --json` row. The translation
   report carries the detail end-to-end (`render.PluginRow.SkipDetails`) rather
-  than collapsing skips to a bare count; the same global attribution caveat as
-  the counts applies (the flattened canonical model does not tag a component with
-  its origin plugin, so the skips shown are the agent's across the whole model).
+  than collapsing skips to a bare count, and the counts/skips are scoped to the
+  named plugin (see the `explain` fix below).
+
+### Fixed
+
+- **`explain <plugin>` now reports only that plugin's components.** `explain`
+  previously stamped the *global* translation result onto every plugin row: the
+  MCP/command counts and the `(N skipped)` itemization were computed from the
+  flattened union of every installed plugin, so e.g. `agentsync explain
+  notion@…` listed skipped subagents and LSP servers that belonged to entirely
+  different plugins. `explain` now re-projects each requested plugin in isolation
+  (`marketplace.ProjectInstalled`) and builds its coverage row from only that
+  plugin's own components, so each row — counts, coverage glyph, and skip
+  details, in both text and `--json` — reflects exactly the plugin named.
+  (`apply`/`verify`'s end-of-run report still shows the per-agent summary across
+  the whole model.)
 
 - **Managed-file banner on rendered memory.** Every rendered memory file
   (`CLAUDE.md`, `AGENTS.md`, …) is now prepended with a short agentsync notice
