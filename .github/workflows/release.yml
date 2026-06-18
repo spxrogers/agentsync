@@ -3,12 +3,16 @@ name: release
 # `--snapshot --skip publish` mode to prove the cross-build stays viable; this
 # workflow is the one that actually cuts a GitHub Release and updates the
 # Homebrew tap. Push an annotated `vX.Y.Z` tag on a green `main` commit and
-# GoReleaser takes it from there.
+# GoReleaser takes it from there. Once the release publishes, the `docs` job
+# rebuilds and redeploys the agentsync.cc site so the live docs always track the
+# just-shipped CLI version.
 on:
   push:
     tags: ["v*"]
 
-# goreleaser needs to create the GitHub Release + upload assets in THIS repo.
+# goreleaser needs to create the GitHub Release + upload assets in THIS repo,
+# and the `docs` job force-pushes the rebuilt site to the gh-pages branch — both
+# need contents:write here.
 permissions:
   contents: write
 
@@ -36,3 +40,28 @@ jobs:
           # with contents:write on the tap. If this secret is unset the brew step
           # fails; everything else (GitHub Release, deb/rpm) still publishes.
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+  # Redeploy agentsync.cc after a successful publish so the live docs always
+  # track the just-released CLI. This is exactly `just docs-publish` (rebuild
+  # website/ and force-push dist/ to the gh-pages branch); GitHub Pages serves
+  # gh-pages via "deploy from a branch", so no extra Actions minutes are spent
+  # rendering the site. Gated on `goreleaser` so a failed publish never ships
+  # docs claiming a version that isn't out.
+  docs:
+    name: docs-publish (agentsync.cc)
+    needs: goreleaser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: extractions/setup-just@v3
+      # `just docs-publish` runs `git push` from a throwaway repo it inits inside
+      # website/dist, which inherits none of actions/checkout's auth. Inject the
+      # workflow token for github.com transports so that force-push to gh-pages
+      # authenticates (contents:write, granted above).
+      - name: Authenticate git pushes to GitHub
+        run: |
+          git config --global \
+            url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf \
+            "https://github.com/"
+      - run: just docs-publish
