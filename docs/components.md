@@ -356,6 +356,16 @@ absolute and `${HOME}`-relative forms for portable state.
 ### `internal/log`
 slog setup. **Key:** `New(w, verbose) *slog.Logger`. **Files:** `log.go`.
 
+### `internal/untrusted`
+The display trust boundary for fetched/native metadata. Owns `Sanitize` (strip
+terminal-control + deceptive bidi/zero-width runes) and the `Text` defined string
+type whose `String()` sanitizes — so a plugin/marketplace id, version, or name
+typed `untrusted.Text` is safe to print through `fmt` by construction; the raw
+value is reachable only via the explicit `Unverified()`. `ui.Sanitize` delegates
+here. See [architecture §7](architecture.md#7-safety-primitives) and `SECURITY.md`.
+- **Key:** `Text` (`.String()` / `.Unverified()` / `.Empty()`); `Wrap`; `Sanitize`.
+- **Files:** `untrusted.go`.
+
 ### `internal/testenv`
 Guards FS-touching tests so they only run in the hermetic container.
 - **Key:** `RequireContainer(t)`; `MustRunInContainer()`; `InContainer() bool`;
@@ -368,6 +378,8 @@ Guards FS-touching tests so they only run in the hermetic container.
 
 `cli` sits on top of everything. `render`, `capture`, and the adapters depend on
 `source` + `secrets`. `source`/`secrets`/`state` depend only on the leaf infra
-packages (`iox`, `jsonkeys`, `paths`). `drift`, `iox`, `jsonkeys`, `paths`, and
-`log` depend on nothing internal — they're the foundation. See the rendered
-dependency graph in [architecture §10](architecture.md#10-package-layering).
+packages (`iox`, `jsonkeys`, `paths`, and — for the canonical plugin/marketplace
+identity fields typed `untrusted.Text` — `untrusted`). `drift`, `iox`,
+`jsonkeys`, `paths`, `log`, and `untrusted` depend on nothing internal — they're
+the foundation. See the rendered dependency graph in
+[architecture §10](architecture.md#10-package-layering).

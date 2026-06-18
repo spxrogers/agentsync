@@ -377,7 +377,7 @@ func projectDisabledPlugins(fs afero.Fs, projHome string) ([]string, error) {
 	var out []string
 	for _, p := range pc.Plugins {
 		if p.Plugin.Disabled {
-			out = append(out, p.ID)
+			out = append(out, p.ID.Unverified())
 		}
 	}
 	return out, nil

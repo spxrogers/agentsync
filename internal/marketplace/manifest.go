@@ -3,7 +3,11 @@
 // that decomposes plugin manifests into canonical source model entries.
 package marketplace
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/spxrogers/agentsync/internal/untrusted"
+)
 
 // Marketplace is the .claude-plugin/marketplace.json document.
 type Marketplace struct {
@@ -28,20 +32,23 @@ type MarketplaceMetadata struct {
 	PluginRoot string `json:"pluginRoot,omitempty"`
 }
 
-// PluginEntry is one plugin listed in a marketplace.
+// PluginEntry is one plugin listed in a marketplace. Name/Version come straight
+// from fetched marketplace.json (untrusted), so they are untrusted.Text: they
+// sanitize themselves when printed and marshal RAW back to JSON (the machine
+// contract). Reach the raw value via Unverified() for lookup/path use.
 type PluginEntry struct {
-	Name        string   `json:"name"`
-	Source      Source   `json:"source"`
-	Description string   `json:"description,omitempty"`
-	Version     string   `json:"version,omitempty"`
-	Author      *Author  `json:"author,omitempty"`
-	Homepage    string   `json:"homepage,omitempty"`
-	Repository  string   `json:"repository,omitempty"`
-	License     string   `json:"license,omitempty"`
-	Keywords    []string `json:"keywords,omitempty"`
-	Category    string   `json:"category,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Strict      *bool    `json:"strict,omitempty"` // conflict policy on the plugin.json+entry union (default true): strict errors on a same-name conflict, non-strict lets the entry override. See marketplace.resolveConflicts.
+	Name        untrusted.Text `json:"name"`
+	Source      Source         `json:"source"`
+	Description string         `json:"description,omitempty"`
+	Version     untrusted.Text `json:"version,omitempty"`
+	Author      *Author        `json:"author,omitempty"`
+	Homepage    string         `json:"homepage,omitempty"`
+	Repository  string         `json:"repository,omitempty"`
+	License     string         `json:"license,omitempty"`
+	Keywords    []string       `json:"keywords,omitempty"`
+	Category    string         `json:"category,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	Strict      *bool          `json:"strict,omitempty"` // conflict policy on the plugin.json+entry union (default true): strict errors on a same-name conflict, non-strict lets the entry override. See marketplace.resolveConflicts.
 
 	// Component config can be inlined here (overlaid on plugin.json):
 	Skills     any            `json:"skills,omitempty"`   // string | []string

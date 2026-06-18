@@ -449,6 +449,19 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    re-uploaded version *or* a tampered component body is detected as drift
    rather than silently consumed. (An entry-only plugin with no cached bodies is
    pinned over its marketplace entry.)
+6. **Display-boundary sanitization, enforced by type** (`internal/untrusted`) —
+   a fetched/native plugin or marketplace id, version, or name can carry terminal
+   escapes (a screen-clear/recolor CSI, an OSC title-set) or deceptive bidi /
+   zero-width runes ("Trojan Source"). Those fields are the defined string type
+   `untrusted.Text`, whose `String()` runs `Sanitize`, so printing one through
+   `fmt` strips the danger **by construction**; the raw value is reachable only
+   via the explicit `Unverified()` (filesystem/lookup use, never display). The
+   wire format is unchanged (`Text` is a string kind — `omitempty` and `--json`
+   raw output are preserved). Reflection-based `TestUntrustedFieldGuard`s
+   (`internal/{source,marketplace,render}`) fail the build if a new string field
+   on those structs is left unclassified, so a future metadata field can't ship
+   as a raw string a new print site would leak. Carve-outs (hex SHAs, `%q` URLs,
+   user-supplied CLI args, enum modes) stay plain strings. See `SECURITY.md`.
 
 ---
 
@@ -527,7 +540,7 @@ flowchart TD
     PRJ["internal/project — <root>/.agentsync/ tree overlay"]
     DRF["internal/drift — 3-way classifier (pure)"]
     ST["internal/state — targets.json"]
-    INFRA["internal/iox · paths · jsonkeys · log"]
+    INFRA["internal/iox · paths · jsonkeys · log · untrusted"]
 
     CLI --> REN & CAP & AD & SRC & SEC & MKT & PRJ & DRF & ST
     REN --> AD & SEC & SRC & ST & DRF & INFRA
@@ -540,6 +553,6 @@ flowchart TD
     ST --> INFRA
 ```
 
-`internal/drift`, `internal/iox`, `internal/jsonkeys`, `internal/paths`, and
-`internal/log` have no internal dependencies — they're the leaves. See the
-[component map](components.md) for what each package contains.
+`internal/drift`, `internal/iox`, `internal/jsonkeys`, `internal/paths`,
+`internal/log`, and `internal/untrusted` have no internal dependencies — they're
+the leaves. See the [component map](components.md) for what each package contains.

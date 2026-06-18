@@ -4,6 +4,8 @@
 // types directly.
 package source
 
+import "github.com/spxrogers/agentsync/internal/untrusted"
+
 // Canonical is the in-memory image of a fully-loaded ~/.agentsync/ tree.
 type Canonical struct {
 	Config       Config
@@ -117,16 +119,22 @@ type SkillFile struct {
 // silent no-op. (Per-agent fan-out is still controllable via a component's
 // `agents` allowlist.)
 type Plugin struct {
-	ID     string     `toml:"-"`
-	Plugin PluginSpec `toml:"plugin"`
+	// ID is the plugin's filesystem id (the plugins/<id>.toml stem), originating
+	// from a marketplace install — untrusted.Text so a print site sanitizes it by
+	// construction; use Unverified() for path/lookup use.
+	ID     untrusted.Text `toml:"-"`
+	Plugin PluginSpec     `toml:"plugin"`
 }
 
 type PluginSpec struct {
-	ID          string   `toml:"id"`
-	Version     string   `toml:"version,omitempty"`
-	ManifestSHA string   `toml:"manifest_sha,omitempty"`
-	Update      string   `toml:"update,omitempty"` // pinned | track | manual
-	Agents      []string `toml:"agents,omitempty"`
+	// ID is "<name>@<marketplace>" and Version comes from the fetched manifest;
+	// both are untrusted.Text (see Plugin.ID). ManifestSHA/Update are
+	// agentsync-controlled and stay plain strings.
+	ID          untrusted.Text `toml:"id"`
+	Version     untrusted.Text `toml:"version,omitempty"`
+	ManifestSHA string         `toml:"manifest_sha,omitempty"`
+	Update      string         `toml:"update,omitempty"` // pinned | track | manual
+	Agents      []string       `toml:"agents,omitempty"`
 	// Disabled, when true, suppresses the plugin's projection during
 	// marketplace.LoadProjected. `agentsync plugin disable <id>` sets this.
 	// Without honouring it there, the CLI's TOML write would be a no-op:
@@ -137,7 +145,10 @@ type PluginSpec struct {
 
 // Marketplace mirrors marketplaces/<name>.toml.
 type Marketplace struct {
-	Name        string          `toml:"-"`
+	// Name is the declared marketplace name (from marketplace.json, falling back
+	// to a URL-derived slug) — untrusted.Text so a print site sanitizes it by
+	// construction; use Unverified() for path/lookup use.
+	Name        untrusted.Text  `toml:"-"`
 	Marketplace MarketplaceSpec `toml:"marketplace"`
 }
 

@@ -14,12 +14,16 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/ui"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // PluginRow is one row in the translation report — one plugin × one agent.
 type PluginRow struct {
-	Plugin string `json:"plugin"`
-	Agent  string `json:"agent"`
+	// Plugin is the plugin id from fetched marketplace metadata (untrusted), so
+	// it is untrusted.Text: it sanitizes itself when printed to the terminal and
+	// marshals RAW to JSON (the --json machine contract owns its own escaping).
+	Plugin untrusted.Text `json:"plugin"`
+	Agent  string         `json:"agent"`
 	// Coverage is "full", "partial", or "none".
 	Coverage string `json:"coverage"`
 	// MCP, Commands, Skills, Subagents, Hooks, and LSP count the components the
@@ -58,8 +62,11 @@ type PluginRow struct {
 // for the report's machine-readable surface.
 type SkipDetail struct {
 	Component string `json:"component"`
-	Name      string `json:"name,omitempty"`
-	Reason    string `json:"reason"`
+	// Name is the skipped component's name, which for a plugin component derives
+	// from fetched marketplace metadata (untrusted) — untrusted.Text so a display
+	// site sanitizes it by construction. Reason is adapter-authored (trusted).
+	Name   untrusted.Text `json:"name,omitempty"`
+	Reason string         `json:"reason"`
 }
 
 // skipDetails converts an adapter's []Skip into the report's JSON-tagged form.
@@ -69,7 +76,9 @@ func skipDetails(skips []adapter.Skip) []SkipDetail {
 	}
 	out := make([]SkipDetail, len(skips))
 	for i, s := range skips {
-		out[i] = SkipDetail{Component: s.Component, Name: s.Name, Reason: s.Reason}
+		// s.Name is the plugin component's name (untrusted upstream); tag it as
+		// untrusted.Text at this boundary so every display site sanitizes it.
+		out[i] = SkipDetail{Component: s.Component, Name: untrusted.Wrap(s.Name), Reason: s.Reason}
 	}
 	return out
 }
@@ -113,14 +122,16 @@ func (r TranslationReport) PrintTextStyled(w io.Writer, p *ui.Printer) {
 }
 
 // printText is the shared body of PrintText / PrintTextStyled. The only
-// untrusted token it renders is the plugin label (a fetched marketplace id),
-// which is passed through ui.Sanitize before reaching the terminal so a hostile
-// plugin cannot smuggle ANSI/control sequences into the report; see the loop.
+// untrusted token it renders is the plugin label (a fetched marketplace id);
+// it is an untrusted.Text, whose String() sanitizes when it is printed via %s,
+// so a hostile plugin cannot smuggle ANSI/control sequences into the report
+// (safe by construction — see the loop).
 func (r TranslationReport) printText(w io.Writer, p *ui.Printer) {
-	// Group rows by plugin.
-	byPlugin := map[string][]PluginRow{}
-	pluginOrder := []string{}
-	seen := map[string]bool{}
+	// Group rows by plugin. The keys stay untrusted.Text (raw): grouping/ordering
+	// key on the RAW id, while the label printed below sanitizes via Text.String().
+	byPlugin := map[untrusted.Text][]PluginRow{}
+	pluginOrder := []untrusted.Text{}
+	seen := map[untrusted.Text]bool{}
 	for _, row := range r.Rows {
 		if !seen[row.Plugin] {
 			pluginOrder = append(pluginOrder, row.Plugin)
@@ -128,29 +139,30 @@ func (r TranslationReport) printText(w io.Writer, p *ui.Printer) {
 		}
 		byPlugin[row.Plugin] = append(byPlugin[row.Plugin], row)
 	}
-	sort.Strings(pluginOrder)
+	// untrusted.Text is a defined string type, so ordering on it compares the raw
+	// bytes (sort.Strings can't take []Text directly).
+	sort.Slice(pluginOrder, func(i, j int) bool { return pluginOrder[i] < pluginOrder[j] })
 
 	for _, plug := range pluginOrder {
 		// The plugin label is the plugin id from fetched marketplace metadata
-		// (untrusted), so sanitize it before rendering to the terminal: a control
-		// sequence smuggled into a plugin id must not recolor/clear the screen or
-		// spoof rows in the translation report `apply` prints. Sanitizing strips
-		// embedded newlines too, so the id cannot forge an extra report line.
-		// Clean labels pass through unchanged, so the byte-stable plain fixtures
-		// still hold. (This text path is the one `apply` prints; `explain` renders
-		// its own report body and sanitizes the same untrusted source there.)
+		// (untrusted.Text). Printing it via %s invokes Text.String(), which
+		// sanitizes — a control sequence smuggled into a plugin id cannot
+		// recolor/clear the screen or spoof rows in the translation report `apply`
+		// prints, and embedded newlines are stripped so the id cannot forge an
+		// extra report line. Clean labels pass through unchanged, so the
+		// byte-stable plain fixtures still hold. (This text path is the one `apply`
+		// prints; `explain` renders its own report body over the same Text source.)
 		//
-		// Grouping and ordering still key on the RAW label (byPlugin,
-		// pluginOrder, sort.Strings): two distinct raw ids that sanitize to the
-		// same visible text therefore render as separate rows that merely look
-		// alike — a cosmetic spoof of the same class as the bidi/zero-width runes
-		// ui.Sanitize deliberately leaves, not a terminal-control escape, so it
-		// is an accepted residual.
-		label := ui.Sanitize(plug)
+		// Grouping and ordering above key on the RAW label (byPlugin, pluginOrder,
+		// the raw-byte sort): two distinct raw ids that sanitize to the same
+		// visible text therefore render as separate rows that merely look alike — a
+		// cosmetic spoof of the same class as the bidi/zero-width runes Sanitize
+		// deliberately leaves, not a terminal-control escape, so it is an accepted
+		// residual.
 		if p != nil {
-			fmt.Fprintf(w, "%s %s\n", p.Bold("plugin:"), label)
+			fmt.Fprintf(w, "%s %s\n", p.Bold("plugin:"), plug)
 		} else {
-			fmt.Fprintf(w, "plugin: %s\n", label)
+			fmt.Fprintf(w, "plugin: %s\n", plug)
 		}
 		rows := byPlugin[plug]
 		sort.Slice(rows, func(i, j int) bool { return rows[i].Agent < rows[j].Agent })
@@ -271,7 +283,7 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 // (counts of what the model hosts for agName), the skip tally + details, and the
 // derived coverage. c is whatever model the caller scoped (whole model or one
 // plugin); res is that agent's render result.
-func reportRow(label, agName string, c source.Canonical, res AgentResult) PluginRow {
+func reportRow(label untrusted.Text, agName string, c source.Canonical, res AgentResult) PluginRow {
 	row := PluginRow{
 		Plugin:      label,
 		Agent:       agName,

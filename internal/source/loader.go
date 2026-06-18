@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/afero"
 
 	"github.com/spxrogers/agentsync/internal/jsonkeys"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // Load reads a canonical model from <home>. Missing home or missing
@@ -143,7 +144,7 @@ func loadPlugins(fs afero.Fs, home string) ([]Plugin, error) {
 		if err := toml.Unmarshal(data, &pl); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", p, err)
 		}
-		pl.ID = strings.TrimSuffix(e.Name(), ".toml")
+		pl.ID = untrusted.Wrap(strings.TrimSuffix(e.Name(), ".toml"))
 		out = append(out, pl)
 	}
 	return out, nil
@@ -172,7 +173,7 @@ func loadMarketplaces(fs afero.Fs, home string) ([]Marketplace, error) {
 		if err := toml.Unmarshal(data, &m); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", p, err)
 		}
-		m.Name = strings.TrimSuffix(e.Name(), ".toml")
+		m.Name = untrusted.Wrap(strings.TrimSuffix(e.Name(), ".toml"))
 		out = append(out, m)
 	}
 	return out, nil

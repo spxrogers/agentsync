@@ -6,28 +6,34 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // Bump describes a pending plugin version change discovered by the update scan.
+// ID/From/To derive from fetched marketplace metadata, so they are
+// untrusted.Text — printed directly they sanitize themselves; reach the raw
+// value via Unverified() for filesystem/lookup use.
 type Bump struct {
 	// ID is the plugin's filesystem ID (e.g. "demo").
-	ID string
+	ID untrusted.Text
 	// From is the currently pinned version (from plugins/<id>.toml).
-	From string
+	From untrusted.Text
 	// To is the latest version available in the fetched marketplace.
-	To string
+	To untrusted.Text
 	// UpdateMode is the plugin's configured update mode ("pinned", "track", "manual").
 	UpdateMode string
 }
 
 // SHAWarning is emitted when a plugin's recorded manifest_sha differs from
 // the freshly-fetched SHA for the same version — a signal that the marketplace
-// publisher re-uploaded the same version with different content.
+// publisher re-uploaded the same version with different content. ID/Version come
+// from fetched/installed plugin metadata and are untrusted.Text; the two SHA
+// fields are agentsync-computed hex and stay plain strings.
 type SHAWarning struct {
 	// ID is the plugin's filesystem ID.
-	ID string
+	ID untrusted.Text
 	// Version is the version that was re-uploaded.
-	Version string
+	Version untrusted.Text
 	// RecordedSHA is what was stored in plugins/<id>.toml at install time.
 	RecordedSHA string
 	// FetchedSHA is the SHA of the freshly-fetched plugin.json.
@@ -42,7 +48,7 @@ type SHAWarning struct {
 func DetectSHADrift(plugins []source.Plugin, freshSHAs map[string]string) []SHAWarning {
 	var out []SHAWarning
 	for _, pl := range plugins {
-		freshSHA, ok := freshSHAs[pl.ID]
+		freshSHA, ok := freshSHAs[pl.ID.Unverified()]
 		if !ok || freshSHA == "" {
 			continue
 		}
@@ -105,11 +111,11 @@ func ComputePendingBumps(
 
 		// Find this plugin in one of the fetched marketplaces.
 		// The spec.ID format is "<name>@<marketplace>".
-		_, mpName := splitPluginRefPkg(spec.ID)
+		_, mpName := splitPluginRefPkg(spec.ID.Unverified())
 		if mpName == "" {
 			// No marketplace hint — search all fetched.
 			for _, entries := range fetched {
-				if entry, ok := entries[pl.ID]; ok {
+				if entry, ok := entries[pl.ID.Unverified()]; ok {
 					if newer := computeBump(pl, spec, entry, mode); newer != nil {
 						out = append(out, *newer)
 					}
@@ -123,7 +129,7 @@ func ComputePendingBumps(
 		if !ok {
 			continue
 		}
-		entry, ok := entries[pl.ID]
+		entry, ok := entries[pl.ID.Unverified()]
 		if !ok {
 			continue
 		}
@@ -147,7 +153,7 @@ func computeBump(pl source.Plugin, spec source.PluginSpec, entry PluginEntry, mo
 	// version is strictly OLDER. If the cores are equal (e.g. a prerelease
 	// suffix differs) or either version is non-semver, fall back to
 	// track-latest (any change bumps) so an exotic scheme isn't stranded.
-	if cmp, ok := compareSemver(spec.Version, latestVersion); ok && cmp > 0 {
+	if cmp, ok := compareSemver(spec.Version.Unverified(), latestVersion.Unverified()); ok && cmp > 0 {
 		return nil
 	}
 	return &Bump{
