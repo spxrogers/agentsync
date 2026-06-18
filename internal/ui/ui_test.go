@@ -126,6 +126,7 @@ func TestSanitize(t *testing.T) {
 		{"OSC title-set neutralized (ESC and BEL gone)", "\x1b]0;pwned\x07", "]0;pwned"},
 		{"pure control string collapses to empty", "\x1b\r\n\t", ""},
 		{"invalid UTF-8 byte normalized to U+FFFD", "a\xffb", "a\ufffdb"},
+		{"pre-existing U+FFFD preserved (rebuild is idempotent)", "a\ufffdb", "a\ufffdb"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

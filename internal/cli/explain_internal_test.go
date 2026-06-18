@@ -13,8 +13,12 @@ import (
 
 // untrustedControl is a plugin-supplied string carrying a screen-clear CSI, a
 // color CSI, and a carriage return — the injection payload the display-boundary
-// sanitization must neutralize.
-const untrustedControl = "evil\x1b[2J\x1b[31m\rname"
+// sanitization must neutralize. untrustedControlSanitized is what survives: the
+// ESC + CR bytes gone, the inert parameter residue left as plain text.
+const (
+	untrustedControl          = "evil\x1b[2J\x1b[31m\rname"
+	untrustedControlSanitized = "evil[2J[31mname"
+)
 
 // assertNoTerminalControl fails if out carries an ESC or CR byte (real newlines
 // emitted by the renderer are fine).
@@ -169,7 +173,7 @@ func TestEmitSkipDetails_SanitizesUntrustedName(t *testing.T) {
 	})
 	out := buf.String()
 	assertNoTerminalControl(t, "emitSkipDetails", out)
-	if !strings.Contains(out, "subagent evil[2J[31mname") {
+	if !strings.Contains(out, "subagent "+untrustedControlSanitized) {
 		t.Errorf("sanitized label not present in output: %q", out)
 	}
 }
@@ -182,7 +186,16 @@ func TestEmitPluginHeader_SanitizesUntrusted(t *testing.T) {
 	var buf bytes.Buffer
 	pl := source.Plugin{Plugin: source.PluginSpec{ID: untrustedControl, Version: "1.0\r0"}}
 	emitPluginHeader(&buf, ui.New(&buf, &buf, ui.ColorNever), pl)
-	assertNoTerminalControl(t, "emitPluginHeader", buf.String())
+	out := buf.String()
+	assertNoTerminalControl(t, "emitPluginHeader", out)
+	// Positively prove the untrusted id+version were rendered (just cleaned), so
+	// the test can't pass vacuously if a refactor dropped the value entirely.
+	if !strings.Contains(out, untrustedControlSanitized) {
+		t.Errorf("emitPluginHeader: sanitized id not rendered: %q", out)
+	}
+	if !strings.Contains(out, "v1.00") { // "1.0\r0" with the CR stripped
+		t.Errorf("emitPluginHeader: sanitized version not rendered: %q", out)
+	}
 }
 
 func TestRunExplainList_SanitizesUntrusted(t *testing.T) {
@@ -194,7 +207,14 @@ func TestRunExplainList_SanitizesUntrusted(t *testing.T) {
 	if err := runExplainList(p, c, false); err != nil {
 		t.Fatalf("runExplainList: %v", err)
 	}
-	assertNoTerminalControl(t, "runExplainList", buf.String())
+	out := buf.String()
+	assertNoTerminalControl(t, "runExplainList", out)
+	if !strings.Contains(out, untrustedControlSanitized) {
+		t.Errorf("runExplainList: sanitized id not rendered: %q", out)
+	}
+	if !strings.Contains(out, "v99") { // "9\r9" with the CR stripped
+		t.Errorf("runExplainList: sanitized version not rendered: %q", out)
+	}
 }
 
 // TestEmitSkipDetails_UnnamedComponentOnly exercises the empty-Name skip
