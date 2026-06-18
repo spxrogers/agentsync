@@ -308,14 +308,19 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 		discoverConventionLSP(cacheDir, readFile, pr)
 	}
 
-	skillPaths := toStringSlice(manifest.Skills)
+	// Skills: the manifest-listed skills are loaded loudly (a broken one the
+	// author named is a hard error), and the default skills/ directory is ALWAYS
+	// scanned and unioned — `skills` ADDS to the default scan (unlike
+	// commands/agents, which REPLACE it), matching Claude Code's path-behavior
+	// rules. A discovered skill that fails to load is skipped with a warning, not
+	// fatal (see appendSkillEntries): one malformed SKILL.md in one plugin must
+	// not abort projection for every installed plugin. A skill appearing in both
+	// the manifest list and the scan resolves to the same dir and collapses in
+	// resolveConflicts.
+	if err := appendSkillEntries(pr, toStringSlice(manifest.Skills), cacheDir, readFile, listDir, false); err != nil {
+		return err
+	}
 	if listDir != nil {
-		// Convention-based discovery: scan cacheDir/skills/*/SKILL.md. Unlike
-		// commands/agents — where a manifest list REPLACES the default scan —
-		// `skills` ADDS to it: the default skills/ directory is ALWAYS scanned and
-		// its skills load ALONGSIDE any the manifest lists, matching Claude Code's
-		// path-behavior rules. A skill that appears in both the manifest list and
-		// the scan resolves to the same dir and collapses in resolveConflicts.
 		discovered, err := discoverSkillDirs(filepath.Join(cacheDir, "skills"), listDir)
 		switch {
 		case errors.Is(err, errSkillSanityCap):
@@ -325,79 +330,52 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 		case err != nil:
 			slog.Warn("plugin skills convention-discovery failed", "cacheDir", cacheDir, "error", err)
 		default:
-			skillPaths = append(skillPaths, discovered...)
-		}
-	}
-	for _, sk := range skillPaths {
-		p, err := resolveComponentPath(sk, cacheDir)
-		if err != nil {
-			return err
-		}
-		skill, err := loadSkillEntry(p, readFile, listDir)
-		if err != nil {
-			return fmt.Errorf("load skill %q: %w", sk, err)
-		}
-		if skill != nil {
-			pr.Skills = append(pr.Skills, *skill)
+			if err := appendSkillEntries(pr, discovered, cacheDir, readFile, listDir, true); err != nil {
+				return err
+			}
 		}
 	}
 
+	// Commands: a listed `commands` field REPLACES the default commands/ scan, an
+	// absent one falls back to it (Claude's plugin convention). Without this, a
+	// plugin that ships its command(s) only in the conventional directory (the
+	// common case — most plugins omit the manifest field, e.g. the official
+	// code-review's commands/code-review.md) projected as "no components".
 	commandPaths := toStringSlice(manifest.Commands)
+	discoveredCommands := false
 	if len(commandPaths) == 0 && listDir != nil {
-		// Convention-based discovery: when plugin.json lists no `commands`, scan
-		// the default commands/ directory. This mirrors Claude Code's plugin
-		// convention — a listed `commands` field REPLACES the default scan, an
-		// absent one falls back to it. Without this, a plugin that ships its
-		// command(s) only in the conventional directory (the overwhelmingly
-		// common case — most plugins omit the manifest field entirely, e.g. the
-		// official code-review's commands/code-review.md) projected as "no
-		// components" instead of the command it plainly ships.
 		discovered, err := discoverFlatMarkdown(filepath.Join(cacheDir, "commands"), listDir)
 		if err != nil {
 			slog.Warn("plugin commands convention-discovery failed", "cacheDir", cacheDir, "error", err)
 		} else {
 			commandPaths = discovered
+			discoveredCommands = true
 		}
 	}
-	for _, cmd := range commandPaths {
-		p, err := resolveComponentPath(cmd, cacheDir)
-		if err != nil {
-			return err
-		}
-		command, err := loadMarkdownEntry(p, readFile)
-		if err != nil {
-			return fmt.Errorf("load command %q: %w", cmd, err)
-		}
-		if command != nil {
-			pr.Commands = append(pr.Commands, source.Command{Name: command.name, Frontmatter: command.fm, Body: command.body})
-		}
+	if err := appendMarkdownComponents(commandPaths, cacheDir, readFile, discoveredCommands, "command", func(e *markdownEntry) {
+		pr.Commands = append(pr.Commands, source.Command{Name: e.name, Frontmatter: e.fm, Body: e.body})
+	}); err != nil {
+		return err
 	}
+
+	// Agents: same REPLACE convention as commands — a plugin that ships subagents
+	// only in the conventional agents/ directory (e.g. the official
+	// code-simplifier's agents/code-simplifier.md) would otherwise project nothing.
 	agentPaths := toStringSlice(manifest.Agents)
+	discoveredAgents := false
 	if len(agentPaths) == 0 && listDir != nil {
-		// Same convention-based discovery for the default agents/ directory: a
-		// plugin that ships subagents only in the conventional directory (e.g.
-		// the official code-simplifier's agents/code-simplifier.md) would
-		// otherwise project as "no components". A listed `agents` field replaces
-		// the default scan, just like commands.
 		discovered, err := discoverFlatMarkdown(filepath.Join(cacheDir, "agents"), listDir)
 		if err != nil {
 			slog.Warn("plugin agents convention-discovery failed", "cacheDir", cacheDir, "error", err)
 		} else {
 			agentPaths = discovered
+			discoveredAgents = true
 		}
 	}
-	for _, ag := range agentPaths {
-		p, err := resolveComponentPath(ag, cacheDir)
-		if err != nil {
-			return err
-		}
-		agent, err := loadMarkdownEntry(p, readFile)
-		if err != nil {
-			return fmt.Errorf("load agent %q: %w", ag, err)
-		}
-		if agent != nil {
-			pr.Subagents = append(pr.Subagents, source.Subagent{Name: agent.name, Frontmatter: agent.fm, Body: agent.body})
-		}
+	if err := appendMarkdownComponents(agentPaths, cacheDir, readFile, discoveredAgents, "agent", func(e *markdownEntry) {
+		pr.Subagents = append(pr.Subagents, source.Subagent{Name: e.name, Frontmatter: e.fm, Body: e.body})
+	}); err != nil {
+		return err
 	}
 	// Hooks: may be a string command or an object with event+command shape.
 	if manifest.Hooks != nil {
@@ -406,6 +384,71 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 		// Convention-based discovery: when plugin.json carries no inline hooks,
 		// read the default hooks/hooks.json (the `{"hooks":{…}}` shape).
 		discoverConventionHooks(cacheDir, readFile, pr)
+	}
+	return nil
+}
+
+// appendMarkdownComponents loads each markdown component (command or subagent) at
+// the given paths and hands the parsed entry to add. The discovered flag selects
+// the failure policy: a convention-DISCOVERED path that fails to resolve, parse,
+// or validate is logged and skipped, because one malformed/hostile file in one
+// plugin must not abort projection for EVERY installed plugin (projection runs
+// for all of them inside explain/apply/status/diff) — the same resilience the
+// config-file discovery and the missing-file path already have. A manifest- or
+// entry-LISTED path instead propagates the error: the author named it explicitly,
+// so a broken one is a hard failure (preserving the long-standing listed-component
+// error contract).
+func appendMarkdownComponents(paths []string, cacheDir string, readFile func(string) ([]byte, error), discovered bool, kind string, add func(*markdownEntry)) error {
+	for _, ref := range paths {
+		p, err := resolveComponentPath(ref, cacheDir)
+		if err != nil {
+			if discovered {
+				slog.Warn("plugin convention-discovered component skipped (path rejected)", "kind", kind, "ref", ref, "error", err)
+				continue
+			}
+			return err
+		}
+		entry, err := loadMarkdownEntry(p, readFile)
+		if err != nil {
+			if discovered {
+				slog.Warn("plugin convention-discovered component skipped (unreadable/invalid)", "kind", kind, "ref", ref, "error", err)
+				continue
+			}
+			return fmt.Errorf("load %s %q: %w", kind, ref, err)
+		}
+		if entry != nil {
+			add(entry)
+		}
+	}
+	return nil
+}
+
+// appendSkillEntries loads each skill at the given paths into pr.Skills, applying
+// the same discovered-vs-listed failure policy as appendMarkdownComponents: a
+// convention-DISCOVERED skill whose SKILL.md is missing/malformed is skipped with
+// a warning (one bad skill must not abort projection for every plugin), while a
+// LISTED skill propagates the error loudly.
+func appendSkillEntries(pr *ProjectionResult, paths []string, cacheDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error), discovered bool) error {
+	for _, ref := range paths {
+		p, err := resolveComponentPath(ref, cacheDir)
+		if err != nil {
+			if discovered {
+				slog.Warn("plugin convention-discovered skill skipped (path rejected)", "ref", ref, "error", err)
+				continue
+			}
+			return err
+		}
+		skill, err := loadSkillEntry(p, readFile, listDir)
+		if err != nil {
+			if discovered {
+				slog.Warn("plugin convention-discovered skill skipped (unreadable/invalid)", "ref", ref, "error", err)
+				continue
+			}
+			return fmt.Errorf("load skill %q: %w", ref, err)
+		}
+		if skill != nil {
+			pr.Skills = append(pr.Skills, *skill)
+		}
 	}
 	return nil
 }

@@ -698,6 +698,117 @@ func TestProject_ConventionCommands_SkipsSymlink(t *testing.T) {
 	}
 }
 
+// TestProject_ConventionMarkdown_MalformedSkipped is the round-2 regression: a
+// convention-DISCOVERED command/agent that can't be loaded (unterminated
+// frontmatter the lenient parser can't recover, or a hostile traversal name) must
+// be skipped with a warning, never abort the whole projection — the same "one bad
+// file bricks every plugin" class the config-file and frontmatter fixes closed.
+// A valid sibling command must still project past the broken ones.
+func TestProject_ConventionMarkdown_MalformedSkipped(t *testing.T) {
+	cache := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"p"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cache, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "commands", "good.md"),
+		[]byte("---\nname: good\n---\nFine.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Unterminated frontmatter: opens "---" with no closing fence — the lenient
+	// YAML fallback does NOT recover this (it errors before the fallback).
+	if err := os.WriteFile(filepath.Join(cache, "commands", "unterminated.md"),
+		[]byte("---\nname: broken\ndescription: oops\nno closing fence\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Hostile traversal name in otherwise-valid frontmatter.
+	if err := os.WriteFile(filepath.Join(cache, "commands", "evil.md"),
+		[]byte("---\nname: ../../evil\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, err := marketplace.Project(marketplace.PluginEntry{Name: "p"}, cache)
+	if err != nil {
+		t.Fatalf("a malformed DISCOVERED command must be skipped, not abort the projection: %v", err)
+	}
+	if len(pr.Commands) != 1 || pr.Commands[0].Name != "good" {
+		t.Fatalf("expected only the good command to survive the broken siblings; got %+v", pr.Commands)
+	}
+}
+
+// TestProject_ListedCommand_MalformedErrors pins the other half of the contract:
+// a manifest-LISTED command (the author named it explicitly) with malformed
+// frontmatter is still a HARD error — only convention-discovered files are
+// skipped. This is the contrast that keeps the discovered-vs-listed policy honest.
+func TestProject_ListedCommand_MalformedErrors(t *testing.T) {
+	cache := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"p","commands":["./commands/bad.md"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cache, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "commands", "bad.md"),
+		[]byte("---\nname: bad\ndescription: oops\nno closing fence\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := marketplace.Project(marketplace.PluginEntry{Name: "p"}, cache)
+	if err == nil {
+		t.Fatal("a LISTED command with malformed frontmatter must error, not be silently skipped")
+	}
+	if !strings.Contains(err.Error(), "frontmatter") && !strings.Contains(err.Error(), "load command") {
+		t.Errorf("error should name the malformed command load; got: %v", err)
+	}
+}
+
+// TestProject_SkillsUnion_SameNameConflict verifies the ADD union meets the
+// strict same-name conflict guard: a manifest-listed skill and a conventional
+// skills/ skill that share a frontmatter `name` but differ in content are a
+// genuine packaging conflict and must error under the default strict/fatal path —
+// the always-scan can now surface a collision the old replace-gate hid.
+func TestProject_SkillsUnion_SameNameConflict(t *testing.T) {
+	cache := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"p","skills":["./custom/a"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cache, "custom", "a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "custom", "a", "SKILL.md"),
+		[]byte("---\nname: shared\n---\nFROM LISTED\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cache, "skills", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "skills", "b", "SKILL.md"),
+		[]byte("---\nname: shared\n---\nFROM SCAN\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := marketplace.Project(marketplace.PluginEntry{Name: "p"}, cache)
+	if err == nil {
+		t.Fatal("a same-name skill from the manifest list and the conventional scan with different content must conflict")
+	}
+	if !strings.Contains(err.Error(), "defined twice with different content") {
+		t.Errorf("error should explain the skill conflict; got: %v", err)
+	}
+}
+
 // TestProject_SkillBundledFiles proves a plugin-bundled skill is projected as a
 // DIRECTORY: scripts/, references/, and nested files come along (with the
 // script's executable bit preserved), not just SKILL.md. This is the plugin/

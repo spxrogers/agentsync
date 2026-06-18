@@ -69,10 +69,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   projection. (Newly surfaced by agent discovery: the official `pr-review-toolkit`
   ships such an `agents/silent-failure-hunter.md`, which previously crashed
   `explain --all` for every plugin once agents were discovered.) Likewise, a
-  malformed/unreadable `.mcp.json`, `.lsp.json`, or `hooks/hooks.json` now drops
-  only that file's components with a warning rather than aborting the projection,
-  so one bad config file in one plugin can't break `explain`/`apply`/`status` for
-  every installed plugin.
+  malformed/unreadable `.mcp.json`, `.lsp.json`, or `hooks/hooks.json` — and a
+  convention-discovered `commands/*.md`/`agents/*.md`/`skills/*/SKILL.md` whose
+  frontmatter can't be parsed even leniently (e.g. an unterminated block) or whose
+  name is a traversal attempt — now drops only that one component with a warning
+  rather than aborting the projection, so one bad file in one plugin can't break
+  `explain`/`apply`/`status` for every installed plugin. A component the plugin
+  author *explicitly listed* in `plugin.json` still fails loudly (a named-but-broken
+  component is a hard error); only proactively-discovered files are skipped.
 
 - **`explain <plugin>` now reports only that plugin's components.** `explain`
   previously stamped the *global* translation result onto every plugin row: the
