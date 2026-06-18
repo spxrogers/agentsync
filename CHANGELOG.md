@@ -40,6 +40,27 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Plugins now project the components they ship in their conventional default
+  locations, not just the ones plugin.json lists.** Claude Code auto-discovers a
+  plugin's components from default locations — `commands/*.md`, `agents/*.md`,
+  `skills/*/SKILL.md`, `.mcp.json`, `.lsp.json`, `hooks/hooks.json` — whether or
+  not `plugin.json` declares them (the manifest is optional, and a listed
+  component field *replaces* its default scan). agentsync only convention-scanned
+  `skills/`, so any plugin that shipped a command, subagent, MCP/LSP server, or
+  hook **only** in its conventional location was silently dropped — `agentsync
+  explain code-review@claude-plugins-official` reported `no components` for a
+  plugin that plainly ships `commands/code-review.md`, and `code-simplifier`
+  (which ships `agents/code-simplifier.md`) likewise. Projection now falls back to
+  the default location for *every* component kind agentsync models when
+  `plugin.json` does not list it — including when there is no `plugin.json` at all
+  — so those components are tracked, rendered, and reported like any other. The
+  manifest-SHA pin already hashed the whole plugin cache tree, so existing installs
+  are unaffected. As part of this, plugin hooks now parse the canonical nested
+  `{matcher, hooks:[{type, command}]}` shape (used by both `hooks/hooks.json` and
+  inline `plugin.json` hooks), emitting one hook per command entry and dropping
+  non-command hook types agentsync's command-only `Hook` model cannot represent
+  rather than projecting an empty hook.
+
 - **`explain <plugin>` now reports only that plugin's components.** `explain`
   previously stamped the *global* translation result onto every plugin row: the
   MCP/command counts and the `(N skipped)` itemization were computed from the
