@@ -401,12 +401,18 @@ func TestExplain_ListsSkips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("explain: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "skipped") {
-		t.Fatalf("expected a skipped tally; got:\n%s", out)
+	// Both the LSP server and the unknown hook are whole-component drops (no
+	// native target), so the tally counts them as "dropped", and the framing
+	// header explains the list rather than leaving a bare count.
+	if !strings.Contains(out, "dropped") {
+		t.Fatalf("expected a 'dropped' tally; got:\n%s", out)
+	}
+	if !strings.Contains(out, "couldn't fully translate") {
+		t.Fatalf("expected the framing header explaining the skip list; got:\n%s", out)
 	}
 	// The skip must be itemized, not just counted: the component and its reason.
 	if !strings.Contains(out, "lsp") {
-		t.Errorf("explain should name the skipped lsp component; got:\n%s", out)
+		t.Errorf("explain should name the dropped lsp component; got:\n%s", out)
 	}
 	if !strings.Contains(out, "Codex has no LSP configuration concept") {
 		t.Errorf("explain should print the skip reason; got:\n%s", out)
@@ -484,7 +490,7 @@ func TestExplain_ScopesToNamedPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("explain clean: %v\n%s", err, out)
 	}
-	for _, leak := range []string{"skipped", "lsp", "subagent", "reviewer"} {
+	for _, leak := range []string{"reduced", "dropped", "couldn't fully translate", "lsp", "subagent", "reviewer"} {
 		if strings.Contains(out, leak) {
 			t.Errorf("explain clean@cross-mp leaked the noisy plugin's %q; got:\n%s", leak, out)
 		}
@@ -540,8 +546,14 @@ func TestExplain_ScopesToNamedPlugin(t *testing.T) {
 	if !strings.Contains(outNoisy, "lsp") || !strings.Contains(outNoisy, "Codex has no LSP configuration concept") {
 		t.Errorf("explain noisy@cross-mp should surface its own lsp skip; got:\n%s", outNoisy)
 	}
-	if !strings.Contains(outNoisy, "subagent-frontmatter") || !strings.Contains(outNoisy, "reviewer") {
-		t.Errorf("explain noisy@cross-mp should surface its own subagent skip; got:\n%s", outNoisy)
+	// The reviewer subagent renders but loses its tools/color frontmatter, so it
+	// surfaces as a "reduced" subagent skip (the label is humanized — no internal
+	// "-frontmatter" suffix leaks to the user).
+	if !strings.Contains(outNoisy, "subagent reviewer") || !strings.Contains(outNoisy, "reduced") {
+		t.Errorf("explain noisy@cross-mp should surface its own reduced subagent skip; got:\n%s", outNoisy)
+	}
+	if strings.Contains(outNoisy, "subagent-frontmatter") {
+		t.Errorf("explain should not leak the internal -frontmatter component name; got:\n%s", outNoisy)
 	}
 }
 
@@ -749,10 +761,11 @@ func setupExplainLSPOnlyFixture(t *testing.T, tmp string) string {
 // plugins used by the cross-plugin scoping regression: "clean" ships a single
 // MCP server (Codex renders it fully), "noisy" ships an MCP plus two components
 // Codex cannot fully translate — an LSP server (no LSP concept) and a subagent
-// (Codex agents are TOML; the markdown `name` frontmatter is dropped). Both of
-// noisy's skips mirror the real-world report (leaked subagents *and* LSPs). With
-// both plugins installed, explaining one must not surface the other's components
-// or skips.
+// whose `tools`/`color` frontmatter has no Codex home (Codex agents are TOML
+// with no per-agent tools allowlist; the agent's `name` itself DOES carry over).
+// Both of noisy's skips mirror the real-world report (leaked subagents *and*
+// LSPs). With both plugins installed, explaining one must not surface the
+// other's components or skips.
 func setupExplainCrossPluginFixture(t *testing.T, tmp string) string {
 	t.Helper()
 	fixture := filepath.Join(tmp, "fixture-marketplace-explain-cross")
@@ -792,7 +805,7 @@ func setupExplainCrossPluginFixture(t *testing.T, tmp string) string {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(agentsDir, "reviewer.md"),
-		[]byte("---\nname: reviewer\ndescription: reviews code\n---\nReview carefully.\n"),
+		[]byte("---\nname: reviewer\ndescription: reviews code\ntools: [Read, Grep]\ncolor: blue\n---\nReview carefully.\n"),
 		0o644); err != nil {
 		t.Fatal(err)
 	}

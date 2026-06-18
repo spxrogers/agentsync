@@ -14,9 +14,13 @@ import (
 
 // codexAgentFile is the TOML shape of a Codex custom agent (~/.codex/agents/<name>.toml).
 // Codex defines subagents as standalone TOML, where the prose lives under
-// `developer_instructions` rather than a markdown body. agentsync projects the
-// canonical markdown body onto developer_instructions and carries the
-// `description` + `model` frontmatter; there is no per-agent tools allowlist.
+// `developer_instructions` rather than a markdown body (per
+// developers.openai.com/codex/subagents). agentsync projects the canonical
+// markdown body onto developer_instructions and carries the `name` (required by
+// Codex), `description`, and `model` frontmatter; there is no per-agent tools
+// allowlist. Codex-only agent keys agentsync has no canonical source for
+// (model_reasoning_effort, sandbox_mode, mcp_servers, skills.config,
+// nickname_candidates) are simply not emitted.
 type codexAgentFile struct {
 	Name                  string `toml:"name"`
 	Description           string `toml:"description,omitempty"`
@@ -25,19 +29,30 @@ type codexAgentFile struct {
 }
 
 // codexAgentKnownKeys are the canonical frontmatter keys with a Codex TOML home.
-// Anything else (tools, color, …) has no target and is dropped with a Skip.
-var codexAgentKnownKeys = map[string]bool{"description": true, "model": true}
+// `name` is required by Codex and is written to the TOML `name` field — it is a
+// known key, NOT a dropped one (omitting it here once caused `explain` to report
+// a spurious "dropped name" against agents whose name in fact carried over).
+// Anything else (notably `tools` and `color`) has no target and is dropped with
+// a Skip.
+var codexAgentKnownKeys = map[string]bool{"name": true, "description": true, "model": true}
 
 // renderSubagents projects canonical subagents into Codex agent TOML files.
-// markdown body → developer_instructions; description + model carry over; any
-// other frontmatter key (notably `tools` and `color`) has no Codex equivalent
-// and is dropped with a reported Skip.
+// markdown body → developer_instructions; name + description + model carry over;
+// any other frontmatter key (notably `tools` and `color`) has no Codex
+// equivalent and is dropped with a reported Skip.
 func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp, []adapter.Skip, error) {
 	var ops []adapter.FileOp
 	var skips []adapter.Skip
 	for _, s := range c.Subagents {
+		// Codex treats the `name` field as the source of truth; prefer the
+		// frontmatter name when present, falling back to the filename-derived
+		// canonical name (which is what Claude subagents use).
+		name := s.Name
+		if fmName := fmString(s.Frontmatter, "name"); fmName != "" {
+			name = fmName
+		}
 		af := codexAgentFile{
-			Name:                  s.Name,
+			Name:                  name,
 			Description:           fmString(s.Frontmatter, "description"),
 			Model:                 fmString(s.Frontmatter, "model"),
 			DeveloperInstructions: s.Body,

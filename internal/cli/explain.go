@@ -158,14 +158,18 @@ func runExplainList(p *ui.Printer, c source.Canonical, jsonOut bool) error {
 
 	fmt.Fprintf(p.Out, "%s %s\n", p.Bold("Installed plugins"),
 		p.Faint(fmt.Sprintf("(%d)", len(plugins))))
+	// Plugin id + version come from fetched marketplace metadata (untrusted), so
+	// sanitize before width/Pad and display to keep terminal escapes out of the
+	// text listing. (The --json branch above leaves them raw — that's the machine
+	// contract, where the consumer owns escaping.)
 	maxLabel := 0
 	for _, pl := range plugins {
-		if n := visibleLen(explainLabel(pl)); n > maxLabel {
+		if n := visibleLen(ui.Sanitize(explainLabel(pl))); n > maxLabel {
 			maxLabel = n
 		}
 	}
 	for _, pl := range plugins {
-		label := explainLabel(pl)
+		label := ui.Sanitize(explainLabel(pl))
 		hasTrail := pl.Plugin.Version != "" || pl.Plugin.Disabled
 		// Only pad the label when something follows it — a bare row with
 		// trailing spaces just leaves visible whitespace at end-of-line.
@@ -175,7 +179,7 @@ func runExplainList(p *ui.Printer, c source.Canonical, jsonOut bool) error {
 		}
 		line := fmt.Sprintf("  %s %s", p.Cyan(ui.GlyphInfo), shown)
 		if pl.Plugin.Version != "" {
-			line += "  " + p.Faint("v"+pl.Plugin.Version)
+			line += "  " + p.Faint("v"+ui.Sanitize(pl.Plugin.Version))
 		}
 		if pl.Plugin.Disabled {
 			line += "  " + p.Yellow("(disabled)")
@@ -313,12 +317,14 @@ func explainPluginReport(fs afero.Fs, c source.Canonical, pl source.Plugin, agen
 	return render.BuildReport(scoped, plan, agents), nil
 }
 
-// emitPluginHeader prints a styled "▸ <id>  v<version>  (disabled)" line.
+// emitPluginHeader prints a styled "▸ <id>  v<version>  (disabled)" line. The
+// id and version come from fetched marketplace metadata (untrusted), so they are
+// sanitized before styling to keep terminal escapes out of the header.
 func emitPluginHeader(w io.Writer, p *ui.Printer, pl source.Plugin) {
-	label := explainLabel(pl)
+	label := ui.Sanitize(explainLabel(pl))
 	parts := []string{p.Bold(p.Cyan("▸") + " " + label)}
 	if pl.Plugin.Version != "" {
-		parts = append(parts, p.Faint("v"+pl.Plugin.Version))
+		parts = append(parts, p.Faint("v"+ui.Sanitize(pl.Plugin.Version)))
 	}
 	if pl.Plugin.Disabled {
 		parts = append(parts, p.Yellow("(disabled)"))
@@ -351,17 +357,18 @@ func emitReportBody(w io.Writer, p *ui.Printer, r render.TranslationReport) {
 		// faint count tail with an optional skip note.
 		mark := color(ui.Pad(glyph+" "+row.Coverage, 12))
 		tail := p.Faint(componentInventory(row))
-		if row.Skips > 0 {
-			tail += "  " + p.Yellow(fmt.Sprintf("(%d skipped)", row.Skips))
+		if note := skipTailNote(p, row.SkipDetails); note != "" {
+			tail += "  " + note
 		}
 		fmt.Fprintf(w, "  %s %s  %s  %s\n",
 			p.Faint(ui.GlyphArrow),
 			p.Bold(ui.Pad(row.Agent, 10)),
 			mark,
 			tail)
-		// "(N skipped)" is a dead end on its own — list each skipped component
-		// (what it is, and why the agent could not translate it) beneath the row.
-		emitSkipDetails(w, p, row.SkipDetails)
+		// The tally is a dead end on its own — list each part the agent could
+		// not fully translate (what it is, whether it was reduced or dropped,
+		// and why) beneath the row.
+		emitSkipDetails(w, p, row.Agent, row.SkipDetails)
 	}
 }
 
@@ -370,8 +377,8 @@ func emitReportBody(w io.Writer, p *ui.Printer, r render.TranslationReport) {
 // plugin that ships (say) only an LSP server or only skills is no longer reported
 // as a bare "0 mcp · 0 commands". Only non-zero kinds are listed, in a stable
 // order, joined by " · "; a plugin that contributes nothing to this agent reads
-// "no components". The counts describe the inventory; the coverage glyph and any
-// "(N skipped)" note describe what the agent could do with it.
+// "no components". The counts describe the inventory; the coverage glyph and the
+// "(N reduced · M dropped)" note describe what the agent could do with it.
 func componentInventory(row render.PluginRow) string {
 	parts := make([]string, 0, 6)
 	// one/many give per-count labels; the abbreviations mcp/lsp are invariant.
@@ -401,35 +408,93 @@ func componentInventory(row render.PluginRow) string {
 	return strings.Join(parts, " · ")
 }
 
-// emitSkipDetails lists each skipped component under its agent row as a faint,
-// indented "<component> <name>  <reason>" line so the "(N skipped)" tally is
-// explained rather than opaque. Reasons are aligned by padding the
-// component+name column to its widest entry.
-func emitSkipDetails(w io.Writer, p *ui.Printer, skips []render.SkipDetail) {
+// emitSkipDetails lists the parts the agent could not fully translate beneath
+// its row. A bare "(N skipped)" tally reads as if N whole components were thrown
+// away — so each line is tagged with WHAT happened: "reduced" (the component
+// still rendered, just without some fields the agent has no home for) or
+// "dropped" (the whole component had no native target and was not emitted at
+// all). A one-line header frames the list and defines the two verbs.
+func emitSkipDetails(w io.Writer, p *ui.Printer, agent string, skips []render.SkipDetail) {
 	if len(skips) == 0 {
 		return
 	}
+	fmt.Fprintf(w, "      %s\n", p.Faint(fmt.Sprintf(
+		"%s %s couldn't fully translate — reduced = rendered without some fields; dropped = not emitted:",
+		ui.GlyphArrow, agent,
+	)))
+	// A skip's Name comes from a fetched marketplace plugin (untrusted) and its
+	// Reason from an adapter (trusted) — sanitize both at this display boundary
+	// so neither can smuggle terminal escapes, and do it BEFORE width/Pad so a
+	// stripped byte can't skew the column. The component kind is adapter-fixed,
+	// so the whole label is safe to sanitize as one unit.
+	labels := make([]string, len(skips))
 	width := 0
-	for _, s := range skips {
-		if n := visibleLen(skipLabel(s)); n > width {
+	for i, s := range skips {
+		labels[i] = ui.Sanitize(skipLabel(s))
+		if n := visibleLen(labels[i]); n > width {
 			width = n
 		}
 	}
-	for _, s := range skips {
-		fmt.Fprintf(w, "      %s %s  %s\n",
-			p.Yellow(ui.GlyphInfo),
-			ui.Pad(skipLabel(s), width),
-			p.Faint(s.Reason))
+	for i, s := range skips {
+		// "reduced" and "dropped" are the same width, so the reason column stays
+		// aligned without padding the (color-wrapped) status word.
+		status := p.Yellow("dropped")
+		if isReducedSkip(s.Component) {
+			status = p.Cyan("reduced")
+		}
+		fmt.Fprintf(w, "        %s %s  %s  %s\n",
+			p.Faint(ui.GlyphInfo),
+			ui.Pad(labels[i], width),
+			status,
+			p.Faint(ui.Sanitize(s.Reason)))
 	}
 }
 
-// skipLabel renders "<component> <name>" for a skipped item, or just the
-// component when the skip has no name (e.g. an unrecognized hook event).
-func skipLabel(s render.SkipDetail) string {
-	if s.Name == "" {
-		return s.Component
+// skipTailNote summarizes a row's skips as a compact "(R reduced · D dropped)"
+// note (omitting a zero side), or "" when there are no skips. Splitting the
+// count by kind keeps the inline tally from reading as "N whole components
+// discarded" — most "skips" on a partial row are reductions, not drops.
+func skipTailNote(p *ui.Printer, skips []render.SkipDetail) string {
+	var reduced, dropped int
+	for _, s := range skips {
+		if isReducedSkip(s.Component) {
+			reduced++
+		} else {
+			dropped++
+		}
 	}
-	return s.Component + " " + s.Name
+	if reduced == 0 && dropped == 0 {
+		return ""
+	}
+	var parts []string
+	if reduced > 0 {
+		parts = append(parts, fmt.Sprintf("%d reduced", reduced))
+	}
+	if dropped > 0 {
+		parts = append(parts, fmt.Sprintf("%d dropped", dropped))
+	}
+	return p.Yellow("(" + strings.Join(parts, " · ") + ")")
+}
+
+// isReducedSkip reports whether a skip is a field-level reduction (the component
+// still rendered) rather than a whole-component drop. The adapters mark the
+// former with a "-frontmatter" component suffix (subagent-frontmatter,
+// command-frontmatter); everything else (a dropped hook event, an LSP server
+// with no native concept, a project-scope command with no target) is a true drop.
+func isReducedSkip(component string) bool {
+	return strings.HasSuffix(component, "-frontmatter")
+}
+
+// skipLabel renders "<kind> <name>" for a skipped item, or just the kind when
+// the skip has no name (e.g. an unrecognized hook event). The internal
+// "-frontmatter" suffix is stripped — the "reduced" status tag now conveys that
+// the loss was field-level, so the label names the component kind plainly.
+func skipLabel(s render.SkipDetail) string {
+	kind := strings.TrimSuffix(s.Component, "-frontmatter")
+	if s.Name == "" {
+		return kind
+	}
+	return kind + " " + s.Name
 }
 
 // coverageGlyphAndColor maps a coverage string to a glyph + semantic color

@@ -27,18 +27,53 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   (rather than from `mcp`/`commands` alone), fixing a latent case where a plugin
   whose skills rendered but whose hook was skipped was mislabeled `none`.
 
-- **`explain` itemizes skipped components.** A `◐ partial` row that reports
-  `(N skipped)` is no longer a dead end: each skipped component is now listed
-  beneath the agent row as an itemized `<component> <name>  <reason>` line (the
-  reason rendered faint) — what the agent could not translate, and why (e.g. `lsp
-  atlassian-lsp  Codex has no LSP configuration concept`). The structured surface
-  gains a `skipDetails` array
-  (`{component, name, reason}`) on every `explain --json` row. The translation
-  report carries the detail end-to-end (`render.PluginRow.SkipDetails`) rather
-  than collapsing skips to a bare count, and the counts/skips are scoped to the
-  named plugin (see the `explain` fix below).
+- **`explain` itemizes what each agent couldn't fully translate, split into
+  "reduced" vs "dropped".** A `◐ partial` row is no longer a dead-end `(N
+  skipped)` tally that reads as if N whole components were discarded. The
+  trailing note now breaks down by kind — `(N reduced · M dropped)` — and each
+  part is listed beneath the agent row under a framing header
+  (`→ <agent> couldn't fully translate — reduced = rendered without some fields;
+  dropped = not emitted:`), tagged `reduced` (the component still rendered, just
+  without fields the agent has no home for — e.g. a subagent's Claude-only
+  `tools`/`color`) or `dropped` (the whole component had no native target and was
+  not emitted — e.g. an LSP server on an agent with no LSP concept), with the
+  reason. The distinction is derived from the adapter's `-frontmatter` skip
+  suffix, which is no longer shown raw — the label names the component kind
+  plainly (`subagent reviewer`, not `subagent-frontmatter reviewer`). The
+  structured surface gains a `skipDetails` array (`{component, name, reason}`) on
+  every `explain --json` row (the raw `component` there retains its
+  `-frontmatter` suffix). The translation report carries the detail end-to-end
+  (`render.PluginRow.SkipDetails`) rather than collapsing skips to a bare count,
+  and the counts/skips are scoped to the named plugin (see the `explain` fix
+  below).
 
 ### Fixed
+
+- **`explain` sanitizes untrusted plugin/component names before rendering them
+  to the terminal.** A fetched marketplace plugin's id, version, or a component
+  name it supplies is attacker-influenced; rendered raw, a name carrying ANSI/
+  escape sequences (CSI color, OSC title-set, `\r`/`\x1b`) could recolor the
+  terminal, clear the screen, or spoof rows when a user ran `agentsync explain`.
+  The new `ui.Sanitize` strips C0/C1 control characters (incl. ESC, CR, LF, TAB,
+  DEL) at the display boundary — applied to the skip itemization
+  (`emitSkipDetails`), the plugin header, and the `--list` text rows, before
+  width/`Pad` so a stripped byte can't skew column alignment. Printable text
+  (incl. non-ASCII) is untouched, and `explain --json` keeps ids/components raw
+  (the machine contract, where the consumer owns escaping). The rendered Codex
+  agent TOML was already safe (the marshaller escapes control bytes and the
+  filename uses the canonical name).
+
+- **Codex subagents no longer report a spurious "dropped name".** The Codex
+  adapter writes the canonical `name` straight into the agent TOML's `name`
+  field (Codex *requires* it), but `name` was omitted from the adapter's set of
+  known frontmatter keys — so any subagent whose frontmatter carried `name`
+  (every Claude-format agent does) was reported as dropping it. For an agent
+  whose only otherwise-unmapped key was `name`, this surfaced a misleading `◐
+  partial` / `(N skipped)` in `explain` even though the agent translated
+  cleanly. `name` is now recognized as a carried-over key (and the frontmatter
+  `name` is preferred over the filename, matching Codex's "name is the source of
+  truth" rule); `tools` and `color`, which genuinely have no Codex target, are
+  still reported as dropped.
 
 - **Plugins now project the components they ship in their conventional default
   locations, not just the ones plugin.json lists.** Claude Code auto-discovers a

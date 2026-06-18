@@ -25,6 +25,8 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 )
@@ -159,6 +161,57 @@ func Pad(s string, width int) string {
 		return s
 	}
 	return s + spaces(width-n)
+}
+
+// Sanitize strips control characters from a string so untrusted text — a fetched
+// marketplace plugin's id, a plugin-supplied component name — can be rendered to
+// a terminal without smuggling escape sequences through it. It removes C0
+// controls (0x00–0x1F, which includes ESC 0x1B, CR, LF, TAB, BEL, and
+// backspace), DEL (0x7F), and C1 controls (0x80–0x9F). Neutralizing the ESC/CSI
+// introducer is the security-relevant part: a name like "\x1b[31mX" renders as
+// the inert literal "[31mX" rather than recoloring the terminal, clearing the
+// screen, or spoofing subsequent rows. Printable text (including non-ASCII
+// letters and ordinary spaces) passes through unchanged. Apply it at the display
+// boundary, before width/Pad calculation, so a stripped byte never throws off
+// column alignment.
+//
+// Scanning is rune-level (not byte-level): byte-level stripping of the 0x80–0x9F
+// range would corrupt legitimate multibyte UTF-8 (a CJK rune's continuation
+// bytes live there). Invalid UTF-8 is normalized rather than passed verbatim — a
+// malformed byte decodes to U+FFFD and is re-emitted as U+FFFD, so a raw
+// 0x80–0x9F byte (a C1 CSI introducer on an 8-bit terminal) can never survive.
+// Sanitize does NOT touch bidi-override or zero-width runes (U+202E, U+200B, …):
+// those are a cosmetic spoofing concern, not a terminal-control one.
+func Sanitize(s string) string {
+	// Fast path: the overwhelmingly common case is clean text, so scan once and
+	// only allocate when there is something to change. We also rebuild on invalid
+	// UTF-8 (RuneError) — `range` yields RuneError for a malformed byte, and the
+	// rebuild's WriteRune normalizes it to U+FFFD, so a raw 0x80–0x9F byte (a C1
+	// CSI introducer on an 8-bit terminal) can never pass through verbatim.
+	clean := true
+	for _, r := range s {
+		if isControl(r) || r == utf8.RuneError {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if !isControl(r) {
+			b.WriteRune(r) // WriteRune(RuneError) emits U+FFFD, normalizing bad bytes
+		}
+	}
+	return b.String()
+}
+
+// isControl reports whether r is a C0 control (incl. ESC/CR/LF/TAB), DEL, or a
+// C1 control — the runes that can carry terminal escape semantics.
+func isControl(r rune) bool {
+	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)
 }
 
 // WarnWriter wraps a destination writer and styles "warning: " line prefixes
