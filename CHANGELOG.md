@@ -27,16 +27,25 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   (rather than from `mcp`/`commands` alone), fixing a latent case where a plugin
   whose skills rendered but whose hook was skipped was mislabeled `none`.
 
-- **`explain` itemizes skipped components.** A `◐ partial` row that reports
-  `(N skipped)` is no longer a dead end: each skipped component is now listed
-  beneath the agent row as an itemized `<component> <name>  <reason>` line (the
-  reason rendered faint) — what the agent could not translate, and why (e.g. `lsp
-  atlassian-lsp  Codex has no LSP configuration concept`). The structured surface
-  gains a `skipDetails` array
-  (`{component, name, reason}`) on every `explain --json` row. The translation
-  report carries the detail end-to-end (`render.PluginRow.SkipDetails`) rather
-  than collapsing skips to a bare count, and the counts/skips are scoped to the
-  named plugin (see the `explain` fix below).
+- **`explain` itemizes what each agent couldn't fully translate, split into
+  "reduced" vs "dropped".** A `◐ partial` row is no longer a dead-end `(N
+  skipped)` tally that reads as if N whole components were discarded. The
+  trailing note now breaks down by kind — `(N reduced · M dropped)` — and each
+  part is listed beneath the agent row under a framing header
+  (`→ <agent> couldn't fully translate — reduced = rendered without some fields;
+  dropped = not emitted:`), tagged `reduced` (the component still rendered, just
+  without fields the agent has no home for — e.g. a subagent's Claude-only
+  `tools`/`color`) or `dropped` (the whole component had no native target and was
+  not emitted — e.g. an LSP server on an agent with no LSP concept), with the
+  reason. The distinction is derived from the adapter's `-frontmatter` skip
+  suffix, which is no longer shown raw — the label names the component kind
+  plainly (`subagent reviewer`, not `subagent-frontmatter reviewer`). The
+  structured surface gains a `skipDetails` array (`{component, name, reason}`) on
+  every `explain --json` row (the raw `component` there retains its
+  `-frontmatter` suffix). The translation report carries the detail end-to-end
+  (`render.PluginRow.SkipDetails`) rather than collapsing skips to a bare count,
+  and the counts/skips are scoped to the named plugin (see the `explain` fix
+  below).
 
 ### Fixed
 

@@ -77,7 +77,7 @@ func TestComponentInventory(t *testing.T) {
 // no stray bullet, no blank line.
 func TestEmitSkipDetails_EmptyIsNoOp(t *testing.T) {
 	var buf bytes.Buffer
-	emitSkipDetails(&buf, ui.New(&buf, &buf, ui.ColorNever), nil)
+	emitSkipDetails(&buf, ui.New(&buf, &buf, ui.ColorNever), "codex", nil)
 	if buf.Len() != 0 {
 		t.Errorf("emitSkipDetails(nil) wrote %q, want nothing", buf.String())
 	}
@@ -85,15 +85,17 @@ func TestEmitSkipDetails_EmptyIsNoOp(t *testing.T) {
 
 // TestEmitSkipDetails_UnnamedComponentOnly exercises the empty-Name skip
 // through the full emitSkipDetails formatting path (not just skipLabel): a skip
-// with no name must render as a bare "<bullet> <component>  <reason>" line with
-// no dangling separator. ColorNever lets us pin the exact bytes.
+// with no name must render as a "<bullet> <kind>  <status>  <reason>" line with
+// no dangling separator, beneath the framing header. A bare hook event with no
+// native target is a "dropped", not a "reduced", skip. ColorNever pins the bytes.
 func TestEmitSkipDetails_UnnamedComponentOnly(t *testing.T) {
 	var buf bytes.Buffer
-	emitSkipDetails(&buf, ui.New(&buf, &buf, ui.ColorNever), []render.SkipDetail{
+	emitSkipDetails(&buf, ui.New(&buf, &buf, ui.ColorNever), "codex", []render.SkipDetail{
 		{Component: "hook", Reason: "unknown event"},
 	})
 	got := buf.String()
-	want := "      " + ui.GlyphInfo + " hook  unknown event\n"
+	want := "      " + ui.GlyphArrow + " codex couldn't fully translate — reduced = rendered without some fields; dropped = not emitted:\n" +
+		"        " + ui.GlyphInfo + " hook  dropped  unknown event\n"
 	if got != want {
 		t.Errorf("emitSkipDetails(unnamed) = %q, want %q", got, want)
 	}
@@ -112,17 +114,21 @@ func TestEmitSkipDetails_ColumnsAlignUnderColor(t *testing.T) {
 		{Component: "subagent-frontmatter", Name: "reviewer", Reason: "dropped tools allowlist"},
 	}
 	var buf bytes.Buffer
-	emitSkipDetails(&buf, ui.New(&buf, &buf, ui.ColorAlways), skips)
+	emitSkipDetails(&buf, ui.New(&buf, &buf, ui.ColorAlways), "codex", skips)
 
 	raw := buf.String()
 	if !strings.Contains(raw, "\x1b[") {
 		t.Fatalf("ColorAlways produced no ANSI; the colored path is untested:\n%q", raw)
 	}
 
-	lines := strings.Split(strings.TrimRight(raw, "\n"), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 skip lines, got %d:\n%q", len(lines), raw)
+	// Drop the framing header line; only the itemized skip lines are alignment-
+	// sensitive. The "reduced"/"dropped" status words are equal width, so the
+	// reason column must still land at the same offset on every item line.
+	allLines := strings.Split(strings.TrimRight(raw, "\n"), "\n")
+	if len(allLines) != 3 {
+		t.Fatalf("expected a header + 2 skip lines, got %d:\n%q", len(allLines), raw)
 	}
+	lines := allLines[1:]
 	offsets := make([]int, len(lines))
 	for i, line := range lines {
 		plain := stripANSI(line)

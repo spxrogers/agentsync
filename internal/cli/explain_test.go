@@ -401,12 +401,18 @@ func TestExplain_ListsSkips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("explain: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "skipped") {
-		t.Fatalf("expected a skipped tally; got:\n%s", out)
+	// Both the LSP server and the unknown hook are whole-component drops (no
+	// native target), so the tally counts them as "dropped", and the framing
+	// header explains the list rather than leaving a bare count.
+	if !strings.Contains(out, "dropped") {
+		t.Fatalf("expected a 'dropped' tally; got:\n%s", out)
+	}
+	if !strings.Contains(out, "couldn't fully translate") {
+		t.Fatalf("expected the framing header explaining the skip list; got:\n%s", out)
 	}
 	// The skip must be itemized, not just counted: the component and its reason.
 	if !strings.Contains(out, "lsp") {
-		t.Errorf("explain should name the skipped lsp component; got:\n%s", out)
+		t.Errorf("explain should name the dropped lsp component; got:\n%s", out)
 	}
 	if !strings.Contains(out, "Codex has no LSP configuration concept") {
 		t.Errorf("explain should print the skip reason; got:\n%s", out)
@@ -484,7 +490,7 @@ func TestExplain_ScopesToNamedPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("explain clean: %v\n%s", err, out)
 	}
-	for _, leak := range []string{"skipped", "lsp", "subagent", "reviewer"} {
+	for _, leak := range []string{"reduced", "dropped", "couldn't fully translate", "lsp", "subagent", "reviewer"} {
 		if strings.Contains(out, leak) {
 			t.Errorf("explain clean@cross-mp leaked the noisy plugin's %q; got:\n%s", leak, out)
 		}
@@ -540,8 +546,14 @@ func TestExplain_ScopesToNamedPlugin(t *testing.T) {
 	if !strings.Contains(outNoisy, "lsp") || !strings.Contains(outNoisy, "Codex has no LSP configuration concept") {
 		t.Errorf("explain noisy@cross-mp should surface its own lsp skip; got:\n%s", outNoisy)
 	}
-	if !strings.Contains(outNoisy, "subagent-frontmatter") || !strings.Contains(outNoisy, "reviewer") {
-		t.Errorf("explain noisy@cross-mp should surface its own subagent skip; got:\n%s", outNoisy)
+	// The reviewer subagent renders but loses its tools/color frontmatter, so it
+	// surfaces as a "reduced" subagent skip (the label is humanized — no internal
+	// "-frontmatter" suffix leaks to the user).
+	if !strings.Contains(outNoisy, "subagent reviewer") || !strings.Contains(outNoisy, "reduced") {
+		t.Errorf("explain noisy@cross-mp should surface its own reduced subagent skip; got:\n%s", outNoisy)
+	}
+	if strings.Contains(outNoisy, "subagent-frontmatter") {
+		t.Errorf("explain should not leak the internal -frontmatter component name; got:\n%s", outNoisy)
 	}
 }
 
