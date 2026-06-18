@@ -404,9 +404,12 @@ and that none of it landed.
 A `◐ partial` row is never a dead end: every part the agent could not fully
 translate is itemized beneath a framing header, each tagged `reduced` or
 `dropped` with the reason, so you can see exactly what loss `apply` would incur.
-`--json` carries the same breakdown — the per-kind counts (`mcp`, `commands`,
-`skills`, `subagents`, `hooks`, `lsp`) plus the `skipDetails` array (each with its
-`component`/`name`/`reason`) — on every row.
+`--json` carries the per-kind counts (`mcp`, `commands`, `skills`, `subagents`,
+`hooks`, `lsp`) and the `skipDetails` array (each entry `{component, name,
+reason}`) on every row. The `reduced` vs `dropped` split is a text-rendering
+distinction only: JSON exposes the raw `component` (a field-level reduction keeps
+its `-frontmatter` suffix, e.g. `subagent-frontmatter`), so a machine consumer
+derives the split from that suffix rather than a dedicated field.
 
 Inspect any plugin's coverage without applying:
 

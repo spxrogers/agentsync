@@ -16,9 +16,10 @@ var ansiSeq = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
 func stripANSI(s string) string { return ansiSeq.ReplaceAllString(s, "") }
 
-// TestSkipLabel covers both arms of skipLabel: a named skip renders
-// "<component> <name>", and an unnamed one (e.g. an unrecognized hook event
-// with no name) falls back to the bare component.
+// TestSkipLabel covers all arms of skipLabel: a named skip renders
+// "<kind> <name>", an unnamed one (e.g. an unrecognized hook event with no
+// name) falls back to the bare kind, and the internal "-frontmatter" suffix is
+// stripped so the user-facing label names the component kind plainly.
 func TestSkipLabel(t *testing.T) {
 	tests := []struct {
 		name string
@@ -27,11 +28,66 @@ func TestSkipLabel(t *testing.T) {
 	}{
 		{"named", render.SkipDetail{Component: "lsp", Name: "gopls"}, "lsp gopls"},
 		{"unnamed", render.SkipDetail{Component: "hook"}, "hook"},
+		{"frontmatter suffix stripped", render.SkipDetail{Component: "subagent-frontmatter", Name: "reviewer"}, "subagent reviewer"},
+		{"command-frontmatter stripped", render.SkipDetail{Component: "command-frontmatter", Name: "deploy"}, "command deploy"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := skipLabel(tc.in); got != tc.want {
 				t.Errorf("skipLabel(%+v) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsReducedSkip pins the classifier that splits a skip into a field-level
+// "reduced" (the component still rendered) vs a whole-component "dropped": only
+// the adapter "-frontmatter" component strings are reductions; every other
+// component kind — and an empty/unknown one — is a drop.
+func TestIsReducedSkip(t *testing.T) {
+	cases := map[string]bool{
+		"subagent-frontmatter": true,
+		"command-frontmatter":  true,
+		"subagent":             false,
+		"command":              false,
+		"hook":                 false,
+		"lsp":                  false,
+		"mcp":                  false,
+		"skill":                false,
+		"memory":               false,
+		"":                     false,
+	}
+	for component, want := range cases {
+		if got := isReducedSkip(component); got != want {
+			t.Errorf("isReducedSkip(%q) = %v, want %v", component, got, want)
+		}
+	}
+}
+
+// TestSkipTailNote pins the inline tally wording end-to-end: the empty case
+// yields no note; a single kind omits the zero side; the mixed case joins
+// "reduced" THEN "dropped" with " · " regardless of input order and wraps the
+// whole thing in parens. ColorNever makes the yellow wrap a no-op so the bytes
+// are exact.
+func TestSkipTailNote(t *testing.T) {
+	var buf bytes.Buffer
+	p := ui.New(&buf, &buf, ui.ColorNever)
+	reduced := render.SkipDetail{Component: "subagent-frontmatter", Name: "a"}
+	dropped := render.SkipDetail{Component: "lsp", Name: "x"}
+	tests := []struct {
+		name  string
+		skips []render.SkipDetail
+		want  string
+	}{
+		{"empty", nil, ""},
+		{"reduced only", []render.SkipDetail{reduced, reduced}, "(2 reduced)"},
+		{"dropped only", []render.SkipDetail{dropped}, "(1 dropped)"},
+		{"mixed, input order does not matter", []render.SkipDetail{dropped, reduced}, "(1 reduced · 1 dropped)"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := skipTailNote(p, tc.skips); got != tc.want {
+				t.Errorf("skipTailNote(%+v) = %q, want %q", tc.skips, got, tc.want)
 			}
 		})
 	}
