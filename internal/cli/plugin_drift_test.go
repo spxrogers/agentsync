@@ -100,8 +100,10 @@ func TestStatus_SanitizesUndeclaredPluginName(t *testing.T) {
 	if strings.ContainsRune(out, rune(0x1b)) || strings.ContainsRune(out, rune(0x0d)) {
 		t.Errorf("control byte from native plugin name leaked into status note: %q", out)
 	}
-	// The nudge must still fire (sanitized residue present), proving non-vacuity.
-	if !strings.Contains(out, "import claude:plugin") {
-		t.Errorf("status should still nudge about the undeclared plugin; got:\n%s", out)
+	// The nudge must still fire AND carry the name in its sanitized form
+	// (ESC+CR stripped, the inert "[31m" residue kept) — proving the
+	// no-control-byte assertion ran against a line that actually embeds the name.
+	if !strings.Contains(out, "demo[31m") {
+		t.Errorf("status nudge should carry the sanitized plugin name; got:\n%s", out)
 	}
 }
