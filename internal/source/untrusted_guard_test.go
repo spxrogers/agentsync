@@ -48,8 +48,11 @@ func stringShapedKind(t reflect.Type) bool { return t.Kind() == reflect.String }
 // TestUntrustedFieldGuard fails when a string-shaped field on a guarded struct
 // is unclassified, or when its concrete type disagrees with its classification
 // (untrusted=true demands untrusted.Text; untrusted=false demands a plain
-// string). Reverting a Text field to string, or adding a new id/version/name
-// field without tagging it Text, both trip here.
+// string). Its primary live coverage is a NEW unclassified id/version/name
+// field; the converse — silently reverting a Text field back to string — is
+// usually caught earlier by the compiler (the raw use sites that took
+// .Unverified() / Wrap() no longer build), with this guard as the backstop if
+// such a revert ever did compile.
 func TestUntrustedFieldGuard(t *testing.T) {
 	textType := reflect.TypeOf(untrusted.Text(""))
 	stringType := reflect.TypeOf("")

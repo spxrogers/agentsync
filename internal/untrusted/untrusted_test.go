@@ -47,6 +47,33 @@ func TestText_Empty(t *testing.T) {
 	}
 }
 
+// TestText_Wrap pins the boundary constructor: Wrap stores the bytes verbatim
+// (Unverified round-trips them) without sanitizing at construction — sanitization
+// happens at the display boundary (String), not at ingestion, so the raw value
+// stays available for path/lookup use.
+func TestText_Wrap(t *testing.T) {
+	raw := "demo\x1b[0m@mp"
+	w := Wrap(raw)
+	if got := w.Unverified(); got != raw {
+		t.Errorf("Wrap(%q).Unverified() = %q, want raw round-trip", raw, got)
+	}
+	if got := w.String(); got != "demo[0m@mp" {
+		t.Errorf("Wrap(%q).String() = %q, want sanitized", raw, got)
+	}
+}
+
+// TestText_WidthVerb guards the alignment property the CLI relies on: a width
+// verb (%-Ns, used for padded list columns) applies its padding to the SANITIZED
+// String() output, so a stripped rune never throws off the column. The input is
+// the 5-rune "ev<ZWSP>il"; the ZWSP is stripped, leaving the 4-rune "evil",
+// which is then padded to width 8 → four trailing spaces. Were padding applied
+// to the raw value, the 5-rune input would yield only three spaces.
+func TestText_WidthVerb(t *testing.T) {
+	if got := fmt.Sprintf("%-8s|", Text("ev\u200bil")); got != "evil    |" {
+		t.Errorf("%%-8s on Text = %q, want padding applied to sanitized output", got)
+	}
+}
+
 // TestText_Serialization guards the named-string design's load-bearing
 // serialization properties (the reason Text is a defined string type, not a
 // struct): TOML/JSON treat it transparently, `omitempty` still elides an empty
