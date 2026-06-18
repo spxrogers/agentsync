@@ -26,6 +26,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spxrogers/agentsync/internal/iox"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 	"sigs.k8s.io/yaml"
 )
 
@@ -53,6 +54,17 @@ func ValidateComponentID(kind, id string) error {
 	// Windows, so allowing it would make the canonical source non-portable.
 	if strings.ContainsAny(id, `/\:`) || strings.Contains(id, "..") || filepath.IsAbs(id) {
 		return fmt.Errorf("%s id %q contains a path separator, '..', ':' or is absolute", kind, id)
+	}
+	// A terminal-control byte (ESC/C0/C1/DEL) or deceptive bidi/zero-width rune is
+	// never a legitimate component id: as a filename it is pathological, and a
+	// foreign id reaching this boundary is later echoed back in `import`/`reconcile`
+	// diagnostics — where a raw ESC would smuggle a terminal escape and a bidi
+	// override could spoof the name. Reject any id the display sanitizer would
+	// alter, tying this write boundary to the SAME rune set untrusted.Sanitize
+	// strips (one source of truth, so the two can't drift). The %q below escapes
+	// any such rune in the message itself, so the error is safe to print.
+	if untrusted.Sanitize(id) != id {
+		return fmt.Errorf("%s id %q contains a control or deceptive formatting rune", kind, id)
 	}
 	return nil
 }

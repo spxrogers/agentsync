@@ -38,6 +38,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
     new `TestUntrustedFieldGuard` over `adapter.NativePlugin` fails the build if a
     future native-config string ships unclassified. No behavior change — the
     notes still strip terminal escapes from a hostile plugin name.
+  - **`ValidateComponentID` now rejects control / deceptive-format runes.** The
+    single dest→source write boundary (reached by `import`/`reconcile` with
+    ids taken from a native config) previously rejected only path separators,
+    traversal, and degenerate ids — a separator-free name carrying an ESC byte or
+    a Trojan-Source bidi override (e.g. `good␛[31m`) passed, becoming a
+    pathological filename and leaking raw bytes when later echoed in an
+    `import` skip diagnostic. It now also rejects any id the display sanitizer
+    would alter (tied to `untrusted.Sanitize`'s rune set), so such an id is
+    skipped with a sanitized warning and never installed. Legitimate non-ASCII
+    ids (e.g. `naïve`, `日本語`) are unaffected.
 
 - **`explain` describes every component kind a plugin hosts, not just MCP +
   commands.** Each agent row's count tail previously read `N mcp · N commands`

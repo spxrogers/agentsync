@@ -225,6 +225,35 @@ func TestImport_PluginsStoreBeatsNativeConfig(t *testing.T) {
 	}
 }
 
+// TestImport_RejectsHostilePluginNameWithoutLeak proves the import path's
+// defense for a native plugin name a plugin author influences: a name that is
+// separator-free (so it clears the path-traversal gate) but carries terminal
+// control bytes is rejected by ValidateComponentID — not installed, and not
+// echoed raw into the skip diagnostic. The warning prints the name sanitized
+// (ESC+CR stripped, inert "[31m" residue kept), so no escape reaches the
+// terminal and no plugins/<name>.toml is written.
+func TestImport_RejectsHostilePluginNameWithoutLeak(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	evilName := "demo" + string(rune(0x1b)) + "[31m" + string(rune(0x0d))
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("test-mp", mpDir, evilName))
+
+	out, err := runCLI(t, env, "import", "claude:plugin")
+	if err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	if strings.ContainsRune(out, rune(0x1b)) || strings.ContainsRune(out, rune(0x0d)) {
+		t.Errorf("control byte from hostile plugin name leaked into import output: %q", out)
+	}
+	if !strings.Contains(out, "skipping plugin") || !strings.Contains(out, "demo[31m") {
+		t.Errorf("import should skip the hostile plugin and carry its sanitized name; got:\n%s", out)
+	}
+	// The hostile name must never become a file in the canonical source.
+	if entries, _ := os.ReadDir(filepath.Join(tmp, ".agentsync", "plugins")); len(entries) != 0 {
+		t.Errorf("hostile plugin must not be written to plugins/; got %d entries", len(entries))
+	}
+}
+
 // TestImport_FullAgentIncludesPlugins verifies plugins are part of a full
 // `import claude`: the summary counts them and both file components and plugins
 // land in the canonical source.

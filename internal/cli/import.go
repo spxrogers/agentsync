@@ -1240,9 +1240,12 @@ func importPlugins(io *importIO, home, agentName string, a adapter.Adapter, name
 		}
 		// The plugin name becomes plugins/<name>.toml; validate it up front (and
 		// in dry-run) so a hostile native id can't escape the source dir and the
-		// preview matches a real import. plName is the raw id for the path/validation/
-		// install identity; warn lines print pl.Name (untrusted.Text), which
-		// sanitizes itself on display.
+		// preview matches a real import. ValidateComponentID also rejects control /
+		// deceptive-format runes, so past this gate plName (the raw id used for the
+		// path/install identity below) is guaranteed clean — its later appearance in
+		// the item-line preview and in any wrapped install error printed via %v
+		// carries no terminal escape. The skip warning prints pl.Name (untrusted.Text,
+		// %q-escaped) for the names this gate rejects.
 		plName := pl.Name.Unverified()
 		if verr := source.ValidateComponentID("plugin", plName); verr != nil {
 			io.warnf("skipping plugin %q: %v", pl.Name, verr)
