@@ -378,15 +378,25 @@ skipped — and the report tells you exactly which:
 
 ```
 ▸ atlassian@anthropic
-  → claude    ✓ full        1 mcp · 5 commands
-  → codex     ◐ partial     1 mcp · 5 commands  (1 skipped)
+  → claude    ✓ full        1 mcp · 5 commands · 1 lsp
+  → codex     ◐ partial     1 mcp · 5 commands · 1 lsp  (1 skipped)
       • lsp atlassian-lsp  Codex has no LSP configuration concept
 ```
 
+Each row's count tail lists every component kind the plugin hosts for that agent
+— MCP servers, commands, skills, subagents, hooks, and LSP servers (only the
+non-zero kinds are shown) — so the inventory is fully descriptive, not just `mcp`
++ `commands`. The counts describe what the plugin *hosts*; the coverage glyph and
+any `(N skipped)` note describe what the agent could *do* with it. So above,
+Codex still shows `1 lsp` (the plugin hosts one) but `✗`-skips it — an LSP-only
+plugin on Codex reads `✗ none  1 lsp`, telling you both what is there and that
+none of it landed.
+
 A `◐ partial` row is never a dead end: every skipped component is itemized
 beneath it (what it is, and why that agent could not translate it), so you can
-see exactly what loss `apply` would incur. `--json` carries the same breakdown
-under each row's `skipDetails` array.
+see exactly what loss `apply` would incur. `--json` carries the same breakdown —
+the per-kind counts (`mcp`, `commands`, `skills`, `subagents`, `hooks`, `lsp`)
+plus the `skipDetails` array — on every row.
 
 Inspect any plugin's coverage without applying:
 

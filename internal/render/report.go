@@ -21,18 +21,31 @@ type PluginRow struct {
 	Agent  string `json:"agent"`
 	// Coverage is "full", "partial", or "none".
 	Coverage string `json:"coverage"`
-	// MCP is the number of MCP servers rendered for this plugin×agent pair.
-	MCP int `json:"mcp"`
-	// Commands is the number of slash commands rendered.
-	Commands int `json:"commands"`
+	// MCP, Commands, Skills, Subagents, Hooks, and LSP count the components the
+	// plugin (or whole model) hosts that target this agent — the inventory, so
+	// the report is descriptive of everything the plugin ships, not just MCP +
+	// commands. MCP and LSP honour each server's `enabled`/`agents` targeting
+	// (a server scoped to other agents is not counted here); the markdown
+	// component kinds (commands/skills/subagents) and hooks have no per-agent
+	// allowlist, so their counts are the model's totals. These describe what is
+	// hosted, NOT what successfully rendered: a hosted component the adapter
+	// cannot translate is still counted here and reported under Skips below.
+	MCP       int `json:"mcp"`
+	Commands  int `json:"commands"`
+	Skills    int `json:"skills"`
+	Subagents int `json:"subagents"`
+	Hooks     int `json:"hooks"`
+	LSP       int `json:"lsp"`
 	// Skips is the number of components the adapter explicitly skipped.
 	Skips int `json:"skips"`
 	// SkipDetails enumerates the components behind Skips — what the adapter
 	// could not translate, and why — so a "(N skipped)" tally is never a dead
-	// end. Same global attribution as the counts: because the canonical model
-	// is flattened (projection does not tag a component with its origin
-	// plugin), these are the agent's skips across the whole model, surfaced
-	// under every plugin row rather than narrowed to one plugin.
+	// end. Attribution follows the canonical+plan passed to BuildReport (see its
+	// doc): when the caller passes the whole flattened model (apply/verify), the
+	// skips are the agent's across every component and are repeated under each
+	// plugin row; when the caller passes a per-plugin-scoped model (`explain
+	// <id>`, which re-projects one plugin in isolation), they are narrowed to
+	// that plugin's own components.
 	SkipDetails []SkipDetail `json:"skipDetails,omitempty"`
 	// Disabled is true when the plugin is disabled for this scope (e.g. by a
 	// project marker's [plugins] disabled). Its components are not rendered.
@@ -162,59 +175,50 @@ func (r TranslationReport) PrintJSON(w io.Writer) error {
 }
 
 // BuildReport constructs a TranslationReport from the canonical model and a
-// RenderPlan.  It associates ops/skips with plugins by matching MCP server IDs
-// contributed by each plugin.
+// RenderPlan: one row per plugin (c.Plugins) × agent. Each row carries the
+// per-agent component inventory (countMCPServers / countLSPServers honour
+// enabled+agent targeting; commands/skills/subagents/hooks are model totals) and
+// the skips from plan.PerAgent[agent].Skips.
 //
-// For each plugin P and each agent A:
-//   - count MCP servers that appear in plan.PerAgent[A].Ops whose SourceID
-//     matches one of P's components.
-//   - coverage = full if skips==0 && mcp>0 (or no components), partial if
-//     skips>0 && mcp>0, none if mcp==0.
+// coverage = full when skips==0; otherwise partial when the adapter still
+// rendered something for the agent (plan ops non-empty), none when every hosted
+// component was skipped. The rendered signal is the plan's ops, not the inventory
+// counts — a hosted-but-unsupported component (e.g. an LSP server on an agent
+// with no LSP concept) is counted in the inventory yet renders nothing, so its
+// row is "none". A disabled plugin yields a single disabled-marker row. With no
+// plugins installed, one "(base)" row per agent summarizes the whole canonical.
 //
-// Plugins with no canonical entries (not yet cached) still generate rows with
-// coverage=none so the operator can see what's missing.
+// BuildReport does NOT itself correlate a component to its origin plugin — the
+// projected canonical is flattened with no origin tag. Attribution is therefore
+// the caller's choice of what model+plan to pass:
+//   - apply/verify pass the whole flattened model, so every plugin row carries
+//     the same global counts/skips (the documented summary behavior).
+//   - `explain <id>` re-projects ONE plugin in isolation
+//     (marketplace.ProjectInstalled) and passes a model+plan holding only that
+//     plugin's components, so its row reflects that plugin alone.
 func BuildReport(c source.Canonical, plan RenderPlan, agents []string) TranslationReport {
 	var report TranslationReport
 
-	// Index each plugin by the MCP server IDs it contributes.
-	// We use Plugins from the canonical model; the MCP server IDs are the keys
-	// we expect to see in the rendered ops.
+	// The canonical is flattened (no origin-plugin tag), so the per-agent counts
+	// are computed over whatever model the caller scoped: apply/verify pass the
+	// whole model (one global summary repeated per plugin row), while `explain
+	// <id>` passes a model holding only one re-projected plugin's components.
 	//
-	// Because plugin projection injects MCPServers with the same IDs as in
-	// plugin.json, we can match ops by SourceID prefix or by looking at the
-	// op's content for the server key.  The simplest approach: for each plugin
-	// record a label and count how many MCP servers with that label appeared.
-
-	// Build per-plugin MCP server name sets from the canonical MCPServers.
-	// We can't directly correlate which MCPServer came from which plugin here
-	// (projection flattens them); instead we show aggregate counts per agent
-	// for each installed plugin as a summary row.
-	//
-	// The report is per-installed-plugin.  If there are no plugins, we emit a
-	// summary row per agent with the global count.
+	// With no plugins installed we emit one "(base)" row per agent over the whole
+	// canonical; otherwise one row per plugin × agent.
 
 	if len(c.Plugins) == 0 {
-		// No plugins installed — emit one row per agent for the global canonical.
 		for _, agName := range agents {
 			res, ok := plan.PerAgent[agName]
 			if !ok {
 				continue
 			}
-			row := PluginRow{
-				Plugin:      "(base)",
-				Agent:       agName,
-				MCP:         countMCPServers(c, agName),
-				Commands:    len(c.Commands),
-				Skips:       len(res.Skips),
-				SkipDetails: skipDetails(res.Skips),
-			}
-			row.Coverage = computeCoverage(row)
+			row := reportRow("(base)", agName, c, res)
 			report.Rows = append(report.Rows, row)
 		}
 		return report
 	}
 
-	// One row per plugin × agent.
 	for _, plug := range c.Plugins {
 		label := plug.Plugin.ID
 		if label == "" {
@@ -236,30 +240,44 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 			if !ok {
 				continue
 			}
-			// For now we attribute all ops/skips equally to each plugin row
-			// since the canonical model is flattened.  A future version can
-			// tag ops with their origin plugin.
-			row := PluginRow{
-				Plugin:      label,
-				Agent:       agName,
-				MCP:         countMCPServers(c, agName),
-				Commands:    len(c.Commands),
-				Skips:       len(res.Skips),
-				SkipDetails: skipDetails(res.Skips),
-			}
-			row.Coverage = computeCoverage(row)
-			report.Rows = append(report.Rows, row)
+			report.Rows = append(report.Rows, reportRow(label, agName, c, res))
 		}
 	}
 	return report
 }
 
-// computeCoverage derives the coverage string from a PluginRow's counts.
-func computeCoverage(row PluginRow) string {
+// reportRow builds one plugin×agent row: the per-agent component inventory
+// (counts of what the model hosts for agName), the skip tally + details, and the
+// derived coverage. c is whatever model the caller scoped (whole model or one
+// plugin); res is that agent's render result.
+func reportRow(label, agName string, c source.Canonical, res AgentResult) PluginRow {
+	row := PluginRow{
+		Plugin:      label,
+		Agent:       agName,
+		MCP:         countMCPServers(c, agName),
+		LSP:         countLSPServers(c, agName),
+		Commands:    len(c.Commands),
+		Skills:      len(c.Skills),
+		Subagents:   len(c.Subagents),
+		Hooks:       len(c.Hooks),
+		Skips:       len(res.Skips),
+		SkipDetails: skipDetails(res.Skips),
+	}
+	row.Coverage = computeCoverage(row, len(res.Ops) > 0)
+	return row
+}
+
+// computeCoverage derives the coverage string. full = nothing skipped. Otherwise
+// partial when the adapter still rendered something for this agent (rendered),
+// none when every hosted component was skipped (or there was nothing to render).
+// The rendered signal comes from the plan's ops — NOT from the inventory counts,
+// which include hosted-but-skipped components (e.g. an LSP server on an agent with
+// no LSP concept is counted in row.LSP yet renders nothing, so its row is "none").
+func computeCoverage(row PluginRow, rendered bool) string {
 	if row.Skips == 0 {
 		return "full"
 	}
-	if row.MCP > 0 || row.Commands > 0 {
+	if rendered {
 		return "partial"
 	}
 	return "none"
@@ -277,6 +295,22 @@ func countMCPServers(c source.Canonical, agent string) int {
 			continue
 		}
 		if targetsAgent(m.Server.Agents, agent) {
+			n++
+		}
+	}
+	return n
+}
+
+// countLSPServers mirrors countMCPServers for LSP servers — LSPServerSpec carries
+// the same source-only enabled/agents targeting fields, so a server disabled or
+// scoped to other agents is not counted for this agent.
+func countLSPServers(c source.Canonical, agent string) int {
+	n := 0
+	for _, l := range c.LSPServers {
+		if l.Spec.Enabled != nil && !*l.Spec.Enabled {
+			continue
+		}
+		if targetsAgent(l.Spec.Agents, agent) {
 			n++
 		}
 	}
