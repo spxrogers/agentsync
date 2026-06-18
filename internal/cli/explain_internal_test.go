@@ -57,6 +57,7 @@ func TestComponentInventory(t *testing.T) {
 		{"subagent singular", render.PluginRow{Subagents: 1}, "1 subagent"},
 		{"subagents plural", render.PluginRow{Subagents: 2}, "2 subagents"},
 		{"skill/hook singular", render.PluginRow{Skills: 1, Hooks: 1}, "1 skill · 1 hook"},
+		{"skills/hooks plural", render.PluginRow{Skills: 2, Hooks: 2}, "2 skills · 2 hooks"},
 		{
 			"order and join",
 			render.PluginRow{MCP: 1, Commands: 2, Skills: 3, Subagents: 1, Hooks: 1, LSP: 1},
