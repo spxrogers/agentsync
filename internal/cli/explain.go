@@ -308,7 +308,41 @@ func emitReportBody(w io.Writer, p *ui.Printer, r render.TranslationReport) {
 			p.Bold(ui.Pad(row.Agent, 10)),
 			mark,
 			tail)
+		// "(N skipped)" is a dead end on its own — list each skipped component
+		// (what it is, and why the agent could not translate it) beneath the row.
+		emitSkipDetails(w, p, row.SkipDetails)
 	}
+}
+
+// emitSkipDetails lists each skipped component under its agent row as a faint,
+// indented "<component> <name>  <reason>" line so the "(N skipped)" tally is
+// explained rather than opaque. Reasons are aligned by padding the
+// component+name column to its widest entry.
+func emitSkipDetails(w io.Writer, p *ui.Printer, skips []render.SkipDetail) {
+	if len(skips) == 0 {
+		return
+	}
+	width := 0
+	for _, s := range skips {
+		if n := visibleLen(skipLabel(s)); n > width {
+			width = n
+		}
+	}
+	for _, s := range skips {
+		fmt.Fprintf(w, "      %s %s  %s\n",
+			p.Yellow(ui.GlyphInfo),
+			ui.Pad(skipLabel(s), width),
+			p.Faint(s.Reason))
+	}
+}
+
+// skipLabel renders "<component> <name>" for a skipped item, or just the
+// component when the skip has no name (e.g. an unrecognized hook event).
+func skipLabel(s render.SkipDetail) string {
+	if s.Name == "" {
+		return s.Component
+	}
+	return s.Component + " " + s.Name
 }
 
 // coverageGlyphAndColor maps a coverage string to a glyph + semantic color

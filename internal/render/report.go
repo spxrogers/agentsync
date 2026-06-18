@@ -10,6 +10,7 @@ import (
 	"io"
 	"sort"
 
+	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/ui"
 )
@@ -26,9 +27,37 @@ type PluginRow struct {
 	Commands int `json:"commands"`
 	// Skips is the number of components the adapter explicitly skipped.
 	Skips int `json:"skips"`
+	// SkipDetails enumerates the components behind Skips — what the adapter
+	// could not translate, and why — so a "(N skipped)" tally is never a dead
+	// end. Same global attribution as the counts: because the canonical model
+	// is flattened (projection does not tag a component with its origin
+	// plugin), these are the agent's skips across the whole model, surfaced
+	// under every plugin row rather than narrowed to one plugin.
+	SkipDetails []SkipDetail `json:"skipDetails,omitempty"`
 	// Disabled is true when the plugin is disabled for this scope (e.g. by a
 	// project marker's [plugins] disabled). Its components are not rendered.
 	Disabled bool `json:"disabled,omitempty"`
+}
+
+// SkipDetail names one component an adapter could not translate, with the
+// human reason it was skipped. It mirrors adapter.Skip but carries JSON tags
+// for the report's machine-readable surface.
+type SkipDetail struct {
+	Component string `json:"component"`
+	Name      string `json:"name,omitempty"`
+	Reason    string `json:"reason"`
+}
+
+// skipDetails converts an adapter's []Skip into the report's JSON-tagged form.
+func skipDetails(skips []adapter.Skip) []SkipDetail {
+	if len(skips) == 0 {
+		return nil
+	}
+	out := make([]SkipDetail, len(skips))
+	for i, s := range skips {
+		out[i] = SkipDetail{Component: s.Component, Name: s.Name, Reason: s.Reason}
+	}
+	return out
 }
 
 // TranslationReport holds all plugin×agent rows.
@@ -172,11 +201,12 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 				continue
 			}
 			row := PluginRow{
-				Plugin:   "(base)",
-				Agent:    agName,
-				MCP:      countMCPServers(c, agName),
-				Commands: len(c.Commands),
-				Skips:    len(res.Skips),
+				Plugin:      "(base)",
+				Agent:       agName,
+				MCP:         countMCPServers(c, agName),
+				Commands:    len(c.Commands),
+				Skips:       len(res.Skips),
+				SkipDetails: skipDetails(res.Skips),
 			}
 			row.Coverage = computeCoverage(row)
 			report.Rows = append(report.Rows, row)
@@ -210,11 +240,12 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 			// since the canonical model is flattened.  A future version can
 			// tag ops with their origin plugin.
 			row := PluginRow{
-				Plugin:   label,
-				Agent:    agName,
-				MCP:      countMCPServers(c, agName),
-				Commands: len(c.Commands),
-				Skips:    len(res.Skips),
+				Plugin:      label,
+				Agent:       agName,
+				MCP:         countMCPServers(c, agName),
+				Commands:    len(c.Commands),
+				Skips:       len(res.Skips),
+				SkipDetails: skipDetails(res.Skips),
 			}
 			row.Coverage = computeCoverage(row)
 			report.Rows = append(report.Rows, row)

@@ -202,8 +202,12 @@ agentsync update --apply --auto-safe
 Prints per-agent translation coverage for one or more installed plugins, without
 applying. Pass space-separated plugin ids to explain just those, `--all` to
 explain every installed plugin, or `--list` to print just the set of installed
-ids (a quick reminder of what you can pass). Add `--json` for machine-readable
-output (rows for plugin/agent coverage, or a `plugins` array under `--list`).
+ids (a quick reminder of what you can pass). A `◐ partial` row that reports
+`(N skipped)` itemizes each skipped component beneath it (its label and the
+reason that agent could not translate it), so the tally is never a dead end. Add
+`--json` for machine-readable output (rows for plugin/agent coverage — each with
+a `skipDetails` array of `{component, name, reason}` — or a `plugins` array under
+`--list`).
 
 ```bash
 agentsync explain atlassian@anthropic
