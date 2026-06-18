@@ -202,8 +202,10 @@ func checkPlugins(p *ui.Printer, home string) {
 		if len(missing) == 0 {
 			continue
 		}
+		// Native plugin names are influenced by the plugin author (read from the
+		// agent's native config), so sanitize before printing.
 		warnCheck(p, fmt.Sprintf("%-10s ", name), fmt.Sprintf("%d not in source: %s — run `agentsync import %s:plugin`",
-			len(missing), strings.Join(missing, ", "), name))
+			len(missing), ui.Sanitize(strings.Join(missing, ", ")), name))
 	}
 }
 
