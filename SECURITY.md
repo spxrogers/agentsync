@@ -36,11 +36,22 @@ can resolve secrets into native config files. Areas of particular interest:
   `ui.Sanitize` at every display boundary before it reaches the terminal,
   stripping C0/C1 control bytes (ESC, CR, LF, …) so a hostile plugin cannot
   smuggle terminal escape sequences (recoloring the screen, spoofing rows, or
-  setting the window title) into agentsync's own output. The invariant — not a
-  fixed list of commands — is that any terminal rendering of such metadata is
-  sanitized at the print boundary (today that spans `explain`, `apply`,
-  `plugin`, `marketplace`, `update`, `status`, and `doctor`). `explain --json`
-  keeps ids raw (a machine contract where the consumer owns escaping).
+  setting the window title) into agentsync's own output. `ui.Sanitize` also
+  strips the printable-but-deceptive format runes: the explicit Unicode bidi
+  controls (U+202A–U+202E, U+2066–U+2069 — the "Trojan Source" / CVE-2021-42574
+  class that can visually reorder a plugin id to read as a trusted name) and the
+  zero-width / invisible runes (U+200B–U+200D, U+FEFF) that can hide or pad a
+  name. Ordinary right-to-left scripts (Arabic, Hebrew) and CJK are preserved
+  byte-for-byte — only the explicit override/isolate controls an attacker would
+  inject are removed, never the implicit direction of legitimate letters.
+  Display *width* is explicitly out of scope: combining marks and wide-width
+  runes can still skew agentsync's rune-counted column alignment, a purely
+  cosmetic limitation (documented on `ui.Pad`), not a spoofing vector. The
+  invariant — not a fixed list of commands — is that any terminal rendering of
+  such metadata is sanitized at the print boundary (today that spans `explain`,
+  `apply`, `plugin`, `marketplace`, `update`, `status`, and `doctor`).
+  `explain --json` keeps ids raw (a machine contract where the consumer owns
+  escaping).
 - **Destination writes**: writes are atomic and refuse to clobber symlinked
   destinations by default; pre-existing foreign files are backed up before
   overwrite.
