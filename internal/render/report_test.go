@@ -439,10 +439,12 @@ func TestBuildReport_InventoryCountsAllKinds(t *testing.T) {
 	}
 }
 
-// TestBuildReport_CoverageNoneWhenNothingRendered: a plugin that hosts only a
-// component the agent cannot translate (an LSP server on Codex) renders nothing,
-// so the row is "none" — even though the LSP is counted in the inventory. This is
-// the user-visible behavior for an LSP-only plugin on a non-LSP agent.
+// TestBuildReport_CoverageNoneWhenNothingRendered pins the user-visible behavior
+// for an LSP-only plugin on a non-LSP agent: the LSP is counted in the inventory
+// (LSP=1) yet renders nothing, so the row is "none". This case reads the same
+// under the old (mcp/commands) and new (rendered) coverage logic — it guards the
+// inventory count + the none-case, NOT the rendered-vs-counts distinction (that
+// is TestBuildReport_CoveragePartialWhenSomethingRendered's job).
 func TestBuildReport_CoverageNoneWhenNothingRendered(t *testing.T) {
 	c := source.Canonical{
 		LSPServers: []source.LSPServer{{ID: "l"}},
@@ -486,5 +488,65 @@ func TestBuildReport_CoveragePartialWhenSomethingRendered(t *testing.T) {
 	}
 	if row.Coverage != "partial" {
 		t.Errorf("coverage = %q, want partial (a skill rendered; only the hook was skipped)", row.Coverage)
+	}
+}
+
+// TestBuildReport_BaseCoverageFromRendered locks the rendered-based coverage on
+// the "(base)" (no-plugins) branch too — the path apply/apply --dry-run summarize
+// through. The computeCoverage change is shared by every BuildReport caller, but
+// the other coverage tests all exercise the per-plugin branch; this pins that the
+// base branch derives partial/none from the plan's ops identically.
+func TestBuildReport_BaseCoverageFromRendered(t *testing.T) {
+	c := source.Canonical{Skills: []source.Skill{{Name: "s"}}} // no Plugins → "(base)"
+	rendered := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+		"codex": {
+			Ops:   []adapter.FileOp{{Action: "write", MergeStrategy: "replace"}},
+			Skips: []adapter.Skip{{Component: "hook", Reason: "unknown event"}},
+		},
+	}}
+	if row := render.BuildReport(c, rendered, []string{"codex"}).Rows[0]; row.Plugin != "(base)" || row.Coverage != "partial" {
+		t.Errorf("base row = {plugin:%q coverage:%q}, want {(base) partial}", row.Plugin, row.Coverage)
+	}
+	nothing := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+		"codex": {Ops: nil, Skips: []adapter.Skip{{Component: "lsp", Reason: "no LSP concept"}}},
+	}}
+	if row := render.BuildReport(c, nothing, []string{"codex"}).Rows[0]; row.Coverage != "none" {
+		t.Errorf("base row coverage = %q, want none (nothing rendered)", row.Coverage)
+	}
+}
+
+// TestBuildReport_CountsHonorTargeting exercises the enabled/agents filtering in
+// countMCPServers and countLSPServers: a server scoped to other agents, or
+// disabled, is not counted for this agent. Without this, a plugin's MCP/LSP
+// server scoped to claude could be silently counted on codex's row.
+func TestBuildReport_CountsHonorTargeting(t *testing.T) {
+	off := false
+	c := source.Canonical{
+		MCPServers: []source.MCPServer{
+			{ID: "claude-only", Server: source.MCPServerSpec{Agents: []string{"claude"}}},
+			{ID: "disabled", Server: source.MCPServerSpec{Enabled: &off}},
+			{ID: "all"},
+		},
+		LSPServers: []source.LSPServer{
+			{ID: "lsp-claude", Spec: source.LSPServerSpec{Agents: []string{"claude"}}},
+			{ID: "lsp-off", Spec: source.LSPServerSpec{Enabled: &off}},
+			{ID: "lsp-all"},
+		},
+	}
+	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+		"claude": {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}},
+		"codex":  {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-toml-keys"}}},
+	}}
+	byAgent := map[string]render.PluginRow{}
+	for _, r := range render.BuildReport(c, plan, []string{"claude", "codex"}).Rows {
+		byAgent[r.Agent] = r
+	}
+	// claude: claude-only + all = 2 mcp; lsp-claude + lsp-all = 2 lsp (disabled excluded).
+	if g := byAgent["claude"]; g.MCP != 2 || g.LSP != 2 {
+		t.Errorf("claude counts = mcp %d lsp %d; want mcp 2 lsp 2", g.MCP, g.LSP)
+	}
+	// codex: only the untargeted "all"/"lsp-all" reach it = 1 mcp, 1 lsp.
+	if g := byAgent["codex"]; g.MCP != 1 || g.LSP != 1 {
+		t.Errorf("codex counts = mcp %d lsp %d; want mcp 1 lsp 1", g.MCP, g.LSP)
 	}
 }

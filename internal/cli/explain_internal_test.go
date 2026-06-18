@@ -37,6 +37,41 @@ func TestSkipLabel(t *testing.T) {
 	}
 }
 
+// TestComponentInventory pins the descriptive count tail: every non-zero kind is
+// listed in a stable order, with correct singular/plural (the mcp/lsp
+// abbreviations stay invariant), and a row that hosts nothing for the agent reads
+// "no components".
+func TestComponentInventory(t *testing.T) {
+	tests := []struct {
+		name string
+		row  render.PluginRow
+		want string
+	}{
+		{"empty", render.PluginRow{}, "no components"},
+		{"one mcp invariant", render.PluginRow{MCP: 1}, "1 mcp"},
+		{"two mcp invariant", render.PluginRow{MCP: 2}, "2 mcp"},
+		{"one lsp invariant", render.PluginRow{LSP: 1}, "1 lsp"},
+		{"two lsp invariant", render.PluginRow{LSP: 2}, "2 lsp"},
+		{"command singular", render.PluginRow{Commands: 1}, "1 command"},
+		{"commands plural", render.PluginRow{Commands: 3}, "3 commands"},
+		{"subagent singular", render.PluginRow{Subagents: 1}, "1 subagent"},
+		{"subagents plural", render.PluginRow{Subagents: 2}, "2 subagents"},
+		{"skill/hook singular", render.PluginRow{Skills: 1, Hooks: 1}, "1 skill · 1 hook"},
+		{
+			"order and join",
+			render.PluginRow{MCP: 1, Commands: 2, Skills: 3, Subagents: 1, Hooks: 1, LSP: 1},
+			"1 mcp · 2 commands · 3 skills · 1 subagent · 1 hook · 1 lsp",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := componentInventory(tc.row); got != tc.want {
+				t.Errorf("componentInventory(%+v) = %q, want %q", tc.row, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestEmitSkipDetails_EmptyIsNoOp asserts a row with no skips emits nothing —
 // no stray bullet, no blank line.
 func TestEmitSkipDetails_EmptyIsNoOp(t *testing.T) {
