@@ -3,7 +3,12 @@
 // model entries. Skills, commands, and subagents are fully loaded from their
 // on-disk markdown files (frontmatter + body + clean Name) via the injected
 // readFile function so that adapters downstream receive complete, render-ready
-// entries.
+// entries. Components a plugin ships in their conventional default locations
+// (skills/, commands/, agents/, .mcp.json, .lsp.json, hooks/hooks.json) are
+// convention-discovered — matching Claude Code, which auto-discovers those
+// defaults whether or not a manifest is present. Per Claude's path-behavior
+// rules a listed commands/agents/mcp/lsp/hooks field REPLACES its default scan,
+// while a listed `skills` ADDS to the always-scanned skills/ directory.
 package marketplace
 
 import (
@@ -33,10 +38,17 @@ type ProjectionResult struct {
 
 // Project loads the plugin's components and returns them as canonical entries:
 //   - Reads cacheDir/.claude-plugin/plugin.json (when present) for the primary
-//     component list; a missing plugin.json is fine (a curator-defined plugin
-//     may declare everything in the entry).
-//   - If the manifest lists no skills, falls back to convention-based discovery:
-//     scans cacheDir/skills/*/ for SKILL.md files.
+//     component list; a missing plugin.json is fine (the manifest is optional —
+//     a curator-defined plugin may declare everything in the entry, and a plugin
+//     that ships only conventional directories declares nothing at all).
+//   - Convention-based discovery of each component kind's default location: the
+//     directory scans cacheDir/skills/*/SKILL.md, cacheDir/commands/*.md,
+//     cacheDir/agents/*.md and the config files cacheDir/.mcp.json,
+//     cacheDir/.lsp.json, cacheDir/hooks/hooks.json. This mirrors Claude Code's
+//     path-behavior rules: for commands/agents/mcp/lsp/hooks a listed manifest
+//     field REPLACES the default scan (so discovery runs only when the manifest is
+//     silent), whereas `skills` ADDS to the always-scanned skills/ directory (so
+//     listed skills and conventional skills are unioned).
 //   - Then overlays any component fields on the PluginEntry itself.
 //
 // This is a UNION: plugin.json PLUS entry additions. The entry.Strict flag
@@ -55,17 +67,19 @@ func Project(entry PluginEntry, cacheDir string) (ProjectionResult, error) {
 
 // ProjectWithReader is like Project but uses a caller-supplied readFile function
 // for loading plugin.json and component markdown files. This enables in-memory
-// filesystem use in tests. Convention-based discovery (skills/ directory scan)
-// is disabled when using ProjectWithReader; use Project for full behavior.
+// filesystem use in tests. Convention-based discovery (the default skills/,
+// commands/, and agents/ directory scans) is disabled when using
+// ProjectWithReader; use Project for full behavior.
 func ProjectWithReader(entry PluginEntry, cacheDir string, readFile func(string) ([]byte, error)) (ProjectionResult, error) {
 	return projectWithFuncs(entry, cacheDir, readFile, nil, false)
 }
 
 // projectWithFuncs is the internal implementation shared by Project and ProjectWithReader.
-// listDir may be nil to disable convention-based skills discovery. When lenient
-// is true, a strict-mode same-name conflict is resolved entry-wins with a logged
-// warning instead of a hard error — used by read-only/diagnostic commands that
-// must still show state (see resolveConflicts).
+// listDir may be nil to disable convention-based discovery of the default skills/,
+// commands/, and agents/ directories. When lenient is true, a strict-mode
+// same-name conflict is resolved entry-wins with a logged warning instead of a
+// hard error — used by read-only/diagnostic commands that must still show state
+// (see resolveConflicts).
 func projectWithFuncs(entry PluginEntry, cacheDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error), lenient bool) (ProjectionResult, error) {
 	var pr ProjectionResult
 
@@ -74,18 +88,23 @@ func projectWithFuncs(entry PluginEntry, cacheDir string, readFile func(string) 
 	// semantics — plugin.json PLUS entry additions/overrides — regardless of the
 	// Strict flag, so a non-strict entry never drops the plugin's own components.
 	manifestPath := filepath.Join(cacheDir, ".claude-plugin", "plugin.json")
+	var manifest PluginManifest
 	data, err := readFile(manifestPath)
-	if err != nil && !os.IsNotExist(err) {
+	switch {
+	case err != nil && !os.IsNotExist(err):
 		return pr, fmt.Errorf("read plugin.json: %w", err)
-	}
-	if err == nil {
-		var manifest PluginManifest
+	case err == nil:
 		if err := json.Unmarshal(data, &manifest); err != nil {
 			return pr, fmt.Errorf("parse plugin.json: %w", err)
 		}
-		if err := applyManifest(manifest, &pr, cacheDir, readFile, listDir); err != nil {
-			return pr, err
-		}
+	}
+	// applyManifest runs even when plugin.json is absent: the manifest is
+	// optional (Claude Code auto-discovers components in their default locations
+	// whether or not one is present), and a zero-value manifest carries no
+	// explicit component lists, so convention-based discovery of the default
+	// skills/, commands/, and agents/ directories still runs.
+	if err := applyManifest(manifest, &pr, cacheDir, readFile, listDir); err != nil {
+		return pr, err
 	}
 	if err := applyEntryOverrides(entry, &pr, cacheDir, readFile, listDir); err != nil {
 		return pr, err
@@ -256,21 +275,52 @@ func resolvePluginRootInArgs(args []string, cacheDir string) []string {
 }
 
 // applyManifest converts a PluginManifest into ProjectionResult entries.
-// listDir may be nil; when non-nil and the manifest lists no skills, skills
-// are discovered by convention from cacheDir/skills/*/SKILL.md.
+// listDir may be nil; when non-nil, convention-based discovery fills each
+// component kind from its default location — the directory scans
+// (cacheDir/skills/*/SKILL.md, cacheDir/commands/*.md, cacheDir/agents/*.md) and
+// the conventional config files (cacheDir/.mcp.json, cacheDir/.lsp.json,
+// cacheDir/hooks/hooks.json). For commands/agents/mcp/lsp/hooks a manifest list
+// REPLACES the scan (discovery runs only when the field is empty); `skills` is
+// always scanned and unioned (it ADDS). A zero-value manifest (plugin.json
+// absent) therefore still discovers everything, matching Claude Code's
+// optional-manifest auto-discovery. listDir==nil (the ProjectWithReader
+// in-memory path) keeps projection explicit-list-only, so the file-based
+// discovery is gated on it too even though it reads through readFile.
 func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error)) error {
-	for name, raw := range manifest.MCPServers {
-		spec := parseMCPSpec(raw, cacheDir)
-		pr.MCPServers = append(pr.MCPServers, source.MCPServer{ID: name, Server: spec})
+	if len(manifest.MCPServers) > 0 {
+		for name, raw := range manifest.MCPServers {
+			spec := parseMCPSpec(raw, cacheDir)
+			pr.MCPServers = append(pr.MCPServers, source.MCPServer{ID: name, Server: spec})
+		}
+	} else if listDir != nil {
+		// Convention-based discovery: when plugin.json lists no mcpServers, read
+		// the default .mcp.json (the standard `{"mcpServers":{…}}` shape).
+		discoverConventionMCP(cacheDir, readFile, pr)
 	}
-	for name, raw := range manifest.LSPServers {
-		spec := parseLSPSpec(raw, cacheDir)
-		pr.LSPServers = append(pr.LSPServers, source.LSPServer{ID: name, Spec: spec})
+	if len(manifest.LSPServers) > 0 {
+		for name, raw := range manifest.LSPServers {
+			spec := parseLSPSpec(raw, cacheDir)
+			pr.LSPServers = append(pr.LSPServers, source.LSPServer{ID: name, Spec: spec})
+		}
+	} else if listDir != nil {
+		// Convention-based discovery: .lsp.json is a BARE name→config map (no
+		// wrapper), unlike the inline `lspServers` object — see discoverConventionLSP.
+		discoverConventionLSP(cacheDir, readFile, pr)
 	}
 
-	skillPaths := toStringSlice(manifest.Skills)
-	if len(skillPaths) == 0 && listDir != nil {
-		// Convention-based discovery: scan cacheDir/skills/*/SKILL.md
+	// Skills: the manifest-listed skills are loaded loudly (a broken one the
+	// author named is a hard error), and the default skills/ directory is ALWAYS
+	// scanned and unioned — `skills` ADDS to the default scan (unlike
+	// commands/agents, which REPLACE it), matching Claude Code's path-behavior
+	// rules. A discovered skill that fails to load is skipped with a warning, not
+	// fatal (see appendSkillEntries): one malformed SKILL.md in one plugin must
+	// not abort projection for every installed plugin. A skill appearing in both
+	// the manifest list and the scan resolves to the same dir and collapses in
+	// resolveConflicts.
+	if err := appendSkillEntries(pr, toStringSlice(manifest.Skills), cacheDir, readFile, listDir, false); err != nil {
+		return err
+	}
+	if listDir != nil {
 		discovered, err := discoverSkillDirs(filepath.Join(cacheDir, "skills"), listDir)
 		switch {
 		case errors.Is(err, errSkillSanityCap):
@@ -280,52 +330,198 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 		case err != nil:
 			slog.Warn("plugin skills convention-discovery failed", "cacheDir", cacheDir, "error", err)
 		default:
-			skillPaths = discovered
+			if err := appendSkillEntries(pr, discovered, cacheDir, readFile, listDir, true); err != nil {
+				return err
+			}
 		}
 	}
-	for _, sk := range skillPaths {
-		p, err := resolveComponentPath(sk, cacheDir)
+
+	// Commands: a listed `commands` field REPLACES the default commands/ scan, an
+	// absent one falls back to it (Claude's plugin convention). Without this, a
+	// plugin that ships its command(s) only in the conventional directory (the
+	// common case — most plugins omit the manifest field, e.g. the official
+	// code-review's commands/code-review.md) projected as "no components".
+	commandPaths := toStringSlice(manifest.Commands)
+	discoveredCommands := false
+	if len(commandPaths) == 0 && listDir != nil {
+		discovered, err := discoverFlatMarkdown(filepath.Join(cacheDir, "commands"), listDir)
 		if err != nil {
+			slog.Warn("plugin commands convention-discovery failed", "cacheDir", cacheDir, "error", err)
+		} else {
+			commandPaths = discovered
+			discoveredCommands = true
+		}
+	}
+	if err := appendMarkdownComponents(commandPaths, cacheDir, readFile, discoveredCommands, "command", func(e *markdownEntry) {
+		pr.Commands = append(pr.Commands, source.Command{Name: e.name, Frontmatter: e.fm, Body: e.body})
+	}); err != nil {
+		return err
+	}
+
+	// Agents: same REPLACE convention as commands — a plugin that ships subagents
+	// only in the conventional agents/ directory (e.g. the official
+	// code-simplifier's agents/code-simplifier.md) would otherwise project nothing.
+	agentPaths := toStringSlice(manifest.Agents)
+	discoveredAgents := false
+	if len(agentPaths) == 0 && listDir != nil {
+		discovered, err := discoverFlatMarkdown(filepath.Join(cacheDir, "agents"), listDir)
+		if err != nil {
+			slog.Warn("plugin agents convention-discovery failed", "cacheDir", cacheDir, "error", err)
+		} else {
+			agentPaths = discovered
+			discoveredAgents = true
+		}
+	}
+	if err := appendMarkdownComponents(agentPaths, cacheDir, readFile, discoveredAgents, "agent", func(e *markdownEntry) {
+		pr.Subagents = append(pr.Subagents, source.Subagent{Name: e.name, Frontmatter: e.fm, Body: e.body})
+	}); err != nil {
+		return err
+	}
+	// Hooks: may be a string command or an object with event+command shape.
+	if manifest.Hooks != nil {
+		applyHooks(manifest.Hooks, pr, cacheDir)
+	} else if listDir != nil {
+		// Convention-based discovery: when plugin.json carries no inline hooks,
+		// read the default hooks/hooks.json (the `{"hooks":{…}}` shape).
+		discoverConventionHooks(cacheDir, readFile, pr)
+	}
+	return nil
+}
+
+// appendMarkdownComponents loads each markdown component (command or subagent) at
+// the given paths and hands the parsed entry to add. The discovered flag selects
+// the failure policy: a convention-DISCOVERED path that fails to resolve, parse,
+// or validate is logged and skipped, because one malformed/hostile file in one
+// plugin must not abort projection for EVERY installed plugin (projection runs
+// for all of them inside explain/apply/status/diff) — the same resilience the
+// config-file discovery and the missing-file path already have. A manifest- or
+// entry-LISTED path instead propagates the error: the author named it explicitly,
+// so a broken one is a hard failure (preserving the long-standing listed-component
+// error contract).
+func appendMarkdownComponents(paths []string, cacheDir string, readFile func(string) ([]byte, error), discovered bool, kind string, add func(*markdownEntry)) error {
+	for _, ref := range paths {
+		p, err := resolveComponentPath(ref, cacheDir)
+		if err != nil {
+			if discovered {
+				slog.Warn("plugin convention-discovered component skipped (path rejected)", "kind", kind, "ref", ref, "error", err)
+				continue
+			}
+			return err
+		}
+		entry, err := loadMarkdownEntry(p, readFile)
+		if err != nil {
+			if discovered {
+				slog.Warn("plugin convention-discovered component skipped (unreadable/invalid)", "kind", kind, "ref", ref, "error", err)
+				continue
+			}
+			return fmt.Errorf("load %s %q: %w", kind, ref, err)
+		}
+		if entry != nil {
+			add(entry)
+		}
+	}
+	return nil
+}
+
+// appendSkillEntries loads each skill at the given paths into pr.Skills, applying
+// the same discovered-vs-listed failure policy as appendMarkdownComponents: a
+// convention-DISCOVERED skill whose SKILL.md is missing/malformed is skipped with
+// a warning (one bad skill must not abort projection for every plugin), while a
+// LISTED skill propagates the error loudly.
+func appendSkillEntries(pr *ProjectionResult, paths []string, cacheDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error), discovered bool) error {
+	for _, ref := range paths {
+		p, err := resolveComponentPath(ref, cacheDir)
+		if err != nil {
+			if discovered {
+				slog.Warn("plugin convention-discovered skill skipped (path rejected)", "ref", ref, "error", err)
+				continue
+			}
 			return err
 		}
 		skill, err := loadSkillEntry(p, readFile, listDir)
 		if err != nil {
-			return fmt.Errorf("load skill %q: %w", sk, err)
+			if discovered {
+				slog.Warn("plugin convention-discovered skill skipped (unreadable/invalid)", "ref", ref, "error", err)
+				continue
+			}
+			return fmt.Errorf("load skill %q: %w", ref, err)
 		}
 		if skill != nil {
 			pr.Skills = append(pr.Skills, *skill)
 		}
 	}
-
-	for _, cmd := range toStringSlice(manifest.Commands) {
-		p, err := resolveComponentPath(cmd, cacheDir)
-		if err != nil {
-			return err
-		}
-		command, err := loadMarkdownEntry(p, readFile)
-		if err != nil {
-			return fmt.Errorf("load command %q: %w", cmd, err)
-		}
-		if command != nil {
-			pr.Commands = append(pr.Commands, source.Command{Name: command.name, Frontmatter: command.fm, Body: command.body})
-		}
-	}
-	for _, ag := range toStringSlice(manifest.Agents) {
-		p, err := resolveComponentPath(ag, cacheDir)
-		if err != nil {
-			return err
-		}
-		agent, err := loadMarkdownEntry(p, readFile)
-		if err != nil {
-			return fmt.Errorf("load agent %q: %w", ag, err)
-		}
-		if agent != nil {
-			pr.Subagents = append(pr.Subagents, source.Subagent{Name: agent.name, Frontmatter: agent.fm, Body: agent.body})
-		}
-	}
-	// Hooks: may be a string command or an object with event+command shape.
-	applyHooks(manifest.Hooks, pr, cacheDir)
 	return nil
+}
+
+// discoverConventionMCP reads a plugin's conventional .mcp.json (the standard
+// `{"mcpServers": {…}}` document) and projects each server through the same
+// parseMCPSpec the inline plugin.json path uses, so ${CLAUDE_PLUGIN_ROOT}
+// resolution and field handling are identical. A missing/unreadable/malformed
+// file is a no-op (see readConventionConfig).
+func discoverConventionMCP(cacheDir string, readFile func(string) ([]byte, error), pr *ProjectionResult) {
+	doc, ok := readConventionConfig(filepath.Join(cacheDir, ".mcp.json"), readFile)
+	if !ok {
+		return
+	}
+	servers, _ := doc["mcpServers"].(map[string]any)
+	for name, raw := range servers {
+		pr.MCPServers = append(pr.MCPServers, source.MCPServer{ID: name, Server: parseMCPSpec(raw, cacheDir)})
+	}
+}
+
+// discoverConventionLSP reads a plugin's conventional .lsp.json. Unlike the
+// inline `lspServers` object, the .lsp.json file is a BARE map of language-server
+// name → config (no wrapper), per the plugin spec — so the whole document is the
+// server map. A missing/unreadable/malformed file is a no-op.
+func discoverConventionLSP(cacheDir string, readFile func(string) ([]byte, error), pr *ProjectionResult) {
+	doc, ok := readConventionConfig(filepath.Join(cacheDir, ".lsp.json"), readFile)
+	if !ok {
+		return
+	}
+	for name, raw := range doc {
+		pr.LSPServers = append(pr.LSPServers, source.LSPServer{ID: name, Spec: parseLSPSpec(raw, cacheDir)})
+	}
+}
+
+// discoverConventionHooks reads a plugin's conventional hooks/hooks.json (the
+// `{"hooks": {…}}` document) and projects its event map through the same
+// applyHooks the inline plugin.json path uses. A missing/unreadable/malformed
+// file, or one with no "hooks" key, is a no-op.
+func discoverConventionHooks(cacheDir string, readFile func(string) ([]byte, error), pr *ProjectionResult) {
+	doc, ok := readConventionConfig(filepath.Join(cacheDir, "hooks", "hooks.json"), readFile)
+	if !ok {
+		return
+	}
+	if hooks, found := doc["hooks"]; found {
+		applyHooks(hooks, pr, cacheDir)
+	}
+}
+
+// readConventionConfig reads and unmarshals one of a plugin's conventional JSON
+// config files (.mcp.json, .lsp.json, hooks/hooks.json) for convention-based
+// discovery. ok is false — with NO error surfaced — when the file is absent (a
+// plugin need not ship every conventional config) OR when it cannot be read or
+// parsed as a JSON object. A single malformed/unreadable config file must drop
+// only that file's components, never abort the whole projection: projection runs
+// for EVERY installed plugin inside `explain`/`apply`/`status`/`diff`, so a
+// propagated error would brick those commands for ALL plugins over one bad file
+// in one plugin — the same failure mode the lenient frontmatter parser avoids for
+// component markdown. The failure is logged, mirroring how the directory-scan
+// discovery paths (discoverFlatMarkdown/discoverSkillDirs) warn-and-skip.
+func readConventionConfig(path string, readFile func(string) ([]byte, error)) (map[string]any, bool) {
+	data, err := readFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("plugin convention config unreadable; skipping", "path", path, "error", err)
+		}
+		return nil, false
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		slog.Warn("plugin convention config is not a valid JSON object; skipping", "path", path, "error", err)
+		return nil, false
+	}
+	return doc, true
 }
 
 // maxSkillDepth caps how many directories below skillsDir a SKILL.md may live.
@@ -437,6 +633,42 @@ func discoverSkillDirs(skillsDir string, listDir func(string) ([]os.DirEntry, er
 	return paths, nil
 }
 
+// discoverFlatMarkdown returns the absolute path of every regular *.md file
+// directly inside dir, sorted for determinism. It backs the convention-based
+// discovery of a plugin's commands/ and agents/ directories — the default
+// locations Claude Code auto-loads when plugin.json lists no `commands`/`agents`
+// (the common case: a plugin ships those components in the conventional
+// directory and omits the manifest field). A missing dir yields no paths and no
+// error — a plugin need not ship every component kind.
+//
+// The scan is deliberately NOT recursive: plugin commands and agents are flat
+// markdown files per the plugin spec, so descending would sweep in unrelated or
+// nested files. Non-regular entries are skipped — subdirectories, and (because a
+// fetched plugin repo is untrusted) symlinks, which IsRegular() reports false for
+// — so a symlink can never pull foreign content into the projection, matching the
+// symlink guard in collectSkillFiles.
+func discoverFlatMarkdown(dir string, listDir func(string) ([]os.DirEntry, error)) ([]string, error) {
+	entries, err := listDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var paths []string
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		if filepath.Ext(e.Name()) != ".md" {
+			continue
+		}
+		paths = append(paths, filepath.Join(dir, e.Name()))
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
 // isDirVia reports whether path is a directory, probed through the injected
 // listDir: listing a directory succeeds, listing a regular file errors
 // (ENOTDIR), and a missing path errors (IsNotExist) — both treated as not a
@@ -510,7 +742,11 @@ type markdownEntry struct {
 // loadSkillEntry reads a skill path which may be either a directory containing
 // SKILL.md or a SKILL.md file directly. Returns nil (no error) if the file is
 // simply missing — the caller should skip that entry with a warning.
-// Returns an error only for real I/O problems or malformed frontmatter.
+// Returns an error only for real I/O problems or frontmatter neither the strict
+// nor the lenient YAML parser can read. Frontmatter is parsed the way Claude Code
+// reads it (source.ParseFrontmatterWithReport): a `description` with bare colons —
+// valid to Claude, invalid to strict YAML — is recovered leniently with a warning
+// rather than failing the projection.
 //
 // A skill is a DIRECTORY, not just SKILL.md: when listDir is non-nil, every
 // other file under the skill directory (scripts/, references/, assets/, nested
@@ -547,9 +783,12 @@ func loadSkillEntry(path string, readFile func(string) ([]byte, error), listDir 
 		skillPath = path
 	}
 
-	fm, body, err := source.ParseFrontmatter(data)
+	fm, body, lenient, err := source.ParseFrontmatterWithReport(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse frontmatter in %s: %w", skillPath, err)
+	}
+	if lenient {
+		slog.Warn("plugin skill frontmatter is not strict YAML; parsed leniently (consider quoting values containing ': ')", "path", skillPath)
 	}
 
 	// Derive name: prefer frontmatter "name" key, fall back to basename of the resolved path.
@@ -634,9 +873,13 @@ func collectSkillFiles(skillDir string, readFile func(string) ([]byte, error), l
 	return files, nil
 }
 
-// loadMarkdownEntry reads a markdown file at path. Returns nil (no error) if
-// the file is simply missing — the caller should skip that entry with a
-// warning. Returns an error for I/O failures or malformed frontmatter.
+// loadMarkdownEntry reads a markdown file at path (a command or subagent).
+// Returns nil (no error) if the file is simply missing — the caller should skip
+// that entry with a warning. Returns an error for I/O failures or frontmatter
+// neither the strict nor the lenient YAML parser can read. Like Claude Code (and
+// the adapter Ingest paths), it parses via source.ParseFrontmatterWithReport, so
+// a `description` containing bare colons — which strict YAML rejects but Claude
+// accepts — is recovered leniently with a warning instead of failing.
 func loadMarkdownEntry(path string, readFile func(string) ([]byte, error)) (*markdownEntry, error) {
 	data, err := readFile(path)
 	if err != nil {
@@ -647,9 +890,12 @@ func loadMarkdownEntry(path string, readFile func(string) ([]byte, error)) (*mar
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 
-	fm, body, err := source.ParseFrontmatter(data)
+	fm, body, lenient, err := source.ParseFrontmatterWithReport(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse frontmatter in %s: %w", path, err)
+	}
+	if lenient {
+		slog.Warn("plugin component frontmatter is not strict YAML; parsed leniently (consider quoting values containing ': ')", "path", path)
 	}
 
 	// Derive name: prefer frontmatter "name" key, fall back to basename without .md.
@@ -684,74 +930,91 @@ func validateProjectedName(kind, name string) error {
 }
 
 // applyHooks interprets the hooks field (string | []string | map) and appends
-// Hook entries. Hook format from plugin.json can be:
+// Hook entries. Hook format from plugin.json — and the conventional
+// hooks/hooks.json — can be:
 //   - a plain command string → PreToolUse catch-all
 //   - []string → each a PreToolUse catch-all
-//   - map[event]command or map[event][]hookObj
+//   - map[event] → a command string, a group object, or a []group, where a
+//     group is the canonical Claude shape {matcher, hooks:[{type,command},…]}
+//     or a simplified flat {matcher, command}.
 func applyHooks(hooks any, pr *ProjectionResult, cacheDir string) {
 	if hooks == nil {
 		return
 	}
 	switch v := hooks.(type) {
 	case string:
-		pr.Hooks = append(pr.Hooks, source.Hook{
-			Event:   "PreToolUse",
-			Matcher: "*",
-			Type:    "command",
-			Command: resolvePluginRoot(v, cacheDir),
-		})
+		appendCommandHook(pr, "PreToolUse", "*", "command", v, cacheDir)
 	case []any:
 		for _, item := range v {
 			if s, ok := item.(string); ok {
-				pr.Hooks = append(pr.Hooks, source.Hook{
-					Event:   "PreToolUse",
-					Matcher: "*",
-					Type:    "command",
-					Command: resolvePluginRoot(s, cacheDir),
-				})
+				appendCommandHook(pr, "PreToolUse", "*", "command", s, cacheDir)
 			}
 		}
 	case map[string]any:
 		for event, val := range v {
 			switch ev := val.(type) {
 			case string:
-				pr.Hooks = append(pr.Hooks, source.Hook{
-					Event:   event,
-					Matcher: "*",
-					Type:    "command",
-					Command: resolvePluginRoot(ev, cacheDir),
-				})
+				appendCommandHook(pr, event, "*", "command", ev, cacheDir)
 			case map[string]any:
-				cmd, _ := ev["command"].(string)
-				matcher, _ := ev["matcher"].(string)
-				if matcher == "" {
-					matcher = "*"
-				}
-				pr.Hooks = append(pr.Hooks, source.Hook{
-					Event:   event,
-					Matcher: matcher,
-					Type:    "command",
-					Command: resolvePluginRoot(cmd, cacheDir),
-				})
+				appendHookGroup(pr, event, ev, cacheDir)
 			case []any:
 				for _, item := range ev {
 					if m, ok := item.(map[string]any); ok {
-						cmd, _ := m["command"].(string)
-						matcher, _ := m["matcher"].(string)
-						if matcher == "" {
-							matcher = "*"
-						}
-						pr.Hooks = append(pr.Hooks, source.Hook{
-							Event:   event,
-							Matcher: matcher,
-							Type:    "command",
-							Command: resolvePluginRoot(cmd, cacheDir),
-						})
+						appendHookGroup(pr, event, m, cacheDir)
 					}
 				}
 			}
 		}
 	}
+}
+
+// appendHookGroup appends the hook(s) one event-group object describes. It
+// handles the canonical Claude shape {matcher, hooks:[{type,command},…]} (one
+// Hook per nested entry, all carrying the group's matcher) and the simplified
+// flat {matcher, command} shape, distinguished by whether a nested "hooks" array
+// is present.
+func appendHookGroup(pr *ProjectionResult, event string, group map[string]any, cacheDir string) {
+	matcher, _ := group["matcher"].(string)
+	if matcher == "" {
+		matcher = "*"
+	}
+	if nested, ok := group["hooks"].([]any); ok {
+		for _, h := range nested {
+			m, ok := h.(map[string]any)
+			if !ok {
+				continue
+			}
+			typ, _ := m["type"].(string)
+			if typ == "" {
+				typ = "command"
+			}
+			cmd, _ := m["command"].(string)
+			appendCommandHook(pr, event, matcher, typ, cmd, cacheDir)
+		}
+		return
+	}
+	typ, _ := group["type"].(string)
+	if typ == "" {
+		typ = "command"
+	}
+	cmd, _ := group["command"].(string)
+	appendCommandHook(pr, event, matcher, typ, cmd, cacheDir)
+}
+
+// appendCommandHook appends a single hook, resolving ${CLAUDE_PLUGIN_ROOT} in the
+// command. An entry with no command is skipped rather than projected as an empty,
+// no-op hook — this also drops the hook types agentsync's command-only Hook model
+// does not represent (http/mcp_tool/prompt/agent), which carry no shell command.
+func appendCommandHook(pr *ProjectionResult, event, matcher, typ, command, cacheDir string) {
+	if command == "" {
+		return
+	}
+	pr.Hooks = append(pr.Hooks, source.Hook{
+		Event:   event,
+		Matcher: matcher,
+		Type:    typ,
+		Command: resolvePluginRoot(command, cacheDir),
+	})
 }
 
 // parseMCPSpec converts a raw map (from JSON) into a source.MCPServerSpec,
