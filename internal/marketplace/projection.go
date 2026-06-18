@@ -5,8 +5,10 @@
 // readFile function so that adapters downstream receive complete, render-ready
 // entries. Components a plugin ships in their conventional default locations
 // (skills/, commands/, agents/, .mcp.json, .lsp.json, hooks/hooks.json) are
-// convention-discovered when plugin.json does not list them — matching Claude
-// Code, which auto-discovers those defaults whether or not a manifest is present.
+// convention-discovered — matching Claude Code, which auto-discovers those
+// defaults whether or not a manifest is present. Per Claude's path-behavior
+// rules a listed commands/agents/mcp/lsp/hooks field REPLACES its default scan,
+// while a listed `skills` ADDS to the always-scanned skills/ directory.
 package marketplace
 
 import (
@@ -39,12 +41,14 @@ type ProjectionResult struct {
 //     component list; a missing plugin.json is fine (the manifest is optional —
 //     a curator-defined plugin may declare everything in the entry, and a plugin
 //     that ships only conventional directories declares nothing at all).
-//   - For each component kind the manifest does NOT list, falls back to
-//     convention-based discovery of its default location: the directory scans
-//     cacheDir/skills/*/SKILL.md, cacheDir/commands/*.md, cacheDir/agents/*.md and
-//     the config files cacheDir/.mcp.json, cacheDir/.lsp.json,
-//     cacheDir/hooks/hooks.json. This mirrors Claude Code, where a listed
-//     component field replaces the default and an absent one falls back to it.
+//   - Convention-based discovery of each component kind's default location: the
+//     directory scans cacheDir/skills/*/SKILL.md, cacheDir/commands/*.md,
+//     cacheDir/agents/*.md and the config files cacheDir/.mcp.json,
+//     cacheDir/.lsp.json, cacheDir/hooks/hooks.json. This mirrors Claude Code's
+//     path-behavior rules: for commands/agents/mcp/lsp/hooks a listed manifest
+//     field REPLACES the default scan (so discovery runs only when the manifest is
+//     silent), whereas `skills` ADDS to the always-scanned skills/ directory (so
+//     listed skills and conventional skills are unioned).
 //   - Then overlays any component fields on the PluginEntry itself.
 //
 // This is a UNION: plugin.json PLUS entry additions. The entry.Strict flag
@@ -271,15 +275,17 @@ func resolvePluginRootInArgs(args []string, cacheDir string) []string {
 }
 
 // applyManifest converts a PluginManifest into ProjectionResult entries.
-// listDir may be nil; when non-nil, any component kind the manifest does NOT
-// list is discovered by convention from its default location — the directory
-// scans (cacheDir/skills/*/SKILL.md, cacheDir/commands/*.md, cacheDir/agents/*.md)
-// and the conventional config files (cacheDir/.mcp.json, cacheDir/.lsp.json,
-// cacheDir/hooks/hooks.json). A zero-value manifest (plugin.json absent) therefore
-// still discovers all of them, matching Claude Code's optional-manifest
-// auto-discovery. listDir==nil (the ProjectWithReader in-memory path) keeps
-// projection explicit-list-only, so the file-based discovery is gated on it too
-// even though it reads through readFile.
+// listDir may be nil; when non-nil, convention-based discovery fills each
+// component kind from its default location — the directory scans
+// (cacheDir/skills/*/SKILL.md, cacheDir/commands/*.md, cacheDir/agents/*.md) and
+// the conventional config files (cacheDir/.mcp.json, cacheDir/.lsp.json,
+// cacheDir/hooks/hooks.json). For commands/agents/mcp/lsp/hooks a manifest list
+// REPLACES the scan (discovery runs only when the field is empty); `skills` is
+// always scanned and unioned (it ADDS). A zero-value manifest (plugin.json
+// absent) therefore still discovers everything, matching Claude Code's
+// optional-manifest auto-discovery. listDir==nil (the ProjectWithReader
+// in-memory path) keeps projection explicit-list-only, so the file-based
+// discovery is gated on it too even though it reads through readFile.
 func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir string, readFile func(string) ([]byte, error), listDir func(string) ([]os.DirEntry, error)) error {
 	if len(manifest.MCPServers) > 0 {
 		for name, raw := range manifest.MCPServers {
@@ -289,9 +295,7 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 	} else if listDir != nil {
 		// Convention-based discovery: when plugin.json lists no mcpServers, read
 		// the default .mcp.json (the standard `{"mcpServers":{…}}` shape).
-		if err := discoverConventionMCP(cacheDir, readFile, pr); err != nil {
-			return err
-		}
+		discoverConventionMCP(cacheDir, readFile, pr)
 	}
 	if len(manifest.LSPServers) > 0 {
 		for name, raw := range manifest.LSPServers {
@@ -301,14 +305,17 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 	} else if listDir != nil {
 		// Convention-based discovery: .lsp.json is a BARE name→config map (no
 		// wrapper), unlike the inline `lspServers` object — see discoverConventionLSP.
-		if err := discoverConventionLSP(cacheDir, readFile, pr); err != nil {
-			return err
-		}
+		discoverConventionLSP(cacheDir, readFile, pr)
 	}
 
 	skillPaths := toStringSlice(manifest.Skills)
-	if len(skillPaths) == 0 && listDir != nil {
-		// Convention-based discovery: scan cacheDir/skills/*/SKILL.md
+	if listDir != nil {
+		// Convention-based discovery: scan cacheDir/skills/*/SKILL.md. Unlike
+		// commands/agents — where a manifest list REPLACES the default scan —
+		// `skills` ADDS to it: the default skills/ directory is ALWAYS scanned and
+		// its skills load ALONGSIDE any the manifest lists, matching Claude Code's
+		// path-behavior rules. A skill that appears in both the manifest list and
+		// the scan resolves to the same dir and collapses in resolveConflicts.
 		discovered, err := discoverSkillDirs(filepath.Join(cacheDir, "skills"), listDir)
 		switch {
 		case errors.Is(err, errSkillSanityCap):
@@ -318,7 +325,7 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 		case err != nil:
 			slog.Warn("plugin skills convention-discovery failed", "cacheDir", cacheDir, "error", err)
 		default:
-			skillPaths = discovered
+			skillPaths = append(skillPaths, discovered...)
 		}
 	}
 	for _, sk := range skillPaths {
@@ -398,9 +405,7 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 	} else if listDir != nil {
 		// Convention-based discovery: when plugin.json carries no inline hooks,
 		// read the default hooks/hooks.json (the `{"hooks":{…}}` shape).
-		if err := discoverConventionHooks(cacheDir, readFile, pr); err != nil {
-			return err
-		}
+		discoverConventionHooks(cacheDir, readFile, pr)
 	}
 	return nil
 }
@@ -408,64 +413,72 @@ func applyManifest(manifest PluginManifest, pr *ProjectionResult, cacheDir strin
 // discoverConventionMCP reads a plugin's conventional .mcp.json (the standard
 // `{"mcpServers": {…}}` document) and projects each server through the same
 // parseMCPSpec the inline plugin.json path uses, so ${CLAUDE_PLUGIN_ROOT}
-// resolution and field handling are identical. A missing file is a no-op.
-func discoverConventionMCP(cacheDir string, readFile func(string) ([]byte, error), pr *ProjectionResult) error {
-	doc, found, err := readPluginJSON(filepath.Join(cacheDir, ".mcp.json"), readFile)
-	if err != nil || !found {
-		return err
+// resolution and field handling are identical. A missing/unreadable/malformed
+// file is a no-op (see readConventionConfig).
+func discoverConventionMCP(cacheDir string, readFile func(string) ([]byte, error), pr *ProjectionResult) {
+	doc, ok := readConventionConfig(filepath.Join(cacheDir, ".mcp.json"), readFile)
+	if !ok {
+		return
 	}
 	servers, _ := doc["mcpServers"].(map[string]any)
 	for name, raw := range servers {
 		pr.MCPServers = append(pr.MCPServers, source.MCPServer{ID: name, Server: parseMCPSpec(raw, cacheDir)})
 	}
-	return nil
 }
 
 // discoverConventionLSP reads a plugin's conventional .lsp.json. Unlike the
 // inline `lspServers` object, the .lsp.json file is a BARE map of language-server
 // name → config (no wrapper), per the plugin spec — so the whole document is the
-// server map. A missing file is a no-op.
-func discoverConventionLSP(cacheDir string, readFile func(string) ([]byte, error), pr *ProjectionResult) error {
-	doc, found, err := readPluginJSON(filepath.Join(cacheDir, ".lsp.json"), readFile)
-	if err != nil || !found {
-		return err
+// server map. A missing/unreadable/malformed file is a no-op.
+func discoverConventionLSP(cacheDir string, readFile func(string) ([]byte, error), pr *ProjectionResult) {
+	doc, ok := readConventionConfig(filepath.Join(cacheDir, ".lsp.json"), readFile)
+	if !ok {
+		return
 	}
 	for name, raw := range doc {
 		pr.LSPServers = append(pr.LSPServers, source.LSPServer{ID: name, Spec: parseLSPSpec(raw, cacheDir)})
 	}
-	return nil
 }
 
 // discoverConventionHooks reads a plugin's conventional hooks/hooks.json (the
 // `{"hooks": {…}}` document) and projects its event map through the same
-// applyHooks the inline plugin.json path uses. A missing file is a no-op.
-func discoverConventionHooks(cacheDir string, readFile func(string) ([]byte, error), pr *ProjectionResult) error {
-	doc, found, err := readPluginJSON(filepath.Join(cacheDir, "hooks", "hooks.json"), readFile)
-	if err != nil || !found {
-		return err
+// applyHooks the inline plugin.json path uses. A missing/unreadable/malformed
+// file, or one with no "hooks" key, is a no-op.
+func discoverConventionHooks(cacheDir string, readFile func(string) ([]byte, error), pr *ProjectionResult) {
+	doc, ok := readConventionConfig(filepath.Join(cacheDir, "hooks", "hooks.json"), readFile)
+	if !ok {
+		return
 	}
-	if hooks, ok := doc["hooks"]; ok {
+	if hooks, found := doc["hooks"]; found {
 		applyHooks(hooks, pr, cacheDir)
 	}
-	return nil
 }
 
-// readPluginJSON reads and unmarshals one of a plugin's conventional JSON config
-// files (.mcp.json, .lsp.json, hooks/hooks.json) for convention-based discovery.
-// A missing file is not an error (found=false): a plugin need not ship every
-// conventional config.
-func readPluginJSON(path string, readFile func(string) ([]byte, error)) (doc map[string]any, found bool, err error) {
+// readConventionConfig reads and unmarshals one of a plugin's conventional JSON
+// config files (.mcp.json, .lsp.json, hooks/hooks.json) for convention-based
+// discovery. ok is false — with NO error surfaced — when the file is absent (a
+// plugin need not ship every conventional config) OR when it cannot be read or
+// parsed as a JSON object. A single malformed/unreadable config file must drop
+// only that file's components, never abort the whole projection: projection runs
+// for EVERY installed plugin inside `explain`/`apply`/`status`/`diff`, so a
+// propagated error would brick those commands for ALL plugins over one bad file
+// in one plugin — the same failure mode the lenient frontmatter parser avoids for
+// component markdown. The failure is logged, mirroring how the directory-scan
+// discovery paths (discoverFlatMarkdown/discoverSkillDirs) warn-and-skip.
+func readConventionConfig(path string, readFile func(string) ([]byte, error)) (map[string]any, bool) {
 	data, err := readFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, false, nil
+		if !os.IsNotExist(err) {
+			slog.Warn("plugin convention config unreadable; skipping", "path", path, "error", err)
 		}
-		return nil, false, fmt.Errorf("read %s: %w", filepath.Base(path), err)
+		return nil, false
 	}
+	var doc map[string]any
 	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, false, fmt.Errorf("parse %s: %w", filepath.Base(path), err)
+		slog.Warn("plugin convention config is not a valid JSON object; skipping", "path", path, "error", err)
+		return nil, false
 	}
-	return doc, true, nil
+	return doc, true
 }
 
 // maxSkillDepth caps how many directories below skillsDir a SKILL.md may live.

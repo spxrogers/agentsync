@@ -44,8 +44,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   locations, not just the ones plugin.json lists.** Claude Code auto-discovers a
   plugin's components from default locations — `commands/*.md`, `agents/*.md`,
   `skills/*/SKILL.md`, `.mcp.json`, `.lsp.json`, `hooks/hooks.json` — whether or
-  not `plugin.json` declares them (the manifest is optional, and a listed
-  component field *replaces* its default scan). agentsync only convention-scanned
+  not `plugin.json` declares them (the manifest is optional; a listed
+  commands/agents/mcp/lsp/hooks field *replaces* its default scan, while a listed
+  `skills` field *adds* to the always-scanned `skills/` directory, per Claude's
+  path-behavior rules). agentsync only convention-scanned
   `skills/`, so any plugin that shipped a command, subagent, MCP/LSP server, or
   hook **only** in its conventional location was silently dropped — `agentsync
   explain code-review@claude-plugins-official` reported `no components` for a
@@ -66,7 +68,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   in this context"* — is recovered with a warning instead of aborting the whole
   projection. (Newly surfaced by agent discovery: the official `pr-review-toolkit`
   ships such an `agents/silent-failure-hunter.md`, which previously crashed
-  `explain --all` for every plugin once agents were discovered.)
+  `explain --all` for every plugin once agents were discovered.) Likewise, a
+  malformed/unreadable `.mcp.json`, `.lsp.json`, or `hooks/hooks.json` now drops
+  only that file's components with a warning rather than aborting the projection,
+  so one bad config file in one plugin can't break `explain`/`apply`/`status` for
+  every installed plugin.
 
 - **`explain <plugin>` now reports only that plugin's components.** `explain`
   previously stamped the *global* translation result onto every plugin row: the

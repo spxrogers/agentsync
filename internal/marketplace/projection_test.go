@@ -531,6 +531,173 @@ func TestProject_Hooks_NestedFormat(t *testing.T) {
 	}
 }
 
+// TestProject_SkillsAddToConventionScan pins the upstream "skills ADD" exception:
+// a manifest that lists a skill does NOT suppress the default skills/ scan (unlike
+// commands/agents, where a listed field replaces the scan). Both the listed skill
+// and the conventional one must be projected.
+func TestProject_SkillsAddToConventionScan(t *testing.T) {
+	cache := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Manifest lists a skill in a custom dir; a second skill lives in the
+	// conventional skills/ directory and is NOT listed.
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"p","skills":["./custom/listed"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cache, "custom", "listed"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "custom", "listed", "SKILL.md"),
+		[]byte("---\nname: listed-skill\ndescription: d\n---\nListed.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cache, "skills", "conventional"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "skills", "conventional", "SKILL.md"),
+		[]byte("---\nname: conventional-skill\ndescription: d\n---\nConventional.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, err := marketplace.Project(marketplace.PluginEntry{Name: "p"}, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, s := range pr.Skills {
+		got[s.Name] = true
+	}
+	if !got["listed-skill"] {
+		t.Errorf("listed skill missing: %v", got)
+	}
+	if !got["conventional-skill"] {
+		t.Errorf("conventional skills/ skill dropped — skills must ADD to the default scan, not replace it: %v", got)
+	}
+}
+
+// TestProject_ConventionConfig_MalformedSkipped is the regression for the
+// "one bad file bricks every plugin" hole: a malformed .mcp.json / .lsp.json /
+// hooks.json must drop only that file's components (with a warning), never abort
+// the whole projection — which runs for every installed plugin, so an error would
+// break `explain`/`apply`/`status` for ALL of them. A valid command discovered
+// alongside the broken config files must still project.
+func TestProject_ConventionConfig_MalformedSkipped(t *testing.T) {
+	cache := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"p"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Three differently-broken JSON configs: truncated object, a JSON array
+	// (not an object), and a bare scalar.
+	if err := os.WriteFile(filepath.Join(cache, ".mcp.json"), []byte(`{"mcpServers": {`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, ".lsp.json"), []byte(`["not","an","object"]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cache, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "hooks", "hooks.json"), []byte(`"garbage"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A perfectly good command in the conventional dir alongside the broken files.
+	if err := os.MkdirAll(filepath.Join(cache, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "commands", "ok.md"),
+		[]byte("---\nname: ok\n---\nFine.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, err := marketplace.Project(marketplace.PluginEntry{Name: "p"}, cache)
+	if err != nil {
+		t.Fatalf("malformed config files must be skipped, not abort the projection: %v", err)
+	}
+	if len(pr.MCPServers) != 0 || len(pr.LSPServers) != 0 || len(pr.Hooks) != 0 {
+		t.Errorf("malformed configs must contribute nothing; mcp=%d lsp=%d hooks=%d",
+			len(pr.MCPServers), len(pr.LSPServers), len(pr.Hooks))
+	}
+	if len(pr.Commands) != 1 || pr.Commands[0].Name != "ok" {
+		t.Errorf("the valid command must still project past the broken configs; commands=%+v", pr.Commands)
+	}
+}
+
+// TestProject_ConventionHooks_NoHooksKey verifies a hooks.json that parses but
+// lacks the "hooks" wrapper key is a clean no-op (not an error, not a panic).
+func TestProject_ConventionHooks_NoHooksKey(t *testing.T) {
+	cache := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"p"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cache, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "hooks", "hooks.json"), []byte(`{"notHooks": {}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, err := marketplace.Project(marketplace.PluginEntry{Name: "p"}, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.Hooks) != 0 {
+		t.Errorf("hooks.json without a \"hooks\" key must contribute no hooks; got %d", len(pr.Hooks))
+	}
+}
+
+// TestProject_ConventionCommands_SkipsSymlink proves discoverFlatMarkdown does not
+// follow a symlink: a fetched plugin repo is untrusted, so a symlinked command
+// pointing at a file OUTSIDE the plugin cache must never pull that foreign content
+// into the projection.
+func TestProject_ConventionCommands_SkipsSymlink(t *testing.T) {
+	cache := t.TempDir()
+	// Foreign target lives outside the plugin cache.
+	foreign := filepath.Join(t.TempDir(), "foreign.md")
+	if err := os.WriteFile(foreign, []byte("---\nname: leaked-via-symlink\n---\nLeaked.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cache, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, ".claude-plugin", "plugin.json"),
+		[]byte(`{"name":"p"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cache, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "commands", "real.md"),
+		[]byte("---\nname: real\n---\nReal.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(foreign, filepath.Join(cache, "commands", "sneaky.md")); err != nil {
+		t.Skipf("symlinks unsupported here: %v", err)
+	}
+
+	pr, err := marketplace.Project(marketplace.PluginEntry{Name: "p"}, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range pr.Commands {
+		if c.Name == "leaked-via-symlink" {
+			t.Fatalf("symlinked command pulled foreign content into the projection: %+v", pr.Commands)
+		}
+	}
+	if len(pr.Commands) != 1 || pr.Commands[0].Name != "real" {
+		t.Errorf("expected only the real command; got %+v", pr.Commands)
+	}
+}
+
 // TestProject_SkillBundledFiles proves a plugin-bundled skill is projected as a
 // DIRECTORY: scripts/, references/, and nested files come along (with the
 // script's executable bit preserved), not just SKILL.md. This is the plugin/
