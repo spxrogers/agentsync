@@ -15,7 +15,6 @@ import (
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
-	"github.com/spxrogers/agentsync/internal/state"
 	"github.com/spxrogers/agentsync/internal/ui"
 )
 
@@ -223,11 +222,6 @@ func runExplain(w io.Writer, p *ui.Printer, fs afero.Fs, c source.Canonical, wan
 	sort.Strings(agents)
 
 	reg := registryFactory()
-	statePath := filepath.Join(home, ".state", "targets.json")
-	s, err := state.Load(statePath)
-	if err != nil {
-		return err
-	}
 
 	if jsonOut {
 		// One combined report whose rows cover exactly the requested plugins,
@@ -235,7 +229,7 @@ func runExplain(w io.Writer, p *ui.Printer, fs afero.Fs, c source.Canonical, wan
 		// computed from its own components.
 		var report render.TranslationReport
 		for _, pl := range wanted {
-			pr, err := explainPluginReport(fs, c, pl, agents, reg, s, home, pluginCacheRoot)
+			pr, err := explainPluginReport(fs, c, pl, agents, reg, home, pluginCacheRoot)
 			if err != nil {
 				return err
 			}
@@ -257,7 +251,7 @@ func runExplain(w io.Writer, p *ui.Printer, fs afero.Fs, c source.Canonical, wan
 		}
 		emitPluginHeader(w, p, pl)
 
-		report, err := explainPluginReport(fs, c, pl, agents, reg, s, home, pluginCacheRoot)
+		report, err := explainPluginReport(fs, c, pl, agents, reg, home, pluginCacheRoot)
 		if err != nil {
 			return err
 		}
@@ -278,7 +272,16 @@ func runExplain(w io.Writer, p *ui.Printer, fs afero.Fs, c source.Canonical, wan
 //
 // A disabled plugin contributes nothing: BuildReport emits its single
 // disabled-marker row from c.Plugins alone, so no projection or plan is needed.
-func explainPluginReport(fs afero.Fs, c source.Canonical, pl source.Plugin, agents []string, reg *adapter.Registry, s *state.Targets, home, pluginCacheRoot string) (render.TranslationReport, error) {
+//
+// State is deliberately NOT threaded into render.Plan here (nil): explain is
+// read-only, and a nil state makes the per-agent ops exactly the adapter's
+// rendered ops, with no apply-time OwnedKeys/orphan-cleanup synthesis. BuildReport
+// derives the partial-vs-none coverage from whether anything rendered
+// (len(ops) > 0), so a stray orphan-cleanup op (one would be synthesized for every
+// key a prior apply owns but this single-plugin scope no longer renders) must not
+// be allowed to masquerade as a real render and flip a fully-skipped plugin's
+// "none" to "partial".
+func explainPluginReport(fs afero.Fs, c source.Canonical, pl source.Plugin, agents []string, reg *adapter.Registry, home, pluginCacheRoot string) (render.TranslationReport, error) {
 	scoped := c
 	scoped.Plugins = []source.Plugin{pl}
 	if pl.Plugin.Disabled {
@@ -303,7 +306,7 @@ func explainPluginReport(fs afero.Fs, c source.Canonical, pl source.Plugin, agen
 	scoped.Hooks = proj.Hooks
 	scoped.LSPServers = proj.LSPServers
 
-	plan, err := render.Plan(secrets.ForRender(scoped), reg, agents, adapter.ScopeUser, "", s, paths.HomeDir(paths.OSEnv{}))
+	plan, err := render.Plan(secrets.ForRender(scoped), reg, agents, adapter.ScopeUser, "", nil, paths.HomeDir(paths.OSEnv{}))
 	if err != nil {
 		return render.TranslationReport{}, err
 	}
@@ -347,7 +350,7 @@ func emitReportBody(w io.Writer, p *ui.Printer, r render.TranslationReport) {
 		// before coloring so ANSI never shifts the count column), then a
 		// faint count tail with an optional skip note.
 		mark := color(ui.Pad(glyph+" "+row.Coverage, 12))
-		tail := p.Faint(fmt.Sprintf("%d mcp · %d commands", row.MCP, row.Commands))
+		tail := p.Faint(componentInventory(row))
 		if row.Skips > 0 {
 			tail += "  " + p.Yellow(fmt.Sprintf("(%d skipped)", row.Skips))
 		}
@@ -360,6 +363,42 @@ func emitReportBody(w io.Writer, p *ui.Printer, r render.TranslationReport) {
 		// (what it is, and why the agent could not translate it) beneath the row.
 		emitSkipDetails(w, p, row.SkipDetails)
 	}
+}
+
+// componentInventory renders the faint count tail describing what the plugin
+// hosts for this agent — every component kind, not just MCP + commands, so a
+// plugin that ships (say) only an LSP server or only skills is no longer reported
+// as a bare "0 mcp · 0 commands". Only non-zero kinds are listed, in a stable
+// order, joined by " · "; a plugin that contributes nothing to this agent reads
+// "no components". The counts describe the inventory; the coverage glyph and any
+// "(N skipped)" note describe what the agent could do with it.
+func componentInventory(row render.PluginRow) string {
+	parts := make([]string, 0, 6)
+	// one/many give per-count labels; the abbreviations mcp/lsp are invariant.
+	for _, c := range []struct {
+		n         int
+		one, many string
+	}{
+		{row.MCP, "mcp", "mcp"},
+		{row.Commands, "command", "commands"},
+		{row.Skills, "skill", "skills"},
+		{row.Subagents, "subagent", "subagents"},
+		{row.Hooks, "hook", "hooks"},
+		{row.LSP, "lsp", "lsp"},
+	} {
+		if c.n <= 0 {
+			continue
+		}
+		label := c.many
+		if c.n == 1 {
+			label = c.one
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", c.n, label))
+	}
+	if len(parts) == 0 {
+		return "no components"
+	}
+	return strings.Join(parts, " · ")
 }
 
 // emitSkipDetails lists each skipped component under its agent row as a faint,

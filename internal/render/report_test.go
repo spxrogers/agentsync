@@ -396,3 +396,95 @@ func TestBuildReport_CountsItemsNotOps(t *testing.T) {
 		t.Fatalf("Commands = %d, want 0 (memory must not be counted as a command)", row.Commands)
 	}
 }
+
+// TestBuildReport_InventoryCountsAllKinds pins that a row describes EVERY
+// component kind the model hosts for the agent, not just MCP + commands — so a
+// plugin shipping skills / subagents / hooks / an LSP server is no longer
+// reported as a bare "0 mcp · 0 commands".
+func TestBuildReport_InventoryCountsAllKinds(t *testing.T) {
+	c := source.Canonical{
+		MCPServers: []source.MCPServer{{ID: "m"}},
+		LSPServers: []source.LSPServer{{ID: "l"}},
+		Commands:   []source.Command{{Name: "c"}},
+		Skills:     []source.Skill{{Name: "s"}},
+		Subagents:  []source.Subagent{{Name: "a"}},
+		Hooks:      []source.Hook{{Event: "PreToolUse"}},
+		Plugins:    []source.Plugin{{ID: "demo", Plugin: source.PluginSpec{ID: "demo@mp"}}},
+	}
+	plan := render.RenderPlan{
+		PerAgent: map[string]render.AgentResult{
+			"claude": {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}},
+		},
+	}
+	report := render.BuildReport(c, plan, []string{"claude"})
+	if len(report.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(report.Rows))
+	}
+	row := report.Rows[0]
+	for _, tc := range []struct {
+		got  int
+		want int
+		name string
+	}{
+		{row.MCP, 1, "mcp"},
+		{row.LSP, 1, "lsp"},
+		{row.Commands, 1, "commands"},
+		{row.Skills, 1, "skills"},
+		{row.Subagents, 1, "subagents"},
+		{row.Hooks, 1, "hooks"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("row.%s = %d, want %d", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
+// TestBuildReport_CoverageNoneWhenNothingRendered: a plugin that hosts only a
+// component the agent cannot translate (an LSP server on Codex) renders nothing,
+// so the row is "none" — even though the LSP is counted in the inventory. This is
+// the user-visible behavior for an LSP-only plugin on a non-LSP agent.
+func TestBuildReport_CoverageNoneWhenNothingRendered(t *testing.T) {
+	c := source.Canonical{
+		LSPServers: []source.LSPServer{{ID: "l"}},
+		Plugins:    []source.Plugin{{ID: "demo", Plugin: source.PluginSpec{ID: "demo@mp"}}},
+	}
+	plan := render.RenderPlan{
+		PerAgent: map[string]render.AgentResult{
+			"codex": {Ops: nil, Skips: []adapter.Skip{{Component: "lsp", Name: "l", Reason: "no LSP concept"}}},
+		},
+	}
+	row := render.BuildReport(c, plan, []string{"codex"}).Rows[0]
+	if row.LSP != 1 {
+		t.Errorf("LSP = %d, want 1 (the hosted server is still counted)", row.LSP)
+	}
+	if row.Coverage != "none" {
+		t.Errorf("coverage = %q, want none (nothing rendered)", row.Coverage)
+	}
+}
+
+// TestBuildReport_CoveragePartialWhenSomethingRendered is the regression for a
+// latent bug the inventory change exposed: coverage was derived from
+// (mcp>0||commands>0), so a plugin whose skills rendered but whose (say) hook was
+// skipped was mislabeled "none" despite real output. Coverage now keys off
+// whether the plan rendered any op, so this is correctly "partial".
+func TestBuildReport_CoveragePartialWhenSomethingRendered(t *testing.T) {
+	c := source.Canonical{
+		Skills:  []source.Skill{{Name: "s"}},
+		Plugins: []source.Plugin{{ID: "demo", Plugin: source.PluginSpec{ID: "demo@mp"}}},
+	}
+	plan := render.RenderPlan{
+		PerAgent: map[string]render.AgentResult{
+			"codex": {
+				Ops:   []adapter.FileOp{{Action: "write", MergeStrategy: "replace"}}, // the skill rendered
+				Skips: []adapter.Skip{{Component: "hook", Name: "x", Reason: "unknown event"}},
+			},
+		},
+	}
+	row := render.BuildReport(c, plan, []string{"codex"}).Rows[0]
+	if row.Skills != 1 {
+		t.Errorf("Skills = %d, want 1", row.Skills)
+	}
+	if row.Coverage != "partial" {
+		t.Errorf("coverage = %q, want partial (a skill rendered; only the hook was skipped)", row.Coverage)
+	}
+}

@@ -11,6 +11,22 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **`explain` describes every component kind a plugin hosts, not just MCP +
+  commands.** Each agent row's count tail previously read `N mcp · N commands`
+  even for a plugin that ships only skills, subagents, hooks, or an LSP server —
+  so an LSP-only plugin reported a misleading `0 mcp · 0 commands`. The tail now
+  lists every non-zero kind it hosts for that agent (`mcp`, `commands`, `skills`,
+  `subagents`, `hooks`, `lsp`), e.g. `1 mcp · 2 skills · 1 lsp`; a plugin that
+  contributes nothing to an agent reads `no components`. The counts describe the
+  inventory (what the plugin hosts, MCP/LSP honouring each server's
+  `enabled`/`agents` targeting) — a hosted component the agent cannot translate is
+  still counted and reported under `(N skipped)`. `explain --json` rows gain the
+  matching `skills`, `subagents`, `hooks`, and `lsp` integer fields alongside the
+  existing `mcp`/`commands` (`render.PluginRow`). Coverage now derives `partial`
+  vs `none` from whether the adapter actually rendered anything for the agent
+  (rather than from `mcp`/`commands` alone), fixing a latent case where a plugin
+  whose skills rendered but whose hook was skipped was mislabeled `none`.
+
 - **`explain` itemizes skipped components.** A `◐ partial` row that reports
   `(N skipped)` is no longer a dead end: each skipped component is now listed
   beneath the agent row as an itemized `<component> <name>  <reason>` line (the

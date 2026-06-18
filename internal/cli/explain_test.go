@@ -645,6 +645,106 @@ func TestExplain_DisabledPluginRendersMarker(t *testing.T) {
 	}
 }
 
+// TestExplain_DescribesAllComponentKinds is the regression for the count tail
+// being limited to "N mcp · N commands": a plugin that ships only an LSP server
+// must report it. With claude (renders the LSP → full) and codex (no LSP concept
+// → none) both enabled, every row must surface "lsp" in its inventory — including
+// codex's "none" row, where the LSP is hosted but skipped — so the user can see
+// what the plugin hosts regardless of per-agent coverage.
+func TestExplain_DescribesAllComponentKinds(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	fixture := setupExplainLSPOnlyFixture(t, tmp)
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []string{"claude", "codex"} {
+		if _, err := runCLI(t, env, "agent", "add", a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "plugin", "install", "lsponly@lsp-mp"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "explain", "lsponly@lsp-mp")
+	if err != nil {
+		t.Fatalf("explain: %v\n%s", err, out)
+	}
+	// The plugin hosts no MCP and no commands, so the OLD tail would have read
+	// "0 mcp · 0 commands" and never mentioned the LSP. It must now say "lsp".
+	if !strings.Contains(out, "lsp") {
+		t.Errorf("explain should describe the hosted LSP server; got:\n%s", out)
+	}
+	if strings.Contains(out, "0 mcp") {
+		t.Errorf("explain should not pad the tail with zero-count kinds; got:\n%s", out)
+	}
+
+	// JSON carries every per-row count, with the LSP populated on both rows.
+	outJSON, err := runCLI(t, env, "explain", "lsponly@lsp-mp", "--json")
+	if err != nil {
+		t.Fatalf("explain --json: %v\n%s", err, outJSON)
+	}
+	var parsed struct {
+		Rows []struct {
+			Agent    string `json:"agent"`
+			Coverage string `json:"coverage"`
+			MCP      int    `json:"mcp"`
+			LSP      int    `json:"lsp"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal([]byte(outJSON), &parsed); err != nil {
+		t.Fatalf("explain --json not valid JSON: %v\n%s", err, outJSON)
+	}
+	got := map[string]struct {
+		cov      string
+		mcp, lsp int
+	}{}
+	for _, r := range parsed.Rows {
+		got[r.Agent] = struct {
+			cov      string
+			mcp, lsp int
+		}{r.Coverage, r.MCP, r.LSP}
+	}
+	if g := got["claude"]; g.lsp != 1 || g.mcp != 0 || g.cov != "full" {
+		t.Errorf("claude row = %+v; want lsp=1 mcp=0 coverage=full", g)
+	}
+	// Codex hosts the LSP (lsp=1) but cannot translate it → renders nothing → none.
+	if g := got["codex"]; g.lsp != 1 || g.cov != "none" {
+		t.Errorf("codex row = %+v; want lsp=1 coverage=none", g)
+	}
+}
+
+// setupExplainLSPOnlyFixture builds a marketplace whose single plugin ships only
+// an LSP server (no MCP, no commands) — the shape that exposed the truncated
+// "0 mcp · 0 commands" tail.
+func setupExplainLSPOnlyFixture(t *testing.T, tmp string) string {
+	t.Helper()
+	fixture := filepath.Join(tmp, "fixture-marketplace-explain-lsponly")
+	if err := os.MkdirAll(filepath.Join(fixture, ".claude-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixture, ".claude-plugin", "marketplace.json"),
+		[]byte(`{"name":"lsp-mp","owner":{"name":"x"},"plugins":[{"name":"lsponly","source":"./plugins/lsponly"}]}`),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	plugDir := filepath.Join(fixture, "plugins", "lsponly", ".claude-plugin")
+	if err := os.MkdirAll(plugDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(plugDir, "plugin.json"),
+		[]byte(`{"name":"lsponly","version":"1.0.0","lspServers":{"typescript":{"command":"typescript-language-server"}}}`),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	return fixture
+}
+
 // setupExplainCrossPluginFixture builds a marketplace with two installable
 // plugins used by the cross-plugin scoping regression: "clean" ships a single
 // MCP server (Codex renders it fully), "noisy" ships an MCP plus two components
