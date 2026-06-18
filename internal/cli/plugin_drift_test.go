@@ -107,3 +107,24 @@ func TestStatus_SanitizesUndeclaredPluginName(t *testing.T) {
 		t.Errorf("status nudge should carry the sanitized plugin name; got:\n%s", out)
 	}
 }
+
+// TestDoctor_SanitizesUndeclaredPluginName mirrors the status guard for doctor's
+// own undeclared-native-plugin report, which shares the undeclaredNativePlugins
+// source and the same ui.Sanitize display boundary — so a refactor dropping the
+// doctor wrap fails a test too, not just the status one.
+func TestDoctor_SanitizesUndeclaredPluginName(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	evilName := "demo" + string(rune(0x1b)) + "[31m" + string(rune(0x0d))
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("test-mp", mpDir, evilName))
+	out, err := runCLI(t, env, "doctor")
+	if err != nil {
+		t.Fatalf("doctor: %v\n%s", err, out)
+	}
+	if strings.ContainsRune(out, rune(0x1b)) || strings.ContainsRune(out, rune(0x0d)) {
+		t.Errorf("control byte from native plugin name leaked into doctor report: %q", out)
+	}
+	if !strings.Contains(out, "demo[31m") {
+		t.Errorf("doctor report should carry the sanitized plugin name; got:\n%s", out)
+	}
+}

@@ -168,8 +168,9 @@ included pending a faithful implementation. Replit/Rovo Dev are likewise deferre
 
 ## Reading the report
 
-Every `apply`, `verify`, and `explain` ends with a coverage report — per plugin,
-per agent — using the same three marks:
+Every `apply` and `explain` ends with a coverage report — per plugin, per agent
+— using the same three marks (`verify` does not print one; it only schema-lints
+the source and validates secrets):
 
 ```
 plugin: atlassian@anthropic

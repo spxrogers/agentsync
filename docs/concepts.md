@@ -164,8 +164,9 @@ for discovery, `apply` never re-emits it. See
 for the full rationale.
 
 ### Translation report & coverage
-Every `apply`, `verify`, and `explain` ends with a report showing, per plugin
-per agent, what landed:
+Every `apply` and `explain` ends with a report showing, per plugin per agent,
+what landed (`verify` only schema-lints the source and validates secrets — it
+does not project plugins or print a coverage report):
 
 - **✓ native** — full fidelity; the agent has the concept directly.
 - **◐ projected** — lossy but defensible translation, explicitly reported.
