@@ -749,10 +749,11 @@ func setupExplainLSPOnlyFixture(t *testing.T, tmp string) string {
 // plugins used by the cross-plugin scoping regression: "clean" ships a single
 // MCP server (Codex renders it fully), "noisy" ships an MCP plus two components
 // Codex cannot fully translate — an LSP server (no LSP concept) and a subagent
-// (Codex agents are TOML; the markdown `name` frontmatter is dropped). Both of
-// noisy's skips mirror the real-world report (leaked subagents *and* LSPs). With
-// both plugins installed, explaining one must not surface the other's components
-// or skips.
+// whose `tools`/`color` frontmatter has no Codex home (Codex agents are TOML
+// with no per-agent tools allowlist; the agent's `name` itself DOES carry over).
+// Both of noisy's skips mirror the real-world report (leaked subagents *and*
+// LSPs). With both plugins installed, explaining one must not surface the
+// other's components or skips.
 func setupExplainCrossPluginFixture(t *testing.T, tmp string) string {
 	t.Helper()
 	fixture := filepath.Join(tmp, "fixture-marketplace-explain-cross")
@@ -792,7 +793,7 @@ func setupExplainCrossPluginFixture(t *testing.T, tmp string) string {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(agentsDir, "reviewer.md"),
-		[]byte("---\nname: reviewer\ndescription: reviews code\n---\nReview carefully.\n"),
+		[]byte("---\nname: reviewer\ndescription: reviews code\ntools: [Read, Grep]\ncolor: blue\n---\nReview carefully.\n"),
 		0o644); err != nil {
 		t.Fatal(err)
 	}

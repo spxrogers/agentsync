@@ -207,10 +207,12 @@ literally, never resolved.)
 **Codex**
 
 - **Subagent** — Codex custom agents are TOML, not markdown: the prose body
-  becomes `developer_instructions`, the `description` + `model` frontmatter carry
-  over, and there is no per-agent `tools` allowlist (tool scoping is only
-  expressible via `[mcp_servers]` / skill toggles), so `tools` (and `color`) are
-  dropped with a reported skip.
+  becomes `developer_instructions`, and the `name` (required by Codex),
+  `description`, and `model` frontmatter carry over. There is no per-agent
+  `tools` allowlist (tool scoping is only expressible via `[mcp_servers]` / skill
+  toggles), so `tools` (and `color`) are dropped with a reported skip. Codex-only
+  agent keys agentsync has no canonical source for (`model_reasoning_effort`,
+  `sandbox_mode`, `nickname_candidates`, …) are simply not emitted.
 - **Slash command** — maps to Codex *custom prompts* (`~/.codex/prompts/*.md`),
   which do preserve `description` + `argument-hint`, but they're global-only, so a
   **project-scope** command has no target and is skipped; they also can't be

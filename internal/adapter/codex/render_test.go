@@ -185,6 +185,10 @@ func TestRender_Subagent_ToTOML(t *testing.T) {
 	c := source.Canonical{Subagents: []source.Subagent{{
 		Name: "review",
 		Frontmatter: map[string]any{
+			// `name` is a real Claude subagent frontmatter key (it lives in
+			// both the Claude and Codex agent schemas); it must carry over to
+			// the TOML `name` field, never be reported as a dropped key.
+			"name":        "review",
 			"description": "Code review",
 			"model":       "gpt-5.5",
 			"tools":       []string{"Read", "Grep"},
@@ -205,18 +209,54 @@ func TestRender_Subagent_ToTOML(t *testing.T) {
 	if !strings.Contains(content, "Code review") || !strings.Contains(content, "gpt-5.5") {
 		t.Fatalf("description/model missing: %s", content)
 	}
+	if !strings.Contains(content, `name = 'review'`) {
+		t.Fatalf("required name field missing from TOML: %s", content)
+	}
 	if strings.Contains(content, "tools") || strings.Contains(content, "color") {
 		t.Fatalf("tools/color should be dropped from TOML: %s", content)
 	}
 	var sawSkip bool
 	for _, s := range skips {
-		if s.Component == "subagent-frontmatter" && s.Name == "review" &&
-			strings.Contains(s.Reason, "tools") && strings.Contains(s.Reason, "color") {
-			sawSkip = true
+		if s.Component == "subagent-frontmatter" && s.Name == "review" {
+			if strings.Contains(s.Reason, "name") {
+				t.Fatalf("name carries over to the Codex TOML; it must not be reported dropped: %q", s.Reason)
+			}
+			if strings.Contains(s.Reason, "tools") && strings.Contains(s.Reason, "color") {
+				sawSkip = true
+			}
 		}
 	}
 	if !sawSkip {
 		t.Fatalf("expected a subagent-frontmatter skip listing tools+color, got %+v", skips)
+	}
+}
+
+// A subagent whose only "extra" frontmatter key is `name` (which carries over to
+// the Codex TOML) must render with NO skip at all — regression guard for the
+// spurious "dropped name" partial that hid clean agents behind a ◐ in `explain`.
+func TestRender_Subagent_NameOnly_NoSkip(t *testing.T) {
+	c := source.Canonical{Subagents: []source.Subagent{{
+		Name: "ai-architect",
+		Frontmatter: map[string]any{
+			"name":        "ai-architect",
+			"description": "Designs the system",
+			"model":       "gpt-5.5",
+		},
+		Body: "Architect the thing.\n",
+	}}}
+	a := codex.New(codex.Options{TargetRoot: t.TempDir()})
+	ops, skips, _ := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	op := findOp(ops, "/agents/ai-architect.toml")
+	if op == nil {
+		t.Fatal("ai-architect.toml op missing")
+	}
+	if !strings.Contains(string(op.Content), `name = 'ai-architect'`) {
+		t.Fatalf("name field missing: %s", op.Content)
+	}
+	for _, s := range skips {
+		if s.Component == "subagent-frontmatter" && s.Name == "ai-architect" {
+			t.Fatalf("no skip expected for a name/description/model-only agent, got %q", s.Reason)
+		}
 	}
 }
 

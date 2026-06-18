@@ -40,6 +40,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Codex subagents no longer report a spurious "dropped name".** The Codex
+  adapter writes the canonical `name` straight into the agent TOML's `name`
+  field (Codex *requires* it), but `name` was omitted from the adapter's set of
+  known frontmatter keys — so any subagent whose frontmatter carried `name`
+  (every Claude-format agent does) was reported as dropping it. For an agent
+  whose only otherwise-unmapped key was `name`, this surfaced a misleading `◐
+  partial` / `(N skipped)` in `explain` even though the agent translated
+  cleanly. `name` is now recognized as a carried-over key (and the frontmatter
+  `name` is preferred over the filename, matching Codex's "name is the source of
+  truth" rule); `tools` and `color`, which genuinely have no Codex target, are
+  still reported as dropped.
+
 - **Plugins now project the components they ship in their conventional default
   locations, not just the ones plugin.json lists.** Claude Code auto-discovers a
   plugin's components from default locations — `commands/*.md`, `agents/*.md`,
