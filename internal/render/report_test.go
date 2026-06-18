@@ -338,6 +338,51 @@ func TestTranslationReport_PrintTextStyled(t *testing.T) {
 	}
 }
 
+// TestTranslationReport_SanitizesUntrustedPluginLabel proves the shared
+// apply/verify translation report strips terminal control bytes from a plugin
+// id (untrusted fetched-marketplace metadata) before printing it, so a hostile
+// plugin cannot smuggle ANSI/escape sequences into agentsync's apply/verify
+// output. Both the plain (PrintText) and styled (PrintTextStyled) paths are
+// covered; the inert parameter residue ("[2J[31m") may survive as plain text.
+func TestTranslationReport_SanitizesUntrustedPluginLabel(t *testing.T) {
+	// A plugin id carrying a screen-clear CSI, a color CSI, and a carriage
+	// return — the injection payload the report's display boundary must defang.
+	const evil = "evil\x1b[2J\x1b[31m\rname"
+	c := source.Canonical{
+		Plugins: []source.Plugin{
+			{ID: "evil", Plugin: source.PluginSpec{ID: evil, Version: "1.0.0"}},
+		},
+	}
+	plan := render.RenderPlan{
+		PerAgent: map[string]render.AgentResult{
+			"claude": {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}},
+		},
+	}
+	report := render.BuildReport(c, plan, []string{"claude"})
+
+	assertClean := func(t *testing.T, where, out string) {
+		t.Helper()
+		if strings.ContainsRune(out, '\x1b') {
+			t.Errorf("%s: ESC byte leaked into report output: %q", where, out)
+		}
+		if strings.ContainsRune(out, '\r') {
+			t.Errorf("%s: CR byte leaked into report output: %q", where, out)
+		}
+		// The label is neutralized but still recognizable as inert text.
+		if !strings.Contains(out, "plugin: evil[2J[31mname") {
+			t.Errorf("%s: sanitized plugin label not present: %q", where, out)
+		}
+	}
+
+	// Plain path (p == nil) and the styled path under ColorNever (p != nil, so no
+	// legitimate ANSI is emitted) — both must carry no raw ESC/CR from the id.
+	var plain, styled bytes.Buffer
+	report.PrintText(&plain)
+	report.PrintTextStyled(&styled, ui.New(&styled, &styled, ui.ColorNever))
+	assertClean(t, "PrintText", plain.String())
+	assertClean(t, "PrintTextStyled", styled.String())
+}
+
 func TestTranslationReport_PrintJSON(t *testing.T) {
 	c := source.Canonical{
 		Plugins: []source.Plugin{

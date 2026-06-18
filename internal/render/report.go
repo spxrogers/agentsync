@@ -126,10 +126,19 @@ func (r TranslationReport) printText(w io.Writer, p *ui.Printer) {
 	sort.Strings(pluginOrder)
 
 	for _, plug := range pluginOrder {
+		// The plugin label is the plugin id from fetched marketplace metadata
+		// (untrusted), so sanitize it before rendering to the terminal: a control
+		// sequence smuggled into a plugin id must not recolor/clear the screen or
+		// spoof rows in the apply/verify translation report. Clean labels pass
+		// through unchanged, so the byte-stable plain fixtures still hold. (The
+		// explain command sanitizes the same untrusted source at its own display
+		// sites; this covers the shared report path that apply/verify print
+		// through.)
+		label := ui.Sanitize(plug)
 		if p != nil {
-			fmt.Fprintf(w, "%s %s\n", p.Bold("plugin:"), plug)
+			fmt.Fprintf(w, "%s %s\n", p.Bold("plugin:"), label)
 		} else {
-			fmt.Fprintf(w, "plugin: %s\n", plug)
+			fmt.Fprintf(w, "plugin: %s\n", label)
 		}
 		rows := byPlugin[plug]
 		sort.Slice(rows, func(i, j int) bool { return rows[i].Agent < rows[j].Agent })

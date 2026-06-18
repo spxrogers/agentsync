@@ -49,19 +49,20 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
-- **`explain` sanitizes untrusted plugin/component names before rendering them
+- **agentsync sanitizes untrusted plugin/component names before rendering them
   to the terminal.** A fetched marketplace plugin's id, version, or a component
   name it supplies is attacker-influenced; rendered raw, a name carrying ANSI/
   escape sequences (CSI color, OSC title-set, `\r`/`\x1b`) could recolor the
-  terminal, clear the screen, or spoof rows when a user ran `agentsync explain`.
-  The new `ui.Sanitize` strips C0/C1 control characters (incl. ESC, CR, LF, TAB,
-  DEL) at the display boundary — applied to the skip itemization
-  (`emitSkipDetails`), the plugin header, and the `--list` text rows, before
-  width/`Pad` so a stripped byte can't skew column alignment. Printable text
-  (incl. non-ASCII) is untouched, and `explain --json` keeps ids/components raw
-  (the machine contract, where the consumer owns escaping). The rendered Codex
-  agent TOML was already safe (the marshaller escapes control bytes and the
-  filename uses the canonical name).
+  terminal, clear the screen, or spoof rows when a user ran `agentsync explain`,
+  `apply`, or `verify`. The new `ui.Sanitize` strips C0/C1 control characters
+  (incl. ESC, CR, LF, TAB, DEL) at the display boundary — applied to `explain`'s
+  skip itemization (`emitSkipDetails`), plugin header, and `--list` text rows,
+  and to the shared `apply`/`verify` translation report's plugin label
+  (`render` `printText`) — before width/`Pad` so a stripped byte can't skew
+  column alignment. Printable text (incl. non-ASCII) is untouched, and `explain
+  --json` keeps ids/components raw (the machine contract, where the consumer
+  owns escaping). The rendered Codex agent TOML was already safe (the marshaller
+  escapes control bytes and the filename uses the canonical name).
 
 - **Codex subagents no longer report a spurious "dropped name".** The Codex
   adapter writes the canonical `name` straight into the agent TOML's `name`
