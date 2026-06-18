@@ -7,8 +7,26 @@ import (
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/ui"
 )
+
+// untrustedControl is a plugin-supplied string carrying a screen-clear CSI, a
+// color CSI, and a carriage return — the injection payload the display-boundary
+// sanitization must neutralize.
+const untrustedControl = "evil\x1b[2J\x1b[31m\rname"
+
+// assertNoTerminalControl fails if out carries an ESC or CR byte (real newlines
+// emitted by the renderer are fine).
+func assertNoTerminalControl(t *testing.T, where, out string) {
+	t.Helper()
+	if strings.ContainsRune(out, '\x1b') {
+		t.Errorf("%s: ESC byte leaked into output: %q", where, out)
+	}
+	if strings.ContainsRune(out, '\r') {
+		t.Errorf("%s: CR byte leaked into output: %q", where, out)
+	}
+}
 
 // ansiSeq matches an SGR escape (color/bold/faint reset) so a test can measure
 // the *visible* layout of styled output independent of the color codes.
@@ -143,22 +161,40 @@ func TestEmitSkipDetails_EmptyIsNoOp(t *testing.T) {
 // terminal control bytes from a plugin-supplied (untrusted) skip name, so a
 // malicious marketplace plugin cannot smuggle ANSI/escape sequences into the
 // rendered `explain` output. No injected control byte may survive; the inert
-// parameter residue ("[31m") is allowed through as plain text.
+// parameter residue ("[2J[31m") is allowed through as plain text.
 func TestEmitSkipDetails_SanitizesUntrustedName(t *testing.T) {
 	var buf bytes.Buffer
 	emitSkipDetails(&buf, ui.New(&buf, &buf, ui.ColorNever), "codex", []render.SkipDetail{
-		{Component: "subagent-frontmatter", Name: "evil\x1b[31m\rname", Reason: "a reason"},
+		{Component: "subagent-frontmatter", Name: untrustedControl, Reason: "a reason"},
 	})
 	out := buf.String()
-	if strings.ContainsRune(out, '\x1b') {
-		t.Errorf("ESC byte leaked into output: %q", out)
-	}
-	if strings.ContainsRune(out, '\r') {
-		t.Errorf("CR byte leaked into output: %q", out)
-	}
-	if !strings.Contains(out, "subagent evil[31mname") {
+	assertNoTerminalControl(t, "emitSkipDetails", out)
+	if !strings.Contains(out, "subagent evil[2J[31mname") {
 		t.Errorf("sanitized label not present in output: %q", out)
 	}
+}
+
+// TestEmitPluginHeader_SanitizesUntrusted and TestRunExplainList_SanitizesUntrusted
+// guard the other two Sanitize call sites (the plugin header id+version, and the
+// `--list` text rows): both render fetched-marketplace metadata, so a refactor
+// that dropped the Sanitize wrap there must fail a test, not slip through.
+func TestEmitPluginHeader_SanitizesUntrusted(t *testing.T) {
+	var buf bytes.Buffer
+	pl := source.Plugin{Plugin: source.PluginSpec{ID: untrustedControl, Version: "1.0\r0"}}
+	emitPluginHeader(&buf, ui.New(&buf, &buf, ui.ColorNever), pl)
+	assertNoTerminalControl(t, "emitPluginHeader", buf.String())
+}
+
+func TestRunExplainList_SanitizesUntrusted(t *testing.T) {
+	var buf bytes.Buffer
+	p := ui.New(&buf, &buf, ui.ColorNever)
+	c := source.Canonical{Plugins: []source.Plugin{{
+		Plugin: source.PluginSpec{ID: untrustedControl, Version: "9\r9"},
+	}}}
+	if err := runExplainList(p, c, false); err != nil {
+		t.Fatalf("runExplainList: %v", err)
+	}
+	assertNoTerminalControl(t, "runExplainList", buf.String())
 }
 
 // TestEmitSkipDetails_UnnamedComponentOnly exercises the empty-Name skip

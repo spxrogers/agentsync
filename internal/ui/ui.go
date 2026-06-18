@@ -26,6 +26,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 )
@@ -173,24 +174,35 @@ func Pad(s string, width int) string {
 // letters and ordinary spaces) passes through unchanged. Apply it at the display
 // boundary, before width/Pad calculation, so a stripped byte never throws off
 // column alignment.
+//
+// Scanning is rune-level (not byte-level): byte-level stripping of the 0x80–0x9F
+// range would corrupt legitimate multibyte UTF-8 (a CJK rune's continuation
+// bytes live there). Invalid UTF-8 is normalized rather than passed verbatim — a
+// malformed byte decodes to U+FFFD and is re-emitted as U+FFFD, so a raw
+// 0x80–0x9F byte (a C1 CSI introducer on an 8-bit terminal) can never survive.
+// Sanitize does NOT touch bidi-override or zero-width runes (U+202E, U+200B, …):
+// those are a cosmetic spoofing concern, not a terminal-control one.
 func Sanitize(s string) string {
 	// Fast path: the overwhelmingly common case is clean text, so scan once and
-	// only allocate when there is something to remove.
-	hasControl := false
+	// only allocate when there is something to change. We also rebuild on invalid
+	// UTF-8 (RuneError) — `range` yields RuneError for a malformed byte, and the
+	// rebuild's WriteRune normalizes it to U+FFFD, so a raw 0x80–0x9F byte (a C1
+	// CSI introducer on an 8-bit terminal) can never pass through verbatim.
+	clean := true
 	for _, r := range s {
-		if isControl(r) {
-			hasControl = true
+		if isControl(r) || r == utf8.RuneError {
+			clean = false
 			break
 		}
 	}
-	if !hasControl {
+	if clean {
 		return s
 	}
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
 		if !isControl(r) {
-			b.WriteRune(r)
+			b.WriteRune(r) // WriteRune(RuneError) emits U+FFFD, normalizing bad bytes
 		}
 	}
 	return b.String()
