@@ -158,14 +158,18 @@ func runExplainList(p *ui.Printer, c source.Canonical, jsonOut bool) error {
 
 	fmt.Fprintf(p.Out, "%s %s\n", p.Bold("Installed plugins"),
 		p.Faint(fmt.Sprintf("(%d)", len(plugins))))
+	// Plugin id + version come from fetched marketplace metadata (untrusted), so
+	// sanitize before width/Pad and display to keep terminal escapes out of the
+	// text listing. (The --json branch above leaves them raw — that's the machine
+	// contract, where the consumer owns escaping.)
 	maxLabel := 0
 	for _, pl := range plugins {
-		if n := visibleLen(explainLabel(pl)); n > maxLabel {
+		if n := visibleLen(ui.Sanitize(explainLabel(pl))); n > maxLabel {
 			maxLabel = n
 		}
 	}
 	for _, pl := range plugins {
-		label := explainLabel(pl)
+		label := ui.Sanitize(explainLabel(pl))
 		hasTrail := pl.Plugin.Version != "" || pl.Plugin.Disabled
 		// Only pad the label when something follows it — a bare row with
 		// trailing spaces just leaves visible whitespace at end-of-line.
@@ -175,7 +179,7 @@ func runExplainList(p *ui.Printer, c source.Canonical, jsonOut bool) error {
 		}
 		line := fmt.Sprintf("  %s %s", p.Cyan(ui.GlyphInfo), shown)
 		if pl.Plugin.Version != "" {
-			line += "  " + p.Faint("v"+pl.Plugin.Version)
+			line += "  " + p.Faint("v"+ui.Sanitize(pl.Plugin.Version))
 		}
 		if pl.Plugin.Disabled {
 			line += "  " + p.Yellow("(disabled)")
@@ -313,12 +317,14 @@ func explainPluginReport(fs afero.Fs, c source.Canonical, pl source.Plugin, agen
 	return render.BuildReport(scoped, plan, agents), nil
 }
 
-// emitPluginHeader prints a styled "▸ <id>  v<version>  (disabled)" line.
+// emitPluginHeader prints a styled "▸ <id>  v<version>  (disabled)" line. The
+// id and version come from fetched marketplace metadata (untrusted), so they are
+// sanitized before styling to keep terminal escapes out of the header.
 func emitPluginHeader(w io.Writer, p *ui.Printer, pl source.Plugin) {
-	label := explainLabel(pl)
+	label := ui.Sanitize(explainLabel(pl))
 	parts := []string{p.Bold(p.Cyan("▸") + " " + label)}
 	if pl.Plugin.Version != "" {
-		parts = append(parts, p.Faint("v"+pl.Plugin.Version))
+		parts = append(parts, p.Faint("v"+ui.Sanitize(pl.Plugin.Version)))
 	}
 	if pl.Plugin.Disabled {
 		parts = append(parts, p.Yellow("(disabled)"))
@@ -415,13 +421,20 @@ func emitSkipDetails(w io.Writer, p *ui.Printer, agent string, skips []render.Sk
 	fmt.Fprintf(w, "      %s\n", p.Faint(fmt.Sprintf(
 		"%s %s couldn't fully translate — reduced = rendered without some fields; dropped = not emitted:",
 		ui.GlyphArrow, agent)))
+	// A skip's Name comes from a fetched marketplace plugin (untrusted) and its
+	// Reason from an adapter (trusted) — sanitize both at this display boundary
+	// so neither can smuggle terminal escapes, and do it BEFORE width/Pad so a
+	// stripped byte can't skew the column. The component kind is adapter-fixed,
+	// so the whole label is safe to sanitize as one unit.
+	labels := make([]string, len(skips))
 	width := 0
-	for _, s := range skips {
-		if n := visibleLen(skipLabel(s)); n > width {
+	for i, s := range skips {
+		labels[i] = ui.Sanitize(skipLabel(s))
+		if n := visibleLen(labels[i]); n > width {
 			width = n
 		}
 	}
-	for _, s := range skips {
+	for i, s := range skips {
 		// "reduced" and "dropped" are the same width, so the reason column stays
 		// aligned without padding the (color-wrapped) status word.
 		status := p.Yellow("dropped")
@@ -430,9 +443,9 @@ func emitSkipDetails(w io.Writer, p *ui.Printer, agent string, skips []render.Sk
 		}
 		fmt.Fprintf(w, "        %s %s  %s  %s\n",
 			p.Faint(ui.GlyphInfo),
-			ui.Pad(skipLabel(s), width),
+			ui.Pad(labels[i], width),
 			status,
-			p.Faint(s.Reason))
+			p.Faint(ui.Sanitize(s.Reason)))
 	}
 }
 

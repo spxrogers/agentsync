@@ -106,3 +106,30 @@ func TestPad(t *testing.T) {
 		}
 	}
 }
+
+func TestSanitize(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"clean ascii passes through", "atlassian@anthropic", "atlassian@anthropic"},
+		{"empty", "", ""},
+		{"non-ascii letters preserved", "café-名前", "café-名前"},
+		{"ordinary spaces preserved", "a b  c", "a b  c"},
+		{"ESC + CSI introducer stripped, params left inert", "\x1b[31mRED\x1b[0m", "[31mRED[0m"},
+		{"carriage return stripped", "before\rafter", "beforeafter"},
+		{"newline and tab stripped", "a\nb\tc", "abc"},
+		{"BEL and backspace stripped", "x\x07\x08y", "xy"},
+		{"DEL stripped", "a\x7fb", "ab"},
+		{"C1 control (U+009B CSI) stripped", "a\u009bb", "ab"},
+		{"OSC title-set neutralized (ESC and BEL gone)", "\x1b]0;pwned\x07", "]0;pwned"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Sanitize(tc.in); got != tc.want {
+				t.Errorf("Sanitize(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

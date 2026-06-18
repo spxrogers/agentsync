@@ -139,6 +139,28 @@ func TestEmitSkipDetails_EmptyIsNoOp(t *testing.T) {
 	}
 }
 
+// TestEmitSkipDetails_SanitizesUntrustedName proves the display boundary strips
+// terminal control bytes from a plugin-supplied (untrusted) skip name, so a
+// malicious marketplace plugin cannot smuggle ANSI/escape sequences into the
+// rendered `explain` output. No injected control byte may survive; the inert
+// parameter residue ("[31m") is allowed through as plain text.
+func TestEmitSkipDetails_SanitizesUntrustedName(t *testing.T) {
+	var buf bytes.Buffer
+	emitSkipDetails(&buf, ui.New(&buf, &buf, ui.ColorNever), "codex", []render.SkipDetail{
+		{Component: "subagent-frontmatter", Name: "evil\x1b[31m\rname", Reason: "a reason"},
+	})
+	out := buf.String()
+	if strings.ContainsRune(out, '\x1b') {
+		t.Errorf("ESC byte leaked into output: %q", out)
+	}
+	if strings.ContainsRune(out, '\r') {
+		t.Errorf("CR byte leaked into output: %q", out)
+	}
+	if !strings.Contains(out, "subagent evil[31mname") {
+		t.Errorf("sanitized label not present in output: %q", out)
+	}
+}
+
 // TestEmitSkipDetails_UnnamedComponentOnly exercises the empty-Name skip
 // through the full emitSkipDetails formatting path (not just skipLabel): a skip
 // with no name must render as a "<bullet> <kind>  <status>  <reason>" line with
