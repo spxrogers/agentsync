@@ -118,21 +118,7 @@ ci: lint test-release
 # Actions -> "release" -> "Run workflow" -> enter the version. That path validates,
 # tags, and publishes in one run (see .github/workflows/release.yml).
 release version:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    version="{{ version }}"
-    semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*))?(\+([0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*))?$'
-    if [[ ! "$version" =~ $semver ]]; then
-        echo "release: '$version' must start with 'v' and be valid semver (e.g. v0.1.0, v1.2.3-rc.1)" >&2
-        exit 1
-    fi
-    if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
-        echo "release: tag '$version' already exists" >&2
-        exit 1
-    fi
-    git tag -a "$version" -m "agentsync $version"
-    git push origin "$version"
-    echo "release: pushed $version — CI's release workflow will build and publish it."
+    scripts/release-tag.sh "{{ version }}"
 
 # Remove generated artefacts (binaries, dist, coverage reports).
 clean:

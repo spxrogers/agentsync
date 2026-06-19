@@ -35,6 +35,13 @@ on:
 permissions:
   contents: write
 
+# Serialize releases so a manual dispatch and a tag push (or two dispatches)
+# can't race to tag/publish the same version. We never cancel an in-flight
+# release — interrupting goreleaser mid-publish is worse than waiting.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   goreleaser:
     name: goreleaser (publish)
@@ -48,30 +55,23 @@ jobs:
         with: { fetch-depth: 0 }
       # Manual-dispatch only: validate the requested version and create + push
       # the annotated tag at HEAD so goreleaser (which derives the version from
-      # the tag at HEAD) has one to release. Mirrors the `just release` recipe's
-      # validation. The version is read via env, never interpolated into the
-      # script body, so a hostile input can't inject shell. Uses the persisted
-      # GITHUB_TOKEN from actions/checkout (contents:write, granted below).
+      # the tag at HEAD) has one to release. Delegates to scripts/release-tag.sh
+      # — the SAME validator the `just release` laptop path uses, so the two
+      # paths can't drift (and CI self-tests that script). The version is read
+      # via env and passed as a single quoted arg; the script validates it before
+      # any git command, so a hostile input can't reach `git tag`/`push` or
+      # inject shell. The tag push uses the persisted GITHUB_TOKEN from
+      # actions/checkout (contents:write, granted below); a GITHUB_TOKEN-pushed
+      # tag deliberately does NOT re-trigger this workflow, which is why we tag
+      # and publish in one run instead of relying on the `push: tags` trigger.
       - name: Validate version and create release tag (manual dispatch)
         if: github.event_name == 'workflow_dispatch'
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          set -euo pipefail
-          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*))?(\+([0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*))?$'
-          if [[ ! "$VERSION" =~ $semver ]]; then
-            echo "release: '$VERSION' must start with 'v' and be valid semver (e.g. v0.1.0, v1.2.3-rc.1)" >&2
-            exit 1
-          fi
-          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
-            echo "release: tag '$VERSION' already exists" >&2
-            exit 1
-          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git tag -a "$VERSION" -m "agentsync $VERSION"
-          git push origin "$VERSION"
-          echo "release: created and pushed $VERSION — publishing it now."
+          scripts/release-tag.sh "$VERSION"
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod

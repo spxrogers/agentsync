@@ -61,6 +61,11 @@ jobs:
       - run: just lint
       - name: Verify formatting & go.mod/go.sum are committed
         run: git diff --exit-code
+      # Pin the release-version rule (scripts/release-tag.sh) so the v+semver
+      # validator both release paths share can't silently rot. Pure bash, no git
+      # side effects.
+      - name: Pin release-version validation (scripts/release-tag.sh --self-test)
+        run: ./scripts/release-tag.sh --self-test
 
   goreleaser-snapshot:
     name: goreleaser-snapshot (cross-build matrix)

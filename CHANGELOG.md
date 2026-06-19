@@ -21,7 +21,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `GITHUB_TOKEN` does not start a new workflow run, so a "push the tag and let
   the tag trigger fire" design would tag but never publish (and conversely, that
   same rule is what stops the manual run from kicking off a duplicate release).
-  The laptop path (`just release vX.Y.Z`) is unchanged.
+  The laptop path (`just release vX.Y.Z`) is unchanged. Both paths now share a
+  single validator, `scripts/release-tag.sh` (CI exercises it via `--self-test`),
+  so the `v`+semver rule lives in exactly one place; the workflow also gained a
+  `concurrency` guard so a dispatch and a tag push can't race to publish the same
+  version.
 - **Untrusted plugin/marketplace metadata is now sanitized by type, not by
   convention (`internal/untrusted`).** Issue #93 / PR #100 sanitized ~24 terminal
   print sites by hand-wrapping each fetched id/version/marketplace-name in
