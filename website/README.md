@@ -74,6 +74,14 @@ CLI. The custom domain is set via [`public/CNAME`](public/CNAME).
 To redeploy out of band (e.g. a docs-only fix between releases), run
 `just docs-publish` locally — it does the same rebuild + force-push to `gh-pages`.
 
+The page footer's "Last updated" line carries a **build/deploy commit hash** — a
+short SHA linked to the exact commit on GitHub, so the live site always shows
+"what's currently live." It's a Starlight component override
+([`src/components/LastUpdated.astro`](src/components/LastUpdated.astro)); the SHA
+is resolved at build time in [`astro.config.mjs`](astro.config.mjs) (CI's
+`GITHUB_SHA`, falling back to local `git rev-parse HEAD`) and injected as
+`PUBLIC_COMMIT_SHA`. If neither is available the hash is simply omitted.
+
 One-time setup in the GitHub repo: **Settings → Pages → Source: Deploy from a
 branch → `gh-pages` / `(root)`**, with `agentsync.cc` as the custom domain (the
 `CNAME` file re-enforces it on each deploy).
