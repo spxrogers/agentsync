@@ -24,6 +24,7 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 				Component: "command",
 				Name:      cmd.Name,
 				Reason:    "no Windsurf workflows target at this scope",
+				Kind:      adapter.SkipDropped,
 			})
 		}
 		return nil, skips, nil

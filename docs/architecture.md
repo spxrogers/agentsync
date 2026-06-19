@@ -140,9 +140,14 @@ The adapter that builds the `Skip` sets `Kind` — the CLI's `explain` reads it
 directly and `explain --json` surfaces it as `kind` (`"reduced"`/`"dropped"`).
 The zero value `SkipKindUnset` is invalid: `Component` is the plain kind (`mcp`,
 `subagent`, …) and no longer encodes the distinction via a `-frontmatter` suffix.
-`TestEveryAdapterClassifiesSkips` (`internal/cli`) renders every registered
-adapter at both scopes and fails if any emitted skip leaves `Kind` unset, so a
-new adapter or skip site cannot silently ship unclassified.
+Two complementary guards make an unclassified skip impossible to ship.
+`TestEverySkipLiteralSetsKind` (`internal/adapter`) statically parses every
+production `adapter.Skip` literal under `internal/` and fails if one omits `Kind`
+— reachability-independent, so a skip site gated on a path that is never empty at
+runtime (e.g. a scope-gap branch) cannot hide from it. `TestEveryAdapterClassifiesSkips`
+(`internal/cli`) is the behavioral complement: it renders every registered
+adapter at both scopes, fails on any unset `Kind`, and pins that both kind values
+are exercised.
 
 **Key-merge strategies and on-disk format.** `KeyMergeStrategy` /
 `FileOp.MergeStrategy` name how an adapter co-owns keys inside a shared config

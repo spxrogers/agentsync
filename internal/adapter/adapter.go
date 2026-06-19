@@ -106,11 +106,16 @@ type SkipKind int
 
 const (
 	// SkipKindUnset is the zero value and is INVALID: every constructed Skip MUST
-	// set Kind to one of the classifications below. Leaving it unset is a bug —
-	// the exhaustiveness guard TestEveryAdapterClassifiesSkips (internal/cli)
-	// renders every registered adapter over a component-complete fixture at both
-	// scopes and fails if any emitted skip carries SkipKindUnset, closing the
-	// "no compile-time guard" gap a silent string suffix left open.
+	// set Kind to one of the classifications below. Leaving it unset is a bug,
+	// caught by two complementary guards. TestEverySkipLiteralSetsKind
+	// (internal/adapter) statically parses every production adapter.Skip literal
+	// under internal/ and fails if one omits Kind — reachability-independent, so a
+	// skip site gated on a path that is never empty at runtime cannot hide from it.
+	// TestEveryAdapterClassifiesSkips (internal/cli) is the behavioral complement:
+	// it renders every registered adapter at both scopes and fails if any emitted
+	// skip carries SkipKindUnset, while also pinning that both kind values are
+	// exercised. Together they close the "no compile-time guard" gap a silent
+	// string suffix left open.
 	SkipKindUnset SkipKind = iota
 	// SkipDropped — the whole component had no native target on this agent and was
 	// not emitted at all (e.g. an LSP server on an agent with no LSP concept, a
