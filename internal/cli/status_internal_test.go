@@ -71,6 +71,27 @@ func TestSkillRoots_AnchorsOnSkillMD(t *testing.T) {
 			want: map[string]bool{greet: true},
 		},
 		{
+			// Sibling skills whose names share a prefix are INDEPENDENT roots —
+			// the nesting filter must not drop `greet` just because `greetzilla`
+			// HasPrefix("…/greet…"). Guards hasAncestorIn's `+sep` boundary at the
+			// skillRoots level (skillRootOf's boundary is covered separately).
+			name: "sibling skills with a shared name prefix are both roots",
+			items: []statusItem{
+				{Path: filepath.Join(greet, "SKILL.md")},
+				{Path: filepath.Join(abs("u", ".claude", "skills", "greetzilla"), "SKILL.md")},
+			},
+			want: map[string]bool{greet: true, abs("u", ".claude", "skills", "greetzilla"): true},
+		},
+		{
+			// A skill literally named `skills` still anchors correctly: the dir is
+			// `…/skills/skills` whose grandparent base is `skills`.
+			name: "a skill named skills is a valid root",
+			items: []statusItem{
+				{Path: abs("u", ".claude", "skills", "skills", "SKILL.md")},
+			},
+			want: map[string]bool{abs("u", ".claude", "skills", "skills"): true},
+		},
+		{
 			name: "a key-merge item that happens to end in SKILL.md is ignored",
 			items: []statusItem{
 				{Path: filepath.Join(greet, "SKILL.md"), Pointer: "/mcpServers/x"},
