@@ -162,7 +162,7 @@ chocolateys:
     project_url: https://github.com/spxrogers/agentsync
     project_source_url: https://github.com/spxrogers/agentsync
     package_source_url: https://github.com/spxrogers/agentsync
-    docs_url: https://github.com/spxrogers/agentsync/blob/main/README.md
+    docs_url: https://agentsync.cc/
     bug_tracker_url: https://github.com/spxrogers/agentsync/issues
     license_url: https://github.com/spxrogers/agentsync/blob/main/LICENSE
     require_license_acceptance: false
