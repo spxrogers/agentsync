@@ -98,6 +98,23 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
     explicit `kind` field (`"reduced"`/`"dropped"`), and `component` is now the
     plain kind (`subagent`, `command`, …) — it no longer carries the
     `-frontmatter` suffix machine consumers had to parse. Read `kind` instead.
+- **`status` now collapses skill directories and gains `--agents` / `--verbose`.**
+  A skill bundling scripts/references/assets used to print one row per file, so a
+  handful of asset-heavy skills could push `status` past a thousand lines. By
+  default each skill directory now renders as a single row — the skill dir, its
+  *most-severe* drift class (so a drifted `SKILL.md` hiding among clean assets
+  still shows red), and a faint `SKILL.md + N files` count with a per-class
+  breakdown when the bundled files don't all share one class. A directory is
+  recognized as a skill by an actual `…/skills/<name>/SKILL.md` (not a bare
+  `skills` path segment), so an unrelated ancestor dir named `skills` can't sweep
+  non-skill files into a bogus group. Pass `-v`/`--verbose` to expand every skill
+  back to one row per file (the previous view). A new `--agents <list>` flag
+  (comma-separated allowlist, `*` = all enabled — matching `mcp add --agents`)
+  scopes the report to specific agents; orphaned-state warnings still consider the
+  full enabled set so narrowing never mislabels a deselected agent as an orphan.
+  `status --json` is
+  unchanged and **never collapsed** — it still carries every tracked file, so the
+  machine contract is stable.
 
 ### Fixed
 

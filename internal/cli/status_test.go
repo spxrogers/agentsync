@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 func TestStatus_DriftAfterDirectEdit(t *testing.T) {
@@ -170,6 +172,295 @@ func TestStatus_CleanAfterApply(t *testing.T) {
 	// After clean apply, should report clean or new (state recorded).
 	if strings.Contains(out, "drift") || strings.Contains(out, "conflict") {
 		t.Fatalf("status reported unexpected drift after clean apply: %s", out)
+	}
+}
+
+// statusEnv runs `init` then `agent add` for each named agent in a fresh temp
+// target root, returning the root and the env to pass to runCLI. It collapses
+// the init/add boilerplate the status collapse/filter tests share.
+func statusEnv(t *testing.T, agents ...string) (string, map[string]string) {
+	t.Helper()
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	for _, a := range agents {
+		if _, err := runCLI(t, env, "agent", "add", a); err != nil {
+			t.Fatalf("agent add %s: %v", a, err)
+		}
+	}
+	return tmp, env
+}
+
+// writeSkill creates .agentsync/skills/<name>/SKILL.md plus the given bundled
+// files (relative slash-paths → contents). Pass a nil map for a single-file skill.
+func writeSkill(t *testing.T, tmp, name string, bundled map[string]string) {
+	t.Helper()
+	dir := filepath.Join(tmp, ".agentsync", "skills", name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"),
+		[]byte("---\nname: "+name+"\ndescription: d\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for rel, body := range bundled {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// lineContaining returns the first line of s that contains sub, or "".
+func lineContaining(s, sub string) string {
+	for _, ln := range strings.Split(s, "\n") {
+		if strings.Contains(ln, sub) {
+			return ln
+		}
+	}
+	return ""
+}
+
+// TestStatus_CollapsesSkillDirectory locks in the default digestible view: a
+// skill directory with bundled files renders as a single summary row (the skill
+// dir + a "SKILL.md + N files" count) instead of one row per file, so a skill
+// shipping hundreds of assets no longer floods the report. --verbose restores
+// the full per-file listing.
+func TestStatus_CollapsesSkillDirectory(t *testing.T) {
+	tmp, env := statusEnv(t, "claude")
+	writeSkill(t, tmp, "build123d", map[string]string{"references/notes.md": "notes\n"})
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	// The collapsed row carries the file-count summary and the discoverability
+	// hint, but NOT the individual bundled-file path.
+	if !strings.Contains(out, "SKILL.md + 1 file") {
+		t.Errorf("expected a collapsed skill summary; got:\n%s", out)
+	}
+	if strings.Contains(out, "notes.md") {
+		t.Errorf("default status should not list bundled skill files; got:\n%s", out)
+	}
+	if !strings.Contains(out, "1 skill directory collapsed") {
+		t.Errorf("expected the singular collapse hint; got:\n%s", out)
+	}
+	if !strings.Contains(out, "--verbose") {
+		t.Errorf("expected a hint pointing at --verbose; got:\n%s", out)
+	}
+
+	vout, err := runCLI(t, env, "status", "--verbose")
+	if err != nil {
+		t.Fatalf("status --verbose: %v\n%s", err, vout)
+	}
+	if !strings.Contains(vout, filepath.Join("references", "notes.md")) {
+		t.Errorf("--verbose should list every bundled file; got:\n%s", vout)
+	}
+	if strings.Contains(vout, "SKILL.md + 1 file") {
+		t.Errorf("--verbose should not collapse; got:\n%s", vout)
+	}
+	if strings.Contains(vout, "collapsed") {
+		t.Errorf("--verbose should not print the collapse hint; got:\n%s", vout)
+	}
+}
+
+// TestStatus_SingleFileSkillNotCollapsed pins the "collapsing hides nothing"
+// promise: a skill that is just a SKILL.md (no bundled files) stays a normal
+// per-file row — collapsing a one-file group would only obscure its path.
+func TestStatus_SingleFileSkillNotCollapsed(t *testing.T) {
+	tmp, env := statusEnv(t, "claude")
+	writeSkill(t, tmp, "solo", nil)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, filepath.Join("skills", "solo", "SKILL.md")) {
+		t.Errorf("a single-file skill should render its SKILL.md path as a row; got:\n%s", out)
+	}
+	if strings.Contains(out, "SKILL.md +") || strings.Contains(out, "collapsed") {
+		t.Errorf("a single-file skill must not be collapsed; got:\n%s", out)
+	}
+}
+
+// TestStatus_CollapsedSkillShowsMostSevereClass guards that collapsing never
+// hides a problem: a drifted SKILL.md inside an otherwise-clean skill must make
+// the collapsed *headline* red (drift) — not merely mention "drift" somewhere —
+// and the faint summary must spell out the mixed per-class breakdown.
+func TestStatus_CollapsedSkillShowsMostSevereClass(t *testing.T) {
+	tmp, env := statusEnv(t, "claude")
+	writeSkill(t, tmp, "greet", map[string]string{"references/notes.md": "notes\n"})
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	// Hand-edit only the rendered SKILL.md so the skill is now 1 drift + 1 clean.
+	dst := filepath.Join(tmp, ".claude", "skills", "greet", "SKILL.md")
+	if err := os.WriteFile(dst, []byte("---\nname: greet\ndescription: d\n---\nHAND EDIT\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	// Isolate the collapsed skill row itself (uniquely identified by its file
+	// count) so the assertion can't be satisfied by the word "drift" leaking in
+	// from the footer/legend/breakdown — the vacuous-green trap.
+	row := lineContaining(out, "SKILL.md + 1 file")
+	if row == "" {
+		t.Fatalf("expected a collapsed skill row; got:\n%s", out)
+	}
+	// Glyphs are always emitted (color is stripped in tests), so the headline is
+	// "✗ drift", and a green regression would render "✓ clean" on this row.
+	if !strings.Contains(row, ui.GlyphErr+" drift") {
+		t.Errorf("collapsed headline must be the most-severe class (✗ drift); row:\n%s", row)
+	}
+	if strings.Contains(row, ui.GlyphOK+" clean") {
+		t.Errorf("collapsed headline regressed to green; row:\n%s", row)
+	}
+	if !strings.Contains(row, "1 clean, 1 drift") {
+		t.Errorf("collapsed summary should break down the mixed classes; row:\n%s", row)
+	}
+	if strings.Contains(out, "notes.md") {
+		t.Errorf("collapsed view should still hide the clean bundled file; got:\n%s", out)
+	}
+}
+
+// TestStatus_CollapseHintPluralizes pins the plural branch of the collapse hint
+// (the singular branch is covered by TestStatus_CollapsesSkillDirectory).
+func TestStatus_CollapseHintPluralizes(t *testing.T) {
+	tmp, env := statusEnv(t, "claude")
+	writeSkill(t, tmp, "alpha", map[string]string{"references/a.md": "a\n"})
+	writeSkill(t, tmp, "beta", map[string]string{"references/b.md": "b\n"})
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "2 skill directories collapsed") {
+		t.Errorf("expected the plural collapse hint; got:\n%s", out)
+	}
+}
+
+// TestStatus_AgentFilter locks in --agents: it scopes the report to the named
+// agent(s), rejects unknown / not-enabled / empty inputs with a clear message,
+// and the (uncollapsed) --json payload honors the same scope.
+func TestStatus_AgentFilter(t *testing.T) {
+	tmp, env := statusEnv(t, "claude", "codex")
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "status", "--agents", "codex")
+	if err != nil {
+		t.Fatalf("status --agents codex: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "[codex]") {
+		t.Errorf("expected the codex section; got:\n%s", out)
+	}
+	if strings.Contains(out, "[claude]") {
+		t.Errorf("--agents codex should not report claude; got:\n%s", out)
+	}
+
+	// "*" means all enabled, matching `mcp add --agents` (not an "unknown agent").
+	star, err := runCLI(t, env, "status", "--agents", "*")
+	if err != nil {
+		t.Fatalf("status --agents '*': %v\n%s", err, star)
+	}
+	if !strings.Contains(star, "[claude]") || !strings.Contains(star, "[codex]") {
+		t.Errorf("--agents '*' should report all enabled agents; got:\n%s", star)
+	}
+
+	// --json honors the filter and stays parseable.
+	jout, err := runCLI(t, env, "status", "--agents", "claude", "--json")
+	if err != nil {
+		t.Fatalf("status --agents claude --json: %v\n%s", err, jout)
+	}
+	var got struct {
+		Agents []struct {
+			Agent string `json:"agent"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal([]byte(jout), &got); err != nil {
+		t.Fatalf("--agents --json not valid JSON: %v\n%s", err, jout)
+	}
+	if len(got.Agents) != 1 || got.Agents[0].Agent != "claude" {
+		t.Errorf("--agents claude --json should carry only claude; got %#v", got.Agents)
+	}
+
+	// Error paths assert the message, not just non-nil — a clear message is the
+	// whole point of failing instead of silently reporting nothing.
+	if _, err := runCLI(t, env, "status", "--agents", "bogus"); err == nil ||
+		!strings.Contains(err.Error(), "unknown agent") {
+		t.Errorf("expected an 'unknown agent' error; got %v", err)
+	}
+	// opencode is a valid agent name but was never enabled here.
+	if _, err := runCLI(t, env, "status", "--agents", "opencode"); err == nil ||
+		!strings.Contains(err.Error(), "not enabled") {
+		t.Errorf("expected a 'not enabled' error; got %v", err)
+	}
+	// An explicitly-empty filter is a clear error, not the misleading
+	// "no agents enabled" message (agents ARE enabled here).
+	if _, err := runCLI(t, env, "status", "--agents", ",,"); err == nil ||
+		!strings.Contains(err.Error(), "cannot be empty") {
+		t.Errorf("expected a 'cannot be empty' error for a blank filter; got %v", err)
+	}
+}
+
+// TestStatus_AgentFilterKeepsOrphanWarningsGlobal pins the invariant that
+// narrowing the report with --agents must NOT make a still-enabled but
+// deselected agent look orphaned — orphan detection uses the full enabled set,
+// not the selection. Swapping the two would re-flag codex here.
+func TestStatus_AgentFilterKeepsOrphanWarningsGlobal(t *testing.T) {
+	tmp, env := statusEnv(t, "claude", "codex")
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLI(t, env, "status", "--agents", "claude")
+	if err != nil {
+		t.Fatalf("status --agents claude: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "is not enabled but still owns") {
+		t.Errorf("filtering to claude must not mislabel the still-enabled codex as orphaned; got:\n%s", out)
+	}
+}
+
+// TestStatus_JSONNotCollapsed pins that the machine-readable payload is never
+// collapsed: scripts must see every tracked file regardless of the human view.
+func TestStatus_JSONNotCollapsed(t *testing.T) {
+	tmp, env := statusEnv(t, "claude")
+	writeSkill(t, tmp, "build123d", map[string]string{"references/notes.md": "notes\n"})
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "status", "--json")
+	if err != nil {
+		t.Fatalf("status --json: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "notes.md") {
+		t.Errorf("--json must list every bundled file (no collapse); got:\n%s", out)
+	}
+	if strings.Contains(out, "SKILL.md + 1 file") {
+		t.Errorf("--json must not carry the human collapse summary; got:\n%s", out)
 	}
 }
 
