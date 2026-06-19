@@ -93,7 +93,7 @@ func newStatusCmd() *cobra.Command {
 			if cmd.Flags().Changed("agents") {
 				names := splitAgents(agentsCSV)
 				if len(names) == 0 {
-					return fmt.Errorf("--agents cannot be empty; name one or more enabled agents")
+					return fmt.Errorf(`--agents cannot be empty; pass "*" for all enabled agents or name one or more`)
 				}
 				// "*" = all enabled, matching `mcp add --agents`; otherwise the
 				// names are a validated allowlist.
@@ -193,7 +193,7 @@ func resolveAgentFilter(want []string, enabled map[string]bool) ([]string, error
 		out = append(out, a)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("--agents cannot be empty; name one or more enabled agents")
+		return nil, fmt.Errorf(`--agents cannot be empty; pass "*" for all enabled agents or name one or more`)
 	}
 	return out, nil
 }
