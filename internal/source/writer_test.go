@@ -50,10 +50,19 @@ func TestValidateComponentID_RejectsControlAndDeceptiveRunes(t *testing.T) {
 		}
 	}
 	// A legitimate non-ASCII id (no explicit control/bidi/zero-width runes) still
-	// passes — the gate strips only the spoofing set, never ordinary letters.
-	for _, id := range []string{"github", "my-plugin", "naïve", "日本語"} {
+	// passes — the gate strips only the spoofing set, never ordinary letters. The
+	// width-affecting-but-inert runes untrusted.Sanitize knowingly leaves alone also
+	// pass BY DESIGN: the gate's scope is exactly Sanitize's set, so these rows pin
+	// that boundary — were Sanitize tightened to strip them, these cases would flip
+	// and force an intentional decision rather than drifting silently.
+	for _, id := range []string{
+		"github", "my-plugin", "naïve", "日本語", // ordinary letters, preserved
+		"soft\u00adhyphen", // U+00AD soft hyphen — width-affecting, not a terminal escape
+		"word\u2060joiner", // U+2060 word joiner — default-ignorable, left alone
+		"line\u2028sep",    // U+2028 line separator — not stripped by Sanitize
+	} {
 		if err := source.ValidateComponentID("plugin", id); err != nil {
-			t.Errorf("ValidateComponentID(%q) = %v; want nil (legitimate id)", id, err)
+			t.Errorf("ValidateComponentID(%q) = %v; want nil (legitimate / out-of-scope id)", id, err)
 		}
 	}
 }

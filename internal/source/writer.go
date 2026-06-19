@@ -63,6 +63,13 @@ func ValidateComponentID(kind, id string) error {
 	// alter, tying this write boundary to the SAME rune set untrusted.Sanitize
 	// strips (one source of truth, so the two can't drift). The %q below escapes
 	// any such rune in the message itself, so the error is safe to print.
+	//
+	// Scope is exactly Sanitize's set — terminal-escape + explicit-bidi + zero-width.
+	// Width-affecting-but-inert runes Sanitize knowingly leaves alone (U+2028/U+2029
+	// line/para separators, U+00AD soft hyphen, U+2060 word joiner) likewise pass
+	// here: they carry no terminal escape and reordering nothing, so they are a
+	// cosmetic width concern (see untrusted.Sanitize's doc), not a write-boundary
+	// one. If that ever needs tightening, tighten Sanitize — this gate follows it.
 	if untrusted.Sanitize(id) != id {
 		return fmt.Errorf("%s id %q contains a control or deceptive formatting rune", kind, id)
 	}
