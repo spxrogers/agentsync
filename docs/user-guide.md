@@ -632,18 +632,21 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `secrets set\|get\|edit <key>` | Manage age-encrypted secrets. | `set --stdin` |
 | `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). | `--dry-run --scope --project` |
-| `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. | `--scope --project --json` |
+| `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. Skill directories collapse to one summary row by default (`--verbose` expands them). | `--agent --verbose --scope --project --json` |
 | `diff [<path>]` | Show pending/drift changes; secrets redacted. | `--scope --project --json` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. Includes `plugin` (Claude), which re-fetches installed plugins + marketplaces **(network)**. `--scope project` reads the agent's *native project-scope* config (e.g. `<root>/.claude/`) and captures it into the project tree `<root>/.agentsync/`, seeding central state with the project scope + root. Plugin import is user-scope only. | `--dry-run --scope --project` |
 | `explain [<plugin>...]` | Show per-agent translation coverage for one or more plugins. | `--all --list --json` |
 
-Global: `-v/--verbose` for verbose logging on any command. `--color=auto|always|never`
-controls whether output is styled with ANSI color and bold (default `auto` — on
-for a TTY, off when piped/redirected; honors `NO_COLOR`). `status --json` and
-`diff [<path>] --json` emit the structured report instead of the formatted one,
-suitable for CI gates and dashboards (`diff --json` masks the same resolved
-secrets the formatted diff does).
+Global: `-v/--verbose` for verbose logging on any command (in `status` it also
+expands each collapsed skill directory back to one row per bundled file).
+`--color=auto|always|never` controls whether output is styled with ANSI color
+and bold (default `auto` — on for a TTY, off when piped/redirected; honors
+`NO_COLOR`). `status --agent <name>` scopes the report to specific agents
+(repeatable or comma-separated). `status --json` and `diff [<path>] --json` emit
+the structured report instead of the formatted one, suitable for CI gates and
+dashboards (`status --json` is never collapsed — it carries every tracked file;
+`diff --json` masks the same resolved secrets the formatted diff does).
 
 ---
 

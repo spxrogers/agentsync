@@ -173,6 +173,170 @@ func TestStatus_CleanAfterApply(t *testing.T) {
 	}
 }
 
+// TestStatus_CollapsesSkillDirectory locks in the default digestible view: a
+// skill directory with bundled files renders as a single summary row (the skill
+// dir + a "SKILL.md + N files" count) instead of one row per file, so a skill
+// shipping hundreds of assets no longer floods the report. --verbose restores
+// the full per-file listing.
+func TestStatus_CollapsesSkillDirectory(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	sk := filepath.Join(tmp, ".agentsync", "skills", "build123d")
+	_ = os.MkdirAll(filepath.Join(sk, "references"), 0o755)
+	_ = os.WriteFile(filepath.Join(sk, "SKILL.md"), []byte("---\nname: build123d\ndescription: d\n---\nbody\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(sk, "references", "notes.md"), []byte("notes\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	// The collapsed row carries the file-count summary and the discoverability
+	// hint, but NOT the individual bundled-file path.
+	if !strings.Contains(out, "SKILL.md + 1 file") {
+		t.Errorf("expected a collapsed skill summary; got:\n%s", out)
+	}
+	if strings.Contains(out, "notes.md") {
+		t.Errorf("default status should not list bundled skill files; got:\n%s", out)
+	}
+	if !strings.Contains(out, "--verbose") {
+		t.Errorf("expected a hint pointing at --verbose; got:\n%s", out)
+	}
+
+	vout, err := runCLI(t, env, "status", "--verbose")
+	if err != nil {
+		t.Fatalf("status --verbose: %v\n%s", err, vout)
+	}
+	if !strings.Contains(vout, filepath.Join("references", "notes.md")) {
+		t.Errorf("--verbose should list every bundled file; got:\n%s", vout)
+	}
+	if strings.Contains(vout, "SKILL.md + 1 file") {
+		t.Errorf("--verbose should not collapse; got:\n%s", vout)
+	}
+}
+
+// TestStatus_CollapsedSkillShowsMostSevereClass guards that collapsing never
+// hides a problem: a drifted SKILL.md inside an otherwise-clean skill must make
+// the collapsed headline red (drift), and the faint summary must spell out the
+// mixed per-class breakdown.
+func TestStatus_CollapsedSkillShowsMostSevereClass(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	sk := filepath.Join(tmp, ".agentsync", "skills", "greet")
+	_ = os.MkdirAll(filepath.Join(sk, "references"), 0o755)
+	_ = os.WriteFile(filepath.Join(sk, "SKILL.md"), []byte("---\nname: greet\ndescription: d\n---\nbody\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(sk, "references", "notes.md"), []byte("notes\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	// Hand-edit only the rendered SKILL.md so the skill is now 1 drift + 1 clean.
+	dst := filepath.Join(tmp, ".claude", "skills", "greet", "SKILL.md")
+	if err := os.WriteFile(dst, []byte("---\nname: greet\ndescription: d\n---\nHAND EDIT\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "drift") {
+		t.Errorf("collapsed headline should surface the drift; got:\n%s", out)
+	}
+	if !strings.Contains(out, "1 clean, 1 drift") {
+		t.Errorf("collapsed summary should break down the mixed classes; got:\n%s", out)
+	}
+	if strings.Contains(out, "notes.md") {
+		t.Errorf("collapsed view should still hide the clean bundled file; got:\n%s", out)
+	}
+}
+
+// TestStatus_AgentFilter locks in --agent: it scopes the report to the named
+// agent(s), and rejects an unknown or not-enabled agent rather than silently
+// reporting nothing.
+func TestStatus_AgentFilter(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "status", "--agent", "codex")
+	if err != nil {
+		t.Fatalf("status --agent codex: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "[codex]") {
+		t.Errorf("expected the codex section; got:\n%s", out)
+	}
+	if strings.Contains(out, "[claude]") {
+		t.Errorf("--agent codex should not report claude; got:\n%s", out)
+	}
+
+	if _, err := runCLI(t, env, "status", "--agent", "bogus"); err == nil {
+		t.Errorf("expected an error for an unknown agent")
+	}
+	// opencode is a valid agent name but was never enabled here.
+	if _, err := runCLI(t, env, "status", "--agent", "opencode"); err == nil {
+		t.Errorf("expected an error for a valid-but-not-enabled agent")
+	}
+}
+
+// TestStatus_JSONNotCollapsed pins that the machine-readable payload is never
+// collapsed: scripts must see every tracked file regardless of the human view.
+func TestStatus_JSONNotCollapsed(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	sk := filepath.Join(tmp, ".agentsync", "skills", "build123d")
+	_ = os.MkdirAll(filepath.Join(sk, "references"), 0o755)
+	_ = os.WriteFile(filepath.Join(sk, "SKILL.md"), []byte("---\nname: build123d\ndescription: d\n---\nbody\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(sk, "references", "notes.md"), []byte("notes\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "status", "--json")
+	if err != nil {
+		t.Fatalf("status --json: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "notes.md") {
+		t.Errorf("--json must list every bundled file (no collapse); got:\n%s", out)
+	}
+	if strings.Contains(out, "SKILL.md + 1 file") {
+		t.Errorf("--json must not carry the human collapse summary; got:\n%s", out)
+	}
+}
+
 // TestStatus_JSONOutput locks in the contract that --json emits the structured
 // drift model: a per-agent items list keyed by drift class plus a summary
 // tally. Scripts (CI gates, dashboards) consume this — its shape and the

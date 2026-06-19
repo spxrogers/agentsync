@@ -51,6 +51,7 @@ func newStatusCmd() *cobra.Command {
 		scopeFlag   string
 		projectFlag string
 		jsonOut     bool
+		agentFlag   []string
 	)
 	cmd := &cobra.Command{
 		Use:   "status",
@@ -77,19 +78,32 @@ func newStatusCmd() *cobra.Command {
 				return err
 			}
 			reg := registryFactory()
-			var agents []string
+			var enabledAgents []string
+			enabled := map[string]bool{}
 			for name, ag := range c.Config.Agents {
 				if ag.Enabled {
-					agents = append(agents, name)
+					enabledAgents = append(enabledAgents, name)
+					enabled[name] = true
 				}
 			}
-			if len(agents) == 0 {
+			// --agent narrows the report (and the plan) to the requested
+			// agent(s); orphan-state warnings still consider the FULL enabled
+			// set so a deselected agent isn't mistaken for an orphaned one.
+			selected := enabledAgents
+			if len(agentFlag) > 0 {
+				sel, serr := resolveAgentFilter(agentFlag, enabled)
+				if serr != nil {
+					return serr
+				}
+				selected = sel
+			}
+			if len(selected) == 0 {
 				if jsonOut {
-					emitStatusWarnings(p, c, reg, s, agents)
+					emitStatusWarnings(p, c, reg, s, enabledAgents, selected)
 					return emitJSON(p.Out, statusModel{Agents: []statusAgent{}, Summary: map[string]int{}})
 				}
 				fmt.Fprintln(p.Out, "no agents enabled; run `agentsync agent add claude` (or opencode)")
-				emitStatusWarnings(p, c, reg, s, agents)
+				emitStatusWarnings(p, c, reg, s, enabledAgents, selected)
 				return nil
 			}
 			// apply WRITES (and RecordOpsState HASHES) the secret-RESOLVED
@@ -105,7 +119,7 @@ func newStatusCmd() *cobra.Command {
 			if resolved, serr := secrets.SubstituteCanonical(c, secBackend, secrets.EnvBackend{}); serr == nil {
 				rendered = resolved
 			}
-			plan, err := render.Plan(rendered, reg, agents, sc, projectRoot, s, userHome)
+			plan, err := render.Plan(rendered, reg, selected, sc, projectRoot, s, userHome)
 			if err != nil {
 				return err
 			}
@@ -113,19 +127,61 @@ func newStatusCmd() *cobra.Command {
 			model := buildStatusModel(plan, reg.Names(), s, userHome, sc, projectRoot)
 			if jsonOut {
 				// JSON to stdout, advisory warnings to stderr — keeps the
-				// machine-readable payload cleanly parseable.
-				emitStatusWarnings(p, c, reg, s, agents)
+				// machine-readable payload cleanly parseable. The --json payload
+				// is never collapsed: it carries every tracked item so scripts
+				// see the same per-file model regardless of the human view.
+				emitStatusWarnings(p, c, reg, s, enabledAgents, selected)
 				return emitJSON(p.Out, model)
 			}
-			renderStatusText(p, model)
-			emitStatusWarnings(p, c, reg, s, agents)
+			renderStatusText(p, model, statusVerbose(cmd))
+			emitStatusWarnings(p, c, reg, s, enabledAgents, selected)
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
 	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the formatted report")
+	cmd.Flags().StringSliceVar(&agentFlag, "agent", nil, "limit the report to specific agent(s) (repeatable or comma-separated)")
 	return cmd
+}
+
+// statusVerbose reports whether the inherited global -v/--verbose flag is set.
+// In status, verbose expands the default collapsed skill-directory rows back
+// into one line per bundled file (the pre-collapse view). It reads the flag off
+// the merged set, falling back to the inherited set the same way newPrinter
+// reads --color.
+func statusVerbose(cmd *cobra.Command) bool {
+	if b, err := cmd.Flags().GetBool("verbose"); err == nil {
+		return b
+	}
+	if f := cmd.InheritedFlags().Lookup("verbose"); f != nil {
+		return f.Value.String() == "true"
+	}
+	return false
+}
+
+// resolveAgentFilter validates the --agent values against the known agent set
+// and the currently-enabled set, returning the de-duplicated selection in the
+// order given. An unknown name or an agent that exists but is not enabled is a
+// hard error — silently dropping it would make `status --agent typo` look clean.
+func resolveAgentFilter(want []string, enabled map[string]bool) ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+	for _, a := range want {
+		a = strings.TrimSpace(a)
+		if a == "" || seen[a] {
+			continue
+		}
+		seen[a] = true
+		if !isValidAgent(a) {
+			return nil, fmt.Errorf("unknown agent %q; valid agents: %s", a, validAgentsList())
+		}
+		if !enabled[a] {
+			return nil, fmt.Errorf("agent %q is not enabled; run `agentsync agent add %s` first", a, a)
+		}
+		out = append(out, a)
+	}
+	return out, nil
 }
 
 // buildStatusModel classifies every tracked file/key/orphan across agents into
@@ -196,6 +252,26 @@ var classOrder = []string{
 	"drift", "conflict", "foreign-collision", "orphan", "orphan-drifted",
 }
 
+// classSeverity ranks drift classes most-severe-first. A collapsed skill row
+// shows the most severe class among its members as its headline so a single
+// drifted/conflicted SKILL.md inside an otherwise-clean skill still surfaces in
+// red at the collapsed level — the count of files never hides a problem.
+var classSeverity = []string{
+	"orphan-drifted", "conflict", "drift", "foreign-collision",
+	"orphan",
+	"pending", "new",
+	"converged", "clean",
+}
+
+// skillGroup is a set of tracked items that all live under one skill directory
+// (…/skills/<name>/). The default `status` view renders it as a single line —
+// the skill dir, its most-severe class, and a faint file-count summary —
+// instead of one line per bundled SKILL.md/script/reference/asset.
+type skillGroup struct {
+	Root  string
+	Items []statusItem
+}
+
 // styleClass maps a drift class to its glyph and color. Green = synced, cyan =
 // a pending change apply will make, red = unexpected/destructive drift, yellow
 // = an orphan needing a decision.
@@ -216,20 +292,13 @@ func styleClass(p *ui.Printer, cls string) (glyph string, color func(string) str
 
 // renderStatusText prints the formatted drift dashboard: a bold header per
 // agent, a glyph + color-coded class per item, and a one-line summary footer.
-func renderStatusText(p *ui.Printer, model statusModel) {
+// By default each skill directory collapses to a single row so a tree of
+// hundreds of bundled files stays readable; verbose restores the per-file view.
+func renderStatusText(p *ui.Printer, model statusModel, verbose bool) {
+	collapsed := 0
 	for _, ag := range model.Agents {
 		fmt.Fprintln(p.Out, p.Bold("["+ag.Agent+"]"))
-		for _, it := range ag.Items {
-			disp := it.Path
-			if it.Pointer != "" {
-				disp = it.Path + "#" + it.Pointer
-			}
-			glyph, color := styleClass(p, it.Class)
-			// Pad the plain "glyph class" to a fixed visible width BEFORE
-			// coloring so ANSI bytes never shift the path column.
-			label := ui.Pad(glyph+" "+it.Class, 20)
-			fmt.Fprintf(p.Out, "  %s %s\n", color(label), disp)
-		}
+		collapsed += renderAgentItems(p, ag.Items, verbose)
 	}
 
 	// Summary footer lists only non-zero classes, so the words "drift" /
@@ -248,6 +317,166 @@ func renderStatusText(p *ui.Printer, model statusModel) {
 		fmt.Fprintln(p.Out, strings.Join(segs, "  ·  "))
 	}
 	renderStatusLegend(p, model.Summary)
+	if collapsed > 0 {
+		fmt.Fprintln(p.Out, "")
+		fmt.Fprintln(p.Out, p.Faint(fmt.Sprintf("%d skill %s collapsed; pass --verbose to list every bundled file.",
+			collapsed, plural(collapsed, "directory", "directories"))))
+	}
+}
+
+// renderAgentItems prints one agent's tracked items. In verbose mode every item
+// is a row; otherwise items under a common skill directory collapse into one
+// summary row. Returns the number of skill directories that were collapsed (a
+// single-file skill is printed as a normal row and not counted, since collapsing
+// it would hide nothing).
+func renderAgentItems(p *ui.Printer, items []statusItem, verbose bool) int {
+	if verbose {
+		for _, it := range items {
+			renderStatusItem(p, it)
+		}
+		return 0
+	}
+	// Group skill-directory items by their root, preserving first-appearance
+	// order; everything else (memory, subagents, commands, MCP/hook/LSP keys)
+	// stays an inline per-item row.
+	type entry struct {
+		item  statusItem
+		group *skillGroup
+	}
+	groups := map[string]*skillGroup{}
+	var order []entry
+	for _, it := range items {
+		root := ""
+		if it.Pointer == "" {
+			if r, ok := skillRoot(it.Path); ok {
+				root = r
+			}
+		}
+		if root == "" {
+			order = append(order, entry{item: it})
+			continue
+		}
+		g := groups[root]
+		if g == nil {
+			g = &skillGroup{Root: root}
+			groups[root] = g
+			order = append(order, entry{group: g})
+		}
+		g.Items = append(g.Items, it)
+	}
+	collapsed := 0
+	for _, e := range order {
+		if e.group == nil {
+			renderStatusItem(p, e.item)
+			continue
+		}
+		if len(e.group.Items) == 1 {
+			renderStatusItem(p, e.group.Items[0])
+			continue
+		}
+		renderSkillGroup(p, e.group)
+		collapsed++
+	}
+	return collapsed
+}
+
+// renderStatusItem prints one tracked file or merged key on a single row.
+func renderStatusItem(p *ui.Printer, it statusItem) {
+	disp := it.Path
+	if it.Pointer != "" {
+		disp = it.Path + "#" + it.Pointer
+	}
+	glyph, color := styleClass(p, it.Class)
+	// Pad the plain "glyph class" to a fixed visible width BEFORE
+	// coloring so ANSI bytes never shift the path column.
+	label := ui.Pad(glyph+" "+it.Class, 20)
+	fmt.Fprintf(p.Out, "  %s %s\n", color(label), disp)
+}
+
+// renderSkillGroup prints a collapsed skill directory: the headline class is the
+// most severe among its files, and a faint suffix reports the file count (plus a
+// per-class breakdown when the files don't all share one class).
+func renderSkillGroup(p *ui.Printer, g *skillGroup) {
+	cls := mostSevereClass(g.Items)
+	glyph, color := styleClass(p, cls)
+	label := ui.Pad(glyph+" "+cls, 20)
+	fmt.Fprintf(p.Out, "  %s %s  %s\n", color(label), g.Root+string(filepath.Separator), p.Faint(skillSummary(g.Items)))
+}
+
+// skillRoot returns the …/skills/<name> directory a path lives under and true if
+// the path is inside one. Every adapter renders skills to a `skills/<name>/`
+// subtree (Claude `~/.claude/skills`, the cross-vendor `~/.agents/skills`, each
+// generic spec's own dir), so the first `skills` path segment plus the next
+// segment is the skill root for any of them. A nested `upstream/SKILL.md` falls
+// under the same outer root, keeping a multi-variant skill on one row.
+func skillRoot(path string) (string, bool) {
+	sep := string(filepath.Separator)
+	parts := strings.Split(path, sep)
+	for i, seg := range parts {
+		if seg == "skills" && i+1 < len(parts) {
+			return strings.Join(parts[:i+2], sep), true
+		}
+	}
+	return "", false
+}
+
+// mostSevereClass returns the highest-severity drift class present among items,
+// so the collapsed headline never downplays a problem hiding among clean files.
+func mostSevereClass(items []statusItem) string {
+	present := map[string]bool{}
+	for _, it := range items {
+		present[it.Class] = true
+	}
+	for _, cls := range classSeverity {
+		if present[cls] {
+			return cls
+		}
+	}
+	if len(items) > 0 {
+		return items[0].Class // class outside the known set; show it verbatim
+	}
+	return ""
+}
+
+// skillSummary builds the faint parenthetical describing a collapsed skill: how
+// many files it bundles (phrased relative to SKILL.md when present, matching how
+// a skill is authored) and, when the files span more than one drift class, the
+// per-class breakdown so a mixed directory isn't flattened to its headline alone.
+func skillSummary(items []statusItem) string {
+	total := len(items)
+	hasSkillMD := false
+	counts := map[string]int{}
+	for _, it := range items {
+		if filepath.Base(it.Path) == "SKILL.md" {
+			hasSkillMD = true
+		}
+		counts[it.Class]++
+	}
+	var size string
+	if hasSkillMD {
+		extra := total - 1
+		size = fmt.Sprintf("SKILL.md + %d %s", extra, plural(extra, "file", "files"))
+	} else {
+		size = fmt.Sprintf("%d %s", total, plural(total, "file", "files"))
+	}
+	if len(counts) <= 1 {
+		return "(" + size + ")"
+	}
+	var segs []string
+	for _, cls := range classOrder {
+		if n := counts[cls]; n > 0 {
+			segs = append(segs, fmt.Sprintf("%d %s", n, cls))
+		}
+	}
+	return "(" + size + "; " + strings.Join(segs, ", ") + ")"
+}
+
+// plural returns one or many depending on n.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // classLegend gives a one-line, action-focused explanation of what `apply`
@@ -301,8 +530,13 @@ func renderStatusLegend(p *ui.Printer, summary map[string]int) {
 // emitStatusWarnings writes advisory diagnostics to stderr: orphaned state from
 // a removed/disabled agent, and native plugins not yet declared in source.
 // These are not part of the status model (and not the --json payload).
-func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry, s *state.Targets, agents []string) {
-	for _, a := range orphanedStateAgents(s, agents) {
+//
+// orphan detection uses the full enabled set so a `--agent`-narrowed report
+// never mistakes a deselected-but-enabled agent for an orphan; the
+// undeclared-plugin nudge follows the selected set so it stays scoped to what
+// the report shows.
+func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry, s *state.Targets, enabled, selected []string) {
+	for _, a := range orphanedStateAgents(s, enabled) {
 		fmt.Fprintf(p.Err, "%s agent %q is not enabled but still owns tracked files/keys in state; its "+
 			"native config is orphaned. Run `agentsync agent disable %s --purge` to remove what agentsync wrote.\n",
 			p.Yellow("warning:"), a, a)
@@ -310,7 +544,7 @@ func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry
 	// Nudge: plugins installed natively in an enabled agent but not yet declared
 	// in source. agentsync treats them as foreign-managed (never drift), so this
 	// is informational — it points at `import`.
-	undeclared := undeclaredNativePlugins(c, reg, agents)
+	undeclared := undeclaredNativePlugins(c, reg, selected)
 	for _, name := range reg.Names() {
 		missing := undeclared[name]
 		if len(missing) == 0 {

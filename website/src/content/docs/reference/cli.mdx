@@ -28,7 +28,7 @@ import { Aside } from '@astrojs/starlight/components';
 | `secrets set\|get\|edit <key>` | Manage age-encrypted secrets. | `set --stdin` |
 | `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). | `--dry-run --scope --project` |
-| `status` | Summarize drift / pending across agents. | `--scope --project` |
+| `status` | Summarize drift / pending across agents (skill dirs collapse by default). | `--agent --verbose --json --scope --project` |
 | `diff [<path>]` | Show pending / drift changes; secrets redacted. | `--scope --project` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source. `--scope project` captures the agent's native project-scope config into the project tree. | `--dry-run --scope --project` |
@@ -146,15 +146,27 @@ agentsync apply
 
 ### `status`
 Summarizes what's out of sync across all agents — pending source changes and
-destination drift. A one-line summary footer tallies items by drift class, and
+destination drift. To stay readable, each **skill directory collapses to one
+row** by default (the skill dir, its most-severe drift class, and a faint
+`SKILL.md + N files` count — with a per-class breakdown when the bundled files
+don't all share one class), so a skill shipping hundreds of assets no longer
+floods the report. Pass `-v`/`--verbose` to expand every skill back to one row
+per bundled file. A one-line summary footer tallies items by drift class, and
 a brief "What `apply` will do:" legend follows it, explaining each class
 present (`new` will be created, `pending` will be updated to match source,
 `drift` will be overwritten — use `reconcile` to keep the edit, etc.). Clean
-items are tallied but never glossed. Pass `--json` to emit the structured
-drift report (per-agent items + a summary tally keyed by drift class) for CI
-gates or dashboards; advisory diagnostics still flow to stderr so the JSON
-payload stays clean. `--json` output omits the legend (the class field is the
-machine contract).
+items are tallied but never glossed.
+
+Use `--agent <name>` (repeatable or comma-separated) to scope the report to
+specific agents — `agentsync status --agent claude` shows just Claude Code.
+Orphaned-state warnings still consider the full enabled set, so narrowing the
+view never mislabels a deselected agent as an orphan.
+
+Pass `--json` to emit the structured drift report (per-agent items + a summary
+tally keyed by drift class) for CI gates or dashboards; advisory diagnostics
+still flow to stderr so the JSON payload stays clean. `--json` is **never
+collapsed** — it carries every tracked file regardless of the human view — and
+omits the legend (the class field is the machine contract).
 
 ### `diff [<path>]`
 Shows the pending / drift changes in detail. **Resolved secrets are redacted**, so
@@ -231,5 +243,6 @@ agentsync explain --list
 | `--dry-run` | apply, import | Preview without writing. |
 | `--auto-safe` | reconcile, update | Auto-resolve only no-risk changes. |
 | `--json` | status, diff, explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). `explain --list --json` emits a `plugins` array; `explain` with ids/`--all` emits the translation `rows`. |
+| `--agent <name>` | status | Scope the report to specific agent(s); repeatable or comma-separated. |
 | `--color auto\|always\|never` | all | Control ANSI color + bold. Default `auto` (on for a TTY, off when piped/redirected; honors `NO_COLOR`). |
-| `-v`, `--verbose` | all | Verbose logging. |
+| `-v`, `--verbose` | all | Verbose logging. In `status`, also expands each collapsed skill directory back to one row per bundled file. |
