@@ -2,7 +2,7 @@
 
 The source for **[agentsync.cc](https://agentsync.cc)** — an
 [Astro Starlight](https://starlight.astro.build) site, deployed to GitHub Pages by
-[`.github/workflows/docs.yml`](../.github/workflows/docs.yml).
+the `docs` job in [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 
 ## Develop
 
