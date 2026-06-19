@@ -93,6 +93,42 @@ func TestSkipTailNote(t *testing.T) {
 	}
 }
 
+// TestExplain_UnsetKindShownNotMaskedAsDropped pins the defensive display
+// contract: a skip whose Kind is the invalid zero value (which the static +
+// runtime guards forbid from real adapters) must surface VISIBLY as "unset" in
+// both the per-skip line and the inline tally — never silently mislabeled
+// "dropped", which would hide exactly the bug the typed field exists to prevent.
+// This matches the JSON surface (SkipKind.MarshalJSON → "unset") so the human and
+// machine outputs agree.
+func TestExplain_UnsetKindShownNotMaskedAsDropped(t *testing.T) {
+	unset := render.SkipDetail{Component: "mystery", Name: "x", Reason: "no kind set", Kind: adapter.SkipKindUnset}
+
+	var buf bytes.Buffer
+	p := ui.New(&buf, &buf, ui.ColorNever)
+	emitSkipDetails(&buf, p, "codex", []render.SkipDetail{unset})
+	// Inspect the per-skip line, not the framing header (which legitimately spells
+	// out "reduced = …; dropped = …").
+	var skipLine string
+	for _, ln := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if strings.Contains(ln, "mystery") {
+			skipLine = ln
+		}
+	}
+	if skipLine == "" {
+		t.Fatalf("no skip line emitted:\n%s", buf.String())
+	}
+	if !strings.Contains(skipLine, "unset") {
+		t.Errorf("skip line must show 'unset' for an unset Kind; got: %q", skipLine)
+	}
+	if strings.Contains(skipLine, "dropped") {
+		t.Errorf("skip line must NOT mislabel an unset Kind as 'dropped'; got: %q", skipLine)
+	}
+
+	if got := skipTailNote(p, []render.SkipDetail{unset}); got != "(1 unset)" {
+		t.Errorf("skipTailNote(unset) = %q, want %q", got, "(1 unset)")
+	}
+}
+
 // TestComponentInventory pins the descriptive count tail: every non-zero kind is
 // listed in a stable order, with correct singular/plural (the mcp/lsp
 // abbreviations stay invariant), and a row that hosts nothing for the agent reads

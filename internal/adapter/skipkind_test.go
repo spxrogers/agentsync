@@ -88,7 +88,7 @@ func TestEverySkipLiteralSetsKind(t *testing.T) {
 			// adapter, where Skip is the local type).
 			if isSkipType(cl.Type, inPkgAdapter) {
 				total++
-				if !hasKindField(cl) {
+				if !hasValidKind(cl) {
 					offenders = append(offenders, posOf(fset, cl))
 				}
 				return true
@@ -102,7 +102,7 @@ func TestEverySkipLiteralSetsKind(t *testing.T) {
 						continue
 					}
 					total++
-					if !hasKindField(ecl) {
+					if !hasValidKind(ecl) {
 						offenders = append(offenders, posOf(fset, ecl))
 					}
 				}
@@ -127,6 +127,65 @@ func TestEverySkipLiteralSetsKind(t *testing.T) {
 	}
 }
 
+// TestSkipKindStaticGuardMatchers is the standing self-test for the static guard's
+// own logic, so TestEverySkipLiteralSetsKind cannot silently rot into a vacuous
+// pass (e.g. a refactor that makes hasValidKind match any field, or isSkipType
+// match nothing). It exercises the matchers against synthetic literals — both the
+// shapes that MUST be accepted and the ones that MUST be flagged, including the
+// explicit-unset case the round-2 review surfaced. This bakes in the
+// break-verification CLAUDE.md asks of a guard.
+func TestSkipKindStaticGuardMatchers(t *testing.T) {
+	lit := func(expr string) *ast.CompositeLit {
+		t.Helper()
+		e, err := parser.ParseExpr(expr)
+		if err != nil {
+			t.Fatalf("parse %q: %v", expr, err)
+		}
+		cl, ok := e.(*ast.CompositeLit)
+		if !ok {
+			t.Fatalf("%q is not a composite literal", expr)
+		}
+		return cl
+	}
+
+	// hasValidKind: a keyed, non-unset Kind is the only accepted form.
+	valid := []string{
+		`adapter.Skip{Component: "c", Kind: adapter.SkipReduced}`,
+		`adapter.Skip{Component: "c", Kind: adapter.SkipDropped}`,
+	}
+	flagged := []string{
+		`adapter.Skip{Component: "c"}`,                              // Kind omitted
+		`adapter.Skip{Component: "c", Kind: adapter.SkipKindUnset}`, // explicit unset
+		`adapter.Skip{Component: "c", Kind: 0}`,                     // zero literal
+		`adapter.Skip{"c", "n", "r", adapter.SkipDropped}`,          // positional → over-report (safe)
+	}
+	for _, s := range valid {
+		if !hasValidKind(lit(s)) {
+			t.Errorf("hasValidKind(%s) = false, want true", s)
+		}
+	}
+	for _, s := range flagged {
+		if hasValidKind(lit(s)) {
+			t.Errorf("hasValidKind(%s) = true, want false (must be flagged)", s)
+		}
+	}
+
+	// isSkipType: qualified adapter.Skip always; bare Skip only inside package adapter.
+	if !isSkipType(lit(`adapter.Skip{Kind: adapter.SkipDropped}`).Type, false) {
+		t.Error("isSkipType(adapter.Skip) = false, want true")
+	}
+	if isSkipType(lit(`adapter.FileOp{Action: "write"}`).Type, false) {
+		t.Error("isSkipType(adapter.FileOp) = true, want false")
+	}
+	bare := lit(`Skip{Kind: SkipDropped}`).Type
+	if !isSkipType(bare, true) {
+		t.Error("isSkipType(bare Skip, inPkgAdapter=true) = false, want true")
+	}
+	if isSkipType(bare, false) {
+		t.Error("isSkipType(bare Skip, inPkgAdapter=false) = true, want false")
+	}
+}
+
 // isSkipType reports whether e is the type of an adapter.Skip composite literal:
 // the qualified `adapter.Skip` everywhere, or the bare `Skip` only within package
 // adapter itself.
@@ -141,16 +200,39 @@ func isSkipType(e ast.Expr, inPkgAdapter bool) bool {
 	return false
 }
 
-// hasKindField reports whether a composite literal sets the Kind field by name.
-func hasKindField(cl *ast.CompositeLit) bool {
+// hasValidKind reports whether a composite literal sets the Kind field by name to
+// a value that is NOT the invalid zero (SkipKindUnset / 0). Checking only that the
+// field name appears would let an explicit `Kind: adapter.SkipKindUnset` (or
+// `Kind: 0`) pass while being exactly the invalid state the guard forbids — and a
+// site like that in unreachable defensive code would slip past the runtime guard
+// too. A positional literal (no keyed Kind) returns false and is flagged; the
+// codebase convention is keyed fields, so this only ever over-reports, never
+// under-reports.
+func hasValidKind(cl *ast.CompositeLit) bool {
 	for _, el := range cl.Elts {
 		kv, ok := el.(*ast.KeyValueExpr)
 		if !ok {
 			continue
 		}
 		if id, ok := kv.Key.(*ast.Ident); ok && id.Name == "Kind" {
-			return true
+			return !isUnsetKindValue(kv.Value)
 		}
+	}
+	return false
+}
+
+// isUnsetKindValue reports whether an expression denotes the invalid zero value:
+// `adapter.SkipKindUnset`, bare `SkipKindUnset` (inside package adapter), or the
+// integer literal `0`.
+func isUnsetKindValue(e ast.Expr) bool {
+	switch v := e.(type) {
+	case *ast.SelectorExpr:
+		x, ok := v.X.(*ast.Ident)
+		return ok && x.Name == "adapter" && v.Sel.Name == "SkipKindUnset"
+	case *ast.Ident:
+		return v.Name == "SkipKindUnset"
+	case *ast.BasicLit:
+		return v.Kind == token.INT && v.Value == "0"
 	}
 	return false
 }

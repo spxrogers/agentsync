@@ -440,35 +440,51 @@ func emitSkipDetails(w io.Writer, p *ui.Printer, agent string, skips []render.Sk
 		}
 	}
 	for i, s := range skips {
-		// "reduced" and "dropped" are the same width, so the reason column stays
-		// aligned without padding the (color-wrapped) status word.
-		status := p.Yellow("dropped")
-		if s.Kind == adapter.SkipReduced {
-			status = p.Cyan("reduced")
-		}
+		// Pad the status word (plain) to the widest real kind BEFORE coloring, so
+		// the reason column holds even for the guard-impossible "unset" fallback and
+		// ANSI never shifts it.
+		word, color := skipStatus(p, s.Kind)
 		fmt.Fprintf(w, "        %s %s  %s  %s\n",
 			p.Faint(ui.GlyphInfo),
 			ui.Pad(labels[i], width),
-			status,
+			color(ui.Pad(word, len("dropped"))),
 			p.Faint(ui.Sanitize(s.Reason)))
+	}
+}
+
+// skipStatus maps a skip's Kind to its display word + semantic color. An unset
+// Kind — which the static (TestEverySkipLiteralSetsKind) and runtime
+// (TestEveryAdapterClassifiesSkips) guards make unconstructable from real
+// adapters — renders as a red "unset" (its String()), a bug made VISIBLE rather
+// than silently mislabeled "dropped".
+func skipStatus(p *ui.Printer, k adapter.SkipKind) (string, func(string) string) {
+	switch k {
+	case adapter.SkipReduced:
+		return "reduced", p.Cyan
+	case adapter.SkipDropped:
+		return "dropped", p.Yellow
+	default:
+		return k.String(), p.Red
 	}
 }
 
 // skipTailNote summarizes a row's skips as a compact "(R reduced · D dropped)"
 // note (omitting a zero side), or "" when there are no skips. Splitting the
 // count by kind keeps the inline tally from reading as "N whole components
-// discarded" — most "skips" on a partial row are reductions, not drops.
+// discarded" — most "skips" on a partial row are reductions, not drops. A skip
+// that is neither (an unset Kind the guards forbid) is counted under its own
+// "unset" bucket rather than silently folded into "dropped".
 func skipTailNote(p *ui.Printer, skips []render.SkipDetail) string {
-	var reduced, dropped int
+	var reduced, dropped, unset int
 	for _, s := range skips {
-		if s.Kind == adapter.SkipReduced {
+		switch s.Kind {
+		case adapter.SkipReduced:
 			reduced++
-		} else {
+		case adapter.SkipDropped:
 			dropped++
+		default:
+			unset++
 		}
-	}
-	if reduced == 0 && dropped == 0 {
-		return ""
 	}
 	var parts []string
 	if reduced > 0 {
@@ -476,6 +492,12 @@ func skipTailNote(p *ui.Printer, skips []render.SkipDetail) string {
 	}
 	if dropped > 0 {
 		parts = append(parts, fmt.Sprintf("%d dropped", dropped))
+	}
+	if unset > 0 {
+		parts = append(parts, fmt.Sprintf("%d unset", unset))
+	}
+	if len(parts) == 0 {
+		return ""
 	}
 	return p.Yellow("(" + strings.Join(parts, " · ") + ")")
 }
