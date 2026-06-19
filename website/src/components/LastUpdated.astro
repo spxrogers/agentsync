@@ -1,0 +1,63 @@
+---
+// Override of Starlight's built-in LastUpdated footer component.
+//
+// Starlight's default renders just the per-page "Last updated: <date>". We
+// extend it with the build/deploy commit hash — a single sitewide breadcrumb
+// for "what's currently live" — linked to the exact commit on GitHub.
+//
+// The SHA is resolved at build time in astro.config.mjs (CI's GITHUB_SHA, then
+// a `git rev-parse HEAD` fallback) and injected as PUBLIC_COMMIT_SHA. We keep
+// the default's markup (a single <p>) so the Footer's flex layout is unchanged.
+const { lang, lastUpdated } = Astro.locals.starlightRoute;
+
+const commitSha = (import.meta.env.PUBLIC_COMMIT_SHA ?? '').trim();
+const shortSha = commitSha.slice(0, 7);
+const commitUrl = commitSha
+	? `https://github.com/spxrogers/agentsync/commit/${commitSha}`
+	: undefined;
+---
+
+{
+	(lastUpdated || commitUrl) && (
+		<p>
+			{lastUpdated && (
+				<>
+					{Astro.locals.t('page.lastUpdated')}{' '}
+					<time datetime={lastUpdated.toISOString()}>
+						{lastUpdated.toLocaleDateString(lang, { dateStyle: 'medium', timeZone: 'UTC' })}
+					</time>
+				</>
+			)}
+			{commitUrl && (
+				<>
+					{lastUpdated && <span class="sep" aria-hidden="true"> · </span>}
+					<a
+						class="commit-link"
+						href={commitUrl}
+						target="_blank"
+						rel="noopener noreferrer"
+						title={`Live build — deployed from commit ${commitSha}`}
+					>
+						<code>{shortSha}</code>
+					</a>
+				</>
+			)}
+		</p>
+	)
+}
+
+<style>
+	.sep {
+		color: var(--sl-color-gray-4);
+	}
+	.commit-link {
+		color: var(--sl-color-gray-3);
+		text-decoration: none;
+	}
+	.commit-link:hover {
+		color: var(--sl-color-text-accent);
+	}
+	.commit-link code {
+		font-size: 0.9em;
+	}
+</style>

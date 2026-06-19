@@ -1,11 +1,37 @@
 // @ts-check
+import { execSync } from 'node:child_process';
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import mermaid from 'astro-mermaid';
 
+// The commit the live site was built from — surfaced in the footer as a
+// "what's currently live" breadcrumb (see src/components/LastUpdated.astro).
+// Prefer the CI-provided SHA (GitHub Actions sets GITHUB_SHA; other hosts set
+// their own), then fall back to the local git HEAD for `just docs-publish` and
+// local builds. Empty string if neither is available (the footer hides it).
+function resolveCommitSha() {
+	const fromEnv =
+		process.env.GITHUB_SHA ||
+		process.env.COMMIT_SHA ||
+		process.env.VERCEL_GIT_COMMIT_SHA ||
+		process.env.CF_PAGES_COMMIT_SHA;
+	if (fromEnv) return fromEnv.trim();
+	try {
+		return execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+	} catch {
+		return '';
+	}
+}
+const commitSha = resolveCommitSha();
+
 // https://astro.build/config
 export default defineConfig({
 	site: 'https://agentsync.cc',
+	vite: {
+		define: {
+			'import.meta.env.PUBLIC_COMMIT_SHA': JSON.stringify(commitSha),
+		},
+	},
 	integrations: [
 		// Must run before Starlight so it can claim ```mermaid fences before
 		// Expressive Code highlights them. Renders client-side (no headless
@@ -22,6 +48,10 @@ export default defineConfig({
 			favicon: '/favicon.svg',
 			tagline: 'One source of truth for every AI coding agent on your machine.',
 			lastUpdated: true,
+			components: {
+				// Append the build/deploy commit hash to the "Last updated" footer.
+				LastUpdated: './src/components/LastUpdated.astro',
+			},
 			social: [
 				{
 					icon: 'github',
