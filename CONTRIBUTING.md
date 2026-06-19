@@ -102,6 +102,34 @@ cover.
 For anything security-sensitive, **don't** open a public PR/issue first — use the
 private reporting path in [`SECURITY.md`](SECURITY.md).
 
+## Cutting a release
+
+Releases are an annotated `vX.Y.Z` tag on a green commit; pushing the tag fires
+`.github/workflows/release.yml`, which runs GoReleaser (GitHub Release +
+Homebrew tap) and redeploys the docs site. Two equivalent ways to trigger it:
+
+- **From a laptop:** `just release vX.Y.Z` — validates `v`+semver, then tags and
+  pushes.
+- **From the GitHub UI / mobile app (no laptop):** Actions → **release** → **Run
+  workflow**, enter the version. The workflow validates it, creates and pushes
+  the tag at the selected ref's HEAD, and publishes in the same run.
+
+Both paths share one validator, `scripts/release-tag.sh` (CI self-tests it via
+`--self-test`), so the version rule can't drift between them.
+
+Either way, make sure the commit you're tagging is green and the `CHANGELOG.md`
+`[Unreleased]` section has been promoted to the new version first.
+
+**If a publish fails after the tag was pushed.** CI runs GoReleaser only in
+`--snapshot --skip publish` mode, so the real publish stanza (GitHub Release
+upload, the Homebrew-tap push) is first exercised at release time — a broken
+`.goreleaser.yaml` publish step or a missing `HOMEBREW_TAP_GITHUB_TOKEN` can fail
+*after* the tag already exists. The tag-exists guard then blocks a re-run for
+that version. To recover: fix the cause, delete the tag locally and on the
+remote (`git push origin :vX.Y.Z`), and re-cut it — or, if the tag is fine and
+only publishing failed, re-run GoReleaser against the existing tag
+(`goreleaser release --clean`).
+
 ## Reporting bugs & requesting features
 
 Use the [issue templates](.github/ISSUE_TEMPLATE/). Bug reports are far easier to

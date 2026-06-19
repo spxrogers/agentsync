@@ -1,20 +1,46 @@
 name: release
-# Tag-triggered publish. CI (ci.yml) only ever runs goreleaser in
-# `--snapshot --skip publish` mode to prove the cross-build stays viable; this
-# workflow is the one that actually cuts a GitHub Release and updates the
-# Homebrew tap. Push an annotated `vX.Y.Z` tag on a green `main` commit and
-# GoReleaser takes it from there. Once the release publishes, the `docs` job
-# rebuilds and redeploys the agentsync.cc site so the live docs always track the
-# just-shipped CLI version.
+# Publish a GitHub Release + update the Homebrew tap. CI (ci.yml) only ever runs
+# goreleaser in `--snapshot --skip publish` mode to prove the cross-build stays
+# viable; this workflow is the one that actually ships. Once the release
+# publishes, the `docs` job rebuilds and redeploys the agentsync.cc site so the
+# live docs always track the just-shipped CLI version.
+#
+# Two ways in, both landing in the single `goreleaser` job below:
+#   1. push an annotated `vX.Y.Z` tag on a green commit (the laptop path —
+#      `just release vX.Y.Z`); the `push: tags` trigger fires.
+#   2. trigger this workflow manually from the GitHub UI / mobile app
+#      ("Actions → release → Run workflow") with a `version` input. The job
+#      validates it, creates + pushes the tag at the dispatched ref's HEAD, then
+#      publishes — all in one run. This is the no-laptop path.
+#
+# Why the manual path tags AND publishes in the same run instead of just pushing
+# a tag and letting trigger #1 fire: a tag pushed with the default GITHUB_TOKEN
+# does NOT start a new workflow run (GitHub's loop-prevention rule), so a
+# "push the tag and walk away" job would tag the repo but never publish. Doing
+# both here sidesteps that entirely — and the token-pushed tag silently not
+# re-triggering this workflow is exactly what stops a double release.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release — v + semver, e.g. v0.6.0 or v1.2.3-rc.1"
+        required: true
+        type: string
 
 # goreleaser needs to create the GitHub Release + upload assets in THIS repo,
 # and the `docs` job force-pushes the rebuilt site to the gh-pages branch — both
 # need contents:write here.
 permissions:
   contents: write
+
+# Serialize releases so a manual dispatch and a tag push (or two dispatches)
+# can't race to tag/publish the same version. We never cancel an in-flight
+# release — interrupting goreleaser mid-publish is worse than waiting.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   goreleaser:
@@ -23,8 +49,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         # Full history + tags so goreleaser can build the changelog and derive
-        # the version from the tag.
+        # the version from the tag. On `push: tags` the checked-out ref IS the
+        # tag; on `workflow_dispatch` it's the dispatched branch, and the step
+        # below creates the tag at its HEAD.
         with: { fetch-depth: 0 }
+      # Manual-dispatch only: validate the requested version and create + push
+      # the annotated tag at HEAD so goreleaser (which derives the version from
+      # the tag at HEAD) has one to release. Delegates to scripts/release-tag.sh
+      # — the SAME validator the `just release` laptop path uses, so the two
+      # paths can't drift (and CI self-tests that script). The version is read
+      # via env and passed as a single quoted arg; the script validates it before
+      # any git command, so a hostile input can't reach `git tag`/`push` or
+      # inject shell. The tag push uses the persisted GITHUB_TOKEN from
+      # actions/checkout (contents:write, granted below); a GITHUB_TOKEN-pushed
+      # tag deliberately does NOT re-trigger this workflow, which is why we tag
+      # and publish in one run instead of relying on the `push: tags` trigger.
+      - name: Validate version and create release tag (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          scripts/release-tag.sh "$VERSION"
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
