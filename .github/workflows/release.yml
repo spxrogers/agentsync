@@ -62,7 +62,10 @@ jobs:
           CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
         run: |
           # Emit ONLY a boolean — never the key value (job outputs aren't masked).
-          if [ -n "$CHOCOLATEY_API_KEY" ]; then
+          # Strip whitespace first so a blank or whitespace/newline-only secret
+          # counts as absent, rather than spinning up the higher-billed Windows
+          # runner for a `choco push` that would just fail on a bogus key.
+          if [ -n "${CHOCOLATEY_API_KEY//[[:space:]]/}" ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -143,11 +146,15 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        # Full history + tags so goreleaser derives the version from the tag the
-        # `goreleaser` job released: on `push: tags` the ref IS the tag; on
-        # `workflow_dispatch` that job created the tag at the dispatched HEAD,
-        # which this checkout (run after it, via `needs`) fetches.
-        with: { fetch-depth: 0 }
+        # Check out the EXACT tag the `goreleaser` job released, not the branch
+        # HEAD: on `push: tags` that's github.ref; on `workflow_dispatch` it's
+        # the tag that job just created (named after the version input). Pinning
+        # to the tag rather than the branch means a commit landing on the branch
+        # mid-release can't make goreleaser's --exact-match tag check miss.
+        # fetch-depth: 0 brings full history + tags for changelog/version.
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod

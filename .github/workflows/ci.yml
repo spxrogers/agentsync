@@ -79,6 +79,15 @@ jobs:
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
+          # Validate the ENTIRE .goreleaser.yaml first — including the
+          # publish-phase scoop/chocolatey blocks the snapshot below skips and
+          # the templated release.disable — so a schema/template typo fails CI
+          # in ~1s instead of mid-release at tag-cut (and can't silently break
+          # the existing homebrew/deb/rpm path). Needs no secrets or Windows.
+          args: check
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
           # --skip publish already skips the (publish-phase) scoop/chocolatey
           # pipes; chocolatey is also named explicitly because its pack step
           # shells out to the Windows-only `choco` CLI, which isn't on this Linux

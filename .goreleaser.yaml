@@ -144,9 +144,10 @@ scoops:
 # new packages through a moderation queue, so the first push won't be publicly
 # installable until it clears review.
 #
-# NOTE: the chocolatey pipe packages a single Windows amd64 binary; the
-# windows/arm64 build is not included. Verify on a clean Windows box at the
-# first release (issue #75).
+# NOTE: the chocolatey pipe packages the Windows amd64 binary only —
+# goreleaser's own arch filter selects amd64/386 and excludes arm64 — so the
+# windows/arm64 build is intentionally absent from the package. Verify on a
+# clean Windows box at the first release (issue #75).
 # --------------------------------------------------------------------------
 chocolateys:
   - name: agentsync
@@ -176,6 +177,13 @@ chocolateys:
 # --------------------------------------------------------------------------
 # AUR (Arch) — deliberately NOT enabled yet. Uncomment once its companion repo /
 # credential exists and you're ready to ship it. Tracked in issue #13.
+#
+# ⚠️ When enabling this — or ANY new publisher that pushes to an external target
+# — add its pipe to the `--skip=` list in the `chocolatey` job of
+# .github/workflows/release.yml. That job reuses this same config with
+# release.disable=true, which suppresses only the GitHub Release, NOT external
+# publishers; an un-skipped publisher would double-publish from the Windows
+# runner (once from the Linux job, again from the Windows job).
 # --------------------------------------------------------------------------
 
 # aurs:
