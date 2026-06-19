@@ -19,12 +19,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   workflow gained a dedicated `windows-latest` job that builds and `choco
   push`es only the `.nupkg`, reusing the same config with
   `AGENTSYNC_DISABLE_GH_RELEASE=true` so it never re-creates the Release the
-  Linux job published. The whole thing ships as a safe no-op until you opt in:
-  Scoop's `skip_upload` templates off `SCOOP_BUCKET_GITHUB_TOKEN` (no token →
-  manifest built but never pushed), and the Windows job is gated on the
-  `ENABLE_CHOCOLATEY` repo variable (flip it + add `CHOCOLATEY_API_KEY` to go
-  live). The CI snapshot job explicitly skips chocolatey (the Linux runner has
-  no `choco`).
+  Linux job published. The whole thing ships as a safe no-op until you add each
+  channel's credential: Scoop's `skip_upload` templates off
+  `SCOOP_BUCKET_GITHUB_TOKEN` (no token → manifest built but never pushed), and
+  the Windows job is gated on the *presence* of `CHOCOLATEY_API_KEY` (surfaced
+  as a job output, since a job-level `if:` can't read `secrets`) — so the
+  windows-latest runner only spins up once the key exists. The CI snapshot job
+  explicitly skips chocolatey (the Linux runner has no `choco`).
 - **Releases can now be cut from the GitHub UI / mobile app, no laptop
   required.** The `release` workflow grew a `workflow_dispatch` trigger with a
   `version` input alongside the existing `push: tags` one: "Actions → release →

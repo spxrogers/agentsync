@@ -135,13 +135,12 @@ scoops:
 # `choco install agentsync` works. goreleaser shells out to the `choco` CLI,
 # which is Windows-only, so unlike every other channel this CANNOT run on the
 # Linux release job — the workflow runs it from a dedicated windows-latest job
-# (.github/workflows/release.yml), gated on the ENABLE_CHOCOLATEY repo variable.
-# choco is pre-installed on GitHub's windows-latest runners.
+# (.github/workflows/release.yml). choco is pre-installed on those runners.
 #
 # Gating lives in the workflow, not here: goreleaser's `skip_publish` is a hard
-# bool (not templateable like scoop's skip_upload), so the Windows job is gated
-# on the ENABLE_CHOCOLATEY repo variable instead — flip it + add
-# CHOCOLATEY_API_KEY together to go live. Chocolatey's community repo also runs
+# bool (not templateable like scoop's skip_upload), so instead the Windows job
+# is gated on the *presence* of CHOCOLATEY_API_KEY — adding that secret is the
+# whole "go live" step. Chocolatey's community repo also runs
 # new packages through a moderation queue, so the first push won't be publicly
 # installable until it clears review.
 #

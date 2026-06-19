@@ -46,7 +46,27 @@ jobs:
   goreleaser:
     name: goreleaser (publish)
     runs-on: ubuntu-latest
+    # Surface whether the Chocolatey credential exists as a job output so the
+    # windows-latest `chocolatey` job can gate on it. A job-level `if:` cannot
+    # read the `secrets` context (only github/needs/vars/inputs are available
+    # there), so we detect the secret HERE — where a step can read it via env —
+    # and publish a plain boolean. This keeps Chocolatey's "just add the key to
+    # go live" UX symmetric with Scoop (which self-gates on its token).
+    outputs:
+      choco_enabled: ${{ steps.choco_flag.outputs.enabled }}
     steps:
+      - name: Detect Chocolatey credential
+        id: choco_flag
+        shell: bash
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+        run: |
+          # Emit ONLY a boolean — never the key value (job outputs aren't masked).
+          if [ -n "$CHOCOLATEY_API_KEY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v4
         # Full history + tags so goreleaser can build the changelog and derive
         # the version from the tag. On `push: tags` the checked-out ref IS the
@@ -103,16 +123,15 @@ jobs:
   # so it can't run on the Linux `goreleaser` job above — hence this dedicated
   # runner. GitHub's windows-latest image ships choco pre-installed.
   #
-  # Gated on the ENABLE_CHOCOLATEY repo variable so it doesn't burn Windows
-  # minutes (billed at a higher rate) until you opt in: Settings → Secrets and
-  # variables → Actions → Variables → ENABLE_CHOCOLATEY=true. `needs: goreleaser`
-  # runs it only after the Linux job published the Release. It reuses the SAME
-  # .goreleaser.yaml but sets AGENTSYNC_DISABLE_GH_RELEASE=true so it builds and
-  # pushes ONLY the .nupkg and never re-creates that Release; it skips the
-  # homebrew/scoop/nfpm pipes the Linux job already handled. Flip the variable
-  # and add CHOCOLATEY_API_KEY together: with the variable on but no key, the
-  # `choco push` would fail (goreleaser's skip_publish is a hard bool, so the
-  # config can't self-gate the push the way Scoop's templated skip_upload does).
+  # Gated purely on the presence of CHOCOLATEY_API_KEY (surfaced as the
+  # `choco_enabled` output of the goreleaser job above), so it doesn't burn
+  # Windows minutes — billed at a higher rate — until you add the key. Adding
+  # the secret is the entire "pull the trigger" step for Chocolatey; no separate
+  # enable flag to remember. `needs: goreleaser` also means it runs only after
+  # the Linux job published the Release. It reuses the SAME .goreleaser.yaml but
+  # sets AGENTSYNC_DISABLE_GH_RELEASE=true so it builds and pushes ONLY the
+  # .nupkg and never re-creates that Release; it skips the homebrew/scoop/nfpm
+  # pipes the Linux job already handled.
   #
   # NOTE (OSS goreleaser): built artifacts can't be shared across runners — that
   # cross-runner split/merge is a Pro feature — so this re-runs the build. It's
@@ -120,7 +139,7 @@ jobs:
   chocolatey:
     name: chocolatey (windows)
     needs: goreleaser
-    if: ${{ vars.ENABLE_CHOCOLATEY == 'true' }}
+    if: ${{ needs.goreleaser.outputs.choco_enabled == 'true' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -139,8 +158,8 @@ jobs:
           args: release --clean --skip=homebrew,scoop,nfpm
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # `choco push` credential — add it together with the ENABLE_CHOCOLATEY
-          # variable that gates this job (see the job-level comment above).
+          # `choco push` credential. Its mere presence is what gates this whole
+          # job (via the goreleaser job's `choco_enabled` output).
           CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
           # Build + push only the .nupkg; do NOT re-create the GitHub Release the
           # Linux job already published (see `release.disable` in .goreleaser.yaml).
