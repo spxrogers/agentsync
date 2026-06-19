@@ -51,7 +51,7 @@ func newStatusCmd() *cobra.Command {
 		scopeFlag   string
 		projectFlag string
 		jsonOut     bool
-		agentFlag   []string
+		agentsCSV   string
 	)
 	cmd := &cobra.Command{
 		Use:   "status",
@@ -86,12 +86,16 @@ func newStatusCmd() *cobra.Command {
 					enabled[name] = true
 				}
 			}
-			// --agent narrows the report (and the plan) to the requested
+			// --agents narrows the report (and the plan) to the requested
 			// agent(s); orphan-state warnings still consider the FULL enabled
 			// set so a deselected agent isn't mistaken for an orphaned one.
 			selected := enabledAgents
-			if len(agentFlag) > 0 {
-				sel, serr := resolveAgentFilter(agentFlag, enabled)
+			if cmd.Flags().Changed("agents") {
+				names := splitAgents(agentsCSV)
+				if len(names) == 0 {
+					return fmt.Errorf("--agents cannot be empty; name one or more enabled agents")
+				}
+				sel, serr := resolveAgentFilter(names, enabled)
 				if serr != nil {
 					return serr
 				}
@@ -141,7 +145,7 @@ func newStatusCmd() *cobra.Command {
 	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
 	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the formatted report")
-	cmd.Flags().StringSliceVar(&agentFlag, "agent", nil, "limit the report to specific agent(s) (repeatable or comma-separated)")
+	cmd.Flags().StringVar(&agentsCSV, "agents", "", "limit the report to a comma-separated agent allowlist (default: all enabled)")
 	return cmd
 }
 
@@ -160,10 +164,13 @@ func statusVerbose(cmd *cobra.Command) bool {
 	return false
 }
 
-// resolveAgentFilter validates the --agent values against the known agent set
-// and the currently-enabled set, returning the de-duplicated selection in the
-// order given. An unknown name or an agent that exists but is not enabled is a
-// hard error — silently dropping it would make `status --agent typo` look clean.
+// resolveAgentFilter validates the (already comma-split) --agents values against
+// the known agent set and the currently-enabled set, returning the de-duplicated
+// selection in the order given. An unknown name or an agent that exists but is
+// not enabled is a hard error — silently dropping it would make
+// `status --agents typo` look clean. Callers split + reject the empty case
+// before calling (mirroring `mcp add --agents`), so a non-empty input that
+// resolves to nothing here is itself an error.
 func resolveAgentFilter(want []string, enabled map[string]bool) ([]string, error) {
 	var out []string
 	seen := map[string]bool{}
@@ -180,6 +187,9 @@ func resolveAgentFilter(want []string, enabled map[string]bool) ([]string, error
 			return nil, fmt.Errorf("agent %q is not enabled; run `agentsync agent add %s` first", a, a)
 		}
 		out = append(out, a)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("--agents cannot be empty; name one or more enabled agents")
 	}
 	return out, nil
 }
@@ -339,6 +349,7 @@ func renderAgentItems(p *ui.Printer, items []statusItem, verbose bool) int {
 	// Group skill-directory items by their root, preserving first-appearance
 	// order; everything else (memory, subagents, commands, MCP/hook/LSP keys)
 	// stays an inline per-item row.
+	roots := skillRoots(items)
 	type entry struct {
 		item  statusItem
 		group *skillGroup
@@ -348,9 +359,7 @@ func renderAgentItems(p *ui.Printer, items []statusItem, verbose bool) int {
 	for _, it := range items {
 		root := ""
 		if it.Pointer == "" {
-			if r, ok := skillRoot(it.Path); ok {
-				root = r
-			}
+			root = skillRootOf(it.Path, roots)
 		}
 		if root == "" {
 			order = append(order, entry{item: it})
@@ -403,21 +412,41 @@ func renderSkillGroup(p *ui.Printer, g *skillGroup) {
 	fmt.Fprintf(p.Out, "  %s %s  %s\n", color(label), g.Root+string(filepath.Separator), p.Faint(skillSummary(g.Items)))
 }
 
-// skillRoot returns the …/skills/<name> directory a path lives under and true if
-// the path is inside one. Every adapter renders skills to a `skills/<name>/`
-// subtree (Claude `~/.claude/skills`, the cross-vendor `~/.agents/skills`, each
-// generic spec's own dir), so the first `skills` path segment plus the next
-// segment is the skill root for any of them. A nested `upstream/SKILL.md` falls
-// under the same outer root, keeping a multi-variant skill on one row.
-func skillRoot(path string) (string, bool) {
-	sep := string(filepath.Separator)
-	parts := strings.Split(path, sep)
-	for i, seg := range parts {
-		if seg == "skills" && i+1 < len(parts) {
-			return strings.Join(parts[:i+2], sep), true
+// skillRoots returns the skill directories present among items, anchored on an
+// actual SKILL.md — the dir of every `…/skills/<name>/SKILL.md` item (one whose
+// grandparent dir is `skills`, the shape every adapter renders: Claude
+// `~/.claude/skills`, the cross-vendor `~/.agents/skills`, each generic spec's
+// own dir). Anchoring on a real SKILL.md rather than merely a `skills` path
+// SEGMENT is deliberate: a user whose $HOME or project root happens to contain a
+// `skills` ancestor (e.g. `/home/skills/user`) would otherwise see EVERY dest
+// path — including a drifted memory/subagent file — swept into one bogus
+// "skill" group and hidden from the per-row view. A skill whose SKILL.md is gone
+// (a true orphan) simply isn't collapsed; its lingering files list individually,
+// which is the clearer view for cleanup anyway.
+func skillRoots(items []statusItem) map[string]bool {
+	roots := map[string]bool{}
+	for _, it := range items {
+		if it.Pointer != "" || filepath.Base(it.Path) != "SKILL.md" {
+			continue
+		}
+		dir := filepath.Dir(it.Path) // …/skills/<name>
+		if filepath.Base(filepath.Dir(dir)) == "skills" {
+			roots[dir] = true
 		}
 	}
-	return "", false
+	return roots
+}
+
+// skillRootOf returns the skill root in roots that contains path (path is the
+// root's SKILL.md or any descendant of it), or "" if none. Roots never nest —
+// each is a distinct `skills/<name>` — so the first match is unambiguous.
+func skillRootOf(path string, roots map[string]bool) string {
+	for r := range roots {
+		if path == r || strings.HasPrefix(path, r+string(filepath.Separator)) {
+			return r
+		}
+	}
+	return ""
 }
 
 // mostSevereClass returns the highest-severity drift class present among items,
@@ -531,7 +560,7 @@ func renderStatusLegend(p *ui.Printer, summary map[string]int) {
 // a removed/disabled agent, and native plugins not yet declared in source.
 // These are not part of the status model (and not the --json payload).
 //
-// orphan detection uses the full enabled set so a `--agent`-narrowed report
+// orphan detection uses the full enabled set so a `--agents`-narrowed report
 // never mistakes a deselected-but-enabled agent for an orphan; the
 // undeclared-plugin nudge follows the selected set so it stays scoped to what
 // the report shows.
