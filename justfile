@@ -114,6 +114,9 @@ ci: lint test-release
     goreleaser release --snapshot --skip=publish --clean
 
 # Cut a release: validate `v`+semver, then tag & push (which fires the release workflow). Usage: `just release v0.1.0`
+# No laptop? Trigger the same release from the GitHub UI/mobile app instead:
+# Actions -> "release" -> "Run workflow" -> enter the version. That path validates,
+# tags, and publishes in one run (see .github/workflows/release.yml).
 release version:
     #!/usr/bin/env bash
     set -euo pipefail

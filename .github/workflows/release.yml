@@ -1,14 +1,33 @@
 name: release
-# Tag-triggered publish. CI (ci.yml) only ever runs goreleaser in
-# `--snapshot --skip publish` mode to prove the cross-build stays viable; this
-# workflow is the one that actually cuts a GitHub Release and updates the
-# Homebrew tap. Push an annotated `vX.Y.Z` tag on a green `main` commit and
-# GoReleaser takes it from there. Once the release publishes, the `docs` job
-# rebuilds and redeploys the agentsync.cc site so the live docs always track the
-# just-shipped CLI version.
+# Publish a GitHub Release + update the Homebrew tap. CI (ci.yml) only ever runs
+# goreleaser in `--snapshot --skip publish` mode to prove the cross-build stays
+# viable; this workflow is the one that actually ships. Once the release
+# publishes, the `docs` job rebuilds and redeploys the agentsync.cc site so the
+# live docs always track the just-shipped CLI version.
+#
+# Two ways in, both landing in the single `goreleaser` job below:
+#   1. push an annotated `vX.Y.Z` tag on a green commit (the laptop path —
+#      `just release vX.Y.Z`); the `push: tags` trigger fires.
+#   2. trigger this workflow manually from the GitHub UI / mobile app
+#      ("Actions → release → Run workflow") with a `version` input. The job
+#      validates it, creates + pushes the tag at the dispatched ref's HEAD, then
+#      publishes — all in one run. This is the no-laptop path.
+#
+# Why the manual path tags AND publishes in the same run instead of just pushing
+# a tag and letting trigger #1 fire: a tag pushed with the default GITHUB_TOKEN
+# does NOT start a new workflow run (GitHub's loop-prevention rule), so a
+# "push the tag and walk away" job would tag the repo but never publish. Doing
+# both here sidesteps that entirely — and the token-pushed tag silently not
+# re-triggering this workflow is exactly what stops a double release.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release — v + semver, e.g. v0.6.0 or v1.2.3-rc.1"
+        required: true
+        type: string
 
 # goreleaser needs to create the GitHub Release + upload assets in THIS repo,
 # and the `docs` job force-pushes the rebuilt site to the gh-pages branch — both
@@ -23,8 +42,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         # Full history + tags so goreleaser can build the changelog and derive
-        # the version from the tag.
+        # the version from the tag. On `push: tags` the checked-out ref IS the
+        # tag; on `workflow_dispatch` it's the dispatched branch, and the step
+        # below creates the tag at its HEAD.
         with: { fetch-depth: 0 }
+      # Manual-dispatch only: validate the requested version and create + push
+      # the annotated tag at HEAD so goreleaser (which derives the version from
+      # the tag at HEAD) has one to release. Mirrors the `just release` recipe's
+      # validation. The version is read via env, never interpolated into the
+      # script body, so a hostile input can't inject shell. Uses the persisted
+      # GITHUB_TOKEN from actions/checkout (contents:write, granted below).
+      - name: Validate version and create release tag (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*))?(\+([0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*))?$'
+          if [[ ! "$VERSION" =~ $semver ]]; then
+            echo "release: '$VERSION' must start with 'v' and be valid semver (e.g. v0.1.0, v1.2.3-rc.1)" >&2
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+            echo "release: tag '$VERSION' already exists" >&2
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$VERSION" -m "agentsync $VERSION"
+          git push origin "$VERSION"
+          echo "release: created and pushed $VERSION — publishing it now."
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod

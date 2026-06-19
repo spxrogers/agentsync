@@ -102,6 +102,21 @@ cover.
 For anything security-sensitive, **don't** open a public PR/issue first — use the
 private reporting path in [`SECURITY.md`](SECURITY.md).
 
+## Cutting a release
+
+Releases are an annotated `vX.Y.Z` tag on a green commit; pushing the tag fires
+`.github/workflows/release.yml`, which runs GoReleaser (GitHub Release +
+Homebrew tap) and redeploys the docs site. Two equivalent ways to trigger it:
+
+- **From a laptop:** `just release vX.Y.Z` — validates `v`+semver, then tags and
+  pushes.
+- **From the GitHub UI / mobile app (no laptop):** Actions → **release** → **Run
+  workflow**, enter the version. The workflow validates it, creates and pushes
+  the tag at the selected ref's HEAD, and publishes in the same run.
+
+Either way, make sure the commit you're tagging is green and the `CHANGELOG.md`
+`[Unreleased]` section has been promoted to the new version first.
+
 ## Reporting bugs & requesting features
 
 Use the [issue templates](.github/ISSUE_TEMPLATE/). Bug reports are far easier to
