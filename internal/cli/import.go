@@ -1166,7 +1166,7 @@ func importPlugins(io *importIO, home, agentName string, a adapter.Adapter, name
 		if !pl.Enabled {
 			continue
 		}
-		if name != "" && pl.Name != name && pl.Name+"@"+pl.MarketplaceID != name {
+		if name != "" && pl.Name.Unverified() != name && pl.Name.Unverified()+"@"+pl.MarketplaceID != name {
 			continue
 		}
 		want = append(want, pl)
@@ -1240,8 +1240,14 @@ func importPlugins(io *importIO, home, agentName string, a adapter.Adapter, name
 		}
 		// The plugin name becomes plugins/<name>.toml; validate it up front (and
 		// in dry-run) so a hostile native id can't escape the source dir and the
-		// preview matches a real import.
-		if verr := source.ValidateComponentID("plugin", pl.Name); verr != nil {
+		// preview matches a real import. ValidateComponentID also rejects control /
+		// deceptive-format runes, so past this gate plName (the raw id used for the
+		// path/install identity below) is guaranteed clean — its later appearance in
+		// the item-line preview and in any wrapped install error printed via %v
+		// carries no terminal escape. The skip warning prints pl.Name (untrusted.Text,
+		// %q-escaped) for the names this gate rejects.
+		plName := pl.Name.Unverified()
+		if verr := source.ValidateComponentID("plugin", plName); verr != nil {
 			io.warnf("skipping plugin %q: %v", pl.Name, verr)
 			continue
 		}
@@ -1250,16 +1256,16 @@ func importPlugins(io *importIO, home, agentName string, a adapter.Adapter, name
 			continue
 		}
 		if io.dryRun {
-			io.item(fmt.Sprintf("plugins/%s.toml", pl.Name), "")
-			ids = append(ids, pl.Name)
+			io.item(fmt.Sprintf("plugins/%s.toml", plName), "")
+			ids = append(ids, plName)
 			continue
 		}
-		if _, ierr := installPluginInto(home, pl.Name, mpName); ierr != nil {
+		if _, ierr := installPluginInto(home, plName, mpName); ierr != nil {
 			io.warnf("skipping plugin %q from %q: %v", pl.Name, mpName, ierr)
 			continue
 		}
-		io.item(fmt.Sprintf("plugins/%s.toml", pl.Name), "")
-		ids = append(ids, pl.Name)
+		io.item(fmt.Sprintf("plugins/%s.toml", plName), "")
+		ids = append(ids, plName)
 	}
 	return ids, nil
 }

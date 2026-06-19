@@ -20,6 +20,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 	"github.com/spxrogers/agentsync/internal/ui"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 	"github.com/tailscale/hujson"
 )
 
@@ -316,11 +317,12 @@ func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry
 			continue
 		}
 		// Native plugin names come from the agent's own config (a plugin author
-		// can influence them), so sanitize before printing to keep terminal
-		// escapes out of the note. The agent `name` is a trusted registry id.
+		// can influence them); they are untrusted.Text and sanitize on display by
+		// construction (untrusted.Join renders each via its String()), so no manual
+		// ui.Sanitize is needed here. The agent `name` is a trusted registry id.
 		fmt.Fprintf(p.Err, "%s %d plugin(s) installed in %s are not in your source (%s); "+
 			"run `agentsync import %s:plugin` to manage them.\n",
-			p.Cyan("note:"), len(missing), name, ui.Sanitize(strings.Join(missing, ", ")), name)
+			p.Cyan("note:"), len(missing), name, untrusted.Join(missing, ", "), name)
 	}
 }
 

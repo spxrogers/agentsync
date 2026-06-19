@@ -52,15 +52,21 @@ can resolve secrets into native config files. Areas of particular interest:
   `apply`, `plugin`, `marketplace`, `update`, `status`, and `doctor`).
   `explain --json` keeps ids raw (a machine contract where the consumer owns
   escaping). This invariant is enforced by **type**, not by per-site convention:
-  the plugin/marketplace id, version, name, and report-row fields are the defined
-  string type `untrusted.Text` (`internal/untrusted`), whose `String()`
-  sanitizes — so printing one through `fmt` is safe by construction, and reaching
-  the raw bytes requires the explicit, greppable `Unverified()` (for
-  filesystem/lookup use, never display). Reflection-based `TestUntrustedFieldGuard`s
-  fail the build if a new string field is added to those structs without being
-  classified, so a future field that carries fetched metadata cannot quietly ship
-  as a raw string a new print site would leak. The established carve-outs (hex
-  SHAs, `%q` URLs, user-supplied CLI arguments, enum modes) stay plain strings.
+  the plugin/marketplace id, version, name, and report-row fields — and the
+  native-ingested plugin name an adapter's `IngestPlugins` reports
+  (`adapter.NativePlugin.Name`), which `status`/`doctor` print in their
+  "undeclared native plugins" notes — are the defined string type
+  `untrusted.Text` (`internal/untrusted`), whose `String()` sanitizes — so
+  printing one through `fmt` is safe by construction, and reaching the raw bytes
+  requires the explicit, greppable `Unverified()` (for filesystem/lookup use,
+  never display). Reflection-based `TestUntrustedFieldGuard`s (in
+  `internal/{source,marketplace,render,adapter}`) fail the build if a new string
+  field is added to those structs without being classified, so a future field
+  that carries fetched or native-config metadata cannot quietly ship as a raw
+  string a new print site would leak. The established carve-outs (hex SHAs, `%q`
+  URLs, user-supplied CLI arguments, enum modes, and the `import`-only
+  diagnostics surface — native marketplace ids and source types) stay plain
+  strings.
 - **Destination writes**: writes are atomic and refuse to clobber symlinked
   destinations by default; pre-existing foreign files are backed up before
   overwrite.

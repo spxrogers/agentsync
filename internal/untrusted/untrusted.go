@@ -73,6 +73,23 @@ func (t Text) Unverified() string { return string(t) }
 // callers read `t.Empty()` instead of comparing against a Text("") literal.
 func (t Text) Empty() bool { return t == "" }
 
+// Join concatenates the SANITIZED form of each Text with sep between elements —
+// the Text-slice analogue of strings.Join, for building one display string from
+// several untrusted values (e.g. the comma-separated plugin list in the
+// status/doctor "undeclared native plugins" note). Each element is sanitized via
+// String(), so the result is safe to print directly; do NOT wrap it in a second
+// Sanitize. sep is trusted caller-supplied text and is emitted verbatim.
+func Join(ts []Text, sep string) string {
+	var b strings.Builder
+	for i, t := range ts {
+		if i > 0 {
+			b.WriteString(sep)
+		}
+		b.WriteString(t.String())
+	}
+	return b.String()
+}
+
 // Sanitize strips control characters and deceptive format runes from a string so
 // untrusted text — a fetched marketplace plugin's id, a plugin-supplied component
 // name — can be rendered to a terminal without smuggling escape sequences or

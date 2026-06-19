@@ -9,6 +9,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // ErrProjectRootRequired is returned by RequireProjectRoot (and thus by every
@@ -163,9 +164,25 @@ type NativeMarketplace struct {
 
 // NativePlugin is a plugin recorded in an agent's native config, as discovered
 // by `import`. Enabled is false for an explicitly-disabled entry.
+//
+// Name is untrusted.Text: a plugin author influences the name the agent persists
+// in its own config, and `status`/`doctor` read it back via IngestPlugins and
+// print it in their "undeclared native plugins" notes, so it must sanitize on
+// display by construction (its String() runs untrusted.Sanitize). Reach the raw
+// bytes via Unverified() only for non-display use — the plugins/<name>.toml stem,
+// a map key, ValidateComponentID. The reflection-based TestUntrustedFieldGuard
+// (internal/adapter) fails the build if a new string field here ships
+// unclassified. See docs/architecture.md §7 and SECURITY.md.
+//
+// MarketplaceID stays a plain string: unlike Name it is not rendered into the
+// status/doctor layout this hardening targets; its only display sites are
+// `import`'s warn diagnostics, the same plain-string surface as the sibling
+// NativeMarketplace / NativeSource fields (marketplace ids, source types). That
+// whole import-diagnostics surface is a deliberate plain-string subset — promote
+// these together if it is ever hardened.
 type NativePlugin struct {
-	Name          string // the "<plugin>" half of a plugin reference
-	MarketplaceID string // the marketplace it was installed from
+	Name          untrusted.Text // the "<plugin>" half of a plugin reference
+	MarketplaceID string         // the marketplace it was installed from
 	Enabled       bool
 }
 

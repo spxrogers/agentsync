@@ -55,7 +55,7 @@ enabled = true
 		"slack":  {"team-mp", true},
 	}
 	for _, pl := range plugins {
-		w, ok := want[pl.Name]
+		w, ok := want[pl.Name.Unverified()]
 		if !ok {
 			t.Fatalf("unexpected plugin %q", pl.Name)
 		}

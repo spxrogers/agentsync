@@ -28,6 +28,45 @@ func TestValidateComponentID_RejectsDegenerate(t *testing.T) {
 	}
 }
 
+// TestValidateComponentID_RejectsControlAndDeceptiveRunes guards the write
+// boundary against an id that is separator-free and non-degenerate yet carries a
+// terminal-control byte or a deceptive bidi/zero-width rune — a foreign id (from a
+// native config on `import`/`reconcile`) that would make a pathological filename
+// and, echoed back in a diagnostic, smuggle a terminal escape or spoof its own
+// name. The check is tied to untrusted.Sanitize's rune set, so these must be
+// rejected even though they pass the separator/traversal/degenerate gates.
+func TestValidateComponentID_RejectsControlAndDeceptiveRunes(t *testing.T) {
+	hostile := []string{
+		"good\x1b[31m",  // ESC — terminal recolor
+		"demo\r",        // CR — row spoof
+		"demo\x07",      // BEL
+		"name\u202egnp", // RLO (U+202E) — Trojan-Source bidi reorder
+		"na\u200bme",    // ZWSP (U+200B) — invisible padding
+		"x\u009bm",      // C1 CSI introducer (U+009B)
+	}
+	for _, id := range hostile {
+		if err := source.ValidateComponentID("plugin", id); err == nil {
+			t.Errorf("ValidateComponentID(%q) = nil; want rejection of control/deceptive rune", id)
+		}
+	}
+	// A legitimate non-ASCII id (no explicit control/bidi/zero-width runes) still
+	// passes — the gate strips only the spoofing set, never ordinary letters. The
+	// width-affecting-but-inert runes untrusted.Sanitize knowingly leaves alone also
+	// pass BY DESIGN: the gate's scope is exactly Sanitize's set, so these rows pin
+	// that boundary — were Sanitize tightened to strip them, these cases would flip
+	// and force an intentional decision rather than drifting silently.
+	for _, id := range []string{
+		"github", "my-plugin", "naïve", "日本語", // ordinary letters, preserved
+		"soft\u00adhyphen", // U+00AD soft hyphen — width-affecting, not a terminal escape
+		"word\u2060joiner", // U+2060 word joiner — default-ignorable, left alone
+		"line\u2028sep",    // U+2028 line separator — not stripped by Sanitize
+	} {
+		if err := source.ValidateComponentID("plugin", id); err != nil {
+			t.Errorf("ValidateComponentID(%q) = %v; want nil (legitimate / out-of-scope id)", id, err)
+		}
+	}
+}
+
 func TestWriteMCP_RoundTrip(t *testing.T) {
 	home := t.TempDir()
 

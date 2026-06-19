@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // IngestPlugins discovers the marketplaces and enabled plugins recorded in
@@ -90,7 +91,7 @@ func parseEnabledPlugins(v any) []adapter.NativePlugin {
 	for key, raw := range m {
 		name, mpID := splitPluginKey(key)
 		out = append(out, adapter.NativePlugin{
-			Name:          name,
+			Name:          untrusted.Wrap(name),
 			MarketplaceID: mpID,
 			Enabled:       enabledTruthy(raw),
 		})
