@@ -26,7 +26,7 @@ version_valid() {
 # one. Pure — touches no git state. Exits non-zero (failing CI) on any mismatch.
 self_test() {
 	local good=(v0.0.0 v0.1.0 v0.6.0 v1.2.3 v10.20.30 v1.2.3-rc.1 v1.2.3-0.3.7 v1.0.0-alpha v1.0.0-alpha.1 v1.0.0+build.1 v1.2.3-rc.1+build.5)
-	local bad=("" 1.2.3 v1.2 v1 vfoo v1.2.3. v01.2.3 v1.02.3 "v1.2.3 " " v1.2.3" v1.2.3- V1.2.3)
+	local bad=("" 1.2.3 v1.2 v1 vfoo v1.2.3. v01.2.3 v1.02.3 "v1.2.3 " " v1.2.3" v1.2.3- V1.2.3 $'v1.2.3\nrm -rf x')
 	local rc=0 v
 	for v in "${good[@]}"; do
 		if ! version_valid "$v"; then
