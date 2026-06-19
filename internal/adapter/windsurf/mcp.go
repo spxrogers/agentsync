@@ -29,6 +29,7 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, []ad
 			skips = append(skips, adapter.Skip{
 				Component: "mcp", Name: m.ID,
 				Reason: "Windsurf MCP config is global-only (~/.codeium/windsurf/mcp_config.json); no project-scope target",
+				Kind:   adapter.SkipDropped,
 			})
 		}
 		return nil, skips, nil

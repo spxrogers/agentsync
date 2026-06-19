@@ -23,9 +23,9 @@ func findOp(ops []adapter.FileOp, suffix string) *adapter.FileOp {
 	return nil
 }
 
-func hasSkip(skips []adapter.Skip, component, name string) *adapter.Skip {
+func hasSkip(skips []adapter.Skip, component, name string, kind adapter.SkipKind) *adapter.Skip {
 	for i := range skips {
-		if skips[i].Component == component && skips[i].Name == name {
+		if skips[i].Component == component && skips[i].Name == name && skips[i].Kind == kind {
 			return &skips[i]
 		}
 	}
@@ -186,9 +186,9 @@ func TestRender_Command_TOML(t *testing.T) {
 	if cf.Description != "Summarize code" || cf.Prompt != "Summarize {{args}}.\n" {
 		t.Fatalf("command TOML wrong: %+v", cf)
 	}
-	sk := hasSkip(skips, "command-frontmatter", "summarize")
+	sk := hasSkip(skips, "command", "summarize", adapter.SkipReduced)
 	if sk == nil || !strings.Contains(sk.Reason, "argument-hint") {
-		t.Fatalf("expected dropped-frontmatter skip listing argument-hint, got %+v", skips)
+		t.Fatalf("expected reduced command skip listing argument-hint, got %+v", skips)
 	}
 }
 
@@ -220,9 +220,9 @@ func TestRender_Subagent_DropsToolsKeepsCore(t *testing.T) {
 	if strings.Contains(content, "tools") || strings.Contains(content, "color") {
 		t.Fatalf("tools/color must be dropped: %s", content)
 	}
-	sk := hasSkip(skips, "subagent-frontmatter", "review")
+	sk := hasSkip(skips, "subagent", "review", adapter.SkipReduced)
 	if sk == nil || !strings.Contains(sk.Reason, "tools") || !strings.Contains(sk.Reason, "color") {
-		t.Fatalf("expected subagent-frontmatter skip listing tools+color, got %+v", skips)
+		t.Fatalf("expected reduced subagent skip listing tools+color, got %+v", skips)
 	}
 }
 
@@ -259,7 +259,7 @@ func TestRender_Hooks_MapsEventsNestedShape(t *testing.T) {
 	if _, ok := hooks["AfterAgent"]; !ok {
 		t.Fatalf("Stop should map to AfterAgent: %s", op.Content)
 	}
-	if hasSkip(skips, "hook", "SubagentStop") == nil {
+	if hasSkip(skips, "hook", "SubagentStop", adapter.SkipDropped) == nil {
 		t.Fatalf("expected a skip for unmapped event SubagentStop, got %+v", skips)
 	}
 }
@@ -280,10 +280,10 @@ func TestRender_SkillAndLSP_Skipped(t *testing.T) {
 	if op := findOp(ops, "SKILL.md"); op != nil {
 		t.Fatalf("Gemini has no skills; none should be written: %s", op.Path)
 	}
-	if hasSkip(skips, "skill", "demo") == nil {
+	if hasSkip(skips, "skill", "demo", adapter.SkipDropped) == nil {
 		t.Fatalf("expected a skill skip, got %+v", skips)
 	}
-	if hasSkip(skips, "lsp", "gopls") == nil {
+	if hasSkip(skips, "lsp", "gopls", adapter.SkipDropped) == nil {
 		t.Fatalf("expected an lsp skip, got %+v", skips)
 	}
 }

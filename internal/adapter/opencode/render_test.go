@@ -329,7 +329,7 @@ func TestRender_Subagent_FrontmatterMunge(t *testing.T) {
 	// verify skip log
 	var sawToolsSkip bool
 	for _, s := range skips {
-		if s.Component == "subagent-frontmatter" && s.Name == "review" {
+		if s.Component == "subagent" && s.Name == "review" && s.Kind == adapter.SkipReduced {
 			if strings.Contains(s.Reason, "tools") {
 				sawToolsSkip = true
 			}
@@ -407,7 +407,7 @@ func TestRender_Command_FrontmatterMunge(t *testing.T) {
 	// verify skip for argument-hint
 	var sawHintSkip bool
 	for _, s := range skips {
-		if s.Component == "command-frontmatter" && s.Name == "summarize" {
+		if s.Component == "command" && s.Name == "summarize" && s.Kind == adapter.SkipReduced {
 			if strings.Contains(s.Reason, "argument-hint") {
 				sawHintSkip = true
 			}
@@ -503,10 +503,10 @@ func TestRender_HooksAndLSP_Skipped(t *testing.T) {
 	}
 	var hookSkip, lspSkip bool
 	for _, s := range skips {
-		if s.Component == "hook" {
+		if s.Component == "hook" && s.Kind == adapter.SkipDropped {
 			hookSkip = true
 		}
-		if s.Component == "lsp" {
+		if s.Component == "lsp" && s.Kind == adapter.SkipDropped {
 			lspSkip = true
 		}
 	}

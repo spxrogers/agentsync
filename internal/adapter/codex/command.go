@@ -23,6 +23,7 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths, scope adapter.Scop
 				Component: "command",
 				Name:      cmd.Name,
 				Reason:    "Codex custom prompts are global-only; no project-scope target",
+				Kind:      adapter.SkipDropped,
 			})
 		}
 		return nil, skips, nil

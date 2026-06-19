@@ -209,8 +209,9 @@ the agent has no home for, while a **dropped** part had no native target and was
 not emitted. Each part is itemized beneath a framing header, tagged `reduced` or
 `dropped` with its reason, so the tally is never a dead end. Add `--json` for
 machine-readable output (rows for plugin/agent coverage — each with a
-`skipDetails` array of `{component, name, reason}` — or a `plugins` array under
-`--list`).
+`skipDetails` array of `{component, name, reason, kind}`, where `kind` is
+`"reduced"` or `"dropped"` and `component` is the plain kind — or a `plugins`
+array under `--list`).
 
 ```bash
 agentsync explain atlassian@anthropic

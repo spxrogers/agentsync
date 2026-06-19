@@ -20,6 +20,7 @@ func (a *Adapter) renderMemory(c source.Canonical, p Paths, scope adapter.Scope)
 			Component: "memory",
 			Name:      "AGENTS.md",
 			Reason:    "Cursor stores user-level rules in app-local storage; no filesystem projection target (use project scope for AGENTS.md)",
+			Kind:      adapter.SkipDropped,
 		}}, nil
 	}
 	body := source.RenderManagedMemory(c.Memory.Body, c.Memory.Fragments, filepath.Base(p.Memory), c.Config.MemoryBannerEnabled())

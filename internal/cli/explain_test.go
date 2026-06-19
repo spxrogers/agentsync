@@ -611,7 +611,7 @@ func TestExplain_AllAttributesPerRow(t *testing.T) {
 			}
 		case "noisy@cross-mp":
 			sawNoisy = true
-			// noisy owns exactly its two skips (lsp + subagent-frontmatter).
+			// noisy owns exactly its two skips (dropped lsp + reduced subagent).
 			if r.MCP != 1 || r.Skips != 2 {
 				t.Errorf("noisy row in --all has wrong own counts: mcp=%d skips=%d (want mcp=1 skips=2)",
 					r.MCP, r.Skips)

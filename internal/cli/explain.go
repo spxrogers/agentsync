@@ -440,35 +440,51 @@ func emitSkipDetails(w io.Writer, p *ui.Printer, agent string, skips []render.Sk
 		}
 	}
 	for i, s := range skips {
-		// "reduced" and "dropped" are the same width, so the reason column stays
-		// aligned without padding the (color-wrapped) status word.
-		status := p.Yellow("dropped")
-		if isReducedSkip(s.Component) {
-			status = p.Cyan("reduced")
-		}
+		// Pad the status word (plain) to the widest real kind BEFORE coloring, so
+		// the reason column holds even for the guard-impossible "unset" fallback and
+		// ANSI never shifts it.
+		word, color := skipStatus(p, s.Kind)
 		fmt.Fprintf(w, "        %s %s  %s  %s\n",
 			p.Faint(ui.GlyphInfo),
 			ui.Pad(labels[i], width),
-			status,
+			color(ui.Pad(word, len("dropped"))),
 			p.Faint(ui.Sanitize(s.Reason)))
+	}
+}
+
+// skipStatus maps a skip's Kind to its display word + semantic color. An unset
+// Kind — which the static (TestEverySkipLiteralSetsKind) and runtime
+// (TestEveryAdapterClassifiesSkips) guards make unconstructable from real
+// adapters — renders as a red "unset" (its String()), a bug made VISIBLE rather
+// than silently mislabeled "dropped".
+func skipStatus(p *ui.Printer, k adapter.SkipKind) (string, func(string) string) {
+	switch k {
+	case adapter.SkipReduced:
+		return "reduced", p.Cyan
+	case adapter.SkipDropped:
+		return "dropped", p.Yellow
+	default:
+		return k.String(), p.Red
 	}
 }
 
 // skipTailNote summarizes a row's skips as a compact "(R reduced · D dropped)"
 // note (omitting a zero side), or "" when there are no skips. Splitting the
 // count by kind keeps the inline tally from reading as "N whole components
-// discarded" — most "skips" on a partial row are reductions, not drops.
+// discarded" — most "skips" on a partial row are reductions, not drops. A skip
+// that is neither (an unset Kind the guards forbid) is counted under its own
+// "unset" bucket rather than silently folded into "dropped".
 func skipTailNote(p *ui.Printer, skips []render.SkipDetail) string {
-	var reduced, dropped int
+	var reduced, dropped, unset int
 	for _, s := range skips {
-		if isReducedSkip(s.Component) {
+		switch s.Kind {
+		case adapter.SkipReduced:
 			reduced++
-		} else {
+		case adapter.SkipDropped:
 			dropped++
+		default:
+			unset++
 		}
-	}
-	if reduced == 0 && dropped == 0 {
-		return ""
 	}
 	var parts []string
 	if reduced > 0 {
@@ -477,29 +493,26 @@ func skipTailNote(p *ui.Printer, skips []render.SkipDetail) string {
 	if dropped > 0 {
 		parts = append(parts, fmt.Sprintf("%d dropped", dropped))
 	}
+	if unset > 0 {
+		parts = append(parts, fmt.Sprintf("%d unset", unset))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
 	return p.Yellow("(" + strings.Join(parts, " · ") + ")")
 }
 
-// isReducedSkip reports whether a skip is a field-level reduction (the component
-// still rendered) rather than a whole-component drop. The adapters mark the
-// former with a "-frontmatter" component suffix (subagent-frontmatter,
-// command-frontmatter); everything else (a dropped hook event, an LSP server
-// with no native concept, a project-scope command with no target) is a true drop.
-func isReducedSkip(component string) bool {
-	return strings.HasSuffix(component, "-frontmatter")
-}
-
-// skipLabel renders "<kind> <name>" for a skipped item, or just the kind when
-// the skip has no name (e.g. an unrecognized hook event). The internal
-// "-frontmatter" suffix is stripped — the "reduced" status tag now conveys that
-// the loss was field-level, so the label names the component kind plainly.
+// skipLabel renders "<component> <name>" for a skipped item, or just the
+// component kind when the skip has no name (e.g. an unrecognized hook event).
+// Component is now the plain kind (mcp, subagent, command, …); the reduced-vs-
+// dropped distinction is carried by SkipDetail.Kind and shown as the status tag,
+// not encoded in the component string.
 func skipLabel(s render.SkipDetail) string {
-	kind := strings.TrimSuffix(s.Component, "-frontmatter")
 	if s.Name.Empty() {
-		return kind
+		return s.Component
 	}
 	// s.Name is untrusted.Text; String() sanitizes it for the display label.
-	return kind + " " + s.Name.String()
+	return s.Component + " " + s.Name.String()
 }
 
 // coverageGlyphAndColor maps a coverage string to a glyph + semantic color

@@ -50,16 +50,16 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 
 	// Components Roo has no faithful target for — skipped with a report.
 	for _, s := range renderC.Skills {
-		skips = append(skips, adapter.Skip{Component: "skill", Name: s.Name, Reason: "Roo has no Agent Skills concept"})
+		skips = append(skips, adapter.Skip{Component: "skill", Name: s.Name, Reason: "Roo has no Agent Skills concept", Kind: adapter.SkipDropped})
 	}
 	for _, s := range renderC.Subagents {
-		skips = append(skips, adapter.Skip{Component: "subagent", Name: s.Name, Reason: "Roo uses custom modes, not per-file subagents"})
+		skips = append(skips, adapter.Skip{Component: "subagent", Name: s.Name, Reason: "Roo uses custom modes, not per-file subagents", Kind: adapter.SkipDropped})
 	}
 	for _, h := range renderC.Hooks {
-		skips = append(skips, adapter.Skip{Component: "hook", Name: h.Event, Reason: "Roo has no declarative hook concept"})
+		skips = append(skips, adapter.Skip{Component: "hook", Name: h.Event, Reason: "Roo has no declarative hook concept", Kind: adapter.SkipDropped})
 	}
 	for _, l := range renderC.LSPServers {
-		skips = append(skips, adapter.Skip{Component: "lsp", Name: l.ID, Reason: "Roo has no LSP configuration concept"})
+		skips = append(skips, adapter.Skip{Component: "lsp", Name: l.ID, Reason: "Roo has no LSP configuration concept", Kind: adapter.SkipDropped})
 	}
 	return ops, skips, nil
 }

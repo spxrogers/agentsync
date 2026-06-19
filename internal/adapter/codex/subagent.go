@@ -59,10 +59,11 @@ func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp
 		}
 		if dropped := droppedKeys(s.Frontmatter); len(dropped) > 0 {
 			skips = append(skips, adapter.Skip{
-				Component: "subagent-frontmatter",
+				Component: "subagent",
 				Name:      s.Name,
 				Reason: fmt.Sprintf("Codex agents are TOML with no per-agent tools allowlist; dropped %s",
 					strings.Join(dropped, ", ")),
+				Kind: adapter.SkipReduced,
 			})
 		}
 		body, err := toml.Marshal(af)

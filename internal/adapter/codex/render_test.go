@@ -217,7 +217,7 @@ func TestRender_Subagent_ToTOML(t *testing.T) {
 	}
 	var sawSkip bool
 	for _, s := range skips {
-		if s.Component == "subagent-frontmatter" && s.Name == "review" {
+		if s.Component == "subagent" && s.Name == "review" && s.Kind == adapter.SkipReduced {
 			if strings.Contains(s.Reason, "name") {
 				t.Fatalf("name carries over to the Codex TOML; it must not be reported dropped: %q", s.Reason)
 			}
@@ -227,7 +227,7 @@ func TestRender_Subagent_ToTOML(t *testing.T) {
 		}
 	}
 	if !sawSkip {
-		t.Fatalf("expected a subagent-frontmatter skip listing tools+color, got %+v", skips)
+		t.Fatalf("expected a reduced subagent skip listing tools+color, got %+v", skips)
 	}
 }
 
@@ -254,7 +254,7 @@ func TestRender_Subagent_NameOnly_NoSkip(t *testing.T) {
 		t.Fatalf("name field missing: %s", op.Content)
 	}
 	for _, s := range skips {
-		if s.Component == "subagent-frontmatter" && s.Name == "ai-architect" {
+		if s.Component == "subagent" && s.Name == "ai-architect" && s.Kind == adapter.SkipReduced {
 			t.Fatalf("no skip expected for a name/description/model-only agent, got %q", s.Reason)
 		}
 	}
@@ -300,7 +300,7 @@ func TestRender_Command_ProjectScope_Skipped(t *testing.T) {
 	}
 	var sawSkip bool
 	for _, s := range skips {
-		if s.Component == "command" && s.Name == "summarize" {
+		if s.Component == "command" && s.Name == "summarize" && s.Kind == adapter.SkipDropped {
 			sawSkip = true
 		}
 	}
@@ -341,7 +341,7 @@ func TestRender_Hooks_KnownAndUnknownEvents(t *testing.T) {
 	}
 	var sawSkip bool
 	for _, s := range skips {
-		if s.Component == "hook" && s.Name == "SessionEnd" {
+		if s.Component == "hook" && s.Name == "SessionEnd" && s.Kind == adapter.SkipDropped {
 			sawSkip = true
 		}
 	}
@@ -406,7 +406,7 @@ func TestRender_LSP_Skipped(t *testing.T) {
 	}
 	var sawLSP bool
 	for _, s := range skips {
-		if s.Component == "lsp" && s.Name == "gopls" {
+		if s.Component == "lsp" && s.Name == "gopls" && s.Kind == adapter.SkipDropped {
 			sawLSP = true
 		}
 	}

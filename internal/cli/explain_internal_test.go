@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/ui"
@@ -39,19 +40,20 @@ var ansiSeq = regexp.MustCompile("\x1b\\[[0-9;]*m")
 func stripANSI(s string) string { return ansiSeq.ReplaceAllString(s, "") }
 
 // TestSkipLabel covers all arms of skipLabel: a named skip renders
-// "<kind> <name>", an unnamed one (e.g. an unrecognized hook event with no
-// name) falls back to the bare kind, and the internal "-frontmatter" suffix is
-// stripped so the user-facing label names the component kind plainly.
+// "<component> <name>", and an unnamed one (e.g. an unrecognized hook event with
+// no name) falls back to the bare component kind. Component is now the plain kind
+// for every skip — reduced and dropped alike label identically; the reduced/
+// dropped distinction is carried by Kind (shown as a status tag), not the label.
 func TestSkipLabel(t *testing.T) {
 	tests := []struct {
 		name string
 		in   render.SkipDetail
 		want string
 	}{
-		{"named", render.SkipDetail{Component: "lsp", Name: "gopls"}, "lsp gopls"},
-		{"unnamed", render.SkipDetail{Component: "hook"}, "hook"},
-		{"frontmatter suffix stripped", render.SkipDetail{Component: "subagent-frontmatter", Name: "reviewer"}, "subagent reviewer"},
-		{"command-frontmatter stripped", render.SkipDetail{Component: "command-frontmatter", Name: "deploy"}, "command deploy"},
+		{"named dropped", render.SkipDetail{Component: "lsp", Name: "gopls", Kind: adapter.SkipDropped}, "lsp gopls"},
+		{"unnamed", render.SkipDetail{Component: "hook", Kind: adapter.SkipDropped}, "hook"},
+		{"reduced subagent labels plainly", render.SkipDetail{Component: "subagent", Name: "reviewer", Kind: adapter.SkipReduced}, "subagent reviewer"},
+		{"reduced command labels plainly", render.SkipDetail{Component: "command", Name: "deploy", Kind: adapter.SkipReduced}, "command deploy"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -59,30 +61,6 @@ func TestSkipLabel(t *testing.T) {
 				t.Errorf("skipLabel(%+v) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
-	}
-}
-
-// TestIsReducedSkip pins the classifier that splits a skip into a field-level
-// "reduced" (the component still rendered) vs a whole-component "dropped": only
-// the adapter "-frontmatter" component strings are reductions; every other
-// component kind — and an empty/unknown one — is a drop.
-func TestIsReducedSkip(t *testing.T) {
-	cases := map[string]bool{
-		"subagent-frontmatter": true,
-		"command-frontmatter":  true,
-		"subagent":             false,
-		"command":              false,
-		"hook":                 false,
-		"lsp":                  false,
-		"mcp":                  false,
-		"skill":                false,
-		"memory":               false,
-		"":                     false,
-	}
-	for component, want := range cases {
-		if got := isReducedSkip(component); got != want {
-			t.Errorf("isReducedSkip(%q) = %v, want %v", component, got, want)
-		}
 	}
 }
 
@@ -94,8 +72,8 @@ func TestIsReducedSkip(t *testing.T) {
 func TestSkipTailNote(t *testing.T) {
 	var buf bytes.Buffer
 	p := ui.New(&buf, &buf, ui.ColorNever)
-	reduced := render.SkipDetail{Component: "subagent-frontmatter", Name: "a"}
-	dropped := render.SkipDetail{Component: "lsp", Name: "x"}
+	reduced := render.SkipDetail{Component: "subagent", Name: "a", Kind: adapter.SkipReduced}
+	dropped := render.SkipDetail{Component: "lsp", Name: "x", Kind: adapter.SkipDropped}
 	tests := []struct {
 		name  string
 		skips []render.SkipDetail
@@ -112,6 +90,42 @@ func TestSkipTailNote(t *testing.T) {
 				t.Errorf("skipTailNote(%+v) = %q, want %q", tc.skips, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestExplain_UnsetKindShownNotMaskedAsDropped pins the defensive display
+// contract: a skip whose Kind is the invalid zero value (which the static +
+// runtime guards forbid from real adapters) must surface VISIBLY as "unset" in
+// both the per-skip line and the inline tally — never silently mislabeled
+// "dropped", which would hide exactly the bug the typed field exists to prevent.
+// This matches the JSON surface (SkipKind.MarshalJSON → "unset") so the human and
+// machine outputs agree.
+func TestExplain_UnsetKindShownNotMaskedAsDropped(t *testing.T) {
+	unset := render.SkipDetail{Component: "mystery", Name: "x", Reason: "no kind set", Kind: adapter.SkipKindUnset}
+
+	var buf bytes.Buffer
+	p := ui.New(&buf, &buf, ui.ColorNever)
+	emitSkipDetails(&buf, p, "codex", []render.SkipDetail{unset})
+	// Inspect the per-skip line, not the framing header (which legitimately spells
+	// out "reduced = …; dropped = …").
+	var skipLine string
+	for _, ln := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if strings.Contains(ln, "mystery") {
+			skipLine = ln
+		}
+	}
+	if skipLine == "" {
+		t.Fatalf("no skip line emitted:\n%s", buf.String())
+	}
+	if !strings.Contains(skipLine, "unset") {
+		t.Errorf("skip line must show 'unset' for an unset Kind; got: %q", skipLine)
+	}
+	if strings.Contains(skipLine, "dropped") {
+		t.Errorf("skip line must NOT mislabel an unset Kind as 'dropped'; got: %q", skipLine)
+	}
+
+	if got := skipTailNote(p, []render.SkipDetail{unset}); got != "(1 unset)" {
+		t.Errorf("skipTailNote(unset) = %q, want %q", got, "(1 unset)")
 	}
 }
 
@@ -169,7 +183,7 @@ func TestEmitSkipDetails_EmptyIsNoOp(t *testing.T) {
 func TestEmitSkipDetails_SanitizesUntrustedName(t *testing.T) {
 	var buf bytes.Buffer
 	emitSkipDetails(&buf, ui.New(&buf, &buf, ui.ColorNever), "codex", []render.SkipDetail{
-		{Component: "subagent-frontmatter", Name: untrustedControl, Reason: "a reason"},
+		{Component: "subagent", Name: untrustedControl, Reason: "a reason", Kind: adapter.SkipReduced},
 	})
 	out := buf.String()
 	assertNoTerminalControl(t, "emitSkipDetails", out)
@@ -225,7 +239,7 @@ func TestRunExplainList_SanitizesUntrusted(t *testing.T) {
 func TestEmitSkipDetails_UnnamedComponentOnly(t *testing.T) {
 	var buf bytes.Buffer
 	emitSkipDetails(&buf, ui.New(&buf, &buf, ui.ColorNever), "codex", []render.SkipDetail{
-		{Component: "hook", Reason: "unknown event"},
+		{Component: "hook", Reason: "unknown event", Kind: adapter.SkipDropped},
 	})
 	got := buf.String()
 	want := "      " + ui.GlyphArrow + " codex couldn't fully translate — reduced = rendered without some fields; dropped = not emitted:\n" +
@@ -244,8 +258,8 @@ func TestEmitSkipDetails_UnnamedComponentOnly(t *testing.T) {
 // offsets catches that.
 func TestEmitSkipDetails_ColumnsAlignUnderColor(t *testing.T) {
 	skips := []render.SkipDetail{
-		{Component: "lsp", Name: "x", Reason: "no LSP concept"},
-		{Component: "subagent-frontmatter", Name: "reviewer", Reason: "dropped tools allowlist"},
+		{Component: "lsp", Name: "x", Reason: "no LSP concept", Kind: adapter.SkipDropped},
+		{Component: "subagent", Name: "reviewer", Reason: "dropped tools allowlist", Kind: adapter.SkipReduced},
 	}
 	var buf bytes.Buffer
 	emitSkipDetails(&buf, ui.New(&buf, &buf, ui.ColorAlways), "codex", skips)

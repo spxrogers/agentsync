@@ -21,9 +21,9 @@ func findOp(ops []adapter.FileOp, suffix string) *adapter.FileOp {
 	return nil
 }
 
-func hasSkip(skips []adapter.Skip, component, name string) bool {
+func hasSkip(skips []adapter.Skip, component, name string, kind adapter.SkipKind) bool {
 	for _, s := range skips {
-		if s.Component == component && s.Name == name {
+		if s.Component == component && s.Name == name && s.Kind == kind {
 			return true
 		}
 	}
@@ -67,7 +67,7 @@ func TestRender_UserScope_MCPOnly(t *testing.T) {
 	if _, hasType := srv["type"]; hasType {
 		t.Fatalf("Cline infers transport; must not write a type key: %v", srv)
 	}
-	if !hasSkip(skips, "memory", "rules") || !hasSkip(skips, "command", "deploy") {
+	if !hasSkip(skips, "memory", "rules", adapter.SkipDropped) || !hasSkip(skips, "command", "deploy", adapter.SkipDropped) {
 		t.Errorf("expected user-scope memory + command skips, got %+v", skips)
 	}
 	if findOp(ops, "agentsync.md") != nil || findOp(ops, "deploy.md") != nil {
@@ -125,13 +125,13 @@ func TestRender_ProjectScope_RulesAndWorkflows(t *testing.T) {
 	if cmdOp == nil || string(cmdOp.Content) != "Run deploy.\n" {
 		t.Fatalf("workflow should be plain body: %+v", cmdOp)
 	}
-	if !hasSkip(skips, "command-frontmatter", "deploy") {
-		t.Errorf("expected command-frontmatter skip, got %+v", skips)
+	if !hasSkip(skips, "command", "deploy", adapter.SkipReduced) {
+		t.Errorf("expected reduced command skip, got %+v", skips)
 	}
 	if findOp(ops, "mcp.json") != nil {
 		t.Fatalf("MCP must not render at project scope: %+v", ops)
 	}
-	if !hasSkip(skips, "mcp", "github") {
+	if !hasSkip(skips, "mcp", "github", adapter.SkipDropped) {
 		t.Errorf("expected project-scope MCP skip, got %+v", skips)
 	}
 }
@@ -148,7 +148,7 @@ func TestRender_UnsupportedComponentsSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, w := range []struct{ comp, name string }{{"skill", "demo"}, {"subagent", "rev"}, {"hook", "PreToolUse"}, {"lsp", "gopls"}} {
-		if !hasSkip(skips, w.comp, w.name) {
+		if !hasSkip(skips, w.comp, w.name, adapter.SkipDropped) {
 			t.Errorf("expected %s skip for %q, got %+v", w.comp, w.name, skips)
 		}
 	}

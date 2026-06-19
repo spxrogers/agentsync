@@ -32,6 +32,7 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, []ad
 			skips = append(skips, adapter.Skip{
 				Component: "mcp", Name: m.ID,
 				Reason: "Cline has no project-level MCP file; agentsync targets the Cline CLI's ~/.cline/mcp.json at user scope",
+				Kind:   adapter.SkipDropped,
 			})
 		}
 		return nil, skips, nil

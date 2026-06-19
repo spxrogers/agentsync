@@ -35,8 +35,9 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 		// Drop unmappable fields, emit Skip notes.
 		if _, ok := cmd.Frontmatter["argument-hint"]; ok {
 			skips = append(skips, adapter.Skip{
-				Component: "command-frontmatter", Name: cmd.Name,
+				Component: "command", Name: cmd.Name,
 				Reason: "Claude `argument-hint` has no OpenCode equivalent",
+				Kind:   adapter.SkipReduced,
 			})
 		}
 

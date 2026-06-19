@@ -31,9 +31,10 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 		}
 		if dropped := droppedKeys(cmd.Frontmatter, continueCommandKnownKeys); len(dropped) > 0 {
 			skips = append(skips, adapter.Skip{
-				Component: "command-frontmatter",
+				Component: "command",
 				Name:      cmd.Name,
 				Reason:    "Continue prompt blocks carry only name/description; dropped " + strings.Join(dropped, ", "),
+				Kind:      adapter.SkipReduced,
 			})
 		}
 		body, err := claude.EncodeFrontmatter(fm, cmd.Body)

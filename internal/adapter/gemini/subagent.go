@@ -45,10 +45,11 @@ func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp
 		}
 		if dropped := droppedKeys(s.Frontmatter, geminiAgentKnownKeys); len(dropped) > 0 {
 			skips = append(skips, adapter.Skip{
-				Component: "subagent-frontmatter",
+				Component: "subagent",
 				Name:      s.Name,
 				Reason: fmt.Sprintf("Gemini agents support name/description/model (its `tools` vocabulary differs from Claude's); dropped %s",
 					strings.Join(dropped, ", ")),
+				Kind: adapter.SkipReduced,
 			})
 		}
 		body, err := claude.EncodeFrontmatter(fm, s.Body)

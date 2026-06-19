@@ -4,6 +4,7 @@
 package adapter
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 
@@ -95,12 +96,61 @@ type FileOp struct {
 	OwnedKeys     []string // JSON pointers owned by agentsync; populated by Apply from state, not Render
 }
 
-// Skip describes a component the adapter chose not to render. Surfaces in the
-// translation report and in `apply --strict`'s exit logic.
+// SkipKind classifies how much of a component was lost, so consumers never have
+// to re-derive the distinction from a component-name convention. The adapter that
+// constructs the Skip sets it — it is the only layer that knows whether the whole
+// component was dropped or merely reduced. (It replaces the former "-frontmatter"
+// component-suffix convention, which encoded the same fact in a string only the
+// CLI knew how to parse.)
+type SkipKind int
+
+const (
+	// SkipKindUnset is the zero value and is INVALID: every constructed Skip MUST
+	// set Kind to one of the classifications below. Leaving it unset is a bug,
+	// caught by two complementary guards. TestEverySkipLiteralSetsKind
+	// (internal/adapter) statically parses every production adapter.Skip literal
+	// under internal/ and fails if one omits Kind — reachability-independent, so a
+	// skip site gated on a path that is never empty at runtime cannot hide from it.
+	// TestEveryAdapterClassifiesSkips (internal/cli) is the behavioral complement:
+	// it renders every registered adapter at both scopes and fails if any emitted
+	// skip carries SkipKindUnset, while also pinning that both kind values are
+	// exercised. Together they close the "no compile-time guard" gap a silent
+	// string suffix left open.
+	SkipKindUnset SkipKind = iota
+	// SkipDropped — the whole component had no native target on this agent and was
+	// not emitted at all (e.g. an LSP server on an agent with no LSP concept, a
+	// SessionEnd hook on Codex).
+	SkipDropped
+	// SkipReduced — the component still rendered, minus fields the target agent has
+	// no home for (e.g. a subagent's Claude-only tools/color frontmatter).
+	SkipReduced
+)
+
+// String renders the kind for human notes and the report's machine surface.
+func (k SkipKind) String() string {
+	switch k {
+	case SkipReduced:
+		return "reduced"
+	case SkipDropped:
+		return "dropped"
+	default:
+		return "unset"
+	}
+}
+
+// MarshalJSON emits the lowercase string form so `explain --json` carries an
+// explicit "kind":"reduced"|"dropped" rather than an opaque integer.
+func (k SkipKind) MarshalJSON() ([]byte, error) { return json.Marshal(k.String()) }
+
+// Skip describes a component the adapter could not fully render. Surfaces in the
+// translation report and in `apply --strict`'s exit logic. Kind distinguishes a
+// whole-component drop from a field-level reduction (the component still
+// rendered) and MUST be set explicitly at every construction site.
 type Skip struct {
-	Component string // "skill" | "subagent" | etc.
+	Component string // "skill" | "subagent" | "command" | etc.
 	Name      string
 	Reason    string
+	Kind      SkipKind
 }
 
 // Adapter is the per-agent contract.

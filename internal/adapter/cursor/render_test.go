@@ -22,9 +22,9 @@ func findOp(ops []adapter.FileOp, suffix string) *adapter.FileOp {
 	return nil
 }
 
-func hasSkip(skips []adapter.Skip, component, name string) *adapter.Skip {
+func hasSkip(skips []adapter.Skip, component, name string, kind adapter.SkipKind) *adapter.Skip {
 	for i := range skips {
-		if skips[i].Component == component && skips[i].Name == name {
+		if skips[i].Component == component && skips[i].Name == name && skips[i].Kind == kind {
 			return &skips[i]
 		}
 	}
@@ -155,7 +155,7 @@ func TestRender_Memory_UserScope_Skipped(t *testing.T) {
 	if op := findOp(ops, "AGENTS.md"); op != nil {
 		t.Fatalf("user-scope memory must not be written (app-local storage): %s", op.Path)
 	}
-	if hasSkip(skips, "memory", "AGENTS.md") == nil {
+	if hasSkip(skips, "memory", "AGENTS.md", adapter.SkipDropped) == nil {
 		t.Fatalf("expected a user-scope memory skip, got %+v", skips)
 	}
 }
@@ -224,9 +224,9 @@ func TestRender_Subagent_DropsToolsAndColor(t *testing.T) {
 	if strings.Contains(content, "tools") || strings.Contains(content, "color") {
 		t.Fatalf("tools/color must be dropped: %s", content)
 	}
-	sk := hasSkip(skips, "subagent-frontmatter", "review")
+	sk := hasSkip(skips, "subagent", "review", adapter.SkipReduced)
 	if sk == nil || !strings.Contains(sk.Reason, "tools") || !strings.Contains(sk.Reason, "color") {
-		t.Fatalf("expected a subagent-frontmatter skip listing tools+color, got %+v", skips)
+		t.Fatalf("expected a reduced subagent skip listing tools+color, got %+v", skips)
 	}
 }
 
@@ -256,9 +256,9 @@ func TestRender_Command_BodyOnly(t *testing.T) {
 	if content != "Summarize $ARGUMENTS.\n" {
 		t.Fatalf("body should be written verbatim, got: %q", content)
 	}
-	sk := hasSkip(skips, "command-frontmatter", "summarize")
+	sk := hasSkip(skips, "command", "summarize", adapter.SkipReduced)
 	if sk == nil || !strings.Contains(sk.Reason, "argument-hint") || !strings.Contains(sk.Reason, "description") {
-		t.Fatalf("expected a command-frontmatter skip listing dropped keys, got %+v", skips)
+		t.Fatalf("expected a reduced command skip listing dropped keys, got %+v", skips)
 	}
 }
 
@@ -326,7 +326,7 @@ func TestRender_Hooks_MapsEventsAndShape(t *testing.T) {
 			t.Fatalf("/version must never be an owned key: %v", op.OwnedKeys)
 		}
 	}
-	if hasSkip(skips, "hook", "Notification") == nil {
+	if hasSkip(skips, "hook", "Notification", adapter.SkipDropped) == nil {
 		t.Fatalf("expected a skip for unmapped event Notification, got %+v", skips)
 	}
 }
@@ -351,7 +351,7 @@ func TestRender_Hooks_SkipsNonCommandType(t *testing.T) {
 	if strings.Contains(string(op.Content), "preToolUse") {
 		t.Fatalf("prompt-type hook must not render: %s", op.Content)
 	}
-	sk := hasSkip(skips, "hook", "PreToolUse")
+	sk := hasSkip(skips, "hook", "PreToolUse", adapter.SkipDropped)
 	if sk == nil || !strings.Contains(sk.Reason, `type "prompt"`) {
 		t.Fatalf("expected a typed skip for the prompt hook, got %+v", skips)
 	}
@@ -368,7 +368,7 @@ func TestRender_LSP_Skipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hasSkip(skips, "lsp", "gopls") == nil {
+	if hasSkip(skips, "lsp", "gopls", adapter.SkipDropped) == nil {
 		t.Fatalf("expected an lsp skip, got %+v", skips)
 	}
 }

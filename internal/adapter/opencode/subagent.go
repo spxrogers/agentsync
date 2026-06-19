@@ -35,14 +35,16 @@ func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp
 		// Drop unmappable fields, emit Skip notes so the user knows what was lost.
 		if _, ok := s.Frontmatter["tools"]; ok {
 			skips = append(skips, adapter.Skip{
-				Component: "subagent-frontmatter", Name: s.Name,
+				Component: "subagent", Name: s.Name,
 				Reason: "Claude `tools` allowlist not projected to OpenCode `permission` (manual rule design needed)",
+				Kind:   adapter.SkipReduced,
 			})
 		}
 		if _, ok := s.Frontmatter["color"]; ok {
 			skips = append(skips, adapter.Skip{
-				Component: "subagent-frontmatter", Name: s.Name,
+				Component: "subagent", Name: s.Name,
 				Reason: "Claude `color` has no OpenCode equivalent",
+				Kind:   adapter.SkipReduced,
 			})
 		}
 

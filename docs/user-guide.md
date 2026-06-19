@@ -406,10 +406,10 @@ translate is itemized beneath a framing header, each tagged `reduced` or
 `dropped` with the reason, so you can see exactly what loss `apply` would incur.
 `--json` carries the per-kind counts (`mcp`, `commands`, `skills`, `subagents`,
 `hooks`, `lsp`) and the `skipDetails` array (each entry `{component, name,
-reason}`) on every row. The `reduced` vs `dropped` split is a text-rendering
-distinction only: JSON exposes the raw `component` (a field-level reduction keeps
-its `-frontmatter` suffix, e.g. `subagent-frontmatter`), so a machine consumer
-derives the split from that suffix rather than a dedicated field.
+reason, kind}`) on every row. `kind` is `"reduced"` or `"dropped"` — the explicit
+machine surface for the split, so a consumer never re-derives it from the
+component string. `component` is the plain component kind (`subagent`, `command`,
+`lsp`, …); it carries no `-frontmatter` suffix.
 
 Inspect any plugin's coverage without applying:
 

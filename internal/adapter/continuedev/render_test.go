@@ -22,9 +22,9 @@ func findOp(ops []adapter.FileOp, suffix string) *adapter.FileOp {
 	return nil
 }
 
-func hasSkip(skips []adapter.Skip, component, name string) bool {
+func hasSkip(skips []adapter.Skip, component, name string, kind adapter.SkipKind) bool {
 	for _, s := range skips {
-		if s.Component == component && s.Name == name {
+		if s.Component == component && s.Name == name && s.Kind == kind {
 			return true
 		}
 	}
@@ -161,8 +161,8 @@ func TestRender_Command_PromptBlock(t *testing.T) {
 	if strings.Contains(content, "argument-hint") {
 		t.Fatalf("argument-hint must be dropped: %s", content)
 	}
-	if !hasSkip(skips, "command-frontmatter", "summarize") {
-		t.Fatalf("expected a command-frontmatter skip, got %+v", skips)
+	if !hasSkip(skips, "command", "summarize", adapter.SkipReduced) {
+		t.Fatalf("expected a reduced command skip, got %+v", skips)
 	}
 }
 
@@ -187,7 +187,7 @@ func TestRender_UnsupportedComponentsSkipped(t *testing.T) {
 	for _, want := range []struct{ comp, name string }{
 		{"skill", "demo"}, {"subagent", "rev"}, {"hook", "PreToolUse"}, {"lsp", "gopls"},
 	} {
-		if !hasSkip(skips, want.comp, want.name) {
+		if !hasSkip(skips, want.comp, want.name, adapter.SkipDropped) {
 			t.Errorf("expected %s skip for %q, got %+v", want.comp, want.name, skips)
 		}
 	}

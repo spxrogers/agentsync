@@ -53,6 +53,7 @@ func (a *Adapter) renderMemory(c source.Canonical, p Paths) ([]adapter.FileOp, [
 			Component: "memory",
 			Name:      "rules",
 			Reason:    "no Windsurf rules target at this scope",
+			Kind:      adapter.SkipDropped,
 		}}, nil
 	}
 	body := source.RenderManagedMemory(c.Memory.Body, c.Memory.Fragments, filepath.Base(p.GlobalRules), banner)
