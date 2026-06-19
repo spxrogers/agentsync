@@ -443,7 +443,7 @@ func emitSkipDetails(w io.Writer, p *ui.Printer, agent string, skips []render.Sk
 		// "reduced" and "dropped" are the same width, so the reason column stays
 		// aligned without padding the (color-wrapped) status word.
 		status := p.Yellow("dropped")
-		if isReducedSkip(s.Component) {
+		if s.Kind == adapter.SkipReduced {
 			status = p.Cyan("reduced")
 		}
 		fmt.Fprintf(w, "        %s %s  %s  %s\n",
@@ -461,7 +461,7 @@ func emitSkipDetails(w io.Writer, p *ui.Printer, agent string, skips []render.Sk
 func skipTailNote(p *ui.Printer, skips []render.SkipDetail) string {
 	var reduced, dropped int
 	for _, s := range skips {
-		if isReducedSkip(s.Component) {
+		if s.Kind == adapter.SkipReduced {
 			reduced++
 		} else {
 			dropped++
@@ -480,26 +480,17 @@ func skipTailNote(p *ui.Printer, skips []render.SkipDetail) string {
 	return p.Yellow("(" + strings.Join(parts, " · ") + ")")
 }
 
-// isReducedSkip reports whether a skip is a field-level reduction (the component
-// still rendered) rather than a whole-component drop. The adapters mark the
-// former with a "-frontmatter" component suffix (subagent-frontmatter,
-// command-frontmatter); everything else (a dropped hook event, an LSP server
-// with no native concept, a project-scope command with no target) is a true drop.
-func isReducedSkip(component string) bool {
-	return strings.HasSuffix(component, "-frontmatter")
-}
-
-// skipLabel renders "<kind> <name>" for a skipped item, or just the kind when
-// the skip has no name (e.g. an unrecognized hook event). The internal
-// "-frontmatter" suffix is stripped — the "reduced" status tag now conveys that
-// the loss was field-level, so the label names the component kind plainly.
+// skipLabel renders "<component> <name>" for a skipped item, or just the
+// component kind when the skip has no name (e.g. an unrecognized hook event).
+// Component is now the plain kind (mcp, subagent, command, …); the reduced-vs-
+// dropped distinction is carried by SkipDetail.Kind and shown as the status tag,
+// not encoded in the component string.
 func skipLabel(s render.SkipDetail) string {
-	kind := strings.TrimSuffix(s.Component, "-frontmatter")
 	if s.Name.Empty() {
-		return kind
+		return s.Component
 	}
 	// s.Name is untrusted.Text; String() sanitizes it for the display label.
-	return kind + " " + s.Name.String()
+	return s.Component + " " + s.Name.String()
 }
 
 // coverageGlyphAndColor maps a coverage string to a glyph + semantic color

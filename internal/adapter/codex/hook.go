@@ -49,6 +49,7 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 				Component: "hook",
 				Name:      h.Event,
 				Reason:    "Codex does not recognize this lifecycle event",
+				Kind:      adapter.SkipDropped,
 			})
 			continue
 		}

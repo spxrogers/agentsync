@@ -33,9 +33,10 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 	for _, cmd := range c.Commands {
 		if len(cmd.Frontmatter) > 0 {
 			skips = append(skips, adapter.Skip{
-				Component: "command-frontmatter",
+				Component: "command",
 				Name:      cmd.Name,
 				Reason:    "Windsurf workflows are plain markdown (no frontmatter); dropped " + strings.Join(sortedKeys(cmd.Frontmatter), ", "),
+				Kind:      adapter.SkipReduced,
 			})
 		}
 		ops = append(ops, adapter.FileOp{

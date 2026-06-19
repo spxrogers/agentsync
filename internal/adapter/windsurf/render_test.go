@@ -21,9 +21,9 @@ func findOp(ops []adapter.FileOp, suffix string) *adapter.FileOp {
 	return nil
 }
 
-func hasSkip(skips []adapter.Skip, component, name string) bool {
+func hasSkip(skips []adapter.Skip, component, name string, kind adapter.SkipKind) bool {
 	for _, s := range skips {
-		if s.Component == component && s.Name == name {
+		if s.Component == component && s.Name == name && s.Kind == kind {
 			return true
 		}
 	}
@@ -142,14 +142,14 @@ func TestRender_ProjectScope_RulesAndWorkflows(t *testing.T) {
 	if string(cmdOp.Content) != "Run deploy.\n" {
 		t.Fatalf("workflow should be plain body: %q", cmdOp.Content)
 	}
-	if !hasSkip(skips, "command-frontmatter", "deploy") {
-		t.Errorf("expected command-frontmatter skip, got %+v", skips)
+	if !hasSkip(skips, "command", "deploy", adapter.SkipReduced) {
+		t.Errorf("expected reduced command skip, got %+v", skips)
 	}
 	// MCP has no project target → reported skip, no op.
 	if findOp(ops, "mcp_config.json") != nil {
 		t.Fatalf("MCP must not render at project scope: %+v", ops)
 	}
-	if !hasSkip(skips, "mcp", "github") {
+	if !hasSkip(skips, "mcp", "github", adapter.SkipDropped) {
 		t.Errorf("expected project-scope MCP skip, got %+v", skips)
 	}
 }
@@ -170,7 +170,7 @@ func TestRender_UnsupportedComponentsSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, w := range []struct{ comp, name string }{{"skill", "demo"}, {"subagent", "rev"}, {"hook", "PreToolUse"}, {"lsp", "gopls"}} {
-		if !hasSkip(skips, w.comp, w.name) {
+		if !hasSkip(skips, w.comp, w.name, adapter.SkipDropped) {
 			t.Errorf("expected %s skip for %q, got %+v", w.comp, w.name, skips)
 		}
 	}

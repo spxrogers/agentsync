@@ -26,9 +26,9 @@ func findOp(ops []adapter.FileOp, suffix string) *adapter.FileOp {
 	return nil
 }
 
-func hasSkip(skips []adapter.Skip, component, name string) bool {
+func hasSkip(skips []adapter.Skip, component, name string, kind adapter.SkipKind) bool {
 	for _, s := range skips {
-		if s.Component == component && s.Name == name {
+		if s.Component == component && s.Name == name && s.Kind == kind {
 			return true
 		}
 	}
@@ -127,7 +127,7 @@ func TestRender_Memory_ScopeGapReported(t *testing.T) {
 	if findOp(ops, ".goosehints") != nil {
 		t.Fatal("project-only memory must not render at user scope")
 	}
-	if !hasSkip(skips, "memory", "goose") {
+	if !hasSkip(skips, "memory", "goose", adapter.SkipDropped) {
 		t.Fatalf("expected memory scope-gap skip, got %+v", skips)
 	}
 }
@@ -213,7 +213,7 @@ func TestRender_MCP_SkipWhenUnsupported(t *testing.T) {
 	if findOp(ops, "mcp") != nil {
 		t.Fatal("memory-only spec must not write MCP")
 	}
-	if !hasSkip(skips, "mcp", "g") {
+	if !hasSkip(skips, "mcp", "g", adapter.SkipDropped) {
 		t.Fatalf("expected mcp skip, got %+v", skips)
 	}
 }
@@ -235,7 +235,7 @@ func TestRender_UnsupportedComponentsSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, w := range []struct{ comp, name string }{{"skill", "sk"}, {"subagent", "sa"}, {"command", "cmd"}, {"hook", "PreToolUse"}, {"lsp", "gopls"}} {
-		if !hasSkip(skips, w.comp, w.name) {
+		if !hasSkip(skips, w.comp, w.name, adapter.SkipDropped) {
 			t.Errorf("expected %s skip for %q, got %+v", w.comp, w.name, skips)
 		}
 	}
@@ -554,7 +554,7 @@ func TestSkills_RoundTrip_Fidelity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hasSkip(skips, "skill", "pdf") {
+	if hasSkip(skips, "skill", "pdf", adapter.SkipDropped) {
 		t.Fatalf("a supported skills spec must not skip the skill: %+v", skips)
 	}
 	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
@@ -632,7 +632,7 @@ func TestSkills_ScopeGapSkip(t *testing.T) {
 	if findOp(ops, "SKILL.md") != nil {
 		t.Fatal("project-only skills spec must not write at user scope")
 	}
-	if !hasSkip(skips, "skill", "sk") {
+	if !hasSkip(skips, "skill", "sk", adapter.SkipDropped) {
 		t.Fatalf("expected user-scope skill skip, got %+v", skips)
 	}
 }
@@ -652,7 +652,7 @@ func TestSkills_UnsupportedSpecStillSkips(t *testing.T) {
 	if findOp(ops, "SKILL.md") != nil {
 		t.Fatal("a spec with no Skills target must not write skills")
 	}
-	if !hasSkip(skips, "skill", "sk") {
+	if !hasSkip(skips, "skill", "sk", adapter.SkipDropped) {
 		t.Fatalf("expected skill skip for a skills-less spec, got %+v", skips)
 	}
 }
@@ -856,7 +856,7 @@ func TestSkills_SkippedAgentsEmitNothing(t *testing.T) {
 			if op := findOp(ops, "SKILL.md"); op != nil {
 				t.Fatalf("skills-less agent %q wrote a skill op: %s", s.Name, op.Path)
 			}
-			if !hasSkip(skips, "skill", "sk") {
+			if !hasSkip(skips, "skill", "sk", adapter.SkipDropped) {
 				t.Fatalf("skills-less agent %q did not report a skill skip", s.Name)
 			}
 		})

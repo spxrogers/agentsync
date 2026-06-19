@@ -67,6 +67,12 @@ type SkipDetail struct {
 	// site sanitizes it by construction. Reason is adapter-authored (trusted).
 	Name   untrusted.Text `json:"name,omitempty"`
 	Reason string         `json:"reason"`
+	// Kind classifies the loss as "reduced" (the component still rendered, minus
+	// some fields) or "dropped" (the whole component was not emitted). It is set by
+	// the adapter and carried verbatim from adapter.Skip; explain reads it directly
+	// instead of re-deriving the split from the component name, and --json surfaces
+	// it as an explicit "kind" field (adapter.SkipKind marshals to the string form).
+	Kind adapter.SkipKind `json:"kind"`
 }
 
 // skipDetails converts an adapter's []Skip into the report's JSON-tagged form.
@@ -77,8 +83,9 @@ func skipDetails(skips []adapter.Skip) []SkipDetail {
 	out := make([]SkipDetail, len(skips))
 	for i, s := range skips {
 		// s.Name is the plugin component's name (untrusted upstream); tag it as
-		// untrusted.Text at this boundary so every display site sanitizes it.
-		out[i] = SkipDetail{Component: s.Component, Name: untrusted.Wrap(s.Name), Reason: s.Reason}
+		// untrusted.Text at this boundary so every display site sanitizes it. Kind
+		// carries the adapter's reduced/dropped classification through verbatim.
+		out[i] = SkipDetail{Component: s.Component, Name: untrusted.Wrap(s.Name), Reason: s.Reason, Kind: s.Kind}
 	}
 	return out
 }

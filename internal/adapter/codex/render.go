@@ -72,6 +72,7 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 		skips = append(skips, adapter.Skip{
 			Component: "lsp", Name: l.ID,
 			Reason: "Codex has no LSP configuration concept",
+			Kind:   adapter.SkipDropped,
 		})
 	}
 	return ops, skips, nil

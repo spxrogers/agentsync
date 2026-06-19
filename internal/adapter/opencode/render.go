@@ -60,6 +60,7 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 		skips = append(skips, adapter.Skip{
 			Component: "hook", Name: h.Event,
 			Reason: "OpenCode hooks are JS/TS plugins; shim generation deferred to post-v1",
+			Kind:   adapter.SkipDropped,
 		})
 	}
 	// LSP: skip with explanation.
@@ -67,6 +68,7 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 		skips = append(skips, adapter.Skip{
 			Component: "lsp", Name: l.ID,
 			Reason: "OpenCode LSP projection deferred to v1.x",
+			Kind:   adapter.SkipDropped,
 		})
 	}
 	return ops, skips, nil

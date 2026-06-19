@@ -60,6 +60,7 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 				Component: "hook",
 				Name:      h.Event,
 				Reason:    "Gemini CLI has no equivalent hook event",
+				Kind:      adapter.SkipDropped,
 			})
 			continue
 		}
@@ -72,6 +73,7 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 				Component: "hook",
 				Name:      h.Event,
 				Reason:    fmt.Sprintf("agentsync models only command hooks; type %q is not projected", h.Type),
+				Kind:      adapter.SkipDropped,
 			})
 			continue
 		}

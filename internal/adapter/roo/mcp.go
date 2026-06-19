@@ -29,6 +29,7 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, []ad
 			skips = append(skips, adapter.Skip{
 				Component: "mcp", Name: m.ID,
 				Reason: "Roo global MCP lives in VS Code globalStorage (OS/editor-specific); agentsync targets the project-level .roo/mcp.json (use project scope)",
+				Kind:   adapter.SkipDropped,
 			})
 		}
 		return nil, skips, nil

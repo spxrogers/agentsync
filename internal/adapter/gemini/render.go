@@ -62,6 +62,7 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 		skips = append(skips, adapter.Skip{
 			Component: "skill", Name: s.Name,
 			Reason: "Gemini CLI has no Agent Skills concept (use a Gemini extension)",
+			Kind:   adapter.SkipDropped,
 		})
 	}
 	// LSP: Gemini CLI has no LSP configuration concept — skip.
@@ -69,6 +70,7 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 		skips = append(skips, adapter.Skip{
 			Component: "lsp", Name: l.ID,
 			Reason: "Gemini CLI has no LSP configuration concept",
+			Kind:   adapter.SkipDropped,
 		})
 	}
 	return ops, skips, nil

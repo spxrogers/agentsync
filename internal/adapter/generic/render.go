@@ -49,6 +49,7 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 			skips = append(skips, adapter.Skip{
 				Component: "memory", Name: a.spec.Name,
 				Reason: fmt.Sprintf("%s memory has no %s-scope target", a.spec.Name, scope.String()),
+				Kind:   adapter.SkipDropped,
 			})
 		}
 	}
@@ -96,6 +97,7 @@ func (a *Adapter) renderSkills(c source.Canonical, scope adapter.Scope, project 
 			skips = append(skips, adapter.Skip{
 				Component: "skill", Name: s.Name,
 				Reason: fmt.Sprintf("%s skills have no %s-scope target", a.spec.Name, scope.String()),
+				Kind:   adapter.SkipDropped,
 			})
 		}
 		return nil, skips, nil
@@ -124,6 +126,7 @@ func (a *Adapter) renderMCP(c source.Canonical, scope adapter.Scope, project str
 			skips = append(skips, adapter.Skip{
 				Component: "mcp", Name: m.ID,
 				Reason: a.mcpSkipReason(scope),
+				Kind:   adapter.SkipDropped,
 			})
 			continue
 		}
@@ -171,20 +174,21 @@ func (a *Adapter) unsupportedSkips(c source.Canonical) []adapter.Skip {
 			skips = append(skips, adapter.Skip{
 				Component: "skill", Name: s.Name,
 				Reason: fmt.Sprintf("%s does not natively scan an Agent-Skills (SKILL.md) directory", a.spec.Name),
+				Kind:   adapter.SkipDropped,
 			})
 		}
 	}
 	for _, s := range c.Subagents {
-		skips = append(skips, adapter.Skip{Component: "subagent", Name: s.Name, Reason: reason("subagents")})
+		skips = append(skips, adapter.Skip{Component: "subagent", Name: s.Name, Reason: reason("subagents"), Kind: adapter.SkipDropped})
 	}
 	for _, cmd := range c.Commands {
-		skips = append(skips, adapter.Skip{Component: "command", Name: cmd.Name, Reason: reason("commands")})
+		skips = append(skips, adapter.Skip{Component: "command", Name: cmd.Name, Reason: reason("commands"), Kind: adapter.SkipDropped})
 	}
 	for _, h := range c.Hooks {
-		skips = append(skips, adapter.Skip{Component: "hook", Name: h.Event, Reason: reason("hooks")})
+		skips = append(skips, adapter.Skip{Component: "hook", Name: h.Event, Reason: reason("hooks"), Kind: adapter.SkipDropped})
 	}
 	for _, l := range c.LSPServers {
-		skips = append(skips, adapter.Skip{Component: "lsp", Name: l.ID, Reason: reason("LSP")})
+		skips = append(skips, adapter.Skip{Component: "lsp", Name: l.ID, Reason: reason("LSP"), Kind: adapter.SkipDropped})
 	}
 	return skips
 }

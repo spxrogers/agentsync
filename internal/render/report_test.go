@@ -119,7 +119,7 @@ func TestBuildReport_PartialCoverage(t *testing.T) {
 					{Action: "write", MergeStrategy: "merge-json-keys"},
 				},
 				Skips: []adapter.Skip{
-					{Component: "hook", Name: "pre-run", Reason: "unsupported"},
+					{Component: "hook", Name: "pre-run", Reason: "unsupported", Kind: adapter.SkipDropped},
 				},
 			},
 		},
@@ -146,8 +146,8 @@ func TestBuildReport_SkipDetails(t *testing.T) {
 		},
 	}
 	skips := []adapter.Skip{
-		{Component: "lsp", Name: "gopls", Reason: "Codex has no LSP configuration concept"},
-		{Component: "hook", Name: "SessionEnd", Reason: "Codex does not recognize this lifecycle event"},
+		{Component: "lsp", Name: "gopls", Reason: "Codex has no LSP configuration concept", Kind: adapter.SkipDropped},
+		{Component: "hook", Name: "SessionEnd", Reason: "Codex does not recognize this lifecycle event", Kind: adapter.SkipDropped},
 	}
 	plan := render.RenderPlan{
 		PerAgent: map[string]render.AgentResult{
@@ -168,11 +168,11 @@ func TestBuildReport_SkipDetails(t *testing.T) {
 	if len(row.SkipDetails) != 2 {
 		t.Fatalf("SkipDetails len = %d, want 2: %+v", len(row.SkipDetails), row.SkipDetails)
 	}
-	if row.SkipDetails[0] != (render.SkipDetail{Component: "lsp", Name: "gopls", Reason: "Codex has no LSP configuration concept"}) {
+	if row.SkipDetails[0] != (render.SkipDetail{Component: "lsp", Name: "gopls", Reason: "Codex has no LSP configuration concept", Kind: adapter.SkipDropped}) {
 		t.Errorf("SkipDetails[0] = %+v, want the gopls lsp skip", row.SkipDetails[0])
 	}
 
-	// JSON surface: lowercase component/name/reason keys under skipDetails.
+	// JSON surface: lowercase component/name/reason/kind keys under skipDetails.
 	var buf bytes.Buffer
 	if err := report.PrintJSON(&buf); err != nil {
 		t.Fatalf("PrintJSON: %v", err)
@@ -183,6 +183,7 @@ func TestBuildReport_SkipDetails(t *testing.T) {
 				Component string `json:"component"`
 				Name      string `json:"name"`
 				Reason    string `json:"reason"`
+				Kind      string `json:"kind"`
 			} `json:"skipDetails"`
 		} `json:"rows"`
 	}
@@ -194,6 +195,11 @@ func TestBuildReport_SkipDetails(t *testing.T) {
 	}
 	if parsed.Rows[0].SkipDetails[1].Reason != "Codex does not recognize this lifecycle event" {
 		t.Errorf("JSON skipDetails[1].reason = %q", parsed.Rows[0].SkipDetails[1].Reason)
+	}
+	// kind is the explicit machine surface for the reduced/dropped split — no more
+	// re-deriving it from a component-name suffix.
+	if parsed.Rows[0].SkipDetails[0].Kind != "dropped" {
+		t.Errorf("JSON skipDetails[0].kind = %q, want dropped", parsed.Rows[0].SkipDetails[0].Kind)
 	}
 }
 
@@ -209,7 +215,7 @@ func TestBuildReport_SkipDetails_BaseBranch(t *testing.T) {
 		PerAgent: map[string]render.AgentResult{
 			"codex": {
 				Ops:   []adapter.FileOp{{Action: "write", MergeStrategy: "merge-toml-keys"}},
-				Skips: []adapter.Skip{{Component: "lsp", Name: "gopls", Reason: "Codex has no LSP configuration concept"}},
+				Skips: []adapter.Skip{{Component: "lsp", Name: "gopls", Reason: "Codex has no LSP configuration concept", Kind: adapter.SkipDropped}},
 			},
 		},
 	}
@@ -224,7 +230,7 @@ func TestBuildReport_SkipDetails_BaseBranch(t *testing.T) {
 	if row.Skips != 1 || len(row.SkipDetails) != 1 {
 		t.Fatalf("base-branch skips not carried: Skips=%d SkipDetails=%+v", row.Skips, row.SkipDetails)
 	}
-	if row.SkipDetails[0] != (render.SkipDetail{Component: "lsp", Name: "gopls", Reason: "Codex has no LSP configuration concept"}) {
+	if row.SkipDetails[0] != (render.SkipDetail{Component: "lsp", Name: "gopls", Reason: "Codex has no LSP configuration concept", Kind: adapter.SkipDropped}) {
 		t.Errorf("SkipDetails[0] = %+v, want the gopls lsp skip", row.SkipDetails[0])
 	}
 }
@@ -554,7 +560,7 @@ func TestBuildReport_CoverageNoneWhenNothingRendered(t *testing.T) {
 	}
 	plan := render.RenderPlan{
 		PerAgent: map[string]render.AgentResult{
-			"codex": {Ops: nil, Skips: []adapter.Skip{{Component: "lsp", Name: "l", Reason: "no LSP concept"}}},
+			"codex": {Ops: nil, Skips: []adapter.Skip{{Component: "lsp", Name: "l", Reason: "no LSP concept", Kind: adapter.SkipDropped}}},
 		},
 	}
 	row := render.BuildReport(c, plan, []string{"codex"}).Rows[0]
@@ -580,7 +586,7 @@ func TestBuildReport_CoveragePartialWhenSomethingRendered(t *testing.T) {
 		PerAgent: map[string]render.AgentResult{
 			"codex": {
 				Ops:   []adapter.FileOp{{Action: "write", MergeStrategy: "replace"}}, // the skill rendered
-				Skips: []adapter.Skip{{Component: "hook", Name: "x", Reason: "unknown event"}},
+				Skips: []adapter.Skip{{Component: "hook", Name: "x", Reason: "unknown event", Kind: adapter.SkipDropped}},
 			},
 		},
 	}
@@ -603,14 +609,14 @@ func TestBuildReport_BaseCoverageFromRendered(t *testing.T) {
 	rendered := render.RenderPlan{PerAgent: map[string]render.AgentResult{
 		"codex": {
 			Ops:   []adapter.FileOp{{Action: "write", MergeStrategy: "replace"}},
-			Skips: []adapter.Skip{{Component: "hook", Reason: "unknown event"}},
+			Skips: []adapter.Skip{{Component: "hook", Reason: "unknown event", Kind: adapter.SkipDropped}},
 		},
 	}}
 	if row := render.BuildReport(c, rendered, []string{"codex"}).Rows[0]; row.Plugin != "(base)" || row.Coverage != "partial" {
 		t.Errorf("base row = {plugin:%q coverage:%q}, want {(base) partial}", row.Plugin, row.Coverage)
 	}
 	nothing := render.RenderPlan{PerAgent: map[string]render.AgentResult{
-		"codex": {Ops: nil, Skips: []adapter.Skip{{Component: "lsp", Reason: "no LSP concept"}}},
+		"codex": {Ops: nil, Skips: []adapter.Skip{{Component: "lsp", Reason: "no LSP concept", Kind: adapter.SkipDropped}}},
 	}}
 	if row := render.BuildReport(c, nothing, []string{"codex"}).Rows[0]; row.Coverage != "none" {
 		t.Errorf("base row coverage = %q, want none (nothing rendered)", row.Coverage)

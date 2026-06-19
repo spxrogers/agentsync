@@ -75,15 +75,29 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   without fields the agent has no home for — e.g. a subagent's Claude-only
   `tools`/`color`) or `dropped` (the whole component had no native target and was
   not emitted — e.g. an LSP server on an agent with no LSP concept), with the
-  reason. The distinction is derived from the adapter's `-frontmatter` skip
-  suffix, which is no longer shown raw — the label names the component kind
-  plainly (`subagent reviewer`, not `subagent-frontmatter reviewer`). The
-  structured surface gains a `skipDetails` array (`{component, name, reason}`) on
-  every `explain --json` row (the raw `component` there retains its
-  `-frontmatter` suffix). The translation report carries the detail end-to-end
-  (`render.PluginRow.SkipDetails`) rather than collapsing skips to a bare count,
-  and the counts/skips are scoped to the named plugin (see the `explain` fix
-  below).
+  reason. The label names the component kind plainly (`subagent reviewer`). The
+  structured surface gains a `skipDetails` array (`{component, name, reason,
+  kind}`) on every `explain --json` row. The translation report carries the
+  detail end-to-end (`render.PluginRow.SkipDetails`) rather than collapsing skips
+  to a bare count, and the counts/skips are scoped to the named plugin (see the
+  `explain` fix below).
+
+- **Skip severity is a typed field, not a `-frontmatter` string convention
+  (#98).** The reduced-vs-dropped distinction `explain` shows was previously
+  derived at the presentation layer by string-matching a `-frontmatter` suffix on
+  the skip's `component` (e.g. `subagent-frontmatter`) — load-bearing for
+  user-facing output yet enforced only by an undocumented naming convention with
+  no compile-time guard. It is now a typed `adapter.Skip.Kind`
+  (`SkipDropped`/`SkipReduced`) the adapter sets at each skip site, carried
+  through `render.SkipDetail` to `explain`. `internal/cli/explain.go` reads
+  `Kind` directly (the `isReducedSkip`/`HasSuffix` heuristic is gone), and a new
+  reflective exhaustiveness guard (`TestEveryAdapterClassifiesSkips`) renders
+  every registered adapter at both scopes and fails if any skip ships with `Kind`
+  unset — so a new adapter or skip site can no longer silently misclassify.
+  - **Breaking change to `explain --json`.** Each `skipDetails` entry gains an
+    explicit `kind` field (`"reduced"`/`"dropped"`), and `component` is now the
+    plain kind (`subagent`, `command`, …) — it no longer carries the
+    `-frontmatter` suffix machine consumers had to parse. Read `kind` instead.
 
 ### Fixed
 

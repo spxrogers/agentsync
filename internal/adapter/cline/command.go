@@ -23,6 +23,7 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 				Component: "command",
 				Name:      cmd.Name,
 				Reason:    "Cline's global workflows live in the non-XDG ~/Documents/Cline/Workflows path agentsync does not target; workflows project at project scope only (.clinerules/workflows/)",
+				Kind:      adapter.SkipDropped,
 			})
 		}
 		return nil, skips, nil
@@ -32,9 +33,10 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 	for _, cmd := range c.Commands {
 		if len(cmd.Frontmatter) > 0 {
 			skips = append(skips, adapter.Skip{
-				Component: "command-frontmatter",
+				Component: "command",
 				Name:      cmd.Name,
 				Reason:    "Cline workflows are plain markdown (no frontmatter); dropped " + strings.Join(sortedKeys(cmd.Frontmatter), ", "),
+				Kind:      adapter.SkipReduced,
 			})
 		}
 		ops = append(ops, adapter.FileOp{
