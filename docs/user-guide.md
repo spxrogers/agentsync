@@ -643,7 +643,8 @@ expands each collapsed skill directory back to one row per bundled file).
 `--color=auto|always|never` controls whether output is styled with ANSI color
 and bold (default `auto` — on for a TTY, off when piped/redirected; honors
 `NO_COLOR`). `status --agents <list>` scopes the report to a comma-separated
-agent allowlist. `status --json` and `diff [<path>] --json` emit
+agent allowlist (`*` = all enabled, matching `mcp add --agents`). `status --json`
+and `diff [<path>] --json` emit
 the structured report instead of the formatted one, suitable for CI gates and
 dashboards (`status --json` is never collapsed — it carries every tracked file;
 `diff --json` masks the same resolved secrets the formatted diff does).

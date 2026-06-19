@@ -58,6 +58,19 @@ func TestSkillRoots_AnchorsOnSkillMD(t *testing.T) {
 			want: map[string]bool{greet: true},
 		},
 		{
+			// A skill bundling its own `skills/<sub>/SKILL.md` must NOT spawn a
+			// second inner root (which the inner SKILL.md would match alongside
+			// the outer one — ambiguous under map iteration). Only the outermost
+			// root survives, so the whole skill collapses onto one row.
+			name: "a bundled skills/<sub>/SKILL.md does not create a nested root",
+			items: []statusItem{
+				{Path: filepath.Join(greet, "SKILL.md")},
+				{Path: filepath.Join(greet, "skills", "sub", "SKILL.md")},
+				{Path: filepath.Join(greet, "references", "x.md")},
+			},
+			want: map[string]bool{greet: true},
+		},
+		{
 			name: "a key-merge item that happens to end in SKILL.md is ignored",
 			items: []statusItem{
 				{Path: filepath.Join(greet, "SKILL.md"), Pointer: "/mcpServers/x"},
@@ -95,8 +108,9 @@ func TestSkillRootOf(t *testing.T) {
 	}{
 		{filepath.Join(greet, "SKILL.md"), greet},
 		{filepath.Join(greet, "references", "notes.md"), greet},
-		{filepath.Join(other, "SKILL.md"), ""},            // not a known root
-		{abs("u", ".claude", "skills", "greetzilla"), ""}, // prefix-but-not-a-child
+		{filepath.Join(greet, "skills", "sub", "SKILL.md"), greet}, // nested bundle maps to the outer root
+		{filepath.Join(other, "SKILL.md"), ""},                     // not a known root
+		{abs("u", ".claude", "skills", "greetzilla"), ""},          // prefix-but-not-a-child
 	}
 	for _, tc := range tests {
 		if got := skillRootOf(tc.path, roots); got != tc.want {

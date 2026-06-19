@@ -95,11 +95,15 @@ func newStatusCmd() *cobra.Command {
 				if len(names) == 0 {
 					return fmt.Errorf("--agents cannot be empty; name one or more enabled agents")
 				}
-				sel, serr := resolveAgentFilter(names, enabled)
-				if serr != nil {
-					return serr
+				// "*" = all enabled, matching `mcp add --agents`; otherwise the
+				// names are a validated allowlist.
+				if !containsStar(names) {
+					sel, serr := resolveAgentFilter(names, enabled)
+					if serr != nil {
+						return serr
+					}
+					selected = sel
 				}
-				selected = sel
 			}
 			if len(selected) == 0 {
 				if jsonOut {
@@ -145,7 +149,7 @@ func newStatusCmd() *cobra.Command {
 	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
 	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the formatted report")
-	cmd.Flags().StringVar(&agentsCSV, "agents", "", "limit the report to a comma-separated agent allowlist (default: all enabled)")
+	cmd.Flags().StringVar(&agentsCSV, "agents", "", `limit the report to a comma-separated agent allowlist ("*" = all enabled; default: all enabled)`)
 	return cmd
 }
 
@@ -192,6 +196,16 @@ func resolveAgentFilter(want []string, enabled map[string]bool) ([]string, error
 		return nil, fmt.Errorf("--agents cannot be empty; name one or more enabled agents")
 	}
 	return out, nil
+}
+
+// containsStar reports whether names includes the "*" wildcard ("all enabled").
+func containsStar(names []string) bool {
+	for _, n := range names {
+		if strings.TrimSpace(n) == "*" {
+			return true
+		}
+	}
+	return false
 }
 
 // buildStatusModel classifies every tracked file/key/orphan across agents into
@@ -423,23 +437,46 @@ func renderSkillGroup(p *ui.Printer, g *skillGroup) {
 // "skill" group and hidden from the per-row view. A skill whose SKILL.md is gone
 // (a true orphan) simply isn't collapsed; its lingering files list individually,
 // which is the clearer view for cleanup anyway.
+//
+// Candidates nested under another candidate are dropped: a skill that itself
+// bundles a `skills/<sub>/SKILL.md` (a legal bundled file — the loader excludes
+// only the top-level SKILL.md) would otherwise yield a second inner root, and
+// the inner SKILL.md would match BOTH, leaving the grouping to map-iteration
+// order. Keeping only outermost roots guarantees they never nest, so every path
+// matches at most one root and the whole skill collapses onto one row.
 func skillRoots(items []statusItem) map[string]bool {
-	roots := map[string]bool{}
+	cand := map[string]bool{}
 	for _, it := range items {
 		if it.Pointer != "" || filepath.Base(it.Path) != "SKILL.md" {
 			continue
 		}
 		dir := filepath.Dir(it.Path) // …/skills/<name>
 		if filepath.Base(filepath.Dir(dir)) == "skills" {
-			roots[dir] = true
+			cand[dir] = true
+		}
+	}
+	roots := map[string]bool{}
+	for r := range cand {
+		if !hasAncestorIn(r, cand) {
+			roots[r] = true
 		}
 	}
 	return roots
 }
 
+// hasAncestorIn reports whether some OTHER member of set is a parent-path of r.
+func hasAncestorIn(r string, set map[string]bool) bool {
+	for other := range set {
+		if other != r && strings.HasPrefix(r, other+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
 // skillRootOf returns the skill root in roots that contains path (path is the
-// root's SKILL.md or any descendant of it), or "" if none. Roots never nest —
-// each is a distinct `skills/<name>` — so the first match is unambiguous.
+// root's SKILL.md or any descendant of it), or "" if none. skillRoots guarantees
+// roots never nest, so at most one can match — the first match is unambiguous.
 func skillRootOf(path string, roots map[string]bool) string {
 	for r := range roots {
 		if path == r || strings.HasPrefix(path, r+string(filepath.Separator)) {

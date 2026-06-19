@@ -109,9 +109,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `skills` path segment), so an unrelated ancestor dir named `skills` can't sweep
   non-skill files into a bogus group. Pass `-v`/`--verbose` to expand every skill
   back to one row per file (the previous view). A new `--agents <list>` flag
-  (comma-separated allowlist, matching `mcp add --agents`) scopes the report to
-  specific agents; orphaned-state warnings still consider the full enabled set so
-  narrowing never mislabels a deselected agent as an orphan. `status --json` is
+  (comma-separated allowlist, `*` = all enabled — matching `mcp add --agents`)
+  scopes the report to specific agents; orphaned-state warnings still consider the
+  full enabled set so narrowing never mislabels a deselected agent as an orphan.
+  `status --json` is
   unchanged and **never collapsed** — it still carries every tracked file, so the
   machine contract is stable.
 

@@ -157,10 +157,10 @@ present (`new` will be created, `pending` will be updated to match source,
 `drift` will be overwritten — use `reconcile` to keep the edit, etc.). Clean
 items are tallied but never glossed.
 
-Use `--agents <list>` (a comma-separated allowlist, matching `mcp add --agents`)
-to scope the report — `agentsync status --agents claude` shows just Claude Code.
-Orphaned-state warnings still consider the full enabled set, so narrowing the
-view never mislabels a deselected agent as an orphan.
+Use `--agents <list>` (a comma-separated allowlist, matching `mcp add --agents`;
+`*` = all enabled) to scope the report — `agentsync status --agents claude` shows
+just Claude Code. Orphaned-state warnings still consider the full enabled set, so
+narrowing the view never mislabels a deselected agent as an orphan.
 
 Pass `--json` to emit the structured drift report (per-agent items + a summary
 tally keyed by drift class) for CI gates or dashboards; advisory diagnostics
@@ -243,6 +243,6 @@ agentsync explain --list
 | `--dry-run` | apply, import | Preview without writing. |
 | `--auto-safe` | reconcile, update | Auto-resolve only no-risk changes. |
 | `--json` | status, diff, explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). `explain --list --json` emits a `plugins` array; `explain` with ids/`--all` emits the translation `rows`. |
-| `--agents <list>` | status | Scope the report to a comma-separated agent allowlist (matches `mcp add --agents`). |
+| `--agents <list>` | status | Scope the report to a comma-separated agent allowlist (`*` = all enabled; matches `mcp add --agents`). |
 | `--color auto\|always\|never` | all | Control ANSI color + bold. Default `auto` (on for a TTY, off when piped/redirected; honors `NO_COLOR`). |
 | `-v`, `--verbose` | all | Verbose logging. In `status`, also expands each collapsed skill directory back to one row per bundled file. |

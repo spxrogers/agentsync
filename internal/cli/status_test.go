@@ -377,6 +377,15 @@ func TestStatus_AgentFilter(t *testing.T) {
 		t.Errorf("--agents codex should not report claude; got:\n%s", out)
 	}
 
+	// "*" means all enabled, matching `mcp add --agents` (not an "unknown agent").
+	star, err := runCLI(t, env, "status", "--agents", "*")
+	if err != nil {
+		t.Fatalf("status --agents '*': %v\n%s", err, star)
+	}
+	if !strings.Contains(star, "[claude]") || !strings.Contains(star, "[codex]") {
+		t.Errorf("--agents '*' should report all enabled agents; got:\n%s", star)
+	}
+
 	// --json honors the filter and stays parseable.
 	jout, err := runCLI(t, env, "status", "--agents", "claude", "--json")
 	if err != nil {
