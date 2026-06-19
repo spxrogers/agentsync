@@ -78,7 +78,11 @@ jobs:
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
-          args: release --clean
+          # Everything EXCEPT chocolatey: that pipe shells out to the Windows-only
+          # `choco` CLI, so it runs on the separate windows-latest `chocolatey`
+          # job below. This job creates the Release + uploads archives/checksums/
+          # deb/rpm and pushes the Homebrew cask + (once enabled) the Scoop bucket.
+          args: release --clean --skip=chocolatey
         env:
           # Creates the Release + uploads archives/checksums/deb/rpm here.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -87,6 +91,60 @@ jobs:
           # with contents:write on the tap. If this secret is unset the brew step
           # fails; everything else (GitHub Release, deb/rpm) still publishes.
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          # Pushes bucket/agentsync.json to spxrogers/scoop-bucket (another repo
+          # the default GITHUB_TOKEN can't write). The `scoops` block self-gates
+          # on this: while the secret is unset it resolves to empty and Scoop is
+          # a no-op (skip_upload=true), so this is safe to ship before the bucket
+          # repo + token exist. Add the secret to "pull the trigger" on Scoop.
+          SCOOP_BUCKET_GITHUB_TOKEN: ${{ secrets.SCOOP_BUCKET_GITHUB_TOKEN }}
+
+  # Windows-only channel: build + push the Chocolatey package (issue #75).
+  # goreleaser's chocolatey pipe shells out to the `choco` CLI (Windows-only),
+  # so it can't run on the Linux `goreleaser` job above — hence this dedicated
+  # runner. GitHub's windows-latest image ships choco pre-installed.
+  #
+  # Gated on the ENABLE_CHOCOLATEY repo variable so it doesn't burn Windows
+  # minutes (billed at a higher rate) until you opt in: Settings → Secrets and
+  # variables → Actions → Variables → ENABLE_CHOCOLATEY=true. `needs: goreleaser`
+  # runs it only after the Linux job published the Release. It reuses the SAME
+  # .goreleaser.yaml but sets AGENTSYNC_DISABLE_GH_RELEASE=true so it builds and
+  # pushes ONLY the .nupkg and never re-creates that Release; it skips the
+  # homebrew/scoop/nfpm pipes the Linux job already handled. Flip the variable
+  # and add CHOCOLATEY_API_KEY together: with the variable on but no key, the
+  # `choco push` would fail (goreleaser's skip_publish is a hard bool, so the
+  # config can't self-gate the push the way Scoop's templated skip_upload does).
+  #
+  # NOTE (OSS goreleaser): built artifacts can't be shared across runners — that
+  # cross-runner split/merge is a Pro feature — so this re-runs the build. It's
+  # cheap: one small Go cross-build.
+  chocolatey:
+    name: chocolatey (windows)
+    needs: goreleaser
+    if: ${{ vars.ENABLE_CHOCOLATEY == 'true' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        # Full history + tags so goreleaser derives the version from the tag the
+        # `goreleaser` job released: on `push: tags` the ref IS the tag; on
+        # `workflow_dispatch` that job created the tag at the dispatched HEAD,
+        # which this checkout (run after it, via `needs`) fetches.
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          # Only the chocolatey pipe: skip the publishers the Linux job owns.
+          args: release --clean --skip=homebrew,scoop,nfpm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # `choco push` credential — add it together with the ENABLE_CHOCOLATEY
+          # variable that gates this job (see the job-level comment above).
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+          # Build + push only the .nupkg; do NOT re-create the GitHub Release the
+          # Linux job already published (see `release.disable` in .goreleaser.yaml).
+          AGENTSYNC_DISABLE_GH_RELEASE: "true"
 
   # Redeploy agentsync.cc after a successful publish so the live docs always
   # track the just-released CLI. This is exactly `just docs-publish` (rebuild

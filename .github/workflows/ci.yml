@@ -79,4 +79,8 @@ jobs:
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
-          args: release --snapshot --skip publish --clean
+          # --skip publish already skips the (publish-phase) scoop/chocolatey
+          # pipes; chocolatey is also named explicitly because its pack step
+          # shells out to the Windows-only `choco` CLI, which isn't on this Linux
+          # runner. This job only proves the cross-build stays viable.
+          args: release --snapshot --skip=publish,chocolatey --clean
