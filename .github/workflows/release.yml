@@ -46,7 +46,30 @@ jobs:
   goreleaser:
     name: goreleaser (publish)
     runs-on: ubuntu-latest
+    # Surface whether the Chocolatey credential exists as a job output so the
+    # windows-latest `chocolatey` job can gate on it. A job-level `if:` cannot
+    # read the `secrets` context (only github/needs/vars/inputs are available
+    # there), so we detect the secret HERE — where a step can read it via env —
+    # and publish a plain boolean. This keeps Chocolatey's "just add the key to
+    # go live" UX symmetric with Scoop (which self-gates on its token).
+    outputs:
+      choco_enabled: ${{ steps.choco_flag.outputs.enabled }}
     steps:
+      - name: Detect Chocolatey credential
+        id: choco_flag
+        shell: bash
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+        run: |
+          # Emit ONLY a boolean — never the key value (job outputs aren't masked).
+          # Strip whitespace first so a blank or whitespace/newline-only secret
+          # counts as absent, rather than spinning up the higher-billed Windows
+          # runner for a `choco push` that would just fail on a bogus key.
+          if [ -n "${CHOCOLATEY_API_KEY//[[:space:]]/}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v4
         # Full history + tags so goreleaser can build the changelog and derive
         # the version from the tag. On `push: tags` the checked-out ref IS the
@@ -78,7 +101,11 @@ jobs:
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
-          args: release --clean
+          # Everything EXCEPT chocolatey: that pipe shells out to the Windows-only
+          # `choco` CLI, so it runs on the separate windows-latest `chocolatey`
+          # job below. This job creates the Release + uploads archives/checksums/
+          # deb/rpm and pushes the Homebrew cask + (once enabled) the Scoop bucket.
+          args: release --clean --skip=chocolatey
         env:
           # Creates the Release + uploads archives/checksums/deb/rpm here.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -87,6 +114,63 @@ jobs:
           # with contents:write on the tap. If this secret is unset the brew step
           # fails; everything else (GitHub Release, deb/rpm) still publishes.
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          # Pushes bucket/agentsync.json to spxrogers/scoop-bucket (another repo
+          # the default GITHUB_TOKEN can't write). The `scoops` block self-gates
+          # on this: while the secret is unset it resolves to empty and Scoop is
+          # a no-op (skip_upload=true), so this is safe to ship before the bucket
+          # repo + token exist. Add the secret to "pull the trigger" on Scoop.
+          SCOOP_BUCKET_GITHUB_TOKEN: ${{ secrets.SCOOP_BUCKET_GITHUB_TOKEN }}
+
+  # Windows-only channel: build + push the Chocolatey package (issue #75).
+  # goreleaser's chocolatey pipe shells out to the `choco` CLI (Windows-only),
+  # so it can't run on the Linux `goreleaser` job above — hence this dedicated
+  # runner. GitHub's windows-latest image ships choco pre-installed.
+  #
+  # Gated purely on the presence of CHOCOLATEY_API_KEY (surfaced as the
+  # `choco_enabled` output of the goreleaser job above), so it doesn't burn
+  # Windows minutes — billed at a higher rate — until you add the key. Adding
+  # the secret is the entire "pull the trigger" step for Chocolatey; no separate
+  # enable flag to remember. `needs: goreleaser` also means it runs only after
+  # the Linux job published the Release. It reuses the SAME .goreleaser.yaml but
+  # sets AGENTSYNC_DISABLE_GH_RELEASE=true so it builds and pushes ONLY the
+  # .nupkg and never re-creates that Release; it skips the homebrew/scoop/nfpm
+  # pipes the Linux job already handled.
+  #
+  # NOTE (OSS goreleaser): built artifacts can't be shared across runners — that
+  # cross-runner split/merge is a Pro feature — so this re-runs the build. It's
+  # cheap: one small Go cross-build.
+  chocolatey:
+    name: chocolatey (windows)
+    needs: goreleaser
+    if: ${{ needs.goreleaser.outputs.choco_enabled == 'true' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        # Check out the EXACT tag the `goreleaser` job released, not the branch
+        # HEAD: on `push: tags` that's github.ref; on `workflow_dispatch` it's
+        # the tag that job just created (named after the version input). Pinning
+        # to the tag rather than the branch means a commit landing on the branch
+        # mid-release can't make goreleaser's --exact-match tag check miss.
+        # fetch-depth: 0 brings full history + tags for changelog/version.
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          # Only the chocolatey pipe: skip the publishers the Linux job owns.
+          args: release --clean --skip=homebrew,scoop,nfpm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # `choco push` credential. Its mere presence is what gates this whole
+          # job (via the goreleaser job's `choco_enabled` output).
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+          # Build + push only the .nupkg; do NOT re-create the GitHub Release the
+          # Linux job already published (see `release.disable` in .goreleaser.yaml).
+          AGENTSYNC_DISABLE_GH_RELEASE: "true"
 
   # Redeploy agentsync.cc after a successful publish so the live docs always
   # track the just-released CLI. This is exactly `just docs-publish` (rebuild

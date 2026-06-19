@@ -112,13 +112,27 @@ RPM:
 
     sudo rpm -i https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_amd64.rpm
 
+### Windows — Scoop or Chocolatey
+
+Scoop:
+
+    scoop bucket add spxrogers https://github.com/spxrogers/scoop-bucket
+    scoop install agentsync
+
+Chocolatey:
+
+    choco install agentsync
+
+Chocolatey packages pass through the community moderation queue before they're
+publicly installable, so a freshly published version can lag the other channels
+by a day or two.
+
 ### Any platform — prebuilt binary
 
 Download the archive for your OS/arch from the
 [latest release](https://github.com/spxrogers/agentsync/releases/latest)
 (`linux` / `darwin` / `windows` × `amd64` / `arm64`), extract it, and put the
-`agentsync` binary on your `PATH`. This is the install path for Windows until
-Scoop/Chocolatey land.
+`agentsync` binary on your `PATH`.
 
 ### From source
 
@@ -128,10 +142,9 @@ or clone and `go build ./cmd/agentsync`.
 
 ### Coming soon
 
-Scoop (Windows), Chocolatey (Windows), and AUR (Arch) packaging is wired in
-`.goreleaser.yaml` but not published yet — tracked in
-[issue #13](https://github.com/spxrogers/agentsync/issues/13). Until then, use the
-prebuilt binary or `go install` above.
+AUR (Arch) packaging is wired in `.goreleaser.yaml` but not published yet —
+tracked in [issue #13](https://github.com/spxrogers/agentsync/issues/13). Until
+then, use the prebuilt binary or `go install` above.
 
 ## Cross-machine sync
 

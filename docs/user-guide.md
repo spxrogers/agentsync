@@ -91,8 +91,8 @@ scoop install agentsync
 choco install agentsync
 ```
 
-**Linux** — `.deb`/`.rpm` on the [Releases page](https://github.com/spxrogers/agentsync/releases),
-or `yay -S agentsync-bin` (AUR).
+**Linux** — `.deb`/`.rpm` on the [Releases page](https://github.com/spxrogers/agentsync/releases).
+(AUR packaging is wired but not published yet — [issue #13](https://github.com/spxrogers/agentsync/issues/13).)
 
 Verify:
 

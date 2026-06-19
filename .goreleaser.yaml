@@ -3,6 +3,14 @@ version: 2
 
 project_name: agentsync
 
+# GitHub Release creation. Templated `disable` so the Windows chocolatey-only
+# job (.github/workflows/release.yml) can reuse this SAME config to build +
+# push the .nupkg WITHOUT trying to re-create the Release the Linux job already
+# made: that job sets AGENTSYNC_DISABLE_GH_RELEASE=true. Everywhere else the var
+# is unset, so envOrDefault yields "false" and the Release is created as normal.
+release:
+  disable: '{{ envOrDefault "AGENTSYNC_DISABLE_GH_RELEASE" "false" }}'
+
 builds:
   - id: agentsync
     main: ./cmd/agentsync
@@ -92,27 +100,91 @@ homebrew_casks:
           end
 
 # --------------------------------------------------------------------------
-# Remaining publishing channels — deliberately NOT enabled yet. Uncomment each
-# once its companion repo / credential exists and you're ready to ship it.
-# Tracked in https://github.com/spxrogers/agentsync/issues/13.
+# Windows — Scoop (issue #74). Writes bucket/agentsync.json into
+# spxrogers/scoop-bucket on every tagged release, pointing at the Windows .zip
+# already built above, so `scoop install agentsync` works. Runs from the Linux
+# release job — pure Go + git, no Windows tooling. The default Actions
+# GITHUB_TOKEN can't write a *second* repo, so the workflow supplies
+# SCOOP_BUCKET_GITHUB_TOKEN (contents:write on the bucket) — same constraint as
+# the Homebrew tap.
+#
+# Self-gating: skip_upload stays true until SCOOP_BUCKET_GITHUB_TOKEN exists, so
+# this is a harmless no-op (manifest built, never pushed) until you create the
+# bucket repo + add the secret. No code change needed to "pull the trigger".
 # --------------------------------------------------------------------------
+scoops:
+  - name: agentsync
+    repository:
+      owner: spxrogers
+      name: scoop-bucket
+      branch: main
+      token: '{{ envOrDefault "SCOOP_BUCKET_GITHUB_TOKEN" "" }}'
+    directory: bucket
+    url_template: "https://github.com/spxrogers/agentsync/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    commit_author:
+      name: goreleaser-bot
+      email: goreleaser@users.noreply.github.com
+    commit_msg_template: "Scoop update for {{ .ProjectName }} version {{ .Tag }}"
+    homepage: https://github.com/spxrogers/agentsync
+    description: Centrally manage AI coding-agent configurations.
+    license: MIT
+    skip_upload: '{{ if isEnvSet "SCOOP_BUCKET_GITHUB_TOKEN" }}false{{ else }}true{{ end }}'
 
-# scoops:
-#   - name: agentsync
-#     repository:
-#       owner: spxrogers
-#       name: scoop-bucket
-#     homepage: https://github.com/spxrogers/agentsync
-#     description: Centrally manage AI coding-agent configurations
-#     license: MIT
+# --------------------------------------------------------------------------
+# Windows — Chocolatey (issue #75). Builds the .nupkg and `choco push`es it so
+# `choco install agentsync` works. goreleaser shells out to the `choco` CLI,
+# which is Windows-only, so unlike every other channel this CANNOT run on the
+# Linux release job — the workflow runs it from a dedicated windows-latest job
+# (.github/workflows/release.yml). choco is pre-installed on those runners.
+#
+# Gating lives in the workflow, not here: goreleaser's `skip_publish` is a hard
+# bool (not templateable like scoop's skip_upload), so instead the Windows job
+# is gated on the *presence* of CHOCOLATEY_API_KEY — adding that secret is the
+# whole "go live" step. Chocolatey's community repo also runs
+# new packages through a moderation queue, so the first push won't be publicly
+# installable until it clears review.
+#
+# NOTE: the chocolatey pipe packages the Windows amd64 binary only —
+# goreleaser's own arch filter selects amd64/386 and excludes arm64 — so the
+# windows/arm64 build is intentionally absent from the package. Verify on a
+# clean Windows box at the first release (issue #75).
+# --------------------------------------------------------------------------
+chocolateys:
+  - name: agentsync
+    ids: [default]
+    title: agentsync
+    authors: spxrogers
+    owners: spxrogers
+    summary: Centrally manage AI coding-agent configurations.
+    description: |
+      agentsync centrally manages AI coding-agent configurations from one
+      canonical source and renders them into each agent's native config.
+    project_url: https://github.com/spxrogers/agentsync
+    project_source_url: https://github.com/spxrogers/agentsync
+    package_source_url: https://github.com/spxrogers/agentsync
+    docs_url: https://agentsync.cc/
+    bug_tracker_url: https://github.com/spxrogers/agentsync/issues
+    license_url: https://github.com/spxrogers/agentsync/blob/main/LICENSE
+    require_license_acceptance: false
+    copyright: 2026 spxrogers
+    tags: "agentsync cli ai coding agents configuration claude codex cursor dotfiles"
+    release_notes: "https://github.com/spxrogers/agentsync/releases/tag/{{ .Tag }}"
+    url_template: "https://github.com/spxrogers/agentsync/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    api_key: '{{ envOrDefault "CHOCOLATEY_API_KEY" "" }}'
+    source_repo: "https://push.chocolatey.org/"
+    goamd64: v1
 
-# chocolateys:
-#   - name: agentsync
-#     api_key: '{{ .Env.CHOCOLATEY_API_KEY }}'
-#     title: agentsync
-#     project_url: https://github.com/spxrogers/agentsync
-#     license_url: https://github.com/spxrogers/agentsync/blob/main/LICENSE
-#     summary: Centrally manage AI coding-agent configurations
+# --------------------------------------------------------------------------
+# AUR (Arch) — deliberately NOT enabled yet. Uncomment once its companion repo /
+# credential exists and you're ready to ship it. Tracked in issue #13.
+#
+# ⚠️ When enabling this — or ANY new publisher that pushes to an external target
+# — add its pipe to the `--skip=` list in the `chocolatey` job of
+# .github/workflows/release.yml. That job reuses this same config with
+# release.disable=true, which suppresses only the GitHub Release, NOT external
+# publishers; an un-skipped publisher would double-publish from the Windows
+# runner (once from the Linux job, again from the Windows job).
+# --------------------------------------------------------------------------
 
 # aurs:
 #   - name: agentsync-bin

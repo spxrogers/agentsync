@@ -11,6 +11,21 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **Windows distribution via Scoop and Chocolatey is wired and ready to ship
+  (issues #74, #75).** `.goreleaser.yaml` now carries fully-configured `scoops`
+  and `chocolateys` blocks. Scoop runs from the existing Linux release job (pure
+  Go + git — it pushes `bucket/agentsync.json` to `spxrogers/scoop-bucket`).
+  Chocolatey shells out to the Windows-only `choco` CLI, so the `release`
+  workflow gained a dedicated `windows-latest` job that builds and `choco
+  push`es only the `.nupkg`, reusing the same config with
+  `AGENTSYNC_DISABLE_GH_RELEASE=true` so it never re-creates the Release the
+  Linux job published. The whole thing ships as a safe no-op until you add each
+  channel's credential: Scoop's `skip_upload` templates off
+  `SCOOP_BUCKET_GITHUB_TOKEN` (no token → manifest built but never pushed), and
+  the Windows job is gated on the *presence* of `CHOCOLATEY_API_KEY` (surfaced
+  as a job output, since a job-level `if:` can't read `secrets`) — so the
+  windows-latest runner only spins up once the key exists. The CI snapshot job
+  explicitly skips chocolatey (the Linux runner has no `choco`).
 - **Releases can now be cut from the GitHub UI / mobile app, no laptop
   required.** The `release` workflow grew a `workflow_dispatch` trigger with a
   `version` input alongside the existing `push: tags` one: "Actions → release →
