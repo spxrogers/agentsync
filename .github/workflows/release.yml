@@ -100,7 +100,14 @@ jobs:
           go-version-file: go.mod
       - uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          # PINNED, and MUST equal the chocolatey job's version below. The two
+          # jobs build the Windows .zip independently and choco verifies the
+          # Linux-built Release archive against the sha256 the Windows job baked
+          # into the package. `version: latest` is resolved per job at run time,
+          # so a goreleaser release landing between this job and a later choco
+          # re-run would change the archive bytes and break verification. Bump
+          # both jobs together. (Go is already pinned via go-version-file.)
+          version: "2.16.0"
           # Everything EXCEPT chocolatey: that pipe shells out to the Windows-only
           # `choco` CLI, so it runs on the separate windows-latest `chocolatey`
           # job below. This job creates the Release + uploads archives/checksums/
@@ -160,7 +167,10 @@ jobs:
           go-version-file: go.mod
       - uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          # PINNED — keep identical to the goreleaser job's version above (see the
+          # rationale there). A version skew between the two jobs changes the
+          # Windows .zip bytes and breaks choco checksum verification.
+          version: "2.16.0"
           # Only the chocolatey pipe: skip the publishers the Linux job owns.
           args: release --clean --skip=homebrew,scoop,nfpm
         env:
