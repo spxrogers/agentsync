@@ -395,7 +395,23 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `/spxrogers/agentsync` Context7 source) via a `script` tag in Starlight's
   `head` config (`website/astro.config.mjs`).
 
-## [0.1.0] — 2026-06-05
+### Fixed
+
+- **Chocolatey packages now build reproducibly across runners (fixes the v0.7.1
+  verification failure).** The release pipeline builds the Windows `.zip` twice —
+  once on the Linux job that uploads it to the GitHub Release, and again on the
+  windows-latest `chocolatey` job, which bakes the sha256 of its *local* rebuild
+  into `chocolateyinstall.ps1`. choco downloads the Release `.zip` and checks it
+  against that sha256, so the two builds must be byte-identical; they weren't, and
+  v0.7.1 failed automated verification with `Checksum … did not meet …`. The two
+  builds diverged on three non-deterministic inputs, now all pinned to the commit:
+  `-trimpath` strips the per-runner GOPATH/module-cache path baked into the binary,
+  `-X main.date` is set from `{{ .CommitDate }}` instead of the wall-clock build
+  time, and `builds[].mod_timestamp` plus the archive's `files[].info.mtime` pin
+  every in-archive mtime (binary and bundled `LICENSE`/`README`) to the commit so
+  `actions/checkout`'s per-runner timestamps no longer change the `.zip` bytes.
+  Re-cutting the release regenerates the Release archive and the Chocolatey package
+  together, so their checksums agree.
 
 The first public release (beta). Functional end-to-end (green under
 `just test-release`): Claude Code, OpenCode, and Codex adapters plus the full
