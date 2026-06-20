@@ -108,9 +108,13 @@ homebrew_casks:
 # SCOOP_BUCKET_GITHUB_TOKEN (contents:write on the bucket) — same constraint as
 # the Homebrew tap.
 #
-# Self-gating: skip_upload stays true until SCOOP_BUCKET_GITHUB_TOKEN exists, so
-# this is a harmless no-op (manifest built, never pushed) until you create the
-# bucket repo + add the secret. No code change needed to "pull the trigger".
+# The push token comes from SCOOP_BUCKET_GITHUB_TOKEN (a repo secret), templated
+# as plain `{{ .Env.… }}` exactly like the Homebrew cask's token. NOTE: credential
+# fields (repository.token, private_key) render via goreleaser's env-only context
+# (ApplySingleEnvOnly) — only bare `{{ .Env.X }}` works; envOrDefault/isEnvSet are
+# NOT available and fail the release at publish time (`function "envOrDefault" not
+# defined`). They ARE available in full-context fields like release.disable and
+# the chocolatey api_key. CI guards this (see ci.yml "Guard goreleaser token…").
 # --------------------------------------------------------------------------
 scoops:
   - name: agentsync
@@ -118,7 +122,7 @@ scoops:
       owner: spxrogers
       name: scoop-bucket
       branch: main
-      token: '{{ envOrDefault "SCOOP_BUCKET_GITHUB_TOKEN" "" }}'
+      token: "{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}"
     directory: bucket
     url_template: "https://github.com/spxrogers/agentsync/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
     commit_author:
@@ -128,7 +132,6 @@ scoops:
     homepage: https://github.com/spxrogers/agentsync
     description: Centrally manage AI coding-agent configurations.
     license: MIT
-    skip_upload: '{{ if isEnvSet "SCOOP_BUCKET_GITHUB_TOKEN" }}false{{ else }}true{{ end }}'
 
 # --------------------------------------------------------------------------
 # Windows — Chocolatey (issue #75). Builds the .nupkg and `choco push`es it so
@@ -137,12 +140,11 @@ scoops:
 # Linux release job — the workflow runs it from a dedicated windows-latest job
 # (.github/workflows/release.yml). choco is pre-installed on those runners.
 #
-# Gating lives in the workflow, not here: goreleaser's `skip_publish` is a hard
-# bool (not templateable like scoop's skip_upload), so instead the Windows job
-# is gated on the *presence* of CHOCOLATEY_API_KEY — adding that secret is the
-# whole "go live" step. Chocolatey's community repo also runs
-# new packages through a moderation queue, so the first push won't be publicly
-# installable until it clears review.
+# Gating lives in the workflow, not here: the Windows job is gated on the
+# *presence* of CHOCOLATEY_API_KEY (via the goreleaser job's choco_enabled
+# output) — adding that secret is the whole "go live" step. Chocolatey's
+# community repo also runs new packages through a moderation queue, so the first
+# push won't be publicly installable until it clears review.
 #
 # NOTE: the chocolatey pipe packages the Windows amd64 binary only —
 # goreleaser's own arch filter selects amd64/386 and excludes arm64 — so the
@@ -170,7 +172,7 @@ chocolateys:
     tags: "agentsync cli ai coding agents configuration claude codex cursor dotfiles"
     release_notes: "https://github.com/spxrogers/agentsync/releases/tag/{{ .Tag }}"
     url_template: "https://github.com/spxrogers/agentsync/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
-    api_key: '{{ envOrDefault "CHOCOLATEY_API_KEY" "" }}'
+    api_key: "{{ .Env.CHOCOLATEY_API_KEY }}"
     source_repo: "https://push.chocolatey.org/"
     goamd64: v1
 

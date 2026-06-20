@@ -115,10 +115,10 @@ jobs:
           # fails; everything else (GitHub Release, deb/rpm) still publishes.
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           # Pushes bucket/agentsync.json to spxrogers/scoop-bucket (another repo
-          # the default GITHUB_TOKEN can't write). The `scoops` block self-gates
-          # on this: while the secret is unset it resolves to empty and Scoop is
-          # a no-op (skip_upload=true), so this is safe to ship before the bucket
-          # repo + token exist. Add the secret to "pull the trigger" on Scoop.
+          # the default GITHUB_TOKEN can't write). The `scoops` block's token is
+          # `{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}` — if this secret is unset it
+          # resolves empty and the scoop step FAILS the release (same as the brew
+          # token above); it is not a silent no-op.
           SCOOP_BUCKET_GITHUB_TOKEN: ${{ secrets.SCOOP_BUCKET_GITHUB_TOKEN }}
 
   # Windows-only channel: build + push the Chocolatey package (issue #75).
