@@ -18,11 +18,26 @@ builds:
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
+    # Reproducible builds — load-bearing for Chocolatey. The Linux release job
+    # uploads the Windows .zip to the GitHub Release; the separate windows-latest
+    # `chocolatey` job (release.yml) REBUILDS that .zip locally (OSS goreleaser
+    # can't share artifacts across runners) and bakes the sha256 of *its* copy
+    # into chocolateyinstall.ps1. choco then downloads the Linux job's .zip and
+    # checks it against that sha256 — so the two builds MUST be byte-identical or
+    # verification fails on a checksum mismatch (this sank v0.7.1). Three inputs
+    # made the builds diverge: (1) without -trimpath the binary embeds the
+    # per-runner GOPATH/module-cache path (Linux `/home/runner/...` vs Windows
+    # `C:\Users\runneradmin\...`); (2) `-X main.date={{.Date}}` stamped each run's
+    # wall-clock build time; (3) the default file mtime was the build time. Pin
+    # all three to the commit (same for both runners). Archive-side mtime
+    # normalization for the bundled LICENSE/README lives in `archives` below.
+    flags: [-trimpath]
+    mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
       - -X main.commit={{.ShortCommit}}
-      - -X main.date={{.Date}}
+      - -X main.date={{.CommitDate}}
 
 archives:
   - id: default
@@ -31,6 +46,20 @@ archives:
       - goos: windows
         formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Reproducible archives (see builds[].mod_timestamp for the why). The binary's
+    # in-archive mtime tracks builds[].mod_timestamp, but goreleaser's *default*
+    # bundled files (LICENSE*, README*) carry each runner's `actions/checkout`
+    # mtime — divergent across runners and enough to change the .zip's sha256. We
+    # restate the default file set with the mtime pinned to the commit date so the
+    # archive is byte-identical on the Linux and windows-latest runners. Keep this
+    # list in sync with goreleaser's default globs if more docs are bundled.
+    files:
+      - src: LICENSE*
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: README*
+        info:
+          mtime: "{{ .CommitDate }}"
 
 checksum:
   name_template: "checksums.txt"
@@ -148,8 +177,14 @@ scoops:
 #
 # NOTE: the chocolatey pipe packages the Windows amd64 binary only —
 # goreleaser's own arch filter selects amd64/386 and excludes arm64 — so the
-# windows/arm64 build is intentionally absent from the package. Verify on a
-# clean Windows box at the first release (issue #75).
+# windows/arm64 build is intentionally absent from the package.
+#
+# The generated chocolateyinstall.ps1 downloads the .zip from the GitHub Release
+# (built by the Linux job) and verifies it against a sha256 computed from THIS
+# runner's local rebuild. Those bytes match only because the build is now
+# reproducible across runners — see builds[].mod_timestamp / -trimpath and the
+# archive `files` mtime pinning above. v0.7.1 failed choco verification on a
+# checksum mismatch before that was in place; do not regress it.
 # --------------------------------------------------------------------------
 chocolateys:
   - name: agentsync
