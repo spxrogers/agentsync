@@ -66,6 +66,17 @@ jobs:
       # side effects.
       - name: Pin release-version validation (scripts/release-tag.sh --self-test)
         run: ./scripts/release-tag.sh --self-test
+      # GoReleaser renders publisher credential fields (`token`, `private_key`)
+      # with the env-only template context (ApplySingleEnvOnly): only bare
+      # `{{ .Env.X }}` works there — function calls like envOrDefault/isEnvSet are
+      # NOT available and fail ONLY at real publish time (`goreleaser check` and
+      # snapshot can't catch it; it broke the v0.7.0 release). Fail fast here.
+      - name: Guard against envOrDefault/isEnvSet in goreleaser token/private_key fields
+        run: |
+          if grep -nE '^[[:space:]]*(token|private_key):.*\{\{.*(envOrDefault|isEnvSet)' .goreleaser.yaml; then
+            echo "::error file=.goreleaser.yaml::publisher token/private_key must use a bare {{ .Env.X }} template — envOrDefault/isEnvSet are unavailable in that context and fail at publish"
+            exit 1
+          fi
 
   goreleaser-snapshot:
     name: goreleaser-snapshot (cross-build matrix)
