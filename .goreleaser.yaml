@@ -46,19 +46,31 @@ archives:
       - goos: windows
         formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    # Reproducible archives (see builds[].mod_timestamp for the why). The binary's
-    # in-archive mtime tracks builds[].mod_timestamp, but goreleaser's *default*
-    # bundled files (LICENSE*, README*) carry each runner's `actions/checkout`
-    # mtime — divergent across runners and enough to change the .zip's sha256. We
-    # restate the default file set with the mtime pinned to the commit date so the
-    # archive is byte-identical on the Linux and windows-latest runners. Keep this
-    # list in sync with goreleaser's default globs if more docs are bundled.
+    # Reproducible archives across runners — load-bearing for Chocolatey. The
+    # Linux job uploads this .zip to the Release; the windows-latest choco job
+    # rebuilds it and bakes its sha256 into the package, so the two builds' bytes
+    # MUST match. A .zip carries two host-dependent inputs, and BOTH must be pinned:
+    #   1. mtime — pinned to the commit (binary via builds[].mod_timestamp; the
+    #      bundled LICENSE/README via files[].info.mtime below), else each runner's
+    #      `actions/checkout` time leaks in.
+    #   2. Unix file-mode bits — a .zip records os.FileInfo.Mode(), which is
+    #      0755/0644 on Linux but ~0666 (no exec bit) on Windows, so an unpinned
+    #      archive differs by build-host OS. v0.7.2 failed *verification* on exactly
+    #      this: validation passed, then the Linux Release .zip and the
+    #      Windows-rebuilt nupkg disagreed on the sha256. builds_info.mode pins the
+    #      binary's mode; files[].info.mode pins the bundled docs'.
+    # We restate goreleaser's default bundled-file globs (LICENSE*, README*) to
+    # attach the pinned info; keep this list in sync if more docs are bundled.
+    builds_info:
+      mode: 0755
     files:
       - src: LICENSE*
         info:
+          mode: 0644
           mtime: "{{ .CommitDate }}"
       - src: README*
         info:
+          mode: 0644
           mtime: "{{ .CommitDate }}"
 
 checksum:

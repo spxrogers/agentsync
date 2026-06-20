@@ -412,6 +412,23 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `actions/checkout`'s per-runner timestamps no longer change the `.zip` bytes.
   Re-cutting the release regenerates the Release archive and the Chocolatey package
   together, so their checksums agree.
+- **Reproducible builds, take two: pin archive file-modes and the GoReleaser
+  version (the v0.7.2 verification fix).** The first pass pinned the build's
+  embedded path/date and the bundled files' mtime — enough to make the archive
+  reproducible *on one host*, but not across the Linux Release job and the
+  `windows-latest` Chocolatey job. A `.zip` also records each entry's Unix mode
+  (`os.FileInfo.Mode()`): `0755`/`0644` on Linux vs `~0666` (no exec bit) on
+  Windows. That lone metadata difference made the two builds' archives disagree, so
+  v0.7.2 *passed validation but failed verification* on a checksum mismatch between
+  the Linux Release archive and the Windows-built `.nupkg`. The archive now pins
+  every in-archive Unix mode (`builds_info.mode` for the binary, `files[].info.mode`
+  for the bundled docs), making the `.zip` byte-identical regardless of build-host
+  OS (the binary itself was already host-independent via `-trimpath` + a pinned Go
+  toolchain). Both release jobs additionally pin GoReleaser to an exact version
+  (`2.16.0`) instead of `latest`, so a version skew between the two independently
+  run jobs — or a later single-job re-run — can't reintroduce the divergence.
+  Verified locally: forcing the archive modes to `0666` changes the `.zip` hash,
+  while with the modes pinned the hash is invariant to on-disk permissions.
 
 The first public release (beta). Functional end-to-end (green under
 `just test-release`): Claude Code, OpenCode, and Codex adapters plus the full
