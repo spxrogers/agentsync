@@ -395,6 +395,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `/spxrogers/agentsync` Context7 source) via a `script` tag in Starlight's
   `head` config (`website/astro.config.mjs`).
 
+## [0.7.3] — 2026-06-20
+
 ### Fixed
 
 - **Chocolatey packages now build reproducibly across runners (fixes the v0.7.1
@@ -429,6 +431,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   run jobs — or a later single-job re-run — can't reintroduce the divergence.
   Verified locally: forcing the archive modes to `0666` changes the `.zip` hash,
   while with the modes pinned the hash is invariant to on-disk permissions.
+
+## [0.1.0] — 2026-06-05
 
 The first public release (beta). Functional end-to-end (green under
 `just test-release`): Claude Code, OpenCode, and Codex adapters plus the full
