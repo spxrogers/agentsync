@@ -147,6 +147,21 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Chocolatey publishing is back to a single GoReleaser run — the structural fix
+  for the v0.7.1–v0.7.3 checksum-mismatch saga.** The release had split the
+  Chocolatey `.nupkg` onto a separate `windows-latest` job that *rebuilt* the
+  Windows archive and baked the sha256 of its own copy into `chocolateyinstall.ps1`;
+  choco then checked that against the archive the Linux job uploaded to the Release.
+  Two independent builds are never byte-identical (per-runner module-cache paths,
+  then Unix file-mode bits, then the zip's creator-OS byte…), so verification kept
+  failing on a checksum mismatch. The chocolatey pipe now runs inside the one Linux
+  `goreleaser release` invocation (`choco` runs there under Mono — packaging/push is
+  all it needs), so the embedded checksum is computed over the *exact* archive that
+  ships and the two can't disagree by construction. The now-unnecessary cross-runner
+  reproducibility scaffolding (archive file-mode/mtime pinning) was dropped;
+  `-trimpath` + commit-pinned build timestamps stay as general reproducible-build
+  hygiene.
+
 - **`ui.Sanitize` now also strips deceptive bidi / zero-width runes, not just
   terminal-control bytes.** Following up on the escape-injection fix below, the
   same untrusted-name display boundary now removes the printable-but-deceptive
