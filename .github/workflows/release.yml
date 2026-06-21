@@ -45,9 +45,11 @@ concurrency:
 jobs:
   goreleaser:
     name: goreleaser (publish)
-    # ubuntu-22.04 specifically: its runner image ships Mono, which the Chocolatey
-    # step below uses to run the `choco` CLI on Linux (the step installs Mono too
-    # if it's ever missing). The whole release is produced in this one job.
+    # ubuntu-22.04: the Chocolatey step below runs `choco` under Mono, and
+    # mono-complete installs cleanly from this image's apt repos (jammy). The whole
+    # release — every channel — is produced in this one job. (This image is on
+    # GitHub's deprecation track; when it's retired, move to a newer runner and
+    # confirm mono-complete is still installable there, or add the Mono apt repo.)
     runs-on: ubuntu-22.04
     steps:
       - name: Detect Chocolatey credential
@@ -112,16 +114,24 @@ jobs:
           CHOCO_VERSION: "2.7.3"
         run: |
           set -euo pipefail
-          command -v mono >/dev/null 2>&1 || {
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends mono-complete
-          }
+          # Install Mono unconditionally rather than gating on a preinstalled copy:
+          # the install path must run every time so it's proven, not discovered
+          # broken during a real release. mono-complete carries the assemblies
+          # choco.exe (a .NET app) needs for pack/push.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mono-complete
           mkdir -p "$HOME/choco" "$HOME/bin"
-          wget -qO- "https://github.com/chocolatey/choco/releases/download/${CHOCO_VERSION}/chocolatey.v${CHOCO_VERSION}.tar.gz" \
+          wget -q --tries=3 --retry-connrefused -O- \
+            "https://github.com/chocolatey/choco/releases/download/${CHOCO_VERSION}/chocolatey.v${CHOCO_VERSION}.tar.gz" \
             | tar -xz -C "$HOME/choco"
           printf '#!/usr/bin/env bash\nexec mono "%s/choco.exe" "$@"\n' "$HOME/choco" > "$HOME/bin/choco"
           chmod +x "$HOME/bin/choco"
           echo "$HOME/bin" >> "$GITHUB_PATH"
+          # Smoke-test the shim NOW, by absolute path ($GITHUB_PATH only affects
+          # later steps), so a broken Mono/choco fails HERE — fast and obvious —
+          # instead of opaquely mid-`goreleaser release`, after the Release and
+          # every other channel have already published.
+          "$HOME/bin/choco" --version
       - uses: goreleaser/goreleaser-action@v6
         with:
           # Pinned so releases are reproducible run-to-run (Go is pinned via
@@ -156,6 +166,15 @@ jobs:
   # gh-pages via "deploy from a branch", so no extra Actions minutes are spent
   # rendering the site. Gated on `goreleaser` so a failed publish never ships
   # docs claiming a version that isn't out.
+  #
+  # NOTE: because choco now runs inside the `goreleaser` job, a `choco push`
+  # failure fails that job and skips this deploy even though the Release already
+  # shipped. The common case (a transient push failure) self-recovers: re-running
+  # the failed `goreleaser` job re-publishes idempotently
+  # (release.replace_existing_artifacts) and re-runs this job. If a push
+  # half-succeeded (the version is already on choco, so a re-push 409s), re-run
+  # THIS job alone — or run `just docs-publish` locally — to ship the docs without
+  # re-pushing choco.
   docs:
     name: docs-publish (agentsync.cc)
     needs: goreleaser
