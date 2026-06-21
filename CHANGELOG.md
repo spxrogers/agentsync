@@ -13,18 +13,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 - **Windows distribution via Scoop and Chocolatey is wired and ready to ship
   (issues #74, #75).** `.goreleaser.yaml` now carries fully-configured `scoops`
-  and `chocolateys` blocks. Scoop runs from the existing Linux release job (pure
-  Go + git — it pushes `bucket/agentsync.json` to `spxrogers/scoop-bucket`).
-  Chocolatey shells out to the Windows-only `choco` CLI, so the `release`
-  workflow gained a dedicated `windows-latest` job that builds and `choco
-  push`es only the `.nupkg`, reusing the same config with
-  `AGENTSYNC_DISABLE_GH_RELEASE=true` so it never re-creates the Release the
-  Linux job published. Scoop pushes with the `SCOOP_BUCKET_GITHUB_TOKEN` secret
-  (a plain `{{ .Env.… }}` token, like the Homebrew cask). The Windows chocolatey
-  job is gated on the *presence* of `CHOCOLATEY_API_KEY` (surfaced as a job
-  output, since a job-level `if:` can't read `secrets`), so the windows-latest
-  runner only spins up once the key exists. The CI snapshot job explicitly skips
-  chocolatey (the Linux runner has no `choco`).
+  and `chocolateys` blocks, and the whole release — GitHub Release, archives,
+  deb/rpm, Homebrew cask, Scoop bucket, and the Chocolatey `.nupkg` — is produced
+  by one `goreleaser release` run on a single Linux job (`choco` runs there under
+  Mono, so no separate Windows runner is needed). Scoop pushes
+  `bucket/agentsync.json` to `spxrogers/scoop-bucket` with the
+  `SCOOP_BUCKET_GITHUB_TOKEN` secret (a plain `{{ .Env.… }}` token, like the
+  Homebrew cask). Chocolatey is gated on the *presence* of `CHOCOLATEY_API_KEY`:
+  the pipe is skipped (`--skip=chocolatey`) and the choco CLI isn't even set up
+  unless the secret is set — adding it is the whole "go live on choco" step. The
+  CI snapshot job explicitly skips chocolatey (the CI runner has no `choco`).
 - **Releases can now be cut from the GitHub UI / mobile app, no laptop
   required.** The `release` workflow grew a `workflow_dispatch` trigger with a
   `version` input alongside the existing `push: tags` one: "Actions → release →
@@ -146,6 +144,21 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   machine contract is stable.
 
 ### Fixed
+
+- **Chocolatey publishing is back to a single GoReleaser run — the structural fix
+  for the v0.7.1–v0.7.3 checksum-mismatch saga.** The release had split the
+  Chocolatey `.nupkg` onto a separate `windows-latest` job that *rebuilt* the
+  Windows archive and baked the sha256 of its own copy into `chocolateyinstall.ps1`;
+  choco then checked that against the archive the Linux job uploaded to the Release.
+  Two independent builds are never byte-identical (per-runner module-cache paths,
+  then Unix file-mode bits, then the zip's creator-OS byte…), so verification kept
+  failing on a checksum mismatch. The chocolatey pipe now runs inside the one Linux
+  `goreleaser release` invocation (`choco` runs there under Mono — packaging/push is
+  all it needs), so the embedded checksum is computed over the *exact* archive that
+  ships and the two can't disagree by construction. The now-unnecessary cross-runner
+  reproducibility scaffolding (archive file-mode/mtime pinning) was dropped;
+  `-trimpath` + commit-pinned build timestamps stay as general reproducible-build
+  hygiene.
 
 - **`ui.Sanitize` now also strips deceptive bidi / zero-width runes, not just
   terminal-control bytes.** Following up on the escape-injection fix below, the

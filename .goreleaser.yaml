@@ -1,15 +1,16 @@
-# goreleaser v2 config (the CI action installs the latest v2 release).
+# goreleaser v2 config (the CI action installs a pinned v2 release — see release.yml).
 version: 2
 
 project_name: agentsync
 
-# GitHub Release creation. Templated `disable` so the Windows chocolatey-only
-# job (.github/workflows/release.yml) can reuse this SAME config to build +
-# push the .nupkg WITHOUT trying to re-create the Release the Linux job already
-# made: that job sets AGENTSYNC_DISABLE_GH_RELEASE=true. Everywhere else the var
-# is unset, so envOrDefault yields "false" and the Release is created as normal.
+# Make a re-run idempotent. The whole release ships in one job (see release.yml),
+# so re-running the workflow is the recovery path if any single publisher hiccups
+# (e.g. a flaky `choco push`) after the Release + archives were already uploaded.
+# `replace_existing_artifacts` re-uploads the (reproducible, identical) assets on
+# the second pass instead of erroring on "asset already exists"; release.mode
+# defaults to keep-existing, so the existing Release itself is left intact.
 release:
-  disable: '{{ envOrDefault "AGENTSYNC_DISABLE_GH_RELEASE" "false" }}'
+  replace_existing_artifacts: true
 
 builds:
   - id: agentsync
@@ -18,19 +19,10 @@ builds:
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
-    # Reproducible builds — load-bearing for Chocolatey. The Linux release job
-    # uploads the Windows .zip to the GitHub Release; the separate windows-latest
-    # `chocolatey` job (release.yml) REBUILDS that .zip locally (OSS goreleaser
-    # can't share artifacts across runners) and bakes the sha256 of *its* copy
-    # into chocolateyinstall.ps1. choco then downloads the Linux job's .zip and
-    # checks it against that sha256 — so the two builds MUST be byte-identical or
-    # verification fails on a checksum mismatch (this sank v0.7.1). Three inputs
-    # made the builds diverge: (1) without -trimpath the binary embeds the
-    # per-runner GOPATH/module-cache path (Linux `/home/runner/...` vs Windows
-    # `C:\Users\runneradmin\...`); (2) `-X main.date={{.Date}}` stamped each run's
-    # wall-clock build time; (3) the default file mtime was the build time. Pin
-    # all three to the commit (same for both runners). Archive-side mtime
-    # normalization for the bundled LICENSE/README lives in `archives` below.
+    # Reproducible builds (general hygiene): -trimpath strips the per-runner
+    # GOPATH/module-cache path from the binary, and the embedded date/mtime are
+    # pinned to the commit rather than wall-clock build time, so a given tag
+    # builds bit-for-bit identically.
     flags: [-trimpath]
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
@@ -46,32 +38,6 @@ archives:
       - goos: windows
         formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    # Reproducible archives across runners — load-bearing for Chocolatey. The
-    # Linux job uploads this .zip to the Release; the windows-latest choco job
-    # rebuilds it and bakes its sha256 into the package, so the two builds' bytes
-    # MUST match. A .zip carries two host-dependent inputs, and BOTH must be pinned:
-    #   1. mtime — pinned to the commit (binary via builds[].mod_timestamp; the
-    #      bundled LICENSE/README via files[].info.mtime below), else each runner's
-    #      `actions/checkout` time leaks in.
-    #   2. Unix file-mode bits — a .zip records os.FileInfo.Mode(), which is
-    #      0755/0644 on Linux but ~0666 (no exec bit) on Windows, so an unpinned
-    #      archive differs by build-host OS. v0.7.2 failed *verification* on exactly
-    #      this: validation passed, then the Linux Release .zip and the
-    #      Windows-rebuilt nupkg disagreed on the sha256. builds_info.mode pins the
-    #      binary's mode; files[].info.mode pins the bundled docs'.
-    # We restate goreleaser's default bundled-file globs (LICENSE*, README*) to
-    # attach the pinned info; keep this list in sync if more docs are bundled.
-    builds_info:
-      mode: 0755
-    files:
-      - src: LICENSE*
-        info:
-          mode: 0644
-          mtime: "{{ .CommitDate }}"
-      - src: README*
-        info:
-          mode: 0644
-          mtime: "{{ .CommitDate }}"
 
 checksum:
   name_template: "checksums.txt"
@@ -154,8 +120,8 @@ homebrew_casks:
 # fields (repository.token, private_key) render via goreleaser's env-only context
 # (ApplySingleEnvOnly) — only bare `{{ .Env.X }}` works; envOrDefault/isEnvSet are
 # NOT available and fail the release at publish time (`function "envOrDefault" not
-# defined`). They ARE available in full-context fields like release.disable and
-# the chocolatey api_key. CI guards this (see ci.yml "Guard goreleaser token…").
+# defined`). They ARE available in full-context fields like the chocolatey api_key.
+# CI guards this (see ci.yml "Guard goreleaser token…").
 # --------------------------------------------------------------------------
 scoops:
   - name: agentsync
@@ -176,27 +142,25 @@ scoops:
 
 # --------------------------------------------------------------------------
 # Windows — Chocolatey (issue #75). Builds the .nupkg and `choco push`es it so
-# `choco install agentsync` works. goreleaser shells out to the `choco` CLI,
-# which is Windows-only, so unlike every other channel this CANNOT run on the
-# Linux release job — the workflow runs it from a dedicated windows-latest job
-# (.github/workflows/release.yml). choco is pre-installed on those runners.
+# `choco install agentsync` works. goreleaser shells out to the `choco` CLI; the
+# release workflow makes `choco` available on the single Linux release runner via
+# Mono, so the chocolatey pipe runs in the SAME goreleaser invocation as every
+# other channel. That single-run design is load-bearing: the sha256 the generated
+# chocolateyinstall.ps1 checks the downloaded .zip against is computed over the
+# EXACT archive this run uploads to the Release, so the two can never disagree. A
+# separately-built .nupkg (a second build on another runner) is never byte-
+# identical — per-runner paths, Unix file-mode bits, the zip's creator-OS byte —
+# and choco verification rejects the mismatch; that two-runner split is what sank
+# v0.7.1–v0.7.3, so keep choco in the one run.
 #
-# Gating lives in the workflow, not here: the Windows job is gated on the
-# *presence* of CHOCOLATEY_API_KEY (via the goreleaser job's choco_enabled
-# output) — adding that secret is the whole "go live" step. Chocolatey's
-# community repo also runs new packages through a moderation queue, so the first
-# push won't be publicly installable until it clears review.
+# Gating lives in the workflow: the chocolatey pipe is skipped unless
+# CHOCOLATEY_API_KEY is present — adding that secret is the whole "go live" step.
+# Chocolatey's community repo runs new packages through a moderation queue, so the
+# first push won't be publicly installable until it clears review.
 #
-# NOTE: the chocolatey pipe packages the Windows amd64 binary only —
-# goreleaser's own arch filter selects amd64/386 and excludes arm64 — so the
-# windows/arm64 build is intentionally absent from the package.
-#
-# The generated chocolateyinstall.ps1 downloads the .zip from the GitHub Release
-# (built by the Linux job) and verifies it against a sha256 computed from THIS
-# runner's local rebuild. Those bytes match only because the build is now
-# reproducible across runners — see builds[].mod_timestamp / -trimpath and the
-# archive `files` mtime pinning above. v0.7.1 failed choco verification on a
-# checksum mismatch before that was in place; do not regress it.
+# NOTE: the chocolatey pipe packages the Windows amd64 binary only — goreleaser's
+# own arch filter selects amd64/386 and excludes arm64 — so the windows/arm64
+# build is intentionally absent from the package.
 # --------------------------------------------------------------------------
 chocolateys:
   - name: agentsync
@@ -226,13 +190,6 @@ chocolateys:
 # --------------------------------------------------------------------------
 # AUR (Arch) — deliberately NOT enabled yet. Uncomment once its companion repo /
 # credential exists and you're ready to ship it. Tracked in issue #13.
-#
-# ⚠️ When enabling this — or ANY new publisher that pushes to an external target
-# — add its pipe to the `--skip=` list in the `chocolatey` job of
-# .github/workflows/release.yml. That job reuses this same config with
-# release.disable=true, which suppresses only the GitHub Release, NOT external
-# publishers; an un-skipped publisher would double-publish from the Windows
-# runner (once from the Linux job, again from the Windows job).
 # --------------------------------------------------------------------------
 
 # aurs:
