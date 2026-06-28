@@ -83,10 +83,13 @@ func runDestinationGitBackup(
 			continue // declined / unavailable / now off — nothing to commit into
 		}
 
-		// Always include the notice file so a freshly-inited repo tracks it (a
-		// no-op on an already-owned repo).
-		stage := append(rels, agit.NoticeFile)
-		if err := repo.Stage(stage); err != nil {
+		// Stage the written files + the notice (so a freshly-inited repo tracks it,
+		// a no-op on an already-owned repo). Build a fresh slice — don't append onto
+		// rels' backing array.
+		toStage := make([]string, 0, len(rels)+1)
+		toStage = append(toStage, rels...)
+		toStage = append(toStage, agit.NoticeFile)
+		if err := repo.Stage(toStage); err != nil {
 			fmt.Fprintf(p.Err, "%s git backup for %s: %v\n", p.Yellow("agentsync:"), name, err)
 			continue
 		}
@@ -95,7 +98,7 @@ func runDestinationGitBackup(
 			fmt.Fprintf(p.Err, "%s git backup for %s: %v\n", p.Yellow("agentsync:"), name, err)
 			continue
 		}
-		staged := dedupeSorted(append(stage, deleted...))
+		staged := dedupeSorted(append(toStage, deleted...))
 		msg := checkpointMessage(name, sc, staged)
 		h, err := repo.CommitStaged(msg, id)
 		if err != nil {

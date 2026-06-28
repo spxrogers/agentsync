@@ -11,6 +11,23 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **Destination dirs can be git-versioned for one-command rollback (issue #118).**
+  `agentsync apply` now optionally keeps each rendered destination agent dir
+  (`~/.claude`, `~/.codex`, …) in its own **local-only** git repo, recording a
+  checkpoint commit after every apply that changes managed files there. A new
+  first-class **`agentsync revert <agent>`** rolls a dir back to a prior checkpoint
+  (append-only — it records a new commit, never rewrites history; `--to` picks a
+  checkpoint, `--all` covers every managed dir, `--dry-run` previews) and warns you
+  to reconcile before the next apply. Behavior is controlled by a new global
+  `[destination_directory_git_backup]` table in `agentsync.toml`
+  (`mode = "prompt"` (default) `| "on" | "off"`, plus optional `author_name` /
+  `author_email`); the first apply to an untracked dir **prompts** (opt-out), and
+  `apply --no-git-backup` bypasses it for CI/scripting. `agentsync doctor` shows
+  the current mode and per-dir status. These repos are **never pushed** — the
+  history may hold the cleartext secrets the rendered files already contain, which
+  is acceptable precisely because it stays local (the canonical `~/.agentsync/`
+  source you push still carries only secret *references*). Covers the nine deep
+  adapters; an existing user-managed repo in a destination dir is left untouched.
 - **Windows distribution via Scoop and Chocolatey is wired and ready to ship
   (issues #74, #75).** `.goreleaser.yaml` now carries fully-configured `scoops`
   and `chocolateys` blocks, and the whole release — GitHub Release, archives,

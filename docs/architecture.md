@@ -363,11 +363,25 @@ Key stages:
    foreign-collision backups (`internal/render`, `internal/iox`).
 8. **Record** new hashes in `targets.json` (`internal/state`) and print the
    translation report.
+9. **Git-backup** (issue #118) — for a user-scope apply, checkpoint each deep
+   agent's destination dir into its own **local-only** git repo
+   (`internal/cli/gitbackup.go` → `internal/git`). The managed-file set is the
+   `written` set from step 7, grouped per agent by the optional
+   `adapter.VersionedHome` extension (each deep adapter exposes its single config
+   dir; the breadth tier abstains, with no safe single dir to init). This step is
+   **best-effort** (the files are already written and state already saved, so a git
+   failure never fails the apply), **opt-out** (the
+   `[destination_directory_git_backup]` mode — `prompt`/`on`/`off` — plus the
+   `apply --no-git-backup` per-run bypass), and **never pushes**: `internal/git`
+   exposes no remote/push surface at all (a source-scanning guard test,
+   `TestNoPushSurface`, keeps it that way). `agentsync revert` rolls a dir back to a
+   prior checkpoint append-only. `.state/` is **untouched** by this step — the two
+   are complementary (operational memory vs. user-facing rollback history).
 
 `--dry-run` runs steps 1–6, then a non-writing pass of step 7 (the writer's merge
 + convergence check, no disk write) so it can label each destination `✓ synced`
 vs `→ write` and preview foreign-collision backups, and prints the plan/report —
-all without writing a byte.
+all without writing a byte (and it skips the git-backup step 9 entirely).
 
 ---
 

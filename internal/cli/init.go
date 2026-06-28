@@ -40,6 +40,15 @@ default_interval = "24h"
 # file          = "secrets/secrets.age"
 # recipient     = "age1...your-public-key..."
 # identity_file = "${env:HOME}/.config/agentsync/age.key"
+
+# [destination_directory_git_backup]
+# Keep a LOCAL-ONLY git history of each rendered destination dir (~/.claude, …)
+# so a bad apply is revertible with "agentsync revert". Never pushed. The history
+# may contain secrets in cleartext (like the files it versions), which is why it
+# stays local. mode: "prompt" (default, ask on first apply) | "on" | "off".
+# mode         = "prompt"
+# author_name  = "agentsync"
+# author_email = "agentsync@localhost"
 `
 
 func newInitCmd() *cobra.Command {

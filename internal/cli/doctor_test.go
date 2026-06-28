@@ -20,6 +20,7 @@ func TestDoctor_PrintsEnvAndAgents(t *testing.T) {
 		"AGENTSYNC_HOME", "Go version", "OS",
 		"home dir   ok", ".state/    ok", "schema     ok",
 		"claude", "opencode",
+		"Destination git backup", "mode       prompt",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("doctor output missing %q. Got:\n%s", want, out)
