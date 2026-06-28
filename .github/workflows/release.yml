@@ -2,8 +2,10 @@ name: release
 # Publish a GitHub Release + update the Homebrew tap. CI (ci.yml) only ever runs
 # goreleaser in `--snapshot --skip publish` mode to prove the cross-build stays
 # viable; this workflow is the one that actually ships. Once the release
-# publishes, the `docs` job rebuilds and redeploys the agentsync.cc site so the
-# live docs always track the just-shipped CLI version.
+# publishes, the `docs` job calls the reusable `docs-publish` workflow
+# (.github/workflows/docs-publish.yml) to rebuild and redeploy the agentsync.cc
+# site so the live docs always track the just-shipped CLI version. That same
+# workflow can be run manually to redeploy the docs out of band.
 #
 # Two ways in, both landing in the single `goreleaser` job below:
 #   1. push an annotated `vX.Y.Z` tag on a green commit (the laptop path —
@@ -164,11 +166,13 @@ jobs:
           CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
 
   # Redeploy agentsync.cc after a successful publish so the live docs always
-  # track the just-released CLI. This is exactly `just docs-publish` (rebuild
-  # website/ and force-push dist/ to the gh-pages branch); GitHub Pages serves
-  # gh-pages via "deploy from a branch", so no extra Actions minutes are spent
-  # rendering the site. Gated on `goreleaser` so a failed publish never ships
-  # docs claiming a version that isn't out.
+  # track the just-released CLI. The build/force-push steps live in the reusable
+  # `docs-publish` workflow (.github/workflows/docs-publish.yml) — which can also
+  # be run manually to redeploy out of band — and we call it here as a shared
+  # component rather than duplicating it. Gated on `goreleaser` so a failed
+  # publish never ships docs claiming a version that isn't out. `uses:` runs the
+  # called workflow with this run's token, which carries the contents:write
+  # granted above (the force-push to gh-pages needs it).
   #
   # NOTE: because choco now runs inside the `goreleaser` job, a `choco push`
   # failure fails that job and skips this deploy even though the Release already
@@ -176,23 +180,8 @@ jobs:
   # the failed `goreleaser` job re-publishes idempotently
   # (release.replace_existing_artifacts) and re-runs this job. If a push
   # half-succeeded (the version is already on choco, so a re-push 409s), re-run
-  # THIS job alone — or run `just docs-publish` locally — to ship the docs without
-  # re-pushing choco.
+  # the `docs-publish` workflow alone — or run `just docs-publish` locally — to
+  # ship the docs without re-pushing choco.
   docs:
-    name: docs-publish (agentsync.cc)
     needs: goreleaser
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-      - uses: extractions/setup-just@v3
-      # `just docs-publish` runs `git push` from a throwaway repo it inits inside
-      # website/dist, which inherits none of actions/checkout's auth. Inject the
-      # workflow token for github.com transports so that force-push to gh-pages
-      # authenticates (contents:write, granted above).
-      - name: Authenticate git pushes to GitHub
-        run: |
-          git config --global \
-            url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf \
-            "https://github.com/"
-      - run: just docs-publish
+    uses: ./.github/workflows/docs-publish.yml
