@@ -276,7 +276,9 @@ The unit is the **directory**, not the agent: each agent's config dir plus any
 shared cross-agent dir it writes (e.g. `~/.agents/skills`, which Codex and several
 agents share) is versioned — shared dirs are de-duplicated to a single repo, and a
 dir nested under another (like `~/.claude/skills` under `~/.claude`) is folded into
-the parent, so there's never a repo inside a repo.
+the parent, so there's never a repo inside a repo. Because a shared dir is one
+repo, `revert <agent>` of a shared dir rolls back *every* agent's files in it —
+revert warns you when that happens.
 
 These repos are **never pushed**. The rendered files they version contain secrets
 resolved to **cleartext** (unlike the canonical source, which keeps `${secret:…}`

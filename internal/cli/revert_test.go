@@ -192,6 +192,39 @@ func TestRevert_PreservesUncommittedEdits(t *testing.T) {
 	}
 }
 
+// TestRevert_FoldedSharedDirNoted is the regression for the folded-dir revert
+// ISSUE: ~/.claude/skills is versioned as part of ~/.claude (de-nested), so
+// `revert opencode` must NOT error trying to open a repo at ~/.claude/skills — it
+// notes the dir is covered by a parent and moves on.
+func TestRevert_FoldedSharedDirNoted(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	mustRun(t, env, "agent", "add", "opencode")
+	f, _ := os.OpenFile(filepath.Join(tmp, ".agentsync", "agentsync.toml"), os.O_APPEND|os.O_WRONLY, 0o644)
+	_, _ = f.WriteString("\n[destination_directory_git_backup]\nmode = \"on\"\n")
+	_ = f.Close()
+	srcSkill := filepath.Join(tmp, ".agentsync", "skills", "demo", "SKILL.md")
+	_ = os.MkdirAll(filepath.Dir(srcSkill), 0o755)
+	_ = os.WriteFile(srcSkill, []byte("---\nname: demo\ndescription: d\n---\nbody\n"), 0o644)
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	// ~/.claude/skills exists but has no .git of its own (folded into ~/.claude).
+	if _, err := os.Stat(filepath.Join(tmp, ".claude", "skills", ".git")); !os.IsNotExist(err) {
+		t.Fatalf("~/.claude/skills should be folded into ~/.claude, not its own repo; err=%v", err)
+	}
+	out, err := runCLI(t, env, "revert", "opencode")
+	if err != nil {
+		t.Fatalf("revert opencode must not error on a folded dir: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "versioned as part of a parent") {
+		t.Errorf("expected the folded-dir note for ~/.claude/skills; got:\n%s", out)
+	}
+}
+
 func TestRevert_All(t *testing.T) {
 	_, env, destSkill := setupGitBackedClaude(t)
 	if out, err := runCLI(t, env, "revert", "--all"); err != nil {

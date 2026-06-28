@@ -44,9 +44,12 @@ func (a *Adapter) VersionRoots(scope adapter.Scope, project string) []string {
 // shared dir resolves to a stable shared root. Returns "" for a bare $HOME-level
 // file — agentsync never inits a repo at $HOME.
 func versionRootOf(targetRoot, rel string) string {
-	parts := strings.Split(filepath.ToSlash(rel), "/")
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/")
 	if len(parts) < 2 {
 		return "" // a bare file directly in $HOME is not versionable
+	}
+	if parts[0] == ".." || parts[0] == "." || parts[0] == "" {
+		return "" // defense-in-depth: a target must stay under $HOME, never escape it
 	}
 	switch parts[0] {
 	case ".config", ".aws", ".agents", ".pi", ".gemini":

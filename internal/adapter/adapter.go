@@ -299,6 +299,19 @@ type VersionedDirs interface {
 	VersionRoots(scope Scope, project string) []string
 }
 
+// NonEmptyDirs returns the non-empty arguments as a slice — a small shared helper
+// for adapters assembling their VersionRoots from a Paths struct whose fields may
+// be "" at a given scope.
+func NonEmptyDirs(dirs ...string) []string {
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		if d != "" {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // WarnEmitter is an OPTIONAL extension to Adapter: an adapter that emits
 // Ingest warnings implements it to let callers redirect the stream away
 // from the default (os.Stderr). Implementors are SOURCES of warnings that

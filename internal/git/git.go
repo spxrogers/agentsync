@@ -14,6 +14,9 @@ package git
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 
 	gogit "github.com/go-git/go-git/v5"
 )
@@ -124,4 +127,45 @@ func Open(dir string) (*Repo, error) {
 		return nil, fmt.Errorf("opening git repo at %s: %w", dir, err)
 	}
 	return &Repo{dir: dir, repo: repo}, nil
+}
+
+// OwnsExactly reports whether dir is itself the root of an agentsync-owned repo —
+// an EXACT `.git` at dir carrying the marker — without the upward search Detect
+// does. Use this where you must act on the repo AT dir (Open/commit/revert), since
+// Detect's DetectDotGit can match a parent repo that merely contains dir.
+func OwnsExactly(dir string) (bool, error) {
+	repo, err := gogit.PlainOpen(dir) // exact: no DetectDotGit
+	if errors.Is(err, gogit.ErrRepositoryNotExists) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("opening git repo at %s: %w", dir, err)
+	}
+	return hasMarker(repo)
+}
+
+// HasNestedRepoBelow reports whether any git repository exists STRICTLY below dir
+// (a `.git` entry in a subdirectory). agentsync refuses to init a repo that would
+// wrap another repo (the cross-run nesting hazard: a child dir was versioned in an
+// earlier run before a parent-dir agent was enabled). Short-circuits on the first
+// hit; a missing dir is reported as false.
+func HasNestedRepoBelow(dir string) (bool, error) {
+	found := false
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil // unreadable entry — ignore, never fail the apply over this
+		}
+		if path == dir || d == nil || !d.IsDir() {
+			return nil
+		}
+		if d.Name() == ".git" {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return found, fmt.Errorf("scanning %s for nested repos: %w", dir, err)
+	}
+	return found, nil
 }

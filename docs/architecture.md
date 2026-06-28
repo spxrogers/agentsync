@@ -372,7 +372,11 @@ Key stages:
    `~/.claude/skills`). The apply tail **unions** those roots, **de-nests** them
    (drops a root nested under another, so there's never a repo inside a repo), and
    **de-dups** them (a shared dir is one repo, checkpointed once with all its files
-   regardless of how many agents wrote there). The managed-file set committed under
+   regardless of how many agents wrote there). De-nesting only sees the current
+   run's roots, so before initializing a dir agentsync also scans the filesystem
+   (`git.HasNestedRepoBelow`) and **refuses to init a repo that would wrap an
+   existing one** — the cross-run case where a child dir was versioned before a
+   parent-dir agent was enabled. The managed-file set committed under
    each root is the `written` set from step 7 plus any tracked deletions; `$HOME`-
    level strays (Claude's `~/.claude.json`) are never versioned (agentsync never
    inits a repo at `$HOME`). This step is **best-effort** (the files are already

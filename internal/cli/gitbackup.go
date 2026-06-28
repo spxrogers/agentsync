@@ -138,6 +138,50 @@ func enabledVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Scop
 	return denestRoots(all)
 }
 
+// versionRootOwners maps each post-de-nest version root to the sorted set of
+// agents whose declared dirs land under it. A root with more than one owner is
+// SHARED (e.g. ~/.agents/skills ← codex + warp + …) — reverting it rolls back every
+// owner's files, which the revert path warns about.
+func versionRootOwners(reg *adapter.Registry, agents []string, sc adapter.Scope, project string) map[string][]string {
+	roots := enabledVersionRoots(reg, agents, sc, project)
+	owners := map[string]map[string]bool{}
+	for _, name := range agents {
+		ad := reg.Lookup(name)
+		if ad == nil {
+			continue
+		}
+		vd, ok := ad.(adapter.VersionedDirs)
+		if !ok {
+			continue
+		}
+		for _, r := range vd.VersionRoots(sc, project) {
+			if r == "" {
+				continue
+			}
+			c := filepath.Clean(r)
+			for _, root := range roots {
+				if isUnderDir(c, root) {
+					if owners[root] == nil {
+						owners[root] = map[string]bool{}
+					}
+					owners[root][name] = true
+					break
+				}
+			}
+		}
+	}
+	out := make(map[string][]string, len(owners))
+	for root, set := range owners {
+		names := make([]string, 0, len(set))
+		for n := range set {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		out[root] = names
+	}
+	return out
+}
+
 // denestRoots returns roots sorted, with any root nested under another removed.
 // Lexical sort places an ancestor before its descendants (the ancestor path is a
 // prefix), so a single forward pass keeping non-nested roots is sufficient.
@@ -178,15 +222,16 @@ func isUnderDir(child, parent string) bool {
 func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mode *string, hintedUnavailable *bool) (*agit.Repo, error) {
 	switch *mode {
 	case source.GitBackupModeOn:
-		return agit.Init(dir)
+		return initGuarded(p, dir)
 	case source.GitBackupModePrompt:
 		switch gitBackupPrompter(cmd, p, dir) {
 		case promptYes:
-			repo, err := agit.Init(dir)
+			repo, err := initGuarded(p, dir)
 			if err != nil {
 				return nil, err
 			}
-			// Sticky "yes": stop asking on future applies.
+			// Sticky "yes": stop asking on future applies (even if THIS dir was
+			// skipped for a nesting conflict — other dirs should still auto-init).
 			if perr := setDestinationGitBackupMode(home, source.GitBackupModeOn); perr != nil {
 				fmt.Fprintf(p.Err, "%s could not persist git-backup mode: %v\n", p.Yellow("agentsync:"), perr)
 			}
@@ -211,6 +256,24 @@ func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mo
 		}
 	}
 	return nil, nil // mode "off" reached here only if flipped mid-run
+}
+
+// initGuarded inits an agentsync repo at dir UNLESS dir already contains a nested
+// git repo below it — agentsync never creates a repo that would wrap another (the
+// cross-run nesting hazard: a child dir was versioned in an earlier run, before a
+// parent-dir agent was enabled). Returns (nil, nil) and warns when it skips.
+func initGuarded(p *ui.Printer, dir string) (*agit.Repo, error) {
+	nested, err := agit.HasNestedRepoBelow(dir)
+	if err != nil {
+		return nil, err
+	}
+	if nested {
+		fmt.Fprintf(p.Err, "%s %s contains a nested git repository; skipping agentsync git backup here "+
+			"to avoid a repo inside a repo (remove the inner .git or reconcile to merge).\n",
+			p.Yellow("agentsync:"), dir)
+		return nil, nil
+	}
+	return agit.Init(dir)
 }
 
 // managedRelsUnder returns the slash-relative paths of every written file that

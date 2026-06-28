@@ -88,6 +88,24 @@ func TestEnabledVersionRoots_DedupAndDenest(t *testing.T) {
 	}
 }
 
+// TestVersionRootOwners_SharedDir proves the shared-dir blast-radius detection:
+// ~/.agents/skills is owned by both codex and warp, which the revert path warns on.
+func TestVersionRootOwners_SharedDir(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("AGENTSYNC_TARGET_ROOT", root)
+	reg := registryFactory()
+	owners := versionRootOwners(reg, []string{"codex", "warp"}, adapter.ScopeUser, "")
+	agentsSkills := filepath.Join(root, ".agents", "skills")
+	got := owners[agentsSkills]
+	if !contains(got, "codex") || !contains(got, "warp") {
+		t.Fatalf("owners[%s] = %v, want both codex and warp", agentsSkills, got)
+	}
+	// codex's own ~/.codex is single-owner.
+	if o := owners[filepath.Join(root, ".codex")]; len(o) != 1 || o[0] != "codex" {
+		t.Errorf("owners[~/.codex] = %v, want [codex]", o)
+	}
+}
+
 func contains(ss []string, want string) bool {
 	for _, s := range ss {
 		if s == want {

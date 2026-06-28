@@ -171,6 +171,60 @@ func TestApply_GitBackupVersionsSharedSkillsDir(t *testing.T) {
 	}
 }
 
+// TestApply_GitBackupGuardsAgainstNestedRepo is the regression for the cross-run
+// nesting BLOCKER: an earlier opencode-only apply versions ~/.claude/skills; later
+// enabling claude must NOT init a repo at ~/.claude that would wrap the child repo.
+func TestApply_GitBackupGuardsAgainstNestedRepo(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "opencode")
+	enableGitBackupOn(t, tmp)
+	writeSkillSource(t, tmp, "demo", "d")
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply (opencode): %v\n%s", err, out)
+	}
+	claudeSkills := filepath.Join(tmp, ".claude", "skills")
+	if st, _ := agit.Detect(claudeSkills); st != agit.StateAgentsyncOwned {
+		t.Fatalf("opencode should have versioned %s, state=%v", claudeSkills, st)
+	}
+
+	// Now add claude (whose root ~/.claude wraps the existing ~/.claude/skills repo).
+	mustRun(t, env, "agent", "add", "claude")
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("apply (claude): %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "nested git repository") {
+		t.Errorf("expected a nested-repo warning, got:\n%s", out)
+	}
+	// The guard fired: no repo was created at ~/.claude (it would wrap the child).
+	if _, err := os.Stat(filepath.Join(tmp, ".claude", ".git")); !os.IsNotExist(err) {
+		t.Fatalf("~/.claude/.git should not exist (guard must skip the wrapping init); err=%v", err)
+	}
+	// The child repo is intact — no corruption.
+	if st, _ := agit.Detect(claudeSkills); st != agit.StateAgentsyncOwned {
+		t.Fatalf("child repo %s damaged, state=%v", claudeSkills, st)
+	}
+}
+
+// TestDoctor_WarnsUnknownGitBackupMode checks doctor flags a typo'd mode value.
+func TestDoctor_WarnsUnknownGitBackupMode(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	f, _ := os.OpenFile(filepath.Join(tmp, ".agentsync", "agentsync.toml"), os.O_APPEND|os.O_WRONLY, 0o644)
+	_, _ = f.WriteString("\n[destination_directory_git_backup]\nmode = \"bogus\"\n")
+	_ = f.Close()
+	out, err := runCLI(t, env, "doctor")
+	if err != nil {
+		t.Fatalf("doctor: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "unknown value") || !strings.Contains(out, "bogus") {
+		t.Fatalf("doctor should warn on the unknown mode; got:\n%s", out)
+	}
+}
+
 // TestDoctor_ShowsVersionedRoot checks doctor reports a versioned dir's status.
 func TestDoctor_ShowsVersionedRoot(t *testing.T) {
 	_, env, _ := setupGitBackedClaude(t)

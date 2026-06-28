@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
@@ -118,15 +119,16 @@ func revertAgent(p *ui.Printer, reg *adapter.Registry, name, toRef string, dryRu
 	if toRef != "" && len(roots) > 1 {
 		return fmt.Errorf("agent %q versions %d directories; --to is ambiguous — omit it to undo the most recent apply on each", name, len(roots))
 	}
-	var anyOwned bool
+	owners := versionRootOwners(reg, reg.Names(), adapter.ScopeUser, "")
+	var anyManaged bool
 	for _, root := range roots {
-		owned, err := revertRoot(p, root, toRef, dryRun, id, strict && len(roots) == 1)
+		managed, err := revertRoot(p, root, toRef, dryRun, id, sharedExcluding(owners[root], name), strict && len(roots) == 1)
 		if err != nil {
 			return err
 		}
-		anyOwned = anyOwned || owned
+		anyManaged = anyManaged || managed
 	}
-	if !anyOwned && strict {
+	if !anyManaged && strict {
 		return fmt.Errorf("none of %q's directories are agentsync-managed git backups; "+
 			"enable [destination_directory_git_backup] and run `agentsync apply` first", name)
 	}
@@ -138,11 +140,12 @@ func revertAll(p *ui.Printer, reg *adapter.Registry, dryRun bool, id agit.Identi
 	roots := enabledVersionRoots(reg, reg.Names(), adapter.ScopeUser, "")
 	var any bool
 	for _, root := range roots {
-		owned, err := revertRoot(p, root, "", dryRun, id, false)
+		// Under --all every owner is reverted anyway, so no cross-agent surprise.
+		managed, err := revertRoot(p, root, "", dryRun, id, nil, false)
 		if err != nil {
 			return err
 		}
-		any = any || owned
+		any = any || managed
 	}
 	if !any {
 		fmt.Fprintf(p.Out, "%s no agentsync-managed destination dirs to revert.\n", p.Faint(ui.GlyphInfo))
@@ -150,15 +153,42 @@ func revertAll(p *ui.Printer, reg *adapter.Registry, dryRun bool, id agit.Identi
 	return nil
 }
 
-// revertRoot reverts a single version-root dir. Returns whether the dir was an
-// agentsync-managed repo (so callers can report "nothing to do"). strict turns a
-// non-managed dir into an error instead of a skip.
-func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity, strict bool) (owned bool, err error) {
-	st, err := agit.Detect(root)
+// sharedExcluding returns the owners of a root other than `self` — i.e. the OTHER
+// agents whose files also live in this shared dir.
+func sharedExcluding(owners []string, self string) []string {
+	var others []string
+	for _, o := range owners {
+		if o != self {
+			others = append(others, o)
+		}
+	}
+	return others
+}
+
+// revertRoot reverts a single version-root dir. Returns whether the dir is an
+// agentsync-managed backup (exactly, or folded into a parent repo). strict turns an
+// unmanaged dir into an error instead of a skip. sharedWith lists OTHER agents that
+// also write into this dir (for the cross-agent rollback warning).
+func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity, sharedWith []string, strict bool) (managed bool, err error) {
+	// Act only on a repo whose EXACT dir is the agentsync root. Detect's upward
+	// search can match a PARENT repo (a folded child like ~/.claude/skills inside
+	// ~/.claude); in that case the dir is managed-by-parent — skip it, the parent's
+	// revert covers it.
+	exact, err := agit.OwnsExactly(root)
 	if err != nil {
 		return false, err
 	}
-	if st != agit.StateAgentsyncOwned {
+	if !exact {
+		st, derr := agit.Detect(root)
+		if derr != nil {
+			return false, derr
+		}
+		if st == agit.StateAgentsyncOwned {
+			// Folded into a parent agentsync repo — managed, but reverted via the parent.
+			fmt.Fprintf(p.Err, "%s %s is versioned as part of a parent directory; revert that to roll it back.\n",
+				p.Faint(ui.GlyphInfo), root)
+			return true, nil
+		}
 		if strict {
 			return false, fmt.Errorf("%s is not an agentsync-managed git backup (state: %s); "+
 				"enable [destination_directory_git_backup] and run `agentsync apply` first", root, st)
@@ -214,6 +244,10 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 		return true, nil
 	}
 	fmt.Fprintf(p.Out, "%s reverted %s to checkpoint %s\n", p.Green(ui.GlyphOK), root, shortRef(targetHash))
+	if len(sharedWith) > 0 {
+		fmt.Fprintf(p.Err, "%s %s is shared with %s — this also rolled back their files in it.\n",
+			p.Yellow(ui.GlyphWarn+" note:"), root, strings.Join(sharedWith, ", "))
+	}
 	printOutOfSyncNotice(p, root)
 	return true, nil
 }

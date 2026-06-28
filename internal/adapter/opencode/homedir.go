@@ -12,16 +12,5 @@ func (a *Adapter) VersionRoots(scope adapter.Scope, project string) []string {
 		return nil
 	}
 	p := ResolvePaths(a.opts.TargetRoot, "", false)
-	return nonEmptyDirs(p.ConfigDir, p.ClaudeSkillsDir)
-}
-
-// nonEmptyDirs returns the non-empty arguments as a slice.
-func nonEmptyDirs(dirs ...string) []string {
-	out := make([]string, 0, len(dirs))
-	for _, d := range dirs {
-		if d != "" {
-			out = append(out, d)
-		}
-	}
-	return out
+	return adapter.NonEmptyDirs(p.ConfigDir, p.ClaudeSkillsDir)
 }
