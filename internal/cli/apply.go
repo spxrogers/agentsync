@@ -27,6 +27,7 @@ func newApplyCmd() *cobra.Command {
 		dryRun      bool
 		scopeFlag   string
 		projectFlag string
+		noGitBackup bool
 	)
 	cmd := &cobra.Command{
 		Use:   "apply",
@@ -39,22 +40,23 @@ func newApplyCmd() *cobra.Command {
 			// concurrent `status` / `diff` / other dry-runs behind a long
 			// real apply.
 			if dryRun {
-				return applyRun(cmd, home, dryRun, scopeFlag, projectFlag)
+				return applyRun(cmd, home, dryRun, scopeFlag, projectFlag, noGitBackup)
 			}
 			return withGlobalLock(home, func() error {
-				return applyRun(cmd, home, dryRun, scopeFlag, projectFlag)
+				return applyRun(cmd, home, dryRun, scopeFlag, projectFlag, noGitBackup)
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "compute plan without writing destinations")
 	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
 	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+	cmd.Flags().BoolVar(&noGitBackup, "no-git-backup", false, "skip destination git versioning/checkpoint for this run (CI/scripting); does not modify agentsync.toml")
 	return cmd
 }
 
 // applyRun is the lock-protected body of the apply command. It is split
 // out from newApplyCmd so the lock acquisition lives in one obvious place.
-func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFlag string) error {
+func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFlag string, noGitBackup bool) error {
 	p, err := newPrinter(cmd)
 	if err != nil {
 		return err
@@ -220,6 +222,15 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	// Bound backup growth (each is a verbatim, possibly-secret-bearing copy
 	// of a pre-existing native file). Best-effort; never fails the apply.
 	_ = render.PruneBackups(home, render.DefaultBackupKeep)
+
+	// Destination git backup (issue #118): checkpoint the user-scope agent dirs we
+	// just wrote into their own local-only git repos, so a bad apply is an
+	// `agentsync revert` away. Never pushed. Best-effort — a git failure here must
+	// not fail an apply whose files are already written and state already saved.
+	if err := runDestinationGitBackup(cmd, p, reg, agents, sc, projectRoot, home,
+		c.Config.DestinationGitBackup, written, noGitBackup); err != nil {
+		fmt.Fprintf(p.Err, "%s destination git backup: %v\n", p.Yellow("agentsync:"), err)
+	}
 
 	w := p.Out
 	// Report a clean no-op distinctly from real work: when every destination
