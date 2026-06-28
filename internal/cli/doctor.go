@@ -232,28 +232,24 @@ func checkDestinationGitBackup(p *ui.Printer, cfg source.DestinationGitBackupCon
 		warnCheck(p, "mode       ", "off (rendered destination dirs are not versioned)")
 	case source.GitBackupModeOn:
 		okCheck(p, "mode       ", "on")
-	default:
+	case source.GitBackupModePrompt:
 		okCheck(p, "mode       ", "prompt (asks on first apply to an untracked dir)")
+	default:
+		warnCheck(p, "mode       ", fmt.Sprintf("unknown value %q — use \"prompt\", \"on\", or \"off\"", cfg.Mode))
 	}
 
+	// Report per VERSION ROOT (deduped/de-nested across all agents), since a shared
+	// dir like ~/.agents/skills belongs to several agents but is one repo.
 	reg := registryFactory()
-	for _, name := range reg.Names() {
-		vh, ok := reg.Lookup(name).(adapter.VersionedHome)
-		if !ok {
-			continue // breadth tier abstains
-		}
-		dir, ok := vh.HomeDir(adapter.ScopeUser, "")
-		if !ok || dir == "" {
-			continue
-		}
-		if _, err := os.Stat(dir); err != nil {
+	for _, root := range enabledVersionRoots(reg, reg.Names(), adapter.ScopeUser, "") {
+		if _, err := os.Stat(root); err != nil {
 			continue // dir not created yet — nothing to report
 		}
-		st, err := agit.Detect(dir)
+		st, err := agit.Detect(root)
 		if err != nil {
 			continue
 		}
-		label := fmt.Sprintf("%-10s ", name)
+		label := root + " — "
 		if st == agit.StateAgentsyncOwned {
 			okCheck(p, label, st.String())
 		} else {

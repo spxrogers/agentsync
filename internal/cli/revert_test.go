@@ -148,6 +148,50 @@ func TestRevert_Errors(t *testing.T) {
 	})
 }
 
+// TestRevert_PreservesUncommittedEdits is the regression for the data-loss finding:
+// a hand-edit to a tracked file after the last apply must NOT be silently destroyed
+// by revert's hard reset. revert snapshots it first, so it stays recoverable.
+func TestRevert_PreservesUncommittedEdits(t *testing.T) {
+	tmp, env, destSkill := setupGitBackedClaude(t)
+	claude := filepath.Join(tmp, ".claude")
+
+	// Hand-edit the rendered skill after the last apply (uncommitted drift).
+	if err := os.WriteFile(destSkill, []byte("HAND-EDITED-CONTENT"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "revert", "claude")
+	if err != nil {
+		t.Fatalf("revert: %v\n%s", err, out)
+	}
+	// The revert happened (skill restored to the v1 checkpoint)...
+	if b, _ := os.ReadFile(destSkill); !strings.Contains(string(b), "v1") {
+		t.Fatalf("revert should restore v1:\n%s", b)
+	}
+	// ...and the hand-edit was preserved as a snapshot, not lost.
+	if !strings.Contains(out, "preserved uncommitted changes") {
+		t.Errorf("expected a snapshot notice, got:\n%s", out)
+	}
+	repo, _ := agit.Open(claude)
+	cps, _ := repo.Log(0)
+	var snap string
+	for _, c := range cps {
+		if strings.Contains(c.Subject, "snapshot uncommitted changes") {
+			snap = c.Hash
+		}
+	}
+	if snap == "" {
+		t.Fatal("no snapshot commit recorded; the hand-edit was lost")
+	}
+	// Recoverable: reverting to the snapshot restores the hand-edit verbatim.
+	if out, err := runCLI(t, env, "revert", "claude", "--to", snap); err != nil {
+		t.Fatalf("revert --to snapshot: %v\n%s", err, out)
+	}
+	if b, _ := os.ReadFile(destSkill); string(b) != "HAND-EDITED-CONTENT" {
+		t.Fatalf("hand-edit not recoverable from the snapshot: %q", b)
+	}
+}
+
 func TestRevert_All(t *testing.T) {
 	_, env, destSkill := setupGitBackedClaude(t)
 	if out, err := runCLI(t, env, "revert", "--all"); err != nil {

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/spxrogers/agentsync/internal/testenv"
@@ -32,12 +33,14 @@ func readFile(t *testing.T, dir, rel string) string {
 	return string(b)
 }
 
-// commitFile writes rel then commits it through the agentsync API, returning the
-// new hash.
+// commitFile writes rel, stages it, and commits, returning the new hash.
 func commitFile(t *testing.T, r *Repo, dir, rel, content, msg string) string {
 	t.Helper()
 	writeFile(t, dir, rel, content)
-	h, err := r.Commit([]string{rel}, msg, DefaultIdentity)
+	if err := r.Stage([]string{rel}); err != nil {
+		t.Fatalf("stage %s: %v", rel, err)
+	}
+	h, err := r.CommitStaged(msg, DefaultIdentity)
 	if err != nil {
 		t.Fatalf("commit %s: %v", rel, err)
 	}
@@ -179,7 +182,10 @@ func TestCommit(t *testing.T) {
 	}
 
 	// No change → no new checkpoint.
-	h3, err := r.Commit([]string{"settings.json"}, "noop", DefaultIdentity)
+	if err := r.Stage([]string{"settings.json"}); err != nil {
+		t.Fatal(err)
+	}
+	h3, err := r.CommitStaged("noop", DefaultIdentity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,6 +267,125 @@ func TestLogAndResolve(t *testing.T) {
 	}
 	if _, err := r.Resolve("deadbeefdeadbeef"); err == nil {
 		t.Fatal("Resolve of a bogus rev should error")
+	}
+}
+
+// inHead reports whether rel is present in the repo's HEAD tree.
+func inHead(t *testing.T, dir, rel string) bool {
+	t.Helper()
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = tree.File(rel)
+	return err == nil
+}
+
+func TestSnapshotDirtyTrackedAndIsClean(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "a.txt", "v1", "first")
+
+	if clean, _ := r.IsClean(); !clean {
+		t.Fatal("freshly committed worktree should be clean")
+	}
+
+	// Hand-edit a tracked file + drop an untracked user file.
+	writeFile(t, dir, "a.txt", "hand-edited")
+	writeFile(t, dir, "user-scratch.txt", "mine")
+
+	if clean, _ := r.IsClean(); clean {
+		t.Fatal("a modified tracked file should make IsClean false")
+	}
+
+	snap, err := r.SnapshotDirtyTracked("snapshot", DefaultIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap == "" {
+		t.Fatal("SnapshotDirtyTracked should have committed the tracked edit")
+	}
+	// The edit is now preserved in history (recoverable), worktree clean of TRACKED
+	// changes; the untracked user file is untouched and uncommitted.
+	if clean, _ := r.IsClean(); !clean {
+		t.Fatal("after snapshot, tracked changes should be clean")
+	}
+	if got := readFile(t, dir, "a.txt"); got != "hand-edited" {
+		t.Fatalf("snapshot lost the edit: a.txt = %q", got)
+	}
+	if inHead(t, dir, "user-scratch.txt") {
+		t.Fatal("untracked user file must NOT be committed by the snapshot")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "user-scratch.txt")); err != nil {
+		t.Fatalf("untracked user file disturbed: %v", err)
+	}
+
+	// Nothing dirty → no-op.
+	again, err := r.SnapshotDirtyTracked("noop", DefaultIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != "" {
+		t.Fatalf("snapshot of a clean tree returned %q, want empty", again)
+	}
+	// An untracked-only worktree is still "clean" for our purposes.
+	writeFile(t, dir, "another-scratch.txt", "also mine")
+	if clean, _ := r.IsClean(); !clean {
+		t.Fatal("untracked-only changes should still count as clean")
+	}
+}
+
+func TestHasMultipleCheckpoints(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "a.txt", "1", "c1")
+	if multi, _ := r.HasMultipleCheckpoints(); multi {
+		t.Fatal("one commit should not be multiple checkpoints")
+	}
+	commitFile(t, r, dir, "a.txt", "2", "c2")
+	if multi, _ := r.HasMultipleCheckpoints(); !multi {
+		t.Fatal("two commits should be multiple checkpoints")
+	}
+}
+
+func TestNowSeamPinsCommitTime(t *testing.T) {
+	testenv.RequireContainer(t)
+	orig := now
+	defer func() { now = orig }()
+	fixed := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	now = func() time.Time { return fixed }
+
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "a.txt", "1", "c1")
+	repo, _ := gogit.PlainOpen(dir)
+	ref, _ := repo.Head()
+	c, _ := repo.CommitObject(ref.Hash())
+	if !c.Author.When.Equal(fixed) {
+		t.Fatalf("commit time = %v, want pinned %v", c.Author.When, fixed)
 	}
 }
 

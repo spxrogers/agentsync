@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -14,6 +16,19 @@ import (
 	"github.com/spxrogers/agentsync/internal/testenv"
 	"github.com/spxrogers/agentsync/internal/ui"
 )
+
+// TestPromptInitGitBackup_NonInteractive pins the headless "never block" guarantee:
+// with a non-terminal stdin the prompt returns promptUnavailable rather than
+// reading (which would hang a CI run). Even though a "y" is queued, it is ignored.
+func TestPromptInitGitBackup_NonInteractive(t *testing.T) {
+	cmd := &cobra.Command{Use: "apply"}
+	cmd.SetIn(strings.NewReader("y\n")) // a *strings.Reader is not an *os.File terminal
+	cmd.SetOut(io.Discard)
+	p := ui.New(io.Discard, io.Discard, ui.ColorNever)
+	if got := promptInitGitBackup(cmd, p, "/some/dir"); got != promptUnavailable {
+		t.Fatalf("non-interactive prompt = %v, want promptUnavailable", got)
+	}
+}
 
 // tracked reports whether rel is in the repo's HEAD tree.
 func tracked(t *testing.T, dir, rel string) bool {

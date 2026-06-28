@@ -2,6 +2,7 @@ package git
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -78,14 +79,68 @@ func (r *Repo) CommitStaged(message string, id Identity) (string, error) {
 	return h.String(), nil
 }
 
-// Commit is the convenience that stages exactly relPaths and commits them. Returns
-// ("", nil) when nothing was staged. (The apply path composes Stage +
-// StageTrackedDeletions + CommitStaged instead, to also capture deletions.)
-func (r *Repo) Commit(relPaths []string, message string, id Identity) (string, error) {
-	if err := r.Stage(relPaths); err != nil {
-		return "", err
+// SnapshotDirtyTracked commits any uncommitted changes to already-TRACKED files
+// (modifications and deletions) as a safety checkpoint, so a subsequent
+// destructive operation (notably revert's hard reset) cannot lose them. Untracked
+// files — the user's own scratch files — are never touched. Returns the snapshot
+// commit hash, or ("", nil) when the worktree has no tracked changes. This is what
+// keeps the append-only promise true of the WORKTREE, not just of history.
+func (r *Repo) SnapshotDirtyTracked(message string, id Identity) (string, error) {
+	wt, err := r.repo.Worktree()
+	if err != nil {
+		return "", fmt.Errorf("worktree for %s: %w", r.dir, err)
+	}
+	st, err := wt.Status()
+	if err != nil {
+		return "", fmt.Errorf("git status in %s: %w", r.dir, err)
+	}
+	var dirty []string
+	for path, fs := range st {
+		if isUntracked(fs) {
+			continue // the user's own files — never snapshot or touch them
+		}
+		if fs.Worktree != gogit.Unmodified || fs.Staging != gogit.Unmodified {
+			dirty = append(dirty, path)
+		}
+	}
+	if len(dirty) == 0 {
+		return "", nil
+	}
+	sort.Strings(dirty)
+	for _, p := range dirty {
+		if _, err := wt.Add(p); err != nil {
+			return "", fmt.Errorf("git add %s: %w", p, err)
+		}
 	}
 	return r.CommitStaged(message, id)
+}
+
+// IsClean reports whether the worktree has no uncommitted changes to TRACKED files
+// (untracked files are ignored — agentsync never commits them).
+func (r *Repo) IsClean() (bool, error) {
+	wt, err := r.repo.Worktree()
+	if err != nil {
+		return false, fmt.Errorf("worktree for %s: %w", r.dir, err)
+	}
+	st, err := wt.Status()
+	if err != nil {
+		return false, fmt.Errorf("git status in %s: %w", r.dir, err)
+	}
+	for _, fs := range st {
+		if isUntracked(fs) {
+			continue
+		}
+		if fs.Worktree != gogit.Unmodified || fs.Staging != gogit.Unmodified {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// isUntracked reports whether a status entry is a purely-untracked file (go-git
+// marks both columns Untracked for these).
+func isUntracked(fs *gogit.FileStatus) bool {
+	return fs.Worktree == gogit.Untracked && fs.Staging == gogit.Untracked
 }
 
 // signature builds the object.Signature for a checkpoint commit.

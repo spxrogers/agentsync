@@ -253,9 +253,11 @@ agentsync revert --all --dry-run     # preview reverting every managed dir
 ```
 
 `revert` is **append-only** — it records a new commit rather than rewriting
-history, so the bad apply stays in the log and the revert is itself revertible. It
-moves only the *destination*, so afterwards it reminds you to **reconcile** (or fix
-the canonical source) before the next `apply` re-renders over it.
+history, so the bad apply stays in the log and the revert is itself revertible. If
+you hand-edited a tracked file after the last apply, revert snapshots that edit
+into history first, so **nothing is lost** (recover it with `revert --to <snapshot>`).
+It moves only the *destination*, so afterwards it reminds you to **reconcile** (or
+fix the canonical source) before the next `apply` re-renders over it.
 
 The first apply to an untracked dir **asks** before initializing the repo
 (opt-out). Answer once and it's remembered in `agentsync.toml`:
@@ -270,14 +272,20 @@ mode = "on"          # "prompt" (default) | "on" | "off"
 `apply --no-git-backup` skips it for one run (CI/scripting) without touching
 config, and `agentsync doctor` shows the current mode and per-dir status.
 
+The unit is the **directory**, not the agent: each agent's config dir plus any
+shared cross-agent dir it writes (e.g. `~/.agents/skills`, which Codex and several
+agents share) is versioned — shared dirs are de-duplicated to a single repo, and a
+dir nested under another (like `~/.claude/skills` under `~/.claude`) is folded into
+the parent, so there's never a repo inside a repo.
+
 These repos are **never pushed**. The rendered files they version contain secrets
 resolved to **cleartext** (unlike the canonical source, which keeps `${secret:…}`
 references), so the history can hold secrets — which is fine precisely because it
 stays local. The thing you commit and push is still `~/.agentsync/`, references
 only. A destination dir you already keep under your own git (e.g. `~/.claude` in a
-dotfiles repo) is detected and left untouched. Coverage is the nine deep adapters;
-the breadth tier's scattered/shared dirs are not versioned (they keep the existing
-`.state/backups` safety net).
+dotfiles repo) is detected and left untouched. (`~/.claude.json`, written directly
+in `$HOME`, is not versioned — agentsync never inits a repo at `$HOME`; it keeps the
+existing `.state/backups` safety net.)
 
 ---
 

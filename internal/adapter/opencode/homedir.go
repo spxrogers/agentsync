@@ -2,17 +2,26 @@ package opencode
 
 import "github.com/spxrogers/agentsync/internal/adapter"
 
-// HomeDir implements adapter.VersionedHome: the user-scope ~/.config/opencode
-// config dir is the local-only git-backup root (issue #118). Returns ("", false)
-// at project scope. (OpenCode also writes user skills under ~/.claude/skills,
-// which the Claude repo captures; nothing is lost.)
-func (a *Adapter) HomeDir(scope adapter.Scope, project string) (string, bool) {
+// VersionRoots implements adapter.VersionedDirs: ~/.config/opencode (its config
+// dir) plus ~/.claude/skills (the shared Claude skills dir OpenCode also writes
+// to). The apply tail de-nests + de-dups across adapters, so when Claude is also
+// enabled, ~/.claude/skills is captured by Claude's ~/.claude repo instead of
+// getting its own. Returns nil at project scope.
+func (a *Adapter) VersionRoots(scope adapter.Scope, project string) []string {
 	if scope != adapter.ScopeUser {
-		return "", false
+		return nil
 	}
-	dir := ResolvePaths(a.opts.TargetRoot, "", false).ConfigDir
-	if dir == "" {
-		return "", false
+	p := ResolvePaths(a.opts.TargetRoot, "", false)
+	return nonEmptyDirs(p.ConfigDir, p.ClaudeSkillsDir)
+}
+
+// nonEmptyDirs returns the non-empty arguments as a slice.
+func nonEmptyDirs(dirs ...string) []string {
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		if d != "" {
+			out = append(out, d)
+		}
 	}
-	return dir, true
+	return out
 }

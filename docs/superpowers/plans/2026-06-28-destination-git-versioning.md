@@ -5,6 +5,15 @@
 **Spec:** [`docs/superpowers/specs/2026-06-28-destination-git-versioning-design.md`](../specs/2026-06-28-destination-git-versioning-design.md)
 **PR:** [#119](https://github.com/spxrogers/agentsync/pull/119)
 
+> **Note (post-implementation):** during review the design evolved in two ways the
+> plan below predates — see the spec for the final design. (1) The optional adapter
+> extension is **`VersionedDirs.VersionRoots() []string`** (a *set* of dirs), not
+> `VersionedHome.HomeDir() (string,bool)`; **every** adapter implements it (deep +
+> breadth), and the apply tail unions/de-nests/de-dups the roots so **shared
+> cross-agent dirs like `~/.agents/skills` are versioned, deduped to one repo**.
+> (2) `revert` takes the global lock and snapshots uncommitted tracked edits before
+> its hard reset (no data loss).
+
 ---
 
 ## Goal

@@ -275,23 +275,28 @@ type PluginIngester interface {
 	IngestPlugins(scope Scope, project string) ([]NativeMarketplace, []NativePlugin, error)
 }
 
-// VersionedHome is an OPTIONAL extension to Adapter: an adapter that writes into a
-// single coherent on-disk config directory declares it so the apply tail can
-// git-init and checkpoint that directory as a local-only rollback history (issue
-// #118). An adapter with no single versionable root (e.g. noop) does not implement
-// it and is skipped.
+// VersionedDirs is an OPTIONAL extension to Adapter: an adapter that writes into
+// one or more on-disk directories declares them so the apply tail can git-init and
+// checkpoint those directories as a local-only rollback history (issue #118). An
+// adapter with no versionable directory (e.g. noop) does not implement it.
 //
-// HomeDir is READ-ONLY and user-scope-focused — it reports the directory to back
-// up; it does not widen the Render/Apply contract. At ScopeProject it MUST return
-// ("", false): project destinations live inside the user's own project repo, which
-// is left to that repo's source control. It also returns ("", false) at user scope
-// for an agent whose root is empty (e.g. an agent that only writes a single file
-// elsewhere). The dir is absolute (after AGENTSYNC_TARGET_ROOT redirection),
-// matching FileOp.Path. Note a deep agent may also write a stray top-level file
-// outside this dir (Claude's ~/.claude.json); those are intentionally NOT
-// versioned — only this dir is. See docs/architecture.md.
-type VersionedHome interface {
-	HomeDir(scope Scope, project string) (string, bool)
+// VersionRoots is READ-ONLY and user-scope-focused — it reports the directories to
+// back up; it does not widen the Render/Apply contract. The unit of versioning is
+// the DIRECTORY, not the agent: an adapter returns its own config dir PLUS any
+// SHARED cross-agent dir it writes into (e.g. Codex and several breadth agents all
+// write skills to ~/.agents/skills; OpenCode writes skills to ~/.claude/skills).
+// The apply tail unions these across all enabled adapters, drops any root nested
+// under another (no repo inside a repo), and de-duplicates — so a shared dir is
+// versioned exactly ONCE no matter how many adapters target it.
+//
+// At ScopeProject it MUST return nil: project destinations live inside the user's
+// own project repo, left to that repo's source control. Each returned path is
+// absolute (after AGENTSYNC_TARGET_ROOT redirection), matching FileOp.Path. A deep
+// agent may also write a stray top-level file outside any returned dir (Claude's
+// ~/.claude.json); those are intentionally NOT versioned — agentsync never inits a
+// repo at $HOME. See docs/architecture.md.
+type VersionedDirs interface {
+	VersionRoots(scope Scope, project string) []string
 }
 
 // WarnEmitter is an OPTIONAL extension to Adapter: an adapter that emits

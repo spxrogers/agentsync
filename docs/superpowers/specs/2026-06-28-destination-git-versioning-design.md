@@ -80,9 +80,9 @@ questions resolved up front for this spec.
 | 7 | **Leave `.state/` (incl. `.state/backups/` and its pruning) exactly as-is.** | Issue |
 | 8 | **Revert is append-only.** `revert` re-materializes files from the chosen checkpoint and records a **new** commit; history is never rewritten, so the bad apply stays auditable and the revert is itself revertible. | Q (this spec) |
 | 9 | **`agentsync revert <agent>` defaults to the last checkpoint**, with `--to <ref>`, `--all`, and `--dry-run`. | Q (this spec) |
-| 10 | **Git root = the agent's own config dir only.** Stray `$HOME`-level managed files (e.g. `~/.claude.json`) stay out of git (we never init a repo at `$HOME`) and keep relying on `.state/backups`. Documented as a known gap. | Q (this spec) |
+| 10 | **Git roots = every destination dir, incl. shared cross-agent dirs** (e.g. `~/.agents/skills`), de-duped to one repo each. Stray `$HOME`-level managed files (e.g. `~/.claude.json`) stay out of git (we never init a repo at `$HOME`) and keep relying on `.state/backups`. (Revised from "agent's own dir only" per maintainer directive.) | Q + maintainer |
 | 11 | **Dedicated agentsync commit identity** (`agentsync <agentsync@localhost>`), overridable via `[destination_directory_git_backup]`. Works even when no global git identity is set. | Q (this spec) |
-| 12 | **Git root via the optional `VersionedHome` adapter extension** — adapters declare their versionable config dir; `noop` abstains. | Review #119 |
+| 12 | **Git roots via the optional `VersionedDirs` adapter extension** — every adapter declares the SET of dirs it writes (config dir + shared dirs); the apply tail unions/de-nests/de-dups them so a shared dir like `~/.agents/skills` is one repo. (Evolved from "config dir only" per maintainer directive to version shared dirs.) | Review #119 + maintainer |
 | 13 | **CI/scripting bypass flag = `apply --no-git-backup`.** | Review #119 |
 | 14 | **Config table = `[destination_directory_git_backup]`, `mode = "prompt" \| "on" \| "off"`** (default `prompt`). | Review #119 |
 | 15 | **No `agentsync git` command — config-edit only; `agentsync doctor` surfaces status read-only.** | Review #119 |
@@ -146,55 +146,51 @@ agentsync revert <agent> [--to <ref>] [--all] [--dry-run]
 
 ### Commit scope & git root
 
-The unit of versioning is **the agent's own config directory at user scope**.
+> **Updated during implementation (per maintainer directive):** the unit of
+> versioning is the **destination directory**, and **shared cross-agent dirs
+> (e.g. `~/.agents/skills`) ARE versioned** — deduped to a single repo. This
+> supersedes the earlier "agent's own config dir only / breadth tier abstains"
+> framing below.
 
-- **Git root resolution — `VersionedHome` adapter extension (decided, PR #119).**
-  Each adapter already resolves its own destination paths via a per-adapter
-  `ResolvePaths` returning an adapter-specific `Paths` struct (e.g. Cursor's
-  `Paths.ConfigDir = ~/.cursor`). There is no shared accessor on the `Adapter`
-  interface today, so we add a small **optional extension interface** (mirroring
-  the existing `PluginIngester` / `WarnEmitter` idiom) so an adapter declares its
-  versionable root:
+The unit of versioning is **a destination directory at user scope** — each agent's
+config dir plus any shared dir it writes into.
+
+- **Git root resolution — `VersionedDirs` adapter extension.** Each adapter already
+  resolves its own destination paths via a per-adapter `ResolvePaths`. We add a
+  small **optional extension interface** (mirroring the `PluginIngester` /
+  `WarnEmitter` idiom) so an adapter declares the **set** of dirs it writes into:
 
   ```go
-  // VersionedHome is an OPTIONAL Adapter extension: an adapter that writes into a
-  // single coherent on-disk config dir declares it so the apply tail can git-init
-  // and checkpoint that dir. Adapters that resolve no single root (noop) don't
-  // implement it and are skipped.
-  type VersionedHome interface {
-      // HomeDir returns the absolute config-dir root to version for this scope,
-      // or ("", false) if there is none (e.g. project scope, or no coherent root).
-      HomeDir(scope Scope, project string) (string, bool)
+  // VersionedDirs is an OPTIONAL Adapter extension: an adapter declares the dirs
+  // it writes into (its config dir + any SHARED cross-agent dir) so the apply tail
+  // can git-version them. nil at project scope.
+  type VersionedDirs interface {
+      VersionRoots(scope Scope, project string) []string
   }
   ```
 
-  **Only the nine deep adapters implement it** — each has a single, coherent
-  user-scope config dir (`~/.claude`, `~/.config/opencode`, `~/.codex`, `~/.cursor`,
-  `~/.gemini`, `~/.continue`, `~/.codeium/windsurf`, `~/.roo`, `~/.cline`). The
-  data-driven `generic` breadth tier **deliberately abstains** (does not implement
-  the interface): its agents' user-scope targets are scattered across multiple
-  top-level dirs and shared cross-agent locations (e.g. `~/.agents/skills`, which
-  several breadth agents and Codex all write to), so there is no safe single dir to
-  `git init` — and `git init`-ing a shared dir like `~/.agents` would violate the
-  per-destination-repo model. Breadth-tier writes therefore keep relying on
-  `.state/backups` (the same accepted gap as stray `$HOME`-level files). This keeps
-  the core `Adapter` contract unchanged and lets non-participating adapters abstain
-  — the same optional-extension pattern as `PluginIngester`/`WarnEmitter`. The
-  decision is pinned in code by `TestVersionedHomeContract` (deep adapters expose a
-  valid dir; breadth adapters must NOT implement the interface).
+  **Every adapter implements it** (deep and breadth). Deep adapters return their
+  config dir plus their shared skill dir (Codex → `~/.codex` + `~/.agents/skills`;
+  OpenCode → `~/.config/opencode` + `~/.claude/skills`). The breadth tier derives
+  its roots from its `generic.Spec` targets. The apply tail then **unions** all
+  roots across enabled adapters, **de-nests** (drops a root nested under another —
+  `~/.claude/skills` folds into `~/.claude` — so there's never a repo inside a
+  repo), and **de-dups** (a shared dir like `~/.agents/skills`, declared by Codex
+  and several breadth agents, is one repo, checkpointed once with all its files).
+  Project scope returns nil (those dirs live in the user's own project repo).
+  Pinned by `TestVersionedDirsContract` + `TestEnabledVersionRoots_DedupAndDenest`.
 
-  *Alternative considered and rejected:* derive the root from the `written` paths
-  or keep a central agent→dir table in `internal/git`. Deriving "the config dir"
-  from a flat path set is ambiguous (`~/.claude` vs `~/.claude/skills`), and a
-  central table duplicates path knowledge the adapters already own.
+  *Alternative considered and rejected:* derive roots purely from the `written`
+  paths. The skills-dir root (`~/.agents/skills`) has no file whose parent is
+  exactly that dir (skills live at `<root>/<name>/SKILL.md`), so leaf-derivation
+  can't recover it; adapters declaring their roots is the clean answer.
 
-- **Which files get staged.** Only managed files written under that root this run
-  — i.e. `written ∩ {files under HomeDir}`. For shared files (e.g.
-  `~/.claude/settings.json`) the **whole file** is staged as written (decision #3),
-  co-located user keys included. We do not `git add -A` the whole tree, so
-  unrelated files the user dropped in the agent dir aren't swept in. (A `.git` that
-  already tracks more is the user's existing-repo case → decision #5, we don't
-  touch it.)
+- **Which files get staged.** Managed files written under each root this run, plus
+  any tracked deletions (a delete-only apply still checkpoints). For shared files
+  (e.g. `~/.claude/settings.json`) the **whole file** is staged as written
+  (decision #3), co-located user keys included. We never `git add -A`, so untracked
+  files the user dropped in the dir aren't swept in. (A `.git` that already tracks
+  more is the user's existing-repo case → decision #5, we don't touch it.)
 
 - **Stray `$HOME`-level files are out of scope (decided gap).** Claude writes
   `~/.claude/` *and* `~/.claude.json` directly in `$HOME`. We will **not** init a
@@ -446,7 +442,8 @@ capability).
 All previously-open decisions were settled in the first spec review — folded into
 the body above and the locked-decisions table (rows 12–17):
 
-1. **Git-root mechanism** → the optional `VersionedHome` adapter extension. ✅
+1. **Git-root mechanism** → the optional `VersionedDirs` adapter extension (a SET
+   of dirs per adapter, unioned/de-nested/de-duped by the apply tail). ✅
 2. **CI bypass flag name** → `apply --no-git-backup`. ✅
 3. **Config table + mode values** → `[destination_directory_git_backup]` with
    `mode = "prompt" | "on" | "off"` (the opposite of `off` is `on`). ✅

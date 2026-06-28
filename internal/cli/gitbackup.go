@@ -25,7 +25,7 @@ func runDestinationGitBackup(
 	sc adapter.Scope, projectRoot, home string,
 	cfg source.DestinationGitBackupConfig, written map[string]bool, noGitBackup bool,
 ) error {
-	if sc != adapter.ScopeUser || noGitBackup || len(written) == 0 {
+	if sc != adapter.ScopeUser || noGitBackup {
 		return nil
 	}
 	mode := cfg.EffectiveMode()
@@ -34,30 +34,17 @@ func runDestinationGitBackup(
 	}
 	id := agit.Identity{Name: cfg.AuthorName, Email: cfg.AuthorEmail}
 
-	// Deterministic order so multi-agent output is stable.
-	names := append([]string(nil), agents...)
-	sort.Strings(names)
+	// The unit of versioning is the DIRECTORY, not the agent: union every enabled
+	// agent's declared version roots, drop nested roots (no repo inside a repo), and
+	// de-dup, so a shared dir (e.g. ~/.agents/skills, written by Codex + several
+	// breadth agents) is checkpointed exactly once with all its files.
+	roots := enabledVersionRoots(reg, agents, sc, projectRoot)
 
 	hintedUnavailable := false
-	for _, name := range names {
-		ad := reg.Lookup(name)
-		if ad == nil {
-			continue
-		}
-		vh, ok := ad.(adapter.VersionedHome)
-		if !ok {
-			continue // breadth tier abstains
-		}
-		dir, ok := vh.HomeDir(sc, projectRoot)
-		if !ok || dir == "" {
-			continue
-		}
-		rels := managedRelsUnder(dir, written)
-		if len(rels) == 0 {
-			continue // this agent's dir didn't change this run
-		}
+	for _, root := range roots {
+		rels := managedRelsUnder(root, written)
 
-		st, err := agit.Detect(dir)
+		st, err := agit.Detect(root)
 		if err != nil {
 			fmt.Fprintf(p.Err, "%s git backup: %v\n", p.Yellow("agentsync:"), err)
 			continue
@@ -67,16 +54,23 @@ func runDestinationGitBackup(
 		switch st {
 		case agit.StateForeign:
 			// The user already source-controls this dir — stay out of their way.
-			fmt.Fprintf(p.Err, "%s %s is under your own source control; skipping agentsync git backup.\n",
-				p.Faint(ui.GlyphInfo), dir)
+			if len(rels) > 0 {
+				fmt.Fprintf(p.Err, "%s %s is under your own source control; skipping agentsync git backup.\n",
+					p.Faint(ui.GlyphInfo), root)
+			}
 			continue
 		case agit.StateAgentsyncOwned:
-			repo, err = agit.Open(dir)
+			// Open even when nothing was written under this root: a delete-only apply
+			// (a managed file removed, nothing added) still needs its checkpoint.
+			repo, err = agit.Open(root)
 		case agit.StateUntracked:
-			repo, err = ensureUntrackedRepo(cmd, p, dir, home, &mode, &hintedUnavailable)
+			if len(rels) == 0 {
+				continue // nothing written here and no existing repo to record into
+			}
+			repo, err = ensureUntrackedRepo(cmd, p, root, home, &mode, &hintedUnavailable)
 		}
 		if err != nil {
-			fmt.Fprintf(p.Err, "%s git backup for %s: %v\n", p.Yellow("agentsync:"), name, err)
+			fmt.Fprintf(p.Err, "%s git backup for %s: %v\n", p.Yellow("agentsync:"), root, err)
 			continue
 		}
 		if repo == nil {
@@ -90,27 +84,91 @@ func runDestinationGitBackup(
 		toStage = append(toStage, rels...)
 		toStage = append(toStage, agit.NoticeFile)
 		if err := repo.Stage(toStage); err != nil {
-			fmt.Fprintf(p.Err, "%s git backup for %s: %v\n", p.Yellow("agentsync:"), name, err)
+			fmt.Fprintf(p.Err, "%s git backup for %s: %v\n", p.Yellow("agentsync:"), root, err)
 			continue
 		}
 		deleted, err := repo.StageTrackedDeletions()
 		if err != nil {
-			fmt.Fprintf(p.Err, "%s git backup for %s: %v\n", p.Yellow("agentsync:"), name, err)
+			fmt.Fprintf(p.Err, "%s git backup for %s: %v\n", p.Yellow("agentsync:"), root, err)
 			continue
 		}
 		staged := dedupeSorted(append(toStage, deleted...))
-		msg := checkpointMessage(name, sc, staged)
+		msg := checkpointMessage(root, staged)
 		h, err := repo.CommitStaged(msg, id)
 		if err != nil {
-			fmt.Fprintf(p.Err, "%s git backup for %s: %v\n", p.Yellow("agentsync:"), name, err)
+			fmt.Fprintf(p.Err, "%s git backup for %s: %v\n", p.Yellow("agentsync:"), root, err)
 			continue
 		}
 		if h != "" {
 			fmt.Fprintf(p.Err, "%s %s\n", p.Faint(ui.GlyphInfo),
-				p.Faint(fmt.Sprintf("git backup: checkpointed %s (%s)", name, dir)))
+				p.Faint(fmt.Sprintf("git backup: checkpointed %s", root)))
 		}
 	}
 	return nil
+}
+
+// enabledVersionRoots returns the de-duplicated, de-nested, sorted set of
+// version-root directories declared by the given agents at the scope. The unit is
+// the directory: a shared dir declared by several agents appears once, and a dir
+// nested under another (e.g. ~/.claude/skills under ~/.claude) is dropped in favor
+// of the ancestor — so agentsync never creates a repo inside another repo.
+func enabledVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Scope, project string) []string {
+	seen := map[string]bool{}
+	var all []string
+	for _, name := range agents {
+		ad := reg.Lookup(name)
+		if ad == nil {
+			continue
+		}
+		vd, ok := ad.(adapter.VersionedDirs)
+		if !ok {
+			continue
+		}
+		for _, r := range vd.VersionRoots(sc, project) {
+			if r == "" {
+				continue
+			}
+			c := filepath.Clean(r)
+			if !seen[c] {
+				seen[c] = true
+				all = append(all, c)
+			}
+		}
+	}
+	return denestRoots(all)
+}
+
+// denestRoots returns roots sorted, with any root nested under another removed.
+// Lexical sort places an ancestor before its descendants (the ancestor path is a
+// prefix), so a single forward pass keeping non-nested roots is sufficient.
+func denestRoots(roots []string) []string {
+	sort.Strings(roots)
+	var kept []string
+	for _, r := range roots {
+		nested := false
+		for _, k := range kept {
+			if isUnderDir(r, k) {
+				nested = true
+				break
+			}
+		}
+		if !nested {
+			kept = append(kept, r)
+		}
+	}
+	return kept
+}
+
+// isUnderDir reports whether child is the same as, or nested under, parent.
+func isUnderDir(child, parent string) bool {
+	if child == parent {
+		return true
+	}
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // ensureUntrackedRepo returns a repo to commit into for an untracked dir, honoring
@@ -188,10 +246,10 @@ func dedupeSorted(in []string) []string {
 	return out
 }
 
-// checkpointMessage renders the per-apply commit message.
-func checkpointMessage(agent string, sc adapter.Scope, staged []string) string {
-	return fmt.Sprintf("agentsync apply: %s (%s) — %d file(s)\n\n%s",
-		agent, sc, len(staged), strings.Join(staged, "\n"))
+// checkpointMessage renders the per-apply commit message for a version root.
+func checkpointMessage(root string, staged []string) string {
+	return fmt.Sprintf("agentsync apply: %s — %d file(s)\n\n%s",
+		root, len(staged), strings.Join(staged, "\n"))
 }
 
 // promptResult is the outcome of the opt-out git-init prompt.

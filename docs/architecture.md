@@ -363,19 +363,27 @@ Key stages:
    foreign-collision backups (`internal/render`, `internal/iox`).
 8. **Record** new hashes in `targets.json` (`internal/state`) and print the
    translation report.
-9. **Git-backup** (issue #118) — for a user-scope apply, checkpoint each deep
-   agent's destination dir into its own **local-only** git repo
-   (`internal/cli/gitbackup.go` → `internal/git`). The managed-file set is the
-   `written` set from step 7, grouped per agent by the optional
-   `adapter.VersionedHome` extension (each deep adapter exposes its single config
-   dir; the breadth tier abstains, with no safe single dir to init). This step is
-   **best-effort** (the files are already written and state already saved, so a git
-   failure never fails the apply), **opt-out** (the
-   `[destination_directory_git_backup]` mode — `prompt`/`on`/`off` — plus the
-   `apply --no-git-backup` per-run bypass), and **never pushes**: `internal/git`
-   exposes no remote/push surface at all (a source-scanning guard test,
-   `TestNoPushSurface`, keeps it that way). `agentsync revert` rolls a dir back to a
-   prior checkpoint append-only. `.state/` is **untouched** by this step — the two
+9. **Git-backup** (issue #118) — for a user-scope apply, checkpoint each destination
+   **directory** into its own **local-only** git repo (`internal/cli/gitbackup.go`
+   → `internal/git`). The unit is the directory, not the agent: every enabled
+   adapter declares its version roots via the optional `adapter.VersionedDirs`
+   extension (its config dir plus any shared cross-agent dir it writes — Codex and
+   several breadth agents all target `~/.agents/skills`; OpenCode targets
+   `~/.claude/skills`). The apply tail **unions** those roots, **de-nests** them
+   (drops a root nested under another, so there's never a repo inside a repo), and
+   **de-dups** them (a shared dir is one repo, checkpointed once with all its files
+   regardless of how many agents wrote there). The managed-file set committed under
+   each root is the `written` set from step 7 plus any tracked deletions; `$HOME`-
+   level strays (Claude's `~/.claude.json`) are never versioned (agentsync never
+   inits a repo at `$HOME`). This step is **best-effort** (the files are already
+   written and state already saved, so a git failure never fails the apply),
+   **opt-out** (the `[destination_directory_git_backup]` mode — `prompt`/`on`/`off`
+   — plus the `apply --no-git-backup` per-run bypass), and **never pushes**:
+   `internal/git` exposes no remote/push surface at all (a source-scanning guard
+   test, `TestNoPushSurface`, keeps it that way). `agentsync revert` (which takes
+   the same global lock apply holds) rolls a dir back to a prior checkpoint
+   append-only, first snapshotting any uncommitted hand-edits to tracked files so
+   the rollback can't lose them. `.state/` is **untouched** by this step — the two
    are complementary (operational memory vs. user-facing rollback history).
 
 `--dry-run` runs steps 1–6, then a non-writing pass of step 7 (the writer's merge
