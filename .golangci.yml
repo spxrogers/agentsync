@@ -84,7 +84,7 @@ linters:
         linters: [forbidigo]
         text: 'iox\.AtomicWrite is reserved'
       # CLI files writing to ~/.agentsync/* (canonical source).
-      - path: '(^|/)internal/cli/(plugin|marketplace|agent|reconcile|update)\.go$'
+      - path: '(^|/)internal/cli/(plugin|marketplace|agent|gitbackup_config|reconcile|update)\.go$'
         linters: [forbidigo]
         text: 'iox\.AtomicWrite is reserved'
       # The PassThroughWriter test helper deliberately delegates to

@@ -275,6 +275,43 @@ type PluginIngester interface {
 	IngestPlugins(scope Scope, project string) ([]NativeMarketplace, []NativePlugin, error)
 }
 
+// VersionedDirs is an OPTIONAL extension to Adapter: an adapter that writes into
+// one or more on-disk directories declares them so the apply tail can git-init and
+// checkpoint those directories as a local-only rollback history (issue #118). An
+// adapter with no versionable directory (e.g. noop) does not implement it.
+//
+// VersionRoots is READ-ONLY and user-scope-focused — it reports the directories to
+// back up; it does not widen the Render/Apply contract. The unit of versioning is
+// the DIRECTORY, not the agent: an adapter returns its own config dir PLUS any
+// SHARED cross-agent dir it writes into (e.g. Codex and several breadth agents all
+// write skills to ~/.agents/skills; OpenCode writes skills to ~/.claude/skills).
+// The apply tail unions these across all enabled adapters, drops any root nested
+// under another (no repo inside a repo), and de-duplicates — so a shared dir is
+// versioned exactly ONCE no matter how many adapters target it.
+//
+// At ScopeProject it MUST return nil: project destinations live inside the user's
+// own project repo, left to that repo's source control. Each returned path is
+// absolute (after AGENTSYNC_TARGET_ROOT redirection), matching FileOp.Path. A deep
+// agent may also write a stray top-level file outside any returned dir (Claude's
+// ~/.claude.json); those are intentionally NOT versioned — agentsync never inits a
+// repo at $HOME. See docs/architecture.md.
+type VersionedDirs interface {
+	VersionRoots(scope Scope, project string) []string
+}
+
+// NonEmptyDirs returns the non-empty arguments as a slice — a small shared helper
+// for adapters assembling their VersionRoots from a Paths struct whose fields may
+// be "" at a given scope.
+func NonEmptyDirs(dirs ...string) []string {
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		if d != "" {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // WarnEmitter is an OPTIONAL extension to Adapter: an adapter that emits
 // Ingest warnings implements it to let callers redirect the stream away
 // from the default (os.Stderr). Implementors are SOURCES of warnings that

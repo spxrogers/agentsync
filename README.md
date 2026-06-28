@@ -37,6 +37,9 @@ configs quietly drift apart. agentsync fixes the fan-out:
 - **Secrets stay secret.** Reference `${secret:github.token}`; agentsync resolves
   it at apply time from an age-encrypted vault and **never** writes the cleartext
   back into your (committable) source.
+- **A bad apply is revertible.** `apply` keeps each destination dir (`~/.claude`,
+  …) in a **local-only** git history (opt-out, never pushed), so `agentsync revert`
+  rolls back to a prior checkpoint.
 
 New here? The **[User guide](docs/user-guide.md)** takes you 0→100.
 
@@ -48,6 +51,8 @@ New here? The **[User guide](docs/user-guide.md)** takes you 0→100.
     agentsync mcp add github --command npx --args "-y,@modelcontextprotocol/server-github"
     agentsync apply --dry-run    # preview what would change vs. is already synced
     agentsync apply
+    # … later, if an apply goes wrong:
+    agentsync revert claude      # roll ~/.claude back to the previous checkpoint
 
 ## Documentation
 

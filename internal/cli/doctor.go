@@ -10,6 +10,8 @@ import (
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
+	"github.com/spxrogers/agentsync/internal/adapter"
+	agit "github.com/spxrogers/agentsync/internal/git"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -73,6 +75,14 @@ func newDoctorCmd() *cobra.Command {
 			p.Section("Plugins")
 			if schemaOK {
 				checkPlugins(p, home)
+			} else {
+				fmt.Fprintln(p.Out, "  skipped (schema invalid above)")
+			}
+
+			fmt.Fprintln(p.Out, "")
+			p.Section("Destination git backup")
+			if schemaOK {
+				checkDestinationGitBackup(p, cfg.DestinationGitBackup)
 			} else {
 				fmt.Fprintln(p.Out, "  skipped (schema invalid above)")
 			}
@@ -208,6 +218,43 @@ func checkPlugins(p *ui.Printer, home string) {
 		// manual ui.Sanitize is needed here.
 		warnCheck(p, fmt.Sprintf("%-10s ", name), fmt.Sprintf("%d not in source: %s — run `agentsync import %s:plugin`",
 			len(missing), untrusted.Join(missing, ", "), name))
+	}
+}
+
+// checkDestinationGitBackup reports the destination-git-backup mode and, per
+// deep agent whose dir exists on disk, whether it is agentsync-versioned, under
+// foreign source control, or untracked. Informational only — never a failure.
+// Changing the mode is a one-line agentsync.toml edit (there is no `agentsync git`
+// command, by design — issue #118).
+func checkDestinationGitBackup(p *ui.Printer, cfg source.DestinationGitBackupConfig) {
+	switch cfg.EffectiveMode() {
+	case source.GitBackupModeOff:
+		warnCheck(p, "mode       ", "off (rendered destination dirs are not versioned)")
+	case source.GitBackupModeOn:
+		okCheck(p, "mode       ", "on")
+	case source.GitBackupModePrompt:
+		okCheck(p, "mode       ", "prompt (asks on first apply to an untracked dir)")
+	default:
+		warnCheck(p, "mode       ", fmt.Sprintf("unknown value %q — use \"prompt\", \"on\", or \"off\"", cfg.Mode))
+	}
+
+	// Report per VERSION ROOT (deduped/de-nested across all agents), since a shared
+	// dir like ~/.agents/skills belongs to several agents but is one repo.
+	reg := registryFactory()
+	for _, root := range enabledVersionRoots(reg, reg.Names(), adapter.ScopeUser, "") {
+		if _, err := os.Stat(root); err != nil {
+			continue // dir not created yet — nothing to report
+		}
+		st, err := agit.Detect(root)
+		if err != nil {
+			continue
+		}
+		label := root + " — "
+		if st == agit.StateAgentsyncOwned {
+			okCheck(p, label, st.String())
+		} else {
+			fmt.Fprintf(p.Out, "  %s %s%s\n", p.Faint(ui.GlyphInfo), label, p.Faint(st.String()))
+		}
 	}
 }
 

@@ -27,7 +27,8 @@ import { Aside } from '@astrojs/starlight/components';
 | `plugin install\|upgrade\|enable\|disable\|remove\|list <id>` | Manage plugins. | `install <id[@marketplace]>` |
 | `secrets set\|get\|edit <key>` | Manage age-encrypted secrets. | `set --stdin` |
 | `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
-| `apply` | Render source → write agent configs (offline). | `--dry-run --scope --project` |
+| `apply` | Render source → write agent configs (offline). Git-versions each destination dir (opt-out). | `--dry-run --scope --project --no-git-backup` |
+| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (local-only git history). | `--to --all --dry-run` |
 | `status` | Summarize drift / pending across agents (skill dirs collapse by default). | `--agents --verbose --json --scope --project` |
 | `diff [<path>]` | Show pending / drift changes; secrets redacted. | `--scope --project` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
@@ -142,6 +143,39 @@ as a no-op rather than a list of pending writes.
 ```bash
 agentsync apply --dry-run
 agentsync apply
+```
+
+**Destination git backup.** After a successful user-scope apply that changes
+managed files, `apply` keeps each agent's destination dir (`~/.claude`, `~/.codex`,
+…) in its own **local-only** git repo and records a checkpoint commit, so a bad
+apply is one `agentsync revert` away. The first apply to an untracked dir
+**prompts** to enable this (opt-out); answer once and it's remembered in
+`[destination_directory_git_backup]`. These repos are **never pushed** (the history
+may hold cleartext secrets, like the files it versions — which is why it stays
+local). A dir already under your own source control is left untouched. Pass
+`--no-git-backup` to skip it for one run (CI/scripting) without touching config.
+The `[destination_directory_git_backup]` table (`mode = "prompt" | "on" | "off"`,
+optional `author_name`/`author_email`) controls the default; `agentsync doctor`
+shows the current mode and per-dir status. See `agentsync revert` below.
+
+### `revert <agent>`
+Rolls an agent's destination dir back to a prior apply checkpoint from its
+local-only git history — recovering from a bad apply. It is **append-only**: it
+records a new commit, so the history is never rewritten and the revert is itself
+revertible. By default it undoes the most recent apply (restores the previous
+checkpoint); `--to <ref>` picks a specific one (a commit hash or `HEAD~2`), `--all`
+reverts every managed dir, and `--dry-run` previews the file changes without
+writing.
+
+revert moves only the **destination**. The next `apply` re-renders from the
+canonical source and would overwrite the reverted state, so revert prints a notice
+telling you to reconcile (`agentsync reconcile` / `import`) or fix the canonical
+source first. Only agentsync-managed (git-backed) user-scope dirs can be reverted.
+
+```bash
+agentsync revert claude              # undo the most recent apply to ~/.claude
+agentsync revert claude --to HEAD~3  # roll back further
+agentsync revert --all --dry-run     # preview reverting every managed dir
 ```
 
 ### `status`

@@ -143,6 +143,20 @@ detection possible), the apply lock, the two-phase write staging dir, first-appl
 backups, and the marketplace/plugin cache. Keys are stored `${HOME}`-relative so
 state is portable across machines.
 
+### Destination git backup (rollback history)
+Optionally, each **user-scope destination dir** (`~/.claude`, `~/.codex`, …) gets
+its **own local-only git repo**: `apply` records a checkpoint commit after every
+run that changes managed files there, and `agentsync revert` rolls a dir back to a
+prior checkpoint. This is distinct from `.state/` — `.state/` is agentsync's
+operational memory (hashes for drift, narrow capped foreign-collision backups),
+whereas these repos are a durable, browsable, revertible rollback history for the
+*rendered destination files*. They are governed by the
+`[destination_directory_git_backup]` table and are **never pushed** — the rendered
+files hold secrets in cleartext, so the history stays local (the canonical source
+you push still carries only `${secret:…}` references). See `apply`/`revert` in the
+[user guide](user-guide.md#command-reference) and
+[architecture §4](architecture.md).
+
 ### Marketplace / Plugin / Projection
 A **marketplace** is a registry of plugins (Claude's marketplace format). A
 **plugin** is a bag of components — MCP servers, skills, subagents, commands,

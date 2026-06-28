@@ -240,6 +240,57 @@ auto-resolves changes that can't lose work).
 
 ---
 
+## Rolling back a bad apply
+
+`apply` can keep each user-scope destination dir (`~/.claude`, `~/.codex`, …) in
+its **own local-only git repo**, recording a checkpoint commit after every apply
+that changes managed files there. If an apply ever goes wrong, roll it back:
+
+```bash
+agentsync revert claude              # undo the most recent apply to ~/.claude
+agentsync revert claude --to HEAD~3  # roll back to an older checkpoint
+agentsync revert --all --dry-run     # preview reverting every managed dir
+```
+
+`revert` is **append-only** — it records a new commit rather than rewriting
+history, so the bad apply stays in the log and the revert is itself revertible. If
+you hand-edited a tracked file after the last apply, revert snapshots that edit
+into history first, so **nothing is lost** (recover it with `revert --to <snapshot>`).
+It moves only the *destination*, so afterwards it reminds you to **reconcile** (or
+fix the canonical source) before the next `apply` re-renders over it.
+
+The first apply to an untracked dir **asks** before initializing the repo
+(opt-out). Answer once and it's remembered in `agentsync.toml`:
+
+```toml
+[destination_directory_git_backup]
+mode = "on"          # "prompt" (default) | "on" | "off"
+# author_name  = "agentsync"      # optional commit-identity overrides
+# author_email = "agentsync@localhost"
+```
+
+`apply --no-git-backup` skips it for one run (CI/scripting) without touching
+config, and `agentsync doctor` shows the current mode and per-dir status.
+
+The unit is the **directory**, not the agent: each agent's config dir plus any
+shared cross-agent dir it writes (e.g. `~/.agents/skills`, which Codex and several
+agents share) is versioned — shared dirs are de-duplicated to a single repo, and a
+dir nested under another (like `~/.claude/skills` under `~/.claude`) is folded into
+the parent, so there's never a repo inside a repo. Because a shared dir is one
+repo, `revert <agent>` of a shared dir rolls back *every* agent's files in it —
+revert warns you when that happens.
+
+These repos are **never pushed**. The rendered files they version contain secrets
+resolved to **cleartext** (unlike the canonical source, which keeps `${secret:…}`
+references), so the history can hold secrets — which is fine precisely because it
+stays local. The thing you commit and push is still `~/.agentsync/`, references
+only. A destination dir you already keep under your own git (e.g. `~/.claude` in a
+dotfiles repo) is detected and left untouched. (`~/.claude.json`, written directly
+in `$HOME`, is not versioned — agentsync never inits a repo at `$HOME`; it keeps the
+existing `.state/backups` safety net.)
+
+---
+
 ## Building your config
 
 `~/.agentsync/` is just files. Use the CLI or edit them in `$EDITOR` — both are
@@ -247,7 +298,7 @@ first-class. Layout:
 
 ```
 ~/.agentsync/
-├── agentsync.toml            # agents, update defaults, secrets backend, [memory] banner
+├── agentsync.toml            # agents, update defaults, secrets backend, [memory] banner, [destination_directory_git_backup]
 ├── mcp/<server>.toml         # one MCP server per file
 ├── lsp/<server>.toml         # one LSP server per file
 ├── agents/<name>.md          # one subagent per file
@@ -631,7 +682,8 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `plugin install\|upgrade\|enable\|disable\|remove\|list <id>` | Manage plugins. | `install <id[@marketplace]>` |
 | `secrets set\|get\|edit <key>` | Manage age-encrypted secrets. | `set --stdin` |
 | `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
-| `apply` | Render source → write agent configs (offline). | `--dry-run --scope --project` |
+| `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. | `--dry-run --scope --project --no-git-backup` |
+| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. | `--to --all --dry-run` |
 | `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. Skill directories collapse to one summary row by default (`--verbose` expands them). | `--agents --verbose --scope --project --json` |
 | `diff [<path>]` | Show pending/drift changes; secrets redacted. | `--scope --project --json` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
