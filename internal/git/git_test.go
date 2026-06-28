@@ -241,6 +241,38 @@ func TestInit(t *testing.T) {
 	}
 }
 
+// TestInitRefusesExistingRepo pins Init's documented invariant: it errors rather
+// than re-initializing when a repo already exists at dir — whether that repo is the
+// user's own (foreign) or one agentsync created earlier. Callers gate on Detect ==
+// StateUntracked first, but Init must fail closed if that gate is ever bypassed.
+func TestInitRefusesExistingRepo(t *testing.T) {
+	testenv.RequireContainer(t)
+
+	t.Run("over a foreign repo", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := gogit.PlainInit(dir, false); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Init(dir); err == nil {
+			t.Fatal("Init over a pre-existing foreign repo should error, got nil")
+		}
+		// The foreign repo must be left untouched — no marker stamped onto it.
+		if owned, _ := OwnsExactly(dir); owned {
+			t.Fatal("a failed Init must not stamp the agentsync marker onto a foreign repo")
+		}
+	})
+
+	t.Run("over an agentsync-owned repo", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := Init(dir); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Init(dir); err == nil {
+			t.Fatal("Init over an existing agentsync repo should error, got nil")
+		}
+	})
+}
+
 func TestCommit(t *testing.T) {
 	testenv.RequireContainer(t)
 	dir := t.TempDir()

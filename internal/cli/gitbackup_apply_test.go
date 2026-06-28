@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	agit "github.com/spxrogers/agentsync/internal/git"
 )
 
@@ -205,6 +207,124 @@ func TestApply_GitBackupGuardsAgainstNestedRepo(t *testing.T) {
 	// The child repo is intact — no corruption.
 	if st, _ := agit.Detect(claudeSkills); st != agit.StateAgentsyncOwned {
 		t.Fatalf("child repo %s damaged, state=%v", claudeSkills, st)
+	}
+}
+
+// headCount returns the number of commits reachable from HEAD, or 0 if HEAD is
+// unborn (a freshly `git init`'d repo with no commits).
+func headCount(t *testing.T, dir string) int {
+	t.Helper()
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatalf("open %s: %v", dir, err)
+	}
+	ref, err := repo.Head()
+	if err != nil {
+		return 0 // unborn HEAD: no commits yet
+	}
+	iter, err := repo.Log(&gogit.LogOptions{From: ref.Hash()})
+	if err != nil {
+		t.Fatalf("log %s: %v", dir, err)
+	}
+	n := 0
+	_ = iter.ForEach(func(*object.Commit) error { n++; return nil })
+	return n
+}
+
+// TestApply_GitBackupSkipsForeignRepoAtDir is the regression for the user's vector:
+// when ~/.claude is ALREADY under the user's own source control (a foreign `.git`
+// exactly at the dir), apply must NOT initialize an agentsync repo, must NOT commit
+// into the user's history, and must say so. agentsync only ever auto-commits into
+// repos it created (marker-stamped) — never someone else's.
+func TestApply_GitBackupSkipsForeignRepoAtDir(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+	writeSkillSource(t, tmp, "demo", "d")
+
+	// The user already source-controls ~/.claude: a foreign (unmarked) repo at the dir.
+	claude := filepath.Join(tmp, ".claude")
+	if err := os.MkdirAll(claude, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gogit.PlainInit(claude, false); err != nil {
+		t.Fatal(err)
+	}
+	if commits := headCount(t, claude); commits != 0 {
+		t.Fatalf("precondition: fresh foreign repo should have 0 commits, got %d", commits)
+	}
+
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	// apply still rendered the skill — versioning being skipped must not block apply.
+	if _, err := os.Stat(filepath.Join(claude, "skills", "demo", "SKILL.md")); err != nil {
+		t.Fatalf("apply should still render the skill into the foreign dir: %v", err)
+	}
+	// The dir is still the USER's repo — agentsync neither re-inited nor claimed it.
+	st, err := agit.Detect(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st != agit.StateForeign {
+		t.Fatalf("~/.claude state = %v, want StateForeign (agentsync must not claim a user repo)", st)
+	}
+	if owned, _ := agit.OwnsExactly(claude); owned {
+		t.Fatal("agentsync must not stamp its marker onto the user's foreign repo")
+	}
+	// And it committed NOTHING into the user's history.
+	if commits := headCount(t, claude); commits != 0 {
+		t.Fatalf("agentsync committed into the user's repo: HEAD has %d commits, want 0", commits)
+	}
+	if !strings.Contains(out, "under your own source control") {
+		t.Errorf("expected a 'skipping, under your own source control' notice, got:\n%s", out)
+	}
+}
+
+// TestApply_GitBackupSkipsDirNestedInForeignRepo covers the dotfiles case: the user
+// keeps their whole home dir under git, so ~/.claude is nested inside a parent
+// foreign repo. DetectDotGit must find the parent and report StateForeign, so apply
+// neither inits a nested repo at ~/.claude nor commits into the parent.
+func TestApply_GitBackupSkipsDirNestedInForeignRepo(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+	writeSkillSource(t, tmp, "demo", "d")
+
+	// Model a dotfiles repo at $HOME: the target root itself is a foreign git repo,
+	// so every dest dir below it (~/.claude, …) is already user-source-controlled.
+	if _, err := gogit.PlainInit(tmp, false); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	claude := filepath.Join(tmp, ".claude")
+	if _, err := os.Stat(filepath.Join(claude, "skills", "demo", "SKILL.md")); err != nil {
+		t.Fatalf("apply should still render the skill: %v", err)
+	}
+	// No nested repo was created at ~/.claude (it would live inside the parent repo).
+	if _, err := os.Stat(filepath.Join(claude, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("~/.claude/.git should not exist (must not nest in the user's repo); err=%v", err)
+	}
+	if st, _ := agit.Detect(claude); st != agit.StateForeign {
+		t.Fatalf("~/.claude state = %v, want StateForeign via the parent repo", st)
+	}
+	// Nothing was committed into the user's parent repo.
+	if commits := headCount(t, tmp); commits != 0 {
+		t.Fatalf("agentsync committed into the user's parent repo: HEAD has %d commits, want 0", commits)
+	}
+	if !strings.Contains(out, "under your own source control") {
+		t.Errorf("expected a 'skipping, under your own source control' notice, got:\n%s", out)
 	}
 }
 
