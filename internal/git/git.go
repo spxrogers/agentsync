@@ -150,6 +150,8 @@ func OwnsExactly(dir string) (bool, error) {
 // earlier run before a parent-dir agent was enabled). Short-circuits on the first
 // hit; a missing dir is reported as false.
 func HasNestedRepoBelow(dir string) (bool, error) {
+	dir = filepath.Clean(dir) // self-defend: the dir's-own-.git exclusion below
+	// compares against `dir`, so it must be clean (no trailing slash / "." / "..").
 	found := false
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
