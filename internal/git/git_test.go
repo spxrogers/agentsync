@@ -110,6 +110,99 @@ func TestDetect(t *testing.T) {
 	})
 }
 
+func TestOwnsExactly(t *testing.T) {
+	testenv.RequireContainer(t)
+
+	t.Run("no repo", func(t *testing.T) {
+		got, err := OwnsExactly(t.TempDir())
+		if err != nil || got {
+			t.Fatalf("OwnsExactly(empty) = (%v, %v), want (false, nil)", got, err)
+		}
+	})
+	t.Run("agentsync repo at dir", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := Init(dir); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := OwnsExactly(dir); !got {
+			t.Fatal("OwnsExactly should be true at an agentsync repo root")
+		}
+	})
+	t.Run("foreign repo at dir", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := gogit.PlainInit(dir, false); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := OwnsExactly(dir); got {
+			t.Fatal("OwnsExactly must be false for a foreign (unmarked) repo")
+		}
+	})
+	t.Run("child of an agentsync repo is NOT exact-owned", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := Init(dir); err != nil {
+			t.Fatal(err)
+		}
+		child := filepath.Join(dir, "skills")
+		if err := os.MkdirAll(child, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		// Detect (upward) would call this Owned; OwnsExactly (exact) must not.
+		if got, _ := OwnsExactly(child); got {
+			t.Fatal("OwnsExactly must be false for a dir merely nested inside an agentsync repo")
+		}
+		if st, _ := Detect(child); st != StateAgentsyncOwned {
+			t.Fatal("precondition: Detect(child) should be Owned via DetectDotGit")
+		}
+	})
+}
+
+func TestHasNestedRepoBelow(t *testing.T) {
+	testenv.RequireContainer(t)
+
+	t.Run("none", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "a/b/c.txt", "x")
+		if got, err := HasNestedRepoBelow(dir); err != nil || got {
+			t.Fatalf("HasNestedRepoBelow(no nested) = (%v,%v), want false", got, err)
+		}
+	})
+	t.Run("missing dir", func(t *testing.T) {
+		if got, err := HasNestedRepoBelow(filepath.Join(t.TempDir(), "nope")); err != nil || got {
+			t.Fatalf("HasNestedRepoBelow(missing) = (%v,%v), want (false,nil)", got, err)
+		}
+	})
+	t.Run("nested .git dir at depth", func(t *testing.T) {
+		dir := t.TempDir()
+		deep := filepath.Join(dir, "x", "y")
+		if _, err := gogit.PlainInit(deep, false); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := HasNestedRepoBelow(dir); !got {
+			t.Fatal("should find a nested .git directory at depth")
+		}
+	})
+	t.Run("nested .git FILE (gitlink) is detected", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "sub/.git", "gitdir: /somewhere/else/.git\n")
+		if got, _ := HasNestedRepoBelow(dir); !got {
+			t.Fatal("should detect a nested .git gitlink FILE, not just a directory")
+		}
+	})
+	t.Run("does not match the dir's own .git", func(t *testing.T) {
+		// Init'd repo: its OWN .git must not count as "below". (In practice the guard
+		// only runs on untracked dirs, but pin the invariant anyway.)
+		dir := t.TempDir()
+		if _, err := Init(dir); err != nil {
+			t.Fatal(err)
+		}
+		// Remove the notice so the only entries are .git + nothing nested.
+		_ = os.Remove(filepath.Join(dir, NoticeFile))
+		if got, _ := HasNestedRepoBelow(dir); got {
+			t.Fatal("the dir's own .git must not count as a nested repo below it")
+		}
+	})
+}
+
 func TestInit(t *testing.T) {
 	testenv.RequireContainer(t)
 	dir := t.TempDir()

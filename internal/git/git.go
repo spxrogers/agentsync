@@ -155,10 +155,14 @@ func HasNestedRepoBelow(dir string) (bool, error) {
 		if walkErr != nil {
 			return nil // unreadable entry — ignore, never fail the apply over this
 		}
-		if path == dir || d == nil || !d.IsDir() {
+		if path == dir || d == nil {
 			return nil
 		}
-		if d.Name() == ".git" {
+		// Match ".git" whether it's a directory (normal repo) OR a file (a gitlink
+		// pointer used by submodules / `git worktree`) — both mean a repo lives here.
+		// Skip dir's OWN immediate .git (parent == dir): that's the repo AT dir, not
+		// one nested below it.
+		if d.Name() == ".git" && filepath.Dir(path) != dir {
 			found = true
 			return filepath.SkipAll
 		}

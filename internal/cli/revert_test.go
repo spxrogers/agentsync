@@ -225,6 +225,57 @@ func TestRevert_FoldedSharedDirNoted(t *testing.T) {
 	}
 }
 
+// TestRevert_SharedDirWarnsBlastRadius asserts the user-facing warning that
+// reverting a shared dir (~/.agents/skills, owned by codex + warp) rolls back the
+// other agent's files too.
+func TestRevert_SharedDirWarnsBlastRadius(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "codex")
+	mustRun(t, env, "agent", "add", "warp")
+	f, _ := os.OpenFile(filepath.Join(tmp, ".agentsync", "agentsync.toml"), os.O_APPEND|os.O_WRONLY, 0o644)
+	_, _ = f.WriteString("\n[destination_directory_git_backup]\nmode = \"on\"\n")
+	_ = f.Close()
+	srcSkill := filepath.Join(tmp, ".agentsync", "skills", "demo", "SKILL.md")
+	_ = os.MkdirAll(filepath.Dir(srcSkill), 0o755)
+	apply := func(body string) {
+		_ = os.WriteFile(srcSkill, []byte("---\nname: demo\ndescription: d\n---\n"+body+"\n"), 0o644)
+		if out, err := runCLI(t, env, "apply"); err != nil {
+			t.Fatalf("apply: %v\n%s", err, out)
+		}
+	}
+	apply("v1")
+	apply("v2") // ~/.agents/skills now has two checkpoints
+
+	// ~/.agents/skills is its own repo, shared by codex + warp.
+	if st, _ := agit.Detect(filepath.Join(tmp, ".agents", "skills")); st != agit.StateAgentsyncOwned {
+		t.Fatalf("shared ~/.agents/skills should be versioned, state=%v", st)
+	}
+	out, err := runCLI(t, env, "revert", "codex")
+	if err != nil {
+		t.Fatalf("revert codex: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "shared with") || !strings.Contains(out, "warp") {
+		t.Fatalf("expected a shared-dir blast-radius warning naming warp; got:\n%s", out)
+	}
+}
+
+// TestRevert_ToAmbiguousMultiRoot: --to is rejected for an agent versioning >1 dir.
+func TestRevert_ToAmbiguousMultiRoot(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "codex") // codex versions ~/.codex AND ~/.agents/skills
+	_, err := runCLI(t, env, "revert", "codex", "--to", "HEAD~1")
+	if err == nil {
+		t.Fatal("expected an ambiguity error for --to on a multi-root agent")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("error should explain --to is ambiguous: %v", err)
+	}
+}
+
 func TestRevert_All(t *testing.T) {
 	_, env, destSkill := setupGitBackedClaude(t)
 	if out, err := runCLI(t, env, "revert", "--all"); err != nil {
