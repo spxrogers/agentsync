@@ -28,10 +28,39 @@ type Canonical struct {
 
 // Config mirrors agentsync.toml at the root of ~/.agentsync/.
 type Config struct {
-	Agents  map[string]Agent `toml:"agents"`
-	Updates UpdateDefaults   `toml:"updates"`
-	Secrets SecretsConfig    `toml:"secrets"`
-	Memory  MemoryConfig     `toml:"memory"`
+	Agents               map[string]Agent           `toml:"agents"`
+	Updates              UpdateDefaults             `toml:"updates"`
+	Secrets              SecretsConfig              `toml:"secrets"`
+	Memory               MemoryConfig               `toml:"memory"`
+	DestinationGitBackup DestinationGitBackupConfig `toml:"destination_directory_git_backup"`
+}
+
+// DestinationGitBackupConfig mirrors the [destination_directory_git_backup] table
+// in agentsync.toml. It controls whether `apply` git-versions the rendered
+// destination dirs (~/.claude, ~/.codex, …) so a bad apply is revertible — a
+// LOCAL-ONLY rollback history that is never pushed (issue #118; see the secret-
+// handling note in CLAUDE.md). The table name is deliberately explicit: these
+// repos back up the destination directories, not general git config. An empty Mode
+// means "prompt".
+type DestinationGitBackupConfig struct {
+	Mode        string `toml:"mode,omitempty"`         // "prompt" | "on" | "off"
+	AuthorName  string `toml:"author_name,omitempty"`  // commit author override
+	AuthorEmail string `toml:"author_email,omitempty"` // commit email override
+}
+
+// Destination-git-backup modes.
+const (
+	GitBackupModePrompt = "prompt" // default: ask on first write to an untracked dir
+	GitBackupModeOn     = "on"     // init + checkpoint silently
+	GitBackupModeOff    = "off"    // never init/commit/prompt
+)
+
+// EffectiveMode returns Mode, defaulting to GitBackupModePrompt when unset.
+func (g DestinationGitBackupConfig) EffectiveMode() string {
+	if g.Mode == "" {
+		return GitBackupModePrompt
+	}
+	return g.Mode
 }
 
 // MemoryConfig mirrors the [memory] table in agentsync.toml.

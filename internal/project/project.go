@@ -80,7 +80,9 @@ func Discover(start string) (root string, found bool, err error) {
 //   - Plugins / Marketplaces: project entries are not modeled at project scope in
 //     v1 and are inherited from base unchanged (see the migration note in
 //     docs/architecture.md). Config (Updates/Secrets/Memory) is inherited from
-//     base unless the project declares its own non-zero values; the effective
+//     base unless the project declares its own non-zero values (this also covers
+//     the [destination_directory_git_backup] table, though it is a user-scope
+//     concern in practice); the effective
 //     [memory] setting is also propagated onto the stored project overlay so
 //     project-scope render honours a user-level managed-banner opt-out.
 func Merge(base, proj source.Canonical) source.Canonical {
@@ -101,6 +103,9 @@ func Merge(base, proj source.Canonical) source.Canonical {
 	}
 	if proj.Config.Memory != (source.MemoryConfig{}) {
 		out.Config.Memory = proj.Config.Memory
+	}
+	if proj.Config.DestinationGitBackup != (source.DestinationGitBackupConfig{}) {
+		out.Config.DestinationGitBackup = proj.Config.DestinationGitBackup
 	}
 
 	out.MCPServers = overlayByKey(base.MCPServers, proj.MCPServers, func(m source.MCPServer) string { return m.ID })

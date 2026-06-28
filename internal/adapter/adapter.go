@@ -275,6 +275,25 @@ type PluginIngester interface {
 	IngestPlugins(scope Scope, project string) ([]NativeMarketplace, []NativePlugin, error)
 }
 
+// VersionedHome is an OPTIONAL extension to Adapter: an adapter that writes into a
+// single coherent on-disk config directory declares it so the apply tail can
+// git-init and checkpoint that directory as a local-only rollback history (issue
+// #118). An adapter with no single versionable root (e.g. noop) does not implement
+// it and is skipped.
+//
+// HomeDir is READ-ONLY and user-scope-focused — it reports the directory to back
+// up; it does not widen the Render/Apply contract. At ScopeProject it MUST return
+// ("", false): project destinations live inside the user's own project repo, which
+// is left to that repo's source control. It also returns ("", false) at user scope
+// for an agent whose root is empty (e.g. an agent that only writes a single file
+// elsewhere). The dir is absolute (after AGENTSYNC_TARGET_ROOT redirection),
+// matching FileOp.Path. Note a deep agent may also write a stray top-level file
+// outside this dir (Claude's ~/.claude.json); those are intentionally NOT
+// versioned — only this dir is. See docs/architecture.md.
+type VersionedHome interface {
+	HomeDir(scope Scope, project string) (string, bool)
+}
+
 // WarnEmitter is an OPTIONAL extension to Adapter: an adapter that emits
 // Ingest warnings implements it to let callers redirect the stream away
 // from the default (os.Stderr). Implementors are SOURCES of warnings that

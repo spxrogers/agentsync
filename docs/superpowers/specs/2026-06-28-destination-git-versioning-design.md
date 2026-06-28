@@ -168,10 +168,20 @@ The unit of versioning is **the agent's own config directory at user scope**.
   }
   ```
 
-  All nine deep adapters and the data-driven `generic` tier implement it (the
-  generic adapter reads the root from its `generic.Spec`); `noop` does not. This
-  keeps the core `Adapter` contract unchanged and lets edge adapters abstain — the
-  same pattern the codebase already uses for optional capabilities.
+  **Only the nine deep adapters implement it** — each has a single, coherent
+  user-scope config dir (`~/.claude`, `~/.config/opencode`, `~/.codex`, `~/.cursor`,
+  `~/.gemini`, `~/.continue`, `~/.codeium/windsurf`, `~/.roo`, `~/.cline`). The
+  data-driven `generic` breadth tier **deliberately abstains** (does not implement
+  the interface): its agents' user-scope targets are scattered across multiple
+  top-level dirs and shared cross-agent locations (e.g. `~/.agents/skills`, which
+  several breadth agents and Codex all write to), so there is no safe single dir to
+  `git init` — and `git init`-ing a shared dir like `~/.agents` would violate the
+  per-destination-repo model. Breadth-tier writes therefore keep relying on
+  `.state/backups` (the same accepted gap as stray `$HOME`-level files). This keeps
+  the core `Adapter` contract unchanged and lets non-participating adapters abstain
+  — the same optional-extension pattern as `PluginIngester`/`WarnEmitter`. The
+  decision is pinned in code by `TestVersionedHomeContract` (deep adapters expose a
+  valid dir; breadth adapters must NOT implement the interface).
 
   *Alternative considered and rejected:* derive the root from the `written` paths
   or keep a central agent→dir table in `internal/git`. Deriving "the config dir"
