@@ -1,7 +1,7 @@
 # Destination auto-git versioning + `agentsync revert` — Design Spec
 
 **Date:** 2026-06-28
-**Status:** Draft for review — design first, implementation plan to follow.
+**Status:** Approved in first review ([PR #119](https://github.com/spxrogers/agentsync/pull/119)). Implementation plan: `docs/superpowers/plans/2026-06-28-destination-git-versioning.md`.
 **Issue:** [#118 — Auto-version the destination agent dirs with git so a bad `apply` is revertible](https://github.com/spxrogers/agentsync/issues/118)
 
 ---
@@ -31,9 +31,9 @@ Two user-visible surfaces ship together:
    checkpoint (last by default), append-only, then print an out-of-sync notice
    telling the user to reconcile before the next apply.
 
-A new global `[git]` table in `agentsync.toml` holds the mode (prompt / auto /
-off) and optional commit-identity overrides; `apply --no-git` bypasses everything
-for CI/scripting.
+A new global `[destination_directory_git_backup]` table in `agentsync.toml` holds
+the mode (`prompt` / `on` / `off`) and optional commit-identity overrides;
+`apply --no-git-backup` bypasses everything for CI/scripting.
 
 ---
 
@@ -81,7 +81,13 @@ questions resolved up front for this spec.
 | 8 | **Revert is append-only.** `revert` re-materializes files from the chosen checkpoint and records a **new** commit; history is never rewritten, so the bad apply stays auditable and the revert is itself revertible. | Q (this spec) |
 | 9 | **`agentsync revert <agent>` defaults to the last checkpoint**, with `--to <ref>`, `--all`, and `--dry-run`. | Q (this spec) |
 | 10 | **Git root = the agent's own config dir only.** Stray `$HOME`-level managed files (e.g. `~/.claude.json`) stay out of git (we never init a repo at `$HOME`) and keep relying on `.state/backups`. Documented as a known gap. | Q (this spec) |
-| 11 | **Dedicated agentsync commit identity** (`agentsync <agentsync@localhost>`), overridable via `[git]`. Works even when no global git identity is set. | Q (this spec) |
+| 11 | **Dedicated agentsync commit identity** (`agentsync <agentsync@localhost>`), overridable via `[destination_directory_git_backup]`. Works even when no global git identity is set. | Q (this spec) |
+| 12 | **Git root via the optional `VersionedHome` adapter extension** — adapters declare their versionable config dir; `noop` abstains. | Review #119 |
+| 13 | **CI/scripting bypass flag = `apply --no-git-backup`.** | Review #119 |
+| 14 | **Config table = `[destination_directory_git_backup]`, `mode = "prompt" \| "on" \| "off"`** (default `prompt`). | Review #119 |
+| 15 | **No `agentsync git` command — config-edit only; `agentsync doctor` surfaces status read-only.** | Review #119 |
+| 16 | **Auto-created marker = `AGENTSYNC_LOCAL_HISTORY.md` at repo root + `[agentsync] managed = true` in the repo's `.git/config`.** | Review #119 |
+| 17 | **`revert` default = undo the most recent apply** (restore `HEAD~1` content, commit append-only). | Review #119 |
 
 ---
 
@@ -105,7 +111,7 @@ agentsync apply  ──► render.Apply(...) ──► written map[string]bool (
               1. resolve agent's git root dir (user scope)
               2. is it already a work tree?  ── yes ─► skip (decision #5), hint
               3. untracked + mode=prompt + TTY ─► prompt to init (opt-out)
-              4. mode=auto / accepted ─► git init (first time) + add changed
+              4. mode=on / accepted ─► git init (first time) + add changed
                  managed files under root + commit checkpoint
 ```
 
@@ -142,12 +148,13 @@ agentsync revert <agent> [--to <ref>] [--all] [--dry-run]
 
 The unit of versioning is **the agent's own config directory at user scope**.
 
-- **Git root resolution.** Each adapter already resolves its own destination paths
-  via a per-adapter `ResolvePaths` returning an adapter-specific `Paths` struct
-  (e.g. Cursor's `Paths.ConfigDir = ~/.cursor`). There is no shared accessor on
-  the `Adapter` interface today. **Recommended:** add a small **optional extension
-  interface** (mirroring the existing `PluginIngester` / `WarnEmitter` idiom) so an
-  adapter can declare its versionable root:
+- **Git root resolution — `VersionedHome` adapter extension (decided, PR #119).**
+  Each adapter already resolves its own destination paths via a per-adapter
+  `ResolvePaths` returning an adapter-specific `Paths` struct (e.g. Cursor's
+  `Paths.ConfigDir = ~/.cursor`). There is no shared accessor on the `Adapter`
+  interface today, so we add a small **optional extension interface** (mirroring
+  the existing `PluginIngester` / `WarnEmitter` idiom) so an adapter declares its
+  versionable root:
 
   ```go
   // VersionedHome is an OPTIONAL Adapter extension: an adapter that writes into a
@@ -166,11 +173,10 @@ The unit of versioning is **the agent's own config directory at user scope**.
   keeps the core `Adapter` contract unchanged and lets edge adapters abstain — the
   same pattern the codebase already uses for optional capabilities.
 
-  *Alternative considered:* derive the root from the `written` paths or keep a
-  central agent→dir table in `internal/git`. Rejected as primary because deriving
-  "the config dir" from a flat path set is ambiguous (`~/.claude` vs
-  `~/.claude/skills`), and a central table duplicates path knowledge the adapters
-  already own. Flagged as an open implementation detail below.
+  *Alternative considered and rejected:* derive the root from the `written` paths
+  or keep a central agent→dir table in `internal/git`. Deriving "the config dir"
+  from a flat path set is ambiguous (`~/.claude` vs `~/.claude/skills`), and a
+  central table duplicates path knowledge the adapters already own.
 
 - **Which files get staged.** Only managed files written under that root this run
   — i.e. `written ∩ {files under HomeDir}`. For shared files (e.g.
@@ -202,12 +208,12 @@ agentsync itself created (see "marker" below), agentsync neither inits nor
 auto-commits; it may print a one-line hint that auto-versioning is disabled
 because the dir is already under source control.
 
-**Repo marker.** To tell "a repo agentsync auto-created" from "the user's own
-repo," the auto-init writes a small marker (the generated `README` / notice file,
-below, plus optionally a config key under the repo's own `.git/config`, e.g.
-`[agentsync] managed = true`). Auto-commit only runs against repos carrying the
-marker. A user's pre-existing repo never gets the marker, so agentsync stays out
-of it.
+**Repo marker (decision #16).** To tell "a repo agentsync auto-created" from "the
+user's own repo," the auto-init writes a `[agentsync] managed = true` key into the
+repo's own `.git/config`, alongside the generated `AGENTSYNC_LOCAL_HISTORY.md`
+notice file (below). Auto-commit and `agentsync revert` only operate on repos
+carrying this marker. A user's pre-existing repo never gets the marker, so
+agentsync stays out of it.
 
 ### Auto-init repo contents
 
@@ -224,18 +230,21 @@ files are already `0o600` (`internal/iox/atomic.go`); the `.git` dir is created
 
 ---
 
-## Config schema — the `[git]` table
+## Config schema — the `[destination_directory_git_backup]` table
 
-New global table in `~/.agentsync/agentsync.toml`, parsed into a `GitConfig`
-struct added to `source.Config` (`internal/source/schema.go`, alongside `Agents`,
-`Updates`, `Secrets`, `Memory`). Project overlay merges like the others
-(`internal/project`), though git settings are a user-scope concern in practice.
+New global table in `~/.agentsync/agentsync.toml`, parsed into a
+`DestinationGitBackupConfig` struct added to `source.Config`
+(`internal/source/schema.go`, alongside `Agents`, `Updates`, `Secrets`,
+`Memory`). The table name is deliberately explicit — these repos are a backup of
+the *destination directories*, not general "git" config. Project overlay merges
+like the others (`internal/project`), though it is a user-scope concern in
+practice.
 
 ```toml
-[git]
-# Destination auto-versioning behavior. Tri-state:
+[destination_directory_git_backup]
+# Behavior for git-backing the rendered destination dirs. Tri-state:
 #   "prompt" (default) — on first write to an untracked agent dir, ask to init.
-#   "auto"             — init + checkpoint silently (set after the user says yes).
+#   "on"               — init + checkpoint silently (set after the user says yes).
 #   "off"              — never init/commit/prompt (set by "don't ask again").
 mode = "prompt"
 
@@ -244,20 +253,32 @@ author_name  = "agentsync"
 author_email = "agentsync@localhost"
 ```
 
+```go
+// internal/source/schema.go
+type DestinationGitBackupConfig struct {
+    Mode        string `toml:"mode,omitempty"`         // "prompt" (default) | "on" | "off"
+    AuthorName  string `toml:"author_name,omitempty"`
+    AuthorEmail string `toml:"author_email,omitempty"`
+}
+// added to Config as:
+//   DestinationGitBackup DestinationGitBackupConfig `toml:"destination_directory_git_backup"`
+```
+
 State transitions:
 
 | Event | Result |
 |---|---|
 | Table absent / `mode` unset | Treated as `"prompt"`. |
-| User answers **yes** at the init prompt | Persist `mode = "auto"`. |
+| User answers **yes** at the init prompt | Persist `mode = "on"`. |
 | User answers **no** | Skip this run; leave `mode = "prompt"` (will ask again). |
 | User answers **no + don't ask again** | Persist `mode = "off"`. |
-| `apply --no-git` (per run) | Force-skip init/commit for that invocation, regardless of `mode`. Never mutates config. |
-| Re-enable later | User edits `agentsync.toml` (`mode = "prompt"`/`"auto"`). |
+| `apply --no-git-backup` (per run) | Force-skip init/commit for that invocation, regardless of `mode`. Never mutates config. |
+| Re-enable later | User edits `agentsync.toml` (`mode = "prompt"`/`"on"`). |
 
 Writing the persisted `mode` back into `agentsync.toml` goes through the existing
 canonical TOML writer (comment- and order-preserving), the same path
-`agentsync mcp add` etc. use — it must not clobber the user's hand-edits.
+`agentsync mcp add` etc. use — it must not clobber the user's hand-edits. The
+current mode is also surfaced read-only by `agentsync doctor` (see CLI surface).
 
 ---
 
@@ -266,14 +287,23 @@ canonical TOML writer (comment- and order-preserving), the same path
 ### `agentsync apply` — one new flag
 
 ```
---no-git    Skip destination git init/checkpoint for this run (CI/scripting).
-            Does not modify agentsync.toml.
+--no-git-backup   Skip destination git init/checkpoint for this run (CI/scripting).
+                  Does not modify agentsync.toml.
 ```
 
-Everything else about apply is unchanged. In `--no-git` or non-interactive
-(`--no-input` / no TTY) runs, agentsync never prompts; with `mode = "auto"` it
+Everything else about apply is unchanged. In `--no-git-backup` or non-interactive
+(`--no-input` / no TTY) runs, agentsync never prompts; with `mode = "on"` it
 still checkpoints silently (no prompt needed), with `mode = "prompt"` and no TTY
 it skips init (can't ask) and prints a one-line hint.
+
+### `agentsync doctor` — surface status (no new command)
+
+There is **no** dedicated `agentsync git`/enable/disable command (kept config-only
+given the triviality — decided, PR #119). Instead, `agentsync doctor`
+(`internal/cli/doctor.go`) gains a small read-only check reporting the
+destination-git-backup mode and, per managed agent dir, whether it is
+agentsync-versioned, already under foreign source control, or untracked. Changing
+the behavior is a one-line `agentsync.toml` edit.
 
 ### `agentsync revert` — new command
 
@@ -361,7 +391,7 @@ source.
 - **Dir already a work tree / nested in one** → no init, no auto-commit
   (decision #5), one-line hint.
 - **No TTY and `mode = "prompt"`** → can't ask → skip init, hint; never block.
-- **`mode = "off"` or `--no-git`** → skip entirely.
+- **`mode = "off"` or `--no-git-backup`** → skip entirely.
 - **Multiple agents in one apply** → one checkpoint commit per agent repo (the
   per-agent grouping is natural: each agent has its own root + repo).
 - **`revert` on an agent that was never inited** → clear error, suggest running an
@@ -380,19 +410,20 @@ source.
 A new command + a new `agentsync.toml` table is a CLI-surface + schema change, so
 the same PR must update:
 
-- `docs/user-guide.md` — command reference (`apply --no-git`, new `revert`
-  section), the `agentsync.toml` layout block (`[git]` table), and the
-  destination-versioning concept.
+- `docs/user-guide.md` — command reference (`apply --no-git-backup`, new `revert`
+  section, the new `doctor` status line), the `agentsync.toml` layout block
+  (`[destination_directory_git_backup]` table), and the destination-versioning
+  concept.
 - `README.md` — quickstart / quick-reference table (add `revert`; note
   auto-versioning).
 - `website/src/content/docs/reference/cli.mdx` — "At a glance" table row + a
-  `### revert` section + the `apply --no-git` flag.
+  `### revert` section + the `apply --no-git-backup` flag.
 - `docs/concepts.md` — the three-state model: note destination dirs may now carry
   a local-only git history (distinct from `.state/`).
 - `docs/architecture.md` — where the checkpoint step sits in the apply tail; the
   never-push invariant; that `.state/` is untouched.
-- `internal/cli/init.go` `initialAgentsyncTOML` constant — add a commented `[git]`
-  example so `agentsync init` scaffolds it.
+- `internal/cli/init.go` `initialAgentsyncTOML` constant — add a commented
+  `[destination_directory_git_backup]` example so `agentsync init` scaffolds it.
 - `CHANGELOG.md` — `[Unreleased] / Added`.
 
 The capability matrix is **not** affected (this isn't a per-agent component
@@ -400,27 +431,22 @@ capability).
 
 ---
 
-## Open decisions (please weigh in via PR comments)
+## Resolved in review (PR #119)
 
-1. **Git-root resolution mechanism.** Recommended: optional `VersionedHome`
-   adapter extension (above). Alternative: central agent→dir table in
-   `internal/git`. Either works; the extension interface is more faithful to
-   "adapters own their paths."
-2. **`--no-git` flag name.** Alternatives: `--no-autocommit`, `--no-version`,
-   `--git=false`. Picked `--no-git` for brevity; open to a clearer name.
-3. **`[git].mode` values.** `"prompt" | "auto" | "off"` — open to naming (e.g.
-   `"ask"`/`"on"`/`"disabled"`).
-4. **Re-enable ergonomics.** Editing `agentsync.toml` is the documented re-enable
-   path. Worth a tiny `agentsync git enable/disable` (or folding into `doctor`)? I
-   lean "no, keep it config-only" for v1 to avoid surface creep — flagging in case
-   you want the command.
-5. **Generated notice filename.** `AGENTSYNC_LOCAL_HISTORY.md` at repo root — open
-   to a different name / location, and whether to also drop a `[agentsync]
-   managed = true` marker in the repo's `.git/config` vs relying on the notice
-   file alone for the "agentsync-created" check.
-6. **`revert` checkpoint default.** "Previous checkpoint = undo the most recent
-   apply." Confirm that's the intended default (vs "restore to the most recent
-   checkpoint," which is a no-op right after an apply).
+All previously-open decisions were settled in the first spec review — folded into
+the body above and the locked-decisions table (rows 12–17):
+
+1. **Git-root mechanism** → the optional `VersionedHome` adapter extension. ✅
+2. **CI bypass flag name** → `apply --no-git-backup`. ✅
+3. **Config table + mode values** → `[destination_directory_git_backup]` with
+   `mode = "prompt" | "on" | "off"` (the opposite of `off` is `on`). ✅
+4. **Re-enable ergonomics** → config-edit only; **no** `agentsync git` command;
+   `agentsync doctor` surfaces the current status read-only. ✅
+5. **Notice file + marker** → `AGENTSYNC_LOCAL_HISTORY.md` at the repo root plus a
+   `[agentsync] managed = true` key in the repo's own `.git/config` as the
+   "agentsync-created" marker. ✅
+6. **`revert` default** → undo the most recent apply, i.e. restore the checkpoint
+   *before* `HEAD` (`HEAD~1` content) and commit it append-only. ✅
 
 ---
 
@@ -434,10 +460,10 @@ All FS-touching tests run in-container (`testenv.RequireContainer`) on
   dedicated identity; `IsWorkTree` detects both a `.git` at root and a nested one;
   restore-to-checkpoint reproduces prior bytes; `IsClean` correct.
 - **Apply-tail integration** (`internal/cli`): first apply to an untracked dir with
-  `mode = "auto"` produces exactly one checkpoint containing the written managed
+  `mode = "on"` produces exactly one checkpoint containing the written managed
   files and **not** unrelated files; a no-op apply produces no new commit; a dir
   that's already a work tree is left untouched (no agentsync commits added);
-  `--no-git` and `mode = "off"` skip; stray `~/.claude.json` is absent from the
+  `--no-git-backup` and `mode = "off"` skip; stray `~/.claude.json` is absent from the
   claude repo history.
 - **Prompt behavior**: TTY + `mode="prompt"` → prompts; "no" leaves `mode=prompt`;
   "no + don't ask again" persists `mode=off`; non-interactive never blocks.
@@ -449,8 +475,8 @@ All FS-touching tests run in-container (`testenv.RequireContainer`) on
 - **Secret invariants unchanged**: existing `internal/secrets` /
   `internal/capture` guards still pass; no `secrets.Resolved` reaches a source
   writer (this feature adds no dest→source path).
-- **Config round-trip**: `[git]` table parses; persisting `mode` preserves
-  comments/key order in `agentsync.toml`.
+- **Config round-trip**: `[destination_directory_git_backup]` table parses;
+  persisting `mode` preserves comments/key order in `agentsync.toml`.
 
 ---
 
