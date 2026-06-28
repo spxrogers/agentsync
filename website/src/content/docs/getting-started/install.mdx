@@ -8,11 +8,13 @@ sidebar:
 import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 
 <Aside type="note" title="Pre-1.0">
-	agentsync is pre-1.0. Per [semantic versioning](https://semver.org/), only the
-	**programmatic API** (Go package surface) may change in breaking ways before
-	`v1.0.0`. The **core functionality** — the CLI commands and flags, the
-	canonical `~/.agentsync/` schema, and the apply/reconcile behavior — is
-	considered **stable**, and we treat breaking changes to it as bugs.
+	agentsync is pre-1.0. Per [semantic versioning](https://semver.org/), the
+	**interfaces** may still change in breaking ways before `v1.0.0` — both the
+	programmatic API (Go package surface) and the CLI surface (commands and
+	flags). The **core functionality** is considered **stable**: the three-state
+	model, the canonical `~/.agentsync/` schema, and the apply/reconcile behavior
+	are solid and safe to rely on. We avoid gratuitous interface churn and call
+	out any breaking change in the [changelog](https://github.com/spxrogers/agentsync/blob/main/CHANGELOG.md).
 </Aside>
 
 ## Package managers (recommended)
