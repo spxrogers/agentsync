@@ -1,0 +1,49 @@
+name: docs-publish
+# Rebuild the agentsync.cc site and force-push it to the gh-pages branch — this is
+# exactly `just docs-publish` (clean website/dist, rebuild, force-push dist/ as a
+# single commit). GitHub Pages serves gh-pages via "deploy from a branch", so no
+# extra Actions minutes are spent rendering the site.
+#
+# Two ways in, both landing in the single `docs` job below:
+#   1. trigger manually from the GitHub UI / mobile app ("Actions → docs-publish →
+#      Run workflow") to redeploy the live docs out of band — e.g. a docs-only fix
+#      between releases — without cutting a CLI release.
+#   2. called by the `release` workflow (`workflow_call`) after a successful
+#      publish, so the live docs always track the just-shipped CLI version. This is
+#      the shared component: the release pipeline references this workflow rather
+#      than duplicating the build/push steps.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+# The job force-pushes the rebuilt site to the gh-pages branch, which needs
+# contents:write. When called from `release`, the effective token is the caller's,
+# which also grants contents:write.
+permissions:
+  contents: write
+
+# Serialize deploys so a manual dispatch and a release-triggered call (or two
+# manual dispatches) can't race to force-push gh-pages. We never cancel an
+# in-flight deploy — a half-finished force-push is worse than waiting.
+concurrency:
+  group: docs-publish
+  cancel-in-progress: false
+
+jobs:
+  docs:
+    name: docs-publish (agentsync.cc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: extractions/setup-just@v3
+      # `just docs-publish` runs `git push` from a throwaway repo it inits inside
+      # website/dist, which inherits none of actions/checkout's auth. Inject the
+      # workflow token for github.com transports so that force-push to gh-pages
+      # authenticates (contents:write, granted above).
+      - name: Authenticate git pushes to GitHub
+        run: |
+          git config --global \
+            url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf \
+            "https://github.com/"
+      - run: just docs-publish

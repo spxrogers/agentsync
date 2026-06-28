@@ -2,7 +2,7 @@
 
 The source for **[agentsync.cc](https://agentsync.cc)** — an
 [Astro Starlight](https://starlight.astro.build) site, deployed to GitHub Pages by
-the `docs` job in [`.github/workflows/release.yml`](../.github/workflows/release.yml).
+the reusable [`docs-publish` workflow](../.github/workflows/docs-publish.yml).
 
 ## Develop
 
@@ -65,14 +65,18 @@ relevant page under `reference/` (the sync table in `CLAUDE.md` lists this).
 ## Deploy
 
 The site is served by GitHub Pages from the `gh-pages` branch ("deploy from a
-branch"), so serving it costs no GitHub Actions minutes. Cutting a release —
+branch"), so serving it costs no GitHub Actions minutes. The build + force-push of
+`dist/` to `gh-pages` lives in the reusable
+[`docs-publish` workflow](../.github/workflows/docs-publish.yml). Cutting a release —
 pushing a `vX.Y.Z` tag — runs the [`release` workflow](../.github/workflows/release.yml),
-whose `docs` job rebuilds `website/` and force-pushes `dist/` to `gh-pages` once
-the CLI is published. The result: the live docs always track the latest released
-CLI. The custom domain is set via [`public/CNAME`](public/CNAME).
+which calls `docs-publish` once the CLI is published. The result: the live docs
+always track the latest released CLI. The custom domain is set via
+[`public/CNAME`](public/CNAME).
 
-To redeploy out of band (e.g. a docs-only fix between releases), run
-`just docs-publish` locally — it does the same rebuild + force-push to `gh-pages`.
+To redeploy out of band (e.g. a docs-only fix between releases), trigger the
+[`docs-publish` workflow](../.github/workflows/docs-publish.yml) manually from the
+GitHub UI ("Actions → docs-publish → Run workflow"), or run `just docs-publish`
+locally — all three do the same rebuild + force-push to `gh-pages`.
 
 The page footer's "Last updated" line carries a **build/deploy commit hash** — a
 short SHA linked to the exact commit on GitHub, so the live site always shows
