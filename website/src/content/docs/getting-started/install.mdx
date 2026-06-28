@@ -1,35 +1,21 @@
 ---
 title: Install
-description: Install agentsync from source today; Homebrew, Scoop, Chocolatey, and Linux packages light up with the first tagged release.
+description: Install agentsync with Homebrew, Scoop, Chocolatey, or the Linux packages — the recommended path. Building from source still works too.
 sidebar:
   order: 3
 ---
 
 import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 
-<Aside type="caution" title="Pre-release">
-	The package-manager channels below are wired up in `.goreleaser.yaml` and
-	publish starting with the **first tagged release**. Until then, **build from
-	source** — it works today.
+<Aside type="note" title="Pre-1.0">
+	agentsync is pre-1.0. Per [semantic versioning](https://semver.org/), only the
+	**programmatic API** (Go package surface) may change in breaking ways before
+	`v1.0.0`. The **core functionality** — the CLI commands and flags, the
+	canonical `~/.agentsync/` schema, and the apply/reconcile behavior — is
+	considered **stable**, and we treat breaking changes to it as bugs.
 </Aside>
 
-## From source (works today)
-
-```bash
-go install github.com/spxrogers/agentsync/cmd/agentsync@latest
-```
-
-Or clone and build:
-
-```bash
-git clone https://github.com/spxrogers/agentsync
-cd agentsync
-go build ./cmd/agentsync
-```
-
-You'll need Go ≥ 1.26.2 (the version pinned in `go.mod`).
-
-## Package managers
+## Package managers (recommended)
 
 <Tabs syncKey="os">
 	<TabItem label="macOS" icon="apple">
@@ -77,6 +63,24 @@ You'll need Go ≥ 1.26.2 (the version pinned in `go.mod`).
 		```
 	</TabItem>
 </Tabs>
+
+## From source
+
+Prefer to build it yourself, or want the latest unreleased commit?
+
+```bash
+go install github.com/spxrogers/agentsync/cmd/agentsync@latest
+```
+
+Or clone and build:
+
+```bash
+git clone https://github.com/spxrogers/agentsync
+cd agentsync
+go build ./cmd/agentsync
+```
+
+You'll need Go ≥ 1.26.2 (the version pinned in `go.mod`).
 
 ## Verify
 
