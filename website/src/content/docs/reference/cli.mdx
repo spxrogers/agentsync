@@ -34,6 +34,7 @@ import { Aside } from '@astrojs/starlight/components';
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source. `--scope project` captures the agent's native project-scope config into the project tree. | `--dry-run --scope --project` |
 | `explain [<plugin>...]` | Show per-agent translation coverage for one or more plugins. | `--all --list --json` |
+| `version` | Print version information (alias for `--version`). | |
 
 ---
 
@@ -280,3 +281,4 @@ agentsync explain --list
 | `--agents <list>` | status | Scope the report to a comma-separated agent allowlist (`*` = all enabled; matches `mcp add --agents`). |
 | `--color auto\|always\|never` | all | Control ANSI color + bold. Default `auto` (on for a TTY, off when piped/redirected; honors `NO_COLOR`). |
 | `-v`, `--verbose` | all | Verbose logging. In `status`, also expands each collapsed skill directory back to one row per bundled file. |
+| `--version` | root | Print version information and exit. The `agentsync version` subcommand is an alias. |

@@ -56,6 +56,7 @@ func NewRoot() *cobra.Command {
 		newSecretsCmd(),
 		newExplainCmd(),
 		newImportCmd(),
+		newVersionCmd(),
 	)
 	return cmd
 }

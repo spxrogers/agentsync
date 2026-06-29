@@ -689,6 +689,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. Includes `plugin` (Claude), which re-fetches installed plugins + marketplaces **(network)**. `--scope project` reads the agent's *native project-scope* config (e.g. `<root>/.claude/`) and captures it into the project tree `<root>/.agentsync/`, seeding central state with the project scope + root. Plugin import is user-scope only. | `--dry-run --scope --project` |
 | `explain [<plugin>...]` | Show per-agent translation coverage for one or more plugins. | `--all --list --json` |
+| `version` | Print version information (alias for `--version`). | |
 
 Global: `-v/--verbose` for verbose logging on any command (in `status` it also
 expands each collapsed skill directory back to one row per bundled file).
