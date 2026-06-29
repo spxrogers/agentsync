@@ -5,7 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	agit "github.com/spxrogers/agentsync/internal/git"
 )
 
@@ -206,6 +209,229 @@ func TestApply_GitBackupGuardsAgainstNestedRepo(t *testing.T) {
 	if st, _ := agit.Detect(claudeSkills); st != agit.StateAgentsyncOwned {
 		t.Fatalf("child repo %s damaged, state=%v", claudeSkills, st)
 	}
+}
+
+// headCount returns the number of commits reachable from HEAD, or 0 if HEAD is
+// unborn (a freshly `git init`'d repo with no commits).
+func headCount(t *testing.T, dir string) int {
+	t.Helper()
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatalf("open %s: %v", dir, err)
+	}
+	ref, err := repo.Head()
+	if err != nil {
+		return 0 // unborn HEAD: no commits yet
+	}
+	iter, err := repo.Log(&gogit.LogOptions{From: ref.Hash()})
+	if err != nil {
+		t.Fatalf("log %s: %v", dir, err)
+	}
+	n := 0
+	_ = iter.ForEach(func(*object.Commit) error { n++; return nil })
+	return n
+}
+
+// headHash returns the HEAD commit hash, or "" for an unborn HEAD.
+func headHash(t *testing.T, dir string) string {
+	t.Helper()
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatalf("open %s: %v", dir, err)
+	}
+	ref, err := repo.Head()
+	if err != nil {
+		return ""
+	}
+	return ref.Hash().String()
+}
+
+// seedUserCommit makes a real commit in a foreign repo at dir (a non-agentsync
+// identity, fixed time for determinism) and returns its hash. Used so the
+// "agentsync must not touch the user's history" assertions bite against a concrete
+// HEAD rather than an unborn one.
+func seedUserCommit(t *testing.T, dir, rel, content string) string {
+	t.Helper()
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatalf("open %s: %v", dir, err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree %s: %v", dir, err)
+	}
+	abs := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wt.Add(rel); err != nil {
+		t.Fatalf("add %s: %v", rel, err)
+	}
+	sig := &object.Signature{Name: "real-user", Email: "user@example.com", When: time.Unix(1_700_000_000, 0).UTC()}
+	h, err := wt.Commit("user's own commit", &gogit.CommitOptions{Author: sig, Committer: sig})
+	if err != nil {
+		t.Fatalf("commit %s: %v", rel, err)
+	}
+	return h.String()
+}
+
+// staging returns the index (staging) status code of rel within the repo at dir.
+// A file agentsync merely rendered (never `git add`ed) reads as Untracked; if
+// agentsync had staged it into the user's index it would read as Added.
+func staging(t *testing.T, dir, rel string) gogit.StatusCode {
+	t.Helper()
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatalf("open %s: %v", dir, err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("worktree %s: %v", dir, err)
+	}
+	st, err := wt.Status()
+	if err != nil {
+		t.Fatalf("status %s: %v", dir, err)
+	}
+	return st.File(filepath.ToSlash(rel)).Staging
+}
+
+// assertUserRepoUntouched is the shared, behavior-level contract for decision #5
+// ("Respect existing source control"): after an apply that rendered renderedRel
+// into a directory the user already git-controls (worktree root userRepo),
+// agentsync must have left that repo PRISTINE — HEAD unmoved, no agentsync marker,
+// no local-history notice file, and the rendered file present-but-UNTRACKED (never
+// staged or committed into the user's index/history).
+func assertUserRepoUntouched(t *testing.T, userRepo, renderedRel, wantHead string) {
+	t.Helper()
+	// HEAD did not move: agentsync committed nothing into the user's history.
+	if got := headHash(t, userRepo); got != wantHead {
+		t.Fatalf("agentsync moved the user's HEAD: %q → %q (must not commit into a user repo)", wantHead, got)
+	}
+	// No agentsync marker: the repo was never claimed/re-inited.
+	if owned, _ := agit.OwnsExactly(userRepo); owned {
+		t.Fatalf("agentsync stamped its marker onto the user's repo at %s", userRepo)
+	}
+	// No local-history notice: that file is written ONLY by agit.Init, so its
+	// presence would prove an init happened.
+	if _, err := os.Stat(filepath.Join(userRepo, agit.NoticeFile)); !os.IsNotExist(err) {
+		t.Fatalf("%s should not exist in a user repo (proves agentsync inited); stat err=%v", agit.NoticeFile, err)
+	}
+	// The rendered file exists but is UNTRACKED — agentsync rendered it without
+	// staging it into the user's index. Added/any-staged here would mean agentsync
+	// ran `git add` against the user's repo.
+	if code := staging(t, userRepo, renderedRel); code != gogit.Untracked {
+		t.Fatalf("rendered %s has staging code %q in the user's index, want Untracked (agentsync must not stage into a user repo)", renderedRel, string(code))
+	}
+}
+
+// assertSkippedNotInited asserts the apply output shows the clean decision-#5 skip
+// (a hint naming the dir + "source control") and crucially does NOT show an
+// init-failure — distinguishing "the foreign guard cleanly skipped" from "agentsync
+// tried to init and bounced off go-git's already-exists error". Without this, a
+// regression that deletes the guard could still pass on an exact-dir repo because
+// PlainInit refuses a second init anyway.
+func assertSkippedNotInited(t *testing.T, out, dir string) {
+	t.Helper()
+	if !strings.Contains(out, "source control") || !strings.Contains(out, dir) {
+		t.Errorf("expected a decision-#5 skip hint naming %s and 'source control', got:\n%s", dir, out)
+	}
+	if strings.Contains(out, "already exists") {
+		t.Errorf("apply attempted to init over the user's repo (saw 'already exists') instead of cleanly skipping:\n%s", out)
+	}
+}
+
+// TestApply_GitBackupSkipsForeignRepoAtDir is the regression for the user's vector:
+// when ~/.claude is ALREADY under the user's own source control (a foreign `.git`
+// exactly at the dir, with real history), apply must render the skill yet leave the
+// user's repo byte-for-byte pristine and cleanly skip — never init, stage, or commit.
+func TestApply_GitBackupSkipsForeignRepoAtDir(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+	writeSkillSource(t, tmp, "demo", "d")
+
+	// The user already source-controls ~/.claude: a foreign (unmarked) repo at the
+	// dir, with a real commit so HEAD invariance is a meaningful assertion.
+	claude := filepath.Join(tmp, ".claude")
+	if err := os.MkdirAll(claude, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gogit.PlainInit(claude, false); err != nil {
+		t.Fatal(err)
+	}
+	wantHead := seedUserCommit(t, claude, "README.md", "the user's own file")
+
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	// apply still rendered the skill — versioning being skipped must not block apply.
+	rendered := filepath.Join("skills", "demo", "SKILL.md")
+	if _, err := os.Stat(filepath.Join(claude, rendered)); err != nil {
+		t.Fatalf("apply should still render the skill into the foreign dir: %v", err)
+	}
+	// The dir is still the USER's repo, untouched in every observable way.
+	if st, _ := agit.Detect(claude); st != agit.StateForeign {
+		t.Fatalf("~/.claude state = %v, want StateForeign (agentsync must not claim a user repo)", st)
+	}
+	if n := headCount(t, claude); n != 1 {
+		t.Fatalf("user history changed: HEAD has %d commits, want exactly the 1 the user made", n)
+	}
+	assertUserRepoUntouched(t, claude, rendered, wantHead)
+	assertSkippedNotInited(t, out, claude)
+}
+
+// TestApply_GitBackupSkipsDirNestedInForeignRepo covers the dotfiles case: the user
+// keeps their whole home dir under git, so ~/.claude is nested inside a parent
+// foreign repo. DetectDotGit must find the parent and report StateForeign, so apply
+// renders into ~/.claude yet neither inits a nested repo there nor stages/commits
+// into the parent.
+func TestApply_GitBackupSkipsDirNestedInForeignRepo(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+	writeSkillSource(t, tmp, "demo", "d")
+
+	// Model a dotfiles repo at $HOME: the target root itself is a foreign git repo
+	// with real history, so every dest dir below it (~/.claude, …) is already
+	// user-source-controlled.
+	if _, err := gogit.PlainInit(tmp, false); err != nil {
+		t.Fatal(err)
+	}
+	wantHead := seedUserCommit(t, tmp, "dotfiles-readme.md", "my dotfiles")
+
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	claude := filepath.Join(tmp, ".claude")
+	// Rendered file path relative to the PARENT repo's worktree root (tmp).
+	rendered := filepath.Join(".claude", "skills", "demo", "SKILL.md")
+	if _, err := os.Stat(filepath.Join(tmp, rendered)); err != nil {
+		t.Fatalf("apply should still render the skill: %v", err)
+	}
+	// No nested repo was created at ~/.claude — this is the assertion that bites if
+	// the foreign guard regresses (go-git would happily init a child repo here).
+	if _, err := os.Stat(filepath.Join(claude, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("~/.claude/.git should not exist (must not nest in the user's repo); err=%v", err)
+	}
+	if st, _ := agit.Detect(claude); st != agit.StateForeign {
+		t.Fatalf("~/.claude state = %v, want StateForeign via the parent repo", st)
+	}
+	if n := headCount(t, tmp); n != 1 {
+		t.Fatalf("parent history changed: HEAD has %d commits, want exactly the 1 the user made", n)
+	}
+	assertUserRepoUntouched(t, tmp, rendered, wantHead)
+	assertSkippedNotInited(t, out, claude)
 }
 
 // TestDoctor_WarnsUnknownGitBackupMode checks doctor flags a typo'd mode value.
