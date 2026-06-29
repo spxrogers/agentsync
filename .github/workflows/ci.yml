@@ -1,8 +1,14 @@
 name: ci
+# CI runs on PRs (the gate that keeps a red commit from merging) and as a
+# reusable workflow called at the top of the release pipeline (release.yml), so a
+# release can never publish from a commit that wouldn't pass CI. It deliberately
+# does NOT run on `push: branches: [main]`: a PR can't merge while its checks are
+# red, so a post-merge run on main only re-proves what the PR already proved —
+# wasted compute. The release path re-runs the suite via `workflow_call` exactly
+# because there's no longer a merge-to-main run for it to lean on.
 on:
   pull_request:
-  push:
-    branches: [main]
+  workflow_call:
 
 # Single source of truth for the Go version: go.mod's `go` directive.
 # setup-go reads it via go-version-file below.
