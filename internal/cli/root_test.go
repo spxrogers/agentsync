@@ -15,6 +15,20 @@ func TestRoot_VersionFlag(t *testing.T) {
 	}
 }
 
+func TestRoot_VersionCommandAliasesFlag(t *testing.T) {
+	cmdOut, err := runCLI(t, nil, "version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	flagOut, err := runCLI(t, nil, "--version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmdOut != flagOut {
+		t.Fatalf("`version` output %q != `--version` output %q", cmdOut, flagOut)
+	}
+}
+
 func TestRoot_HelpListsSubcommands(t *testing.T) {
 	out, _ := runCLI(t, nil, "--help")
 	for _, sub := range []string{"init", "agent", "doctor", "verify", "apply"} {

@@ -164,6 +164,9 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `status --json` is
   unchanged and **never collapsed** — it still carries every tracked file, so the
   machine contract is stable.
+- **`agentsync version` is now a subcommand alias for `agentsync --version`.**
+  It renders the same version template as the `--version` flag, so the two
+  outputs can never drift.
 
 ### Fixed
 
