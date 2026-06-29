@@ -45,8 +45,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Re-run the full CI suite (test-fast matrix, hermetic test-release gate, lint,
+  # goreleaser snapshot) against the exact commit being released, as the gate the
+  # rest of this workflow depends on. CI no longer runs on push-to-main, so there
+  # is no merge-time run to lean on; this `workflow_call` is how a release proves
+  # the commit is green before goreleaser publishes anything irreversible. On a
+  # `push: tags` trigger it runs against the tagged commit; on workflow_dispatch,
+  # against the dispatched ref's HEAD (the same commit the tag step below tags).
+  ci:
+    name: ci (pre-release gate)
+    uses: ./.github/workflows/ci.yml
+
   goreleaser:
     name: goreleaser (publish)
+    # Gate publication on the CI suite above: nothing ships from a red commit.
+    needs: ci
     # ubuntu-22.04: the Chocolatey step below runs `choco` under Mono, and
     # mono-complete installs cleanly from this image's apt repos (jammy). The whole
     # release — every channel — is produced in this one job. (This image is on
