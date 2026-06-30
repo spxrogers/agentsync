@@ -235,6 +235,83 @@ func TestSecretsSet_StdinPath(t *testing.T) {
 	}
 }
 
+func TestSecretsSet_RefusesEmptyValue(t *testing.T) {
+	const sentinel = "ghp_SENTINEL_NEVER_ECHO_THIS_TOKEN"
+
+	tests := []struct {
+		name  string
+		stdin string
+		args  []string
+	}{
+		{
+			name:  "stdin-empty",
+			stdin: "",
+			args:  []string{"secrets", "set", "github.token", "--stdin"},
+		},
+		{
+			name:  "stdin-newline-only",
+			stdin: "\n",
+			args:  []string{"secrets", "set", "github.token", "--stdin"},
+		},
+		{
+			name:  "stdin-whitespace-only",
+			stdin: "   ",
+			args:  []string{"secrets", "set", "github.token", "--stdin"},
+		},
+		{
+			name: "legacy-empty",
+			args: []string{"secrets", "set", "github.token="},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env, _, _, _ := setupSecretsEnv(t)
+
+			var out string
+			var err error
+			if strings.HasPrefix(tt.name, "stdin-") {
+				out, err = runCLIWithStdin(t, env, tt.stdin, tt.args...)
+			} else {
+				out, err = runCLI(t, env, tt.args...)
+			}
+			if err == nil {
+				t.Fatalf("expected empty secret value to be refused, got success:\n%s", out)
+			}
+			if strings.Contains(out, "secret \"github.token\" set") {
+				t.Fatalf("refused empty value must not print success:\n%s", out)
+			}
+			if strings.Contains(out, sentinel) || strings.Contains(err.Error(), sentinel) {
+				t.Fatalf("SECURITY: refusal path echoed sentinel value: err=%v out=%q", err, out)
+			}
+
+			got, getErr := runCLI(t, env, "secrets", "get", "github.token")
+			if getErr == nil {
+				t.Fatalf("refused value should not have been stored; get succeeded with %q", got)
+			}
+			if !strings.Contains(got, "not found") && !strings.Contains(getErr.Error(), "not found") {
+				t.Fatalf("get after refusal should report not found: err=%v out=%q", getErr, got)
+			}
+		})
+	}
+}
+
+func TestSecretsSet_AllowEmptyStoresEmpty(t *testing.T) {
+	env, _, _, _ := setupSecretsEnv(t)
+	out, err := runCLIWithStdin(t, env, "", "secrets", "set", "github.token", "--stdin", "--allow-empty")
+	if err != nil {
+		t.Fatalf("secrets set --allow-empty: %v\n%s", err, out)
+	}
+
+	got, err := runCLI(t, env, "secrets", "get", "github.token")
+	if err != nil {
+		t.Fatalf("get after allow-empty set: %v\n%s", err, got)
+	}
+	if strings.TrimSpace(got) != "" {
+		t.Fatalf("expected empty secret value, got %q", got)
+	}
+}
+
 // TestSecretsSet_LegacyArgWarns proves the back-compat path still works
 // but warns the user that the value just hit argv.
 func TestSecretsSet_LegacyArgWarns(t *testing.T) {

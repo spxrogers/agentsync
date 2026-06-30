@@ -513,9 +513,14 @@ Store the value in the age-encrypted vault — three ways:
 ```bash
 agentsync secrets set github.token --stdin    # from stdin (best for scripts / 1Password CLI)
 agentsync secrets set github.token            # interactive prompt, echo off
+agentsync secrets set github.token --stdin --allow-empty  # deliberately store an empty value
 agentsync secrets edit                        # open the whole vault in $EDITOR
 agentsync secrets get github.token            # read one back (to verify)
 ```
+
+`secrets set` refuses empty or whitespace-only values by default so a failed
+paste does not silently store a broken secret; pass `--allow-empty` only when an
+empty string is intentional.
 
 `${secret:…}` is resolved at apply time and written into native config; `${env:…}`
 pulls from the environment. The resolved value is **never** captured back into
@@ -680,7 +685,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `mcp add\|remove\|list <name>` | Manage MCP servers. | `--type --command --args --url --env --agents` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
 | `plugin install\|upgrade\|enable\|disable\|remove\|list <id>` | Manage plugins. | `install <id[@marketplace]>` |
-| `secrets set\|get\|edit <key>` | Manage age-encrypted secrets. | `set --stdin` |
+| `secrets set\|get\|edit <key>` | Manage age-encrypted secrets. `set` refuses empty/whitespace-only values unless `--allow-empty` is passed. | `set --stdin --allow-empty` |
 | `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. | `--dry-run --scope --project --no-git-backup` |
 | `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. | `--to --all --dry-run` |
