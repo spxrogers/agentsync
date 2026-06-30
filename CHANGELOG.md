@@ -11,6 +11,9 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- `agentsync secrets set` now refuses empty or whitespace-only values by default
+  and exposes `--allow-empty` for the rare case where storing an empty string is
+  deliberate (issue #165).
 - **Destination dirs can be git-versioned for one-command rollback (issue #118).**
   `agentsync apply` now optionally keeps each rendered destination dir in its own
   **local-only** git repo, recording a checkpoint commit after every apply that
