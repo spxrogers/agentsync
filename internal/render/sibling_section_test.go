@@ -108,6 +108,12 @@ func codexTwoSection() source.Canonical {
 // other section is wiped. scopeOwnedToSections (pipeline.go) fixes it; this
 // proves it stays fixed. (Re-homed from Claude hooks+lspServers to Codex
 // mcp_servers+hooks after #73 dropped Claude's settings.json LSP write.)
+//
+// This guards the interaction at the render-pipeline layer. The same
+// no-sibling-wipe property is also covered end-to-end through the CLI by
+// TestApply_Codex_MCPAndHooks_Converge (internal/cli), and for the single-apply
+// case with a fake adapter by TestRenderApply_MultipleMergeOpsSamePathAllApplied
+// (writer_test.go) — three altitudes, one property.
 func TestApply_MultiSectionSameFile_NoSiblingWipe(t *testing.T) {
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, ".agentsync")
@@ -131,7 +137,10 @@ func TestApply_MultiSectionSameFile_NoSiblingWipe(t *testing.T) {
 // TestApply_WholeSectionRemoval_StillCleansUp guards the removal case that the
 // per-op-section scoping must not regress: removing ALL hooks (while keeping the
 // MCP server) must still delete the orphaned [hooks.*] section from config.toml,
-// even though another section's op still writes that file.
+// even though another section's op still writes that file. Unlike the
+// convergence tests cross-referenced above, this is the only coverage for
+// per-section orphan cleanup while a sibling section stays live (it exercises
+// orphanCleanupOps, a different pipeline path than scopeOwnedToSections).
 func TestApply_WholeSectionRemoval_StillCleansUp(t *testing.T) {
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, ".agentsync")
