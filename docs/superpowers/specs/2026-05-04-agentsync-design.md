@@ -258,7 +258,7 @@ A plugin is a bag of components. Each component is translated independently per 
 | Subagent | ✓ `~/.claude/agents/X.md` | ◐ projected — `.opencode/agents/X.md` w/ frontmatter munging (`tools` → `permission`, `color` drops, `mode: subagent` added) | ◐ projected — `.codex/agents/X.toml` (markdown→TOML; body→`developer_instructions`) | ✗ skip |
 | Slash command | ✓ `~/.claude/commands/X.md` | ◐ projected — `.opencode/commands/X.md`; body preserved as template, frontmatter fields don't all map (`argument-hint` drops, OpenCode-specific fields not added) | ✗ skip — no custom slash commands | ◐ projected — `.cursor/rules/X.mdc` Manual rule, body=template |
 | Hook | ✓ JSON in settings | ✗ skip(warn) — OpenCode hooks are JS/TS plugins (shim generation deferred) | ◐ projected — `hooks.json`, 5/9 events overlap, requires `[features] codex_hooks = true` | ◐ projected — `hooks.json`, ~6/9 events overlap (Tab hooks unique to Cursor) |
-| LSP server | ✓ native | ✗ skip(warn) — LSP projection deferred to v1.x | ✗ skip(warn) — no LSP concept | ✗ skip(warn) — Cursor inherits VSCode LSP but projection deferred |
+| LSP server | ✗ skip — corrected post-design: Claude Code reads LSP only from plugin manifests, not `settings.json` (see #66/#73) | ✗ skip(warn) — LSP projection deferred to v1.x | ✗ skip(warn) — no LSP concept | ✗ skip(warn) — Cursor inherits VSCode LSP but projection deferred |
 
 **Skill-write strategy**: when a skill must reach multiple agents that read different paths, agentsync writes the same `SKILL.md` content to each path directly. **No symlinks ever.** Two file ops per skill, both tracked in state. Robustness over disk-cost.
 
@@ -440,7 +440,7 @@ State is schema-versioned; future bumps add migrators in `internal/state/`.
 | Milestone | Scope |
 |---|---|
 | **M0** Skeleton | cobra root, `AGENTSYNC_HOME` / `AGENTSYNC_TARGET_ROOT` resolution, adapter interface + registry, source loader (TOML→Go structs), state manager (`targets.json` with fsync+rename), atomic write + flock, slog. |
-| **M1** Claude adapter (full) | Detect/Read/Plan/Apply for all 7 components incl. LSP. `~/.claude/settings.json` and `~/.claude.json` key-level merge with `applied_keys`; foreign keys preserved. Skill frontmatter passthrough. |
+| **M1** Claude adapter (full) | Detect/Read/Plan/Apply for the six supported components (memory, MCP, skill, subagent, command, hook; LSP was scoped here but downgraded to a documented skip post-design — Claude loads LSP only from plugin manifests, see #66/#73). `~/.claude/settings.json` and `~/.claude.json` key-level merge with `applied_keys`; foreign keys preserved. Skill frontmatter passthrough. |
 | **M2** OpenCode adapter | MCP, AGENTS.md, skills (write to `.claude/skills/`), agents (`.opencode/agents/`), commands (`.opencode/commands/`). Hooks: ✗ skip(warn). LSP: ✗ skip(warn). JSONC round-trip via `tailscale/hujson`. |
 | **M3** Drift / status / diff / reconcile | 3-way classifier, file + key levels, prompt loop, bulk hotkeys, `--auto-*` flags, foreign-key reporting. |
 | **M4** Marketplaces + plugins | All 5 plugin sources (relative, github, url, git-subdir, npm). go-git fetch + sparse for git-subdir. npm tarball fetch via registry HTTP. `strict` mode handling. `${CLAUDE_PLUGIN_ROOT}` substitution. Per-component projection, translation report, sha pinning, update modes. |
