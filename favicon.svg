@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="agentsync">
+  <defs>
+    <linearGradient id="as-fav" x1="4" y1="4" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2dd4bf"/>
+      <stop offset="1" stop-color="#6366f1"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="30" height="30" rx="8" fill="#0b1220"/>
+  <g transform="translate(4 4)" stroke="url(#as-fav)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <polyline points="21 4 21 9 16 9"/>
+    <polyline points="3 20 3 15 8 15"/>
+    <path d="M4.2 9a8 8 0 0 1 13.2-3L21 9"/>
+    <path d="M3 15l3.6 3A8 8 0 0 0 19.8 15"/>
+  </g>
+</svg>

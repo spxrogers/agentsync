@@ -1,0 +1,657 @@
+<!DOCTYPE html><html lang="en" dir="ltr" data-theme="dark" data-has-toc data-has-sidebar class="astro-bguv2lll"> <head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Architecture | agentsync</title><link rel="canonical" href="https://agentsync.cc/internals/architecture/"/><link rel="sitemap" href="/sitemap-index.xml"/><script src="https://www.googletagmanager.com/gtag/js?id=G-3LE4ZX1TWF" async></script><script>window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-3LE4ZX1TWF');</script><script src="https://context7.com/widget.js" data-library="/spxrogers/agentsync" async></script><link rel="shortcut icon" href="/favicon.svg" type="image/svg+xml"/><meta name="generator" content="Astro v6.3.7"/><meta name="generator" content="Starlight v0.39.2"/><meta property="og:title" content="Architecture"/><meta property="og:type" content="article"/><meta property="og:url" content="https://agentsync.cc/internals/architecture/"/><meta property="og:locale" content="en"/><meta property="og:description" content="The apply/capture pipelines, the 3-way drift classifier, and the secret-safety invariants."/><meta property="og:site_name" content="agentsync"/><meta name="twitter:card" content="summary_large_image"/><meta name="description" content="The apply/capture pipelines, the 3-way drift classifier, and the secret-safety invariants."/><meta property="og:image" content="https://agentsync.cc/og.png"/><script>
+	window.StarlightThemeProvider = (() => {
+		const storedTheme =
+			typeof localStorage !== 'undefined' && localStorage.getItem('starlight-theme');
+		const theme =
+			storedTheme ||
+			(window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+		document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+		return {
+			updatePickers(theme = storedTheme || 'auto') {
+				document.querySelectorAll('starlight-theme-select').forEach((picker) => {
+					const select = picker.querySelector('select');
+					if (select) select.value = theme;
+					/** @type {HTMLTemplateElement | null} */
+					const tmpl = document.querySelector(`#theme-icons`);
+					const newIcon = tmpl && tmpl.content.querySelector('.' + theme);
+					if (newIcon) {
+						const oldIcon = picker.querySelector('svg.label-icon');
+						if (oldIcon) {
+							oldIcon.replaceChildren(...newIcon.cloneNode(true).childNodes);
+						}
+					}
+				});
+			},
+		};
+	})();
+</script><template id="theme-icons"><svg aria-hidden="true" class="light astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M5 12a1 1 0 0 0-1-1H3a1 1 0 0 0 0 2h1a1 1 0 0 0 1-1Zm.64 5-.71.71a1 1 0 0 0 0 1.41 1 1 0 0 0 1.41 0l.71-.71A1 1 0 0 0 5.64 17ZM12 5a1 1 0 0 0 1-1V3a1 1 0 0 0-2 0v1a1 1 0 0 0 1 1Zm5.66 2.34a1 1 0 0 0 .7-.29l.71-.71a1 1 0 1 0-1.41-1.41l-.66.71a1 1 0 0 0 0 1.41 1 1 0 0 0 .66.29Zm-12-.29a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.71-.71a1.004 1.004 0 1 0-1.43 1.41l.73.71ZM21 11h-1a1 1 0 0 0 0 2h1a1 1 0 0 0 0-2Zm-2.64 6A1 1 0 0 0 17 18.36l.71.71a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.76-.66ZM12 6.5a5.5 5.5 0 1 0 5.5 5.5A5.51 5.51 0 0 0 12 6.5Zm0 9a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm0 3.5a1 1 0 0 0-1 1v1a1 1 0 0 0 2 0v-1a1 1 0 0 0-1-1Z"/></svg><svg aria-hidden="true" class="dark astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.64 13a1 1 0 0 0-1.05-.14 8.049 8.049 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36a10.14 10.14 0 1 0 14 11.69 1 1 0 0 0-.36-1.05Zm-9.5 6.69A8.14 8.14 0 0 1 7.08 5.22v.27a10.15 10.15 0 0 0 10.14 10.14 9.784 9.784 0 0 0 2.1-.22 8.11 8.11 0 0 1-7.18 4.32v-.04Z"/></svg><svg aria-hidden="true" class="auto astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg></template><link rel="stylesheet" href="/_astro/print.DNXP8c50.css" media="print"><link rel="stylesheet" href="/_astro/common.K6m6ooV3.css">
+<link rel="stylesheet" href="/_astro/Code.Z3erjfkG.css"><script type="module" src="/_astro/page.Bv-QlaK6.js"></script></head> <body class="astro-bguv2lll"> <a href="#_top" class="astro-7q3lir66">Skip to content</a> <div class="page sl-flex astro-vrdttmbt"> <header class="header astro-vrdttmbt"><div class="header astro-kmkmnagf"> <div class="title-wrapper sl-flex astro-kmkmnagf"> <a href="/" class="site-title sl-flex astro-m46x6ez3">  <img class="astro-m46x6ez3" alt="agentsync" src="/_astro/agentsync-logo.D8y6KW2E.svg" width="24" height="24">  <span class="astro-m46x6ez3" translate="no"> agentsync </span> </a> </div> <div class="sl-flex print:hidden astro-kmkmnagf"> <site-search class="astro-kmkmnagf astro-v37mnknz" data-translations="{&quot;placeholder&quot;:&quot;Search&quot;}"> <button data-open-modal disabled aria-label="Search" aria-keyshortcuts="Control+K" class="astro-v37mnknz"> <svg aria-hidden="true" class="astro-v37mnknz astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.71 20.29 18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.39ZM11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg> <span class="sl-hidden md:sl-block astro-v37mnknz" aria-hidden="true">Search</span> <kbd class="sl-hidden md:sl-flex astro-v37mnknz" style="display: none;"> <kbd class="astro-v37mnknz">Ctrl</kbd><kbd class="astro-v37mnknz">K</kbd> </kbd> </button> <dialog style="padding:0" aria-label="Search" class="astro-v37mnknz"> <div class="dialog-frame sl-flex astro-v37mnknz">  <button data-close-modal class="sl-flex md:sl-hidden astro-v37mnknz"> Cancel </button> <div class="search-container astro-v37mnknz"> <div id="starlight__search" class="astro-v37mnknz"></div> </div> </div> </dialog> </site-search>  <script>
+	(() => {
+		const openBtn = document.querySelector('button[data-open-modal]');
+		const shortcut = openBtn?.querySelector('kbd');
+		if (!openBtn || !(shortcut instanceof HTMLElement)) return;
+		const platformKey = shortcut.querySelector('kbd');
+		if (platformKey && /(Mac|iPhone|iPod|iPad)/i.test(navigator.platform)) {
+			platformKey.textContent = '⌘';
+			openBtn.setAttribute('aria-keyshortcuts', 'Meta+K');
+		}
+		shortcut.style.display = '';
+	})();
+</script> <script type="module" src="/_astro/Search.astro_astro_type_script_index_0_lang.CZEeVnww.js"></script>  </div> <div class="sl-hidden md:sl-flex print:hidden right-group astro-kmkmnagf"> <div class="sl-flex social-icons astro-kmkmnagf"> <a href="https://github.com/spxrogers/agentsync" rel="me" class="sl-flex astro-wy4te6ga"><span class="sr-only astro-wy4te6ga">GitHub</span><svg aria-hidden="true" class="astro-wy4te6ga astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"/></svg></a> </div> <starlight-theme-select>  <label style="--sl-select-width: 6.25em" class="astro-4yphtoen"> <span class="sr-only astro-4yphtoen">Select theme</span> <svg aria-hidden="true" class="icon label-icon astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg> <select autocomplete="off" class="astro-4yphtoen"> <option value="dark" class="astro-4yphtoen">Dark</option><option value="light" class="astro-4yphtoen">Light</option><option value="auto" selected class="astro-4yphtoen">Auto</option> </select> <svg aria-hidden="true" class="icon caret astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg> </label> </starlight-theme-select>  <script>
+	StarlightThemeProvider.updatePickers();
+</script> <script type="module">const r="starlight-theme",o=e=>e==="auto"||e==="dark"||e==="light"?e:"auto",c=()=>o(typeof localStorage<"u"&&localStorage.getItem(r));function n(e){typeof localStorage<"u"&&localStorage.setItem(r,e==="light"||e==="dark"?e:"")}const l=()=>matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";function t(e){StarlightThemeProvider.updatePickers(e),document.documentElement.dataset.theme=e==="auto"?l():e,n(e)}matchMedia("(prefers-color-scheme: light)").addEventListener("change",()=>{c()==="auto"&&t("auto")});class s extends HTMLElement{constructor(){super(),t(c()),this.querySelector("select")?.addEventListener("change",a=>{a.currentTarget instanceof HTMLSelectElement&&t(o(a.currentTarget.value))})}}customElements.define("starlight-theme-select",s);</script> <script type="module">class s extends HTMLElement{constructor(){super();const e=this.querySelector("select");e&&(e.addEventListener("change",t=>{t.currentTarget instanceof HTMLSelectElement&&(window.location.pathname=t.currentTarget.value)}),window.addEventListener("pageshow",t=>{if(!t.persisted)return;const n=e.querySelector("option[selected]")?.index;n!==e.selectedIndex&&(e.selectedIndex=n??0)}))}}customElements.define("starlight-lang-select",s);</script> </div> </div></header> <nav class="sidebar print:hidden astro-vrdttmbt" aria-label="Main"> <starlight-menu-button class="print:hidden astro-jif73yzw"> <button aria-expanded="false" aria-label="Menu" aria-controls="starlight__sidebar" class="sl-flex md:sl-hidden astro-jif73yzw"> <svg aria-hidden="true" class="open-menu astro-jif73yzw astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M3 8h18a1 1 0 1 0 0-2H3a1 1 0 0 0 0 2Zm18 8H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Zm0-5H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Z"/></svg> <svg aria-hidden="true" class="close-menu astro-jif73yzw astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="m13.41 12 6.3-6.29a1.004 1.004 0 1 0-1.42-1.42L12 10.59l-6.29-6.3a1.004 1.004 0 0 0-1.42 1.42l6.3 6.29-6.3 6.29a1 1 0 0 0 0 1.42.998.998 0 0 0 1.42 0l6.29-6.3 6.29 6.3a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.42L13.41 12Z"/></svg> </button> </starlight-menu-button> <script type="module">class s extends HTMLElement{constructor(){super(),this.btn=this.querySelector("button"),this.btn.addEventListener("click",()=>this.toggleExpanded());const t=this.closest("nav");t&&t.addEventListener("keyup",e=>this.closeOnEscape(e))}setExpanded(t){this.setAttribute("aria-expanded",String(t)),document.body.toggleAttribute("data-mobile-menu-expanded",t)}toggleExpanded(){this.setExpanded(this.getAttribute("aria-expanded")!=="true")}closeOnEscape(t){t.code==="Escape"&&(this.setExpanded(!1),this.btn.focus())}}customElements.define("starlight-menu-button",s);</script>  <div id="starlight__sidebar" class="sidebar-pane astro-vrdttmbt"> <div class="sidebar-content sl-flex astro-vrdttmbt"> <sl-sidebar-state-persist data-hash="0vt5dfa" class="astro-kku4brbg"> <script aria-hidden="true">
+		(() => {
+			try {
+				if (!matchMedia('(min-width: 50em)').matches) return;
+				/** @type {HTMLElement | null} */
+				const target = document.querySelector('sl-sidebar-state-persist');
+				const state = JSON.parse(sessionStorage.getItem('sl-sidebar-state') || '0');
+				if (!target || !state || target.dataset.hash !== state.hash) return;
+				window._starlightScrollRestore = state.scroll;
+				customElements.define(
+					'sl-sidebar-restore',
+					class SidebarRestore extends HTMLElement {
+						connectedCallback() {
+							try {
+								const idx = parseInt(this.dataset.index || '');
+								const details = this.closest('details');
+								if (details && typeof state.open[idx] === 'boolean') details.open = state.open[idx];
+							} catch {}
+						}
+					}
+				);
+			} catch {}
+		})();
+	</script>  <ul class="top-level astro-3ii7xxms"> <li class="astro-3ii7xxms"> <details open class="astro-3ii7xxms"> <summary class="astro-3ii7xxms"> <span class="group-label astro-3ii7xxms"> <span class="large astro-3ii7xxms">Start here</span>  </span> <svg aria-hidden="true" class="caret astro-3ii7xxms astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg> </summary> <sl-sidebar-restore data-index="0"></sl-sidebar-restore> <ul class="astro-3ii7xxms"> <li class="astro-3ii7xxms"> <a href="/getting-started/introduction/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">What is agentsync?</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/comparison/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">How agentsync compares</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/reference/capability-matrix/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Agent Capability matrix</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/getting-started/mental-model/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">The mental model</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/getting-started/install/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Install</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/getting-started/first-sync/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Your first sync</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/getting-started/existing-configs/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Already have configs?</span>  </a> </li> </ul> </details> </li><li class="astro-3ii7xxms"> <details open class="astro-3ii7xxms"> <summary class="astro-3ii7xxms"> <span class="group-label astro-3ii7xxms"> <span class="large astro-3ii7xxms">Guides</span>  </span> <svg aria-hidden="true" class="caret astro-3ii7xxms astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg> </summary> <sl-sidebar-restore data-index="1"></sl-sidebar-restore> <ul class="astro-3ii7xxms"> <li class="astro-3ii7xxms"> <a href="/guides/daily-loop/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">The daily loop</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/guides/mcp-servers/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">MCP servers</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/guides/memory/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Memory</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/guides/plugins/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Marketplaces &amp; plugins</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/guides/secrets/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Secrets</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/guides/projects/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Project-local config</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/guides/updating/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Updating from the network</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/guides/cross-machine/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Cross-machine sync</span>  </a> </li> </ul> </details> </li><li class="astro-3ii7xxms"> <details open class="astro-3ii7xxms"> <summary class="astro-3ii7xxms"> <span class="group-label astro-3ii7xxms"> <span class="large astro-3ii7xxms">Recipes</span>  </span> <svg aria-hidden="true" class="caret astro-3ii7xxms astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg> </summary> <sl-sidebar-restore data-index="2"></sl-sidebar-restore> <ul class="astro-3ii7xxms"> <li class="astro-3ii7xxms"> <a href="/recipes/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Overview</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/recipes/dotfiles/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Commit your config to dotfiles</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/recipes/team-onboarding/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Onboard a teammate</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/recipes/ci-verification/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Verify config in CI</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/recipes/adopt-existing/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Adopt a populated machine</span>  </a> </li> </ul> </details> </li><li class="astro-3ii7xxms"> <details open class="astro-3ii7xxms"> <summary class="astro-3ii7xxms"> <span class="group-label astro-3ii7xxms"> <span class="large astro-3ii7xxms">Reference</span>  </span> <svg aria-hidden="true" class="caret astro-3ii7xxms astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg> </summary> <sl-sidebar-restore data-index="3"></sl-sidebar-restore> <ul class="astro-3ii7xxms"> <li class="astro-3ii7xxms"> <a href="/reference/cli/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">CLI commands</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/reference/configuration/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Configuration &amp; layout</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/reference/environment/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Environment variables</span>  </a> </li> </ul> </details> </li><li class="astro-3ii7xxms"> <details open class="astro-3ii7xxms"> <summary class="astro-3ii7xxms"> <span class="group-label astro-3ii7xxms"> <span class="large astro-3ii7xxms">Concepts</span>  </span> <svg aria-hidden="true" class="caret astro-3ii7xxms astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg> </summary> <sl-sidebar-restore data-index="4"></sl-sidebar-restore> <ul class="astro-3ii7xxms"> <li class="astro-3ii7xxms"> <a href="/concepts/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Concepts &amp; glossary</span>  </a> </li> </ul> </details> </li><li class="astro-3ii7xxms"> <details open class="astro-3ii7xxms"> <summary class="astro-3ii7xxms"> <span class="group-label astro-3ii7xxms"> <span class="large astro-3ii7xxms">Under the hood</span>  </span> <svg aria-hidden="true" class="caret astro-3ii7xxms astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg> </summary> <sl-sidebar-restore data-index="5"></sl-sidebar-restore> <ul class="astro-3ii7xxms"> <li class="astro-3ii7xxms"> <a href="/internals/architecture/" aria-current="page" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Architecture</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/internals/components/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Component map</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/internals/security/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Security model</span>  </a> </li> </ul> </details> </li><li class="astro-3ii7xxms"> <details open class="astro-3ii7xxms"> <summary class="astro-3ii7xxms"> <span class="group-label astro-3ii7xxms"> <span class="large astro-3ii7xxms">Help</span>  </span> <svg aria-hidden="true" class="caret astro-3ii7xxms astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg> </summary> <sl-sidebar-restore data-index="6"></sl-sidebar-restore> <ul class="astro-3ii7xxms"> <li class="astro-3ii7xxms"> <a href="/help/faq/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">FAQ</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/help/troubleshooting/" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Troubleshooting</span>  </a> </li> </ul> </details> </li> </ul>  <script aria-hidden="true">
+		(() => {
+			const scroller = document.getElementById('starlight__sidebar');
+			if (!window._starlightScrollRestore || !scroller) return;
+			scroller.scrollTop = window._starlightScrollRestore;
+			delete window._starlightScrollRestore;
+		})();
+	</script> </sl-sidebar-state-persist> <div class="md:sl-hidden"> <div class="mobile-preferences sl-flex astro-wu23bvmt"> <div class="social-icons astro-wu23bvmt"> <a href="https://github.com/spxrogers/agentsync" rel="me" class="sl-flex astro-wy4te6ga"><span class="sr-only astro-wy4te6ga">GitHub</span><svg aria-hidden="true" class="astro-wy4te6ga astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"/></svg></a> </div> <starlight-theme-select>  <label style="--sl-select-width: 6.25em" class="astro-4yphtoen"> <span class="sr-only astro-4yphtoen">Select theme</span> <svg aria-hidden="true" class="icon label-icon astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg> <select autocomplete="off" class="astro-4yphtoen"> <option value="dark" class="astro-4yphtoen">Dark</option><option value="light" class="astro-4yphtoen">Light</option><option value="auto" selected class="astro-4yphtoen">Auto</option> </select> <svg aria-hidden="true" class="icon caret astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg> </label> </starlight-theme-select>  <script>
+	StarlightThemeProvider.updatePickers();
+</script>   </div> </div> </div> </div> </nav> <div class="main-frame astro-vrdttmbt">  <script type="module">const a=document.getElementById("starlight__sidebar"),n=a?.querySelector("sl-sidebar-state-persist"),o="sl-sidebar-state",i=()=>{let t=[];const e=n?.dataset.hash||"";try{const s=sessionStorage.getItem(o),r=JSON.parse(s||"{}");Array.isArray(r.open)&&r.hash===e&&(t=r.open)}catch{}return{hash:e,open:t,scroll:a?.scrollTop||0}},c=t=>{try{sessionStorage.setItem(o,JSON.stringify(t))}catch{}},d=()=>c(i()),l=(t,e)=>{const s=i();s.open[e]=t,c(s)};n?.addEventListener("click",t=>{if(!(t.target instanceof Element))return;const e=t.target.closest("summary")?.closest("details");if(!e)return;const s=e.querySelector("sl-sidebar-restore"),r=parseInt(s?.dataset.index||"");isNaN(r)||l(!e.open,r)});addEventListener("visibilitychange",()=>{document.visibilityState==="hidden"&&d()});addEventListener("pageHide",d);</script> <div class="lg:sl-flex astro-67yu43on"> <aside class="right-sidebar-container print:hidden astro-67yu43on"> <div class="right-sidebar astro-67yu43on"> <div class="lg:sl-hidden astro-pb3aqygn"><mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-doynk5tl"><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-doynk5tl"><details id="starlight__mobile-toc" class="astro-doynk5tl"><summary id="starlight__on-this-page--mobile" class="sl-flex astro-doynk5tl"><span class="toggle sl-flex astro-doynk5tl">On this page<svg aria-hidden="true" class="caret astro-doynk5tl astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></span><span class="display-current astro-doynk5tl"></span></summary><div class="dropdown astro-doynk5tl"><ul class="isMobile astro-gnoq344e" style="--depth: 0;"> <li class="astro-gnoq344e" style="--depth: 0;"> <a href="#_top" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">Overview</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#1-the-three-state-model" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">1. The three-state model</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#2-the-canonical-model-is-the-schema" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">2. The canonical model is the schema</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#3-the-adapter-contract" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">3. The adapter contract</span> </a> <ul class="isMobile astro-gnoq344e" style="--depth: 1;"> <li class="astro-gnoq344e" style="--depth: 1;"> <a href="#pluginingester-read-only" class="astro-gnoq344e" style="--depth: 1;"> <span class="astro-gnoq344e" style="--depth: 1;">PluginIngester (read-only)</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 1;"> <a href="#warnemitter-optional" class="astro-gnoq344e" style="--depth: 1;"> <span class="astro-gnoq344e" style="--depth: 1;">WarnEmitter (optional)</span> </a>  </li> </ul> </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#4-the-apply-pipeline-source--destination" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">4. The apply pipeline (Source ▶ Destination)</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#5-the-capture-pipeline-destination--source" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">5. The capture pipeline (Destination ▶ Source)</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#6-drift--the-3-way-classifier" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">6. Drift — the 3-way classifier</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#7-safety-primitives" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">7. Safety primitives</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#8-secrets--how-the-leak-is-prevented" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">8. Secrets — how the leak is prevented</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#9-network-boundary" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">9. Network boundary</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#10-package-layering" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">10. Package layering</span> </a>  </li> </ul></div></details></nav></mobile-starlight-toc><script type="module" src="/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.hwBsy0Mo.js"></script></div><div class="right-sidebar-panel sl-hidden lg:sl-block astro-pb3aqygn"><div class="sl-container astro-pb3aqygn"><starlight-toc data-min-h="2" data-max-h="3"><nav aria-labelledby="starlight__on-this-page"><h2 id="starlight__on-this-page">On this page</h2><ul class="astro-gnoq344e" style="--depth: 0;"> <li class="astro-gnoq344e" style="--depth: 0;"> <a href="#_top" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">Overview</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#1-the-three-state-model" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">1. The three-state model</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#2-the-canonical-model-is-the-schema" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">2. The canonical model is the schema</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#3-the-adapter-contract" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">3. The adapter contract</span> </a> <ul class="astro-gnoq344e" style="--depth: 1;"> <li class="astro-gnoq344e" style="--depth: 1;"> <a href="#pluginingester-read-only" class="astro-gnoq344e" style="--depth: 1;"> <span class="astro-gnoq344e" style="--depth: 1;">PluginIngester (read-only)</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 1;"> <a href="#warnemitter-optional" class="astro-gnoq344e" style="--depth: 1;"> <span class="astro-gnoq344e" style="--depth: 1;">WarnEmitter (optional)</span> </a>  </li> </ul> </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#4-the-apply-pipeline-source--destination" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">4. The apply pipeline (Source ▶ Destination)</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#5-the-capture-pipeline-destination--source" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">5. The capture pipeline (Destination ▶ Source)</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#6-drift--the-3-way-classifier" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">6. Drift — the 3-way classifier</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#7-safety-primitives" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">7. Safety primitives</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#8-secrets--how-the-leak-is-prevented" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">8. Secrets — how the leak is prevented</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#9-network-boundary" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">9. Network boundary</span> </a>  </li><li class="astro-gnoq344e" style="--depth: 0;"> <a href="#10-package-layering" class="astro-gnoq344e" style="--depth: 0;"> <span class="astro-gnoq344e" style="--depth: 0;">10. Package layering</span> </a>  </li> </ul></nav></starlight-toc><script type="module" src="/_astro/TableOfContents.astro_astro_type_script_index_0_lang.FuRcXuRY.js"></script></div></div> </div> </aside> <div class="main-pane astro-67yu43on">  <main data-pagefind-body class="astro-bguv2lll" lang="en" dir="ltr">    <div class="content-panel astro-7nkwcw3z"> <div class="sl-container astro-7nkwcw3z"> <h1 id="_top" class="astro-j6tvhyss">Architecture</h1> </div> </div> <div class="content-panel astro-7nkwcw3z"> <div class="sl-container astro-7nkwcw3z"> <div class="sl-markdown-content"> <aside aria-label="Mirrored from the repo" class="starlight-aside starlight-aside--note"><p class="starlight-aside__title" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" class="starlight-aside__icon"><path d="M12 11C11.7348 11 11.4804 11.1054 11.2929 11.2929C11.1054 11.4804 11 11.7348 11 12V16C11 16.2652 11.1054 16.5196 11.2929 16.7071C11.4804 16.8946 11.7348 17 12 17C12.2652 17 12.5196 16.8946 12.7071 16.7071C12.8946 16.5196 13 16.2652 13 16V12C13 11.7348 12.8946 11.4804 12.7071 11.2929C12.5196 11.1054 12.2652 11 12 11ZM12.38 7.08C12.1365 6.97998 11.8635 6.97998 11.62 7.08C11.4973 7.12759 11.3851 7.19896 11.29 7.29C11.2017 7.3872 11.1306 7.49882 11.08 7.62C11.024 7.73868 10.9966 7.86882 11 8C10.9992 8.13161 11.0245 8.26207 11.0742 8.38391C11.124 8.50574 11.1973 8.61656 11.29 8.71C11.3872 8.79833 11.4988 8.86936 11.62 8.92C11.7715 8.98224 11.936 9.00632 12.099 8.99011C12.2619 8.97391 12.4184 8.91792 12.5547 8.82707C12.691 8.73622 12.8029 8.61328 12.8805 8.46907C12.9582 8.32486 12.9992 8.16378 13 8C12.9963 7.73523 12.8927 7.48163 12.71 7.29C12.6149 7.19896 12.5028 7.12759 12.38 7.08ZM12 2C10.0222 2 8.08879 2.58649 6.4443 3.6853C4.79981 4.78412 3.51809 6.3459 2.76121 8.17317C2.00433 10.0004 1.8063 12.0111 2.19215 13.9509C2.578 15.8907 3.53041 17.6725 4.92894 19.0711C6.32746 20.4696 8.10929 21.422 10.0491 21.8079C11.9889 22.1937 13.9996 21.9957 15.8268 21.2388C17.6541 20.4819 19.2159 19.2002 20.3147 17.5557C21.4135 15.9112 22 13.9778 22 12C22 10.6868 21.7413 9.38642 21.2388 8.17317C20.7363 6.95991 19.9997 5.85752 19.0711 4.92893C18.1425 4.00035 17.0401 3.26375 15.8268 2.7612C14.6136 2.25866 13.3132 2 12 2ZM12 20C10.4178 20 8.87104 19.5308 7.55544 18.6518C6.23985 17.7727 5.21447 16.5233 4.60897 15.0615C4.00347 13.5997 3.84504 11.9911 4.15372 10.4393C4.4624 8.88743 5.22433 7.46197 6.34315 6.34315C7.46197 5.22433 8.88743 4.4624 10.4393 4.15372C11.9911 3.84504 13.5997 4.00346 15.0615 4.60896C16.5233 5.21447 17.7727 6.23984 18.6518 7.55544C19.5308 8.87103 20 10.4177 20 12C20 14.1217 19.1572 16.1566 17.6569 17.6569C16.1566 19.1571 14.1217 20 12 20Z"></path></svg>Mirrored from the repo</p><div class="starlight-aside__content"><p>This page is generated from <a href="https://github.com/spxrogers/agentsync/blob/main/docs/architecture.md"><code dir="auto">docs/architecture.md</code></a>, the
+canonical in-repo doc. Edit that file, not this page.</p></div></aside>
+<p>How agentsync is put together: the data model, the apply/capture pipelines, the
+drift classifier, and the safety and secrets invariants that make it trustworthy
+enough to point at your real config and your real credentials.</p>
+<p>If you haven’t yet, read <a href="/concepts/">Concepts &#x26; glossary</a> first — this page
+assumes that vocabulary. For a package-by-package index, see the
+<a href="/internals/components/">component map</a>.</p>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="1-the-three-state-model">1. The three-state model</h2><a class="sl-anchor-link" href="#1-the-three-state-model"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “1. The three-state model”</span></a></div>
+<p>agentsync inherits chezmoi’s three-state design. Every operation is a comparison
+between <strong>Source</strong> (what you committed), <strong>Target</strong> (what the source renders to,
+computed in memory), and <strong>Destination</strong> (what’s on disk in each agent).</p>
+<pre class="mermaid">flowchart LR
+    subgraph S["Source — ~/.agentsync/"]
+        TOML["TOML + .md&#x3C;br/>(hand-editable)"]
+    end
+    subgraph T["Target — in memory"]
+        OPS["per-agent FileOps&#x3C;br/>+ Skips"]
+    end
+    subgraph D["Destination — on disk"]
+        NATIVE["~/.claude.json&#x3C;br/>~/.config/opencode/…"]
+    end
+    TOML -- "render (resolve secrets + project)" --> OPS
+    OPS -- "write (atomic)" --> NATIVE
+    NATIVE -- "capture (ingest + re-reference)" --> TOML</pre>
+<p>Drift is a hash comparison against the <strong>last-applied</strong> hashes recorded in
+state: if the destination’s hash no longer matches what agentsync last wrote, the
+file was edited outside agentsync.</p>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="2-the-canonical-model-is-the-schema">2. The canonical model <em>is</em> the schema</h2><a class="sl-anchor-link" href="#2-the-canonical-model-is-the-schema"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “2. The canonical model is the schema”</span></a></div>
+<p>There is no separate internal IR. The Go structs in <code dir="auto">internal/source</code> that parse
+the TOML/markdown in <code dir="auto">~/.agentsync/</code> are the canonical model
+(<code dir="auto">source.Canonical</code>), and adapters render directly from it. Adding a component
+field means changing those structs; adding an agent means adding an adapter that
+consumes them — the schema is the contract between the two.</p>
+<div class="expressive-code"><link rel="stylesheet" href="/_astro/ec.v4551.css"><script type="module" src="/_astro/ec.0vx5m.js"></script><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="plaintext"><code><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">source.Canonical</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">├── Config          (agentsync.toml: agents, update defaults, secrets backend, [memory] banner)</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">├── MCPServers      (mcp/*.toml)</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">├── Skills          (skills/&#x3C;name>/ — SKILL.md + bundled scripts/references/assets)</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">├── Subagents, Commands, Hooks, LSPServers</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">├── Plugins, Marketplaces   (plugins/*.toml, marketplaces/*.toml)</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">├── Memory          (memory/AGENTS.md + fragments/; rendered files get the managed banner — see below)</span></div></div><div class="ec-line"><div class="code"><span style="--0:#d6deeb;--1:#403f53">└── Project         (overlay loaded from a &#x3C;root>/.agentsync/ tree, project scope)</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="source.Canonical├── Config          (agentsync.toml: agents, update defaults, secrets backend, [memory] banner)├── MCPServers      (mcp/*.toml)├── Skills          (skills/<name>/ — SKILL.md + bundled scripts/references/assets)├── Subagents, Commands, Hooks, LSPServers├── Plugins, Marketplaces   (plugins/*.toml, marketplaces/*.toml)├── Memory          (memory/AGENTS.md + fragments/; rendered files get the managed banner — see below)└── Project         (overlay loaded from a <root>/.agentsync/ tree, project scope)"><div></div></button></div></figure></div>
+<p>At <strong>project scope</strong> the same canonical is loaded a second time from the repo’s
+<code dir="auto">&#x3C;root>/.agentsync/</code> tree (identical layout) and overlaid onto the user canonical
+by <code dir="auto">project.Merge</code>: entries are merged by id/name (project wins), project memory
+is appended, an empty project <code dir="auto">[agents]</code> inherits the user’s enabled agents, and
+a project <code dir="auto">plugins/&#x3C;id>.toml</code> with <code dir="auto">disabled = true</code> is excluded from projection
+in that repo. The retired M5 single-file <code dir="auto">.agentsync.toml</code> marker is no longer
+read — <code dir="auto">project.Discover</code> surfaces a migration error if it finds one.</p>
+<p><strong>Managed memory banner.</strong> Every rendered memory file (<code dir="auto">CLAUDE.md</code>, <code dir="auto">AGENTS.md</code>,
+…) is prepended with a short agentsync notice naming the file and pointing edits
+back at <code dir="auto">.agentsync/memory/AGENTS.md</code> + <code dir="auto">agentsync apply</code>. Every adapter renders
+memory through the one helper <code dir="auto">source.RenderManagedMemory</code> (which wraps
+<code dir="auto">ExpandMemoryImports</code>), so the banner is byte-identical across agents. It is a
+property of the <em>rendered destination file only</em> — it is wrapped in reversible
+<code dir="auto">&#x3C;!-- agentsync:managed memory-banner --></code> markers (the <code dir="auto">agentsync:managed</code>
+namespace carries a per-marker identifier so future managed markers stay
+unambiguous) and stripped by <code dir="auto">source.StripManagedBanner</code>
+on the way back in (each adapter’s ingest, plus a backstop at the <code dir="auto">import</code> /
+<code dir="auto">reconcile</code> write-back funnels), so it never enters the canonical source and never
+compounds. Because the banner text is static (only the filename varies) it hashes
+identically on every render, so an untouched file still classifies <code dir="auto">InSync</code> — the
+banner never manufactures drift. It is on by default; <code dir="auto">[memory] banner = false</code>
+in <code dir="auto">agentsync.toml</code> opts out (the project overlay inherits the user setting unless
+it sets its own). The <code dir="auto">agentsync:managed</code> marker is <strong>reserved</strong>: <code dir="auto">checkReservedMarkers</code>
+(in <code dir="auto">loadMemory</code> and <code dir="auto">WriteMemory</code>) rejects a canonical whose body or a fragment
+carries it rather than letting it collide with the banner’s markers, and
+<code dir="auto">StripManagedBanner</code> matches agentsync’s full rendered banner (not the bare
+markers) so it removes only agentsync’s own banner — a user-authored marker block
+is preserved, never deleted.</p>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="3-the-adapter-contract">3. The adapter contract</h2><a class="sl-anchor-link" href="#3-the-adapter-contract"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “3. The adapter contract”</span></a></div>
+<p>Every agent integration implements one interface (<code dir="auto">internal/adapter/adapter.go</code>):</p>
+<div class="expressive-code"><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="go"><code><div class="ec-line"><div class="code"><span style="--0:#C792EA;--1:#8844AE">type</span><span style="--0:#D6DEEB;--1:#403F53"> Adapter </span><span style="--0:#C792EA;--1:#8844AE">interface</span><span style="--0:#D6DEEB;--1:#403F53"> {</span></div></div><div class="ec-line"><div class="code"><span class="indent">    </span><span style="--0:#82AAFF;--1:#3B61B0">Name</span><span style="--0:#D6DEEB;--1:#403F53">() </span><span style="--0:#C792EA;--1:#8844AE">string</span></div></div><div class="ec-line"><div class="code"><span class="indent">    </span><span style="--0:#82AAFF;--1:#3B61B0">Capabilities</span><span style="--0:#D6DEEB;--1:#403F53">() Capability       </span><span style="--0:#919F9F;--1:#5D6376">// bitmask: MCP, Memory, Skill, Subagent, Command, Hook, LSP</span></div></div><div class="ec-line"><div class="code"><span class="indent">    </span><span style="--0:#82AAFF;--1:#3B61B0">Detect</span><span style="--0:#D6DEEB;--1:#403F53">() (</span><span style="--0:#C792EA;--1:#8844AE">bool</span><span style="--0:#D6DEEB;--1:#403F53">, </span><span style="--0:#C792EA;--1:#8844AE">error</span><span style="--0:#D6DEEB;--1:#403F53">)          </span><span style="--0:#919F9F;--1:#5D6376">// is this agent installed?</span></div></div><div class="ec-line"><div class="code"><span class="indent">    </span><span style="--0:#82AAFF;--1:#3B61B0">Render</span><span style="--1:#403F53"><span style="--0:#D6DEEB">(</span><span style="--0:#D7DBE0">r</span><span style="--0:#D6DEEB"> secrets.Resolved, </span><span style="--0:#D7DBE0">scope</span><span style="--0:#D6DEEB"> Scope, </span><span style="--0:#D7DBE0">project</span><span style="--0:#D6DEEB"> </span></span><span style="--0:#C792EA;--1:#8844AE">string</span><span style="--0:#D6DEEB;--1:#403F53">) ([]FileOp, []Skip, </span><span style="--0:#C792EA;--1:#8844AE">error</span><span style="--0:#D6DEEB;--1:#403F53">)</span></div></div><div class="ec-line"><div class="code"><span class="indent">    </span><span style="--0:#82AAFF;--1:#3B61B0">Ingest</span><span style="--1:#403F53"><span style="--0:#D6DEEB">(</span><span style="--0:#D7DBE0">scope</span><span style="--0:#D6DEEB"> Scope, </span><span style="--0:#D7DBE0">project</span><span style="--0:#D6DEEB"> </span></span><span style="--0:#C792EA;--1:#8844AE">string</span><span style="--0:#D6DEEB;--1:#403F53">) (source.Canonical, </span><span style="--0:#C792EA;--1:#8844AE">error</span><span style="--0:#D6DEEB;--1:#403F53">)</span></div></div><div class="ec-line"><div class="code"><span class="indent">    </span><span style="--0:#82AAFF;--1:#3B61B0">KeyMergeStrategy</span><span style="--0:#D6DEEB;--1:#403F53">() </span><span style="--0:#C792EA;--1:#8844AE">string</span><span style="--0:#D6DEEB;--1:#403F53">       </span><span style="--0:#919F9F;--1:#5D6376">// "merge-json-keys" | "merge-jsonc-keys" | "merge-toml-keys" | ""</span></div></div><div class="ec-line"><div class="code"><span class="indent">    </span><span style="--0:#82AAFF;--1:#3B61B0">Apply</span><span style="--1:#403F53"><span style="--0:#D6DEEB">(</span><span style="--0:#D7DBE0">ops</span><span style="--0:#D6DEEB"> []FileOp, </span><span style="--0:#D7DBE0">w</span><span style="--0:#D6DEEB"> DestWriter) </span></span><span style="--0:#C792EA;--1:#8844AE">error</span></div></div><div class="ec-line"><div class="code"><span style="--0:#D6DEEB;--1:#403F53">}</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="type Adapter interface {    Name() string    Capabilities() Capability       // bitmask: MCP, Memory, Skill, Subagent, Command, Hook, LSP    Detect() (bool, error)          // is this agent installed?    Render(r secrets.Resolved, scope Scope, project string) ([]FileOp, []Skip, error)    Ingest(scope Scope, project string) (source.Canonical, error)    KeyMergeStrategy() string       // &#x22;merge-json-keys&#x22; | &#x22;merge-jsonc-keys&#x22; | &#x22;merge-toml-keys&#x22; | &#x22;&#x22;    Apply(ops []FileOp, w DestWriter) error}"><div></div></button></div></figure></div>
+<p>Two design points worth internalizing:</p>
+<ul>
+<li><strong><code dir="auto">Render</code> accepts only <code dir="auto">secrets.Resolved</code>, never a raw <code dir="auto">source.Canonical</code>.</strong>
+<code dir="auto">Resolved</code> is a wrapper type produced by secret substitution; you cannot pass
+the templated source model to <code dir="auto">Render</code>, and you cannot pass the resolved
+(cleartext) model to a source writer. This makes “leak a resolved secret back
+into source” a <em>compile error</em>, not a code-review check.</li>
+<li><strong>Every destination write goes through <code dir="auto">DestWriter</code>.</strong> Adapters never call
+<code dir="auto">iox.AtomicWrite</code>/<code dir="auto">os.Remove</code> directly. <code dir="auto">DestWriter</code> owns the
+foreign-collision backup invariant (back up any pre-existing file agentsync
+doesn’t yet own, before overwriting). A <code dir="auto">forbidigo</code> lint rule fails any direct
+write outside the allowed packages, so a new adapter can’t regress the backup
+guarantee.</li>
+<li><strong>Project scope requires a project root.</strong> Each adapter’s <code dir="auto">ResolvePaths</code> falls
+through to <em>user</em>-scope paths when the project root is empty, so a
+<code dir="auto">(ScopeProject, "")</code> call would silently write the project overlay into the
+user’s global config. Every scope-resolving adapter method —
+<code dir="auto">Render</code>, <code dir="auto">Ingest</code>, and <code dir="auto">IngestPlugins</code> — calls <code dir="auto">adapter.RequireProjectRoot</code>
+first thing and returns <code dir="auto">ErrProjectRootRequired</code> instead — a loud failure at
+the narrowest waist rather than a silent wrong-scope I/O. The CLI’s
+<code dir="auto">resolveScope</code> already guarantees a non-empty root for project scope, so this
+is defense-in-depth against a future or non-CLI caller.</li>
+</ul>
+<p><code dir="auto">Capability</code> is a bitmask, so the OpenCode adapter simply omits <code dir="auto">CapHook</code> and
+<code dir="auto">CapLSP</code>. Claude, Codex, Cursor, and the other v1 adapters omit <code dir="auto">CapLSP</code> too:
+Claude Code reads LSP servers from plugin manifests rather than
+<code dir="auto">settings.json</code>, and agentsync does not synthesize Claude plugins in v1; the
+others have no native LSP config concept. The pipeline reports those components
+as skipped.</p>
+<p><strong>Skips are typed, not stringly-classified.</strong> A <code dir="auto">Skip</code> carries a <code dir="auto">Kind</code>
+(<code dir="auto">adapter.SkipKind</code>): <code dir="auto">SkipDropped</code> when the whole component had no native target
+and was not emitted, <code dir="auto">SkipReduced</code> when it rendered but lost fields the agent has
+no home for (a subagent’s Claude-only <code dir="auto">tools</code>/<code dir="auto">color</code>, a command’s frontmatter).
+The adapter that builds the <code dir="auto">Skip</code> sets <code dir="auto">Kind</code> — the CLI’s <code dir="auto">explain</code> reads it
+directly and <code dir="auto">explain --json</code> surfaces it as <code dir="auto">kind</code> (<code dir="auto">"reduced"</code>/<code dir="auto">"dropped"</code>).
+The zero value <code dir="auto">SkipKindUnset</code> is invalid: <code dir="auto">Component</code> is the plain kind (<code dir="auto">mcp</code>,
+<code dir="auto">subagent</code>, …) and no longer encodes the distinction via a <code dir="auto">-frontmatter</code> suffix.
+Two complementary guards make an unclassified skip impossible to ship.
+<code dir="auto">TestEverySkipLiteralSetsKind</code> (<code dir="auto">internal/adapter</code>) statically parses every
+production <code dir="auto">adapter.Skip</code> literal under <code dir="auto">internal/</code> and fails if one omits <code dir="auto">Kind</code>
+— reachability-independent, so a skip site gated on a path that is never empty at
+runtime (e.g. a scope-gap branch) cannot hide from it. <code dir="auto">TestEveryAdapterClassifiesSkips</code>
+(<code dir="auto">internal/cli</code>) is the behavioral complement: it renders every registered
+adapter at both scopes, fails on any unset <code dir="auto">Kind</code>, and pins that both kind values
+are exercised.</p>
+<p><strong>Key-merge strategies and on-disk format.</strong> <code dir="auto">KeyMergeStrategy</code> /
+<code dir="auto">FileOp.MergeStrategy</code> name how an adapter co-owns keys inside a shared config
+file: <code dir="auto">merge-json-keys</code> (Claude’s <code dir="auto">.claude.json</code>/<code dir="auto">settings.json</code>, a project’s
+repo-root <code dir="auto">.mcp.json</code> for project-scope MCP servers, Cursor’s <code dir="auto">.cursor/mcp.json</code> +
+<code dir="auto">.cursor/hooks.json</code>, Gemini’s <code dir="auto">.gemini/settings.json</code> — which co-owns both
+<code dir="auto">mcpServers</code> and <code dir="auto">hooks</code> — Windsurf’s <code dir="auto">~/.codeium/windsurf/mcp_config.json</code>, Roo’s project <code dir="auto">.roo/mcp.json</code>,
+and Cline’s <code dir="auto">~/.cline/mcp.json</code>),
+<code dir="auto">merge-jsonc-keys</code> (OpenCode’s comment-tolerant <code dir="auto">opencode.json</code>), and
+<code dir="auto">merge-toml-keys</code> (Codex’s <code dir="auto">config.toml</code>). The Continue adapter co-owns no shared
+file (it projects one block file per item), so it has no key-merge strategy.</p>
+<p><strong>Deep vs breadth-tier adapters.</strong> The nine hand-written packages above are
+<em>deep</em> adapters — agent-specific, multi-component, often bidirectional. Beyond
+them, a single data-driven <em>generic</em> adapter (<code dir="auto">internal/adapter/generic</code>) serves a
+long tail of agents from a verified <code dir="auto">Spec</code> table — memory, (where expressible)
+MCP, and (where the agent scans a <code dir="auto">SKILL.md</code> directory) Agent Skills, every other
+component reported as a skip. Both kinds implement the same
+<code dir="auto">Adapter</code> interface and register identically, so the rest of the pipeline (plan,
+classify, write, capture, state) treats them uniformly. The set of valid agent
+names is derived from the deep package list <strong>plus</strong> <code dir="auto">generic.Specs()</code> (see
+<code dir="auto">internal/cli/agent.go</code> <code dir="auto">allAgentNames</code>), so adding a breadth agent — a verified
+table row — needs no change to validation, <code dir="auto">doctor</code>, or <code dir="auto">init</code>. The merge <em>currency</em> is always a
+<code dir="auto">map[string]any</code> decoded from the rendered op’s JSON <code dir="auto">Content</code>, so the
+pipeline’s pointer/ownership machinery (owned-key synthesis, orphan cleanup,
+per-pointer state hashing, foreign-collision backup) is format-agnostic; only
+the destination <em>file</em> is decoded/encoded per strategy — TOML for
+<code dir="auto">merge-toml-keys</code> (<code dir="auto">internal/adapter/codex/settings.go</code>), JSON otherwise. As
+with <code dir="auto">opencode.json</code> and <code dir="auto">mcp/*.toml</code>, the TOML round-trip does not preserve
+comments in the rewritten file (a documented v1 limit).</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="pluginingester-read-only">PluginIngester (read-only)</h3><a class="sl-anchor-link" href="#pluginingester-read-only"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “PluginIngester (read-only)”</span></a></div>
+<p>One <strong>optional</strong> extension sits beside the core interface:</p>
+<div class="expressive-code"><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="go"><code><div class="ec-line"><div class="code"><span style="--0:#C792EA;--1:#8844AE">type</span><span style="--0:#D6DEEB;--1:#403F53"> PluginIngester </span><span style="--0:#C792EA;--1:#8844AE">interface</span><span style="--0:#D6DEEB;--1:#403F53"> {</span></div></div><div class="ec-line"><div class="code"><span class="indent">    </span><span style="--0:#82AAFF;--1:#3B61B0">IngestPlugins</span><span style="--1:#403F53"><span style="--0:#D6DEEB">(</span><span style="--0:#D7DBE0">scope</span><span style="--0:#D6DEEB"> Scope, </span><span style="--0:#D7DBE0">project</span><span style="--0:#D6DEEB"> </span></span><span style="--0:#C792EA;--1:#8844AE">string</span><span style="--0:#D6DEEB;--1:#403F53">) ([]NativeMarketplace, []NativePlugin, </span><span style="--0:#C792EA;--1:#8844AE">error</span><span style="--0:#D6DEEB;--1:#403F53">)</span></div></div><div class="ec-line"><div class="code"><span style="--0:#D6DEEB;--1:#403F53">}</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="type PluginIngester interface {    IngestPlugins(scope Scope, project string) ([]NativeMarketplace, []NativePlugin, error)}"><div></div></button></div></figure></div>
+<p>An adapter implements it only if the agent tracks installed plugins +
+marketplaces in its native config (Claude reads <code dir="auto">enabledPlugins</code> /
+<code dir="auto">extraKnownMarketplaces</code> from <code dir="auto">settings.json</code>; Codex reads
+<code dir="auto">[plugins."&#x3C;name>@&#x3C;source>"]</code> enable-state from <code dir="auto">config.toml</code>). <code dir="auto">import</code>
+type-asserts for it: an adapter that doesn’t implement it imports no plugins.
+It’s kept off the core <code dir="auto">Adapter</code> because the canonical schema doesn’t otherwise
+depend on a native plugin concept (OpenCode has no plugins; the Cursor adapter
+has them but its enable-state location is undocumented, so it implements no
+<code dir="auto">PluginIngester</code> yet).</p>
+<div class="sl-heading-wrapper level-h4"><h4 id="the-asymmetry-is-the-invariant--read-only-by-design">The asymmetry is the invariant — read-only by design</h4><a class="sl-anchor-link" href="#the-asymmetry-is-the-invariant--read-only-by-design"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “The asymmetry is the invariant — read-only by design”</span></a></div>
+<p>PluginIngester has <strong>no <code dir="auto">Render</code>-side counterpart</strong>, and <code dir="auto">Adapter.Render</code> MUST
+NOT emit plugin-enablement or marketplace-registry metadata back into the
+native config. This is the rule for every adapter, present and future:</p>
+<blockquote>
+<p><strong><code dir="auto">import</code> reads the agent’s plugin enable-state for discovery; <code dir="auto">apply</code>
+never writes it back. Apply fans out the plugin’s <em>components</em>, not the
+plugin itself.</strong></p>
+</blockquote>
+<p>Concretely, for each adapter:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>direction</th><th>what crosses the boundary</th></tr></thead><tbody><tr><td><strong>import</strong> (<code dir="auto">Adapter</code> → canonical via <code dir="auto">IngestPlugins</code>)</td><td>enable-state + marketplace sources, so agentsync can fetch the same plugins and own them in <code dir="auto">~/.agentsync/plugins/</code>, <code dir="auto">~/.agentsync/marketplaces/</code></td></tr><tr><td><strong>apply</strong> (canonical → <code dir="auto">Adapter</code> via <code dir="auto">Render</code>)</td><td><strong>only the plugin’s projected components</strong> — its skills go to the agent’s skills path, its MCP server to <code dir="auto">mcpServers</code>, its commands to the commands path, etc. <strong>Never <code dir="auto">enabledPlugins</code>, never <code dir="auto">extraKnownMarketplaces</code>, never <code dir="auto">[plugins."x@y"]</code>.</strong></td></tr></tbody></table>
+<p>Why the asymmetry rather than a tidy round-trip:</p>
+<ul>
+<li><strong>Plugin identity dissolves at the projection boundary.</strong> Once a plugin’s
+skills land at <code dir="auto">~/.claude/skills/&#x3C;name>/</code>, its MCP entry under <code dir="auto">mcpServers</code>,
+its commands at <code dir="auto">~/.claude/commands/&#x3C;name>.md</code>, the consumer agent reads
+them through the same code path it uses for hand-authored components. It
+does not need plugin-manager metadata to <em>use</em> a projected skill — the
+plugin grouping is purely agentsync’s internal bookkeeping.</li>
+<li><strong>Ownership stays singular.</strong> agentsync is the source of truth for which
+plugins exist. The consumer agent’s plugin manager is the source of truth
+for whatever <em>the agent itself</em> installed locally. Writing
+<code dir="auto">enabledPlugins</code> back would blur this and pick a fight with the agent’s
+own UI: every user <code dir="auto">/plugin disable</code> would be reverted by the next apply
+(a ping-pong loop).</li>
+<li><strong>No double-install.</strong> If agentsync also wrote <code dir="auto">enabledPlugins/X = true</code>,
+the consumer agent would keep its own copy under
+<code dir="auto">~/.claude/plugins/&#x3C;id>/...</code> alongside agentsync’s projection at the
+shared path — two copies of the same skill, served by different code
+paths, with the agent’s UI free to upgrade/disable one but not the other.</li>
+</ul>
+<p>The CLI’s <code dir="auto">import</code> maps each <code dir="auto">NativePlugin</code> result onto an agentsync
+marketplace source and re-fetches it through the same code path as
+<code dir="auto">marketplace add</code> + <code dir="auto">plugin install</code>, so a captured plugin lands as a normal
+<code dir="auto">plugins/&#x3C;id>.toml</code> + <code dir="auto">marketplaces/&#x3C;name>.toml</code> pair with a pinned manifest
+SHA. From then on, the projection layer drives every apply.</p>
+<div class="sl-heading-wrapper level-h4"><h4 id="per-adapter">Per-adapter</h4><a class="sl-anchor-link" href="#per-adapter"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “Per-adapter”</span></a></div>
+<p>The <strong>Codex</strong> adapter implements <code dir="auto">IngestPlugins</code>; <strong>Cursor</strong> has a native plugin
+system too but does not implement it yet (its enable-state location is
+undocumented — see below). Both Codex and Claude project a plugin’s components to
+every enabled agent via its capability matrix, and both follow the
+read-only-on-import, components-only-on-apply rule above:</p>
+<ul>
+<li><strong>Claude</strong> reads <code dir="auto">enabledPlugins</code> / <code dir="auto">extraKnownMarketplaces</code> on <code dir="auto">import</code> and
+deliberately leaves both keys untouched on <code dir="auto">apply</code>. Foreign entries
+(plugins the user enabled directly in Claude Code, marketplaces the user
+added by hand) are preserved by the merge-keys writer because the render
+doesn’t claim those keys.</li>
+<li><strong>Codex</strong> records enable-state in <code dir="auto">~/.codex/config.toml</code> under
+<code dir="auto">[plugins."&#x3C;name>@&#x3C;source>"]</code> tables — the same <code dir="auto">name@source</code> shape Claude
+uses. <code dir="auto">IngestPlugins</code> parses those TOML tables into <code dir="auto">NativePlugin</code> records.
+Unlike Claude, Codex records no marketplace <em>fetch source</em> in a documented
+config location, so it returns no <code dir="auto">NativeMarketplace</code>s; <code dir="auto">import</code> resolves
+each plugin’s marketplace from agentsync’s own registered marketplaces
+(warning + skipping any it can’t), exactly the path Claude’s
+auto-available built-in marketplace takes. The Codex render never emits
+the <code dir="auto">[plugins."x@y"]</code> tables back, matching the Claude rule.</li>
+<li><strong>OpenCode</strong>, <strong>Gemini CLI</strong>, <strong>Continue</strong>, <strong>Windsurf</strong>, <strong>Roo Code</strong>, and
+<strong>Cline</strong> have no native plugin concept agentsync models (Gemini uses
+extensions; Continue composes Hub + local blocks), so they implement neither
+side — all still <em>receive</em> plugin-projected components (skills, MCP, …) on
+<code dir="auto">apply</code> like every other component, because that’s the whole point.</li>
+<li><strong>Cursor</strong> ships a real adapter (MCP, memory, skills, subagents, commands,
+hooks) but implements no <code dir="auto">PluginIngester</code> yet. Its plugin <em>content</em> schema —
+<code dir="auto">.cursor-plugin/plugin.json</code> + <code dir="auto">.cursor-plugin/marketplace.json</code>, near-identical
+to Claude’s <code dir="auto">.claude-plugin/*</code> (rules, skills, agents, commands, hooks, MCP) —
+means the projection layer largely transfers, but where Cursor records local
+<em>enable-state</em> is undocumented (possibly app-local like its user rules), so
+plugin discovery on <code dir="auto">import</code> is deferred. When that location is identified the
+Cursor adapter implements <code dir="auto">PluginIngester</code> for it — and, by the same invariant,
+still never renders it back. It already <em>receives</em> plugin-projected components
+on <code dir="auto">apply</code> like every other adapter.</li>
+</ul>
+<p>See the capability matrix for source links.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="warnemitter-optional">WarnEmitter (optional)</h3><a class="sl-anchor-link" href="#warnemitter-optional"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “WarnEmitter (optional)”</span></a></div>
+<p>A second optional extension lets callers redirect the warnings an adapter’s
+<code dir="auto">Ingest</code> emits (lenient-YAML notices, dropped components, …) away from
+<code dir="auto">os.Stderr</code>:</p>
+<div class="expressive-code"><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="go"><code><div class="ec-line"><div class="code"><span style="--0:#C792EA;--1:#8844AE">type</span><span style="--0:#D6DEEB;--1:#403F53"> WarnEmitter </span><span style="--0:#C792EA;--1:#8844AE">interface</span><span style="--0:#D6DEEB;--1:#403F53"> {</span></div></div><div class="ec-line"><div class="code"><span class="indent">    </span><span style="--0:#82AAFF;--1:#3B61B0">SetStderr</span><span style="--1:#403F53"><span style="--0:#D6DEEB">(</span><span style="--0:#D7DBE0">w</span><span style="--0:#D6DEEB"> io.Writer)</span></span></div></div><div class="ec-line"><div class="code"><span style="--0:#D6DEEB;--1:#403F53">}</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="type WarnEmitter interface {    SetStderr(w io.Writer)}"><div></div></button></div></figure></div>
+<p>Concrete adapters (claude/opencode/codex) implement it; the noop adapter
+doesn’t (it emits no warnings). Four contract rules every implementor
+honours:</p>
+<ol>
+<li><strong><code dir="auto">SetStderr(nil)</code> resets to the default</strong> (<code dir="auto">os.Stderr</code>) — and MUST
+NOT panic. Pinned by per-adapter <code dir="auto">TestSetStderr_NilResetsToDefault</code>
+tests that capture <code dir="auto">os.Stderr</code> via a pipe and assert the warning
+actually lands there — a faulty <code dir="auto">SetStderr(nil)</code> routing to
+<code dir="auto">io.Discard</code> would not pass.</li>
+<li><strong>Configure stderr BEFORE Ingest.</strong> Adapters snapshot the writer at
+Ingest entry (<code dir="auto">warn := a.stderr()</code>), so calling <code dir="auto">SetStderr</code> mid-Ingest
+is ignored for the remainder of that call. The <code dir="auto">RouteTo</code>-before-Ingest
+pattern is the supported one; don’t depend on dynamic switching.</li>
+<li><strong>Compile-pin against <code dir="auto">adapter.WarnEmitter</code>.</strong> Each adapter’s
+<code dir="auto">claude_test.go</code> / <code dir="auto">opencode_test.go</code> / <code dir="auto">codex_test.go</code> carries a
+<code dir="auto">var _ adapter.WarnEmitter = a</code> line so dropping the method fails
+the test build, not a runtime no-op.</li>
+<li><strong>The writer’s lifetime is the caller’s problem.</strong> Today’s caller
+(<code dir="auto">import</code>) uses the restore-handle pattern —
+<code dir="auto">defer warnW.RouteTo(a)()</code> evaluates the inner <code dir="auto">RouteTo(a)</code> immediately
+(wires the writer) and defers the returned restore closure (calls
+<code dir="auto">SetStderr(nil)</code> on the way out) — paired with <code dir="auto">defer warnW.Flush()</code>
+to drain any partial line in the WarnWriter’s line-assembly buffer.</li>
+</ol>
+<p><code dir="auto">import</code> is the only caller today: it wraps <code dir="auto">cmd.ErrOrStderr()</code> in a
+<code dir="auto">ui.WarnWriter</code> that restyles <code dir="auto">"warning: "</code> line prefixes to bold-yellow
+<code dir="auto">"⚠️ warning:"</code>, then <code dir="auto">defer warnW.RouteTo(a)()</code> injects the wrapper
+and arranges the restore. The same wrapper backs <code dir="auto">capture.Opts.Warn</code>
+and the command’s own <code dir="auto">io.warn</code> calls, so every warning the user sees
+during an import — adapter, capture, or CLI — shares one styling.</p>
+<p>Kept off the core <code dir="auto">Adapter</code> for the same reason as <code dir="auto">PluginIngester</code>: an
+adapter that emits no Ingest warnings shouldn’t be forced to implement a
+setter it’ll never use.</p>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="4-the-apply-pipeline-source--destination">4. The apply pipeline (Source ▶ Destination)</h2><a class="sl-anchor-link" href="#4-the-apply-pipeline-source--destination"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “4. The apply pipeline (Source ▶ Destination)”</span></a></div>
+<p><code dir="auto">agentsync apply</code> is local-only and offline. It renders from the cache that
+<code dir="auto">agentsync update</code> populated.</p>
+<pre class="mermaid">flowchart TD
+    A["cli: newApplyCmd"] --> B["source.Load(fs, home)"]
+    B --> P["project.Discover &#x26;lt;root&#x26;gt;/.agentsync/&#x3C;br/>load + project.Merge (if project scope)"]
+    P --> C["marketplace.LoadProjected&#x3C;br/>(plugins → components, from cache)"]
+    C --> SEC["secrets.SubstituteCanonical&#x3C;br/>→ secrets.Resolved"]
+    SEC --> REN["render.Plan&#x3C;br/>(each adapter.Render → FileOps + Skips)"]
+    REN --> CL["drift.Classify per file/key&#x3C;br/>(H_src vs H_applied vs H_dest)"]
+    CL --> W["render.Apply via DestWriter&#x3C;br/>(two-phase atomic write + backups)"]
+    W --> ST["state.Save targets.json&#x3C;br/>(record new hashes)"]
+    W --> RPT["render.TranslationReport&#x3C;br/>(✓ / ◐ / ✗ per plugin per agent)"]</pre>
+<p>Key stages:</p>
+<ol>
+<li><strong>Load</strong> the canonical source (<code dir="auto">internal/source</code>).</li>
+<li><strong>Overlay</strong> the project source tree (<code dir="auto">&#x3C;root>/.agentsync/</code>) if the apply is
+project-scoped — load it and <code dir="auto">project.Merge</code> it onto the user canonical (<code dir="auto">internal/project</code>).</li>
+<li><strong>Project plugins</strong> into components from the local cache (<code dir="auto">internal/marketplace</code>).</li>
+<li><strong>Resolve secrets</strong> — <code dir="auto">${secret:…}</code>/<code dir="auto">${env:…}</code> → <code dir="auto">secrets.Resolved</code> (<code dir="auto">internal/secrets</code>).</li>
+<li><strong>Plan</strong> — each enabled adapter renders the resolved model into <code dir="auto">FileOp</code>s and
+<code dir="auto">Skip</code>s (<code dir="auto">internal/render</code>, <code dir="auto">internal/adapter/*</code>).</li>
+<li><strong>Classify</strong> each file/key with the 3-way drift classifier (<code dir="auto">internal/drift</code>).</li>
+<li><strong>Write</strong> through <code dir="auto">DestWriter</code> with two-phase atomic writes and
+foreign-collision backups (<code dir="auto">internal/render</code>, <code dir="auto">internal/iox</code>).</li>
+<li><strong>Record</strong> new hashes in <code dir="auto">targets.json</code> (<code dir="auto">internal/state</code>) and print the
+translation report.</li>
+<li><strong>Git-backup</strong> (issue #118) — for a user-scope apply, checkpoint each destination
+<strong>directory</strong> into its own <strong>local-only</strong> git repo (<code dir="auto">internal/cli/gitbackup.go</code>
+→ <code dir="auto">internal/git</code>). The unit is the directory, not the agent: every enabled
+adapter declares its version roots via the optional <code dir="auto">adapter.VersionedDirs</code>
+extension (its config dir plus any shared cross-agent dir it writes — Codex and
+several breadth agents all target <code dir="auto">~/.agents/skills</code>; OpenCode targets
+<code dir="auto">~/.claude/skills</code>). The apply tail <strong>unions</strong> those roots, <strong>de-nests</strong> them
+(drops a root nested under another, so there’s never a repo inside a repo), and
+<strong>de-dups</strong> them (a shared dir is one repo, checkpointed once with all its files
+regardless of how many agents wrote there). De-nesting only sees the current
+run’s roots, so before initializing a dir agentsync also scans the filesystem
+(<code dir="auto">git.HasNestedRepoBelow</code>) and <strong>refuses to init a repo that would wrap an
+existing one</strong> — the cross-run case where a child dir was versioned before a
+parent-dir agent was enabled. The managed-file set committed under
+each root is the <code dir="auto">written</code> set from step 7 plus any tracked deletions; <code dir="auto">$HOME</code>-
+level strays (Claude’s <code dir="auto">~/.claude.json</code>) are never versioned (agentsync never
+inits a repo at <code dir="auto">$HOME</code>). This step is <strong>best-effort</strong> (the files are already
+written and state already saved, so a git failure never fails the apply),
+<strong>opt-out</strong> (the <code dir="auto">[destination_directory_git_backup]</code> mode — <code dir="auto">prompt</code>/<code dir="auto">on</code>/<code dir="auto">off</code>
+— plus the <code dir="auto">apply --no-git-backup</code> per-run bypass), and <strong>never pushes</strong>:
+<code dir="auto">internal/git</code> exposes no remote/push surface at all (a source-scanning guard
+test, <code dir="auto">TestNoPushSurface</code>, keeps it that way). <code dir="auto">agentsync revert</code> (which takes
+the same global lock apply holds) rolls a dir back to a prior checkpoint
+append-only, first snapshotting any uncommitted hand-edits to tracked files so
+the rollback can’t lose them. <code dir="auto">.state/</code> is <strong>untouched</strong> by this step — the two
+are complementary (operational memory vs. user-facing rollback history).</li>
+</ol>
+<p><code dir="auto">--dry-run</code> runs steps 1–6, then a non-writing pass of step 7 (the writer’s merge</p>
+<ul>
+<li>convergence check, no disk write) so it can label each destination <code dir="auto">✓ synced</code>
+vs <code dir="auto">→ write</code> and preview foreign-collision backups, and prints the plan/report —
+all without writing a byte (and it skips the git-backup step 9 entirely).</li>
+</ul>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="5-the-capture-pipeline-destination--source">5. The capture pipeline (Destination ▶ Source)</h2><a class="sl-anchor-link" href="#5-the-capture-pipeline-destination--source"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “5. The capture pipeline (Destination ▶ Source)”</span></a></div>
+<p>The reverse path — used by <code dir="auto">agentsync import</code> and reconcile’s <code dir="auto">[w]rite-back</code> —
+goes through exactly one function, <code dir="auto">capture.Capture</code>:</p>
+<pre class="mermaid">flowchart LR
+    NATIVE["native config on disk"] --> ING["adapter.Ingest&#x3C;br/>→ source.Canonical"]
+    ING --> CAP["capture.Capture"]
+    CAP --> RR["secrets.ReReferenceCanonical&#x3C;br/>(cleartext → ${secret:…})"]
+    RR --> PRES["preserve source-only fields&#x3C;br/>(agents, enabled)"]
+    PRES --> WR["source.Write* (templated only)"]
+    WR --> SRC["~/.agentsync/*.toml"]</pre>
+<p><code dir="auto">capture.Capture</code> is the single dest→source funnel. It <strong>re-references</strong> any
+resolved secret back to its <code dir="auto">${secret:…}</code> form before writing, and it preserves
+source-only fields (like an MCP server’s <code dir="auto">agents</code>/<code dir="auto">enabled</code> list) that the
+rendered destination never carried. No other code path writes destination data
+back into the source.</p>
+<p>Re-reference matches by value, so it cannot distinguish a <em>moved or rotated</em>
+secret from a deliberate non-secret edit. As a <strong>fail-closed backstop</strong>,
+<code dir="auto">capture.Capture</code> re-scans the about-to-be-written model
+(<code dir="auto">secrets.ResidualSecretCleartext</code>): if a live vault secret value would still be
+written verbatim, or a <code dir="auto">${secret:K}</code> the source referenced has vanished from the
+captured group (rotated/edited away), it <strong>refuses the write</strong> rather than risk
+persisting cleartext — directing the user to update the vault or edit the source.</p>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="6-drift--the-3-way-classifier">6. Drift — the 3-way classifier</h2><a class="sl-anchor-link" href="#6-drift--the-3-way-classifier"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “6. Drift — the 3-way classifier”</span></a></div>
+<p><code dir="auto">internal/drift</code> is a pure function over three hashes. For every managed file or
+key:</p>
+<ul>
+<li><code dir="auto">H_src</code> — computed now from the canonical source</li>
+<li><code dir="auto">H_applied</code> — recorded last apply in <code dir="auto">targets.json</code></li>
+<li><code dir="auto">H_dest</code> — current on-disk content (or nil)</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th><code dir="auto">H_applied</code> vs <code dir="auto">H_src</code></th><th><code dir="auto">H_applied</code> vs <code dir="auto">H_dest</code></th><th>Class</th><th><code dir="auto">apply</code> behavior</th></tr></thead><tbody><tr><td>=</td><td>=</td><td><strong>clean</strong></td><td>noop</td></tr><tr><td>≠</td><td>=</td><td><strong>pending</strong></td><td>write <code dir="auto">H_src</code></td></tr><tr><td>=</td><td>≠</td><td><strong>drift</strong></td><td>block; suggest reconcile</td></tr><tr><td>≠</td><td>≠, <code dir="auto">H_dest = H_src</code></td><td><strong>converged</strong></td><td>refresh state silently</td></tr><tr><td>≠</td><td>≠, all differ</td><td><strong>conflict</strong></td><td>block; require reconcile</td></tr><tr><td><code dir="auto">H_applied</code> nil, <code dir="auto">H_dest</code> nil</td><td>—</td><td><strong>new</strong></td><td>create</td></tr><tr><td><code dir="auto">H_applied</code> nil, <code dir="auto">H_dest</code> ≠ nil</td><td>—</td><td><strong>foreign-collision</strong></td><td>back up dest, then write</td></tr><tr><td><code dir="auto">H_src</code> nil, <code dir="auto">H_applied</code> ≠ nil</td><td><code dir="auto">H_dest = H_applied</code></td><td><strong>orphan</strong></td><td>delete</td></tr><tr><td><code dir="auto">H_src</code> nil, <code dir="auto">H_applied</code> ≠ nil</td><td><code dir="auto">H_dest ≠ H_applied</code></td><td><strong>orphan-drifted</strong></td><td>warn</td></tr></tbody></table>
+<p><code dir="auto">drift.SafeForAutoApply(class)</code> is what <code dir="auto">reconcile --auto-safe</code> consults — it
+auto-resolves only the cases that can’t lose work (<code dir="auto">converged</code>, <code dir="auto">pending</code>).</p>
+<p><strong>Orphan reclamation on <code dir="auto">apply</code>.</strong> <code dir="auto">apply</code> itself reclaims two kinds of orphan so
+a removed component doesn’t linger in the destination: emptied key-merge sections
+(an MCP/hook/LSP section whose source went empty — cleaned via a synthesized
+empty-merge op) and <strong>skill files</strong> (a whole skill, or one bundled
+<code dir="auto">scripts/</code>/<code dir="auto">references/</code>/<code dir="auto">assets/</code> file, removed from <code dir="auto">~/.agentsync/skills/</code>). A
+skill is a directory under the Agent Skills spec, so removal must reclaim the
+whole tree; the writer deletes each orphaned file, <strong>backs up an <code dir="auto">orphan-drifted</code>
+dest first</strong> (a hand-edit is never destroyed un-preserved), and prunes the
+now-empty directories up to — never including — the agent’s skills root. Other
+replace-strategy orphans (subagents, commands) are still surfaced for the
+interactive <code dir="auto">reconcile</code> loop rather than auto-deleted.</p>
+<p><strong>Granularity.</strong> Structured files (JSON/JSONC/TOML) are tracked per <strong>JSON
+pointer</strong>, so agentsync can own <code dir="auto">$.mcpServers.github</code> inside <code dir="auto">~/.claude.json</code>
+without touching keys it didn’t write. Those untouched keys are <strong>foreign keys</strong>
+— surfaced in <code dir="auto">status</code> but never entering the classifier. If a structured file
+fails to parse, the algorithm degrades to file-level on the whole file.</p>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="7-safety-primitives">7. Safety primitives</h2><a class="sl-anchor-link" href="#7-safety-primitives"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “7. Safety primitives”</span></a></div>
+<p>All present in v1.0 (<code dir="auto">internal/iox</code>, <code dir="auto">internal/render</code>, <code dir="auto">internal/state</code>):</p>
+<ol>
+<li><strong>Two-phase atomic write</strong> — write to <code dir="auto">.state/staging/</code>, fsync, rename onto
+the final path. A crash leaves either the old or the new file, never a partial.</li>
+<li><strong>File lock</strong> — <code dir="auto">gofrs/flock</code> on <code dir="auto">.state/apply.lock</code> serializes concurrent
+<code dir="auto">apply</code>/<code dir="auto">reconcile</code>. <code dir="auto">apply --dry-run</code> is read-only and takes no lock.</li>
+<li><strong><code dir="auto">AGENTSYNC_TARGET_ROOT</code></strong> — every dest path resolves through one helper
+(<code dir="auto">internal/paths</code>), so tests redirect <code dir="auto">$HOME</code> to a tmpdir. A <code dir="auto">forbidigo</code> rule
+bans <code dir="auto">os.UserHomeDir()</code> in <code dir="auto">_test.go</code>.</li>
+<li><strong>First-apply backups</strong> — the <code dir="auto">foreign-collision</code> case copies the pre-existing
+destination into <code dir="auto">.state/backups/&#x3C;ts>/</code> before writing. Symlinked
+destinations are refused by default.</li>
+<li><strong>Manifest-SHA pinning</strong> — every plugin records a <code dir="auto">tree:v1:</code> content hash
+over its <em>entire</em> cache tree (every projected component body — skills,
+command/subagent markdown — not just <code dir="auto">plugin.json</code>, excluding <code dir="auto">.git/</code>), so a
+re-uploaded version <em>or</em> a tampered component body is detected as drift
+rather than silently consumed. (An entry-only plugin with no cached bodies is
+pinned over its marketplace entry.)</li>
+<li><strong>Display-boundary sanitization, enforced by type</strong> (<code dir="auto">internal/untrusted</code>) —
+a fetched/native plugin or marketplace id, version, or name can carry terminal
+escapes (a screen-clear/recolor CSI, an OSC title-set) or deceptive bidi /
+zero-width runes (“Trojan Source”). Those fields are the defined string type
+<code dir="auto">untrusted.Text</code>, whose <code dir="auto">String()</code> runs <code dir="auto">Sanitize</code>, so printing one through
+<code dir="auto">fmt</code> strips the danger <strong>by construction</strong>; the raw value is reachable only
+via the explicit <code dir="auto">Unverified()</code> (filesystem/lookup use, never display). The
+wire format is unchanged (<code dir="auto">Text</code> is a string kind — <code dir="auto">omitempty</code> and <code dir="auto">--json</code>
+raw output are preserved). This also covers the <strong>native-ingested</strong> plugin
+name: a <code dir="auto">PluginIngester</code>’s <code dir="auto">adapter.NativePlugin.Name</code> is <code dir="auto">untrusted.Text</code>, so
+the <code dir="auto">status</code>/<code dir="auto">doctor</code> “undeclared native plugins” notes that print it sanitize
+by construction (via <code dir="auto">untrusted.Join</code>) with no per-site <code dir="auto">ui.Sanitize</code> wrapper.
+Reflection-based <code dir="auto">TestUntrustedFieldGuard</code>s
+(<code dir="auto">internal/{source,marketplace,render,adapter}</code>) fail the build if a new string
+field on those structs is left unclassified, so a future metadata field can’t
+ship as a raw string a new print site would leak. Carve-outs (hex SHAs, <code dir="auto">%q</code>
+URLs, user-supplied CLI args, enum modes, and the <code dir="auto">import</code>-only diagnostics
+surface — native marketplace ids / source types) stay plain strings. See
+<code dir="auto">SECURITY.md</code>.</li>
+</ol>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="8-secrets--how-the-leak-is-prevented">8. Secrets — how the leak is prevented</h2><a class="sl-anchor-link" href="#8-secrets--how-the-leak-is-prevented"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “8. Secrets — how the leak is prevented”</span></a></div>
+<p>The dangerous bug class is a <em>resolved cleartext secret being persisted back
+into the canonical source</em> (often a committed dotfiles repo). agentsync makes
+this hard to do by accident with three tiers of defense:</p>
+<ul>
+<li><strong>Compile-enforced (load-bearing).</strong> <code dir="auto">secrets.SubstituteCanonical</code> returns
+<code dir="auto">secrets.Resolved</code>, a wrapper that is <em>not</em> assignable to <code dir="auto">source.Canonical</code>.
+Adapters’ <code dir="auto">Render</code> take <code dir="auto">Resolved</code>; source writers and <code dir="auto">capture.Capture</code> take
+only the templated <code dir="auto">source.Canonical</code>. Passing resolved data to a writer is a
+compile error.</li>
+<li><strong>Value-invariant (load-bearing).</strong> Secret substitution clones the model
+before resolving (no aliasing back to the caller’s templated copy), and the
+field walker only visits secret-bearing fields — so text components (memory,
+skills incl. their bundled files, commands) physically cannot carry a
+substituted secret.</li>
+<li><strong>Lint fence (defense-in-depth).</strong> A <code dir="auto">forbidigo</code> rule forbids unwrapping a
+<code dir="auto">Resolved</code> outside the two adapter <code dir="auto">Render</code> egress sites.</li>
+<li><strong>Capture fail-closed backstop (defense-in-depth).</strong> The <em>dest→source</em>
+direction can’t be type-enforced (it legitimately writes a templated
+<code dir="auto">source.Canonical</code>), and re-reference matches by value — so a secret <em>moved</em>
+into a literal-counterpart field or <em>rotated</em> to a vault-unknown value can
+evade restoration. <code dir="auto">capture.Capture</code> re-scans the about-to-be-written model
+(<code dir="auto">secrets.ResidualSecretCleartext</code>) and <strong>refuses to write</strong> if a resolved
+secret would persist, rather than guess.</li>
+</ul>
+<p>There is one <strong>accepted residual</strong>: a <em>deliberate</em> two-step laundering (defeat
+the lint fence to obtain a writable <code dir="auto">source.Canonical</code>, then call a source writer
+directly) could leak. No innocent mistake produces it, and <code dir="auto">capture.Capture</code>
+always re-references. The single field list lives in <code dir="auto">walkSecretFields</code>
+(<code dir="auto">internal/secrets/walk.go</code>); a reflection-based test fails if a new
+string-shaped secret-bearing field is added without classification.</p>
+<p>The MCP/LSP <code dir="auto">Extra</code> passthrough maps (unmodeled native fields, carried verbatim)
+are a <strong>deliberate exception</strong>: they are not in <code dir="auto">walkSecretFields</code>, so a
+<code dir="auto">${secret:…}</code> in <code dir="auto">Extra</code> is written literally rather than resolved. The leak
+backstop scans <code dir="auto">Extra</code> separately (<code dir="auto">scanExtraResidual</code>) and refuses a write that
+would persist a live secret value through it.</p>
+<blockquote>
+<p>If you ever find yourself unwrapping a <code dir="auto">secrets.Resolved</code> outside an adapter’s
+<code dir="auto">Render</code>, stop — you almost certainly want <code dir="auto">capture.Capture</code>. The full set of
+invariants is in <a href="https://github.com/spxrogers/agentsync/blob/main/CLAUDE.md"><code dir="auto">CLAUDE.md</code></a> and <a href="/internals/security/"><code dir="auto">SECURITY.md</code></a>.</p>
+</blockquote>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="9-network-boundary">9. Network boundary</h2><a class="sl-anchor-link" href="#9-network-boundary"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “9. Network boundary”</span></a></div>
+<p><code dir="auto">agentsync update</code> is the <strong>only</strong> command that touches the network. It clones
+or fetches marketplaces (<code dir="auto">go-git</code>, with a <code dir="auto">git</code> shell-out fallback for sparse
+clones) and npm tarballs (registry HTTP, no <code dir="auto">npm</code> binary required), writing them
+to <code dir="auto">.state/cache/</code>. Everything else — including <code dir="auto">apply</code> — reads only from that
+cache, which keeps <code dir="auto">apply</code> fast, offline, and reproducible in CI.</p>
+<p>Untrusted-input hardening at this boundary: fetchers reject symlinks in tarballs
+(and confine git-cloned symlinks to the fetched tree, refusing any that escape),
+cap decompressed size (<code dir="auto">AGENTSYNC_MAX_TARBALL_MB</code>), verify manifest SHAs, bound
+component paths to the plugin cache, and reject <code dir="auto">http://</code>/<code dir="auto">git://</code> sources unless
+<code dir="auto">AGENTSYNC_ALLOW_INSECURE_URLS=1</code>.</p>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="10-package-layering">10. Package layering</h2><a class="sl-anchor-link" href="#10-package-layering"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only" data-pagefind-ignore="">Section titled “10. Package layering”</span></a></div>
+<pre class="mermaid">flowchart TD
+    CLI["internal/cli — cobra command tree"]
+    REN["internal/render — apply pipeline"]
+    CAP["internal/capture — dest▶source funnel"]
+    AD["internal/adapter (+ claude, opencode, noop)"]
+    SRC["internal/source — canonical model + loaders/writers"]
+    SEC["internal/secrets — resolve / re-reference / mask"]
+    MKT["internal/marketplace — fetch + project plugins"]
+    PRJ["internal/project — &#x3C;root>/.agentsync/ tree overlay"]
+    DRF["internal/drift — 3-way classifier (pure)"]
+    ST["internal/state — targets.json"]
+    INFRA["internal/iox · paths · jsonkeys · log · untrusted"]
+
+    CLI --> REN &#x26; CAP &#x26; AD &#x26; SRC &#x26; SEC &#x26; MKT &#x26; PRJ &#x26; DRF &#x26; ST
+    REN --> AD &#x26; SEC &#x26; SRC &#x26; ST &#x26; DRF &#x26; INFRA
+    CAP --> SRC &#x26; SEC &#x26; INFRA
+    AD --> SRC &#x26; SEC &#x26; INFRA
+    MKT --> SRC
+    PRJ --> SRC
+    SRC --> INFRA
+    SEC --> SRC &#x26; INFRA
+    ST --> INFRA</pre>
+<p><code dir="auto">internal/drift</code>, <code dir="auto">internal/iox</code>, <code dir="auto">internal/jsonkeys</code>, <code dir="auto">internal/paths</code>,
+<code dir="auto">internal/log</code>, and <code dir="auto">internal/untrusted</code> have no internal dependencies — they’re
+the leaves. See the <a href="/internals/components/">component map</a> for what each package contains.</p> </div> <footer class="sl-flex astro-3yyafb3n"> <div class="meta sl-flex astro-3yyafb3n"> <a href="https://github.com/spxrogers/agentsync/edit/main/docs/architecture.md" class="sl-flex print:hidden astro-eez2twj6"><svg aria-hidden="true" class="astro-eez2twj6 astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.2em;"><path d="M22 7.24a1 1 0 0 0-.29-.71l-4.24-4.24a1 1 0 0 0-1.1-.22 1 1 0 0 0-.32.22l-2.83 2.83L2.29 16.05a1 1 0 0 0-.29.71V21a1 1 0 0 0 1 1h4.24a1 1 0 0 0 .76-.29l10.87-10.93L21.71 8c.1-.1.17-.2.22-.33a1 1 0 0 0 0-.24v-.14l.07-.05ZM6.83 20H4v-2.83l9.93-9.93 2.83 2.83L6.83 20ZM18.17 8.66l-2.83-2.83 1.42-1.41 2.82 2.82-1.41 1.42Z"/></svg>Edit page</a> <p class="astro-asuirehi"><a class="commit-link astro-asuirehi" href="https://github.com/spxrogers/agentsync/commit/c013fdb26fdda208cf80701e1dedfe0475f8b720" target="_blank" rel="noopener noreferrer" title="Live build — deployed from commit c013fdb26fdda208cf80701e1dedfe0475f8b720"><code class="astro-asuirehi">c013fdb</code></a></p> </div> <div class="pagination-links print:hidden astro-u2l5gyhi" dir="ltr"> <a href="/concepts/" rel="prev" class="astro-u2l5gyhi"> <svg aria-hidden="true" class="astro-u2l5gyhi astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17 11H9.41l3.3-3.29a1.004 1.004 0 1 0-1.42-1.42l-5 5a1 1 0 0 0-.21.33 1 1 0 0 0 0 .76 1 1 0 0 0 .21.33l5 5a1.002 1.002 0 0 0 1.639-.325 1 1 0 0 0-.219-1.095L9.41 13H17a1 1 0 0 0 0-2Z"/></svg> <span class="astro-u2l5gyhi"> Previous <br class="astro-u2l5gyhi"> <span class="link-title astro-u2l5gyhi">Concepts &amp; glossary</span> </span> </a> <a href="/internals/components/" rel="next" class="astro-u2l5gyhi"> <svg aria-hidden="true" class="astro-u2l5gyhi astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg> <span class="astro-u2l5gyhi"> Next <br class="astro-u2l5gyhi"> <span class="link-title astro-u2l5gyhi">Component map</span> </span> </a> </div>  </footer> </div> </div>  </main> </div> </div> </div> </div> </body></html>
