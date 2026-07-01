@@ -99,11 +99,11 @@ func Plan(r secrets.Resolved, reg *adapter.Registry, agents []string, scope adap
 				if IsKeyMerge(op.MergeStrategy) {
 					owned := ownedKeysFor(s, name, scope, project, op.Path, userHome)
 					// Scope each op's OwnedKeys to the top-level sections THIS op
-					// writes. Several ops can target one file (claude writes
-					// mcpServers, hooks, AND lspServers to settings.json); without
-					// scoping, every op carried the union of owned pointers and
-					// MergeKeys' removal step deleted the OTHER ops' sections —
-					// last op wins, earlier sections wiped on the next apply.
+					// writes. Several ops can target one file (codex writes
+					// mcp_servers AND hooks to config.toml); without scoping, every
+					// op carried the union of owned pointers and MergeKeys' removal
+					// step deleted the OTHER ops' sections — last op wins, earlier
+					// sections wiped on the next apply.
 					ops[i].OwnedKeys = scopeOwnedToSections(owned, op.Content)
 				}
 			}
