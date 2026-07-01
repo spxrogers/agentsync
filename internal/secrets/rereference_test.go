@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/source"
@@ -136,24 +137,11 @@ func TestReReferenceCanonical_LSPSecretFields(t *testing.T) {
 	}
 
 	walkSecretFields(ingested, func(loc secretFieldLoc, s string) string {
-		if s == live || containsString(s, live) {
+		if strings.Contains(s, live) {
 			t.Errorf("LSP re-reference residual leak at %+v: %q", loc, s)
 		}
 		return s
 	})
-}
-
-func containsString(s, substr string) bool {
-	return len(substr) > 0 && len(s) >= len(substr) && (s == substr || containsStringAt(s, substr))
-}
-
-func containsStringAt(s, substr string) bool {
-	for i := 0; i+len(substr) <= len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 // TestReReferenceCanonical_ValueFallbackOnStructuralShift is the regression for
