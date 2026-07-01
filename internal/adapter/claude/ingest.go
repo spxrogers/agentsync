@@ -164,32 +164,6 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		}
 	}
 
-	// LSP servers from settings.json /lspServers/<id>
-	if data, err := os.ReadFile(p.Settings); err == nil {
-		var top map[string]any
-		if json.Unmarshal(data, &top) == nil {
-			if lspServers, ok := top["lspServers"].(map[string]any); ok {
-				for id, raw := range lspServers {
-					spec, ok := raw.(map[string]any)
-					if !ok {
-						continue
-					}
-					c.LSPServers = append(c.LSPServers, source.LSPServer{
-						ID: id,
-						Spec: source.LSPServerSpec{
-							Command: asStr(spec["command"]),
-							Args:    asStrSlice(spec["args"]),
-							Env:     asStrMap(spec["env"]),
-							URL:     asStr(spec["url"]),
-							Headers: asStrMap(spec["headers"]),
-							Extra:   ExtraNativeKeys(spec, "command", "args", "env", "url", "headers"),
-						},
-					})
-				}
-			}
-		}
-	}
-
 	// Memory from CLAUDE.md. The agentsync managed-file banner is a render-time
 	// decoration with no canonical home, so it is stripped here (like Windsurf's
 	// activation frontmatter) — ingest yields the canonical model, which never

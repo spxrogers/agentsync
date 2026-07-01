@@ -72,11 +72,22 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 		ops = append(ops, hookOps...)
 	}
 
-	// 7. LSP servers -> settings.json /lspServers/<id>
-	if lspOps, err := a.renderLSP(renderC, paths); err != nil {
-		return nil, nil, err
-	} else {
-		ops = append(ops, lspOps...)
+	// 7. LSP servers: Claude Code only reads LSP servers from plugin
+	// manifests, not settings.json. agentsync does not synthesize Claude
+	// plugins in v1, so canonical LSP servers are reported as skipped instead
+	// of writing a settings key Claude silently ignores.
+	for _, l := range renderC.LSPServers {
+		if l.Spec.Enabled != nil && !*l.Spec.Enabled {
+			continue
+		}
+		if !agentTargeted("claude", l.Spec.Agents) {
+			continue
+		}
+		skips = append(skips, adapter.Skip{
+			Component: "lsp", Name: l.ID,
+			Reason: "Claude Code reads LSP servers only from plugin manifests; agentsync does not synthesize Claude plugins in v1",
+			Kind:   adapter.SkipDropped,
+		})
 	}
 
 	// Plugin enablement (settings.json#/enabledPlugins) and the marketplace

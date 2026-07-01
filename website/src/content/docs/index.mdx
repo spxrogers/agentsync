@@ -108,7 +108,7 @@ That `github` MCP server now lives in **both** `~/.claude.json` and
 
 | Agent | Status | Component coverage |
 | --- | --- | --- |
-| **Claude Code** | ✓ full adapter | All seven components, including LSP. |
+| **Claude Code** | ✓ adapter | MCP, memory, skills, subagents, commands, hooks. LSP skipped unless provided by Claude plugins. |
 | **OpenCode** | ✓ adapter | MCP, memory, skills, subagents, commands. Hooks + LSP skipped. |
 | **Codex CLI** | ✓ adapter | MCP (TOML `config.toml`), memory, skills, subagents (◐), slash commands (◐), hooks (◐) + plugin import. No LSP concept. |
 | **Cursor** | ✓ adapter | MCP (`.cursor/mcp.json`), memory (◐, project-scope `AGENTS.md`), skills, subagents (◐), slash commands (◐), hooks (◐). No LSP concept. |

@@ -115,7 +115,7 @@ func TestIngest_ProjectScopeMCP_ReadsMCPJSONNotSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A settings.json mcpServers block is a trap: it must NOT be read at project
-	// scope (settings.json holds hooks/LSP/permissions, never project MCP).
+	// scope (settings.json holds hooks/permissions, never project MCP).
 	claudeDir := filepath.Join(proj, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -226,7 +226,7 @@ func TestIngest_RoundTripsSubagentsAndCommands(t *testing.T) {
 	}
 }
 
-func TestIngest_RoundTripsHooksAndLSP(t *testing.T) {
+func TestIngest_RoundTripsHooksButIgnoresSettingsLSP(t *testing.T) {
 	tmp := t.TempDir()
 	in := source.Canonical{
 		Hooks: []source.Hook{{
@@ -235,13 +235,13 @@ func TestIngest_RoundTripsHooksAndLSP(t *testing.T) {
 			Type:    "command",
 			Command: "echo before",
 		}},
-		LSPServers: []source.LSPServer{{
-			ID: "gopls",
-			Spec: source.LSPServerSpec{
-				Command: "gopls",
-				Args:    []string{"serve"},
-			},
-		}},
+	}
+	settings := filepath.Join(tmp, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte(`{"lspServers":{"gopls":{"command":"gopls"}}}`), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	a := claude.New(claude.Options{TargetRoot: tmp})
 	ops, _, err := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
@@ -258,8 +258,8 @@ func TestIngest_RoundTripsHooksAndLSP(t *testing.T) {
 	if len(out.Hooks) != 1 || out.Hooks[0].Event != "PreToolUse" {
 		t.Fatalf("Hook roundtrip lost: %+v", out.Hooks)
 	}
-	if len(out.LSPServers) != 1 || out.LSPServers[0].ID != "gopls" {
-		t.Fatalf("LSP roundtrip lost: %+v", out.LSPServers)
+	if len(out.LSPServers) != 0 {
+		t.Fatalf("settings.json lspServers must not be ingested as native Claude LSP: %+v", out.LSPServers)
 	}
 }
 

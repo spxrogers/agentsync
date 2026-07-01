@@ -36,7 +36,7 @@ func ResolvePaths(targetRoot, project string, projectScope bool) Paths {
 		// MCP servers live in <project>/.mcp.json at the repo root — the file
 		// `claude mcp add --scope project` writes and the team checks in (per
 		// https://code.claude.com/docs/ MCP scopes). settings.json holds
-		// hooks/LSP/permissions, never project MCP.
+		// hooks/permissions, never project MCP.
 		projHome := filepath.Join(project, ".claude")
 		p.Home = projHome
 		p.Settings = filepath.Join(projHome, "settings.json")

@@ -94,10 +94,11 @@ OpenCode hooks are JS/TS plugins, not declarative shell commands. agentsync does
 **not** auto-translate Claude hooks to OpenCode — hand-author a small JS/TS plugin
 if you need one. You'll see the hook reported as skipped for OpenCode.
 
-### LSP beyond Claude
-LSP projection to non-Claude agents is deferred. Claude plugins with LSP servers
-install correctly on Claude; elsewhere you'll see `lsp server X skipped` in the
-report.
+### LSP projection
+LSP projection is deferred in v1. Claude Code reads LSP servers from plugin
+manifests rather than `settings.json`, and agentsync does not synthesize Claude
+plugins yet; other adapters have no native LSP config target. You'll see
+`lsp server X skipped` in the report.
 
 <Aside type="note" title="Found something not listed here?">
 	That's exactly the beta feedback we want —

@@ -75,7 +75,7 @@ The nine **deep adapters** (rich, agent-specific, often bidirectional):
 
 | Agent | Status | Component coverage |
 | --- | --- | --- |
-| **Claude Code** | ✓ full adapter | All seven components, incl. LSP. |
+| **Claude Code** | ✓ adapter | MCP, memory, skills, subagents, commands, hooks. LSP skipped unless provided by Claude plugins. |
 | **OpenCode** | ✓ adapter | MCP, memory, skills, subagents, commands. Hooks + LSP skipped. |
 | **Codex CLI** | ✓ adapter | MCP (TOML `config.toml`), memory, skills, subagents (◐), slash commands (◐, global-only), hooks (◐) + plugin import. No LSP concept. |
 | **Cursor** | ✓ adapter | MCP (`.cursor/mcp.json`), memory (◐, project-scope `AGENTS.md`), skills (`.cursor/skills/`), subagents (◐), slash commands (◐), hooks (◐, `.cursor/hooks.json`). No LSP concept. |

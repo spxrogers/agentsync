@@ -129,8 +129,11 @@ Two design points worth internalizing:
   is defense-in-depth against a future or non-CLI caller.
 
 `Capability` is a bitmask, so the OpenCode adapter simply omits `CapHook` and
-`CapLSP` (and the Codex and Cursor adapters omit `CapLSP` — neither has an LSP
-concept) and the pipeline reports those components as skipped.
+`CapLSP`. Claude, Codex, Cursor, and the other v1 adapters omit `CapLSP` too:
+Claude Code reads LSP servers from plugin manifests rather than
+`settings.json`, and agentsync does not synthesize Claude plugins in v1; the
+others have no native LSP config concept. The pipeline reports those components
+as skipped.
 
 **Skips are typed, not stringly-classified.** A `Skip` carries a `Kind`
 (`adapter.SkipKind`): `SkipDropped` when the whole component had no native target

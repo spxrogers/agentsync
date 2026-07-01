@@ -25,7 +25,7 @@ import (
 //
 // Parsing is lenient: a missing settings.json yields no plugins, and a
 // malformed one is treated as "no plugins discovered" rather than failing the
-// whole import (matching the hooks/LSP blocks in Ingest). Only a genuine read
+// whole import (matching the hooks block in Ingest). Only a genuine read
 // error (e.g. a permission problem) is surfaced.
 func (a *Adapter) IngestPlugins(scope adapter.Scope, project string) ([]adapter.NativeMarketplace, []adapter.NativePlugin, error) {
 	if err := adapter.RequireProjectRoot(scope, project); err != nil {

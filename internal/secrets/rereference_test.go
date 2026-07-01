@@ -90,6 +90,72 @@ func TestReReferenceCanonical_FieldPositional(t *testing.T) {
 	}
 }
 
+func TestReReferenceCanonical_LSPSecretFields(t *testing.T) {
+	const live = "lsp-live-secret"
+	sec := fakeResolver{"LSP_TOKEN": live}
+	env := fakeResolver{}
+
+	against := &source.Canonical{LSPServers: []source.LSPServer{{
+		ID: "typescript",
+		Spec: source.LSPServerSpec{
+			Command: "${secret:LSP_TOKEN}",
+			URL:     "https://example.invalid/${secret:LSP_TOKEN}",
+			Args:    []string{"--token", "${secret:LSP_TOKEN}"},
+			Env:     map[string]string{"TOKEN": "${secret:LSP_TOKEN}"},
+			Headers: map[string]string{"Authorization": "Bearer ${secret:LSP_TOKEN}"},
+		},
+	}}}
+	ingested := &source.Canonical{LSPServers: []source.LSPServer{{
+		ID: "typescript",
+		Spec: source.LSPServerSpec{
+			Command: live,
+			URL:     "https://example.invalid/" + live,
+			Args:    []string{"--token", live},
+			Env:     map[string]string{"TOKEN": live},
+			Headers: map[string]string{"Authorization": "Bearer " + live},
+		},
+	}}}
+
+	ReReferenceCanonical(ingested, against, sec, env)
+
+	got := ingested.LSPServers[0].Spec
+	if got.Command != "${secret:LSP_TOKEN}" {
+		t.Errorf("LSP command not re-referenced: %q", got.Command)
+	}
+	if got.URL != "https://example.invalid/${secret:LSP_TOKEN}" {
+		t.Errorf("LSP URL not re-referenced: %q", got.URL)
+	}
+	if got.Args[1] != "${secret:LSP_TOKEN}" {
+		t.Errorf("LSP arg not re-referenced: %q", got.Args[1])
+	}
+	if got.Env["TOKEN"] != "${secret:LSP_TOKEN}" {
+		t.Errorf("LSP env not re-referenced: %q", got.Env["TOKEN"])
+	}
+	if got.Headers["Authorization"] != "Bearer ${secret:LSP_TOKEN}" {
+		t.Errorf("LSP header not re-referenced: %q", got.Headers["Authorization"])
+	}
+
+	walkSecretFields(ingested, func(loc secretFieldLoc, s string) string {
+		if s == live || containsString(s, live) {
+			t.Errorf("LSP re-reference residual leak at %+v: %q", loc, s)
+		}
+		return s
+	})
+}
+
+func containsString(s, substr string) bool {
+	return len(substr) > 0 && len(s) >= len(substr) && (s == substr || containsStringAt(s, substr))
+}
+
+func containsStringAt(s, substr string) bool {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 // TestReReferenceCanonical_ValueFallbackOnStructuralShift is the regression for
 // a silent cleartext-secret leak: the positional restore matches a templated
 // source field to its ingested counterpart by location, so a native edit that
