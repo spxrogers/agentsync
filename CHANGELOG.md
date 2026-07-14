@@ -17,7 +17,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   mode), gruvbox code themes, square-cornered chrome, and an animated
   source-to-agents fan-out hero on the landing page. Styling only — no content
   or navigation changes. The `og.png` social card is regenerated to match
-  (amber-on-graphite, same typefaces), so link previews carry the new brand.
+  (amber-on-graphite, same typefaces), so link previews carry the new brand;
+  `og-light.png` is a manila-paper variant of the same card (an alternate for
+  surfaces like GitHub's repo social preview — `og:image` still points at
+  `og.png`), and the favicon is recolored to the amber palette.
 
 ### Added
 
