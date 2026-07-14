@@ -16,7 +16,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   (self-hosted), a warm graphite + amber palette (manila drafting-paper light
   mode), gruvbox code themes, square-cornered chrome, and an animated
   source-to-agents fan-out hero on the landing page. Styling only — no content
-  or navigation changes.
+  or navigation changes. The `og.png` social card is regenerated to match
+  (amber-on-graphite, same typefaces), so link previews carry the new brand.
 
 ### Added
 
