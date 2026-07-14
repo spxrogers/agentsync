@@ -62,7 +62,23 @@ export default defineConfig({
 			editLink: {
 				baseUrl: 'https://github.com/spxrogers/agentsync/edit/main/website/',
 			},
-			customCss: ['./src/styles/custom.css'],
+			// "Drafting table" theme: self-hosted fonts (no external font requests) + the
+			// palette, hero fan-out, and chrome styling in custom.css.
+			customCss: [
+				'@fontsource-variable/space-grotesk',
+				'@fontsource-variable/jetbrains-mono',
+				'./src/styles/custom.css',
+			],
+			// Gruvbox is the drafting-table palette in code form: warm graphite dark,
+			// manila-paper light. Square-ish frames to match the rectilinear chrome.
+			expressiveCode: {
+				themes: ['gruvbox-dark-hard', 'gruvbox-light-medium'],
+				styleOverrides: {
+					borderRadius: '3px',
+					codeFontFamily: "'JetBrains Mono Variable', ui-monospace, monospace",
+					frames: { shadowColor: 'transparent' },
+				},
+			},
 			head: [
 				{
 					tag: 'meta',

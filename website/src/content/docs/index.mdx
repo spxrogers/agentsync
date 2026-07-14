@@ -3,9 +3,40 @@ title: agentsync
 description: One source of truth for every AI coding agent on your machine. Define your MCP servers, memory, skills, and plugins once — apply them, correctly translated, to Claude Code, OpenCode, and more.
 template: splash
 hero:
+  title: <span class="as-wordmark">agentsync</span>
   tagline: Define your MCP servers, memory, skills, and plugins once. Run <code>agentsync apply</code>. They land — correctly translated — in every AI coding agent on your machine.
+  # Decorative fan-out visual (styled in src/styles/custom.css): the canonical source
+  # applying out to the nine deep adapters + the 22-agent breadth tier (31 total —
+  # keep the chip list in sync with the capability matrix).
   image:
-    file: ../../assets/agentsync-logo.svg
+    html: |-
+      <div class="as-fan" aria-hidden="true">
+      <div class="as-src">~/.agentsync/</div>
+      <svg class="as-rays" viewBox="0 0 260 56" preserveAspectRatio="none">
+      <path d="M130 0 C 130 30, 14 26, 14 56"/>
+      <path d="M130 0 C 130 30, 43 26, 43 56"/>
+      <path d="M130 0 C 130 30, 72 26, 72 56"/>
+      <path d="M130 0 C 130 30, 101 26, 101 56"/>
+      <path d="M130 0 C 130 30, 130 26, 130 56"/>
+      <path d="M130 0 C 130 30, 159 26, 159 56"/>
+      <path d="M130 0 C 130 30, 188 26, 188 56"/>
+      <path d="M130 0 C 130 30, 217 26, 217 56"/>
+      <path d="M130 0 C 130 30, 246 26, 246 56"/>
+      </svg>
+      <div class="as-apply"><span class="as-p">$</span> agentsync apply</div>
+      <div class="as-chips">
+      <span>Claude Code</span>
+      <span>OpenCode</span>
+      <span>Codex</span>
+      <span>Cursor</span>
+      <span>Gemini CLI</span>
+      <span>Continue</span>
+      <span>Windsurf</span>
+      <span>Roo Code</span>
+      <span>Cline</span>
+      <span class="as-more">+ 22 more</span>
+      </div>
+      </div>
   actions:
     - text: Get started
       link: /getting-started/introduction/
