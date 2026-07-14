@@ -9,6 +9,15 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Changed
+
+- **Docs website: new "drafting table" visual identity.** agentsync.cc gets its
+  own look instead of stock Starlight: Space Grotesk / JetBrains Mono
+  (self-hosted), a warm graphite + amber palette (manila drafting-paper light
+  mode), gruvbox code themes, square-cornered chrome, and an animated
+  source-to-agents fan-out hero on the landing page. Styling only — no content
+  or navigation changes.
+
 ### Added
 
 - **Destination dirs can be git-versioned for one-command rollback (issue #118).**

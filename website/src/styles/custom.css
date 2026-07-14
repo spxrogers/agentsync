@@ -1,70 +1,271 @@
-/* agentsync docs theme — teal accent, calm and content-first.
-   Brand gradient (teal → indigo) matches the logo; used sparingly. */
+/* agentsync "drafting table" theme.
+ *
+ * The identity: a technical drawing. Warm graphite darks, amber accents, drafting-paper
+ * light mode, square corners, hairline borders, and a faint blueprint grid behind the
+ * hero. Fonts: Space Grotesk (variable) for UI/headings, JetBrains Mono (variable) for
+ * code — both self-hosted via @fontsource (no external font requests).
+ */
 
 :root {
-	/* Dark theme (default). */
-	--sl-color-accent-low: #0c3b3d;
-	--sl-color-accent: #15a39d;
-	--sl-color-accent-high: #a3e9e2;
+	/* Typography */
+	--sl-font: 'Space Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
+	--sl-font-mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
 
-	--as-brand-from: #2dd4bf;
-	--as-brand-to: #6366f1;
+	/* Brand tokens */
+	--as-amber: #e8a33d;
+	--as-copper: #c96f1f;
+	--as-radius: 3px;
+
+	/* Dark (graphite, warm-tinted — a drafting table under a desk lamp) */
+	--sl-color-accent-low: #3a2b10;
+	--sl-color-accent: #c98a28;
+	--sl-color-accent-high: #f4cd87;
+	--sl-color-white: #f2eee6;
+	--sl-color-gray-1: #d8d2c7;
+	--sl-color-gray-2: #b3ac9f;
+	--sl-color-gray-3: #837c6f;
+	--sl-color-gray-4: #524d43;
+	--sl-color-gray-5: #2b2822;
+	--sl-color-gray-6: #1a1815;
+	--sl-color-black: #121110;
+	--sl-color-hairline-shade: #26231e;
+
 	--sl-content-width: 50rem;
 }
 
 :root[data-theme='light'] {
-	--sl-color-accent-low: #c8efeb;
-	--sl-color-accent: #0c8c86;
-	--sl-color-accent-high: #0a4744;
+	/* Light: manila drafting paper + ink */
+	--sl-color-accent-low: #f7e7c3;
+	--sl-color-accent: #a16207;
+	--sl-color-accent-high: #6d4405;
+	--sl-color-white: #201c14;
+	--sl-color-gray-1: #373226;
+	--sl-color-gray-2: #4c463a;
+	--sl-color-gray-3: #6e6759;
+	--sl-color-gray-4: #a49c8c;
+	--sl-color-gray-5: #ddd6c6;
+	--sl-color-gray-6: #f0ebdd;
+	--sl-color-gray-7: #f6f2e7;
+	--sl-color-black: #faf7ef;
+	--sl-color-hairline-shade: #e4ddcb;
 }
 
-/* ---- Hero (landing splash) -------------------------------------------- */
+/* Headings: tight, engineered. */
+.sl-markdown-content :is(h1, h2, h3, h4),
+.hero h1,
+.site-title {
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+
+/* ---- Hero: blueprint grid + amber wordmark ------------------------------ */
 
 .hero {
 	position: relative;
 }
 
-.hero h1 {
-	background: linear-gradient(135deg, var(--as-brand-from), var(--as-brand-to));
+.hero h1 .as-wordmark {
+	background: linear-gradient(100deg, var(--as-amber), var(--as-copper));
 	-webkit-background-clip: text;
 	background-clip: text;
 	color: transparent;
 }
 
-/* Soft brand glow behind the hero — subtle, never loud. */
+/* On drafting paper the amber stop washes out — use the ink-amber pair. */
+:root[data-theme='light'] .hero h1 .as-wordmark {
+	background: linear-gradient(100deg, #a16207, #7c3f03);
+	-webkit-background-clip: text;
+	background-clip: text;
+}
+
+/* Faint drafting grid behind the hero, fading out radially. */
 .hero::before {
 	content: '';
 	position: absolute;
-	inset: -20% -10% auto -10%;
-	height: 360px;
+	inset: -3rem -6rem auto -6rem;
+	height: 30rem;
 	z-index: -1;
-	background: radial-gradient(
-		60% 80% at 30% 0%,
-		color-mix(in oklab, var(--as-brand-from) 22%, transparent),
-		transparent 70%
-	);
 	pointer-events: none;
+	background-image: linear-gradient(
+			color-mix(in oklab, var(--sl-color-accent) 14%, transparent) 1px,
+			transparent 1px
+		),
+		linear-gradient(
+			90deg,
+			color-mix(in oklab, var(--sl-color-accent) 14%, transparent) 1px,
+			transparent 1px
+		);
+	background-size: 2.25rem 2.25rem;
+	-webkit-mask-image: radial-gradient(65% 70% at 50% 30%, #000 30%, transparent 75%);
+	mask-image: radial-gradient(65% 70% at 50% 30%, #000 30%, transparent 75%);
 }
 
-/* ---- Cards ------------------------------------------------------------ */
+/* The fan-out diagram wants a little more room than Starlight's 20rem default. */
+.hero > .hero-html {
+	width: min(100%, 26rem);
+}
+
+/* ---- Hero visual: the fan-out ------------------------------------------- */
+
+.as-fan {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	width: 100%;
+	font-family: var(--sl-font-mono);
+}
+
+.as-src {
+	font-size: 0.85rem;
+	padding: 0.45rem 0.9rem;
+	color: var(--sl-color-white);
+	background: color-mix(in oklab, var(--sl-color-accent) 12%, var(--sl-color-black));
+	border: 1px solid var(--sl-color-accent);
+	border-radius: var(--as-radius);
+}
+
+.as-rays {
+	width: 100%;
+	height: 3.4rem;
+	stroke: var(--sl-color-accent);
+	fill: none;
+	stroke-width: 1.2;
+	stroke-dasharray: 4 4;
+	opacity: 0.75;
+}
+
+.as-rays path {
+	animation: as-march 1.6s linear infinite;
+}
+
+@keyframes as-march {
+	to {
+		stroke-dashoffset: -16;
+	}
+}
+
+.as-apply {
+	margin-top: -2.6rem;
+	margin-bottom: 1rem;
+	z-index: 1;
+	font-size: 0.7rem;
+	padding: 0.15rem 0.55rem;
+	color: var(--sl-color-accent-high);
+	background: var(--sl-color-black);
+	border: 1px dashed color-mix(in oklab, var(--sl-color-accent) 60%, transparent);
+	border-radius: var(--as-radius);
+}
+
+.as-apply .as-p {
+	color: var(--sl-color-accent);
+}
+
+.as-chips {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 0.4rem;
+}
+
+.as-chips span {
+	font-size: 0.68rem;
+	padding: 0.28rem 0.55rem;
+	color: var(--sl-color-gray-1);
+	border: 1px solid var(--sl-color-gray-5);
+	border-left: 2px solid var(--sl-color-accent);
+	border-radius: var(--as-radius);
+	background: color-mix(in oklab, var(--sl-color-gray-6) 80%, transparent);
+	animation: as-land 0.5s ease-out backwards;
+}
+
+.as-chips span:nth-child(2) { animation-delay: 0.08s; }
+.as-chips span:nth-child(3) { animation-delay: 0.16s; }
+.as-chips span:nth-child(4) { animation-delay: 0.24s; }
+.as-chips span:nth-child(5) { animation-delay: 0.32s; }
+.as-chips span:nth-child(6) { animation-delay: 0.4s; }
+.as-chips span:nth-child(7) { animation-delay: 0.48s; }
+.as-chips span:nth-child(8) { animation-delay: 0.56s; }
+.as-chips span:nth-child(9) { animation-delay: 0.64s; }
+.as-chips span:nth-child(10) { animation-delay: 0.72s; }
+
+.as-chips .as-more {
+	border-style: dashed;
+	border-left-style: dashed;
+	border-left-width: 1px;
+	color: var(--sl-color-gray-3);
+}
+
+@keyframes as-land {
+	from {
+		opacity: 0;
+		translate: 0 0.4rem;
+	}
+	to {
+		opacity: 1;
+		translate: 0 0;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.as-rays path,
+	.as-chips span {
+		animation: none;
+	}
+}
+
+/* ---- Cards: square, keylined, labeled like a drawing -------------------- */
 
 .card {
-	border-radius: 0.75rem;
-	transition: border-color 0.15s ease, transform 0.15s ease;
+	border-radius: var(--as-radius);
+	border: 1px solid var(--sl-color-gray-5);
+	transition: border-color 0.15s ease;
 }
 
 .card:hover {
 	border-color: var(--sl-color-accent);
-	transform: translateY(-2px);
 }
 
-/* Accent the small card icons with the brand color. */
 .card .icon {
-	color: var(--sl-color-accent-high);
-	background: color-mix(in oklab, var(--sl-color-accent) 22%, transparent);
+	color: var(--sl-color-accent);
+	background: color-mix(in oklab, var(--sl-color-accent) 16%, transparent);
+	border-radius: var(--as-radius);
 }
 
-/* ---- Code & tables ---------------------------------------------------- */
+/* Card titles in mono, like part labels on a schematic. */
+.card .title {
+	font-family: var(--sl-font-mono);
+	font-size: var(--sl-text-lg);
+	letter-spacing: -0.02em;
+}
+
+/* ---- Chrome: rectilinear everywhere -------------------------------------- */
+
+/* Sidebar current page: a solid amber left rule, square corners. */
+.sidebar-content a {
+	border-radius: var(--as-radius);
+}
+
+.sidebar-content a[aria-current='page'] {
+	border-radius: var(--as-radius);
+	border-inline-start: 2px solid var(--sl-color-accent);
+	background: color-mix(in oklab, var(--sl-color-accent) 12%, transparent);
+	color: var(--sl-color-white);
+}
+
+/* Search button squared off. */
+button[data-open-modal] {
+	border-radius: var(--as-radius);
+	border: 1px solid var(--sl-color-gray-5);
+}
+
+/* Inline code: amber-tinted chip, square. */
+.sl-markdown-content code:not(:is(pre code)) {
+	border-radius: var(--as-radius);
+	padding: 0.1em 0.35em;
+	background: color-mix(in oklab, var(--sl-color-accent) 10%, var(--sl-color-gray-6));
+}
+
+/* ---- Code & tables (kept from the previous theme) ------------------------ */
 
 /* Keep wide tables (e.g. the capability matrix) inside the content column by
    letting cells — and the long file-path code spans inside them — wrap, rather
@@ -90,7 +291,6 @@
 
 /* ---- Misc ------------------------------------------------------------- */
 
-/* Brand-tinted external/site-title link in the header. */
 .site-title {
 	font-weight: 650;
 }
