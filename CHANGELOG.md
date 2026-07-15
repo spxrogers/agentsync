@@ -15,8 +15,9 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   (issue #183).** A project tree's `[agents]` table in
   `<root>/.agentsync/agentsync.toml` is now **authoritative**: project-scope
   rendering targets exactly the agents the project declares, and an empty or
-  missing table is a **hard error** on `apply`/`status`/`diff`/`reconcile`/
-  `verify` instead of silently inheriting the current user's enabled agents.
+  missing table is a **hard error** on every scope-aware render path —
+  `apply`/`status`/`diff`/`reconcile`/`update --apply`/`verify` — instead of
+  silently inheriting the current user's enabled agents.
   Inheritance made the committed project tree render differently on each
   collaborator's machine (whoever ran apply decided which `.claude/`, `.codex/`,
   … trees existed); now identical source always produces an identical render.
@@ -30,7 +31,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   <path>` and edit the project tree's own `[agents]` declaration (project
   entries are written without the redundant `scope` key). At project scope,
   `agent disable --purge` removes only that project's rendered files and state
-  — never the user's machine-wide destinations or another repo's files.
+  — never the user's machine-wide destinations or another repo's files. (At
+  user scope, `--purge` keeps its historical semantics: it cleans up that
+  agent's rendered files across every scope and project.) `agent add/enable/…`
+  rewrites of the `[agents]` table are now also validated fail-closed: if the
+  regenerated file would not re-parse (e.g. an exotic TOML construct the
+  rewriter cannot splice), the command refuses and leaves the file untouched.
 
 - **Docs website: new "drafting table" visual identity.** agentsync.cc gets its
   own look instead of stock Starlight: Space Grotesk / JetBrains Mono

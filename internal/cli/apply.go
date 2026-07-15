@@ -48,10 +48,30 @@ func newApplyCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "compute plan without writing destinations")
-	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
-	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
 	cmd.Flags().BoolVar(&noGitBackup, "no-git-backup", false, "skip destination git versioning/checkpoint for this run (CI/scripting); does not modify agentsync.toml")
 	return cmd
+}
+
+// addScopeFlags registers the standard --scope/--project pair every
+// scope-aware command shares (apply, status, diff, reconcile, verify, import,
+// and the agent subcommands). init and update register their own variants with
+// scope-specific help text.
+func addScopeFlags(cmd *cobra.Command, scopeFlag, projectFlag *string) {
+	cmd.Flags().StringVar(scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
+	cmd.Flags().StringVar(projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+}
+
+// noAgentsEnabledHint is the shared "nothing is enabled" notice for read-only
+// commands (status/diff). At project scope it must point at the PROJECT's
+// [agents] declaration — the user-scope `agent add` hint would send the user
+// to edit the wrong file.
+func noAgentsEnabledHint(sc adapter.Scope, projectRoot string) string {
+	if sc == adapter.ScopeProject {
+		return fmt.Sprintf("no agents enabled at project scope (%s); check the [agents] table in %s or run `agentsync agent enable <name> --scope project`",
+			projectRoot, filepath.Join(project.Home(projectRoot), "agentsync.toml"))
+	}
+	return "no agents enabled; run `agentsync agent add claude` (or opencode)"
 }
 
 // applyRun is the lock-protected body of the apply command. It is split

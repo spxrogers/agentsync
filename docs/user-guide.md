@@ -335,7 +335,9 @@ Every agent command also takes `--scope project` / `--project <path>` to manage
 the **project's own** `[agents]` declaration in `<root>/.agentsync/agentsync.toml`
 instead of the user registry — project scope renders only to agents declared
 there (see [Project-local config](#project-local-config)). At project scope,
-`disable --purge` removes only that project's rendered files.
+`disable --purge` removes only that project's rendered files; at user scope,
+`--purge` cleans up that agent's rendered files across every scope and project
+(the historical behavior).
 
 > All nine deep adapters (`claude`, `opencode`, `codex`, `cursor`, `gemini`,
 > `continue`, `windsurf`, `roo`, `cline`) plus 22 breadth-tier agents work with
@@ -591,9 +593,10 @@ replaces a user entry with the same id/name, new entries are appended, and
 project memory is appended after user memory. The project's `[agents]` table is
 **authoritative** — project scope renders only to the agents the project itself
 declares, never your user-scope agents. A project that declares none is a hard
-error on `apply`/`status`/`diff`/`reconcile`/`verify` (run `agentsync agent add
-<name> --scope project` to fix); `import --scope project` still works before any
-agents are declared, so you can bootstrap the tree from native config first.
+error on every scope-aware render path — `apply`/`status`/`diff`/`reconcile`/
+`update --apply`/`verify` (run `agentsync agent add <name> --scope project` to
+fix); `import --scope project` still works before any agents are declared, so
+you can bootstrap the tree from native config first.
 
 Apply at project scope (an explicit opt-in) and the overlay merges onto your
 user config:

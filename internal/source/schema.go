@@ -75,8 +75,12 @@ type MemoryConfig struct {
 }
 
 type Agent struct {
-	Enabled bool   `toml:"enabled"`
-	Scope   string `toml:"scope,omitempty"` // "user" | "project"
+	Enabled bool `toml:"enabled"`
+	// Scope is display-only and never drives behavior: the scope of record is
+	// which file the entry lives in (~/.agentsync/agentsync.toml vs a project
+	// tree's). `agent add` writes "user" at user scope for continuity and omits
+	// the key entirely in project files; no render/plan path reads it.
+	Scope string `toml:"scope,omitempty"`
 }
 
 type UpdateDefaults struct {

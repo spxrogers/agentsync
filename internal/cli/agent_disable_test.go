@@ -229,9 +229,7 @@ func TestAgentDisable_Purge_ProjectScopeOnlyTouchesProject(t *testing.T) {
 	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", proj); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "agent", "add", "claude", "--scope", "project", "--project", proj); err != nil {
-		t.Fatal(err)
-	}
+	declareProjectAgent(t, env, proj, "claude")
 	scaffoldProjectMCP(t, proj, "projsrv", "node", "s.js")
 	if _, err := runCLI(t, env, "apply", "--project", proj); err != nil {
 		t.Fatal(err)

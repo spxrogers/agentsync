@@ -110,7 +110,7 @@ func newStatusCmd() *cobra.Command {
 					emitStatusWarnings(p, c, reg, s, enabledAgents, selected)
 					return emitJSON(p.Out, statusModel{Agents: []statusAgent{}, Summary: map[string]int{}})
 				}
-				fmt.Fprintln(p.Out, "no agents enabled; run `agentsync agent add claude` (or opencode)")
+				fmt.Fprintln(p.Out, noAgentsEnabledHint(sc, projectRoot))
 				emitStatusWarnings(p, c, reg, s, enabledAgents, selected)
 				return nil
 			}
@@ -146,8 +146,7 @@ func newStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
-	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the formatted report")
 	cmd.Flags().StringVar(&agentsCSV, "agents", "", `limit the report to a comma-separated agent allowlist ("*" = all enabled; default: all enabled)`)
 	return cmd

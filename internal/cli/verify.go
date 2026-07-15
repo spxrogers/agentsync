@@ -101,8 +101,7 @@ func newVerifyCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
-	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
 	return cmd
 }
 

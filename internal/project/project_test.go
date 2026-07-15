@@ -146,6 +146,10 @@ func TestMerge_AgentsReplaceWhenDeclared(t *testing.T) {
 	if _, ok := out.Config.Agents["claude"]; !ok {
 		t.Fatal("claude should be retained")
 	}
+	// base must be left untouched (Merge never mutates its inputs).
+	if len(base.Config.Agents) != 3 {
+		t.Fatalf("base agents mutated by Merge: %v", base.Config.Agents)
+	}
 }
 
 // TestMerge_AgentsNotInheritedWhenProjectEmpty pins the #183 contract flip: the

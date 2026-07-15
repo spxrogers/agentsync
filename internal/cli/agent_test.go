@@ -79,6 +79,44 @@ func TestAgent_AddPreservesSubtableForm(t *testing.T) {
 	}
 }
 
+// TestAgent_AddRefusesUnsplicableTOML pins the writeAgents fail-closed
+// backstop: the [agents] rewriter is line-based, so a multi-line string whose
+// CONTENT contains an "[agents.…]" line would be mangled by the splice —
+// previously bricking the config (the spliced file no longer parsed, so every
+// later command failed to load the home). The rewrite must now be validated by
+// re-parsing before the write, refusing and leaving the file untouched.
+func TestAgent_AddRefusesUnsplicableTOML(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(tmp, ".agentsync", "agentsync.toml")
+	// Valid TOML the line splicer cannot handle: a multi-line string carrying
+	// an [agents.evil] line as CONTENT.
+	body := "[agents]\nclaude = { enabled = true }\n\n[updates]\ndefault_mode = \"track\"\ndefault_interval = \"\"\"\n[agents.evil]\n\"\"\"\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := runCLI(t, env, "agent", "add", "opencode")
+	if err == nil {
+		t.Fatal("agent add on an unsplicable config must refuse, not corrupt the file")
+	}
+	if !strings.Contains(err.Error(), "refusing") {
+		t.Fatalf("error should say the rewrite was refused; got: %v", err)
+	}
+	// The on-disk file must be byte-identical (still parseable) and later
+	// commands must still work.
+	after, _ := os.ReadFile(cfgPath)
+	if string(after) != body {
+		t.Fatalf("refused rewrite still modified the file:\n%s", after)
+	}
+	if out, lerr := runCLI(t, env, "agent", "list"); lerr != nil || !strings.Contains(out, "claude") {
+		t.Fatalf("config unusable after refused add: %v\n%s", lerr, out)
+	}
+}
+
 // TestAgent_ProjectScope_Lifecycle exercises the #183 project-scope agent
 // commands end-to-end: add/list/disable/enable/remove against a project tree's
 // agentsync.toml, leaving the user-scope config untouched throughout.
@@ -108,6 +146,11 @@ func TestAgent_ProjectScope_Lifecycle(t *testing.T) {
 	}
 	if strings.Contains(string(projCfg), `scope = "user"`) {
 		t.Fatalf("project config must not carry a user scope marker:\n%s", projCfg)
+	}
+	// The scaffold's guidance comments sit ABOVE the [agents] header precisely
+	// so the section rewrite cannot swallow them — pin that.
+	if !strings.Contains(string(projCfg), "# Author project components") {
+		t.Fatalf("first project agent add dropped the scaffold guidance comments:\n%s", projCfg)
 	}
 	if after, _ := os.ReadFile(userCfgPath); string(after) != string(userCfgBefore) {
 		t.Fatalf("project-scope agent add modified the USER config:\n%s", after)

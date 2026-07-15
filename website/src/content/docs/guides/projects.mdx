@@ -63,8 +63,9 @@ state centrally under `~/.agentsync/.state/`, keyed by the project root.
 The project's enabled agents go in an `[agents]` table. This declaration is
 **authoritative**: project scope renders only to the agents declared here —
 never your user-scope agents — so every collaborator gets the same render from
-the same committed source. Declaring at least one agent is **required**;
-`apply`/`status`/`diff` refuse to run against a project that declares none.
+the same committed source. Declaring at least one agent is **required**; every
+scope-aware render path (`apply`, `status`, `diff`, `reconcile`,
+`update --apply`, `verify`) refuses to run against a project that declares none.
 
 ```toml title="myrepo/.agentsync/agentsync.toml"
 [agents]

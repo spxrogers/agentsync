@@ -104,15 +104,6 @@ func newAgentCmd() *cobra.Command {
 	return cmd
 }
 
-// addAgentScopeFlags registers the shared --scope/--project pair on an agent
-// subcommand. Every agent command is scope-aware: at project scope it edits the
-// [agents] table in <root>/.agentsync/agentsync.toml — the declaration project
-// scope renders from (project.Merge never inherits user-scope agents).
-func addAgentScopeFlags(cmd *cobra.Command, scopeFlag, projectFlag *string) {
-	cmd.Flags().StringVar(scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
-	cmd.Flags().StringVar(projectFlag, "project", "", "explicit path to project root (implies --scope project)")
-}
-
 func newAgentAddCmd() *cobra.Command {
 	var scopeFlag, projectFlag string
 	cmd := &cobra.Command{
@@ -123,7 +114,7 @@ func newAgentAddCmd() *cobra.Command {
 			return agentAddRun(cmd, args, scopeFlag, projectFlag)
 		}),
 	}
-	addAgentScopeFlags(cmd, &scopeFlag, &projectFlag)
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
 	return cmd
 }
 
@@ -137,7 +128,7 @@ func newAgentRemoveCmd() *cobra.Command {
 			return agentRemoveRun(cmd, args, scopeFlag, projectFlag)
 		}),
 	}
-	addAgentScopeFlags(cmd, &scopeFlag, &projectFlag)
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
 	return cmd
 }
 
@@ -151,7 +142,7 @@ func newAgentEnableCmd() *cobra.Command {
 			return agentEnableRun(cmd, args, scopeFlag, projectFlag)
 		}),
 	}
-	addAgentScopeFlags(cmd, &scopeFlag, &projectFlag)
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
 	return cmd
 }
 
@@ -170,7 +161,7 @@ func newAgentDisableCmd() *cobra.Command {
 		}),
 	}
 	cmd.Flags().BoolVar(&purge, "purge", false, "remove agent destination files that agentsync owns")
-	addAgentScopeFlags(cmd, &scopeFlag, &projectFlag)
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
 	return cmd
 }
 
@@ -312,7 +303,50 @@ func writeAgents(p string, raw []byte, agents map[string]map[string]any) error {
 		}
 		out = append(out, tail...)
 	}
-	return iox.AtomicWrite(p, []byte(strings.Join(out, "\n")), 0o644)
+
+	// Fail-closed backstop: the splicer above is line-based, not a TOML parser,
+	// so a construct it cannot see (e.g. a multi-line string whose CONTENT
+	// contains an "[agents]" line) would corrupt the file — bricking every
+	// subsequent command that loads it. Before writing, re-parse the spliced
+	// result and require the agents table to round-trip exactly; refuse the
+	// write (leaving the on-disk file untouched) rather than persist a config
+	// the loader can no longer read.
+	content := []byte(strings.Join(out, "\n"))
+	var check agentsyncCfg
+	if err := toml.Unmarshal(content, &check); err != nil {
+		return fmt.Errorf("refusing to rewrite %s: the regenerated config does not parse (%v); "+
+			"the file likely uses a TOML construct the [agents] rewriter cannot splice "+
+			"(e.g. a multi-line string containing an \"[agents]\" line) — edit the [agents] table by hand", p, err)
+	}
+	if !agentsTablesEqual(check.Agents, agents) {
+		return fmt.Errorf("refusing to rewrite %s: the regenerated [agents] table does not round-trip; "+
+			"edit the [agents] table by hand", p)
+	}
+	return iox.AtomicWrite(p, content, 0o644)
+}
+
+// agentsTablesEqual reports whether a re-parsed agents table carries exactly
+// the intended entries (same names, enabled bits, and scope markers). It is
+// the writeAgents backstop's oracle, so it compares only the fields
+// buildAgentsSection emits.
+func agentsTablesEqual(got, want map[string]map[string]any) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for name, w := range want {
+		g, ok := got[name]
+		if !ok {
+			return false
+		}
+		ge, _ := g["enabled"].(bool)
+		we, _ := w["enabled"].(bool)
+		gs, _ := g["scope"].(string)
+		ws, _ := w["scope"].(string)
+		if ge != we || gs != ws {
+			return false
+		}
+	}
+	return true
 }
 
 func agentAddRun(cmd *cobra.Command, args []string, scopeFlag, projectFlag string) error {
@@ -402,7 +436,7 @@ func newAgentListCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "list every agent agentsync supports, marking which are registered")
-	addAgentScopeFlags(cmd, &scopeFlag, &projectFlag)
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
 	return cmd
 }
 
@@ -535,21 +569,35 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool, scopeFlag, p
 	return purgeAgentDests(cmd, name, home, sc, projectRoot)
 }
 
-// purgeKeyMatch reports whether a state key ("agent:scope:project:…") belongs
-// to the purge set. At user scope the purge keeps its historical cleanup-
-// everything semantics: every entry of the named agent, across all scopes and
-// projects. At project scope it matches only the agent's entries for THAT
-// project root — purging a project must not delete the user's machine-wide
-// destinations or another repo's rendered files.
-func purgeKeyMatch(key, agent string, sc adapter.Scope, portableProject string) bool {
+// purgeKeyRest reports whether a state key ("agent:scope:project:path[:ptr]")
+// belongs to the purge set and, if so, returns the key's remainder after the
+// dest-identifying prefix (the path, or "path:ptr" for a Keys entry). At user
+// scope the purge keeps its historical cleanup-everything semantics: every
+// entry of the named agent, across all scopes and projects. At project scope it
+// matches only the agent's entries for THAT project root — purging a project
+// must not delete the user's machine-wide destinations or another repo's
+// rendered files. The project-scope match compares the full literal prefix
+// (like render.PruneStaleState's key prefixes) instead of colon-split fields:
+// a portable project root is not guaranteed colon-free (a root outside $HOME
+// stays an absolute path), and field-splitting would silently mismatch it.
+func purgeKeyRest(key, agent string, sc adapter.Scope, portableProject string) (rest string, ok bool) {
+	if sc == adapter.ScopeProject {
+		prefix := agent + ":" + adapter.ScopeProject.String() + ":" + portableProject + ":"
+		if !strings.HasPrefix(key, prefix) {
+			return "", false
+		}
+		return key[len(prefix):], true
+	}
+	if !strings.HasPrefix(key, agent+":") {
+		return "", false
+	}
+	// User scope spans every scope:project pair, so the remainder is the 4th
+	// colon field (exact for the colon-free segments user-scope keys carry).
 	parts := strings.SplitN(key, ":", 4)
-	if len(parts) < 4 || parts[0] != agent {
-		return false
+	if len(parts) < 4 {
+		return "", false
 	}
-	if sc != adapter.ScopeProject {
-		return true
-	}
-	return parts[1] == adapter.ScopeProject.String() && parts[2] == portableProject
+	return parts[3], true
 }
 
 // purgeAgentDests deletes the destination files owned solely by the named
@@ -578,13 +626,15 @@ func purgeAgentDests(cmd *cobra.Command, name, home string, sc adapter.Scope, pr
 	purgedFilePaths := map[string]bool{}
 	otherFilePaths := map[string]bool{}
 	for key := range s.Files {
-		parts := strings.SplitN(key, ":", 4)
-		if len(parts) < 4 || parts[3] == "" {
+		if path, ok := purgeKeyRest(key, name, sc, portableProject); ok {
+			if path != "" {
+				purgedFilePaths[path] = true
+			}
 			continue
 		}
-		if purgeKeyMatch(key, name, sc, portableProject) {
-			purgedFilePaths[parts[3]] = true
-		} else {
+		// Not ours: record the path so shared files stay protected below. The
+		// 4th colon field is exact for the colon-free segments these keys carry.
+		if parts := strings.SplitN(key, ":", 4); len(parts) == 4 && parts[3] != "" {
 			otherFilePaths[parts[3]] = true
 		}
 	}
@@ -596,14 +646,16 @@ func purgeAgentDests(cmd *cobra.Command, name, home string, sc adapter.Scope, pr
 	// this agent's owned pointers per path so we can remove ONLY them.
 	purgedKeyPtrs := map[string][]string{}
 	for key := range s.Keys {
-		if !purgeKeyMatch(key, name, sc, portableProject) {
+		rest, ok := purgeKeyRest(key, name, sc, portableProject)
+		if !ok {
 			continue
 		}
-		parts := strings.SplitN(key, ":", 5)
-		if len(parts) < 5 || parts[3] == "" {
+		// rest is "path:ptr" for a Keys entry.
+		parts := strings.SplitN(rest, ":", 2)
+		if len(parts) < 2 || parts[0] == "" {
 			continue
 		}
-		purgedKeyPtrs[parts[3]] = append(purgedKeyPtrs[parts[3]], parts[4])
+		purgedKeyPtrs[parts[0]] = append(purgedKeyPtrs[parts[0]], parts[1])
 	}
 
 	reg := registryFactory()
@@ -654,12 +706,12 @@ func purgeAgentDests(cmd *cobra.Command, name, home string, sc adapter.Scope, pr
 
 	// Remove the matching state entries for this agent.
 	for key := range s.Files {
-		if purgeKeyMatch(key, name, sc, portableProject) {
+		if _, ok := purgeKeyRest(key, name, sc, portableProject); ok {
 			delete(s.Files, key)
 		}
 	}
 	for key := range s.Keys {
-		if purgeKeyMatch(key, name, sc, portableProject) {
+		if _, ok := purgeKeyRest(key, name, sc, portableProject); ok {
 			delete(s.Keys, key)
 		}
 	}

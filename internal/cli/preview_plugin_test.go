@@ -97,7 +97,7 @@ func TestProjectTree_DisablesPluginProjection(t *testing.T) {
 	// A project tree that disables the demo plugin.
 	proj := filepath.Join(tmp, "proj")
 	mustRun(t, env, "init", "--scope", "project", "--project", proj)
-	mustRun(t, env, "agent", "add", "claude", "--scope", "project", "--project", proj)
+	declareProjectAgent(t, env, proj, "claude")
 	if err := os.MkdirAll(filepath.Join(proj, ".agentsync", "plugins"), 0o755); err != nil {
 		t.Fatal(err)
 	}

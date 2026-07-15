@@ -197,8 +197,7 @@ Examples:
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview which source files would be written, without writing")
-	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
-	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
 	return cmd
 }
 

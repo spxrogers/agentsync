@@ -179,25 +179,31 @@ func scaffoldHome(cmd *cobra.Command, home string) error {
 	return nil
 }
 
+// initialProjectAgentsyncTOML is the project-scope scaffold stub. The guidance
+// comments live ABOVE the [agents] header on purpose: `agent add --scope
+// project` regenerates the [agents] section (dropping every line inside it,
+// comments included), and with [agents] as the file's last section a trailing
+// guidance block would be swallowed by the very first add.
 const initialProjectAgentsyncTOML = `# agentsync project-scope config
 # Rendered into <repo>/.claude/, <repo>/.opencode/, <repo>/.codex/, … by
 # 'agentsync apply' when run inside this repo. Commit this .agentsync/ tree to
 # share project-scoped agent config with collaborators.
-
-[agents]
-# Project scope renders ONLY to the agents declared here — this committed table
-# is authoritative, and user-scope agents are never inherited, so every
-# collaborator gets the same render from the same source. Declare at least one
-# (apply/status/diff refuse to run against a project that declares none):
-#   agentsync agent add <name> --scope project
-# or uncomment/edit directly:
-# claude   = { enabled = true }
-# opencode = { enabled = true }
-
+#
 # Author project components by adding files under this tree (mcp/<id>.toml,
 # skills/<name>/SKILL.md, agents/<name>.md, commands/<name>.md, hooks/<event>.toml,
 # lsp/<id>.toml, memory/AGENTS.md) or capture existing native config with
 # 'agentsync import <agent> --scope project'.
+#
+# Project scope renders ONLY to the agents declared in [agents] below — the
+# committed table is authoritative, and user-scope agents are never inherited,
+# so every collaborator gets the same render from the same source. Declare at
+# least one (apply/status/diff refuse to run against a project that declares
+# none):
+#   agentsync agent add <name> --scope project
+
+[agents]
+# claude   = { enabled = true }
+# opencode = { enabled = true }
 `
 
 // scaffoldProjectHome populates an empty <root>/.agentsync/ project source tree
