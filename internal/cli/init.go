@@ -185,8 +185,12 @@ const initialProjectAgentsyncTOML = `# agentsync project-scope config
 # share project-scoped agent config with collaborators.
 
 [agents]
-# Leave this empty to inherit the agents you enabled at user scope, or pin a
-# subset for this project:
+# Project scope renders ONLY to the agents declared here — this committed table
+# is authoritative, and user-scope agents are never inherited, so every
+# collaborator gets the same render from the same source. Declare at least one
+# (apply/status/diff refuse to run against a project that declares none):
+#   agentsync agent add <name> --scope project
+# or uncomment/edit directly:
 # claude   = { enabled = true }
 # opencode = { enabled = true }
 
@@ -232,10 +236,12 @@ func scaffoldProjectHome(cmd *cobra.Command, root string) error {
 	}
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Next steps:")
-	fmt.Fprintln(w, "  1. add project components under", home)
+	fmt.Fprintf(w, "  1. agentsync agent add claude --scope project --project %s\n", root)
+	fmt.Fprintln(w, "     (declare every agent this project renders to; user-scope agents are not inherited)")
+	fmt.Fprintln(w, "  2. add project components under", home)
 	fmt.Fprintf(w, "     (or: agentsync import claude --scope project --project %s)\n", root)
-	fmt.Fprintf(w, "  2. agentsync apply --project %s --dry-run   # preview\n", root)
-	fmt.Fprintf(w, "  3. agentsync apply --project %s             # write project destinations\n", root)
+	fmt.Fprintf(w, "  3. agentsync apply --project %s --dry-run   # preview\n", root)
+	fmt.Fprintf(w, "  4. agentsync apply --project %s             # write project destinations\n", root)
 	return nil
 }
 

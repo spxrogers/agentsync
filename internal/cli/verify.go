@@ -68,6 +68,11 @@ func newVerifyCmd() *cobra.Command {
 				if perr != nil {
 					return fmt.Errorf("verify: load project source %s: %w", sourceRoot, perr)
 				}
+				// verify lints the source a project-scope apply would consume, so
+				// it must reject the same undeclared-agents state apply rejects.
+				if err := requireProjectAgents(pc, sourceRoot); err != nil {
+					return err
+				}
 				c = project.Merge(c, pc)
 			}
 			for name := range c.Config.Agents {

@@ -120,8 +120,14 @@ project tree is ambiguous, so agentsync **prompts** for project-vs-user (or, whe
 non-interactive / `--no-input`, errors rather than guessing). It never silently
 acts on a tree it merely detected. The project tree is **overlaid** onto the
 user canonical: a project entry replaces a user entry with the same id/name, new
-entries are added, project memory is appended, and an empty `[agents]` inherits
-the user's enabled agents. A project `plugins/<id>.toml` with `disabled = true`
+entries are added, and project memory is appended. The project's `[agents]`
+table is **authoritative**: project scope renders only to the agents the project
+itself declares, never the user's enabled agents — so a committed tree produces
+the same render on every collaborator's machine. A project that declares no
+agents is a hard error on `apply`/`status`/`diff`/`reconcile`/`verify` (declare
+them with `agentsync agent add <name> --scope project`); `import --scope
+project` stays available for bootstrapping the tree from native config first. A
+project `plugins/<id>.toml` with `disabled = true`
 suppresses that plugin's components in the repo. (The retired M5 single-file
 `.agentsync.toml` marker is no longer read; `agentsync init --scope project`
 prints how to migrate.)

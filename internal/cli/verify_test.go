@@ -167,6 +167,9 @@ func TestVerify_ProjectScope_OK(t *testing.T) {
 	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", proj); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := runCLI(t, env, "agent", "add", "claude", "--scope", "project", "--project", proj); err != nil {
+		t.Fatal(err)
+	}
 	// A valid project-scope MCP server referencing an env var that is set, so
 	// the ${env:} resolution pass succeeds.
 	mcp := filepath.Join(proj, ".agentsync", "mcp", "projapi.toml")

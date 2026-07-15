@@ -39,7 +39,7 @@ That writes a tree with the same files as the user tree — `agentsync.toml` plu
 
 - myrepo/
   - .agentsync/
-    - agentsync.toml `[agents]` table (subset / inherit)
+    - agentsync.toml `[agents]` table (the project's own agent set — required)
     - mcp/
       - **company-api.toml** project-only MCP servers
     - plugins/
@@ -60,13 +60,23 @@ state centrally under `~/.agentsync/.state/`, keyed by the project root.
 
 ## Author the tree
 
-The project's enabled agents go in an `[agents]` table — leave it empty to inherit
-the user's enabled agents:
+The project's enabled agents go in an `[agents]` table. This declaration is
+**authoritative**: project scope renders only to the agents declared here —
+never your user-scope agents — so every collaborator gets the same render from
+the same committed source. Declaring at least one agent is **required**;
+`apply`/`status`/`diff` refuse to run against a project that declares none.
 
 ```toml title="myrepo/.agentsync/agentsync.toml"
 [agents]
-claude = { enabled = true }       # subset for this project
-# (empty [agents] inherits the user's enabled agents)
+claude = { enabled = true }       # the agents THIS project renders to
+```
+
+The ergonomic way to manage it is the agent commands at project scope:
+
+```bash
+agentsync agent add claude --scope project      # or --project <path>
+agentsync agent list --scope project
+agentsync agent disable claude --scope project
 ```
 
 A project-only MCP server is just an `mcp/<id>.toml` file, identical in format to
@@ -102,7 +112,11 @@ The project tree is **overlaid** onto your user canonical:
 - a project entry **replaces** a user entry with the same id/name,
 - new project entries are **appended**,
 - project memory is **appended after** user memory,
-- an empty project `[agents]` **inherits** the user's enabled agents.
+- the project's `[agents]` table is **authoritative** — user-scope agents are
+  never inherited, and a project that declares none is a hard error (fix it with
+  `agentsync agent add <name> --scope project`). `import --scope project` stays
+  available before any agents are declared, so you can bootstrap the tree from
+  native config first.
 
 User-level servers and plugins still apply unless the project replaces or disables
 them.
@@ -159,8 +173,9 @@ user scope.
 
 <Aside type="note">
 	`--scope` and `--project` work on `init`, `import`, `apply`, `status`, `diff`,
-	`reconcile`, and `update` — anywhere the active config set matters. The global
-	`--no-input` flag makes any of them fail closed instead of prompting.
+	`reconcile`, `update`, `verify`, and every `agent` subcommand — anywhere the
+	active config set matters. The global `--no-input` flag makes any of them fail
+	closed instead of prompting.
 </Aside>
 
 <Aside type="caution" title="Upgrading from the old marker?">

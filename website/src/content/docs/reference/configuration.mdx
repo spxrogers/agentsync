@@ -109,10 +109,12 @@ source) and is on unless you set `banner = false`. See the
 A repo can carry a **project source tree** — a `.agentsync/` directory at its root
 with the *same* layout as the user tree above (scaffolded by `agentsync init
 --scope project`), minus `.state/`. It overlays onto your user config: a project
-entry replaces a user entry with the same id/name, new entries are appended,
-project memory is appended after user memory, and an empty project `[agents]`
-inherits the user's enabled agents. Commit the `.agentsync/` tree to share it with
-collaborators. See [Project-local config](/guides/projects/).
+entry replaces a user entry with the same id/name, new entries are appended, and
+project memory is appended after user memory. The project's `[agents]` table is
+authoritative — project scope renders only to the agents the project declares
+(`agentsync agent add <name> --scope project`), never the user's enabled agents,
+and a project that declares none is a hard error. Commit the `.agentsync/` tree
+to share it with collaborators. See [Project-local config](/guides/projects/).
 
 ## State
 

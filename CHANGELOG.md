@@ -11,6 +11,27 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
+- **BREAKING: project scope now requires the project to declare its own agents
+  (issue #183).** A project tree's `[agents]` table in
+  `<root>/.agentsync/agentsync.toml` is now **authoritative**: project-scope
+  rendering targets exactly the agents the project declares, and an empty or
+  missing table is a **hard error** on `apply`/`status`/`diff`/`reconcile`/
+  `verify` instead of silently inheriting the current user's enabled agents.
+  Inheritance made the committed project tree render differently on each
+  collaborator's machine (whoever ran apply decided which `.claude/`, `.codex/`,
+  … trees existed); now identical source always produces an identical render.
+  `import --scope project` is deliberately exempt so a tree can still be
+  bootstrapped from native config before agents are declared. **Migration:**
+  projects that relied on an empty `[agents]` must now declare their agents —
+  run `agentsync agent add <name> --scope project` (or edit the `[agents]`
+  table) for each agent the project should render to.
+- **All `agent` subcommands are scope-aware.** `agent
+  add|remove|list|enable|disable` now take `--scope project` / `--project
+  <path>` and edit the project tree's own `[agents]` declaration (project
+  entries are written without the redundant `scope` key). At project scope,
+  `agent disable --purge` removes only that project's rendered files and state
+  — never the user's machine-wide destinations or another repo's files.
+
 - **Docs website: new "drafting table" visual identity.** agentsync.cc gets its
   own look instead of stock Starlight: Space Grotesk / JetBrains Mono
   (self-hosted), a warm graphite + amber palette (manila drafting-paper light

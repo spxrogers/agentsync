@@ -68,8 +68,12 @@ func Discover(start string) (root string, found bool, err error) {
 // returning a new Canonical. It never mutates base.
 //
 // Semantics (documented in docs/architecture.md §project overlay):
-//   - Agents: if proj declares any agents, its agent map REPLACES base's (the
-//     project picks its own agent set); an empty project agent map inherits base.
+//   - Agents: the project's agent map is AUTHORITATIVE — project scope renders
+//     only to agents the project itself declares, so the committed tree produces
+//     the same render on every collaborator's machine. Base (user-scope) agents
+//     are never inherited; an empty project agent map merges to an empty agent
+//     set (scope-aware commands reject it before rendering — see
+//     requireProjectAgents in internal/cli).
 //   - MCP / LSP / Skills / Subagents / Commands: overlaid by identity (ID or
 //     Name) — a project entry replaces a base entry with the same key, and a new
 //     key is appended. Order is base-first, then appended project entries.
@@ -88,13 +92,15 @@ func Discover(start string) (root string, found bool, err error) {
 func Merge(base, proj source.Canonical) source.Canonical {
 	out := base // shallow copy; every slice/map we touch is replaced, not mutated
 
-	if len(proj.Config.Agents) > 0 {
-		agents := make(map[string]source.Agent, len(proj.Config.Agents))
-		for k, v := range proj.Config.Agents {
-			agents[k] = v
-		}
-		out.Config.Agents = agents
+	// The project's agent declaration is authoritative — never fall back to
+	// base's agents when it is empty. Inheriting made the project render depend
+	// on each collaborator's personal user-scope config, so identical committed
+	// source produced different .claude/.cursor/.codex/… trees per machine.
+	agents := make(map[string]source.Agent, len(proj.Config.Agents))
+	for k, v := range proj.Config.Agents {
+		agents[k] = v
 	}
+	out.Config.Agents = agents
 	if proj.Config.Updates != (source.UpdateDefaults{}) {
 		out.Config.Updates = proj.Config.Updates
 	}

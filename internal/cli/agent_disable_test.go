@@ -197,6 +197,79 @@ func TestAgentDisable_Purge_KeepsSharedFileOwnedByOtherAgent(t *testing.T) {
 	}
 }
 
+// TestAgentDisable_Purge_ProjectScopeOnlyTouchesProject verifies the scope
+// filter on purge (#183): `agent disable claude --purge --project <root>`
+// removes only claude's PROJECT-scope destinations for that root — the user's
+// machine-wide destinations (also owned by claude) must survive untouched.
+func TestAgentDisable_Purge_ProjectScopeOnlyTouchesProject(t *testing.T) {
+	tmp := t.TempDir()
+	proj := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	// A user-scope MCP server → ~/.claude.json keys owned by claude:user.
+	userMCP := filepath.Join(tmp, ".agentsync", "mcp", "usersrv.toml")
+	if err := os.MkdirAll(filepath.Dir(userMCP), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userMCP, []byte("[server]\ntype = \"stdio\"\ncommand = \"npx\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A project tree with its own claude declaration + MCP → <proj>/.mcp.json
+	// keys owned by claude:project:<proj>.
+	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", proj); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude", "--scope", "project", "--project", proj); err != nil {
+		t.Fatal(err)
+	}
+	scaffoldProjectMCP(t, proj, "projsrv", "node", "s.js")
+	if _, err := runCLI(t, env, "apply", "--project", proj); err != nil {
+		t.Fatal(err)
+	}
+
+	projMCPPath := filepath.Join(proj, ".mcp.json")
+	if body, err := os.ReadFile(projMCPPath); err != nil || !strings.Contains(string(body), "projsrv") {
+		t.Fatalf("fixture: project .mcp.json missing projsrv (err=%v):\n%s", err, body)
+	}
+
+	out, err := runCLI(t, env, "agent", "disable", "claude", "--purge", "--project", proj)
+	if err != nil {
+		t.Fatalf("agent disable --purge --project: %v\n%s", err, out)
+	}
+
+	// Project dest: claude's owned key pruned.
+	if body, _ := os.ReadFile(projMCPPath); strings.Contains(string(body), "projsrv") {
+		t.Fatalf("project purge did not prune the project-owned key:\n%s", body)
+	}
+	// User dest: untouched — the purge was scoped to the project.
+	userBody, err := os.ReadFile(filepath.Join(tmp, ".claude.json"))
+	if err != nil {
+		t.Fatalf("user .claude.json must survive a project-scoped purge: %v", err)
+	}
+	if !strings.Contains(string(userBody), "usersrv") {
+		t.Fatalf("project-scoped purge deleted user-scope keys:\n%s", userBody)
+	}
+	// And the project declaration was flipped to disabled, not the user's.
+	projCfg, _ := os.ReadFile(filepath.Join(proj, ".agentsync", "agentsync.toml"))
+	if !strings.Contains(string(projCfg), "claude = { enabled = false }") {
+		t.Fatalf("project entry not disabled:\n%s", projCfg)
+	}
+	userCfg, _ := os.ReadFile(filepath.Join(tmp, ".agentsync", "agentsync.toml"))
+	if !strings.Contains(string(userCfg), `claude = { enabled = true, scope = "user" }`) {
+		t.Fatalf("user entry must stay enabled:\n%s", userCfg)
+	}
+}
+
 // TestAgentDisable_Purge_NoPurge verifies that without --purge, destination
 // files are NOT removed.
 func TestAgentDisable_Purge_NoPurge(t *testing.T) {

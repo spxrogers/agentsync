@@ -373,9 +373,29 @@ func loadProjectedForScope(cmd *cobra.Command, fs afero.Fs, home, scopeFlag, pro
 		if perr != nil {
 			return source.Canonical{}, sc, projectRoot, fmt.Errorf("load project source %s: %w", projHome, perr)
 		}
+		if err := requireProjectAgents(pc, projHome); err != nil {
+			return source.Canonical{}, sc, projectRoot, err
+		}
 		c = project.Merge(c, pc)
 	}
 	return c, sc, projectRoot, nil
+}
+
+// requireProjectAgents rejects a project tree whose [agents] table is empty or
+// absent. A project's agent declaration is authoritative for project scope
+// (project.Merge never inherits the user's enabled agents), so an undeclared
+// set can only mean "render to nothing" — which reads as a silent no-op, or
+// worse, as per-machine behavior to a user expecting the old inheritance. Fail
+// with the fix instead. A declared-but-all-disabled table is a deliberate
+// state and passes; the enabled-agent extraction downstream reports it softly.
+func requireProjectAgents(pc source.Canonical, projHome string) error {
+	if len(pc.Config.Agents) > 0 {
+		return nil
+	}
+	cfgPath := filepath.Join(projHome, "agentsync.toml")
+	return fmt.Errorf("this project declares no agents: the [agents] table in %s is empty or missing, "+
+		"and project scope renders only to agents the project itself declares (user-scope agents are not inherited); "+
+		"run `agentsync agent add <name> --scope project` or add them to %s", cfgPath, cfgPath)
 }
 
 // projectDisabledPlugins returns the plugin ids a project tree marks disabled

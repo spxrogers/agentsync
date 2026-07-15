@@ -23,8 +23,14 @@ directory committed at the repo root, with the same layout as your user
    agentsync init --scope project    # creates ./.agentsync/
    ```
 
-2. **Set the project's agents** — an `[agents]` table (leave it empty to inherit
-   each teammate's enabled agents):
+2. **Declare the project's agents** — required. Project scope renders only to
+   the agents declared here, never each teammate's user-scope agents, so
+   everyone gets the same render from the committed tree:
+
+   ```bash
+   agentsync agent add claude --scope project
+   agentsync agent add opencode --scope project
+   ```
 
    ```toml title="myrepo/.agentsync/agentsync.toml"
    [agents]
@@ -79,9 +85,11 @@ directory committed at the repo root, with the same layout as your user
 
 </Steps>
 
-<Aside type="note" title="The overlay is additive">
+<Aside type="note" title="The overlay is additive — except agents">
 	The project tree merges *onto* each teammate's user-level config — it doesn't
 	wipe their personal servers or plugins. A project entry replaces a user entry
-	with the same id/name, new entries are appended, and an empty project `[agents]`
-	inherits each teammate's own enabled agents.
+	with the same id/name and new entries are appended. Agents are the exception:
+	the project's `[agents]` table is authoritative, and a project that declares
+	none is a hard error (never an inherit of the teammate's own agents), which is
+	what keeps the render identical across the team.
 </Aside>
