@@ -331,6 +331,14 @@ agentsync agent disable opencode  # stop applying to it (keeps source)
 agentsync agent disable opencode --purge   # also remove what it wrote
 ```
 
+Every agent command also takes `--scope project` / `--project <path>` to manage
+the **project's own** `[agents]` declaration in `<root>/.agentsync/agentsync.toml`
+instead of the user registry — project scope renders only to agents declared
+there (see [Project-local config](#project-local-config)). At project scope,
+`disable --purge` removes only that project's rendered files; at user scope,
+`--purge` cleans up that agent's rendered files across every scope and project
+(the historical behavior).
+
 > All nine deep adapters (`claude`, `opencode`, `codex`, `cursor`, `gemini`,
 > `continue`, `windsurf`, `roo`, `cline`) plus 22 breadth-tier agents work with
 > `agent add` — run `agentsync agent list --all` for the full set, or see the
@@ -549,9 +557,18 @@ this tree:
 ```toml
 # myrepo/.agentsync/agentsync.toml
 [agents]
-claude = { enabled = true }       # subset for this project;
-                                  # leave [agents] empty to inherit the user's
-                                  # enabled agents
+claude = { enabled = true }       # the agents THIS project renders to —
+                                  # required; user-scope agents are never
+                                  # inherited, so every collaborator gets the
+                                  # same render
+```
+
+Declare agents with the project-scope agent commands instead of hand-editing:
+
+```bash
+agentsync agent add claude --scope project     # or --project <path>
+agentsync agent list --scope project
+agentsync agent disable claude --scope project
 ```
 
 ```toml
@@ -572,9 +589,14 @@ Author project memory directly in `<root>/.agentsync/memory/AGENTS.md` (compose
 it from `fragments/` just like the user tree).
 
 The project tree is **overlaid** onto your user canonical: a project entry
-replaces a user entry with the same id/name, new entries are appended, project
-memory is appended after user memory, and an empty project `[agents]` inherits
-the user's enabled agents.
+replaces a user entry with the same id/name, new entries are appended, and
+project memory is appended after user memory. The project's `[agents]` table is
+**authoritative** — project scope renders only to the agents the project itself
+declares, never your user-scope agents. A project that declares none is a hard
+error on every scope-aware render path — `apply`/`status`/`diff`/`reconcile`/
+`update --apply`/`verify` (run `agentsync agent add <name> --scope project` to
+fix); `import --scope project` still works before any agents are declared, so
+you can bootstrap the tree from native config first.
 
 Apply at project scope (an explicit opt-in) and the overlay merges onto your
 user config:
@@ -676,7 +698,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `init [<git-url>]` | Create `~/.agentsync/` (user scope); optionally clone a bootstrap repo. `--scope project` scaffolds a project tree at `<cwd>/.agentsync/` instead; `--project <path>` targets `<path>/.agentsync/` (implies project scope). A git-URL clone is user-scope only. | `--scope --project` |
 | `doctor` | Diagnose setup: PATH, home/state writability, config schema, secrets backend; flags natively-installed plugins missing from source. | |
 | `verify` | Validate config and surface every unresolved `${secret:}`/`${env:}` ref. `--scope project`/`--project <path>` schema-lints the project tree and validates its references against the inherited user secrets backend. | `--scope --project` |
-| `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry. | `disable --purge` |
+| `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or with `--scope project`/`--project <path>` the project tree's own `[agents]` declaration (which project scope renders from; never inherited). At project scope `disable --purge` touches only that project's rendered files. | `disable --purge --scope --project` |
 | `mcp add\|remove\|list <name>` | Manage MCP servers. | `--type --command --args --url --env --agents` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
 | `plugin install\|upgrade\|enable\|disable\|remove\|list <id>` | Manage plugins. | `install <id[@marketplace]>` |

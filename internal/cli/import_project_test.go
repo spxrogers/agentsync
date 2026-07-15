@@ -47,6 +47,10 @@ func TestIntegration_Import_ProjectScope(t *testing.T) {
 		t.Fatalf("import --scope project: %v\n%s", err, out)
 	}
 
+	// Declare the project's agent so the round-trip apply below passes the
+	// #183 undeclared-agents guard (import itself deliberately doesn't need it).
+	declareProjectAgent(t, env, proj, "claude")
+
 	// Captured config must land in the PROJECT tree, not the user home.
 	if _, err := os.Stat(filepath.Join(proj, ".agentsync", "agents", "rev.md")); err != nil {
 		t.Fatalf("project subagent not captured into project tree: %v", err)

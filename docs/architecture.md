@@ -60,9 +60,15 @@ source.Canonical
 At **project scope** the same canonical is loaded a second time from the repo's
 `<root>/.agentsync/` tree (identical layout) and overlaid onto the user canonical
 by `project.Merge`: entries are merged by id/name (project wins), project memory
-is appended, an empty project `[agents]` inherits the user's enabled agents, and
-a project `plugins/<id>.toml` with `disabled = true` is excluded from projection
-in that repo. The retired M5 single-file `.agentsync.toml` marker is no longer
+is appended, and a project `plugins/<id>.toml` with `disabled = true` is excluded
+from projection in that repo. The project's `[agents]` table is **authoritative**
+— `project.Merge` never inherits the user's enabled agents, so identical
+committed source renders identically for every collaborator. An empty or absent
+project `[agents]` is rejected before render by `requireProjectAgents`
+(`internal/cli`), which every scope-aware command reaches via
+`loadProjectedForScope` (`verify` calls it on its own load path); the error
+points at `agentsync agent add <name> --scope project`. `import --scope project`
+is deliberately exempt: it is the capture path used to bootstrap a tree. The retired M5 single-file `.agentsync.toml` marker is no longer
 read — `project.Discover` surfaces a migration error if it finds one.
 
 **Managed memory banner.** Every rendered memory file (`CLAUDE.md`, `AGENTS.md`,

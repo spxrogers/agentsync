@@ -146,16 +146,29 @@ func TestMerge_AgentsReplaceWhenDeclared(t *testing.T) {
 	if _, ok := out.Config.Agents["claude"]; !ok {
 		t.Fatal("claude should be retained")
 	}
+	// base must be left untouched (Merge never mutates its inputs).
+	if len(base.Config.Agents) != 3 {
+		t.Fatalf("base agents mutated by Merge: %v", base.Config.Agents)
+	}
 }
 
-func TestMerge_AgentsInheritWhenProjectEmpty(t *testing.T) {
+// TestMerge_AgentsNotInheritedWhenProjectEmpty pins the #183 contract flip: the
+// project's [agents] declaration is authoritative, so a project that declares
+// none merges to an EMPTY agent set — never the user's enabled agents. (The
+// pre-#183 behavior inherited base here, which made a committed project tree
+// render differently per collaborator.)
+func TestMerge_AgentsNotInheritedWhenProjectEmpty(t *testing.T) {
 	base := source.Canonical{Config: source.Config{Agents: map[string]source.Agent{
 		"claude": {Enabled: true}, "codex": {Enabled: true},
 	}}}
 	proj := source.Canonical{} // no agents declared
 	out := project.Merge(base, proj)
-	if len(out.Config.Agents) != 2 {
-		t.Fatalf("empty project agents should inherit base; got %v", out.Config.Agents)
+	if len(out.Config.Agents) != 0 {
+		t.Fatalf("empty project agents must NOT inherit base; got %v", out.Config.Agents)
+	}
+	// base must be left untouched (Merge never mutates its inputs).
+	if len(base.Config.Agents) != 2 {
+		t.Fatalf("base agents mutated by Merge: %v", base.Config.Agents)
 	}
 }
 

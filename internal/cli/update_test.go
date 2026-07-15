@@ -52,6 +52,39 @@ func TestUpdate_ApplyRecordsFreshManifestSHA(t *testing.T) {
 	}
 }
 
+// TestUpdate_ApplyProjectScope_RequiresDeclaredAgents pins the #183 guard on
+// update's re-apply path: `update --apply --project <root>` reloads the source
+// via loadProjectedForScope once a bump lands, so a project that declares no
+// agents must fail there with the same actionable error apply gives — never
+// silently re-render with inherited user-scope agents.
+func TestUpdate_ApplyProjectScope_RequiresDeclaredAgents(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	base := t.TempDir()
+	proj := t.TempDir()
+
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+
+	// A pending bump so the re-apply (and therefore the reload) actually runs.
+	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
+	mustRun(t, env, "marketplace", "add", mpDir)
+	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "apply")
+	_ = makeVersionedMarketplace(t, base, "1.0.1")
+
+	// A project tree with NO declared agents.
+	mustRun(t, env, "init", "--scope", "project", "--project", proj)
+
+	_, err := runCLI(t, env, "update", "--apply", "--project", proj)
+	if err == nil {
+		t.Fatal("update --apply --project against an undeclared project must error")
+	}
+	if !strings.Contains(err.Error(), "declares no agents") {
+		t.Fatalf("error should say the project declares no agents; got: %v", err)
+	}
+}
+
 // TestUpdate_ApplyBumpFailureLeavesCacheConsistent is the regression for the
 // applyPluginBump fetch-then-write window. It overwrote the LIVE plugin cache
 // before writing plugins/<id>.toml, so a TOML-write failure left the cache new

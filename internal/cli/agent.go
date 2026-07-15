@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter/generic"
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -94,8 +96,8 @@ func boolStr(b bool) string {
 func newAgentCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "agent", Short: "manage which agents agentsync targets"}
 	cmd.AddCommand(
-		&cobra.Command{Use: "add <name>", Short: "register an agent (any supported agent; see `agent list --all`)", Args: cobra.ExactArgs(1), RunE: lockedRun(agentAddRun)},
-		&cobra.Command{Use: "remove <name>", Short: "unregister an agent", Args: cobra.ExactArgs(1), RunE: lockedRun(agentRemoveRun)},
+		newAgentAddCmd(),
+		newAgentRemoveCmd(),
 		newAgentListCmd(),
 		newAgentEnableCmd(),
 		newAgentDisableCmd(),
@@ -103,26 +105,64 @@ func newAgentCmd() *cobra.Command {
 	return cmd
 }
 
+func newAgentAddCmd() *cobra.Command {
+	var scopeFlag, projectFlag string
+	cmd := &cobra.Command{
+		Use:   "add <name>",
+		Short: "register an agent (any supported agent; see `agent list --all`)",
+		Args:  cobra.ExactArgs(1),
+		RunE: lockedRun(func(cmd *cobra.Command, args []string) error {
+			return agentAddRun(cmd, args, scopeFlag, projectFlag)
+		}),
+	}
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	return cmd
+}
+
+func newAgentRemoveCmd() *cobra.Command {
+	var scopeFlag, projectFlag string
+	cmd := &cobra.Command{
+		Use:   "remove <name>",
+		Short: "unregister an agent",
+		Args:  cobra.ExactArgs(1),
+		RunE: lockedRun(func(cmd *cobra.Command, args []string) error {
+			return agentRemoveRun(cmd, args, scopeFlag, projectFlag)
+		}),
+	}
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	return cmd
+}
+
 func newAgentEnableCmd() *cobra.Command {
-	return &cobra.Command{
+	var scopeFlag, projectFlag string
+	cmd := &cobra.Command{
 		Use:   "enable <name>",
 		Args:  cobra.ExactArgs(1),
 		Short: "enable a registered agent",
-		RunE:  lockedRun(agentEnableRun),
+		RunE: lockedRun(func(cmd *cobra.Command, args []string) error {
+			return agentEnableRun(cmd, args, scopeFlag, projectFlag)
+		}),
 	}
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	return cmd
 }
 
 func newAgentDisableCmd() *cobra.Command {
-	var purge bool
+	var (
+		purge       bool
+		scopeFlag   string
+		projectFlag string
+	)
 	cmd := &cobra.Command{
 		Use:   "disable <name>",
 		Args:  cobra.ExactArgs(1),
 		Short: "disable a registered agent (optionally purging its destination files)",
 		RunE: lockedRun(func(cmd *cobra.Command, args []string) error {
-			return agentDisableRun(cmd, args, purge)
+			return agentDisableRun(cmd, args, purge, scopeFlag, projectFlag)
 		}),
 	}
 	cmd.Flags().BoolVar(&purge, "purge", false, "remove agent destination files that agentsync owns")
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
 	return cmd
 }
 
@@ -141,14 +181,36 @@ func validateAgent(name string) error {
 	return fmt.Errorf("unknown agent %q; valid: %s", name, validAgentsList())
 }
 
-// readAgentsyncTOML returns the file path + raw bytes + parsed `agents` section.
-func readAgentsyncTOML() (string, []byte, map[string]map[string]any, error) {
-	home := paths.AgentsyncHome(paths.OSEnv{})
+// agentScopeHome resolves the effective scope for an agent command and the
+// agentsync home whose agentsync.toml it edits: ~/.agentsync at user scope, the
+// <root>/.agentsync project tree at project scope. Scope resolution is shared
+// with apply/status/diff (resolveScope), so the same explicit-opt-in rules hold:
+// --project implies project scope, --scope project walks up from cwd, and a bare
+// invocation inside a project tree prompts (or fails closed when non-interactive).
+func agentScopeHome(cmd *cobra.Command, scopeFlag, projectFlag string) (home string, sc adapter.Scope, projectRoot string, err error) {
+	sc, projectRoot, err = resolveScope(cmd, scopeFlag, projectFlag, noInputFlag(cmd))
+	if err != nil {
+		return "", sc, projectRoot, err
+	}
+	if sc == adapter.ScopeProject {
+		return project.Home(projectRoot), sc, projectRoot, nil
+	}
+	return paths.AgentsyncHome(paths.OSEnv{}), sc, "", nil
+}
+
+// readAgentsyncTOMLAt returns the file path + raw bytes + parsed `agents`
+// section of the agentsync.toml under home. The missing-file hint points at the
+// scope-appropriate init.
+func readAgentsyncTOMLAt(home string, sc adapter.Scope) (string, []byte, map[string]map[string]any, error) {
 	p := filepath.Join(home, "agentsync.toml")
 	raw, err := os.ReadFile(p)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return p, nil, nil, fmt.Errorf("no agentsync config at %s; run `agentsync init` first", p)
+			hint := "run `agentsync init` first"
+			if sc == adapter.ScopeProject {
+				hint = "run `agentsync init --scope project` first"
+			}
+			return p, nil, nil, fmt.Errorf("no agentsync config at %s; %s", p, hint)
 		}
 		return p, nil, nil, fmt.Errorf("read %s: %w", p, err)
 	}
@@ -163,7 +225,10 @@ func readAgentsyncTOML() (string, []byte, map[string]map[string]any, error) {
 }
 
 // buildAgentsSection returns a TOML [agents] block with inline table values,
-// preserving comment header context. Agents are sorted alphabetically.
+// preserving comment header context. Agents are sorted alphabetically. It
+// emits ONLY the fields the canonical model reads (enabled + scope) — any
+// extra key a user hand-added inside an agent entry is deliberately dropped,
+// matching source.Agent, which never loads such keys either.
 func buildAgentsSection(agents map[string]map[string]any) string {
 	names := make([]string, 0, len(agents))
 	for n := range agents {
@@ -176,8 +241,14 @@ func buildAgentsSection(agents map[string]map[string]any) string {
 	for _, n := range names {
 		v := agents[n]
 		enabled, _ := v["enabled"].(bool)
-		scope, _ := v["scope"].(string)
-		fmt.Fprintf(&sb, "%s = { enabled = %s, scope = %q }\n", n, boolStr(enabled), scope)
+		// The scope field is omitted when empty: project-scope entries carry no
+		// scope key (the file's location already IS the scope), and regenerating
+		// `scope = ""` for them would add noise the loader never reads.
+		if scope, _ := v["scope"].(string); scope != "" {
+			fmt.Fprintf(&sb, "%s = { enabled = %s, scope = %q }\n", n, boolStr(enabled), scope)
+		} else {
+			fmt.Fprintf(&sb, "%s = { enabled = %s }\n", n, boolStr(enabled))
+		}
 	}
 	return sb.String()
 }
@@ -236,10 +307,81 @@ func writeAgents(p string, raw []byte, agents map[string]map[string]any) error {
 		}
 		out = append(out, tail...)
 	}
-	return iox.AtomicWrite(p, []byte(strings.Join(out, "\n")), 0o644)
+
+	// Fail-closed backstop: the splicer above is line-based, not a TOML parser,
+	// so a construct it cannot see (e.g. a multi-line string whose CONTENT
+	// contains an "[agents]" line) could corrupt the file — either bricking
+	// every subsequent load, or worse, silently mangling ANOTHER table's data
+	// while still parsing. Before writing, re-parse the spliced result and
+	// require BOTH that the agents table matches the intended entries AND that
+	// everything outside [agents] is semantically unchanged from the original;
+	// refuse the write (leaving the on-disk file untouched) otherwise.
+	content := []byte(strings.Join(out, "\n"))
+	var check agentsyncCfg
+	if err := toml.Unmarshal(content, &check); err != nil {
+		return fmt.Errorf("refusing to rewrite %s: the regenerated config does not parse (%v); "+
+			"the file likely uses a TOML construct the [agents] rewriter cannot splice "+
+			"(e.g. a multi-line string containing an \"[agents]\" line) — edit the [agents] table by hand", p, err)
+	}
+	if !agentsTablesEqual(check.Agents, agents) {
+		return fmt.Errorf("refusing to rewrite %s: the regenerated [agents] table does not round-trip; "+
+			"edit the [agents] table by hand", p)
+	}
+	same, err := nonAgentsUnchanged(raw, content)
+	if err != nil {
+		return fmt.Errorf("refusing to rewrite %s: %w; edit the [agents] table by hand", p, err)
+	}
+	if !same {
+		return fmt.Errorf("refusing to rewrite %s: the rewrite would alter content outside the [agents] table "+
+			"(the file likely uses a TOML construct the rewriter cannot splice, e.g. a multi-line string "+
+			"containing an \"[agents]\" line) — edit the [agents] table by hand", p)
+	}
+	return iox.AtomicWrite(p, content, 0o644)
 }
 
-func agentAddRun(cmd *cobra.Command, args []string) error {
+// nonAgentsUnchanged reports whether every table EXCEPT [agents] decodes to
+// the same value in the original and the spliced config. Comments and
+// whitespace are free to differ; data outside the section the rewriter owns is
+// not — a splice that still parses but changed another table's values is
+// silent corruption and must be refused.
+func nonAgentsUnchanged(oldRaw, newRaw []byte) (bool, error) {
+	var oldDoc, newDoc map[string]any
+	if err := toml.Unmarshal(oldRaw, &oldDoc); err != nil {
+		return false, fmt.Errorf("re-parse original config: %w", err)
+	}
+	if err := toml.Unmarshal(newRaw, &newDoc); err != nil {
+		return false, fmt.Errorf("re-parse regenerated config: %w", err)
+	}
+	delete(oldDoc, "agents")
+	delete(newDoc, "agents")
+	return reflect.DeepEqual(oldDoc, newDoc), nil
+}
+
+// agentsTablesEqual reports whether a re-parsed agents table carries exactly
+// the intended entries (same names, enabled bits, and scope markers). It is
+// the writeAgents backstop's oracle, so it compares only the fields
+// buildAgentsSection emits.
+func agentsTablesEqual(got, want map[string]map[string]any) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for name, w := range want {
+		g, ok := got[name]
+		if !ok {
+			return false
+		}
+		ge, _ := g["enabled"].(bool)
+		we, _ := w["enabled"].(bool)
+		gs, _ := g["scope"].(string)
+		ws, _ := w["scope"].(string)
+		if ge != we || gs != ws {
+			return false
+		}
+	}
+	return true
+}
+
+func agentAddRun(cmd *cobra.Command, args []string, scopeFlag, projectFlag string) error {
 	name := args[0]
 	if err := validateAgent(name); err != nil {
 		return err
@@ -248,7 +390,11 @@ func agentAddRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("agent %q has no implemented adapter yet; "+
 			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to register anyway and accept a no-op apply", name)
 	}
-	p, raw, agents, err := readAgentsyncTOML()
+	home, sc, _, err := agentScopeHome(cmd, scopeFlag, projectFlag)
+	if err != nil {
+		return err
+	}
+	p, raw, agents, err := readAgentsyncTOMLAt(home, sc)
 	if err != nil {
 		return err
 	}
@@ -256,7 +402,13 @@ func agentAddRun(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "agent %s already registered\n", name)
 		return nil
 	}
-	agents[name] = map[string]any{"enabled": true, "scope": "user"}
+	entry := map[string]any{"enabled": true}
+	if sc != adapter.ScopeProject {
+		// The user-scope entry keeps its historical scope marker; project-scope
+		// entries carry none — the project file's location already is the scope.
+		entry["scope"] = "user"
+	}
+	agents[name] = entry
 	if err := writeAgents(p, raw, agents); err != nil {
 		return err
 	}
@@ -279,9 +431,13 @@ func agentAddRun(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func agentRemoveRun(cmd *cobra.Command, args []string) error {
+func agentRemoveRun(cmd *cobra.Command, args []string, scopeFlag, projectFlag string) error {
 	name := args[0]
-	p, raw, agents, err := readAgentsyncTOML()
+	home, sc, _, err := agentScopeHome(cmd, scopeFlag, projectFlag)
+	if err != nil {
+		return err
+	}
+	p, raw, agents, err := readAgentsyncTOMLAt(home, sc)
 	if err != nil {
 		return err
 	}
@@ -298,21 +454,41 @@ func agentRemoveRun(cmd *cobra.Command, args []string) error {
 }
 
 func newAgentListCmd() *cobra.Command {
-	var all bool
+	var (
+		all         bool
+		scopeFlag   string
+		projectFlag string
+	)
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "list registered agents (--all to list every supported agent)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return agentListRun(cmd, all)
+			return agentListRun(cmd, all, scopeFlag, projectFlag)
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "list every agent agentsync supports, marking which are registered")
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
 	return cmd
 }
 
-func agentListRun(cmd *cobra.Command, all bool) error {
-	_, _, agents, err := readAgentsyncTOML()
+// agentEntrySuffix renders the trailing detail of one `agent list` line. The
+// scope field is shown only when the entry carries one (project-scope entries
+// don't — the file's location is the scope).
+func agentEntrySuffix(v map[string]any) string {
+	enabled, _ := v["enabled"].(bool)
+	if scope, _ := v["scope"].(string); scope != "" {
+		return fmt.Sprintf("enabled=%t scope=%s", enabled, scope)
+	}
+	return fmt.Sprintf("enabled=%t", enabled)
+}
+
+func agentListRun(cmd *cobra.Command, all bool, scopeFlag, projectFlag string) error {
+	home, sc, _, err := agentScopeHome(cmd, scopeFlag, projectFlag)
+	if err != nil {
+		return err
+	}
+	_, _, agents, err := readAgentsyncTOMLAt(home, sc)
 	if err != nil {
 		return err
 	}
@@ -322,9 +498,7 @@ func agentListRun(cmd *cobra.Command, all bool) error {
 		// points at.
 		for _, n := range allAgentNames() {
 			if v, ok := agents[n]; ok {
-				enabled, _ := v["enabled"].(bool)
-				scope, _ := v["scope"].(string)
-				fmt.Fprintf(cmd.OutOrStdout(), "%-12s registered enabled=%t scope=%s\n", n, enabled, scope)
+				fmt.Fprintf(cmd.OutOrStdout(), "%-12s registered %s\n", n, agentEntrySuffix(v))
 			} else {
 				fmt.Fprintf(cmd.OutOrStdout(), "%-12s available\n", n)
 			}
@@ -337,27 +511,41 @@ func agentListRun(cmd *cobra.Command, all bool) error {
 	}
 	sort.Strings(names)
 	if len(names) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "(no agents registered; try: agentsync agent add claude, or agentsync agent list --all)")
+		if sc == adapter.ScopeProject {
+			fmt.Fprintln(cmd.OutOrStdout(), "(no agents declared for this project; project scope renders only to declared agents — try: agentsync agent add claude --scope project)")
+		} else {
+			fmt.Fprintln(cmd.OutOrStdout(), "(no agents registered; try: agentsync agent add claude, or agentsync agent list --all)")
+		}
 		return nil
 	}
 	for _, n := range names {
-		v := agents[n]
-		enabled, _ := v["enabled"].(bool)
-		scope, _ := v["scope"].(string)
-		fmt.Fprintf(cmd.OutOrStdout(), "%-10s enabled=%t scope=%s\n", n, enabled, scope)
+		fmt.Fprintf(cmd.OutOrStdout(), "%-10s %s\n", n, agentEntrySuffix(agents[n]))
 	}
 	return nil
 }
 
-func agentEnableRun(cmd *cobra.Command, args []string) error {
+// agentRegisterHint is the scope-appropriate "register it first" suffix for
+// enable/disable errors on an unregistered agent.
+func agentRegisterHint(name string, sc adapter.Scope) string {
+	if sc == adapter.ScopeProject {
+		return fmt.Sprintf("use 'agentsync agent add %s --scope project' first", name)
+	}
+	return fmt.Sprintf("use 'agentsync agent add %s' first", name)
+}
+
+func agentEnableRun(cmd *cobra.Command, args []string, scopeFlag, projectFlag string) error {
 	name := args[0]
-	p, raw, agents, err := readAgentsyncTOML()
+	home, sc, _, err := agentScopeHome(cmd, scopeFlag, projectFlag)
+	if err != nil {
+		return err
+	}
+	p, raw, agents, err := readAgentsyncTOMLAt(home, sc)
 	if err != nil {
 		return err
 	}
 	v, ok := agents[name]
 	if !ok {
-		return fmt.Errorf("agent %q not registered; use 'agentsync agent add %s' first", name, name)
+		return fmt.Errorf("agent %q not registered; %s", name, agentRegisterHint(name, sc))
 	}
 	v["enabled"] = true
 	agents[name] = v
@@ -368,12 +556,19 @@ func agentEnableRun(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
+func agentDisableRun(cmd *cobra.Command, args []string, purge bool, scopeFlag, projectFlag string) error {
 	name := args[0]
-	p, raw, agents, err := readAgentsyncTOML()
+	cfgHome, sc, projectRoot, err := agentScopeHome(cmd, scopeFlag, projectFlag)
 	if err != nil {
 		return err
 	}
+	p, raw, agents, err := readAgentsyncTOMLAt(cfgHome, sc)
+	if err != nil {
+		return err
+	}
+	// State (and therefore purge bookkeeping) always lives in the USER agentsync
+	// home — project trees carry no .state/ (apply records project-scope state
+	// centrally, keyed by project root).
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	v, ok := agents[name]
 	if !ok {
@@ -385,7 +580,7 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 			if err := validateAgent(name); err != nil {
 				return err
 			}
-			return purgeAgentDests(cmd, name, home)
+			return purgeAgentDests(cmd, name, home, sc, projectRoot)
 		}
 		return fmt.Errorf("agent %q not registered (pass --purge to clean up an already-removed agent's leftover files)", name)
 	}
@@ -403,12 +598,72 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 	// The whole disable command (including this purge) already runs under the
 	// global lock via lockedRun, so call purge directly — re-acquiring here
 	// would deadlock on the re-entrant flock.
-	return purgeAgentDests(cmd, name, home)
+	return purgeAgentDests(cmd, name, home, sc, projectRoot)
+}
+
+// purgeKeyRest reports whether a state key ("agent:scope:project:path[:ptr]")
+// belongs to the purge set and, if so, returns the key's remainder after the
+// dest-identifying prefix (the path, or "path:ptr" for a Keys entry). At user
+// scope the purge keeps its historical cleanup-everything semantics: every
+// entry of the named agent, across all scopes and projects. At project scope it
+// matches only the agent's entries for THAT project root — purging a project
+// must not delete the user's machine-wide destinations or another repo's
+// rendered files. The project-scope match compares the full literal prefix
+// (like render.PruneStaleState's key prefixes) instead of colon-split fields:
+// a portable project root is not guaranteed colon-free (a root outside $HOME
+// stays an absolute path), and field-splitting would silently mismatch it.
+func purgeKeyRest(key, agent string, sc adapter.Scope, portableProject string) (rest string, ok bool) {
+	if sc == adapter.ScopeProject {
+		prefix := agent + ":" + adapter.ScopeProject.String() + ":" + portableProject + ":"
+		if !strings.HasPrefix(key, prefix) {
+			return "", false
+		}
+		return key[len(prefix):], true
+	}
+	if !strings.HasPrefix(key, agent+":") {
+		return "", false
+	}
+	// User scope spans every scope:project pair, so the remainder is the 4th
+	// colon field. That is exact for user-scope keys (empty project segment)
+	// and colon-free project roots; a colon-bearing root mangles it — an
+	// accepted residual of the historical cross-scope user purge, and safe
+	// because otherFilesKeyPath mangles identically, keeping the shared-file
+	// guard aligned.
+	parts := strings.SplitN(key, ":", 4)
+	if len(parts) < 4 {
+		return "", false
+	}
+	return parts[3], true
+}
+
+// otherFilesKeyPath extracts the dest path from a Files key that is NOT part
+// of the purge set, for the shared-file guard. A key whose project segment
+// matches the purge's own portableProject is stripped colon-safely by literal
+// prefix — a co-owned dest under the same project root is exactly the case the
+// guard protects, and the root is not guaranteed colon-free. Every other key
+// falls back to the 4th colon field: user-scope keys carry an empty (colon-
+// free) project segment there, and a DIFFERENT project's dest can never
+// collide with this purge's paths, so a mangled extraction cannot cause a
+// false unprotected delete (it can only fail to match, which is the status
+// quo for keys that were never candidates).
+func otherFilesKeyPath(key, portableProject string) string {
+	if i := strings.Index(key, ":"); i >= 0 {
+		marker := ":" + adapter.ScopeProject.String() + ":" + portableProject + ":"
+		if tail := key[i:]; strings.HasPrefix(tail, marker) {
+			return tail[len(marker):]
+		}
+	}
+	parts := strings.SplitN(key, ":", 4)
+	if len(parts) < 4 {
+		return ""
+	}
+	return parts[3]
 }
 
 // purgeAgentDests deletes the destination files owned solely by the named
-// agent and removes its state entries. Must be called under withGlobalLock.
-func purgeAgentDests(cmd *cobra.Command, name, home string) error {
+// agent (at project scope: only within that project) and removes the matching
+// state entries. Must be called under withGlobalLock.
+func purgeAgentDests(cmd *cobra.Command, name, home string, sc adapter.Scope, projectRoot string) error {
 	// State keys store dest paths HOME-relative ("${HOME}/.claude.json").
 	// Expand them back to absolute via the user's $HOME before deleting —
 	// otherwise os.Remove would target the literal "${HOME}/..." string,
@@ -420,7 +675,9 @@ func purgeAgentDests(cmd *cobra.Command, name, home string) error {
 		return fmt.Errorf("load state: %w", err)
 	}
 
-	prefix := name + ":"
+	// The project segment of state keys is HOME-relative (matching
+	// render.RecordOpsState), so portabilize before comparing.
+	portableProject := paths.HomeRelative(userHome, projectRoot)
 
 	// File-owned dests (whole-file replace ops, e.g. ~/.claude/skills/<n>/
 	// SKILL.md): the whole file is agentsync's, so a whole-file delete is
@@ -429,14 +686,15 @@ func purgeAgentDests(cmd *cobra.Command, name, home string) error {
 	purgedFilePaths := map[string]bool{}
 	otherFilePaths := map[string]bool{}
 	for key := range s.Files {
-		parts := strings.SplitN(key, ":", 4)
-		if len(parts) < 4 || parts[3] == "" {
+		if path, ok := purgeKeyRest(key, name, sc, portableProject); ok {
+			if path != "" {
+				purgedFilePaths[path] = true
+			}
 			continue
 		}
-		if strings.HasPrefix(key, prefix) {
-			purgedFilePaths[parts[3]] = true
-		} else {
-			otherFilePaths[parts[3]] = true
+		// Not ours: record the path so shared files stay protected below.
+		if path := otherFilesKeyPath(key, portableProject); path != "" {
+			otherFilePaths[path] = true
 		}
 	}
 
@@ -447,14 +705,16 @@ func purgeAgentDests(cmd *cobra.Command, name, home string) error {
 	// this agent's owned pointers per path so we can remove ONLY them.
 	purgedKeyPtrs := map[string][]string{}
 	for key := range s.Keys {
-		if !strings.HasPrefix(key, prefix) {
+		rest, ok := purgeKeyRest(key, name, sc, portableProject)
+		if !ok {
 			continue
 		}
-		parts := strings.SplitN(key, ":", 5)
-		if len(parts) < 5 || parts[3] == "" {
+		// rest is "path:ptr" for a Keys entry.
+		parts := strings.SplitN(rest, ":", 2)
+		if len(parts) < 2 || parts[0] == "" {
 			continue
 		}
-		purgedKeyPtrs[parts[3]] = append(purgedKeyPtrs[parts[3]], parts[4])
+		purgedKeyPtrs[parts[0]] = append(purgedKeyPtrs[parts[0]], parts[1])
 	}
 
 	reg := registryFactory()
@@ -497,20 +757,20 @@ func purgeAgentDests(cmd *cobra.Command, name, home string) error {
 				prunedFiles++
 			}
 		}
-		rw := render.NewWriter(s, home, userHome, adapter.ScopeUser, "", name)
+		rw := render.NewWriter(s, home, userHome, sc, projectRoot, name)
 		if err := a.Apply(ops, rw); err != nil {
 			return fmt.Errorf("purge apply %s: %w", name, err)
 		}
 	}
 
-	// Remove state entries for this agent.
+	// Remove the matching state entries for this agent.
 	for key := range s.Files {
-		if strings.HasPrefix(key, prefix) {
+		if _, ok := purgeKeyRest(key, name, sc, portableProject); ok {
 			delete(s.Files, key)
 		}
 	}
 	for key := range s.Keys {
-		if strings.HasPrefix(key, prefix) {
+		if _, ok := purgeKeyRest(key, name, sc, portableProject); ok {
 			delete(s.Keys, key)
 		}
 	}

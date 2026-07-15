@@ -70,6 +70,7 @@ func TestApply_AnnouncesScope(t *testing.T) {
 
 	proj := filepath.Join(tmp, "proj")
 	mustRun(t, env, "init", "--scope", "project", "--project", proj)
+	declareProjectAgent(t, env, proj, "claude")
 	out2, err := runCLI(t, env, "apply", "--project", proj)
 	if err != nil {
 		t.Fatalf("apply --project: %v\n%s", err, out2)

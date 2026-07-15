@@ -68,6 +68,11 @@ func newVerifyCmd() *cobra.Command {
 				if perr != nil {
 					return fmt.Errorf("verify: load project source %s: %w", sourceRoot, perr)
 				}
+				// verify lints the source a project-scope apply would consume, so
+				// it must reject the same undeclared-agents state apply rejects.
+				if err := requireProjectAgents(pc, sourceRoot); err != nil {
+					return err
+				}
 				c = project.Merge(c, pc)
 			}
 			for name := range c.Config.Agents {
@@ -96,8 +101,7 @@ func newVerifyCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
-	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
 	return cmd
 }
 

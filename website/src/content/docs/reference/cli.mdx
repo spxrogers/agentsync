@@ -21,7 +21,7 @@ import { Aside } from '@astrojs/starlight/components';
 | `init [<git-url>]` | Create `~/.agentsync/`; optionally clone a bootstrap repo. `--scope project` / `--project <path>` scaffolds a project tree instead. | `--scope --project` |
 | `doctor` | Diagnose setup: PATH, home/state writability, schema, secrets backend. | |
 | `verify` | Validate config; surface unresolved `${secret:}` / `${env:}` refs. `--scope project` / `--project <path>` lints the project tree instead. | `--scope --project` |
-| `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry. | `disable --purge` |
+| `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or a project tree's own `[agents]` declaration with `--scope project` / `--project <path>`. | `disable --purge --scope --project` |
 | `mcp add\|remove\|list <name>` | Manage MCP servers. | `--type --command --args --url --env --agents` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
 | `plugin install\|upgrade\|enable\|disable\|remove\|list <id>` | Manage plugins. | `install <id[@marketplace]>` |
@@ -87,6 +87,17 @@ agentsync agent list              # registry + enabled state
 agentsync agent list --all        # every supported agent (registered or not)
 agentsync agent disable opencode  # stop applying (keeps source)
 agentsync agent disable opencode --purge   # also remove what it wrote
+```
+
+Every subcommand also takes `--scope project` / `--project <path>` to manage the
+**project's own** `[agents]` declaration in `<root>/.agentsync/agentsync.toml` —
+the set project scope renders to (user-scope agents are never inherited; see
+[Project-local config](/guides/projects/)):
+
+```bash
+agentsync agent add claude --scope project     # declare a project agent
+agentsync agent list --project ~/code/myrepo   # read a project's declaration
+agentsync agent disable claude --purge --scope project  # purge only this project's rendered files
 ```
 
 <Aside type="note">

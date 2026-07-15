@@ -82,7 +82,7 @@ func newDiffCmd() *cobra.Command {
 				if jsonOut {
 					return emitJSON(p.Out, diffModel{Hunks: []diffHunk{}})
 				}
-				fmt.Fprintln(p.Out, "no agents enabled; run `agentsync agent add claude` (or opencode)")
+				fmt.Fprintln(p.Out, noAgentsEnabledHint(sc, projectRoot))
 				return nil
 			}
 			// diff renders the TEMPLATED canonical (it masks the destination's
@@ -195,8 +195,7 @@ func newDiffCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
-	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the formatted diff")
 	return cmd
 }

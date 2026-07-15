@@ -7,6 +7,16 @@ import (
 	"testing"
 )
 
+// declareProjectAgent declares an agent in a project tree's [agents] table via
+// the project-scope agent command — the #183 contract: project scope renders
+// only to agents the project itself declares, never the user's enabled agents.
+func declareProjectAgent(t *testing.T, env map[string]string, projectDir, name string) {
+	t.Helper()
+	if out, err := runCLI(t, env, "agent", "add", name, "--scope", "project", "--project", projectDir); err != nil {
+		t.Fatalf("agent add %s --scope project: %v\n%s", name, err, out)
+	}
+}
+
 // scaffoldProjectMCP writes a project-scope MCP server into an already-created
 // project tree (<projectDir>/.agentsync/mcp/<id>.toml).
 func scaffoldProjectMCP(t *testing.T, projectDir, id, command string, args ...string) {
@@ -50,6 +60,7 @@ func TestIntegration_Project_Overlay(t *testing.T) {
 	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", projectDir); err != nil {
 		t.Fatal(err)
 	}
+	declareProjectAgent(t, env, projectDir, "claude")
 	scaffoldProjectMCP(t, projectDir, "proj-mcp", "npx", "-y", "@proj/mcp")
 
 	// chdir into project dir so auto-detect kicks in.
@@ -205,6 +216,7 @@ func TestIntegration_Project_ExplicitFlag(t *testing.T) {
 	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", projectDir); err != nil {
 		t.Fatal(err)
 	}
+	declareProjectAgent(t, env, projectDir, "claude")
 	scaffoldProjectMCP(t, projectDir, "api-mcp", "node", "server.js")
 
 	out, err := runCLI(t, env, "apply", "--project", projectDir)
@@ -275,6 +287,7 @@ func TestIntegration_Project_Memory(t *testing.T) {
 	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", projectDir); err != nil {
 		t.Fatal(err)
 	}
+	declareProjectAgent(t, env, projectDir, "claude")
 	mem := "# Project Rules\nAlways write tests first."
 	if err := os.WriteFile(filepath.Join(projectDir, ".agentsync", "memory", "AGENTS.md"), []byte(mem), 0o644); err != nil {
 		t.Fatal(err)
@@ -312,6 +325,7 @@ func TestIntegration_Project_OpenCode_MCP(t *testing.T) {
 	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", projectDir); err != nil {
 		t.Fatal(err)
 	}
+	declareProjectAgent(t, env, projectDir, "opencode")
 	scaffoldProjectMCP(t, projectDir, "oc-mcp", "node", "server.js")
 
 	if out, err := runCLI(t, env, "apply", "--project", projectDir); err != nil {
@@ -349,6 +363,7 @@ func TestIntegration_Project_MCPJsonDriftDetected(t *testing.T) {
 	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", projectDir); err != nil {
 		t.Fatal(err)
 	}
+	declareProjectAgent(t, env, projectDir, "claude")
 	// Server id deliberately free of the substring "drift" so the drift
 	// assertion below can only match the drift *class*, never the id in the path.
 	scaffoldProjectMCP(t, projectDir, "apisrv", "npx", "-y", "@x/mcp")
@@ -377,5 +392,93 @@ func TestIntegration_Project_MCPJsonDriftDetected(t *testing.T) {
 	}
 	if !strings.Contains(out, "drift") {
 		t.Fatalf("status did not report drift on project .mcp.json:\n%s", out)
+	}
+}
+
+// TestIntegration_Project_UndeclaredAgentsError pins the #183 contract: a
+// project tree whose [agents] table is empty or missing is a hard error for
+// every scope-aware read/render command — never a silent no-op, and never an
+// inherit of the user's enabled agents. The message must be actionable (point
+// at `agent add --scope project`). `import --scope project` stays exempt: it
+// is the capture path a user may need BEFORE declaring agents.
+func TestIntegration_Project_UndeclaredAgentsError(t *testing.T) {
+	tmpHome := t.TempDir()
+	projectDir := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	// User scope has claude enabled — precisely the agent set that must NOT
+	// leak into project scope.
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", projectDir); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{
+		{"apply", "--project", projectDir, "--dry-run"},
+		{"apply", "--project", projectDir},
+		{"status", "--project", projectDir},
+		{"diff", "--project", projectDir},
+		{"reconcile", "--project", projectDir, "--auto-safe"},
+		{"verify", "--project", projectDir},
+	} {
+		out, err := runCLI(t, env, args...)
+		if err == nil {
+			t.Fatalf("%v: expected undeclared-project-agents error, got success:\n%s", args, out)
+		}
+		if !strings.Contains(err.Error(), "declares no agents") {
+			t.Fatalf("%v: error should say the project declares no agents; got: %v", args, err)
+		}
+		if !strings.Contains(err.Error(), "agent add") {
+			t.Fatalf("%v: error should point at `agentsync agent add --scope project`; got: %v", args, err)
+		}
+	}
+
+	// No project destination may have been written, and nothing may have been
+	// inherited from user scope.
+	if _, err := os.Stat(filepath.Join(projectDir, "CLAUDE.md")); err == nil {
+		t.Fatal("apply against an undeclared project wrote CLAUDE.md (inherited user agents?)")
+	}
+
+	// A DECLARED-but-all-disabled table is a different state: it passes the
+	// guard (a deliberate declaration) and the command reports softly instead
+	// of erroring — pin that boundary before declaring for real below.
+	allDisabled := t.TempDir()
+	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", allDisabled); err != nil {
+		t.Fatal(err)
+	}
+	declareProjectAgent(t, env, allDisabled, "claude")
+	if _, err := runCLI(t, env, "agent", "disable", "claude", "--scope", "project", "--project", allDisabled); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLI(t, env, "apply", "--project", allDisabled)
+	if err != nil {
+		t.Fatalf("apply against an all-disabled project must soft-noop, not error: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "no agents are enabled at project scope") {
+		t.Fatalf("apply should explain the all-disabled state with the project-scope hint; got:\n%s", out)
+	}
+	out, err = runCLI(t, env, "status", "--project", allDisabled)
+	if err != nil {
+		t.Fatalf("status against an all-disabled project must soft-noop: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "project scope") {
+		t.Fatalf("status hint should be project-scoped, not point at the user registry; got:\n%s", out)
+	}
+
+	// The capture path stays available before declaration: import is how a user
+	// may bootstrap the project tree from native config in the first place.
+	if out, err := runCLI(t, env, "import", "claude", "--scope", "project", "--project", projectDir, "--dry-run"); err != nil {
+		t.Fatalf("import --scope project must not require declared agents: %v\n%s", err, out)
+	}
+
+	// Declaring an agent clears the error.
+	declareProjectAgent(t, env, projectDir, "claude")
+	if out, err := runCLI(t, env, "apply", "--project", projectDir, "--dry-run"); err != nil {
+		t.Fatalf("apply after declaring agents: %v\n%s", err, out)
 	}
 }
