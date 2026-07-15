@@ -35,8 +35,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   user scope, `--purge` keeps its historical semantics: it cleans up that
   agent's rendered files across every scope and project.) `agent add/enable/…`
   rewrites of the `[agents]` table are now also validated fail-closed: if the
-  regenerated file would not re-parse (e.g. an exotic TOML construct the
-  rewriter cannot splice), the command refuses and leaves the file untouched.
+  regenerated file would not re-parse, or would alter ANY data outside the
+  `[agents]` table (e.g. an exotic TOML construct the rewriter cannot splice,
+  like a multi-line string containing an `[agents]`-shaped line), the command
+  refuses and leaves the file untouched.
 
 - **Docs website: new "drafting table" visual identity.** agentsync.cc gets its
   own look instead of stock Starlight: Space Grotesk / JetBrains Mono

@@ -68,7 +68,7 @@ func addScopeFlags(cmd *cobra.Command, scopeFlag, projectFlag *string) {
 // to edit the wrong file.
 func noAgentsEnabledHint(sc adapter.Scope, projectRoot string) string {
 	if sc == adapter.ScopeProject {
-		return fmt.Sprintf("no agents enabled at project scope (%s); check the [agents] table in %s or run `agentsync agent enable <name> --scope project`",
+		return fmt.Sprintf("no agents are enabled at project scope (%s); check the [agents] table in %s or run `agentsync agent enable <name> --scope project`",
 			projectRoot, filepath.Join(project.Home(projectRoot), "agentsync.toml"))
 	}
 	return "no agents enabled; run `agentsync agent add claude` (or opencode)"

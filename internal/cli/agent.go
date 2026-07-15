@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -224,7 +225,10 @@ func readAgentsyncTOMLAt(home string, sc adapter.Scope) (string, []byte, map[str
 }
 
 // buildAgentsSection returns a TOML [agents] block with inline table values,
-// preserving comment header context. Agents are sorted alphabetically.
+// preserving comment header context. Agents are sorted alphabetically. It
+// emits ONLY the fields the canonical model reads (enabled + scope) — any
+// extra key a user hand-added inside an agent entry is deliberately dropped,
+// matching source.Agent, which never loads such keys either.
 func buildAgentsSection(agents map[string]map[string]any) string {
 	names := make([]string, 0, len(agents))
 	for n := range agents {
@@ -306,11 +310,12 @@ func writeAgents(p string, raw []byte, agents map[string]map[string]any) error {
 
 	// Fail-closed backstop: the splicer above is line-based, not a TOML parser,
 	// so a construct it cannot see (e.g. a multi-line string whose CONTENT
-	// contains an "[agents]" line) would corrupt the file — bricking every
-	// subsequent command that loads it. Before writing, re-parse the spliced
-	// result and require the agents table to round-trip exactly; refuse the
-	// write (leaving the on-disk file untouched) rather than persist a config
-	// the loader can no longer read.
+	// contains an "[agents]" line) could corrupt the file — either bricking
+	// every subsequent load, or worse, silently mangling ANOTHER table's data
+	// while still parsing. Before writing, re-parse the spliced result and
+	// require BOTH that the agents table matches the intended entries AND that
+	// everything outside [agents] is semantically unchanged from the original;
+	// refuse the write (leaving the on-disk file untouched) otherwise.
 	content := []byte(strings.Join(out, "\n"))
 	var check agentsyncCfg
 	if err := toml.Unmarshal(content, &check); err != nil {
@@ -322,7 +327,34 @@ func writeAgents(p string, raw []byte, agents map[string]map[string]any) error {
 		return fmt.Errorf("refusing to rewrite %s: the regenerated [agents] table does not round-trip; "+
 			"edit the [agents] table by hand", p)
 	}
+	same, err := nonAgentsUnchanged(raw, content)
+	if err != nil {
+		return fmt.Errorf("refusing to rewrite %s: %w; edit the [agents] table by hand", p, err)
+	}
+	if !same {
+		return fmt.Errorf("refusing to rewrite %s: the rewrite would alter content outside the [agents] table "+
+			"(the file likely uses a TOML construct the rewriter cannot splice, e.g. a multi-line string "+
+			"containing an \"[agents]\" line) — edit the [agents] table by hand", p)
+	}
 	return iox.AtomicWrite(p, content, 0o644)
+}
+
+// nonAgentsUnchanged reports whether every table EXCEPT [agents] decodes to
+// the same value in the original and the spliced config. Comments and
+// whitespace are free to differ; data outside the section the rewriter owns is
+// not — a splice that still parses but changed another table's values is
+// silent corruption and must be refused.
+func nonAgentsUnchanged(oldRaw, newRaw []byte) (bool, error) {
+	var oldDoc, newDoc map[string]any
+	if err := toml.Unmarshal(oldRaw, &oldDoc); err != nil {
+		return false, fmt.Errorf("re-parse original config: %w", err)
+	}
+	if err := toml.Unmarshal(newRaw, &newDoc); err != nil {
+		return false, fmt.Errorf("re-parse regenerated config: %w", err)
+	}
+	delete(oldDoc, "agents")
+	delete(newDoc, "agents")
+	return reflect.DeepEqual(oldDoc, newDoc), nil
 }
 
 // agentsTablesEqual reports whether a re-parsed agents table carries exactly
@@ -592,12 +624,40 @@ func purgeKeyRest(key, agent string, sc adapter.Scope, portableProject string) (
 		return "", false
 	}
 	// User scope spans every scope:project pair, so the remainder is the 4th
-	// colon field (exact for the colon-free segments user-scope keys carry).
+	// colon field. That is exact for user-scope keys (empty project segment)
+	// and colon-free project roots; a colon-bearing root mangles it — an
+	// accepted residual of the historical cross-scope user purge, and safe
+	// because otherFilesKeyPath mangles identically, keeping the shared-file
+	// guard aligned.
 	parts := strings.SplitN(key, ":", 4)
 	if len(parts) < 4 {
 		return "", false
 	}
 	return parts[3], true
+}
+
+// otherFilesKeyPath extracts the dest path from a Files key that is NOT part
+// of the purge set, for the shared-file guard. A key whose project segment
+// matches the purge's own portableProject is stripped colon-safely by literal
+// prefix — a co-owned dest under the same project root is exactly the case the
+// guard protects, and the root is not guaranteed colon-free. Every other key
+// falls back to the 4th colon field: user-scope keys carry an empty (colon-
+// free) project segment there, and a DIFFERENT project's dest can never
+// collide with this purge's paths, so a mangled extraction cannot cause a
+// false unprotected delete (it can only fail to match, which is the status
+// quo for keys that were never candidates).
+func otherFilesKeyPath(key, portableProject string) string {
+	if i := strings.Index(key, ":"); i >= 0 {
+		marker := ":" + adapter.ScopeProject.String() + ":" + portableProject + ":"
+		if tail := key[i:]; strings.HasPrefix(tail, marker) {
+			return tail[len(marker):]
+		}
+	}
+	parts := strings.SplitN(key, ":", 4)
+	if len(parts) < 4 {
+		return ""
+	}
+	return parts[3]
 }
 
 // purgeAgentDests deletes the destination files owned solely by the named
@@ -632,10 +692,9 @@ func purgeAgentDests(cmd *cobra.Command, name, home string, sc adapter.Scope, pr
 			}
 			continue
 		}
-		// Not ours: record the path so shared files stay protected below. The
-		// 4th colon field is exact for the colon-free segments these keys carry.
-		if parts := strings.SplitN(key, ":", 4); len(parts) == 4 && parts[3] != "" {
-			otherFilePaths[parts[3]] = true
+		// Not ours: record the path so shared files stay protected below.
+		if path := otherFilesKeyPath(key, portableProject); path != "" {
+			otherFilePaths[path] = true
 		}
 	}
 

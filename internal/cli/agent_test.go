@@ -117,6 +117,38 @@ func TestAgent_AddRefusesUnsplicableTOML(t *testing.T) {
 	}
 }
 
+// TestAgent_AddRefusesSilentNonAgentsCorruption pins the second half of the
+// writeAgents backstop: a splice that still PARSES but silently altered
+// another table's data must also be refused. The fixture's [custom] multi-line
+// string contains an "[agents.injected]" line followed by a "["-opening line —
+// the line splicer drops the former and un-strings the latter, so the result
+// parses cleanly and the agents table round-trips, yet [custom].note changed.
+// Only the whole-document non-agents comparison catches it.
+func TestAgent_AddRefusesSilentNonAgentsCorruption(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(tmp, ".agentsync", "agentsync.toml")
+	body := "[agents]\nclaude = { enabled = true }\n\n[custom]\nnote = \"\"\"\n[agents.injected]\n[whatever]\n\"\"\"\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := runCLI(t, env, "agent", "add", "opencode")
+	if err == nil {
+		t.Fatal("agent add must refuse a splice that silently corrupts non-agents content")
+	}
+	if !strings.Contains(err.Error(), "refusing") {
+		t.Fatalf("error should say the rewrite was refused; got: %v", err)
+	}
+	after, _ := os.ReadFile(cfgPath)
+	if string(after) != body {
+		t.Fatalf("refused rewrite still modified the file:\n%s", after)
+	}
+}
+
 // TestAgent_ProjectScope_Lifecycle exercises the #183 project-scope agent
 // commands end-to-end: add/list/disable/enable/remove against a project tree's
 // agentsync.toml, leaving the user-scope config untouched throughout.

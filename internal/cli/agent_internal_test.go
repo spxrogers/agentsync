@@ -64,6 +64,12 @@ func TestPurgeKeyRest(t *testing.T) {
 			agent: "claude", sc: adapter.ScopeProject, portableProject: "${HOME}/proj",
 			wantOK: true, wantRest: "${HOME}/proj/.mcp.json:/mcpServers/x",
 		},
+		{
+			name:  "user-scope keys entry remainder keeps the path:ptr tail",
+			key:   "claude:user::${HOME}/.claude.json:/mcpServers/x",
+			agent: "claude", sc: adapter.ScopeUser,
+			wantOK: true, wantRest: "${HOME}/.claude.json:/mcpServers/x",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -73,6 +79,54 @@ func TestPurgeKeyRest(t *testing.T) {
 			}
 			if ok && rest != tc.wantRest {
 				t.Fatalf("rest = %q, want %q", rest, tc.wantRest)
+			}
+		})
+	}
+}
+
+// TestOtherFilesKeyPath pins the shared-file guard's path extraction: keys
+// under the purge's OWN project root are stripped colon-safely (they are the
+// candidates for a co-owned dest), everything else falls back to the 4th colon
+// field. Both sides of the guard must extract a same-root dest identically, or
+// a co-owned file under a colon-bearing root would lose its protection and be
+// deleted without backup.
+func TestOtherFilesKeyPath(t *testing.T) {
+	testenv.RequireContainer(t)
+	cases := []struct {
+		name            string
+		key             string
+		portableProject string
+		want            string
+	}{
+		{
+			name:            "same project root, colon-bearing, extracts the exact path",
+			key:             "opencode:project:/mnt/we:ird/proj:/mnt/we:ird/proj/x/SKILL.md",
+			portableProject: "/mnt/we:ird/proj",
+			want:            "/mnt/we:ird/proj/x/SKILL.md",
+		},
+		{
+			name:            "same project root, plain, extracts the path",
+			key:             "opencode:project:${HOME}/proj:${HOME}/proj/.mcp.json",
+			portableProject: "${HOME}/proj",
+			want:            "${HOME}/proj/.mcp.json",
+		},
+		{
+			name:            "user-scope key falls back to the exact 4th field",
+			key:             "opencode:user::${HOME}/.claude.json",
+			portableProject: "${HOME}/proj",
+			want:            "${HOME}/.claude.json",
+		},
+		{
+			name:            "malformed short key yields nothing",
+			key:             "opencode:user",
+			portableProject: "${HOME}/proj",
+			want:            "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := otherFilesKeyPath(tc.key, tc.portableProject); got != tc.want {
+				t.Fatalf("otherFilesKeyPath(%q) = %q, want %q", tc.key, got, tc.want)
 			}
 		})
 	}
