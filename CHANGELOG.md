@@ -11,6 +11,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
+- **Chocolatey publishing is temporarily paused (issue #188).** The `chocolateys`
+  block in `.goreleaser.yaml` is commented out while the `agentsync` package
+  waits in Chocolatey's community moderation queue — `choco push` returns 403
+  until it clears review, and that failure sank the tail of the v0.10.0 publish
+  after every other channel had shipped. Homebrew, Scoop, deb/rpm, and the
+  GitHub Release archives are unaffected. The block will be re-enabled verbatim
+  once the package is approved.
 - **BREAKING: project scope now requires the project to declare its own agents
   (issue #183).** A project tree's `[agents]` table in
   `<root>/.agentsync/agentsync.toml` is now **authoritative**: project-scope
