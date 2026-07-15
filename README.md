@@ -124,13 +124,11 @@ Scoop:
     scoop bucket add spxrogers https://github.com/spxrogers/scoop-bucket
     scoop install agentsync
 
-Chocolatey:
+Chocolatey (pending — the package is in the community moderation queue and not
+yet installable; publishing is paused until it clears review, see
+[issue #188](https://github.com/spxrogers/agentsync/issues/188)):
 
     choco install agentsync
-
-Chocolatey packages pass through the community moderation queue before they're
-publicly installable, so a freshly published version can lag the other channels
-by a day or two.
 
 ### Any platform — prebuilt binary
 
