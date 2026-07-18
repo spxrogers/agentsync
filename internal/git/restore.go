@@ -165,8 +165,15 @@ func restoreFileFromTree(wt *gogit.Worktree, tree *object.Tree, p string) error 
 			return fmt.Errorf("creating parent dir of %s: %w", p, err)
 		}
 	}
-	// Drop any existing file so the target mode takes effect on (re)create.
+	// Drop any existing file so the target mode takes effect on (re)create. When p
+	// was a DIRECTORY in HEAD and is a file in the target, the delete pass already
+	// removed p's tracked contents; if the user left untracked files under p the
+	// dir is still non-empty, and we must NOT delete them — so surface a clear,
+	// actionable error rather than a raw "directory not empty".
 	if err := fs.Remove(p); err != nil && !os.IsNotExist(err) {
+		if info, statErr := fs.Stat(p); statErr == nil && info.IsDir() {
+			return fmt.Errorf("cannot restore %q to a file: the directory still holds files agentsync does not manage; move or remove your own files under %q, then re-run revert", p, p)
+		}
 		return fmt.Errorf("replacing %s: %w", p, err)
 	}
 	dst, err := fs.OpenFile(p, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)

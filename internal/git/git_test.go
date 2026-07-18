@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -615,10 +617,10 @@ func TestRestore_PreservesUntrackedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsStr(untracked, "MY-PERSONAL-NOTES.txt") {
+	if !slices.Contains(untracked, "MY-PERSONAL-NOTES.txt") {
 		t.Fatalf("UntrackedPaths = %v, want it to include MY-PERSONAL-NOTES.txt", untracked)
 	}
-	if containsStr(untracked, "scratch.log") {
+	if slices.Contains(untracked, "scratch.log") {
 		t.Fatalf("UntrackedPaths = %v, should NOT list the gitignored scratch.log", untracked)
 	}
 
@@ -652,16 +654,6 @@ func TestRestore_PreservesUntrackedFiles(t *testing.T) {
 	if _, ok := tree["a.txt"]; !ok {
 		t.Fatalf("revert commit tree missing the tracked a.txt: %v", tree)
 	}
-}
-
-// containsStr reports whether s is in xs.
-func containsStr(xs []string, s string) bool {
-	for _, x := range xs {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
 
 // headTreePaths returns the set of file paths in the repo's current HEAD tree.
@@ -799,5 +791,88 @@ func TestRestore_FileDirTransition(t *testing.T) {
 	// ENOTDIR); either way a nil error would mean the dir entry survived.
 	if _, err := os.Stat(filepath.Join(dir, "foo", "bar")); err == nil {
 		t.Fatal("foo/bar should be gone after reverting to the file checkpoint")
+	}
+}
+
+// TestRestore_FileToDirTransition is the reverse of TestRestore_FileDirTransition:
+// the target checkpoint has foo as a DIRECTORY (foo/bar) while HEAD has foo as a
+// regular file. The delete of the file foo must run before restoreFileFromTree's
+// MkdirAll("foo"), which would otherwise fail over the still-present file. It
+// fails against the pre-fix single-pass sorted order (create foo/bar first).
+func TestRestore_FileToDirTransition(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// c1 (target, HEAD~1): foo is a directory containing foo/bar.
+	commitFile(t, r, dir, "foo/bar", "iamdir", "c1: foo is a dir")
+	// c2 (HEAD): foo becomes a regular file (remove the dir, add the file foo).
+	if err := os.RemoveAll(filepath.Join(dir, "foo")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "foo", "iamfile")
+	if err := r.Stage([]string{"foo"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c2: foo is a file", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	// Revert to c1: delete the file foo, then MkdirAll("foo") + create foo/bar.
+	if _, err := r.Restore("HEAD~1", "agentsync revert: file->dir", DefaultIdentity); err != nil {
+		t.Fatalf("Restore across a file->dir transition should not error: %v", err)
+	}
+	if got := readFile(t, dir, "foo/bar"); got != "iamdir" {
+		t.Fatalf("foo/bar = %q, want the restored dir content", got)
+	}
+}
+
+// TestRestore_UntrackedSiblingBlocksFileReplacement pins the fail-safe contract
+// for the one case Restore genuinely cannot complete: the target turns a directory
+// into a file, but the user left an UNTRACKED file inside that directory. Restore
+// must refuse (never delete the untracked file) with an actionable error, and the
+// untracked file must survive.
+func TestRestore_UntrackedSiblingBlocksFileReplacement(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// c1 (target): foo is a regular file.
+	commitFile(t, r, dir, "foo", "iamfile", "c1: foo is a file")
+	// c2 (HEAD): foo becomes a directory (foo/bar tracked).
+	if err := os.Remove(filepath.Join(dir, "foo")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "foo/bar", "iamdir")
+	if err := r.Stage([]string{"foo/bar"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c2: foo is a dir", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	// The user drops an untracked scratch file inside dir foo.
+	const scratch = "keep me — untracked\n"
+	writeFile(t, dir, "foo/scratch.txt", scratch)
+
+	// Reverting to c1 would need to replace dir foo with a file, but foo still
+	// holds the untracked scratch file — Restore must refuse, not delete it.
+	_, err = r.Restore("HEAD~1", "agentsync revert: blocked", DefaultIdentity)
+	if err == nil {
+		t.Fatal("Restore should refuse when an untracked file blocks a dir->file replacement")
+	}
+	if !strings.Contains(err.Error(), "agentsync does not manage") {
+		t.Fatalf("error should point at the unmanaged files; got: %v", err)
+	}
+	if got := readFile(t, dir, "foo/scratch.txt"); got != scratch {
+		t.Fatalf("untracked scratch file must survive the refused revert, got %q", got)
 	}
 }
