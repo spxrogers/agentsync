@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"sort"
+	"strings"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -92,6 +93,30 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (string, error) {
 	wt, err := r.repo.Worktree()
 	if err != nil {
 		return "", fmt.Errorf("worktree for %s: %w", r.dir, err)
+	}
+	// Pre-flight the one conflict Restore cannot resolve without data loss: a path
+	// that is a file in the target but is CURRENTLY a directory still holding
+	// untracked files (which we must never delete). Detect it BEFORE mutating the
+	// worktree so the refusal is all-or-nothing — no half-applied deletes — and
+	// name the offending file. restoreFileFromTree keeps a defensive backstop for
+	// the same case, but this makes the common one fail cleanly up front.
+	untracked, err := r.UntrackedPaths()
+	if err != nil {
+		return "", err
+	}
+	for _, ch := range changes {
+		if ch.Kind == "delete" {
+			continue
+		}
+		info, statErr := wt.Filesystem.Stat(ch.Path)
+		if statErr != nil || !info.IsDir() {
+			continue
+		}
+		for _, u := range untracked {
+			if u == ch.Path || strings.HasPrefix(u, ch.Path+"/") {
+				return "", fmt.Errorf("cannot restore %q to a file: the directory holds files agentsync does not manage (e.g. %q); move or remove them, then re-run revert", ch.Path, u)
+			}
+		}
 	}
 	// Apply the delta path-by-path and stage each change. HEAD never moves, so the
 	// commit below is parented on the original HEAD automatically — the intervening

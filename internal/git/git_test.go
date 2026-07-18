@@ -686,16 +686,21 @@ func headTreePaths(t *testing.T, r *Repo) map[string]bool {
 	return out
 }
 
-// commitExecFile writes rel at 0o755, stages it, and commits, returning the hash.
-// Used to exercise restoreFileFromTree's exec-bit preservation.
-func commitExecFile(t *testing.T, r *Repo, dir, rel, content, msg string) string {
+// commitFileMode writes rel with the given mode, stages it, and commits, returning
+// the hash. Used to exercise restoreFileFromTree's mode preservation (notably the
+// exec bit). An explicit Chmod pins the mode even when rel already exists (a
+// content edit) — os.WriteFile only honors perms when it creates the file.
+func commitFileMode(t *testing.T, r *Repo, dir, rel, content string, mode os.FileMode, msg string) string {
 	t.Helper()
 	abs := filepath.Join(dir, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
 		t.Fatalf("mkdir for %s: %v", rel, err)
 	}
-	if err := os.WriteFile(abs, []byte(content), 0o755); err != nil {
+	if err := os.WriteFile(abs, []byte(content), mode); err != nil {
 		t.Fatalf("write %s: %v", rel, err)
+	}
+	if err := os.Chmod(abs, mode); err != nil {
+		t.Fatalf("chmod %s: %v", rel, err)
 	}
 	if err := r.Stage([]string{rel}); err != nil {
 		t.Fatalf("stage %s: %v", rel, err)
@@ -726,30 +731,54 @@ func assertPerm(t *testing.T, dir, rel string, want os.FileMode) {
 // +x from restored skill scripts on every revert while the suite stayed green.
 func TestRestore_PreservesFileMode(t *testing.T) {
 	testenv.RequireContainer(t)
-	dir := t.TempDir()
-	r, err := Init(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	commitExecFile(t, r, dir, "run.sh", "#!/bin/sh\necho v1\n", "add script") // HEAD~1
-	// Remove the script in a second checkpoint so reverting exercises the CREATE
-	// path of restoreFileFromTree (a fresh OpenFile, where the mode must be set).
-	if err := os.Remove(filepath.Join(dir, "run.sh")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.StageTrackedDeletions(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.CommitStaged("remove script", DefaultIdentity); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.Restore("HEAD~1", "agentsync revert: restore script", DefaultIdentity); err != nil {
-		t.Fatal(err)
-	}
-	if got := readFile(t, dir, "run.sh"); got != "#!/bin/sh\necho v1\n" {
-		t.Fatalf("run.sh content = %q, want v1", got)
-	}
-	assertPerm(t, dir, "run.sh", 0o755)
+
+	t.Run("create path", func(t *testing.T) {
+		dir := t.TempDir()
+		r, err := Init(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		commitFileMode(t, r, dir, "run.sh", "#!/bin/sh\necho v1\n", 0o755, "add script") // HEAD~1
+		// Remove the script in a second checkpoint so reverting RE-CREATES it fresh
+		// (a fresh OpenFile, where the target mode must be set).
+		if err := os.Remove(filepath.Join(dir, "run.sh")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.StageTrackedDeletions(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.CommitStaged("remove script", DefaultIdentity); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Restore("HEAD~1", "agentsync revert: restore script", DefaultIdentity); err != nil {
+			t.Fatal(err)
+		}
+		if got := readFile(t, dir, "run.sh"); got != "#!/bin/sh\necho v1\n" {
+			t.Fatalf("run.sh content = %q, want v1", got)
+		}
+		assertPerm(t, dir, "run.sh", 0o755)
+	})
+
+	t.Run("modify path", func(t *testing.T) {
+		dir := t.TempDir()
+		r, err := Init(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// run.sh stays a file across both checkpoints but flips 0o755 -> 0o644, so
+		// reverting exercises the MODIFY path: restoreFileFromTree must Remove the
+		// existing 0o644 file before OpenFile so the target 0o755 mode takes hold
+		// (OpenFile only honors perm on creation).
+		commitFileMode(t, r, dir, "run.sh", "#!/bin/sh\necho v1\n", 0o755, "exec v1") // HEAD~1
+		commitFileMode(t, r, dir, "run.sh", "#!/bin/sh\necho v2\n", 0o644, "nonexec v2")
+		if _, err := r.Restore("HEAD~1", "agentsync revert: restore exec bit", DefaultIdentity); err != nil {
+			t.Fatal(err)
+		}
+		if got := readFile(t, dir, "run.sh"); got != "#!/bin/sh\necho v1\n" {
+			t.Fatalf("run.sh content = %q, want v1", got)
+		}
+		assertPerm(t, dir, "run.sh", 0o755)
+	})
 }
 
 // TestRestore_FileDirTransition exercises a path that is a FILE in the target
@@ -874,5 +903,10 @@ func TestRestore_UntrackedSiblingBlocksFileReplacement(t *testing.T) {
 	}
 	if got := readFile(t, dir, "foo/scratch.txt"); got != scratch {
 		t.Fatalf("untracked scratch file must survive the refused revert, got %q", got)
+	}
+	// All-or-nothing: the pre-flight refuses BEFORE any delete, so the tracked
+	// foo/bar must still be present (no half-applied worktree mutation).
+	if got := readFile(t, dir, "foo/bar"); got != "iamdir" {
+		t.Fatalf("refusal must be all-or-nothing: tracked foo/bar was mutated, got %q", got)
 	}
 }
