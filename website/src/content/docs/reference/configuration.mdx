@@ -55,18 +55,29 @@ The top-level config: which agents are registered, update defaults, and the
 secrets backend.
 
 ```toml title="~/.agentsync/agentsync.toml"
-# Registered agents and whether each is enabled.
-[[agents]]
-name    = "claude"
+# Registered agents and whether each is enabled. Each agent is its own
+# [agents.<name>] sub-table (a TOML table keyed by agent name), not an
+# array-of-tables.
+[agents.claude]
+enabled = true
+scope   = "user"   # display-only; the file an entry lives in is the scope of record
+
+[agents.opencode]
 enabled = true
 
-[[agents]]
-name    = "opencode"
-enabled = true
+# Plugin update defaults (used by `agentsync update`).
+[updates]
+default_mode     = "track"   # pinned | track | manual — a plugin's own `update`
+                             # wins; this is the fallback. Only "track" plugins are
+                             # auto-bumped; "pinned"/"manual" need explicit action.
+                             # Unset behaves as "track".
+default_interval = "24h"     # configured update cadence
 
 # Secrets backend — see the Secrets guide.
 [secrets]
 backend       = "age"
+file          = "secrets/secrets.age"                # vault path; relative → under
+                                                     # ~/.agentsync, default shown
 recipient     = "age1…"                              # public key, safe to commit
 identity_file = "${env:HOME}/.config/agentsync/age.key"  # private key, per-machine
 
@@ -75,6 +86,19 @@ identity_file = "${env:HOME}/.config/agentsync/age.key"  # private key, per-mach
 banner = true   # default; set false to omit the managed-file banner from
                 # rendered memory files (CLAUDE.md, AGENTS.md, …)
 ```
+
+`[updates]` sets the default plugin-update policy for `agentsync update`.
+`default_mode` is `pinned` (never auto-bump), `track` (auto-bump to the latest
+marketplace version), or `manual` (bump only on explicit action); a plugin's own
+`update` key overrides it, and an unset `default_mode` behaves as `track`.
+`default_interval` (e.g. `"24h"`) is the configured update cadence for plugins
+that opt in to periodic updates.
+
+`[secrets].file` is the path to the age-encrypted vault. A relative path is
+resolved under `~/.agentsync/` (honouring `AGENTSYNC_HOME`); an absolute path or
+one with a leading `~` / `${env:HOME}` is expanded as written. When omitted it
+defaults to `secrets/secrets.age`, so most configs can leave it out. See the
+[Secrets guide](/guides/secrets/).
 
 The `[memory] banner` notice that agentsync prepends to each rendered memory file
 points edits back at `.agentsync/memory/AGENTS.md` + `agentsync apply`. It lives

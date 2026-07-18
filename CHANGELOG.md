@@ -219,6 +219,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Corrected two copy-paste-wrong docs examples (issue #129).** The onboarding
+  and daily-loop pages told users to run `agentsync diff claude`, but `diff`'s
+  argument is a filesystem path, not an agent name — `diff claude` matched nothing
+  and silently printed "no diff"; the example is now bare `agentsync diff`. The
+  configuration reference showed an `[[agents]]` array-of-tables snippet with
+  `name = "…"`, but the loader unmarshals `agents` as a table keyed by name, so the
+  documented TOML registered zero agents; it now shows the correct `[agents.<name>]`
+  form. Also documented the previously-undocumented `[updates]` block and
+  `[secrets].file` key.
+
 - **An invalid `[destination_directory_git_backup]` `mode` now errors at config
   load instead of being silently ignored (issue #137).** The strict TOML decoder
   rejected unknown keys but accepted any value, so a typo like `mode = "On"`,

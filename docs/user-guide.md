@@ -218,7 +218,7 @@ A typical session after an agent edited a file out from under you:
 
 ```bash
 agentsync status              # spot the drift
-agentsync diff claude         # inspect it (resolved secrets are masked)
+agentsync diff                # inspect it (resolved secrets are masked)
 agentsync reconcile           # interactively resolve
 ```
 

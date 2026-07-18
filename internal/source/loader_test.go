@@ -51,7 +51,8 @@ func TestLoadRejectsInvalidGitBackupMode(t *testing.T) {
 		t.Run("invalid "+tc.name, func(t *testing.T) {
 			fs := afero.NewMemMapFs()
 			_ = afero.WriteFile(fs, path, []byte(
-				"[destination_directory_git_backup]\nmode = \""+tc.mode+"\"\n"), 0o644)
+				"[destination_directory_git_backup]\nmode = \""+tc.mode+"\"\n",
+			), 0o644)
 			_, err := source.Load(fs, home)
 			if err == nil {
 				t.Fatalf("Load accepted invalid mode %q; want error", tc.mode)
@@ -94,6 +95,64 @@ func TestLoadRejectsInvalidGitBackupMode(t *testing.T) {
 				t.Errorf("EffectiveMode() = %q, want %q", got, tc.wantEff)
 			}
 		})
+	}
+}
+
+// TestConfigurationDocExampleParses is artifact-anchored on the exact
+// agentsync.toml snippet published in
+// website/src/content/docs/reference/configuration.mdx. It guards against the
+// doc regressing back to the invalid [[agents]] array-of-tables form (which
+// registers ZERO agents): the [agents.<name>] sub-table form must load a
+// non-empty, correctly-keyed Agents map, and the [updates]/[secrets] sections
+// the same snippet documents must parse under strict decoding.
+func TestConfigurationDocExampleParses(t *testing.T) {
+	// Kept byte-identical (minus the `age1…`/`…` placeholders that are just
+	// opaque strings) to the fenced ```toml block in configuration.mdx.
+	const doc = `
+[agents.claude]
+enabled = true
+scope   = "user"
+
+[agents.opencode]
+enabled = true
+
+[updates]
+default_mode     = "track"
+default_interval = "24h"
+
+[secrets]
+backend       = "age"
+file          = "secrets/secrets.age"
+recipient     = "age1example"
+identity_file = "${env:HOME}/.config/agentsync/age.key"
+
+[memory]
+banner = true
+`
+	fs := afero.NewMemMapFs()
+	_ = afero.WriteFile(fs, "/home/.agentsync/agentsync.toml", []byte(doc), 0o644)
+	c, err := source.Load(fs, "/home/.agentsync")
+	if err != nil {
+		t.Fatalf("source.Load of documented snippet: %v", err)
+	}
+	if len(c.Config.Agents) != 2 {
+		t.Fatalf("Agents map = %d entries, want 2 (the [[agents]] form would give 0): %#v",
+			len(c.Config.Agents), c.Config.Agents)
+	}
+	for _, name := range []string{"claude", "opencode"} {
+		ag, ok := c.Config.Agents[name]
+		if !ok {
+			t.Fatalf("agent %q missing from parsed Agents map", name)
+		}
+		if !ag.Enabled {
+			t.Errorf("agent %q parsed as disabled; want enabled", name)
+		}
+	}
+	if got := c.Config.Updates.DefaultMode; got != "track" {
+		t.Errorf("[updates] default_mode = %q, want %q", got, "track")
+	}
+	if got := c.Config.Secrets.File; got != "secrets/secrets.age" {
+		t.Errorf("[secrets] file = %q, want %q", got, "secrets/secrets.age")
 	}
 }
 
