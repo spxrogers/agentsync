@@ -88,11 +88,22 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				fmt.Fprintf(warn, "warning: skipping command %q: %v\n", e.Name(), err)
 				continue
 			}
-			name := e.Name()[:len(e.Name())-len(".md")]
+			fileName := e.Name()[:len(e.Name())-len(".md")]
 			fm, body, lenient, err := claude.ParseFrontmatterWithReport(data)
 			if err != nil {
-				fmt.Fprintf(warn, "warning: skipping command %q: %v\n", name, err)
+				fmt.Fprintf(warn, "warning: skipping command %q: %v\n", fileName, err)
 				continue
+			}
+			// Continue keys a slash command off the frontmatter `name`, not the
+			// filename (Render writes both, so agentsync-authored blocks agree —
+			// but a foreign block may differ). Prefer the frontmatter `name`,
+			// falling back to the filename only when it's absent, mirroring the
+			// MCP branch above (`asStr(srv["name"])`). `name` is NOT captured into
+			// the canonical command frontmatter — Render regenerates it from
+			// Command.Name — so only the canonical identity changes here.
+			name := fileName
+			if n, ok := fm["name"].(string); ok && n != "" {
+				name = n
 			}
 			if lenient {
 				fmt.Fprintf(warn, "warning: command %q frontmatter is not strict YAML; parsed leniently (consider quoting values containing ': ')\n", name)

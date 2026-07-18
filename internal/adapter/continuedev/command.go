@@ -25,6 +25,10 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 	var ops []adapter.FileOp
 	var skips []adapter.Skip
 	for _, cmd := range c.Commands {
+		// Round-trip contract: the canonical Name is written into BOTH the
+		// frontmatter `name` and the filename (`<Name>.md`, below). Ingest reads
+		// the identity back from the frontmatter `name` (the filename is only a
+		// fallback), so this pair must stay matched — see ingest.go's command branch.
 		fm := map[string]any{"name": cmd.Name, "invokable": true}
 		if d := fmString(cmd.Frontmatter, "description"); d != "" {
 			fm["description"] = d

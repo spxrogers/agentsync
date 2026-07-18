@@ -287,6 +287,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   vocabulary differs from Gemini's) and `color` (no Gemini agent field) with a
   reported `Skip` that lists exactly those keys — so a hand-authored Gemini agent
   file survives a round-trip instead of being degraded on the next apply.
+- **Continue command import no longer silently renames foreign prompt blocks
+  (issue #127).** Continue keys a slash command off its prompt block's
+  frontmatter `name`, not the filename. Import (`import`/`reconcile`) now captures
+  the canonical command identity from the frontmatter `name`, falling back to the
+  filename only when it is absent — mirroring the MCP branch. Previously a
+  hand-authored or third-party block at `.continue/prompts/foo.md` whose
+  frontmatter was `name: bar` was captured as `foo` and rewritten as `/foo` on the
+  next apply, silently destroying the user's `/bar`. Render is unchanged.
 
 - **Claude LSP capability corrected.** Claude Code reads LSP servers from plugin
   manifests, not `settings.json#/lspServers`; agentsync now reports canonical
