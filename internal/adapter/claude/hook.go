@@ -98,6 +98,11 @@ var (
 // entry without the dropped fields; Render is the last line of defense (it skips
 // non-command handlers), and this ingest guard keeps unrepresentable events out
 // of the canonical source in the first place.
+//
+// This is intentionally MORE diagnostic than Gemini's twin: it also warns on the
+// structurally-malformed shapes (non-object def/handler, non-array event value or
+// "hooks" value) that Gemini's ingestHooks drops silently. Bringing Gemini to
+// parity is a separate follow-up (out of this issue's scope).
 func ingestHooks(raw any, warn io.Writer) []source.Hook {
 	hooks, ok := raw.(map[string]any)
 	if !ok {
@@ -107,6 +112,7 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 	for event, rawEntries := range hooks {
 		entries, ok := rawEntries.([]any)
 		if !ok {
+			fmt.Fprintf(warn, "warning: hook event %q value is not an array; event not captured\n", event)
 			continue
 		}
 		var captured []source.Hook
@@ -125,14 +131,14 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 				break
 			}
 			matcher := asStr(entry["matcher"])
-			// A present-but-non-array "hooks" value (e.g. an object) can't be
-			// captured; leave the whole event uncaptured rather than silently
-			// contribute zero handlers while a sibling def keeps the event alive
-			// (which the next apply would then own and clobber this def).
-			rawHooks, hasHooks := entry["hooks"]
-			hooksArr, isArr := rawHooks.([]any)
-			if hasHooks && !isArr {
-				fmt.Fprintf(warn, "warning: hook event %q has a definition whose \"hooks\" value is not an array; event not captured\n", event)
+			// A definition must carry a "hooks" ARRAY of handlers. An absent, null,
+			// or non-array "hooks" value can't be captured, so leave the whole event
+			// uncaptured rather than silently contribute zero handlers while a
+			// sibling def keeps the event alive (which the next apply would then own
+			// and clobber this def). An empty array is fine — a def with no handlers.
+			hooksArr, isArr := entry["hooks"].([]any)
+			if !isArr {
+				fmt.Fprintf(warn, "warning: hook event %q has a definition without a valid \"hooks\" array; event not captured\n", event)
 				representable = false
 				break
 			}

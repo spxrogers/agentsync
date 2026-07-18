@@ -53,6 +53,12 @@ func TestIngest_HookArtifactRoundTrip(t *testing.T) {
 	if len(out.Hooks) != 1 || out.Hooks[0].Event != "PostToolUse" {
 		t.Fatalf("expected only the clean PostToolUse event captured, got %+v", out.Hooks)
 	}
+	// Modify the captured command so the rendered PostToolUse DIFFERS from the
+	// native fixture. Otherwise a no-op Apply (or a stubbed Render) would leave
+	// "echo after" in place and the round-trip assertion below would pass
+	// vacuously — a correct Apply must materialize this new value through the
+	// owned-key merge while leaving the guarded foreign events untouched.
+	out.Hooks[0].Command = "echo after (rerendered)"
 
 	ops, _, err := a.Render(secrets.ForRender(out), adapter.ScopeUser, "")
 	if err != nil {
@@ -117,10 +123,12 @@ func TestIngest_HookArtifactRoundTrip(t *testing.T) {
 		}
 	})
 
-	t.Run("clean hook round-trips", func(t *testing.T) {
+	t.Run("clean hook round-trips through a real merge", func(t *testing.T) {
 		h := handler(t, "PostToolUse")
-		if h["type"] != "command" || h["command"] != "echo after" {
-			t.Errorf("PostToolUse did not round-trip: %+v", h)
+		// The rerendered value proves Apply actually wrote via the owned-key merge
+		// (a no-op Apply would leave the native "echo after").
+		if h["type"] != "command" || h["command"] != "echo after (rerendered)" {
+			t.Errorf("PostToolUse did not round-trip through a real render/merge: %+v", h)
 		}
 	})
 
@@ -263,7 +271,22 @@ func TestIngest_HookGuardWarnsAndSkips(t *testing.T) {
 		{
 			name:      "hooks value is not an array",
 			hooks:     `{ "PreToolUse": [ { "matcher": "Bash", "hooks": { "not": "an array" } } ] }`,
-			wantWarns: []string{`"hooks" value is not an array`, "event not captured"},
+			wantWarns: []string{`without a valid "hooks" array`, "event not captured"},
+		},
+		{
+			name:      "hooks value is null",
+			hooks:     `{ "PreToolUse": [ { "matcher": "Bash", "hooks": null } ] }`,
+			wantWarns: []string{`without a valid "hooks" array`, "event not captured"},
+		},
+		{
+			name:      "hooks key absent",
+			hooks:     `{ "PreToolUse": [ { "matcher": "Bash" } ] }`,
+			wantWarns: []string{`without a valid "hooks" array`, "event not captured"},
+		},
+		{
+			name:      "event value is not an array",
+			hooks:     `{ "PreToolUse": { "matcher": "Bash" } }`,
+			wantWarns: []string{"value is not an array", "event not captured"},
 		},
 	}
 	for _, tt := range tests {
