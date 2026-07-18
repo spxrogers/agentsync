@@ -138,9 +138,9 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	if data, err := os.ReadFile(p.Settings); err == nil {
 		var top map[string]any
 		if json.Unmarshal(data, &top) == nil {
-			if hooks, ok := top["hooks"].(map[string]any); ok {
-				c.Hooks = append(c.Hooks, ingestHooks(hooks, warn)...)
-			}
+			// ingestHooks takes any and does its own map assertion (mirroring the
+			// gemini adapter's call site), so pass the raw value straight through.
+			c.Hooks = append(c.Hooks, ingestHooks(top["hooks"], warn)...)
 		}
 	}
 

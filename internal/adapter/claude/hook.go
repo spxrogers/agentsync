@@ -125,7 +125,17 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 				break
 			}
 			matcher := asStr(entry["matcher"])
-			hooksArr, _ := entry["hooks"].([]any)
+			// A present-but-non-array "hooks" value (e.g. an object) can't be
+			// captured; leave the whole event uncaptured rather than silently
+			// contribute zero handlers while a sibling def keeps the event alive
+			// (which the next apply would then own and clobber this def).
+			rawHooks, hasHooks := entry["hooks"]
+			hooksArr, isArr := rawHooks.([]any)
+			if hasHooks && !isArr {
+				fmt.Fprintf(warn, "warning: hook event %q has a definition whose \"hooks\" value is not an array; event not captured\n", event)
+				representable = false
+				break
+			}
 			for _, rawH := range hooksArr {
 				h, ok := rawH.(map[string]any)
 				if !ok {

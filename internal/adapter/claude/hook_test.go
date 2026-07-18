@@ -190,17 +190,34 @@ func TestRenderHooks_SkipsNonCommandHandler(t *testing.T) {
 				t.Errorf("got hook skip = %v, want %v (skips=%+v)", gotHookSkip, tt.wantSkip, skips)
 			}
 
-			// A settings.json op must never carry an empty-command handler.
+			// A settings.json op must never carry an empty-command handler. Parse
+			// the op payload and walk it (not a spacing-coupled byte substring) so
+			// the negative assertion can't pass vacuously if the encoder changes.
 			var renderedHooks bool
 			for _, op := range ops {
 				if !strings.HasSuffix(op.Path, "settings.json") {
 					continue
 				}
-				if bytes.Contains(op.Content, []byte(`"hooks"`)) {
+				var payload map[string]any
+				if err := json.Unmarshal(op.Content, &payload); err != nil {
+					t.Fatalf("parse settings.json op: %v\n%s", err, op.Content)
+				}
+				hooksObj, _ := payload["hooks"].(map[string]any)
+				if len(hooksObj) > 0 {
 					renderedHooks = true
 				}
-				if bytes.Contains(op.Content, []byte(`"command": ""`)) {
-					t.Errorf("settings.json op emitted an empty-command handler:\n%s", op.Content)
+				for event, raw := range hooksObj {
+					defs, _ := raw.([]any)
+					for _, rawDef := range defs {
+						def, _ := rawDef.(map[string]any)
+						hs, _ := def["hooks"].([]any)
+						for _, rawH := range hs {
+							h, _ := rawH.(map[string]any)
+							if cmd, ok := h["command"].(string); ok && cmd == "" {
+								t.Errorf("event %q op emitted an empty-command handler: %+v", event, h)
+							}
+						}
+					}
 				}
 			}
 			if renderedHooks != tt.wantRender {
@@ -242,6 +259,11 @@ func TestIngest_HookGuardWarnsAndSkips(t *testing.T) {
 			name:      "malformed handler (not an object)",
 			hooks:     `{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ "echo hi" ] } ] }`,
 			wantWarns: []string{"malformed handler", "event not captured"},
+		},
+		{
+			name:      "hooks value is not an array",
+			hooks:     `{ "PreToolUse": [ { "matcher": "Bash", "hooks": { "not": "an array" } } ] }`,
+			wantWarns: []string{`"hooks" value is not an array`, "event not captured"},
 		},
 	}
 	for _, tt := range tests {
