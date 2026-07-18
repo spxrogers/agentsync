@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -245,5 +246,166 @@ func TestSecretsSet_LegacyArgWarns(t *testing.T) {
 	}
 	if !strings.Contains(out, "warning") || !strings.Contains(out, "--stdin") {
 		t.Fatalf("legacy form did not warn about argv exposure; got:\n%s", out)
+	}
+}
+
+// TestSecretsSet_RefusesClobberOfScalarParent is the regression for the
+// vault-data-loss bug where `secrets set a.b=v` (with `a` an existing scalar
+// secret) silently replaced the scalar with a fresh nested map — irreversibly
+// destroying the cleartext value in an often-committed age vault — while still
+// reporting success. The fix refuses *destructive type changes* (nesting under a
+// scalar parent; a leaf assignment overwriting an existing table) and leaves
+// secrets.age byte-for-byte unchanged, while the legitimate cases (new nested
+// key under an absent or table parent; in-place scalar update) still succeed.
+//
+// Each sub-case drives the REAL command end-to-end against an on-disk encrypted
+// vault and asserts the observable outcome (raw ciphertext bytes and `secrets
+// get`), never a parsed-map round-trip.
+func TestSecretsSet_RefusesClobberOfScalarParent(t *testing.T) {
+	const liveSecret = "ghp_live_DO_NOT_DESTROY"
+	cases := []struct {
+		name        string
+		seed        string            // decrypted TOML pre-encrypted into the vault
+		setArg      string            // argument to `secrets set`
+		wantRefused bool              // must the set be refused?
+		mustNotLeak []string          // secret values that must never appear on a refusal
+		survivors   map[string]string // `secrets get` key -> expected substring afterwards
+	}{
+		{
+			name:        "scalar parent refused",
+			seed:        fmt.Sprintf("token = %q\n", liveSecret),
+			setArg:      "token.scope=repo",
+			wantRefused: true,
+			mustNotLeak: []string{liveSecret},
+			survivors:   map[string]string{"token": liveSecret},
+		},
+		{
+			name:        "table parent allowed",
+			seed:        "[github]\ntoken = \"gh_tok\"\n",
+			setArg:      "github.scope=repo",
+			wantRefused: false,
+			survivors:   map[string]string{"github.scope": "repo", "github.token": "gh_tok"},
+		},
+		{
+			name:        "absent parent allowed",
+			seed:        "[github]\ntoken = \"gh_tok\"\n",
+			setArg:      "linear.api_key=lin_new",
+			wantRefused: false,
+			survivors:   map[string]string{"linear.api_key": "lin_new", "github.token": "gh_tok"},
+		},
+		{
+			name:        "scalar leaf in-place update allowed",
+			seed:        "[github]\ntoken = \"old_tok\"\n",
+			setArg:      "github.token=new_tok",
+			wantRefused: false,
+			survivors:   map[string]string{"github.token": "new_tok"},
+		},
+		{
+			name:        "table leaf overwrite refused",
+			seed:        "[github]\ntoken = \"gh_tok\"\n",
+			setArg:      "github=whole_value",
+			wantRefused: true,
+			mustNotLeak: []string{"gh_tok"},
+			survivors:   map[string]string{"github.token": "gh_tok"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env, agePath, _, id := setupSecretsEnv(t)
+			if err := secrets_pkg.Encrypt([]byte(tc.seed), id.Recipient().String(), agePath); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(agePath)
+			if err != nil {
+				t.Fatalf("read vault before set: %v", err)
+			}
+
+			out, setErr := runCLI(t, env, "secrets", "set", tc.setArg)
+
+			if tc.wantRefused {
+				if setErr == nil {
+					t.Fatalf("secrets set %q must be refused, got success\n%s", tc.setArg, out)
+				}
+				// The vault must be byte-for-byte unchanged on disk: no
+				// re-encryption, no rollback artifact.
+				after, rerr := os.ReadFile(agePath)
+				if rerr != nil {
+					t.Fatalf("read vault after refused set: %v", rerr)
+				}
+				if !bytes.Equal(before, after) {
+					t.Fatalf("a refused set must leave secrets.age byte-for-byte unchanged (len before=%d after=%d)",
+						len(before), len(after))
+				}
+				// The refusal must not echo any secret value byte.
+				for _, s := range tc.mustNotLeak {
+					if strings.Contains(setErr.Error(), s) || strings.Contains(out, s) {
+						t.Fatalf("SECURITY: refusal leaked secret value %q:\nerr=%v\nout=%s", s, setErr, out)
+					}
+				}
+			} else if setErr != nil {
+				t.Fatalf("secrets set %q must succeed, got error: %v\n%s", tc.setArg, setErr, out)
+			}
+
+			// The survivors / results are observable via `secrets get` against
+			// the real encrypted vault.
+			for key, want := range tc.survivors {
+				got, gErr := runCLI(t, env, "secrets", "get", key)
+				if gErr != nil {
+					t.Fatalf("secrets get %q: %v\n%s", key, gErr, got)
+				}
+				if !strings.Contains(got, want) {
+					t.Fatalf("secrets get %q = %q, want it to contain %q", key, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestSecretsSet_ValidatesVaultBeforePersist proves the `set` path now runs the
+// same flatten-contract validation (secrets.ValidateVaultTOML) the `edit` path
+// already applies, BEFORE encrypting — so a `set` that would yield a vault
+// `apply` later refuses is rejected at save time with a "not saved" message and
+// the prior vault is left untouched.
+//
+// Fixture: the vault holds a literal quoted top-level key "x.y" (a single key
+// whose NAME contains a dot — NOT a nested table), which is a valid vault on its
+// own. `secrets set x.y=two` creates a nested `[x] y="two"` (parent "x" is
+// absent, so the clobber guard does NOT fire) which now COLLIDES with the quoted
+// "x.y" under apply's flatten contract (mirrors internal/secrets/age.go:120-128).
+// The validation guard — not the clobber guard — is what must catch it.
+func TestSecretsSet_ValidatesVaultBeforePersist(t *testing.T) {
+	env, agePath, idPath, id := setupSecretsEnv(t)
+	const seed = "\"x.y\" = \"one\"\n"
+	if err := secrets_pkg.Encrypt([]byte(seed), id.Recipient().String(), agePath); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(agePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, setErr := runCLI(t, env, "secrets", "set", "x.y=two")
+	if setErr == nil {
+		t.Fatalf("a set that yields a flatten collision must be refused, got success\n%s", out)
+	}
+	if !strings.Contains(setErr.Error(), "not saved") {
+		t.Fatalf("validation refusal should carry a '(not saved)' message, got: %v", setErr)
+	}
+
+	// The vault must be byte-for-byte unchanged on disk.
+	after, rerr := os.ReadFile(agePath)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("a validation-refused set must leave secrets.age byte-for-byte unchanged")
+	}
+	// And the original cleartext survives, decrypted straight from the artifact.
+	plain, derr := secrets_pkg.Decrypt(agePath, idPath)
+	if derr != nil {
+		t.Fatalf("decrypt vault after refused set: %v", derr)
+	}
+	if string(plain) != seed {
+		t.Fatalf("vault cleartext changed after a refused set: got %q, want %q", string(plain), seed)
 	}
 }

@@ -320,6 +320,20 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   from the fetch), surfacing what it kept in the status line (e.g.
   `(kept agents=[claude], update=pinned)`). A genuine first install is unchanged
   and byte-identical, preserving the `install`/`import` shared-artifact contract.
+- **`secrets set a.b=v` no longer silently destroys a pre-existing scalar secret
+  at `a`, and the `set` path now validates the vault before saving (issue #142).**
+  Nesting under a key that already holds a scalar value (e.g. `secrets set
+  token.scope=repo` when `token` is a stored secret) previously overwrote the
+  scalar with a fresh table — irreversibly dropping the cleartext from an often
+  git-committed age vault — while still printing success. `secrets set` now
+  **refuses** destructive type changes (nesting under a scalar parent, or a leaf
+  assignment that would overwrite an existing table) with a clear error that
+  never echoes a secret value, and leaves `secrets.age` byte-for-byte unchanged.
+  It also runs the same flatten-contract validation (`ValidateVaultTOML`) the
+  `secrets edit` path already applied, so a `set` that would yield a vault `apply`
+  later rejects is refused at save time (`… (not saved): …`) instead of being
+  encrypted with a cheerful success message. Legitimate cases — a new nested key
+  under an absent or table parent, and an in-place scalar update — are unchanged.
 
 - **Claude LSP capability corrected.** Claude Code reads LSP servers from plugin
   manifests, not `settings.json#/lspServers`; agentsync now reports canonical

@@ -124,10 +124,21 @@ func decryptToMap(cfg source.SecretsConfig, home string) (map[string]any, error)
 
 // encryptMap marshals m as TOML and encrypts to secrets.age, verifying the
 // result is decryptable by the configured identity (see writeSecretsVerified).
+//
+// Before persisting, it validates the marshaled bytes against apply's flatten
+// contract (secrets.ValidateVaultTOML: string-only leaves, no dup/colliding
+// keys) — the SAME guard the `secrets edit` path applies — so a `set` that would
+// yield a vault apply later refuses is rejected at save time instead of being
+// silently encrypted. Validation runs on the EXACT bytes that get encrypted
+// (one marshal), so validated bytes == written bytes; nothing can drift between
+// the check and the write.
 func encryptMap(m map[string]any, cfg source.SecretsConfig, home string) error {
 	plain, err := toml.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("marshal secrets TOML: %w", err)
+	}
+	if err := secrets.ValidateVaultTOML(plain); err != nil {
+		return fmt.Errorf("resulting secrets are invalid (not saved): %w", err)
 	}
 	return writeSecretsVerified(plain, cfg, home)
 }
@@ -160,13 +171,31 @@ func writeSecretsVerified(plain []byte, cfg source.SecretsConfig, home string) e
 	return nil
 }
 
-// setNestedKey sets a dotted key in a nested map, creating intermediate maps
-// as needed.
-func setNestedKey(m map[string]any, dottedKey, value string) {
+// setNestedKey sets a dotted key in a nested map, creating intermediate maps as
+// needed. It refuses *destructive type changes* rather than silently destroying
+// vault content — the secrets.age vault is often the only copy of a cleartext
+// secret, so an overwrite here is irreversible loss:
+//
+//   - Nesting under an existing scalar parent (e.g. `set token.scope=…` when
+//     `token` is already a scalar secret) would drop the parent's value; refused.
+//   - A leaf assignment that would overwrite an existing table (e.g. `set a=…`
+//     when `a` is a `[a]` table) would drop the whole sub-table; refused.
+//
+// The legitimate cases still succeed: an in-place scalar update (scalar leaf →
+// new scalar leaf) and a new nested key under an absent or table parent. Error
+// messages carry only KEY names, never a secret *value* byte (the
+// no-secret-in-stderr convention honored by resolveSecretKeyValue).
+func setNestedKey(m map[string]any, dottedKey, value string) error {
 	parts := strings.SplitN(dottedKey, ".", 2)
 	if len(parts) == 1 {
+		if existing, ok := m[parts[0]]; ok {
+			if _, isMap := existing.(map[string]any); isMap {
+				return fmt.Errorf("setting %q would overwrite the existing table at %q; refusing to destroy it — choose a different key or remove %q first",
+					parts[0], parts[0], parts[0])
+			}
+		}
 		m[parts[0]] = value
-		return
+		return nil
 	}
 	sub, ok := m[parts[0]]
 	if !ok {
@@ -175,11 +204,10 @@ func setNestedKey(m map[string]any, dottedKey, value string) {
 	}
 	subMap, ok := sub.(map[string]any)
 	if !ok {
-		// overwrite non-map with map
-		subMap = map[string]any{}
-		m[parts[0]] = subMap
+		return fmt.Errorf("setting %q would overwrite the existing secret at %q (a scalar value); refusing to destroy it — choose a different key or remove %q first",
+			dottedKey, parts[0], parts[0])
 	}
-	setNestedKey(subMap, parts[1], value)
+	return setNestedKey(subMap, parts[1], value)
 }
 
 // editorArgv builds the editor argv from $EDITOR and the file to edit. $EDITOR
@@ -357,7 +385,12 @@ func secretsSet(cmd *cobra.Command, arg string, useStdin bool) error {
 	if err != nil {
 		return err
 	}
-	setNestedKey(m, key, value)
+	// Refuse destructive type changes BEFORE any encryption, so a refused set
+	// never reaches encryptMap/writeSecretsVerified and the on-disk vault is left
+	// byte-for-byte unchanged.
+	if err := setNestedKey(m, key, value); err != nil {
+		return err
+	}
 	if err := encryptMap(m, cfg, home); err != nil {
 		return err
 	}
