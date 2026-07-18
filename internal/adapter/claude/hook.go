@@ -3,6 +3,9 @@ package claude
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"sort"
+	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -12,13 +15,33 @@ import (
 // entries. Per-event ownership: agentsync owns the entire array under its
 // event key. Foreign event keys (e.g. PreToolUse if user has authored
 // directly) are NOT touched if they're not in canonical.
-func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, error) {
+//
+// Render is the last line of defense against corrupting the user's real
+// settings.json: the canonical Hook models only command handlers, so any hook
+// whose Type is a non-empty non-"command" value is reported as a dropped Skip
+// and never emitted — emitting a {type:"...",command:""} handler would let the
+// owned-array overwrite clobber the user's native handler. An empty Type is
+// treated as command-compatible (mirrors Gemini's `h.Type != "" && h.Type !=
+// "command"` guard).
+func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []adapter.Skip, error) {
 	if len(c.Hooks) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	byEvent := map[string][]map[string]any{}
-	var ownedKeys []string
+	var skips []adapter.Skip
 	for _, h := range c.Hooks {
+		// agentsync models only command hooks (the only kind the canonical Hook
+		// represents). Skip any other type with a report rather than emitting an
+		// entry with an empty command that would overwrite the user's handler.
+		if h.Type != "" && h.Type != "command" {
+			skips = append(skips, adapter.Skip{
+				Component: "hook",
+				Name:      h.Event,
+				Reason:    fmt.Sprintf("agentsync models only command hooks; type %q is not projected", h.Type),
+				Kind:      adapter.SkipDropped,
+			})
+			continue
+		}
 		entry := map[string]any{
 			"matcher": h.Matcher,
 			"hooks": []map[string]any{{
@@ -28,13 +51,17 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, er
 		}
 		byEvent[h.Event] = append(byEvent[h.Event], entry)
 	}
+	if len(byEvent) == 0 {
+		return nil, skips, nil
+	}
+	var ownedKeys []string
 	for event := range byEvent {
 		ownedKeys = append(ownedKeys, "/hooks/"+event)
 	}
 	obj := map[string]any{"hooks": byEvent}
 	body, err := json.MarshalIndent(obj, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("marshal hooks: %w", err)
+		return nil, nil, fmt.Errorf("marshal hooks: %w", err)
 	}
 	return []adapter.FileOp{{
 		Action:        "write",
@@ -44,5 +71,99 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, er
 		SourceID:      "hooks/* (multiple)",
 		MergeStrategy: "merge-json-keys",
 		OwnedKeys:     ownedKeys,
-	}}, nil
+	}}, skips, nil
+}
+
+// Claude's documented hook schema is wider than the canonical source.Hook: a
+// per-event definition can carry keys beyond {matcher, hooks} and an individual
+// handler keys beyond {type, command} (e.g. `timeout`). These enumerate the
+// fields the canonical model CAN represent; anything else in an event makes that
+// event unrepresentable — see ingestHooks.
+var (
+	claudeHookDefModeledKeys   = map[string]bool{"matcher": true, "hooks": true}
+	claudeHookEntryModeledKeys = map[string]bool{"type": true, "command": true}
+)
+
+// ingestHooks decodes settings.json's `hooks` object into canonical hooks,
+// warning on anything it cannot capture. Inverse of renderHooks: each
+// {type, command} handler becomes a source.Hook sharing the group's matcher.
+// Unlike Gemini there is NO event-name remapping — every Claude event name is
+// canonical. Per event, if ANY definition carries an unmodeled key, or ANY
+// handler is a non-empty non-"command" type, or ANY handler carries an unmodeled
+// key (e.g. `timeout`), the WHOLE event is left uncaptured with a warning.
+//
+// APPROACH A (no schema change): mirror the Gemini adapter's guard-and-warn
+// posture rather than widen source.Hook. Capturing a lossy subset would let the
+// next apply — which owns the whole per-event array — rewrite the user's native
+// entry without the dropped fields; Render is the last line of defense (it skips
+// non-command handlers), and this ingest guard keeps unrepresentable events out
+// of the canonical source in the first place.
+func ingestHooks(raw any, warn io.Writer) []source.Hook {
+	hooks, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	var out []source.Hook
+	for event, rawEntries := range hooks {
+		entries, ok := rawEntries.([]any)
+		if !ok {
+			continue
+		}
+		var captured []source.Hook
+		representable := true
+	defs:
+		for _, rawEntry := range entries {
+			entry, ok := rawEntry.(map[string]any)
+			if !ok {
+				representable = false
+				break
+			}
+			if extra := unmodeledKeys(entry, claudeHookDefModeledKeys); len(extra) > 0 {
+				fmt.Fprintf(warn, "warning: hook event %q has a definition with unmodeled fields (%s); event not captured\n", event, strings.Join(extra, ", "))
+				representable = false
+				break
+			}
+			matcher := asStr(entry["matcher"])
+			hooksArr, _ := entry["hooks"].([]any)
+			for _, rawH := range hooksArr {
+				h, ok := rawH.(map[string]any)
+				if !ok {
+					representable = false
+					break defs
+				}
+				if typ := asStr(h["type"]); typ != "" && typ != "command" {
+					fmt.Fprintf(warn, "warning: hook event %q has a %q-type handler agentsync cannot represent; event not captured\n", event, typ)
+					representable = false
+					break defs
+				}
+				if extra := unmodeledKeys(h, claudeHookEntryModeledKeys); len(extra) > 0 {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler with unmodeled fields (%s); event not captured\n", event, strings.Join(extra, ", "))
+					representable = false
+					break defs
+				}
+				captured = append(captured, source.Hook{
+					Event:   event,
+					Matcher: matcher,
+					Type:    asStr(h["type"]),
+					Command: asStr(h["command"]),
+				})
+			}
+		}
+		if representable {
+			out = append(out, captured...)
+		}
+	}
+	return out
+}
+
+// unmodeledKeys returns the sorted keys of m that are not in modeled.
+func unmodeledKeys(m map[string]any, modeled map[string]bool) []string {
+	var out []string
+	for k := range m {
+		if !modeled[k] {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

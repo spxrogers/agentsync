@@ -219,6 +219,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Claude hooks no longer drop unmodeled fields or corrupt non-command handlers
+  on `import`→`apply` (issue #124).** The canonical hook model represents only
+  command handlers, so an `import` that captured a `settings.json` hook event
+  carrying an unmodeled field (e.g. `timeout`) or a non-`command` handler, then
+  re-`apply`d it, silently rewrote the user's native `/hooks/<event>` array —
+  dropping the extra fields and emitting a structurally invalid
+  `{"type":"…","command":""}` entry. Ingest now leaves any hook event it cannot
+  fully represent **uncaptured** with a warning (matching the Gemini adapter), so
+  the next apply never owns or overwrites that event, and Render reports a dropped
+  `Skip` for a non-`command` handler instead of emitting an empty-command entry.
+
 - **Claude LSP capability corrected.** Claude Code reads LSP servers from plugin
   manifests, not `settings.json#/lspServers`; agentsync now reports canonical
   Claude LSP servers as skipped instead of writing or importing a key Claude
