@@ -139,6 +139,70 @@ func TestCapture_RefusesMovedSecretIntoLiteralField(t *testing.T) {
 	}
 }
 
+// TestCapture_RefusesShortSecretMovedIntoLiteralField is the analog of
+// TestCapture_RefusesMovedSecretIntoLiteralField for a SHORT (1–3 char) secret.
+// The re-reference value-based fallback intentionally skips values shorter than
+// minReReferenceLen (=4), but the fail-closed backstop must NOT inherit that
+// floor: a short credential moved onto a field whose source counterpart is a
+// literal (so re-reference leaves it as cleartext) must still be refused rather
+// than persisted into the committed canonical source. This fails on main (the
+// backstop reused sourceSecretValues, which dropped the short value) and passes
+// after decoupling the backstop onto backstopSecretValues.
+func TestCapture_RefusesShortSecretMovedIntoLiteralField(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+	}{
+		{name: "1char", value: "a"},
+		{name: "2char", value: "ab"},
+		{name: "3char", value: "abc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("TOK", tc.value)
+			writeFile(t, filepath.Join(home, "agentsync.toml"), "[secrets]\nbackend = \"env\"\n")
+			writeFile(t, filepath.Join(home, "mcp", "srv.toml"), ""+
+				"[server]\ntype = \"stdio\"\ncommand = \"run-server\"\n[server.env]\nAUTH = \"${secret:TOK}\"\n")
+
+			ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+				ID:     "srv",
+				Server: source.MCPServerSpec{Type: "stdio", Command: "run-server --token=" + tc.value},
+			}}}
+			if _, err := capture.Capture(home, ingested, capture.Opts{}); err == nil {
+				t.Fatal("capture must REFUSE a short secret moved into a literal-counterpart field, got nil")
+			}
+			if raw, _ := os.ReadFile(filepath.Join(home, "mcp", "srv.toml")); strings.Contains(string(raw), "--token="+tc.value) {
+				t.Fatalf("LEAK: short cleartext persisted despite refusal:\n%s", raw)
+			}
+		})
+	}
+}
+
+// TestCapture_EmptySecretNotFalseRefused proves the backstop does not
+// false-refuse when a ${secret:K} resolves to the EMPTY string: an empty value
+// has nothing to leak, and strings.Contains(field, "") is always true, so an
+// unguarded detection set would refuse every benign write-back. A benign,
+// unchanged write must succeed.
+func TestCapture_EmptySecretNotFalseRefused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("K", "")
+	writeFile(t, filepath.Join(home, "agentsync.toml"), "[secrets]\nbackend = \"env\"\n")
+	writeFile(t, filepath.Join(home, "mcp", "srv.toml"), ""+
+		"[server]\ntype = \"stdio\"\ncommand = \"npx\"\n[server.env]\nAUTH = \"${secret:K}\"\n")
+
+	// Unchanged write-back: apply resolved ${secret:K} to "" in the dest env.
+	ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+		ID: "srv",
+		Server: source.MCPServerSpec{
+			Type: "stdio", Command: "npx",
+			Env: map[string]string{"AUTH": ""},
+		},
+	}}}
+	if _, err := capture.Capture(home, ingested, capture.Opts{}); err != nil {
+		t.Fatalf("empty-resolving secret must not be false-refused: %v", err)
+	}
+}
+
 // TestCapture_RefusesRotatedSecret is the fail-closed backstop for a ROTATED
 // secret: the source field is ${secret:}-templated, but the user changed the
 // dest value to a NEW token the vault doesn't know. Re-reference can't match it,

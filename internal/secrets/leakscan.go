@@ -48,7 +48,10 @@ func ResidualSecretCleartext(ingested, against *source.Canonical, sec, env Resol
 	if ingested == nil || against == nil {
 		return nil
 	}
-	secretVals := sourceSecretValues(against, sec) // resolved value -> placeholder
+	// backstopSecretValues (NOT sourceSecretValues) is the detection set: the
+	// backstop must trip on short (1–3 char) live secrets too, since refusing a
+	// leak is not the substring rewrite the re-reference length floor guards.
+	secretVals := backstopSecretValues(against, sec) // resolved value -> placeholder
 	srcByLoc := make(map[secretFieldLoc]string)
 	walkSecretFields(against, func(loc secretFieldLoc, s string) string {
 		srcByLoc[loc] = s
@@ -81,6 +84,13 @@ func ResidualSecretCleartext(ingested, against *source.Canonical, sec, env Resol
 		// in source (even one that coincidentally equals another secret's value)
 		// is pre-existing, not a new leak, so it must not be refused.
 		for v := range secretVals {
+			// belt-and-suspenders: strings.Contains(s, "") is always true, so an
+			// empty resolved value would false-flag every field. backstopSecretValues
+			// already excludes "" at build time; this guards against any future
+			// detection-set change.
+			if v == "" {
+				continue
+			}
 			if strings.Contains(s, v) && !strings.Contains(src, v) {
 				flag(g)
 				return s

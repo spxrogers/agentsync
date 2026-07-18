@@ -434,6 +434,10 @@ secret from a deliberate non-secret edit. As a **fail-closed backstop**,
 written verbatim, or a `${secret:K}` the source referenced has vanished from the
 captured group (rotated/edited away), it **refuses the write** rather than risk
 persisting cleartext — directing the user to update the vault or edit the source.
+The backstop detects live secret values regardless of length: it does **not**
+inherit the re-reference value-based fallback's length floor (which skips 1–3
+char values to avoid substring-rewriting unrelated text), because refusing to
+persist a leak is not a rewrite — so even a 1–3 char credential trips it.
 
 ---
 

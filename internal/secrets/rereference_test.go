@@ -410,3 +410,55 @@ func TestResidualSecretCleartext_ExtraValue(t *testing.T) {
 		t.Fatalf("pre-existing source Extra literal must not be flagged, got %v", leaks)
 	}
 }
+
+// TestBackstopVsSourceSecretValues pins the decoupling: the re-reference
+// fallback set (sourceSecretValues) applies the minReReferenceLen floor and so
+// drops 1–3 char values, while the backstop set (backstopSecretValues) keeps
+// them — it only drops truly-empty values.
+func TestBackstopVsSourceSecretValues(t *testing.T) {
+	sec := fakeResolver{
+		"ONE":   "a",
+		"TWO":   "ab",
+		"THREE": "abc",
+		"FOUR":  "abcd",
+		"EMPTY": "",
+	}
+	against := &source.Canonical{
+		MCPServers: []source.MCPServer{{
+			ID: "srv",
+			Server: source.MCPServerSpec{
+				Type: "stdio",
+				Env: map[string]string{
+					"A": "${secret:ONE}",
+					"B": "${secret:TWO}",
+					"C": "${secret:THREE}",
+					"D": "${secret:FOUR}",
+					"E": "${secret:EMPTY}",
+				},
+			},
+		}},
+	}
+
+	backstop := backstopSecretValues(against, sec)
+	for _, v := range []string{"a", "ab", "abc", "abcd"} {
+		if _, ok := backstop[v]; !ok {
+			t.Errorf("backstopSecretValues must include %q", v)
+		}
+	}
+	if _, ok := backstop[""]; ok {
+		t.Errorf("backstopSecretValues must exclude the empty value")
+	}
+
+	reref := sourceSecretValues(against, sec)
+	for _, v := range []string{"a", "ab", "abc"} {
+		if _, ok := reref[v]; ok {
+			t.Errorf("sourceSecretValues must exclude short value %q (< minReReferenceLen)", v)
+		}
+	}
+	if _, ok := reref["abcd"]; !ok {
+		t.Errorf("sourceSecretValues must include >=4-char value %q", "abcd")
+	}
+	if _, ok := reref[""]; ok {
+		t.Errorf("sourceSecretValues must exclude the empty value")
+	}
+}

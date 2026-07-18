@@ -219,6 +219,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **The capture cleartext backstop now refuses short and empty-edge moved secrets
+  (issue #135).** The fail-closed backstop (`secrets.ResidualSecretCleartext`)
+  reused the re-reference value set, which drops any resolved secret shorter than
+  4 characters — so a 1–3 character credential moved into a field whose source
+  counterpart is a literal was written verbatim into the committed canonical
+  source with no refusal. The backstop now builds its detection set without the
+  length floor (keeping 1–3 char values, excluding only truly-empty ones), closing
+  the leak while the re-reference fallback keeps its substring-safety floor
+  unchanged. Security hardening.
+
 - **`agentsync revert` no longer deletes your untracked or gitignored files
   (issue #128).** `Restore` used go-git's `HardReset`, which — unlike `git reset
   --hard` — enumerates and removes every untracked and gitignored file in the

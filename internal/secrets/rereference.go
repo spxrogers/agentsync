@@ -108,15 +108,23 @@ func rereferenceHookByValue(against *source.Canonical, event, ingested string, s
 }
 
 // minReReferenceLen is the shortest resolved secret value the value-based
-// fallback will invert. A 1–3 char "secret" is not a credential worth the risk
-// of substring-rewriting unrelated text (a flag, a path segment); the
-// field-positional pass still restores it when the dest field is unchanged.
+// re-reference fallback will invert. A 1–3 char "secret" is not a credential
+// worth the risk of substring-rewriting unrelated text (a flag, a path segment);
+// the field-positional pass still restores it when the dest field is unchanged.
+//
+// This floor governs ONLY the re-reference value-based fallback
+// (sourceSecretValues). The fail-closed cleartext backstop deliberately does NOT
+// inherit it — refusing to persist a leak is not a substring rewrite, so it uses
+// backstopSecretValues (no length floor) and still trips on a 1–3 char credential.
 const minReReferenceLen = 4
 
 // sourceSecretValues resolves every ${secret:…} reference in against and returns
 // a map from the resolved cleartext to its placeholder. ${env:…} is excluded:
 // an env value is not a credential-at-rest concern and is never inverted (see
-// restoreField). Values shorter than minReReferenceLen are skipped.
+// restoreField). This is the RE-REFERENCE fallback's detection set, so values
+// shorter than minReReferenceLen are skipped (the field-positional pass still
+// restores an unchanged short-secret field). The backstop uses
+// backstopSecretValues instead, which keeps those short values.
 func sourceSecretValues(against *source.Canonical, sec Resolver) map[string]string {
 	out := map[string]string{}
 	if against == nil || sec == nil {
@@ -129,6 +137,38 @@ func sourceSecretValues(against *source.Canonical, sec Resolver) map[string]stri
 			}
 			v, err := sec.Resolve(m[2])
 			if err != nil || len(v) < minReReferenceLen {
+				continue
+			}
+			out[v] = m[0]
+		}
+		return s
+	})
+	return out
+}
+
+// backstopSecretValues resolves every ${secret:…} reference in against and
+// returns a map from the resolved cleartext to its placeholder, for the
+// fail-closed cleartext backstop (ResidualSecretCleartext). ${env:…} is excluded
+// (same rationale as sourceSecretValues).
+//
+// Unlike sourceSecretValues it does NOT apply minReReferenceLen: refusing to
+// persist a leak is not a substring rewrite of unrelated text, so a 1–3 char
+// credential moved into a literal-counterpart field must still trip the backstop
+// rather than be silently written to the committed canonical source. Only
+// truly-empty values are excluded — there is nothing to leak — which also folds
+// in the empty-secret (e.g. blank age/env value) blind spot.
+func backstopSecretValues(against *source.Canonical, sec Resolver) map[string]string {
+	out := map[string]string{}
+	if against == nil || sec == nil {
+		return out
+	}
+	walkSecretFields(against, func(_ secretFieldLoc, s string) string {
+		for _, m := range re.FindAllStringSubmatch(s, -1) {
+			if len(m) < 3 || m[1] != "secret" {
+				continue
+			}
+			v, err := sec.Resolve(m[2])
+			if err != nil || v == "" {
 				continue
 			}
 			out[v] = m[0]
