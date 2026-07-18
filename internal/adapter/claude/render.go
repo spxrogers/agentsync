@@ -66,10 +66,11 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 	}
 
 	// 6. Hooks -> settings.json /hooks/<event>
-	if hookOps, err := a.renderHooks(renderC, paths); err != nil {
+	if hookOps, hookSkips, err := a.renderHooks(renderC, paths); err != nil {
 		return nil, nil, err
 	} else {
 		ops = append(ops, hookOps...)
+		skips = append(skips, hookSkips...)
 	}
 
 	// 7. LSP servers: Claude Code only reads LSP servers from plugin

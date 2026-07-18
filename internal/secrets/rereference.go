@@ -108,16 +108,26 @@ func rereferenceHookByValue(against *source.Canonical, event, ingested string, s
 }
 
 // minReReferenceLen is the shortest resolved secret value the value-based
-// fallback will invert. A 1–3 char "secret" is not a credential worth the risk
-// of substring-rewriting unrelated text (a flag, a path segment); the
-// field-positional pass still restores it when the dest field is unchanged.
+// re-reference fallback will invert. A 1–3 char "secret" is not a credential
+// worth the risk of substring-rewriting unrelated text (a flag, a path segment);
+// the field-positional pass still restores it when the dest field is unchanged.
+//
+// This floor governs ONLY the re-reference value-based fallback
+// (sourceSecretValues). The fail-closed cleartext backstop deliberately does NOT
+// inherit it — refusing to persist a leak is not a substring rewrite, so it uses
+// backstopSecretValues (no length floor) and still trips on a 1–3 char credential.
 const minReReferenceLen = 4
 
-// sourceSecretValues resolves every ${secret:…} reference in against and returns
-// a map from the resolved cleartext to its placeholder. ${env:…} is excluded:
-// an env value is not a credential-at-rest concern and is never inverted (see
-// restoreField). Values shorter than minReReferenceLen are skipped.
-func sourceSecretValues(against *source.Canonical, sec Resolver) map[string]string {
+// resolvedSecretValues resolves every ${secret:…} reference in against to a map
+// from resolved cleartext -> its placeholder, skipping any value shorter than
+// minLen (which also excludes empty values, len 0). ${env:…} is excluded: an env
+// value is not a credential-at-rest concern and is never inverted (see
+// restoreField). It is the single body behind BOTH sourceSecretValues (the
+// re-reference fallback set) and backstopSecretValues (the fail-closed backstop
+// set) so a future change to the regex, the env/secret discrimination, or the
+// walkSecretFields closure can't silently desync the two security-sensitive
+// detection sets — the drift hazard two independent copies would create.
+func resolvedSecretValues(against *source.Canonical, sec Resolver, minLen int) map[string]string {
 	out := map[string]string{}
 	if against == nil || sec == nil {
 		return out
@@ -128,7 +138,7 @@ func sourceSecretValues(against *source.Canonical, sec Resolver) map[string]stri
 				continue
 			}
 			v, err := sec.Resolve(m[2])
-			if err != nil || len(v) < minReReferenceLen {
+			if err != nil || len(v) < minLen {
 				continue
 			}
 			out[v] = m[0]
@@ -136,6 +146,25 @@ func sourceSecretValues(against *source.Canonical, sec Resolver) map[string]stri
 		return s
 	})
 	return out
+}
+
+// sourceSecretValues is the RE-REFERENCE fallback's detection set: values shorter
+// than minReReferenceLen are skipped (the field-positional pass still restores an
+// unchanged short-secret field, and inverting a 1–3 char value risks
+// substring-rewriting unrelated text). The backstop uses backstopSecretValues.
+func sourceSecretValues(against *source.Canonical, sec Resolver) map[string]string {
+	return resolvedSecretValues(against, sec, minReReferenceLen)
+}
+
+// backstopSecretValues is the fail-closed cleartext backstop's detection set
+// (ResidualSecretCleartext). Unlike sourceSecretValues it does NOT apply
+// minReReferenceLen: refusing to persist a leak is not a substring rewrite, so a
+// 1–3 char credential moved into a literal-counterpart field must still trip the
+// backstop rather than be silently written to the committed canonical source. Only
+// truly-empty values (len 0) are excluded — nothing to leak — which also folds in
+// the empty-secret (blank age/env value) blind spot.
+func backstopSecretValues(against *source.Canonical, sec Resolver) map[string]string {
+	return resolvedSecretValues(against, sec, 1)
 }
 
 // restoreField returns the source field's templated value when it referenced a

@@ -4,10 +4,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
@@ -583,5 +587,446 @@ func TestRestoreAppendOnly(t *testing.T) {
 	}
 	if noop != "" {
 		t.Fatalf("restore to HEAD returned %q, want empty (no-op)", noop)
+	}
+}
+
+// TestRestore_PreservesUntrackedFiles is the regression guard for issue #128:
+// Restore must NOT delete the user's own untracked/gitignored files (go-git's
+// HardReset would have; the delta-apply must not). Fails against the old
+// HardReset implementation, which enumerates and removes them.
+func TestRestore_PreservesUntrackedFiles(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "a.txt", "v1", "apply 1") // HEAD~1 target
+	commitFile(t, r, dir, "a.txt", "v2", "apply 2") // HEAD
+
+	// Drop files the user owns that git is NOT versioning: a plain untracked file,
+	// plus a .gitignore and a matching ignored file (invisible to go-git status).
+	const notesBody = "my personal notes — do not delete\n"
+	const scratchBody = "ephemeral scratch log line\n"
+	writeFile(t, dir, "MY-PERSONAL-NOTES.txt", notesBody)
+	writeFile(t, dir, ".gitignore", "scratch.log\n")
+	writeFile(t, dir, "scratch.log", scratchBody)
+
+	// UntrackedPaths should surface the plain untracked files (not the ignored one).
+	untracked, err := r.UntrackedPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(untracked, "MY-PERSONAL-NOTES.txt") {
+		t.Fatalf("UntrackedPaths = %v, want it to include MY-PERSONAL-NOTES.txt", untracked)
+	}
+	if slices.Contains(untracked, "scratch.log") {
+		t.Fatalf("UntrackedPaths = %v, should NOT list the gitignored scratch.log", untracked)
+	}
+
+	h, err := r.Restore("HEAD~1", "agentsync revert: preserve untracked", DefaultIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h == "" {
+		t.Fatal("Restore returned empty hash")
+	}
+
+	// The tracked restore still happened.
+	if got := readFile(t, dir, "a.txt"); got != "v1" {
+		t.Fatalf("after restore a.txt = %q, want v1", got)
+	}
+	// Both of the user's own files survive byte-for-byte.
+	if got := readFile(t, dir, "MY-PERSONAL-NOTES.txt"); got != notesBody {
+		t.Fatalf("untracked file was mutated/deleted: got %q", got)
+	}
+	if got := readFile(t, dir, "scratch.log"); got != scratchBody {
+		t.Fatalf("gitignored file was mutated/deleted: got %q", got)
+	}
+
+	// Neither user file was swept into the revert commit's tree — they stay untracked.
+	tree := headTreePaths(t, r)
+	for _, p := range []string{"MY-PERSONAL-NOTES.txt", "scratch.log"} {
+		if _, ok := tree[p]; ok {
+			t.Fatalf("revert commit tree unexpectedly contains %s: %v", p, tree)
+		}
+	}
+	if _, ok := tree["a.txt"]; !ok {
+		t.Fatalf("revert commit tree missing the tracked a.txt: %v", tree)
+	}
+}
+
+// headTreePaths returns the set of file paths in the repo's current HEAD tree.
+func headTreePaths(t *testing.T, r *Repo) map[string]bool {
+	t.Helper()
+	log, err := r.Log(0)
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	if len(log) == 0 {
+		t.Fatalf("Log returned no commits")
+	}
+	repo, err := gogit.PlainOpen(r.Dir())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	c, err := repo.CommitObject(plumbing.NewHash(log[0].Hash))
+	if err != nil {
+		t.Fatalf("commit object: %v", err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		t.Fatalf("tree: %v", err)
+	}
+	out := map[string]bool{}
+	_ = tree.Files().ForEach(func(f *object.File) error {
+		out[f.Name] = true
+		return nil
+	})
+	return out
+}
+
+// commitFileMode writes rel with the given mode, stages it, and commits, returning
+// the hash. Used to exercise restoreFileFromTree's mode preservation (notably the
+// exec bit). An explicit Chmod pins the mode even when rel already exists (a
+// content edit) — os.WriteFile only honors perms when it creates the file.
+func commitFileMode(t *testing.T, r *Repo, dir, rel, content string, mode os.FileMode, msg string) string {
+	t.Helper()
+	abs := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
+		t.Fatalf("mkdir for %s: %v", rel, err)
+	}
+	if err := os.WriteFile(abs, []byte(content), mode); err != nil {
+		t.Fatalf("write %s: %v", rel, err)
+	}
+	if err := os.Chmod(abs, mode); err != nil {
+		t.Fatalf("chmod %s: %v", rel, err)
+	}
+	if err := r.Stage([]string{rel}); err != nil {
+		t.Fatalf("stage %s: %v", rel, err)
+	}
+	h, err := r.CommitStaged(msg, DefaultIdentity)
+	if err != nil {
+		t.Fatalf("commit %s: %v", rel, err)
+	}
+	return h
+}
+
+// assertPerm fails unless <dir>/<rel> has exactly the given permission bits.
+func assertPerm(t *testing.T, dir, rel string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatalf("stat %s: %v", rel, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("%s perm = %04o, want %04o", rel, got, want)
+	}
+}
+
+// TestRestore_PreservesFileMode backs restoreFileFromTree's documented
+// mode-preservation contract (notably the exec bit): a revert that re-creates a
+// tracked 0o755 script must restore it executable, not as 0o644. Without an
+// enforcing test, a refactor that dropped the mode handling would silently strip
+// +x from restored skill scripts on every revert while the suite stayed green.
+func TestRestore_PreservesFileMode(t *testing.T) {
+	testenv.RequireContainer(t)
+
+	t.Run("create path", func(t *testing.T) {
+		dir := t.TempDir()
+		r, err := Init(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		commitFileMode(t, r, dir, "run.sh", "#!/bin/sh\necho v1\n", 0o755, "add script") // HEAD~1
+		// Remove the script in a second checkpoint so reverting RE-CREATES it fresh
+		// (a fresh OpenFile, where the target mode must be set).
+		if err := os.Remove(filepath.Join(dir, "run.sh")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.StageTrackedDeletions(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.CommitStaged("remove script", DefaultIdentity); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Restore("HEAD~1", "agentsync revert: restore script", DefaultIdentity); err != nil {
+			t.Fatal(err)
+		}
+		if got := readFile(t, dir, "run.sh"); got != "#!/bin/sh\necho v1\n" {
+			t.Fatalf("run.sh content = %q, want v1", got)
+		}
+		assertPerm(t, dir, "run.sh", 0o755)
+	})
+
+	t.Run("modify path", func(t *testing.T) {
+		dir := t.TempDir()
+		r, err := Init(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// run.sh stays a file across both checkpoints but flips 0o755 -> 0o644, so
+		// reverting exercises the MODIFY path: restoreFileFromTree must Remove the
+		// existing 0o644 file before OpenFile so the target 0o755 mode takes hold
+		// (OpenFile only honors perm on creation).
+		commitFileMode(t, r, dir, "run.sh", "#!/bin/sh\necho v1\n", 0o755, "exec v1") // HEAD~1
+		commitFileMode(t, r, dir, "run.sh", "#!/bin/sh\necho v2\n", 0o644, "nonexec v2")
+		if _, err := r.Restore("HEAD~1", "agentsync revert: restore exec bit", DefaultIdentity); err != nil {
+			t.Fatal(err)
+		}
+		if got := readFile(t, dir, "run.sh"); got != "#!/bin/sh\necho v1\n" {
+			t.Fatalf("run.sh content = %q, want v1", got)
+		}
+		assertPerm(t, dir, "run.sh", 0o755)
+	})
+}
+
+// TestRestore_FileDirTransition exercises a path that is a FILE in the target
+// checkpoint but a DIRECTORY prefix in HEAD (foo vs foo/bar). Restore must apply
+// the delete (foo/bar) before the create (foo) so the now-empty dir can be
+// replaced by the file; the pre-fix single-pass sorted order created "foo" first
+// and aborted with "directory not empty".
+func TestRestore_FileDirTransition(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// c1 (target, HEAD~1): foo is a regular file.
+	commitFile(t, r, dir, "foo", "iamfile", "c1: foo is a file")
+	// c2 (HEAD): foo becomes a directory (remove the file, add foo/bar).
+	if err := os.Remove(filepath.Join(dir, "foo")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "foo/bar", "iamdir")
+	if err := r.Stage([]string{"foo/bar"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c2: foo is a dir", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	// Revert to c1: delete foo/bar, then create the file foo over the empty dir.
+	if _, err := r.Restore("HEAD~1", "agentsync revert: dir->file", DefaultIdentity); err != nil {
+		t.Fatalf("Restore across a file<->dir transition should not error: %v", err)
+	}
+	if got := readFile(t, dir, "foo"); got != "iamfile" {
+		t.Fatalf("foo = %q, want the restored file content", got)
+	}
+	// foo is now a regular file, so foo/bar cannot exist (stat yields ENOENT or
+	// ENOTDIR); either way a nil error would mean the dir entry survived.
+	if _, err := os.Stat(filepath.Join(dir, "foo", "bar")); err == nil {
+		t.Fatal("foo/bar should be gone after reverting to the file checkpoint")
+	}
+}
+
+// TestRestore_FileToDirTransition is the reverse of TestRestore_FileDirTransition:
+// the target checkpoint has foo as a DIRECTORY (foo/bar) while HEAD has foo as a
+// regular file. The delete of the file foo must run before restoreFileFromTree's
+// MkdirAll("foo"), which would otherwise fail over the still-present file. It
+// fails against the pre-fix single-pass sorted order (create foo/bar first).
+func TestRestore_FileToDirTransition(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// c1 (target, HEAD~1): foo is a directory containing foo/bar.
+	commitFile(t, r, dir, "foo/bar", "iamdir", "c1: foo is a dir")
+	// c2 (HEAD): foo becomes a regular file (remove the dir, add the file foo).
+	if err := os.RemoveAll(filepath.Join(dir, "foo")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "foo", "iamfile")
+	if err := r.Stage([]string{"foo"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c2: foo is a file", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	// Revert to c1: delete the file foo, then MkdirAll("foo") + create foo/bar.
+	if _, err := r.Restore("HEAD~1", "agentsync revert: file->dir", DefaultIdentity); err != nil {
+		t.Fatalf("Restore across a file->dir transition should not error: %v", err)
+	}
+	if got := readFile(t, dir, "foo/bar"); got != "iamdir" {
+		t.Fatalf("foo/bar = %q, want the restored dir content", got)
+	}
+}
+
+// TestRestore_UntrackedSiblingBlocksFileReplacement pins the fail-safe contract
+// for the one case Restore genuinely cannot complete: the target turns a directory
+// into a file, but the user left an UNTRACKED file inside that directory. Restore
+// must refuse (never delete the untracked file) with an actionable error, and the
+// untracked file must survive.
+func TestRestore_UntrackedSiblingBlocksFileReplacement(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// c1 (target): foo is a regular file.
+	commitFile(t, r, dir, "foo", "iamfile", "c1: foo is a file")
+	// c2 (HEAD): foo becomes a directory (foo/bar tracked).
+	if err := os.Remove(filepath.Join(dir, "foo")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "foo/bar", "iamdir")
+	if err := r.Stage([]string{"foo/bar"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c2: foo is a dir", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	// The user drops an untracked scratch file inside dir foo.
+	const scratch = "keep me — untracked\n"
+	writeFile(t, dir, "foo/scratch.txt", scratch)
+
+	// Reverting to c1 would need to replace dir foo with a file, but foo still
+	// holds the untracked scratch file — Restore must refuse, not delete it.
+	_, err = r.Restore("HEAD~1", "agentsync revert: blocked", DefaultIdentity)
+	if err == nil {
+		t.Fatal("Restore should refuse when an untracked file blocks a dir->file replacement")
+	}
+	if !strings.Contains(err.Error(), "agentsync does not manage") {
+		t.Fatalf("error should point at the unmanaged files; got: %v", err)
+	}
+	if got := readFile(t, dir, "foo/scratch.txt"); got != scratch {
+		t.Fatalf("untracked scratch file must survive the refused revert, got %q", got)
+	}
+	// All-or-nothing: the pre-flight refuses BEFORE any delete, so the tracked
+	// foo/bar must still be present (no half-applied worktree mutation).
+	if got := readFile(t, dir, "foo/bar"); got != "iamdir" {
+		t.Fatalf("refusal must be all-or-nothing: tracked foo/bar was mutated, got %q", got)
+	}
+}
+
+// TestRestore_GitignoredSiblingBlocksFileReplacement proves the pre-flight is
+// filesystem-based, not git-status-based: a GITIGNORED file (which git status
+// omits) inside a dir being replaced by a file must still block the revert
+// all-or-nothing, since #128 preserves gitignored files equally.
+func TestRestore_GitignoredSiblingBlocksFileReplacement(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "foo", "iamfile", "c1: foo is a file") // target
+	// c2: foo becomes a dir (foo/bar tracked) with a .gitignore for *.log under it.
+	if err := os.Remove(filepath.Join(dir, "foo")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "foo/bar", "iamdir")
+	writeFile(t, dir, ".gitignore", "foo/*.log\n")
+	if err := r.Stage([]string{"foo/bar", ".gitignore"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c2: foo is a dir", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	const scratch = "gitignored — keep me\n"
+	writeFile(t, dir, "foo/debug.log", scratch) // gitignored; git status omits it
+
+	if _, err := r.Restore("HEAD~1", "agentsync revert: blocked by gitignored", DefaultIdentity); err == nil {
+		t.Fatal("Restore should refuse when a gitignored file blocks a dir->file replacement")
+	} else if !strings.Contains(err.Error(), "agentsync does not manage") {
+		t.Fatalf("error should point at the unmanaged files; got: %v", err)
+	}
+	if got := readFile(t, dir, "foo/debug.log"); got != scratch {
+		t.Fatalf("gitignored file must survive the refused revert, got %q", got)
+	}
+	if got := readFile(t, dir, "foo/bar"); got != "iamdir" {
+		t.Fatalf("refusal must be all-or-nothing: tracked foo/bar was mutated, got %q", got)
+	}
+}
+
+// TestRestore_ParentFileCollisionBlocked covers the reverse structural conflict:
+// creating a target path whose ancestor is an existing untracked FILE (MkdirAll
+// would fail over it). The pre-flight must refuse before mutating and preserve the
+// untracked file.
+func TestRestore_ParentFileCollisionBlocked(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "a/b", "iamdir", "c1: a is a dir")
+	commitFile(t, r, dir, "keep", "k", "c2: add keep")
+	// c3 (HEAD): remove a/b so "a" no longer exists in the tree.
+	if err := os.RemoveAll(filepath.Join(dir, "a")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c3: remove a/b", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	// The user drops an untracked FILE named exactly "a".
+	const scratch = "untracked file named a\n"
+	writeFile(t, dir, "a", scratch)
+
+	// Revert to c2 (has a/b): creating a/b needs MkdirAll("a") over the untracked
+	// file "a" — the pre-flight must refuse before mutating, preserving "a".
+	if _, err := r.Restore("HEAD~1", "agentsync revert: parent collision", DefaultIdentity); err == nil {
+		t.Fatal("Restore should refuse when an untracked file blocks creating a parent dir")
+	} else if !strings.Contains(err.Error(), "does not manage") {
+		t.Fatalf("error should point at the unmanaged parent; got: %v", err)
+	}
+	if got := readFile(t, dir, "a"); got != scratch {
+		t.Fatalf("untracked file 'a' must survive the refused revert, got %q", got)
+	}
+}
+
+// TestRestore_CreatePathCollidesWithUntrackedFile pins the untouched-files promise
+// for a create-path collision: agentsync manages X, a later apply removes X, the
+// user drops their own untracked file at path X. Reverting to a checkpoint that has
+// X must refuse rather than silently overwrite + commit over the user's file.
+func TestRestore_CreatePathCollidesWithUntrackedFile(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "keep", "k", "c1")
+	commitFile(t, r, dir, "X", "managed-content", "c2: add managed X") // HEAD~1 has X
+	if err := os.Remove(filepath.Join(dir, "X")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c3: remove X", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	// The user drops their OWN untracked file at path X.
+	const user = "my own notes at X\n"
+	writeFile(t, dir, "X", user)
+
+	// Reverting to c2 (has managed X) is a create of X — but X is now the user's
+	// untracked file. Restore must refuse, not overwrite it.
+	if _, err := r.Restore("HEAD~1", "agentsync revert: create collision", DefaultIdentity); err == nil {
+		t.Fatal("Restore should refuse to overwrite an untracked file at a create path")
+	} else if !strings.Contains(err.Error(), "a file agentsync does not manage already exists") {
+		t.Fatalf("error should name the create-collision; got: %v", err)
+	}
+	if got := readFile(t, dir, "X"); got != user {
+		t.Fatalf("user's untracked file at X must survive, got %q", got)
 	}
 }

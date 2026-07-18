@@ -219,6 +219,55 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Corrected two copy-paste-wrong docs examples (issue #129).** The onboarding
+  and daily-loop pages told users to run `agentsync diff claude`, but `diff`'s
+  argument is a filesystem path, not an agent name — `diff claude` matched nothing
+  and silently printed "no diff"; the example is now bare `agentsync diff`. The
+  configuration reference showed an `[[agents]]` array-of-tables snippet with
+  `name = "…"`, but the loader unmarshals `agents` as a table keyed by name, so the
+  documented TOML registered zero agents; it now shows the correct `[agents.<name>]`
+  form. Also documented the previously-undocumented `[updates]` block and
+  `[secrets].file` key.
+
+- **An invalid `[destination_directory_git_backup]` `mode` now errors at config
+  load instead of being silently ignored (issue #137).** The strict TOML decoder
+  rejected unknown keys but accepted any value, so a typo like `mode = "On"`,
+  `"yes"`, or `"true"` silently disabled git backup for untracked dirs (while
+  still committing already-owned repos) — and only `doctor` warned. `source.Load`
+  now rejects any `mode` outside `{prompt, on, off}` (case-sensitive; empty
+  defaults to `prompt`) with a path-prefixed error, so `apply` and `doctor` agree.
+
+- **The capture cleartext backstop now refuses short and empty-edge moved secrets
+  (issue #135).** The fail-closed backstop (`secrets.ResidualSecretCleartext`)
+  reused the re-reference value set, which drops any resolved secret shorter than
+  4 characters — so a 1–3 character credential moved into a field whose source
+  counterpart is a literal was written verbatim into the committed canonical
+  source with no refusal. The backstop now builds its detection set without the
+  length floor (keeping 1–3 char values, excluding only truly-empty ones), closing
+  the leak while the re-reference fallback keeps its substring-safety floor
+  unchanged. Security hardening.
+
+- **`agentsync revert` no longer deletes your untracked or gitignored files
+  (issue #128).** `Restore` used go-git's `HardReset`, which — unlike `git reset
+  --hard` — enumerates and removes every untracked and gitignored file in the
+  worktree, so a revert silently destroyed the user's own scratch files in the
+  managed destination dir during the operation sold as safe recovery. Restore now
+  applies only the tracked HEAD↔target delta file-by-file and never enumerates
+  untracked entries, so they (and gitignored files) survive byte-for-byte and stay
+  untracked. `revert --dry-run` now notes when untracked files are present (left
+  untouched).
+
+- **Claude hooks no longer drop unmodeled fields or corrupt non-command handlers
+  on `import`→`apply` (issue #124).** The canonical hook model represents only
+  command handlers, so an `import` that captured a `settings.json` hook event
+  carrying an unmodeled field (e.g. `timeout`) or a non-`command` handler, then
+  re-`apply`d it, silently rewrote the user's native `/hooks/<event>` array —
+  dropping the extra fields and emitting a structurally invalid
+  `{"type":"…","command":""}` entry. Ingest now leaves any hook event it cannot
+  fully represent **uncaptured** with a warning (matching the Gemini adapter), so
+  the next apply never owns or overwrites that event, and Render reports a dropped
+  `Skip` for a non-`command` handler instead of emitting an empty-command entry.
+
 - **Claude LSP capability corrected.** Claude Code reads LSP servers from plugin
   manifests, not `settings.json#/lspServers`; agentsync now reports canonical
   Claude LSP servers as skipped instead of writing or importing a key Claude

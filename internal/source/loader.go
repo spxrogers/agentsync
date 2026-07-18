@@ -89,6 +89,14 @@ func loadConfig(fs afero.Fs, home string, cfg *Config) error {
 		}
 		return fmt.Errorf("parse %s: %w", p, err)
 	}
+	// Validate enumerated values the strict decoder can't catch: it rejects
+	// unknown KEYS but accepts any VALUE, so a typo'd git-backup mode
+	// (mode = "On"/"yes"/"true") would otherwise slip through and silently
+	// change behavior. Reject it here so every source.Load caller (apply,
+	// doctor) agrees at load time.
+	if err := cfg.DestinationGitBackup.validateMode(); err != nil {
+		return fmt.Errorf("parse %s: %w", p, err)
+	}
 	return nil
 }
 

@@ -434,8 +434,12 @@ func TestApply_GitBackupSkipsDirNestedInForeignRepo(t *testing.T) {
 	assertSkippedNotInited(t, out, claude)
 }
 
-// TestDoctor_WarnsUnknownGitBackupMode checks doctor flags a typo'd mode value.
-func TestDoctor_WarnsUnknownGitBackupMode(t *testing.T) {
+// TestDoctor_RejectsUnknownGitBackupModeAtLoad checks that a typo'd git-backup
+// mode is now caught at source.Load (via validateMode), so doctor surfaces it as
+// an invalid schema and returns an error rather than reaching the git-backup
+// section's defensive warn arm. (Previously the value slipped past strict
+// key-decoding and only the git-backup section warned about it — see issue #137.)
+func TestDoctor_RejectsUnknownGitBackupModeAtLoad(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	mustRun(t, env, "init")
@@ -443,11 +447,13 @@ func TestDoctor_WarnsUnknownGitBackupMode(t *testing.T) {
 	_, _ = f.WriteString("\n[destination_directory_git_backup]\nmode = \"bogus\"\n")
 	_ = f.Close()
 	out, err := runCLI(t, env, "doctor")
-	if err != nil {
-		t.Fatalf("doctor: %v\n%s", err, out)
+	if err == nil {
+		t.Fatalf("doctor should fail on the invalid mode; got no error\n%s", out)
 	}
-	if !strings.Contains(out, "unknown value") || !strings.Contains(out, "bogus") {
-		t.Fatalf("doctor should warn on the unknown mode; got:\n%s", out)
+	// The schema check reports the load error, which names the offending value
+	// and the valid set.
+	if !strings.Contains(out, "invalid") || !strings.Contains(out, "bogus") {
+		t.Fatalf("doctor should report the invalid mode at schema load; got:\n%s", out)
 	}
 }
 

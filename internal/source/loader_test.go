@@ -1,10 +1,14 @@
 package source_test
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/afero"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
 // TestLoad_AgentsyncTOMLRejectsTypos guards against the silent-drop bug
@@ -22,9 +26,149 @@ defauls_mode = "track"
 	}
 	// We don't pin on the exact pelletier message; just confirm the bad
 	// key surfaces.
-	if got := err.Error(); !contains(got, "defauls_mode") {
+	if got := err.Error(); !strings.Contains(got, "defauls_mode") {
 		t.Fatalf("error %q does not mention the typo'd key", got)
 	}
+}
+
+// TestLoadRejectsInvalidGitBackupMode confirms that an out-of-set
+// [destination_directory_git_backup] mode value is rejected at source.Load
+// (previously the strict decoder caught unknown KEYS but accepted any VALUE, so
+// a typo like mode = "On"/"yes" silently disabled backup). The error must
+// surface from the top-level Load call and name the file path, the offending
+// value, and the valid set. Valid values (including the empty default) must
+// load cleanly, with EffectiveMode() defaulting "" → "prompt".
+func TestLoadRejectsInvalidGitBackupMode(t *testing.T) {
+	const home = "/home/.agentsync"
+	const path = home + "/agentsync.toml"
+
+	invalid := []struct {
+		name string
+		mode string
+	}{
+		{"yes", "yes"},
+		{"true", "true"},
+		{"capital On", "On"},
+		{"numeric zero", "0"},
+	}
+	for _, tc := range invalid {
+		t.Run("invalid "+tc.name, func(t *testing.T) {
+			fs := afero.NewMemMapFs()
+			_ = afero.WriteFile(fs, path, []byte(
+				"[destination_directory_git_backup]\nmode = \""+tc.mode+"\"\n",
+			), 0o644)
+			_, err := source.Load(fs, home)
+			if err == nil {
+				t.Fatalf("Load accepted invalid mode %q; want error", tc.mode)
+			}
+			got := err.Error()
+			// Path prefix, offending value, and valid set must all appear.
+			if !strings.Contains(got, path) {
+				t.Errorf("error %q does not name the file path %q", got, path)
+			}
+			if !strings.Contains(got, tc.mode) {
+				t.Errorf("error %q does not mention the offending value %q", got, tc.mode)
+			}
+			for _, want := range []string{source.GitBackupModePrompt, source.GitBackupModeOn, source.GitBackupModeOff} {
+				if !strings.Contains(got, want) {
+					t.Errorf("error %q does not mention valid value %q", got, want)
+				}
+			}
+		})
+	}
+
+	valid := []struct {
+		name    string
+		body    string
+		wantEff string
+	}{
+		{"omitted defaults to prompt", "", source.GitBackupModePrompt},
+		{"prompt", "[destination_directory_git_backup]\nmode = \"prompt\"\n", source.GitBackupModePrompt},
+		{"on", "[destination_directory_git_backup]\nmode = \"on\"\n", source.GitBackupModeOn},
+		{"off", "[destination_directory_git_backup]\nmode = \"off\"\n", source.GitBackupModeOff},
+	}
+	for _, tc := range valid {
+		t.Run("valid "+tc.name, func(t *testing.T) {
+			fs := afero.NewMemMapFs()
+			_ = afero.WriteFile(fs, path, []byte(tc.body), 0o644)
+			c, err := source.Load(fs, home)
+			if err != nil {
+				t.Fatalf("Load(%q) = error %v; want success", tc.body, err)
+			}
+			if got := c.Config.DestinationGitBackup.EffectiveMode(); got != tc.wantEff {
+				t.Errorf("EffectiveMode() = %q, want %q", got, tc.wantEff)
+			}
+		})
+	}
+}
+
+// TestConfigurationDocExampleParses is artifact-anchored on the exact
+// agentsync.toml snippet published in
+// website/src/content/docs/reference/configuration.mdx. It guards against the
+// doc regressing back to the invalid [[agents]] array-of-tables form (which
+// registers ZERO agents): the [agents.<name>] sub-table form must load a
+// non-empty, correctly-keyed Agents map, and the [updates]/[secrets] sections
+// the same snippet documents must parse under strict decoding.
+func TestConfigurationDocExampleParses(t *testing.T) {
+	testenv.RequireContainer(t)
+	// Read the LIVE published snippet, not a copy: extract the fenced ```toml block
+	// from configuration.mdx and load THAT, so a doc edit back to [[agents]] (or a
+	// dropped/renamed section) fails this test instead of shipping undetected.
+	mdxPath := filepath.Join("..", "..", "website", "src", "content", "docs", "reference", "configuration.mdx")
+	raw, err := os.ReadFile(mdxPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", mdxPath, err)
+	}
+	doc := extractFencedBlock(t, string(raw), "```toml", `title="~/.agentsync/agentsync.toml"`)
+
+	fs := afero.NewMemMapFs()
+	_ = afero.WriteFile(fs, "/home/.agentsync/agentsync.toml", []byte(doc), 0o644)
+	c, err := source.Load(fs, "/home/.agentsync")
+	if err != nil {
+		t.Fatalf("source.Load of the documented agentsync.toml snippet: %v\n---\n%s", err, doc)
+	}
+	if len(c.Config.Agents) != 2 {
+		t.Fatalf("Agents map = %d entries, want 2 (the [[agents]] form would give 0): %#v",
+			len(c.Config.Agents), c.Config.Agents)
+	}
+	for _, name := range []string{"claude", "opencode"} {
+		ag, ok := c.Config.Agents[name]
+		if !ok {
+			t.Fatalf("agent %q missing from parsed Agents map", name)
+		}
+		if !ag.Enabled {
+			t.Errorf("agent %q parsed as disabled; want enabled", name)
+		}
+	}
+	if got := c.Config.Updates.DefaultMode; got != "track" {
+		t.Errorf("[updates] default_mode = %q, want %q", got, "track")
+	}
+	if got := c.Config.Secrets.File; got == "" {
+		t.Error("[secrets] file should be documented and parse to a non-empty value")
+	}
+}
+
+// extractFencedBlock returns the body of the first ```<lang> fence whose opening
+// line contains marker, from markdown src. It fails the test if none is found, so
+// a doc restructure that removes the block is caught rather than silently skipped.
+func extractFencedBlock(t *testing.T, src, fence, marker string) string {
+	t.Helper()
+	lines := strings.Split(src, "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), fence) || !strings.Contains(line, marker) {
+			continue
+		}
+		var body []string
+		for _, l := range lines[i+1:] {
+			if strings.TrimSpace(l) == "```" {
+				return strings.Join(body, "\n")
+			}
+			body = append(body, l)
+		}
+		t.Fatalf("unterminated %s fence in doc", fence)
+	}
+	t.Fatalf("no %s fence containing %q found in the doc", fence, marker)
+	return ""
 }
 
 // TestParseFrontmatter_ClosingFenceAtEOF guards the parser against two common
@@ -90,10 +234,10 @@ body
 	if !ok {
 		t.Fatalf("description not a string: %T %v", fm["description"], fm["description"])
 	}
-	if !contains(desc, "Triggers on: optimize GLB") {
+	if !strings.Contains(desc, "Triggers on: optimize GLB") {
 		t.Fatalf("lenient description truncated at colon-space: %q", desc)
 	}
-	if !contains(desc, "model optimization.") {
+	if !strings.Contains(desc, "model optimization.") {
 		t.Fatalf("lenient description missing tail: %q", desc)
 	}
 	if body != "body\n" {
@@ -123,7 +267,7 @@ body
 		t.Fatalf("skill silently dropped: %+v", c.Skills)
 	}
 	desc, _ := c.Skills[0].Frontmatter["description"].(string)
-	if !contains(desc, "Triggers on: optimize GLB") {
+	if !strings.Contains(desc, "Triggers on: optimize GLB") {
 		t.Fatalf("description truncated: %q", desc)
 	}
 }
@@ -168,17 +312,6 @@ func TestLoad_NestedMemoryFragments(t *testing.T) {
 	if got, ok := c.Memory.Fragments["top.md"]; !ok || got != "top body" {
 		t.Fatalf("flat fragment regressed: %#v", c.Memory.Fragments)
 	}
-}
-
-// contains is a small substring helper so the new test reads cleanly
-// without bringing in strings.Contains for one call.
-func contains(haystack, needle string) bool {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
 }
 
 func TestLoad_EmptyHome(t *testing.T) {

@@ -14,7 +14,12 @@ import (
 
 // Ingest reads native Claude config files and returns a partial source.Canonical.
 // It is the inverse of Render: Ingest(Apply(Render(c))) round-trips to c
-// for the components agentsync manages.
+// for the components agentsync manages. Hook events settings.json holds that the
+// canonical model cannot fully represent — an unmodeled definition/handler field
+// (e.g. `timeout`) or a non-command handler type — are left uncaptured with a
+// warning rather than captured as a lossy subset, matching the Gemini adapter:
+// the next apply owns the whole per-event array, so capturing a subset would let
+// it rewrite the user's native entry without those fields.
 func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical, error) {
 	if err := adapter.RequireProjectRoot(scope, project); err != nil {
 		return source.Canonical{}, err
@@ -133,34 +138,9 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	if data, err := os.ReadFile(p.Settings); err == nil {
 		var top map[string]any
 		if json.Unmarshal(data, &top) == nil {
-			if hooks, ok := top["hooks"].(map[string]any); ok {
-				for event, rawEntries := range hooks {
-					entries, ok := rawEntries.([]any)
-					if !ok {
-						continue
-					}
-					for _, rawEntry := range entries {
-						entry, ok := rawEntry.(map[string]any)
-						if !ok {
-							continue
-						}
-						matcher := asStr(entry["matcher"])
-						hooksArr, _ := entry["hooks"].([]any)
-						for _, rawH := range hooksArr {
-							h, ok := rawH.(map[string]any)
-							if !ok {
-								continue
-							}
-							c.Hooks = append(c.Hooks, source.Hook{
-								Event:   event,
-								Matcher: matcher,
-								Type:    asStr(h["type"]),
-								Command: asStr(h["command"]),
-							})
-						}
-					}
-				}
-			}
+			// ingestHooks takes any and does its own map assertion (mirroring the
+			// gemini adapter's call site), so pass the raw value straight through.
+			c.Hooks = append(c.Hooks, ingestHooks(top["hooks"], warn)...)
 		}
 	}
 

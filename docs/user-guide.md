@@ -218,7 +218,7 @@ A typical session after an agent edited a file out from under you:
 
 ```bash
 agentsync status              # spot the drift
-agentsync diff claude         # inspect it (resolved secrets are masked)
+agentsync diff                # inspect it (resolved secrets are masked)
 agentsync reconcile           # interactively resolve
 ```
 
@@ -258,8 +258,12 @@ agentsync revert --all --dry-run     # preview reverting every managed dir
 history, so the bad apply stays in the log and the revert is itself revertible. If
 you hand-edited a tracked file after the last apply, revert snapshots that edit
 into history first, so **nothing is lost** (recover it with `revert --to <snapshot>`).
-It moves only the *destination*, so afterwards it reminds you to **reconcile** (or
-fix the canonical source) before the next `apply` re-renders over it.
+Any **untracked files** you dropped into the dir (and gitignored files) are **left
+untouched** — revert only rewinds the files agentsync itself versions, so your own
+scratch files are never deleted. `revert --dry-run` notes when such files are
+present. It moves only the *destination*, so afterwards it reminds you to
+**reconcile** (or fix the canonical source) before the next `apply` re-renders over
+it.
 
 The first apply to an untracked dir **asks** before initializing the repo
 (opt-out). Answer once and it's remembered in `agentsync.toml`:
@@ -270,6 +274,12 @@ mode = "on"          # "prompt" (default) | "on" | "off"
 # author_name  = "agentsync"      # optional commit-identity overrides
 # author_email = "agentsync@localhost"
 ```
+
+`mode` accepts exactly `prompt`, `on`, or `off` (case-sensitive; an omitted
+`mode` defaults to `prompt`). Any other value — a typo like `"On"`, `"yes"`, or
+`"true"` — is now **rejected at load** with a path-prefixed error, so every
+command that reads the config (`apply`, `doctor`, …) agrees. (Previously an
+invalid value was silently ignored and only `doctor` warned about it.)
 
 `apply --no-git-backup` skips it for one run (CI/scripting) without touching
 config, and `agentsync doctor` shows the current mode and per-dir status.

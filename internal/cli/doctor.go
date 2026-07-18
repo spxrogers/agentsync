@@ -235,6 +235,9 @@ func checkDestinationGitBackup(p *ui.Printer, cfg source.DestinationGitBackupCon
 	case source.GitBackupModePrompt:
 		okCheck(p, "mode       ", "prompt (asks on first apply to an untracked dir)")
 	default:
+		// Defensive: source.Load now rejects an invalid mode at load time
+		// (validateMode), so doctor should never reach here on a loaded config.
+		// Kept as a belt-and-suspenders guard.
 		warnCheck(p, "mode       ", fmt.Sprintf("unknown value %q — use \"prompt\", \"on\", or \"off\"", cfg.Mode))
 	}
 

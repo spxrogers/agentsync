@@ -168,16 +168,21 @@ local). A dir already under your own source control is left untouched. Pass
 `--no-git-backup` to skip it for one run (CI/scripting) without touching config.
 The `[destination_directory_git_backup]` table (`mode = "prompt" | "on" | "off"`,
 optional `author_name`/`author_email`) controls the default; `agentsync doctor`
-shows the current mode and per-dir status. See `agentsync revert` below.
+shows the current mode and per-dir status. `mode` is validated at load — it must
+be exactly `prompt`, `on`, or `off` (case-sensitive; omit it for the `prompt`
+default). Any other value now **errors at load** with a path-prefixed message,
+rather than being silently ignored. See `agentsync revert` below.
 
 ### `revert <agent>`
 Rolls an agent's destination dir back to a prior apply checkpoint from its
 local-only git history — recovering from a bad apply. It is **append-only**: it
 records a new commit, so the history is never rewritten and the revert is itself
-revertible. By default it undoes the most recent apply (restores the previous
-checkpoint); `--to <ref>` picks a specific one (a commit hash or `HEAD~2`), `--all`
-reverts every managed dir, and `--dry-run` previews the file changes without
-writing.
+revertible. Untracked files you dropped into the dir (and gitignored files) are
+**left untouched** — revert only rewinds the files agentsync versions, so your own
+scratch files are never deleted. By default it undoes the most recent apply
+(restores the previous checkpoint); `--to <ref>` picks a specific one (a commit
+hash or `HEAD~2`), `--all` reverts every managed dir, and `--dry-run` previews the
+file changes without writing (noting when untracked files are present).
 
 revert moves only the **destination**. The next `apply` re-renders from the
 canonical source and would overwrite the reverted state, so revert prints a notice

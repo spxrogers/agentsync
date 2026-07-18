@@ -111,6 +111,12 @@ Claude's native paths (`~/.claude/skills/<name>/`, `mcpServers` in
 `.claude.json`, …) and deliberately leaves the enablement keys themselves
 untouched. The asymmetry is the cross-adapter rule, not a Claude quirk — see
 [architecture.md § PluginIngester (read-only)](architecture.md#pluginingester-read-only).
+Hook fidelity: the canonical `Hook` models only command handlers, so (like
+Gemini) Ingest leaves a `settings.json` hook event uncaptured with a warning if
+it carries an unmodeled definition/handler field (e.g. `timeout`) or a
+non-command handler, and Render reports a dropped `Skip` for any non-command
+hook rather than emitting an empty-command entry — an import→apply round-trip
+never rewrites the user's native `/hooks/<event>` array lossily.
 - **Key:** `New(Options) *Adapter`; the `Adapter` + `PluginIngester` methods;
   `ParseFrontmatter`/`EncodeFrontmatter`; `MergeKeys`.
 - **Depends on:** adapter, secrets, source, paths, iox, jsonkeys.

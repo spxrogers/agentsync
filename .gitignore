@@ -8,3 +8,8 @@
 .idea/
 *.swp
 .DS_Store
+
+# Transient per-agent git worktrees created by background workflow orchestration.
+# These are isolated checkouts managed (and cleaned up) by the harness — never
+# commit them.
+/.claude/worktrees/

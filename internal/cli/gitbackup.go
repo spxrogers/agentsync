@@ -255,7 +255,11 @@ func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mo
 			return nil, nil
 		}
 	}
-	return nil, nil // mode "off" reached here only if flipped mid-run
+	// Defensive fallback: load-time validation (source.loadConfig →
+	// validateMode) now rejects any mode outside {"", prompt, on, off}, so an
+	// invalid value never reaches here; "off" is the only remaining case,
+	// reachable only if flipped mid-run.
+	return nil, nil
 }
 
 // initGuarded inits an agentsync repo at dir UNLESS dir already contains a nested

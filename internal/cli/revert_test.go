@@ -3,6 +3,7 @@ package cli_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -222,6 +223,75 @@ func TestRevert_FoldedSharedDirNoted(t *testing.T) {
 	}
 	if !strings.Contains(out, "versioned as part of a parent") {
 		t.Errorf("expected the folded-dir note for ~/.claude/skills; got:\n%s", out)
+	}
+}
+
+// TestRevert_PreservesUntrackedUserFiles is the CLI-level regression for issue
+// #128: a file the user dropped into a managed dest dir (untracked by agentsync's
+// backup) must survive a revert byte-for-byte and never be swept into any
+// checkpoint. The old go-git HardReset would have deleted it.
+func TestRevert_PreservesUntrackedUserFiles(t *testing.T) {
+	tmp, env, destSkill := setupGitBackedClaude(t)
+	claude := filepath.Join(tmp, ".claude")
+
+	// The user drops a scratch file into ~/.claude that agentsync never wrote.
+	const userBody = "personal scratch — keep me\n"
+	userFile := filepath.Join(claude, "MY-NOTES.txt")
+	if err := os.WriteFile(userFile, []byte(userBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "revert", "claude")
+	if err != nil {
+		t.Fatalf("revert: %v\n%s", err, out)
+	}
+	// The revert otherwise succeeded: dest skill back to v1.
+	if b, _ := os.ReadFile(destSkill); !strings.Contains(string(b), "v1") || strings.Contains(string(b), "v2") {
+		t.Fatalf("after revert dest skill should hold v1:\n%s", b)
+	}
+	// The user's untracked file survives byte-for-byte.
+	if b, _ := os.ReadFile(userFile); string(b) != userBody {
+		t.Fatalf("untracked user file was destroyed/mutated by revert: %q", b)
+	}
+	// It is in NO checkpoint tree — revert never versioned it, so it is still
+	// reported untracked after the revert commit.
+	repo, _ := agit.Open(claude)
+	if untracked, err := repo.UntrackedPaths(); err != nil || !slices.Contains(untracked, "MY-NOTES.txt") {
+		t.Fatalf("MY-NOTES.txt should still be untracked; UntrackedPaths=%v err=%v", untracked, err)
+	}
+}
+
+// TestRevert_DryRunWarnsUntracked verifies --dry-run notes the presence of
+// untracked files (left untouched) and writes nothing.
+func TestRevert_DryRunWarnsUntracked(t *testing.T) {
+	tmp, env, destSkill := setupGitBackedClaude(t)
+	claude := filepath.Join(tmp, ".claude")
+	repo, _ := agit.Open(claude)
+	before, _ := repo.Log(0)
+
+	const userBody = "keep me\n"
+	userFile := filepath.Join(claude, "SCRATCH.txt")
+	if err := os.WriteFile(userFile, []byte(userBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "revert", "claude", "--dry-run")
+	if err != nil {
+		t.Fatalf("revert --dry-run: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "untracked file(s) in this dir are left untouched") {
+		t.Errorf("expected the untracked-present note, got:\n%s", out)
+	}
+	// Nothing changed on disk or in history.
+	if b, _ := os.ReadFile(destSkill); !strings.Contains(string(b), "v2") {
+		t.Fatalf("dry-run mutated the dest skill:\n%s", b)
+	}
+	if b, _ := os.ReadFile(userFile); string(b) != userBody {
+		t.Fatalf("dry-run mutated the untracked file: %q", b)
+	}
+	after, _ := repo.Log(0)
+	if len(after) != len(before) {
+		t.Fatalf("dry-run recorded a commit: %d -> %d", len(before), len(after))
 	}
 }
 
