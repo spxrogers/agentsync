@@ -102,6 +102,10 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (string, error) {
 	//   (1) a path that is a file in the target but CURRENTLY a directory whose
 	//       contents aren't all being deleted (it holds untracked/gitignored files)
 	//       — replacing it with a file would delete them;
+	//  (1b) a CREATE path that is currently a regular file — since a create means
+	//       HEAD doesn't track this path, that file is the user's own
+	//       (untracked/gitignored); overwriting + committing it would violate the
+	//       untouched-files promise;
 	//   (2) a create whose ancestor is an existing unmanaged FILE — MkdirAll would
 	//       fail over it.
 	// A non-transactional restore can't guarantee zero partial state for every
@@ -119,7 +123,9 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (string, error) {
 			continue
 		}
 		abs := filepath.Join(r.dir, filepath.FromSlash(ch.Path))
-		if info, statErr := os.Stat(abs); statErr == nil && info.IsDir() {
+		info, statErr := os.Stat(abs)
+		switch {
+		case statErr == nil && info.IsDir():
 			blocker, werr := firstUnmanagedFileUnder(r.dir, abs, deleting)
 			if werr != nil {
 				return "", fmt.Errorf("scanning %s during revert in %s: %w", ch.Path, r.dir, werr)
@@ -127,6 +133,11 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (string, error) {
 			if blocker != "" {
 				return "", fmt.Errorf("cannot restore %q to a file: the directory holds files agentsync does not manage (e.g. %q); move or remove them, then re-run revert", ch.Path, blocker)
 			}
+		case statErr == nil && ch.Kind == "create":
+			// (1b) a create over an existing regular file: it is the user's own
+			// untracked/gitignored file (HEAD doesn't track this path) — refuse
+			// rather than overwrite and commit it.
+			return "", fmt.Errorf("cannot restore %q: a file agentsync does not manage already exists there; move or remove it, then re-run revert", ch.Path)
 		}
 		for parent := path.Dir(ch.Path); parent != "." && parent != "/"; parent = path.Dir(parent) {
 			pinfo, statErr := os.Stat(filepath.Join(r.dir, filepath.FromSlash(parent)))
@@ -240,14 +251,15 @@ func restoreFileFromTree(wt *gogit.Worktree, tree *object.Tree, p string) error 
 			return fmt.Errorf("creating parent dir of %s: %w", p, err)
 		}
 	}
-	// Drop any existing file so the target mode takes effect on (re)create. When p
-	// was a DIRECTORY in HEAD and is a file in the target, the delete pass already
-	// removed p's tracked contents; if the user left untracked files under p the
-	// dir is still non-empty, and we must NOT delete them — so surface a clear,
-	// actionable error rather than a raw "directory not empty".
+	// Drop any existing file so the target mode takes effect on (re)create. Restore's
+	// up-front pre-flight already refuses a dir->file replacement that would destroy
+	// unmanaged files, so reaching here with p still a non-empty directory means the
+	// filesystem changed AFTER that scan (a concurrent write) — a TOCTOU backstop.
+	// Distinct wording ("still holds ... after the pre-flight") so a test can tell it
+	// apart from the pre-flight's refusal; we still never delete the unmanaged files.
 	if err := fs.Remove(p); err != nil && !os.IsNotExist(err) {
 		if info, statErr := fs.Stat(p); statErr == nil && info.IsDir() {
-			return fmt.Errorf("cannot restore %q to a file: the directory still holds files agentsync does not manage; move or remove your own files under %q, then re-run revert", p, p)
+			return fmt.Errorf("cannot restore %q to a file: its directory still holds unmanaged files after the pre-flight (a concurrent change?); move or remove your own files under %q, then re-run revert", p, p)
 		}
 		return fmt.Errorf("replacing %s: %w", p, err)
 	}

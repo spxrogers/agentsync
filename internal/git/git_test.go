@@ -992,3 +992,41 @@ func TestRestore_ParentFileCollisionBlocked(t *testing.T) {
 		t.Fatalf("untracked file 'a' must survive the refused revert, got %q", got)
 	}
 }
+
+// TestRestore_CreatePathCollidesWithUntrackedFile pins the untouched-files promise
+// for a create-path collision: agentsync manages X, a later apply removes X, the
+// user drops their own untracked file at path X. Reverting to a checkpoint that has
+// X must refuse rather than silently overwrite + commit over the user's file.
+func TestRestore_CreatePathCollidesWithUntrackedFile(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "keep", "k", "c1")
+	commitFile(t, r, dir, "X", "managed-content", "c2: add managed X") // HEAD~1 has X
+	if err := os.Remove(filepath.Join(dir, "X")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c3: remove X", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	// The user drops their OWN untracked file at path X.
+	const user = "my own notes at X\n"
+	writeFile(t, dir, "X", user)
+
+	// Reverting to c2 (has managed X) is a create of X — but X is now the user's
+	// untracked file. Restore must refuse, not overwrite it.
+	if _, err := r.Restore("HEAD~1", "agentsync revert: create collision", DefaultIdentity); err == nil {
+		t.Fatal("Restore should refuse to overwrite an untracked file at a create path")
+	} else if !strings.Contains(err.Error(), "a file agentsync does not manage already exists") {
+		t.Fatalf("error should name the create-collision; got: %v", err)
+	}
+	if got := readFile(t, dir, "X"); got != user {
+		t.Fatalf("user's untracked file at X must survive, got %q", got)
+	}
+}
