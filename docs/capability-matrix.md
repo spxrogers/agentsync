@@ -251,12 +251,16 @@ literally, never resolved.)
 
 **Gemini CLI**
 
-- **Subagent** — markdown under `.gemini/agents/`. Gemini recognizes
-  `name`/`description`/`model` (plus Gemini-only `kind`/`temperature`/`max_turns`/…
-  agentsync doesn't model); Claude's `tools` list uses a *different tool vocabulary*
-  (`read_file`/`grep_search`, not `Read`/`Grep`), so copying it verbatim would name
-  tools Gemini doesn't have — it and `color` are dropped with a report. `name` is
-  defaulted to the filename when absent (Gemini requires it).
+- **Subagent** — markdown under `.gemini/agents/`. Captured frontmatter is passed
+  through verbatim, so Gemini's own native fields — `kind`/`temperature`/`max_turns`/
+  `timeout_mins`/`mcpServers` (and any other native key) — survive `apply` instead of
+  being stripped: a key that `import`/`reconcile` captured into canonical is re-emitted
+  on the next render, not clipped by the whole-file replace. Only Claude's `tools` list
+  (its tool vocabulary *differs* from Gemini's — `read_file`/`grep_search`, not
+  `Read`/`Grep`, so copying it verbatim would name tools Gemini doesn't have) and
+  `color` (no Gemini agent field) are dropped with a report, and the reported `Skip`
+  lists only those keys. `name` is defaulted to the filename when absent (Gemini
+  requires it).
 - **Slash command** — Gemini commands are TOML (`.gemini/commands/*.toml`) with
   `description` + `prompt`. The body becomes `prompt` and `description` carries
   over; `argument-hint`/`allowed-tools` have no Gemini field and drop. Gemini's

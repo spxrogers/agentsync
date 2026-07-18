@@ -278,6 +278,15 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   subagents with distinct file stems that resolve to the same effective Codex
   `name` — two TOMLs claiming one agent identity — are now reported as a Render
   error instead of being written silently.
+- **Gemini subagent native frontmatter keys are preserved on apply (issue #134).**
+  `agentsync apply` re-rendered a `.gemini/agents/<name>.md` with only
+  `name`/`description`/`model` and a whole-file replace, silently stripping the
+  Gemini-native keys (`kind`/`temperature`/`max_turns`/`timeout_mins`/`mcpServers`)
+  that `import`/`reconcile` had already captured into canonical. Render now passes
+  captured frontmatter through verbatim, dropping only Claude's `tools` (its tool
+  vocabulary differs from Gemini's) and `color` (no Gemini agent field) with a
+  reported `Skip` that lists exactly those keys — so a hand-authored Gemini agent
+  file survives a round-trip instead of being degraded on the next apply.
 
 - **Claude LSP capability corrected.** Claude Code reads LSP servers from plugin
   manifests, not `settings.json#/lspServers`; agentsync now reports canonical
