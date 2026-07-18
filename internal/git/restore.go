@@ -96,20 +96,34 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (string, error) {
 	// Apply the delta path-by-path and stage each change. HEAD never moves, so the
 	// commit below is parented on the original HEAD automatically — the intervening
 	// commits (and the bad apply) stay reachable, keeping revert append-only.
+	//
+	// Deletes are applied in a FIRST pass, before any create/modify, so a path that
+	// swaps between a file and a directory across the two checkpoints cannot abort
+	// mid-restore. E.g. going back to a target where "a" is a file while HEAD has
+	// "a/b": the diff is {delete "a/b", create "a"}; removing "a/b" first empties
+	// dir "a" so restoreFileFromTree can replace it with the file "a". The reverse
+	// (delete file "a", then create "a/b") likewise needs the delete first so
+	// MkdirAll("a") succeeds. Delete and create paths are otherwise disjoint (a tree
+	// diff never both deletes and creates the same path), so the two passes are
+	// order-independent within themselves.
 	for _, ch := range changes {
-		switch ch.Kind {
-		case "delete":
-			// wt.Remove both deletes the worktree file and stages the deletion.
-			if _, err := wt.Remove(ch.Path); err != nil {
-				return "", fmt.Errorf("removing %s during revert in %s: %w", ch.Path, r.dir, err)
-			}
-		default: // "create" | "modify"
-			if err := restoreFileFromTree(wt, targetTree, ch.Path); err != nil {
-				return "", fmt.Errorf("restoring %s during revert in %s: %w", ch.Path, r.dir, err)
-			}
-			if _, err := wt.Add(ch.Path); err != nil {
-				return "", fmt.Errorf("staging %s during revert in %s: %w", ch.Path, r.dir, err)
-			}
+		if ch.Kind != "delete" {
+			continue
+		}
+		// wt.Remove both deletes the worktree file and stages the deletion.
+		if _, err := wt.Remove(ch.Path); err != nil {
+			return "", fmt.Errorf("removing %s during revert in %s: %w", ch.Path, r.dir, err)
+		}
+	}
+	for _, ch := range changes {
+		if ch.Kind == "delete" {
+			continue // "create" | "modify"
+		}
+		if err := restoreFileFromTree(wt, targetTree, ch.Path); err != nil {
+			return "", fmt.Errorf("restoring %s during revert in %s: %w", ch.Path, r.dir, err)
+		}
+		if _, err := wt.Add(ch.Path); err != nil {
+			return "", fmt.Errorf("staging %s during revert in %s: %w", ch.Path, r.dir, err)
 		}
 	}
 	sig := signature(id)

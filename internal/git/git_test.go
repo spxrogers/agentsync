@@ -693,3 +693,111 @@ func headTreePaths(t *testing.T, r *Repo) map[string]bool {
 	})
 	return out
 }
+
+// commitExecFile writes rel at 0o755, stages it, and commits, returning the hash.
+// Used to exercise restoreFileFromTree's exec-bit preservation.
+func commitExecFile(t *testing.T, r *Repo, dir, rel, content, msg string) string {
+	t.Helper()
+	abs := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
+		t.Fatalf("mkdir for %s: %v", rel, err)
+	}
+	if err := os.WriteFile(abs, []byte(content), 0o755); err != nil {
+		t.Fatalf("write %s: %v", rel, err)
+	}
+	if err := r.Stage([]string{rel}); err != nil {
+		t.Fatalf("stage %s: %v", rel, err)
+	}
+	h, err := r.CommitStaged(msg, DefaultIdentity)
+	if err != nil {
+		t.Fatalf("commit %s: %v", rel, err)
+	}
+	return h
+}
+
+// assertPerm fails unless <dir>/<rel> has exactly the given permission bits.
+func assertPerm(t *testing.T, dir, rel string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatalf("stat %s: %v", rel, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("%s perm = %04o, want %04o", rel, got, want)
+	}
+}
+
+// TestRestore_PreservesFileMode backs restoreFileFromTree's documented
+// mode-preservation contract (notably the exec bit): a revert that re-creates a
+// tracked 0o755 script must restore it executable, not as 0o644. Without an
+// enforcing test, a refactor that dropped the mode handling would silently strip
+// +x from restored skill scripts on every revert while the suite stayed green.
+func TestRestore_PreservesFileMode(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitExecFile(t, r, dir, "run.sh", "#!/bin/sh\necho v1\n", "add script") // HEAD~1
+	// Remove the script in a second checkpoint so reverting exercises the CREATE
+	// path of restoreFileFromTree (a fresh OpenFile, where the mode must be set).
+	if err := os.Remove(filepath.Join(dir, "run.sh")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("remove script", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Restore("HEAD~1", "agentsync revert: restore script", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, dir, "run.sh"); got != "#!/bin/sh\necho v1\n" {
+		t.Fatalf("run.sh content = %q, want v1", got)
+	}
+	assertPerm(t, dir, "run.sh", 0o755)
+}
+
+// TestRestore_FileDirTransition exercises a path that is a FILE in the target
+// checkpoint but a DIRECTORY prefix in HEAD (foo vs foo/bar). Restore must apply
+// the delete (foo/bar) before the create (foo) so the now-empty dir can be
+// replaced by the file; the pre-fix single-pass sorted order created "foo" first
+// and aborted with "directory not empty".
+func TestRestore_FileDirTransition(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// c1 (target, HEAD~1): foo is a regular file.
+	commitFile(t, r, dir, "foo", "iamfile", "c1: foo is a file")
+	// c2 (HEAD): foo becomes a directory (remove the file, add foo/bar).
+	if err := os.Remove(filepath.Join(dir, "foo")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "foo/bar", "iamdir")
+	if err := r.Stage([]string{"foo/bar"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c2: foo is a dir", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	// Revert to c1: delete foo/bar, then create the file foo over the empty dir.
+	if _, err := r.Restore("HEAD~1", "agentsync revert: dir->file", DefaultIdentity); err != nil {
+		t.Fatalf("Restore across a file<->dir transition should not error: %v", err)
+	}
+	if got := readFile(t, dir, "foo"); got != "iamfile" {
+		t.Fatalf("foo = %q, want the restored file content", got)
+	}
+	// foo is now a regular file, so foo/bar cannot exist (stat yields ENOENT or
+	// ENOTDIR); either way a nil error would mean the dir entry survived.
+	if _, err := os.Stat(filepath.Join(dir, "foo", "bar")); err == nil {
+		t.Fatal("foo/bar should be gone after reverting to the file checkpoint")
+	}
+}
