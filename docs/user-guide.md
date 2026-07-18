@@ -275,6 +275,12 @@ mode = "on"          # "prompt" (default) | "on" | "off"
 # author_email = "agentsync@localhost"
 ```
 
+`mode` accepts exactly `prompt`, `on`, or `off` (case-sensitive; an omitted
+`mode` defaults to `prompt`). Any other value — a typo like `"On"`, `"yes"`, or
+`"true"` — is now **rejected at load** with a path-prefixed error, so every
+command that reads the config (`apply`, `doctor`, …) agrees. (Previously an
+invalid value was silently ignored and only `doctor` warned about it.)
+
 `apply --no-git-backup` skips it for one run (CI/scripting) without touching
 config, and `agentsync doctor` shows the current mode and per-dir status.
 

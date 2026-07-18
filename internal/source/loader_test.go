@@ -27,6 +27,76 @@ defauls_mode = "track"
 	}
 }
 
+// TestLoadRejectsInvalidGitBackupMode confirms that an out-of-set
+// [destination_directory_git_backup] mode value is rejected at source.Load
+// (previously the strict decoder caught unknown KEYS but accepted any VALUE, so
+// a typo like mode = "On"/"yes" silently disabled backup). The error must
+// surface from the top-level Load call and name the file path, the offending
+// value, and the valid set. Valid values (including the empty default) must
+// load cleanly, with EffectiveMode() defaulting "" → "prompt".
+func TestLoadRejectsInvalidGitBackupMode(t *testing.T) {
+	const home = "/home/.agentsync"
+	const path = home + "/agentsync.toml"
+
+	invalid := []struct {
+		name string
+		mode string
+	}{
+		{"yes", "yes"},
+		{"true", "true"},
+		{"capital On", "On"},
+		{"numeric zero", "0"},
+	}
+	for _, tc := range invalid {
+		t.Run("invalid "+tc.name, func(t *testing.T) {
+			fs := afero.NewMemMapFs()
+			_ = afero.WriteFile(fs, path, []byte(
+				"[destination_directory_git_backup]\nmode = \""+tc.mode+"\"\n"), 0o644)
+			_, err := source.Load(fs, home)
+			if err == nil {
+				t.Fatalf("Load accepted invalid mode %q; want error", tc.mode)
+			}
+			got := err.Error()
+			// Path prefix, offending value, and valid set must all appear.
+			if !contains(got, path) {
+				t.Errorf("error %q does not name the file path %q", got, path)
+			}
+			if !contains(got, tc.mode) {
+				t.Errorf("error %q does not mention the offending value %q", got, tc.mode)
+			}
+			for _, want := range []string{source.GitBackupModePrompt, source.GitBackupModeOn, source.GitBackupModeOff} {
+				if !contains(got, want) {
+					t.Errorf("error %q does not mention valid value %q", got, want)
+				}
+			}
+		})
+	}
+
+	valid := []struct {
+		name    string
+		body    string
+		wantEff string
+	}{
+		{"omitted defaults to prompt", "", source.GitBackupModePrompt},
+		{"prompt", "[destination_directory_git_backup]\nmode = \"prompt\"\n", source.GitBackupModePrompt},
+		{"on", "[destination_directory_git_backup]\nmode = \"on\"\n", source.GitBackupModeOn},
+		{"off", "[destination_directory_git_backup]\nmode = \"off\"\n", source.GitBackupModeOff},
+	}
+	for _, tc := range valid {
+		t.Run("valid "+tc.name, func(t *testing.T) {
+			fs := afero.NewMemMapFs()
+			_ = afero.WriteFile(fs, path, []byte(tc.body), 0o644)
+			c, err := source.Load(fs, home)
+			if err != nil {
+				t.Fatalf("Load(%q) = error %v; want success", tc.body, err)
+			}
+			if got := c.Config.DestinationGitBackup.EffectiveMode(); got != tc.wantEff {
+				t.Errorf("EffectiveMode() = %q, want %q", got, tc.wantEff)
+			}
+		})
+	}
+}
+
 // TestParseFrontmatter_ClosingFenceAtEOF guards the parser against two common
 // real-world shapes that previously returned "unterminated frontmatter":
 // a closing "---" at end-of-file with no trailing newline (editors strip it),

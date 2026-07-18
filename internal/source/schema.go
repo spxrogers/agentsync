@@ -4,7 +4,11 @@
 // types directly.
 package source
 
-import "github.com/spxrogers/agentsync/internal/untrusted"
+import (
+	"fmt"
+
+	"github.com/spxrogers/agentsync/internal/untrusted"
+)
 
 // Canonical is the in-memory image of a fully-loaded ~/.agentsync/ tree.
 type Canonical struct {
@@ -61,6 +65,23 @@ func (g DestinationGitBackupConfig) EffectiveMode() string {
 		return GitBackupModePrompt
 	}
 	return g.Mode
+}
+
+// validateMode rejects any Mode value outside the allowed set
+// {"", "prompt", "on", "off"}. The empty string is accepted (EffectiveMode
+// defaults it to "prompt"); every other value must match a mode constant
+// case-SENSITIVELY — "On"/"true"/"yes" are invalid by design, so a typo can no
+// longer silently disable backup for untracked dirs while owned repos still
+// commit. Called from loadConfig after a successful decode so every source.Load
+// caller (apply, doctor, …) inherits the rejection.
+func (g DestinationGitBackupConfig) validateMode() error {
+	switch g.Mode {
+	case "", GitBackupModePrompt, GitBackupModeOn, GitBackupModeOff:
+		return nil
+	default:
+		return fmt.Errorf("[destination_directory_git_backup] mode: invalid value %q (want %q, %q, or %q)",
+			g.Mode, GitBackupModePrompt, GitBackupModeOn, GitBackupModeOff)
+	}
 }
 
 // MemoryConfig mirrors the [memory] table in agentsync.toml.

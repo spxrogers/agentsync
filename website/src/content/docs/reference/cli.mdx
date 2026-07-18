@@ -168,7 +168,10 @@ local). A dir already under your own source control is left untouched. Pass
 `--no-git-backup` to skip it for one run (CI/scripting) without touching config.
 The `[destination_directory_git_backup]` table (`mode = "prompt" | "on" | "off"`,
 optional `author_name`/`author_email`) controls the default; `agentsync doctor`
-shows the current mode and per-dir status. See `agentsync revert` below.
+shows the current mode and per-dir status. `mode` is validated at load — it must
+be exactly `prompt`, `on`, or `off` (case-sensitive; omit it for the `prompt`
+default). Any other value now **errors at load** with a path-prefixed message,
+rather than being silently ignored. See `agentsync revert` below.
 
 ### `revert <agent>`
 Rolls an agent's destination dir back to a prior apply checkpoint from its

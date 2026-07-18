@@ -219,6 +219,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **An invalid `[destination_directory_git_backup]` `mode` now errors at config
+  load instead of being silently ignored (issue #137).** The strict TOML decoder
+  rejected unknown keys but accepted any value, so a typo like `mode = "On"`,
+  `"yes"`, or `"true"` silently disabled git backup for untracked dirs (while
+  still committing already-owned repos) — and only `doctor` warned. `source.Load`
+  now rejects any `mode` outside `{prompt, on, off}` (case-sensitive; empty
+  defaults to `prompt`) with a path-prefixed error, so `apply` and `doctor` agree.
+
 - **The capture cleartext backstop now refuses short and empty-edge moved secrets
   (issue #135).** The fail-closed backstop (`secrets.ResidualSecretCleartext`)
   reused the re-reference value set, which drops any resolved secret shorter than
