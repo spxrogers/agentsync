@@ -130,6 +130,15 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 				representable = false
 				break
 			}
+			// A non-string matcher would be coerced to "" by asStr and captured as a
+			// match-all — refuse the event rather than silently rewrite it.
+			if rawMatcher, present := entry["matcher"]; present {
+				if _, isStr := rawMatcher.(string); !isStr {
+					fmt.Fprintf(warn, "warning: hook event %q has a definition whose \"matcher\" is not a string; event not captured\n", event)
+					representable = false
+					break
+				}
+			}
 			matcher := asStr(entry["matcher"])
 			// A definition must carry a "hooks" ARRAY of handlers. An absent, null,
 			// or non-array "hooks" value can't be captured, so leave the whole event
@@ -148,6 +157,15 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 					fmt.Fprintf(warn, "warning: hook event %q has a malformed handler (not an object); event not captured\n", event)
 					representable = false
 					break defs
+				}
+				// A non-string type would be coerced to "" by asStr and captured as a
+				// command handler; refuse the malformed shape instead.
+				if rawType, present := h["type"]; present {
+					if _, isStr := rawType.(string); !isStr {
+						fmt.Fprintf(warn, "warning: hook event %q has a handler whose \"type\" is not a string; event not captured\n", event)
+						representable = false
+						break defs
+					}
 				}
 				if typ := asStr(h["type"]); typ != "" && typ != "command" {
 					fmt.Fprintf(warn, "warning: hook event %q has a %q-type handler agentsync cannot represent; event not captured\n", event, typ)

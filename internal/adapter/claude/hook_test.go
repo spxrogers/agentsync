@@ -288,6 +288,16 @@ func TestIngest_HookGuardWarnsAndSkips(t *testing.T) {
 			hooks:     `{ "PreToolUse": { "matcher": "Bash" } }`,
 			wantWarns: []string{"value is not an array", "event not captured"},
 		},
+		{
+			name:      "handler type is not a string",
+			hooks:     `{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": 5, "command": "x" } ] } ] }`,
+			wantWarns: []string{`"type" is not a string`, "event not captured"},
+		},
+		{
+			name:      "matcher is not a string",
+			hooks:     `{ "PreToolUse": [ { "matcher": 5, "hooks": [ { "type": "command", "command": "x" } ] } ] }`,
+			wantWarns: []string{`"matcher" is not a string`, "event not captured"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
