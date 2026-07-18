@@ -82,9 +82,44 @@ func pluginInstallRun(cmd *cobra.Command, args []string) error {
 	// %s sanitizes it by construction — a control sequence in the version string
 	// cannot smuggle terminal escapes into the status line. (id is the user's own
 	// argument and sha is hex, so neither needs it.)
-	fmt.Fprintf(cmd.OutOrStdout(), "installed plugin %s (version=%s sha=%s)\n",
+	fmt.Fprintf(cmd.OutOrStdout(), "installed plugin %s (version=%s sha=%s)",
 		id, spec.Version, truncate(spec.ManifestSHA, 12))
+	// When a re-install PRESERVED user-authored lifecycle fields that differ from
+	// the first-install defaults, surface it instead of reporting an unqualified
+	// success — the user's fan-out scope / update policy / disabled state was kept,
+	// not reset (issue #140). Agents/Update values are user-authored canonical
+	// config; route them through ui.Sanitize so a hand-edited control byte cannot
+	// smuggle terminal escapes into the status line, mirroring the Version guard.
+	if kept := keptLifecycleSummary(spec); kept != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), " (kept %s)", kept)
+	}
+	fmt.Fprintln(cmd.OutOrStdout())
 	return nil
+}
+
+// keptLifecycleSummary describes which user-authored lifecycle fields a
+// re-install preserved that differ from the first-install defaults
+// (Agents=["*"], Update="track", Disabled=false). It returns "" when the written
+// spec matches those defaults — a genuine first install, or a re-install over a
+// TOML that already held the defaults — so the install status line only mentions
+// preserved state when there is some to mention.
+func keptLifecycleSummary(spec pluginTOMLSpec) string {
+	var parts []string
+	defaultAgents := len(spec.Agents) == 1 && spec.Agents[0] == "*"
+	if !defaultAgents {
+		sanitized := make([]string, len(spec.Agents))
+		for i, a := range spec.Agents {
+			sanitized[i] = ui.Sanitize(a)
+		}
+		parts = append(parts, fmt.Sprintf("agents=[%s]", strings.Join(sanitized, ",")))
+	}
+	if spec.Update != "track" {
+		parts = append(parts, fmt.Sprintf("update=%s", ui.Sanitize(spec.Update)))
+	}
+	if spec.Disabled {
+		parts = append(parts, "disabled=true")
+	}
+	return strings.Join(parts, ", ")
 }
 
 // installPluginInto fetches plugin id from the named marketplace into the
@@ -125,14 +160,41 @@ func installPluginInto(home, id, mpName string) (pluginTOMLSpec, error) {
 
 	// Write plugins/<id>.toml.
 	pluginPath := filepath.Join(home, "plugins", id+".toml")
+
+	// Lifecycle fields (Agents allowlist, Update policy, Disabled bit) are
+	// user-authored, security-relevant on-disk state: the allowlist scopes which
+	// agents a credential-bearing plugin fans out to. A re-install over an
+	// existing plugins/<id>.toml must PRESERVE them rather than reset them to the
+	// first-install defaults — silently re-broadening a narrowed allowlist would
+	// ship those credentials to agents the user deliberately excluded (issue
+	// #140). Only ID/Version/ManifestSHA are legitimately refreshed by install.
+	//
+	// A genuine first install (no prior TOML — a not-exist read falls through
+	// here) keeps the historical defaults byte-for-byte, so `install` and
+	// `import` still produce byte-identical canonical artifacts (see the doc
+	// comment above): Agents=["*"], Update="track", Disabled absent.
+	agents := []string{"*"}
+	update := "track"
+	disabled := false
+	if existing, rerr := readPluginTOML(pluginPath); rerr == nil {
+		if len(existing.Plugin.Agents) > 0 {
+			agents = existing.Plugin.Agents
+		}
+		if existing.Plugin.Update != "" {
+			update = existing.Plugin.Update
+		}
+		disabled = existing.Plugin.Disabled
+	}
+
 	spec := pluginTOMLSpec{
 		// id/marketplace are validated cache keys; wrap the composed id as Text to
 		// match the canonical model (the ManifestSHA below stays a plain string).
 		ID:          untrusted.Wrap(id + "@" + resolveMarketplaceName(mpName)),
 		Version:     mpEntry.Version,
 		ManifestSHA: manifestSHA,
-		Update:      "track",
-		Agents:      []string{"*"},
+		Update:      update,
+		Agents:      agents,
+		Disabled:    disabled,
 	}
 	if result.Version != "" {
 		spec.Version = untrusted.Wrap(result.Version)
@@ -246,10 +308,12 @@ func pluginEnableRun(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// Only flip the disabled bit. Do NOT touch Agents: re-materializing ["*"] over
+	// a previously-narrowed allowlist silently re-broadens a plugin's
+	// credential-bearing components to agents the user excluded (issue #140). An
+	// empty/omitted allowlist already means "all agents" downstream, so there is
+	// nothing to backfill here.
 	existing.Plugin.Disabled = false
-	if len(existing.Plugin.Agents) == 0 {
-		existing.Plugin.Agents = []string{"*"}
-	}
 	data, err := toml.Marshal(existing)
 	if err != nil {
 		return err
@@ -284,8 +348,12 @@ func pluginDisableRun(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// Only set the disabled bit. The `disabled = true` flag alone suppresses the
+	// plugin's projection at apply (source.PluginSpec.Disabled), so emptying
+	// Agents was never necessary — and doing so destroyed the user's narrowed
+	// allowlist, which the next `enable` then re-broadened to ["*"] (issue #140).
+	// Preserve Agents (and Update) untouched across disable.
 	existing.Plugin.Disabled = true
-	existing.Plugin.Agents = []string{}
 	data, err := toml.Marshal(existing)
 	if err != nil {
 		return err

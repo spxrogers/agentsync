@@ -307,6 +307,19 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   hand-authored or third-party block at `.continue/prompts/foo.md` whose
   frontmatter was `name: bar` was captured as `foo` and rewritten as `/foo` on the
   next apply, silently destroying the user's `/bar`. Render is unchanged.
+- **`plugin install`/`disable`/`enable` no longer silently widen or reset a
+  plugin's `agents` allowlist (and `update`/`disabled`) (issue #140).** `disable`
+  emptied the allowlist and the next `enable` re-materialized `["*"]`, so a
+  `disable`→`enable` round-trip silently widened a plugin scoped to
+  `agents = ["claude"]` back to *every* agent — fanning its credential-bearing
+  MCP servers / hooks / skills out to agents the user deliberately excluded.
+  Re-running `plugin install` on an already-registered plugin likewise hard-reset
+  `agents`/`update`/`disabled` to the first-install defaults. `disable`/`enable`
+  now flip only the `disabled` bit and a re-install carries forward the existing
+  `agents`/`update`/`disabled` (refreshing only `id`/`version`/`manifest_sha`
+  from the fetch), surfacing what it kept in the status line (e.g.
+  `(kept agents=[claude], update=pinned)`). A genuine first install is unchanged
+  and byte-identical, preserving the `install`/`import` shared-artifact contract.
 
 - **Claude LSP capability corrected.** Claude Code reads LSP servers from plugin
   manifests, not `settings.json#/lspServers`; agentsync now reports canonical

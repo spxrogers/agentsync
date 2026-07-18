@@ -10,7 +10,48 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/pelletier/go-toml/v2"
 )
+
+// pluginTOMLFixture mirrors the on-disk plugins/<id>.toml [plugin] table so
+// lifecycle tests can assert against the REAL file on disk (read back + parsed),
+// not an in-memory struct that never touched the filesystem — per CLAUDE.md's
+// "models must stay faithful to their on-disk artifacts" doctrine.
+type pluginTOMLFixture struct {
+	Plugin struct {
+		ID          string   `toml:"id"`
+		Version     string   `toml:"version"`
+		ManifestSHA string   `toml:"manifest_sha"`
+		Update      string   `toml:"update"`
+		Agents      []string `toml:"agents"`
+		Disabled    bool     `toml:"disabled"`
+	} `toml:"plugin"`
+}
+
+// readPluginTOMLFixture reads plugins/<id>.toml back from disk and parses it.
+func readPluginTOMLFixture(t *testing.T, path string) pluginTOMLFixture {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var p pluginTOMLFixture
+	if err := toml.Unmarshal(data, &p); err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	return p
+}
+
+// writePluginTOMLBody overwrites plugins/<id>.toml with the given raw TOML body,
+// simulating a user hand-editing the file to narrow the allowlist / set an
+// update policy. Writing the artifact directly (not an in-memory model) keeps
+// the round-trip anchored to what lands on disk.
+func writePluginTOMLBody(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
 
 // makeLocalMarketplace creates a local directory tree that looks like a
 // marketplace with one plugin. Returns the marketplace root path.
@@ -617,6 +658,216 @@ func TestPlugin_EnableDisable(t *testing.T) {
 	if strings.Contains(listOut2, "disabled") {
 		t.Errorf("plugin should show enabled after re-enable: %s", listOut2)
 	}
+}
+
+// TestPlugin_DisableEnablePreservesAgentsAllowlist is the regression for issue
+// #140's disable→enable data loss: `disable` emptied Agents and the next
+// `enable` re-materialized ["*"], silently widening a narrowed allowlist to
+// every agent. A user who scoped a credential-bearing plugin to agents=["claude"]
+// must get exactly that back after a disable→enable round-trip — asserted against
+// the on-disk plugins/demo.toml, not an in-memory struct.
+func TestPlugin_DisableEnablePreservesAgentsAllowlist(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+		t.Fatal(err)
+	}
+
+	home := filepath.Join(tmp, ".agentsync")
+	pluginPath := filepath.Join(home, "plugins", "demo.toml")
+
+	// User narrows the allowlist and pins the update mode on disk.
+	writePluginTOMLBody(t, pluginPath, `[plugin]
+id = "demo@test-mp"
+version = "1.0.0"
+update = "pinned"
+agents = ["claude"]
+`)
+
+	// Disable must NOT empty the allowlist.
+	if out, err := runCLI(t, env, "plugin", "disable", "demo"); err != nil {
+		t.Fatalf("plugin disable: %v\n%s", err, out)
+	}
+	afterDisable := readPluginTOMLFixture(t, pluginPath)
+	if !equalStrings(afterDisable.Plugin.Agents, []string{"claude"}) {
+		t.Errorf("disable emptied/changed the allowlist on disk: got agents=%v, want [claude]", afterDisable.Plugin.Agents)
+	}
+	if !afterDisable.Plugin.Disabled {
+		t.Errorf("disable did not set disabled=true on disk")
+	}
+	if afterDisable.Plugin.Update != "pinned" {
+		t.Errorf("disable changed update on disk: got %q, want pinned", afterDisable.Plugin.Update)
+	}
+
+	// Enable must NOT re-broaden the (still-narrowed) allowlist to ["*"].
+	if out, err := runCLI(t, env, "plugin", "enable", "demo"); err != nil {
+		t.Fatalf("plugin enable: %v\n%s", err, out)
+	}
+	afterEnable := readPluginTOMLFixture(t, pluginPath)
+	if !equalStrings(afterEnable.Plugin.Agents, []string{"claude"}) {
+		t.Errorf("enable re-broadened the allowlist on disk: got agents=%v, want [claude]", afterEnable.Plugin.Agents)
+	}
+	if afterEnable.Plugin.Update != "pinned" {
+		t.Errorf("enable changed update on disk: got %q, want pinned", afterEnable.Plugin.Update)
+	}
+	if afterEnable.Plugin.Disabled {
+		t.Errorf("enable did not clear disabled on disk")
+	}
+}
+
+// TestPlugin_ReinstallPreservesAgentsUpdateDisabled is the regression for issue
+// #140's re-install data loss: `installPluginInto` hard-reset Agents/Update/
+// Disabled to the first-install defaults on every write, so re-installing an
+// already-registered plugin wiped a narrowed allowlist, a pinned/manual update
+// mode, and a deliberate disabled state — while ID/Version/ManifestSHA are the
+// only fields install legitimately refreshes.
+func TestPlugin_ReinstallPreservesAgentsUpdateDisabled(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+		t.Fatal(err)
+	}
+
+	home := filepath.Join(tmp, ".agentsync")
+	pluginPath := filepath.Join(home, "plugins", "demo.toml")
+
+	// Capture the freshly-fetched pin so we can prove re-install refreshes it
+	// (and does not just echo back the stale sentinel we write below).
+	firstInstall := readPluginTOMLFixture(t, pluginPath)
+	if firstInstall.Plugin.ManifestSHA == "" {
+		t.Fatalf("first install wrote no manifest_sha; fixture=%+v", firstInstall.Plugin)
+	}
+
+	// User narrows the allowlist, sets a manual update mode, disables the plugin,
+	// and (to prove the refresh) plants stale version/sha sentinels.
+	writePluginTOMLBody(t, pluginPath, `[plugin]
+id = "demo@test-mp"
+version = "0.0.0-stale"
+manifest_sha = "deadbeefstale"
+update = "manual"
+agents = ["claude"]
+disabled = true
+`)
+
+	out, err := runCLI(t, env, "plugin", "install", "demo@test-mp")
+	if err != nil {
+		t.Fatalf("plugin re-install: %v\n%s", err, out)
+	}
+
+	// Preserved lifecycle fields must survive the re-install on disk.
+	after := readPluginTOMLFixture(t, pluginPath)
+	if !equalStrings(after.Plugin.Agents, []string{"claude"}) {
+		t.Errorf("re-install reset the allowlist on disk: got agents=%v, want [claude]", after.Plugin.Agents)
+	}
+	if after.Plugin.Update != "manual" {
+		t.Errorf("re-install reset update on disk: got %q, want manual", after.Plugin.Update)
+	}
+	if !after.Plugin.Disabled {
+		t.Errorf("re-install cleared disabled on disk (silently re-enabled the plugin)")
+	}
+	// ID/Version/ManifestSHA come from the fresh fetch, overwriting the sentinels.
+	if after.Plugin.ManifestSHA == "deadbeefstale" {
+		t.Errorf("re-install did not refresh manifest_sha from the fresh fetch")
+	}
+	if after.Plugin.ManifestSHA != firstInstall.Plugin.ManifestSHA {
+		t.Errorf("re-install manifest_sha = %q, want the freshly-fetched %q", after.Plugin.ManifestSHA, firstInstall.Plugin.ManifestSHA)
+	}
+	if after.Plugin.Version == "0.0.0-stale" {
+		t.Errorf("re-install did not refresh version from the fresh fetch")
+	}
+
+	// The install output must SURFACE that the existing lifecycle was kept, not
+	// report an unqualified success (issue #140 acceptance §6 bullet 6).
+	if !strings.Contains(out, "kept") {
+		t.Errorf("re-install output did not surface the preserved lifecycle fields: %q", out)
+	}
+	if !strings.Contains(out, "agents=[claude]") {
+		t.Errorf("re-install output did not surface the kept allowlist: %q", out)
+	}
+	if !strings.Contains(out, "update=manual") {
+		t.Errorf("re-install output did not surface the kept update mode: %q", out)
+	}
+	if !strings.Contains(out, "disabled=true") {
+		t.Errorf("re-install output did not surface the kept disabled state: %q", out)
+	}
+}
+
+// TestPlugin_FirstInstallDefaults pins the byte-identical-to-today first-install
+// behavior so the `install`/`import` shared-artifact contract (plugin.go's
+// installPluginInto doc comment) is not regressed by the re-install preservation
+// fix: a genuine first install (no prior plugins/<id>.toml) still writes
+// agents=["*"], update="track", and NO disabled key.
+func TestPlugin_FirstInstallDefaults(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "plugin", "install", "demo@test-mp")
+	if err != nil {
+		t.Fatalf("plugin install: %v\n%s", err, out)
+	}
+	// A default first install must NOT emit a "kept ..." note.
+	if strings.Contains(out, "kept") {
+		t.Errorf("first install surfaced a preserved-lifecycle note it should not: %q", out)
+	}
+
+	home := filepath.Join(tmp, ".agentsync")
+	pluginPath := filepath.Join(home, "plugins", "demo.toml")
+	fx := readPluginTOMLFixture(t, pluginPath)
+	if !equalStrings(fx.Plugin.Agents, []string{"*"}) {
+		t.Errorf("first install agents = %v, want [*]", fx.Plugin.Agents)
+	}
+	if fx.Plugin.Update != "track" {
+		t.Errorf("first install update = %q, want track", fx.Plugin.Update)
+	}
+	if fx.Plugin.Disabled {
+		t.Errorf("first install set disabled=true, want absent/false")
+	}
+	// disabled is omitempty: a false value must be ABSENT from the on-disk bytes,
+	// not written as `disabled = false` — this is the byte-identical guarantee.
+	raw, err := os.ReadFile(pluginPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", pluginPath, err)
+	}
+	if strings.Contains(string(raw), "disabled") {
+		t.Errorf("first install wrote a disabled key; want it absent:\n%s", raw)
+	}
+}
+
+// equalStrings reports whether two string slices are element-wise equal.
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestPlugin_DisableSuppressesProjectionAtApply is the regression test for
