@@ -115,6 +115,7 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 		for _, rawEntry := range entries {
 			entry, ok := rawEntry.(map[string]any)
 			if !ok {
+				fmt.Fprintf(warn, "warning: hook event %q has a malformed definition (not an object); event not captured\n", event)
 				representable = false
 				break
 			}
@@ -128,6 +129,7 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 			for _, rawH := range hooksArr {
 				h, ok := rawH.(map[string]any)
 				if !ok {
+					fmt.Fprintf(warn, "warning: hook event %q has a malformed handler (not an object); event not captured\n", event)
 					representable = false
 					break defs
 				}

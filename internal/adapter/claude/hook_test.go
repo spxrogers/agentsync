@@ -126,9 +126,20 @@ func TestIngest_HookArtifactRoundTrip(t *testing.T) {
 
 	t.Run("no empty-command handler emitted", func(t *testing.T) {
 		// A regression would emit {"type":"prompt","command":""} (or any
-		// command:"") for a guarded handler. Assert none appears anywhere.
-		if bytes.Contains(finalRaw, []byte(`"command": ""`)) || bytes.Contains(finalRaw, []byte(`"command":""`)) {
-			t.Errorf("final settings.json contains an empty-command handler:\n%s", finalRaw)
+		// command:"") for a guarded handler. Walk the PARSED object (not the
+		// formatted bytes) so the check is independent of the encoder's spacing.
+		for event, raw := range hooks {
+			defs, _ := raw.([]any)
+			for _, rawDef := range defs {
+				def, _ := rawDef.(map[string]any)
+				hs, _ := def["hooks"].([]any)
+				for _, rawH := range hs {
+					h, _ := rawH.(map[string]any)
+					if cmd, ok := h["command"].(string); ok && cmd == "" {
+						t.Errorf("event %q has a handler with an empty command: %+v", event, h)
+					}
+				}
+			}
 		}
 	})
 }
@@ -200,37 +211,65 @@ func TestRenderHooks_SkipsNonCommandHandler(t *testing.T) {
 }
 
 // TestIngest_HookGuardWarnsAndSkips captures the adapter's stderr and asserts
-// that an event with an unmodeled handler field is absent from the ingested
-// model and produces an "event not captured" warning.
+// that EVERY kind of unrepresentable hook event — an unmodeled field, a
+// non-command handler, and a structurally malformed (non-object) definition or
+// handler — is left out of the ingested model AND produces an "event not
+// captured" warning, honouring the "warn on anything it cannot capture"
+// contract.
 func TestIngest_HookGuardWarnsAndSkips(t *testing.T) {
 	testenv.RequireContainer(t)
-	tmp := t.TempDir()
-	settings := filepath.Join(tmp, ".claude", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name      string
+		hooks     string // the JSON value of the settings.json "hooks" object
+		wantWarns []string
+	}{
+		{
+			name:      "unmodeled handler field",
+			hooks:     `{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo before", "timeout": 30 } ] } ] }`,
+			wantWarns: []string{"unmodeled fields (timeout)", "event not captured"},
+		},
+		{
+			name:      "non-command handler",
+			hooks:     `{ "Notification": [ { "matcher": "", "hooks": [ { "type": "prompt", "command": "notify me" } ] } ] }`,
+			wantWarns: []string{`"prompt"-type handler`, "event not captured"},
+		},
+		{
+			name:      "malformed definition (not an object)",
+			hooks:     `{ "PreToolUse": [ "echo hi" ] }`,
+			wantWarns: []string{"malformed definition", "event not captured"},
+		},
+		{
+			name:      "malformed handler (not an object)",
+			hooks:     `{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ "echo hi" ] } ] }`,
+			wantWarns: []string{"malformed handler", "event not captured"},
+		},
 	}
-	native := `{
-  "hooks": {
-    "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo before", "timeout": 30 } ] } ]
-  }
-}`
-	if err := os.WriteFile(settings, []byte(native), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			settings := filepath.Join(tmp, ".claude", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(settings, []byte(`{ "hooks": `+tt.hooks+` }`), 0o644); err != nil {
+				t.Fatal(err)
+			}
 
-	var warn bytes.Buffer
-	a := claude.New(claude.Options{TargetRoot: tmp, Stderr: &warn})
-	out, err := a.Ingest(adapter.ScopeUser, "")
-	if err != nil {
-		t.Fatalf("Ingest: %v", err)
-	}
-	if len(out.Hooks) != 0 {
-		t.Fatalf("guarded event should be absent from ingested hooks, got %+v", out.Hooks)
-	}
-	got := warn.String()
-	for _, want := range []string{`unmodeled fields (timeout)`, `event not captured`} {
-		if !strings.Contains(got, want) {
-			t.Errorf("missing warning %q in:\n%s", want, got)
-		}
+			var warn bytes.Buffer
+			a := claude.New(claude.Options{TargetRoot: tmp, Stderr: &warn})
+			out, err := a.Ingest(adapter.ScopeUser, "")
+			if err != nil {
+				t.Fatalf("Ingest: %v", err)
+			}
+			if len(out.Hooks) != 0 {
+				t.Fatalf("guarded event should be absent from ingested hooks, got %+v", out.Hooks)
+			}
+			got := warn.String()
+			for _, want := range tt.wantWarns {
+				if !strings.Contains(got, want) {
+					t.Errorf("missing warning %q in:\n%s", want, got)
+				}
+			}
+		})
 	}
 }
