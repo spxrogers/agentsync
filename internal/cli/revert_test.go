@@ -3,6 +3,7 @@ package cli_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -255,7 +256,7 @@ func TestRevert_PreservesUntrackedUserFiles(t *testing.T) {
 	// It is in NO checkpoint tree — revert never versioned it, so it is still
 	// reported untracked after the revert commit.
 	repo, _ := agit.Open(claude)
-	if untracked, err := repo.UntrackedPaths(); err != nil || !contains(untracked, "MY-NOTES.txt") {
+	if untracked, err := repo.UntrackedPaths(); err != nil || !slices.Contains(untracked, "MY-NOTES.txt") {
 		t.Fatalf("MY-NOTES.txt should still be untracked; UntrackedPaths=%v err=%v", untracked, err)
 	}
 }
@@ -292,16 +293,6 @@ func TestRevert_DryRunWarnsUntracked(t *testing.T) {
 	if len(after) != len(before) {
 		t.Fatalf("dry-run recorded a commit: %d -> %d", len(before), len(after))
 	}
-}
-
-// contains reports whether s is in xs.
-func contains(xs []string, s string) bool {
-	for _, x := range xs {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
 
 // TestRevert_SharedDirWarnsBlastRadius asserts the user-facing warning that

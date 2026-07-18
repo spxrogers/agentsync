@@ -1,6 +1,7 @@
 package source_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spf13/afero"
@@ -22,7 +23,7 @@ defauls_mode = "track"
 	}
 	// We don't pin on the exact pelletier message; just confirm the bad
 	// key surfaces.
-	if got := err.Error(); !contains(got, "defauls_mode") {
+	if got := err.Error(); !strings.Contains(got, "defauls_mode") {
 		t.Fatalf("error %q does not mention the typo'd key", got)
 	}
 }
@@ -59,14 +60,14 @@ func TestLoadRejectsInvalidGitBackupMode(t *testing.T) {
 			}
 			got := err.Error()
 			// Path prefix, offending value, and valid set must all appear.
-			if !contains(got, path) {
+			if !strings.Contains(got, path) {
 				t.Errorf("error %q does not name the file path %q", got, path)
 			}
-			if !contains(got, tc.mode) {
+			if !strings.Contains(got, tc.mode) {
 				t.Errorf("error %q does not mention the offending value %q", got, tc.mode)
 			}
 			for _, want := range []string{source.GitBackupModePrompt, source.GitBackupModeOn, source.GitBackupModeOff} {
-				if !contains(got, want) {
+				if !strings.Contains(got, want) {
 					t.Errorf("error %q does not mention valid value %q", got, want)
 				}
 			}
@@ -219,10 +220,10 @@ body
 	if !ok {
 		t.Fatalf("description not a string: %T %v", fm["description"], fm["description"])
 	}
-	if !contains(desc, "Triggers on: optimize GLB") {
+	if !strings.Contains(desc, "Triggers on: optimize GLB") {
 		t.Fatalf("lenient description truncated at colon-space: %q", desc)
 	}
-	if !contains(desc, "model optimization.") {
+	if !strings.Contains(desc, "model optimization.") {
 		t.Fatalf("lenient description missing tail: %q", desc)
 	}
 	if body != "body\n" {
@@ -252,7 +253,7 @@ body
 		t.Fatalf("skill silently dropped: %+v", c.Skills)
 	}
 	desc, _ := c.Skills[0].Frontmatter["description"].(string)
-	if !contains(desc, "Triggers on: optimize GLB") {
+	if !strings.Contains(desc, "Triggers on: optimize GLB") {
 		t.Fatalf("description truncated: %q", desc)
 	}
 }
@@ -297,17 +298,6 @@ func TestLoad_NestedMemoryFragments(t *testing.T) {
 	if got, ok := c.Memory.Fragments["top.md"]; !ok || got != "top body" {
 		t.Fatalf("flat fragment regressed: %#v", c.Memory.Fragments)
 	}
-}
-
-// contains is a small substring helper so the new test reads cleanly
-// without bringing in strings.Contains for one call.
-func contains(haystack, needle string) bool {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
 }
 
 func TestLoad_EmptyHome(t *testing.T) {
