@@ -339,7 +339,8 @@ Behavior:
    go-git's `HardReset`, which (unlike `git reset --hard`) enumerates and deletes
    every untracked/gitignored worktree file. Touching only the diffed paths leaves
    the user's own untracked/gitignored files intact (issue #128); `--dry-run` notes
-   when such files are present.
+   when untracked files are present (gitignored files are also preserved, but
+   git status can't enumerate them, so they aren't listed).
 4. Print the **out-of-sync notice** (decision #4):
 
    > `agentsync revert` completed. The destination directory `<dir>` is now out
