@@ -291,8 +291,11 @@ literally, never resolved.)
 - **Memory** — at project scope, `.windsurf/rules/agentsync.md` with the
   documented `trigger: always_on` activation frontmatter (workspace rules declare
   their trigger in frontmatter — a frontmatter-less rule's activation is
-  undefined); ingest strips exactly that block, so the canonical body round-trips
-  byte-clean. At user scope, the single global rules file
+  undefined); ingest strips **any** leading `trigger:` frontmatter fence so a
+  re-apply never double-fences the rule. The exact agentsync `always_on` block
+  round-trips byte-clean; a hand-changed non-`always_on` trigger is stripped
+  *and* warned (its activation mode has no canonical home, so it is not captured).
+  At user scope, the single global rules file
   `~/.codeium/windsurf/memories/global_rules.md` — always-on and frontmatter-less,
   written verbatim. It is whole-file owned like Claude's `~/.claude/CLAUDE.md`
   (a pre-existing hand-authored copy is backed up on first apply), and Windsurf

@@ -2,6 +2,7 @@ package windsurf
 
 import (
 	"path/filepath"
+	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -11,8 +12,9 @@ import (
 // project-scope rule. Windsurf workspace rules declare their activation mode in
 // frontmatter via the `trigger` field (always_on/model_decision/glob/manual);
 // without it a rule's activation is undefined, so the projected memory could be
-// inert. `always_on` matches memory semantics. Ingest strips exactly this block
-// so the canonical body round-trips byte-clean.
+// inert. `always_on` matches memory semantics. Ingest strips this block (and any
+// other leading fence) so the canonical body round-trips byte-clean and a re-apply
+// never double-fences (see stripMemoryRuleFrontmatter).
 const memoryRuleFrontmatter = "---\ntrigger: always_on\n---\n\n"
 
 // renderMemory projects the canonical memory body into Windsurf rules.
@@ -67,21 +69,39 @@ func (a *Adapter) renderMemory(c source.Canonical, p Paths) ([]adapter.FileOp, [
 	}}, nil, nil
 }
 
-// stripMemoryRuleFrontmatter removes the agentsync-rendered activation
-// frontmatter from a captured workspace rule, returning the canonical body.
-// exact reports whether the prefix was the agentsync-rendered block; when the
-// file carries no (or different) frontmatter the content is returned untouched
-// and the caller decides whether to warn — a hand-changed trigger has no
-// canonical home, so capturing it would lose it on the next apply anyway.
-func stripMemoryRuleFrontmatter(data []byte) (body string, exact bool) {
+// stripMemoryRuleFrontmatter removes a leading activation-frontmatter fence from
+// a captured workspace rule, returning the canonical body. It strips ANY leading
+// `---`…`---` fence at byte 0 regardless of the `trigger:` value — Windsurf honors
+// the trigger, so folding a hand-changed fence into the body would make the next
+// apply re-prepend agentsync's own `trigger: always_on` fence on top of it,
+// producing a malformed double-fenced rule that breaks activation.
+//
+// The two returned signals let the caller warn precisely:
+//   - wasAgentsyncBlock reports whether the stripped fence was EXACTLY the
+//     agentsync-rendered `trigger: always_on` block (the byte-clean round-trip);
+//   - hadForeignFrontmatter reports whether a fence was present but was NOT the
+//     agentsync block (a hand-changed trigger). Its activation mode has no
+//     canonical home, so the caller warns that the metadata is not captured.
+//
+// A file with no leading fence returns both false and is left untouched — no
+// warning. Only a byte-0 `---\n` opens a fence, and the fence closes at the next
+// line that is exactly `---`, so an in-body `---` horizontal rule is never
+// mistaken for a fence.
+func stripMemoryRuleFrontmatter(data []byte) (body string, wasAgentsyncBlock, hadForeignFrontmatter bool) {
 	s := string(data)
-	if len(s) >= len(memoryRuleFrontmatter) && s[:len(memoryRuleFrontmatter)] == memoryRuleFrontmatter {
-		return s[len(memoryRuleFrontmatter):], true
+	if strings.HasPrefix(s, memoryRuleFrontmatter) {
+		return s[len(memoryRuleFrontmatter):], true, false
 	}
-	// Tolerate the fence without the trailing blank line.
+	// Tolerate the agentsync fence without the trailing blank line.
 	const bare = "---\ntrigger: always_on\n---\n"
-	if len(s) >= len(bare) && s[:len(bare)] == bare {
-		return s[len(bare):], true
+	if strings.HasPrefix(s, bare) {
+		return s[len(bare):], true, false
 	}
-	return s, false
+	// Any other leading frontmatter fence (a hand-changed trigger, extra keys):
+	// strip it so re-apply never double-fences, and signal it was foreign so the
+	// caller warns that its activation metadata is not captured.
+	if rest, stripped := stripLeadingFrontmatter(s); stripped {
+		return rest, false, true
+	}
+	return s, false, false
 }

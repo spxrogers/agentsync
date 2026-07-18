@@ -219,6 +219,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Windsurf: strip non-`always_on` trigger frontmatter on ingest so re-apply no
+  longer produces a malformed double-fenced rule (issue #136).** When a user
+  hand-edited a workspace rule's `trigger:` to a non-default value (e.g. `glob`
+  or `manual`), ingest previously folded the whole `---`…`---` fence into the
+  canonical memory body, so the next `apply` re-prepended agentsync's own
+  `trigger: always_on` fence on top of it — a double-`---` block that breaks
+  Windsurf activation. Ingest now strips ANY leading frontmatter fence regardless
+  of trigger value (the exact agentsync block still round-trips byte-clean; a
+  foreign trigger is stripped *and* warned, since its activation mode has no
+  canonical home). A hand-authored leading `---`…`---` block in an ingested
+  workflow file is likewise stripped from the captured command body.
+
 - **Corrected two copy-paste-wrong docs examples (issue #129).** The onboarding
   and daily-loop pages told users to run `agentsync diff claude`, but `diff`'s
   argument is a filesystem path, not an agent name — `diff claude` matched nothing
