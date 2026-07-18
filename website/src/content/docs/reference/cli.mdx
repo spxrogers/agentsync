@@ -174,10 +174,12 @@ shows the current mode and per-dir status. See `agentsync revert` below.
 Rolls an agent's destination dir back to a prior apply checkpoint from its
 local-only git history — recovering from a bad apply. It is **append-only**: it
 records a new commit, so the history is never rewritten and the revert is itself
-revertible. By default it undoes the most recent apply (restores the previous
-checkpoint); `--to <ref>` picks a specific one (a commit hash or `HEAD~2`), `--all`
-reverts every managed dir, and `--dry-run` previews the file changes without
-writing.
+revertible. Untracked files you dropped into the dir (and gitignored files) are
+**left untouched** — revert only rewinds the files agentsync versions, so your own
+scratch files are never deleted. By default it undoes the most recent apply
+(restores the previous checkpoint); `--to <ref>` picks a specific one (a commit
+hash or `HEAD~2`), `--all` reverts every managed dir, and `--dry-run` previews the
+file changes without writing (noting when untracked files are present).
 
 revert moves only the **destination**. The next `apply` re-renders from the
 canonical source and would overwrite the reverted state, so revert prints a notice

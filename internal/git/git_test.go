@@ -8,6 +8,8 @@ import (
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
@@ -584,4 +586,110 @@ func TestRestoreAppendOnly(t *testing.T) {
 	if noop != "" {
 		t.Fatalf("restore to HEAD returned %q, want empty (no-op)", noop)
 	}
+}
+
+// TestRestore_PreservesUntrackedFiles is the regression guard for issue #128:
+// Restore must NOT delete the user's own untracked/gitignored files (go-git's
+// HardReset would have; the delta-apply must not). Fails against the old
+// HardReset implementation, which enumerates and removes them.
+func TestRestore_PreservesUntrackedFiles(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "a.txt", "v1", "apply 1") // HEAD~1 target
+	commitFile(t, r, dir, "a.txt", "v2", "apply 2") // HEAD
+
+	// Drop files the user owns that git is NOT versioning: a plain untracked file,
+	// plus a .gitignore and a matching ignored file (invisible to go-git status).
+	const notesBody = "my personal notes — do not delete\n"
+	const scratchBody = "ephemeral scratch log line\n"
+	writeFile(t, dir, "MY-PERSONAL-NOTES.txt", notesBody)
+	writeFile(t, dir, ".gitignore", "scratch.log\n")
+	writeFile(t, dir, "scratch.log", scratchBody)
+
+	// UntrackedPaths should surface the plain untracked files (not the ignored one).
+	untracked, err := r.UntrackedPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsStr(untracked, "MY-PERSONAL-NOTES.txt") {
+		t.Fatalf("UntrackedPaths = %v, want it to include MY-PERSONAL-NOTES.txt", untracked)
+	}
+	if containsStr(untracked, "scratch.log") {
+		t.Fatalf("UntrackedPaths = %v, should NOT list the gitignored scratch.log", untracked)
+	}
+
+	h, err := r.Restore("HEAD~1", "agentsync revert: preserve untracked", DefaultIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h == "" {
+		t.Fatal("Restore returned empty hash")
+	}
+
+	// The tracked restore still happened.
+	if got := readFile(t, dir, "a.txt"); got != "v1" {
+		t.Fatalf("after restore a.txt = %q, want v1", got)
+	}
+	// Both of the user's own files survive byte-for-byte.
+	if got := readFile(t, dir, "MY-PERSONAL-NOTES.txt"); got != notesBody {
+		t.Fatalf("untracked file was mutated/deleted: got %q", got)
+	}
+	if got := readFile(t, dir, "scratch.log"); got != scratchBody {
+		t.Fatalf("gitignored file was mutated/deleted: got %q", got)
+	}
+
+	// Neither user file was swept into the revert commit's tree — they stay untracked.
+	tree := headTreePaths(t, r)
+	for _, p := range []string{"MY-PERSONAL-NOTES.txt", "scratch.log"} {
+		if _, ok := tree[p]; ok {
+			t.Fatalf("revert commit tree unexpectedly contains %s: %v", p, tree)
+		}
+	}
+	if _, ok := tree["a.txt"]; !ok {
+		t.Fatalf("revert commit tree missing the tracked a.txt: %v", tree)
+	}
+}
+
+// containsStr reports whether s is in xs.
+func containsStr(xs []string, s string) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// headTreePaths returns the set of file paths in the repo's current HEAD tree.
+func headTreePaths(t *testing.T, r *Repo) map[string]bool {
+	t.Helper()
+	log, err := r.Log(0)
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	if len(log) == 0 {
+		t.Fatalf("Log returned no commits")
+	}
+	repo, err := gogit.PlainOpen(r.Dir())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	c, err := repo.CommitObject(plumbing.NewHash(log[0].Hash))
+	if err != nil {
+		t.Fatalf("commit object: %v", err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		t.Fatalf("tree: %v", err)
+	}
+	out := map[string]bool{}
+	_ = tree.Files().ForEach(func(f *object.File) error {
+		out[f.Name] = true
+		return nil
+	})
+	return out
 }

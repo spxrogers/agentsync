@@ -219,6 +219,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`agentsync revert` no longer deletes your untracked or gitignored files
+  (issue #128).** `Restore` used go-git's `HardReset`, which — unlike `git reset
+  --hard` — enumerates and removes every untracked and gitignored file in the
+  worktree, so a revert silently destroyed the user's own scratch files in the
+  managed destination dir during the operation sold as safe recovery. Restore now
+  applies only the tracked HEAD↔target delta file-by-file and never enumerates
+  untracked entries, so they (and gitignored files) survive byte-for-byte and stay
+  untracked. `revert --dry-run` now notes when untracked files are present (left
+  untouched).
+
 - **Claude hooks no longer drop unmodeled fields or corrupt non-command handlers
   on `import`→`apply` (issue #124).** The canonical hook model represents only
   command handlers, so an `import` that captured a `settings.json` hook event

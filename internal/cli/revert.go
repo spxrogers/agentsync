@@ -28,8 +28,10 @@ apply checkpoint from its local-only git history, recovering from a bad apply.
 
 It is append-only: revert records a NEW commit, so the history is never rewritten
 and the revert is itself revertible. Uncommitted hand-edits to tracked files are
-preserved as a snapshot commit first, so nothing is lost. By default it undoes the
-most recent apply (restores the previous checkpoint); --to picks a specific one.
+preserved as a snapshot commit first, so nothing is lost. Untracked files you
+dropped into the dir (and gitignored files) are left untouched — revert only
+rewinds the files agentsync itself versions. By default it undoes the most recent
+apply (restores the previous checkpoint); --to picks a specific one.
 
 revert only moves the DESTINATION. The next 'agentsync apply' re-renders from the
 canonical config and would overwrite the reverted state, so revert prints a notice
@@ -224,7 +226,8 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 		return true, err
 	}
 	// Preserve any uncommitted hand-edits to tracked files as a snapshot commit so
-	// the hard reset inside Restore can't lose them (untracked files are untouched).
+	// Restore's delta-apply can't lose them. Untracked files are untouched: Restore
+	// only rewrites the tracked HEAD↔target delta and never enumerates them.
 	snap, err := repo.SnapshotDirtyTracked("agentsync revert: snapshot uncommitted changes before revert", id)
 	if err != nil {
 		return true, err
@@ -263,6 +266,9 @@ func previewRevert(p *ui.Printer, repo *agit.Repo, root, target string) error {
 		p.Bold("dry-run:"), root, p.Cyan(shortRef(targetHash)), subject)
 	if clean, _ := repo.IsClean(); !clean {
 		fmt.Fprintf(p.Out, "  (uncommitted changes to tracked files would be snapshotted first, then preserved in history)\n")
+	}
+	if untracked, _ := repo.UntrackedPaths(); len(untracked) > 0 {
+		fmt.Fprintf(p.Out, "  (%d untracked file(s) in this dir are left untouched)\n", len(untracked))
 	}
 	if len(changes) == 0 {
 		fmt.Fprintf(p.Out, "  (already matches; nothing to change)\n")

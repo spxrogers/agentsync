@@ -334,7 +334,12 @@ Behavior:
    agentsync-managed repo (no marker / never inited).
 2. Resolve the target checkpoint (`--to` or the previous checkpoint by default).
 3. Restore the worktree files to that checkpoint's content and record a new commit
-   `agentsync revert: <agent> → <short-ref>`. Append-only (decision #8).
+   `agentsync revert: <agent> → <short-ref>`. Append-only (decision #8). This
+   applies **only the tracked HEAD↔target delta** file-by-file — it must NOT use
+   go-git's `HardReset`, which (unlike `git reset --hard`) enumerates and deletes
+   every untracked/gitignored worktree file. Touching only the diffed paths leaves
+   the user's own untracked/gitignored files intact (issue #128); `--dry-run` notes
+   when such files are present.
 4. Print the **out-of-sync notice** (decision #4):
 
    > `agentsync revert` completed. The destination directory `<dir>` is now out

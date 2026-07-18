@@ -39,7 +39,8 @@ configs quietly drift apart. agentsync fixes the fan-out:
   back into your (committable) source.
 - **A bad apply is revertible.** `apply` keeps each destination dir (`~/.claude`,
   …) in a **local-only** git history (opt-out, never pushed), so `agentsync revert`
-  rolls back to a prior checkpoint.
+  rolls back to a prior checkpoint — while leaving any untracked/gitignored files
+  you put in the dir untouched.
 
 New here? The **[User guide](docs/user-guide.md)** takes you 0→100.
 

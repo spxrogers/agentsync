@@ -258,8 +258,12 @@ agentsync revert --all --dry-run     # preview reverting every managed dir
 history, so the bad apply stays in the log and the revert is itself revertible. If
 you hand-edited a tracked file after the last apply, revert snapshots that edit
 into history first, so **nothing is lost** (recover it with `revert --to <snapshot>`).
-It moves only the *destination*, so afterwards it reminds you to **reconcile** (or
-fix the canonical source) before the next `apply` re-renders over it.
+Any **untracked files** you dropped into the dir (and gitignored files) are **left
+untouched** — revert only rewinds the files agentsync itself versions, so your own
+scratch files are never deleted. `revert --dry-run` notes when such files are
+present. It moves only the *destination*, so afterwards it reminds you to
+**reconcile** (or fix the canonical source) before the next `apply` re-renders over
+it.
 
 The first apply to an untracked dir **asks** before initializing the repo
 (opt-out). Answer once and it's remembered in `agentsync.toml`:

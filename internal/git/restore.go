@@ -2,6 +2,9 @@ package git
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"path"
 	"sort"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -59,11 +62,21 @@ func (r *Repo) Plan(targetRev string) (targetHash string, changes []FileChange, 
 	return targetStr, out, nil
 }
 
-// Restore makes the worktree match the targetRev checkpoint and records the result
-// as a NEW commit on top of the current HEAD. It is append-only: HEAD advances,
-// nothing is rewritten or lost, so the bad apply stays in history and the revert
-// is itself revertible. Returns the new commit hash, or ("", nil) when the worktree
-// already matches target (no checkpoint recorded).
+// Restore makes the worktree's TRACKED files match the targetRev checkpoint and
+// records the result as a NEW commit on top of the current HEAD. It is append-only:
+// HEAD advances, nothing is rewritten or lost, so the bad apply stays in history
+// and the revert is itself revertible. Returns the new commit hash, or ("", nil)
+// when the worktree already matches target (no checkpoint recorded).
+//
+// It applies ONLY the tracked HEAD↔target delta (the FileChanges from Plan) to the
+// worktree — it deliberately does NOT use go-git's HardReset. Unlike `git reset
+// --hard`, go-git's HardReset enumerates and DELETES every untracked and gitignored
+// worktree file; a revert sold as safe rollback must never destroy the user's own
+// scratch files. Because only the diffed paths are touched, any untracked or
+// gitignored file the user dropped into the dir survives byte-for-byte and stays
+// untracked. (Callers snapshot uncommitted TRACKED edits first — see revert's
+// SnapshotDirtyTracked — so at entry tracked worktree == HEAD and applying the
+// delta reproduces target's tracked content exactly.)
 func (r *Repo) Restore(targetRev, message string, id Identity) (string, error) {
 	targetStr, changes, err := r.Plan(targetRev)
 	if err != nil {
@@ -72,7 +85,7 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (string, error) {
 	if len(changes) == 0 {
 		return "", nil
 	}
-	orig, err := r.headHash()
+	targetTree, err := r.commitTree(plumbing.NewHash(targetStr))
 	if err != nil {
 		return "", err
 	}
@@ -80,18 +93,24 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("worktree for %s: %w", r.dir, err)
 	}
-	// Append-only restore via two resets:
-	//   1. HARD reset to target  → index + worktree now hold target's content
-	//      (and the branch ref transiently points at target).
-	//   2. SOFT reset to orig    → moves the branch ref back to the original HEAD
-	//      WITHOUT touching the index/worktree (go-git SoftReset leaves both).
-	// Committing now records target's content as a new commit whose PARENT is the
-	// original HEAD — so the intervening commits (and the bad apply) stay reachable.
-	if err := wt.Reset(&gogit.ResetOptions{Commit: plumbing.NewHash(targetStr), Mode: gogit.HardReset}); err != nil {
-		return "", fmt.Errorf("reset worktree to checkpoint %s in %s: %w", shortStr(targetStr), r.dir, err)
-	}
-	if err := wt.Reset(&gogit.ResetOptions{Commit: orig, Mode: gogit.SoftReset}); err != nil {
-		return "", fmt.Errorf("restoring branch ref after revert in %s: %w", r.dir, err)
+	// Apply the delta path-by-path and stage each change. HEAD never moves, so the
+	// commit below is parented on the original HEAD automatically — the intervening
+	// commits (and the bad apply) stay reachable, keeping revert append-only.
+	for _, ch := range changes {
+		switch ch.Kind {
+		case "delete":
+			// wt.Remove both deletes the worktree file and stages the deletion.
+			if _, err := wt.Remove(ch.Path); err != nil {
+				return "", fmt.Errorf("removing %s during revert in %s: %w", ch.Path, r.dir, err)
+			}
+		default: // "create" | "modify"
+			if err := restoreFileFromTree(wt, targetTree, ch.Path); err != nil {
+				return "", fmt.Errorf("restoring %s during revert in %s: %w", ch.Path, r.dir, err)
+			}
+			if _, err := wt.Add(ch.Path); err != nil {
+				return "", fmt.Errorf("staging %s during revert in %s: %w", ch.Path, r.dir, err)
+			}
+		}
 	}
 	sig := signature(id)
 	h, err := wt.Commit(message, &gogit.CommitOptions{Author: sig, Committer: sig})
@@ -99,6 +118,78 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (string, error) {
 		return "", fmt.Errorf("recording revert commit in %s: %w", r.dir, err)
 	}
 	return h.String(), nil
+}
+
+// restoreFileFromTree writes the target tree's blob for slash-path p into the
+// worktree filesystem, preserving the blob's file mode (notably the exec bit).
+// It writes through wt.Filesystem so paths resolve under the worktree root even
+// for folded/rerooted repos. The file is removed first so OpenFile's perm applies
+// even when p already exists (a "modify"), since OpenFile only honors perm on
+// creation.
+//
+// A symlink-mode blob (git mode 120000) is written as a regular file here, not
+// recreated as a symlink; agentsync writes only regular files into the versioned
+// dirs, so a tracked symlink blob does not arise in practice.
+func restoreFileFromTree(wt *gogit.Worktree, tree *object.Tree, p string) error {
+	fs := wt.Filesystem
+	f, err := tree.File(p)
+	if err != nil {
+		return fmt.Errorf("loading blob %s from target checkpoint: %w", p, err)
+	}
+	mode, err := f.Mode.ToOSFileMode()
+	if err != nil {
+		return fmt.Errorf("resolving file mode of %s: %w", p, err)
+	}
+	reader, err := f.Reader()
+	if err != nil {
+		return fmt.Errorf("reading blob %s: %w", p, err)
+	}
+	defer reader.Close()
+
+	if dir := path.Dir(p); dir != "." && dir != "/" {
+		if err := fs.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("creating parent dir of %s: %w", p, err)
+		}
+	}
+	// Drop any existing file so the target mode takes effect on (re)create.
+	if err := fs.Remove(p); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("replacing %s: %w", p, err)
+	}
+	dst, err := fs.OpenFile(p, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if err != nil {
+		return fmt.Errorf("opening %s for write: %w", p, err)
+	}
+	if _, err := io.Copy(dst, reader); err != nil {
+		_ = dst.Close()
+		return fmt.Errorf("writing %s: %w", p, err)
+	}
+	if err := dst.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", p, err)
+	}
+	return nil
+}
+
+// UntrackedPaths returns the sorted slash-relative paths of files in the worktree
+// that git is not tracking (a `?` status) — the user's own scratch files that a
+// revert leaves untouched. Note go-git's status does not enumerate gitignored
+// files, so those (also preserved by revert) do not appear here.
+func (r *Repo) UntrackedPaths() ([]string, error) {
+	wt, err := r.repo.Worktree()
+	if err != nil {
+		return nil, fmt.Errorf("worktree for %s: %w", r.dir, err)
+	}
+	st, err := wt.Status()
+	if err != nil {
+		return nil, fmt.Errorf("git status in %s: %w", r.dir, err)
+	}
+	var out []string
+	for p, fs := range st {
+		if isUntracked(fs) {
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // commitTree loads the tree of a commit hash.

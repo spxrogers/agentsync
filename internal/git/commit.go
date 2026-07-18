@@ -81,7 +81,7 @@ func (r *Repo) CommitStaged(message string, id Identity) (string, error) {
 
 // SnapshotDirtyTracked commits any uncommitted changes to already-TRACKED files
 // (modifications and deletions) as a safety checkpoint, so a subsequent
-// destructive operation (notably revert's hard reset) cannot lose them. Untracked
+// destructive operation (notably revert's restore) cannot lose them. Untracked
 // files — the user's own scratch files — are never touched. Returns the snapshot
 // commit hash, or ("", nil) when the worktree has no tracked changes. This is what
 // keeps the append-only promise true of the WORKTREE, not just of history.
