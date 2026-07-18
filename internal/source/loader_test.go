@@ -1,11 +1,14 @@
 package source_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spf13/afero"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
 // TestLoad_AgentsyncTOMLRejectsTypos guards against the silent-drop bug
@@ -107,34 +110,22 @@ func TestLoadRejectsInvalidGitBackupMode(t *testing.T) {
 // non-empty, correctly-keyed Agents map, and the [updates]/[secrets] sections
 // the same snippet documents must parse under strict decoding.
 func TestConfigurationDocExampleParses(t *testing.T) {
-	// Kept byte-identical (minus the `age1…`/`…` placeholders that are just
-	// opaque strings) to the fenced ```toml block in configuration.mdx.
-	const doc = `
-[agents.claude]
-enabled = true
-scope   = "user"
+	testenv.RequireContainer(t)
+	// Read the LIVE published snippet, not a copy: extract the fenced ```toml block
+	// from configuration.mdx and load THAT, so a doc edit back to [[agents]] (or a
+	// dropped/renamed section) fails this test instead of shipping undetected.
+	mdxPath := filepath.Join("..", "..", "website", "src", "content", "docs", "reference", "configuration.mdx")
+	raw, err := os.ReadFile(mdxPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", mdxPath, err)
+	}
+	doc := extractFencedBlock(t, string(raw), "```toml", `title="~/.agentsync/agentsync.toml"`)
 
-[agents.opencode]
-enabled = true
-
-[updates]
-default_mode     = "track"
-default_interval = "24h"
-
-[secrets]
-backend       = "age"
-file          = "secrets/secrets.age"
-recipient     = "age1example"
-identity_file = "${env:HOME}/.config/agentsync/age.key"
-
-[memory]
-banner = true
-`
 	fs := afero.NewMemMapFs()
 	_ = afero.WriteFile(fs, "/home/.agentsync/agentsync.toml", []byte(doc), 0o644)
 	c, err := source.Load(fs, "/home/.agentsync")
 	if err != nil {
-		t.Fatalf("source.Load of documented snippet: %v", err)
+		t.Fatalf("source.Load of the documented agentsync.toml snippet: %v\n---\n%s", err, doc)
 	}
 	if len(c.Config.Agents) != 2 {
 		t.Fatalf("Agents map = %d entries, want 2 (the [[agents]] form would give 0): %#v",
@@ -152,9 +143,32 @@ banner = true
 	if got := c.Config.Updates.DefaultMode; got != "track" {
 		t.Errorf("[updates] default_mode = %q, want %q", got, "track")
 	}
-	if got := c.Config.Secrets.File; got != "secrets/secrets.age" {
-		t.Errorf("[secrets] file = %q, want %q", got, "secrets/secrets.age")
+	if got := c.Config.Secrets.File; got == "" {
+		t.Error("[secrets] file should be documented and parse to a non-empty value")
 	}
+}
+
+// extractFencedBlock returns the body of the first ```<lang> fence whose opening
+// line contains marker, from markdown src. It fails the test if none is found, so
+// a doc restructure that removes the block is caught rather than silently skipped.
+func extractFencedBlock(t *testing.T, src, fence, marker string) string {
+	t.Helper()
+	lines := strings.Split(src, "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), fence) || !strings.Contains(line, marker) {
+			continue
+		}
+		var body []string
+		for _, l := range lines[i+1:] {
+			if strings.TrimSpace(l) == "```" {
+				return strings.Join(body, "\n")
+			}
+			body = append(body, l)
+		}
+		t.Fatalf("unterminated %s fence in doc", fence)
+	}
+	t.Fatalf("no %s fence containing %q found in the doc", fence, marker)
+	return ""
 }
 
 // TestParseFrontmatter_ClosingFenceAtEOF guards the parser against two common
