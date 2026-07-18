@@ -5,8 +5,8 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
-	"strings"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -94,28 +94,52 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("worktree for %s: %w", r.dir, err)
 	}
-	// Pre-flight the one conflict Restore cannot resolve without data loss: a path
-	// that is a file in the target but is CURRENTLY a directory still holding
-	// untracked files (which we must never delete). Detect it BEFORE mutating the
-	// worktree so the refusal is all-or-nothing — no half-applied deletes — and
-	// name the offending file. restoreFileFromTree keeps a defensive backstop for
-	// the same case, but this makes the common one fail cleanly up front.
-	untracked, err := r.UntrackedPaths()
-	if err != nil {
-		return "", err
+	// Pre-flight the STRUCTURAL conflicts a create/modify can't resolve without
+	// destroying a file agentsync doesn't manage, and refuse BEFORE mutating the
+	// worktree — so no unmanaged file is ever deleted and these conflicts fail up
+	// front rather than half-way through the delete pass. We inspect the worktree
+	// filesystem directly (NOT git status, which omits gitignored files):
+	//   (1) a path that is a file in the target but CURRENTLY a directory whose
+	//       contents aren't all being deleted (it holds untracked/gitignored files)
+	//       — replacing it with a file would delete them;
+	//   (2) a create whose ancestor is an existing unmanaged FILE — MkdirAll would
+	//       fail over it.
+	// A non-transactional restore can't guarantee zero partial state for every
+	// possible I/O error, but any staged-but-uncommitted delete is git-recoverable
+	// and no unmanaged file is ever lost. restoreFileFromTree keeps a defensive
+	// backstop for the same dir->file case.
+	deleting := make(map[string]bool, len(changes))
+	for _, ch := range changes {
+		if ch.Kind == "delete" {
+			deleting[ch.Path] = true
+		}
 	}
 	for _, ch := range changes {
 		if ch.Kind == "delete" {
 			continue
 		}
-		info, statErr := wt.Filesystem.Stat(ch.Path)
-		if statErr != nil || !info.IsDir() {
-			continue
-		}
-		for _, u := range untracked {
-			if u == ch.Path || strings.HasPrefix(u, ch.Path+"/") {
-				return "", fmt.Errorf("cannot restore %q to a file: the directory holds files agentsync does not manage (e.g. %q); move or remove them, then re-run revert", ch.Path, u)
+		abs := filepath.Join(r.dir, filepath.FromSlash(ch.Path))
+		if info, statErr := os.Stat(abs); statErr == nil && info.IsDir() {
+			blocker, werr := firstUnmanagedFileUnder(r.dir, abs, deleting)
+			if werr != nil {
+				return "", fmt.Errorf("scanning %s during revert in %s: %w", ch.Path, r.dir, werr)
 			}
+			if blocker != "" {
+				return "", fmt.Errorf("cannot restore %q to a file: the directory holds files agentsync does not manage (e.g. %q); move or remove them, then re-run revert", ch.Path, blocker)
+			}
+		}
+		for parent := path.Dir(ch.Path); parent != "." && parent != "/"; parent = path.Dir(parent) {
+			pinfo, statErr := os.Stat(filepath.Join(r.dir, filepath.FromSlash(parent)))
+			if statErr != nil {
+				continue // doesn't exist yet — MkdirAll will create it
+			}
+			if pinfo.IsDir() {
+				break // a real directory — fine
+			}
+			if !deleting[parent] {
+				return "", fmt.Errorf("cannot restore %q: its parent %q is a file agentsync does not manage; move or remove it, then re-run revert", ch.Path, parent)
+			}
+			break // parent is a file being deleted — the delete pass clears it first
 		}
 	}
 	// Apply the delta path-by-path and stage each change. HEAD never moves, so the
@@ -157,6 +181,32 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (string, error) {
 		return "", fmt.Errorf("recording revert commit in %s: %w", r.dir, err)
 	}
 	return h.String(), nil
+}
+
+// firstUnmanagedFileUnder walks absDir and returns the first regular file — as a
+// repoDir-relative slash path — that is NOT in the `deleting` set: an untracked or
+// gitignored file that replacing this directory with a file would have to destroy.
+// It returns "" when the directory holds nothing agentsync isn't already removing.
+func firstUnmanagedFileUnder(repoDir, absDir string, deleting map[string]bool) (string, error) {
+	var found string
+	err := filepath.WalkDir(absDir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, rerr := filepath.Rel(repoDir, p)
+		if rerr != nil {
+			return rerr
+		}
+		if slash := filepath.ToSlash(rel); !deleting[slash] {
+			found = slash
+			return filepath.SkipAll // stop at the first unmanaged file
+		}
+		return nil
+	})
+	return found, err
 }
 
 // restoreFileFromTree writes the target tree's blob for slash-path p into the

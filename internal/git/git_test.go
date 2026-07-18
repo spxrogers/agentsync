@@ -910,3 +910,85 @@ func TestRestore_UntrackedSiblingBlocksFileReplacement(t *testing.T) {
 		t.Fatalf("refusal must be all-or-nothing: tracked foo/bar was mutated, got %q", got)
 	}
 }
+
+// TestRestore_GitignoredSiblingBlocksFileReplacement proves the pre-flight is
+// filesystem-based, not git-status-based: a GITIGNORED file (which git status
+// omits) inside a dir being replaced by a file must still block the revert
+// all-or-nothing, since #128 preserves gitignored files equally.
+func TestRestore_GitignoredSiblingBlocksFileReplacement(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "foo", "iamfile", "c1: foo is a file") // target
+	// c2: foo becomes a dir (foo/bar tracked) with a .gitignore for *.log under it.
+	if err := os.Remove(filepath.Join(dir, "foo")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "foo/bar", "iamdir")
+	writeFile(t, dir, ".gitignore", "foo/*.log\n")
+	if err := r.Stage([]string{"foo/bar", ".gitignore"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c2: foo is a dir", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	const scratch = "gitignored — keep me\n"
+	writeFile(t, dir, "foo/debug.log", scratch) // gitignored; git status omits it
+
+	if _, err := r.Restore("HEAD~1", "agentsync revert: blocked by gitignored", DefaultIdentity); err == nil {
+		t.Fatal("Restore should refuse when a gitignored file blocks a dir->file replacement")
+	} else if !strings.Contains(err.Error(), "agentsync does not manage") {
+		t.Fatalf("error should point at the unmanaged files; got: %v", err)
+	}
+	if got := readFile(t, dir, "foo/debug.log"); got != scratch {
+		t.Fatalf("gitignored file must survive the refused revert, got %q", got)
+	}
+	if got := readFile(t, dir, "foo/bar"); got != "iamdir" {
+		t.Fatalf("refusal must be all-or-nothing: tracked foo/bar was mutated, got %q", got)
+	}
+}
+
+// TestRestore_ParentFileCollisionBlocked covers the reverse structural conflict:
+// creating a target path whose ancestor is an existing untracked FILE (MkdirAll
+// would fail over it). The pre-flight must refuse before mutating and preserve the
+// untracked file.
+func TestRestore_ParentFileCollisionBlocked(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "a/b", "iamdir", "c1: a is a dir")
+	commitFile(t, r, dir, "keep", "k", "c2: add keep")
+	// c3 (HEAD): remove a/b so "a" no longer exists in the tree.
+	if err := os.RemoveAll(filepath.Join(dir, "a")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c3: remove a/b", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	// The user drops an untracked FILE named exactly "a".
+	const scratch = "untracked file named a\n"
+	writeFile(t, dir, "a", scratch)
+
+	// Revert to c2 (has a/b): creating a/b needs MkdirAll("a") over the untracked
+	// file "a" — the pre-flight must refuse before mutating, preserving "a".
+	if _, err := r.Restore("HEAD~1", "agentsync revert: parent collision", DefaultIdentity); err == nil {
+		t.Fatal("Restore should refuse when an untracked file blocks creating a parent dir")
+	} else if !strings.Contains(err.Error(), "does not manage") {
+		t.Fatalf("error should point at the unmanaged parent; got: %v", err)
+	}
+	if got := readFile(t, dir, "a"); got != scratch {
+		t.Fatalf("untracked file 'a' must survive the refused revert, got %q", got)
+	}
+}
