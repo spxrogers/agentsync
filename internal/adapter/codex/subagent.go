@@ -39,10 +39,17 @@ var codexAgentKnownKeys = map[string]bool{"name": true, "description": true, "mo
 // renderSubagents projects canonical subagents into Codex agent TOML files.
 // markdown body → developer_instructions; name + description + model carry over;
 // any other frontmatter key (notably `tools` and `color`) has no Codex
-// equivalent and is dropped with a reported Skip.
+// equivalent and is dropped with a reported Skip. Because Codex's `name` is the
+// agent's identity, two subagents with distinct file stems that resolve to the
+// same effective `name` would write two TOMLs claiming one identity; that
+// collision is reported as an error rather than emitted silently.
 func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp, []adapter.Skip, error) {
 	var ops []adapter.FileOp
 	var skips []adapter.Skip
+	// seenNames maps each effective Codex agent name already rendered to the
+	// canonical name (file stem) that first produced it, so a later subagent
+	// resolving to the same effective name is caught as a collision.
+	seenNames := map[string]string{}
 	for _, s := range c.Subagents {
 		// Codex treats the `name` field as the source of truth; prefer the
 		// frontmatter name when present, falling back to the filename-derived
@@ -51,6 +58,17 @@ func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp
 		if fmName := fmString(s.Frontmatter, "name"); fmName != "" {
 			name = fmName
 		}
+		// Two agents claiming one Codex identity cannot both be written. Return
+		// an error (Render's contract already carries one) rather than silently
+		// overwrite or emit duplicate TOMLs — a silent drop would violate the
+		// "capture it or acknowledge it, never drop it silently" invariant.
+		if first, ok := seenNames[name]; ok {
+			return nil, nil, fmt.Errorf(
+				"codex subagents %q and %q resolve to the same agent name %q; rename one or set distinct frontmatter names",
+				first, s.Name, name,
+			)
+		}
+		seenNames[name] = s.Name
 		af := codexAgentFile{
 			Name:                  name,
 			Description:           fmString(s.Frontmatter, "description"),

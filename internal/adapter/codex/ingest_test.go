@@ -116,6 +116,12 @@ func TestIngest_RoundTripsSubagent(t *testing.T) {
 		t.Fatalf("Subagent roundtrip lost: %+v", out.Subagents)
 	}
 	sa := out.Subagents[0]
+	// Codex writes `name` (required) into the TOML from the effective name, which
+	// falls back to the canonical name when no frontmatter name is set — so ingest
+	// re-populates it unconditionally on presence.
+	if sa.Frontmatter["name"] != "reviewer" {
+		t.Fatalf("name should be re-populated from the TOML name field: %+v", sa.Frontmatter)
+	}
 	if sa.Frontmatter["description"] != "code review agent" {
 		t.Fatalf("description missing: %+v", sa.Frontmatter)
 	}
@@ -127,6 +133,63 @@ func TestIngest_RoundTripsSubagent(t *testing.T) {
 	}
 	if sa.Body != "You are a code reviewer.\n" {
 		t.Fatalf("body (developer_instructions) roundtrip: got %q", sa.Body)
+	}
+}
+
+// TestIngest_RoundTripsSubagent_DivergentName is the load-bearing fidelity test
+// for issue #144: a subagent whose frontmatter `name` deliberately differs from
+// its file stem must have that divergent name survive Render → Apply → Ingest.
+// Before the fix, ingest reconstructed the name from the filename only and the
+// frontmatter `name` was silently erased.
+func TestIngest_RoundTripsSubagent_DivergentName(t *testing.T) {
+	in := source.Canonical{Subagents: []source.Subagent{{
+		Name: "reviewer",
+		Frontmatter: map[string]any{
+			"name":        "Senior Reviewer",
+			"description": "code review agent",
+			"model":       "gpt-5.5",
+		},
+		Body: "You are a code reviewer.\n",
+	}}}
+	out := roundTrip(t, in, adapter.ScopeUser, "")
+	if len(out.Subagents) != 1 {
+		t.Fatalf("want exactly one subagent, got %+v", out.Subagents)
+	}
+	sa := out.Subagents[0]
+	if sa.Frontmatter["name"] != "Senior Reviewer" {
+		t.Fatalf("divergent frontmatter name did not survive round-trip: %+v", sa.Frontmatter)
+	}
+	if sa.Frontmatter["description"] != "code review agent" {
+		t.Fatalf("description missing: %+v", sa.Frontmatter)
+	}
+	if sa.Frontmatter["model"] != "gpt-5.5" {
+		t.Fatalf("model missing: %+v", sa.Frontmatter)
+	}
+	if sa.Body != "You are a code reviewer.\n" {
+		t.Fatalf("body (developer_instructions) roundtrip: got %q", sa.Body)
+	}
+}
+
+// TestIngest_Subagent_RepopulatesName_WhenMatchingFilename covers the low finding
+// that ingest must re-populate `name` even when it equals the file stem — the
+// re-population is unconditional on presence, not gated on divergence.
+func TestIngest_Subagent_RepopulatesName_WhenMatchingFilename(t *testing.T) {
+	in := source.Canonical{Subagents: []source.Subagent{{
+		Name: "ai-architect",
+		Frontmatter: map[string]any{
+			"name":        "ai-architect",
+			"description": "Designs the system",
+			"model":       "gpt-5.5",
+		},
+		Body: "Architect the thing.\n",
+	}}}
+	out := roundTrip(t, in, adapter.ScopeUser, "")
+	if len(out.Subagents) != 1 {
+		t.Fatalf("want exactly one subagent, got %+v", out.Subagents)
+	}
+	if got := out.Subagents[0].Frontmatter["name"]; got != "ai-architect" {
+		t.Fatalf("name should be re-populated even when it matches the file stem, got %v: %+v",
+			got, out.Subagents[0].Frontmatter)
 	}
 }
 

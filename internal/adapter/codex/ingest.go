@@ -17,8 +17,10 @@ import (
 // source.Canonical. It is the inverse of Render.
 //
 // Round-trip note: subagents lose the Claude-side `tools`/`color` frontmatter
-// (Codex agents have no equivalent), so Ingest reconstructs only the
-// `description` + `model` that were written to the agent TOML, plus the body
+// (Codex agents have no equivalent), so Ingest reconstructs the `name` (required
+// by Codex, re-populated from the TOML `name` field so a frontmatter name that
+// deliberately diverges from the file stem survives the round-trip),
+// `description`, and `model` that were written to the agent TOML, plus the body
 // from `developer_instructions`. Project-scope slash commands are never written
 // (global-only), so they don't ingest at project scope either.
 func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical, error) {
@@ -91,12 +93,24 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				continue
 			}
 			fm := map[string]any{}
+			// Re-populate the frontmatter `name` from the TOML `name` field
+			// unconditionally on presence (even when it equals the file stem):
+			// this makes the round-trip lossless for a deliberately-divergent name
+			// and a harmless no-op for a matching one, since Render prefers
+			// Frontmatter["name"] when present and falls back to the canonical
+			// (filename-derived) name otherwise.
+			if af.Name != "" {
+				fm["name"] = af.Name
+			}
 			if af.Description != "" {
 				fm["description"] = af.Description
 			}
 			if af.Model != "" {
 				fm["model"] = af.Model
 			}
+			// The canonical Name stays derived from the filename — it is the
+			// on-disk identity / SourceID stem — while the frontmatter carries the
+			// TOML `name` value above.
 			name := e.Name()[:len(e.Name())-len(".toml")]
 			c.Subagents = append(c.Subagents, source.Subagent{Name: name, Frontmatter: fm, Body: af.DeveloperInstructions})
 		}

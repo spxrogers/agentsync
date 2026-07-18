@@ -267,6 +267,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   fully represent **uncaptured** with a warning (matching the Gemini adapter), so
   the next apply never owns or overwrites that event, and Render reports a dropped
   `Skip` for a non-`command` handler instead of emitting an empty-command entry.
+- **Codex subagent `name` now survives a round-trip, and colliding effective
+  names are caught (issue #144).** A Codex custom agent whose frontmatter `name`
+  deliberately differs from its file stem (rendered into the TOML `name` field
+  but written to `<stem>.toml`) had that divergent value silently erased on the
+  next `import`/`reconcile`, because ingest reconstructed the name from the
+  filename and never read the TOML `name` back. Ingest now re-populates
+  `Frontmatter["name"]` from the TOML `name` field unconditionally on presence
+  (lossless for a divergent name, a no-op for a matching one). Separately, two
+  subagents with distinct file stems that resolve to the same effective Codex
+  `name` — two TOMLs claiming one agent identity — are now reported as a Render
+  error instead of being written silently.
 
 - **Claude LSP capability corrected.** Claude Code reads LSP servers from plugin
   manifests, not `settings.json#/lspServers`; agentsync now reports canonical
