@@ -180,6 +180,16 @@ type Adapter interface {
 	// destination when the source section became empty (no render op exists
 	// to carry the removal). It MUST be exact — applying the wrong strategy to
 	// a JSONC file would parse it as strict JSON and clobber the file.
+	//
+	// CONSTRAINT — an adapter MUST emit exactly ONE key-merge strategy across
+	// all its ops. orphanCleanupOps applies this single accessor value to
+	// EVERY key-merge destination the adapter owns, so an adapter co-owning
+	// keys across files of *different* on-disk formats (e.g. a JSON mcp.json
+	// and a TOML config.toml) is NOT currently supported — it would require
+	// widening this accessor to a per-path strategy first. The central guard
+	// TestKeyMergeStrategy_MatchesEmittedOps (internal/cli) pins this accessor
+	// against the MergeStrategy stamped on every key-merge FileOp for all
+	// registered adapters, so the two can never silently diverge.
 	KeyMergeStrategy() string
 	// Apply executes ops against destinations. Adapters MUST route every
 	// destination write through w.Write / w.Delete rather than calling

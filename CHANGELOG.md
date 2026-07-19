@@ -32,6 +32,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
+- **Each adapter's key-merge strategy is now a machine-checked, load-bearing
+  invariant (issue #157).** A new central guard
+  (`TestKeyMergeStrategy_MatchesEmittedOps`) renders a real MCP+hook fixture
+  through every registered adapter and asserts `KeyMergeStrategy()` — the single
+  static value `orphanCleanupOps` trusts for its destructive cleanup writes —
+  equals the `MergeStrategy` on every key-merge `FileOp` the adapter emits (and
+  `""` ⇒ no key-merge ops). The interface + architecture docs now record the
+  single-strategy-per-adapter constraint explicitly, and correct a stale
+  architecture-doc line that listed Gemini under `merge-json-keys` (it emits
+  `merge-jsonc-keys`).
 - **A project-scope `[destination_directory_git_backup]` override is no longer copied
   into the merged config (issue #126).** Git backup is a user-scope-only feature
   (`VersionRoots` returns nil at project scope), so a project override could never take

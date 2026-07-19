@@ -162,12 +162,23 @@ are exercised.
 `FileOp.MergeStrategy` name how an adapter co-owns keys inside a shared config
 file: `merge-json-keys` (Claude's `.claude.json`/`settings.json`, a project's
 repo-root `.mcp.json` for project-scope MCP servers, Cursor's `.cursor/mcp.json` +
-`.cursor/hooks.json`, Gemini's `.gemini/settings.json` — which co-owns both
-`mcpServers` and `hooks` — Windsurf's `~/.codeium/windsurf/mcp_config.json`, Roo's project `.roo/mcp.json`,
+`.cursor/hooks.json`, Windsurf's `~/.codeium/windsurf/mcp_config.json`, Roo's project `.roo/mcp.json`,
 and Cline's `~/.cline/mcp.json`),
-`merge-jsonc-keys` (OpenCode's comment-tolerant `opencode.json`), and
+`merge-jsonc-keys` (OpenCode's comment-tolerant `opencode.json` and Gemini's
+`.gemini/settings.json` — which co-owns both `mcpServers` and `hooks`), and
 `merge-toml-keys` (Codex's `config.toml`). The Continue adapter co-owns no shared
 file (it projects one block file per item), so it has no key-merge strategy.
+
+Each adapter has **exactly one** key-merge strategy. `orphanCleanupOps`
+(`internal/render/pipeline.go`) synthesizes destructive cleanup writes from the
+single, static `KeyMergeStrategy()` value and applies it to *every* key-merge
+destination the adapter owns, so an adapter co-owning keys across files of
+*different* on-disk formats is **not currently supported** — it would require
+widening the accessor to a per-path strategy first. A central guard
+(`TestKeyMergeStrategy_MatchesEmittedOps`, `internal/cli`) renders a real
+MCP+hook fixture through every registered adapter and pins `KeyMergeStrategy()`
+against the `MergeStrategy` stamped on every key-merge `FileOp` it emits, so the
+accessor can never silently drift from what an adapter actually writes.
 
 **Deep vs breadth-tier adapters.** The nine hand-written packages above are
 *deep* adapters — agent-specific, multi-component, often bidirectional. Beyond
