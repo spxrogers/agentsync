@@ -54,6 +54,7 @@ func newSecretsCmd() *cobra.Command {
 // hanging on a non-interactive prompt.
 func newSecretsSetCmd() *cobra.Command {
 	var useStdin bool
+	var allowEmpty bool
 	cmd := &cobra.Command{
 		Use:   "set <key>[=<value>]",
 		Short: "set (or update) a secret key (prompts securely by default)",
@@ -61,11 +62,12 @@ func newSecretsSetCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			return withGlobalLock(home, func() error {
-				return secretsSet(cmd, args[0], useStdin)
+				return secretsSet(cmd, args[0], useStdin, allowEmpty)
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&useStdin, "stdin", false, "read the secret value from stdin (recommended for scripts)")
+	cmd.Flags().BoolVar(&allowEmpty, "allow-empty", false, "permit storing an empty-string secret (refused by default)")
 	return cmd
 }
 
@@ -361,7 +363,7 @@ func secretsGet(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func secretsSet(cmd *cobra.Command, arg string, useStdin bool) error {
+func secretsSet(cmd *cobra.Command, arg string, useStdin, allowEmpty bool) error {
 	cfg, home, err := loadSecretsConfig()
 	if err != nil {
 		return err
@@ -379,6 +381,14 @@ func secretsSet(cmd *cobra.Command, arg string, useStdin bool) error {
 	key, value, err := resolveSecretKeyValue(cmd, arg, useStdin)
 	if err != nil {
 		return err
+	}
+	// Refuse a whitespace-only (or empty) value by default: an empty secret is
+	// almost never intentional (a fat-fingered paste, an empty pbpaste pipe), is
+	// invisible to the fail-closed cleartext backstop, and resolves to "" in native
+	// config at apply time. The error names only the key, never the attempted value
+	// (which could be a mistyped real secret). --allow-empty is the escape hatch.
+	if !allowEmpty && strings.TrimSpace(value) == "" {
+		return fmt.Errorf("refusing to store an empty value for secret %q; pass --allow-empty to store it deliberately", key)
 	}
 
 	m, err := decryptToMap(cfg, home)

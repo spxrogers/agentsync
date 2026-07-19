@@ -57,6 +57,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
+- **`agentsync secrets set` refuses an empty value by default (issue #165).** An
+  empty or whitespace-only value (a fat-fingered paste, an empty `pbpaste`/
+  `1password` pipe) across any input mode (`--stdin`, interactive prompt, legacy
+  `key=`) is now refused with a value-free error rather than silently stored as a
+  broken secret that resolves to `""` at apply time. Pass the new `--allow-empty`
+  flag to store an empty value deliberately.
 - **`Detect()` is now wired into `doctor`; the dead `Capabilities()` bitmask is
   removed from the `Adapter` interface (issue #177).** Both methods previously had
   no production consumer. `doctor`'s adapter-detection section now calls each
