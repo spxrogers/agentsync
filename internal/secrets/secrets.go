@@ -52,21 +52,26 @@ func SubstituteRefs(s string, secrets Resolver, env Resolver) (string, []string,
 	return out, unresolved, nil
 }
 
-// EnvBackend resolves ${env:NAME} via os.Getenv(NAME). Used both as the env
-// resolver in SubstituteRefs and as the "backend = env" mode where secrets
-// are also stored as env vars (e.g. by direnv / 1Password CLI).
+// EnvBackend resolves ${env:NAME} via os.LookupEnv(NAME) — presence, not
+// emptiness, is the criterion, so a var set to "" resolves to "" (matching
+// AgeBackend) and only an unset var errors. Used both as the env resolver in
+// SubstituteRefs and as the "backend = env" mode where secrets are also stored
+// as env vars (e.g. by direnv / 1Password CLI).
 type EnvBackend struct{}
 
 func (EnvBackend) Resolve(key string) (string, error) {
-	v := osGetenv(key)
-	if v == "" {
+	// Presence, not emptiness, is the criterion — a var set to the empty string
+	// resolves to "" (matching AgeBackend's cache-presence model); only an
+	// unset var is an error. (issue #163)
+	v, ok := osLookupEnv(key)
+	if !ok {
 		return "", fmt.Errorf("env var %q not set", key)
 	}
 	return v, nil
 }
 
-// osGetenv indirection so tests can inject without touching real env.
-var osGetenv = os.Getenv
+// osLookupEnv indirection so tests can inject without touching real env.
+var osLookupEnv = os.LookupEnv
 
 // NopResolver is a Resolver that always returns an error (key not found).
 // Used when no secrets backend is configured.

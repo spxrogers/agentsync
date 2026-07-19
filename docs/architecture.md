@@ -118,11 +118,13 @@ Two design points worth internalizing:
   (cleartext) model to a source writer. This makes "leak a resolved secret back
   into source" a *compile error*, not a code-review check.
 - **Every destination write goes through `DestWriter`.** Adapters never call
-  `iox.AtomicWrite`/`os.Remove` directly. `DestWriter` owns the
-  foreign-collision backup invariant (back up any pre-existing file agentsync
-  doesn't yet own, before overwriting). A `forbidigo` lint rule fails any direct
-  write outside the allowed packages, so a new adapter can't regress the backup
-  guarantee.
+  `iox.AtomicWrite` or the destructive `os.*` family
+  (`os.Remove`/`os.RemoveAll`/`os.WriteFile`/`os.Create`) directly. `DestWriter`
+  owns the foreign-collision backup invariant (back up any pre-existing file
+  agentsync doesn't yet own, before overwriting). A `forbidigo` lint rule — plus a
+  belt-and-braces source-scanning test (`internal/render/writer_lint_test.go`) —
+  fails any direct write outside the allowed non-destination packages, so a new
+  adapter can't regress the backup guarantee.
 - **Project scope requires a project root.** Each adapter's `ResolvePaths` falls
   through to *user*-scope paths when the project root is empty, so a
   `(ScopeProject, "")` call would silently write the project overlay into the
@@ -460,6 +462,16 @@ The backstop detects live secret values regardless of length: it does **not**
 inherit the re-reference value-based fallback's length floor (which skips 1–3
 char values to avoid substring-rewriting unrelated text), because refusing to
 persist a leak is not a rewrite — so even a 1–3 char credential trips it.
+
+The backstop is also **fail-closed under indeterminacy**: its value prong builds
+its detection set by resolving the source's `${secret:…}` refs through the
+backend. If the backend can't resolve them (vault locked / unavailable), that set
+is empty and the prong is *blind* — it cannot prove a resolved secret wasn't moved
+into a literal field. So an unresolvable `${secret:…}` the source references
+forces `capture.Capture` to **refuse** the whole write-back rather than fall
+through to a warning; the user unlocks/restores the vault (or edits the canonical
+source directly) and retries. (`${env:…}` is unaffected — the value prong resolves
+only through the secret backend, so an unresolvable env ref stays a warning.)
 
 ---
 

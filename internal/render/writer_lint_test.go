@@ -78,6 +78,68 @@ func TestNoDirectAtomicWriteOutsideAllowedFiles(t *testing.T) {
 	}
 }
 
+// TestNoDirectDestructiveOSCallsOutsideAllowedFiles is the belt-and-braces
+// complement to the os.* forbidigo rules (issue #163): it fails the build if any
+// non-test, non-allowlisted file calls os.Remove/os.RemoveAll/os.WriteFile/
+// os.Create directly. Those bypass the DestWriter foreign-collision backup
+// invariant exactly like a direct iox.AtomicWrite. The allowlist is kept in
+// lockstep with the .golangci.yml os.* exclusions.
+func TestNoDirectDestructiveOSCallsOutsideAllowedFiles(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+
+	// Files allowed direct os.* — the DestWriter itself plus non-destination
+	// writers: canonical source, the vault, plugin/marketplace cache, git-backup
+	// repo scaffolding, iox internals, and a writability probe.
+	allowed := map[string]bool{
+		"internal/render/writer.go":         true, // the DestWriter — owns delete + backup
+		"internal/adapter/testwriter.go":    true, // PassThroughWriter test helper
+		"internal/iox/atomic.go":            true,
+		"internal/git/init.go":              true, // local git-backup repo scaffolding
+		"internal/marketplace/fetch_git.go": true, // fetch scratch dirs
+		"internal/cli/init.go":              true,
+		"internal/cli/secrets.go":           true,
+		"internal/cli/marketplace.go":       true,
+		"internal/cli/plugin.go":            true,
+		"internal/cli/update.go":            true,
+		"internal/cli/mcp.go":               true,
+		"internal/cli/agent.go":             true,
+		"internal/cli/doctor.go":            true, // ~/.agentsync writability probe
+		"internal/cli/reconcile.go":         true,
+	}
+	forbidden := []string{"os.Remove", "os.RemoveAll", "os.WriteFile", "os.Create"}
+
+	var bad []string
+	walkErr := filepathWalk(repoRoot, func(path string) error {
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, _ := filepath.Rel(repoRoot, path)
+		rel = filepath.ToSlash(rel)
+		// test/ is BDD/e2e harness code writing fixtures to temp dirs (via
+		// AGENTSYNC_TARGET_ROOT), never a native destination — treat it like _test.go.
+		if allowed[rel] || strings.HasPrefix(rel, "vendor/") || strings.HasPrefix(rel, ".git/") || strings.HasPrefix(rel, "test/") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		src := string(data)
+		for _, name := range forbidden {
+			if containsCallSite(src, name) {
+				bad = append(bad, rel+" ("+name+")")
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("walk: %v", walkErr)
+	}
+	if len(bad) > 0 {
+		t.Fatalf("direct os.Remove/os.RemoveAll/os.WriteFile/os.Create in non-allowlisted files — writes to native destinations must route through render.Writer / adapter.DestWriter:\n  %s\nIf this write is to canonical source / state / cache / git-backup, add it to the allowlist here AND the .golangci.yml exclusions.", strings.Join(bad, "\n  "))
+	}
+}
+
 // findRepoRoot walks up from this test file's package until it finds go.mod.
 func findRepoRoot(t *testing.T) string {
 	t.Helper()

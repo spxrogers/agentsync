@@ -216,7 +216,11 @@ func CheckIdentityPermissions(path string) error {
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		// Surface the open error from the caller, not a fake permission error.
+		// DELIBERATE: bypass the permission gate ONLY when the file is
+		// absent/unreadable — the decrypt caller surfaces the real open error, so
+		// manufacturing a "bad permissions" error here would be misleading. This is
+		// NOT a hole in the gate: a file that is PRESENT but insecure still stats
+		// successfully and is rejected by the mode&0o077 check below. (issue #163)
 		return nil
 	}
 	mode := info.Mode().Perm()

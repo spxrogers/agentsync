@@ -42,6 +42,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   may hold cleartext secrets, and `revert`'s dirty-tracked snapshot prints the same
   caution before it commits possibly-just-typed cleartext. All of this stays
   best-effort: a chmod failure never aborts the apply, and no push surface is added.
+- **Secret-invariant edges hardened (issue #163).** `capture.Capture` is now
+  fail-closed under indeterminacy: when the secrets backend can't resolve a
+  `${secret:…}` the source references (vault locked/unavailable), the leak-check
+  value prong is blind, so Capture **refuses** the write-back instead of degrading
+  to a warning. `EnvBackend` now uses presence semantics (`os.LookupEnv`) so a
+  set-but-empty env var resolves to `""` like `AgeBackend`. The `DestWriter`
+  write-ban is now fenced for the destructive `os.*` family
+  (`os.Remove`/`os.RemoveAll`/`os.WriteFile`/`os.Create`) via a forbidigo rule +
+  a source-scanning test (previously only `iox.AtomicWrite` was fenced). Plus
+  smaller edge hardening: the age identity-permission stat-bypass is documented +
+  directly tested, the drift classifier's deleted-destination rows are pinned, and
+  the capture residual warning is reworded to describe what it actually checks.
 
 ### Changed
 

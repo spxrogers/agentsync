@@ -91,6 +91,11 @@ func ResidualSecretCleartext(ingested, against *source.Canonical, sec, env Resol
 			if v == "" {
 				continue
 			}
+			// INTENTIONAL conservative bias (issue #163): substring containment,
+			// not equality — a resolved secret value that appears as a *substring*
+			// of unrelated edited text is refused even if it was legitimately
+			// shifted. Erring toward refusing a possible leak is the safe default;
+			// the user resolves it by updating the vault or editing source directly.
 			if strings.Contains(s, v) && !strings.Contains(src, v) {
 				flag(g)
 				return s

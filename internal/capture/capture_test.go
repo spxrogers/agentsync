@@ -444,3 +444,59 @@ func TestCapture_FirstImportNoSource(t *testing.T) {
 		t.Errorf("first-import write-as-is failed: command=%q", got.Server.Command)
 	}
 }
+
+// TestCapture_RefusesOnLockedBackend pins the fail-closed-under-indeterminacy
+// behavior (issue #163): when the secrets backend can't resolve a ${secret:…} the
+// source references (vault locked / absent), the backstop's value prong is BLIND —
+// so Capture refuses the whole write-back rather than degrade to a warning, and
+// leaves the canonical source file untouched.
+func TestCapture_RefusesOnLockedBackend(t *testing.T) {
+	home := t.TempDir()
+	// age backend whose identity + vault do NOT exist -> Resolve fails (locked).
+	writeFile(t, filepath.Join(home, "agentsync.toml"), ""+
+		"[secrets]\n"+
+		"backend = \"age\"\n"+
+		"recipient = \"age1qqqq\"\n"+
+		"identity_file = \""+filepath.Join(home, "missing.key")+"\"\n"+
+		"file = \"secrets/secrets.age\"\n")
+	// Source references a ${secret:…} the locked backend can't resolve.
+	srcPath := filepath.Join(home, "mcp", "srv.toml")
+	writeFile(t, srcPath, ""+
+		"[server]\n"+
+		"type = \"stdio\"\n"+
+		"command = \"npx\"\n"+
+		"[server.env]\n"+
+		"TOK = \"${secret:github.token}\"\n")
+	before, err := os.ReadFile(srcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ingested := &source.Canonical{MCPServers: []source.MCPServer{{
+		ID: "srv",
+		Server: source.MCPServerSpec{
+			Type:    "stdio",
+			Command: "npx",
+			Env:     map[string]string{"TOK": "some-resolved-cleartext"},
+		},
+	}}}
+
+	res, err := capture.Capture(home, ingested, capture.Opts{})
+	if err == nil {
+		t.Fatal("Capture must refuse when the backend can't resolve a ${secret:…} the source references")
+	}
+	if !strings.Contains(err.Error(), "could not resolve") {
+		t.Fatalf("refusal error should name the unresolvable secret; got: %v", err)
+	}
+	if len(res.Written) != 0 {
+		t.Fatalf("nothing should be written on refusal; wrote %v", res.Written)
+	}
+	// The canonical source file must be byte-for-byte unchanged.
+	after, err := os.ReadFile(srcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("source mcp file modified despite refusal:\nbefore=%q\nafter=%q", before, after)
+	}
+}

@@ -22,6 +22,10 @@ func TestClassify(t *testing.T) {
 		{name: "foreign-collision", hsrc: "a", happlied: "", hdest: "x", want: drift.ForeignCollision},
 		{name: "orphan", hsrc: "", happlied: "a", hdest: "a", want: drift.Orphan},
 		{name: "orphan-drifted", hsrc: "", happlied: "a", hdest: "b", want: drift.OrphanDrifted},
+		// Deleted-destination rows (issue #163): source is still tracked but the
+		// dest was removed out from under us (hdest == "").
+		{name: "drift-dest-deleted", hsrc: "a", happlied: "a", hdest: "", want: drift.Drift},
+		{name: "conflict-dest-deleted", hsrc: "b", happlied: "a", hdest: "", want: drift.Conflict},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
