@@ -189,7 +189,13 @@ func MalformedSecretRefs(c *source.Canonical) []untrusted.Text {
 	bad := map[string]bool{}
 	walkSecretFields(c, func(_ secretFieldLoc, s string) string {
 		for _, cand := range looseRefRe.FindAllString(s, -1) {
-			if !re.MatchString(cand) {
+			// Match the WHOLE candidate against the strict shape, not a substring:
+			// re.MatchString is a substring search, so a malformed outer ref that
+			// merely embeds a well-formed nested ref (e.g. "${secret:${env:FOO}}",
+			// whose loose candidate "${secret:${env:FOO}" contains a valid
+			// "${env:FOO}") would be wrongly accepted. Require the strict match to
+			// span the entire candidate so nested/partial refs are flagged.
+			if loc := re.FindStringIndex(cand); loc == nil || loc[0] != 0 || loc[1] != len(cand) {
 				bad[cand] = true
 			}
 		}

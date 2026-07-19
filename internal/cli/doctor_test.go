@@ -206,6 +206,34 @@ func TestDoctor_FailsOnMissingHome(t *testing.T) {
 // identity-perm check ignoring AGENTSYNC_AGE_SKIP_PERM_CHECK=1, which apply and
 // verify both honor (via secrets.CheckIdentityPermissions). doctor would falsely
 // fail a 0644 identity even when the user opted out of the perm gate.
+// TestDoctor_SanitizesHostileSecretPath pins that doctor escapes a config-derived
+// [secrets] identity_file/age_file path: those are shareable-dotfile values that
+// can carry raw ESC/bidi bytes, and the "not readable" / "not yet created"
+// branches print them even for a path that does not exist — so a crafted config
+// must not inject terminal escapes into doctor's output (issue #93/#171 class).
+func TestDoctor_SanitizesHostileSecretPath(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp, "NO_COLOR": "1"}
+	_, _ = runCLI(t, env, "init")
+
+	cfgPath := filepath.Join(tmp, ".agentsync", "agentsync.toml")
+	// identity_file holds a raw ESC (TOML  escape) and points nowhere, so
+	// doctor's os.Stat fails and it prints the path in its "not readable" line.
+	body := "[agents]\n[secrets]\nbackend       = \"age\"\nrecipient     = \"age1qqqq\"\n" +
+		"identity_file = \"/nope/x\\u001b[2K\\u001b[31mHACKED/age.key\"\nfile          = \"secrets/secrets.age\"\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _ := runCLI(t, env, "doctor")
+	if strings.ContainsRune(out, 0x1b) {
+		t.Fatalf("doctor output must not carry a raw ESC byte from a config-derived path; got:\n%q", out)
+	}
+	if !strings.Contains(out, "HACKED") {
+		t.Fatalf("doctor should still show the (sanitized) path; got:\n%s", out)
+	}
+}
+
 func TestDoctor_HonorsSkipPermCheck(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{

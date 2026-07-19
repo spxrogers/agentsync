@@ -310,6 +310,24 @@ func TestVerify_OfflineMode(t *testing.T) {
 		}
 	})
 
+	// A malformed OUTER ref that embeds a well-formed nested ref: the loose
+	// candidate "${secret:${env:FOO}" contains a valid "${env:FOO}", so an
+	// unanchored substring shape-check would wrongly accept it. The offline check
+	// must flag it (apply resolves only the inner ref, leaving a partial literal).
+	t.Run("offline-rejects-nested-ref", func(t *testing.T) {
+		tmp := t.TempDir()
+		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
+		_, _ = runCLI(t, env, "init")
+		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:${env:FOO}}\"\n")
+		_, err := runCLI(t, env, "verify")
+		if err == nil {
+			t.Fatal("offline verify must reject a nested/partial ${secret:${env:…}} reference")
+		}
+		if !strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("error should name the malformed ref; got: %v", err)
+		}
+	})
+
 	t.Run("offline-accepts-wellformed-unresolvable", func(t *testing.T) {
 		tmp := t.TempDir()
 		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
@@ -334,4 +352,31 @@ func TestVerify_OfflineMode(t *testing.T) {
 			t.Fatal("online verify must fail to resolve ${secret:some.key}")
 		}
 	})
+}
+
+// TestVerify_SanitizesHostileAgentKey pins that verify's agent-validation error
+// escapes a config-derived [agents.<name>] key: a TOML quoted key can carry raw
+// ESC bytes, and the wrap must use %q (not %s) so a shared config cannot inject
+// terminal escapes on plain `agentsync verify` (issue #93/#171 class).
+func TestVerify_SanitizesHostileAgentKey(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp}
+	_, _ = runCLI(t, env, "init")
+	cfgPath := filepath.Join(tmp, ".agentsync", "agentsync.toml")
+	// The quoted key decodes to a map key holding a raw ESC; the agent is
+	// unknown, so validateAgent fails and verify wraps the key in its error.
+	body := "[agents.\"cla\\u001b[2K\\u001b[31mHACKED\"]\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runCLI(t, env, "verify")
+	if err == nil {
+		t.Fatal("verify must reject an unknown agent")
+	}
+	if strings.ContainsRune(err.Error(), 0x1b) {
+		t.Fatalf("verify error must not carry a raw ESC byte from the agent key; got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "HACKED") {
+		t.Fatalf("error should still name the (escaped) agent key; got: %q", err.Error())
+	}
 }

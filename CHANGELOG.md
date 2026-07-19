@@ -55,11 +55,19 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   config could smuggle terminal escapes into the CI log through the error message.
   `secrets.MalformedSecretRefs` now returns `[]untrusted.Text` and `verify` renders
   them via `untrusted.Join`, so every displayed candidate is sanitized by
-  construction — closing the #93/PR100 terminal-escape-injection class at the one
-  new print site that had reintroduced it. Also broadened the direct-`os.*`
-  destination-write guard (issue #163) to cover `os.OpenFile`/`os.Rename`/`os.Truncate`
-  in addition to `Remove`/`RemoveAll`/`WriteFile`/`Create`, closing the
-  truncate-write / rename bypass of the `DestWriter` foreign-collision backup.
+  construction. The same sweep hardened the other config-derived print sites that
+  could carry raw bytes: `verify`'s `[agents.<name>]` validation error now uses
+  `%q` (a quoted TOML key can hold ESC), and `doctor`'s `[secrets]`
+  `identity_file`/`age_file` path lines (which print even for a non-existent path)
+  now render through `untrusted.Text` — closing the #93/PR100
+  terminal-escape-injection class across all three sites. The offline shape check
+  itself was also corrected to match the WHOLE candidate (an anchored check),
+  so a malformed outer ref that merely embeds a well-formed nested ref
+  (`${secret:${env:FOO}}`) is now flagged instead of silently accepted. Separately,
+  broadened the direct-`os.*` destination-write guard (issue #163) to cover
+  `os.OpenFile`/`os.Rename`/`os.Truncate` in addition to
+  `Remove`/`RemoveAll`/`WriteFile`/`Create`, closing the truncate-write / rename
+  bypass of the `DestWriter` foreign-collision backup.
 - **The local `.git` rollback history's secret-at-rest control is now re-asserted on
   every apply (issue #126).** Destination git-backup repos deliberately persist
   *resolved cleartext secrets* into a **local-only** `.git` history; that exception is

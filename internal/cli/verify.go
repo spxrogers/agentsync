@@ -78,7 +78,11 @@ func newVerifyCmd() *cobra.Command {
 			}
 			for name := range c.Config.Agents {
 				if err := validateAgent(name); err != nil {
-					return fmt.Errorf("agents.%s: %w", name, err)
+					// %q, not %s: name is a config-derived [agents.<name>] TOML key
+					// and a quoted key can carry raw ESC/bidi bytes; %q escapes them
+					// so a shared config can't inject terminal escapes here (matches
+					// the agent-name print convention in agent.go/status.go/revert.go).
+					return fmt.Errorf("agents.%q: %w", name, err)
 				}
 			}
 			if err := verifySecrets(c.Config.Secrets, home); err != nil {

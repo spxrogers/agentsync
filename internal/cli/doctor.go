@@ -317,27 +317,37 @@ func checkSecrets(p *ui.Printer, cfg source.SecretsConfig, home string) int {
 	// apply never disagree on the path.
 	userHome := paths.HomeDir(paths.OSEnv{})
 	idPath := secrets.ResolveIdentityFile(cfg, home, userHome)
+	// idPath/agePath derive from the config's [secrets] identity_file/age_file,
+	// which are shareable dotfiles — a crafted path can carry raw ESC/bidi bytes.
+	// Display through untrusted.Text so every print below sanitizes by
+	// construction (the "not readable"/"not yet created" branches fire on a
+	// path that need not even exist); the raw path is still used for os.Stat /
+	// CheckIdentityPermissions (issue #93/#171 class).
+	idDisp := untrusted.Wrap(idPath)
 	info, err := os.Stat(idPath)
 	if err != nil {
-		failCheck(p, "identity   ", fmt.Sprintf("%s — not readable (%v)", idPath, err))
+		// err is a *PathError whose message embeds the raw idPath, so sanitize
+		// its rendering too — not just idDisp — or the ESC leaks through %v.
+		failCheck(p, "identity   ", fmt.Sprintf("%s — not readable (%s)", idDisp, untrusted.Wrap(err.Error())))
 		return fails + 1
 	}
 	// Use the same check apply/verify use so doctor never disagrees: it honors
 	// AGENTSYNC_AGE_SKIP_PERM_CHECK=1 and the Windows ACL caveat, unlike the
 	// previous inline 0o077 mask which falsely failed an opted-out 0644 key.
 	if permErr := secrets.CheckIdentityPermissions(idPath); permErr != nil {
-		failCheck(p, "identity   ", fmt.Sprintf("%s — too permissive (%v); chmod 600 (or set AGENTSYNC_AGE_SKIP_PERM_CHECK=1)", idPath, info.Mode().Perm()))
+		failCheck(p, "identity   ", fmt.Sprintf("%s — too permissive (%v); chmod 600 (or set AGENTSYNC_AGE_SKIP_PERM_CHECK=1)", idDisp, info.Mode().Perm()))
 		return fails + 1
 	}
-	okCheck(p, "identity   ", fmt.Sprintf("ok (%s)", idPath))
+	okCheck(p, "identity   ", fmt.Sprintf("ok (%s)", idDisp))
 
 	// Age-encrypted file location — warn if missing (legitimate on a
 	// fresh install where the user hasn't called `secrets set` yet).
 	agePath := secrets.ResolveAgeFile(cfg, home, userHome)
+	ageDisp := untrusted.Wrap(agePath)
 	if _, err := os.Stat(agePath); err != nil {
-		warnCheck(p, "age file   ", fmt.Sprintf("%s — not yet created (run `agentsync secrets edit` to author)", agePath))
+		warnCheck(p, "age file   ", fmt.Sprintf("%s — not yet created (run `agentsync secrets edit` to author)", ageDisp))
 	} else {
-		okCheck(p, "age file   ", agePath)
+		okCheck(p, "age file   ", ageDisp.String())
 	}
 	return fails
 }
