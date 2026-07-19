@@ -28,10 +28,11 @@ apply checkpoint from its local-only git history, recovering from a bad apply.
 
 It is append-only: revert records a NEW commit, so the history is never rewritten
 and the revert is itself revertible. Uncommitted hand-edits to tracked files are
-preserved as a snapshot commit first, so nothing is lost. Untracked files you
-dropped into the dir (and gitignored files) are left untouched — revert only
-rewinds the files agentsync itself versions. By default it undoes the most recent
-apply (restores the previous checkpoint); --to picks a specific one.
+preserved as a snapshot commit first, so nothing is lost — that snapshot lands in the
+local-only history and, like the files it versions, may contain secrets in cleartext.
+Untracked files you dropped into the dir (and gitignored files) are left untouched —
+revert only rewinds the files agentsync itself versions. By default it undoes the most
+recent apply (restores the previous checkpoint); --to picks a specific one.
 
 Even the FIRST apply is revertible: before that apply overwrites the dir, agentsync
 records a pre-apply baseline checkpoint of its prior contents, so a revert right
@@ -262,6 +263,11 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 	if snap != "" {
 		fmt.Fprintf(p.Out, "%s preserved uncommitted changes in %s as snapshot %s\n",
 			p.Faint(ui.GlyphInfo), root, shortRef(snap))
+		// The snapshot commits the dest files verbatim; like everything in this
+		// local-only history they may hold secrets resolved to cleartext. Caution the
+		// user rather than silently persist a freshly-typed secret (issue #126).
+		fmt.Fprintf(p.Err, "%s that snapshot is kept in the local-only history and, like the files it versions, may contain secrets in cleartext.\n",
+			p.Faint(ui.GlyphInfo))
 	}
 	if h == "" {
 		fmt.Fprintf(p.Out, "%s %s already matches %s; nothing to revert.\n", p.Faint(ui.GlyphInfo), root, shortRef(targetHash))

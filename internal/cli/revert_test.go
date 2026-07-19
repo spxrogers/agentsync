@@ -198,6 +198,28 @@ func TestRevert_PreservesUncommittedEdits(t *testing.T) {
 	}
 }
 
+// TestRevertSnapshotPrintsCleartextCaution pins issue #126: when revert preserves a
+// dirty-tracked snapshot, it cautions that the snapshot may carry cleartext secrets
+// into the local-only history (dest files hold secrets resolved to cleartext).
+func TestRevertSnapshotPrintsCleartextCaution(t *testing.T) {
+	_, env, destSkill := setupGitBackedClaude(t)
+
+	// Uncommitted hand-edit to a tracked dest file → revert snapshots it first.
+	if err := os.WriteFile(destSkill, []byte("HAND-EDITED"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLI(t, env, "revert", "claude")
+	if err != nil {
+		t.Fatalf("revert: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "preserved uncommitted changes") {
+		t.Fatalf("expected the snapshot-preserved notice, got:\n%s", out)
+	}
+	if !strings.Contains(out, "may contain secrets in cleartext") {
+		t.Errorf("expected a cleartext caution alongside the snapshot notice, got:\n%s", out)
+	}
+}
+
 // TestRevert_FoldedSharedDirNoted is the regression for the folded-dir revert
 // ISSUE: ~/.claude/skills is versioned as part of ~/.claude (de-nested), so
 // `revert opencode` must NOT error trying to open a repo at ~/.claude/skills — it

@@ -84,11 +84,13 @@ func Discover(start string) (root string, found bool, err error) {
 //   - Plugins / Marketplaces: project entries are not modeled at project scope in
 //     v1 and are inherited from base unchanged (see the migration note in
 //     docs/architecture.md). Config (Updates/Secrets/Memory) is inherited from
-//     base unless the project declares its own non-zero values (this also covers
-//     the [destination_directory_git_backup] table, though it is a user-scope
-//     concern in practice); the effective
+//     base unless the project declares its own non-zero values; the effective
 //     [memory] setting is also propagated onto the stored project overlay so
-//     project-scope render honours a user-level managed-banner opt-out.
+//     project-scope render honours a user-level managed-banner opt-out. The
+//     [destination_directory_git_backup] table is deliberately NOT overlaid: git
+//     backup is a user-scope-only feature (VersionRoots returns nil at project scope
+//     and runDestinationGitBackup is gated to user scope), so a project override
+//     could never take effect — copying it would be silently inert (issue #126).
 func Merge(base, proj source.Canonical) source.Canonical {
 	out := base // shallow copy; every slice/map we touch is replaced, not mutated
 
@@ -110,9 +112,9 @@ func Merge(base, proj source.Canonical) source.Canonical {
 	if proj.Config.Memory != (source.MemoryConfig{}) {
 		out.Config.Memory = proj.Config.Memory
 	}
-	if proj.Config.DestinationGitBackup != (source.DestinationGitBackupConfig{}) {
-		out.Config.DestinationGitBackup = proj.Config.DestinationGitBackup
-	}
+	// [destination_directory_git_backup] is intentionally NOT overlaid: git backup is
+	// a user-scope-only feature, so a project-scope override can never take effect —
+	// copying it would be silently inert. out keeps base's (user-scope) value (issue #126).
 
 	out.MCPServers = overlayByKey(base.MCPServers, proj.MCPServers, func(m source.MCPServer) string { return m.ID })
 	out.LSPServers = overlayByKey(base.LSPServers, proj.LSPServers, func(l source.LSPServer) string { return l.ID })

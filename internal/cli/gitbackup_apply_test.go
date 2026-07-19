@@ -274,6 +274,108 @@ func TestApply_GitBackupBaselineFailureDoesNotAbortApply(t *testing.T) {
 	}
 }
 
+// TestModeOnNewDirEmitsCleartextNotice pins issue #126's mode="on" caution: an apply
+// that auto-inits NEW dirs prints the "local-only / may contain cleartext" notice once
+// per run (even across several new dirs); a later apply into the now-owned dirs does not.
+func TestModeOnNewDirEmitsCleartextNotice(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	mustRun(t, env, "agent", "add", "codex") // adds ~/.agents/skills as a second new root
+	enableGitBackupOn(t, tmp)
+	writeSkillSource(t, tmp, "demo", "d") // renders under ~/.claude AND ~/.agents/skills
+
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	// Exactly once, even though more than one new dir was inited this run.
+	if n := strings.Count(out, "may contain secrets in cleartext"); n != 1 {
+		t.Fatalf("mode=on cleartext notice should appear exactly once across new dirs, got %d:\n%s", n, out)
+	}
+
+	// A second apply (no source change) only commits into now-owned dirs — no notice.
+	out2, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("re-apply: %v\n%s", err, out2)
+	}
+	if strings.Contains(out2, "may contain secrets in cleartext") {
+		t.Errorf("second apply into owned dirs must not re-emit the cleartext notice:\n%s", out2)
+	}
+}
+
+// committedBlob returns the contents of rel in the repo-at-dir's HEAD commit tree.
+func committedBlob(t *testing.T, dir, rel string) string {
+	t.Helper()
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := tree.File(rel)
+	if err != nil {
+		t.Fatalf("blob %q not in HEAD tree: %v", rel, err)
+	}
+	s, err := f.Contents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// TestResolvedSecretLandsInLocalHistory anchors the blessed local-only cleartext
+// exception (issue #126) to the on-disk artifact: a hook command referencing an
+// ${env:…} secret resolves to CLEARTEXT in the rendered settings.json, which is
+// committed into the destination dir's local-only git history. The rationale ("this
+// history really may contain secrets") is only true if the cleartext is actually there.
+func TestResolvedSecretLandsInLocalHistory(t *testing.T) {
+	const secretVal = "s3cr3t-in-history-9x"
+	tmp := t.TempDir()
+	env := map[string]string{
+		"AGENTSYNC_TARGET_ROOT": tmp,
+		"AGENTSYNC_HIST_SECRET": secretVal,
+	}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+
+	// A hook whose command carries an ${env:…} reference — resolved to cleartext into
+	// ~/.claude/settings.json at apply time.
+	hook := filepath.Join(tmp, ".agentsync", "hooks", "PreToolUse.toml")
+	if err := os.MkdirAll(filepath.Dir(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hook, []byte("[[hook]]\nmatcher = \"Write\"\ntype = \"command\"\ncommand = \"echo ${env:AGENTSYNC_HIST_SECRET}\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	claude := filepath.Join(tmp, ".claude")
+	// The resolved cleartext is on disk...
+	if b, _ := os.ReadFile(filepath.Join(claude, "settings.json")); !strings.Contains(string(b), secretVal) {
+		t.Fatalf("resolved secret should be cleartext in settings.json on disk:\n%s", b)
+	}
+	// ...and in the committed history blob — the exception is real.
+	if blob := committedBlob(t, claude, "settings.json"); !strings.Contains(blob, secretVal) {
+		t.Fatalf("resolved secret cleartext should be committed to the local-only history:\n%s", blob)
+	}
+}
+
 // writeSkillSource writes a skill SKILL.md into the canonical source tree.
 func writeSkillSource(t *testing.T, tmp, name, body string) {
 	t.Helper()

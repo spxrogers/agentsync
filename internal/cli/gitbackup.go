@@ -34,10 +34,22 @@ type gitBackupSession struct {
 	// agents) is versioned exactly once.
 	roots             []string
 	hintedUnavailable bool
+	// warnedCleartext gates the one-time-per-run mode=on cleartext notice, so an
+	// unattended (mode="on") apply that auto-inits new dirs warns about the local-only
+	// cleartext-secret history once, not once per dir.
+	warnedCleartext bool
 	// handled records roots whose init/prompt (or foreign-skip hint) decision has
 	// already been made THIS run, so the baseline and checkpoint passes never
 	// double-prompt or double-hint the same dir.
 	handled map[string]bool
+}
+
+// gitPermWarn returns the callback EnsureDirSecure reports through — a loosened
+// .git-history warning to stderr with the existing agentsync yellow prefix.
+func (s *gitBackupSession) gitPermWarn() func(string) {
+	return func(msg string) {
+		fmt.Fprintf(s.p.Err, "%s %s\n", s.p.Yellow("agentsync:"), msg)
+	}
 }
 
 // newGitBackupSession builds the shared session, or returns nil when git backup does
@@ -93,7 +105,7 @@ func (s *gitBackupSession) resolveBackupRepo(root string, st agit.State, hasWrit
 			return nil, nil // nothing to record, or the decision was already made this run
 		}
 		s.handled[root] = true
-		return ensureUntrackedRepo(s.cmd, s.p, root, s.home, &s.mode, &s.hintedUnavailable)
+		return ensureUntrackedRepo(s.cmd, s.p, root, s.home, &s.mode, &s.hintedUnavailable, &s.warnedCleartext)
 	}
 	return nil, nil
 }
@@ -212,6 +224,13 @@ func (s *gitBackupSession) checkpoint(written map[string]bool) error {
 		if repo == nil {
 			continue // foreign / declined / unavailable / nothing written — nothing to commit into
 		}
+		// Re-assert the at-rest control on every apply's commit path (issue #126): the
+		// history holds cleartext-resolved secrets and receives fresh secret blobs each
+		// apply, so a .git dir whose perms drifted looser than 0o700 is best-effort
+		// re-tightened and surfaced — covering both already-owned repos and ones just
+		// inited (whose init-time chmod may have silently failed). Best-effort; never
+		// aborts the apply.
+		repo.EnsureDirSecure(s.gitPermWarn())
 		if st == agit.StateAgentsyncOwned {
 			// Re-probe: a foreign repo may have been cloned below this owned root since
 			// init. The append-only checkpoint below is harmless, but warn now so the
@@ -380,10 +399,22 @@ func isUnderDir(child, parent string) bool {
 // the mode: "on" inits silently; "prompt" asks (opt-out) and persists the answer.
 // Returns (nil, nil) when init was declined or could not be offered. It may flip
 // *mode to "off" for the rest of this run when the user picks "don't ask again".
-func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mode *string, hintedUnavailable *bool) (*agit.Repo, error) {
+//
+// warnedCleartext gates the mode="on" cleartext notice: unlike the interactive prompt
+// (which already warns), mode="on" auto-inits with no caution, so an unattended apply
+// would grow its cleartext-secret git footprint across new dirs silently. The notice
+// fires once per run (the first NEW dir it actually inits), never on a declined /
+// nested-skip (nil repo) init.
+func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mode *string, hintedUnavailable, warnedCleartext *bool) (*agit.Repo, error) {
 	switch *mode {
 	case source.GitBackupModeOn:
-		return initGuarded(p, dir)
+		repo, err := initGuarded(p, dir)
+		if err == nil && repo != nil && !*warnedCleartext {
+			fmt.Fprintf(p.Err, "%s started a %s git backup of %s; like the files it versions, its history may contain secrets in cleartext (it is never pushed).\n",
+				p.Faint(ui.GlyphInfo), p.Bold("local-only"), dir)
+			*warnedCleartext = true
+		}
+		return repo, err
 	case source.GitBackupModePrompt:
 		switch gitBackupPrompter(cmd, p, dir) {
 		case promptYes:

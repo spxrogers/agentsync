@@ -194,6 +194,38 @@ func TestMerge_MCPOverlay_AppendAndReplace(t *testing.T) {
 	}
 }
 
+// TestMergeDropsProjectGitBackupOverride pins issue #126: git backup is a user-scope
+// concern, so a project-scope [destination_directory_git_backup] value is never
+// overlaid onto the merged config — the merged value always stays base's (or empty).
+func TestMergeDropsProjectGitBackupOverride(t *testing.T) {
+	baseCfg := source.DestinationGitBackupConfig{Mode: source.GitBackupModeOff}
+	projCfg := source.DestinationGitBackupConfig{Mode: source.GitBackupModeOn, AuthorName: "proj"}
+	cases := []struct {
+		name string
+		base source.DestinationGitBackupConfig
+		proj source.DestinationGitBackupConfig
+		want source.DestinationGitBackupConfig
+	}{
+		{name: "base-set/proj-unset", base: baseCfg, want: baseCfg},
+		{name: "base-unset/proj-set", proj: projCfg, want: source.DestinationGitBackupConfig{}},
+		{name: "both-set", base: baseCfg, proj: projCfg, want: baseCfg},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := source.Canonical{Config: source.Config{DestinationGitBackup: tc.base}}
+			proj := source.Canonical{Config: source.Config{
+				Agents:               map[string]source.Agent{"claude": {Enabled: true}},
+				DestinationGitBackup: tc.proj,
+			}}
+			out := project.Merge(base, proj)
+			if out.Config.DestinationGitBackup != tc.want {
+				t.Fatalf("merged git-backup = %+v, want %+v (project override must never be overlaid)",
+					out.Config.DestinationGitBackup, tc.want)
+			}
+		})
+	}
+}
+
 func TestMerge_ComponentsOverlayByName(t *testing.T) {
 	base := source.Canonical{
 		Skills:    []source.Skill{{Name: "a", Body: "base-a"}, {Name: "b", Body: "base-b"}},

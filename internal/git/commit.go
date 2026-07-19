@@ -108,6 +108,12 @@ func (r *Repo) CommitStaged(message string, id Identity) (string, error) {
 // files — the user's own scratch files — are never touched. Returns the snapshot
 // commit hash, or ("", nil) when the worktree has no tracked changes. This is what
 // keeps the append-only promise true of the WORKTREE, not just of history.
+//
+// CAUTION (issue #126): the snapshot commits the dest files verbatim, and dest files
+// hold secrets resolved to cleartext — so a freshly hand-typed secret can land in this
+// local-only history. That is acceptable only because the repo is never pushed; there
+// is deliberately NO fail-closed backstop here (unlike capture.Capture's), so callers
+// surface a cleartext caution to the user instead.
 func (r *Repo) SnapshotDirtyTracked(message string, id Identity) (string, error) {
 	wt, err := r.repo.Worktree()
 	if err != nil {

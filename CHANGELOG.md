@@ -9,6 +9,35 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Security
+
+- **The local `.git` rollback history's secret-at-rest control is now re-asserted on
+  every apply (issue #126).** Destination git-backup repos deliberately persist
+  *resolved cleartext secrets* into a **local-only** `.git` history; that exception is
+  made acceptable by two controls — the repo is never pushed, and `.git` is tightened
+  to `0o700`. The `0o700` control used to be set **once at init** (with a silently
+  swallowed error) and never re-checked, so a history whose perms later drifted looser
+  (a `git gc`, a restore-from-tar, an admin `chmod`) stayed world/group-readable while
+  every apply wrote fresh secret blobs into it. `.git` perms are now stat-checked and
+  best-effort re-tightened to `0o700` on every apply's Open/commit path (a POSIX no-op
+  when already tight; a warning to stderr when it had drifted); the init-time chmod
+  failure is surfaced the same way instead of swallowed. `Init` is now atomic-ish — the
+  local-history NOTICE is written **before** the managed marker (and the half-created
+  `.git` is rolled back on failure), so a repo that `Detect`s as agentsync-owned always
+  carries the "do not push / may contain cleartext" notice. A `mode = "on"` apply that
+  auto-inits a new dir now prints a one-time-per-run caution that the local-only history
+  may hold cleartext secrets, and `revert`'s dirty-tracked snapshot prints the same
+  caution before it commits possibly-just-typed cleartext. All of this stays
+  best-effort: a chmod failure never aborts the apply, and no push surface is added.
+
+### Changed
+
+- **A project-scope `[destination_directory_git_backup]` override is no longer copied
+  into the merged config (issue #126).** Git backup is a user-scope-only feature
+  (`VersionRoots` returns nil at project scope), so a project override could never take
+  effect; the overlay is dropped and the merge comment made honest, rather than
+  silently accepting an inert value.
+
 ### Fixed
 
 - **The first `apply` is now revertible (issue #143).** Destination git backup used
