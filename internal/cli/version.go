@@ -28,6 +28,11 @@ func newVersionCmd() *cobra.Command {
 			// route back into this subcommand (whose own Version is empty) and
 			// recurse.
 			root := cmd.Root()
+			// Precondition: the root is a fresh, single-use *cobra.Command per
+			// process (main builds it via NewRoot().Execute(); every test builds
+			// its own). So overwriting root.args via SetArgs here is safe and needs
+			// no restore — nothing re-reads this root after Execute returns, and the
+			// outer ExecuteC already captured its own args slice before dispatching.
 			root.SetArgs([]string{"--version"})
 			return root.Execute()
 		},

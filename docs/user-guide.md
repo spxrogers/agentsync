@@ -248,9 +248,12 @@ auto-resolves changes that can't lose work).
 its **own local-only git repo**, recording a checkpoint commit after every apply
 that changes managed files there. **Even the first apply is revertible:** before
 that apply overwrites the dir, agentsync records a **pre-apply baseline** commit of
-its prior contents (including any pre-existing files you already had in the dir), so
-the apply checkpoint's parent is the genuine pre-apply state — there is no "the first
-apply can't be undone" gap. If an apply ever goes wrong, roll it back:
+the prior content of the files it is about to manage, so the apply checkpoint's parent
+is the genuine pre-apply state — there is no "the first apply can't be undone" gap.
+Pre-existing files agentsync did **not** write (an agent's credentials, conversation
+transcripts, your own scratch files) are deliberately left **out** of the versioned
+history so it never becomes a durable copy of your secrets — they are untracked, so a
+revert leaves them untouched anyway. If an apply ever goes wrong, roll it back:
 
 ```bash
 agentsync revert claude              # undo the most recent apply to ~/.claude

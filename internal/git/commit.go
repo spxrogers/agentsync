@@ -30,29 +30,6 @@ func (r *Repo) Stage(relPaths []string) error {
 	return nil
 }
 
-// StageAll stages the ENTIRE current worktree (equivalent to `git add -A`): every
-// new, modified, and deleted file under the repo root, tracked or not, is brought
-// into the index. It is used for the PRE-APPLY BASELINE checkpoint (issue #143),
-// where the point is to capture the dir's full on-disk state before render.Apply
-// overwrites anything — including pre-existing, non-managed sibling files agentsync
-// did not write — so a revert to the baseline restores the genuine prior state, not
-// only the managed subset. The `.git` dir and gitignored files are never staged.
-//
-// Contrast Stage (managed paths only) and SnapshotDirtyTracked (tracked-only): those
-// deliberately never sweep in the user's untracked files. StageAll is used ONLY for
-// the earliest (root) baseline commit, so nothing can ever revert to a point "before"
-// those files existed — the #128 untracked-file safety of later checkpoints is intact.
-func (r *Repo) StageAll() error {
-	wt, err := r.repo.Worktree()
-	if err != nil {
-		return fmt.Errorf("worktree for %s: %w", r.dir, err)
-	}
-	if err := wt.AddWithOptions(&gogit.AddOptions{All: true}); err != nil {
-		return fmt.Errorf("git add -A in %s: %w", r.dir, err)
-	}
-	return nil
-}
-
 // StageTrackedDeletions stages the removal of any already-TRACKED file that is now
 // missing from the worktree — so an apply that deleted a managed file (e.g. a
 // dropped MCP server) records that deletion in the checkpoint. It deliberately

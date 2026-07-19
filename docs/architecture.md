@@ -618,6 +618,7 @@ flowchart TD
     REN --> AD & SEC & SRC & ST & DRF & INFRA
     CAP --> SRC & SEC & INFRA
     AD --> SRC & SEC & INFRA
+    AD -. "opencode ingest ownership only (issue #148)" .-> ST
     MKT --> SRC
     PRJ --> SRC
     SRC --> INFRA
@@ -628,3 +629,15 @@ flowchart TD
 `internal/drift`, `internal/iox`, `internal/jsonkeys`, `internal/paths`,
 `internal/log`, and `internal/untrusted` have no internal dependencies — they're
 the leaves. See the [component map](components.md) for what each package contains.
+
+**Documented layering exception (`opencode → state`).** Adapters otherwise depend
+only on `source`, `secrets`, and the infra leaves. The OpenCode adapter is the one
+exception: its `Ingest` reads the apply-state file (`internal/state`) to build an
+*ownership filter* so it re-captures only agents/commands agentsync actually wrote,
+never hand-authored siblings in OpenCode's shared `agents/`/`commands/` dirs (issue
+#148). This is a deliberate, opencode-scoped dependency — the general fix (threading
+the owned-path set in from the CLI caller so no adapter touches `state`) is a
+class-wide follow-up, since no other adapter filters ingest ownership yet. The state
+**key format** the filter reconstructs is not silently duplicated: the round-trip
+test seeds ownership through the real `render.RecordOpsState`, so any drift in the
+key scheme breaks that test rather than silently under-capturing.

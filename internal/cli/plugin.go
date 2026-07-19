@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -176,7 +177,8 @@ func installPluginInto(home, id, mpName string) (pluginTOMLSpec, error) {
 	agents := []string{"*"}
 	update := "track"
 	disabled := false
-	if existing, rerr := readPluginTOML(pluginPath); rerr == nil {
+	switch existing, rerr := readPluginTOML(pluginPath); {
+	case rerr == nil:
 		if len(existing.Plugin.Agents) > 0 {
 			agents = existing.Plugin.Agents
 		}
@@ -184,7 +186,15 @@ func installPluginInto(home, id, mpName string) (pluginTOMLSpec, error) {
 			update = existing.Plugin.Update
 		}
 		disabled = existing.Plugin.Disabled
+	case !errors.Is(rerr, os.ErrNotExist):
+		// The file EXISTS but is unparseable. Falling through to the ["*"]/track/false
+		// defaults would silently re-broaden a narrowed allowlist — the exact #140 loss
+		// this preserve path prevents — so refuse rather than reset a corrupt-but-present
+		// lifecycle file. The user can fix or remove it and re-install.
+		return pluginTOMLSpec{}, fmt.Errorf("existing %s is unreadable (%w); refusing to overwrite its agents/update/disabled with defaults — fix or remove it, then re-install", pluginPath, rerr)
 	}
+	// A genuine first install (readPluginTOML returned os.ErrNotExist) keeps the
+	// byte-identical defaults so install/import still produce identical artifacts.
 
 	spec := pluginTOMLSpec{
 		// id/marketplace are validated cache keys; wrap the composed id as Text to

@@ -97,6 +97,14 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	// apply state (see destOwned); a missing state owns nothing, and a corrupt one
 	// is reported and treated as owning nothing rather than risking over-capture.
 	statePath := filepath.Join(a.opts.TargetRoot, ".agentsync", ".state", "targets.json")
+	// state.Load returns an empty (owns-nothing) state for an ABSENT file with no
+	// error — which silently yields zero capture. That is the correct/safe direction,
+	// but it must not be silent: warn so a user who relocated AGENTSYNC_HOME, or who
+	// ran `import` to bootstrap before any `apply`, understands why no OpenCode
+	// agents/commands were captured (agentsync only re-captures what it wrote).
+	if _, statErr := os.Stat(statePath); os.IsNotExist(statErr) {
+		fmt.Fprintf(warn, "warning: opencode ingest found no apply state at %s; no agents/commands captured (agentsync only re-captures files it wrote — apply first, or check AGENTSYNC_HOME)\n", statePath)
+	}
 	ownState, stErr := state.Load(statePath)
 	if stErr != nil {
 		fmt.Fprintf(warn, "warning: opencode ingest could not read apply state (%v); skipping agent/command capture\n", stErr)

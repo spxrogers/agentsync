@@ -208,11 +208,13 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 	}
 
 	// A foreign git repo may have appeared below this owned root since init (e.g. the
-	// user cloned one into ~/.claude/skills). Reverting would hard-reset the parent's
-	// whole work tree — including the foreign checkout, which SnapshotDirtyTracked
-	// can't protect (it is untracked from the parent's view) — so refuse BEFORE any
-	// destructive write. Checked before the dry-run early return, so a preview reports
-	// the skip too and never claims it will revert.
+	// user cloned one into ~/.claude/skills). agentsync's clean ownership of the root
+	// no longer holds, so refuse to revert as a precaution BEFORE any write — checked
+	// before the dry-run early return, so a preview reports the skip too and never
+	// claims it will revert. (Restore is a surgical tracked-delta apply and would leave
+	// the untracked foreign checkout in place, but reverting a root that now wraps
+	// another repo is a hazard the user should resolve first — remove or reconcile the
+	// inner repo, then revert.)
 	nested, nerr := agit.HasNestedRepoBelow(root)
 	if nerr != nil {
 		return true, nerr
@@ -220,10 +222,10 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 	if nested {
 		if strict {
 			return true, fmt.Errorf("%s contains a nested git repository; refusing to revert "+
-				"(a hard reset could destroy its files) — remove or reconcile the inner repo first", root)
+				"as a precaution — remove or reconcile the inner repo first", root)
 		}
-		fmt.Fprintf(p.Err, "%s a nested git repository now lives below %s; reverting would hard-reset "+
-			"and could destroy its files — skipping.\n", p.Yellow(ui.GlyphWarn+" note:"), root)
+		fmt.Fprintf(p.Err, "%s a nested git repository now lives below %s; skipping revert "+
+			"as a precaution — remove or reconcile the inner repo first.\n", p.Yellow(ui.GlyphWarn+" note:"), root)
 		return true, nil
 	}
 

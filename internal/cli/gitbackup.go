@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -155,13 +156,26 @@ func (s *gitBackupSession) baseline(plannedWrites map[string]bool) {
 			cerr error
 		)
 		if st == agit.StateUntracked {
-			// Freshly inited: stage the dir's FULL current on-disk content (git add -A)
-			// so pre-existing, non-managed siblings are captured in the baseline and a
-			// revert to it restores the genuine pre-apply state — not only the files
-			// this apply writes. This is the earliest commit, so nothing can revert to
-			// "before" these files and #128's untracked-file safety of later
-			// checkpoints is not weakened.
-			if serr := repo.StageAll(); serr != nil {
+			// Freshly inited: stage the NOTICE plus the PRE-APPLY content of only the
+			// paths this apply will manage — deliberately NOT the whole dir. Sweeping
+			// the whole dir (git add -A) would durably commit unrelated sensitive
+			// siblings (an agent's credentials file, conversation transcripts) into the
+			// local-only history, enlarging the secret-history surface far beyond the
+			// resolved-config model the "harden secret-history" guard is scoped to.
+			// #128 already preserves untracked, non-managed siblings across a revert
+			// (Restore never enumerates them), so they survive WITHOUT being versioned:
+			// pre-existing non-managed content is OUT of the recoverability contract
+			// (preserved, not versioned) — the alternative issue #143 explicitly permits.
+			// The NOTICE guarantees a non-empty baseline even when every managed path is
+			// new, so a revert still has a target that removes exactly what this apply
+			// creates.
+			toStage := []string{agit.NoticeFile}
+			for _, rel := range managedRelsUnder(root, plannedWrites) {
+				if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); statErr == nil {
+					toStage = append(toStage, rel) // capture a managed path's pre-apply content
+				}
+			}
+			if serr := repo.Stage(toStage); serr != nil {
 				s.warnFirstApplyUnrevertible(root, serr)
 				continue
 			}
@@ -202,8 +216,13 @@ func (s *gitBackupSession) warnFirstApplyUnrevertible(root string, err error) {
 // managed writes (or a managed deletion) this run — the second commit after a first
 // apply, whose parent is the pre-apply baseline. It is BEST-EFFORT by contract: the
 // files are already written and state is already saved, so a git failure here is
-// reported but never fails the apply. It is a no-op for an empty write set or an agent
-// dir under foreign source control.
+// reported (never returned) and never fails the apply. It is a no-op for an empty write
+// set or an agent dir under foreign source control.
+//
+// It always returns nil today (every per-root failure is warned-and-continued). The
+// error return is retained deliberately: the test-facing wrapper runDestinationGitBackup
+// exposes it, and keeping the shape lets a future non-best-effort caller surface a hard
+// failure without a signature break across the wrapper and its test callers.
 func (s *gitBackupSession) checkpoint(written map[string]bool) error {
 	if s == nil {
 		return nil
@@ -474,18 +493,19 @@ func initGuarded(p *ui.Printer, dir string) (*agit.Repo, error) {
 
 // warnNestedForeignRepoOnCommit warns when a foreign git repo now lives below an
 // agentsync-owned root (cloned there after init). The commit path is non-destructive
-// (append-only), so this is a warning, not a refusal — but `agentsync revert` of this
-// root would hard-reset over the foreign checkout, so the user is told before ever
-// running it. Best-effort: a scan error is swallowed (a git-backup step must never fail
-// the apply over an unreadable subtree).
+// (append-only), so this is a warning, not a refusal — but agentsync's clean ownership
+// of the root no longer holds, so `agentsync revert` of this root will now refuse (as a
+// precaution) until the nesting is resolved; the user is told before ever running it.
+// Best-effort: a scan error is swallowed (a git-backup step must never fail the apply
+// over an unreadable subtree).
 func warnNestedForeignRepoOnCommit(p *ui.Printer, root string) {
 	nested, err := agit.HasNestedRepoBelow(root)
 	if err != nil || !nested {
 		return
 	}
 	fmt.Fprintf(p.Err, "%s a nested git repository now lives below the agentsync-owned dir %s; "+
-		"`agentsync revert` of this root is unsafe until the inner repo is removed or reconciled "+
-		"(a hard reset could destroy its files).\n",
+		"`agentsync revert` of this root will refuse as a precaution until the inner repo is "+
+		"removed or reconciled.\n",
 		p.Yellow("agentsync:"), root)
 }
 

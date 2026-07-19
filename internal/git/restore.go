@@ -206,8 +206,9 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (revertHash, snap
 
 // applyRestoreDelta applies the tracked HEAD↔target delta to the worktree path-by-path
 // and stages each change. HEAD never moves here, so the commit in Restore is parented
-// on the original HEAD automatically — the intervening commits (and the bad apply) stay
-// reachable, keeping revert append-only.
+// on the CURRENT HEAD automatically — the snapshot commit when one was taken, otherwise
+// the pre-revert HEAD — and the intervening commits (and the bad apply) stay reachable,
+// keeping revert append-only.
 //
 // Deletes are applied in a FIRST pass, before any create/modify, so a path that swaps
 // between a file and a directory across the two checkpoints cannot abort mid-restore.

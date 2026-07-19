@@ -185,10 +185,15 @@ func TestApply_GitBackupBaselineRevertsFirstApply(t *testing.T) {
 	}
 }
 
-// TestApply_GitBackupBaselineStagesPreexistingContent covers Problem B: init over a
-// non-empty non-git dir must capture the pre-existing, non-managed siblings in the
-// baseline (the pinned decision in the issue), not silently drop them.
-func TestApply_GitBackupBaselineStagesPreexistingContent(t *testing.T) {
+// TestApply_GitBackupBaselinePreexistingContentOutOfContract pins issue #143's
+// pre-existing-content decision (Problem B). The pre-apply baseline stages only the
+// NOTICE plus the managed paths' pre-apply content — NOT the whole dir. Pre-existing,
+// non-managed siblings (a stray user file, a leftover skill, and — critically — an
+// agent credentials file) are deliberately OUT of the recoverability contract: they
+// are NOT swept into the local-only git history (which would durably persist a live
+// credential far beyond the resolved-config secret model), yet they survive a revert
+// untouched because #128 makes Restore untracked-safe.
+func TestApply_GitBackupBaselinePreexistingContentOutOfContract(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	mustRun(t, env, "init")
@@ -197,11 +202,13 @@ func TestApply_GitBackupBaselineStagesPreexistingContent(t *testing.T) {
 	writeSkillSource(t, tmp, "demo", "applied")
 
 	claude := filepath.Join(tmp, ".claude")
-	// Pre-existing, non-managed content on disk before the first apply: a stray note
-	// and a leftover skill agentsync does NOT write this run.
+	// Pre-existing, non-managed content on disk before the first apply: a stray note,
+	// a leftover skill agentsync does NOT write this run, and a file mimicking an
+	// agent's live credentials.
 	seed := map[string]string{
 		"notes.txt":                "stray user note\n",
 		"skills/leftover/SKILL.md": "---\nname: leftover\n---\nold\n",
+		".credentials.json":        "{\"token\":\"live-oauth-secret\"}\n",
 	}
 	for rel, body := range seed {
 		abs := filepath.Join(claude, filepath.FromSlash(rel))
@@ -227,8 +234,12 @@ func TestApply_GitBackupBaselineStagesPreexistingContent(t *testing.T) {
 	}
 	baseline := cps[len(cps)-1].Hash // oldest = the pre-apply baseline
 	for rel := range seed {
-		if !trackedInCommit(t, claude, baseline, rel) {
-			t.Errorf("pre-existing %q should be captured in the baseline commit tree", rel)
+		if trackedInCommit(t, claude, baseline, rel) {
+			t.Errorf("non-managed %q must NOT be versioned in the baseline (secret-history surface)", rel)
+		}
+		// ...but it must survive on disk untouched (untracked, preserved by #128).
+		if _, err := os.Stat(filepath.Join(claude, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("pre-existing non-managed %q should be preserved on disk after apply, got %v", rel, err)
 		}
 	}
 }
