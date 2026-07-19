@@ -743,6 +743,21 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   Verified locally: forcing the archive modes to `0666` changes the `.zip` hash,
   while with the modes pinned the hash is invariant to on-disk permissions.
 
+## [0.7.2] — 2026-06-19
+
+### Fixed
+
+- Release/packaging fix superseded by [0.7.3]; the checksum-mismatch story
+  (archive file-mode + GoReleaser-version pinning) is documented in full under
+  [0.7.3]. Tagged release: `v0.7.2`.
+
+## [0.7.1] — 2026-06-19
+
+### Fixed
+
+- Release/packaging fix superseded by [0.7.3]; see [0.7.3] for the full
+  reproducible-build / checksum-mismatch narrative. Tagged release: `v0.7.1`.
+
 ## [0.1.0] — 2026-06-05
 
 The first public release (beta). Functional end-to-end (green under
@@ -1337,5 +1352,8 @@ the Cursor adapter is a no-op (planned); Codex projections drop fields Codex has
 no target for (reported in the apply translation report); OpenCode hooks/LSP are
 skipped; TOML/JSONC comments are not preserved across write-back.
 
-[Unreleased]: https://github.com/spxrogers/agentsync/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/spxrogers/agentsync/compare/v0.10.1...HEAD
+[0.7.3]: https://github.com/spxrogers/agentsync/compare/v0.7.2...v0.7.3
+[0.7.2]: https://github.com/spxrogers/agentsync/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/spxrogers/agentsync/compare/v0.7.0...v0.7.1
 [0.1.0]: https://github.com/spxrogers/agentsync/releases/tag/v0.1.0
