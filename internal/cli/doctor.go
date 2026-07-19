@@ -254,6 +254,11 @@ func checkDestinationGitBackup(p *ui.Printer, cfg source.DestinationGitBackupCon
 
 	// Report per VERSION ROOT (deduped/de-nested across all agents), since a shared
 	// dir like ~/.agents/skills belongs to several agents but is one repo.
+	//
+	// Probing ALL registered agents (reg.Names()) rather than only the enabled set
+	// apply acts on is INTENTIONAL — like checkPlugins above, doctor surfaces
+	// foreign/owned destination dirs the user should know about even for agents that
+	// aren't enabled; the os.Stat filter below drops any root that doesn't exist yet.
 	reg := registryFactory()
 	for _, root := range enabledVersionRoots(reg, reg.Names(), adapter.ScopeUser, "") {
 		if _, err := os.Stat(root); err != nil {

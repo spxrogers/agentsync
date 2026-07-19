@@ -5,7 +5,80 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	gogit "github.com/go-git/go-git/v5"
+	agit "github.com/spxrogers/agentsync/internal/git"
 )
+
+// TestDoctor_ReportsPerVersionRootGitState drives the checkDestinationGitBackup
+// per-version-root loop end-to-end (issue #174): it plants three real on-disk dirs
+// at three distinct deep-agent version roots — an agentsync-owned repo, a foreign
+// .git, and a plain untracked dir — and asserts doctor reports each root's git
+// state. The oracle is doctor's actual output produced from real dirs, not an
+// agit.Detect unit call (that has its own coverage).
+func TestDoctor_ReportsPerVersionRootGitState(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+
+	claudeRoot := filepath.Join(tmp, ".claude") // agentsync-owned
+	rooRoot := filepath.Join(tmp, ".roo")       // foreign source control
+	clineRoot := filepath.Join(tmp, ".cline")   // untracked
+
+	// agentsync-owned: a real repo carrying the managed marker.
+	if err := os.MkdirAll(claudeRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agit.Init(claudeRoot); err != nil {
+		t.Fatalf("agit.Init: %v", err)
+	}
+	// foreign: a genuine git repo the user owns — no agentsync managed marker.
+	if err := os.MkdirAll(rooRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gogit.PlainInit(rooRoot, false); err != nil {
+		t.Fatalf("PlainInit foreign repo: %v", err)
+	}
+	// untracked: a plain dir with no repo at or above it.
+	if err := os.MkdirAll(clineRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Preconditions: confirm the planted states are what we expect, so a doctor
+	// output miss is unambiguously a reporting bug, not a bad fixture.
+	for _, tc := range []struct {
+		dir  string
+		want agit.State
+	}{
+		{claudeRoot, agit.StateAgentsyncOwned},
+		{rooRoot, agit.StateForeign},
+		{clineRoot, agit.StateUntracked},
+	} {
+		if st, err := agit.Detect(tc.dir); err != nil || st != tc.want {
+			t.Fatalf("precondition: Detect(%s) = (%v, %v), want %v", tc.dir, st, err, tc.want)
+		}
+	}
+
+	out, err := runCLI(t, env, "doctor")
+	if err != nil {
+		t.Fatalf("doctor: %v\n%s", err, out)
+	}
+	for _, want := range []struct {
+		name, substr string
+	}{
+		{"owned", claudeRoot + " — agentsync-versioned"},
+		{"foreign", rooRoot + " — foreign source control"},
+		{"untracked", clineRoot + " — untracked"},
+	} {
+		t.Run(want.name, func(t *testing.T) {
+			if !strings.Contains(out, want.substr) {
+				t.Fatalf("doctor output missing %q. Got:\n%s", want.substr, out)
+			}
+		})
+	}
+}
 
 func TestDoctor_PrintsEnvAndAgents(t *testing.T) {
 	tmp := t.TempDir()
