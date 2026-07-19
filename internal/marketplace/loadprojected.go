@@ -197,9 +197,10 @@ func firstDivergentByKey[T any](items []T, key func(T) string, sameRender func(a
 
 // sameMCPRender / sameLSPRender compare only the fields that reach the agent
 // destination — the ones a hijack would repoint (type/command/args/url/env/
-// headers). The source-only `agents`/`enabled` targeting metadata is excluded:
-// render strips it and capture preserves it, so two sources differing ONLY on it
-// are not a divergent override. nil and empty collections compare equal.
+// headers). The `agents`/`enabled` targeting metadata is excluded — it decides
+// WHICH agents get the server and whether it is on, not the server's endpoint
+// (what a hijack repoints) — so two sources differing ONLY on it are not a
+// divergent override. nil and empty collections compare equal.
 func sameMCPRender(a, b source.MCPServer) bool {
 	return reflect.DeepEqual(mcpRenderFields(a.Server), mcpRenderFields(b.Server))
 }

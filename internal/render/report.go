@@ -342,8 +342,9 @@ func countMCPServers(c source.Canonical, agent string) int {
 }
 
 // countLSPServers mirrors countMCPServers for LSP servers — LSPServerSpec carries
-// the same source-only enabled/agents targeting fields, so a server disabled or
-// scoped to other agents is not counted for this agent.
+// the same enabled/agents targeting fields (agents source-only; enabled default-on
+// when nil), so a server disabled or scoped to other agents is not counted for
+// this agent.
 func countLSPServers(c source.Canonical, agent string) int {
 	n := 0
 	for _, l := range c.LSPServers {

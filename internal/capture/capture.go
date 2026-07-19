@@ -45,9 +45,13 @@ type Result struct {
 //  1. re-references resolved secrets back to ${secret:…} against the current
 //     source (secrets.ReReferenceCanonical), so a live credential apply wrote
 //     into the destination is never persisted into ~/.agentsync;
-//  2. preserves source-only fields the rendered destination never carries
-//     (MCP/LSP agents + enabled), so write-back can't silently broaden a
-//     server's exposure or clear its enablement;
+//  2. preserves MCP/LSP targeting the destination doesn't fully carry: `agents`
+//     is source-only (no native dest carries it) and is ALWAYS restored, so
+//     write-back can't silently broaden a server's exposure; `enabled` IS carried
+//     by some dests (Codex reads native `enabled` — issue #152), so the source
+//     value is restored only when the ingest carried none (nil) — a real native
+//     enable/disable round-trips, while a dest that omits `enabled` keeps the
+//     source state (so write-back still can't silently clear it);
 //  3. writes through internal/source/writer.go (never iox.AtomicWrite directly).
 //
 // The current source MUST load for Capture to run: re-referencing and

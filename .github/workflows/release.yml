@@ -36,7 +36,8 @@ on:
 # need contents:write. `id-token: write` (the ambient OIDC token keyless cosign
 # uses to sign checksums.txt) is NOT granted here: only the goreleaser job signs,
 # so it is scoped to that job's own permissions block below (least privilege) —
-# the docs/choco jobs never mint an OIDC token they don't use.
+# the ci and docs jobs never mint an OIDC token they don't use (the Chocolatey
+# steps run INSIDE goreleaser, which is the one job that does sign).
 permissions:
   contents: write
 

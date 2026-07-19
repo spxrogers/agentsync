@@ -479,16 +479,19 @@ flowchart LR
     NATIVE["native config on disk"] --> ING["adapter.Ingest<br/>→ source.Canonical"]
     ING --> CAP["capture.Capture"]
     CAP --> RR["secrets.ReReferenceCanonical<br/>(cleartext → ${secret:…})"]
-    RR --> PRES["preserve source-only fields<br/>(agents, enabled)"]
+    RR --> PRES["preserve targeting<br/>(agents source-only; enabled if ingest carried none)"]
     PRES --> WR["source.Write* (templated only)"]
     WR --> SRC["~/.agentsync/*.toml"]
 ```
 
 `capture.Capture` is the single dest→source funnel. It **re-references** any
 resolved secret back to its `${secret:…}` form before writing, and it preserves
-source-only fields (like an MCP server's `agents`/`enabled` list) that the
-rendered destination never carried. No other code path writes destination data
-back into the source.
+the server targeting the destination doesn't fully carry: an MCP/LSP server's
+`agents` list is source-only (no native dest carries it) and is always restored,
+while `enabled` — which some destinations *do* carry (Codex reads a native
+`enabled` back, issue #152) — is restored from source only when the ingest carried
+none, so a real native enable/disable round-trips instead of being reset. No other
+code path writes destination data back into the source.
 
 Re-reference matches by value, so it cannot distinguish a *moved or rotated*
 secret from a deliberate non-secret edit. As a **fail-closed backstop**,

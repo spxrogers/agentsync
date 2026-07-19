@@ -259,9 +259,12 @@ type LSPServerSpec struct {
 	Env     map[string]string `toml:"env,omitempty"`
 	URL     string            `toml:"url,omitempty"`
 	Headers map[string]string `toml:"headers,omitempty"`
-	// Agents / Enabled mirror MCPServerSpec: they are source-only targeting
-	// fields that the rendered destination never carries, so capture must
-	// preserve them (via source.ReadLSP) rather than reset them from the dest.
+	// Agents / Enabled mirror MCPServerSpec: Agents is a source-only targeting
+	// field no native dest carries, so capture always restores it (via
+	// source.ReadLSP). Enabled follows the same conditional rule as MCP — capture
+	// restores the source value only when the ingest carried none — so a dest that
+	// ever reports LSP enable state can round-trip it; no LSP adapter reads native
+	// `enabled` today (Codex's MCP dest does, #152), so in practice it is preserved.
 	Agents  []string `toml:"agents,omitempty"`  // ["*"] or ["claude",...]; empty = all
 	Enabled *bool    `toml:"enabled,omitempty"` // nil means default-on
 	// Extra carries native LSP-server fields agentsync does not model, captured
