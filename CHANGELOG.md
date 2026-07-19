@@ -32,6 +32,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
+- **Capability matrix: the Claude Hook cell is corrected from `✓` to `◐` (issue
+  #147).** agentsync models only `command` hooks (`matcher` + `command`); those
+  round-trip losslessly, but a non-`command` handler type or an unmodeled field
+  (e.g. `timeout`) is now *reported* (a render Skip / an ingest warning that leaves
+  your native entry untouched) rather than claimed as full-fidelity. The ◐ is
+  backed by the artifact-anchored `TestIngest_HookArtifactRoundTrip`.
+- **Capability matrix: the Codex subagent `name` claim is corrected (issue #150).**
+  The matrix now states that a Codex subagent's `name`/`description`/`model`
+  round-trip in **both** directions — a frontmatter `name` diverging from the file
+  stem survives ingest (re-populated from the TOML `name`) instead of being
+  silently rederived from the filename — and that colliding effective names are
+  refused at render, matching the shipped fix.
 - **Each adapter's key-merge strategy is now a machine-checked, load-bearing
   invariant (issue #157).** A new central guard
   (`TestKeyMergeStrategy_MatchesEmittedOps`) renders a real MCP+hook fixture
