@@ -166,3 +166,32 @@ func sortByLengthDesc(s []string) {
 		}
 	}
 }
+
+// MalformedSecretRefs walks every secret-bearing canonical field and returns each
+// ${secret:…}/${env:…}-SHAPED token that does NOT match the strict reference shape
+// (a non-empty [A-Za-z0-9._-]+ key after a colon) — e.g. ${secret:} or
+// ${secret foo}. It needs no backend, so it is the offline-validatable shape check
+// `verify` runs when reference resolution is skipped (issue #171).
+func MalformedSecretRefs(c *source.Canonical) []string {
+	if c == nil {
+		return nil
+	}
+	bad := map[string]bool{}
+	walkSecretFields(c, func(_ secretFieldLoc, s string) string {
+		for _, cand := range looseRefRe.FindAllString(s, -1) {
+			if !re.MatchString(cand) {
+				bad[cand] = true
+			}
+		}
+		return s
+	})
+	if len(bad) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(bad))
+	for k := range bad {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}

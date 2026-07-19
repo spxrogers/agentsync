@@ -103,6 +103,21 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **CLI write-path correctness batch (issue #171).** Five disjoint fixes: (1)
+  `setDestinationGitBackupMode` now re-parses the spliced `agentsync.toml` before
+  writing and **refuses** (leaving the file untouched) if the splice would no longer
+  parse or would alter content outside its table — mirroring the `[agents]`
+  splicer's backstop. (2) `reconcile`'s interactive EOF path now reaches `done:`, so
+  a queued `[o]verride` and pruned state are flushed instead of silently dropped
+  when the input stream ends. (3) offline `verify`
+  (`AGENTSYNC_ALLOW_OFFLINE_VERIFY=1`) now validates `${secret:…}`/`${env:…}`
+  reference **shape** (a malformed `${secret:}` fails) instead of skipping reference
+  checks entirely and mis-claiming "all references resolve"; the docs now state
+  offline mode checks shape, not resolvability. (4) a user-scope `agent disable
+  --purge` is documented as an intentionally cross-scope machine-wide cleanup
+  (project-scope `--purge --scope project` stays isolated). (5) the marketplace
+  `head_sha`/`name` keys are documented as CLI fetch-cache metadata deliberately not
+  modeled in the canonical schema (no silent drop).
 - **`plugin upgrade/enable/disable/remove` now accept the `id@marketplace` ref that
   `install` accepts (issue #168).** They previously took `args[0]` verbatim and
   built a bogus `plugins/<id>@<marketplace>.toml` path, so copying the exact install

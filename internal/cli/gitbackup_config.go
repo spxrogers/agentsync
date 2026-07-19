@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -34,10 +35,52 @@ func setDestinationGitBackupMode(home, mode string) error {
 	}
 	block := buildGitBackupSection(mode, cfg.Table.AuthorName, cfg.Table.AuthorEmail)
 	out := spliceTOMLTable(string(raw), gitBackupTableHeader, block)
-	if err := iox.AtomicWrite(p, []byte(out), 0o644); err != nil {
+
+	// Fail-closed backstop (issue #171): spliceTOMLTable is line-based, not a TOML
+	// parser — it assumes the target table is a simple contiguous block and does not
+	// distinguish `[x]` from an array-of-tables `[[x]]`. On an unusual-but-valid
+	// layout (the table mid-file followed by an `[[array.of.tables]]`, interleaved
+	// sections, or a multi-line string whose CONTENT contains a `[...]` line) the
+	// splice can produce bytes that no longer parse, or that silently mangle ANOTHER
+	// table. Mirror writeAgents' guard: re-parse the spliced result and require BOTH
+	// that it parses as a full canonical config AND that everything outside the
+	// git-backup table is unchanged; refuse the write (leaving agentsync.toml
+	// byte-for-byte untouched) otherwise.
+	content := []byte(out)
+	var check source.Config
+	if err := toml.Unmarshal(content, &check); err != nil {
+		return fmt.Errorf("refusing to rewrite %s: the regenerated config no longer parses (%v); "+
+			"the file likely uses a TOML construct the git-backup splicer cannot handle — "+
+			"edit the [destination_directory_git_backup] table by hand (mode change aborted)", p, err)
+	}
+	same, err := nonGitBackupUnchanged(raw, content)
+	if err != nil {
+		return fmt.Errorf("refusing to rewrite %s: %w (mode change aborted)", p, err)
+	}
+	if !same {
+		return fmt.Errorf("refusing to rewrite %s: the rewrite would alter content outside the "+
+			"[destination_directory_git_backup] table — edit it by hand (mode change aborted)", p)
+	}
+	if err := iox.AtomicWrite(p, content, 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", p, err)
 	}
 	return nil
+}
+
+// nonGitBackupUnchanged reports whether everything OUTSIDE the git-backup table is
+// semantically identical between the original and spliced config — the backstop's
+// oracle that the splice touched only its own table (issue #171).
+func nonGitBackupUnchanged(oldRaw, newRaw []byte) (bool, error) {
+	var oldDoc, newDoc map[string]any
+	if err := toml.Unmarshal(oldRaw, &oldDoc); err != nil {
+		return false, fmt.Errorf("re-parse original config: %w", err)
+	}
+	if err := toml.Unmarshal(newRaw, &newDoc); err != nil {
+		return false, fmt.Errorf("re-parse regenerated config: %w", err)
+	}
+	delete(oldDoc, "destination_directory_git_backup")
+	delete(newDoc, "destination_directory_git_backup")
+	return reflect.DeepEqual(oldDoc, newDoc), nil
 }
 
 // buildGitBackupSection renders the [destination_directory_git_backup] block,

@@ -516,3 +516,45 @@ func TestReconcile_InteractiveQuit(t *testing.T) {
 		t.Fatalf("expected 'quit' in output; got: %s", out)
 	}
 }
+
+// TestReconcile_EOFFlushesOverrides is the regression for the interactive EOF path
+// dropping queued state (issue #171): after choosing [o]verride on a drift item, an
+// EOF (piped input ends) must still reach `done:` so the queued override is applied
+// (a bare `return nil` used to drop it).
+func TestReconcile_EOFFlushesOverrides(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun := func(args ...string) {
+		t.Helper()
+		if _, err := runCLI(t, env, args...); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+	mustRun("init")
+	mustRun("agent", "add", "claude")
+	for _, name := range []string{"aaa", "bbb"} {
+		mcp := filepath.Join(tmp, ".agentsync", "mcp", name+".toml")
+		_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+		_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
+	}
+	mustRun("apply")
+
+	// Drift BOTH servers in the destination (npx -> npm).
+	dst := filepath.Join(tmp, ".claude.json")
+	body, _ := os.ReadFile(dst)
+	if err := os.WriteFile(dst, []byte(strings.ReplaceAll(string(body), `"npx"`, `"npm"`)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A single 'o' overrides the first drift item; the stream then EOFs before the
+	// second is answered. Post-fix, EOF reaches `done:` and applies the queued
+	// override (restoring the source "npx" for the first item).
+	out, err := runCLIWithStdin(t, env, "o", "reconcile")
+	if err != nil {
+		t.Fatalf("reconcile: %v\n%s", err, out)
+	}
+	final, _ := os.ReadFile(dst)
+	if !strings.Contains(string(final), `"npx"`) {
+		t.Fatalf("EOF after [o]verride dropped the queued override (source value not restored):\n%s", final)
+	}
+}

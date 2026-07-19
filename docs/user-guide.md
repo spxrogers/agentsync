@@ -332,7 +332,9 @@ first-class. Layout:
 ├── agents/<name>.md          # one subagent per file
 ├── commands/<name>.md        # one slash command per file
 ├── hooks/<event>.toml        # one hook per file
-├── marketplaces/<name>.toml  # one marketplace per file
+├── marketplaces/<name>.toml  # one marketplace per file (its `head_sha`/`name`
+│                             #   keys are CLI fetch-cache metadata, regenerated on
+│                             #   fetch — not modeled in the canonical schema)
 ├── plugins/<id>.toml         # one plugin enablement per file
 ├── memory/AGENTS.md          # canonical memory (+ fragments/*.md)
 ├── skills/<name>/            # a skill is a DIRECTORY: SKILL.md + bundled
@@ -769,7 +771,7 @@ and the complete environment-variable table. The ones you'll reach for most:
 | `AGENTSYNC_HOME` | Override the `~/.agentsync/` location. |
 | `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations (e.g. chezmoi-managed files). |
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://`/`git://` plugin/marketplace sources. |
-| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `verify` skip secret resolution (CI without an age key). |
+| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `verify` validate reference *shape* only, skipping resolution (CI without an age key). |
 
 Quick hits:
 

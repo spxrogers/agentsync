@@ -21,7 +21,9 @@ agentsync verify
 
 CI runners usually don't have your age identity, so secret *resolution* would
 fail. Set `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` to validate structure and reference
-syntax while skipping the actual decryption:
+**shape** (a malformed `${secret:}` still fails) while skipping resolution — it
+does **not** check that a well-formed reference actually resolves, which needs a
+run without the flag:
 
 ```bash
 AGENTSYNC_ALLOW_OFFLINE_VERIFY=1 agentsync verify

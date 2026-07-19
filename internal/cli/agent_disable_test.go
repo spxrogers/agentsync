@@ -311,3 +311,55 @@ command = "npx"
 		t.Fatalf(".claude.json should still exist after disable (no --purge): %v", err)
 	}
 }
+
+// TestAgentDisable_Purge_UserScopeIsCrossScope pins the RATIFIED policy (issue
+// #171): a plain USER-scope `agent disable <agent> --purge` is intentionally
+// cross-scope — it prunes the agent's dest keys across every scope:project pair,
+// including project-scope dests in checked-out repos. (The project-scoped form is
+// isolated; see TestAgentDisable_Purge_ProjectScopeOnlyTouchesProject.)
+func TestAgentDisable_Purge_UserScopeIsCrossScope(t *testing.T) {
+	tmp := t.TempDir()
+	proj := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	userMCP := filepath.Join(tmp, ".agentsync", "mcp", "usersrv.toml")
+	if err := os.MkdirAll(filepath.Dir(userMCP), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userMCP, []byte("[server]\ntype = \"stdio\"\ncommand = \"npx\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", proj); err != nil {
+		t.Fatal(err)
+	}
+	declareProjectAgent(t, env, proj, "claude")
+	scaffoldProjectMCP(t, proj, "projsrv", "node", "s.js")
+	if _, err := runCLI(t, env, "apply", "--project", proj); err != nil {
+		t.Fatal(err)
+	}
+
+	// A plain USER-scope purge (no --scope/--project): ratified cross-scope.
+	out, err := runCLI(t, env, "agent", "disable", "claude", "--purge")
+	if err != nil {
+		t.Fatalf("user-scope agent disable --purge: %v\n%s", err, out)
+	}
+
+	// User dest pruned.
+	if body, _ := os.ReadFile(filepath.Join(tmp, ".claude.json")); strings.Contains(string(body), "usersrv") {
+		t.Fatalf("user-scope purge did not prune the user-scope key:\n%s", body)
+	}
+	// Project dest ALSO pruned — the ratified cross-scope behavior.
+	if body, _ := os.ReadFile(filepath.Join(proj, ".mcp.json")); strings.Contains(string(body), "projsrv") {
+		t.Fatalf("ratified cross-scope user purge should also prune the project-scope key:\n%s", body)
+	}
+}

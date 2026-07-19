@@ -254,3 +254,59 @@ func TestVerify_ProjectScope_NoTree(t *testing.T) {
 		t.Fatalf("error should mention the missing .agentsync/ tree; got: %v", err)
 	}
 }
+
+// TestVerify_OfflineMode pins that AGENTSYNC_ALLOW_OFFLINE_VERIFY=1 (the CI path)
+// validates reference SHAPE but not resolvability (issue #171): a malformed
+// ${secret:} is rejected offline, a well-formed-but-unresolvable ref passes offline,
+// and the online path still fails to resolve it.
+func TestVerify_OfflineMode(t *testing.T) {
+	writeMCP := func(t *testing.T, tmp, body string) {
+		t.Helper()
+		p := filepath.Join(tmp, ".agentsync", "mcp", "x.toml")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("offline-rejects-malformed-ref", func(t *testing.T) {
+		tmp := t.TempDir()
+		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
+		_, _ = runCLI(t, env, "init")
+		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:}\"\n")
+		_, err := runCLI(t, env, "verify")
+		if err == nil {
+			t.Fatal("offline verify must reject a malformed ${secret:} reference")
+		}
+		if !strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("error should name the malformed ref; got: %v", err)
+		}
+	})
+
+	t.Run("offline-accepts-wellformed-unresolvable", func(t *testing.T) {
+		tmp := t.TempDir()
+		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
+		_, _ = runCLI(t, env, "init")
+		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:some.key}\"\n")
+		out, err := runCLI(t, env, "verify")
+		if err != nil {
+			t.Fatalf("offline verify must NOT resolve a well-formed ref: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "resolvability not checked") {
+			t.Fatalf("offline ok line should note resolvability is not checked; got: %s", out)
+		}
+	})
+
+	t.Run("online-rejects-unresolvable", func(t *testing.T) {
+		tmp := t.TempDir()
+		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp} // online: no offline flag
+		_, _ = runCLI(t, env, "init")
+		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:some.key}\"\n")
+		_, err := runCLI(t, env, "verify")
+		if err == nil {
+			t.Fatal("online verify must fail to resolve ${secret:some.key}")
+		}
+	})
+}

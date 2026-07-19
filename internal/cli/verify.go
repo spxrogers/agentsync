@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
@@ -83,21 +84,33 @@ func newVerifyCmd() *cobra.Command {
 			if err := verifySecrets(c.Config.Secrets, home); err != nil {
 				return fmt.Errorf("verify secrets: %w", err)
 			}
-			// Substitute against the live backends. AGENTSYNC_ALLOW_OFFLINE_VERIFY=1
-			// skips resolution when running in CI without an age key.
-			// Offline mode cannot catch a typo'd secret name (e.g.
-			// ${secret:GITHB.token}) — that requires a live backend.
-			// The regex inside SubstituteRefs already enforces the
-			// reference shape, so the schema decode + this pass cover
-			// the offline-validatable space.
-			if os.Getenv("AGENTSYNC_ALLOW_OFFLINE_VERIFY") != "1" {
+			// Reference checking. Online (default) resolves every ${secret:…}/
+			// ${env:…} against the live backends. Offline (AGENTSYNC_ALLOW_OFFLINE_VERIFY=1,
+			// the documented CI path without an age key) can't RESOLVE, but it still
+			// validates reference SHAPE — flagging a malformed ref (${secret:} empty
+			// key, missing colon, illegal char) that the strict resolver would
+			// otherwise silently pass through as literal text. It does NOT catch a
+			// well-shaped-but-wrong/unresolvable name (a typo'd key, a missing vault
+			// entry); that requires running WITHOUT the offline flag. (issue #171)
+			offline := os.Getenv("AGENTSYNC_ALLOW_OFFLINE_VERIFY") == "1"
+			if offline {
+				if bad := secrets.MalformedSecretRefs(&c); len(bad) > 0 {
+					return fmt.Errorf("verify: malformed secret/env reference(s): %s "+
+						"(offline mode checks reference shape only; run without "+
+						"AGENTSYNC_ALLOW_OFFLINE_VERIFY=1 to also check resolvability)", strings.Join(bad, ", "))
+				}
+			} else {
 				secBackend := secrets.SelectBackend(c.Config.Secrets, home, userHome)
 				envBackend := secrets.EnvBackend{}
 				if _, err := secrets.SubstituteCanonical(c, secBackend, envBackend); err != nil {
 					return fmt.Errorf("verify ${secret:}/${env:} resolution: %w", err)
 				}
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "ok: schema valid; all references resolve")
+			if offline {
+				fmt.Fprintln(cmd.OutOrStdout(), "ok: schema valid; reference shapes valid (offline — resolvability not checked)")
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "ok: schema valid; all references resolve")
+			}
 			return nil
 		},
 	}

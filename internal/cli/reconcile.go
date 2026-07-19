@@ -242,7 +242,10 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 			for {
 				ch, readErr := readChar(br)
 				if readErr != nil {
-					return nil // EOF → quit gracefully
+					// EOF → finish gracefully, but reach `done:` so any queued
+					// [o]verride ops are applied and pruned/dirty state is flushed
+					// (a bare `return nil` here dropped both — issue #171).
+					goto done
 				}
 				switch ch {
 				case 'w', 'W', 'o', 'O', 's', 'S', 'i', 'q', 'Q':
@@ -264,7 +267,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 						fmt.Fprintf(w, "  apply '%c' to all %d remaining items? [y/N] ", lower, remaining)
 						confirm, readErr := readChar(br)
 						if readErr != nil {
-							return nil
+							goto done // EOF mid-confirm → flush queued overrides + state (issue #171)
 						}
 						fmt.Fprintf(w, "%c\n", confirm)
 						if confirm != 'y' && confirm != 'Y' {

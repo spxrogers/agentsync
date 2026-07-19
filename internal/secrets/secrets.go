@@ -21,6 +21,14 @@ type Resolver interface {
 // re matches ${secret:dotted.key} and ${env:NAME} references.
 var re = regexp.MustCompile(`\$\{(secret|env):([A-Za-z0-9._-]+)\}`)
 
+// looseRefRe matches anything SHAPED like a ${secret …}/${env …} reference (a
+// colon or whitespace after the kind), so a MALFORMED ref — ${secret:} (empty
+// key), ${secret foo} (no colon), a key with a space/illegal char — is caught for
+// the offline shape check even though the strict `re` above silently skips it. It
+// deliberately does not match `${env}` (no separator) or `${secretary}` (no
+// boundary), which are not clearly references. (issue #171)
+var looseRefRe = regexp.MustCompile(`\$\{\s*(secret|env)[:\s][^}]*\}`)
+
 // SubstituteRefs walks s and replaces ${secret:dotted.key} and ${env:NAME}
 // references. Unknown references are left as-is and reported in the
 // returned []string of unresolved markers (caller decides whether to error).

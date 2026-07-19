@@ -64,7 +64,10 @@ something feels off.
 Validates the canonical config and surfaces **every** unresolved `${secret:…}` /
 `${env:…}` reference. Ideal for CI — see
 [Verify config in CI](/recipes/ci-verification/). Pair with
-`AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` on runners without an age key.
+`AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` on runners without an age key: offline mode
+validates reference **shape** (a malformed `${secret:}` still fails) but skips
+resolution, so a well-formed-but-unresolvable name only surfaces on a run without
+the flag.
 
 Defaults to **user** scope. `--scope project` (walks up from cwd to the
 `.agentsync/` tree) or `--project <path>` schema-lints the **project** source
