@@ -766,6 +766,44 @@ func TestPlugin_ReinstallOverCorruptTOMLRefuses(t *testing.T) {
 	}
 }
 
+// TestPlugin_ReinstallOverEmptyTOMLUsesDefaults pins the refuse-vs-fall-through boundary
+// documented in installPluginInto: a semantically-EMPTY plugins/<id>.toml (blank or
+// comment-only) parses successfully to an empty spec, so it carries no allowlist to
+// preserve and a re-install legitimately falls through to the defaults — unlike a corrupt/
+// unparseable file, which refuses (TestPlugin_ReinstallOverCorruptTOMLRefuses).
+func TestPlugin_ReinstallOverEmptyTOMLUsesDefaults(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+		t.Fatal(err)
+	}
+	pluginPath := filepath.Join(tmp, ".agentsync", "plugins", "demo.toml")
+
+	// A comment-only file: valid TOML, no [plugin] table — semantically empty.
+	if err := os.WriteFile(pluginPath, []byte("# no allowlist here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-install SUCCEEDS (empty is not "corrupt") and falls through to the defaults.
+	if out, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+		t.Fatalf("re-install over a semantically-empty toml should succeed, got: %v\n%s", err, out)
+	}
+	got := readPluginTOMLFixture(t, pluginPath)
+	if len(got.Plugin.Agents) != 1 || got.Plugin.Agents[0] != "*" {
+		t.Fatalf("empty toml should fall through to default agents=[\"*\"], got %v", got.Plugin.Agents)
+	}
+	if got.Plugin.Update != "track" {
+		t.Fatalf("empty toml should fall through to default update=track, got %q", got.Plugin.Update)
+	}
+}
+
 func TestPlugin_ReinstallPreservesAgentsUpdateDisabled(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
