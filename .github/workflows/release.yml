@@ -33,9 +33,11 @@ on:
 
 # goreleaser needs to create the GitHub Release + upload assets in THIS repo,
 # and the `docs` job force-pushes the rebuilt site to the gh-pages branch — both
-# need contents:write here.
+# need contents:write here. `id-token: write` mints the ambient OIDC token
+# keyless cosign uses to sign checksums.txt (no long-lived signing key/secret).
 permissions:
   contents: write
+  id-token: write
 
 # Serialize releases so a manual dispatch and a tag push (or two dispatches)
 # can't race to tag/publish the same version. We never cancel an in-flight
@@ -150,6 +152,10 @@ jobs:
           # failure from an opaque mid-`goreleaser release` abort (after the Release
           # already published) into a fast, obvious one here.
           "$HOME/bin/choco" --version
+      # cosign for the keyless checksum signature (goreleaser's signs: block shells
+      # out to `cosign sign-blob`). Keyless uses this job's OIDC token (permissions
+      # id-token: write above) — no signing key is stored (issue #138).
+      - uses: sigstore/cosign-installer@v3
       - uses: goreleaser/goreleaser-action@v6
         with:
           # Pinned so releases are reproducible run-to-run (Go is pinned via

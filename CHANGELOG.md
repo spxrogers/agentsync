@@ -50,6 +50,19 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Release pipeline hardening: pinned goreleaser, reproducible archives, signed
+  checksums, and a nfpms↔README URL guard (issue #138).** goreleaser is now pinned
+  to the same version (`2.16.0`) across `ci.yml`, `release.yml`, and `just ci` (the
+  last via `go run …@2.16.0`), with a CI guard that fails the build if the three
+  ever diverge — so the toolchain that validates a release config can't differ from
+  the one that ships it. Archive entry mtimes are pinned to the commit date, so
+  re-cutting a release produces byte-identical archives and an identical
+  `checksums.txt` (restoring the reproducibility scaffolding PR #115 dropped). The
+  release `checksums.txt` is now signed with keyless cosign (Sigstore) — artifact
+  integrity no longer rests on GitHub TLS alone — using the release job's ambient
+  OIDC token, introducing no new signing secret. A new CI guard couples the nfpms
+  version-less `file_name_template` to the README's `releases/latest/download/`
+  install URLs so a divergence fails CI instead of silently 404ing.
 - **The first `apply` is now revertible (issue #143).** Destination git backup used
   to record its first checkpoint only *after* `render.Apply` had already overwritten
   the dir, so a bad **first** apply into a previously-untracked dir had no prior state

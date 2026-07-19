@@ -110,8 +110,11 @@ docs-publish:
     REMOTE="$(git remote get-url origin)"; cd website/dist && git init -q && git add -A && git -c user.name="agentsync docs" -c user.email="docs@users.noreply.github.com" commit -qm "deploy agentsync.cc docs" && git push -f "$REMOTE" HEAD:gh-pages && rm -rf .git
 
 # Full CI gate: lint + the hermetic release suite + the cross-build matrix.
+# goreleaser is pinned via `go run …@version` (the same self-enforcing pattern as
+# golangci-lint) so local `just ci` can't drift from the version CI/release use;
+# the ci.yml version-parity guard asserts all three agree (issue #138).
 ci: lint test-release
-    goreleaser release --snapshot --skip=publish --clean
+    go run github.com/goreleaser/goreleaser/v2@v2.16.0 release --snapshot --skip=publish --clean
 
 # Cut a release: validate `v`+semver, then tag & push (which fires the release workflow). Usage: `just release v0.1.0`
 # No laptop? Trigger the same release from the GitHub UI/mobile app instead:

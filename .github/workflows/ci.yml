@@ -83,6 +83,49 @@ jobs:
             echo "::error file=.goreleaser.yaml::publisher token/private_key must use a bare {{ .Env.X }} template — envOrDefault/isEnvSet are unavailable in that context and fail at publish"
             exit 1
           fi
+      # The goreleaser version is pinned in THREE places (ci.yml x2, release.yml,
+      # justfile). This is the C3 "dual-list drift" class — assert they never
+      # diverge, so the toolchain that validates a release can't differ from the
+      # one that ships it (issue #138).
+      - name: Guard goreleaser version pin (CI == release == just)
+        run: |
+          set -euo pipefail
+          mapfile -t vers < <(
+            grep -hoE 'version: "[0-9]+\.[0-9]+\.[0-9]+"' .github/workflows/ci.yml .github/workflows/release.yml \
+              | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'
+            grep -hoE 'goreleaser/v2@v[0-9]+\.[0-9]+\.[0-9]+' justfile | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'
+          )
+          if [ "${#vers[@]}" -lt 4 ]; then
+            echo "::error::expected >=4 goreleaser version pins (ci.yml x2, release.yml x1, justfile x1); found ${#vers[@]}: ${vers[*]:-none}"
+            exit 1
+          fi
+          if [ "$(printf '%s\n' "${vers[@]}" | sort -u | wc -l)" -ne 1 ]; then
+            echo "::error::goreleaser version pins disagree across ci.yml / release.yml / justfile: ${vers[*]}"
+            exit 1
+          fi
+          echo "goreleaser pinned consistently to ${vers[0]} across ci.yml, release.yml, justfile"
+      # The nfpms file_name_template is version-less specifically so the README's
+      # releases/latest/download/ URLs resolve. Assert the coupling so a change to
+      # either side fails CI instead of silently 404ing the install command (#138).
+      - name: Guard nfpms file_name_template matches README install URLs
+        run: |
+          set -euo pipefail
+          proj=$(grep -oE '^project_name:[[:space:]]*[A-Za-z0-9_-]+' .goreleaser.yaml | awk '{print $2}')
+          # The template must stay the version-less {ProjectName}_{Os}_{Arch}{ext} shape.
+          if ! grep -qE 'file_name_template:.*\.ProjectName.*_.*\.Os.*_.*\.Arch.*\.ConventionalExtension' .goreleaser.yaml; then
+            echo "::error file=.goreleaser.yaml::nfpms file_name_template no longer produces the version-less {ProjectName}_{Os}_{Arch}{ext} shape the README latest/download URLs depend on"
+            exit 1
+          fi
+          fails=0
+          # Every deb/rpm the README links via releases/latest/download must match that shape.
+          while IFS= read -r fname; do
+            [ -z "$fname" ] && continue
+            if ! printf '%s' "$fname" | grep -qE "^${proj}_linux_(amd64|arm64)\.(deb|rpm)$"; then
+              echo "::error file=README.md::install URL '$fname' does not match nfpms file_name_template '${proj}_{Os}_{Arch}{.deb|.rpm}'"
+              fails=1
+            fi
+          done < <(grep -oE 'releases/latest/download/[^ )"]+\.(deb|rpm)' README.md | sed 's#.*/##' | sort -u)
+          exit $fails
 
   goreleaser-snapshot:
     name: goreleaser-snapshot (cross-build matrix)
@@ -95,7 +138,10 @@ jobs:
           go-version-file: ${{ env.GO_VERSION_FILE }}
       - uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          # Pinned to match the publish job (release.yml) and `just ci` so the
+          # config is validated by the exact goreleaser that ships it — the
+          # version-parity guard in the lint job enforces this (issue #138).
+          version: "2.16.0"
           # Validate the ENTIRE .goreleaser.yaml first — including the
           # publish-phase scoop/chocolatey blocks the snapshot below skips — so a
           # schema/template typo fails CI in ~1s instead of mid-release at tag-cut
@@ -104,7 +150,7 @@ jobs:
           args: check
       - uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          version: "2.16.0"
           # --skip publish already skips the (publish-phase) scoop/chocolatey
           # pipes; chocolatey is also named explicitly because its pack step
           # shells out to the `choco` CLI, which this CI runner does not install

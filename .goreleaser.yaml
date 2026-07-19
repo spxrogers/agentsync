@@ -38,9 +38,52 @@ archives:
       - goos: windows
         formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Pin every in-archive entry's mtime to the commit date (RFC3339) so re-cutting
+    # a release produces byte-identical archives (and therefore an identical
+    # checksums.txt) — the "reproducible, identical" guarantee the `release:` block
+    # above relies on for `replace_existing_artifacts`. goreleaser 2.16.0 has no
+    # top-level archives.mtime, so the binary is pinned via builds_info.mtime and the
+    # bundled docs (the same LICENSE/README/CHANGELOG set goreleaser includes by
+    # default) via files[].info.mtime. The binary itself is already host-independent
+    # (-trimpath + mod_timestamp above); this pins the wall-clock mtime the tar/zip
+    # would otherwise stamp on each entry. PR #115 dropped this scaffolding; restored
+    # here (issue #138).
+    builds_info:
+      mtime: "{{ .CommitDate }}"
+    files:
+      - src: LICENSE
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: README.md
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: CHANGELOG.md
+        info:
+          mtime: "{{ .CommitDate }}"
 
 checksum:
   name_template: "checksums.txt"
+
+# Sign the checksums.txt with keyless cosign (Sigstore). Artifact integrity no
+# longer rests on GitHub TLS alone: consumers can verify checksums.txt against
+# checksums.txt.sig + checksums.txt.pem via cosign's Rekor transparency log.
+# Keyless signing introduces NO new credential/secret — it uses the release job's
+# ambient OIDC token (release.yml grants `id-token: write` and installs cosign).
+# `--yes` skips the interactive confirmation. This is a publish-phase action; the
+# CI `--snapshot --skip=publish` run does not exercise it, but `goreleaser check`
+# schema-validates the block (issue #138).
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    signature: "${artifact}.sig"
+    args:
+      - "sign-blob"
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
 
 snapshot:
   version_template: "{{ incpatch .Version }}-snapshot-{{.ShortCommit}}"
@@ -67,8 +110,10 @@ nfpms:
     # agentsync_linux_amd64.deb) so the README's
     # releases/latest/download/<name> URLs resolve. Without this the default
     # name carries the version, which `latest/download/` can't address.
-    # .ConventionalExtension expands to .deb / .rpm per format. VERIFY the
-    # emitted names match the README at the first tagged release.
+    # .ConventionalExtension expands to .deb / .rpm per format. The coupling to
+    # the README install URLs is now enforced by the "Guard nfpms
+    # file_name_template matches README install URLs" step in ci.yml, so a
+    # divergence fails CI instead of silently 404ing (issue #138).
     file_name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}{{ .ConventionalExtension }}"
 
 # --------------------------------------------------------------------------
