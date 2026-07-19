@@ -103,6 +103,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`plugin upgrade/enable/disable/remove` now accept the `id@marketplace` ref that
+  `install` accepts (issue #168).** They previously took `args[0]` verbatim and
+  built a bogus `plugins/<id>@<marketplace>.toml` path, so copying the exact install
+  ref failed — with a raw `read …: no such file or directory` for
+  upgrade/enable/disable. All four now split the ref like `install`, operate on the
+  bare id, and report a clean `plugin "<id>" is not installed` when absent.
 - **A disabled Codex MCP server now round-trips into canonical `enabled` (issue
   #152).** Codex's per-server `[mcp_servers.<name>] enabled = false` is now ingested
   into the canonical `MCPServerSpec.Enabled` field (present-only capture; absent

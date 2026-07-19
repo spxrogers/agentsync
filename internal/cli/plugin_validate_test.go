@@ -36,4 +36,14 @@ func TestValidateCacheKey(t *testing.T) {
 			t.Errorf("validateCacheKey(%q) should accept: %v", s, err)
 		}
 	}
+	// The validator sees the BARE id: an `id@marketplace` ref is split by
+	// splitPluginRef before reaching it (#168), so `@` never arrives here. The
+	// validator therefore neither needs nor performs an `@` rejection — a bare
+	// `demo` is accepted and a path-separator id is still rejected.
+	if err := validateCacheKey("plugin", "demo"); err != nil {
+		t.Errorf("validateCacheKey(\"demo\") should accept the bare id: %v", err)
+	}
+	if err := validateCacheKey("plugin", "a/b"); err == nil {
+		t.Error("validateCacheKey(\"a/b\") should still reject path separators")
+	}
 }

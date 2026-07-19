@@ -734,7 +734,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or with `--scope project`/`--project <path>` the project tree's own `[agents]` declaration (which project scope renders from; never inherited). At project scope `disable --purge` touches only that project's rendered files. | `disable --purge --scope --project` |
 | `mcp add\|remove\|list <name>` | Manage MCP servers. | `--type --command --args --url --env --agents` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
-| `plugin install\|upgrade\|enable\|disable\|remove\|list <id>` | Manage plugins. | `install <id[@marketplace]>` |
+| `plugin install\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works). | `install <id[@marketplace]>` |
 | `secrets set\|get <key>` / `secrets edit` | Manage age-encrypted secrets (`edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
 | `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. | `--dry-run --scope --project --no-git-backup` |

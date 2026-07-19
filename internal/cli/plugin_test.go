@@ -1146,3 +1146,95 @@ func TestPlugin_ListSanitizesUntrustedVersion(t *testing.T) {
 		t.Errorf("sanitized version not present in plugin list: %q", out)
 	}
 }
+
+// TestPlugin_SubcommandsAcceptMarketplaceRef is the core #168 regression: after
+// installing `demo@test-mp`, the sibling subcommands must accept the SAME full ref
+// (splitting it to the bare id like `install` does) instead of building a bogus
+// plugins/demo@test-mp.toml path.
+func TestPlugin_SubcommandsAcceptMarketplaceRef(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+		t.Fatalf("install: %v\n%s", err, out)
+	}
+
+	// Sequential (remove deletes the artifact, so it runs last).
+	t.Run("upgrade", func(t *testing.T) {
+		out, err := runCLI(t, env, "plugin", "upgrade", "demo@test-mp")
+		if err != nil {
+			t.Fatalf("upgrade demo@test-mp: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "upgraded plugin demo") {
+			t.Fatalf("unexpected upgrade output: %s", out)
+		}
+	})
+	t.Run("disable", func(t *testing.T) {
+		out, err := runCLI(t, env, "plugin", "disable", "demo@test-mp")
+		if err != nil {
+			t.Fatalf("disable demo@test-mp: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "disabled plugin demo") {
+			t.Fatalf("unexpected disable output: %s", out)
+		}
+		if list, _ := runCLI(t, env, "plugin", "list"); !strings.Contains(list, "disabled") {
+			t.Fatalf("plugin list should show disabled: %s", list)
+		}
+	})
+	t.Run("enable", func(t *testing.T) {
+		out, err := runCLI(t, env, "plugin", "enable", "demo@test-mp")
+		if err != nil {
+			t.Fatalf("enable demo@test-mp: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "enabled plugin demo") {
+			t.Fatalf("unexpected enable output: %s", out)
+		}
+	})
+	t.Run("remove", func(t *testing.T) {
+		out, err := runCLI(t, env, "plugin", "remove", "demo@test-mp")
+		if err != nil {
+			t.Fatalf("remove demo@test-mp: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "removed plugin demo") {
+			t.Fatalf("unexpected remove output: %s", out)
+		}
+		if _, err := os.Stat(filepath.Join(tmp, ".agentsync", "plugins", "demo.toml")); !os.IsNotExist(err) {
+			t.Fatalf("plugins/demo.toml should be gone after remove; stat err=%v", err)
+		}
+	})
+}
+
+// TestPlugin_NotInstalledReportsFriendlyError pins that upgrade/enable/disable/
+// remove on a never-installed id report a clean "is not installed" message rather
+// than leaking a raw file-not-found (#168).
+func TestPlugin_NotInstalledReportsFriendlyError(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+	for _, sub := range []string{"upgrade", "enable", "disable", "remove"} {
+		t.Run(sub, func(t *testing.T) {
+			_, err := runCLI(t, env, "plugin", sub, "ghost")
+			if err == nil {
+				t.Fatalf("%s on a not-installed plugin should error", sub)
+			}
+			if !strings.Contains(err.Error(), "is not installed") {
+				t.Fatalf("%s error should say 'is not installed'; got: %v", sub, err)
+			}
+			if strings.Contains(err.Error(), "no such file or directory") {
+				t.Fatalf("%s leaked a raw file-not-found error: %v", sub, err)
+			}
+		})
+	}
+}
