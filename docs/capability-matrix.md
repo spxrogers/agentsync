@@ -199,14 +199,20 @@ literally, never resolved.)
 
 **OpenCode**
 
-- **Subagent** — Claude's `tools` allowlist is remapped onto OpenCode's
-  `permission` model (approximate), and Claude frontmatter keys OpenCode doesn't
-  recognize are dropped. The OpenCode agent `mode` (`primary`/`all`/`subagent`)
-  is preserved across an `import`/`reconcile` → `apply` round-trip: a native
-  `primary`/`all` agent is no longer demoted to `subagent` (a Claude-shaped
-  subagent with no `mode` still defaults to `subagent`).
-- **Slash command** — Claude's `argument-hint` has no OpenCode field and is
-  dropped; there's no command-level `allowed-tools` (scoping is per-agent instead).
+- **Subagent** — OpenCode-supported frontmatter keys agentsync doesn't model
+  explicitly (`temperature`, `top_p`, `permission`, `disable`, `prompt`, `steps`)
+  pass through verbatim; the agent `mode` (`primary`/`all`/`subagent`) is
+  preserved across an `import`/`reconcile` → `apply` round-trip (a native
+  `primary`/`all` agent is no longer demoted to `subagent`; a Claude-shaped
+  subagent with no `mode` still defaults to `subagent`). Claude-only keys with no
+  OpenCode home — `tools` (its allowlist has no clean projection onto OpenCode's
+  `permission` model) and `color` — are dropped with a reported Skip, never
+  silently.
+- **Slash command** — OpenCode-supported command keys agentsync doesn't model
+  (`agent`, `subtask`) pass through verbatim; Claude's `argument-hint` has no
+  OpenCode field and is dropped with a reported Skip (there's no command-level
+  `allowed-tools`; scoping is per-agent instead). No frontmatter key is dropped
+  silently — every one is either rendered or surfaced as a Skip.
 - **Ingest ownership** — `import` captures only agentsync-owned agents/commands
   from the shared `agents/`/`commands/` directories (ownership is read from apply
   state); a user's hand-authored files alongside them are left untouched and

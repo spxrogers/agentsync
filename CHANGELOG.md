@@ -341,6 +341,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   later rejects is refused at save time (`… (not saved): …`) instead of being
   encrypted with a cheerful success message. Legitimate cases — a new nested key
   under an absent or table parent, and an in-place scalar update — are unchanged.
+- **OpenCode subagent/command render preserves supported frontmatter keys
+  instead of silently dropping them (issue #125).** The OpenCode render
+  functions copied only a hard-coded allowlist (`description`/`model`, plus
+  `tools`/`color`/`argument-hint` handling) and dropped every other frontmatter
+  key with no signal — including OpenCode-supported keys like `temperature`,
+  `permission`, `steps` (agents) and `agent`, `subtask` (commands). Those legal
+  OpenCode keys now pass through verbatim, and any key with no OpenCode home is
+  surfaced as an `adapter.Skip` (reported in the translation report) rather than
+  vanishing: no key is ever both absent from the rendered file and absent from
+  the skips.
+
 - **OpenCode agent `mode` is preserved and ingest no longer over-captures
   (issue #148).** OpenCode's `Ingest` previously deleted the agent `mode` key on
   every captured agent, so a native `primary`/`all` agent was silently demoted to

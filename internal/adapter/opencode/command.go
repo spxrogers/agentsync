@@ -9,6 +9,18 @@ import (
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
+// opencodeCommandPassthroughKeys are the OpenCode command frontmatter keys
+// agentsync does not model explicitly but that OpenCode supports, so they pass
+// through verbatim rather than being dropped. Verified against the OpenCode
+// command docs (https://opencode.ai/docs/commands/). `description` and `model`
+// are handled explicitly by renderCommands; `argument-hint` is Claude-only and
+// reported as a Skip. The command body is the template, so there is no
+// `template` key here (see the note below).
+var opencodeCommandPassthroughKeys = map[string]bool{
+	"agent":   true,
+	"subtask": true,
+}
+
 // renderCommands translates Claude-shaped command frontmatter to OpenCode-shaped
 // and emits FileOps for .config/opencode/commands/<name>.md.
 //
@@ -17,9 +29,13 @@ import (
 //	description   -> description  (direct copy)
 //	model         -> model        (direct copy)
 //	argument-hint -> drop + Skip  (no OpenCode equivalent)
+//	<other>       -> passthrough if a legal OpenCode command key (agent,
+//	                 subtask); else drop + Skip
 //
-// Body is preserved as-is; OpenCode treats the body as the command template.
-// We do NOT add a `template:` frontmatter key to avoid duplication.
+// No frontmatter key is silently dropped: it is either copied to the output or
+// named in an adapter.Skip. Body is preserved as-is; OpenCode treats the body as
+// the command template. We do NOT add a `template:` frontmatter key to avoid
+// duplication.
 func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp, []adapter.Skip, error) {
 	var ops []adapter.FileOp
 	var skips []adapter.Skip
@@ -32,7 +48,8 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 			out["model"] = v
 		}
 
-		// Drop unmappable fields, emit Skip notes.
+		// Dedicated Skip for the well-known Claude-only key (its Reason string is
+		// asserted by existing tests).
 		if _, ok := cmd.Frontmatter["argument-hint"]; ok {
 			skips = append(skips, adapter.Skip{
 				Component: "command", Name: cmd.Name,
@@ -40,6 +57,11 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 				Kind:   adapter.SkipReduced,
 			})
 		}
+
+		// Every remaining key: pass through if it is a legal OpenCode command key,
+		// otherwise Skip.
+		handled := map[string]bool{"description": true, "model": true, "argument-hint": true}
+		skips = passthroughOrSkip("command", cmd.Name, cmd.Frontmatter, out, handled, opencodeCommandPassthroughKeys, skips)
 
 		body, err := claude.EncodeFrontmatter(out, cmd.Body)
 		if err != nil {
