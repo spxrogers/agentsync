@@ -19,6 +19,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 // deepAdapterNames are the hand-written, agent-specific adapters (richer than the
@@ -478,7 +479,9 @@ func newAgentListCmd() *cobra.Command {
 func agentEntrySuffix(v map[string]any) string {
 	enabled, _ := v["enabled"].(bool)
 	if scope, _ := v["scope"].(string); scope != "" {
-		return fmt.Sprintf("enabled=%t scope=%s", enabled, scope)
+		// scope is a config-derived, unvalidated display-only field; sanitize it
+		// so an ESC in a shared agentsync.toml can't inject escapes (issue #93/#171).
+		return fmt.Sprintf("enabled=%t scope=%s", enabled, ui.Sanitize(scope))
 	}
 	return fmt.Sprintf("enabled=%t", enabled)
 }
@@ -519,7 +522,10 @@ func agentListRun(cmd *cobra.Command, all bool, scopeFlag, projectFlag string) e
 		return nil
 	}
 	for _, n := range names {
-		fmt.Fprintf(cmd.OutOrStdout(), "%-10s %s\n", n, agentEntrySuffix(agents[n]))
+		// n is a config [agents.<name>] key; a quoted TOML key can hold ESC, so
+		// sanitize it on display (the --all branch iterates the fixed
+		// allAgentNames() set and is already safe) (issue #93/#171).
+		fmt.Fprintf(cmd.OutOrStdout(), "%-10s %s\n", ui.Sanitize(n), agentEntrySuffix(agents[n]))
 	}
 	return nil
 }

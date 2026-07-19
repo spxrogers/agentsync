@@ -11,6 +11,7 @@ import (
 	"filippo.io/age"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spxrogers/agentsync/internal/iox"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // AgeBackend reads an age-encrypted TOML file (secrets.age), decrypts it using
@@ -39,7 +40,7 @@ func (b *AgeBackend) load() error {
 	}
 	idData, err := os.ReadFile(b.IdentityFile)
 	if err != nil {
-		return fmt.Errorf("read identity %s: %w", b.IdentityFile, err)
+		return fmt.Errorf("read identity %s: %s", untrusted.Wrap(b.IdentityFile), untrusted.Wrap(err.Error()))
 	}
 	ids, err := age.ParseIdentities(strings.NewReader(string(idData)))
 	if err != nil {
@@ -47,12 +48,12 @@ func (b *AgeBackend) load() error {
 	}
 	encFile, err := os.Open(b.AgeFile)
 	if err != nil {
-		return fmt.Errorf("open age file %s: %w", b.AgeFile, err)
+		return fmt.Errorf("open age file %s: %s", untrusted.Wrap(b.AgeFile), untrusted.Wrap(err.Error()))
 	}
 	defer encFile.Close()
 	rd, err := age.Decrypt(encFile, ids...)
 	if err != nil {
-		return fmt.Errorf("decrypt %s: %w", b.AgeFile, err)
+		return fmt.Errorf("decrypt %s: %w", untrusted.Wrap(b.AgeFile), err)
 	}
 	raw, err := io.ReadAll(rd)
 	if err != nil {
@@ -150,7 +151,7 @@ func Encrypt(plaintext []byte, recipient string, dest string) error {
 		return fmt.Errorf("parse age recipient: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return fmt.Errorf("mkdir parent of %s: %w", dest, err)
+		return fmt.Errorf("mkdir parent of %s: %s", untrusted.Wrap(dest), untrusted.Wrap(err.Error()))
 	}
 	// Encrypt to an in-memory buffer first so a write failure mid-stream
 	// cannot truncate the user's existing secrets.age.
@@ -178,7 +179,7 @@ func Decrypt(ageFile, identityFile string) ([]byte, error) {
 	// We want raw bytes, not parsed; bypass the cache and re-decrypt directly.
 	idData, err := os.ReadFile(identityFile)
 	if err != nil {
-		return nil, fmt.Errorf("read identity %s: %w", identityFile, err)
+		return nil, fmt.Errorf("read identity %s: %s", untrusted.Wrap(identityFile), untrusted.Wrap(err.Error()))
 	}
 	ids, err := age.ParseIdentities(strings.NewReader(string(idData)))
 	if err != nil {
@@ -186,12 +187,12 @@ func Decrypt(ageFile, identityFile string) ([]byte, error) {
 	}
 	encFile, err := os.Open(ageFile)
 	if err != nil {
-		return nil, fmt.Errorf("open age file %s: %w", ageFile, err)
+		return nil, fmt.Errorf("open age file %s: %s", untrusted.Wrap(ageFile), untrusted.Wrap(err.Error()))
 	}
 	defer encFile.Close()
 	rd, err := age.Decrypt(encFile, ids...)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt %s: %w", ageFile, err)
+		return nil, fmt.Errorf("decrypt %s: %w", untrusted.Wrap(ageFile), err)
 	}
 	raw, err := io.ReadAll(rd)
 	_ = b // suppress unused warning
@@ -231,7 +232,7 @@ func CheckIdentityPermissions(path string) error {
 	}
 	if mode&0o077 != 0 {
 		return fmt.Errorf("age identity %s has insecure permissions %#o (group/other readable); chmod 600 it, or set %s=1 to override",
-			path, mode, SkipPermCheckEnv)
+			untrusted.Wrap(path), mode, SkipPermCheckEnv)
 	}
 	return nil
 }

@@ -192,7 +192,10 @@ func checkStateDir(p *ui.Printer, home string) int {
 func checkSchema(p *ui.Printer, home string) (source.Config, bool) {
 	c, err := source.Load(afero.NewOsFs(), home)
 	if err != nil {
-		failCheck(p, "schema     ", fmt.Sprintf("invalid: %v", err))
+		// A strict-decode error embeds the raw offending config source line
+		// (go-toml's StrictMissingError.String()), which can carry ESC/bidi bytes
+		// from a shared config; sanitize the whole rendering (issue #93/#171).
+		failCheck(p, "schema     ", fmt.Sprintf("invalid: %s", untrusted.Wrap(err.Error())))
 		return source.Config{}, false
 	}
 	okCheck(p, "schema     ", fmt.Sprintf("ok (%d mcp, %d plugin(s), %d marketplace(s))",

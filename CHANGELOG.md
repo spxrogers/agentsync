@@ -55,21 +55,25 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   config could smuggle terminal escapes into the CI log through the error message.
   `secrets.MalformedSecretRefs` now returns `[]untrusted.Text` and `verify` renders
   them via `untrusted.Join`, so every displayed candidate is sanitized by
-  construction. The same sweep hardened the neighbouring config-derived print sites
-  in the `verify` and `doctor` commands: `verify`'s `[agents.<name>]` validation
-  error now uses `%q` (a quoted TOML key can hold ESC), `verify`'s and `doctor`'s
+  construction. A **systematic sweep of the whole `#93/#171` class** (a
+  config-/native-config-derived string reaching the terminal raw) then closed
+  every remaining site the review surfaced across the CLI: `verify`'s
+  `[agents.<name>]` validation error (now `%q`); `verify`'s and `doctor`'s
   `[secrets]` `identity_file`/`age_file` path errors (which print even for a
-  non-existent path) now render through `untrusted.Text`. The offline shape check
-  itself was also corrected to match the WHOLE candidate (an anchored check), so a
-  malformed outer ref that merely embeds a well-formed nested ref
-  (`${secret:${env:FOO}}`) is now flagged instead of silently accepted. **Scope
-  note:** this hardened the `verify`/`doctor` config-path print sites, not the whole
-  class — the same `#93/#171` pattern (a config-/native-config-derived string
-  reaching the terminal raw) is *pre-existing* at other display sites the review
-  surfaced (`marketplace list`/`agent list`/`mcp list` columns, the
-  `status`/`diff`/`apply`/`reconcile` path dashboards, and `source.Load`
-  error rendering); a systematic sweep of those is tracked as a dedicated
-  follow-up, not claimed here. Separately, broadened the direct-`os.*`
+  non-existent path); `doctor`'s schema-invalid line (which echoes the raw
+  offending config source line via go-toml's strict-decode error);
+  `marketplace list`'s `url`/`head_sha` columns; `agent list`'s `[agents.<name>]`
+  key and display-only `scope` value; `mcp list`'s server-id (filename-stem)
+  column; the `status`/`diff`/`apply` path dashboards and interactive
+  `reconcile`'s item-label + mcp-server-id; and `secrets`'s age-backend path
+  errors (`internal/secrets/age.go`) — each sanitized at its display boundary via
+  `ui.Sanitize`/`untrusted.Text`, with `reconcile`'s ignore-pattern write kept
+  raw so the persisted pattern is exact. New `escape_sweep_test.go` drives each
+  plain command with a hostile fixture and asserts no raw ESC/bidi byte reaches
+  stdout (break-verified). The offline shape check itself was also corrected to
+  match the WHOLE candidate (an anchored check), so a malformed outer ref that
+  merely embeds a well-formed nested ref (`${secret:${env:FOO}}`) is now flagged
+  instead of silently accepted. Separately, broadened the direct-`os.*`
   destination-write guard (issue #163) to cover `os.OpenFile`/`os.Rename`/`os.Truncate`
   in addition to `Remove`/`RemoveAll`/`WriteFile`/`Create`, closing the
   truncate-write / rename bypass of the `DestWriter` foreign-collision backup.

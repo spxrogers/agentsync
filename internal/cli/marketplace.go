@@ -267,8 +267,12 @@ func marketplaceListRun(cmd *cobra.Command, _ []string) error {
 	}
 	for _, name := range names {
 		mp := mps[name]
+		// url and head_sha are config-derived (marketplaces/<name>.toml, a
+		// shareable dotfile) and a TOML basic string can hold ESC — sanitize
+		// them like the name column so `marketplace list` can't inject escapes
+		// (issue #93/#171).
 		fmt.Fprintf(cmd.OutOrStdout(), "%-20s url=%-40s sha=%s\n",
-			ui.Sanitize(name), mp.URL, truncate(mp.HeadSHA, 12))
+			ui.Sanitize(name), ui.Sanitize(mp.URL), ui.Sanitize(truncate(mp.HeadSHA, 12)))
 	}
 	return nil
 }

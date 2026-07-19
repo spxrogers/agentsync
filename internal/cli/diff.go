@@ -187,6 +187,10 @@ func newDiffCmd() *cobra.Command {
 				if h.Pointer != "" {
 					label = h.Path + "#" + h.Pointer
 				}
+				// label embeds a config-derived component name/id; sanitize on
+				// display so an ESC in a shared config's name can't inject escapes
+				// into the diff header (issue #93/#171).
+				label = ui.Sanitize(label)
 				fmt.Fprintf(p.Out, "%s %s\n", p.Red("--- source"), label)
 				fmt.Fprintf(p.Out, "%s %s\n", p.Green("+++ dest  "), label)
 				diffs := dmp.DiffMain(h.Dest, h.Source, false)
