@@ -107,16 +107,23 @@ Full ✓/◐/✗ breakdown per component: **[capability matrix](docs/capability-
 
 ### Linux — deb / rpm
 
-Pick the package for your architecture (`amd64` or `arm64`).
+Pick the package for your architecture — both `amd64` and `arm64` are published
+every release (use the matching URL below).
 
 Debian/Ubuntu:
 
+    # amd64
     curl -fsSL https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_amd64.deb -o agentsync.deb
+    # arm64
+    curl -fsSL https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_arm64.deb -o agentsync.deb
     sudo dpkg -i agentsync.deb
 
 RPM:
 
+    # amd64
     sudo rpm -i https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_amd64.rpm
+    # arm64
+    sudo rpm -i https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_arm64.rpm
 
 ### Windows — Scoop or Chocolatey
 
@@ -137,6 +144,15 @@ Download the archive for your OS/arch from the
 [latest release](https://github.com/spxrogers/agentsync/releases/latest)
 (`linux` / `darwin` / `windows` × `amd64` / `arm64`), extract it, and put the
 `agentsync` binary on your `PATH`.
+
+On **macOS**, the prebuilt binaries are not signed or notarized, so Gatekeeper
+blocks the first run with *"agentsync cannot be opened because the developer
+cannot be verified."* Clear the quarantine attribute before running it:
+
+    xattr -dr com.apple.quarantine ./agentsync
+
+(Homebrew users don't need this — the cask strips the quarantine attribute for
+you on install.)
 
 ### From source
 

@@ -160,7 +160,10 @@ whereas these repos are a durable, browsable, revertible rollback history for th
 *rendered destination files*. They are governed by the
 `[destination_directory_git_backup]` table and are **never pushed** — the rendered
 files hold secrets in cleartext, so the history stays local (the canonical source
-you push still carries only `${secret:…}` references). See `apply`/`revert` in the
+you push still carries only `${secret:…}` references). Because that history holds
+cleartext, the local `.git` directory is hardened to `0700` on **POSIX** to limit
+at-rest exposure; on **Windows** this chmod is a silent no-op, so the filesystem
+ACLs — not a mode bit — are the boundary there. See `apply`/`revert` in the
 [user guide](user-guide.md#command-reference) and
 [architecture §4](architecture.md).
 

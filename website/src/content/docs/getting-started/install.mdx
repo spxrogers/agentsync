@@ -25,6 +25,17 @@ import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 		brew tap spxrogers/tap
 		brew install agentsync
 		```
+
+		<Aside type="caution" title="Raw-archive downloads on macOS">
+			The Homebrew cask above needs no extra steps. If you instead download a raw
+			release archive, note the prebuilt macOS binaries are **not signed or
+			notarized**, so Gatekeeper blocks the first run (*"the developer cannot be
+			verified"*). Clear the quarantine attribute before running it:
+
+			```bash
+			xattr -dr com.apple.quarantine ./agentsync
+			```
+		</Aside>
 	</TabItem>
 	<TabItem label="Windows" icon="seti:windows">
 		Scoop:
@@ -43,19 +54,26 @@ import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 		```
 	</TabItem>
 	<TabItem label="Linux" icon="linux">
-		Pick the package for your architecture (`amd64` or `arm64`).
+		Pick the package for your architecture — both `amd64` and `arm64` are
+		published every release (use the matching URL).
 
 		Debian / Ubuntu:
 
 		```bash
+		# amd64
 		curl -fsSL https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_amd64.deb -o agentsync.deb
+		# arm64
+		curl -fsSL https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_arm64.deb -o agentsync.deb
 		sudo dpkg -i agentsync.deb
 		```
 
 		RPM:
 
 		```bash
+		# amd64
 		sudo rpm -i https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_amd64.rpm
+		# arm64
+		sudo rpm -i https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_arm64.rpm
 		```
 
 		Arch (AUR) — wired but not published yet

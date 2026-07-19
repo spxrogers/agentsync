@@ -263,8 +263,11 @@ agentsync revert --all --dry-run     # preview reverting every managed dir
 
 `revert` is **append-only** — it records a new commit rather than rewriting
 history, so the bad apply stays in the log and the revert is itself revertible. If
-you hand-edited a tracked file after the last apply, revert snapshots that edit
-into history first, so **nothing is lost** (recover it with `revert --to <snapshot>`).
+you hand-edited a **tracked** file after the last apply, revert snapshots that edit
+into history first, so **nothing tracked is lost** (recover it with `revert --to
+<snapshot>`). The snapshot deliberately covers **tracked files only** — untracked
+scratch files you dropped into a managed dir are never committed and are outside
+the revert snapshot (they are also left untouched by the rollback, not deleted).
 That snapshot is taken by the rollback engine itself, so the guarantee holds however
 revert is invoked; in the rare event a rollback fails partway (e.g. a full disk), the
 error names the snapshot commit and the pre-revert checkpoint so you can recover.

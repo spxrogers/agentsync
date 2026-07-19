@@ -9,6 +9,19 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Documentation
+
+- **Install & git-backup docs: macOS Gatekeeper guidance, arm64 download URLs, and
+  qualified safety promises (issue #132).** The README and the website install page
+  now tell raw-archive macOS users that the prebuilt binaries are unsigned/
+  un-notarized (Gatekeeper blocks first run) and how to clear the quarantine
+  attribute (`xattr -dr com.apple.quarantine`), noting Homebrew users don't need it;
+  both now show the `arm64` `.deb`/`.rpm` download URLs alongside `amd64`.
+  `docs/concepts.md` records that the local git-backup `.git` `0700` hardening is
+  POSIX-only (a Windows no-op → ACLs are the boundary), and the user-guide's revert
+  "nothing is lost" promise is qualified to **tracked files only** (untracked scratch
+  files are outside the snapshot).
+
 ### Security
 
 - **The local `.git` rollback history's secret-at-rest control is now re-asserted on
