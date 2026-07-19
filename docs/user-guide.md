@@ -246,7 +246,14 @@ auto-resolves changes that can't lose work).
 
 `apply` can keep each user-scope destination dir (`~/.claude`, `~/.codex`, …) in
 its **own local-only git repo**, recording a checkpoint commit after every apply
-that changes managed files there. If an apply ever goes wrong, roll it back:
+that changes managed files there. **Even the first apply is revertible:** before
+that apply overwrites the dir, agentsync records a **pre-apply baseline** commit of
+the prior content of the files it is about to manage, so the apply checkpoint's parent
+is the genuine pre-apply state — there is no "the first apply can't be undone" gap.
+Pre-existing files agentsync did **not** write (an agent's credentials, conversation
+transcripts, your own scratch files) are deliberately left **out** of the versioned
+history so it never becomes a durable copy of your secrets — they are untracked, so a
+revert leaves them untouched anyway. If an apply ever goes wrong, roll it back:
 
 ```bash
 agentsync revert claude              # undo the most recent apply to ~/.claude
@@ -258,15 +265,21 @@ agentsync revert --all --dry-run     # preview reverting every managed dir
 history, so the bad apply stays in the log and the revert is itself revertible. If
 you hand-edited a tracked file after the last apply, revert snapshots that edit
 into history first, so **nothing is lost** (recover it with `revert --to <snapshot>`).
+That snapshot is taken by the rollback engine itself, so the guarantee holds however
+revert is invoked; in the rare event a rollback fails partway (e.g. a full disk), the
+error names the snapshot commit and the pre-revert checkpoint so you can recover.
 Any **untracked files** you dropped into the dir (and gitignored files) are **left
 untouched** — revert only rewinds the files agentsync itself versions, so your own
 scratch files are never deleted. `revert --dry-run` notes when such files are
-present. It moves only the *destination*, so afterwards it reminds you to
+present. And if you later clone your own git repo *inside* a managed dir (e.g.
+`~/.claude/skills/.git`), revert **skips that dir** with a warning (or errors under
+`--strict`) rather than hard-reset over your repo's checked-out files. It moves only the *destination*, so afterwards it reminds you to
 **reconcile** (or fix the canonical source) before the next `apply` re-renders over
 it.
 
 The first apply to an untracked dir **asks** before initializing the repo
-(opt-out). Answer once and it's remembered in `agentsync.toml`:
+(opt-out); it takes the pre-apply baseline the moment you agree, so that first apply
+is covered too. Answer once and it's remembered in `agentsync.toml`:
 
 ```toml
 [destination_directory_git_backup]
@@ -717,7 +730,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `secrets set\|get\|edit <key>` | Manage age-encrypted secrets. | `set --stdin` |
 | `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. | `--dry-run --scope --project --no-git-backup` |
-| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. | `--to --all --dry-run` |
+| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. Skips (or, with `--strict`, errors on) a dir under which a foreign git repo has appeared. | `--to --all --dry-run` |
 | `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. Skill directories collapse to one summary row by default (`--verbose` expands them). | `--agents --verbose --scope --project --json` |
 | `diff [<path>]` | Show pending/drift changes; secrets redacted. | `--scope --project --json` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |

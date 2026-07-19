@@ -56,7 +56,11 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 					continue
 				}
 				name := e.Name()[:len(e.Name())-len(".md")]
-				c.Commands = append(c.Commands, source.Command{Name: name, Frontmatter: map[string]any{}, Body: string(data)})
+				// Windsurf workflows are plain markdown with no honored frontmatter,
+				// but a user may have hand-authored a leading `---`…`---` block; strip
+				// it so a stray fence never folds into the canonical command body.
+				body, _ := stripLeadingFrontmatter(string(data))
+				c.Commands = append(c.Commands, source.Command{Name: name, Frontmatter: map[string]any{}, Body: body})
 			}
 		}
 	}
@@ -67,8 +71,11 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	// no canonical home (see claude/ingest.go).
 	if p.RulesDir != "" {
 		if data, err := os.ReadFile(filepath.Join(p.RulesDir, memoryRuleFile)); err == nil {
-			body, exact := stripMemoryRuleFrontmatter(data)
-			if !exact {
+			body, _, foreign := stripMemoryRuleFrontmatter(data)
+			// Warn only when a FOREIGN (non-`always_on`) fence was stripped — its
+			// activation mode has no canonical home. A frontmatter-less rule (no
+			// fence) does not warn, and the agentsync block round-trips silently.
+			if foreign {
 				fmt.Fprintf(warn, "warning: %s does not start with the agentsync-rendered `trigger: always_on` frontmatter; Windsurf activation metadata has no canonical home and is not captured\n", filepath.Join(p.RulesDir, memoryRuleFile))
 			}
 			c.Memory.Body = source.StripManagedBanner(body)

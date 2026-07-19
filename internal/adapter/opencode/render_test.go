@@ -3,6 +3,7 @@ package opencode_test
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,19 @@ import (
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 )
+
+// skipNamesKey reports whether skips contains a SkipReduced note for
+// (component, name) whose Reason mentions key — the passthrough-or-Skip
+// invariant's oracle for "this key was surfaced, not silently dropped".
+func skipNamesKey(skips []adapter.Skip, component, name, key string) bool {
+	for _, s := range skips {
+		if s.Component == component && s.Name == name &&
+			s.Kind == adapter.SkipReduced && strings.Contains(s.Reason, key) {
+			return true
+		}
+	}
+	return false
+}
 
 // TestProjectScope_EmptyProjectErrors pins the adapter-boundary guard for
 // OpenCode: a project-scope Render/Ingest with no project root must fail loudly
@@ -337,6 +351,127 @@ func TestRender_Subagent_FrontmatterMunge(t *testing.T) {
 	}
 	if !sawToolsSkip {
 		t.Fatalf("no skip emitted for tools allowlist")
+	}
+}
+
+// TestRender_Subagent_PassthroughOrSkip_OnDiskFixture is artifact-anchored:
+// it renders a subagent whose frontmatter carries the full realistic key set —
+// modeled keys (description, model), legal OpenCode keys (temperature,
+// permission, steps), and Claude-only keys (tools, color) — then asserts against
+// the ON-DISK bytes that the legal keys pass through verbatim, the Claude-only
+// keys are absent AND named in a SkipReduced, and no source key is both absent
+// from the output and absent from the skips.
+func TestRender_Subagent_PassthroughOrSkip_OnDiskFixture(t *testing.T) {
+	frontmatter := map[string]any{
+		"description": "Reviewer",
+		"model":       "anthropic/claude-sonnet-4",
+		"temperature": 0.2,
+		"permission":  map[string]any{"edit": "deny", "bash": "deny"},
+		"steps":       5,
+		"tools":       []string{"Read", "Grep"}, // Claude-only -> Skip
+		"color":       "blue",                   // Claude-only -> Skip
+	}
+	c := source.Canonical{Subagents: []source.Subagent{{
+		Name: "review", Frontmatter: frontmatter, Body: "Review code.\n",
+	}}}
+	root := t.TempDir()
+	a := opencode.New(opencode.Options{TargetRoot: root})
+	ops, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	// Apply writes the ops to disk (creating parent dirs); read the real file.
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	wantPath := filepath.Join(root, ".config", "opencode", "agents", "review.md")
+	data, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("read rendered agent: %v", err)
+	}
+	content := string(data)
+
+	// Legal OpenCode keys pass through verbatim; mode is synthesized.
+	for _, want := range []string{"temperature:", "permission:", "steps:", "mode: subagent"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("rendered agent missing %q:\n%s", want, content)
+		}
+	}
+	// Claude-only keys must not render.
+	for _, k := range []string{"tools:", "color:"} {
+		if strings.Contains(content, k) {
+			t.Errorf("Claude-only %q must not render:\n%s", k, content)
+		}
+	}
+	// ...and must be surfaced as SkipReduced notes.
+	for _, k := range []string{"tools", "color"} {
+		if !skipNamesKey(skips, "subagent", "review", k) {
+			t.Errorf("no SkipReduced naming %q", k)
+		}
+	}
+	// Invariant: every source key is rendered OR named in a Skip — never both
+	// absent. Driven from the source list so a future key cannot regress silently.
+	for key := range frontmatter {
+		if strings.Contains(content, key+":") {
+			continue
+		}
+		if skipNamesKey(skips, "subagent", "review", key) {
+			continue
+		}
+		t.Errorf("key %q neither rendered nor named in a Skip", key)
+	}
+}
+
+// TestRender_Command_PassthroughOrSkip_OnDiskFixture mirrors the subagent
+// fixture for commands: legal OpenCode command keys (agent, subtask) pass
+// through verbatim, the Claude-only argument-hint is dropped with a Skip, and
+// the no-key-silently-dropped invariant holds on the ON-DISK bytes.
+func TestRender_Command_PassthroughOrSkip_OnDiskFixture(t *testing.T) {
+	frontmatter := map[string]any{
+		"description":   "Summarize",
+		"model":         "anthropic/claude-sonnet-4",
+		"agent":         "build",  // legal OpenCode command key -> passthrough
+		"subtask":       true,     // legal OpenCode command key -> passthrough
+		"argument-hint": "<file>", // Claude-only -> Skip
+	}
+	c := source.Canonical{Commands: []source.Command{{
+		Name: "summarize", Frontmatter: frontmatter, Body: "Summarize $ARGUMENTS.\n",
+	}}}
+	root := t.TempDir()
+	a := opencode.New(opencode.Options{TargetRoot: root})
+	ops, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	wantPath := filepath.Join(root, ".config", "opencode", "commands", "summarize.md")
+	data, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("read rendered command: %v", err)
+	}
+	content := string(data)
+
+	for _, want := range []string{"agent:", "subtask:", "description:", "model:"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("rendered command missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "argument-hint") {
+		t.Errorf("argument-hint must not render:\n%s", content)
+	}
+	if !skipNamesKey(skips, "command", "summarize", "argument-hint") {
+		t.Error("no SkipReduced naming argument-hint")
+	}
+	for key := range frontmatter {
+		if strings.Contains(content, key+":") {
+			continue
+		}
+		if skipNamesKey(skips, "command", "summarize", key) {
+			continue
+		}
+		t.Errorf("key %q neither rendered nor named in a Skip", key)
 	}
 }
 

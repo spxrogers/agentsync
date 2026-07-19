@@ -63,11 +63,26 @@ func (r *Repo) Plan(targetRev string) (targetHash string, changes []FileChange, 
 	return targetStr, out, nil
 }
 
+// snapshotMessage is the commit subject Restore uses when it snapshots uncommitted
+// tracked edits before resetting. Kept stable so the CLI (and tests) can recognise
+// the safety checkpoint in history.
+const snapshotMessage = "agentsync revert: snapshot uncommitted changes before revert"
+
 // Restore makes the worktree's TRACKED files match the targetRev checkpoint and
 // records the result as a NEW commit on top of the current HEAD. It is append-only:
-// HEAD advances, nothing is rewritten or lost, so the bad apply stays in history
-// and the revert is itself revertible. Returns the new commit hash, or ("", nil)
-// when the worktree already matches target (no checkpoint recorded).
+// HEAD advances, nothing is rewritten or lost, so the bad apply stays in history and
+// the revert is itself revertible. Returns the new commit hash plus the snapshot hash
+// (below), or ("", snapshot, nil) when the worktree already matches target (no
+// checkpoint recorded).
+//
+// SAFE-BY-CONSTRUCTION for uncommitted TRACKED edits: Restore FIRST snapshots any
+// uncommitted changes to already-tracked files into history (via SnapshotDirtyTracked)
+// so the delta-apply below cannot lose them — EVERY caller is protected, not only the
+// CLI wrapper, so the "nothing is rewritten or lost" promise holds of the WORKTREE and
+// is no longer contingent on the caller. The returned snapshotHash is that commit ("" when
+// the worktree had no tracked changes); callers surface it so the user can recover the
+// preserved edits. The target is resolved to a concrete hash BEFORE snapshotting, so a
+// relative targetRev like "HEAD~1" stays correct even though the snapshot advances HEAD.
 //
 // It applies ONLY the tracked HEAD↔target delta (the FileChanges from Plan) to the
 // worktree — it deliberately does NOT use go-git's HardReset. Unlike `git reset
@@ -75,24 +90,46 @@ func (r *Repo) Plan(targetRev string) (targetHash string, changes []FileChange, 
 // worktree file; a revert sold as safe rollback must never destroy the user's own
 // scratch files. Because only the diffed paths are touched, any untracked or
 // gitignored file the user dropped into the dir survives byte-for-byte and stays
-// untracked. (Callers snapshot uncommitted TRACKED edits first — see revert's
-// SnapshotDirtyTracked — so at entry tracked worktree == HEAD and applying the
-// delta reproduces target's tracked content exactly.)
-func (r *Repo) Restore(targetRev, message string, id Identity) (string, error) {
-	targetStr, changes, err := r.Plan(targetRev)
+// untracked.
+//
+// If a failure strikes AFTER the snapshot advanced HEAD (mid delta-apply or at the
+// final commit), the returned error carries a recovery hint naming the pre-revert HEAD
+// and the snapshot commit (restoreFailureHint) so a half-applied worktree has a clear
+// path back. A pre-flight refusal is all-or-nothing (nothing is mutated) and returns
+// its own actionable error without that hint.
+func (r *Repo) Restore(targetRev, message string, id Identity) (revertHash, snapshotHash string, err error) {
+	// Resolve the target to a CONCRETE hash up front — the snapshot below advances
+	// HEAD, after which a relative ref like "HEAD~1" would resolve elsewhere.
+	targetStr, err := r.Resolve(targetRev)
 	if err != nil {
-		return "", err
+		return "", "", err
+	}
+	// Remember the pre-revert HEAD so a partial-failure hint can name it for recovery.
+	origHash, err := r.headHash()
+	if err != nil {
+		return "", "", err
+	}
+	orig := origHash.String()
+	// Snapshot uncommitted TRACKED edits so the delta-apply can't lose them; untracked
+	// files are never touched (#128's contract, preserved below).
+	snapshotHash, err = r.SnapshotDirtyTracked(snapshotMessage, id)
+	if err != nil {
+		return "", "", err
+	}
+	_, changes, err := r.Plan(targetStr)
+	if err != nil {
+		return "", snapshotHash, err
 	}
 	if len(changes) == 0 {
-		return "", nil
+		return "", snapshotHash, nil
 	}
 	targetTree, err := r.commitTree(plumbing.NewHash(targetStr))
 	if err != nil {
-		return "", err
+		return "", snapshotHash, err
 	}
 	wt, err := r.repo.Worktree()
 	if err != nil {
-		return "", fmt.Errorf("worktree for %s: %w", r.dir, err)
+		return "", snapshotHash, fmt.Errorf("worktree for %s: %w", r.dir, err)
 	}
 	// Pre-flight the STRUCTURAL conflicts a create/modify can't resolve without
 	// destroying a file agentsync doesn't manage, and refuse BEFORE mutating the
@@ -128,16 +165,16 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (string, error) {
 		case statErr == nil && info.IsDir():
 			blocker, werr := firstUnmanagedFileUnder(r.dir, abs, deleting)
 			if werr != nil {
-				return "", fmt.Errorf("scanning %s during revert in %s: %w", ch.Path, r.dir, werr)
+				return "", snapshotHash, fmt.Errorf("scanning %s during revert in %s: %w", ch.Path, r.dir, werr)
 			}
 			if blocker != "" {
-				return "", fmt.Errorf("cannot restore %q to a file: the directory holds files agentsync does not manage (e.g. %q); move or remove them, then re-run revert", ch.Path, blocker)
+				return "", snapshotHash, fmt.Errorf("cannot restore %q to a file: the directory holds files agentsync does not manage (e.g. %q); move or remove them, then re-run revert", ch.Path, blocker)
 			}
 		case statErr == nil && ch.Kind == "create":
 			// (1b) a create over an existing regular file: it is the user's own
 			// untracked/gitignored file (HEAD doesn't track this path) — refuse
 			// rather than overwrite and commit it.
-			return "", fmt.Errorf("cannot restore %q: a file agentsync does not manage already exists there; move or remove it, then re-run revert", ch.Path)
+			return "", snapshotHash, fmt.Errorf("cannot restore %q: a file agentsync does not manage already exists there; move or remove it, then re-run revert", ch.Path)
 		}
 		for parent := path.Dir(ch.Path); parent != "." && parent != "/"; parent = path.Dir(parent) {
 			pinfo, statErr := os.Stat(filepath.Join(r.dir, filepath.FromSlash(parent)))
@@ -148,31 +185,47 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (string, error) {
 				break // a real directory — fine
 			}
 			if !deleting[parent] {
-				return "", fmt.Errorf("cannot restore %q: its parent %q is a file agentsync does not manage; move or remove it, then re-run revert", ch.Path, parent)
+				return "", snapshotHash, fmt.Errorf("cannot restore %q: its parent %q is a file agentsync does not manage; move or remove it, then re-run revert", ch.Path, parent)
 			}
 			break // parent is a file being deleted — the delete pass clears it first
 		}
 	}
-	// Apply the delta path-by-path and stage each change. HEAD never moves, so the
-	// commit below is parented on the original HEAD automatically — the intervening
-	// commits (and the bad apply) stay reachable, keeping revert append-only.
-	//
-	// Deletes are applied in a FIRST pass, before any create/modify, so a path that
-	// swaps between a file and a directory across the two checkpoints cannot abort
-	// mid-restore. E.g. going back to a target where "a" is a file while HEAD has
-	// "a/b": the diff is {delete "a/b", create "a"}; removing "a/b" first empties
-	// dir "a" so restoreFileFromTree can replace it with the file "a". The reverse
-	// (delete file "a", then create "a/b") likewise needs the delete first so
-	// MkdirAll("a") succeeds. Delete and create paths are otherwise disjoint (a tree
-	// diff never both deletes and creates the same path), so the two passes are
-	// order-independent within themselves.
+	// Apply the delta, then commit. Any failure here is AFTER the snapshot advanced
+	// HEAD, so wrap it with a recovery hint naming orig + the snapshot commit.
+	if err := r.applyRestoreDelta(wt, targetTree, changes); err != nil {
+		return "", snapshotHash, restoreFailureHint(r.dir, orig, snapshotHash, err)
+	}
+	sig := signature(id)
+	h, err := wt.Commit(message, &gogit.CommitOptions{Author: sig, Committer: sig})
+	if err != nil {
+		return "", snapshotHash, restoreFailureHint(r.dir, orig, snapshotHash,
+			fmt.Errorf("recording revert commit in %s: %w", r.dir, err))
+	}
+	return h.String(), snapshotHash, nil
+}
+
+// applyRestoreDelta applies the tracked HEAD↔target delta to the worktree path-by-path
+// and stages each change. HEAD never moves here, so the commit in Restore is parented
+// on the CURRENT HEAD automatically — the snapshot commit when one was taken, otherwise
+// the pre-revert HEAD — and the intervening commits (and the bad apply) stay reachable,
+// keeping revert append-only.
+//
+// Deletes are applied in a FIRST pass, before any create/modify, so a path that swaps
+// between a file and a directory across the two checkpoints cannot abort mid-restore.
+// E.g. going back to a target where "a" is a file while HEAD has "a/b": the diff is
+// {delete "a/b", create "a"}; removing "a/b" first empties dir "a" so restoreFileFromTree
+// can replace it with the file "a". The reverse (delete file "a", then create "a/b")
+// likewise needs the delete first so MkdirAll("a") succeeds. Delete and create paths are
+// otherwise disjoint (a tree diff never both deletes and creates the same path), so the
+// two passes are order-independent within themselves.
+func (r *Repo) applyRestoreDelta(wt *gogit.Worktree, targetTree *object.Tree, changes []FileChange) error {
 	for _, ch := range changes {
 		if ch.Kind != "delete" {
 			continue
 		}
 		// wt.Remove both deletes the worktree file and stages the deletion.
 		if _, err := wt.Remove(ch.Path); err != nil {
-			return "", fmt.Errorf("removing %s during revert in %s: %w", ch.Path, r.dir, err)
+			return fmt.Errorf("removing %s during revert in %s: %w", ch.Path, r.dir, err)
 		}
 	}
 	for _, ch := range changes {
@@ -180,18 +233,28 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (string, error) {
 			continue // "create" | "modify"
 		}
 		if err := restoreFileFromTree(wt, targetTree, ch.Path); err != nil {
-			return "", fmt.Errorf("restoring %s during revert in %s: %w", ch.Path, r.dir, err)
+			return fmt.Errorf("restoring %s during revert in %s: %w", ch.Path, r.dir, err)
 		}
 		if _, err := wt.Add(ch.Path); err != nil {
-			return "", fmt.Errorf("staging %s during revert in %s: %w", ch.Path, r.dir, err)
+			return fmt.Errorf("staging %s during revert in %s: %w", ch.Path, r.dir, err)
 		}
 	}
-	sig := signature(id)
-	h, err := wt.Commit(message, &gogit.CommitOptions{Author: sig, Committer: sig})
-	if err != nil {
-		return "", fmt.Errorf("recording revert commit in %s: %w", r.dir, err)
+	return nil
+}
+
+// restoreFailureHint wraps a failure that struck once the worktree delta-apply had begun
+// — after Restore's snapshot may already have advanced HEAD — with an actionable
+// recovery pointer. It names the pre-revert HEAD (orig) and, when one was taken, the
+// snapshot commit that preserved the user's uncommitted tracked edits, so a half-applied
+// worktree still has a clear path back. A pre-flight refusal is all-or-nothing and does
+// NOT go through here (nothing was mutated, so there is nothing to recover).
+func restoreFailureHint(dir, orig, snapshot string, err error) error {
+	if snapshot != "" {
+		return fmt.Errorf("revert of %s failed partway; nothing is lost — your uncommitted edits are preserved in snapshot %s and the pre-revert checkpoint is %s. Recover with `git -C %s reset --hard %s` (keep your edits) or `git -C %s reset --hard %s` (discard them): %w",
+			dir, shortStr(snapshot), shortStr(orig), dir, shortStr(snapshot), dir, shortStr(orig), err)
 	}
-	return h.String(), nil
+	return fmt.Errorf("revert of %s failed partway; the pre-revert checkpoint is %s. Recover with `git -C %s reset --hard %s`: %w",
+		dir, shortStr(orig), dir, shortStr(orig), err)
 }
 
 // firstUnmanagedFileUnder walks absDir and returns the first regular file — as a

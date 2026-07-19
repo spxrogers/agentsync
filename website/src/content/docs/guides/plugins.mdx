@@ -81,6 +81,19 @@ agents = ["claude"]   # only fan this plugin out to Claude
 	**does not consult it** in v1 — use the `agents` allowlist instead.
 </Aside>
 
+The allowlist is a deliberate, security-relevant choice: a plugin's MCP servers,
+hooks, and skills can carry `${secret:…}` credentials, so `agents = ["claude"]`
+keeps that blast radius scoped to Claude only.
+
+<Aside type="note" title="Lifecycle commands preserve your allowlist">
+	`plugin disable`/`enable` and re-running `plugin install` on an
+	already-registered plugin **preserve** its `agents` allowlist (and its `update`
+	mode and `disabled` state) — they never silently re-broaden a narrowed plugin
+	back to every agent. Only `id`/`version`/`manifest_sha` are refreshed by a
+	re-install (from the fresh fetch); when a re-install keeps non-default
+	targeting, the command says so (e.g. `(kept agents=[claude], update=pinned)`).
+</Aside>
+
 ## Plugin lifecycle
 
 ```bash
@@ -91,6 +104,9 @@ agentsync plugin disable  <id>
 agentsync plugin remove   <id>
 agentsync plugin list
 ```
+
+`disable`/`enable` flip only the `disabled` bit and `install` refreshes only the
+fetched fields — so your `agents` allowlist survives the full lifecycle untouched.
 
 <LinkCard
 	title="Agent capability matrix"

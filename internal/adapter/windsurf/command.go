@@ -61,3 +61,41 @@ func sortedKeys(fm map[string]any) []string {
 	sort.Strings(out)
 	return out
 }
+
+// stripLeadingFrontmatter removes a leading YAML frontmatter fence from s when
+// one is present at byte 0, returning the content after it and whether a fence
+// was stripped. A fence opens only with a byte-0 `---\n` line and closes at the
+// next line that is exactly `---`; a single following blank line is consumed so
+// the returned body starts at the first real content line. If s does not open
+// with `---\n`, or no closing `---` line is found, s is returned untouched with
+// stripped=false — so an in-body `---` horizontal rule (never at byte 0 as an
+// opener, never reached without an opener) is never mistaken for a fence.
+//
+// It is shared by the rule path (stripMemoryRuleFrontmatter) and the workflow
+// ingest path: both strip a hand-authored leading fence so it never folds into
+// the canonical body. Windsurf workflows are plain markdown with no honored
+// frontmatter, so this only tidies a stray fence out of the captured body.
+func stripLeadingFrontmatter(s string) (rest string, stripped bool) {
+	if !strings.HasPrefix(s, "---\n") {
+		return s, false
+	}
+	body := s[len("---\n"):]
+	for {
+		nl := strings.IndexByte(body, '\n')
+		line := body
+		if nl >= 0 {
+			line = body[:nl]
+		}
+		if line == "---" {
+			if nl < 0 {
+				return "", true // closing fence at EOF, empty body
+			}
+			after := body[nl+1:]
+			return strings.TrimPrefix(after, "\n"), true // consume one blank line
+		}
+		if nl < 0 {
+			return s, false // reached EOF without a closing fence: not frontmatter
+		}
+		body = body[nl+1:]
+	}
+}

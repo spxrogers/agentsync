@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -14,17 +15,52 @@ import (
 	"github.com/spxrogers/agentsync/internal/ui"
 )
 
-// runDestinationGitBackup checkpoints each user-scope agent dir that received
-// managed writes this apply, giving it a local-only git history so a bad apply is
-// revertible (issue #118). It is BEST-EFFORT by contract: the files are already
-// written and state is already saved, so a git failure here is reported but never
-// fails the apply. It is a no-op for project scope, --no-git-backup, mode "off",
-// an empty write set, or an agent dir under foreign source control.
-func runDestinationGitBackup(
+// gitBackupSession carries the per-run state the PRE-APPLY baseline pass and the
+// POST-APPLY checkpoint pass MUST share so they never diverge (issue #143). A
+// "yes"/"never" answer to the init prompt, the one-time "backup available" hint, and
+// the foreign/nested skip decisions are taken once and honored by both passes: both
+// select the SAME de-nested version roots and resolve each root through the SAME
+// logic (resolveBackupRepo), so a dir the baseline inits is already agentsync-owned
+// by the time the checkpoint pass opens it, and a dir the user declined (or a foreign
+// dir) is remembered rather than prompted/hinted twice.
+type gitBackupSession struct {
+	cmd  *cobra.Command
+	p    *ui.Printer
+	home string
+	id   agit.Identity
+	mode string
+	// roots is the union of every enabled agent's declared version roots, de-nested
+	// (no repo inside a repo) and de-duped — the DIRECTORY is the unit of versioning,
+	// so a shared dir (e.g. ~/.agents/skills, written by Codex + several breadth
+	// agents) is versioned exactly once.
+	roots             []string
+	hintedUnavailable bool
+	// warnedCleartext gates the one-time-per-run mode=on cleartext notice, so an
+	// unattended (mode="on") apply that auto-inits new dirs warns about the local-only
+	// cleartext-secret history once, not once per dir.
+	warnedCleartext bool
+	// handled records roots whose init/prompt (or foreign-skip hint) decision has
+	// already been made THIS run, so the baseline and checkpoint passes never
+	// double-prompt or double-hint the same dir.
+	handled map[string]bool
+}
+
+// gitPermWarn returns the callback EnsureDirSecure reports through — a loosened
+// .git-history warning to stderr with the existing agentsync yellow prefix.
+func (s *gitBackupSession) gitPermWarn() func(string) {
+	return func(msg string) {
+		fmt.Fprintf(s.p.Err, "%s %s\n", s.p.Yellow("agentsync:"), msg)
+	}
+}
+
+// newGitBackupSession builds the shared session, or returns nil when git backup does
+// nothing this run: project scope, --no-git-backup, or mode "off". A nil session's
+// baseline/checkpoint methods are safe no-ops, so callers need not branch.
+func newGitBackupSession(
 	cmd *cobra.Command, p *ui.Printer, reg *adapter.Registry, agents []string,
 	sc adapter.Scope, projectRoot, home string,
-	cfg source.DestinationGitBackupConfig, written map[string]bool, noGitBackup bool,
-) error {
+	cfg source.DestinationGitBackupConfig, noGitBackup bool,
+) *gitBackupSession {
 	if sc != adapter.ScopeUser || noGitBackup {
 		return nil
 	}
@@ -32,49 +68,194 @@ func runDestinationGitBackup(
 	if mode == source.GitBackupModeOff {
 		return nil
 	}
-	id := agit.Identity{Name: cfg.AuthorName, Email: cfg.AuthorEmail}
+	return &gitBackupSession{
+		cmd:     cmd,
+		p:       p,
+		home:    home,
+		id:      agit.Identity{Name: cfg.AuthorName, Email: cfg.AuthorEmail},
+		mode:    mode,
+		roots:   enabledVersionRoots(reg, agents, sc, projectRoot),
+		handled: map[string]bool{},
+	}
+}
 
-	// The unit of versioning is the DIRECTORY, not the agent: union every enabled
-	// agent's declared version roots, drop nested roots (no repo inside a repo), and
-	// de-dup, so a shared dir (e.g. ~/.agents/skills, written by Codex + several
-	// breadth agents) is checkpointed exactly once with all its files.
-	roots := enabledVersionRoots(reg, agents, sc, projectRoot)
+// resolveBackupRepo resolves the agentsync repo to checkpoint into for one version
+// root, applying every skip the baseline and checkpoint passes share: a foreign dir
+// is left untouched (with a one-time hint when managed writes land in it), an
+// untracked dir with no managed writes is skipped, and an untracked dir is inited
+// under the mode/prompt policy (initGuarded refuses a nesting hazard). hasWrites
+// reports whether managed files land under this root this run. Returns (nil, nil) on
+// a clean skip. The init/prompt/foreign-hint decision for a given dir is taken at
+// most once per run (handled) so the two passes never double-prompt or double-hint.
+func (s *gitBackupSession) resolveBackupRepo(root string, st agit.State, hasWrites bool) (*agit.Repo, error) {
+	switch st {
+	case agit.StateForeign:
+		// The user already source-controls this dir — stay out of their way.
+		if hasWrites && !s.handled[root] {
+			s.handled[root] = true
+			fmt.Fprintf(s.p.Err, "%s %s is under your own source control; skipping agentsync git backup.\n",
+				s.p.Faint(ui.GlyphInfo), root)
+		}
+		return nil, nil
+	case agit.StateAgentsyncOwned:
+		// Open even when nothing was written under this root: a delete-only apply
+		// (a managed file removed, nothing added) still needs its checkpoint.
+		return agit.Open(root)
+	case agit.StateUntracked:
+		if !hasWrites || s.handled[root] {
+			return nil, nil // nothing to record, or the decision was already made this run
+		}
+		s.handled[root] = true
+		return ensureUntrackedRepo(s.cmd, s.p, root, s.home, &s.mode, &s.hintedUnavailable, &s.warnedCleartext)
+	}
+	return nil, nil
+}
 
-	hintedUnavailable := false
-	for _, root := range roots {
+// baseline records a PRE-APPLY baseline checkpoint of every version root this apply
+// will write into, BEFORE render.Apply overwrites anything — so even the FIRST apply
+// into a dir is revertible (the apply checkpoint's parent is the genuine pre-apply
+// state), not just the second apply onward (issue #143). plannedWrites is the set of
+// destination paths the plan will write, so this pass manages exactly the roots the
+// post-apply checkpoint pass would.
+//
+// FAILURE POLICY — best-effort WITH A LOUD WARNING. Unlike the post-apply checkpoint
+// (best-effort-silent, because the files are already written), the baseline runs
+// BEFORE the destructive write, so a failure means the first apply will be
+// unrecoverable. It still NEVER aborts the apply — but the user is clearly told the
+// first apply to that dir will not be revertible. Foreign dirs (the user's own source
+// control) and mode/scope skips are honored exactly as the checkpoint pass honors
+// them, and a declined prompt does not block apply.
+func (s *gitBackupSession) baseline(plannedWrites map[string]bool) {
+	if s == nil {
+		return
+	}
+	for _, root := range s.roots {
+		hasWrites := len(managedRelsUnder(root, plannedWrites)) > 0
+		st, err := agit.Detect(root)
+		if err != nil {
+			fmt.Fprintf(s.p.Err, "%s git baseline: %v\n", s.p.Yellow("agentsync:"), err)
+			continue
+		}
+		repo, err := s.resolveBackupRepo(root, st, hasWrites)
+		if err != nil {
+			s.warnFirstApplyUnrevertible(root, err)
+			continue
+		}
+		if repo == nil {
+			// A foreign dir is the user's own repo (not inited by design) — its
+			// existing "under your own source control" hint already fired, so this is
+			// not our failure to warn about. Any OTHER skip of a write-bound dir (a
+			// nesting hazard, a declined prompt) means its first apply is unrevertible.
+			if hasWrites && st != agit.StateForeign {
+				s.warnFirstApplyUnrevertible(root, nil)
+			}
+			continue
+		}
+		var (
+			h    string
+			cerr error
+		)
+		if st == agit.StateUntracked {
+			// Freshly inited: stage the NOTICE plus the PRE-APPLY content of only the
+			// paths this apply will manage — deliberately NOT the whole dir. Sweeping
+			// the whole dir (git add -A) would durably commit unrelated sensitive
+			// siblings (an agent's credentials file, conversation transcripts) into the
+			// local-only history, enlarging the secret-history surface far beyond the
+			// resolved-config model the "harden secret-history" guard is scoped to.
+			// #128 already preserves untracked, non-managed siblings across a revert
+			// (Restore never enumerates them), so they survive WITHOUT being versioned:
+			// pre-existing non-managed content is OUT of the recoverability contract
+			// (preserved, not versioned) — the alternative issue #143 explicitly permits.
+			// The NOTICE guarantees a non-empty baseline even when every managed path is
+			// new, so a revert still has a target that removes exactly what this apply
+			// creates.
+			toStage := []string{agit.NoticeFile}
+			for _, rel := range managedRelsUnder(root, plannedWrites) {
+				if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); statErr == nil {
+					toStage = append(toStage, rel) // capture a managed path's pre-apply content
+				}
+			}
+			if serr := repo.Stage(toStage); serr != nil {
+				s.warnFirstApplyUnrevertible(root, serr)
+				continue
+			}
+			h, cerr = repo.CommitStaged(baselineMessage(root), s.id)
+		} else {
+			// Already-owned (a later apply): history already makes this dir revertible,
+			// so the baseline only snapshots uncommitted TRACKED drift — it must NOT
+			// sweep in the user's untracked files (#128), which git add -A would.
+			// SnapshotDirtyTracked is a no-op on a clean worktree, so a re-apply with
+			// no drift records no spurious baseline commit.
+			h, cerr = repo.SnapshotDirtyTracked(baselineMessage(root), s.id)
+		}
+		if cerr != nil {
+			s.warnFirstApplyUnrevertible(root, cerr)
+			continue
+		}
+		if h != "" {
+			fmt.Fprintf(s.p.Err, "%s %s\n", s.p.Faint(ui.GlyphInfo),
+				s.p.Faint(fmt.Sprintf("git backup: pre-apply baseline of %s", root)))
+		}
+	}
+}
+
+// warnFirstApplyUnrevertible tells the user, loudly, that a pre-apply baseline could
+// not be taken for root, so the first apply to it is not recoverable — the deliberate,
+// documented failure policy of the baseline pass (it warns but never aborts apply).
+func (s *gitBackupSession) warnFirstApplyUnrevertible(root string, err error) {
+	if err != nil {
+		fmt.Fprintf(s.p.Err, "%s could not take a pre-apply baseline of %s (%v); the first apply to it will not be revertible.\n",
+			s.p.Yellow("agentsync:"), root, err)
+		return
+	}
+	fmt.Fprintf(s.p.Err, "%s could not take a pre-apply baseline of %s; the first apply to it will not be revertible.\n",
+		s.p.Yellow("agentsync:"), root)
+}
+
+// checkpoint records the POST-APPLY checkpoint for each version root that received
+// managed writes (or a managed deletion) this run — the second commit after a first
+// apply, whose parent is the pre-apply baseline. It is BEST-EFFORT by contract: the
+// files are already written and state is already saved, so a git failure here is
+// reported (never returned) and never fails the apply. It is a no-op for an empty write
+// set or an agent dir under foreign source control.
+//
+// It always returns nil today (every per-root failure is warned-and-continued). The
+// error return is retained deliberately: the test-facing wrapper runDestinationGitBackup
+// exposes it, and keeping the shape lets a future non-best-effort caller surface a hard
+// failure without a signature break across the wrapper and its test callers.
+func (s *gitBackupSession) checkpoint(written map[string]bool) error {
+	if s == nil {
+		return nil
+	}
+	for _, root := range s.roots {
 		rels := managedRelsUnder(root, written)
 
 		st, err := agit.Detect(root)
 		if err != nil {
-			fmt.Fprintf(p.Err, "%s git backup: %v\n", p.Yellow("agentsync:"), err)
+			fmt.Fprintf(s.p.Err, "%s git backup: %v\n", s.p.Yellow("agentsync:"), err)
 			continue
 		}
-
-		var repo *agit.Repo
-		switch st {
-		case agit.StateForeign:
-			// The user already source-controls this dir — stay out of their way.
-			if len(rels) > 0 {
-				fmt.Fprintf(p.Err, "%s %s is under your own source control; skipping agentsync git backup.\n",
-					p.Faint(ui.GlyphInfo), root)
-			}
-			continue
-		case agit.StateAgentsyncOwned:
-			// Open even when nothing was written under this root: a delete-only apply
-			// (a managed file removed, nothing added) still needs its checkpoint.
-			repo, err = agit.Open(root)
-		case agit.StateUntracked:
-			if len(rels) == 0 {
-				continue // nothing written here and no existing repo to record into
-			}
-			repo, err = ensureUntrackedRepo(cmd, p, root, home, &mode, &hintedUnavailable)
-		}
+		repo, err := s.resolveBackupRepo(root, st, len(rels) > 0)
 		if err != nil {
-			fmt.Fprintf(p.Err, "%s git backup for %s: %v\n", p.Yellow("agentsync:"), root, err)
+			fmt.Fprintf(s.p.Err, "%s git backup for %s: %v\n", s.p.Yellow("agentsync:"), root, err)
 			continue
 		}
 		if repo == nil {
-			continue // declined / unavailable / now off — nothing to commit into
+			continue // foreign / declined / unavailable / nothing written — nothing to commit into
+		}
+		// Re-assert the at-rest control on every apply's commit path (issue #126): the
+		// history holds cleartext-resolved secrets and receives fresh secret blobs each
+		// apply, so a .git dir whose perms drifted looser than 0o700 is best-effort
+		// re-tightened and surfaced — covering both already-owned repos and ones just
+		// inited (whose init-time chmod may have silently failed). Best-effort; never
+		// aborts the apply.
+		repo.EnsureDirSecure(s.gitPermWarn())
+		if st == agit.StateAgentsyncOwned {
+			// Re-probe: a foreign repo may have been cloned below this owned root since
+			// init. The append-only checkpoint below is harmless, but warn now so the
+			// user learns `revert` here is unsafe BEFORE they ever run it (revertRoot
+			// then refuses/skips the same case).
+			warnNestedForeignRepoOnCommit(s.p, root)
 		}
 
 		// Stage the written files + the notice (so a freshly-inited repo tracks it,
@@ -84,27 +265,45 @@ func runDestinationGitBackup(
 		toStage = append(toStage, rels...)
 		toStage = append(toStage, agit.NoticeFile)
 		if err := repo.Stage(toStage); err != nil {
-			fmt.Fprintf(p.Err, "%s git backup for %s: %v\n", p.Yellow("agentsync:"), root, err)
+			fmt.Fprintf(s.p.Err, "%s git backup for %s: %v\n", s.p.Yellow("agentsync:"), root, err)
 			continue
 		}
 		deleted, err := repo.StageTrackedDeletions()
 		if err != nil {
-			fmt.Fprintf(p.Err, "%s git backup for %s: %v\n", p.Yellow("agentsync:"), root, err)
+			fmt.Fprintf(s.p.Err, "%s git backup for %s: %v\n", s.p.Yellow("agentsync:"), root, err)
 			continue
 		}
 		staged := dedupeSorted(append(toStage, deleted...))
 		msg := checkpointMessage(root, staged)
-		h, err := repo.CommitStaged(msg, id)
+		h, err := repo.CommitStaged(msg, s.id)
 		if err != nil {
-			fmt.Fprintf(p.Err, "%s git backup for %s: %v\n", p.Yellow("agentsync:"), root, err)
+			fmt.Fprintf(s.p.Err, "%s git backup for %s: %v\n", s.p.Yellow("agentsync:"), root, err)
 			continue
 		}
 		if h != "" {
-			fmt.Fprintf(p.Err, "%s %s\n", p.Faint(ui.GlyphInfo),
-				p.Faint(fmt.Sprintf("git backup: checkpointed %s", root)))
+			fmt.Fprintf(s.p.Err, "%s %s\n", s.p.Faint(ui.GlyphInfo),
+				s.p.Faint(fmt.Sprintf("git backup: checkpointed %s", root)))
 		}
 	}
 	return nil
+}
+
+// runDestinationGitBackup is the standalone POST-APPLY checkpoint pass. The pre-apply
+// baseline is taken separately in apply (via gitBackupSession.baseline) so the two
+// passes share one session; this thin wrapper is kept so focused tests can drive the
+// checkpoint pass directly. It is a no-op for project scope, --no-git-backup, mode
+// "off", an empty write set, or an agent dir under foreign source control.
+func runDestinationGitBackup(
+	cmd *cobra.Command, p *ui.Printer, reg *adapter.Registry, agents []string,
+	sc adapter.Scope, projectRoot, home string,
+	cfg source.DestinationGitBackupConfig, written map[string]bool, noGitBackup bool,
+) error {
+	return newGitBackupSession(cmd, p, reg, agents, sc, projectRoot, home, cfg, noGitBackup).checkpoint(written)
+}
+
+// baselineMessage renders the commit subject for a pre-apply baseline checkpoint.
+func baselineMessage(root string) string {
+	return fmt.Sprintf("agentsync apply: pre-apply baseline of %s", root)
 }
 
 // enabledVersionRoots returns the de-duplicated, de-nested, sorted set of
@@ -219,10 +418,22 @@ func isUnderDir(child, parent string) bool {
 // the mode: "on" inits silently; "prompt" asks (opt-out) and persists the answer.
 // Returns (nil, nil) when init was declined or could not be offered. It may flip
 // *mode to "off" for the rest of this run when the user picks "don't ask again".
-func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mode *string, hintedUnavailable *bool) (*agit.Repo, error) {
+//
+// warnedCleartext gates the mode="on" cleartext notice: unlike the interactive prompt
+// (which already warns), mode="on" auto-inits with no caution, so an unattended apply
+// would grow its cleartext-secret git footprint across new dirs silently. The notice
+// fires once per run (the first NEW dir it actually inits), never on a declined /
+// nested-skip (nil repo) init.
+func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mode *string, hintedUnavailable, warnedCleartext *bool) (*agit.Repo, error) {
 	switch *mode {
 	case source.GitBackupModeOn:
-		return initGuarded(p, dir)
+		repo, err := initGuarded(p, dir)
+		if err == nil && repo != nil && !*warnedCleartext {
+			fmt.Fprintf(p.Err, "%s started a %s git backup of %s; like the files it versions, its history may contain secrets in cleartext (it is never pushed).\n",
+				p.Faint(ui.GlyphInfo), p.Bold("local-only"), dir)
+			*warnedCleartext = true
+		}
+		return repo, err
 	case source.GitBackupModePrompt:
 		switch gitBackupPrompter(cmd, p, dir) {
 		case promptYes:
@@ -278,6 +489,24 @@ func initGuarded(p *ui.Printer, dir string) (*agit.Repo, error) {
 		return nil, nil
 	}
 	return agit.Init(dir)
+}
+
+// warnNestedForeignRepoOnCommit warns when a foreign git repo now lives below an
+// agentsync-owned root (cloned there after init). The commit path is non-destructive
+// (append-only), so this is a warning, not a refusal — but agentsync's clean ownership
+// of the root no longer holds, so `agentsync revert` of this root will now refuse (as a
+// precaution) until the nesting is resolved; the user is told before ever running it.
+// Best-effort: a scan error is swallowed (a git-backup step must never fail the apply
+// over an unreadable subtree).
+func warnNestedForeignRepoOnCommit(p *ui.Printer, root string) {
+	nested, err := agit.HasNestedRepoBelow(root)
+	if err != nil || !nested {
+		return
+	}
+	fmt.Fprintf(p.Err, "%s a nested git repository now lives below the agentsync-owned dir %s; "+
+		"`agentsync revert` of this root will refuse as a precaution until the inner repo is "+
+		"removed or reconciled.\n",
+		p.Yellow("agentsync:"), root)
 }
 
 // managedRelsUnder returns the slash-relative paths of every written file that

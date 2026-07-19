@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -171,6 +173,44 @@ func TestGitBackup_ModeOn_CheckpointsWrittenFiles(t *testing.T) {
 	}
 	if tracked(t, h.claudDir, "user-scratch.txt") {
 		t.Error("untracked user file must NOT be committed")
+	}
+}
+
+// TestOwnedPathRetightensLoosenedGit is the apply-tail regression for issue #126: when
+// an agentsync-owned repo's .git has drifted looser than 0o700, the next apply's
+// commit path best-effort re-tightens it and warns to p.Err — the apply still succeeds.
+func TestOwnedPathRetightensLoosenedGit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX perm bits are meaningless on Windows")
+	}
+	h := newGBHarness(t)
+	abs := h.writeManaged("settings.json", `{"a":1}`)
+	// First run creates the owned repo.
+	h.run(source.DestinationGitBackupConfig{Mode: source.GitBackupModeOn}, map[string]bool{abs: true}, false)
+	if st, _ := agit.Detect(h.claudDir); st != agit.StateAgentsyncOwned {
+		t.Fatalf("precondition: dir should be owned after first run")
+	}
+
+	// Loosen .git, then a second run must re-tighten it and warn on stderr.
+	gitDir := filepath.Join(h.claudDir, ".git")
+	if err := os.Chmod(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var errBuf bytes.Buffer
+	p := ui.New(io.Discard, &errBuf, ui.ColorNever)
+	if err := os.WriteFile(abs, []byte(`{"a":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runDestinationGitBackup(h.cmd, p, h.reg, []string{"claude"},
+		adapter.ScopeUser, "", h.home,
+		source.DestinationGitBackupConfig{Mode: source.GitBackupModeOn}, map[string]bool{abs: true}, false); err != nil {
+		t.Fatalf("runDestinationGitBackup: %v", err)
+	}
+	if info, err := os.Stat(gitDir); err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf(".git mode not re-tightened to 700 (err=%v)", err)
+	}
+	if !strings.Contains(errBuf.String(), "0700") {
+		t.Errorf("expected a loosened-history warning on stderr, got: %q", errBuf.String())
 	}
 }
 

@@ -260,6 +260,27 @@ func TestRender_Subagent_NameOnly_NoSkip(t *testing.T) {
 	}
 }
 
+// TestRender_Subagent_DuplicateEffectiveName_Detected pins the collision guard:
+// two subagents with distinct file stems (`a`, `b`) that resolve to the same
+// effective Codex `name` ("Shared") must NOT both be written (that would produce
+// two TOMLs claiming one Codex identity). renderSubagents returns an error naming
+// both agents and the shared name.
+func TestRender_Subagent_DuplicateEffectiveName_Detected(t *testing.T) {
+	c := source.Canonical{Subagents: []source.Subagent{
+		{Name: "a", Frontmatter: map[string]any{"name": "Shared"}, Body: "A.\n"},
+		{Name: "b", Frontmatter: map[string]any{"name": "Shared"}, Body: "B.\n"},
+	}}
+	a := codex.New(codex.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err == nil {
+		t.Fatalf("expected a collision error for two subagents sharing name %q; got ops=%+v", "Shared", ops)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "Shared") || !strings.Contains(msg, `"a"`) || !strings.Contains(msg, `"b"`) {
+		t.Fatalf("collision error should name both agents and the shared name, got: %v", msg)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Command — full fidelity at user scope, skipped at project scope
 // ---------------------------------------------------------------------------

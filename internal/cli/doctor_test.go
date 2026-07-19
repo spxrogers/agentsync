@@ -28,6 +28,28 @@ func TestDoctor_PrintsEnvAndAgents(t *testing.T) {
 	}
 }
 
+// TestDoctor_WarnsNestedRepoUnderUntrackedRoot is the regression for issue #149's D4:
+// a StateUntracked destination root that CONTAINS a nested `.git` must produce a warn
+// line (apply's initGuarded will refuse to init a repo-inside-a-repo there), not a clean
+// "untracked" line — so doctor's report matches what apply actually does.
+func TestDoctor_WarnsNestedRepoUnderUntrackedRoot(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	// ~/.claude is untracked (no apply ran), but a foreign repo lives below it.
+	nested := filepath.Join(tmp, ".claude", "plugin", ".git")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _ := runCLI(t, env, "doctor")
+	if !strings.Contains(out, "nested git repo") {
+		t.Fatalf("doctor should warn that untracked ~/.claude contains a nested repo; got:\n%s", out)
+	}
+}
+
 // TestDoctor_FailsOnMissingHome asserts that doctor exits non-zero when
 // the user runs it before `agentsync init`. The old PATH-only doctor
 // returned ok no matter what.

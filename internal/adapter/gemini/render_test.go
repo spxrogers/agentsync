@@ -2,6 +2,7 @@ package gemini_test
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -193,15 +194,21 @@ func TestRender_Command_TOML(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Subagent — markdown; tools/color dropped + reported; name defaulted
+// Subagent — markdown; native keys pass through; tools/color dropped + reported;
+// name defaulted
 // ---------------------------------------------------------------------------
 
+// TestRender_Subagent_DropsToolsKeepsCore pins the render partition: the
+// genuinely-untranslatable keys (`tools` — different vocabulary than Gemini;
+// `color` — no Gemini field) are dropped with a reported Skip, while a native
+// Gemini key (`temperature`) present in the same frontmatter survives on disk.
 func TestRender_Subagent_DropsToolsKeepsCore(t *testing.T) {
 	c := source.Canonical{Subagents: []source.Subagent{{
 		Name: "review",
 		Frontmatter: map[string]any{
 			"description": "Code review", "model": "gemini-3-flash",
-			"tools": []any{"Read", "Grep"}, "color": "blue",
+			"temperature": 0.2,                                    // native Gemini key — must survive
+			"tools":       []any{"Read", "Grep"}, "color": "blue", // untranslatable — must drop
 		},
 		Body: "Review the code.\n",
 	}}}
@@ -217,12 +224,143 @@ func TestRender_Subagent_DropsToolsKeepsCore(t *testing.T) {
 	if !strings.Contains(content, "name: review") {
 		t.Fatalf("name should be set (Gemini requires it): %s", content)
 	}
+	if !strings.Contains(content, "temperature: 0.2") {
+		t.Fatalf("native key temperature must pass through, not be clipped: %s", content)
+	}
 	if strings.Contains(content, "tools") || strings.Contains(content, "color") {
 		t.Fatalf("tools/color must be dropped: %s", content)
 	}
 	sk := hasSkip(skips, "subagent", "review", adapter.SkipReduced)
 	if sk == nil || !strings.Contains(sk.Reason, "tools") || !strings.Contains(sk.Reason, "color") {
 		t.Fatalf("expected reduced subagent skip listing tools+color, got %+v", skips)
+	}
+}
+
+// TestRender_Subagent_PassesThroughNativeKeys asserts that Gemini-native
+// frontmatter keys captured into canonical (kind/temperature/max_turns/
+// timeout_mins/mcpServers) are re-emitted verbatim on render — with their values,
+// including a numeric temperature and a nested mcpServers map — and that NO Skip
+// is emitted when only native/pass-through keys are present.
+func TestRender_Subagent_PassesThroughNativeKeys(t *testing.T) {
+	c := source.Canonical{Subagents: []source.Subagent{{
+		Name: "researcher",
+		Frontmatter: map[string]any{
+			"description":  "Research helper",
+			"model":        "gemini-3-pro",
+			"kind":         "local",
+			"temperature":  0.2,
+			"max_turns":    12,
+			"timeout_mins": 5,
+			"mcpServers":   map[string]any{"fetch": map[string]any{"command": "mcp-fetch"}},
+		},
+		Body: "Do research.\n",
+	}}}
+	ops, skips, err := gemini.New(gemini.Options{TargetRoot: t.TempDir()}).Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := findOp(ops, ".gemini/agents/researcher.md")
+	if op == nil {
+		t.Fatal("researcher.md op missing")
+	}
+	content := string(op.Content)
+	// Native keys AND their values survive (numeric + nested map).
+	for _, want := range []string{
+		"name: researcher",
+		"kind: local",
+		"temperature: 0.2",
+		"max_turns: 12",
+		"timeout_mins: 5",
+		"mcpServers:",
+		"mcp-fetch",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("native frontmatter %q should pass through verbatim: %s", want, content)
+		}
+	}
+	// Only native/pass-through keys are present → no Skip.
+	if sk := hasSkip(skips, "subagent", "researcher", adapter.SkipReduced); sk != nil {
+		t.Fatalf("no Skip expected when only native keys are present, got %+v", sk)
+	}
+}
+
+// TestRoundTrip_Subagent_NativeKeysSurvive is artifact-anchored: it seeds a
+// spec-complete on-disk `.gemini/agents/<name>.md` fixture carrying the native
+// Gemini keys, Ingests it into canonical, Renders back out, writes the rendered
+// bytes to disk, and asserts the native keys + body survive the whole-file
+// replace on disk (not merely that the parsed model round-trips). This is the
+// fidelity guard the CLAUDE.md invariant requires.
+func TestRoundTrip_Subagent_NativeKeysSurvive(t *testing.T) {
+	root := t.TempDir()
+	agentsDir := filepath.Join(root, ".gemini", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Spec-complete Gemini agent file (per geminicli.com/docs/core/subagents):
+	// name/description/model plus native kind/temperature/max_turns/timeout_mins/
+	// mcpServers, and a markdown body.
+	fixture := "---\n" +
+		"name: researcher\n" +
+		"description: Deep research subagent\n" +
+		"model: gemini-3-pro\n" +
+		"kind: local\n" +
+		"temperature: 0.2\n" +
+		"max_turns: 12\n" +
+		"timeout_mins: 5\n" +
+		"mcpServers:\n" +
+		"  fetch:\n" +
+		"    command: mcp-fetch\n" +
+		"    args:\n" +
+		"    - --quiet\n" +
+		"---\n" +
+		"Investigate the topic thoroughly.\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, "researcher.md"), []byte(fixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ad := gemini.New(gemini.Options{TargetRoot: root})
+	c, err := ad.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	if len(c.Subagents) != 1 {
+		t.Fatalf("want 1 captured subagent, got %d", len(c.Subagents))
+	}
+
+	ops, _, err := ad.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	op := findOp(ops, ".gemini/agents/researcher.md")
+	if op == nil {
+		t.Fatal("re-rendered researcher.md op missing")
+	}
+	// Anchor the assertion to disk: write the re-rendered file out and read it
+	// back, then confirm each native key/value + the body survived.
+	out := filepath.Join(t.TempDir(), "researcher.md")
+	if err := os.WriteFile(out, op.Content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotStr := string(got)
+	for _, want := range []string{
+		"name: researcher",
+		"description: Deep research subagent",
+		"model: gemini-3-pro",
+		"kind: local",
+		"temperature: 0.2",
+		"max_turns: 12",
+		"timeout_mins: 5",
+		"mcpServers:",
+		"mcp-fetch",
+		"Investigate the topic thoroughly.",
+	} {
+		if !strings.Contains(gotStr, want) {
+			t.Fatalf("on-disk re-render lost %q:\n%s", want, gotStr)
+		}
 	}
 }
 

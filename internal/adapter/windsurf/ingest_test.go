@@ -216,3 +216,99 @@ func TestIngest_MCP_ExtraPassthrough_ArtifactAnchored(t *testing.T) {
 		t.Fatalf("unmodeled native key lost on re-render:\n%s", onDisk)
 	}
 }
+
+// TestRoundTrip_ProjectRule_NonAlwaysOnTrigger_NoDoubleFence is the load-bearing,
+// artifact-anchored regression for D3-windsurf-trigger-frontmatter-fold. It seeds
+// a spec-complete on-disk workspace rule whose `trigger:` was hand-changed to a
+// non-`always_on` value (glob, with a `globs:` key), ingests it, then RE-RENDERS
+// and reads the file back ON DISK to prove a re-apply yields a single well-formed
+// activation fence — never the malformed double-`---` block the old
+// exact-match-only strip produced.
+func TestRoundTrip_ProjectRule_NonAlwaysOnTrigger_NoDoubleFence(t *testing.T) {
+	tmp := t.TempDir()
+	proj := t.TempDir()
+	ruleFile := filepath.Join(proj, ".windsurf", "rules", "agentsync.md")
+	if err := os.MkdirAll(filepath.Dir(ruleFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Spec-complete on-disk fixture: a foreign trigger with an extra frontmatter key.
+	fixture := "---\ntrigger: glob\nglobs: **/*.go\n---\n\n# Project rules\n\nBe terse.\n"
+	if err := os.WriteFile(ruleFile, []byte(fixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var warn bytes.Buffer
+	a := windsurf.New(windsurf.Options{TargetRoot: tmp, Stderr: &warn})
+	got, err := a.Ingest(adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The foreign fence must be stripped, not folded into the body.
+	if got.Memory.Body != "# Project rules\n\nBe terse.\n" {
+		t.Fatalf("foreign trigger fence must be stripped from body: %q", got.Memory.Body)
+	}
+	if strings.Contains(got.Memory.Body, "---") || strings.Contains(got.Memory.Body, "trigger:") || strings.Contains(got.Memory.Body, "globs:") {
+		t.Fatalf("captured body still carries frontmatter remnants: %q", got.Memory.Body)
+	}
+	// A foreign (non-always_on) fence still warns that its activation has no home.
+	if !strings.Contains(warn.String(), "activation metadata") {
+		t.Fatalf("expected foreign-trigger warning, got: %q", warn.String())
+	}
+
+	// Re-render the ingested canonical and read the rule back ON DISK.
+	projC := got
+	c := got
+	c.Project = &projC
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatal(err)
+	}
+	onDiskBytes, err := os.ReadFile(ruleFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	onDisk := string(onDiskBytes)
+	// Exactly ONE well-formed activation fence at byte 0, no embedded trigger.
+	if !strings.HasPrefix(onDisk, "---\ntrigger: always_on\n---\n") {
+		t.Fatalf("re-rendered rule must start with the single always_on fence: %q", onDisk)
+	}
+	if n := strings.Count(onDisk, "\n---\n"); n != 1 {
+		t.Fatalf("re-rendered rule must carry exactly one frontmatter fence, got %d: %q", n, onDisk)
+	}
+	afterFence := onDisk[len("---\ntrigger: always_on\n---\n"):]
+	if strings.Contains(afterFence, "trigger:") {
+		t.Fatalf("re-rendered body re-embeds a trigger line (double-fence): %q", onDisk)
+	}
+}
+
+// TestRoundTrip_Workflow_StripsHandAuthoredFrontmatter proves the benign
+// D3-windsurf-workflow-frontmatter-fold sub-fix: a hand-authored leading `---`…`---`
+// block in a workflow file is stripped on ingest so it never folds into the
+// canonical command body. Workflows are plain markdown, so Frontmatter stays empty.
+func TestRoundTrip_Workflow_StripsHandAuthoredFrontmatter(t *testing.T) {
+	proj := t.TempDir()
+	wfFile := filepath.Join(proj, ".windsurf", "workflows", "deploy.md")
+	if err := os.MkdirAll(filepath.Dir(wfFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wfFile, []byte("---\nname: deploy\n---\n\n1. tag\n2. push\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := windsurf.New(windsurf.Options{TargetRoot: t.TempDir()})
+	got, err := a.Ingest(adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Commands) != 1 {
+		t.Fatalf("expected one command, got %+v", got.Commands)
+	}
+	if got.Commands[0].Body != "1. tag\n2. push\n" {
+		t.Fatalf("hand-authored fence must be stripped from workflow body: %q", got.Commands[0].Body)
+	}
+	if len(got.Commands[0].Frontmatter) != 0 {
+		t.Fatalf("Windsurf workflows carry no frontmatter; got %+v", got.Commands[0].Frontmatter)
+	}
+}

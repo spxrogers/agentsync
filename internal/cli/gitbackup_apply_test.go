@@ -8,13 +8,16 @@ import (
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	agit "github.com/spxrogers/agentsync/internal/git"
 )
 
 // TestApply_GitBackupCheckpoint is the end-to-end apply-tail test: with git backup
 // enabled, the first apply that writes under ~/.claude initializes a local repo and
-// records exactly one checkpoint; a re-apply with no source change records none.
+// records a PRE-APPLY BASELINE plus the apply checkpoint (≥2 commits, the apply
+// checkpoint's parent being the baseline — issue #143); a re-apply with no source
+// change records none.
 func TestApply_GitBackupCheckpoint(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
@@ -63,17 +66,381 @@ func TestApply_GitBackupCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cps) != 1 {
-		t.Fatalf("want exactly 1 checkpoint after first apply, got %d", len(cps))
+	// ≥2 commits: a pre-apply baseline plus the apply checkpoint. The old "exactly 1
+	// checkpoint after first apply" premise is exactly the recoverability gap #143
+	// closed — before the baseline, the first apply was unrevertible.
+	if len(cps) < 2 {
+		t.Fatalf("want >=2 commits after first apply (baseline + apply), got %d", len(cps))
+	}
+	// The apply checkpoint (HEAD) is parented on the pre-apply baseline.
+	gr, err := gogit.PlainOpen(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := gr.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hc, err := gr.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hc.NumParents() != 1 {
+		t.Fatalf("apply checkpoint should have exactly one parent (the baseline), got %d", hc.NumParents())
+	}
+	baseline := cps[len(cps)-1] // oldest commit
+	if hc.ParentHashes[0].String() != baseline.Hash {
+		t.Fatalf("apply checkpoint parent = %s, want the baseline %s", hc.ParentHashes[0].String(), baseline.Hash)
+	}
+	if !strings.Contains(baseline.Subject, "pre-apply baseline") {
+		t.Fatalf("oldest commit should be the pre-apply baseline, got subject %q", baseline.Subject)
 	}
 
-	// Re-apply with no source change → no new checkpoint (apply is a no-op).
+	// Re-apply with no source change → no new checkpoint (apply is a no-op): neither
+	// the baseline pass (worktree clean) nor the checkpoint pass records anything.
+	before := len(cps)
 	if out, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("re-apply: %v\n%s", err, out)
 	}
 	cps2, _ := repo.Log(0)
-	if len(cps2) != 1 {
-		t.Fatalf("re-apply recorded a checkpoint despite no change: %d commits", len(cps2))
+	if len(cps2) != before {
+		t.Fatalf("re-apply recorded a checkpoint despite no change: %d -> %d commits", before, len(cps2))
+	}
+}
+
+// trackedInCommit reports whether rel is present in the tree of commit `hash`.
+func trackedInCommit(t *testing.T, dir, hash, rel string) bool {
+	t.Helper()
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := repo.CommitObject(plumbing.NewHash(hash))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = tree.File(rel)
+	return err == nil
+}
+
+// TestApply_GitBackupBaselineRevertsFirstApply is the headline #143 test, anchored to
+// the on-disk artifact: a populated destination dir's pre-apply bytes are written to
+// disk first, then a first apply + revert must restore those exact bytes (not a parsed
+// model), and revert must NOT print "only one checkpoint — skipping".
+func TestApply_GitBackupBaselineRevertsFirstApply(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+	writeSkillSource(t, tmp, "demo", "applied-body")
+
+	// Seed the destination dir with genuine pre-apply content ON DISK, before the
+	// first apply ever runs. existing.txt is a file agentsync never writes.
+	claude := filepath.Join(tmp, ".claude")
+	if err := os.MkdirAll(claude, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const preApply = "PRE-APPLY-BYTES\nkeep me exactly\n"
+	existing := filepath.Join(claude, "existing.txt")
+	if err := os.WriteFile(existing, []byte(preApply), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	// Precondition: the apply wrote a managed skill under the dir, and the repo has a
+	// baseline + checkpoint.
+	skillDest := filepath.Join(claude, "skills", "demo", "SKILL.md")
+	if _, err := os.Stat(skillDest); err != nil {
+		t.Fatalf("apply should have written the skill: %v", err)
+	}
+	repo, err := agit.Open(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cps, _ := repo.Log(0); len(cps) < 2 {
+		t.Fatalf("first apply should record a baseline + checkpoint (>=2 commits), got %d", len(cps))
+	}
+
+	out, err := runCLI(t, env, "revert", "claude")
+	if err != nil {
+		t.Fatalf("revert: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "only one checkpoint") {
+		t.Fatalf("revert bailed with the single-checkpoint message despite a baseline:\n%s", out)
+	}
+	// The pre-apply bytes are restored byte-for-byte...
+	if b, _ := os.ReadFile(existing); string(b) != preApply {
+		t.Fatalf("revert did not restore pre-apply existing.txt byte-for-byte:\n got %q\nwant %q", string(b), preApply)
+	}
+	// ...and the applied skill is rolled back (the pre-apply state had none).
+	if _, err := os.Stat(skillDest); !os.IsNotExist(err) {
+		t.Fatalf("revert should have removed the applied skill (pre-apply state had none); stat err=%v", err)
+	}
+}
+
+// TestApply_GitBackupBaselinePreexistingContentOutOfContract pins issue #143's
+// pre-existing-content decision (Problem B). The pre-apply baseline stages only the
+// NOTICE plus the managed paths' pre-apply content — NOT the whole dir. Pre-existing,
+// non-managed siblings (a stray user file, a leftover skill, and — critically — an
+// agent credentials file) are deliberately OUT of the recoverability contract: they
+// are NOT swept into the local-only git history (which would durably persist a live
+// credential far beyond the resolved-config secret model), yet they survive a revert
+// untouched because #128 makes Restore untracked-safe.
+func TestApply_GitBackupBaselinePreexistingContentOutOfContract(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+	writeSkillSource(t, tmp, "demo", "applied")
+
+	claude := filepath.Join(tmp, ".claude")
+	// Pre-existing, non-managed content on disk before the first apply: a stray note,
+	// a leftover skill agentsync does NOT write this run, and a file mimicking an
+	// agent's live credentials.
+	seed := map[string]string{
+		"notes.txt":                "stray user note\n",
+		"skills/leftover/SKILL.md": "---\nname: leftover\n---\nold\n",
+		".credentials.json":        "{\"token\":\"live-oauth-secret\"}\n",
+	}
+	for rel, body := range seed {
+		abs := filepath.Join(claude, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(abs, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	repo, err := agit.Open(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cps, err := repo.Log(0)
+	if err != nil || len(cps) < 2 {
+		t.Fatalf("want >=2 commits, got %d (err %v)", len(cps), err)
+	}
+	baseline := cps[len(cps)-1].Hash // oldest = the pre-apply baseline
+	for rel := range seed {
+		if trackedInCommit(t, claude, baseline, rel) {
+			t.Errorf("non-managed %q must NOT be versioned in the baseline (secret-history surface)", rel)
+		}
+		// ...but it must survive on disk untouched (untracked, preserved by #128).
+		if _, err := os.Stat(filepath.Join(claude, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("pre-existing non-managed %q should be preserved on disk after apply, got %v", rel, err)
+		}
+	}
+	// Guard against a vacuous pass: trackedInCommit must actually return TRUE for a
+	// path the baseline DOES version — the agentsync NOTICE it writes at init.
+	if !trackedInCommit(t, claude, baseline, agit.NoticeFile) {
+		t.Errorf("the agentsync NOTICE (%s) should be tracked in the baseline commit", agit.NoticeFile)
+	}
+}
+
+// TestApply_GitBackupBaselineRestoresPreexistingManagedFile proves the baseline's
+// os.Stat-succeeds branch (gitbackup.go): a MANAGED destination file that already exists
+// on disk before the first (git-backed) apply has its pre-apply content captured in the
+// baseline, so a revert restores those exact bytes. This is the data-loss-on-rollback
+// guard the narrowed baseline (issue #143) must still honor — the sibling
+// ...RevertsFirstApply test's surviving file is non-managed, so it only proves #128
+// untracked-preservation, not managed capture.
+func TestApply_GitBackupBaselineRestoresPreexistingManagedFile(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+	writeSkillSource(t, tmp, "demo", "new-applied-body")
+
+	// A MANAGED dest file already exists on disk before the first git-backed apply
+	// (e.g. a prior `apply --no-git-backup`, or a hand-placed file at a path agentsync
+	// manages). Its pre-apply bytes differ from what this apply will render.
+	claude := filepath.Join(tmp, ".claude")
+	skillDest := filepath.Join(claude, "skills", "demo", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillDest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const preApplyManaged = "OLD-MANAGED-PRE-APPLY-BYTES\nkeep me exactly\n"
+	if err := os.WriteFile(skillDest, []byte(preApplyManaged), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	// The apply overwrote the managed dest with freshly-rendered content.
+	if b, _ := os.ReadFile(skillDest); string(b) == preApplyManaged {
+		t.Fatalf("apply should have overwritten the managed dest; it still holds the pre-apply bytes")
+	}
+	repo, err := agit.Open(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cps, _ := repo.Log(0); len(cps) < 2 {
+		t.Fatalf("first apply should record a baseline + checkpoint (>=2 commits), got %d", len(cps))
+	}
+
+	// Revert restores the MANAGED dest to its pre-apply bytes captured by the baseline.
+	if out, err := runCLI(t, env, "revert", "claude"); err != nil {
+		t.Fatalf("revert: %v\n%s", err, out)
+	}
+	if b, _ := os.ReadFile(skillDest); string(b) != preApplyManaged {
+		t.Fatalf("revert did not restore the managed dest's pre-apply bytes:\n got %q\nwant %q", string(b), preApplyManaged)
+	}
+}
+
+// TestApply_GitBackupBaselineFailureDoesNotAbortApply drives a case where the pre-apply
+// baseline cannot be taken (a foreign repo nested below the root fires the nested-repo
+// guard) and asserts the apply still succeeds, the destination is still rendered, and
+// the user is warned the first apply is not revertible.
+func TestApply_GitBackupBaselineFailureDoesNotAbortApply(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+	writeSkillSource(t, tmp, "demo", "applied")
+
+	claude := filepath.Join(tmp, ".claude")
+	// A foreign git repo already lives BELOW ~/.claude, so the nested-repo guard must
+	// refuse to init a wrapping repo — the baseline can't be taken there.
+	inner := filepath.Join(claude, "skills", "vendor")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gogit.PlainInit(inner, false); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("apply must still succeed despite the baseline skip: %v\n%s", err, out)
+	}
+	// The destination is still rendered.
+	if _, err := os.Stat(filepath.Join(claude, "skills", "demo", "SKILL.md")); err != nil {
+		t.Fatalf("apply should still render the skill: %v", err)
+	}
+	// No wrapping repo was created at ~/.claude (the nested guard fired) ...
+	if _, err := os.Stat(filepath.Join(claude, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("~/.claude/.git must not exist (nested guard should skip); err=%v", err)
+	}
+	// ... and the user is warned the first apply is not revertible.
+	if !strings.Contains(out, "not be revertible") {
+		t.Errorf("expected a 'first apply not revertible' warning, got:\n%s", out)
+	}
+}
+
+// TestModeOnNewDirEmitsCleartextNotice pins issue #126's mode="on" caution: an apply
+// that auto-inits NEW dirs prints the "local-only / may contain cleartext" notice once
+// per run (even across several new dirs); a later apply into the now-owned dirs does not.
+func TestModeOnNewDirEmitsCleartextNotice(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	mustRun(t, env, "agent", "add", "codex") // adds ~/.agents/skills as a second new root
+	enableGitBackupOn(t, tmp)
+	writeSkillSource(t, tmp, "demo", "d") // renders under ~/.claude AND ~/.agents/skills
+
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	// Exactly once, even though more than one new dir was inited this run.
+	if n := strings.Count(out, "may contain secrets in cleartext"); n != 1 {
+		t.Fatalf("mode=on cleartext notice should appear exactly once across new dirs, got %d:\n%s", n, out)
+	}
+
+	// A second apply (no source change) only commits into now-owned dirs — no notice.
+	out2, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("re-apply: %v\n%s", err, out2)
+	}
+	if strings.Contains(out2, "may contain secrets in cleartext") {
+		t.Errorf("second apply into owned dirs must not re-emit the cleartext notice:\n%s", out2)
+	}
+}
+
+// committedBlob returns the contents of rel in the repo-at-dir's HEAD commit tree.
+func committedBlob(t *testing.T, dir, rel string) string {
+	t.Helper()
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := tree.File(rel)
+	if err != nil {
+		t.Fatalf("blob %q not in HEAD tree: %v", rel, err)
+	}
+	s, err := f.Contents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// TestResolvedSecretLandsInLocalHistory anchors the blessed local-only cleartext
+// exception (issue #126) to the on-disk artifact: a hook command referencing an
+// ${env:…} secret resolves to CLEARTEXT in the rendered settings.json, which is
+// committed into the destination dir's local-only git history. The rationale ("this
+// history really may contain secrets") is only true if the cleartext is actually there.
+func TestResolvedSecretLandsInLocalHistory(t *testing.T) {
+	const secretVal = "s3cr3t-in-history-9x"
+	tmp := t.TempDir()
+	env := map[string]string{
+		"AGENTSYNC_TARGET_ROOT": tmp,
+		"AGENTSYNC_HIST_SECRET": secretVal,
+	}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+
+	// A hook whose command carries an ${env:…} reference — resolved to cleartext into
+	// ~/.claude/settings.json at apply time.
+	hook := filepath.Join(tmp, ".agentsync", "hooks", "PreToolUse.toml")
+	if err := os.MkdirAll(filepath.Dir(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hook, []byte("[[hook]]\nmatcher = \"Write\"\ntype = \"command\"\ncommand = \"echo ${env:AGENTSYNC_HIST_SECRET}\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	claude := filepath.Join(tmp, ".claude")
+	// The resolved cleartext is on disk...
+	if b, _ := os.ReadFile(filepath.Join(claude, "settings.json")); !strings.Contains(string(b), secretVal) {
+		t.Fatalf("resolved secret should be cleartext in settings.json on disk:\n%s", b)
+	}
+	// ...and in the committed history blob — the exception is real.
+	if blob := committedBlob(t, claude, "settings.json"); !strings.Contains(blob, secretVal) {
+		t.Fatalf("resolved secret cleartext should be committed to the local-only history:\n%s", blob)
 	}
 }
 

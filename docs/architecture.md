@@ -385,7 +385,14 @@ Key stages:
    run's roots, so before initializing a dir agentsync also scans the filesystem
    (`git.HasNestedRepoBelow`) and **refuses to init a repo that would wrap an
    existing one** — the cross-run case where a child dir was versioned before a
-   parent-dir agent was enabled. The managed-file set committed under
+   parent-dir agent was enabled. That same scan (symlink-aware — it shallow-probes a
+   symlinked subdir's target for a `.git`) is **re-run on every later path that
+   assumes the work tree is wholly agentsync's**: the commit path **warns** if a
+   foreign repo has appeared under an owned root (the append-only checkpoint is still
+   recorded), `agentsync revert` **refuses/skips** such a root before its destructive
+   hard reset (an error under `--strict`), and `doctor` downgrades a `StateUntracked`
+   root that contains a nested `.git` to a **warn** so its report matches what apply
+   does. The managed-file set committed under
    each root is the `written` set from step 7 plus any tracked deletions; `$HOME`-
    level strays (Claude's `~/.claude.json`) are never versioned (agentsync never
    inits a repo at `$HOME`). This step is **best-effort** (the files are already
@@ -395,9 +402,12 @@ Key stages:
    `internal/git` exposes no remote/push surface at all (a source-scanning guard
    test, `TestNoPushSurface`, keeps it that way). `agentsync revert` (which takes
    the same global lock apply holds) rolls a dir back to a prior checkpoint
-   append-only, first snapshotting any uncommitted hand-edits to tracked files so
-   the rollback can't lose them. `.state/` is **untouched** by this step — the two
-   are complementary (operational memory vs. user-facing rollback history).
+   append-only. Snapshotting uncommitted hand-edits to tracked files is enforced
+   **inside the engine `Restore`** (safe-by-construction for every caller, not just
+   the CLI wrapper), so the rollback can't lose them; a partial-reset failure after
+   that snapshot surfaces a **recovery hint** naming the pre-revert HEAD and the
+   snapshot commit. `.state/` is **untouched** by this step — the two are
+   complementary (operational memory vs. user-facing rollback history).
 
 `--dry-run` runs steps 1–6, then a non-writing pass of step 7 (the writer's merge
 + convergence check, no disk write) so it can label each destination `✓ synced`
@@ -608,6 +618,7 @@ flowchart TD
     REN --> AD & SEC & SRC & ST & DRF & INFRA
     CAP --> SRC & SEC & INFRA
     AD --> SRC & SEC & INFRA
+    AD -. "opencode ingest ownership only (issue #148)" .-> ST
     MKT --> SRC
     PRJ --> SRC
     SRC --> INFRA
@@ -618,3 +629,15 @@ flowchart TD
 `internal/drift`, `internal/iox`, `internal/jsonkeys`, `internal/paths`,
 `internal/log`, and `internal/untrusted` have no internal dependencies — they're
 the leaves. See the [component map](components.md) for what each package contains.
+
+**Documented layering exception (`opencode → state`).** Adapters otherwise depend
+only on `source`, `secrets`, and the infra leaves. The OpenCode adapter is the one
+exception: its `Ingest` reads the apply-state file (`internal/state`) to build an
+*ownership filter* so it re-captures only agents/commands agentsync actually wrote,
+never hand-authored siblings in OpenCode's shared `agents/`/`commands/` dirs (issue
+#148). This is a deliberate, opencode-scoped dependency — the general fix (threading
+the owned-path set in from the CLI caller so no adapter touches `state`) is a
+class-wide follow-up, since no other adapter filters ingest ownership yet. The state
+**key format** the filter reconstructs is not silently duplicated: the round-trip
+test seeds ownership through the real `render.RecordOpsState`, so any drift in the
+key scheme breaks that test rather than silently under-capturing.

@@ -9,6 +9,55 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Security
+
+- **The local `.git` rollback history's secret-at-rest control is now re-asserted on
+  every apply (issue #126).** Destination git-backup repos deliberately persist
+  *resolved cleartext secrets* into a **local-only** `.git` history; that exception is
+  made acceptable by two controls — the repo is never pushed, and `.git` is tightened
+  to `0o700`. The `0o700` control used to be set **once at init** (with a silently
+  swallowed error) and never re-checked, so a history whose perms later drifted looser
+  (a `git gc`, a restore-from-tar, an admin `chmod`) stayed world/group-readable while
+  every apply wrote fresh secret blobs into it. `.git` perms are now stat-checked and
+  best-effort re-tightened to `0o700` on every apply's Open/commit path (a POSIX no-op
+  when already tight; a warning to stderr when it had drifted); the init-time chmod
+  failure is surfaced the same way instead of swallowed. `Init` is now atomic-ish — the
+  local-history NOTICE is written **before** the managed marker (and the half-created
+  `.git` is rolled back on failure), so a repo that `Detect`s as agentsync-owned always
+  carries the "do not push / may contain cleartext" notice. A `mode = "on"` apply that
+  auto-inits a new dir now prints a one-time-per-run caution that the local-only history
+  may hold cleartext secrets, and `revert`'s dirty-tracked snapshot prints the same
+  caution before it commits possibly-just-typed cleartext. All of this stays
+  best-effort: a chmod failure never aborts the apply, and no push surface is added.
+
+### Changed
+
+- **A project-scope `[destination_directory_git_backup]` override is no longer copied
+  into the merged config (issue #126).** Git backup is a user-scope-only feature
+  (`VersionRoots` returns nil at project scope), so a project override could never take
+  effect; the overlay is dropped and the merge comment made honest, rather than
+  silently accepting an inert value.
+
+### Fixed
+
+- **The first `apply` is now revertible (issue #143).** Destination git backup used
+  to record its first checkpoint only *after* `render.Apply` had already overwritten
+  the dir, so a bad **first** apply into a previously-untracked dir had no prior state
+  to roll back to and `revert` bailed with "only one checkpoint — skipping". `apply`
+  now takes a **pre-apply baseline** checkpoint of each version root *before*
+  rendering, so after a first apply there are ≥2 commits (baseline + apply, the apply's
+  parent being the baseline) and `revert` restores the genuine pre-apply state. The
+  baseline stages only the **managed files' pre-apply content** (plus the local-history
+  notice) — deliberately **not** the whole dir: pre-existing siblings agentsync did not
+  write (an agent's credentials file, conversation transcripts, your own scratch files)
+  are left out of the versioned history so it never becomes a durable copy of your
+  secrets, and are preserved untouched across a revert because they are untracked
+  (issue #128). The baseline pass is
+  best-effort **with a loud warning**: if it can't run (a nesting hazard, a declined
+  prompt), the apply still proceeds but you're told that first apply won't be
+  revertible; it honors `--no-git-backup`, `mode = "off"`, project scope, and dirs
+  under your own source control exactly as the post-apply checkpoint does.
+
 ### Changed
 
 - **Chocolatey publishing is temporarily paused (issue #188).** The `chocolateys`
@@ -214,10 +263,55 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   unchanged and **never collapsed** — it still carries every tracked file, so the
   machine contract is stable.
 - **`agentsync version` is now a subcommand alias for `agentsync --version`.**
-  It renders the same version template as the `--version` flag, so the two
-  outputs can never drift.
+  The subcommand delegates to cobra's own version renderer — it re-dispatches
+  the root with its `--version` flag set, so the same precompiled,
+  `FuncMap`-bearing template function renders the same data against the same
+  flag-owning (root) command. Its output is therefore byte-identical to
+  `--version` by construction and can never drift, even if the version template
+  later uses a cobra template function such as `rpad` or `trim`. (Previously the
+  subcommand hand-parsed the template with a bare `text/template` that had no
+  `FuncMap`, so such an edit would have silently broken `agentsync version`
+  while `--version` kept working; a raw-byte parity test now pins the guarantee.)
 
 ### Fixed
+
+- **`revert`: the uncommitted-tracked-edit safety is now enforced in the engine,
+  and partial-reset failures surface a recovery hint (issue #146).** `internal/git.Repo.Restore`
+  previously relied on the CLI wrapper snapshotting uncommitted edits to tracked
+  files before it ran; any other caller (or a refactor) silently lost them. The
+  snapshot is now folded into `Restore` itself — it resolves the target to a
+  concrete hash, then snapshots dirty tracked files, so the append-only "nothing is
+  rewritten or lost" promise holds for *every* caller, not just `revert`. Untracked
+  and gitignored files remain untouched (issue #128). If a rollback fails partway
+  after that snapshot, the error now names the snapshot commit and the pre-revert
+  checkpoint (`git reset --hard …`) instead of handing back a bare error after
+  claiming the edits were preserved.
+
+- **`revert`/`apply`/`doctor` now re-check for a foreign repo nested under a
+  destination dir, not just at init (issue #149).** The `HasNestedRepoBelow` guard
+  previously ran only when initializing a new backup repo, so a git repo cloned
+  under an already-owned root *after* init (e.g. `~/.claude/skills/.git`) was
+  invisible — and `agentsync revert`'s hard reset would clobber its checked-out
+  files. Now `revert` re-probes before any destructive write and **skips** such a
+  root with a warning (errors under `--strict`), including in `--dry-run`; the
+  commit path **warns** when a foreign repo appears under an owned root (still
+  recording the harmless append-only checkpoint); and `doctor` shows a **warn** for
+  an untracked root that contains a nested `.git` instead of a clean `untracked`
+  line. The scan is also **symlink-aware** now — a symlinked subdir pointing at a
+  foreign repo (which `filepath.WalkDir` would not descend into) is detected via a
+  shallow probe of the link target.
+
+- **Windsurf: strip non-`always_on` trigger frontmatter on ingest so re-apply no
+  longer produces a malformed double-fenced rule (issue #136).** When a user
+  hand-edited a workspace rule's `trigger:` to a non-default value (e.g. `glob`
+  or `manual`), ingest previously folded the whole `---`…`---` fence into the
+  canonical memory body, so the next `apply` re-prepended agentsync's own
+  `trigger: always_on` fence on top of it — a double-`---` block that breaks
+  Windsurf activation. Ingest now strips ANY leading frontmatter fence regardless
+  of trigger value (the exact agentsync block still round-trips byte-clean; a
+  foreign trigger is stripped *and* warned, since its activation mode has no
+  canonical home). A hand-authored leading `---`…`---` block in an ingested
+  workflow file is likewise stripped from the captured command body.
 
 - **Corrected two copy-paste-wrong docs examples (issue #129).** The onboarding
   and daily-loop pages told users to run `agentsync diff claude`, but `diff`'s
@@ -267,6 +361,82 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   fully represent **uncaptured** with a warning (matching the Gemini adapter), so
   the next apply never owns or overwrites that event, and Render reports a dropped
   `Skip` for a non-`command` handler instead of emitting an empty-command entry.
+- **Codex subagent `name` now survives a round-trip, and colliding effective
+  names are caught (issue #144).** A Codex custom agent whose frontmatter `name`
+  deliberately differs from its file stem (rendered into the TOML `name` field
+  but written to `<stem>.toml`) had that divergent value silently erased on the
+  next `import`/`reconcile`, because ingest reconstructed the name from the
+  filename and never read the TOML `name` back. Ingest now re-populates
+  `Frontmatter["name"]` from the TOML `name` field unconditionally on presence
+  (lossless for a divergent name, a no-op for a matching one). Separately, two
+  subagents with distinct file stems that resolve to the same effective Codex
+  `name` — two TOMLs claiming one agent identity — are now reported as a Render
+  error instead of being written silently.
+- **Gemini subagent native frontmatter keys are preserved on apply (issue #134).**
+  `agentsync apply` re-rendered a `.gemini/agents/<name>.md` with only
+  `name`/`description`/`model` and a whole-file replace, silently stripping the
+  Gemini-native keys (`kind`/`temperature`/`max_turns`/`timeout_mins`/`mcpServers`)
+  that `import`/`reconcile` had already captured into canonical. Render now passes
+  captured frontmatter through verbatim, dropping only Claude's `tools` (its tool
+  vocabulary differs from Gemini's) and `color` (no Gemini agent field) with a
+  reported `Skip` that lists exactly those keys — so a hand-authored Gemini agent
+  file survives a round-trip instead of being degraded on the next apply.
+- **Continue command import no longer silently renames foreign prompt blocks
+  (issue #127).** Continue keys a slash command off its prompt block's
+  frontmatter `name`, not the filename. Import (`import`/`reconcile`) now captures
+  the canonical command identity from the frontmatter `name`, falling back to the
+  filename only when it is absent — mirroring the MCP branch. Previously a
+  hand-authored or third-party block at `.continue/prompts/foo.md` whose
+  frontmatter was `name: bar` was captured as `foo` and rewritten as `/foo` on the
+  next apply, silently destroying the user's `/bar`. Render is unchanged.
+- **`plugin install`/`disable`/`enable` no longer silently widen or reset a
+  plugin's `agents` allowlist (and `update`/`disabled`) (issue #140).** `disable`
+  emptied the allowlist and the next `enable` re-materialized `["*"]`, so a
+  `disable`→`enable` round-trip silently widened a plugin scoped to
+  `agents = ["claude"]` back to *every* agent — fanning its credential-bearing
+  MCP servers / hooks / skills out to agents the user deliberately excluded.
+  Re-running `plugin install` on an already-registered plugin likewise hard-reset
+  `agents`/`update`/`disabled` to the first-install defaults. `disable`/`enable`
+  now flip only the `disabled` bit and a re-install carries forward the existing
+  `agents`/`update`/`disabled` (refreshing only `id`/`version`/`manifest_sha`
+  from the fetch), surfacing what it kept in the status line (e.g.
+  `(kept agents=[claude], update=pinned)`). A genuine first install is unchanged
+  and byte-identical, preserving the `install`/`import` shared-artifact contract.
+- **`secrets set a.b=v` no longer silently destroys a pre-existing scalar secret
+  at `a`, and the `set` path now validates the vault before saving (issue #142).**
+  Nesting under a key that already holds a scalar value (e.g. `secrets set
+  token.scope=repo` when `token` is a stored secret) previously overwrote the
+  scalar with a fresh table — irreversibly dropping the cleartext from an often
+  git-committed age vault — while still printing success. `secrets set` now
+  **refuses** destructive type changes (nesting under a scalar parent, or a leaf
+  assignment that would overwrite an existing table) with a clear error that
+  never echoes a secret value, and leaves `secrets.age` byte-for-byte unchanged.
+  It also runs the same flatten-contract validation (`ValidateVaultTOML`) the
+  `secrets edit` path already applied, so a `set` that would yield a vault `apply`
+  later rejects is refused at save time (`… (not saved): …`) instead of being
+  encrypted with a cheerful success message. Legitimate cases — a new nested key
+  under an absent or table parent, and an in-place scalar update — are unchanged.
+- **OpenCode subagent/command render preserves supported frontmatter keys
+  instead of silently dropping them (issue #125).** The OpenCode render
+  functions copied only a hard-coded allowlist (`description`/`model`, plus
+  `tools`/`color`/`argument-hint` handling) and dropped every other frontmatter
+  key with no signal — including OpenCode-supported keys like `temperature`,
+  `permission`, `steps` (agents) and `agent`, `subtask` (commands). Those legal
+  OpenCode keys now pass through verbatim, and any key with no OpenCode home is
+  surfaced as an `adapter.Skip` (reported in the translation report) rather than
+  vanishing: no key is ever both absent from the rendered file and absent from
+  the skips.
+
+- **OpenCode agent `mode` is preserved and ingest no longer over-captures
+  (issue #148).** OpenCode's `Ingest` previously deleted the agent `mode` key on
+  every captured agent, so a native `primary`/`all` agent was silently demoted to
+  `subagent` on the next `import`/`reconcile` → `apply` round-trip; the `mode`
+  (`primary`/`all`/`subagent`) is now retained in the canonical frontmatter and
+  re-emitted verbatim on render (a Claude-shaped subagent with no `mode` still
+  defaults to `subagent`). `Ingest` also over-captured the *entire* native
+  `agents/`/`commands/` directories — including hand-authored files agentsync
+  never wrote — pulling unmanaged user config into the canonical source; it now
+  captures only agentsync-owned files (ownership read from apply state).
 
 - **Claude LSP capability corrected.** Claude Code reads LSP servers from plugin
   manifests, not `settings.json#/lspServers`; agentsync now reports canonical

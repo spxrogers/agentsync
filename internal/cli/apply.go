@@ -197,6 +197,17 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	if err != nil {
 		return err
 	}
+
+	// Pre-apply baseline (issue #143): BEFORE render.Apply overwrites anything,
+	// commit the current on-disk state of each version root this apply will write
+	// into, so even the FIRST apply is revertible — the apply checkpoint's parent is
+	// the genuine pre-apply state. The baseline shares ONE session with the post-apply
+	// checkpoint below so a fresh dir is inited/prompted exactly once. Best-effort with
+	// a loud warning — a baseline failure never aborts the apply (honors
+	// --no-git-backup / mode=off / project scope / a declined prompt, all as nil).
+	gb := newGitBackupSession(cmd, p, reg, agents, sc, projectRoot, home, c.Config.DestinationGitBackup, noGitBackup)
+	gb.baseline(plannedDestinations(plan))
+
 	collisions, written, unchanged, applyErr := render.Apply(plan, reg, s, home, userHome, sc, projectRoot)
 	if len(collisions) > 0 {
 		fmt.Fprintf(p.Err, "%s backed up %d pre-existing target(s) before overwriting:\n",
@@ -246,9 +257,10 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	// Destination git backup (issue #118): checkpoint the user-scope agent dirs we
 	// just wrote into their own local-only git repos, so a bad apply is an
 	// `agentsync revert` away. Never pushed. Best-effort — a git failure here must
-	// not fail an apply whose files are already written and state already saved.
-	if err := runDestinationGitBackup(cmd, p, reg, agents, sc, projectRoot, home,
-		c.Config.DestinationGitBackup, written, noGitBackup); err != nil {
+	// not fail an apply whose files are already written and state already saved. This
+	// is the SAME session that took the pre-apply baseline above, so a fresh dir it
+	// inited is committed into here without a second prompt.
+	if err := gb.checkpoint(written); err != nil {
 		fmt.Fprintf(p.Err, "%s destination git backup: %v\n", p.Yellow("agentsync:"), err)
 	}
 
@@ -310,6 +322,23 @@ func planSyncCounts(plan render.RenderPlan, wouldChange map[string]bool) (toWrit
 		}
 	}
 	return toWrite, synced
+}
+
+// plannedDestinations returns the set of destination paths the plan will WRITE (not
+// delete), so the pre-apply baseline pass (issue #143) knows which version roots this
+// apply will touch BEFORE render.Apply runs and produces the concrete `written` set.
+// It is a superset of `written` (a planned write may turn out already-in-sync), which
+// is exactly right for deciding which roots to baseline.
+func plannedDestinations(plan render.RenderPlan) map[string]bool {
+	out := map[string]bool{}
+	for _, res := range plan.PerAgent {
+		for _, op := range res.Ops {
+			if op.Action == "" || op.Action == "write" {
+				out[op.Path] = true
+			}
+		}
+	}
+	return out
 }
 
 // saveBestEffortState records hashes for the ops agentsync actually wrote

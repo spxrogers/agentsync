@@ -28,10 +28,15 @@ apply checkpoint from its local-only git history, recovering from a bad apply.
 
 It is append-only: revert records a NEW commit, so the history is never rewritten
 and the revert is itself revertible. Uncommitted hand-edits to tracked files are
-preserved as a snapshot commit first, so nothing is lost. Untracked files you
-dropped into the dir (and gitignored files) are left untouched — revert only
-rewinds the files agentsync itself versions. By default it undoes the most recent
-apply (restores the previous checkpoint); --to picks a specific one.
+preserved as a snapshot commit first, so nothing is lost — that snapshot lands in the
+local-only history and, like the files it versions, may contain secrets in cleartext.
+Untracked files you dropped into the dir (and gitignored files) are left untouched —
+revert only rewinds the files agentsync itself versions. By default it undoes the most
+recent apply (restores the previous checkpoint); --to picks a specific one.
+
+Even the FIRST apply is revertible: before that apply overwrites the dir, agentsync
+records a pre-apply baseline checkpoint of its prior contents, so a revert right
+after a first apply restores the genuine pre-apply state.
 
 revert only moves the DESTINATION. The next 'agentsync apply' re-renders from the
 canonical config and would overwrite the reverted state, so revert prints a notice
@@ -202,6 +207,28 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 		return true, err
 	}
 
+	// A foreign git repo may have appeared below this owned root since init (e.g. the
+	// user cloned one into ~/.claude/skills). agentsync's clean ownership of the root
+	// no longer holds, so refuse to revert as a precaution BEFORE any write — checked
+	// before the dry-run early return, so a preview reports the skip too and never
+	// claims it will revert. (Restore is a surgical tracked-delta apply and would leave
+	// the untracked foreign checkout in place, but reverting a root that now wraps
+	// another repo is a hazard the user should resolve first — remove or reconcile the
+	// inner repo, then revert.)
+	nested, nerr := agit.HasNestedRepoBelow(root)
+	if nerr != nil {
+		return true, nerr
+	}
+	if nested {
+		if strict {
+			return true, fmt.Errorf("%s contains a nested git repository; refusing to revert "+
+				"as a precaution — remove or reconcile the inner repo first", root)
+		}
+		fmt.Fprintf(p.Err, "%s a nested git repository now lives below %s; skipping revert "+
+			"as a precaution — remove or reconcile the inner repo first.\n", p.Yellow(ui.GlyphWarn+" note:"), root)
+		return true, nil
+	}
+
 	target := toRef
 	if target == "" {
 		multi, herr := repo.HasMultipleCheckpoints()
@@ -219,28 +246,30 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 		return true, previewRevert(p, repo, root, target)
 	}
 
-	// Resolve the target to a concrete hash BEFORE snapshotting — the snapshot below
-	// moves HEAD, after which a relative ref like "HEAD~1" would point elsewhere.
+	// Resolve the target to a concrete hash for the commit message; Restore also
+	// snapshots uncommitted tracked edits internally (safe-by-construction) and
+	// resolves the ref itself before that snapshot moves HEAD.
 	targetHash, err := repo.Resolve(target)
 	if err != nil {
 		return true, err
 	}
-	// Preserve any uncommitted hand-edits to tracked files as a snapshot commit so
-	// Restore's delta-apply can't lose them. Untracked files are untouched: Restore
-	// only rewrites the tracked HEAD↔target delta and never enumerates them.
-	snap, err := repo.SnapshotDirtyTracked("agentsync revert: snapshot uncommitted changes before revert", id)
+	msg := fmt.Sprintf("agentsync revert: %s → %s", root, shortRef(targetHash))
+	// Restore folds in SnapshotDirtyTracked and returns its hash. Do NOT announce the
+	// snapshot before the revert lands: on a partial failure Restore returns a hinted
+	// error naming the snapshot + pre-revert HEAD, so we print the "preserved" notice
+	// only once the revert actually succeeds and the error can't contradict it.
+	h, snap, err := repo.Restore(targetHash, msg, id)
 	if err != nil {
 		return true, err
 	}
 	if snap != "" {
 		fmt.Fprintf(p.Out, "%s preserved uncommitted changes in %s as snapshot %s\n",
 			p.Faint(ui.GlyphInfo), root, shortRef(snap))
-	}
-
-	msg := fmt.Sprintf("agentsync revert: %s → %s", root, shortRef(targetHash))
-	h, err := repo.Restore(targetHash, msg, id)
-	if err != nil {
-		return true, err
+		// The snapshot commits the dest files verbatim; like everything in this
+		// local-only history they may hold secrets resolved to cleartext. Caution the
+		// user rather than silently persist a freshly-typed secret (issue #126).
+		fmt.Fprintf(p.Err, "%s that snapshot is kept in the local-only history and, like the files it versions, may contain secrets in cleartext.\n",
+			p.Faint(ui.GlyphInfo))
 	}
 	if h == "" {
 		fmt.Fprintf(p.Out, "%s %s already matches %s; nothing to revert.\n", p.Faint(ui.GlyphInfo), root, shortRef(targetHash))

@@ -199,11 +199,24 @@ literally, never resolved.)
 
 **OpenCode**
 
-- **Subagent** — Claude's `tools` allowlist is remapped onto OpenCode's
-  `permission` model (approximate), and Claude frontmatter keys OpenCode doesn't
-  recognize are dropped.
-- **Slash command** — Claude's `argument-hint` has no OpenCode field and is
-  dropped; there's no command-level `allowed-tools` (scoping is per-agent instead).
+- **Subagent** — OpenCode-supported frontmatter keys agentsync doesn't model
+  explicitly (`temperature`, `top_p`, `permission`, `disable`, `prompt`, `steps`)
+  pass through verbatim; the agent `mode` (`primary`/`all`/`subagent`) is
+  preserved across an `import`/`reconcile` → `apply` round-trip (a native
+  `primary`/`all` agent is no longer demoted to `subagent`; a Claude-shaped
+  subagent with no `mode` still defaults to `subagent`). Claude-only keys with no
+  OpenCode home — `tools` (its allowlist has no clean projection onto OpenCode's
+  `permission` model) and `color` — are dropped with a reported Skip, never
+  silently.
+- **Slash command** — OpenCode-supported command keys agentsync doesn't model
+  (`agent`, `subtask`) pass through verbatim; Claude's `argument-hint` has no
+  OpenCode field and is dropped with a reported Skip (there's no command-level
+  `allowed-tools`; scoping is per-agent instead). No frontmatter key is dropped
+  silently — every one is either rendered or surfaced as a Skip.
+- **Ingest ownership** — `import` captures only agentsync-owned agents/commands
+  from the shared `agents/`/`commands/` directories (ownership is read from apply
+  state); a user's hand-authored files alongside them are left untouched and
+  never pulled into the canonical source.
 
 **Codex**
 
@@ -251,12 +264,16 @@ literally, never resolved.)
 
 **Gemini CLI**
 
-- **Subagent** — markdown under `.gemini/agents/`. Gemini recognizes
-  `name`/`description`/`model` (plus Gemini-only `kind`/`temperature`/`max_turns`/…
-  agentsync doesn't model); Claude's `tools` list uses a *different tool vocabulary*
-  (`read_file`/`grep_search`, not `Read`/`Grep`), so copying it verbatim would name
-  tools Gemini doesn't have — it and `color` are dropped with a report. `name` is
-  defaulted to the filename when absent (Gemini requires it).
+- **Subagent** — markdown under `.gemini/agents/`. Captured frontmatter is passed
+  through verbatim, so Gemini's own native fields — `kind`/`temperature`/`max_turns`/
+  `timeout_mins`/`mcpServers` (and any other native key) — survive `apply` instead of
+  being stripped: a key that `import`/`reconcile` captured into canonical is re-emitted
+  on the next render, not clipped by the whole-file replace. Only Claude's `tools` list
+  (its tool vocabulary *differs* from Gemini's — `read_file`/`grep_search`, not
+  `Read`/`Grep`, so copying it verbatim would name tools Gemini doesn't have) and
+  `color` (no Gemini agent field) are dropped with a report, and the reported `Skip`
+  lists only those keys. `name` is defaulted to the filename when absent (Gemini
+  requires it).
 - **Slash command** — Gemini commands are TOML (`.gemini/commands/*.toml`) with
   `description` + `prompt`. The body becomes `prompt` and `description` carries
   over; `argument-hint`/`allowed-tools` have no Gemini field and drop. Gemini's
@@ -287,8 +304,11 @@ literally, never resolved.)
 - **Memory** — at project scope, `.windsurf/rules/agentsync.md` with the
   documented `trigger: always_on` activation frontmatter (workspace rules declare
   their trigger in frontmatter — a frontmatter-less rule's activation is
-  undefined); ingest strips exactly that block, so the canonical body round-trips
-  byte-clean. At user scope, the single global rules file
+  undefined); ingest strips **any** leading `trigger:` frontmatter fence so a
+  re-apply never double-fences the rule. The exact agentsync `always_on` block
+  round-trips byte-clean; a hand-changed non-`always_on` trigger is stripped
+  *and* warned (its activation mode has no canonical home, so it is not captured).
+  At user scope, the single global rules file
   `~/.codeium/windsurf/memories/global_rules.md` — always-on and frontmatter-less,
   written verbatim. It is whole-file owned like Claude's `~/.claude/CLAUDE.md`
   (a pre-existing hand-authored copy is backed up on first apply), and Windsurf
