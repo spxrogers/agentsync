@@ -63,6 +63,13 @@ func runDestinationGitBackup(
 			// Open even when nothing was written under this root: a delete-only apply
 			// (a managed file removed, nothing added) still needs its checkpoint.
 			repo, err = agit.Open(root)
+			// Re-probe: a foreign repo may have been cloned below this owned root since
+			// init. The append-only checkpoint below is harmless, but warn now so the
+			// user learns `revert` here is unsafe BEFORE they ever run it (revertRoot
+			// then refuses/skips the same case).
+			if err == nil {
+				warnNestedForeignRepoOnCommit(p, root)
+			}
 		case agit.StateUntracked:
 			if len(rels) == 0 {
 				continue // nothing written here and no existing repo to record into
@@ -278,6 +285,23 @@ func initGuarded(p *ui.Printer, dir string) (*agit.Repo, error) {
 		return nil, nil
 	}
 	return agit.Init(dir)
+}
+
+// warnNestedForeignRepoOnCommit warns when a foreign git repo now lives below an
+// agentsync-owned root (cloned there after init). The commit path is non-destructive
+// (append-only), so this is a warning, not a refusal — but `agentsync revert` of this
+// root would hard-reset over the foreign checkout, so the user is told before ever
+// running it. Best-effort: a scan error is swallowed (a git-backup step must never fail
+// the apply over an unreadable subtree).
+func warnNestedForeignRepoOnCommit(p *ui.Printer, root string) {
+	nested, err := agit.HasNestedRepoBelow(root)
+	if err != nil || !nested {
+		return
+	}
+	fmt.Fprintf(p.Err, "%s a nested git repository now lives below the agentsync-owned dir %s; "+
+		"`agentsync revert` of this root is unsafe until the inner repo is removed or reconciled "+
+		"(a hard reset could destroy its files).\n",
+		p.Yellow("agentsync:"), root)
 }
 
 // managedRelsUnder returns the slash-relative paths of every written file that

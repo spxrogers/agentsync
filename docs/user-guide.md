@@ -264,7 +264,9 @@ error names the snapshot commit and the pre-revert checkpoint so you can recover
 Any **untracked files** you dropped into the dir (and gitignored files) are **left
 untouched** — revert only rewinds the files agentsync itself versions, so your own
 scratch files are never deleted. `revert --dry-run` notes when such files are
-present. It moves only the *destination*, so afterwards it reminds you to
+present. And if you later clone your own git repo *inside* a managed dir (e.g.
+`~/.claude/skills/.git`), revert **skips that dir** with a warning (or errors under
+`--strict`) rather than hard-reset over your repo's checked-out files. It moves only the *destination*, so afterwards it reminds you to
 **reconcile** (or fix the canonical source) before the next `apply` re-renders over
 it.
 
@@ -720,7 +722,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `secrets set\|get\|edit <key>` | Manage age-encrypted secrets. | `set --stdin` |
 | `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. | `--dry-run --scope --project --no-git-backup` |
-| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. | `--to --all --dry-run` |
+| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. Skips (or, with `--strict`, errors on) a dir under which a foreign git repo has appeared. | `--to --all --dry-run` |
 | `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. Skill directories collapse to one summary row by default (`--verbose` expands them). | `--agents --verbose --scope --project --json` |
 | `diff [<path>]` | Show pending/drift changes; secrets redacted. | `--scope --project --json` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |

@@ -238,6 +238,20 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   checkpoint (`git reset --hard …`) instead of handing back a bare error after
   claiming the edits were preserved.
 
+- **`revert`/`apply`/`doctor` now re-check for a foreign repo nested under a
+  destination dir, not just at init (issue #149).** The `HasNestedRepoBelow` guard
+  previously ran only when initializing a new backup repo, so a git repo cloned
+  under an already-owned root *after* init (e.g. `~/.claude/skills/.git`) was
+  invisible — and `agentsync revert`'s hard reset would clobber its checked-out
+  files. Now `revert` re-probes before any destructive write and **skips** such a
+  root with a warning (errors under `--strict`), including in `--dry-run`; the
+  commit path **warns** when a foreign repo appears under an owned root (still
+  recording the harmless append-only checkpoint); and `doctor` shows a **warn** for
+  an untracked root that contains a nested `.git` instead of a clean `untracked`
+  line. The scan is also **symlink-aware** now — a symlinked subdir pointing at a
+  foreign repo (which `filepath.WalkDir` would not descend into) is detected via a
+  shallow probe of the link target.
+
 - **Windsurf: strip non-`always_on` trigger frontmatter on ingest so re-apply no
   longer produces a malformed double-fenced rule (issue #136).** When a user
   hand-edited a workspace rule's `trigger:` to a non-default value (e.g. `glob`

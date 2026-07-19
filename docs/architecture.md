@@ -385,7 +385,14 @@ Key stages:
    run's roots, so before initializing a dir agentsync also scans the filesystem
    (`git.HasNestedRepoBelow`) and **refuses to init a repo that would wrap an
    existing one** — the cross-run case where a child dir was versioned before a
-   parent-dir agent was enabled. The managed-file set committed under
+   parent-dir agent was enabled. That same scan (symlink-aware — it shallow-probes a
+   symlinked subdir's target for a `.git`) is **re-run on every later path that
+   assumes the work tree is wholly agentsync's**: the commit path **warns** if a
+   foreign repo has appeared under an owned root (the append-only checkpoint is still
+   recorded), `agentsync revert` **refuses/skips** such a root before its destructive
+   hard reset (an error under `--strict`), and `doctor` downgrades a `StateUntracked`
+   root that contains a nested `.git` to a **warn** so its report matches what apply
+   does. The managed-file set committed under
    each root is the `written` set from step 7 plus any tracked deletions; `$HOME`-
    level strays (Claude's `~/.claude.json`) are never versioned (agentsync never
    inits a repo at `$HOME`). This step is **best-effort** (the files are already

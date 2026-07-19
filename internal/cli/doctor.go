@@ -253,9 +253,19 @@ func checkDestinationGitBackup(p *ui.Printer, cfg source.DestinationGitBackupCon
 			continue
 		}
 		label := root + " — "
-		if st == agit.StateAgentsyncOwned {
+		switch st {
+		case agit.StateAgentsyncOwned:
 			okCheck(p, label, st.String())
-		} else {
+		case agit.StateUntracked:
+			// An untracked root that CONTAINS a nested repo is one apply's initGuarded
+			// will refuse to init (no repo-inside-a-repo) — so surface a warn here
+			// instead of a clean "untracked" line, matching what apply actually does.
+			if nested, _ := agit.HasNestedRepoBelow(root); nested {
+				warnCheck(p, label, "contains a nested git repo — apply will skip git backup here")
+			} else {
+				fmt.Fprintf(p.Out, "  %s %s%s\n", p.Faint(ui.GlyphInfo), label, p.Faint(st.String()))
+			}
+		default:
 			fmt.Fprintf(p.Out, "  %s %s%s\n", p.Faint(ui.GlyphInfo), label, p.Faint(st.String()))
 		}
 	}

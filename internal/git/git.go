@@ -146,9 +146,17 @@ func OwnsExactly(dir string) (bool, error) {
 
 // HasNestedRepoBelow reports whether any git repository exists STRICTLY below dir
 // (a `.git` entry in a subdirectory). agentsync refuses to init a repo that would
-// wrap another repo (the cross-run nesting hazard: a child dir was versioned in an
-// earlier run before a parent-dir agent was enabled). Short-circuits on the first
-// hit; a missing dir is reported as false.
+// wrap another repo, and the revert/commit paths re-probe with it so a foreign repo
+// cloned under an owned root AFTER init is caught before a destructive hard reset
+// (the cross-run nesting hazard: a child dir was versioned — or a foreign repo
+// appeared — before/after a parent-dir agent was enabled). Short-circuits on the
+// first hit; a missing dir is reported as false.
+//
+// Symlink-aware: `filepath.WalkDir` does not descend into symlinked directories, so a
+// symlinked foreign repo below dir (e.g. ~/.claude/plugins -> /elsewhere/checkout)
+// would otherwise be missed. When an entry is a symlink to a directory, this shallow-
+// probes the link target for a `.git` entry (see nestedRepoViaSymlink). The probe does
+// not recurse through the symlink, so symlink cycles cannot trap it.
 func HasNestedRepoBelow(dir string) (bool, error) {
 	dir = filepath.Clean(dir) // self-defend: the dir's-own-.git exclusion below
 	// compares against `dir`, so it must be clean (no trailing slash / "." / "..").
@@ -168,10 +176,33 @@ func HasNestedRepoBelow(dir string) (bool, error) {
 			found = true
 			return filepath.SkipAll
 		}
+		// A symlinked subdirectory: WalkDir won't descend into it, so probe its target
+		// for a nested repo directly.
+		if d.Type()&fs.ModeSymlink != 0 && nestedRepoViaSymlink(path) {
+			found = true
+			return filepath.SkipAll
+		}
 		return nil
 	})
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return found, fmt.Errorf("scanning %s for nested repos: %w", dir, err)
 	}
 	return found, nil
+}
+
+// nestedRepoViaSymlink reports whether the symlink at linkPath resolves to a DIRECTORY
+// that itself contains a `.git` entry — a foreign repo reached through a symlink. It
+// follows the link exactly one level (os.Stat) and shallow-probes for `.git`; it never
+// recurses through the target, so a symlink cycle cannot trap it. Any resolution error
+// (dangling link, permission) is treated as "no nested repo" — the guard must never
+// fail the apply over an unreadable symlink.
+func nestedRepoViaSymlink(linkPath string) bool {
+	info, err := os.Stat(linkPath) // follows the symlink to its target
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	if _, err := os.Lstat(filepath.Join(linkPath, ".git")); err == nil {
+		return true
+	}
+	return false
 }

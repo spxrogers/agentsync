@@ -208,6 +208,41 @@ func TestHasNestedRepoBelow(t *testing.T) {
 	})
 }
 
+// TestHasNestedRepoBelowFollowsSymlink pins the D3 symlink-detection contract from
+// issue #149: a foreign repo reachable ONLY through a symlinked subdir below dir is
+// still detected (plain filepath.WalkDir does not follow symlinks). The real repo lives
+// OUTSIDE dir so the symlink is the sole path to its .git — a walk that ignored
+// symlinks would report false.
+func TestHasNestedRepoBelowFollowsSymlink(t *testing.T) {
+	testenv.RequireContainer(t)
+
+	t.Run("symlink to a foreign repo is detected", func(t *testing.T) {
+		root := t.TempDir()
+		external := t.TempDir() // the real repo, OUTSIDE root
+		if _, err := gogit.PlainInit(external, false); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(external, filepath.Join(root, "plugins")); err != nil {
+			t.Skipf("symlinks unavailable on this platform: %v", err)
+		}
+		if got, err := HasNestedRepoBelow(root); err != nil || !got {
+			t.Fatalf("HasNestedRepoBelow via symlink = (%v,%v), want (true,nil)", got, err)
+		}
+	})
+
+	t.Run("symlink to a plain non-repo dir is not a false positive", func(t *testing.T) {
+		root := t.TempDir()
+		external := t.TempDir()
+		writeFile(t, external, "a/b.txt", "x") // a real dir, but no .git anywhere in it
+		if err := os.Symlink(external, filepath.Join(root, "plugins")); err != nil {
+			t.Skipf("symlinks unavailable on this platform: %v", err)
+		}
+		if got, err := HasNestedRepoBelow(root); err != nil || got {
+			t.Fatalf("HasNestedRepoBelow(symlink to non-repo) = (%v,%v), want (false,nil)", got, err)
+		}
+	})
+}
+
 func TestInit(t *testing.T) {
 	testenv.RequireContainer(t)
 	dir := t.TempDir()
