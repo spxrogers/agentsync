@@ -242,6 +242,63 @@ func TestApply_GitBackupBaselinePreexistingContentOutOfContract(t *testing.T) {
 			t.Errorf("pre-existing non-managed %q should be preserved on disk after apply, got %v", rel, err)
 		}
 	}
+	// Guard against a vacuous pass: trackedInCommit must actually return TRUE for a
+	// path the baseline DOES version — the agentsync NOTICE it writes at init.
+	if !trackedInCommit(t, claude, baseline, agit.NoticeFile) {
+		t.Errorf("the agentsync NOTICE (%s) should be tracked in the baseline commit", agit.NoticeFile)
+	}
+}
+
+// TestApply_GitBackupBaselineRestoresPreexistingManagedFile proves the baseline's
+// os.Stat-succeeds branch (gitbackup.go): a MANAGED destination file that already exists
+// on disk before the first (git-backed) apply has its pre-apply content captured in the
+// baseline, so a revert restores those exact bytes. This is the data-loss-on-rollback
+// guard the narrowed baseline (issue #143) must still honor — the sibling
+// ...RevertsFirstApply test's surviving file is non-managed, so it only proves #128
+// untracked-preservation, not managed capture.
+func TestApply_GitBackupBaselineRestoresPreexistingManagedFile(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+	writeSkillSource(t, tmp, "demo", "new-applied-body")
+
+	// A MANAGED dest file already exists on disk before the first git-backed apply
+	// (e.g. a prior `apply --no-git-backup`, or a hand-placed file at a path agentsync
+	// manages). Its pre-apply bytes differ from what this apply will render.
+	claude := filepath.Join(tmp, ".claude")
+	skillDest := filepath.Join(claude, "skills", "demo", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillDest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const preApplyManaged = "OLD-MANAGED-PRE-APPLY-BYTES\nkeep me exactly\n"
+	if err := os.WriteFile(skillDest, []byte(preApplyManaged), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	// The apply overwrote the managed dest with freshly-rendered content.
+	if b, _ := os.ReadFile(skillDest); string(b) == preApplyManaged {
+		t.Fatalf("apply should have overwritten the managed dest; it still holds the pre-apply bytes")
+	}
+	repo, err := agit.Open(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cps, _ := repo.Log(0); len(cps) < 2 {
+		t.Fatalf("first apply should record a baseline + checkpoint (>=2 commits), got %d", len(cps))
+	}
+
+	// Revert restores the MANAGED dest to its pre-apply bytes captured by the baseline.
+	if out, err := runCLI(t, env, "revert", "claude"); err != nil {
+		t.Fatalf("revert: %v\n%s", err, out)
+	}
+	if b, _ := os.ReadFile(skillDest); string(b) != preApplyManaged {
+		t.Fatalf("revert did not restore the managed dest's pre-apply bytes:\n got %q\nwant %q", string(b), preApplyManaged)
+	}
 }
 
 // TestApply_GitBackupBaselineFailureDoesNotAbortApply drives a case where the pre-apply

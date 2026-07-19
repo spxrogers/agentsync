@@ -1,6 +1,7 @@
 package opencode_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -446,6 +447,34 @@ func TestIngest_PreservesAgentMode(t *testing.T) {
 // directories, never a user's hand-authored files. Managed files are written
 // through the real Render→Apply path and their ownership is seeded exactly as a
 // real apply records it; foreign files are dropped in alongside with no state.
+// TestIngest_WarnsWhenApplyStateAbsent proves the missing-apply-state case is not silent
+// (issue #148 round-2 hardening). With a native OpenCode agent on disk but no
+// targets.json (a relocated AGENTSYNC_HOME, or `import` run before any `apply`), Ingest
+// owns nothing — the safe direction — but WARNS so the user understands why nothing was
+// captured, rather than silently dropping their agents/commands.
+func TestIngest_WarnsWhenApplyStateAbsent(t *testing.T) {
+	targetRoot := t.TempDir()
+	a := opencode.New(opencode.Options{TargetRoot: targetRoot})
+	var warn bytes.Buffer
+	a.SetStderr(&warn)
+
+	agentsDir := filepath.Join(targetRoot, ".config", "opencode", "agents")
+	writeFixtureFile(t, filepath.Join(agentsDir, "some-agent.md"),
+		"---\ndescription: an agent\nmode: primary\n---\nBody.\n")
+
+	got, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if !strings.Contains(warn.String(), "found no apply state") {
+		t.Fatalf("expected a missing-apply-state warning; stderr=%q", warn.String())
+	}
+	// Safe direction: nothing captured without ownership state.
+	if len(got.Subagents) != 0 {
+		t.Fatalf("expected no agents captured without apply state, got %d", len(got.Subagents))
+	}
+}
+
 func TestIngest_OwnershipFilter_SkipsUnmanagedAgentsAndCommands(t *testing.T) {
 	targetRoot := t.TempDir()
 	a := opencode.New(opencode.Options{TargetRoot: targetRoot})

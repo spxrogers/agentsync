@@ -729,6 +729,43 @@ agents = ["claude"]
 // already-registered plugin wiped a narrowed allowlist, a pinned/manual update
 // mode, and a deliberate disabled state — while ID/Version/ManifestSHA are the
 // only fields install legitimately refreshes.
+// TestPlugin_ReinstallOverCorruptTOMLRefuses proves the #140 corruption guard: a
+// re-install over a plugins/<id>.toml that EXISTS but is unparseable REFUSES rather than
+// silently resetting the agents allowlist to ["*"]. A genuinely-missing file is a normal
+// first install (TestPlugin_FirstInstallDefaults / TestPlugin_InstallFromLocalMarketplace).
+func TestPlugin_ReinstallOverCorruptTOMLRefuses(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+		t.Fatal(err)
+	}
+	pluginPath := filepath.Join(tmp, ".agentsync", "plugins", "demo.toml")
+
+	// Corrupt the on-disk TOML: present, but unparseable.
+	const corrupt = "this is [[[ not valid = toml\n"
+	if err := os.WriteFile(pluginPath, []byte(corrupt), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-install must REFUSE, not silently overwrite the unreadable lifecycle file with
+	// default agents=["*"]/update=track/disabled=false.
+	out, err := runCLI(t, env, "plugin", "install", "demo@test-mp")
+	if err == nil {
+		t.Fatalf("re-install over a corrupt plugins/demo.toml should fail; got success:\n%s", out)
+	}
+	// The corrupt file is left untouched (not clobbered with defaults).
+	if b, _ := os.ReadFile(pluginPath); string(b) != corrupt {
+		t.Fatalf("a refused install must not overwrite the corrupt file; got %q", string(b))
+	}
+}
+
 func TestPlugin_ReinstallPreservesAgentsUpdateDisabled(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

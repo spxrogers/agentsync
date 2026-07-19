@@ -190,7 +190,11 @@ func installPluginInto(home, id, mpName string) (pluginTOMLSpec, error) {
 		// The file EXISTS but is unparseable. Falling through to the ["*"]/track/false
 		// defaults would silently re-broaden a narrowed allowlist — the exact #140 loss
 		// this preserve path prevents — so refuse rather than reset a corrupt-but-present
-		// lifecycle file. The user can fix or remove it and re-install.
+		// lifecycle file. The user can fix or remove it and re-install. ("Unparseable"
+		// here means a TOML *parse error*; a semantically-empty file — blank or
+		// comment-only — parses to rerr==nil above and legitimately carries no allowlist
+		// to preserve, so it falls through to defaults. agentsync's own iox.AtomicWrite
+		// never produces such a file; only external truncation would.)
 		return pluginTOMLSpec{}, fmt.Errorf("existing %s is unreadable (%w); refusing to overwrite its agents/update/disabled with defaults — fix or remove it, then re-install", pluginPath, rerr)
 	}
 	// A genuine first install (readPluginTOML returned os.ErrNotExist) keeps the
