@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // CollectResolved walks every string field of the canonical that
@@ -172,7 +173,16 @@ func sortByLengthDesc(s []string) {
 // (a non-empty [A-Za-z0-9._-]+ key after a colon) — e.g. ${secret:} or
 // ${secret foo}. It needs no backend, so it is the offline-validatable shape check
 // `verify` runs when reference resolution is skipped (issue #171).
-func MalformedSecretRefs(c *source.Canonical) []string {
+//
+// The returned tokens are the raw, loosely-matched candidates — they are
+// config-derived and therefore attacker-influenceable (agentsync configs are
+// shareable dotfiles), and looseRefRe's `[^}]*` tail can capture ESC / C1 /
+// newline bytes that the strict shape rejects. They are returned as
+// untrusted.Text so any display site (the `verify` offline error) sanitizes them
+// on print BY DEFAULT — a raw print cannot reintroduce the #93/PR100
+// terminal-escape-injection class. Match/dedup/sort run on the raw bytes; only
+// the returned rendering is display-guarded.
+func MalformedSecretRefs(c *source.Canonical) []untrusted.Text {
 	if c == nil {
 		return nil
 	}
@@ -193,5 +203,9 @@ func MalformedSecretRefs(c *source.Canonical) []string {
 		out = append(out, k)
 	}
 	sort.Strings(out)
-	return out
+	refs := make([]untrusted.Text, len(out))
+	for i, s := range out {
+		refs[i] = untrusted.Wrap(s)
+	}
+	return refs
 }

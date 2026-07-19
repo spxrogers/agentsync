@@ -15,11 +15,19 @@ import (
 const gitBackupTableHeader = "[destination_directory_git_backup]"
 
 // setDestinationGitBackupMode writes mode into the
-// [destination_directory_git_backup] table of <home>/agentsync.toml, preserving
-// everything OUTSIDE that table (comments, key order, other sections) via a
-// line-splice — never a full marshal, which would strip the user's comments. Any
-// existing author_name/author_email overrides in the table are carried across.
-// Creates the table if absent.
+// [destination_directory_git_backup] table of <home>/agentsync.toml via a
+// line-splice — never a full marshal, which would strip the user's comments. It
+// preserves the keys, section order, and comments of every OTHER table. Any
+// existing author_name/author_email overrides in the table are carried across;
+// the table is created if absent.
+//
+// Fidelity caveat: the splice's "run" for this table extends to the next
+// `[header]`, so a comment or blank line sitting between this table's last key
+// and the following section header is treated as part of this table and is NOT
+// preserved (put a section's leading comment below its own header). The
+// fail-closed backstop below guarantees no *semantic* content outside the table
+// changes — that is the load-bearing invariant; trailing-comment fidelity for
+// this table's own run is best-effort, not guaranteed.
 func setDestinationGitBackupMode(home, mode string) error {
 	p := filepath.Join(home, "agentsync.toml")
 	raw, err := os.ReadFile(p)
@@ -99,10 +107,15 @@ func buildGitBackupSection(mode, authorName, authorEmail string) string {
 }
 
 // spliceTOMLTable replaces the simple TOML table named by header (e.g.
-// "[destination_directory_git_backup]") with newBlock, preserving everything
-// outside it. A table runs from its header line to the next line beginning with
-// "[". If the table is absent, newBlock is appended after a blank-line separator.
-// Mirrors writeAgents' approach so config edits never clobber hand-written content.
+// "[destination_directory_git_backup]") with newBlock, preserving the content of
+// every OTHER table. A table's "run" is from its header line to the next line
+// beginning with "[", so a trailing comment or blank line between the table's
+// keys and the following "[header]" is part of THIS table's run and is replaced
+// along with it — comment fidelity is therefore best-effort for lines adjacent
+// to the spliced table (the caller's fail-closed re-parse backstop, not this
+// line-splice, is what guarantees no data outside the table is lost). If the
+// table is absent, newBlock is appended after a blank-line separator. Mirrors
+// writeAgents' approach so config edits never clobber hand-written content.
 func spliceTOMLTable(raw, header, newBlock string) string {
 	newLines := strings.Split(newBlock, "\n")
 	lines := strings.Split(raw, "\n")

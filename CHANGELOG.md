@@ -46,6 +46,20 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Security
 
+- **Offline `verify` no longer prints unsanitized malformed-reference candidates
+  (issue #171 hardening).** `agentsync verify` in offline mode
+  (`AGENTSYNC_ALLOW_OFFLINE_VERIFY=1`, the documented CI path) reports each
+  `${secret:…}`/`${env:…}`-shaped token whose reference shape is invalid. Those
+  tokens are config-derived — agentsync configs are shareable dotfiles — and the
+  loose shape-matcher's tail can capture raw ESC / C1 / newline bytes, so a crafted
+  config could smuggle terminal escapes into the CI log through the error message.
+  `secrets.MalformedSecretRefs` now returns `[]untrusted.Text` and `verify` renders
+  them via `untrusted.Join`, so every displayed candidate is sanitized by
+  construction — closing the #93/PR100 terminal-escape-injection class at the one
+  new print site that had reintroduced it. Also broadened the direct-`os.*`
+  destination-write guard (issue #163) to cover `os.OpenFile`/`os.Rename`/`os.Truncate`
+  in addition to `Remove`/`RemoveAll`/`WriteFile`/`Create`, closing the
+  truncate-write / rename bypass of the `DestWriter` foreign-collision backup.
 - **The local `.git` rollback history's secret-at-rest control is now re-asserted on
   every apply (issue #126).** Destination git-backup repos deliberately persist
   *resolved cleartext secrets* into a **local-only** `.git` history; that exception is

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
@@ -13,6 +12,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 func newVerifyCmd() *cobra.Command {
@@ -95,9 +95,12 @@ func newVerifyCmd() *cobra.Command {
 			offline := os.Getenv("AGENTSYNC_ALLOW_OFFLINE_VERIFY") == "1"
 			if offline {
 				if bad := secrets.MalformedSecretRefs(&c); len(bad) > 0 {
+					// bad is []untrusted.Text — untrusted.Join sanitizes each token
+					// on display, so a config-crafted ESC/control byte in a malformed
+					// ref can't inject terminal escapes here (issue #171 / #93).
 					return fmt.Errorf("verify: malformed secret/env reference(s): %s "+
 						"(offline mode checks reference shape only; run without "+
-						"AGENTSYNC_ALLOW_OFFLINE_VERIFY=1 to also check resolvability)", strings.Join(bad, ", "))
+						"AGENTSYNC_ALLOW_OFFLINE_VERIFY=1 to also check resolvability)", untrusted.Join(bad, ", "))
 				}
 			} else {
 				secBackend := secrets.SelectBackend(c.Config.Secrets, home, userHome)

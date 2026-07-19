@@ -285,6 +285,31 @@ func TestVerify_OfflineMode(t *testing.T) {
 		}
 	})
 
+	// A malformed ref is config-derived and can carry hostile bytes (agentsync
+	// configs are shareable dotfiles). looseRefRe's `[^}]*` tail captures ESC/C1
+	// bytes, so the offline error must sanitize the candidate on display —
+	// otherwise a crafted config injects terminal escapes into the CI log
+	// (issue #171 / the #93 escape-injection class). MalformedSecretRefs returns
+	// []untrusted.Text and verify joins via untrusted.Join to close this.
+	t.Run("offline-malformed-ref-is-sanitized", func(t *testing.T) {
+		tmp := t.TempDir()
+		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
+		_, _ = runCLI(t, env, "init")
+		// TOML  decodes to a raw ESC byte inside the Command field; the key
+		// after the colon is illegal, so it is flagged malformed and displayed.
+		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:\\u001b[2K\\u001b[31mHACKED}\"\n")
+		_, err := runCLI(t, env, "verify")
+		if err == nil {
+			t.Fatal("offline verify must reject the malformed ref")
+		}
+		if strings.ContainsRune(err.Error(), 0x1b) {
+			t.Fatalf("offline verify error must not carry a raw ESC byte (escape injection); got: %q", err.Error())
+		}
+		if !strings.Contains(err.Error(), "malformed") || !strings.Contains(err.Error(), "HACKED") {
+			t.Fatalf("error should still name the (sanitized) malformed ref; got: %q", err.Error())
+		}
+	})
+
 	t.Run("offline-accepts-wellformed-unresolvable", func(t *testing.T) {
 		tmp := t.TempDir()
 		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
