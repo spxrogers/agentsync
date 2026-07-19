@@ -11,6 +11,20 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Documentation
 
+- **Synced the v1.0 git-backup feature's contract docs (issue #141).** The
+  components map now carries `internal/git` (the leaf go-git wrapper) and
+  `internal/ui`, the full adapter set (9 deep adapters + generic breadth tier +
+  noop), each deep adapter's `homedir.go`, and the `revert` / `version` commands;
+  the architecture §10 package-layering graph gains a `git` node (no push surface)
+  and a new `### VersionedDirs (optional)` §3 subsection; the `doctor` reference
+  (CLI + user-guide command tables and the `### doctor` body) documents its
+  Destination-git-backup section (mode + per-dir repo status); and the README
+  gains a "Known limits" bullet for the local-only, never-pushed backup history.
+  Also corrected the stale `internal/project` `.agentsync.toml`-marker description
+  to the current `.agentsync/`-directory overlay, added the
+  `comparison/index.md` ↔ `docs/comparison.md` mirrored-pages row to
+  `website/README.md`, and refreshed a few `Files` lists (secrets `leakscan.go`/
+  `runtime.go`, marketplace `treehash.go`).
 - **Cleared the carried-over doc-vs-code drift cluster (issue #145).** Corrected six
   "plugin import is Claude-only" claims (Codex implements `PluginIngester` too),
   the Windsurf `components.md` scope/`WarnEmitter` description (memory + commands

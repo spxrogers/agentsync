@@ -11,19 +11,23 @@ internal/
 ├── cli/              # cobra command tree (entry layer)
 ├── source/           # the canonical model + loaders/writers   ← the schema
 ├── secrets/          # ${secret:}/${env:} resolve · re-reference · mask
-├── project/          # .agentsync.toml overlay discovery + merge
+├── project/          # .agentsync/ tree overlay discovery + merge
 ├── adapter/          # the per-agent Adapter interface + registry
-│   ├── claude/       #   full adapter (reference implementation)
-│   ├── opencode/     #   adapter (hooks/LSP skipped)
-│   └── noop/         #   placeholder for unimplemented agents
+│   ├── claude/ opencode/ codex/       # 9 deep adapters (agent-specific,
+│   ├── cursor/ gemini/ continuedev/   # often bidirectional; claude is
+│   ├── windsurf/ roo/ cline/          # the reference implementation)
+│   ├── generic/                       # data-driven breadth tier (22 agents, specs.go)
+│   └── noop/                          # placeholder for unimplemented agents
 ├── render/           # the apply pipeline: plan · write · report
 ├── capture/          # the single dest▶source write-back funnel
 ├── drift/            # the 3-way classifier (pure, no IO)
 ├── state/            # targets.json (last-applied hashes)
 ├── marketplace/      # fetch marketplaces/plugins · project components
+├── git/              # leaf go-git wrapper: local dir rollback history (issue #118)
 ├── iox/              # atomic write + file lock
 ├── jsonkeys/         # per-key JSON-pointer merge (preserve foreign keys)
 ├── paths/            # AGENTSYNC_HOME / TARGET_ROOT / HOME resolution
+├── ui/               # presentation: Printer · color · glyphs · WarnWriter
 ├── log/              # slog setup
 └── testenv/          # hermetic-container test guard
 ```
@@ -41,11 +45,12 @@ Wires every cobra subcommand into the root tree and dispatches to handlers; this
 is the only package that depends on nearly all the others.
 - **Key:** `NewRoot() *cobra.Command`, `Execute() error`, `Version`/`Commit`/`Date`.
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,
-  `status`, `diff`, `reconcile`, `import`, `doctor`, `verify`,
+  `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `verify`,
   `mcp {add,remove,list}`, `plugin {install,upgrade,enable,disable,remove,list}`,
-  `marketplace {add,remove,list}`, `update`, `secrets {edit,get,set}`, `explain`.
+  `marketplace {add,remove,list}`, `update`, `secrets {edit,get,set}`, `explain`,
+  `version`.
 - **Depends on:** adapter, source, state, secrets, paths, render, marketplace,
-  project, drift, log.
+  project, drift, git, ui, log.
 - **Files:** `root.go` + one file per command group.
 
 ---
@@ -77,14 +82,19 @@ The `Resolved` wrapper type is the load-bearing leak guard.
   `SelectBackend`; and the single field list `walkSecretFields` (in `walk.go`).
 - **Depends on:** source, iox.
 - **Files:** `secrets.go`, `age.go`, `resolved.go`, `substitute.go`,
-  `rereference.go`, `mask.go`, `walk.go`, `secretpaths.go`.
+  `rereference.go`, `mask.go`, `walk.go`, `secretpaths.go`, `leakscan.go`
+  (the `ResidualSecretCleartext` backstop), `runtime.go`.
 
 ### `internal/project`
-Discovers a repo's `.agentsync.toml` marker by walking up from the cwd and merges
-its overlay (project MCP servers, plugin enable/disable, extra memory) onto the
-base canonical model.
-- **Key:** `MarkerFile` (`.agentsync.toml`); `Marker`; `Discover(cwd)`;
-  `Merge(base, m) source.Canonical`.
+Discovers a repo's project-scope source tree — a `.agentsync/` **directory**
+(the same on-disk layout as the user-scope `~/.agentsync/`) found by walking up
+from the cwd — and overlays its canonical (project agents, MCP/LSP/skills/
+subagents/commands/hooks, extra memory) onto the base user canonical. The retired
+M5 single-file `.agentsync.toml` marker is no longer read: `Discover` surfaces a
+**migration error** if it finds one with no `.agentsync/` tree.
+- **Key:** `DirName` (`.agentsync`); `LegacyMarkerFile` (`.agentsync.toml`,
+  migration-only); `Home(root)`; `Discover(start) (root, found, err)`;
+  `Merge(base, proj) source.Canonical`.
 - **Depends on:** source.
 - **Files:** `project.go`.
 
@@ -95,7 +105,13 @@ base canonical model.
 ### `internal/adapter`
 Declares the per-agent `Adapter` contract and a registry; the `DestWriter`
 interface funnels all destination writes through the foreign-collision backup.
+An **optional** `VersionedDirs` extension lets an adapter declare the on-disk
+directories the apply tail should git-back-up for local rollback — an adapter
+implements `VersionRoots(scope, project)` to return its config dir plus any
+shared cross-agent dir it writes into, and MUST return nil at project scope (see
+[architecture § VersionedDirs](architecture.md#versioneddirs-optional)).
 - **Key:** `Adapter` (interface); `DestWriter` (interface);
+  `VersionedDirs` (optional interface, `VersionRoots`); `NonEmptyDirs` (helper);
   `Scope` (`ScopeUser`/`ScopeProject`); `FileOp`; `Skip` (with `SkipKind`);
   `Registry` (`NewRegistry`, `Register`, `Lookup`, `Names`). Component support is
   expressed by what `Render` emits — an unsupported component yields a `Skip`,
@@ -121,7 +137,7 @@ never rewrites the user's native `/hooks/<event>` array lossily.
 - **Key:** `New(Options) *Adapter`; the `Adapter` + `PluginIngester` methods;
   `ParseFrontmatter`/`EncodeFrontmatter`; `MergeKeys`.
 - **Depends on:** adapter, secrets, source, paths, iox, jsonkeys.
-- **Files:** `claude.go`, `render.go`, `ingest.go`, `ingest_plugins.go`,
+- **Files:** `claude.go`, `homedir.go`, `render.go`, `ingest.go`, `ingest_plugins.go`,
   `apply.go`, `paths.go`, `frontmatter.go`, `skill.go`, `command.go`,
   `subagent.go`, `hook.go`, `lsp.go`, `memory.go`, `settings.go`.
 
@@ -130,7 +146,7 @@ The OpenCode adapter — MCP, memory, skills, subagents, commands via JSONC
 round-trip (`tailscale/hujson`). Skips Hook and LSP (reported with a warning).
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods.
 - **Depends on:** adapter, secrets, source, paths, iox.
-- **Files:** `opencode.go`, `render.go`, `ingest.go`, `apply.go`, `paths.go`,
+- **Files:** `opencode.go`, `homedir.go`, `render.go`, `ingest.go`, `apply.go`, `paths.go`,
   `skill.go`, `subagent.go`, `command.go`, `memory.go`, `settings.go`.
 
 ### `internal/adapter/codex`
@@ -150,7 +166,7 @@ Skips LSP (Codex has no LSP concept).
   `MergeTOML`; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter helpers), secrets, source,
   paths, iox, jsonkeys, go-toml/v2.
-- **Files:** `codex.go`, `render.go`, `mcp.go`, `ingest.go`, `ingest_plugins.go`,
+- **Files:** `codex.go`, `homedir.go`, `render.go`, `mcp.go`, `ingest.go`, `ingest_plugins.go`,
   `apply.go`, `paths.go`, `skill.go`, `command.go`, `subagent.go`, `hook.go`,
   `memory.go`, `settings.go`.
 
@@ -171,7 +187,7 @@ out plugin components like every adapter.
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter/skill/extra helpers),
   secrets, source, paths, iox, jsonkeys, afero.
-- **Files:** `cursor.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
+- **Files:** `cursor.go`, `homedir.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
   `paths.go`, `skill.go`, `command.go`, `subagent.go`, `hook.go`, `memory.go`.
 
 ### `internal/adapter/gemini`
@@ -188,7 +204,7 @@ native plugin enable-state agentsync models).
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter helpers), secrets, source,
   paths, iox, jsonkeys, go-toml/v2.
-- **Files:** `gemini.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
+- **Files:** `gemini.go`, `homedir.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
   `paths.go`, `command.go`, `subagent.go`, `hook.go`, `memory.go`.
 
 ### `internal/adapter/continuedev`
@@ -205,7 +221,7 @@ are skipped with a report (Skill/Subagent/Hook/LSP). No
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter/Extra helpers), secrets,
   source, paths, iox, sigs.k8s.io/yaml.
-- **Files:** `continue.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
+- **Files:** `continue.go`, `homedir.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
   `paths.go`, `command.go`, `memory.go`.
 
 ### `internal/adapter/windsurf`
@@ -223,7 +239,7 @@ rule lacks the agentsync-rendered `trigger: always_on` frontmatter. No
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (Extra helpers), secrets, source,
   paths, iox, jsonkeys.
-- **Files:** `windsurf.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
+- **Files:** `windsurf.go`, `homedir.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
   `paths.go`, `command.go`, `memory.go`.
 
 ### `internal/adapter/roo`
@@ -238,7 +254,7 @@ Skill/Subagent/Hook/LSP. No `PluginIngester`.
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter/Extra helpers), secrets,
   source, paths, iox, jsonkeys.
-- **Files:** `roo.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`, `paths.go`,
+- **Files:** `roo.go`, `homedir.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`, `paths.go`,
   `command.go`, `memory.go`.
 
 ### `internal/adapter/cline`
@@ -256,7 +272,7 @@ hooks/LSP have no Cline concept and are skipped. Emits no Ingest warnings
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (Extra helpers), secrets, source,
   paths, iox, jsonkeys.
-- **Files:** `cline.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
+- **Files:** `cline.go`, `homedir.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
   `paths.go`, `command.go`, `memory.go`.
 
 ### `internal/adapter/generic`
@@ -280,7 +296,7 @@ capture). Adding an agent is a verified table row, not a package.
 - **Key:** `Spec`, `New(Spec, Options) *Adapter`; the `Adapter` methods; `Specs()`.
 - **Depends on:** adapter, adapter/claude (Extra + SkillFileOps helpers), secrets,
   source, paths, iox, jsonkeys.
-- **Files:** `generic.go`, `render.go`, `ingest.go`, `apply.go`, `specs.go`.
+- **Files:** `generic.go`, `homedir.go`, `render.go`, `ingest.go`, `apply.go`, `specs.go`.
 
 ### `internal/adapter/noop`
 Placeholder adapter that detects true and renders nothing. Used as a registry
@@ -336,12 +352,33 @@ manifests into canonical components.
   `GitFetcher`/`NPMFetcher`/`RelativeFetcher`; `LoadProjected`/
   `LoadProjectedLenient`/`LoadProjectedExcluding`.
 - **Depends on:** source, log.
-- **Files:** `manifest.go`, `projection.go`, `loadprojected.go`, `fetcher.go`,
-  `fetch_git.go`, `fetch_npm.go`, `fetch_relative.go`, `update.go`.
+- **Files:** `manifest.go`, `treehash.go` (the `tree:v1:` content hash),
+  `projection.go`, `loadprojected.go`, `fetcher.go`, `fetch_git.go`,
+  `fetch_npm.go`, `fetch_relative.go`, `update.go`.
 
 ---
 
-## Infrastructure (leaf packages, no internal deps)
+## Infrastructure & presentation
+
+Leaf packages with no internal dependencies, plus the thin `ui` presentation
+layer (which builds only on `untrusted`).
+
+### `internal/git`
+The **only** `go-git` surface in the codebase: a local-only, directory-level
+rollback history for destination git backup (issue #118). Each managed
+destination dir becomes its own repo carrying an `[agentsync] managed = true`
+marker so agentsync only ever auto-commits into repos it created; a checkpoint is
+recorded after each apply and `revert` rolls a dir back append-only. It exposes
+**no** remote/push API — enforced by the source-scanning `TestNoPushSurface`
+guard — so a backup can never leave the machine (the history may hold the
+cleartext secrets the rendered files already contain).
+- **Key:** `Detect`/`State` (`StateUntracked`/`StateAgentsyncOwned`/`StateForeign`;
+  `State.String()` → `agentsync-versioned` / `foreign source control` / `untracked`);
+  `Init`/`Open`/`OwnsExactly`/`HasNestedRepoBelow`; `Stage`/`StageTrackedDeletions`/
+  `CommitStaged`/`SnapshotDirtyTracked`/`IsClean`; `Log`/`Resolve`/`Plan`/`Restore`;
+  `Identity`; `NoticeFile`.
+- **Depends on:** nothing internal (leaf).
+- **Files:** `git.go`, `init.go`, `commit.go`, `log.go`, `restore.go`, `perms.go`.
 
 ### `internal/iox`
 Atomic file IO and locking.
@@ -375,6 +412,19 @@ here. See [architecture §7](architecture.md#7-safety-primitives) and `SECURITY.
 - **Key:** `Text` (`.String()` / `.Unverified()` / `.Empty()`); `Wrap`; `Sanitize`.
 - **Files:** `untrusted.go`.
 
+### `internal/ui`
+The presentation layer — every command renders styled output through a `*Printer`
+so color, glyph, and spacing decisions live in one place. Owns the curated glyph
+vocabulary (`✓`/`◐`/`✗`/`⚠`/`•`/`→`), the `--color` mode resolution, and a
+`WarnWriter` that restyles `warning:` line prefixes. `Sanitize` delegates to
+`internal/untrusted`, so untrusted metadata printed through `ui` is stripped of
+terminal-control and deceptive-format runes by construction.
+- **Key:** `Printer` (`New`, `Color`, `Section`, colour helpers); the
+  package-level `Pad` helper; `ColorMode`/`ParseColorMode`; the `Glyph*`
+  vocabulary; `WarnWriter` (`NewWarnWriter`, `RouteTo`, `Flush`); `Sanitize`.
+- **Depends on:** untrusted.
+- **Files:** `ui.go`, `spinner.go`.
+
 ### `internal/testenv`
 Guards FS-touching tests so they only run in the hermetic container.
 - **Key:** `RequireContainer(t)`; `MustRunInContainer()`; `InContainer() bool`;
@@ -388,7 +438,9 @@ Guards FS-touching tests so they only run in the hermetic container.
 `cli` sits on top of everything. `render`, `capture`, and the adapters depend on
 `source` + `secrets`. `source`/`secrets`/`state` depend only on the leaf infra
 packages (`iox`, `jsonkeys`, `paths`, and — for the canonical plugin/marketplace
-identity fields typed `untrusted.Text` — `untrusted`). `drift`, `iox`,
-`jsonkeys`, `paths`, `log`, and `untrusted` depend on nothing internal — they're
-the foundation. See the rendered dependency graph in
+identity fields typed `untrusted.Text` — `untrusted`). `git` (destination
+rollback history, reached only from `cli`) is likewise a leaf. `drift`, `git`,
+`iox`, `jsonkeys`, `paths`, `log`, and `untrusted` depend on nothing internal —
+they're the foundation; `ui` (presentation) builds only on `untrusted`. See the
+rendered dependency graph in
 [architecture §10](architecture.md#10-package-layering).

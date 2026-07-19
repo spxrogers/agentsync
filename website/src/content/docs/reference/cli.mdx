@@ -19,7 +19,7 @@ import { Aside } from '@astrojs/starlight/components';
 | Command | Purpose | Key flags / args |
 |---|---|---|
 | `init [<git-url>]` | Create `~/.agentsync/`; optionally clone a bootstrap repo. `--scope project` / `--project <path>` scaffolds a project tree instead. | `--scope --project` |
-| `doctor` | Diagnose setup: PATH, home/state writability, schema, secrets backend. | |
+| `doctor` | Diagnose setup: PATH, home/state writability, schema, secrets backend, destination-git-backup mode + per-dir repo status. | |
 | `verify` | Validate config; surface unresolved `${secret:}` / `${env:}` refs. `--scope project` / `--project <path>` lints the project tree instead. | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or a project tree's own `[agents]` declaration with `--scope project` / `--project <path>`. | `disable --purge --scope --project` |
 | `mcp add\|remove\|list <name>` | Manage MCP servers. | `--type --command --args --url --env --agents` |
@@ -57,8 +57,13 @@ config with collaborators. Full guide: [Project-local config](/guides/projects/)
 A health check: verifies your `PATH`, that home and state directories are
 writable, that the config schema parses, and that the secrets backend is reachable.
 It also lists plugins installed natively in an agent (Claude and Codex) that aren't in your
-source yet — run `import <agent>:plugin` to capture them. Run it first when
-something feels off.
+source yet — run `import <agent>:plugin` to capture them. A **Destination git
+backup** section reports the configured `[destination_directory_git_backup]` mode
+(`prompt`/`on`/`off`) and, per versioned destination dir on disk, whether it is
+agentsync-versioned, under foreign source control, or untracked. An untracked
+candidate dir that contains a nested git repo below it is flagged as a warning,
+since `apply` refuses to init a repo inside a repo and skips git backup there.
+Run it first when something feels off.
 
 ### `verify`
 Validates the canonical config and surfaces **every** unresolved `${secret:…}` /

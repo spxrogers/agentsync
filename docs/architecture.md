@@ -352,6 +352,40 @@ Kept off the core `Adapter` for the same reason as `PluginIngester`: an
 adapter that emits no Ingest warnings shouldn't be forced to implement a
 setter it'll never use.
 
+### VersionedDirs (optional)
+
+A third **optional** extension lets an adapter declare the on-disk directories the
+apply tail should keep in a local-only git rollback history (issue #118, step 9
+below):
+
+```go
+type VersionedDirs interface {
+    VersionRoots(scope Scope, project string) []string
+}
+```
+
+It is **read-only** and does not widen the `Render`/`Apply` contract — it only
+reports directories to back up. The contract every implementor honours:
+
+1. **`ScopeProject` MUST return nil.** Project destinations live inside the user's
+   own project repo and are left to that repo's source control; git backup is a
+   user-scope-only feature. (`project.Merge` drops any project
+   `[destination_directory_git_backup]` override for the same reason.)
+2. **The unit is the directory, not the agent.** An adapter returns its own config
+   dir **plus** any shared cross-agent dir it writes into — Codex and several
+   breadth agents all write skills to `~/.agents/skills`; OpenCode writes skills to
+   `~/.claude/skills`. The apply tail **unions** these across every enabled adapter,
+   **de-nests** them (drops a root nested under another — never a repo inside a
+   repo), and **de-dups** them (a shared dir is one repo, checkpointed once).
+3. **Paths are absolute, after `AGENTSYNC_TARGET_ROOT` redirection** — they match
+   the `FileOp.Path` values the adapter emits, so tests redirect `$HOME` uniformly.
+4. **`$HOME`-level strays are excluded.** A deep agent may also write a top-level
+   file outside any returned dir (Claude's `~/.claude.json`); those are
+   intentionally **not** versioned — agentsync never inits a repo at `$HOME`.
+
+An adapter with no versionable directory (e.g. `noop`) does not implement it. The
+apply tail's use of these roots is the step-9 narrative in §4.
+
 ---
 
 ## 4. The apply pipeline (Source ▶ Destination)
@@ -634,16 +668,17 @@ flowchart TD
     CLI["internal/cli — cobra command tree"]
     REN["internal/render — apply pipeline"]
     CAP["internal/capture — dest▶source funnel"]
-    AD["internal/adapter (+ claude, opencode, noop)"]
+    AD["internal/adapter (+ 9 deep adapters, generic breadth tier, noop)"]
     SRC["internal/source — canonical model + loaders/writers"]
     SEC["internal/secrets — resolve / re-reference / mask"]
     MKT["internal/marketplace — fetch + project plugins"]
     PRJ["internal/project — <root>/.agentsync/ tree overlay"]
     DRF["internal/drift — 3-way classifier (pure)"]
     ST["internal/state — targets.json"]
-    INFRA["internal/iox · paths · jsonkeys · log · untrusted"]
+    GIT["internal/git — local-only go-git wrapper (no push surface)"]
+    INFRA["internal/iox · paths · jsonkeys · log · untrusted · ui"]
 
-    CLI --> REN & CAP & AD & SRC & SEC & MKT & PRJ & DRF & ST
+    CLI --> REN & CAP & AD & SRC & SEC & MKT & PRJ & DRF & ST & GIT
     REN --> AD & SEC & SRC & ST & DRF & INFRA
     CAP --> SRC & SEC & INFRA
     AD --> SRC & SEC & INFRA
@@ -655,9 +690,11 @@ flowchart TD
     ST --> INFRA
 ```
 
-`internal/drift`, `internal/iox`, `internal/jsonkeys`, `internal/paths`,
-`internal/log`, and `internal/untrusted` have no internal dependencies — they're
-the leaves. See the [component map](components.md) for what each package contains.
+`internal/drift`, `internal/git`, `internal/iox`, `internal/jsonkeys`,
+`internal/paths`, `internal/log`, and `internal/untrusted` have no internal
+dependencies — they're the leaves (`internal/git` is reached only from `cli`, via
+`internal/cli/gitbackup.go`); `internal/ui` builds only on `internal/untrusted`.
+See the [component map](components.md) for what each package contains.
 
 **Documented layering exception (`opencode → state`).** Adapters otherwise depend
 only on `source`, `secrets`, and the infra leaves. The OpenCode adapter is the one
