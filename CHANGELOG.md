@@ -97,6 +97,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **A disabled Codex MCP server now round-trips into canonical `enabled` (issue
+  #152).** Codex's per-server `[mcp_servers.<name>] enabled = false` is now ingested
+  into the canonical `MCPServerSpec.Enabled` field (present-only capture; absent
+  stays default-on) instead of landing in the `Extra` passthrough. Also adds
+  artifact-anchored Codex fidelity tests: MCP+hooks coexistence in one `config.toml`,
+  a bundled-skill round-trip asserting byte-for-byte survival + the script's `0o755`
+  bit, and a spec-complete multi-paragraph `developer_instructions` body.
 - **Release pipeline hardening: pinned goreleaser, reproducible archives, signed
   checksums, and a nfpms↔README URL guard (issue #138).** goreleaser is now pinned
   to the same version (`2.16.0`) across `ci.yml`, `release.yml`, and `just ci` (the

@@ -92,7 +92,10 @@ func isRemoteMCP(s source.MCPServerSpec) bool {
 // config.toml `[mcp_servers.<id>]` — into the canonical MCPServerSpec. It is the
 // inverse of codexMCPSpec (Render). A server carrying a URL is canonicalised to
 // the "http" transport; otherwise "stdio". Codex's `http_headers` map back onto
-// canonical `headers`.
+// canonical `headers`. Codex's per-server `enabled` boolean (default-on when the
+// key is absent; `enabled = false` disables the server) maps back onto canonical
+// `Enabled` — captured only when the key is PRESENT so an absent key stays nil
+// (default-on) — and is therefore a modeled key excluded from Extra.
 func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
 	url := asStr(raw["url"])
 	typ := "stdio"
@@ -106,11 +109,23 @@ func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
 		Env:     asStrMap(raw["env"]),
 		URL:     url,
 		Headers: asStrMap(raw["http_headers"]),
-		Extra:   claude.ExtraNativeKeys(raw, "command", "args", "env", "url", "http_headers"),
+		Enabled: asBoolPtr(raw["enabled"]),
+		Extra:   claude.ExtraNativeKeys(raw, "command", "args", "env", "url", "http_headers", "enabled"),
 	}
 }
 
 func asStr(v any) string { s, _ := v.(string); return s }
+
+// asBoolPtr returns a pointer to v when it is a bool, else nil. Used so an
+// absent Codex `enabled` key stays nil (default-on) while a present one — true
+// or false — is captured into the tri-state *bool.
+func asBoolPtr(v any) *bool {
+	b, ok := v.(bool)
+	if !ok {
+		return nil
+	}
+	return &b
+}
 
 func asStrSlice(v any) []string {
 	arr, ok := v.([]any)

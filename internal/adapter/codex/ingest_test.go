@@ -1,6 +1,10 @@
 package codex_test
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -252,5 +256,244 @@ func TestIngest_RoundTripsHooks_MultiEventMultiGroup(t *testing.T) {
 		if !seen[want] {
 			t.Fatalf("missing hook %+v after round-trip; got %+v", want, out.Hooks)
 		}
+	}
+}
+
+// TestIngest_RoundTripsMCPAndHooksCoexist proves the INGEST surface handles an
+// MCP server AND a hook that share config.toml: both must ingest back with their
+// fields intact, and — because renderMCP and renderHooks each emit a separate
+// merge-toml-keys FileOp for the SAME config.toml — the applied file on disk must
+// carry BOTH the `[mcp_servers.*]` and `[hooks.*]` tables. If Apply's per-op
+// merge clobbered instead of folding, one of the two tables would be missing.
+// (This is the ingest-surface complement to #180's render-pipeline coexistence
+// test; here we assert the ingested model AND the on-disk merge outcome.)
+func TestIngest_RoundTripsMCPAndHooksCoexist(t *testing.T) {
+	enabled := true
+	in := source.Canonical{
+		MCPServers: []source.MCPServer{{
+			ID: "github",
+			Server: source.MCPServerSpec{
+				Type: "stdio", Command: "npx", Args: []string{"-y", "server"},
+				Env: map[string]string{"TOKEN": "abc"}, Enabled: &enabled,
+			},
+		}},
+		Hooks: []source.Hook{
+			{Event: "PreToolUse", Matcher: "Bash", Type: "command", Command: "echo hi"},
+		},
+	}
+
+	// Mirror the roundTrip helper but keep a handle on tmp so we can read the
+	// merged config.toml back off disk.
+	tmp := t.TempDir()
+	a := codex.New(codex.Options{TargetRoot: tmp})
+	ops, _, err := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	out, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	// Exactly one MCP server, command/args/env intact.
+	if len(out.MCPServers) != 1 {
+		t.Fatalf("want exactly one MCP server, got %+v", out.MCPServers)
+	}
+	srv := out.MCPServers[0]
+	if srv.ID != "github" {
+		t.Fatalf("MCP id = %q, want github", srv.ID)
+	}
+	if srv.Server.Command != "npx" {
+		t.Fatalf("command = %q, want npx", srv.Server.Command)
+	}
+	if len(srv.Server.Args) != 2 || srv.Server.Args[0] != "-y" || srv.Server.Args[1] != "server" {
+		t.Fatalf("args = %v, want [-y server]", srv.Server.Args)
+	}
+	if srv.Server.Env["TOKEN"] != "abc" {
+		t.Fatalf("env TOKEN = %q, want abc", srv.Server.Env["TOKEN"])
+	}
+
+	// Exactly one hook, event/matcher/type/command intact.
+	if len(out.Hooks) != 1 {
+		t.Fatalf("want exactly one hook, got %+v", out.Hooks)
+	}
+	h := out.Hooks[0]
+	if h.Event != "PreToolUse" || h.Matcher != "Bash" || h.Type != "command" || h.Command != "echo hi" {
+		t.Fatalf("hook roundtrip mismatch: %+v", h)
+	}
+
+	// The single config.toml on disk must carry BOTH tables — proof that the two
+	// merge-toml-keys FileOps folded into one file rather than clobbering.
+	cfgPath := codex.ResolvePaths(tmp, "", false).Config
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config.toml: %v", err)
+	}
+	got := string(raw)
+	if !strings.Contains(got, "[mcp_servers.") {
+		t.Fatalf("config.toml missing [mcp_servers.*] table:\n%s", got)
+	}
+	if !strings.Contains(got, "[hooks.") {
+		t.Fatalf("config.toml missing [hooks.*] table:\n%s", got)
+	}
+}
+
+// TestIngest_SkillBundledFilesSurvive is the load-bearing bundled-file fidelity
+// test: a spec-complete on-disk skill directory (SKILL.md + an executable
+// scripts/run.sh + a binary assets/icon.bin) must survive ingest → render →
+// apply byte-for-byte, and the script must keep its 0o755 permission bits. The
+// oracle is the on-disk artifact at the rendered destination, not the parsed
+// model.
+func TestIngest_SkillBundledFilesSurvive(t *testing.T) {
+	const skillName = "demo"
+	scriptBytes := []byte("#!/bin/sh\necho hello\n")
+	iconBytes := []byte{0x00, 0xff, 0x10, 0x80} // deliberately non-UTF-8
+
+	// Build the spec-complete on-disk source skill directory.
+	srcRoot := t.TempDir()
+	skillDir := filepath.Join(srcRoot, ".agents", "skills", skillName)
+	if err := os.MkdirAll(filepath.Join(skillDir, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(skillDir, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillMD := "---\nname: demo\ndescription: A demo skill\n---\nDo the demo.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillMD), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(skillDir, "scripts", "run.sh")
+	if err := os.WriteFile(scriptPath, scriptBytes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// os.WriteFile is subject to the umask, so chmod explicitly to make the +x
+	// bit real before ReadSkillFiles captures Mode().Perm().
+	if err := os.Chmod(scriptPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "assets", "icon.bin"), iconBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Load into canonical by ingesting the source root — this exercises the real
+	// source.ReadSkillFiles capture path (SKILL.md skipped, bundled files kept
+	// with their mode).
+	loader := codex.New(codex.Options{TargetRoot: srcRoot})
+	in, err := loader.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Ingest source skill: %v", err)
+	}
+	if len(in.Skills) != 1 {
+		t.Fatalf("want exactly one skill loaded, got %+v", in.Skills)
+	}
+
+	// Render + apply to a SECOND temp root and assert the rendered artifact.
+	dstRoot := t.TempDir()
+	a := codex.New(codex.Options{TargetRoot: dstRoot})
+	ops, _, err := a.Render(secrets.ForRender(in), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	rendered := filepath.Join(dstRoot, ".agents", "skills", skillName)
+	cases := []struct {
+		name      string
+		relPath   string
+		wantBytes []byte
+		wantMode  os.FileMode // 0 means do not assert mode
+	}{
+		{name: "executable script", relPath: "scripts/run.sh", wantBytes: scriptBytes, wantMode: 0o755},
+		{name: "binary asset", relPath: "assets/icon.bin", wantBytes: iconBytes},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := filepath.Join(rendered, filepath.FromSlash(tc.relPath))
+			got, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatalf("read %s: %v", tc.relPath, err)
+			}
+			if !bytes.Equal(got, tc.wantBytes) {
+				t.Fatalf("%s bytes changed on round-trip:\n got %v\nwant %v", tc.relPath, got, tc.wantBytes)
+			}
+			if tc.wantMode != 0 {
+				info, err := os.Stat(p)
+				if err != nil {
+					t.Fatalf("stat %s: %v", tc.relPath, err)
+				}
+				if info.Mode().Perm() != tc.wantMode {
+					t.Fatalf("%s mode = %o, want %o", tc.relPath, info.Mode().Perm(), tc.wantMode)
+				}
+			}
+		})
+	}
+}
+
+// TestIngest_RoundTripsSubagentBody_SpecComplete anchors the subagent body
+// fidelity to a spec-complete artifact: a multi-paragraph developer_instructions
+// body with blank lines, an embedded fenced code block, inline markdown, and a
+// trailing newline must survive Render (→ TOML developer_instructions) → Apply →
+// Ingest exactly, byte-for-byte.
+func TestIngest_RoundTripsSubagentBody_SpecComplete(t *testing.T) {
+	body := "First paragraph with **bold** and `inline code`.\n\n" +
+		"Second paragraph before a fenced block:\n\n" +
+		"```go\nfunc main() {\n\tprintln(\"hi\")\n}\n```\n\n" +
+		"Trailing paragraph with a list:\n\n- one\n- two\n"
+	in := source.Canonical{Subagents: []source.Subagent{{
+		Name: "writer",
+		Frontmatter: map[string]any{
+			"description": "prose agent",
+			"model":       "gpt-5.5",
+		},
+		Body: body,
+	}}}
+	out := roundTrip(t, in, adapter.ScopeUser, "")
+	if len(out.Subagents) != 1 {
+		t.Fatalf("want exactly one subagent, got %+v", out.Subagents)
+	}
+	if got := out.Subagents[0].Body; got != body {
+		t.Fatalf("developer_instructions body not preserved exactly:\n got %q\nwant %q", got, body)
+	}
+}
+
+// TestIngest_MCP_EnabledFalse pins the `enabled -> Enabled` ingest: Codex's
+// per-server `enabled = false` under [mcp_servers.<id>] must be captured into the
+// canonical tri-state *bool (non-nil, false) and, being modeled, must NOT leak
+// into Extra. The native config is written directly (never through render, which
+// drops disabled servers before they reach config.toml), so this is the only way
+// to exercise the disabled-server ingest.
+func TestIngest_MCP_EnabledFalse(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := codex.ResolvePaths(tmp, "", false).Config
+	if err := os.MkdirAll(filepath.Dir(cfg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	native := "[mcp_servers.x]\ncommand = \"foo\"\nenabled = false\n"
+	if err := os.WriteFile(cfg, []byte(native), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := codex.New(codex.Options{TargetRoot: tmp})
+	out, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if len(out.MCPServers) != 1 || out.MCPServers[0].ID != "x" {
+		t.Fatalf("want exactly one MCP server 'x', got %+v", out.MCPServers)
+	}
+	srv := out.MCPServers[0].Server
+	if srv.Enabled == nil {
+		t.Fatalf("enabled key was present but Enabled is nil (want *false): %+v", srv)
+	}
+	if *srv.Enabled {
+		t.Fatalf("Enabled = true, want false")
+	}
+	if _, ok := srv.Extra["enabled"]; ok {
+		t.Fatalf("enabled is modeled and must be excluded from Extra: %+v", srv.Extra)
 	}
 }
