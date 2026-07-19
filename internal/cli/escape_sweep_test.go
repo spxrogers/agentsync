@@ -139,3 +139,20 @@ func TestEscapeSweep_ApplyPlan(t *testing.T) {
 	}
 	assertSanitized(t, out, "SKILLHACK")
 }
+
+func TestEscapeSweep_ImportDryRun(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	env["NO_COLOR"] = "1"
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	// A native marketplace id carrying a raw ESC byte (json.Marshal escapes it
+	// into the on-disk .claude.json; import decodes it back). import --dry-run
+	// previews the marketplace BY NATIVE ID via importIO.item() without fetching —
+	// the one item() caller not gated by ValidateComponentID.
+	mpID := "m\x1b[31mMKTHACK"
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings(mpID, mpDir, "demo"))
+	out, err := runCLI(t, env, "import", "claude:plugin", "--dry-run")
+	if err != nil {
+		t.Fatalf("import claude:plugin --dry-run: %v\n%s", err, out)
+	}
+	assertSanitized(t, out, "MKTHACK")
+}

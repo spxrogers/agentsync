@@ -68,9 +68,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `reconcile`'s item-label + mcp-server-id; and `secrets`'s age-backend path
   errors (`internal/secrets/age.go`) — each sanitized at its display boundary via
   `ui.Sanitize`/`untrusted.Text`, with `reconcile`'s ignore-pattern write kept
-  raw so the persisted pattern is exact. New `escape_sweep_test.go` drives each
-  plain command with a hostile fixture and asserts no raw ESC/bidi byte reaches
-  stdout (break-verified). The offline shape check itself was also corrected to
+  raw so the persisted pattern is exact. A follow-up verification pass then closed
+  the *indirect* leaks of the same class — the config-derived path surfacing
+  through an **error value** or a **derived path** rather than a direct print:
+  `render.CollisionReport.String()` (printed by `reconcile` override + `update
+  --apply`); `reconcile`'s orphan backup/remove errors, write-back error, and the
+  `filepath.Rel` conflict path; `import`'s dry-run marketplace preview (a
+  plain-string native marketplace id, ungated by `ValidateComponentID`) and its
+  undeclared-native-items warning; and `revert --dry-run`'s change list. New
+  `escape_sweep_test.go` + `render/collision_report_test.go` drive each command
+  with a hostile fixture and assert no raw ESC/bidi byte reaches stdout
+  (representative sites break-verified). The offline shape check itself was also corrected to
   match the WHOLE candidate (an anchored check), so a malformed outer ref that
   merely embeds a well-formed nested ref (`${secret:${env:FOO}}`) is now flagged
   instead of silently accepted. Separately, broadened the direct-`os.*`

@@ -307,7 +307,9 @@ func previewRevert(p *ui.Printer, repo *agit.Repo, root, target string) error {
 		return nil
 	}
 	for _, c := range changes {
-		fmt.Fprintf(p.Out, "    %s %-6s %s\n", p.Cyan(ui.GlyphArrow), c.Kind, c.Path)
+		// c.Path is a tracked dest path embedding a config-derived component
+		// dirname; sanitize on display (issue #93/#171).
+		fmt.Fprintf(p.Out, "    %s %-6s %s\n", p.Cyan(ui.GlyphArrow), c.Kind, ui.Sanitize(c.Path))
 	}
 	return nil
 }

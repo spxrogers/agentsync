@@ -16,6 +16,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // DefaultBackupKeep is how many backup-timestamp dirs apply retains.
@@ -111,12 +112,17 @@ type CollisionReport struct {
 	BackupTo string // absolute path of the backup that was written
 }
 
-// String formats a CollisionReport for human output.
+// String formats a CollisionReport for human output. Path/Pointer embed a
+// config-derived component name/id that can hold control/bidi bytes, so they are
+// sanitized here — every call site prints this string straight to a terminal
+// (issue #93/#171). BackupTo is agentsync-generated; sanitizing it is a no-op.
 func (r CollisionReport) String() string {
 	if r.Pointer != "" {
-		return fmt.Sprintf("foreign-collision %s#%s (backed up to %s)", r.Path, r.Pointer, r.BackupTo)
+		return fmt.Sprintf("foreign-collision %s#%s (backed up to %s)",
+			untrusted.Sanitize(r.Path), untrusted.Sanitize(r.Pointer), untrusted.Sanitize(r.BackupTo))
 	}
-	return fmt.Sprintf("foreign-collision %s (backed up to %s)", r.Path, r.BackupTo)
+	return fmt.Sprintf("foreign-collision %s (backed up to %s)",
+		untrusted.Sanitize(r.Path), untrusted.Sanitize(r.BackupTo))
 }
 
 // NewWriter constructs a Writer for one (agent, scope, project) tuple.

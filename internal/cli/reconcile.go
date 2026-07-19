@@ -176,14 +176,14 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 					fmt.Fprintf(w, "%c\n", ch)
 					bk, berr := render.BackupFile(home, it.op.Path)
 					if berr != nil {
-						fmt.Fprintf(w, "  backup failed, NOT removing: %v\n", berr)
+						fmt.Fprintf(w, "  backup failed, NOT removing: %s\n", ui.Sanitize(berr.Error()))
 						break orphanPrompt
 					}
 					if bk != "" {
-						fmt.Fprintf(w, "  backup: %s\n", bk)
+						fmt.Fprintf(w, "  backup: %s\n", ui.Sanitize(bk))
 					}
 					if rmErr := os.Remove(it.op.Path); rmErr != nil && !os.IsNotExist(rmErr) {
-						fmt.Fprintf(w, "  remove failed: %v\n", rmErr)
+						fmt.Fprintf(w, "  remove failed: %s\n", ui.Sanitize(rmErr.Error()))
 						break orphanPrompt
 					}
 					pruneStateFilesForPath(s, userHome, it.op.Path)
@@ -580,7 +580,7 @@ func attemptWriteBack(cmd *cobra.Command, w io.Writer, home string, it reconcile
 		prior, priorWritten = writtenSources[srcFile]
 	}
 	if err := writeBackItem(cmd, home, it); err != nil {
-		fmt.Fprintf(w, "  write-back error: %v\n", err)
+		fmt.Fprintf(w, "  write-back error: %s\n", ui.Sanitize(err.Error()))
 		return true
 	}
 	if srcFile != "" {
@@ -590,7 +590,7 @@ func attemptWriteBack(cmd *cobra.Command, w io.Writer, home string, it reconcile
 				rel, _ := filepath.Rel(home, srcFile)
 				fmt.Fprintf(w, "  conflict: %s — another agent drifted the same source (%s) to a different "+
 					"value this run; kept the first write and skipped this one. Make the agents agree, or "+
-					"reconcile one at a time, then re-run.\n", itemLabelDisp(it), rel)
+					"reconcile one at a time, then re-run.\n", itemLabelDisp(it), ui.Sanitize(rel))
 				return true
 			}
 			writtenSources[srcFile] = after
