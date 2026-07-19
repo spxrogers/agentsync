@@ -134,20 +134,6 @@ func New(spec Spec, opts Options) *Adapter { return &Adapter{spec: spec, opts: o
 
 func (a *Adapter) Name() string { return a.spec.Name }
 
-func (a *Adapter) Capabilities() adapter.Capability {
-	var c adapter.Capability
-	if a.spec.Memory.User != "" || a.spec.Memory.Project != "" {
-		c |= adapter.CapMemory
-	}
-	if a.spec.MCP.supported() {
-		c |= adapter.CapMCP
-	}
-	if a.spec.Skills.User != "" || a.spec.Skills.Project != "" {
-		c |= adapter.CapSkill
-	}
-	return c
-}
-
 // KeyMergeStrategy is merge-jsonc-keys when the spec has an MCP file (the only
 // key-merge surface); otherwise "" (memory is a whole-file write). The breadth
 // tier always uses the JSONC-tolerant merge so a commented settings file (Zed,

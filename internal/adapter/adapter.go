@@ -35,20 +35,6 @@ func RequireProjectRoot(scope Scope, project string) error {
 	return nil
 }
 
-// Capability is a bitmask of components an adapter can produce. M1's Claude
-// adapter is full-spectrum; M2's OpenCode adapter omits Hook + LSP.
-type Capability uint32
-
-const (
-	CapMCP Capability = 1 << iota
-	CapMemory
-	CapSkill
-	CapSubagent
-	CapCommand
-	CapHook
-	CapLSP
-)
-
 // Scope distinguishes user-level vs project-level apply targets.
 type Scope int
 
@@ -156,7 +142,10 @@ type Skip struct {
 // Adapter is the per-agent contract.
 type Adapter interface {
 	Name() string
-	Capabilities() Capability
+	// Detect reports whether the agent appears installed — its config dir exists
+	// under the target root, or its binary is on PATH. Informational only: the
+	// `doctor` command consumes it to print a per-agent detected/not-detected
+	// line; it never gates apply or fails a readiness check.
 	Detect() (bool, error)
 	// Render projects the resolved canonical (secrets already substituted to
 	// cleartext, or wrapped templated for a preview) into destination FileOps.

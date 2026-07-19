@@ -24,29 +24,6 @@ func TestKeyMergeStrategy(t *testing.T) {
 	}
 }
 
-// TestCapabilities pins the component bitmask: MCP/Memory/Subagent/Command/Hook
-// supported; Skill + LSP NOT (Gemini uses extensions, has no LSP concept).
-func TestCapabilities(t *testing.T) {
-	caps := gemini.New(gemini.Options{}).Capabilities()
-	for _, c := range []struct {
-		name string
-		cap  adapter.Capability
-		want bool
-	}{
-		{"MCP", adapter.CapMCP, true},
-		{"Memory", adapter.CapMemory, true},
-		{"Subagent", adapter.CapSubagent, true},
-		{"Command", adapter.CapCommand, true},
-		{"Hook", adapter.CapHook, true},
-		{"Skill", adapter.CapSkill, false},
-		{"LSP", adapter.CapLSP, false},
-	} {
-		if got := caps&c.cap != 0; got != c.want {
-			t.Errorf("Capabilities() has %s = %v, want %v", c.name, got, c.want)
-		}
-	}
-}
-
 func TestDetect_ConfigDir(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tmp, ".gemini"), 0o755); err != nil {

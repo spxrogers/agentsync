@@ -22,8 +22,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-
-	"github.com/spxrogers/agentsync/internal/adapter"
 )
 
 // Options configure the adapter at construction.
@@ -59,12 +57,6 @@ func (a *Adapter) Name() string { return "continue" }
 // write (one YAML/markdown block per item), so the adapter owns no shared
 // key-merge file.
 func (a *Adapter) KeyMergeStrategy() string { return "" }
-
-func (a *Adapter) Capabilities() adapter.Capability {
-	return adapter.CapMCP | adapter.CapMemory | adapter.CapCommand
-	// Skill/Subagent/Hook/LSP omitted: Continue has no faithful target for them
-	// (it uses top-level assistants + rules, not per-file subagents or hooks).
-}
 
 func (a *Adapter) Detect() (bool, error) {
 	p := ResolvePaths(a.opts.TargetRoot, "", false)

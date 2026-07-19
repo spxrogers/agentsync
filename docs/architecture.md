@@ -102,8 +102,7 @@ Every agent integration implements one interface (`internal/adapter/adapter.go`)
 ```go
 type Adapter interface {
     Name() string
-    Capabilities() Capability       // bitmask: MCP, Memory, Skill, Subagent, Command, Hook, LSP
-    Detect() (bool, error)          // is this agent installed?
+    Detect() (bool, error)          // is this agent installed? (informational; consumed by `doctor`)
     Render(r secrets.Resolved, scope Scope, project string) ([]FileOp, []Skip, error)
     Ingest(scope Scope, project string) (source.Canonical, error)
     KeyMergeStrategy() string       // "merge-json-keys" | "merge-jsonc-keys" | "merge-toml-keys" | ""
@@ -134,12 +133,14 @@ Two design points worth internalizing:
   `resolveScope` already guarantees a non-empty root for project scope, so this
   is defense-in-depth against a future or non-CLI caller.
 
-`Capability` is a bitmask, so the OpenCode adapter simply omits `CapHook` and
-`CapLSP`. Claude, Codex, Cursor, and the other v1 adapters omit `CapLSP` too:
-Claude Code reads LSP servers from plugin manifests rather than
-`settings.json`, and agentsync does not synthesize Claude plugins in v1; the
-others have no native LSP config concept. The pipeline reports those components
-as skipped.
+**Component support is expressed by what `Render` emits, not a capability
+declaration.** When an agent has no native target for a component, its `Render`
+returns a `[]Skip` entry for that component rather than a `FileOp` — there is no
+separate capability bitmask to keep in sync with the render logic. So the
+OpenCode adapter reports Hook and LSP as skips; Claude, Codex, Cursor, and the
+other v1 adapters report LSP as a skip too (Claude Code reads LSP servers from
+plugin manifests rather than `settings.json`, and agentsync does not synthesize
+Claude plugins in v1; the others have no native LSP config concept).
 
 **Skips are typed, not stringly-classified.** A `Skip` carries a `Kind`
 (`adapter.SkipKind`): `SkipDropped` when the whole component had no native target

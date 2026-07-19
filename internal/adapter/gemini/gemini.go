@@ -21,8 +21,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-
-	"github.com/spxrogers/agentsync/internal/adapter"
 )
 
 // Options configure the adapter at construction.
@@ -61,13 +59,6 @@ func (a *Adapter) Name() string { return "gemini" }
 // `hooks` live there — so the single strategy the render pipeline uses for
 // orphan-cleanup synthesis is correct for every key-merge path this adapter owns.
 func (a *Adapter) KeyMergeStrategy() string { return "merge-jsonc-keys" }
-
-func (a *Adapter) Capabilities() adapter.Capability {
-	return adapter.CapMCP | adapter.CapMemory | adapter.CapSubagent |
-		adapter.CapCommand | adapter.CapHook
-	// Skill omitted: Gemini CLI has no Agent Skills concept (uses extensions).
-	// LSP omitted: Gemini CLI has no LSP configuration concept. Both ✗ skip.
-}
 
 func (a *Adapter) Detect() (bool, error) {
 	p := ResolvePaths(a.opts.TargetRoot, "", false)

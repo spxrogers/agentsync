@@ -26,30 +26,6 @@ func TestKeyMergeStrategy(t *testing.T) {
 	}
 }
 
-// TestCapabilities pins the component bitmask: MCP/Memory/Skill/Subagent/Command/
-// Hook supported, LSP NOT (Cursor has no LSP config concept).
-func TestCapabilities(t *testing.T) {
-	a := cursor.New(cursor.Options{})
-	caps := a.Capabilities()
-	for _, c := range []struct {
-		name string
-		cap  adapter.Capability
-		want bool
-	}{
-		{"MCP", adapter.CapMCP, true},
-		{"Memory", adapter.CapMemory, true},
-		{"Skill", adapter.CapSkill, true},
-		{"Subagent", adapter.CapSubagent, true},
-		{"Command", adapter.CapCommand, true},
-		{"Hook", adapter.CapHook, true},
-		{"LSP", adapter.CapLSP, false},
-	} {
-		if got := caps&c.cap != 0; got != c.want {
-			t.Errorf("Capabilities() has %s = %v, want %v", c.name, got, c.want)
-		}
-	}
-}
-
 // TestDetect_ConfigDir reports installed when ~/.cursor exists, regardless of a
 // `cursor` binary on PATH (LookPath stubbed to always fail).
 func TestDetect_ConfigDir(t *testing.T) {

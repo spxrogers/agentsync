@@ -95,10 +95,11 @@ base canonical model.
 ### `internal/adapter`
 Declares the per-agent `Adapter` contract and a registry; the `DestWriter`
 interface funnels all destination writes through the foreign-collision backup.
-- **Key:** `Adapter` (interface); `DestWriter` (interface); `Capability`
-  (bitmask: `CapMCP`, `CapMemory`, `CapSkill`, `CapSubagent`, `CapCommand`,
-  `CapHook`, `CapLSP`); `Scope` (`ScopeUser`/`ScopeProject`); `FileOp`; `Skip`;
-  `Registry` (`NewRegistry`, `Register`, `Lookup`, `Names`).
+- **Key:** `Adapter` (interface); `DestWriter` (interface);
+  `Scope` (`ScopeUser`/`ScopeProject`); `FileOp`; `Skip` (with `SkipKind`);
+  `Registry` (`NewRegistry`, `Register`, `Lookup`, `Names`). Component support is
+  expressed by what `Render` emits — an unsupported component yields a `Skip`,
+  not an absent capability flag.
 - **Files:** `adapter.go`, `registry.go`.
 
 ### `internal/adapter/claude`
@@ -126,7 +127,7 @@ never rewrites the user's native `/hooks/<event>` array lossily.
 
 ### `internal/adapter/opencode`
 The OpenCode adapter — MCP, memory, skills, subagents, commands via JSONC
-round-trip (`tailscale/hujson`). Omits `CapHook`/`CapLSP` (skipped with a warning).
+round-trip (`tailscale/hujson`). Skips Hook and LSP (reported with a warning).
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods.
 - **Depends on:** adapter, secrets, source, paths, iox.
 - **Files:** `opencode.go`, `render.go`, `ingest.go`, `apply.go`, `paths.go`,
@@ -144,7 +145,7 @@ Implements `PluginIngester` (parses `[plugins."<name>@<source>"]` enable-state
 on `import`); Render does **not** re-emit those tables on `apply`, matching the
 cross-adapter invariant — see
 [architecture.md § PluginIngester (read-only)](architecture.md#pluginingester-read-only).
-Omits `CapLSP` (Codex has no LSP concept).
+Skips LSP (Codex has no LSP concept).
 - **Key:** `New(Options) *Adapter`; the `Adapter` + `PluginIngester` methods;
   `MergeTOML`; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter helpers), secrets, source,
@@ -163,7 +164,7 @@ so it is never an orphan-strippable owned key). Memory projects to the repo-root
 `AGENTS.md` at project scope only (user-level rules live in Cursor's app-local
 storage); skills to `.cursor/skills/`; subagents to `.cursor/agents/<name>.md`
 (`tools`/`color` dropped); commands to `.cursor/commands/<name>.md` (plain
-markdown — frontmatter dropped). Omits `CapLSP` (Cursor has no LSP concept).
+markdown — frontmatter dropped). Skips LSP (Cursor has no LSP concept).
 Implements no `PluginIngester` yet — Cursor's native plugin enable-state location
 is undocumented, so plugin discovery on `import` is deferred; `apply` still fans
 out plugin components like every adapter.
@@ -181,8 +182,8 @@ the same nested shape as Claude) both merge into `.gemini/settings.json` via
 user's other keys (`theme`, `model`, …) are preserved. Memory projects to
 `GEMINI.md` (`~/.gemini/GEMINI.md` user / repo-root `GEMINI.md` project); commands
 to `.gemini/commands/<name>.toml` (`description` + `prompt`); subagents to
-`.gemini/agents/<name>.md`. Omits `CapSkill` (Gemini uses extensions, not Agent
-Skills) and `CapLSP` (no LSP concept) — both ✗ skip. No `PluginIngester` (no
+`.gemini/agents/<name>.md`. Skips Skill (Gemini uses extensions, not Agent
+Skills) and LSP (no LSP concept) — both ✗ skip. No `PluginIngester` (no
 native plugin enable-state agentsync models).
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter helpers), secrets, source,
@@ -199,7 +200,7 @@ Continue "blocks" — one file per item, so there is **no key-merge**
 `requestOptions.headers`); memory → `.continue/rules/agentsync.md` (a
 frontmatter-less always-apply rule); commands → `.continue/prompts/<name>.md`
 prompt blocks. Skills/subagents/hooks/LSP have no faithful Continue target and
-are skipped with a report. Omits `CapSkill`/`CapSubagent`/`CapHook`/`CapLSP`. No
+are skipped with a report (Skill/Subagent/Hook/LSP). No
 `PluginIngester`.
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter/Extra helpers), secrets,
@@ -230,8 +231,8 @@ The Roo Code adapter — MCP, memory, and slash commands via clean filesystem
 `.roo/rules/agentsync.md` (plain markdown rule) and commands →
 `.roo/commands/<name>.md` (markdown + frontmatter — keeps `description` +
 `argument-hint`), both at user *and* project scope. Roo's global MCP is VS Code
-globalStorage (not targeted — user-scope MCP is reported as a skip). Omits
-`CapSkill`/`CapSubagent`/`CapHook`/`CapLSP`. No `PluginIngester`.
+globalStorage (not targeted — user-scope MCP is reported as a skip). Skips
+Skill/Subagent/Hook/LSP. No `PluginIngester`.
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter/Extra helpers), secrets,
   source, paths, iox, jsonkeys.

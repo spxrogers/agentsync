@@ -45,6 +45,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
+- **`Detect()` is now wired into `doctor`; the dead `Capabilities()` bitmask is
+  removed from the `Adapter` interface (issue #177).** Both methods previously had
+  no production consumer. `doctor`'s adapter-detection section now calls each
+  adapter's richer `Detect()` (config-dir stat + PATH fallback) instead of a
+  PATH-only lookup — reported informationally, never failing the check. The
+  per-agent `Capability` bitmask, which nothing in the pipeline consumed and which
+  could silently drift from real `Render`/`Skip` behavior, is deleted along with the
+  `Capability` type and `Cap*` consts; component support is (and was) expressed by
+  `Render` returning `[]Skip`, and `docs/architecture.md`'s false "the pipeline
+  reports those components as skipped [via the bitmask]" claim is corrected.
 - **Capability matrix: the Claude Hook cell is corrected from `✓` to `◐` (issue
   #147).** agentsync models only `command` hooks (`matcher` + `command`); those
   round-trip losslessly, but a non-`command` handler type or an unmodeled field

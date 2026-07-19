@@ -12,8 +12,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-
-	"github.com/spxrogers/agentsync/internal/adapter"
 )
 
 // Options configure the adapter at construction.
@@ -55,12 +53,6 @@ func (a *Adapter) Name() string { return "codex" }
 // config.toml tables rather than a separate hooks.json precisely so there is one
 // strategy; see renderHooks.)
 func (a *Adapter) KeyMergeStrategy() string { return "merge-toml-keys" }
-
-func (a *Adapter) Capabilities() adapter.Capability {
-	return adapter.CapMCP | adapter.CapMemory | adapter.CapSkill |
-		adapter.CapSubagent | adapter.CapCommand | adapter.CapHook
-	// LSP omitted: Codex has no LSP concept (shipped as ✗ skip).
-}
 
 func (a *Adapter) Detect() (bool, error) {
 	p := ResolvePaths(a.opts.TargetRoot, "", false)

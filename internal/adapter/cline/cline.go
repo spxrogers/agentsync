@@ -24,8 +24,6 @@ package cline
 import (
 	"os"
 	"os/exec"
-
-	"github.com/spxrogers/agentsync/internal/adapter"
 )
 
 // Options configure the adapter at construction.
@@ -45,11 +43,6 @@ func (a *Adapter) Name() string { return "cline" }
 // KeyMergeStrategy is cline's single key-merge strategy: JSON (~/.cline/mcp.json).
 // Rules/workflows are whole-file markdown writes.
 func (a *Adapter) KeyMergeStrategy() string { return "merge-json-keys" }
-
-func (a *Adapter) Capabilities() adapter.Capability {
-	return adapter.CapMCP | adapter.CapMemory | adapter.CapCommand
-	// Skill/Subagent/Hook/LSP omitted: no Cline concept (all ✗ skip).
-}
 
 func (a *Adapter) Detect() (bool, error) {
 	p := ResolvePaths(a.opts.TargetRoot, "", false)

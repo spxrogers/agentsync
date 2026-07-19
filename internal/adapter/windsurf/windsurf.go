@@ -26,8 +26,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-
-	"github.com/spxrogers/agentsync/internal/adapter"
 )
 
 // Options configure the adapter at construction.
@@ -63,11 +61,6 @@ func (a *Adapter) Name() string { return "windsurf" }
 // (mcp_config.json). It is the only file whose keys agentsync co-owns; rules and
 // workflows are whole-file markdown writes.
 func (a *Adapter) KeyMergeStrategy() string { return "merge-json-keys" }
-
-func (a *Adapter) Capabilities() adapter.Capability {
-	return adapter.CapMCP | adapter.CapMemory | adapter.CapCommand
-	// Skill/Subagent/Hook/LSP omitted: no Windsurf concept (all ✗ skip).
-}
 
 func (a *Adapter) Detect() (bool, error) {
 	p := ResolvePaths(a.opts.TargetRoot, "", false)

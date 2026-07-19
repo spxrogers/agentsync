@@ -12,8 +12,6 @@ type stub struct{ name string }
 
 func (s stub) Name() string { return s.name }
 
-func (stub) Capabilities() adapter.Capability { return 0 }
-
 func (stub) Detect() (bool, error) { return false, nil }
 
 func (stub) Render(secrets.Resolved, adapter.Scope, string) ([]adapter.FileOp, []adapter.Skip, error) {

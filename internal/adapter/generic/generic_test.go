@@ -37,25 +37,16 @@ func hasSkip(skips []adapter.Skip, component, name string, kind adapter.SkipKind
 
 // --- adapter-surface from spec ---
 
-func TestCapabilitiesAndStrategyFromSpec(t *testing.T) {
+func TestStrategyFromSpec(t *testing.T) {
 	memOnly := generic.New(generic.Spec{Name: "mem", Memory: generic.FileTarget{Project: "AGENTS.md"}}, generic.Options{})
-	if got := memOnly.Capabilities(); got&adapter.CapMemory == 0 || got&adapter.CapMCP != 0 {
-		t.Fatalf("memory-only caps wrong: %v", got)
-	}
 	if memOnly.KeyMergeStrategy() != "" {
 		t.Fatalf("memory-only must have no key-merge strategy")
 	}
 	withMCP := generic.New(generic.Spec{Name: "x", MCP: generic.MCPTarget{Project: ".x/mcp.json"}}, generic.Options{})
-	if withMCP.Capabilities()&adapter.CapMCP == 0 {
-		t.Fatal("MCP cap missing")
-	}
 	if withMCP.KeyMergeStrategy() != "merge-jsonc-keys" {
 		t.Fatal("MCP spec must use the JSONC-tolerant merge")
 	}
 	withSkills := generic.New(generic.Spec{Name: "x", Skills: generic.FileTarget{Project: ".agents/skills"}}, generic.Options{})
-	if withSkills.Capabilities()&adapter.CapSkill == 0 {
-		t.Fatal("Skill cap missing when a Skills target is declared")
-	}
 	// A skills target is a directory write, not a JSON key-merge surface.
 	if withSkills.KeyMergeStrategy() != "" {
 		t.Fatal("a skills-only spec must have no key-merge strategy")

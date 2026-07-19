@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 
@@ -56,19 +55,31 @@ func newDoctorCmd() *cobra.Command {
 			}
 
 			fmt.Fprintln(p.Out, "")
-			p.Section("Adapter detection (PATH-only)")
+			p.Section("Adapter detection")
+			// Detection is INFORMATIONAL — each adapter's Detect() stats its config
+			// dir under the target root and falls back to a PATH lookup. It never
+			// touches the fails counter: a not-detected agent is a normal state (the
+			// user may author config for a machine where the agent isn't installed).
+			reg := registryFactory()
 			for _, name := range allAgentNames() {
-				bin := agentBinary(name)
-				if bin == "" {
-					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint("(no PATH binary; detected by config dir)"))
+				a := reg.Lookup(name)
+				if a == nil {
+					// #160 guarantees every valid agent has a registered adapter, so a
+					// nil lookup should be unreachable — but report it gracefully rather
+					// than panic if that invariant ever regresses.
+					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint("no adapter registered"))
 					continue
 				}
-				path, lookErr := exec.LookPath(bin)
-				if lookErr != nil {
-					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint("not found in PATH"))
-					continue
+				detected, derr := a.Detect()
+				switch {
+				case derr != nil:
+					// A Detect error is still informational — surface it, never fail.
+					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint(fmt.Sprintf("detection error: %v", derr)))
+				case detected:
+					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Green(ui.GlyphOK), name, p.Faint("detected"))
+				default:
+					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint("not detected"))
 				}
-				fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Green(ui.GlyphOK), name, p.Faint(path))
 			}
 
 			fmt.Fprintln(p.Out, "")
