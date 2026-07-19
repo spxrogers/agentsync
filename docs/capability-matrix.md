@@ -329,11 +329,16 @@ literally, never resolved.)
   `~/.codeium/windsurf/memories/global_rules.md` — always-on and frontmatter-less,
   written verbatim. It is whole-file owned like Claude's `~/.claude/CLAUDE.md`
   (a pre-existing hand-authored copy is backed up on first apply), and Windsurf
-  enforces its documented 6,000-character limit itself.
+  enforces its documented 6,000-character limit itself. **Workspace** rules
+  (`.windsurf/rules/`) have a separate, larger documented limit —
+  **12,000 characters per file** — which agentsync also leaves to Windsurf: it
+  writes the rule body verbatim and neither truncates nor flags it.
 - **Slash command** — Windsurf workflows are plain markdown invoked as `/<name>`
   (project `.windsurf/workflows/*.md`, user
   `~/.codeium/windsurf/global_workflows/*.md`), so command `description`/
   `argument-hint`/`allowed-tools` frontmatter drops — only the body survives.
+  Windsurf documents a **12,000-character-per-file** limit for workflows; agentsync
+  writes the body verbatim and leaves that enforcement to Windsurf.
 - **MCP remote** — Windsurf does not distinguish SSE vs streamable-HTTP in the
   config (just `serverUrl`), so a canonical `sse` server normalizes to `http` if
   later captured back via `import`/`reconcile`.

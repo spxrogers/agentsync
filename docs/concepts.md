@@ -142,7 +142,7 @@ environment. The public **recipient** key is safe to commit; the private
 
 > A central invariant: a *resolved* cleartext secret must never be written back
 > into the canonical source. The type system enforces this — see
-> [architecture](architecture.md#secrets-how-the-leak-is-prevented) and `CLAUDE.md`.
+> [architecture](architecture.md#8-secrets--how-the-leak-is-prevented) and `CLAUDE.md`.
 
 ### State (`~/.agentsync/.state/`)
 Gitignored bookkeeping: `targets.json` (the last-applied hashes that make drift

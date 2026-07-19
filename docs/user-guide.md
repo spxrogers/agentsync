@@ -176,7 +176,7 @@ LSP, memory, **and plugins**) in one pass. A bulk import that finds nothing for 
 component reports it and exits cleanly rather than erroring. Add `--dry-run` to
 list the source files an import would write without touching `~/.agentsync/`.
 
-**Plugins are a special case.** The `plugin` component (Claude only in v1) reads
+**Plugins are a special case.** The `plugin` component (Claude and Codex) reads
 the agent's installed plugins and their marketplaces and re-fetches each one into
 the agentsync cache, pinning a manifest SHA — the same artifacts `marketplace
 add` + `plugin install` produce. Because it re-fetches, a real plugin import (not

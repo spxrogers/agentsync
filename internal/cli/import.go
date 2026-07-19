@@ -165,7 +165,7 @@ component too imports the agent's full native config in one pass. Use
 --dry-run to preview which source files would be written, without writing.
 
 The plugin component captures the agent's installed plugins + their
-marketplaces (Claude only in v1): it re-fetches each marketplace and plugin
+marketplaces (Claude and Codex): it re-fetches each marketplace and plugin
 into the agentsync cache and pins them, so a real import needs network access.
 A plugin's marketplace is resolved from agentsync's own registered marketplaces
 first, then the agent's native config; a plugin whose marketplace is registered
@@ -1127,7 +1127,7 @@ func importMemory(io *importIO, home string, c source.Canonical) ([]string, erro
 // producing byte-identical artifacts to the manual commands.
 //
 // Only agents implementing adapter.PluginIngester have a native plugin concept
-// (Claude in v1); others import no plugins (not an error, so a full
+// (Claude and Codex); others import no plugins (not an error, so a full
 // `import <agent>` stays clean for them). A real import needs network access to
 // re-fetch; --dry-run discovers and previews without fetching or writing.
 //

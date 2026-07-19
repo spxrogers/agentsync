@@ -13,7 +13,7 @@ import (
 // `.gemini/settings.json` under the `mcpServers` object. A stdio server keeps
 // command/args/env; a remote server uses Gemini's two-key transport split —
 // `url` for SSE, `httpUrl` for HTTP streaming — with `headers`. op.Content is
-// JSON and the merge-json-keys strategy preserves a hand-authored settings.json's
+// JSON and the merge-jsonc-keys strategy preserves a hand-authored settings.json's
 // foreign keys (and the `hooks` section the adapter also owns).
 func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, error) {
 	servers := map[string]any{}

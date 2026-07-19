@@ -178,7 +178,7 @@ out plugin components like every adapter.
 The Gemini CLI adapter — MCP, memory, slash commands, subagents, and hooks. MCP
 (`mcpServers`, with Gemini's `url`/`httpUrl` transport split) and hooks (`hooks`,
 the same nested shape as Claude) both merge into `.gemini/settings.json` via
-`merge-json-keys` — settings.json is the adapter's single key-merge file, so the
+`merge-jsonc-keys` — settings.json is the adapter's single key-merge file, so the
 user's other keys (`theme`, `model`, …) are preserved. Memory projects to
 `GEMINI.md` (`~/.gemini/GEMINI.md` user / repo-root `GEMINI.md` project); commands
 to `.gemini/commands/<name>.toml` (`description` + `prompt`); subagents to
@@ -210,14 +210,16 @@ are skipped with a report (Skill/Subagent/Hook/LSP). No
 
 ### `internal/adapter/windsurf`
 The Windsurf (Cascade) adapter — MCP, memory, and slash commands, **scope-
-asymmetric** to match Windsurf's layout: MCP renders at user scope only
+asymmetric** to match Windsurf's layout: only **MCP** is user-scope-only
 (`~/.codeium/windsurf/mcp_config.json`, JSON `mcpServers` via `merge-json-keys`;
-remote uses `serverUrl`), while memory (`.windsurf/rules/agentsync.md`, plain
-markdown) and commands (`.windsurf/workflows/<name>.md`, plain markdown workflows)
-render at project scope only; the non-applicable scope reports a skip. Skills/
-subagents/hooks/LSP have no Windsurf concept and are skipped. Emits no Ingest
-warnings (rules/workflows are plain markdown), so it does not implement
-`WarnEmitter`. No `PluginIngester`.
+remote uses `serverUrl`), skipped (reported) at project scope. **Memory** and
+**commands** render at **both** scopes — project → `.windsurf/rules/agentsync.md`
+(workspace rule) / `.windsurf/workflows/<name>.md`, user → the global rules file
+`~/.codeium/windsurf/memories/global_rules.md` / `~/.codeium/windsurf/global_workflows/`
+— all plain markdown. Skills/subagents/hooks/LSP have no Windsurf concept and are
+skipped. It **implements `WarnEmitter`**: `Ingest` emits a warning when a workspace
+rule lacks the agentsync-rendered `trigger: always_on` frontmatter. No
+`PluginIngester`.
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (Extra helpers), secrets, source,
   paths, iox, jsonkeys.

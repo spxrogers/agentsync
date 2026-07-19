@@ -56,7 +56,7 @@ config with collaborators. Full guide: [Project-local config](/guides/projects/)
 ### `doctor`
 A health check: verifies your `PATH`, that home and state directories are
 writable, that the config schema parses, and that the secrets backend is reachable.
-It also lists plugins installed natively in an agent (Claude) that aren't in your
+It also lists plugins installed natively in an agent (Claude and Codex) that aren't in your
 source yet — run `import <agent>:plugin` to capture them. Run it first when
 something feels off.
 
@@ -247,7 +247,7 @@ The interactive merge UX for drift and conflicts. Full guide:
 
 ### `import <agent>[:<component>[:<name>]]`
 Captures native config back into your canonical source. Drop parts of the selector
-to widen scope. The `plugin` component (Claude only in v1) captures installed
+to widen scope. The `plugin` component (Claude and Codex) captures installed
 plugins + their marketplaces by re-fetching them into the agentsync cache, so a
 real plugin import **uses the network**. A plugin's marketplace is resolved from
 agentsync's own registered marketplaces first, then the agent's native config; a

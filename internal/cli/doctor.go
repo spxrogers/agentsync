@@ -200,7 +200,7 @@ func checkSchema(p *ui.Printer, home string) (source.Config, bool) {
 	return c.Config, true
 }
 
-// checkPlugins surfaces plugins installed natively in an agent (Claude in v1)
+// checkPlugins surfaces plugins installed natively in an agent (Claude and Codex)
 // that are NOT declared in the canonical source — informational only, never a
 // failure: agentsync treats them as foreign-managed, and `import <agent>:plugin`
 // brings them under management. Probes every registered adapter (not just the

@@ -29,7 +29,7 @@ func readSettings(t *testing.T, tmp string) map[string]any {
 
 // TestApply_MCPAndHooks_ShareSettingsJSON verifies the two sections agentsync
 // owns (mcpServers + hooks) both land in the SAME settings.json without
-// clobbering each other (two merge-json-keys ops to one file).
+// clobbering each other (two merge-jsonc-keys ops to one file).
 func TestApply_MCPAndHooks_ShareSettingsJSON(t *testing.T) {
 	tmp := t.TempDir()
 	c := source.Canonical{
@@ -53,7 +53,7 @@ func TestApply_MCPAndHooks_ShareSettingsJSON(t *testing.T) {
 	}
 }
 
-// TestApply_PreservesForeignSettings verifies merge-json-keys preserves a user's
+// TestApply_PreservesForeignSettings verifies merge-jsonc-keys preserves a user's
 // foreign top-level key and foreign MCP server in settings.json.
 func TestApply_PreservesForeignSettings(t *testing.T) {
 	tmp := t.TempDir()

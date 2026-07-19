@@ -11,6 +11,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Documentation
 
+- **Cleared the carried-over doc-vs-code drift cluster (issue #145).** Corrected six
+  "plugin import is Claude-only" claims (Codex implements `PluginIngester` too),
+  the Windsurf `components.md` scope/`WarnEmitter` description (memory + commands
+  render at both scopes; it *does* implement `WarnEmitter`), Gemini's
+  `merge-json-keys`→`merge-jsonc-keys` source comments, a broken `concepts.md`
+  architecture anchor, and copy nits (agent count `30+`→`31`, "three axes"→"four").
+  Acknowledged Windsurf's separate 12,000-char workspace-rule/workflow limit in the
+  capability matrix (verified against upstream docs).
 - **Install & git-backup docs: macOS Gatekeeper guidance, arm64 download URLs, and
   qualified safety promises (issue #132).** The README and the website install page
   now tell raw-archive macOS users that the prebuilt binaries are unsigned/

@@ -5,7 +5,7 @@
 // (settings.json) and holds BOTH MCP servers (the `mcpServers` object — the same
 // idea as Claude) and lifecycle hooks (the `hooks` object — the same nested
 // matcher-group/hooks-array shape Claude uses), so the adapter has a single
-// key-merge strategy (merge-json-keys) and co-owns two sections of one file,
+// key-merge strategy (merge-jsonc-keys) and co-owns two sections of one file,
 // exactly as Claude co-owns `hooks`/`lspServers` inside its settings.json.
 //
 // The remaining components are files: memory → GEMINI.md (the hierarchical

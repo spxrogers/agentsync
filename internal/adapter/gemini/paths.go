@@ -9,7 +9,7 @@ import "path/filepath"
 // `~/.gemini/GEMINI.md` at user scope, repo-root `GEMINI.md` at project scope.
 type Paths struct {
 	ConfigDir   string // ~/.gemini (or <proj>/.gemini)
-	Settings    string // .gemini/settings.json (mcpServers + hooks; merge-json-keys)
+	Settings    string // .gemini/settings.json (mcpServers + hooks; merge-jsonc-keys)
 	Memory      string // ~/.gemini/GEMINI.md (user) or <proj>/GEMINI.md (project root)
 	CommandsDir string // .gemini/commands (slash-command TOML)
 	AgentsDir   string // .gemini/agents (subagent markdown)
