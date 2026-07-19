@@ -9,6 +9,23 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Fixed
+
+- **The first `apply` is now revertible (issue #143).** Destination git backup used
+  to record its first checkpoint only *after* `render.Apply` had already overwritten
+  the dir, so a bad **first** apply into a previously-untracked dir had no prior state
+  to roll back to and `revert` bailed with "only one checkpoint — skipping". `apply`
+  now takes a **pre-apply baseline** checkpoint of each version root's current on-disk
+  content *before* rendering, so after a first apply there are ≥2 commits (baseline +
+  apply, the apply's parent being the baseline) and `revert` restores the genuine
+  pre-apply state. The baseline stages the dir's **full pre-existing contents** (not
+  only the files this apply writes), so non-managed siblings you already had in the
+  dir are captured and restorable rather than silently dropped. The baseline pass is
+  best-effort **with a loud warning**: if it can't run (a nesting hazard, a declined
+  prompt), the apply still proceeds but you're told that first apply won't be
+  revertible; it honors `--no-git-backup`, `mode = "off"`, project scope, and dirs
+  under your own source control exactly as the post-apply checkpoint does.
+
 ### Changed
 
 - **Chocolatey publishing is temporarily paused (issue #188).** The `chocolateys`

@@ -33,6 +33,10 @@ dropped into the dir (and gitignored files) are left untouched — revert only
 rewinds the files agentsync itself versions. By default it undoes the most recent
 apply (restores the previous checkpoint); --to picks a specific one.
 
+Even the FIRST apply is revertible: before that apply overwrites the dir, agentsync
+records a pre-apply baseline checkpoint of its prior contents, so a revert right
+after a first apply restores the genuine pre-apply state.
+
 revert only moves the DESTINATION. The next 'agentsync apply' re-renders from the
 canonical config and would overwrite the reverted state, so revert prints a notice
 telling you to reconcile (agentsync reconcile / import) or fix the canonical source

@@ -246,7 +246,11 @@ auto-resolves changes that can't lose work).
 
 `apply` can keep each user-scope destination dir (`~/.claude`, `~/.codex`, …) in
 its **own local-only git repo**, recording a checkpoint commit after every apply
-that changes managed files there. If an apply ever goes wrong, roll it back:
+that changes managed files there. **Even the first apply is revertible:** before
+that apply overwrites the dir, agentsync records a **pre-apply baseline** commit of
+its prior contents (including any pre-existing files you already had in the dir), so
+the apply checkpoint's parent is the genuine pre-apply state — there is no "the first
+apply can't be undone" gap. If an apply ever goes wrong, roll it back:
 
 ```bash
 agentsync revert claude              # undo the most recent apply to ~/.claude
@@ -271,7 +275,8 @@ present. And if you later clone your own git repo *inside* a managed dir (e.g.
 it.
 
 The first apply to an untracked dir **asks** before initializing the repo
-(opt-out). Answer once and it's remembered in `agentsync.toml`:
+(opt-out); it takes the pre-apply baseline the moment you agree, so that first apply
+is covered too. Answer once and it's remembered in `agentsync.toml`:
 
 ```toml
 [destination_directory_git_backup]

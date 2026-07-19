@@ -31,6 +31,11 @@ rolled back with ` + "`agentsync revert`" + ` (or plain ` + "`git revert` / `git
 
 ## Rolling back
 
+Every apply records a checkpoint here. The FIRST apply also records a **pre-apply
+baseline** — a commit of this directory's contents *as they were before* that apply
+overwrote them — so even the very first apply is revertible (the baseline is the
+apply checkpoint's parent).
+
     agentsync revert <agent>           # undo the most recent apply to this dir
     agentsync revert <agent> --to <ref>  # roll back to a specific checkpoint
 `

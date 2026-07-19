@@ -55,8 +55,10 @@ func TestRevert_DefaultUndoesLastApply(t *testing.T) {
 	claude := filepath.Join(tmp, ".claude")
 	repo, _ := agit.Open(claude)
 	before, _ := repo.Log(0)
-	if len(before) != 2 {
-		t.Fatalf("want 2 checkpoints before revert, got %d", len(before))
+	// Two applies produce a pre-apply baseline (first apply) + two apply checkpoints
+	// (issue #143): 3 commits.
+	if len(before) != 3 {
+		t.Fatalf("want 3 commits before revert (baseline + v1 + v2), got %d", len(before))
 	}
 
 	out, err := runCLI(t, env, "revert", "claude")
@@ -71,10 +73,10 @@ func TestRevert_DefaultUndoesLastApply(t *testing.T) {
 	if !strings.Contains(out, "out of sync") {
 		t.Errorf("expected out-of-sync notice, got:\n%s", out)
 	}
-	// Append-only: a new commit on top (3 total), originals still reachable.
+	// Append-only: a new commit on top, originals still reachable.
 	after, _ := repo.Log(0)
-	if len(after) != 3 {
-		t.Fatalf("want 3 checkpoints after revert (append-only), got %d", len(after))
+	if len(after) != len(before)+1 {
+		t.Fatalf("want one more commit after revert (append-only): %d -> %d", len(before), len(after))
 	}
 }
 
@@ -106,13 +108,16 @@ func TestRevert_ToSpecificCheckpoint(t *testing.T) {
 	claude := filepath.Join(tmp, ".claude")
 	repo, _ := agit.Open(claude)
 	cps, _ := repo.Log(0)
-	oldest := cps[len(cps)-1].Hash // the v1 checkpoint (first apply)
+	// cps (newest→oldest) is [v2, v1, baseline]; the v1 apply checkpoint is the
+	// second-oldest — the oldest is now the pre-apply baseline (notice only, issue
+	// #143), which would restore an empty dir rather than v1.
+	v1 := cps[len(cps)-2].Hash
 
-	if out, err := runCLI(t, env, "revert", "claude", "--to", oldest); err != nil {
+	if out, err := runCLI(t, env, "revert", "claude", "--to", v1); err != nil {
 		t.Fatalf("revert --to: %v\n%s", err, out)
 	}
 	if b, _ := os.ReadFile(destSkill); !strings.Contains(string(b), "v1") {
-		t.Fatalf("after revert --to oldest, dest skill should hold v1:\n%s", b)
+		t.Fatalf("after revert --to v1, dest skill should hold v1:\n%s", b)
 	}
 }
 
