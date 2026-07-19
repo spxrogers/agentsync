@@ -214,8 +214,15 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   unchanged and **never collapsed** — it still carries every tracked file, so the
   machine contract is stable.
 - **`agentsync version` is now a subcommand alias for `agentsync --version`.**
-  It renders the same version template as the `--version` flag, so the two
-  outputs can never drift.
+  The subcommand delegates to cobra's own version renderer — it re-dispatches
+  the root with its `--version` flag set, so the same precompiled,
+  `FuncMap`-bearing template function renders the same data against the same
+  flag-owning (root) command. Its output is therefore byte-identical to
+  `--version` by construction and can never drift, even if the version template
+  later uses a cobra template function such as `rpad` or `trim`. (Previously the
+  subcommand hand-parsed the template with a bare `text/template` that had no
+  `FuncMap`, so such an edit would have silently broken `agentsync version`
+  while `--version` kept working; a raw-byte parity test now pins the guarantee.)
 
 ### Fixed
 
