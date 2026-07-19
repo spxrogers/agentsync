@@ -413,8 +413,13 @@ Key stages:
    written and state already saved, so a git failure never fails the apply),
    **opt-out** (the `[destination_directory_git_backup]` mode — `prompt`/`on`/`off`
    — plus the `apply --no-git-backup` per-run bypass), and **never pushes**:
-   `internal/git` exposes no remote/push surface at all (a source-scanning guard
-   test, `TestNoPushSurface`, keeps it that way). `agentsync revert` (which takes
+   `internal/git`'s own API exposes no remote/push calls, enforced by
+   `TestNoPushSurface` — a **source-scanning convention guard** (a grep over the
+   package's non-test `.go` files for banned remote/push tokens), not a type-level
+   impossibility. The go-git `*Repository` that `Repo` holds still has
+   `Push`/`CreateRemote`, so this is a convention guard (a struct-shape or
+   reflection change could defeat the scan), in the same spirit as the secrets lint
+   fence (§8 / `SECURITY.md`). `agentsync revert` (which takes
    the same global lock apply holds) rolls a dir back to a prior checkpoint
    append-only. Snapshotting uncommitted hand-edits to tracked files is enforced
    **inside the engine `Restore`** (safe-by-construction for every caller, not just
