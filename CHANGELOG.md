@@ -341,6 +341,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   later rejects is refused at save time (`… (not saved): …`) instead of being
   encrypted with a cheerful success message. Legitimate cases — a new nested key
   under an absent or table parent, and an in-place scalar update — are unchanged.
+- **OpenCode agent `mode` is preserved and ingest no longer over-captures
+  (issue #148).** OpenCode's `Ingest` previously deleted the agent `mode` key on
+  every captured agent, so a native `primary`/`all` agent was silently demoted to
+  `subagent` on the next `import`/`reconcile` → `apply` round-trip; the `mode`
+  (`primary`/`all`/`subagent`) is now retained in the canonical frontmatter and
+  re-emitted verbatim on render (a Claude-shaped subagent with no `mode` still
+  defaults to `subagent`). `Ingest` also over-captured the *entire* native
+  `agents/`/`commands/` directories — including hand-authored files agentsync
+  never wrote — pulling unmanaged user config into the canonical source; it now
+  captures only agentsync-owned files (ownership read from apply state).
 
 - **Claude LSP capability corrected.** Claude Code reads LSP servers from plugin
   manifests, not `settings.json#/lspServers`; agentsync now reports canonical

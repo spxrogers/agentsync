@@ -201,9 +201,16 @@ literally, never resolved.)
 
 - **Subagent** — Claude's `tools` allowlist is remapped onto OpenCode's
   `permission` model (approximate), and Claude frontmatter keys OpenCode doesn't
-  recognize are dropped.
+  recognize are dropped. The OpenCode agent `mode` (`primary`/`all`/`subagent`)
+  is preserved across an `import`/`reconcile` → `apply` round-trip: a native
+  `primary`/`all` agent is no longer demoted to `subagent` (a Claude-shaped
+  subagent with no `mode` still defaults to `subagent`).
 - **Slash command** — Claude's `argument-hint` has no OpenCode field and is
   dropped; there's no command-level `allowed-tools` (scoping is per-agent instead).
+- **Ingest ownership** — `import` captures only agentsync-owned agents/commands
+  from the shared `agents/`/`commands/` directories (ownership is read from apply
+  state); a user's hand-authored files alongside them are left untouched and
+  never pulled into the canonical source.
 
 **Codex**
 

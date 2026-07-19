@@ -11,17 +11,27 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
+	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/state"
 )
 
 // Ingest reads OpenCode's native config files and returns a partial
 // source.Canonical. It is the inverse of Render.
 //
-// Round-trip note: subagents lose the Claude-side `tools` and `color` fields
-// (they were dropped on render because OpenCode has no equivalent). Ingest can
-// only reconstruct what is present on disk — `description`, `model`, and the
-// `mode` key (which is dropped during ingest because it is an OpenCode-specific
-// artifact, not part of canonical).
+// Round-trip notes:
+//   - Subagent `mode` (primary/all/subagent) is PRESERVED into the canonical
+//     frontmatter. The canonical `source.Subagent.Frontmatter` is a free-form
+//     map, so an OpenCode-specific key round-trips without a schema change; the
+//     render side re-emits an ingested `mode` verbatim, so a native primary/all
+//     agent is no longer demoted to subagent on the next apply.
+//   - Subagents still lose the Claude-side `tools`/`color` fields (dropped on
+//     render because OpenCode has no equivalent). Ingest reconstructs only what
+//     is present on disk.
+//   - Only agentsync-OWNED agents/commands are captured (see destOwned): the
+//     agents/ and commands/ directories are shared with the user's own
+//     hand-authored files, which are left untouched and never pulled into the
+//     canonical source.
 func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical, error) {
 	if err := adapter.RequireProjectRoot(scope, project); err != nil {
 		return source.Canonical{}, err
@@ -80,14 +90,31 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		}
 	}
 
+	// Ownership: the agents/ and commands/ dirs are shared with the user's own
+	// hand-authored files (and agents/ with OpenCode's primary-agent workflow),
+	// so ingest must capture ONLY the files agentsync actually wrote — never pull
+	// unmanaged user config into the canonical source. Ownership comes from the
+	// apply state (see destOwned); a missing state owns nothing, and a corrupt one
+	// is reported and treated as owning nothing rather than risking over-capture.
+	statePath := filepath.Join(a.opts.TargetRoot, ".agentsync", ".state", "targets.json")
+	ownState, stErr := state.Load(statePath)
+	if stErr != nil {
+		fmt.Fprintf(warn, "warning: opencode ingest could not read apply state (%v); skipping agent/command capture\n", stErr)
+		ownState = state.New()
+	}
+
 	// Subagents from <AgentsDir>/<name>.md — frontmatter munged back to canonical:
-	// drop `mode` (OpenCode-specific artifact), retain `description` + `model`.
+	// preserve `mode` (primary/all/subagent), retain `description` + `model`.
 	if entries, err := os.ReadDir(p.AgentsDir); err == nil {
 		for _, e := range entries {
 			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(p.AgentsDir, e.Name()))
+			destPath := filepath.Join(p.AgentsDir, e.Name())
+			if !a.destOwned(ownState, scope, project, destPath) {
+				continue // hand-authored / agentsync-unmanaged file — leave it alone
+			}
+			data, err := os.ReadFile(destPath)
 			if err != nil {
 				continue
 			}
@@ -100,19 +127,23 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			if lenient {
 				fmt.Fprintf(warn, "warning: subagent %q frontmatter is not strict YAML; parsed leniently (consider quoting values containing ': ')\n", name)
 			}
-			// Drop OpenCode-specific `mode` key; it is not canonical.
-			delete(fm, "mode")
+			// `mode` is retained: it is a legal OpenCode agent key and the
+			// canonical frontmatter is free-form, so it round-trips through render.
 			c.Subagents = append(c.Subagents, source.Subagent{Name: name, Frontmatter: fm, Body: body})
 		}
 	}
 
-	// Commands from <CommandsDir>/<name>.md
+	// Commands from <CommandsDir>/<name>.md — owned files only.
 	if entries, err := os.ReadDir(p.CommandsDir); err == nil {
 		for _, e := range entries {
 			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(p.CommandsDir, e.Name()))
+			destPath := filepath.Join(p.CommandsDir, e.Name())
+			if !a.destOwned(ownState, scope, project, destPath) {
+				continue // hand-authored / agentsync-unmanaged file — leave it alone
+			}
+			data, err := os.ReadFile(destPath)
 			if err != nil {
 				continue
 			}
@@ -135,6 +166,35 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 
 	return c, nil
+}
+
+// destOwned reports whether the apply state records destPath as an
+// agentsync-owned file for this adapter at (scope, project). Ingest consults it
+// so it captures only agentsync-managed agents/commands from the shared
+// ~/.config/opencode/{agents,commands}/ directories, never a user's
+// hand-authored files sitting alongside them.
+//
+// The state key mirrors render.RecordOpsState exactly —
+// "<agent>:<scope>:<home-rel-project>:<home-rel-path>" — so a file apply wrote
+// is recognized here. Home-relativization uses the adapter's configured
+// TargetRoot, the SAME base ResolvePaths uses for every other path, so the read
+// side agrees with the write side in production (the CLI registry constructs
+// every adapter with TargetRoot = paths.HomeDir, the same value apply feeds
+// RecordOpsState).
+//
+// Scope note: filtering ingest by ownership is currently OpenCode-only — no
+// other deep adapter filters its Ingest yet (a known class-wide gap tracked for
+// follow-up; reconcile is unaffected because it classifies drift via the render
+// plan + state and never calls Ingest). The state path is derived from
+// TargetRoot and assumes the default AGENTSYNC_HOME layout
+// (<target-root>/.agentsync); an AGENTSYNC_HOME relocated outside TargetRoot is
+// not honored here.
+func (a *Adapter) destOwned(st *state.Targets, scope adapter.Scope, project, destPath string) bool {
+	home := a.opts.TargetRoot
+	key := fmt.Sprintf("opencode:%s:%s:%s", scope.String(),
+		paths.HomeRelative(home, project), paths.HomeRelative(home, destPath))
+	_, ok := st.Files[key]
+	return ok
 }
 
 func asStr(v any) string { s, _ := v.(string); return s }

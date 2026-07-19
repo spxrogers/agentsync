@@ -16,9 +16,9 @@ import (
 //
 //	description -> description  (direct copy)
 //	model       -> model        (direct copy)
+//	mode        -> mode         (preserved if present; defaults to "subagent")
 //	tools       -> drop + Skip  (OpenCode uses permission model; non-trivial mapping)
 //	color       -> drop + Skip  (no OpenCode equivalent)
-//	(none)      -> mode: subagent  (always added)
 func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp, []adapter.Skip, error) {
 	var ops []adapter.FileOp
 	var skips []adapter.Skip
@@ -30,7 +30,16 @@ func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp
 		if v, ok := s.Frontmatter["model"]; ok {
 			out["model"] = v
 		}
-		out["mode"] = "subagent"
+		// Preserve an OpenCode `mode` (primary/all/subagent) carried in the
+		// canonical frontmatter — e.g. one captured from a native agent by Ingest
+		// — so a primary/all agent is not silently demoted to subagent on the next
+		// apply. A Claude-shaped subagent has no `mode`, so it still defaults to
+		// "subagent" (apply-only flow unchanged).
+		if v, ok := s.Frontmatter["mode"]; ok {
+			out["mode"] = v
+		} else {
+			out["mode"] = "subagent"
+		}
 
 		// Drop unmappable fields, emit Skip notes so the user knows what was lost.
 		if _, ok := s.Frontmatter["tools"]; ok {
