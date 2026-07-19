@@ -188,7 +188,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 - **A disabled Codex MCP server now round-trips into canonical `enabled` (issue
   #152).** Codex's per-server `[mcp_servers.<name>] enabled = false` is now ingested
   into the canonical `MCPServerSpec.Enabled` field (present-only capture; absent
-  stays default-on) instead of landing in the `Extra` passthrough. Also adds
+  stays default-on) instead of landing in the `Extra` passthrough. `capture.Capture`
+  was taught to preserve the source-only `enabled` **only when the ingest carried
+  none** (`Enabled == nil`), so a native disable/enable now survives write-back of
+  an **already-managed** server instead of being silently reset to the source value
+  — completing the round-trip for `reconcile`/re-`import`, not just first import.
+  Also adds
   artifact-anchored Codex fidelity tests: MCP+hooks coexistence in one `config.toml`,
   a bundled-skill round-trip asserting byte-for-byte survival + the script's `0o755`
   bit, and a spec-complete multi-paragraph `developer_instructions` body.

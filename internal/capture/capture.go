@@ -111,8 +111,16 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 
 	for _, m := range ingested.MCPServers {
 		if existing, ok, rerr := source.ReadMCP(home, m.ID); rerr == nil && ok {
+			// Agents targeting is never carried by any native dest, so restoring
+			// the source value is always right. Enabled, however, IS carried by
+			// some dests (Codex reads native `enabled` — issue #152), so only fall
+			// back to the source value when the ingest produced none (nil); a
+			// captured explicit &true/&false must survive, or a native disable is
+			// silently dropped on re-import/reconcile of an already-managed server.
 			m.Server.Agents = existing.Server.Agents
-			m.Server.Enabled = existing.Server.Enabled
+			if m.Server.Enabled == nil {
+				m.Server.Enabled = existing.Server.Enabled
+			}
 		}
 		if err := source.WriteMCP(home, m.ID, m); err != nil {
 			return res, fmt.Errorf("write mcp %s: %w", m.ID, err)
@@ -122,8 +130,13 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 
 	for _, ls := range ingested.LSPServers {
 		if existing, ok, rerr := source.ReadLSP(home, ls.ID); rerr == nil && ok {
+			// Same rule as MCP: Agents is source-only, but preserve Enabled only
+			// when the ingest carried none, so a dest that ever reports LSP enable
+			// state can round-trip it (no adapter does today; kept symmetric).
 			ls.Spec.Agents = existing.Spec.Agents
-			ls.Spec.Enabled = existing.Spec.Enabled
+			if ls.Spec.Enabled == nil {
+				ls.Spec.Enabled = existing.Spec.Enabled
+			}
 		}
 		if err := source.WriteLSP(home, ls); err != nil {
 			return res, fmt.Errorf("write lsp %s: %w", ls.ID, err)
