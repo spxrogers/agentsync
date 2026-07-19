@@ -2,7 +2,6 @@ package cli
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -33,7 +32,11 @@ func TestVersionedDirsContract(t *testing.T) {
 			if !filepath.IsAbs(d) {
 				t.Errorf("%s.VersionRoots(user) = %q; want absolute", name, d)
 			}
-			if !strings.HasPrefix(d, root) {
+			// Path-BOUNDARY check, not a byte prefix: a sibling like `<root>-evil`
+			// starts with the root string but is not under it. isUnderDir uses
+			// filepath.Rel and rejects such escapes (the exact bug class this guard
+			// exists to catch). See TestVersionedDirsContract_RejectsSibling.
+			if !isUnderDir(d, root) {
 				t.Errorf("%s.VersionRoots(user) = %q; want under target root %q", name, d, root)
 			}
 			if d == root {
@@ -50,6 +53,31 @@ func TestVersionedDirsContract(t *testing.T) {
 	agentsSkills := filepath.Join(root, ".agents", "skills")
 	if !contains(reg.Lookup("codex").(adapter.VersionedDirs).VersionRoots(adapter.ScopeUser, ""), agentsSkills) {
 		t.Errorf("codex VersionRoots should include the shared %s", agentsSkills)
+	}
+}
+
+// fakeVersionedDirs is a stand-in adapter returning caller-supplied roots.
+type fakeVersionedDirs struct{ roots []string }
+
+func (f fakeVersionedDirs) VersionRoots(adapter.Scope, string) []string { return f.roots }
+
+// TestVersionedDirsContract_RejectsSibling proves the contract's boundary check
+// catches the prefix-bug class: a returned root whose STRING starts with the
+// target root but is a sibling directory (e.g. `<root>-evil/x`) is not under it.
+// The old strings.HasPrefix check would have accepted it; isUnderDir rejects it.
+func TestVersionedDirsContract_RejectsSibling(t *testing.T) {
+	root := t.TempDir()
+	sibling := filepath.Join(root+"-evil", "x")
+	var vd adapter.VersionedDirs = fakeVersionedDirs{roots: []string{sibling}}
+	for _, d := range vd.VersionRoots(adapter.ScopeUser, "") {
+		// It genuinely shares root's byte prefix (what the old check keyed on)...
+		if len(d) < len(root) || d[:len(root)] != root {
+			t.Fatalf("fixture bug: %q should share the byte prefix %q", d, root)
+		}
+		// ...yet the boundary check must reject it as not-under-root.
+		if isUnderDir(d, root) {
+			t.Fatalf("boundary check accepted sibling %q as under %q — the prefix-bug class is not caught", d, root)
+		}
 	}
 }
 
@@ -123,4 +151,35 @@ func countEq(ss []string, want string) int {
 		}
 	}
 	return n
+}
+
+// TestOwnersFor_RecoversFoldedRoot is the fix for Problem 3 (issue #154): an
+// agent's own de-nested root can be a child parent-folded into an ancestor key in
+// the global owners map, so an exact-key lookup drops the cross-agent warning.
+// OpenCode's ~/.claude/skills folds into Claude's ~/.claude under {claude,
+// opencode}; ownersFor must recover the ancestor's owner set (incl. claude) rather
+// than nil.
+func TestOwnersFor_RecoversFoldedRoot(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("AGENTSYNC_TARGET_ROOT", root)
+	reg := registryFactory()
+
+	owners := versionRootOwners(reg, []string{"claude", "opencode"}, adapter.ScopeUser, "")
+	claudeSkills := filepath.Join(root, ".claude", "skills") // opencode's own de-nested root
+
+	// Precondition: the child root is folded away — it is NOT an exact key.
+	if _, ok := owners[claudeSkills]; ok {
+		t.Fatalf("precondition: %s should be folded into ~/.claude, not a global key", claudeSkills)
+	}
+	// The exact-key path would return nil (the latent bug); ownersFor recovers it.
+	if got := owners[claudeSkills]; got != nil {
+		t.Fatalf("owners[foldedRoot] unexpectedly non-nil: %v", got)
+	}
+	got := ownersFor(owners, claudeSkills)
+	if got == nil {
+		t.Fatal("ownersFor returned nil for a parent-folded root — the shared-dir warning would be dropped")
+	}
+	if !contains(got, "claude") {
+		t.Fatalf("ownersFor(%s) = %v, want to include claude via nearest ancestor ~/.claude", claudeSkills, got)
+	}
 }

@@ -381,6 +381,29 @@ func versionRootOwners(reg *adapter.Registry, agents []string, sc adapter.Scope,
 	return out
 }
 
+// ownersFor returns the cross-agent owner set for a version root by boundary-correct
+// match. The owners map is keyed by the GLOBALLY de-nested root set, so an agent's
+// OWN de-nested root can be a child that was parent-folded away in that map (e.g.
+// OpenCode's ~/.claude/skills folds into Claude's ~/.claude). An exact-key miss
+// therefore falls back to the owners of the nearest ANCESTOR key (deepest key that
+// contains root, via isUnderDir), never a byte prefix. This keeps the shared-dir
+// blast-radius warning intact for parent-folded roots (issue #154).
+func ownersFor(owners map[string][]string, root string) []string {
+	if o, ok := owners[root]; ok {
+		return o
+	}
+	best := ""
+	for k := range owners {
+		if isUnderDir(root, k) && len(k) > len(best) {
+			best = k
+		}
+	}
+	if best == "" {
+		return nil
+	}
+	return owners[best]
+}
+
 // denestRoots returns roots sorted, with any root nested under another removed.
 // Lexical sort places an ancestor before its descendants (the ancestor path is a
 // prefix), so a single forward pass keeping non-nested roots is sufficient.

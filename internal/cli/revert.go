@@ -129,7 +129,10 @@ func revertAgent(p *ui.Printer, reg *adapter.Registry, name, toRef string, dryRu
 	owners := versionRootOwners(reg, reg.Names(), adapter.ScopeUser, "")
 	var anyManaged bool
 	for _, root := range roots {
-		managed, err := revertRoot(p, root, toRef, dryRun, id, sharedExcluding(owners[root], name), strict && len(roots) == 1)
+		// ownersFor (not owners[root]): this agent's own de-nested root may be a
+		// child parent-folded into an ancestor key in the global owners map, so an
+		// exact-key lookup would drop the cross-agent warning (issue #154).
+		managed, err := revertRoot(p, root, toRef, dryRun, id, sharedExcluding(ownersFor(owners, root), name), strict && len(roots) == 1)
 		if err != nil {
 			return err
 		}
