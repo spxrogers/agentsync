@@ -380,3 +380,33 @@ func TestVerify_SanitizesHostileAgentKey(t *testing.T) {
 		t.Fatalf("error should still name the (escaped) agent key; got: %q", err.Error())
 	}
 }
+
+// TestVerify_SanitizesHostileSecretPath pins that verify's verifySecrets escapes a
+// config-derived [secrets].identity_file path (the twin of doctor's checkSecrets):
+// a shareable dotfiles config with an ESC-laden, non-existent path must not inject
+// terminal escapes into `verify`'s error on the default (non-offline) path
+// (issue #93/#171 class).
+func TestVerify_SanitizesHostileSecretPath(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp}
+	_, _ = runCLI(t, env, "init")
+	cfgPath := filepath.Join(tmp, ".agentsync", "agentsync.toml")
+	// identity_file holds a raw ESC (TOML  escape) and points nowhere, so
+	// verifySecrets' os.Stat fails and it returns the path (and the *PathError)
+	// in its error — which must be sanitized.
+	body := "[agents]\n[secrets]\nbackend       = \"age\"\nrecipient     = \"age1qqqq\"\n" +
+		"identity_file = \"/nope/x\\u001b[2K\\u001b[31mHACKED/age.key\"\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runCLI(t, env, "verify")
+	if err == nil {
+		t.Fatal("verify must fail on a non-existent identity_file")
+	}
+	if strings.ContainsRune(err.Error(), 0x1b) {
+		t.Fatalf("verify error must not carry a raw ESC byte from a config-derived path; got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "HACKED") {
+		t.Fatalf("error should still name the (sanitized) path; got: %q", err.Error())
+	}
+}

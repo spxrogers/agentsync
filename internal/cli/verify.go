@@ -174,7 +174,12 @@ func verifySecrets(cfg source.SecretsConfig, home string) error {
 	// ResolveIdentityFile) so verify and apply never disagree on the path.
 	idPath := secrets.ResolveIdentityFile(cfg, home, userHome)
 	if _, err := os.Stat(idPath); err != nil {
-		return fmt.Errorf("identity_file %s: %w", idPath, err)
+		// idPath is config-derived ([secrets].identity_file, a shareable dotfile)
+		// and the *PathError re-embeds it; sanitize both the path and the error
+		// rendering (dropping %w) so a crafted path can't inject terminal escapes
+		// into `verify`'s output — the verifySecrets twin of the doctor fix
+		// (issue #93/#171).
+		return fmt.Errorf("identity_file %s: %s", untrusted.Wrap(idPath), untrusted.Wrap(err.Error()))
 	}
 	// Use the same permission check apply uses — it honours
 	// AGENTSYNC_AGE_SKIP_PERM_CHECK=1, which the previous inline
@@ -189,7 +194,7 @@ func verifySecrets(cfg source.SecretsConfig, home string) error {
 	// apply does, then only flag a present-but-unreadable file.
 	agePath := secrets.ResolveAgeFile(cfg, home, userHome)
 	if _, err := os.Stat(agePath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("secrets.file %s: %w", agePath, err)
+		return fmt.Errorf("secrets.file %s: %s", untrusted.Wrap(agePath), untrusted.Wrap(err.Error()))
 	}
 	return nil
 }
