@@ -226,6 +226,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`revert`: the uncommitted-tracked-edit safety is now enforced in the engine,
+  and partial-reset failures surface a recovery hint (issue #146).** `internal/git.Repo.Restore`
+  previously relied on the CLI wrapper snapshotting uncommitted edits to tracked
+  files before it ran; any other caller (or a refactor) silently lost them. The
+  snapshot is now folded into `Restore` itself — it resolves the target to a
+  concrete hash, then snapshots dirty tracked files, so the append-only "nothing is
+  rewritten or lost" promise holds for *every* caller, not just `revert`. Untracked
+  and gitignored files remain untouched (issue #128). If a rollback fails partway
+  after that snapshot, the error now names the snapshot commit and the pre-revert
+  checkpoint (`git reset --hard …`) instead of handing back a bare error after
+  claiming the edits were preserved.
+
 - **Windsurf: strip non-`always_on` trigger frontmatter on ingest so re-apply no
   longer produces a malformed double-fenced rule (issue #136).** When a user
   hand-edited a workspace rule's `trigger:` to a non-default value (e.g. `glob`

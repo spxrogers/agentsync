@@ -219,28 +219,25 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 		return true, previewRevert(p, repo, root, target)
 	}
 
-	// Resolve the target to a concrete hash BEFORE snapshotting — the snapshot below
-	// moves HEAD, after which a relative ref like "HEAD~1" would point elsewhere.
+	// Resolve the target to a concrete hash for the commit message; Restore also
+	// snapshots uncommitted tracked edits internally (safe-by-construction) and
+	// resolves the ref itself before that snapshot moves HEAD.
 	targetHash, err := repo.Resolve(target)
 	if err != nil {
 		return true, err
 	}
-	// Preserve any uncommitted hand-edits to tracked files as a snapshot commit so
-	// Restore's delta-apply can't lose them. Untracked files are untouched: Restore
-	// only rewrites the tracked HEAD↔target delta and never enumerates them.
-	snap, err := repo.SnapshotDirtyTracked("agentsync revert: snapshot uncommitted changes before revert", id)
+	msg := fmt.Sprintf("agentsync revert: %s → %s", root, shortRef(targetHash))
+	// Restore folds in SnapshotDirtyTracked and returns its hash. Do NOT announce the
+	// snapshot before the revert lands: on a partial failure Restore returns a hinted
+	// error naming the snapshot + pre-revert HEAD, so we print the "preserved" notice
+	// only once the revert actually succeeds and the error can't contradict it.
+	h, snap, err := repo.Restore(targetHash, msg, id)
 	if err != nil {
 		return true, err
 	}
 	if snap != "" {
 		fmt.Fprintf(p.Out, "%s preserved uncommitted changes in %s as snapshot %s\n",
 			p.Faint(ui.GlyphInfo), root, shortRef(snap))
-	}
-
-	msg := fmt.Sprintf("agentsync revert: %s → %s", root, shortRef(targetHash))
-	h, err := repo.Restore(targetHash, msg, id)
-	if err != nil {
-		return true, err
 	}
 	if h == "" {
 		fmt.Fprintf(p.Out, "%s %s already matches %s; nothing to revert.\n", p.Faint(ui.GlyphInfo), root, shortRef(targetHash))

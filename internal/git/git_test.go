@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -554,7 +555,7 @@ func TestRestoreAppendOnly(t *testing.T) {
 		t.Fatalf("Plan mutated worktree: a.txt = %q", got)
 	}
 
-	h, err := r.Restore("HEAD~2", "agentsync revert: test", DefaultIdentity)
+	h, _, err := r.Restore("HEAD~2", "agentsync revert: test", DefaultIdentity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -581,7 +582,7 @@ func TestRestoreAppendOnly(t *testing.T) {
 	}
 
 	// Restoring to the current HEAD is a no-op.
-	noop, err := r.Restore("HEAD", "noop", DefaultIdentity)
+	noop, _, err := r.Restore("HEAD", "noop", DefaultIdentity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,7 +625,7 @@ func TestRestore_PreservesUntrackedFiles(t *testing.T) {
 		t.Fatalf("UntrackedPaths = %v, should NOT list the gitignored scratch.log", untracked)
 	}
 
-	h, err := r.Restore("HEAD~1", "agentsync revert: preserve untracked", DefaultIdentity)
+	h, _, err := r.Restore("HEAD~1", "agentsync revert: preserve untracked", DefaultIdentity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -750,7 +751,7 @@ func TestRestore_PreservesFileMode(t *testing.T) {
 		if _, err := r.CommitStaged("remove script", DefaultIdentity); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := r.Restore("HEAD~1", "agentsync revert: restore script", DefaultIdentity); err != nil {
+		if _, _, err := r.Restore("HEAD~1", "agentsync revert: restore script", DefaultIdentity); err != nil {
 			t.Fatal(err)
 		}
 		if got := readFile(t, dir, "run.sh"); got != "#!/bin/sh\necho v1\n" {
@@ -771,7 +772,7 @@ func TestRestore_PreservesFileMode(t *testing.T) {
 		// (OpenFile only honors perm on creation).
 		commitFileMode(t, r, dir, "run.sh", "#!/bin/sh\necho v1\n", 0o755, "exec v1") // HEAD~1
 		commitFileMode(t, r, dir, "run.sh", "#!/bin/sh\necho v2\n", 0o644, "nonexec v2")
-		if _, err := r.Restore("HEAD~1", "agentsync revert: restore exec bit", DefaultIdentity); err != nil {
+		if _, _, err := r.Restore("HEAD~1", "agentsync revert: restore exec bit", DefaultIdentity); err != nil {
 			t.Fatal(err)
 		}
 		if got := readFile(t, dir, "run.sh"); got != "#!/bin/sh\necho v1\n" {
@@ -810,7 +811,7 @@ func TestRestore_FileDirTransition(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Revert to c1: delete foo/bar, then create the file foo over the empty dir.
-	if _, err := r.Restore("HEAD~1", "agentsync revert: dir->file", DefaultIdentity); err != nil {
+	if _, _, err := r.Restore("HEAD~1", "agentsync revert: dir->file", DefaultIdentity); err != nil {
 		t.Fatalf("Restore across a file<->dir transition should not error: %v", err)
 	}
 	if got := readFile(t, dir, "foo"); got != "iamfile" {
@@ -852,7 +853,7 @@ func TestRestore_FileToDirTransition(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Revert to c1: delete the file foo, then MkdirAll("foo") + create foo/bar.
-	if _, err := r.Restore("HEAD~1", "agentsync revert: file->dir", DefaultIdentity); err != nil {
+	if _, _, err := r.Restore("HEAD~1", "agentsync revert: file->dir", DefaultIdentity); err != nil {
 		t.Fatalf("Restore across a file->dir transition should not error: %v", err)
 	}
 	if got := readFile(t, dir, "foo/bar"); got != "iamdir" {
@@ -894,7 +895,7 @@ func TestRestore_UntrackedSiblingBlocksFileReplacement(t *testing.T) {
 
 	// Reverting to c1 would need to replace dir foo with a file, but foo still
 	// holds the untracked scratch file — Restore must refuse, not delete it.
-	_, err = r.Restore("HEAD~1", "agentsync revert: blocked", DefaultIdentity)
+	_, _, err = r.Restore("HEAD~1", "agentsync revert: blocked", DefaultIdentity)
 	if err == nil {
 		t.Fatal("Restore should refuse when an untracked file blocks a dir->file replacement")
 	}
@@ -941,7 +942,7 @@ func TestRestore_GitignoredSiblingBlocksFileReplacement(t *testing.T) {
 	const scratch = "gitignored — keep me\n"
 	writeFile(t, dir, "foo/debug.log", scratch) // gitignored; git status omits it
 
-	if _, err := r.Restore("HEAD~1", "agentsync revert: blocked by gitignored", DefaultIdentity); err == nil {
+	if _, _, err := r.Restore("HEAD~1", "agentsync revert: blocked by gitignored", DefaultIdentity); err == nil {
 		t.Fatal("Restore should refuse when a gitignored file blocks a dir->file replacement")
 	} else if !strings.Contains(err.Error(), "agentsync does not manage") {
 		t.Fatalf("error should point at the unmanaged files; got: %v", err)
@@ -983,7 +984,7 @@ func TestRestore_ParentFileCollisionBlocked(t *testing.T) {
 
 	// Revert to c2 (has a/b): creating a/b needs MkdirAll("a") over the untracked
 	// file "a" — the pre-flight must refuse before mutating, preserving "a".
-	if _, err := r.Restore("HEAD~1", "agentsync revert: parent collision", DefaultIdentity); err == nil {
+	if _, _, err := r.Restore("HEAD~1", "agentsync revert: parent collision", DefaultIdentity); err == nil {
 		t.Fatal("Restore should refuse when an untracked file blocks creating a parent dir")
 	} else if !strings.Contains(err.Error(), "does not manage") {
 		t.Fatalf("error should point at the unmanaged parent; got: %v", err)
@@ -1021,7 +1022,7 @@ func TestRestore_CreatePathCollidesWithUntrackedFile(t *testing.T) {
 
 	// Reverting to c2 (has managed X) is a create of X — but X is now the user's
 	// untracked file. Restore must refuse, not overwrite it.
-	if _, err := r.Restore("HEAD~1", "agentsync revert: create collision", DefaultIdentity); err == nil {
+	if _, _, err := r.Restore("HEAD~1", "agentsync revert: create collision", DefaultIdentity); err == nil {
 		t.Fatal("Restore should refuse to overwrite an untracked file at a create path")
 	} else if !strings.Contains(err.Error(), "a file agentsync does not manage already exists") {
 		t.Fatalf("error should name the create-collision; got: %v", err)
@@ -1029,4 +1030,118 @@ func TestRestore_CreatePathCollidesWithUntrackedFile(t *testing.T) {
 	if got := readFile(t, dir, "X"); got != user {
 		t.Fatalf("user's untracked file at X must survive, got %q", got)
 	}
+}
+
+// blobAt returns the content of rel in the tree of commit hash.
+func blobAt(t *testing.T, dir, hash, rel string) string {
+	t.Helper()
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := repo.CommitObject(plumbing.NewHash(hash))
+	if err != nil {
+		t.Fatalf("commit object %s: %v", hash, err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		t.Fatalf("tree of %s: %v", hash, err)
+	}
+	f, err := tree.File(rel)
+	if err != nil {
+		t.Fatalf("file %s in commit %s: %v", rel, hash, err)
+	}
+	s, err := f.Contents()
+	if err != nil {
+		t.Fatalf("contents of %s: %v", rel, err)
+	}
+	return s
+}
+
+// TestRestoreSnapshotsDirtyTracked is the engine-level regression for issue #146's D1:
+// Restore itself (called DIRECTLY, no CLI wrapper) must preserve uncommitted edits to
+// already-TRACKED files by snapshotting them into history BEFORE the delta-apply — the
+// worktree-safety promise now holds for every caller, not just revert.go. It also
+// guards the boundary with #128: an untracked scratch file is left byte-for-byte alone.
+// Everything is anchored to the on-disk filesystem / commit trees, not a return value.
+func TestRestoreSnapshotsDirtyTracked(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "a.txt", "v1", "apply 1") // HEAD~1 target
+	commitFile(t, r, dir, "a.txt", "v2", "apply 2") // HEAD
+
+	// Hand-edit the tracked file on disk WITHOUT committing, and drop an untracked file.
+	const handEdit = "hand-edited-after-apply"
+	const scratchBody = "my scratch — keep me\n"
+	writeFile(t, dir, "a.txt", handEdit)
+	writeFile(t, dir, "scratch.txt", scratchBody)
+
+	// Call Restore directly. It must snapshot the dirty tracked edit first, then restore
+	// a.txt to the HEAD~1 checkpoint.
+	revert, snap, err := r.Restore("HEAD~1", "agentsync revert: engine", DefaultIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revert == "" {
+		t.Fatal("Restore returned an empty revert hash")
+	}
+	if snap == "" {
+		t.Fatal("Restore must snapshot the uncommitted tracked edit and return its hash (D1 safety)")
+	}
+
+	// On-disk: the worktree now matches the target checkpoint.
+	if got := readFile(t, dir, "a.txt"); got != "v1" {
+		t.Fatalf("after restore a.txt = %q, want v1 (target checkpoint)", got)
+	}
+	// Recoverable from history: the snapshot commit's tree carries the hand-edit verbatim.
+	if got := blobAt(t, dir, snap, "a.txt"); got != handEdit {
+		t.Fatalf("snapshot %s should preserve the hand-edit; a.txt blob = %q, want %q", snap, got, handEdit)
+	}
+	// Boundary with #128: the untracked scratch file is untouched and never versioned.
+	if got := readFile(t, dir, "scratch.txt"); got != scratchBody {
+		t.Fatalf("untracked scratch file was mutated/deleted by Restore: %q", got)
+	}
+	if untracked, _ := r.UntrackedPaths(); !slices.Contains(untracked, "scratch.txt") {
+		t.Fatalf("scratch.txt should still be untracked after Restore; UntrackedPaths=%v", untracked)
+	}
+}
+
+// TestRestoreFailureHint pins the recovery-hint formatting for issue #146's D2: a
+// failure once the delta-apply has begun (after the snapshot advanced HEAD) must surface
+// an error naming BOTH the snapshot commit and the pre-revert HEAD (orig), so the user
+// can recover their preserved edits. A genuine mid-delta-apply failure needs filesystem
+// conditions that are impractical to force deterministically in-container (the pre-flight
+// already refuses every structural conflict; the remaining triggers are disk-full /
+// EACCES mid-write), so we assert the pure error-wrapping helper directly.
+func TestRestoreFailureHint(t *testing.T) {
+	orig := "0123456789abcdef0123456789abcdef01234567"
+	snap := "89abcdef0123456789abcdef0123456789abcdef"
+	inner := errors.New("write a.txt: disk full")
+
+	t.Run("with snapshot names orig and snapshot", func(t *testing.T) {
+		err := restoreFailureHint("/dest/.claude", orig, snap, inner)
+		msg := err.Error()
+		for _, want := range []string{shortStr(snap), shortStr(orig), "reset --hard", "disk full"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("hint %q missing %q", msg, want)
+			}
+		}
+		if !errors.Is(err, inner) {
+			t.Error("hint must wrap the inner error (errors.Is)")
+		}
+	})
+	t.Run("without snapshot still names orig", func(t *testing.T) {
+		err := restoreFailureHint("/dest/.claude", orig, "", inner)
+		msg := err.Error()
+		if !strings.Contains(msg, shortStr(orig)) || !strings.Contains(msg, "reset --hard") {
+			t.Errorf("hint %q should name orig + a reset --hard recovery command", msg)
+		}
+		if strings.Contains(msg, shortStr(snap)) {
+			t.Errorf("hint without a snapshot must not name a snapshot hash: %q", msg)
+		}
+	})
 }

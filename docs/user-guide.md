@@ -258,6 +258,9 @@ agentsync revert --all --dry-run     # preview reverting every managed dir
 history, so the bad apply stays in the log and the revert is itself revertible. If
 you hand-edited a tracked file after the last apply, revert snapshots that edit
 into history first, so **nothing is lost** (recover it with `revert --to <snapshot>`).
+That snapshot is taken by the rollback engine itself, so the guarantee holds however
+revert is invoked; in the rare event a rollback fails partway (e.g. a full disk), the
+error names the snapshot commit and the pre-revert checkpoint so you can recover.
 Any **untracked files** you dropped into the dir (and gitignored files) are **left
 untouched** — revert only rewinds the files agentsync itself versions, so your own
 scratch files are never deleted. `revert --dry-run` notes when such files are

@@ -395,9 +395,12 @@ Key stages:
    `internal/git` exposes no remote/push surface at all (a source-scanning guard
    test, `TestNoPushSurface`, keeps it that way). `agentsync revert` (which takes
    the same global lock apply holds) rolls a dir back to a prior checkpoint
-   append-only, first snapshotting any uncommitted hand-edits to tracked files so
-   the rollback can't lose them. `.state/` is **untouched** by this step — the two
-   are complementary (operational memory vs. user-facing rollback history).
+   append-only. Snapshotting uncommitted hand-edits to tracked files is enforced
+   **inside the engine `Restore`** (safe-by-construction for every caller, not just
+   the CLI wrapper), so the rollback can't lose them; a partial-reset failure after
+   that snapshot surfaces a **recovery hint** naming the pre-revert HEAD and the
+   snapshot commit. `.state/` is **untouched** by this step — the two are
+   complementary (operational memory vs. user-facing rollback history).
 
 `--dry-run` runs steps 1–6, then a non-writing pass of step 7 (the writer's merge
 + convergence check, no disk write) so it can label each destination `✓ synced`
