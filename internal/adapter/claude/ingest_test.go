@@ -229,6 +229,11 @@ func TestIngest_RoundTripsSubagentsAndCommands(t *testing.T) {
 	}
 }
 
+// MODEL-ANCHORED: this remains a deliberate model-level unit check (Render→Apply→Ingest,
+// asserting the parsed hook survives + settings.json lspServers stays ignored). The
+// artifact-anchored on-disk hook fidelity is now backed separately by
+// TestIngest_HookArtifactRoundTrip (hook_test.go), so this one is kept as the
+// model/round-trip oracle, not the byte oracle.
 func TestIngest_RoundTripsHooksButIgnoresSettingsLSP(t *testing.T) {
 	tmp := t.TempDir()
 	in := source.Canonical{

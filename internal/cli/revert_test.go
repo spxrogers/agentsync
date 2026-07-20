@@ -132,6 +132,25 @@ func TestRevert_Errors(t *testing.T) {
 			t.Fatal("expected error for agent + --all")
 		}
 	})
+	t.Run("all plus to", func(t *testing.T) {
+		// --to names a checkpoint in ONE repo and cannot span every managed dir, so
+		// `revert --all --to <ref>` is rejected up front by the guard in revert.go's
+		// RunE (before any repo is touched). A resolvable ref is used to prove the
+		// rejection is the flag-combination guard, not a bad-ref resolution error.
+		if _, err := runCLI(t, env, "revert", "--all", "--to", "HEAD~1"); err == nil {
+			t.Fatal("expected error for --all combined with --to")
+		}
+	})
+	t.Run("non-ancestor to ref rejected", func(t *testing.T) {
+		// TODO(ancestor-validation): revert does NOT yet validate that --to names a
+		// commit that is actually a checkpoint (ancestor of HEAD) in the target repo.
+		// internal/git/log.go Resolve() accepts ANY resolvable revision, and
+		// revertRoot in internal/cli/revert.go passes it straight to repo.Restore
+		// without a membership/ancestor check. Until that validation exists, asserting
+		// a non-checkpoint --to is "rejected" would be asserting behavior the code does
+		// not have. Skip rather than pin the unsafe current behavior.
+		t.Skip("ancestor/checkpoint-membership validation for --to is not implemented (git.Resolve accepts any resolvable commit); see revert.go revertRoot + log.go Resolve")
+	})
 	t.Run("no target", func(t *testing.T) {
 		if _, err := runCLI(t, env, "revert"); err == nil {
 			t.Fatal("expected error when neither agent nor --all given")

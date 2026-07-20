@@ -48,6 +48,48 @@ func TestMCP_AddStdio_WritesCanonicalTOML(t *testing.T) {
 	}
 }
 
+// TestMCPAdd_ReadsBackEnvAndAgents pins that `mcp add`'s --env and --agents flags
+// survive the round-trip into the canonical mcp/<id>.toml: the Env map keeps its
+// KEY=VAL pair and the agent allowlist parses back to exactly ["claude","codex"].
+// The Agents allowlist is a source-only field (never emitted into a rendered dest),
+// so this add→load path is the only place its fidelity is exercised end-to-end.
+func TestMCPAdd_ReadsBackEnvAndAgents(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	_, _ = runCLI(t, env, "init")
+
+	out, err := runCLI(t, env, "mcp", "add", "gh",
+		"--type", "stdio",
+		"--command", "npx",
+		"--env", "TOKEN=abc123",
+		"--agents", "claude,codex")
+	if err != nil {
+		t.Fatalf("mcp add: %v\n%s", err, out)
+	}
+
+	p := filepath.Join(tmp, ".agentsync", "mcp", "gh.toml")
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read written file: %v", err)
+	}
+	var m source.MCPServer
+	if err := toml.Unmarshal(data, &m); err != nil {
+		t.Fatalf("parse written toml: %v\n%s", err, data)
+	}
+	if m.Server.Env["TOKEN"] != "abc123" {
+		t.Errorf("Env[TOKEN] = %q, want abc123 (env round-trip)\n%s", m.Server.Env["TOKEN"], data)
+	}
+	want := []string{"claude", "codex"}
+	if len(m.Server.Agents) != len(want) {
+		t.Fatalf("agents = %v, want %v", m.Server.Agents, want)
+	}
+	for i, a := range want {
+		if m.Server.Agents[i] != a {
+			t.Errorf("agents[%d] = %q, want %q", i, m.Server.Agents[i], a)
+		}
+	}
+}
+
 func TestMCP_AddRejectsDuplicates(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

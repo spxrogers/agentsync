@@ -12,6 +12,7 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/spxrogers/agentsync/internal/testenv"
 )
@@ -1359,4 +1360,87 @@ func TestSnapshotDirtyTracked_CleartextCapture(t *testing.T) {
 	if want := time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC); !c.Author.When.Equal(want) {
 		t.Errorf("snapshot commit time = %v, want pinned %v", c.Author.When, want)
 	}
+}
+
+func TestStage_WriteDriven(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Baseline checkpoint: three tracked files, exec.sh starting NON-executable.
+	commitFile(t, r, dir, "same.txt", "unchanged-bytes\n", "baseline same")
+	commitFileMode(t, r, dir, "exec.sh", "#!/bin/sh\necho hi\n", 0o644, "baseline exec")
+	commitFile(t, r, dir, "changed.txt", "v1\n", "baseline changed")
+
+	// A second apply WRITES a set of files regardless of whether the bytes moved:
+	//   (a) same.txt    — rewritten with byte-identical content.
+	//   (b) exec.sh     — mode-only change (chmod +x), same bytes.
+	//   (c) changed.txt — genuinely new content (keeps the checkpoint non-empty).
+	writeFile(t, dir, "same.txt", "unchanged-bytes\n") // identical bytes
+	if err := os.Chmod(filepath.Join(dir, "exec.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "changed.txt", "v2\n")
+
+	written := []string{"same.txt", "exec.sh", "changed.txt"}
+	if err := r.Stage(written); err != nil {
+		t.Fatalf("stage the written set: %v", err)
+	}
+	h, err := r.CommitStaged("write-driven checkpoint", DefaultIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h == "" {
+		t.Fatal("checkpoint should be non-empty (changed.txt moved)")
+	}
+
+	// Every member of the written set is present in the checkpoint tree.
+	tree := headTreePaths(t, r)
+	for _, p := range written {
+		if !tree[p] {
+			t.Fatalf("written path %q missing from checkpoint tree %v", p, tree)
+		}
+	}
+	// (a) the byte-identical rewrite survives with its bytes intact.
+	if got := blobAt(t, dir, h, "same.txt"); got != "unchanged-bytes\n" {
+		t.Fatalf("same.txt in checkpoint = %q, want the unchanged bytes", got)
+	}
+	// (b) the mode-only change is captured: the tree entry is executable, proving
+	//     the exec bit rode into the checkpoint though not one content byte changed.
+	if mode := treeEntryMode(t, r, "exec.sh"); mode != filemode.Executable {
+		t.Fatalf("exec.sh checkpoint mode = %v, want Executable (mode-only change captured)", mode)
+	}
+	// (c) the genuinely-changed file carries its new bytes.
+	if got := blobAt(t, dir, h, "changed.txt"); got != "v2\n" {
+		t.Fatalf("changed.txt in checkpoint = %q, want v2", got)
+	}
+}
+
+// treeEntryMode returns the git filemode of rel in the repo's current HEAD tree.
+func treeEntryMode(t *testing.T, r *Repo, rel string) filemode.FileMode {
+	t.Helper()
+	repo, err := gogit.PlainOpen(r.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := tree.FindEntry(rel)
+	if err != nil {
+		t.Fatalf("find %s in HEAD tree: %v", rel, err)
+	}
+	return e.Mode
 }
