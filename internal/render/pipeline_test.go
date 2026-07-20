@@ -184,6 +184,30 @@ func TestPlan_RejectsTraversalComponentName(t *testing.T) {
 	}
 }
 
+// TestPlan_RejectsTraversalInProjectOverlay proves the id-validation recursion is
+// wired end-to-end: a traversal-bearing id living ONLY in the project overlay (the
+// top-level model is clean) still refuses the whole plan. This ties the
+// ComponentIDs `c.Project` recursion (internal/secrets) to the render-time guard —
+// a regression that stopped descending into the overlay would render a
+// write-anywhere FileOp for a project-only component.
+func TestPlan_RejectsTraversalInProjectOverlay(t *testing.T) {
+	reg := adapter.NewRegistry()
+	if err := reg.Register(noop.New("claude")); err != nil {
+		t.Fatal(err)
+	}
+	proj := source.Canonical{
+		MCPServers: []source.MCPServer{{ID: "../../../etc/x", Server: source.MCPServerSpec{Type: "stdio", Command: "x"}}},
+	}
+	model := source.Canonical{Project: &proj}
+	_, err := render.Plan(secrets.ForRender(model), reg, []string{"claude"}, adapter.ScopeProject, "/tmp/proj", nil, "/tmp")
+	if err == nil {
+		t.Fatal("Plan accepted a traversal MCP id living only in the project overlay")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "render:") || !strings.Contains(msg, "component mcp") {
+		t.Errorf("error %q missing render/kind context (want 'render:' + 'component mcp')", msg)
+	}
+}
+
 // TestPlan_ContainmentBackstopRejectsEscapingFileOp exercises the second,
 // path-based guard directly: a stub adapter emits a write op whose path still
 // contains a surviving ".." after cleaning, while the model carries no component

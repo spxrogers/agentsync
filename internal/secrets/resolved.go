@@ -56,10 +56,15 @@ func ForRender(c source.Canonical) Resolved { return Resolved{c: c} }
 // stop — you almost certainly want capture.Capture instead.
 func (r Resolved) Canonical() source.Canonical { return r.c }
 
-// ComponentID is a (kind, name) pair for a text component whose canonical Name
-// becomes a destination filename stem at Render (subagent/command/skill). Kind
-// is the label source.ValidateComponentID expects ("subagent", "command",
-// "skill").
+// ComponentID is a (kind, name) pair for a component id an adapter joins into a
+// destination path. For a TEXT component (subagent/command/skill) the Name is the
+// canonical Name that becomes a destination filename stem at Render. For an MCP or
+// LSP server the Name is the server id: a filename stem only for adapters that
+// write one file per server (continuedev — filepath.Join(MCPDir, id+".yaml")), and
+// a JSON key in a shared file for the rest — but a traversal id is never a
+// legitimate server id in either shape, so all kinds are validated the same way.
+// Kind is the label source.ValidateComponentID expects ("subagent", "command",
+// "skill", "mcp", "lsp").
 type ComponentID struct {
 	Kind string
 	Name string

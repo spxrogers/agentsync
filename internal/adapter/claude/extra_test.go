@@ -34,3 +34,52 @@ func TestMergeExtra_SkipsReservedKeys(t *testing.T) {
 		t.Errorf("reserved key __block_schema leaked into destination: %v", spec)
 	}
 }
+
+// TestExtraNativeKeys_SkipsReservedAndModeled pins the CAPTURE side of the "__"
+// reserved namespace, symmetric with MergeExtra's render-side skip. A native
+// config's modeled keys are excluded (they are represented in the canonical
+// model), and a "__"-prefixed key is excluded too — agentsync owns that namespace
+// on both sides, so a stray native "__" key can never be captured into the shared
+// Extra only to be dropped on the next render (a silent lossy round-trip). Every
+// other unmodeled native key is captured verbatim.
+func TestExtraNativeKeys_SkipsReservedAndModeled(t *testing.T) {
+	raw := map[string]any{
+		"command":         "npx",      // modeled — excluded
+		"timeout":         30,         // unmodeled native passthrough — captured
+		"cwd":             "/srv",     // unmodeled native passthrough — captured
+		"__block_version": "v2",       // reserved namespace — excluded
+		"__anything":      "internal", // reserved namespace — excluded
+	}
+
+	extra := ExtraNativeKeys(raw, "command", "args", "env")
+
+	if got := extra["timeout"]; got != 30 {
+		t.Errorf("unmodeled native key dropped: extra[timeout]=%v, want 30", got)
+	}
+	if got := extra["cwd"]; got != "/srv" {
+		t.Errorf("unmodeled native key dropped: extra[cwd]=%v, want /srv", got)
+	}
+	if _, ok := extra["command"]; ok {
+		t.Errorf("modeled key captured into Extra: %v", extra)
+	}
+	if _, ok := extra["__block_version"]; ok {
+		t.Errorf("reserved key __block_version captured into Extra: %v", extra)
+	}
+	if _, ok := extra["__anything"]; ok {
+		t.Errorf("reserved key __anything captured into Extra: %v", extra)
+	}
+}
+
+// TestExtraNativeKeys_AllReservedOrModeledReturnsNil proves the nil-Extra
+// contract survives the "__" skip: if every native key is modeled or reserved,
+// ExtraNativeKeys returns nil (not an empty map), so the caller omits the
+// canonical [server.extra] table entirely.
+func TestExtraNativeKeys_AllReservedOrModeledReturnsNil(t *testing.T) {
+	raw := map[string]any{
+		"command":         "npx", // modeled
+		"__block_version": "v2",  // reserved
+	}
+	if extra := ExtraNativeKeys(raw, "command"); extra != nil {
+		t.Errorf("expected nil Extra when only modeled/reserved keys present, got %v", extra)
+	}
+}

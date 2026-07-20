@@ -678,6 +678,20 @@ are a **deliberate exception**: they are not in `walkSecretFields`, so a
 backstop scans `Extra` separately (`scanExtraResidual`) and refuses a write that
 would persist a live secret value through it.
 
+**The `__` prefix is an agentsync-reserved `Extra` namespace.** A `__`-prefixed
+`Extra` key is agentsync-INTERNAL round-trip metadata, never a verbatim native
+field — the sole current use is continuedev's `__block_version` / `__block_schema`,
+which round-trip a Continue MCP block's `version`/`schema` header through the
+shared `Extra` map. Because `Extra` is a **shared** canonical field, this namespace
+is owned by agentsync symmetrically on both sides of the round trip: the shared
+`claude.MergeExtra` (render) never projects a `__` key into a destination, and
+`claude.ExtraNativeKeys` (capture) never ingests one — so one adapter's synthetic
+keys can never leak into another agent's native config, and a stray native `__`
+key can never be captured-then-silently-dropped. An adapter that owns reserved
+keys reads and writes them directly (continuedev's `blockHeader` /
+`applyBlockHeader` operate at the block level, bypassing both shared helpers). No
+supported harness uses a `__`-prefixed native config key.
+
 > If you ever find yourself unwrapping a `secrets.Resolved` outside an adapter's
 > `Render`, stop — you almost certainly want `capture.Capture`. The full set of
 > invariants is in [`CLAUDE.md`](../CLAUDE.md) and [`SECURITY.md`](../SECURITY.md).

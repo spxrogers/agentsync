@@ -1,6 +1,9 @@
 package render_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,18 +80,21 @@ func TestRecordOpsState_MergeTomlNumericNoFalseDrift(t *testing.T) {
 		dest    string // on-disk TOML dest content
 		ours    string // op.Content (JSON)
 		wantErr string // "" = expect success
+		wantPtr string // the single owned pointer that must be recorded
 	}{
 		{
 			name:    "numeric owned value records cleanly (no apply failure)",
 			dest:    "[mcp_servers.github]\ntimeout = 30\n",
 			ours:    `{"mcp_servers":{"github":{"timeout":30}}}`,
 			wantErr: "",
+			wantPtr: "/mcp_servers/github",
 		},
 		{
 			name:    "string owned value records cleanly",
 			dest:    "[mcp_servers.github]\ncommand = \"npx\"\n",
 			ours:    `{"mcp_servers":{"github":{"command":"npx"}}}`,
 			wantErr: "",
+			wantPtr: "/mcp_servers/github",
 		},
 	}
 	for _, tc := range cases {
@@ -114,11 +120,59 @@ func TestRecordOpsState_MergeTomlNumericNoFalseDrift(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("string-only owned value should record cleanly, got: %v", err)
+				t.Fatalf("owned value should record cleanly, got: %v", err)
 			}
-			if len(st.Keys) == 0 {
-				t.Fatalf("expected a recorded key for the string-only owned value")
+			// Exactly one owned pointer recorded, and it is the RIGHT one — proving
+			// the value landed under wantPtr, not merely that "a" key exists.
+			if len(st.Keys) != 1 {
+				t.Fatalf("want exactly one recorded key, got %d: %v", len(st.Keys), st.Keys)
+			}
+			var gotKey string
+			var gotEntry state.KeyEntry
+			for k, e := range st.Keys {
+				gotKey, gotEntry = k, e
+			}
+			if !strings.HasSuffix(gotKey, ":"+tc.wantPtr) {
+				t.Errorf("recorded key %q does not end with pointer %q", gotKey, tc.wantPtr)
+			}
+			// No false drift (the actual #162 bug class): the recorded hash is taken
+			// from the TOML-decoded dest value, while status/diff hash the JSON-decoded
+			// SOURCE value for the same pointer. For a value that decodes equivalently
+			// in both (an in-range int, a string), those two hashes MUST match, or the
+			// 3-way drift classifier reports perpetual drift no apply can converge. The
+			// removed assertHashStableTOMLValue guard worried about exactly this —
+			// assert it directly instead of merely asserting "recorded without error".
+			if want := jsonPointerHash(t, tc.ours, tc.wantPtr); gotEntry.SHA256 != want {
+				t.Errorf("recorded hash %s != source-side hash %s — %s would false-drift on the next status",
+					gotEntry.SHA256, want, tc.wantPtr)
 			}
 		})
 	}
+}
+
+// jsonPointerHash replicates RecordOpsState's owned-key hashing
+// (hex(sha256(json.Marshal(v)))) over the JSON-decoded SOURCE value at ptr — i.e.
+// exactly what status/diff hash for the source side. RecordOpsState hashes the
+// TOML-decoded DEST value the same way; the two must agree for a shape-stable
+// scalar, which is what the caller asserts.
+func jsonPointerHash(t *testing.T, jsonStr, ptr string) string {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &m); err != nil {
+		t.Fatalf("unmarshal source %q: %v", jsonStr, err)
+	}
+	cur := any(m)
+	for _, seg := range strings.Split(strings.TrimPrefix(ptr, "/"), "/") {
+		obj, ok := cur.(map[string]any)
+		if !ok {
+			t.Fatalf("pointer %s: no object at segment %q", ptr, seg)
+		}
+		cur = obj[seg]
+	}
+	b, err := json.Marshal(cur)
+	if err != nil {
+		t.Fatalf("marshal value at %s: %v", ptr, err)
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }

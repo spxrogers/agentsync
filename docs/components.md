@@ -133,13 +133,20 @@ Gemini) Ingest leaves a `settings.json` hook event uncaptured with a warning if
 it carries an unmodeled definition/handler field (e.g. `timeout`) or a
 non-command handler, and Render reports a dropped `Skip` for any non-command
 hook rather than emitting an empty-command entry — an import→apply round-trip
-never rewrites the user's native `/hooks/<event>` array lossily.
+never rewrites the user's native `/hooks/<event>` array lossily. It also owns the
+shared `Extra` passthrough helpers reused by every MCP-capable adapter:
+`ExtraNativeKeys` (capture unmodeled native fields into `source.*Spec.Extra`) and
+`MergeExtra` (project them back on render). Both reserve the `__` prefix as an
+agentsync-internal namespace — symmetric on capture and render — so one adapter's
+synthetic metadata (continuedev's `__block_version`/`__block_schema`) can never
+leak into another agent's config; see
+[architecture.md § 8](architecture.md#8-secrets--how-the-leak-is-prevented).
 - **Key:** `New(Options) *Adapter`; the `Adapter` + `PluginIngester` methods;
-  `ParseFrontmatter`/`EncodeFrontmatter`; `MergeKeys`.
+  `ParseFrontmatter`/`EncodeFrontmatter`; `MergeKeys`; `MergeExtra`/`ExtraNativeKeys`.
 - **Depends on:** adapter, secrets, source, paths, iox, jsonkeys.
 - **Files:** `claude.go`, `homedir.go`, `render.go`, `ingest.go`, `ingest_plugins.go`,
   `apply.go`, `paths.go`, `frontmatter.go`, `skill.go`, `command.go`,
-  `subagent.go`, `hook.go`, `lsp.go`, `memory.go`, `settings.go`.
+  `subagent.go`, `hook.go`, `lsp.go`, `memory.go`, `settings.go`, `extra.go`.
 
 ### `internal/adapter/opencode`
 The OpenCode adapter — MCP, memory, skills, subagents, commands via JSONC

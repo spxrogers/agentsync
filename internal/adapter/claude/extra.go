@@ -19,6 +19,19 @@ func ExtraNativeKeys(raw map[string]any, modeled ...string) map[string]any {
 		if skip[k] {
 			continue
 		}
+		// Reserved agentsync namespace, symmetric with MergeExtra. A "__"-prefixed
+		// key is agentsync-INTERNAL round-trip metadata (continuedev's
+		// __block_version/__block_schema), never a verbatim native field. MergeExtra
+		// refuses to RENDER such a key; capture refuses to INGEST one, so the "__"
+		// namespace stays fully agentsync-owned on both sides. Without this, a stray
+		// native "__"-prefixed key would be captured into the shared Extra yet dropped
+		// on the next render — a silent lossy round-trip. continuedev stores its block
+		// header via applyBlockHeader (block level), not through this helper (the inner
+		// server map, which never carries a "__" key), so it is unaffected. No known
+		// harness uses a "__"-prefixed native config key; this carve-out is deliberate.
+		if strings.HasPrefix(k, "__") {
+			continue
+		}
 		if extra == nil {
 			extra = map[string]any{}
 		}
