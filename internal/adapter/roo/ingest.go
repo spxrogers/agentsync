@@ -49,6 +49,17 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	warn := a.stderr()
 
 	// Commands from .roo/commands/<name>.md (markdown + frontmatter).
+	//
+	// Non-recursive by design, and VERIFIED correct for plain subdirectories:
+	// per RooCodeInc/Roo-Code's scanCommandDirectory, Roo names a command by its
+	// bare basename and does NOT walk plain nested subdirectories, so a flat,
+	// non-recursive read drops nothing Roo honors for ordinary nested dirs. The one
+	// known, narrow residual: Roo DOES follow a *symlinked* directory under
+	// .roo/commands (depth ≤5) to find .md commands within it, whereas this flat
+	// read does not — a symlink entry is not a `.md` file (and reading it as a file
+	// fails), so its contents are skipped. This is an accepted, acknowledged gap (a
+	// symlinked command dir is an unusual authoring choice); if it ever needs
+	// closing, mirror scanCommandDirectory's depth-bounded symlink follow here.
 	commandEntries, present, err := adapter.ReadDirOptional(p.CommandsDir)
 	if err != nil {
 		return c, fmt.Errorf("read commands dir %s: %w", p.CommandsDir, err)

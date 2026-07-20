@@ -14,7 +14,10 @@
 //   - Workflows (slash commands): `.clinerules/workflows/<name>.md`, plain
 //     markdown invoked as `/<name>.md`. Project scope only (Cline's global
 //     rules/workflows live under the non-XDG ~/Documents/Cline/ path agentsync
-//     deliberately does not target).
+//     deliberately does not target). Each rendered workflow carries a leading
+//     reversible ownership marker (see managedWorkflowMarker) so Ingest captures
+//     only agentsync-owned workflows and never over-captures a human-authored one —
+//     the same ownership scoping memory gets from its fixed `agentsync.md` name.
 //
 // Skills, subagents, hooks, and LSP have no Cline concept and are skipped. Rules/
 // workflows are plain markdown (no frontmatter parsing), so the adapter emits no

@@ -324,6 +324,14 @@ func baselineMessage(root string) string {
 // the directory: a shared dir declared by several agents appears once, and a dir
 // nested under another (e.g. ~/.claude/skills under ~/.claude) is dropped in favor
 // of the ancestor — so agentsync never creates a repo inside another repo.
+//
+// DEDUP CASING (nit, issue #175): the seen[] key is the BYTE-EXACT cleaned path
+// (filepath.Clean), so on a case-insensitive filesystem two roots differing only in
+// case would be treated as distinct and could both be inited. That is safe today
+// because every version root is a hardcoded string literal with fixed casing (the
+// deep adapters' Paths + generic.versionRootOf), so no two roots ever differ only in
+// case — the dedup relies on that. If a future adapter derives a root from a
+// case-varying source, this key would need case-folding on case-insensitive FSes.
 func enabledVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Scope, project string) []string {
 	seen := map[string]bool{}
 	var all []string
@@ -521,6 +529,12 @@ func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mo
 // git repo below it — agentsync never creates a repo that would wrap another (the
 // cross-run nesting hazard: a child dir was versioned in an earlier run, before a
 // parent-dir agent was enabled). Returns (nil, nil) and warns when it skips.
+//
+// The nesting probe (agit.HasNestedRepoBelow) is a full-subtree WalkDir that
+// short-circuits only on finding a nested `.git`; for a version root that collapses
+// to a busy IDE/app dir this is a one-time full-tree walk on first init — a bounded
+// but potentially large apply-tail cost. See HasNestedRepoBelow's COST note for why
+// it is left unbounded.
 func initGuarded(p *ui.Printer, dir string) (*agit.Repo, error) {
 	nested, err := agit.HasNestedRepoBelow(dir)
 	if err != nil {

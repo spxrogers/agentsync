@@ -84,7 +84,12 @@ func TestIngest_UnreadableWorkflows_FailsLoud(t *testing.T) {
 		wantCmds int
 	}{
 		{name: "absent workflows dir is a silent skip", setup: func(t *testing.T, wfDir string) {}},
-		{name: "present and valid workflow ingests", setup: func(t *testing.T, wfDir string) { plantContent(t, filepath.Join(wfDir, "deploy.md"), "1. tag\n") }, wantCmds: 1},
+		{name: "present and valid workflow ingests", setup: func(t *testing.T, wfDir string) {
+			// Must carry the agentsync-owned marker: post-#175 cline ingest is
+			// ownership-scoped, so an unmarked (foreign) workflow is deliberately not
+			// captured. This case pins the read-error path, so use an owned workflow.
+			plantContent(t, filepath.Join(wfDir, "deploy.md"), "<!-- agentsync:managed cline-workflow -->\n1. tag\n")
+		}, wantCmds: 1},
 		{name: "present but unreadable workflows dir fails loud", setup: func(t *testing.T, wfDir string) { plantFileAtDir(t, wfDir) }, wantErr: true},
 	}
 	for _, tt := range tests {

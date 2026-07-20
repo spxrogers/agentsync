@@ -113,6 +113,27 @@ inferred), stdio value (`stdio` / `local`), and remote URL key (`url` / `httpUrl
 IDE app-storage (JetBrains, AugmentCode), or cloud-dashboard (Jules) — where the
 generic engine refuses to invent a shape and reports a skip.
 
+**MCP transport normalization.** A **type-keyed** dialect (copilot, copilot-cli,
+factory, crush — those with a `type`/`transport` field) records `sse` explicitly,
+so an SSE server round-trips `sse → sse`. A **transport-keyless** dialect
+(antigravity, zed, warp, junie, kiro, amazonq, pi, amp — no transport field;
+transport is inferred from which url key is present) has nowhere to record it, so a
+canonical `sse` server is written with just its url and **canonicalizes back as
+`http`** if later captured via `import`/`reconcile` — the same acknowledged
+`sse → http` flip the deep OpenCode/Windsurf/Cline adapters carry (an apply-only
+flow is unaffected). The Gemini-lineage **qwen** dialect is the exception: it splits
+the two remote transports across two url keys (`httpUrl` = streamable HTTP, `url` =
+SSE), so it preserves `sse`.
+
+**Detection.** Detect is informational only (it drives `doctor`'s per-agent line;
+it never gates apply), and most breadth agents are detected by a binary on `PATH`
+or a user-home config dir. Two are **not auto-detectable** and are only ever active
+when enabled explicitly: **copilot** (a VS Code extension with no `DetectBin` and no
+stable user-home marker — its config is per-project `.github/`/`.vscode/`), and
+**jetbrains** (its `.aiassistant/` is a *project*-relative rules dir, not a user-home
+install marker — JetBrains keeps its own state under `~/.config/JetBrains/…`). Trae
+*is* detected: `~/.trae` is Trae Desktop's user-home marker.
+
 **Skills coverage (18 of 22).** Agent Skills are the open
 [agentskills.io](https://agentskills.io) spec — a skill is a *directory* (`SKILL.md`
 frontmatter + body, plus bundled `scripts/`/`references/`/`assets/`). Unlike MCP,
@@ -367,6 +388,15 @@ literally, never resolved.)
 - **MCP scope** — `.roo/mcp.json` is project-level; Roo's *global* MCP lives in VS
   Code globalStorage (OS/editor-specific), which agentsync does not target, so
   user-scope MCP is reported as a skip. (rulesync and ruler make the same call.)
+- **MCP remote / transport normalization** — Roo records a remote server's
+  transport in an explicit `type` (`streamable-http` for HTTP, `sse` for SSE), so a
+  captured `sse` server round-trips `sse → sse` losslessly. A canonical server with
+  NO transport — `type = ""` with a `url` and no `command` — is treated as remote and
+  rendered as `type: streamable-http`, so it normalizes to `http` on capture and is
+  stable thereafter (`http → streamable-http → http`); a hand-authored native entry
+  carrying only a `url` canonicalizes the same way. So the rule, in both directions,
+  is "a url-bearing, command-less server with no explicit transport is remote `http`".
+  `stdio` carries no `type` key.
 - **Slash command** — `.roo/commands/*.md` keep `description` AND `argument-hint`
   (Roo supports both); only `allowed-tools` (and any other unmodeled key) drops.
 - **Subagent / Hook / Skill / LSP** — Roo's "custom modes" are not per-file
@@ -385,9 +415,15 @@ literally, never resolved.)
   `.clinerules/` markdown), byte-clean round-trip.
 - **Slash command** — Cline workflows (`.clinerules/workflows/*.md`) are plain
   markdown invoked as `/<name>`, so command frontmatter drops — only the body
-  survives.
-- **MCP remote** — Cline infers transport from keys (no `type`), so a canonical
-  `sse` server normalizes to `http` if later captured back via `import`/`reconcile`.
+  survives. Each rendered workflow carries a leading reversible ownership marker
+  (an inert HTML comment), so `import`/`reconcile` capture only agentsync-owned
+  workflows and leave a human-authored workflow in that directory untouched — the
+  same ownership scoping memory gets from its fixed `agentsync.md` filename.
+- **MCP remote / transport normalization** — Cline infers transport from which
+  keys are present (there is no `type` field): stdio keeps command/args/env, a
+  remote server uses `url` + `headers`. Because no transport is recorded, a
+  canonical `sse` server normalizes to `http` if later captured back via
+  `import`/`reconcile` (an apply-only flow is unaffected).
 
 ## Why OpenCode skips hooks and LSP
 

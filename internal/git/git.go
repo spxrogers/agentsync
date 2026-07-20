@@ -157,6 +157,16 @@ func OwnsExactly(dir string) (bool, error) {
 // appeared — before/after a parent-dir agent was enabled). Short-circuits on the
 // first hit; a missing dir is reported as false.
 //
+// COST (design note, issue #175): this is a full `filepath.WalkDir(dir, …)` that
+// short-circuits only once it FINDS a nested `.git`. When a version root collapses
+// to a busy IDE/app directory (see generic.versionRootOf's whole-IDE-dir tradeoff),
+// the common case — NO nested repo — walks the entire, possibly large, subtree once
+// per untracked-dir init. It is correct (it swallows per-entry walk errors and never
+// fails the apply), just potentially slow: an unbounded one-time apply-tail cost. It
+// is left unbounded deliberately — a depth cap would have to exceed however deep
+// agentsync (or a user) might nest a managed dir, and mis-sizing it would silently
+// weaken the nesting guard, a worse failure than a slow first init.
+//
 // Symlink-aware: `filepath.WalkDir` does not descend into symlinked directories, so a
 // symlinked foreign repo below dir (e.g. ~/.claude/plugins -> /elsewhere/checkout)
 // would otherwise be missed. When an entry is a symlink to a directory, this shallow-

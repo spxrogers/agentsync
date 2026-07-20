@@ -43,6 +43,17 @@ func (a *Adapter) VersionRoots(scope adapter.Scope, project string) []string {
 // (~/.config/<x>, ~/.aws/<x>, ~/.agents/skills, ~/.pi/agent, ~/.gemini/config) so a
 // shared dir resolves to a stable shared root. Returns "" for a bare $HOME-level
 // file — agentsync never inits a repo at $HOME.
+//
+// WHOLE-IDE-DIR VERSIONING TRADEOFF (design note, issue #175): several roots this
+// resolves to are directories the IDE fills with its OWN state — zed's files map to
+// ~/.config/zed, kiro's steering to ~/.kiro — so the local-rollback repo
+// (adapter.VersionedDirs, issue #118) inits `.git` AMID unrelated app state. That is
+// deliberate and its blast radius is bounded by design: only agentsync-WRITTEN files
+// are ever tracked (the apply tail stages exactly managedRelsUnder(root, plannedWrites),
+// StageTrackedDeletions touches only already-tracked files, and go-git's HardReset
+// runs no `git clean`), so untracked IDE files are never committed, reset, or deleted —
+// the repo simply co-exists with them. The alternative (a narrower per-file root) was
+// declined: it fights the shared-dir dedup and would fragment the rollback history.
 func versionRootOf(targetRoot, rel string) string {
 	parts := strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/")
 	if len(parts) < 2 {

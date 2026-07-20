@@ -44,10 +44,17 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 
 	// Commands from .clinerules/workflows/<name>.md (project scope; plain markdown).
+	// Ownership-scoped like memory ingest: only workflows agentsync itself wrote —
+	// those carrying the leading managedWorkflowMarker — are captured (the marker is
+	// stripped so the canonical body round-trips clean). A human-authored workflow in
+	// .clinerules/workflows/ has no marker and is left untouched, so ingest never
+	// pulls a foreign workflow into the canonical model (the over-capture asymmetry
+	// this closes: memory reads only the agentsync-owned agentsync.md, but workflows
+	// used to read every .md).
+	//
 	// Cline implements no diagnostics sink (WarnEmitter), so a per-workflow read
-	// error is RETURNED rather than warned — it is still surfaced loudly, never
-	// swallowed into a silently-short Commands slice. An absent entry (rare race)
-	// stays a benign skip.
+	// error is RETURNED rather than warned — surfaced loudly, never swallowed into a
+	// silently-short Commands slice. An absent entry (rare race) stays a benign skip.
 	if p.WorkflowsDir != "" {
 		entries, present, err := adapter.ReadDirOptional(p.WorkflowsDir)
 		if err != nil {
@@ -66,8 +73,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 					}
 					return c, fmt.Errorf("read workflow %s: %w", wfPath, err)
 				}
+				body, owned := stripManagedWorkflow(string(data))
+				if !owned {
+					continue // human-authored workflow — not agentsync-owned
+				}
 				name := e.Name()[:len(e.Name())-len(".md")]
-				c.Commands = append(c.Commands, source.Command{Name: name, Frontmatter: map[string]any{}, Body: string(data)})
+				c.Commands = append(c.Commands, source.Command{Name: name, Frontmatter: map[string]any{}, Body: body})
 			}
 		}
 	}

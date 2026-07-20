@@ -1,7 +1,6 @@
 package claude
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +8,7 @@ import (
 	"github.com/spf13/afero"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -36,8 +36,14 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		return c, fmt.Errorf("read %s: %w", mcpFile, err)
 	}
 	if present {
-		var top map[string]any
-		if err := json.Unmarshal(data, &top); err != nil {
+		// Decode preserving json.Number (jsonkeys.DecodeObject, json.Decoder +
+		// UseNumber) — the same rationale as apply.go's readJSONFile: an unmodeled
+		// native key that flows into Extra (e.g. a timeout in nanoseconds) can hold
+		// an integer > 2^53, which plain json.Unmarshal would round to float64 and
+		// then re-marshal lossily on the next render. UseNumber keeps the literal
+		// digits so Extra round-trips byte-exact.
+		top, err := jsonkeys.DecodeObject(data)
+		if err != nil {
 			return c, fmt.Errorf("parse %s: %w", mcpFile, err)
 		}
 		if servers, ok := top["mcpServers"].(map[string]any); ok {
@@ -164,15 +170,17 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 
 	// Hooks from settings.json /hooks/<event>. A corrupt-but-present settings.json
 	// now fails loudly (parse error returned), matching the MCP block above and
-	// removing the old MCP-loud / hooks-silent asymmetry: a swallowed parse error
-	// would have read as "no hooks", which drift could classify as "hooks cleared".
+	// removing the old MCP-loud / hooks-silent asymmetry. Decode with UseNumber
+	// (jsonkeys.DecodeObject) so an unmodeled large integer survives as json.Number
+	// rather than a rounded float64 (same precision reason as the MCP block +
+	// apply.go), for defense-in-depth consistency across all three decode sites.
 	settingsData, present, err := adapter.ReadFileOptional(p.Settings)
 	if err != nil {
 		return c, fmt.Errorf("read %s: %w", p.Settings, err)
 	}
 	if present {
-		var top map[string]any
-		if err := json.Unmarshal(settingsData, &top); err != nil {
+		top, err := jsonkeys.DecodeObject(settingsData)
+		if err != nil {
 			return c, fmt.Errorf("parse %s: %w", p.Settings, err)
 		}
 		// ingestHooks takes any and does its own map assertion (mirroring the

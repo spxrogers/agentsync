@@ -313,6 +313,27 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   hand-authored `global_rules.md`/workflow, a memory body that itself begins with a
   user-authored `---`/frontmatter block surviving round-trip byte-for-byte, and the
   `url`→`serverUrl` canonicalization. All figures verified against `docs.devin.ai`.
+- **Adapter transport-normalization, Detect, and precision cleanups (issue #175).**
+  A batch of low/nit adapter fixes plus the cross-cutting C5 matrix harmonization:
+  (1) **Roo** untyped-url MCP servers now round-trip to a *stable* canonical type —
+  a `type = ""` server with a url and no command normalizes to `http` (rendered
+  `streamable-http`) and stays stable, and a hand-authored native `url`-only entry
+  canonicalizes the same way instead of being misread as stdio and losing its url;
+  (2) **Roo** `Detect()` no longer probes a nonexistent `roo` CLI binary (Roo is a
+  VS Code extension) — detection is the `.roo/` config dir only; (3) **Cline**
+  workflow ingest now captures only agentsync-owned workflows (each rendered
+  workflow carries a reversible ownership marker) instead of over-capturing
+  human-authored ones, matching memory's ownership scoping; (4) **Claude** MCP and
+  hooks ingest decode with `UseNumber`, so an unmodeled native key holding an
+  integer larger than 2^53 (e.g. a nanosecond timeout) survives `import`/`reconcile`
+  byte-exact instead of being rounded through `float64`; (5) the capability matrix
+  gains a coherent per-row **MCP transport-normalization** note for Roo, Cline, and
+  the generic breadth tier (documenting the `sse → http` flip for transport-keyless
+  dialects), and flags **copilot**/**jetbrains** as not auto-detectable. The
+  whole-IDE-dir VersionedDirs tradeoff, the dedup casing assumption, and the
+  `HasNestedRepoBelow` full-tree-walk cost are now documented in code comments; the
+  **noop** placeholder's package doc, `New` name guard, and `Detect`/`Apply` no-op
+  behavior are documented and test-covered.
 - **CLI write-path correctness batch (issue #171).** Five disjoint fixes: (1)
   `setDestinationGitBackupMode` now re-parses the spliced `agentsync.toml` before
   writing and **refuses** (leaving the file untouched) if the splice would no longer

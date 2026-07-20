@@ -219,6 +219,14 @@ func mcpServerMap(t MCPTarget, s source.MCPServerSpec) map[string]any {
 			spec[t.TransportKey] = t.remoteValue()
 		}
 	}
+	// TRANSPORT-KEYLESS dialects (TransportKey == "": antigravity/zed/warp/junie/
+	// kiro/amazonq/pi/amp) record NO transport field — Cline-style, transport is
+	// inferred from which url key is present. So a canonical `sse` server (unless it
+	// has an SSEURLKey split, only Gemini-lineage qwen does) is written with just a
+	// url and canonicalizes back as `http` on capture: an acknowledged, DOCUMENTED
+	// sse→http normalization (docs/capability-matrix.md → "Breadth tier / MCP
+	// transport"), the same flip the deep OpenCode/Windsurf/Cline adapters carry.
+	// TestGeneric_TransportKeylessSSEFlipDocumented pins it.
 	if remote {
 		urlKey := t.remoteURLKey()
 		if s.Type == "sse" && t.SSEURLKey != "" {
