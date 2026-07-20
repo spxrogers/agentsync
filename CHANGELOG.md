@@ -9,6 +9,34 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gemini adapter: hook group shape, empty `type`, and always-fire matchers
+  (issue #166).** Rendering `.gemini/settings.json` `hooks` now reconstructs the
+  native multi-handler shape from the flat canonical model — consecutive hooks
+  sharing an (event, matcher) coalesce into one group with a multi-element `hooks`
+  array, so an `import`→`apply` round-trip no longer explodes a hand-authored
+  multi-handler group into N single-handler groups. An empty hook `type` is omitted
+  instead of written as `"type":""`, and a matcher set on an always-fire Gemini
+  event (`BeforeAgent`/`AfterAgent`/`SessionStart`/`SessionEnd`/`PreCompress`/
+  `Notification` — only `BeforeTool`/`AfterTool` accept one) is dropped with a
+  reported `SkipReduced` rather than emitted where Gemini ignores it.
+- **Gemini adapter: namespaced subdirectory commands (issue #166).** A native
+  `.gemini/commands/git/commit.toml` (Gemini `/git:commit`) now round-trips:
+  ingest walks the commands tree recursively and encodes the subdirectory into
+  `Command.Name` as a forward-slash relpath (`git/commit`), and render projects it
+  back into the subdirectory layout. The guarantee is scoped to the adapter
+  native→native round-trip — the flat canonical source cannot carry a `/`-bearing
+  name — and the namespace is never silently truncated.
+- **Gemini adapter: `$`-containing resolved secret values flagged, not silently
+  corrupted (issue #166, theme C5).** Gemini expands `$VAR`/`${VAR}`/`${VAR:-default}`
+  in every `settings.json` string (env, headers, and `url`/`httpUrl`) with no escape
+  for a literal `$` (upstream `envVarResolver.ts`). agentsync now writes such a
+  resolved value verbatim (a fabricated escape would itself corrupt it) and reports a
+  `SkipReduced` naming the affected env/headers/url value, surfacing the data-dependent
+  read-time corruption risk. The canonical source is unaffected — it still holds the
+  `${secret:…}` reference — so this is destination corruption, not a cleartext leak.
+
 ### Documentation
 
 - **Build-time link/anchor checker for the docs website (issue #170).** New

@@ -27,6 +27,15 @@ type geminiCommandFile struct {
 // reported Skip. (Gemini's argument placeholder is `{{args}}` rather than Claude's
 // `$ARGUMENTS`/`$1`; the body is written verbatim — placeholder syntax is not
 // auto-translated, a documented projection note.)
+//
+// A Command.Name carrying a forward-slash namespace (e.g. "git/commit", the
+// invocation `/git:commit`) is projected into Gemini's subdirectory layout —
+// `commands/git/commit.toml` — via filepath.FromSlash; iox.AtomicWrite creates the
+// intermediate directory. This inverts ingest's WalkDir capture. NOTE: the guarantee
+// is scoped to the ADAPTER round-trip (native→native via ingest+render); the flat
+// canonical loader/writer cannot carry a '/'-bearing Name (source.ValidateComponentID
+// rejects path separators), so a namespaced command does not survive a full
+// import→canonical-source→apply cycle — see docs/capability-matrix.md.
 func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp, []adapter.Skip, error) {
 	var ops []adapter.FileOp
 	var skips []adapter.Skip
@@ -49,10 +58,10 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 		}
 		ops = append(ops, adapter.FileOp{
 			Action:        "write",
-			Path:          filepath.Join(p.CommandsDir, cmd.Name+".toml"),
+			Path:          filepath.Join(p.CommandsDir, filepath.FromSlash(cmd.Name)+".toml"),
 			Content:       body,
 			Mode:          0o644,
-			SourceID:      filepath.Join("commands", cmd.Name+".md"),
+			SourceID:      filepath.Join("commands", filepath.FromSlash(cmd.Name)+".md"),
 			MergeStrategy: "replace",
 		})
 	}

@@ -32,6 +32,24 @@ var canonicalToGeminiHookEvent = map[string]string{
 // not captured: agentsync only round-trips events it can also render.
 var geminiToCanonicalHookEvent = invertHookEvents(canonicalToGeminiHookEvent)
 
+// geminiAlwaysFireHookEvent marks the Gemini events that ALWAYS fire and take no
+// matcher. Per geminicli.com/docs/hooks (upstream event table), only the tool
+// events BeforeTool/AfterTool accept a (regex) matcher; every lifecycle event
+// — BeforeAgent, AfterAgent, SessionStart, SessionEnd, PreCompress, Notification
+// — fires unconditionally, so a matcher there is silently ignored by Gemini. A
+// non-empty canonical Matcher on one of these is dropped with a reported
+// SkipReduced (the "capture it or acknowledge it" invariant) rather than emitted
+// into a position that can never take effect. Keyed by the Gemini event name (the
+// value side of canonicalToGeminiHookEvent).
+var geminiAlwaysFireHookEvent = map[string]bool{
+	"BeforeAgent":  true,
+	"AfterAgent":   true,
+	"SessionStart": true,
+	"SessionEnd":   true,
+	"PreCompress":  true,
+	"Notification": true,
+}
+
 func invertHookEvents(m map[string]string) map[string]string {
 	out := make(map[string]string, len(m))
 	for k, v := range m {
@@ -48,6 +66,15 @@ func invertHookEvents(m map[string]string) map[string]string {
 // user authored are untouched. settings.json is shared with `mcpServers` (the
 // other section this adapter owns), and the render pipeline scopes each op's
 // OwnedKeys to its own section so they never clobber each other.
+//
+// Three on-disk-fidelity behaviors reconstruct the native shape from the flat
+// canonical model: (1) consecutive Hooks sharing the same (Event, Matcher) are
+// COALESCED into a single group whose `hooks` array carries one {type, command}
+// per Hook — the faithful inverse of ingestHooks, which flattens a native
+// multi-handler group into N flat Hooks, so ingest→render is idempotent; (2) an
+// empty Type is OMITTED (never a stray "type":"" Gemini did not ask for); (3) a
+// matcher on an always-fire event is dropped with a reported SkipReduced (Gemini
+// ignores it there — see geminiAlwaysFireHookEvent).
 func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []adapter.Skip, error) {
 	if len(c.Hooks) == 0 {
 		return nil, nil, nil
@@ -78,14 +105,40 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 			})
 			continue
 		}
-		entry := map[string]any{
-			"matcher": h.Matcher,
-			"hooks": []map[string]any{{
-				"type":    h.Type,
-				"command": h.Command,
-			}},
+		// Always-fire events take no matcher; a non-empty one would be silently
+		// ignored by Gemini, so drop it with a reported SkipReduced instead of
+		// emitting it into a position that can never take effect.
+		matcher := h.Matcher
+		if matcher != "" && geminiAlwaysFireHookEvent[ge] {
+			skips = append(skips, adapter.Skip{
+				Component: "hook",
+				Name:      h.Event.String(),
+				Reason:    fmt.Sprintf("Gemini event %s is always-fire and takes no matcher; matcher %q dropped", ge, matcher),
+				Kind:      adapter.SkipReduced,
+			})
+			matcher = ""
 		}
-		byEvent[ge] = append(byEvent[ge], entry)
+		// Omit an empty "type": the canonical Hook documents Type as "command"
+		// but does not require it, and "type":"" is not something Gemini asked
+		// for. When present, Type is always "command" (the only kind reached here).
+		handler := map[string]any{"command": h.Command}
+		if h.Type != "" {
+			handler["type"] = h.Type
+		}
+		// Coalesce with the previous group iff this Hook shares its (event,
+		// matcher) — reconstructing the native multi-handler group (one group, an
+		// N-element `hooks` array) rather than exploding into N single-handler
+		// groups. The flat model preserves order, so consecutive same-(event,
+		// matcher) Hooks are exactly the handlers one native group ingested to.
+		if groups := byEvent[ge]; len(groups) > 0 && groups[len(groups)-1]["matcher"] == matcher {
+			last := groups[len(groups)-1]
+			last["hooks"] = append(last["hooks"].([]map[string]any), handler)
+		} else {
+			byEvent[ge] = append(groups, map[string]any{
+				"matcher": matcher,
+				"hooks":   []map[string]any{handler},
+			})
+		}
 	}
 	if len(byEvent) == 0 {
 		return nil, skips, nil
