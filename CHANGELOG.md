@@ -252,6 +252,19 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `renderHooks` (the render pipeline populates `OwnedKeys` from persisted state,
   always overwriting the adapter-set value); hook orphan-cleanup is now covered
   directly against `MergeTOML`.
+- **Continue & Cursor MCP round-trip and off-spec-key fixes (issue #172).** Three
+  behavior changes: (1) **Cursor** no longer writes a `type` key on **remote**
+  (`url`-bearing) MCP servers — Cursor's documented remote schema is `url`+`headers`
+  with no `type`, so the key was off-spec; stdio servers still carry `type`, and
+  ingest stays tolerant of a `type` key on read (a remote server's transport label
+  now normalizes away on capture, as Cursor infers "remote" from the `url`). The
+  reject-vs-ignore verdict for an unknown remote `type` is tracked upstream in #164.
+  (2) **Continue** now round-trips a block's `name`/`version`/`schema` header:
+  a hand-authored non-default `version`/`schema` is preserved instead of being
+  silently regenerated to the `0.0.1`/`v1` defaults on the next apply. (3)
+  **Continue** no longer silently drops the `url` of a server that carries both a
+  `command` and a `url` with no explicit `type`; it renders as stdio (command wins)
+  and reports the dropped `url` via a translation-report `Skip`.
 - **CLI write-path correctness batch (issue #171).** Five disjoint fixes: (1)
   `setDestinationGitBackupMode` now re-parses the spliced `agentsync.toml` before
   writing and **refuses** (leaving the file untouched) if the splice would no longer

@@ -53,6 +53,10 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			if !ok {
 				continue
 			}
+			// The block-level version/schema header is preserved (when non-default)
+			// so a re-render round-trips a hand-authored block instead of rewriting
+			// its header to the 0.0.1/v1 defaults — see applyBlockHeader.
+			blockVersion, blockSchema := asStr(block["version"]), asStr(block["schema"])
 			fallbackID := e.Name()[:len(e.Name())-len(ext)]
 			for _, raw := range servers {
 				srv, ok := raw.(map[string]any)
@@ -71,7 +75,9 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				if id != fallbackID || len(servers) > 1 {
 					fmt.Fprintf(warn, "warning: MCP server %q in block %q: apply renders one %s.yaml per server; remove the original block after import to avoid duplicate definitions\n", id, e.Name(), id)
 				}
-				c.MCPServers = append(c.MCPServers, source.MCPServer{ID: id, Server: IngestMCPSpec(srv)})
+				spec := IngestMCPSpec(srv)
+				applyBlockHeader(&spec, blockVersion, blockSchema)
+				c.MCPServers = append(c.MCPServers, source.MCPServer{ID: id, Server: spec})
 			}
 		}
 	}

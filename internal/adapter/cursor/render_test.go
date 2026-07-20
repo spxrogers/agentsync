@@ -3,10 +3,12 @@ package cursor_test
 import (
 	"encoding/json"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/adapter/cursor"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -94,6 +96,54 @@ func TestRender_MCP_RemoteHeaders(t *testing.T) {
 	}
 	if h := srv["headers"].(map[string]any); h["X-Region"] != "us" {
 		t.Fatalf("headers dropped: %v", srv)
+	}
+}
+
+// TestRender_MCP_Remote_OmitsType asserts a remote (url-bearing) server carries
+// NO `type` key — Cursor's documented remote schema is url+headers only — while a
+// stdio server still carries `type`. Decodes mcp.json from op.Content.
+func TestRender_MCP_Remote_OmitsType(t *testing.T) {
+	c := source.Canonical{MCPServers: []source.MCPServer{
+		{ID: "remote", Server: source.MCPServerSpec{
+			Type: "http", URL: "https://mcp.example.com/mcp",
+			Headers: map[string]string{"X-Region": "us"},
+		}},
+		{ID: "local", Server: source.MCPServerSpec{
+			Type: "stdio", Command: "npx", Args: []string{"-y", "pkg"},
+		}},
+	}}
+	a := cursor.New(cursor.Options{TargetRoot: t.TempDir()})
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := findOp(ops, ".cursor/mcp.json")
+	if op == nil {
+		t.Fatal("mcp.json op missing")
+	}
+	var ours map[string]any
+	if err := json.Unmarshal(op.Content, &ours); err != nil {
+		t.Fatalf("op.Content is not JSON: %v\n%s", err, op.Content)
+	}
+	servers := ours["mcpServers"].(map[string]any)
+
+	remote := servers["remote"].(map[string]any)
+	if _, hasType := remote["type"]; hasType {
+		t.Fatalf("remote server must NOT carry a `type` key (Cursor remote schema is url+headers): %v", remote)
+	}
+	if remote["url"] != "https://mcp.example.com/mcp" {
+		t.Fatalf("remote url dropped: %v", remote)
+	}
+	if h := remote["headers"].(map[string]any); h["X-Region"] != "us" {
+		t.Fatalf("remote headers dropped: %v", remote)
+	}
+
+	local := servers["local"].(map[string]any)
+	if local["type"] != "stdio" {
+		t.Fatalf("stdio server must still carry type=stdio: %v", local)
+	}
+	if local["command"] != "npx" {
+		t.Fatalf("stdio command dropped: %v", local)
 	}
 }
 
@@ -211,22 +261,68 @@ func TestRender_Subagent_DropsToolsAndColor(t *testing.T) {
 	if op == nil {
 		t.Fatal("review.md op missing")
 	}
-	content := string(op.Content)
-	if !strings.Contains(content, "Review the code") {
-		t.Fatalf("body missing: %s", content)
+	// Decode the rendered frontmatter and assert dropped KEYS are absent — a
+	// whole-file strings.Contains("tools"/"color") is false-passable (a value or
+	// body text could carry the substring, and a masked key would go unnoticed).
+	fm, body, err := claude.ParseFrontmatter(op.Content)
+	if err != nil {
+		t.Fatalf("rendered subagent frontmatter did not parse: %v\n%s", err, op.Content)
 	}
-	if !strings.Contains(content, "description") || !strings.Contains(content, "Code review") {
-		t.Fatalf("description should be preserved: %s", content)
+	if body != "Review the code.\n" {
+		t.Fatalf("body not preserved verbatim: %q", body)
 	}
-	if !strings.Contains(content, "readonly") {
-		t.Fatalf("readonly should be preserved: %s", content)
+	if fm["description"] != "Code review" {
+		t.Fatalf("description key should be preserved: %+v", fm)
 	}
-	if strings.Contains(content, "tools") || strings.Contains(content, "color") {
-		t.Fatalf("tools/color must be dropped: %s", content)
+	if fm["readonly"] != true {
+		t.Fatalf("readonly key should be preserved: %+v", fm)
+	}
+	if _, ok := fm["tools"]; ok {
+		t.Fatalf("tools key must be dropped from rendered frontmatter: %+v", fm)
+	}
+	if _, ok := fm["color"]; ok {
+		t.Fatalf("color key must be dropped from rendered frontmatter: %+v", fm)
 	}
 	sk := hasSkip(skips, "subagent", "review", adapter.SkipReduced)
 	if sk == nil || !strings.Contains(sk.Reason, "tools") || !strings.Contains(sk.Reason, "color") {
 		t.Fatalf("expected a reduced subagent skip listing tools+color, got %+v", skips)
+	}
+}
+
+// TestRender_Subagent_IsBackground asserts that `is_background: true` — a Cursor
+// subagent key (cursorAgentKnownKeys) — survives into the rendered
+// `.cursor/agents/<name>.md` frontmatter and is NOT reported as a dropped key in
+// any reduced Skip.
+func TestRender_Subagent_IsBackground(t *testing.T) {
+	c := source.Canonical{Subagents: []source.Subagent{{
+		Name: "bg",
+		Frontmatter: map[string]any{
+			"description":   "Runs in the background",
+			"is_background": true,
+		},
+		Body: "Do background work.\n",
+	}}}
+	a := cursor.New(cursor.Options{TargetRoot: t.TempDir()})
+	ops, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := findOp(ops, ".cursor/agents/bg.md")
+	if op == nil {
+		t.Fatal("bg.md op missing")
+	}
+	fm, _, err := claude.ParseFrontmatter(op.Content)
+	if err != nil {
+		t.Fatalf("rendered subagent frontmatter did not parse: %v\n%s", err, op.Content)
+	}
+	if fm["is_background"] != true {
+		t.Fatalf("is_background:true must survive into rendered frontmatter: %+v", fm)
+	}
+	// is_background is a supported key — it must not appear in any reduced Skip.
+	for _, sk := range skips {
+		if sk.Kind == adapter.SkipReduced && strings.Contains(sk.Reason, "is_background") {
+			t.Fatalf("is_background is supported and must not be reported as dropped: %+v", sk)
+		}
 	}
 }
 
@@ -249,17 +345,33 @@ func TestRender_Command_BodyOnly(t *testing.T) {
 	if op == nil {
 		t.Fatal("summarize.md command op missing")
 	}
-	content := string(op.Content)
-	if strings.Contains(content, "---") || strings.Contains(content, "argument-hint") {
-		t.Fatalf("Cursor commands are plain markdown; frontmatter must not be written: %s", content)
+	// Cursor commands are plain markdown (no frontmatter). Decode and assert the
+	// rendered file has NO frontmatter keys at all — precise, unlike a
+	// strings.Contains("---"/"argument-hint") over the whole file.
+	fm, body, err := claude.ParseFrontmatter(op.Content)
+	if err != nil {
+		t.Fatalf("rendered command did not parse: %v\n%s", err, op.Content)
 	}
-	if content != "Summarize $ARGUMENTS.\n" {
-		t.Fatalf("body should be written verbatim, got: %q", content)
+	if len(fm) != 0 {
+		t.Fatalf("Cursor commands carry no frontmatter; rendered keys %v: %s", sortedFMKeys(fm), op.Content)
+	}
+	if body != "Summarize $ARGUMENTS.\n" {
+		t.Fatalf("body should be written verbatim, got: %q", body)
 	}
 	sk := hasSkip(skips, "command", "summarize", adapter.SkipReduced)
 	if sk == nil || !strings.Contains(sk.Reason, "argument-hint") || !strings.Contains(sk.Reason, "description") {
 		t.Fatalf("expected a reduced command skip listing dropped keys, got %+v", skips)
 	}
+}
+
+// sortedFMKeys returns the frontmatter map's keys sorted, for stable test output.
+func sortedFMKeys(fm map[string]any) []string {
+	out := make([]string, 0, len(fm))
+	for k := range fm {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func TestRender_Command_ProjectScope_Path(t *testing.T) {

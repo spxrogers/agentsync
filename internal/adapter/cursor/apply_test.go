@@ -171,6 +171,91 @@ func TestApply_Reapply_Converges(t *testing.T) {
 	}
 }
 
+// TestApply_Hooks_OrphanCleanup_PreservesVersionAndForeign drives the synthesized
+// empty-`{}` / last-hook-removed op (the write the render pipeline emits when the
+// last canonical hook is removed) through applyWrite, backing the apply.go:50-64
+// contract: the required top-level `version` survives (re-injected when absent,
+// preserved when user-set) and a pre-existing FOREIGN hook event is never stripped
+// by orphan-cleanup even as agentsync's own owned event is removed.
+func TestApply_Hooks_OrphanCleanup_PreservesVersionAndForeign(t *testing.T) {
+	cases := []struct {
+		name        string
+		startFile   string
+		wantVersion int
+	}{
+		{
+			name: "user-set version preserved",
+			startFile: `{
+  "version": 3,
+  "hooks": {
+    "afterFileEdit": [ { "command": "./format.sh" } ],
+    "preToolUse": [ { "command": "echo hi" } ]
+  }
+}`,
+			wantVersion: 3,
+		},
+		{
+			name: "missing version re-injected",
+			startFile: `{
+  "hooks": {
+    "afterFileEdit": [ { "command": "./format.sh" } ],
+    "preToolUse": [ { "command": "echo hi" } ]
+  }
+}`,
+			wantVersion: 1, // cursorHooksVersion default
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			hooksPath := filepath.Join(tmp, ".cursor", "hooks.json")
+			if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(hooksPath, []byte(tc.startFile), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// The orphan-cleanup op: empty owned payload, but it still OWNS the event
+			// agentsync previously rendered (/hooks/preToolUse). merge-json-keys then
+			// strips that owned-but-now-absent key while leaving foreign keys alone.
+			op := adapter.FileOp{
+				Action:        "write",
+				Path:          hooksPath,
+				Content:       []byte("{}\n"),
+				Mode:          0o644,
+				MergeStrategy: "merge-json-keys",
+				OwnedKeys:     []string{"/hooks/preToolUse"},
+			}
+			a := cursor.New(cursor.Options{TargetRoot: tmp})
+			if err := a.Apply([]adapter.FileOp{op}, adapter.PassThroughWriter{}); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+
+			data, err := os.ReadFile(hooksPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("hooks.json not JSON: %v\n%s", err, data)
+			}
+			if jsonNum(got["version"]) != tc.wantVersion {
+				t.Fatalf("version = %v, want %d (must survive the orphan-cleanup op)", got["version"], tc.wantVersion)
+			}
+			hooks, ok := got["hooks"].(map[string]any)
+			if !ok {
+				t.Fatalf("hooks object missing after cleanup: %v", got)
+			}
+			if _, ok := hooks["afterFileEdit"]; !ok {
+				t.Fatalf("foreign afterFileEdit event must survive orphan-cleanup: %v", got)
+			}
+			if _, ok := hooks["preToolUse"]; ok {
+				t.Fatalf("agentsync's own owned event must be stripped by orphan-cleanup: %v", got)
+			}
+		})
+	}
+}
+
 // jsonNum normalizes a decoded JSON number (float64) to int for comparison.
 func jsonNum(v any) int {
 	if f, ok := v.(float64); ok {

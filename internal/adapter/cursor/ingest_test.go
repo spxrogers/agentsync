@@ -2,6 +2,7 @@ package cursor_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -51,8 +52,12 @@ func TestRoundTrip_MCP(t *testing.T) {
 	if s := byID["stdio-srv"]; s.Type != "stdio" || s.Command != "npx" || !reflect.DeepEqual(s.Args, []string{"-y", "pkg"}) || s.Env["K"] != "v" {
 		t.Fatalf("stdio round-trip lost data: %+v", s)
 	}
-	if s := byID["http-srv"]; s.Type != "http" || s.URL != "https://x/mcp" || s.Headers["A"] != "b" {
-		t.Fatalf("http round-trip lost data: %+v", s)
+	// Cursor's remote schema is url+headers with NO `type` key, so the transport
+	// LABEL normalizes away on capture (Cursor infers remote from the url); the url
+	// and headers still round-trip. See TestRender_MCP_Remote_OmitsType and the
+	// "Cursor MCP" capability-matrix row.
+	if s := byID["http-srv"]; s.Type != "" || s.URL != "https://x/mcp" || s.Headers["A"] != "b" {
+		t.Fatalf("http round-trip: type must normalize to \"\" (no remote type key), url+headers survive: %+v", s)
 	}
 }
 
@@ -79,6 +84,60 @@ func TestRoundTrip_MCP_ExtraPassthrough(t *testing.T) {
 	extra := got.MCPServers[0].Server.Extra
 	if extra["timeout"] == nil || extra["disabled"] == nil {
 		t.Fatalf("native keys not captured into Extra: %+v", extra)
+	}
+}
+
+// TestRoundTrip_MCP_ExtraPassthrough_FullCycle proves Extra's RENDER egress, not
+// just its ingest: a native mcp.json unmodeled key must be ingested, written back
+// out to a FRESH target on re-render (read from disk), and still land in Extra on
+// a second ingest. The ingest-only assertion above never exercised the write-out
+// via claude.MergeExtra.
+func TestRoundTrip_MCP_ExtraPassthrough_FullCycle(t *testing.T) {
+	src := t.TempDir()
+	mcpPath := filepath.Join(src, ".cursor", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// `envFile` is a documented Cursor stdio field agentsync does not model.
+	native := `{ "mcpServers": { "srv": { "command": "x", "envFile": "/etc/mcp.env" } } }`
+	if err := os.WriteFile(mcpPath, []byte(native), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ingest from src.
+	a := cursor.New(cursor.Options{TargetRoot: src})
+	got, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.MCPServers) != 1 || got.MCPServers[0].Server.Extra["envFile"] != "/etc/mcp.env" {
+		t.Fatalf("envFile not captured into Extra on ingest: %+v", got.MCPServers)
+	}
+
+	// Re-render to a FRESH target and read the written mcp.json back from disk.
+	dst := t.TempDir()
+	b := cursor.New(cursor.Options{TargetRoot: dst})
+	renderApply(t, b, got, adapter.ScopeUser, "")
+	data, err := os.ReadFile(filepath.Join(dst, ".cursor", "mcp.json"))
+	if err != nil {
+		t.Fatalf("re-rendered mcp.json missing: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("re-rendered mcp.json is not JSON: %v\n%s", err, data)
+	}
+	srv := out["mcpServers"].(map[string]any)["srv"].(map[string]any)
+	if srv["envFile"] != "/etc/mcp.env" {
+		t.Fatalf("unmodeled Extra key not written out on re-render: %v", srv)
+	}
+
+	// Ingest the fresh target again — it must still be in Extra.
+	again, err := b.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.MCPServers) != 1 || again.MCPServers[0].Server.Extra["envFile"] != "/etc/mcp.env" {
+		t.Fatalf("unmodeled key lost after full Ingest→Render→Ingest cycle: %+v", again.MCPServers)
 	}
 }
 

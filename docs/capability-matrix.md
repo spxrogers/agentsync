@@ -400,14 +400,27 @@ A few ✓ cells still change shape on the way out — same content, no loss:
 
 - **Codex MCP** — Claude's JSON `mcpServers` become TOML `[mcp_servers.X]` (stdio
   and streamable-HTTP both representable).
-- **Cursor MCP** — `.cursor/mcp.json` uses the same `mcpServers` shape as Claude,
-  down to `${env:…}` references.
+- **Cursor MCP** — `.cursor/mcp.json` `mcpServers`. A stdio server matches Claude's
+  shape (`type`/`command`/`args`/`env`, down to `${env:…}` references); a remote
+  server follows Cursor's documented remote schema — `url` + `headers` with **no
+  `type` key** — so agentsync does not write a `type` on remote servers, and a
+  remote server's transport label normalizes away on capture (Cursor infers
+  "remote" from the `url`; the `url`/`headers` still round-trip). Ingest stays
+  tolerant of a `type` key on read. (Open upstream question **#164**: whether real
+  Cursor *rejects* or silently *ignores* an unknown remote `type` — dropping it is
+  the conservative, spec-matching choice pending that test.)
 - **Gemini MCP** — `.gemini/settings.json` `mcpServers`: stdio keeps
   command/args/env; a remote server uses Gemini's transport split — `url` for SSE,
   `httpUrl` for HTTP streaming — both round-tripping the canonical `type`.
 - **Continue MCP** — one `.continue/mcpServers/<id>.yaml` block per server: stdio
   keeps command/args/env; a remote server uses Continue's `streamable-http`/`sse`
-  type + `url`, with auth headers under `requestOptions.headers`.
+  type + `url`, with auth headers under `requestOptions.headers`. The block's
+  required `name`/`version`/`schema` header **round-trips** — a hand-authored
+  non-default `version`/`schema` is preserved (via reserved `Extra` keys) rather
+  than regenerated to the `0.0.1`/`v1` defaults. A canonical server carrying both a
+  `command` and a `url` with no explicit `type` is ambiguous (a Continue block is
+  single-transport): agentsync renders it as stdio (command wins) and reports the
+  dropped `url` via a reduced `Skip` rather than dropping it silently.
 - **Continue memory** — the body lands as `.continue/rules/agentsync.md`, a
   frontmatter-less rule Continue always applies (byte-clean round-trip).
 - **Windsurf MCP** — `~/.codeium/windsurf/mcp_config.json` `mcpServers`: stdio
