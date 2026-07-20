@@ -254,3 +254,159 @@ func TestVerify_ProjectScope_NoTree(t *testing.T) {
 		t.Fatalf("error should mention the missing .agentsync/ tree; got: %v", err)
 	}
 }
+
+// TestVerify_OfflineMode pins that AGENTSYNC_ALLOW_OFFLINE_VERIFY=1 (the CI path)
+// validates reference SHAPE but not resolvability (issue #171): a malformed
+// ${secret:} is rejected offline, a well-formed-but-unresolvable ref passes offline,
+// and the online path still fails to resolve it.
+func TestVerify_OfflineMode(t *testing.T) {
+	writeMCP := func(t *testing.T, tmp, body string) {
+		t.Helper()
+		p := filepath.Join(tmp, ".agentsync", "mcp", "x.toml")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("offline-rejects-malformed-ref", func(t *testing.T) {
+		tmp := t.TempDir()
+		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
+		_, _ = runCLI(t, env, "init")
+		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:}\"\n")
+		_, err := runCLI(t, env, "verify")
+		if err == nil {
+			t.Fatal("offline verify must reject a malformed ${secret:} reference")
+		}
+		if !strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("error should name the malformed ref; got: %v", err)
+		}
+	})
+
+	// A malformed ref is config-derived and can carry hostile bytes (agentsync
+	// configs are shareable dotfiles). looseRefRe's `[^}]*` tail captures ESC/C1
+	// bytes, so the offline error must sanitize the candidate on display —
+	// otherwise a crafted config injects terminal escapes into the CI log
+	// (issue #171 / the #93 escape-injection class). MalformedSecretRefs returns
+	// []untrusted.Text and verify joins via untrusted.Join to close this.
+	t.Run("offline-malformed-ref-is-sanitized", func(t *testing.T) {
+		tmp := t.TempDir()
+		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
+		_, _ = runCLI(t, env, "init")
+		// TOML  decodes to a raw ESC byte inside the Command field; the key
+		// after the colon is illegal, so it is flagged malformed and displayed.
+		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:\\u001b[2K\\u001b[31mHACKED}\"\n")
+		_, err := runCLI(t, env, "verify")
+		if err == nil {
+			t.Fatal("offline verify must reject the malformed ref")
+		}
+		if strings.ContainsRune(err.Error(), 0x1b) {
+			t.Fatalf("offline verify error must not carry a raw ESC byte (escape injection); got: %q", err.Error())
+		}
+		if !strings.Contains(err.Error(), "malformed") || !strings.Contains(err.Error(), "HACKED") {
+			t.Fatalf("error should still name the (sanitized) malformed ref; got: %q", err.Error())
+		}
+	})
+
+	// A malformed OUTER ref that embeds a well-formed nested ref: the loose
+	// candidate "${secret:${env:FOO}" contains a valid "${env:FOO}", so an
+	// unanchored substring shape-check would wrongly accept it. The offline check
+	// must flag it (apply resolves only the inner ref, leaving a partial literal).
+	t.Run("offline-rejects-nested-ref", func(t *testing.T) {
+		tmp := t.TempDir()
+		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
+		_, _ = runCLI(t, env, "init")
+		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:${env:FOO}}\"\n")
+		_, err := runCLI(t, env, "verify")
+		if err == nil {
+			t.Fatal("offline verify must reject a nested/partial ${secret:${env:…}} reference")
+		}
+		if !strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("error should name the malformed ref; got: %v", err)
+		}
+	})
+
+	t.Run("offline-accepts-wellformed-unresolvable", func(t *testing.T) {
+		tmp := t.TempDir()
+		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
+		_, _ = runCLI(t, env, "init")
+		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:some.key}\"\n")
+		out, err := runCLI(t, env, "verify")
+		if err != nil {
+			t.Fatalf("offline verify must NOT resolve a well-formed ref: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "resolvability not checked") {
+			t.Fatalf("offline ok line should note resolvability is not checked; got: %s", out)
+		}
+	})
+
+	t.Run("online-rejects-unresolvable", func(t *testing.T) {
+		tmp := t.TempDir()
+		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp} // online: no offline flag
+		_, _ = runCLI(t, env, "init")
+		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:some.key}\"\n")
+		_, err := runCLI(t, env, "verify")
+		if err == nil {
+			t.Fatal("online verify must fail to resolve ${secret:some.key}")
+		}
+	})
+}
+
+// TestVerify_SanitizesHostileAgentKey pins that verify's agent-validation error
+// escapes a config-derived [agents.<name>] key: a TOML quoted key can carry raw
+// ESC bytes, and the wrap must use %q (not %s) so a shared config cannot inject
+// terminal escapes on plain `agentsync verify` (issue #93/#171 class).
+func TestVerify_SanitizesHostileAgentKey(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp}
+	_, _ = runCLI(t, env, "init")
+	cfgPath := filepath.Join(tmp, ".agentsync", "agentsync.toml")
+	// The quoted key decodes to a map key holding a raw ESC; the agent is
+	// unknown, so validateAgent fails and verify wraps the key in its error.
+	body := "[agents.\"cla\\u001b[2K\\u001b[31mHACKED\"]\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runCLI(t, env, "verify")
+	if err == nil {
+		t.Fatal("verify must reject an unknown agent")
+	}
+	if strings.ContainsRune(err.Error(), 0x1b) {
+		t.Fatalf("verify error must not carry a raw ESC byte from the agent key; got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "HACKED") {
+		t.Fatalf("error should still name the (escaped) agent key; got: %q", err.Error())
+	}
+}
+
+// TestVerify_SanitizesHostileSecretPath pins that verify's verifySecrets escapes a
+// config-derived [secrets].identity_file path (the twin of doctor's checkSecrets):
+// a shareable dotfiles config with an ESC-laden, non-existent path must not inject
+// terminal escapes into `verify`'s error on the default (non-offline) path
+// (issue #93/#171 class).
+func TestVerify_SanitizesHostileSecretPath(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp}
+	_, _ = runCLI(t, env, "init")
+	cfgPath := filepath.Join(tmp, ".agentsync", "agentsync.toml")
+	// identity_file holds a raw ESC (TOML  escape) and points nowhere, so
+	// verifySecrets' os.Stat fails and it returns the path (and the *PathError)
+	// in its error — which must be sanitized.
+	body := "[agents]\n[secrets]\nbackend       = \"age\"\nrecipient     = \"age1qqqq\"\n" +
+		"identity_file = \"/nope/x\\u001b[2K\\u001b[31mHACKED/age.key\"\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runCLI(t, env, "verify")
+	if err == nil {
+		t.Fatal("verify must fail on a non-existent identity_file")
+	}
+	if strings.ContainsRune(err.Error(), 0x1b) {
+		t.Fatalf("verify error must not carry a raw ESC byte from a config-derived path; got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "HACKED") {
+		t.Fatalf("error should still name the (sanitized) path; got: %q", err.Error())
+	}
+}

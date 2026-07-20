@@ -51,6 +51,13 @@ func versionRootOf(targetRoot, rel string) string {
 	if parts[0] == ".." || parts[0] == "." || parts[0] == "" {
 		return "" // defense-in-depth: a target must stay under $HOME, never escape it
 	}
+	// SYNC OBLIGATION (issue #154): this multi-segment base allowlist MUST stay in
+	// sync with internal/adapter/generic/specs.go. Any new breadth spec whose
+	// user target lives under a *multi-product* base (a base shared by more than one
+	// product/agent — e.g. `.local/share/<x>`, `.var/app/<x>`) MUST be added here,
+	// or it collapses to a single over-broad segment (e.g. ~/.local) and would
+	// version a huge shared tree under one repo. TestVersionRoots_AllSpecs and
+	// TestVersionRootOf_Tightness (homedir_test.go) guard this.
 	switch parts[0] {
 	case ".config", ".aws", ".agents", ".pi", ".gemini":
 		return filepath.Join(targetRoot, parts[0], parts[1])

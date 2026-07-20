@@ -79,7 +79,7 @@ Component support across agents.
 | **Skill** | ✓ `~/.claude/skills/X/` (dir) | ✓ shared `.claude/skills/` | ✓ `~/.agents/skills/` | ✓ `.cursor/skills/` | ✗ no skills concept | ✗ no skills concept | ✗ no skills concept | ✗ no skills concept | ✗ no skills concept |
 | **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/` | ◐ `.gemini/agents/` | ✗ top-level assistants only | ✗ no subagent concept | ✗ custom modes only | ✗ no subagent concept |
 | **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ◐ `~/.codex/prompts/` | ◐ `.cursor/commands/` | ◐ `.gemini/commands/` (TOML) | ◐ `.continue/prompts/` | ◐ `.windsurf/workflows/` + `global_workflows/` | ◐ `.roo/commands/` (`allowed-tools` dropped) | ◐ `.clinerules/workflows/` (project-only) |
-| **Hook** | ✓ JSON in settings | ✗ skip (JS/TS plugins) | ◐ `config.toml` `[hooks.*]` | ◐ `.cursor/hooks.json` | ◐ `settings.json` `hooks` | ✗ no hook concept | ✗ no hook concept | ✗ no hook concept | ✗ no hook concept |
+| **Hook** | ◐ JSON in settings (command hooks; other handler types/fields reported) | ✗ skip (JS/TS plugins) | ◐ `config.toml` `[hooks.*]` | ◐ `.cursor/hooks.json` | ◐ `settings.json` `hooks` | ✗ no hook concept | ✗ no hook concept | ✗ no hook concept | ✗ no hook concept |
 | **LSP server** | ✗ skip (Claude loads LSP only from plugin manifests) | ✗ skip (deferred) | ✗ no LSP concept | ✗ no LSP config | ✗ no LSP concept | ✗ no LSP concept | ✗ no LSP concept | ✗ no LSP concept | ✗ no LSP concept |
 
 > The ◐/✗ cells are *features*, not bugs: agentsync refuses to invent a
@@ -197,6 +197,18 @@ passthrough `[server.extra]` table on import/reconcile and re-rendered on apply,
 rather than dropped. (`Extra` is verbatim only — `${secret:…}` there is written
 literally, never resolved.)
 
+**Claude**
+
+- **Hook** — agentsync models only `command` hooks (`matcher` + `command`), which
+  round-trip losslessly. A Claude hook that uses a non-`command` handler type, or
+  carries a field agentsync doesn't model (e.g. `timeout`), is **reported, not
+  silently dropped**: on render a non-command handler surfaces as a Skip and is
+  never emitted (so agentsync's owned-array write can't clobber a native handler),
+  and on ingest the whole event is left uncaptured with a warning — so the next
+  apply never *owns*, and therefore never rewrites, your richer native entry. This
+  guard-and-warn behavior is anchored by the artifact-anchored
+  `TestIngest_HookArtifactRoundTrip` (`internal/adapter/claude`).
+
 **OpenCode**
 
 - **Subagent** — OpenCode-supported frontmatter keys agentsync doesn't model
@@ -222,11 +234,16 @@ literally, never resolved.)
 
 - **Subagent** — Codex custom agents are TOML, not markdown: the prose body
   becomes `developer_instructions`, and the `name` (required by Codex),
-  `description`, and `model` frontmatter carry over. There is no per-agent
-  `tools` allowlist (tool scoping is only expressible via `[mcp_servers]` / skill
-  toggles), so `tools` (and `color`) are dropped with a reported skip. Codex-only
-  agent keys agentsync has no canonical source for (`model_reasoning_effort`,
-  `sandbox_mode`, `nickname_candidates`, …) are simply not emitted.
+  `description`, and `model` frontmatter round-trip in **both** directions — a
+  frontmatter `name` that deliberately diverges from the file stem survives an
+  `apply` → `import`/`reconcile` round-trip, because ingest re-populates the
+  frontmatter `name` from the TOML `name` rather than silently rederiving it from
+  the filename. Two subagents whose effective names collide are refused at render
+  with an error naming both, not silently merged. There is no per-agent `tools`
+  allowlist (tool scoping is only expressible via `[mcp_servers]` / skill toggles),
+  so `tools` (and `color`) are dropped with a reported skip. Codex-only agent keys
+  agentsync has no canonical source for (`model_reasoning_effort`, `sandbox_mode`,
+  `nickname_candidates`, …) are simply not emitted.
 - **Slash command** — maps to Codex *custom prompts* (`~/.codex/prompts/*.md`),
   which do preserve `description` + `argument-hint`, but they're global-only, so a
   **project-scope** command has no target and is skipped; they also can't be
@@ -312,11 +329,16 @@ literally, never resolved.)
   `~/.codeium/windsurf/memories/global_rules.md` — always-on and frontmatter-less,
   written verbatim. It is whole-file owned like Claude's `~/.claude/CLAUDE.md`
   (a pre-existing hand-authored copy is backed up on first apply), and Windsurf
-  enforces its documented 6,000-character limit itself.
+  enforces its documented 6,000-character limit itself. **Workspace** rules
+  (`.windsurf/rules/`) have a separate, larger documented limit —
+  **12,000 characters per file** — which agentsync also leaves to Windsurf: it
+  writes the rule body verbatim and neither truncates nor flags it.
 - **Slash command** — Windsurf workflows are plain markdown invoked as `/<name>`
   (project `.windsurf/workflows/*.md`, user
   `~/.codeium/windsurf/global_workflows/*.md`), so command `description`/
   `argument-hint`/`allowed-tools` frontmatter drops — only the body survives.
+  Windsurf documents a **12,000-character-per-file** limit for workflows; agentsync
+  writes the body verbatim and leaves that enforcement to Windsurf.
 - **MCP remote** — Windsurf does not distinguish SSE vs streamable-HTTP in the
   config (just `serverUrl`), so a canonical `sse` server normalizes to `http` if
   later captured back via `import`/`reconcile`.

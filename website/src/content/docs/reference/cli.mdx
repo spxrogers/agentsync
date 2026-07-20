@@ -19,13 +19,13 @@ import { Aside } from '@astrojs/starlight/components';
 | Command | Purpose | Key flags / args |
 |---|---|---|
 | `init [<git-url>]` | Create `~/.agentsync/`; optionally clone a bootstrap repo. `--scope project` / `--project <path>` scaffolds a project tree instead. | `--scope --project` |
-| `doctor` | Diagnose setup: PATH, home/state writability, schema, secrets backend. | |
+| `doctor` | Diagnose setup: PATH, home/state writability, schema, secrets backend, destination-git-backup mode + per-dir repo status. | |
 | `verify` | Validate config; surface unresolved `${secret:}` / `${env:}` refs. `--scope project` / `--project <path>` lints the project tree instead. | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or a project tree's own `[agents]` declaration with `--scope project` / `--project <path>`. | `disable --purge --scope --project` |
 | `mcp add\|remove\|list <name>` | Manage MCP servers. | `--type --command --args --url --env --agents` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
-| `plugin install\|upgrade\|enable\|disable\|remove\|list <id>` | Manage plugins. | `install <id[@marketplace]>` |
-| `secrets set\|get\|edit <key>` | Manage age-encrypted secrets. | `set --stdin` |
+| `plugin install\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works). | `install <id[@marketplace]>` |
+| `secrets set\|get <key>` / `secrets edit` | Manage age-encrypted secrets (`edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
 | `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). Git-versions each destination dir (opt-out). | `--dry-run --scope --project --no-git-backup` |
 | `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (local-only git history). | `--to --all --dry-run` |
@@ -56,15 +56,23 @@ config with collaborators. Full guide: [Project-local config](/guides/projects/)
 ### `doctor`
 A health check: verifies your `PATH`, that home and state directories are
 writable, that the config schema parses, and that the secrets backend is reachable.
-It also lists plugins installed natively in an agent (Claude) that aren't in your
-source yet — run `import <agent>:plugin` to capture them. Run it first when
-something feels off.
+It also lists plugins installed natively in an agent (Claude and Codex) that aren't in your
+source yet — run `import <agent>:plugin` to capture them. A **Destination git
+backup** section reports the configured `[destination_directory_git_backup]` mode
+(`prompt`/`on`/`off`) and, per versioned destination dir on disk, whether it is
+agentsync-versioned, under foreign source control, or untracked. An untracked
+candidate dir that contains a nested git repo below it is flagged as a warning,
+since `apply` refuses to init a repo inside a repo and skips git backup there.
+Run it first when something feels off.
 
 ### `verify`
 Validates the canonical config and surfaces **every** unresolved `${secret:…}` /
 `${env:…}` reference. Ideal for CI — see
 [Verify config in CI](/recipes/ci-verification/). Pair with
-`AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` on runners without an age key.
+`AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` on runners without an age key: offline mode
+validates reference **shape** (a malformed `${secret:}` still fails) but skips
+resolution, so a well-formed-but-unresolvable name only surfaces on a run without
+the flag.
 
 Defaults to **user** scope. `--scope project` (walks up from cwd to the
 `.agentsync/` tree) or `--project <path>` schema-lints the **project** source
@@ -139,6 +147,9 @@ agentsync secrets set github.token --stdin
 agentsync secrets get github.token
 agentsync secrets edit
 ```
+
+`secrets set` refuses an empty (or whitespace-only) value by default; pass
+`--allow-empty` to store one deliberately.
 
 ---
 
@@ -241,7 +252,7 @@ The interactive merge UX for drift and conflicts. Full guide:
 
 ### `import <agent>[:<component>[:<name>]]`
 Captures native config back into your canonical source. Drop parts of the selector
-to widen scope. The `plugin` component (Claude only in v1) captures installed
+to widen scope. The `plugin` component (Claude and Codex) captures installed
 plugins + their marketplaces by re-fetching them into the agentsync cache, so a
 real plugin import **uses the network**. A plugin's marketplace is resolved from
 agentsync's own registered marketplaces first, then the agent's native config; a

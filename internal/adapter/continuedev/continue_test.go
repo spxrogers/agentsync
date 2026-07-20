@@ -25,28 +25,6 @@ func TestKeyMergeStrategy(t *testing.T) {
 	}
 }
 
-// TestCapabilities pins the bitmask: MCP/Memory/Command supported; the rest not.
-func TestCapabilities(t *testing.T) {
-	caps := continuedev.New(continuedev.Options{}).Capabilities()
-	for _, c := range []struct {
-		name string
-		cap  adapter.Capability
-		want bool
-	}{
-		{"MCP", adapter.CapMCP, true},
-		{"Memory", adapter.CapMemory, true},
-		{"Command", adapter.CapCommand, true},
-		{"Skill", adapter.CapSkill, false},
-		{"Subagent", adapter.CapSubagent, false},
-		{"Hook", adapter.CapHook, false},
-		{"LSP", adapter.CapLSP, false},
-	} {
-		if got := caps&c.cap != 0; got != c.want {
-			t.Errorf("Capabilities() has %s = %v, want %v", c.name, got, c.want)
-		}
-	}
-}
-
 func TestDetect_ConfigDir(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tmp, ".continue"), 0o755); err != nil {

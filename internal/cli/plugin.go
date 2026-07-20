@@ -235,7 +235,10 @@ func newPluginUpgradeCmd() *cobra.Command {
 }
 
 func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
-	id := args[0]
+	// Accept the id@marketplace ref that `install` accepts; operate on the bare id
+	// (the on-disk file is plugins/<id>.toml). The stored id (below) is
+	// authoritative for the marketplace, so the CLI marketplace segment is ignored.
+	id, _ := splitPluginRef(args[0])
 	if err := validateCacheKey("plugin", id); err != nil {
 		return err
 	}
@@ -245,6 +248,9 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
 	pluginPath := filepath.Join(home, "plugins", id+".toml")
 	existing, err := readPluginTOML(pluginPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("plugin %q is not installed", id)
+		}
 		return err
 	}
 
@@ -311,7 +317,7 @@ func newPluginEnableCmd() *cobra.Command {
 }
 
 func pluginEnableRun(cmd *cobra.Command, args []string) error {
-	id := args[0]
+	id, _ := splitPluginRef(args[0]) // accept id@marketplace like install; operate on the bare id
 	if err := validateCacheKey("plugin", id); err != nil {
 		return err
 	}
@@ -320,6 +326,9 @@ func pluginEnableRun(cmd *cobra.Command, args []string) error {
 
 	existing, err := readPluginTOML(pluginPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("plugin %q is not installed", id)
+		}
 		return err
 	}
 	// Only flip the disabled bit. Do NOT touch Agents: re-materializing ["*"] over
@@ -351,7 +360,7 @@ func newPluginDisableCmd() *cobra.Command {
 }
 
 func pluginDisableRun(cmd *cobra.Command, args []string) error {
-	id := args[0]
+	id, _ := splitPluginRef(args[0]) // accept id@marketplace like install; operate on the bare id
 	if err := validateCacheKey("plugin", id); err != nil {
 		return err
 	}
@@ -360,6 +369,9 @@ func pluginDisableRun(cmd *cobra.Command, args []string) error {
 
 	existing, err := readPluginTOML(pluginPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("plugin %q is not installed", id)
+		}
 		return err
 	}
 	// Only set the disabled bit. The `disabled = true` flag alone suppresses the
@@ -391,7 +403,7 @@ func newPluginRemoveCmd() *cobra.Command {
 }
 
 func pluginRemoveRun(cmd *cobra.Command, args []string) error {
-	id := args[0]
+	id, _ := splitPluginRef(args[0]) // accept id@marketplace like install; operate on the bare id
 	if err := validateCacheKey("plugin", id); err != nil {
 		return err
 	}

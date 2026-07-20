@@ -19,6 +19,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 // deepAdapterNames are the hand-written, agent-specific adapters (richer than the
@@ -478,7 +479,9 @@ func newAgentListCmd() *cobra.Command {
 func agentEntrySuffix(v map[string]any) string {
 	enabled, _ := v["enabled"].(bool)
 	if scope, _ := v["scope"].(string); scope != "" {
-		return fmt.Sprintf("enabled=%t scope=%s", enabled, scope)
+		// scope is a config-derived, unvalidated display-only field; sanitize it
+		// so an ESC in a shared agentsync.toml can't inject escapes (issue #93/#171).
+		return fmt.Sprintf("enabled=%t scope=%s", enabled, ui.Sanitize(scope))
 	}
 	return fmt.Sprintf("enabled=%t", enabled)
 }
@@ -519,7 +522,10 @@ func agentListRun(cmd *cobra.Command, all bool, scopeFlag, projectFlag string) e
 		return nil
 	}
 	for _, n := range names {
-		fmt.Fprintf(cmd.OutOrStdout(), "%-10s %s\n", n, agentEntrySuffix(agents[n]))
+		// n is a config [agents.<name>] key; a quoted TOML key can hold ESC, so
+		// sanitize it on display (the --all branch iterates the fixed
+		// allAgentNames() set and is already safe) (issue #93/#171).
+		fmt.Fprintf(cmd.OutOrStdout(), "%-10s %s\n", ui.Sanitize(n), agentEntrySuffix(agents[n]))
 	}
 	return nil
 }
@@ -623,12 +629,15 @@ func purgeKeyRest(key, agent string, sc adapter.Scope, portableProject string) (
 	if !strings.HasPrefix(key, agent+":") {
 		return "", false
 	}
-	// User scope spans every scope:project pair, so the remainder is the 4th
-	// colon field. That is exact for user-scope keys (empty project segment)
-	// and colon-free project roots; a colon-bearing root mangles it — an
-	// accepted residual of the historical cross-scope user purge, and safe
-	// because otherFilesKeyPath mangles identically, keeping the shared-file
-	// guard aligned.
+	// RATIFIED POLICY (issue #171, decision confirmed): a USER-scope `--purge` is
+	// intentionally cross-scope — it is the machine-wide "remove everything this
+	// agent ever wrote" affordance, so it spans every scope:project pair for the
+	// agent (including project-scope dest files in checked-out repos). It matches by
+	// the `agent:` prefix and takes the 4th colon field as the remainder. That is
+	// exact for user-scope keys (empty project segment) and colon-free project
+	// roots; a colon-bearing root mangles it — an accepted residual, safe because
+	// otherFilesKeyPath mangles identically, keeping the shared-file guard aligned.
+	// (Project-scope `--purge --scope project` stays isolated to that repo, above.)
 	parts := strings.SplitN(key, ":", 4)
 	if len(parts) < 4 {
 		return "", false

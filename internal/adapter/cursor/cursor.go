@@ -20,8 +20,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-
-	"github.com/spxrogers/agentsync/internal/adapter"
 )
 
 // Options configure the adapter at construction.
@@ -61,12 +59,6 @@ func (a *Adapter) Name() string { return "cursor" }
 // single strategy the render pipeline uses for orphan-cleanup synthesis is
 // correct for every key-merge path this adapter owns.
 func (a *Adapter) KeyMergeStrategy() string { return "merge-json-keys" }
-
-func (a *Adapter) Capabilities() adapter.Capability {
-	return adapter.CapMCP | adapter.CapMemory | adapter.CapSkill |
-		adapter.CapSubagent | adapter.CapCommand | adapter.CapHook
-	// LSP omitted: Cursor has no LSP configuration concept (shipped as ✗ skip).
-}
 
 func (a *Adapter) Detect() (bool, error) {
 	p := ResolvePaths(a.opts.TargetRoot, "", false)

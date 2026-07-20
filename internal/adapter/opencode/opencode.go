@@ -5,8 +5,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-
-	"github.com/spxrogers/agentsync/internal/adapter"
 )
 
 // Options configure the adapter at construction.
@@ -43,12 +41,6 @@ func (a *Adapter) Name() string { return "opencode" }
 // KeyMergeStrategy is opencode's single key-merge strategy: JSONC
 // (opencode.json), which MUST be merged via hujson, not strict JSON.
 func (a *Adapter) KeyMergeStrategy() string { return "merge-jsonc-keys" }
-
-func (a *Adapter) Capabilities() adapter.Capability {
-	return adapter.CapMCP | adapter.CapMemory | adapter.CapSkill |
-		adapter.CapSubagent | adapter.CapCommand
-	// Hook + LSP capabilities omitted: shipped as ✗ skip in v1.
-}
 
 func (a *Adapter) Detect() (bool, error) {
 	p := ResolvePaths(a.opts.TargetRoot, "", false)

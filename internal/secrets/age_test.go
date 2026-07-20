@@ -3,6 +3,7 @@ package secrets_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -163,5 +164,91 @@ func TestDecrypt_RawBytes(t *testing.T) {
 	}
 	if string(got) != "hello world" {
 		t.Fatalf("expected %q, got %q", plain, got)
+	}
+}
+
+// TestBackendSetButEmpty pins that both backends use PRESENCE (not emptiness)
+// semantics (issue #163): a present-but-empty value resolves to ("", nil); only a
+// genuinely-absent key errors. AgeBackend already did this; EnvBackend now matches
+// it (os.LookupEnv instead of os.Getenv=="").
+func TestBackendSetButEmpty(t *testing.T) {
+	t.Run("env/set-empty", func(t *testing.T) {
+		t.Setenv("AGENTSYNC_EMPTY_TEST_VAR", "")
+		v, err := secrets_pkg.EnvBackend{}.Resolve("AGENTSYNC_EMPTY_TEST_VAR")
+		if err != nil || v != "" {
+			t.Fatalf("set-but-empty env var: got (%q, %v), want (\"\", nil)", v, err)
+		}
+	})
+	t.Run("env/unset", func(t *testing.T) {
+		if _, err := (secrets_pkg.EnvBackend{}).Resolve("AGENTSYNC_UNSET_TEST_VAR_XYZ"); err == nil {
+			t.Fatal("unset env var should error")
+		}
+	})
+	// AgeBackend cases build from a real on-disk age vault fixture (not a
+	// hand-populated cache), per the artifact-fidelity rule.
+	newVault := func(t *testing.T, body string) *secrets_pkg.AgeBackend {
+		t.Helper()
+		tmp := t.TempDir()
+		id, err := age.GenerateX25519Identity()
+		if err != nil {
+			t.Fatal(err)
+		}
+		idPath := filepath.Join(tmp, "id.txt")
+		if err := os.WriteFile(idPath, []byte(id.String()), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		agePath := filepath.Join(tmp, "secrets.age")
+		if err := secrets_pkg.Encrypt([]byte(body), id.Recipient().String(), agePath); err != nil {
+			t.Fatal(err)
+		}
+		return secrets_pkg.NewAgeBackend(agePath, idPath)
+	}
+	t.Run("age/set-empty", func(t *testing.T) {
+		b := newVault(t, "[github]\ntoken = \"\"\n") // empty-string leaf — present, not missing
+		v, err := b.Resolve("github.token")
+		if err != nil || v != "" {
+			t.Fatalf("set-but-empty age secret: got (%q, %v), want (\"\", nil)", v, err)
+		}
+	})
+	t.Run("age/missing", func(t *testing.T) {
+		b := newVault(t, "[github]\ntoken = \"x\"\n")
+		if _, err := b.Resolve("github.absent"); err == nil {
+			t.Fatal("missing age key should error")
+		}
+	})
+}
+
+// TestCheckIdentityPermissions is the direct unit test P5 asks for: a PRESENT but
+// group/other-readable identity file is still rejected (the stat-error bypass only
+// covers absent/unreadable files), while a 0600 file passes. (issue #163)
+func TestCheckIdentityPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits don't reflect Windows ACLs; the check no-ops there")
+	}
+	t.Setenv(secrets_pkg.SkipPermCheckEnv, "") // ensure the gate is NOT bypassed
+	tmp := t.TempDir()
+
+	loose := filepath.Join(tmp, "loose.key")
+	if err := os.WriteFile(loose, []byte("id"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := secrets_pkg.CheckIdentityPermissions(loose); err == nil {
+		t.Fatal("0644 identity (group/other readable) must be rejected")
+	} else if !contains(err.Error(), "insecure permissions") {
+		t.Fatalf("error should mention insecure permissions; got: %v", err)
+	}
+
+	tight := filepath.Join(tmp, "tight.key")
+	if err := os.WriteFile(tight, []byte("id"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := secrets_pkg.CheckIdentityPermissions(tight); err != nil {
+		t.Fatalf("0600 identity must pass; got: %v", err)
+	}
+
+	// Absent file is bypassed (the caller surfaces the real open error), not
+	// reported as a permission error.
+	if err := secrets_pkg.CheckIdentityPermissions(filepath.Join(tmp, "nope.key")); err != nil {
+		t.Fatalf("absent identity must be bypassed (nil), not a fake perm error; got: %v", err)
 	}
 }

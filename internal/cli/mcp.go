@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 // newMCPCmd implements `agentsync mcp {add,remove,list}`. The design
@@ -157,7 +158,10 @@ func newMCPListCmd() *cobra.Command {
 				return nil
 			}
 			for _, id := range ids {
-				fmt.Fprintln(cmd.OutOrStdout(), id)
+				// id is the mcp/<id>.toml filename stem; a POSIX filename may hold
+				// ESC and git preserves it on clone, so sanitize on display
+				// (issue #93/#171).
+				fmt.Fprintln(cmd.OutOrStdout(), ui.Sanitize(id))
 			}
 			return nil
 		},

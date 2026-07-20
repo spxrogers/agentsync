@@ -49,6 +49,32 @@ linters:
         # that could otherwise launder it.
         - pattern: '^secrets\.Resolved\.Canonical$'
           msg: "do not unwrap secrets.Resolved to source.Canonical outside an adapter's Render; persisting it would leak resolved cleartext into ~/.agentsync. Render from the Resolved; capture writes the templated source.Canonical."
+        # A destructive os.* write to a *destination* file bypasses the DestWriter
+        # foreign-collision backup invariant, exactly like a direct iox.AtomicWrite
+        # (the Adapter.Apply doc bans both). This covers the create/overwrite/delete
+        # primitives (Remove/RemoveAll/WriteFile/Create) plus the less-obvious
+        # move/truncate ones — OpenFile (the O_TRUNC truncate-write; also matches a
+        # read-only open, a deliberate over-approximation), Rename, and Truncate — so
+        # an adapter cannot overwrite a native file by reaching for one of those.
+        # Adapters must route through render.Writer / adapter.DestWriter. The
+        # exclusions list below whitelists the legitimate non-destination callers —
+        # the DestWriter itself, canonical-source / state / plugin-marketplace-cache /
+        # git-backup scaffolding, and all tests — each text-scoped to this rule so it
+        # does not also suppress the iox.AtomicWrite / secrets.Resolved.Canonical rules.
+        - pattern: '^os\.Remove$'
+          msg: "use render.Writer / adapter.DestWriter for native-destination writes; direct os.* is reserved for non-destination (canonical-source / state / cache / git-backup) code"
+        - pattern: '^os\.RemoveAll$'
+          msg: "use render.Writer / adapter.DestWriter for native-destination writes; direct os.* is reserved for non-destination (canonical-source / state / cache / git-backup) code"
+        - pattern: '^os\.WriteFile$'
+          msg: "use render.Writer / adapter.DestWriter for native-destination writes; direct os.* is reserved for non-destination (canonical-source / state / cache / git-backup) code"
+        - pattern: '^os\.Create$'
+          msg: "use render.Writer / adapter.DestWriter for native-destination writes; direct os.* is reserved for non-destination (canonical-source / state / cache / git-backup) code"
+        - pattern: '^os\.OpenFile$'
+          msg: "use render.Writer / adapter.DestWriter for native-destination writes; direct os.* is reserved for non-destination (canonical-source / state / cache / git-backup) code"
+        - pattern: '^os\.Rename$'
+          msg: "use render.Writer / adapter.DestWriter for native-destination writes; direct os.* is reserved for non-destination (canonical-source / state / cache / git-backup) code"
+        - pattern: '^os\.Truncate$'
+          msg: "use render.Writer / adapter.DestWriter for native-destination writes; direct os.* is reserved for non-destination (canonical-source / state / cache / git-backup) code"
   exclusions:
     rules:
       # main.go can use os.UserHomeDir if needed.
@@ -97,6 +123,40 @@ linters:
       - path: '(^|/)internal/secrets/.*_test\.go$'
         linters: [forbidigo]
         text: 'unwrap secrets\.Resolved'
+      # --- os.* destination-write fence exclusions (issue #163) ---
+      # All tests: fixtures write freely to t.TempDir()/afero, never to a real
+      # native destination. Text-scoped to the os.* rule only.
+      - path: '_test\.go$'
+        linters: [forbidigo]
+        text: 'direct os\.\* is reserved'
+      # The DestWriter itself owns the delete + foreign-collision-backup invariant.
+      - path: '(^|/)internal/render/writer\.go$'
+        linters: [forbidigo]
+        text: 'direct os\.\* is reserved'
+      # PassThroughWriter test helper — delegating the delete is its job.
+      - path: '(^|/)internal/adapter/testwriter\.go$'
+        linters: [forbidigo]
+        text: 'direct os\.\* is reserved'
+      # iox atomic-write internals (temp-file cleanup) and the local git-backup
+      # repo scaffolding + marketplace fetch scratch — all non-destination.
+      - path: '(^|/)internal/iox/.*'
+        linters: [forbidigo]
+        text: 'direct os\.\* is reserved'
+      - path: '(^|/)internal/git/.*'
+        linters: [forbidigo]
+        text: 'direct os\.\* is reserved'
+      - path: '(^|/)internal/marketplace/.*'
+        linters: [forbidigo]
+        text: 'direct os\.\* is reserved'
+      # CLI files writing to canonical source (~/.agentsync/*), the vault, the
+      # plugin/marketplace cache, or a writability probe — not native destinations.
+      - path: '(^|/)internal/cli/(init|secrets|marketplace|plugin|update|mcp|agent|doctor|reconcile)\.go$'
+        linters: [forbidigo]
+        text: 'direct os\.\* is reserved'
+      # BDD/e2e harness code writes fixtures to temp dirs, never a native destination.
+      - path: '(^|/)test/.*'
+        linters: [forbidigo]
+        text: 'direct os\.\* is reserved'
 
 formatters:
   enable:

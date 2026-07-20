@@ -287,15 +287,19 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 // a green check, so a clean re-apply reads as a no-op instead of a wall of
 // pending "write"s; anything that would actually change keeps the cyan arrow.
 func printPlannedOp(w io.Writer, p *ui.Printer, op adapter.FileOp, wouldChange map[string]bool) {
+	// op.Path embeds a config-derived component name/id; sanitize on display so
+	// an ESC in a shared config's name can't inject escapes into the plan preview
+	// (issue #93/#171).
+	dispPath := ui.Sanitize(op.Path)
 	if isSyncedOp(op, wouldChange) {
-		fmt.Fprintf(w, "    %s %s %s\n", p.Green(ui.GlyphOK), p.Green(ui.Pad("synced", 6)), op.Path)
+		fmt.Fprintf(w, "    %s %s %s\n", p.Green(ui.GlyphOK), p.Green(ui.Pad("synced", 6)), dispPath)
 		return
 	}
 	action := op.Action
 	if action == "" {
 		action = "write"
 	}
-	fmt.Fprintf(w, "    %s %s %s\n", p.Cyan(ui.GlyphArrow), p.Cyan(ui.Pad(action, 6)), op.Path)
+	fmt.Fprintf(w, "    %s %s %s\n", p.Cyan(ui.GlyphArrow), p.Cyan(ui.Pad(action, 6)), dispPath)
 }
 
 // isSyncedOp reports whether a planned op is a write the destination already

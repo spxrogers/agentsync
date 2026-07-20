@@ -409,3 +409,58 @@ func TestSecretsSet_ValidatesVaultBeforePersist(t *testing.T) {
 		t.Fatalf("vault cleartext changed after a refused set: got %q, want %q", string(plain), seed)
 	}
 }
+
+// TestSecretsSet_RefusesEmptyValue pins that an empty (or whitespace-only) value
+// is refused by default across every input mode, stores nothing, and never echoes
+// the attempted value (issue #165).
+func TestSecretsSet_RefusesEmptyValue(t *testing.T) {
+	cases := []struct {
+		name     string
+		useStdin bool
+		stdin    string
+		args     []string
+	}{
+		{"stdin-empty", true, "", []string{"secrets", "set", "github.token", "--stdin"}},
+		{"stdin-newline-only", true, "\n", []string{"secrets", "set", "github.token", "--stdin"}},
+		{"stdin-whitespace-only", true, "   ", []string{"secrets", "set", "github.token", "--stdin"}},
+		{"legacy-empty", false, "", []string{"secrets", "set", "github.token="}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env, _, _, _ := setupSecretsEnv(t)
+			var out string
+			var err error
+			if tc.useStdin {
+				out, err = runCLIWithStdin(t, env, tc.stdin, tc.args...)
+			} else {
+				out, err = runCLI(t, env, tc.args...)
+			}
+			if err == nil {
+				t.Fatalf("empty value must be refused; got success:\n%s", out)
+			}
+			if !strings.Contains(err.Error(), "empty") {
+				t.Fatalf("refusal should explain the empty-value; got: %v", err)
+			}
+			// Nothing was stored: get on the key fails (no vault / not found).
+			if got, gerr := runCLI(t, env, "secrets", "get", "github.token"); gerr == nil {
+				t.Fatalf("no secret should have been stored; get returned: %s", got)
+			}
+		})
+	}
+}
+
+// TestSecretsSet_AllowEmptyStoresEmpty proves the escape hatch stores an empty
+// value end-to-end through encrypt->decrypt (issue #165).
+func TestSecretsSet_AllowEmptyStoresEmpty(t *testing.T) {
+	env, _, _, _ := setupSecretsEnv(t)
+	if out, err := runCLIWithStdin(t, env, "", "secrets", "set", "github.token", "--stdin", "--allow-empty"); err != nil {
+		t.Fatalf("--allow-empty should store an empty value; got err=%v\n%s", err, out)
+	}
+	got, err := runCLI(t, env, "secrets", "get", "github.token")
+	if err != nil {
+		t.Fatalf("get after allow-empty set: %v\n%s", err, got)
+	}
+	if strings.TrimSpace(got) != "" {
+		t.Fatalf("stored value should be empty; got %q", got)
+	}
+}

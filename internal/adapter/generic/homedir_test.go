@@ -76,6 +76,19 @@ func TestVersionRoots_AllSpecs(t *testing.T) {
 				}
 				if under(abs, r) {
 					n++
+					// Root-tightness (issue #154): the root must not be OVER-BROAD. The
+					// deepest a target sits below its (correct) root across all current
+					// specs is 2 segments — a file in a subdir of a single-product base
+					// (junie's .junie/mcp/mcp.json, augmentcode's .augment/rules/...).
+					// A target 3+ segments deep signals a collapsed, over-broad root:
+					// e.g. a future spec under an unlisted multi-product base
+					// (.local/share/foo/mcp.json wrongly collapsing to ~/.local) would
+					// fail here.
+					if rel, err := filepath.Rel(r, abs); err == nil && rel != "." {
+						if depth := len(strings.Split(filepath.ToSlash(rel), "/")); depth > 2 {
+							t.Errorf("%s: version root %q is over-broad for target %q (%d segments deep, want <= 2)", spec.Name, r, target, depth)
+						}
+					}
 				}
 			}
 			if n != 1 {
@@ -129,4 +142,42 @@ func under(child, parent string) bool {
 		return false
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// TestVersionRootOf_Tightness pins that versionRootOf returns a root at most one
+// segment shallower than the target for representative listed bases, and documents
+// (in code) what an UNLISTED multi-product base currently produces, so the
+// over-broad-collapse hazard stays visible (issue #154).
+func TestVersionRootOf_Tightness(t *testing.T) {
+	const root = "/home/u"
+	cases := []struct {
+		name, target, wantRoot string
+	}{
+		{"config-base", ".config/zed/AGENTS.md", ".config/zed"},
+		{"aws-base", ".aws/amazonq/mcp.json", ".aws/amazonq"},
+		{"agents-skills", ".agents/skills", ".agents/skills"},
+		{"single-dotted", ".qwen/settings.json", ".qwen"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := versionRootOf(root, c.target)
+			want := filepath.Join(root, filepath.FromSlash(c.wantRoot))
+			if got != want {
+				t.Fatalf("versionRootOf(%q) = %q, want %q", c.target, got, want)
+			}
+			rel, err := filepath.Rel(got, filepath.Join(root, filepath.FromSlash(c.target)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rel != "." && len(strings.Split(filepath.ToSlash(rel), "/")) > 1 {
+				t.Errorf("root %q is over-broad for target %q (rel=%q, want the target <= 1 segment below)", got, c.target, rel)
+			}
+		})
+	}
+	// KNOWN-BROAD: a target under an UNLISTED multi-product base collapses to a
+	// single over-broad segment today. Pinned here so the hazard is visible; if such
+	// a spec is ever added, versionRootOf's allowlist (and this row) must be updated.
+	if broad := versionRootOf(root, ".local/share/foo/mcp.json"); broad != filepath.Join(root, ".local") {
+		t.Errorf("expected the documented over-broad collapse to ~/.local for an unlisted base; got %q", broad)
+	}
 }

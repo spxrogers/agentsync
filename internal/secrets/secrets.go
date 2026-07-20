@@ -21,6 +21,14 @@ type Resolver interface {
 // re matches ${secret:dotted.key} and ${env:NAME} references.
 var re = regexp.MustCompile(`\$\{(secret|env):([A-Za-z0-9._-]+)\}`)
 
+// looseRefRe matches anything SHAPED like a ${secret …}/${env …} reference (a
+// colon or whitespace after the kind), so a MALFORMED ref — ${secret:} (empty
+// key), ${secret foo} (no colon), a key with a space/illegal char — is caught for
+// the offline shape check even though the strict `re` above silently skips it. It
+// deliberately does not match `${env}` (no separator) or `${secretary}` (no
+// boundary), which are not clearly references. (issue #171)
+var looseRefRe = regexp.MustCompile(`\$\{\s*(secret|env)[:\s][^}]*\}`)
+
 // SubstituteRefs walks s and replaces ${secret:dotted.key} and ${env:NAME}
 // references. Unknown references are left as-is and reported in the
 // returned []string of unresolved markers (caller decides whether to error).
@@ -52,21 +60,26 @@ func SubstituteRefs(s string, secrets Resolver, env Resolver) (string, []string,
 	return out, unresolved, nil
 }
 
-// EnvBackend resolves ${env:NAME} via os.Getenv(NAME). Used both as the env
-// resolver in SubstituteRefs and as the "backend = env" mode where secrets
-// are also stored as env vars (e.g. by direnv / 1Password CLI).
+// EnvBackend resolves ${env:NAME} via os.LookupEnv(NAME) — presence, not
+// emptiness, is the criterion, so a var set to "" resolves to "" (matching
+// AgeBackend) and only an unset var errors. Used both as the env resolver in
+// SubstituteRefs and as the "backend = env" mode where secrets are also stored
+// as env vars (e.g. by direnv / 1Password CLI).
 type EnvBackend struct{}
 
 func (EnvBackend) Resolve(key string) (string, error) {
-	v := osGetenv(key)
-	if v == "" {
+	// Presence, not emptiness, is the criterion — a var set to the empty string
+	// resolves to "" (matching AgeBackend's cache-presence model); only an
+	// unset var is an error. (issue #163)
+	v, ok := osLookupEnv(key)
+	if !ok {
 		return "", fmt.Errorf("env var %q not set", key)
 	}
 	return v, nil
 }
 
-// osGetenv indirection so tests can inject without touching real env.
-var osGetenv = os.Getenv
+// osLookupEnv indirection so tests can inject without touching real env.
+var osLookupEnv = os.LookupEnv
 
 // NopResolver is a Resolver that always returns an error (key not found).
 // Used when no secrets backend is configured.

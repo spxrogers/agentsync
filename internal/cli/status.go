@@ -408,6 +408,11 @@ func renderStatusItem(p *ui.Printer, it statusItem) {
 	if it.Pointer != "" {
 		disp = it.Path + "#" + it.Pointer
 	}
+	// Path/Pointer embed a config-derived component name/id (a skill/subagent/
+	// command dirname, an mcp/lsp id) that source.Load reads verbatim, so a
+	// control byte in a shared config's name reaches here — sanitize on display
+	// (issue #93/#171).
+	disp = ui.Sanitize(disp)
 	glyph, color := styleClass(p, it.Class)
 	// Pad the plain "glyph class" to a fixed visible width BEFORE
 	// coloring so ANSI bytes never shift the path column.
@@ -422,7 +427,7 @@ func renderSkillGroup(p *ui.Printer, g *skillGroup) {
 	cls := mostSevereClass(g.Items)
 	glyph, color := styleClass(p, cls)
 	label := ui.Pad(glyph+" "+cls, 20)
-	fmt.Fprintf(p.Out, "  %s %s  %s\n", color(label), g.Root+string(filepath.Separator), p.Faint(skillSummary(g.Items)))
+	fmt.Fprintf(p.Out, "  %s %s  %s\n", color(label), ui.Sanitize(g.Root+string(filepath.Separator)), p.Faint(skillSummary(g.Items)))
 }
 
 // skillRoots returns the skill directories present among items, anchored on an
@@ -603,7 +608,7 @@ func renderStatusLegend(p *ui.Printer, summary map[string]int) {
 func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry, s *state.Targets, enabled, selected []string) {
 	for _, a := range orphanedStateAgents(s, enabled) {
 		fmt.Fprintf(p.Err, "%s agent %q is not enabled but still owns tracked files/keys in state; its "+
-			"native config is orphaned. Run `agentsync agent disable %s --purge` to remove what agentsync wrote.\n",
+			"native config is orphaned. Run `agentsync agent disable %q --purge` to remove what agentsync wrote.\n",
 			p.Yellow("warning:"), a, a)
 	}
 	// Nudge: plugins installed natively in an enabled agent but not yet declared

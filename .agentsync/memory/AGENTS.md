@@ -157,8 +157,8 @@ before writing it down.
   logging, test container guard.
 
 The registered command tree (`internal/cli/root.go`): `init`, `agent`, `apply`,
-`status`, `diff`, `reconcile`, `import`, `doctor`, `verify`, `mcp`, `plugin`,
-`marketplace`, `update`, `secrets`, `explain`.
+`revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `verify`, `mcp`,
+`plugin`, `marketplace`, `update`, `secrets`, `explain`, `version`.
 
 ## Secret-handling invariants (read before touching secrets / capture / source writers)
 

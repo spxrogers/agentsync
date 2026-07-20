@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 
@@ -56,19 +55,31 @@ func newDoctorCmd() *cobra.Command {
 			}
 
 			fmt.Fprintln(p.Out, "")
-			p.Section("Adapter detection (PATH-only)")
+			p.Section("Adapter detection")
+			// Detection is INFORMATIONAL — each adapter's Detect() stats its config
+			// dir under the target root and falls back to a PATH lookup. It never
+			// touches the fails counter: a not-detected agent is a normal state (the
+			// user may author config for a machine where the agent isn't installed).
+			reg := registryFactory()
 			for _, name := range allAgentNames() {
-				bin := agentBinary(name)
-				if bin == "" {
-					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint("(no PATH binary; detected by config dir)"))
+				a := reg.Lookup(name)
+				if a == nil {
+					// #160 guarantees every valid agent has a registered adapter, so a
+					// nil lookup should be unreachable — but report it gracefully rather
+					// than panic if that invariant ever regresses.
+					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint("no adapter registered"))
 					continue
 				}
-				path, lookErr := exec.LookPath(bin)
-				if lookErr != nil {
-					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint("not found in PATH"))
-					continue
+				detected, derr := a.Detect()
+				switch {
+				case derr != nil:
+					// A Detect error is still informational — surface it, never fail.
+					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint(fmt.Sprintf("detection error: %v", derr)))
+				case detected:
+					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Green(ui.GlyphOK), name, p.Faint("detected"))
+				default:
+					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint("not detected"))
 				}
-				fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Green(ui.GlyphOK), name, p.Faint(path))
 			}
 
 			fmt.Fprintln(p.Out, "")
@@ -181,7 +192,10 @@ func checkStateDir(p *ui.Printer, home string) int {
 func checkSchema(p *ui.Printer, home string) (source.Config, bool) {
 	c, err := source.Load(afero.NewOsFs(), home)
 	if err != nil {
-		failCheck(p, "schema     ", fmt.Sprintf("invalid: %v", err))
+		// A strict-decode error embeds the raw offending config source line
+		// (go-toml's StrictMissingError.String()), which can carry ESC/bidi bytes
+		// from a shared config; sanitize the whole rendering (issue #93/#171).
+		failCheck(p, "schema     ", fmt.Sprintf("invalid: %s", untrusted.Wrap(err.Error())))
 		return source.Config{}, false
 	}
 	okCheck(p, "schema     ", fmt.Sprintf("ok (%d mcp, %d plugin(s), %d marketplace(s))",
@@ -189,7 +203,7 @@ func checkSchema(p *ui.Printer, home string) (source.Config, bool) {
 	return c.Config, true
 }
 
-// checkPlugins surfaces plugins installed natively in an agent (Claude in v1)
+// checkPlugins surfaces plugins installed natively in an agent (Claude and Codex)
 // that are NOT declared in the canonical source — informational only, never a
 // failure: agentsync treats them as foreign-managed, and `import <agent>:plugin`
 // brings them under management. Probes every registered adapter (not just the
@@ -243,6 +257,11 @@ func checkDestinationGitBackup(p *ui.Printer, cfg source.DestinationGitBackupCon
 
 	// Report per VERSION ROOT (deduped/de-nested across all agents), since a shared
 	// dir like ~/.agents/skills belongs to several agents but is one repo.
+	//
+	// Probing ALL registered agents (reg.Names()) rather than only the enabled set
+	// apply acts on is INTENTIONAL — like checkPlugins above, doctor surfaces
+	// foreign/owned destination dirs the user should know about even for agents that
+	// aren't enabled; the os.Stat filter below drops any root that doesn't exist yet.
 	reg := registryFactory()
 	for _, root := range enabledVersionRoots(reg, reg.Names(), adapter.ScopeUser, "") {
 		if _, err := os.Stat(root); err != nil {
@@ -301,27 +320,37 @@ func checkSecrets(p *ui.Printer, cfg source.SecretsConfig, home string) int {
 	// apply never disagree on the path.
 	userHome := paths.HomeDir(paths.OSEnv{})
 	idPath := secrets.ResolveIdentityFile(cfg, home, userHome)
+	// idPath/agePath derive from the config's [secrets] identity_file/age_file,
+	// which are shareable dotfiles — a crafted path can carry raw ESC/bidi bytes.
+	// Display through untrusted.Text so every print below sanitizes by
+	// construction (the "not readable"/"not yet created" branches fire on a
+	// path that need not even exist); the raw path is still used for os.Stat /
+	// CheckIdentityPermissions (issue #93/#171 class).
+	idDisp := untrusted.Wrap(idPath)
 	info, err := os.Stat(idPath)
 	if err != nil {
-		failCheck(p, "identity   ", fmt.Sprintf("%s — not readable (%v)", idPath, err))
+		// err is a *PathError whose message embeds the raw idPath, so sanitize
+		// its rendering too — not just idDisp — or the ESC leaks through %v.
+		failCheck(p, "identity   ", fmt.Sprintf("%s — not readable (%s)", idDisp, untrusted.Wrap(err.Error())))
 		return fails + 1
 	}
 	// Use the same check apply/verify use so doctor never disagrees: it honors
 	// AGENTSYNC_AGE_SKIP_PERM_CHECK=1 and the Windows ACL caveat, unlike the
 	// previous inline 0o077 mask which falsely failed an opted-out 0644 key.
 	if permErr := secrets.CheckIdentityPermissions(idPath); permErr != nil {
-		failCheck(p, "identity   ", fmt.Sprintf("%s — too permissive (%v); chmod 600 (or set AGENTSYNC_AGE_SKIP_PERM_CHECK=1)", idPath, info.Mode().Perm()))
+		failCheck(p, "identity   ", fmt.Sprintf("%s — too permissive (%v); chmod 600 (or set AGENTSYNC_AGE_SKIP_PERM_CHECK=1)", idDisp, info.Mode().Perm()))
 		return fails + 1
 	}
-	okCheck(p, "identity   ", fmt.Sprintf("ok (%s)", idPath))
+	okCheck(p, "identity   ", fmt.Sprintf("ok (%s)", idDisp))
 
 	// Age-encrypted file location — warn if missing (legitimate on a
 	// fresh install where the user hasn't called `secrets set` yet).
 	agePath := secrets.ResolveAgeFile(cfg, home, userHome)
+	ageDisp := untrusted.Wrap(agePath)
 	if _, err := os.Stat(agePath); err != nil {
-		warnCheck(p, "age file   ", fmt.Sprintf("%s — not yet created (run `agentsync secrets edit` to author)", agePath))
+		warnCheck(p, "age file   ", fmt.Sprintf("%s — not yet created (run `agentsync secrets edit` to author)", ageDisp))
 	} else {
-		okCheck(p, "age file   ", agePath)
+		okCheck(p, "age file   ", ageDisp.String())
 	}
 	return fails
 }

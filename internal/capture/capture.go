@@ -45,9 +45,13 @@ type Result struct {
 //  1. re-references resolved secrets back to ${secret:…} against the current
 //     source (secrets.ReReferenceCanonical), so a live credential apply wrote
 //     into the destination is never persisted into ~/.agentsync;
-//  2. preserves source-only fields the rendered destination never carries
-//     (MCP/LSP agents + enabled), so write-back can't silently broaden a
-//     server's exposure or clear its enablement;
+//  2. preserves MCP/LSP targeting the destination doesn't fully carry: `agents`
+//     is source-only (no native dest carries it) and is ALWAYS restored, so
+//     write-back can't silently broaden a server's exposure; `enabled` IS carried
+//     by some dests (Codex reads native `enabled` — issue #152), so the source
+//     value is restored only when the ingest carried none (nil) — a real native
+//     enable/disable round-trips, while a dest that omits `enabled` keeps the
+//     source state (so write-back still can't silently clear it);
 //  3. writes through internal/source/writer.go (never iox.AtomicWrite directly).
 //
 // The current source MUST load for Capture to run: re-referencing and
@@ -77,6 +81,23 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 	sec := secrets.SelectBackend(cur.Config.Secrets, home, userHome)
 	secrets.ReReferenceCanonical(ingested, &cur, sec, secrets.EnvBackend{})
 
+	// Fail-closed under indeterminacy (issue #163): the value prong of the backstop
+	// below builds its "live secret value -> placeholder" detection set by resolving
+	// the source's ${secret:…} refs through the backend. If the backend can't resolve
+	// them (vault locked / unavailable), that set is empty and the value prong is
+	// BLIND — it cannot prove a resolved secret wasn't moved into a literal-
+	// counterpart field. So an unresolvable ${secret:…} the source references forces
+	// a refusal here rather than letting the flow fall through to a mere warning
+	// (the reporting side used to carry the leak-prevention weight, which it can't).
+	// Only the `secret:` kind matters: the value prong resolves via `sec`, not the
+	// env backend, so an unresolvable ${env:…} does not blind it (it stays a warning).
+	if blind := secretKindRefs(secrets.UnresolvedSecretRefs(&cur, sec, secrets.EnvBackend{})); len(blind) > 0 {
+		return res, fmt.Errorf("refusing to write back: the secrets backend could not resolve %s that the "+
+			"canonical source references, so agentsync cannot verify a resolved secret would not be persisted "+
+			"as cleartext into ~/.agentsync. Unlock/restore the vault (`agentsync secrets …`) and retry, or "+
+			"edit the canonical source directly", strings.Join(blind, ", "))
+	}
+
 	// Fail-closed backstop: re-reference matches by value and cannot tell a
 	// moved/rotated secret from a deliberate literal edit, so it can leave a
 	// resolved credential as cleartext (a secret moved into a literal-counterpart
@@ -94,8 +115,16 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 
 	for _, m := range ingested.MCPServers {
 		if existing, ok, rerr := source.ReadMCP(home, m.ID); rerr == nil && ok {
+			// Agents targeting is never carried by any native dest, so restoring
+			// the source value is always right. Enabled, however, IS carried by
+			// some dests (Codex reads native `enabled` — issue #152), so only fall
+			// back to the source value when the ingest produced none (nil); a
+			// captured explicit &true/&false must survive, or a native disable is
+			// silently dropped on re-import/reconcile of an already-managed server.
 			m.Server.Agents = existing.Server.Agents
-			m.Server.Enabled = existing.Server.Enabled
+			if m.Server.Enabled == nil {
+				m.Server.Enabled = existing.Server.Enabled
+			}
 		}
 		if err := source.WriteMCP(home, m.ID, m); err != nil {
 			return res, fmt.Errorf("write mcp %s: %w", m.ID, err)
@@ -105,8 +134,13 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 
 	for _, ls := range ingested.LSPServers {
 		if existing, ok, rerr := source.ReadLSP(home, ls.ID); rerr == nil && ok {
+			// Same rule as MCP: Agents is source-only, but preserve Enabled only
+			// when the ingest carried none, so a dest that ever reports LSP enable
+			// state can round-trip it (no adapter does today; kept symmetric).
 			ls.Spec.Agents = existing.Spec.Agents
-			ls.Spec.Enabled = existing.Spec.Enabled
+			if ls.Spec.Enabled == nil {
+				ls.Spec.Enabled = existing.Spec.Enabled
+			}
 		}
 		if err := source.WriteLSP(home, ls); err != nil {
 			return res, fmt.Errorf("write lsp %s: %w", ls.ID, err)
@@ -132,12 +166,32 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 	}
 
 	if opts.Warn != nil {
+		// Unresolvable `secret:` refs already forced a refusal above, so anything
+		// left here is an `env:` ref the source references but that the env backend
+		// couldn't resolve. This warning describes the CURRENT SOURCE's resolvability
+		// (`cur`), not the just-written file: re-referencing restores a ${…} form by
+		// matching the resolved value, so a field carrying an unresolvable ref may not
+		// have been re-referenced (issue #163).
 		if missing := secrets.UnresolvedSecretRefs(&cur, sec, secrets.EnvBackend{}); len(missing) > 0 {
 			fmt.Fprintf(opts.Warn,
-				"warning: could not re-reference %s (secrets backend or env var unavailable); "+
-					"the written-back source file may contain cleartext — review it before committing\n",
+				"warning: the secrets backend could not resolve %s referenced by the canonical source; "+
+					"a field carrying one of these may not have been restored to its ${…} reference — "+
+					"review the written-back source before committing\n",
 				strings.Join(missing, ", "))
 		}
 	}
 	return res, nil
+}
+
+// secretKindRefs filters UnresolvedSecretRefs output down to the `secret:` kind
+// (vault-backed), which is the only kind the backstop's value prong resolves and
+// therefore the only kind whose unresolvability blinds it.
+func secretKindRefs(refs []string) []string {
+	var out []string
+	for _, r := range refs {
+		if strings.HasPrefix(r, "secret:") {
+			out = append(out, r)
+		}
+	}
+	return out
 }

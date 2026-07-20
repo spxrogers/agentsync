@@ -35,20 +35,6 @@ func RequireProjectRoot(scope Scope, project string) error {
 	return nil
 }
 
-// Capability is a bitmask of components an adapter can produce. M1's Claude
-// adapter is full-spectrum; M2's OpenCode adapter omits Hook + LSP.
-type Capability uint32
-
-const (
-	CapMCP Capability = 1 << iota
-	CapMemory
-	CapSkill
-	CapSubagent
-	CapCommand
-	CapHook
-	CapLSP
-)
-
 // Scope distinguishes user-level vs project-level apply targets.
 type Scope int
 
@@ -156,7 +142,10 @@ type Skip struct {
 // Adapter is the per-agent contract.
 type Adapter interface {
 	Name() string
-	Capabilities() Capability
+	// Detect reports whether the agent appears installed — its config dir exists
+	// under the target root, or its binary is on PATH. Informational only: the
+	// `doctor` command consumes it to print a per-agent detected/not-detected
+	// line; it never gates apply or fails a readiness check.
 	Detect() (bool, error)
 	// Render projects the resolved canonical (secrets already substituted to
 	// cleartext, or wrapped templated for a preview) into destination FileOps.
@@ -180,6 +169,16 @@ type Adapter interface {
 	// destination when the source section became empty (no render op exists
 	// to carry the removal). It MUST be exact — applying the wrong strategy to
 	// a JSONC file would parse it as strict JSON and clobber the file.
+	//
+	// CONSTRAINT — an adapter MUST emit exactly ONE key-merge strategy across
+	// all its ops. orphanCleanupOps applies this single accessor value to
+	// EVERY key-merge destination the adapter owns, so an adapter co-owning
+	// keys across files of *different* on-disk formats (e.g. a JSON mcp.json
+	// and a TOML config.toml) is NOT currently supported — it would require
+	// widening this accessor to a per-path strategy first. The central guard
+	// TestKeyMergeStrategy_MatchesEmittedOps (internal/cli) pins this accessor
+	// against the MergeStrategy stamped on every key-merge FileOp for all
+	// registered adapters, so the two can never silently diverge.
 	KeyMergeStrategy() string
 	// Apply executes ops against destinations. Adapters MUST route every
 	// destination write through w.Write / w.Delete rather than calling

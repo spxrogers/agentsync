@@ -5,7 +5,80 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	gogit "github.com/go-git/go-git/v5"
+	agit "github.com/spxrogers/agentsync/internal/git"
 )
+
+// TestDoctor_ReportsPerVersionRootGitState drives the checkDestinationGitBackup
+// per-version-root loop end-to-end (issue #174): it plants three real on-disk dirs
+// at three distinct deep-agent version roots — an agentsync-owned repo, a foreign
+// .git, and a plain untracked dir — and asserts doctor reports each root's git
+// state. The oracle is doctor's actual output produced from real dirs, not an
+// agit.Detect unit call (that has its own coverage).
+func TestDoctor_ReportsPerVersionRootGitState(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+
+	claudeRoot := filepath.Join(tmp, ".claude") // agentsync-owned
+	rooRoot := filepath.Join(tmp, ".roo")       // foreign source control
+	clineRoot := filepath.Join(tmp, ".cline")   // untracked
+
+	// agentsync-owned: a real repo carrying the managed marker.
+	if err := os.MkdirAll(claudeRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agit.Init(claudeRoot); err != nil {
+		t.Fatalf("agit.Init: %v", err)
+	}
+	// foreign: a genuine git repo the user owns — no agentsync managed marker.
+	if err := os.MkdirAll(rooRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gogit.PlainInit(rooRoot, false); err != nil {
+		t.Fatalf("PlainInit foreign repo: %v", err)
+	}
+	// untracked: a plain dir with no repo at or above it.
+	if err := os.MkdirAll(clineRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Preconditions: confirm the planted states are what we expect, so a doctor
+	// output miss is unambiguously a reporting bug, not a bad fixture.
+	for _, tc := range []struct {
+		dir  string
+		want agit.State
+	}{
+		{claudeRoot, agit.StateAgentsyncOwned},
+		{rooRoot, agit.StateForeign},
+		{clineRoot, agit.StateUntracked},
+	} {
+		if st, err := agit.Detect(tc.dir); err != nil || st != tc.want {
+			t.Fatalf("precondition: Detect(%s) = (%v, %v), want %v", tc.dir, st, err, tc.want)
+		}
+	}
+
+	out, err := runCLI(t, env, "doctor")
+	if err != nil {
+		t.Fatalf("doctor: %v\n%s", err, out)
+	}
+	for _, want := range []struct {
+		name, substr string
+	}{
+		{"owned", claudeRoot + " — agentsync-versioned"},
+		{"foreign", rooRoot + " — foreign source control"},
+		{"untracked", clineRoot + " — untracked"},
+	} {
+		t.Run(want.name, func(t *testing.T) {
+			if !strings.Contains(out, want.substr) {
+				t.Fatalf("doctor output missing %q. Got:\n%s", want.substr, out)
+			}
+		})
+	}
+}
 
 func TestDoctor_PrintsEnvAndAgents(t *testing.T) {
 	tmp := t.TempDir()
@@ -25,6 +98,68 @@ func TestDoctor_PrintsEnvAndAgents(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("doctor output missing %q. Got:\n%s", want, out)
 		}
+	}
+}
+
+// detectionLineSays scans doctor's output for the "Adapter detection" line of
+// the named agent and reports whether it carries the expected status. A
+// detection line is the one containing both the agent name and "detected"; the
+// git-backup section also prints the agent's config path but never "detected",
+// so it is skipped. "detected" is a substring of "not detected", so the
+// "detected" case additionally requires the negative form to be absent.
+func detectionLineSays(out, agent, status string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, agent) || !strings.Contains(line, "detected") {
+			continue
+		}
+		hasNot := strings.Contains(line, "not detected")
+		switch status {
+		case "not detected":
+			return hasNot
+		case "detected":
+			return !hasNot
+		}
+	}
+	return false
+}
+
+// TestDoctor_ReportsAdapterDetection pins that the "Adapter detection" section
+// reflects each adapter's Detect(): an agent whose config dir exists under the
+// target root reports "detected", a never-installed agent reports "not
+// detected", and — because detection is purely informational — it never makes
+// doctor exit non-zero.
+func TestDoctor_ReportsAdapterDetection(t *testing.T) {
+	tmp := t.TempDir()
+	// An empty PATH guarantees no agent binary is ever found, so detection is
+	// driven solely by the config-dir stat under the target root — deterministic
+	// regardless of what happens to be installed in the test container.
+	env := map[string]string{
+		"AGENTSYNC_TARGET_ROOT": tmp,
+		"PATH":                  t.TempDir(),
+	}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	// claude's Detect() stats <target>/.claude — create it so claude is detected.
+	if err := os.MkdirAll(filepath.Join(tmp, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "doctor")
+	if err != nil {
+		t.Fatalf("detection is informational and must not fail doctor; got err=%v\n%s", err, out)
+	}
+	// The heading dropped the "(PATH-only)" qualifier now that Detect() also
+	// stats the config dir.
+	if !strings.Contains(out, "Adapter detection") || strings.Contains(out, "PATH-only") {
+		t.Fatalf("want an \"Adapter detection\" heading without \"PATH-only\"; got:\n%s", out)
+	}
+	if !detectionLineSays(out, "claude", "detected") {
+		t.Fatalf("claude should report detected (its ~/.claude config dir exists); got:\n%s", out)
+	}
+	// windsurf is never installed here: no ~/.codeium/windsurf dir, empty PATH.
+	if !detectionLineSays(out, "windsurf", "not detected") {
+		t.Fatalf("windsurf should report not detected; got:\n%s", out)
 	}
 }
 
@@ -71,6 +206,34 @@ func TestDoctor_FailsOnMissingHome(t *testing.T) {
 // identity-perm check ignoring AGENTSYNC_AGE_SKIP_PERM_CHECK=1, which apply and
 // verify both honor (via secrets.CheckIdentityPermissions). doctor would falsely
 // fail a 0644 identity even when the user opted out of the perm gate.
+// TestDoctor_SanitizesHostileSecretPath pins that doctor escapes a config-derived
+// [secrets] identity_file/age_file path: those are shareable-dotfile values that
+// can carry raw ESC/bidi bytes, and the "not readable" / "not yet created"
+// branches print them even for a path that does not exist — so a crafted config
+// must not inject terminal escapes into doctor's output (issue #93/#171 class).
+func TestDoctor_SanitizesHostileSecretPath(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp, "NO_COLOR": "1"}
+	_, _ = runCLI(t, env, "init")
+
+	cfgPath := filepath.Join(tmp, ".agentsync", "agentsync.toml")
+	// identity_file holds a raw ESC (TOML  escape) and points nowhere, so
+	// doctor's os.Stat fails and it prints the path in its "not readable" line.
+	body := "[agents]\n[secrets]\nbackend       = \"age\"\nrecipient     = \"age1qqqq\"\n" +
+		"identity_file = \"/nope/x\\u001b[2K\\u001b[31mHACKED/age.key\"\nfile          = \"secrets/secrets.age\"\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _ := runCLI(t, env, "doctor")
+	if strings.ContainsRune(out, 0x1b) {
+		t.Fatalf("doctor output must not carry a raw ESC byte from a config-derived path; got:\n%q", out)
+	}
+	if !strings.Contains(out, "HACKED") {
+		t.Fatalf("doctor should still show the (sanitized) path; got:\n%s", out)
+	}
+}
+
 func TestDoctor_HonorsSkipPermCheck(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{

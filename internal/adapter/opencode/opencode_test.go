@@ -14,40 +14,11 @@ func TestAdapter_Identity(t *testing.T) {
 	if a.Name() != "opencode" {
 		t.Fatalf("Name = %q", a.Name())
 	}
-	if a.Capabilities() == 0 {
-		t.Fatalf("expected non-zero capabilities")
-	}
 	// Must satisfy the interface.
 	var _ adapter.Adapter = a
 	// Compile-time pin: same drift-detection as the claude adapter — drops
 	// of SetStderr fail the build before RouteTo would silently no-op us.
 	var _ adapter.WarnEmitter = a
-}
-
-func TestAdapter_Capabilities_HasExpected(t *testing.T) {
-	a := opencode.New(opencode.Options{TargetRoot: t.TempDir()})
-	caps := a.Capabilities()
-
-	for _, want := range []adapter.Capability{
-		adapter.CapMCP,
-		adapter.CapMemory,
-		adapter.CapSkill,
-		adapter.CapSubagent,
-		adapter.CapCommand,
-	} {
-		if caps&want == 0 {
-			t.Fatalf("expected capability %v to be set, got %b", want, caps)
-		}
-	}
-	// Hook and LSP are intentionally absent in v1.
-	for _, absent := range []adapter.Capability{
-		adapter.CapHook,
-		adapter.CapLSP,
-	} {
-		if caps&absent != 0 {
-			t.Fatalf("expected capability %v to be absent in v1, got %b", absent, caps)
-		}
-	}
 }
 
 func TestAdapter_DetectsConfigDir(t *testing.T) {

@@ -102,8 +102,7 @@ Every agent integration implements one interface (`internal/adapter/adapter.go`)
 ```go
 type Adapter interface {
     Name() string
-    Capabilities() Capability       // bitmask: MCP, Memory, Skill, Subagent, Command, Hook, LSP
-    Detect() (bool, error)          // is this agent installed?
+    Detect() (bool, error)          // is this agent installed? (informational; consumed by `doctor`)
     Render(r secrets.Resolved, scope Scope, project string) ([]FileOp, []Skip, error)
     Ingest(scope Scope, project string) (source.Canonical, error)
     KeyMergeStrategy() string       // "merge-json-keys" | "merge-jsonc-keys" | "merge-toml-keys" | ""
@@ -119,11 +118,13 @@ Two design points worth internalizing:
   (cleartext) model to a source writer. This makes "leak a resolved secret back
   into source" a *compile error*, not a code-review check.
 - **Every destination write goes through `DestWriter`.** Adapters never call
-  `iox.AtomicWrite`/`os.Remove` directly. `DestWriter` owns the
-  foreign-collision backup invariant (back up any pre-existing file agentsync
-  doesn't yet own, before overwriting). A `forbidigo` lint rule fails any direct
-  write outside the allowed packages, so a new adapter can't regress the backup
-  guarantee.
+  `iox.AtomicWrite` or the destructive `os.*` family
+  (`os.Remove`/`os.RemoveAll`/`os.WriteFile`/`os.Create`) directly. `DestWriter`
+  owns the foreign-collision backup invariant (back up any pre-existing file
+  agentsync doesn't yet own, before overwriting). A `forbidigo` lint rule — plus a
+  belt-and-braces source-scanning test (`internal/render/writer_lint_test.go`) —
+  fails any direct write outside the allowed non-destination packages, so a new
+  adapter can't regress the backup guarantee.
 - **Project scope requires a project root.** Each adapter's `ResolvePaths` falls
   through to *user*-scope paths when the project root is empty, so a
   `(ScopeProject, "")` call would silently write the project overlay into the
@@ -134,12 +135,14 @@ Two design points worth internalizing:
   `resolveScope` already guarantees a non-empty root for project scope, so this
   is defense-in-depth against a future or non-CLI caller.
 
-`Capability` is a bitmask, so the OpenCode adapter simply omits `CapHook` and
-`CapLSP`. Claude, Codex, Cursor, and the other v1 adapters omit `CapLSP` too:
-Claude Code reads LSP servers from plugin manifests rather than
-`settings.json`, and agentsync does not synthesize Claude plugins in v1; the
-others have no native LSP config concept. The pipeline reports those components
-as skipped.
+**Component support is expressed by what `Render` emits, not a capability
+declaration.** When an agent has no native target for a component, its `Render`
+returns a `[]Skip` entry for that component rather than a `FileOp` — there is no
+separate capability bitmask to keep in sync with the render logic. So the
+OpenCode adapter reports Hook and LSP as skips; Claude, Codex, Cursor, and the
+other v1 adapters report LSP as a skip too (Claude Code reads LSP servers from
+plugin manifests rather than `settings.json`, and agentsync does not synthesize
+Claude plugins in v1; the others have no native LSP config concept).
 
 **Skips are typed, not stringly-classified.** A `Skip` carries a `Kind`
 (`adapter.SkipKind`): `SkipDropped` when the whole component had no native target
@@ -162,12 +165,23 @@ are exercised.
 `FileOp.MergeStrategy` name how an adapter co-owns keys inside a shared config
 file: `merge-json-keys` (Claude's `.claude.json`/`settings.json`, a project's
 repo-root `.mcp.json` for project-scope MCP servers, Cursor's `.cursor/mcp.json` +
-`.cursor/hooks.json`, Gemini's `.gemini/settings.json` — which co-owns both
-`mcpServers` and `hooks` — Windsurf's `~/.codeium/windsurf/mcp_config.json`, Roo's project `.roo/mcp.json`,
+`.cursor/hooks.json`, Windsurf's `~/.codeium/windsurf/mcp_config.json`, Roo's project `.roo/mcp.json`,
 and Cline's `~/.cline/mcp.json`),
-`merge-jsonc-keys` (OpenCode's comment-tolerant `opencode.json`), and
+`merge-jsonc-keys` (OpenCode's comment-tolerant `opencode.json` and Gemini's
+`.gemini/settings.json` — which co-owns both `mcpServers` and `hooks`), and
 `merge-toml-keys` (Codex's `config.toml`). The Continue adapter co-owns no shared
 file (it projects one block file per item), so it has no key-merge strategy.
+
+Each adapter has **exactly one** key-merge strategy. `orphanCleanupOps`
+(`internal/render/pipeline.go`) synthesizes destructive cleanup writes from the
+single, static `KeyMergeStrategy()` value and applies it to *every* key-merge
+destination the adapter owns, so an adapter co-owning keys across files of
+*different* on-disk formats is **not currently supported** — it would require
+widening the accessor to a per-path strategy first. A central guard
+(`TestKeyMergeStrategy_MatchesEmittedOps`, `internal/cli`) renders a real
+MCP+hook fixture through every registered adapter and pins `KeyMergeStrategy()`
+against the `MergeStrategy` stamped on every key-merge `FileOp` it emits, so the
+accessor can never silently drift from what an adapter actually writes.
 
 **Deep vs breadth-tier adapters.** The nine hand-written packages above are
 *deep* adapters — agent-specific, multi-component, often bidirectional. Beyond
@@ -338,6 +352,40 @@ Kept off the core `Adapter` for the same reason as `PluginIngester`: an
 adapter that emits no Ingest warnings shouldn't be forced to implement a
 setter it'll never use.
 
+### VersionedDirs (optional)
+
+A third **optional** extension lets an adapter declare the on-disk directories the
+apply tail should keep in a local-only git rollback history (issue #118, step 9
+below):
+
+```go
+type VersionedDirs interface {
+    VersionRoots(scope Scope, project string) []string
+}
+```
+
+It is **read-only** and does not widen the `Render`/`Apply` contract — it only
+reports directories to back up. The contract every implementor honours:
+
+1. **`ScopeProject` MUST return nil.** Project destinations live inside the user's
+   own project repo and are left to that repo's source control; git backup is a
+   user-scope-only feature. (`project.Merge` drops any project
+   `[destination_directory_git_backup]` override for the same reason.)
+2. **The unit is the directory, not the agent.** An adapter returns its own config
+   dir **plus** any shared cross-agent dir it writes into — Codex and several
+   breadth agents all write skills to `~/.agents/skills`; OpenCode writes skills to
+   `~/.claude/skills`. The apply tail **unions** these across every enabled adapter,
+   **de-nests** them (drops a root nested under another — never a repo inside a
+   repo), and **de-dups** them (a shared dir is one repo, checkpointed once).
+3. **Paths are absolute, after `AGENTSYNC_TARGET_ROOT` redirection** — they match
+   the `FileOp.Path` values the adapter emits, so tests redirect `$HOME` uniformly.
+4. **`$HOME`-level strays are excluded.** A deep agent may also write a top-level
+   file outside any returned dir (Claude's `~/.claude.json`); those are
+   intentionally **not** versioned — agentsync never inits a repo at `$HOME`.
+
+An adapter with no versionable directory (e.g. `noop`) does not implement it. The
+apply tail's use of these roots is the step-9 narrative in §4.
+
 ---
 
 ## 4. The apply pipeline (Source ▶ Destination)
@@ -399,8 +447,13 @@ Key stages:
    written and state already saved, so a git failure never fails the apply),
    **opt-out** (the `[destination_directory_git_backup]` mode — `prompt`/`on`/`off`
    — plus the `apply --no-git-backup` per-run bypass), and **never pushes**:
-   `internal/git` exposes no remote/push surface at all (a source-scanning guard
-   test, `TestNoPushSurface`, keeps it that way). `agentsync revert` (which takes
+   `internal/git`'s own API exposes no remote/push calls, enforced by
+   `TestNoPushSurface` — a **source-scanning convention guard** (a grep over the
+   package's non-test `.go` files for banned remote/push tokens), not a type-level
+   impossibility. The go-git `*Repository` that `Repo` holds still has
+   `Push`/`CreateRemote`, so this is a convention guard (a struct-shape or
+   reflection change could defeat the scan), in the same spirit as the secrets lint
+   fence (§8 / `SECURITY.md`). `agentsync revert` (which takes
    the same global lock apply holds) rolls a dir back to a prior checkpoint
    append-only. Snapshotting uncommitted hand-edits to tracked files is enforced
    **inside the engine `Restore`** (safe-by-construction for every caller, not just
@@ -426,16 +479,19 @@ flowchart LR
     NATIVE["native config on disk"] --> ING["adapter.Ingest<br/>→ source.Canonical"]
     ING --> CAP["capture.Capture"]
     CAP --> RR["secrets.ReReferenceCanonical<br/>(cleartext → ${secret:…})"]
-    RR --> PRES["preserve source-only fields<br/>(agents, enabled)"]
+    RR --> PRES["preserve targeting<br/>(agents source-only; enabled if ingest carried none)"]
     PRES --> WR["source.Write* (templated only)"]
     WR --> SRC["~/.agentsync/*.toml"]
 ```
 
 `capture.Capture` is the single dest→source funnel. It **re-references** any
 resolved secret back to its `${secret:…}` form before writing, and it preserves
-source-only fields (like an MCP server's `agents`/`enabled` list) that the
-rendered destination never carried. No other code path writes destination data
-back into the source.
+the server targeting the destination doesn't fully carry: an MCP/LSP server's
+`agents` list is source-only (no native dest carries it) and is always restored,
+while `enabled` — which some destinations *do* carry (Codex reads a native
+`enabled` back, issue #152) — is restored from source only when the ingest carried
+none, so a real native enable/disable round-trips instead of being reset. No other
+code path writes destination data back into the source.
 
 Re-reference matches by value, so it cannot distinguish a *moved or rotated*
 secret from a deliberate non-secret edit. As a **fail-closed backstop**,
@@ -448,6 +504,16 @@ The backstop detects live secret values regardless of length: it does **not**
 inherit the re-reference value-based fallback's length floor (which skips 1–3
 char values to avoid substring-rewriting unrelated text), because refusing to
 persist a leak is not a rewrite — so even a 1–3 char credential trips it.
+
+The backstop is also **fail-closed under indeterminacy**: its value prong builds
+its detection set by resolving the source's `${secret:…}` refs through the
+backend. If the backend can't resolve them (vault locked / unavailable), that set
+is empty and the prong is *blind* — it cannot prove a resolved secret wasn't moved
+into a literal field. So an unresolvable `${secret:…}` the source references
+forces `capture.Capture` to **refuse** the whole write-back rather than fall
+through to a warning; the user unlocks/restores the vault (or edits the canonical
+source directly) and retries. (`${env:…}` is unaffected — the value prong resolves
+only through the secret backend, so an unresolvable env ref stays a warning.)
 
 ---
 
@@ -605,16 +671,17 @@ flowchart TD
     CLI["internal/cli — cobra command tree"]
     REN["internal/render — apply pipeline"]
     CAP["internal/capture — dest▶source funnel"]
-    AD["internal/adapter (+ claude, opencode, noop)"]
+    AD["internal/adapter (+ 9 deep adapters, generic breadth tier, noop)"]
     SRC["internal/source — canonical model + loaders/writers"]
     SEC["internal/secrets — resolve / re-reference / mask"]
     MKT["internal/marketplace — fetch + project plugins"]
     PRJ["internal/project — <root>/.agentsync/ tree overlay"]
     DRF["internal/drift — 3-way classifier (pure)"]
     ST["internal/state — targets.json"]
-    INFRA["internal/iox · paths · jsonkeys · log · untrusted"]
+    GIT["internal/git — local-only go-git wrapper (no push surface)"]
+    INFRA["internal/iox · paths · jsonkeys · log · untrusted · ui"]
 
-    CLI --> REN & CAP & AD & SRC & SEC & MKT & PRJ & DRF & ST
+    CLI --> REN & CAP & AD & SRC & SEC & MKT & PRJ & DRF & ST & GIT
     REN --> AD & SEC & SRC & ST & DRF & INFRA
     CAP --> SRC & SEC & INFRA
     AD --> SRC & SEC & INFRA
@@ -626,9 +693,11 @@ flowchart TD
     ST --> INFRA
 ```
 
-`internal/drift`, `internal/iox`, `internal/jsonkeys`, `internal/paths`,
-`internal/log`, and `internal/untrusted` have no internal dependencies — they're
-the leaves. See the [component map](components.md) for what each package contains.
+`internal/drift`, `internal/git`, `internal/iox`, `internal/jsonkeys`,
+`internal/paths`, `internal/log`, and `internal/untrusted` have no internal
+dependencies — they're the leaves (`internal/git` is reached only from `cli`, via
+`internal/cli/gitbackup.go`); `internal/ui` builds only on `internal/untrusted`.
+See the [component map](components.md) for what each package contains.
 
 **Documented layering exception (`opencode → state`).** Adapters otherwise depend
 only on `source`, `secrets`, and the infra leaves. The OpenCode adapter is the one

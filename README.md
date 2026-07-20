@@ -107,16 +107,23 @@ Full ✓/◐/✗ breakdown per component: **[capability matrix](docs/capability-
 
 ### Linux — deb / rpm
 
-Pick the package for your architecture (`amd64` or `arm64`).
+Pick the package for your architecture — both `amd64` and `arm64` are published
+every release (use the matching URL below).
 
 Debian/Ubuntu:
 
+    # amd64
     curl -fsSL https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_amd64.deb -o agentsync.deb
+    # arm64
+    curl -fsSL https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_arm64.deb -o agentsync.deb
     sudo dpkg -i agentsync.deb
 
 RPM:
 
+    # amd64
     sudo rpm -i https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_amd64.rpm
+    # arm64
+    sudo rpm -i https://github.com/spxrogers/agentsync/releases/latest/download/agentsync_linux_arm64.rpm
 
 ### Windows — Scoop or Chocolatey
 
@@ -137,6 +144,15 @@ Download the archive for your OS/arch from the
 [latest release](https://github.com/spxrogers/agentsync/releases/latest)
 (`linux` / `darwin` / `windows` × `amd64` / `arm64`), extract it, and put the
 `agentsync` binary on your `PATH`.
+
+On **macOS**, the prebuilt binaries are not signed or notarized, so Gatekeeper
+blocks the first run with *"agentsync cannot be opened because the developer
+cannot be verified."* Clear the quarantine attribute before running it:
+
+    xattr -dr com.apple.quarantine ./agentsync
+
+(Homebrew users don't need this — the cask strips the quarantine attribute for
+you on install.)
 
 ### From source
 
@@ -181,6 +197,7 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 - **LSP projection beyond Claude**: OpenCode LSP support is deferred (Codex, Cursor, Gemini, Continue, Windsurf, Roo, and Cline have no LSP concept at all). Claude plugins that include LSP servers install correctly on Claude itself; on other agents you'll see `lsp server X skipped` in the apply translation report.
 - **TOML / JSONC comment preservation**: comments in `~/.agentsync/mcp/*.toml`, in agent-side `opencode.json`, in Gemini's `.gemini/settings.json`, in the breadth tier's JSONC settings files (Zed's `settings.json`, Amp's `settings.json`, Copilot's `.vscode/mcp.json`), and in Codex's `~/.codex/config.toml` are NOT preserved across reconcile `[w]`rite-back or import / apply. For TOML, hand-edited comments survive in unrelated sections; for the JSONC files the whole file is re-emitted as plain JSON on the first agentsync write (foreign keys and values are preserved; the original is backed up). For Zed this is your main editor settings file — expect comments to be stripped and keys re-sorted on the first apply. Deferred to a later release.
 - **Hand-edits to agentsync-owned keys** in shared agent files (e.g. an MCP server entry in `~/.claude.json` that agentsync owns): the next `apply` overwrites them with NO foreign-collision backup, because agentsync considers them its own. Use `agentsync reconcile` (the drift classifier catches the edit and offers `[w]`rite-back) BEFORE the next apply if you want to keep them.
+- **Destination git backup is local-only**: `apply` keeps each managed destination dir (`~/.claude`, `~/.codex`, …) in its own git history so `agentsync revert` can undo a bad apply — but that history is **never pushed** (the rendered files hold `${secret:…}` references resolved to **cleartext**, so its commits may too; the `.git` dir is hardened to `0700`, which is **POSIX-only** — a Windows no-op, where NTFS ACLs are the boundary). A destination dir already under **your own** source control is detected as `foreign source control` and left un-versioned (only `agentsync-versioned` dirs are reverted; an `untracked` dir is a candidate for init). `$HOME`-level strays (Claude's `~/.claude.json`) are never versioned — agentsync never inits a repo at `$HOME`. `revert`'s "nothing is lost" guarantee covers **tracked files only**: untracked / gitignored scratch files in the dir are left untouched, never snapshotted.
 - **Plain-http / git:// plugin sources** are rejected by default to prevent MITM swap. Set `AGENTSYNC_ALLOW_INSECURE_URLS=1` for internal mirrors.
 - **Symlinked destinations** (e.g. `~/.claude.json` is a chezmoi symlink into your dotfiles repo) are rejected by default — a rename onto the path would replace the symlink with a regular file and strand your linked source. Set `AGENTSYNC_ALLOW_SYMLINK_DEST=1` to write through the symlink instead (the underlying file is updated in place; the link survives).
 - **Aider** and **Firebender**: deliberately deferred — no faithful generic projection (Aider has no MCP and only an `.aider.conf.yml` `read:` pointer for memory; Firebender's config is unverified).
@@ -195,7 +212,7 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept http:// and git:// plugin / marketplace sources. |
 | `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` | Register an agent that has no implemented adapter yet (none today — every valid agent is real). |
 | `AGENTSYNC_ALLOW_PLUGIN_DRIFT=1` | Bypass the plugin-cache manifest-SHA check (after hand-editing). |
-| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Skip `${secret:…}` resolution in `agentsync verify` (CI without an age key). |
+| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Skip `${secret:…}` resolution in `agentsync verify`; reference *shape* is still validated (CI without an age key). |
 | `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` | Skip the 0600 mode check on the age identity file (ACL'd NFS). |
 | `AGENTSYNC_MAX_TARBALL_MB=<N>` | Override the per-tarball decompressed-bytes cap (default 512). 0 disables. |
 | `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |

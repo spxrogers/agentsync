@@ -33,7 +33,11 @@ on:
 
 # goreleaser needs to create the GitHub Release + upload assets in THIS repo,
 # and the `docs` job force-pushes the rebuilt site to the gh-pages branch — both
-# need contents:write here.
+# need contents:write. `id-token: write` (the ambient OIDC token keyless cosign
+# uses to sign checksums.txt) is NOT granted here: only the goreleaser job signs,
+# so it is scoped to that job's own permissions block below (least privilege) —
+# the ci and docs jobs never mint an OIDC token they don't use (the Chocolatey
+# steps run INSIDE goreleaser, which is the one job that does sign).
 permissions:
   contents: write
 
@@ -60,6 +64,13 @@ jobs:
     name: goreleaser (publish)
     # Gate publication on the CI suite above: nothing ships from a red commit.
     needs: ci
+    # Job-scoped least privilege: a job-level permissions block REPLACES the
+    # workflow default for this job, so re-grant contents:write (create the
+    # Release + upload assets) and add id-token:write — the OIDC token keyless
+    # cosign mints to sign checksums.txt. Only this job signs (issue #138).
+    permissions:
+      contents: write
+      id-token: write
     # ubuntu-22.04: the Chocolatey step below runs `choco` under Mono, and
     # mono-complete installs cleanly from this image's apt repos (jammy). The whole
     # release — every channel — is produced in this one job. (This image is on
@@ -150,6 +161,10 @@ jobs:
           # failure from an opaque mid-`goreleaser release` abort (after the Release
           # already published) into a fast, obvious one here.
           "$HOME/bin/choco" --version
+      # cosign for the keyless checksum signature (goreleaser's signs: block shells
+      # out to `cosign sign-blob`). Keyless uses this job's OIDC token (permissions
+      # id-token: write on this job) — no signing key is stored (issue #138).
+      - uses: sigstore/cosign-installer@v3
       - uses: goreleaser/goreleaser-action@v6
         with:
           # Pinned so releases are reproducible run-to-run (Go is pinned via

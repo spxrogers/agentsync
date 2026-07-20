@@ -14,9 +14,6 @@ func TestAdapter_Identity(t *testing.T) {
 	if a.Name() != "claude" {
 		t.Fatalf("Name = %q", a.Name())
 	}
-	if a.Capabilities() == 0 {
-		t.Fatalf("expected non-zero capabilities")
-	}
 	var _ adapter.Adapter = a
 	// Compile-time pin: a future refactor that drops SetStderr (or changes
 	// its signature) fails to build here, surfacing the drift before

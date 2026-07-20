@@ -15,9 +15,8 @@ type Adapter struct {
 
 func New(name string) *Adapter { return &Adapter{AdapterName: name} }
 
-func (a *Adapter) Name() string                     { return a.AdapterName }
-func (a *Adapter) Capabilities() adapter.Capability { return 0 }
-func (a *Adapter) Detect() (bool, error)            { return true, nil }
+func (a *Adapter) Name() string          { return a.AdapterName }
+func (a *Adapter) Detect() (bool, error) { return true, nil }
 func (a *Adapter) Render(secrets.Resolved, adapter.Scope, string) ([]adapter.FileOp, []adapter.Skip, error) {
 	return nil, nil, nil
 }

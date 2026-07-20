@@ -24,8 +24,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-
-	"github.com/spxrogers/agentsync/internal/adapter"
 )
 
 // Options configure the adapter at construction.
@@ -56,11 +54,6 @@ func (a *Adapter) Name() string { return "roo" }
 // KeyMergeStrategy is roo's single key-merge strategy: JSON (.roo/mcp.json — the
 // only file whose keys agentsync co-owns; rules/commands are whole-file writes).
 func (a *Adapter) KeyMergeStrategy() string { return "merge-json-keys" }
-
-func (a *Adapter) Capabilities() adapter.Capability {
-	return adapter.CapMCP | adapter.CapMemory | adapter.CapCommand
-	// Skill/Subagent/Hook/LSP omitted: no faithful Roo target (all ✗ skip).
-}
 
 func (a *Adapter) Detect() (bool, error) {
 	p := ResolvePaths(a.opts.TargetRoot, "", false)

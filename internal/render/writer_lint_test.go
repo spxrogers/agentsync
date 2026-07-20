@@ -78,6 +78,81 @@ func TestNoDirectAtomicWriteOutsideAllowedFiles(t *testing.T) {
 	}
 }
 
+// TestNoDirectDestructiveOSCallsOutsideAllowedFiles is the belt-and-braces
+// complement to the os.* forbidigo rules (issue #163): it fails the build if any
+// non-test, non-allowlisted file calls a destructive os.* write primitive
+// directly. Those bypass the DestWriter foreign-collision backup invariant
+// exactly like a direct iox.AtomicWrite. It covers the create/overwrite/delete
+// AND move/truncate primitives — os.Remove/os.RemoveAll/os.WriteFile/os.Create
+// plus os.OpenFile (the O_TRUNC truncate-write vector), os.Rename, and
+// os.Truncate — so an adapter cannot overwrite a pre-existing native file by
+// reaching for one of the less-obvious calls. (os.OpenFile also matches a
+// read-only open; that is deliberate over-approximation — a raw open of a native
+// destination path, even to read, should be reviewed. Allowlist a genuine
+// non-destination read-open with a comment.)
+//
+// The allowlist here is PER-FILE and is a subset of (i.e. at least as tight as)
+// the .golangci.yml os.* exclusions, which exclude internal/iox, internal/git,
+// and internal/marketplace whole-dir; keep BOTH in sync when adding a legitimate
+// non-destination os.* site.
+func TestNoDirectDestructiveOSCallsOutsideAllowedFiles(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+
+	// Files allowed direct os.* — the DestWriter itself plus non-destination
+	// writers: canonical source, the vault, plugin/marketplace cache, git-backup
+	// repo scaffolding, iox internals, and a writability probe.
+	allowed := map[string]bool{
+		"internal/render/writer.go":              true, // the DestWriter — owns delete + backup
+		"internal/adapter/testwriter.go":         true, // PassThroughWriter test helper
+		"internal/iox/atomic.go":                 true,
+		"internal/git/init.go":                   true, // local git-backup repo scaffolding
+		"internal/marketplace/fetch_git.go":      true, // fetch scratch dirs + swap-in rename
+		"internal/marketplace/fetch_relative.go": true, // copies fetched files into the cache
+		"internal/marketplace/fetch_npm.go":      true, // unpacks the npm tarball into the cache
+		"internal/cli/init.go":                   true,
+		"internal/cli/secrets.go":                true,
+		"internal/cli/marketplace.go":            true,
+		"internal/cli/plugin.go":                 true,
+		"internal/cli/update.go":                 true,
+		"internal/cli/mcp.go":                    true,
+		"internal/cli/agent.go":                  true,
+		"internal/cli/doctor.go":                 true, // ~/.agentsync writability probe
+		"internal/cli/reconcile.go":              true,
+	}
+	forbidden := []string{"os.Remove", "os.RemoveAll", "os.WriteFile", "os.Create", "os.OpenFile", "os.Rename", "os.Truncate"}
+
+	var bad []string
+	walkErr := filepathWalk(repoRoot, func(path string) error {
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, _ := filepath.Rel(repoRoot, path)
+		rel = filepath.ToSlash(rel)
+		// test/ is BDD/e2e harness code writing fixtures to temp dirs (via
+		// AGENTSYNC_TARGET_ROOT), never a native destination — treat it like _test.go.
+		if allowed[rel] || strings.HasPrefix(rel, "vendor/") || strings.HasPrefix(rel, ".git/") || strings.HasPrefix(rel, "test/") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		src := string(data)
+		for _, name := range forbidden {
+			if containsCallSite(src, name) {
+				bad = append(bad, rel+" ("+name+")")
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("walk: %v", walkErr)
+	}
+	if len(bad) > 0 {
+		t.Fatalf("direct destructive os.* (Remove/RemoveAll/WriteFile/Create/OpenFile/Rename/Truncate) in non-allowlisted files — writes to native destinations must route through render.Writer / adapter.DestWriter:\n  %s\nIf this write is to canonical source / state / cache / git-backup (or a genuine non-destination read-open), add it to the allowlist here AND the .golangci.yml exclusions.", strings.Join(bad, "\n  "))
+	}
+}
+
 // findRepoRoot walks up from this test file's package until it finds go.mod.
 func findRepoRoot(t *testing.T) string {
 	t.Helper()

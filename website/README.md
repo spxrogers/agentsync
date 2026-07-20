@@ -53,6 +53,7 @@ The pages marked `*` above are **generated** from the canonical contract docs in
 | `internals/architecture.md` | `docs/architecture.md` |
 | `internals/components.md` | `docs/components.md` |
 | `reference/capability-matrix.md` | `docs/capability-matrix.md` |
+| `comparison/index.md` | `docs/comparison.md` |
 
 These are gitignored and rebuilt on every dev/build. **Edit the `docs/*.md` file,
 never the generated copy** — that's how the site stays in lock-step with the

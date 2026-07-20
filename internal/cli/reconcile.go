@@ -23,6 +23,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 // reconcileItem describes one classified item in the reconcile pass.
@@ -158,11 +159,11 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 		// in an auto mode (too destructive to do non-interactively).
 		if it.orphan {
 			if autoWB || autoOR || autoSafe {
-				fmt.Fprintf(w, "orphan left in place (run `agentsync reconcile` interactively to remove): %s\n", it.op.Path)
+				fmt.Fprintf(w, "orphan left in place (run `agentsync reconcile` interactively to remove): %s\n", ui.Sanitize(it.op.Path))
 				autoSkipped++
 				continue
 			}
-			fmt.Fprintf(w, "\n%s  (orphan — source no longer produces this file)\n", it.op.Path)
+			fmt.Fprintf(w, "\n%s  (orphan — source no longer produces this file)\n", ui.Sanitize(it.op.Path))
 			fmt.Fprintf(w, "  [r]emove (backs up first)  [k]eep  [q]uit\n  > ")
 		orphanPrompt:
 			for {
@@ -175,23 +176,23 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 					fmt.Fprintf(w, "%c\n", ch)
 					bk, berr := render.BackupFile(home, it.op.Path)
 					if berr != nil {
-						fmt.Fprintf(w, "  backup failed, NOT removing: %v\n", berr)
+						fmt.Fprintf(w, "  backup failed, NOT removing: %s\n", ui.Sanitize(berr.Error()))
 						break orphanPrompt
 					}
 					if bk != "" {
-						fmt.Fprintf(w, "  backup: %s\n", bk)
+						fmt.Fprintf(w, "  backup: %s\n", ui.Sanitize(bk))
 					}
 					if rmErr := os.Remove(it.op.Path); rmErr != nil && !os.IsNotExist(rmErr) {
-						fmt.Fprintf(w, "  remove failed: %v\n", rmErr)
+						fmt.Fprintf(w, "  remove failed: %s\n", ui.Sanitize(rmErr.Error()))
 						break orphanPrompt
 					}
 					pruneStateFilesForPath(s, userHome, it.op.Path)
 					stateDirty = true
-					fmt.Fprintf(w, "  removed: %s\n", it.op.Path)
+					fmt.Fprintf(w, "  removed: %s\n", ui.Sanitize(it.op.Path))
 					break orphanPrompt
 				case 'k', 'K':
 					fmt.Fprintf(w, "%c\n", ch)
-					fmt.Fprintf(w, "  kept: %s\n", it.op.Path)
+					fmt.Fprintf(w, "  kept: %s\n", ui.Sanitize(it.op.Path))
 					break orphanPrompt
 				case 'q', 'Q':
 					fmt.Fprintln(w, "quit")
@@ -213,7 +214,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 				// with foreign content — the worst data-loss path. Refuse to
 				// do that non-interactively; leave it for an explicit choice.
 				if it.cls == drift.ForeignCollision {
-					fmt.Fprintf(w, "skipped (foreign-collision, would overwrite source): %s — resolve interactively\n", itemLabel(it))
+					fmt.Fprintf(w, "skipped (foreign-collision, would overwrite source): %s — resolve interactively\n", itemLabelDisp(it))
 					autoSkipped++
 					action = 's'
 				} else {
@@ -224,7 +225,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 			case autoSafe:
 				// auto-safe: skip non-safe items (they require prompting, but
 				// auto-safe only silently handles safe ones which never reach here).
-				fmt.Fprintf(w, "skipped (needs manual review): %s (%s)\n", itemLabel(it), it.cls)
+				fmt.Fprintf(w, "skipped (needs manual review): %s (%s)\n", itemLabelDisp(it), it.cls)
 				autoSkipped++
 				action = 's'
 			}
@@ -232,7 +233,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 
 		if action == 0 {
 			// Interactive prompt.
-			label := itemLabel(it)
+			label := itemLabelDisp(it)
 			fmt.Fprintf(w, "\n%s  (%s)\n", label, it.cls)
 			fmt.Fprintf(w, "  source:      %s\n", shortVal(it.hsrc))
 			fmt.Fprintf(w, "  destination: %s\n", shortVal(it.hdest))
@@ -242,7 +243,10 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 			for {
 				ch, readErr := readChar(br)
 				if readErr != nil {
-					return nil // EOF → quit gracefully
+					// EOF → finish gracefully, but reach `done:` so any queued
+					// [o]verride ops are applied and pruned/dirty state is flushed
+					// (a bare `return nil` here dropped both — issue #171).
+					goto done
 				}
 				switch ch {
 				case 'w', 'W', 'o', 'O', 's', 'S', 'i', 'q', 'Q':
@@ -264,7 +268,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 						fmt.Fprintf(w, "  apply '%c' to all %d remaining items? [y/N] ", lower, remaining)
 						confirm, readErr := readChar(br)
 						if readErr != nil {
-							return nil
+							goto done // EOF mid-confirm → flush queued overrides + state (issue #171)
 						}
 						fmt.Fprintf(w, "%c\n", confirm)
 						if confirm != 'y' && confirm != 'Y' {
@@ -305,7 +309,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 		case 'i':
 			// ignore: append to ignore.toml (best-effort).
 			_ = appendIgnore(home, itemLabel(it))
-			fmt.Fprintf(w, "  ignored: %s\n", itemLabel(it))
+			fmt.Fprintf(w, "  ignored: %s\n", itemLabelDisp(it))
 		case 'q':
 			fmt.Fprintln(w, "quit")
 			goto done
@@ -521,6 +525,13 @@ func itemLabel(it reconcileItem) string {
 	return it.op.Path
 }
 
+// itemLabelDisp is itemLabel sanitized for TERMINAL DISPLAY only. itemLabel's raw
+// value is written verbatim to ignore.toml (appendIgnore), so the path/pointer —
+// which embeds a config-derived component name/id that can hold control bytes —
+// must be sanitized at the display boundary, never in itemLabel itself
+// (issue #93/#171).
+func itemLabelDisp(it reconcileItem) string { return ui.Sanitize(itemLabel(it)) }
+
 func shortVal(hash string) string {
 	if hash == "" {
 		return "<absent>"
@@ -569,7 +580,7 @@ func attemptWriteBack(cmd *cobra.Command, w io.Writer, home string, it reconcile
 		prior, priorWritten = writtenSources[srcFile]
 	}
 	if err := writeBackItem(cmd, home, it); err != nil {
-		fmt.Fprintf(w, "  write-back error: %v\n", err)
+		fmt.Fprintf(w, "  write-back error: %s\n", ui.Sanitize(err.Error()))
 		return true
 	}
 	if srcFile != "" {
@@ -579,13 +590,13 @@ func attemptWriteBack(cmd *cobra.Command, w io.Writer, home string, it reconcile
 				rel, _ := filepath.Rel(home, srcFile)
 				fmt.Fprintf(w, "  conflict: %s — another agent drifted the same source (%s) to a different "+
 					"value this run; kept the first write and skipped this one. Make the agents agree, or "+
-					"reconcile one at a time, then re-run.\n", itemLabel(it), rel)
+					"reconcile one at a time, then re-run.\n", itemLabelDisp(it), ui.Sanitize(rel))
 				return true
 			}
 			writtenSources[srcFile] = after
 		}
 	}
-	fmt.Fprintf(w, "  write-back: %s\n", itemLabel(it))
+	fmt.Fprintf(w, "  write-back: %s\n", itemLabelDisp(it))
 	return false
 }
 
@@ -644,6 +655,10 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 	if len(parts) >= 2 && (parts[0] == "mcpServers" || parts[0] == "mcp" || parts[0] == "mcp_servers") {
 		topKey := parts[0]
 		serverID := parts[1]
+		// serverID comes from the (native-config-derived) JSON pointer and can
+		// hold control bytes; keep the raw value for lookup/canonical ID but use
+		// a sanitized copy in any error surfaced to the terminal (issue #93/#171).
+		serverIDDisp := ui.Sanitize(serverID)
 		mcpServers, _ := dest[topKey].(map[string]any)
 		if mcpServers == nil {
 			return fmt.Errorf("%s not found in destination", topKey)
@@ -655,7 +670,7 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 			// match — but persisting that requires source-side mutation
 			// which isn't safe to do silently here. Surface as an error
 			// so the user can pick [d]elete-source via a follow-up flow.
-			return fmt.Errorf("destination dropped %s/%s — no write-back possible; remove the source manually or use [o]verride to push canonical back", topKey, serverID)
+			return fmt.Errorf("destination dropped %s/%s — no write-back possible; remove the source manually or use [o]verride to push canonical back", topKey, serverIDDisp)
 		}
 		var spec source.MCPServerSpec
 		switch topKey {
@@ -663,24 +678,24 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 			// OpenCode native shape → canonical, via the single adapter translator.
 			rawMap, _ := specRaw.(map[string]any)
 			if rawMap == nil {
-				return fmt.Errorf("opencode mcp spec %s is not an object", serverID)
+				return fmt.Errorf("opencode mcp spec %s is not an object", serverIDDisp)
 			}
 			spec = opencode.IngestMCPSpec(rawMap)
 		case "mcp_servers":
 			// Codex native shape (TOML-decoded map) → canonical.
 			rawMap, _ := specRaw.(map[string]any)
 			if rawMap == nil {
-				return fmt.Errorf("codex mcp spec %s is not an object", serverID)
+				return fmt.Errorf("codex mcp spec %s is not an object", serverIDDisp)
 			}
 			spec = codex.IngestMCPSpec(rawMap)
 		default:
 			// Claude's mcpServers value matches the canonical model 1:1.
 			specBytes, err := json.Marshal(specRaw)
 			if err != nil {
-				return fmt.Errorf("marshal mcp spec %s: %w", serverID, err)
+				return fmt.Errorf("marshal mcp spec %s: %w", serverIDDisp, err)
 			}
 			if err := json.Unmarshal(specBytes, &spec); err != nil {
-				return fmt.Errorf("unmarshal mcp spec %s: %w", serverID, err)
+				return fmt.Errorf("unmarshal mcp spec %s: %w", serverIDDisp, err)
 			}
 			// json.Unmarshal into the struct drops unmodeled native keys; capture
 			// them into Extra so write-back is not field-lossy (matching ingest and

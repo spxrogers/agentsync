@@ -176,7 +176,7 @@ LSP, memory, **and plugins**) in one pass. A bulk import that finds nothing for 
 component reports it and exits cleanly rather than erroring. Add `--dry-run` to
 list the source files an import would write without touching `~/.agentsync/`.
 
-**Plugins are a special case.** The `plugin` component (Claude only in v1) reads
+**Plugins are a special case.** The `plugin` component (Claude and Codex) reads
 the agent's installed plugins and their marketplaces and re-fetches each one into
 the agentsync cache, pinning a manifest SHA — the same artifacts `marketplace
 add` + `plugin install` produce. Because it re-fetches, a real plugin import (not
@@ -263,8 +263,11 @@ agentsync revert --all --dry-run     # preview reverting every managed dir
 
 `revert` is **append-only** — it records a new commit rather than rewriting
 history, so the bad apply stays in the log and the revert is itself revertible. If
-you hand-edited a tracked file after the last apply, revert snapshots that edit
-into history first, so **nothing is lost** (recover it with `revert --to <snapshot>`).
+you hand-edited a **tracked** file after the last apply, revert snapshots that edit
+into history first, so **nothing tracked is lost** (recover it with `revert --to
+<snapshot>`). The snapshot deliberately covers **tracked files only** — untracked
+scratch files you dropped into a managed dir are never committed and are outside
+the revert snapshot (they are also left untouched by the rollback, not deleted).
 That snapshot is taken by the rollback engine itself, so the guarantee holds however
 revert is invoked; in the rare event a rollback fails partway (e.g. a full disk), the
 error names the snapshot commit and the pre-revert checkpoint so you can recover.
@@ -329,7 +332,9 @@ first-class. Layout:
 ├── agents/<name>.md          # one subagent per file
 ├── commands/<name>.md        # one slash command per file
 ├── hooks/<event>.toml        # one hook per file
-├── marketplaces/<name>.toml  # one marketplace per file
+├── marketplaces/<name>.toml  # one marketplace per file (its `head_sha`/`name`
+│                             #   keys are CLI fetch-cache metadata, regenerated on
+│                             #   fetch — not modeled in the canonical schema)
 ├── plugins/<id>.toml         # one plugin enablement per file
 ├── memory/AGENTS.md          # canonical memory (+ fragments/*.md)
 ├── skills/<name>/            # a skill is a DIRECTORY: SKILL.md + bundled
@@ -550,6 +555,11 @@ agentsync secrets edit                        # open the whole vault in $EDITOR
 agentsync secrets get github.token            # read one back (to verify)
 ```
 
+`secrets set` refuses an **empty or whitespace-only** value by default (a
+fat-fingered paste or an empty `pbpaste`/`1password` pipe would otherwise store a
+silently-broken secret that resolves to `""` at apply time); pass `--allow-empty`
+to store an empty value deliberately.
+
 `${secret:…}` is resolved at apply time and written into native config; `${env:…}`
 pulls from the environment. The resolved value is **never** captured back into
 your source — `agentsync diff` even redacts it so a piped diff can't leak it.
@@ -682,7 +692,7 @@ Claude, OpenCode, Codex, Cursor, Gemini CLI, Continue, Windsurf, Roo Code, and C
 | Skill | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
 | Subagent | ✓ | ◐ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ |
 | Slash command | ✓ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ |
-| Hook | ✓ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ |
+| Hook | ◐ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ |
 | LSP server | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
 
 (Some adapters are scope-asymmetric: Windsurf's and Cline's MCP is global-only and renders at user scope — Windsurf memory + commands render at both scopes, Cline's at project scope; Roo renders MCP at project scope only — VS Code agents keep global MCP in app-storage. See the [capability matrix](capability-matrix.md).)
@@ -721,13 +731,13 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | Command | Purpose | Key flags / args |
 |---|---|---|
 | `init [<git-url>]` | Create `~/.agentsync/` (user scope); optionally clone a bootstrap repo. `--scope project` scaffolds a project tree at `<cwd>/.agentsync/` instead; `--project <path>` targets `<path>/.agentsync/` (implies project scope). A git-URL clone is user-scope only. | `--scope --project` |
-| `doctor` | Diagnose setup: PATH, home/state writability, config schema, secrets backend; flags natively-installed plugins missing from source. | |
+| `doctor` | Diagnose setup: PATH, home/state writability, config schema, secrets backend, destination-git-backup mode + per-dir repo status; flags natively-installed plugins missing from source. | |
 | `verify` | Validate config and surface every unresolved `${secret:}`/`${env:}` ref. `--scope project`/`--project <path>` schema-lints the project tree and validates its references against the inherited user secrets backend. | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or with `--scope project`/`--project <path>` the project tree's own `[agents]` declaration (which project scope renders from; never inherited). At project scope `disable --purge` touches only that project's rendered files. | `disable --purge --scope --project` |
 | `mcp add\|remove\|list <name>` | Manage MCP servers. | `--type --command --args --url --env --agents` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
-| `plugin install\|upgrade\|enable\|disable\|remove\|list <id>` | Manage plugins. | `install <id[@marketplace]>` |
-| `secrets set\|get\|edit <key>` | Manage age-encrypted secrets. | `set --stdin` |
+| `plugin install\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works). | `install <id[@marketplace]>` |
+| `secrets set\|get <key>` / `secrets edit` | Manage age-encrypted secrets (`edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
 | `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. | `--dry-run --scope --project --no-git-backup` |
 | `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. Skips (or, with `--strict`, errors on) a dir under which a foreign git repo has appeared. | `--to --all --dry-run` |
@@ -761,7 +771,7 @@ and the complete environment-variable table. The ones you'll reach for most:
 | `AGENTSYNC_HOME` | Override the `~/.agentsync/` location. |
 | `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations (e.g. chezmoi-managed files). |
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://`/`git://` plugin/marketplace sources. |
-| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `verify` skip secret resolution (CI without an age key). |
+| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `verify` validate reference *shape* only, skipping resolution (CI without an age key). |
 
 Quick hits:
 

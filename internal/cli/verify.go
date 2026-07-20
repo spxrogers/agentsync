@@ -12,6 +12,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 func newVerifyCmd() *cobra.Command {
@@ -77,27 +78,46 @@ func newVerifyCmd() *cobra.Command {
 			}
 			for name := range c.Config.Agents {
 				if err := validateAgent(name); err != nil {
-					return fmt.Errorf("agents.%s: %w", name, err)
+					// %q, not %s: name is a config-derived [agents.<name>] TOML key
+					// and a quoted key can carry raw ESC/bidi bytes; %q escapes them
+					// so a shared config can't inject terminal escapes here (matches
+					// the agent-name print convention in agent.go/status.go/revert.go).
+					return fmt.Errorf("agents.%q: %w", name, err)
 				}
 			}
 			if err := verifySecrets(c.Config.Secrets, home); err != nil {
 				return fmt.Errorf("verify secrets: %w", err)
 			}
-			// Substitute against the live backends. AGENTSYNC_ALLOW_OFFLINE_VERIFY=1
-			// skips resolution when running in CI without an age key.
-			// Offline mode cannot catch a typo'd secret name (e.g.
-			// ${secret:GITHB.token}) — that requires a live backend.
-			// The regex inside SubstituteRefs already enforces the
-			// reference shape, so the schema decode + this pass cover
-			// the offline-validatable space.
-			if os.Getenv("AGENTSYNC_ALLOW_OFFLINE_VERIFY") != "1" {
+			// Reference checking. Online (default) resolves every ${secret:…}/
+			// ${env:…} against the live backends. Offline (AGENTSYNC_ALLOW_OFFLINE_VERIFY=1,
+			// the documented CI path without an age key) can't RESOLVE, but it still
+			// validates reference SHAPE — flagging a malformed ref (${secret:} empty
+			// key, missing colon, illegal char) that the strict resolver would
+			// otherwise silently pass through as literal text. It does NOT catch a
+			// well-shaped-but-wrong/unresolvable name (a typo'd key, a missing vault
+			// entry); that requires running WITHOUT the offline flag. (issue #171)
+			offline := os.Getenv("AGENTSYNC_ALLOW_OFFLINE_VERIFY") == "1"
+			if offline {
+				if bad := secrets.MalformedSecretRefs(&c); len(bad) > 0 {
+					// bad is []untrusted.Text — untrusted.Join sanitizes each token
+					// on display, so a config-crafted ESC/control byte in a malformed
+					// ref can't inject terminal escapes here (issue #171 / #93).
+					return fmt.Errorf("verify: malformed secret/env reference(s): %s "+
+						"(offline mode checks reference shape only; run without "+
+						"AGENTSYNC_ALLOW_OFFLINE_VERIFY=1 to also check resolvability)", untrusted.Join(bad, ", "))
+				}
+			} else {
 				secBackend := secrets.SelectBackend(c.Config.Secrets, home, userHome)
 				envBackend := secrets.EnvBackend{}
 				if _, err := secrets.SubstituteCanonical(c, secBackend, envBackend); err != nil {
 					return fmt.Errorf("verify ${secret:}/${env:} resolution: %w", err)
 				}
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "ok: schema valid; all references resolve")
+			if offline {
+				fmt.Fprintln(cmd.OutOrStdout(), "ok: schema valid; reference shapes valid (offline — resolvability not checked)")
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "ok: schema valid; all references resolve")
+			}
 			return nil
 		},
 	}
@@ -154,7 +174,12 @@ func verifySecrets(cfg source.SecretsConfig, home string) error {
 	// ResolveIdentityFile) so verify and apply never disagree on the path.
 	idPath := secrets.ResolveIdentityFile(cfg, home, userHome)
 	if _, err := os.Stat(idPath); err != nil {
-		return fmt.Errorf("identity_file %s: %w", idPath, err)
+		// idPath is config-derived ([secrets].identity_file, a shareable dotfile)
+		// and the *PathError re-embeds it; sanitize both the path and the error
+		// rendering (dropping %w) so a crafted path can't inject terminal escapes
+		// into `verify`'s output — the verifySecrets twin of the doctor fix
+		// (issue #93/#171).
+		return fmt.Errorf("identity_file %s: %s", untrusted.Wrap(idPath), untrusted.Wrap(err.Error()))
 	}
 	// Use the same permission check apply uses — it honours
 	// AGENTSYNC_AGE_SKIP_PERM_CHECK=1, which the previous inline
@@ -169,7 +194,7 @@ func verifySecrets(cfg source.SecretsConfig, home string) error {
 	// apply does, then only flag a present-but-unreadable file.
 	agePath := secrets.ResolveAgeFile(cfg, home, userHome)
 	if _, err := os.Stat(agePath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("secrets.file %s: %w", agePath, err)
+		return fmt.Errorf("secrets.file %s: %s", untrusted.Wrap(agePath), untrusted.Wrap(err.Error()))
 	}
 	return nil
 }

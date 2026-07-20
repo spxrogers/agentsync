@@ -14,9 +14,6 @@ func TestAdapter_Identity(t *testing.T) {
 	if a.Name() != "codex" {
 		t.Fatalf("Name = %q", a.Name())
 	}
-	if a.Capabilities() == 0 {
-		t.Fatalf("expected non-zero capabilities")
-	}
 	if a.KeyMergeStrategy() != "merge-toml-keys" {
 		t.Fatalf("KeyMergeStrategy = %q, want merge-toml-keys", a.KeyMergeStrategy())
 	}
@@ -26,28 +23,6 @@ func TestAdapter_Identity(t *testing.T) {
 	// Compile-time pin: drift on SetStderr fails the build before RouteTo
 	// would silently no-op us at runtime.
 	var _ adapter.WarnEmitter = a
-}
-
-func TestAdapter_Capabilities_HasExpected(t *testing.T) {
-	a := codex.New(codex.Options{TargetRoot: t.TempDir()})
-	caps := a.Capabilities()
-
-	for _, want := range []adapter.Capability{
-		adapter.CapMCP,
-		adapter.CapMemory,
-		adapter.CapSkill,
-		adapter.CapSubagent,
-		adapter.CapCommand,
-		adapter.CapHook,
-	} {
-		if caps&want == 0 {
-			t.Fatalf("expected capability %v to be set, got %b", want, caps)
-		}
-	}
-	// Codex has no LSP concept.
-	if caps&adapter.CapLSP != 0 {
-		t.Fatalf("expected CapLSP to be absent, got %b", caps)
-	}
 }
 
 func TestAdapter_DetectsConfigDir(t *testing.T) {

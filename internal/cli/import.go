@@ -165,7 +165,7 @@ component too imports the agent's full native config in one pass. Use
 --dry-run to preview which source files would be written, without writing.
 
 The plugin component captures the agent's installed plugins + their
-marketplaces (Claude only in v1): it re-fetches each marketplace and plugin
+marketplaces (Claude and Codex): it re-fetches each marketplace and plugin
 into the agentsync cache and pins them, so a real import needs network access.
 A plugin's marketplace is resolved from agentsync's own registered marketplaces
 first, then the agent's native config; a plugin whose marketplace is registered
@@ -332,7 +332,9 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projec
 	if warnings := unimportedDestPointers(agentsyncHome, srcHome, agentName, reg, sc, projectRoot); len(warnings) > 0 {
 		io.note("these items exist in the destination but agentsync did not capture them:")
 		for _, w := range warnings {
-			fmt.Fprintf(io.err, "  %s\n", w)
+			// w is <op.Path>#<pointer> harvested from the native config; the
+			// pointer can hold control bytes, so sanitize on display (#93/#171).
+			fmt.Fprintf(io.err, "  %s\n", ui.Sanitize(w))
 		}
 		fmt.Fprintln(io.err, "  agentsync will leave them alone on apply (it only writes keys it owns). Import an item by name if you want agentsync to manage it.")
 	}
@@ -635,6 +637,12 @@ type importIO struct {
 // the first time, so an empty component prints nothing.
 func (i *importIO) item(path, suffix string) {
 	i.flushSection()
+	// path embeds a config-/native-config-derived component name or id (e.g. a
+	// native marketplace id in the dry-run plugin preview, which is a plain
+	// string not gated by ValidateComponentID); sanitize it here so no item()
+	// caller can leak a control/bidi byte to the terminal (issue #93/#171).
+	// suffix is agentsync-generated (" (3 entries)"), left as-is.
+	path = ui.Sanitize(path)
 	if i.dryRun {
 		fmt.Fprintf(i.out, "  %s would import %s%s\n", i.p.Cyan(ui.GlyphArrow), path, suffix)
 		return
@@ -1127,7 +1135,7 @@ func importMemory(io *importIO, home string, c source.Canonical) ([]string, erro
 // producing byte-identical artifacts to the manual commands.
 //
 // Only agents implementing adapter.PluginIngester have a native plugin concept
-// (Claude in v1); others import no plugins (not an error, so a full
+// (Claude and Codex); others import no plugins (not an error, so a full
 // `import <agent>` stays clean for them). A real import needs network access to
 // re-fetch; --dry-run discovers and previews without fetching or writing.
 //

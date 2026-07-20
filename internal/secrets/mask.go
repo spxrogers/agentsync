@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // CollectResolved walks every string field of the canonical that
@@ -165,4 +166,52 @@ func sortByLengthDesc(s []string) {
 			s[j-1], s[j] = s[j], s[j-1]
 		}
 	}
+}
+
+// MalformedSecretRefs walks every secret-bearing canonical field and returns each
+// ${secret:…}/${env:…}-SHAPED token that does NOT match the strict reference shape
+// (a non-empty [A-Za-z0-9._-]+ key after a colon) — e.g. ${secret:} or
+// ${secret foo}. It needs no backend, so it is the offline-validatable shape check
+// `verify` runs when reference resolution is skipped (issue #171).
+//
+// The returned tokens are the raw, loosely-matched candidates — they are
+// config-derived and therefore attacker-influenceable (agentsync configs are
+// shareable dotfiles), and looseRefRe's `[^}]*` tail can capture ESC / C1 /
+// newline bytes that the strict shape rejects. They are returned as
+// untrusted.Text so any display site (the `verify` offline error) sanitizes them
+// on print BY DEFAULT — a raw print cannot reintroduce the #93/PR100
+// terminal-escape-injection class. Match/dedup/sort run on the raw bytes; only
+// the returned rendering is display-guarded.
+func MalformedSecretRefs(c *source.Canonical) []untrusted.Text {
+	if c == nil {
+		return nil
+	}
+	bad := map[string]bool{}
+	walkSecretFields(c, func(_ secretFieldLoc, s string) string {
+		for _, cand := range looseRefRe.FindAllString(s, -1) {
+			// Match the WHOLE candidate against the strict shape, not a substring:
+			// re.MatchString is a substring search, so a malformed outer ref that
+			// merely embeds a well-formed nested ref (e.g. "${secret:${env:FOO}}",
+			// whose loose candidate "${secret:${env:FOO}" contains a valid
+			// "${env:FOO}") would be wrongly accepted. Require the strict match to
+			// span the entire candidate so nested/partial refs are flagged.
+			if loc := re.FindStringIndex(cand); loc == nil || loc[0] != 0 || loc[1] != len(cand) {
+				bad[cand] = true
+			}
+		}
+		return s
+	})
+	if len(bad) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(bad))
+	for k := range bad {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	refs := make([]untrusted.Text, len(out))
+	for i, s := range out {
+		refs[i] = untrusted.Wrap(s)
+	}
+	return refs
 }

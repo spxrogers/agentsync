@@ -9,8 +9,82 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Documentation
+
+- **Synced the v1.0 git-backup feature's contract docs (issue #141).** The
+  components map now carries `internal/git` (the leaf go-git wrapper) and
+  `internal/ui`, the full adapter set (9 deep adapters + generic breadth tier +
+  noop), each deep adapter's `homedir.go`, and the `revert` / `version` commands;
+  the architecture §10 package-layering graph gains a `git` node (no push surface)
+  and a new `### VersionedDirs (optional)` §3 subsection; the `doctor` reference
+  (CLI + user-guide command tables and the `### doctor` body) documents its
+  Destination-git-backup section (mode + per-dir repo status); and the README
+  gains a "Known limits" bullet for the local-only, never-pushed backup history.
+  Also corrected the stale `internal/project` `.agentsync.toml`-marker description
+  to the current `.agentsync/`-directory overlay, added the
+  `comparison/index.md` ↔ `docs/comparison.md` mirrored-pages row to
+  `website/README.md`, and refreshed a few `Files` lists (secrets `leakscan.go`/
+  `runtime.go`, marketplace `treehash.go`).
+- **Cleared the carried-over doc-vs-code drift cluster (issue #145).** Corrected six
+  "plugin import is Claude-only" claims (Codex implements `PluginIngester` too),
+  the Windsurf `components.md` scope/`WarnEmitter` description (memory + commands
+  render at both scopes; it *does* implement `WarnEmitter`), Gemini's
+  `merge-json-keys`→`merge-jsonc-keys` source comments, a broken `concepts.md`
+  architecture anchor, and copy nits (agent count `30+`→`31`, "three axes"→"four").
+  Acknowledged Windsurf's separate 12,000-char workspace-rule/workflow limit in the
+  capability matrix (verified against upstream docs).
+- **Install & git-backup docs: macOS Gatekeeper guidance, arm64 download URLs, and
+  qualified safety promises (issue #132).** The README and the website install page
+  now tell raw-archive macOS users that the prebuilt binaries are unsigned/
+  un-notarized (Gatekeeper blocks first run) and how to clear the quarantine
+  attribute (`xattr -dr com.apple.quarantine`), noting Homebrew users don't need it;
+  both now show the `arm64` `.deb`/`.rpm` download URLs alongside `amd64`.
+  `docs/concepts.md` records that the local git-backup `.git` `0700` hardening is
+  POSIX-only (a Windows no-op → ACLs are the boundary), and the user-guide's revert
+  "nothing is lost" promise is qualified to **tracked files only** (untracked scratch
+  files are outside the snapshot).
+
 ### Security
 
+- **Offline `verify` no longer prints unsanitized malformed-reference candidates
+  (issue #171 hardening).** `agentsync verify` in offline mode
+  (`AGENTSYNC_ALLOW_OFFLINE_VERIFY=1`, the documented CI path) reports each
+  `${secret:…}`/`${env:…}`-shaped token whose reference shape is invalid. Those
+  tokens are config-derived — agentsync configs are shareable dotfiles — and the
+  loose shape-matcher's tail can capture raw ESC / C1 / newline bytes, so a crafted
+  config could smuggle terminal escapes into the CI log through the error message.
+  `secrets.MalformedSecretRefs` now returns `[]untrusted.Text` and `verify` renders
+  them via `untrusted.Join`, so every displayed candidate is sanitized by
+  construction. A **systematic sweep of the whole `#93/#171` class** (a
+  config-/native-config-derived string reaching the terminal raw) then closed
+  every remaining site the review surfaced across the CLI: `verify`'s
+  `[agents.<name>]` validation error (now `%q`); `verify`'s and `doctor`'s
+  `[secrets]` `identity_file`/`age_file` path errors (which print even for a
+  non-existent path); `doctor`'s schema-invalid line (which echoes the raw
+  offending config source line via go-toml's strict-decode error);
+  `marketplace list`'s `url`/`head_sha` columns; `agent list`'s `[agents.<name>]`
+  key and display-only `scope` value; `mcp list`'s server-id (filename-stem)
+  column; the `status`/`diff`/`apply` path dashboards and interactive
+  `reconcile`'s item-label + mcp-server-id; and `secrets`'s age-backend path
+  errors (`internal/secrets/age.go`) — each sanitized at its display boundary via
+  `ui.Sanitize`/`untrusted.Text`, with `reconcile`'s ignore-pattern write kept
+  raw so the persisted pattern is exact. A follow-up verification pass then closed
+  the *indirect* leaks of the same class — the config-derived path surfacing
+  through an **error value** or a **derived path** rather than a direct print:
+  `render.CollisionReport.String()` (printed by `reconcile` override + `update
+  --apply`); `reconcile`'s orphan backup/remove errors, write-back error, and the
+  `filepath.Rel` conflict path; `import`'s dry-run marketplace preview (a
+  plain-string native marketplace id, ungated by `ValidateComponentID`) and its
+  undeclared-native-items warning; and `revert --dry-run`'s change list. New
+  `escape_sweep_test.go` + `render/collision_report_test.go` drive each command
+  with a hostile fixture and assert no raw ESC/bidi byte reaches stdout
+  (representative sites break-verified). The offline shape check itself was also corrected to
+  match the WHOLE candidate (an anchored check), so a malformed outer ref that
+  merely embeds a well-formed nested ref (`${secret:${env:FOO}}`) is now flagged
+  instead of silently accepted. Separately, broadened the direct-`os.*`
+  destination-write guard (issue #163) to cover `os.OpenFile`/`os.Rename`/`os.Truncate`
+  in addition to `Remove`/`RemoveAll`/`WriteFile`/`Create`, closing the
+  truncate-write / rename bypass of the `DestWriter` foreign-collision backup.
 - **The local `.git` rollback history's secret-at-rest control is now re-asserted on
   every apply (issue #126).** Destination git-backup repos deliberately persist
   *resolved cleartext secrets* into a **local-only** `.git` history; that exception is
@@ -29,9 +103,59 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   may hold cleartext secrets, and `revert`'s dirty-tracked snapshot prints the same
   caution before it commits possibly-just-typed cleartext. All of this stays
   best-effort: a chmod failure never aborts the apply, and no push surface is added.
+- **Secret-invariant edges hardened (issue #163).** `capture.Capture` is now
+  fail-closed under indeterminacy: when the secrets backend can't resolve a
+  `${secret:…}` the source references (vault locked/unavailable), the leak-check
+  value prong is blind, so Capture **refuses** the write-back instead of degrading
+  to a warning. `EnvBackend` now uses presence semantics (`os.LookupEnv`) so a
+  set-but-empty env var resolves to `""` like `AgeBackend`. The `DestWriter`
+  write-ban is now fenced for the destructive `os.*` family
+  (`os.Remove`/`os.RemoveAll`/`os.WriteFile`/`os.Create`) via a forbidigo rule +
+  a source-scanning test (previously only `iox.AtomicWrite` was fenced). Plus
+  smaller edge hardening: the age identity-permission stat-bypass is documented +
+  directly tested, the drift classifier's deleted-destination rows are pinned, and
+  the capture residual warning is reworded to describe what it actually checks.
 
 ### Changed
 
+- **`agentsync secrets set` refuses an empty value by default (issue #165).** An
+  empty or whitespace-only value (a fat-fingered paste, an empty `pbpaste`/
+  `1password` pipe) across any input mode (`--stdin`, interactive prompt, legacy
+  `key=`) is now refused with a value-free error rather than silently stored as a
+  broken secret that resolves to `""` at apply time. Pass the new `--allow-empty`
+  flag to store an empty value deliberately.
+- **`Detect()` is now wired into `doctor`; the dead `Capabilities()` bitmask is
+  removed from the `Adapter` interface (issue #177).** Both methods previously had
+  no production consumer. `doctor`'s adapter-detection section now calls each
+  adapter's richer `Detect()` (config-dir stat + PATH fallback) instead of a
+  PATH-only lookup — reported informationally, never failing the check. The
+  per-agent `Capability` bitmask, which nothing in the pipeline consumed and which
+  could silently drift from real `Render`/`Skip` behavior, is deleted along with the
+  `Capability` type and `Cap*` consts; component support is (and was) expressed by
+  `Render` returning `[]Skip`, and `docs/architecture.md`'s false "the pipeline
+  reports those components as skipped [via the bitmask]" claim is corrected.
+- **Capability matrix: the Claude Hook cell is corrected from `✓` to `◐` (issue
+  #147).** agentsync models only `command` hooks (`matcher` + `command`); those
+  round-trip losslessly, but a non-`command` handler type or an unmodeled field
+  (e.g. `timeout`) is now *reported* (a render Skip / an ingest warning that leaves
+  your native entry untouched) rather than claimed as full-fidelity. The ◐ is
+  backed by the artifact-anchored `TestIngest_HookArtifactRoundTrip`.
+- **Capability matrix: the Codex subagent `name` claim is corrected (issue #150).**
+  The matrix now states that a Codex subagent's `name`/`description`/`model`
+  round-trip in **both** directions — a frontmatter `name` diverging from the file
+  stem survives ingest (re-populated from the TOML `name`) instead of being
+  silently rederived from the filename — and that colliding effective names are
+  refused at render, matching the shipped fix.
+- **Each adapter's key-merge strategy is now a machine-checked, load-bearing
+  invariant (issue #157).** A new central guard
+  (`TestKeyMergeStrategy_MatchesEmittedOps`) renders a real MCP+hook fixture
+  through every registered adapter and asserts `KeyMergeStrategy()` — the single
+  static value `orphanCleanupOps` trusts for its destructive cleanup writes —
+  equals the `MergeStrategy` on every key-merge `FileOp` the adapter emits (and
+  `""` ⇒ no key-merge ops). The interface + architecture docs now record the
+  single-strategy-per-adapter constraint explicitly, and correct a stale
+  architecture-doc line that listed Gemini under `merge-json-keys` (it emits
+  `merge-jsonc-keys`).
 - **A project-scope `[destination_directory_git_backup]` override is no longer copied
   into the merged config (issue #126).** Git backup is a user-scope-only feature
   (`VersionRoots` returns nil at project scope), so a project override could never take
@@ -40,6 +164,52 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **CLI write-path correctness batch (issue #171).** Five disjoint fixes: (1)
+  `setDestinationGitBackupMode` now re-parses the spliced `agentsync.toml` before
+  writing and **refuses** (leaving the file untouched) if the splice would no longer
+  parse or would alter content outside its table — mirroring the `[agents]`
+  splicer's backstop. (2) `reconcile`'s interactive EOF path now reaches `done:`, so
+  a queued `[o]verride` and pruned state are flushed instead of silently dropped
+  when the input stream ends. (3) offline `verify`
+  (`AGENTSYNC_ALLOW_OFFLINE_VERIFY=1`) now validates `${secret:…}`/`${env:…}`
+  reference **shape** (a malformed `${secret:}` fails) instead of skipping reference
+  checks entirely and mis-claiming "all references resolve"; the docs now state
+  offline mode checks shape, not resolvability. (4) a user-scope `agent disable
+  --purge` is documented as an intentionally cross-scope machine-wide cleanup
+  (project-scope `--purge --scope project` stays isolated). (5) the marketplace
+  `head_sha`/`name` keys are documented as CLI fetch-cache metadata deliberately not
+  modeled in the canonical schema (no silent drop).
+- **`plugin upgrade/enable/disable/remove` now accept the `id@marketplace` ref that
+  `install` accepts (issue #168).** They previously took `args[0]` verbatim and
+  built a bogus `plugins/<id>@<marketplace>.toml` path, so copying the exact install
+  ref failed — with a raw `read …: no such file or directory` for
+  upgrade/enable/disable. All four now split the ref like `install`, operate on the
+  bare id, and report a clean `plugin "<id>" is not installed` when absent.
+- **A disabled Codex MCP server now round-trips into canonical `enabled` (issue
+  #152).** Codex's per-server `[mcp_servers.<name>] enabled = false` is now ingested
+  into the canonical `MCPServerSpec.Enabled` field (present-only capture; absent
+  stays default-on) instead of landing in the `Extra` passthrough. `capture.Capture`
+  was taught to preserve the source-only `enabled` **only when the ingest carried
+  none** (`Enabled == nil`), so a native disable/enable now survives write-back of
+  an **already-managed** server instead of being silently reset to the source value
+  — completing the round-trip for `reconcile`/re-`import`, not just first import.
+  Also adds
+  artifact-anchored Codex fidelity tests: MCP+hooks coexistence in one `config.toml`,
+  a bundled-skill round-trip asserting byte-for-byte survival + the script's `0o755`
+  bit, and a spec-complete multi-paragraph `developer_instructions` body.
+- **Release pipeline hardening: pinned goreleaser, reproducible archives, signed
+  checksums, and a nfpms↔README URL guard (issue #138).** goreleaser is now pinned
+  to the same version (`2.16.0`) across `ci.yml`, `release.yml`, and `just ci` (the
+  last via `go run …@2.16.0`), with a CI guard that fails the build if the three
+  ever diverge — so the toolchain that validates a release config can't differ from
+  the one that ships it. Archive entry mtimes are pinned to the commit date, so
+  re-cutting a release produces byte-identical archives and an identical
+  `checksums.txt` (restoring the reproducibility scaffolding PR #115 dropped). The
+  release `checksums.txt` is now signed with keyless cosign (Sigstore) — artifact
+  integrity no longer rests on GitHub TLS alone — using the release job's ambient
+  OIDC token, introducing no new signing secret. A new CI guard couples the nfpms
+  version-less `file_name_template` to the README's `releases/latest/download/`
+  install URLs so a divergence fails CI instead of silently 404ing.
 - **The first `apply` is now revertible (issue #143).** Destination git backup used
   to record its first checkpoint only *after* `render.Apply` had already overwritten
   the dir, so a bad **first** apply into a previously-untracked dir had no prior state
@@ -743,6 +913,21 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   Verified locally: forcing the archive modes to `0666` changes the `.zip` hash,
   while with the modes pinned the hash is invariant to on-disk permissions.
 
+## [0.7.2] — 2026-06-19
+
+### Fixed
+
+- Release/packaging fix superseded by [0.7.3]; the checksum-mismatch story
+  (archive file-mode + GoReleaser-version pinning) is documented in full under
+  [0.7.3]. Tagged release: `v0.7.2`.
+
+## [0.7.1] — 2026-06-19
+
+### Fixed
+
+- Release/packaging fix superseded by [0.7.3]; see [0.7.3] for the full
+  reproducible-build / checksum-mismatch narrative. Tagged release: `v0.7.1`.
+
 ## [0.1.0] — 2026-06-05
 
 The first public release (beta). Functional end-to-end (green under
@@ -1337,5 +1522,8 @@ the Cursor adapter is a no-op (planned); Codex projections drop fields Codex has
 no target for (reported in the apply translation report); OpenCode hooks/LSP are
 skipped; TOML/JSONC comments are not preserved across write-back.
 
-[Unreleased]: https://github.com/spxrogers/agentsync/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/spxrogers/agentsync/compare/v0.10.1...HEAD
+[0.7.3]: https://github.com/spxrogers/agentsync/compare/v0.7.2...v0.7.3
+[0.7.2]: https://github.com/spxrogers/agentsync/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/spxrogers/agentsync/compare/v0.7.0...v0.7.1
 [0.1.0]: https://github.com/spxrogers/agentsync/releases/tag/v0.1.0
