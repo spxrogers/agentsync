@@ -65,6 +65,13 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, []ad
 // windsurfMCPSpec projects a canonical server into Windsurf's mcp_config.json
 // shape. A remote server (http/sse, or untyped-with-url) uses `serverUrl` +
 // `headers`; stdio uses command/args/env. Passthrough native keys re-merge via Extra.
+//
+// Render emits ONLY `serverUrl` for a remote server, never the alternate native
+// `url` key. So a hand-authored `mcp_config.json` that used `url` (which
+// IngestMCPSpec also reads) is canonicalized to `serverUrl` on the next apply.
+// This is benign — Windsurf/Devin accepts both keys (docs.devin.ai) — but it is a
+// visible dest→source→dest key rename; it is documented here, on IngestMCPSpec,
+// and in docs/capability-matrix.md rather than left silent.
 func windsurfMCPSpec(s source.MCPServerSpec) map[string]any {
 	spec := map[string]any{}
 	if isRemote(s) {
@@ -104,9 +111,15 @@ func isRemote(s source.MCPServerSpec) bool {
 
 // IngestMCPSpec translates one Windsurf-native server entry (the value under
 // mcp_config.json `mcpServers.<id>`) into the canonical MCPServerSpec. A server
-// carrying `serverUrl` (or `url`) is canonicalised to the http transport (Windsurf
-// does not distinguish sse/http in the config), otherwise stdio. Native keys
-// agentsync doesn't model are preserved in Extra.
+// carrying `serverUrl` (or the alternate native `url` key) is canonicalised to
+// the http transport (Windsurf does not distinguish sse/http in the config),
+// otherwise stdio. Native keys agentsync doesn't model are preserved in Extra.
+//
+// Note the `url`→`serverUrl` canonicalization: both native keys read into the
+// same canonical URL, but windsurfMCPSpec re-renders ONLY `serverUrl`, so a
+// hand-authored `url` key is rewritten to `serverUrl` on the next apply. Benign —
+// Windsurf/Devin accepts both (docs.devin.ai) — and pinned by
+// TestIngestMCPSpec_UrlCanonicalizedToServerUrl so it can't change silently.
 func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
 	url := asStr(raw["serverUrl"])
 	if url == "" {

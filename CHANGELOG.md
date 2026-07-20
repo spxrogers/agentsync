@@ -265,6 +265,26 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   **Continue** no longer silently drops the `url` of a server that carries both a
   `command` and a `url` with no explicit `type`; it renders as stdio (command wins)
   and reports the dropped `url` via a translation-report `Skip`.
+- **Windsurf ingest can no longer clobber a project rule with the global-rules
+  read, and its documented limits/canonicalization are now written down
+  (issue #169).** The two memory reads in the Windsurf `Ingest` (project workspace
+  rule + user global rules) were independent `if` blocks that both assigned
+  `Memory.Body`; they are now a single guarded read (`readMemoryBody`) that reads
+  the project rule when present and the global file ONLY otherwise, so a future
+  path-resolution change can never let the global read overwrite a populated
+  project body (the two sources are mutually exclusive per scope). No behavior
+  change today. Alongside, three previously-undocumented facts are now recorded in
+  code comments **and** the capability matrix: the MCP ingest canonicalizes a
+  native `url` key to `serverUrl` on re-render (benign — Windsurf/Devin accepts
+  both); workspace rules and workflows carry a documented **12,000-character**
+  per-file limit (distinct from the 6,000-char global-rules limit) that agentsync
+  leaves to Windsurf to enforce; and a near-`RulesDir` note tracks the upstream
+  Windsurf → Devin Desktop rebrand (`.devin/rules/*.md` preferred, `.windsurf/rules/*.md`
+  the still-honored legacy fallback agentsync targets). New artifact-anchored tests
+  cover the ingest guard, the whole-file overwrite + foreign-collision backup of a
+  hand-authored `global_rules.md`/workflow, a memory body that itself begins with a
+  user-authored `---`/frontmatter block surviving round-trip byte-for-byte, and the
+  `url`→`serverUrl` canonicalization. All figures verified against `docs.devin.ai`.
 - **CLI write-path correctness batch (issue #171).** Five disjoint fixes: (1)
   `setDestinationGitBackupMode` now re-parses the spliced `agentsync.toml` before
   writing and **refuses** (leaving the file untouched) if the splice would no longer
