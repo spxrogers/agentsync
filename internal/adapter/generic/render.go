@@ -185,7 +185,7 @@ func (a *Adapter) unsupportedSkips(c source.Canonical) []adapter.Skip {
 		skips = append(skips, adapter.Skip{Component: "command", Name: cmd.Name, Reason: reason("commands"), Kind: adapter.SkipDropped})
 	}
 	for _, h := range c.Hooks {
-		skips = append(skips, adapter.Skip{Component: "hook", Name: h.Event, Reason: reason("hooks"), Kind: adapter.SkipDropped})
+		skips = append(skips, adapter.Skip{Component: "hook", Name: h.Event.String(), Reason: reason("hooks"), Kind: adapter.SkipDropped})
 	}
 	for _, l := range c.LSPServers {
 		skips = append(skips, adapter.Skip{Component: "lsp", Name: l.ID, Reason: reason("LSP"), Kind: adapter.SkipDropped})

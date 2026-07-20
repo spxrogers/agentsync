@@ -246,7 +246,7 @@ func TestIngest_RoundTripsHooks_MultiEventMultiGroup(t *testing.T) {
 		if h.Type != "command" {
 			t.Fatalf("hook type mangled: %+v", h)
 		}
-		seen[key{h.Event, h.Matcher, h.Command}] = true
+		seen[key{h.Event.Unverified(), h.Matcher, h.Command}] = true
 	}
 	for _, want := range []key{
 		{"PreToolUse", "Bash", "a"},

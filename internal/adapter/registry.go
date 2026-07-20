@@ -1,6 +1,9 @@
 package adapter
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 // Registry is an in-memory map of adapter name -> Adapter.
 type Registry struct {
@@ -30,11 +33,6 @@ func (r *Registry) Names() []string {
 	for n := range r.items {
 		out = append(out, n)
 	}
-	// bubble sort small slice — keep stdlib only here
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j-1] > out[j]; j-- {
-			out[j-1], out[j] = out[j], out[j-1]
-		}
-	}
+	sort.Strings(out)
 	return out
 }

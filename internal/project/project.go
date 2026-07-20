@@ -173,11 +173,11 @@ func overlayHooks(base, proj []source.Hook) []source.Hook {
 	}
 	projEvents := map[string]bool{}
 	for _, h := range proj {
-		projEvents[h.Event] = true
+		projEvents[h.Event.Unverified()] = true // map key: raw event, not sanitizing String()
 	}
 	out := make([]source.Hook, 0, len(base)+len(proj))
 	for _, h := range base {
-		if !projEvents[h.Event] {
+		if !projEvents[h.Event.Unverified()] {
 			out = append(out, h)
 		}
 	}

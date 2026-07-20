@@ -58,7 +58,7 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 	// Hooks: skip with explanation.
 	for _, h := range renderC.Hooks {
 		skips = append(skips, adapter.Skip{
-			Component: "hook", Name: h.Event,
+			Component: "hook", Name: h.Event.String(),
 			Reason: "OpenCode hooks are JS/TS plugins; shim generation deferred to post-v1",
 			Kind:   adapter.SkipDropped,
 		})

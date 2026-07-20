@@ -545,7 +545,7 @@ func filterCanonicalTo(c source.Canonical, imp importedSet) source.Canonical {
 	sub.Skills = filterByKey(c.Skills, imp.Skills, func(s source.Skill) string { return s.Name })
 	sub.Subagents = filterByKey(c.Subagents, imp.Subagents, func(s source.Subagent) string { return s.Name })
 	sub.Commands = filterByKey(c.Commands, imp.Commands, func(cm source.Command) string { return cm.Name })
-	sub.Hooks = filterByKey(c.Hooks, imp.HookEvents, func(h source.Hook) string { return h.Event })
+	sub.Hooks = filterByKey(c.Hooks, imp.HookEvents, func(h source.Hook) string { return h.Event.Unverified() })
 	if imp.Memory {
 		sub.Memory = c.Memory
 	}
@@ -1013,7 +1013,7 @@ func importCommand(io *importIO, home string, c source.Canonical, name string) (
 func importHook(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
 	var matched []source.Hook
 	for _, h := range c.Hooks {
-		if name == "" || h.Event == name {
+		if name == "" || h.Event.Unverified() == name {
 			matched = append(matched, h)
 		}
 	}
@@ -1024,7 +1024,7 @@ func importHook(io *importIO, home string, c source.Canonical, name string) ([]s
 		return nil, nil
 	}
 	for _, h := range matched {
-		if err := source.ValidateComponentID("hook event", h.Event); err != nil {
+		if err := source.ValidateComponentID("hook event", h.Event.Unverified()); err != nil {
 			return nil, err
 		}
 	}
@@ -1038,10 +1038,13 @@ func importHook(io *importIO, home string, c source.Canonical, name string) ([]s
 	perEvent := map[string]int{}
 	var order []string
 	for _, h := range matched {
-		if _, seen := perEvent[h.Event]; !seen {
-			order = append(order, h.Event)
+		// event is a map key and the hooks/<event>.toml file stem — raw machine
+		// value, not the sanitizing String().
+		event := h.Event.Unverified()
+		if _, seen := perEvent[event]; !seen {
+			order = append(order, event)
 		}
-		perEvent[h.Event]++
+		perEvent[event]++
 	}
 	for _, ev := range order {
 		io.item(fmt.Sprintf("hooks/%s.toml", ev), fmt.Sprintf(" (%d entries)", perEvent[ev]))

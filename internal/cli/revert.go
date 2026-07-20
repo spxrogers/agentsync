@@ -256,7 +256,7 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 	if err != nil {
 		return true, err
 	}
-	msg := fmt.Sprintf("agentsync revert: %s → %s", root, shortRef(targetHash))
+	msg := fmt.Sprintf("agentsync revert: %s → %s", root, agit.Short(targetHash))
 	// Restore folds in SnapshotDirtyTracked and returns its hash. Do NOT announce the
 	// snapshot before the revert lands: on a partial failure Restore returns a hinted
 	// error naming the snapshot + pre-revert HEAD, so we print the "preserved" notice
@@ -267,7 +267,7 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 	}
 	if snap != "" {
 		fmt.Fprintf(p.Out, "%s preserved uncommitted changes in %s as snapshot %s\n",
-			p.Faint(ui.GlyphInfo), root, shortRef(snap))
+			p.Faint(ui.GlyphInfo), root, agit.Short(snap))
 		// The snapshot commits the dest files verbatim; like everything in this
 		// local-only history they may hold secrets resolved to cleartext. Caution the
 		// user rather than silently persist a freshly-typed secret (issue #126).
@@ -275,10 +275,10 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 			p.Faint(ui.GlyphInfo))
 	}
 	if h == "" {
-		fmt.Fprintf(p.Out, "%s %s already matches %s; nothing to revert.\n", p.Faint(ui.GlyphInfo), root, shortRef(targetHash))
+		fmt.Fprintf(p.Out, "%s %s already matches %s; nothing to revert.\n", p.Faint(ui.GlyphInfo), root, agit.Short(targetHash))
 		return true, nil
 	}
-	fmt.Fprintf(p.Out, "%s reverted %s to checkpoint %s\n", p.Green(ui.GlyphOK), root, shortRef(targetHash))
+	fmt.Fprintf(p.Out, "%s reverted %s to checkpoint %s\n", p.Green(ui.GlyphOK), root, agit.Short(targetHash))
 	if len(sharedWith) > 0 {
 		fmt.Fprintf(p.Err, "%s %s is shared with %s — this also rolled back their files in it.\n",
 			p.Yellow(ui.GlyphWarn+" note:"), root, strings.Join(sharedWith, ", "))
@@ -295,7 +295,7 @@ func previewRevert(p *ui.Printer, repo *agit.Repo, root, target string) error {
 	}
 	subject := checkpointSubject(repo, targetHash)
 	fmt.Fprintf(p.Out, "%s would revert %s to %s%s\n",
-		p.Bold("dry-run:"), root, p.Cyan(shortRef(targetHash)), subject)
+		p.Bold("dry-run:"), root, p.Cyan(agit.Short(targetHash)), subject)
 	if clean, _ := repo.IsClean(); !clean {
 		fmt.Fprintf(p.Out, "  (uncommitted changes to tracked files would be snapshotted first, then preserved in history)\n")
 	}
@@ -337,14 +337,6 @@ func cleanAll(dirs []string) []string {
 		}
 	}
 	return out
-}
-
-// shortRef abbreviates a full hash to 7 chars for display.
-func shortRef(h string) string {
-	if len(h) >= 7 {
-		return h[:7]
-	}
-	return h
 }
 
 // printOutOfSyncNotice warns that the destination now diverges from canonical.

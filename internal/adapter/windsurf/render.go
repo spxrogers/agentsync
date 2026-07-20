@@ -58,7 +58,7 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 		skips = append(skips, adapter.Skip{Component: "subagent", Name: s.Name, Reason: "Windsurf has no subagent concept", Kind: adapter.SkipDropped})
 	}
 	for _, h := range renderC.Hooks {
-		skips = append(skips, adapter.Skip{Component: "hook", Name: h.Event, Reason: "Windsurf has no declarative hook concept", Kind: adapter.SkipDropped})
+		skips = append(skips, adapter.Skip{Component: "hook", Name: h.Event.String(), Reason: "Windsurf has no declarative hook concept", Kind: adapter.SkipDropped})
 	}
 	for _, l := range renderC.LSPServers {
 		skips = append(skips, adapter.Skip{Component: "lsp", Name: l.ID, Reason: "Windsurf has no LSP configuration concept", Kind: adapter.SkipDropped})

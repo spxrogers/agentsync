@@ -271,7 +271,7 @@ func TestMerge_HooksOverlayByEvent(t *testing.T) {
 	out := project.Merge(base, proj)
 	byEvent := map[string][]string{}
 	for _, h := range out.Hooks {
-		byEvent[h.Event] = append(byEvent[h.Event], h.Command)
+		byEvent[h.Event.Unverified()] = append(byEvent[h.Event.Unverified()], h.Command)
 	}
 	// All hooks for an overridden event are replaced by the project's set.
 	if len(byEvent["PreToolUse"]) != 1 || byEvent["PreToolUse"][0] != "proj-pre" {

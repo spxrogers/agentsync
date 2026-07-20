@@ -138,6 +138,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
+- **Carried-over core/git nits: fail-safe `git.Detect`, cheaper re-applies, and a
+  visible sticky-skip note (issue #176).** `apply` no longer runs the full per-root
+  git-status round-trip on an agentsync-owned destination dir that had nothing
+  written and no tracked deletions this run (clean re-applies are faster). When you
+  answer "yes" to the git-backup prompt for a directory that is then skipped for a
+  nested-repo conflict, agentsync now prints a one-line note that auto-backup was
+  still enabled globally (previously the `mode=on` switch flipped silently).
+  Internally, `git.Detect` now returns the fail-safe `foreign` state (never the
+  init-eligible `untracked`) alongside any open error, the hook `Event` field is
+  modeled as sanitizing `untrusted.Text`, and the ten identical adapter `Apply`
+  dispatchers collapse to one shared helper — no user-visible behavior change from
+  those.
 - **`agentsync secrets set` refuses an empty value by default (issue #165).** An
   empty or whitespace-only value (a fat-fingered paste, an empty `pbpaste`/
   `1password` pipe) across any input mode (`--stdin`, interactive prompt, legacy

@@ -1160,7 +1160,7 @@ func TestRestoreFailureHint(t *testing.T) {
 	t.Run("with snapshot names orig and snapshot", func(t *testing.T) {
 		err := restoreFailureHint("/dest/.claude", orig, snap, inner)
 		msg := err.Error()
-		for _, want := range []string{shortStr(snap), shortStr(orig), "reset --hard", "disk full"} {
+		for _, want := range []string{Short(snap), Short(orig), "reset --hard", "disk full"} {
 			if !strings.Contains(msg, want) {
 				t.Errorf("hint %q missing %q", msg, want)
 			}
@@ -1172,11 +1172,98 @@ func TestRestoreFailureHint(t *testing.T) {
 	t.Run("without snapshot still names orig", func(t *testing.T) {
 		err := restoreFailureHint("/dest/.claude", orig, "", inner)
 		msg := err.Error()
-		if !strings.Contains(msg, shortStr(orig)) || !strings.Contains(msg, "reset --hard") {
+		if !strings.Contains(msg, Short(orig)) || !strings.Contains(msg, "reset --hard") {
 			t.Errorf("hint %q should name orig + a reset --hard recovery command", msg)
 		}
-		if strings.Contains(msg, shortStr(snap)) {
+		if strings.Contains(msg, Short(snap)) {
 			t.Errorf("hint without a snapshot must not name a snapshot hash: %q", msg)
 		}
 	})
+}
+
+// TestShort pins the single shared 7-char hex abbreviator (formerly the three
+// identical shortStr/shortHash/shortRef copies).
+func TestShort(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{name: "full 40-char hex", in: "0123456789abcdef0123456789abcdef01234567", want: "0123456"},
+		{name: "exactly 7", in: "abcdef0", want: "abcdef0"},
+		{name: "shorter than 7", in: "abc", want: "abc"},
+		{name: "empty", in: "", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Short(tt.in); got != tt.want {
+				t.Fatalf("Short(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDetect_ErrorReturnsForeign pins the fail-safe: on a non-ErrRepositoryNotExists
+// open error Detect returns StateForeign ("leave it alone"), never the init-eligible
+// StateUntracked, so a caller reading State before err cannot init into an unreadable
+// repo. The happy path still reports (StateUntracked, nil) for a plain dir.
+func TestDetect_ErrorReturnsForeign(t *testing.T) {
+	testenv.RequireContainer(t)
+
+	t.Run("malformed .git returns foreign + error", func(t *testing.T) {
+		dir := t.TempDir()
+		// A .git FILE with no "gitdir:" prefix opens with an error that is NOT
+		// ErrRepositoryNotExists (go-git: ".git file has no gitdir: prefix").
+		if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("not a gitfile\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		st, err := Detect(dir)
+		if err == nil {
+			t.Fatalf("expected an open error for a malformed .git, got nil (state %v)", st)
+		}
+		if st != StateForeign {
+			t.Fatalf("state on error = %v, want StateForeign (fail-safe)", st)
+		}
+	})
+
+	t.Run("plain dir returns untracked + nil", func(t *testing.T) {
+		st, err := Detect(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st != StateUntracked {
+			t.Fatalf("state = %v, want StateUntracked", st)
+		}
+	})
+}
+
+// TestPlan_ModifyAndUnknown asserts a real HEAD↔target diff that MODIFIES a file
+// yields Kind "modify" via the explicit merkletrie.Modify case (not the former
+// default-arm masquerade). The "unknown" default is defensive only — merkletrie's
+// Action() returns exactly Insert/Delete/Modify, so it is unreachable via a real
+// diff and cannot be exercised here without fabricating an invalid change.
+func TestPlan_ModifyAndUnknown(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	repo, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, repo, dir, "f.txt", "A\n", "one")
+	commitFile(t, repo, dir, "f.txt", "B\n", "two") // same path, new content → a MODIFY
+
+	_, changes, err := repo.Plan("HEAD~1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got *FileChange
+	for i := range changes {
+		if changes[i].Path == "f.txt" {
+			got = &changes[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("f.txt not in plan: %+v", changes)
+	}
+	if got.Kind != "modify" {
+		t.Fatalf("Kind = %q, want \"modify\" (explicit merkletrie.Modify case)", got.Kind)
+	}
 }

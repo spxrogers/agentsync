@@ -62,7 +62,7 @@ func walkSecretFieldsScoped(c *source.Canonical, scope string, fn func(loc secre
 	}
 	for i := range c.Hooks {
 		h := &c.Hooks[i]
-		h.Command = fn(secretFieldLoc{scope, "hook", h.Event, "command", strconv.Itoa(i)}, h.Command)
+		h.Command = fn(secretFieldLoc{scope, "hook", h.Event.Unverified(), "command", strconv.Itoa(i)}, h.Command)
 	}
 	for i := range c.LSPServers {
 		id := c.LSPServers[i].ID

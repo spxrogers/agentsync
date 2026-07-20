@@ -100,7 +100,7 @@ func TestRoundTrip_Hooks(t *testing.T) {
 	norm := func(hs []source.Hook) []hk {
 		out := make([]hk, 0, len(hs))
 		for _, h := range hs {
-			out = append(out, hk{h.Event, h.Matcher, h.Type, h.Command})
+			out = append(out, hk{h.Event.Unverified(), h.Matcher, h.Type, h.Command})
 		}
 		sort.Slice(out, func(i, j int) bool { return out[i].e < out[j].e })
 		return out

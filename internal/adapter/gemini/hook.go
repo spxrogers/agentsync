@@ -9,6 +9,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // canonicalToGeminiHookEvent maps agentsync's canonical (Claude-shaped)
@@ -54,11 +55,11 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 	byEvent := map[string][]map[string]any{}
 	var skips []adapter.Skip
 	for _, h := range c.Hooks {
-		ge, ok := canonicalToGeminiHookEvent[h.Event]
+		ge, ok := canonicalToGeminiHookEvent[h.Event.Unverified()]
 		if !ok {
 			skips = append(skips, adapter.Skip{
 				Component: "hook",
-				Name:      h.Event,
+				Name:      h.Event.String(),
 				Reason:    "Gemini CLI has no equivalent hook event",
 				Kind:      adapter.SkipDropped,
 			})
@@ -71,7 +72,7 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 		if h.Type != "" && h.Type != "command" {
 			skips = append(skips, adapter.Skip{
 				Component: "hook",
-				Name:      h.Event,
+				Name:      h.Event.String(),
 				Reason:    fmt.Sprintf("agentsync models only command hooks; type %q is not projected", h.Type),
 				Kind:      adapter.SkipDropped,
 			})
@@ -177,7 +178,7 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 					break defs
 				}
 				captured = append(captured, source.Hook{
-					Event:   canonEvent,
+					Event:   untrusted.Wrap(canonEvent), // remapped from native config
 					Matcher: matcher,
 					Type:    asStr(h["type"]),
 					Command: asStr(h["command"]),

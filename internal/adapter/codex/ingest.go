@@ -11,6 +11,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // Ingest reads Codex's native config files and returns a partial
@@ -180,7 +181,7 @@ func ingestHooks(raw any) []source.Hook {
 					continue
 				}
 				out = append(out, source.Hook{
-					Event:   event,
+					Event:   untrusted.Wrap(event), // native config map key
 					Matcher: matcher,
 					Type:    asStr(h["type"]),
 					Command: asStr(h["command"]),

@@ -44,10 +44,12 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 	byEvent := map[string][]map[string]any{}
 	var skips []adapter.Skip
 	for _, h := range c.Hooks {
-		if !codexHookEvents[h.Event] {
+		// event is a machine map key / lookup — raw, not the sanitizing String().
+		event := h.Event.Unverified()
+		if !codexHookEvents[event] {
 			skips = append(skips, adapter.Skip{
 				Component: "hook",
-				Name:      h.Event,
+				Name:      h.Event.String(),
 				Reason:    "Codex does not recognize this lifecycle event",
 				Kind:      adapter.SkipDropped,
 			})
@@ -60,7 +62,7 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 				"command": h.Command,
 			}},
 		}
-		byEvent[h.Event] = append(byEvent[h.Event], entry)
+		byEvent[event] = append(byEvent[event], entry)
 	}
 	if len(byEvent) == 0 {
 		return nil, skips, nil

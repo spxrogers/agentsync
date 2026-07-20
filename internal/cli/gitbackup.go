@@ -258,6 +258,24 @@ func (s *gitBackupSession) checkpoint(written map[string]bool) error {
 			warnNestedForeignRepoOnCommit(s.p, root)
 		}
 
+		// Per-root cost, and its short-circuit. Without one, every root runs
+		// repo.Stage (one wt.Add per written file, each an internal full-tree git
+		// status) + StageTrackedDeletions (one status) + CommitStaged→indexClean
+		// (one status) — O(roots × (writtenFiles × status + 2 status)) on EVERY
+		// apply, even a clean re-apply that changed nothing. Short-circuit an
+		// agentsync-owned root that WROTE nothing this run: stage any tracked
+		// deletions first (the only change a delete-only apply carries under this
+		// root), and if there are none either, skip the Stage(notice)+CommitStaged
+		// round-trip entirely — a no-write, no-delete root produces no checkpoint
+		// anyway (CommitStaged returns "" on a clean index), so nothing is lost.
+		deleted, err := repo.StageTrackedDeletions()
+		if err != nil {
+			fmt.Fprintf(s.p.Err, "%s git backup for %s: %v\n", s.p.Yellow("agentsync:"), root, err)
+			continue
+		}
+		if len(rels) == 0 && len(deleted) == 0 {
+			continue // nothing written and nothing deleted under this root
+		}
 		// Stage the written files + the notice (so a freshly-inited repo tracks it,
 		// a no-op on an already-owned repo). Build a fresh slice — don't append onto
 		// rels' backing array.
@@ -265,11 +283,6 @@ func (s *gitBackupSession) checkpoint(written map[string]bool) error {
 		toStage = append(toStage, rels...)
 		toStage = append(toStage, agit.NoticeFile)
 		if err := repo.Stage(toStage); err != nil {
-			fmt.Fprintf(s.p.Err, "%s git backup for %s: %v\n", s.p.Yellow("agentsync:"), root, err)
-			continue
-		}
-		deleted, err := repo.StageTrackedDeletions()
-		if err != nil {
 			fmt.Fprintf(s.p.Err, "%s git backup for %s: %v\n", s.p.Yellow("agentsync:"), root, err)
 			continue
 		}
@@ -466,6 +479,14 @@ func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mo
 			}
 			// Sticky "yes": stop asking on future applies (even if THIS dir was
 			// skipped for a nesting conflict — other dirs should still auto-init).
+			if repo == nil {
+				// initGuarded skipped THIS dir for a nesting conflict (it already
+				// warned why), yet the user said "yes" — surface that the global
+				// switch is flipping on regardless, so the persisted mode=on below
+				// is not a silent change.
+				fmt.Fprintf(p.Err, "%s this directory was skipped, but auto-backup is now enabled for future directories and applies.\n",
+					p.Faint(ui.GlyphInfo))
+			}
 			if perr := setDestinationGitBackupMode(home, source.GitBackupModeOn); perr != nil {
 				fmt.Fprintf(p.Err, "%s could not persist git-backup mode: %v\n", p.Yellow("agentsync:"), perr)
 			}

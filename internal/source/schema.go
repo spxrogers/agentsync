@@ -239,11 +239,18 @@ type Command struct {
 }
 
 // Hook represents a single hook entry for an event.
+//
+// Event is untrusted.Text: it is derived from an on-disk file NAME
+// (hooks/<event>.toml) — a user/marketplace-controllable origin outside
+// agentsync's trust boundary — so a print site sanitizes it by construction (its
+// String() runs untrusted.Sanitize). Reach the raw bytes via Unverified() only
+// for non-display logic — the hooks/<event>.toml stem, a map key, an event
+// comparison, TOML serialization. See internal/untrusted and SECURITY.md.
 type Hook struct {
-	Event   string // e.g. "PreToolUse"
-	Matcher string // glob/regex string
-	Type    string // "command"
-	Command string // shell command
+	Event   untrusted.Text // e.g. "PreToolUse"
+	Matcher string         // glob/regex string
+	Type    string         // "command"
+	Command string         // shell command
 }
 
 // LSPServer mirrors lsp/<id>.toml.

@@ -83,13 +83,18 @@ const (
 // inside an existing repo (a dotfiles user who keeps ~/.claude under git) is
 // reported StateForeign rather than StateUntracked — agentsync must not init a
 // nested repo or commit into someone else's history.
+//
+// State is meaningful only when err == nil. On any error path Detect returns the
+// fail-safe StateForeign ("leave it alone"), never the init-eligible
+// StateUntracked, so a future caller that reads State before checking err cannot
+// classify an unreadable repo as eligible for init/commit.
 func Detect(dir string) (State, error) {
 	repo, err := gogit.PlainOpenWithOptions(dir, &gogit.PlainOpenOptions{DetectDotGit: true})
 	if errors.Is(err, gogit.ErrRepositoryNotExists) {
 		return StateUntracked, nil
 	}
 	if err != nil {
-		return StateUntracked, fmt.Errorf("opening git repo at %s: %w", dir, err)
+		return StateForeign, fmt.Errorf("opening git repo at %s: %w", dir, err)
 	}
 	owned, err := hasMarker(repo)
 	if err != nil {

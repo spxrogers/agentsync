@@ -100,7 +100,7 @@ func ReReferenceCanonical(c *source.Canonical, against *source.Canonical, sec, e
 // source hook — a hook the user never templated is left untouched.
 func rereferenceHookByValue(against *source.Canonical, event, ingested string, secretVals map[string]string) string {
 	for _, h := range against.Hooks {
-		if h.Event == event && strings.Contains(h.Command, "${secret:") {
+		if h.Event.Unverified() == event && strings.Contains(h.Command, "${secret:") {
 			return MaskResolved(ingested, secretVals)
 		}
 	}
@@ -188,7 +188,7 @@ func restoreField(srcVal, ingested string, sec, env Resolver) string {
 // ingested command is the match.
 func rereferenceHook(against *source.Canonical, event, ingested string, sec, env Resolver) string {
 	for _, h := range against.Hooks {
-		if h.Event != event || !strings.Contains(h.Command, "${secret:") {
+		if h.Event.Unverified() != event || !strings.Contains(h.Command, "${secret:") {
 			continue
 		}
 		if resolved, _, err := SubstituteRefs(h.Command, sec, env); err == nil && resolved == ingested {

@@ -365,7 +365,7 @@ func loadHooks(fs afero.Fs, home string) ([]Hook, error) {
 		}
 		for _, h := range hf.Hook {
 			out = append(out, Hook{
-				Event:   event,
+				Event:   untrusted.Wrap(event),
 				Matcher: h.Matcher,
 				Type:    h.Type,
 				Command: h.Command,
