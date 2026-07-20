@@ -253,6 +253,14 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 			return err
 		}
 	}
+	// Post-apply state.Save. If it FAILS here, every destination is already
+	// written correctly but its ownership was not recorded — the dests are
+	// "written-but-unrecorded". This is NOT silent data loss: the next apply
+	// treats each unrecorded dest as FOREIGN (state owns nothing there) and so
+	// backs it up before overwriting (render.Writer.maybeBackup), then records
+	// it — a self-heal. The apply-error rescue above ends in its own Save for the
+	// mid-pipeline case; this is the all-writes-succeeded case. See
+	// docs/architecture.md (apply pipeline) for the durability argument.
 	if err := state.Save(statePath, s); err != nil {
 		return err
 	}

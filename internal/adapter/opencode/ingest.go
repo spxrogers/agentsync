@@ -195,7 +195,22 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		}
 	}
 
-	// Memory from AGENTS.md (managed-file banner stripped — see claude/ingest.go)
+	// Memory from AGENTS.md (managed-file banner stripped — see claude/ingest.go).
+	//
+	// Fragment round-trip: OpenCode has NO native fragment/@import concept in
+	// AGENTS.md (https://opencode.ai/docs/rules/ — it offers only an opencode.json
+	// `instructions` glob list, not in-file composition), so agentsync expands
+	// memory/fragments/ INLINE into the rendered AGENTS.md. That expansion is
+	// REVERSIBLE: RenderManagedMemory wraps each inlined fragment in HTML-comment
+	// boundary markers (source.ExpandMemoryImports) that OpenCode treats as inert.
+	// StripManagedBanner removes only the managed BANNER, never those fragment
+	// markers, so they survive into Memory.Body here — and the write-back funnel
+	// (import/reconcile → source.CollapseMemoryMarkers) reconstructs
+	// memory/AGENTS.md + the fragment files from them. So Ingest deliberately
+	// populates only Body (not Memory.Fragments), exactly like the Claude adapter:
+	// fragment reconstruction is the capture layer's single responsibility, NOT a
+	// per-adapter one. Fragments are therefore round-tripped, not silently
+	// flattened (see TestIngest_RoundTripsMemoryFragments).
 	if data, present, err := adapter.ReadFileOptional(p.Memory); err != nil {
 		return c, fmt.Errorf("read memory %s: %w", p.Memory, err)
 	} else if present {

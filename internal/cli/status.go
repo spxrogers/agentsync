@@ -282,10 +282,19 @@ func buildStatusModel(plan render.RenderPlan, names []string, s *state.Targets, 
 				continue
 			}
 			seen[op.Path] = true
+			entry := s.Files[stateFileKey(userHome, name, sc, projectRoot, op.Path)]
 			hsrc := hashContent(op.Content)
-			happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, op.Path)].SHA256
+			happlied := entry.SHA256
 			hdest := hashFile(op.Path)
 			cls := drift.Classify(hsrc, happlied, hdest).String()
+			// A file whose CONTENT is clean but whose permission bits drifted from
+			// what agentsync last applied is still drift — the next apply re-
+			// converges the mode (render.Writer.Write chmods a content-identical
+			// file whose mode differs). Without this, a skill script that lost its
+			// +x bit reports "clean" yet the next apply would change it.
+			if cls == drift.Clean.String() && modeDrifted(entry.Mode, op.Path) {
+				cls = drift.Drift.String()
+			}
 			ag.Items = append(ag.Items, statusItem{Path: op.Path, Class: cls})
 			model.Summary[cls]++
 		}
@@ -765,6 +774,26 @@ func hashFile(path string) string {
 		return ""
 	}
 	return hashContent(data)
+}
+
+// modeDrifted reports whether the regular file at path exists with permission
+// bits that differ from the mode agentsync last recorded for it (state
+// FileEntry.Mode). A recorded mode of 0 means "unspecified" (older state, or an
+// op whose adapter left Mode unset — the writer defaults those to 0o644 on
+// write), so it never counts as drift. A missing, symlinked, or non-regular file
+// is left to the content classifier (which already flags it), so this returns
+// false there. It is the permission-bit analog of the content-hash drift the
+// classifier detects: a content-identical chmod is real drift the next apply
+// re-converges (render.Writer.Write).
+func modeDrifted(recordedMode uint32, path string) bool {
+	if recordedMode == 0 {
+		return false
+	}
+	fi, err := os.Lstat(path)
+	if err != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
+		return false
+	}
+	return fi.Mode().Perm() != os.FileMode(recordedMode).Perm()
 }
 
 func hashAnyValue(v any) string {

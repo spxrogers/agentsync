@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	iofs "io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -72,8 +73,13 @@ func loadProjected(fs afero.Fs, home, pluginCacheRoot string, disabled []string,
 	for _, id := range disabled {
 		disabledByProject[id] = true
 	}
+	// Build the marketplace-name → entries index ONCE for this load so entry
+	// resolution is O(plugins + marketplaces), not O(plugins × marketplaces):
+	// the previous per-plugin scan re-read and re-parsed every cached
+	// marketplace.json for EVERY installed plugin (issue #162 item G).
+	mpIndex := buildMarketplaceIndex(home)
 	for _, pl := range c.Plugins {
-		proj, ok, perr := projectOnePlugin(fs, home, pluginCacheRoot, pl, disabledByProject, lenient)
+		proj, ok, perr := projectOnePlugin(fs, home, pluginCacheRoot, pl, disabledByProject, lenient, mpIndex)
 		if perr != nil {
 			return c, perr
 		}
@@ -114,7 +120,9 @@ func ProjectInstalled(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugi
 	if pluginCacheRoot == "" {
 		return ProjectionResult{}, false, nil
 	}
-	return projectOnePlugin(fs, home, pluginCacheRoot, pl, nil, lenient)
+	// nil index → resolveInstalledEntry falls back to its direct per-call scan,
+	// which is fine for this single-plugin diagnostic path (no O(P×M) blow-up).
+	return projectOnePlugin(fs, home, pluginCacheRoot, pl, nil, lenient, nil)
 }
 
 // projectOnePlugin projects a single installed plugin into its ProjectionResult.
@@ -124,7 +132,7 @@ func ProjectInstalled(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugi
 // the plugin contributes nothing this load: it is disabled via `plugin disable`
 // (pl.Plugin.Disabled), or disabled by the active project tree
 // (disabledByProject[pl.ID], the plugins/<id>.toml `disabled = true` flag).
-func projectOnePlugin(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugin, disabledByProject map[string]bool, lenient bool) (ProjectionResult, bool, error) {
+func projectOnePlugin(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugin, disabledByProject map[string]bool, lenient bool, mpIndex marketplaceIndex) (ProjectionResult, bool, error) {
 	if pl.Plugin.Disabled || disabledByProject[pl.ID.Unverified()] {
 		return ProjectionResult{}, false, nil
 	}
@@ -141,11 +149,37 @@ func projectOnePlugin(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugi
 	if err := verifyPluginManifestSHA(fs, pluginDir, pl.Plugin.ManifestSHA, id); err != nil {
 		return ProjectionResult{}, false, err
 	}
-	proj, perr := projectWithFuncs(resolveInstalledEntry(home, id, mpName), pluginDir, os.ReadFile, os.ReadDir, lenient)
+	// Read the projected component bodies AND directory listings through the SAME
+	// injected fs that the tamper guard hashed (verifyPluginManifestSHA →
+	// PluginTreeHash), so on a non-OS fs (tests, or any future virtual fs) the
+	// guard and the data it protects can never read DIFFERENT trees. Passing
+	// os.ReadFile/os.ReadDir here (the old behavior) hashed the injected fs while
+	// projecting the real OS filesystem — an integrity guarantee that was unsound
+	// off the real filesystem (issue #162 item E).
+	readFile := func(p string) ([]byte, error) { return afero.ReadFile(fs, p) }
+	readDir := func(p string) ([]os.DirEntry, error) { return aferoReadDirEntries(fs, p) }
+	proj, perr := projectWithFuncs(resolveInstalledEntry(home, id, mpName, mpIndex), pluginDir, readFile, readDir, lenient)
 	if perr != nil {
 		return ProjectionResult{}, false, fmt.Errorf("project plugin %s: %w", id, perr)
 	}
 	return proj, true, nil
+}
+
+// aferoReadDirEntries lists dir through the injected fs and adapts the result to
+// []os.DirEntry (afero.ReadDir yields []os.FileInfo). It is what lets projection
+// read directory listings through the SAME fs the tamper guard hashes; each
+// entry's Info()/Type() come from the injected fs, so mode bits and the symlink
+// guard in collectSkillFiles are preserved on both the OS fs and a mem fs.
+func aferoReadDirEntries(fs afero.Fs, dir string) ([]os.DirEntry, error) {
+	infos, err := afero.ReadDir(fs, dir)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]os.DirEntry, len(infos))
+	for i, fi := range infos {
+		entries[i] = iofs.FileInfoToDirEntry(fi)
+	}
+	return entries, nil
 }
 
 // checkProjectedConflicts surfaces a silent cross-source hijack. The projected
@@ -255,10 +289,25 @@ func lspRenderFields(s source.LSPServerSpec) source.LSPServerSpec {
 // inline overrides may be slightly ahead of the installed content. Project
 // unions plugin.json with the entry, so this never DROPS the plugin's own
 // components; at worst a stale entry adds a slightly-ahead override.
-func resolveInstalledEntry(home, id, mpName string) PluginEntry {
+func resolveInstalledEntry(home, id, mpName string, idx marketplaceIndex) PluginEntry {
 	if mpName == "" {
 		return PluginEntry{Name: untrusted.Wrap(id)}
 	}
+	// Memoized path: a pre-built index (LoadProjected) resolves without touching
+	// the filesystem, so N plugins cost O(1) each instead of re-scanning every
+	// marketplace.json. A miss falls through to the bare-entry fallback below,
+	// exactly like the scan finding no matching entry.
+	if idx != nil {
+		for _, e := range idx[mpName] {
+			if e.Name.Unverified() == id {
+				return e
+			}
+		}
+		return PluginEntry{Name: untrusted.Wrap(id)}
+	}
+	// Fallback (ProjectInstalled diagnostic path, or any nil-index caller): the
+	// direct per-call scan, byte-for-byte the prior behavior — any read/parse
+	// failure or unmatched entry degrades to a bare strict entry.
 	cacheRoot := filepath.Join(home, ".state", "cache", "marketplaces")
 	dirs, err := os.ReadDir(cacheRoot)
 	if err != nil {
@@ -286,6 +335,46 @@ func resolveInstalledEntry(home, id, mpName string) PluginEntry {
 		}
 	}
 	return PluginEntry{Name: untrusted.Wrap(id)}
+}
+
+// marketplaceIndex maps a marketplace's DECLARED name (marketplace.json `name`)
+// to its plugin entries. It is built once per LoadProjected (buildMarketplaceIndex)
+// so resolveInstalledEntry is O(plugins + marketplaces): the previous code
+// re-read and re-parsed every cached marketplace.json for EVERY installed plugin
+// (issue #162 item G). A nil index means "not memoized" (the ProjectInstalled
+// diagnostic path), which resolveInstalledEntry handles with its direct scan.
+type marketplaceIndex map[string][]PluginEntry
+
+// buildMarketplaceIndex reads and parses each cached marketplace.json exactly
+// once, indexing every marketplace's entries by its declared name. It preserves
+// the scan's fallback semantics precisely: an unreadable cache root, an
+// unreadable/unparseable marketplace.json, or a missing entry all yield "no
+// match" (resolveInstalledEntry then returns a bare strict entry). Entries from
+// multiple cached marketplaces that declare the SAME name are concatenated in
+// os.ReadDir (sorted) order, so a lookup still finds the first matching entry —
+// matching the old first-dir-wins scan for the pathological name-collision case.
+func buildMarketplaceIndex(home string) marketplaceIndex {
+	idx := marketplaceIndex{}
+	cacheRoot := filepath.Join(home, ".state", "cache", "marketplaces")
+	dirs, err := os.ReadDir(cacheRoot)
+	if err != nil {
+		return idx
+	}
+	for _, d := range dirs {
+		if !d.IsDir() {
+			continue
+		}
+		data, rerr := os.ReadFile(filepath.Join(cacheRoot, d.Name(), ".claude-plugin", "marketplace.json"))
+		if rerr != nil {
+			continue
+		}
+		var mp Marketplace
+		if json.Unmarshal(data, &mp) != nil {
+			continue
+		}
+		idx[mp.Name] = append(idx[mp.Name], mp.Plugins...)
+	}
+	return idx
 }
 
 // verifyPluginManifestSHA checks the on-disk plugin cache against the SHA

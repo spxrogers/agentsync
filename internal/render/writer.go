@@ -195,6 +195,31 @@ func (w *Writer) Write(op adapter.FileOp, finalBytes []byte) error {
 	// it is what lets `apply --dry-run` label a converged destination "synced"
 	// rather than "write".
 	if cur, err := os.ReadFile(op.Path); err == nil && bytes.Equal(cur, finalBytes) {
+		// Bytes converged — but the file MODE may still have drifted (e.g. an
+		// executable skill script that lost its +x bit). A content-identical
+		// chmod must still re-converge, yet we must NOT churn the mtime when
+		// nothing differs. So compare the current perm against the intended mode
+		// and rewrite ONLY the permission bits (os.Chmod, which leaves content and
+		// mtime untouched) when they differ; the common "already in sync" case
+		// stays a true no-op. op.Mode == 0 means "unspecified" (the writer would
+		// default it to 0o644 on a real write), so it never triggers a mode fix.
+		if op.Mode != 0 {
+			want := os.FileMode(op.Mode).Perm()
+			if fi, serr := os.Stat(op.Path); serr == nil && fi.Mode().Perm() != want {
+				if w.dryRun {
+					// Preview: a mode-only mismatch WOULD change on a real apply.
+					w.wouldChange[op.Path] = true
+					return nil
+				}
+				if cerr := os.Chmod(op.Path, want); cerr != nil {
+					return fmt.Errorf("chmod %s to %o: %w", op.Path, want, cerr)
+				}
+				// A real (mode-only) change: owned and written, NOT unchanged, so
+				// the apply summary counts it rather than reporting "up to date".
+				w.wrote[op.Path] = true
+				return nil
+			}
+		}
 		w.wrote[op.Path] = true
 		w.unchanged[op.Path] = true
 		return nil

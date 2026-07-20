@@ -7,7 +7,15 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter/opencode"
 )
 
-func TestMergeJSONC_PreservesForeignAndAddsOurs(t *testing.T) {
+// TestMergeJSONC_PreservesForeignKeysDropsComments pins MergeJSONC's ACTUAL
+// guarantee (see settings.go): foreign KEYS/VALUES survive the merge and owned
+// keys are added/removed, but comments and trailing commas are NOT preserved —
+// the JSONC is parsed (hujson) and re-emitted as plain JSON. The previous name
+// (…PreservesForeignAndAddsOurs) plus the fixture's `// top comment` and
+// `// soon-to-be-removed` oversold a comment-preservation guarantee the function
+// does not make and the test never checked, so this renames-and-strengthens: it
+// now asserts the comments are DROPPED, matching the documented v1 limitation.
+func TestMergeJSONC_PreservesForeignKeysDropsComments(t *testing.T) {
 	existing := []byte(`{
   // top comment
   "foreign": 1,
@@ -43,6 +51,12 @@ func TestMergeJSONC_PreservesForeignAndAddsOurs(t *testing.T) {
 	// command value must be correct
 	if !strings.Contains(s, `"npx"`) {
 		t.Fatalf("command value missing:\n%s", s)
+	}
+	// Comments are NOT preserved — this is the real guarantee the old name
+	// oversold. Assert both the leading and inline comments are gone so the name
+	// can never again imply a preservation MergeJSONC does not provide.
+	if strings.Contains(s, "top comment") || strings.Contains(s, "soon-to-be-removed") {
+		t.Fatalf("comments should be dropped (JSONC re-emitted as plain JSON):\n%s", s)
 	}
 }
 

@@ -193,6 +193,15 @@ func newDiffCmd() *cobra.Command {
 							dstStr = secrets.MaskResolved(string(dstBytes), redact)
 						}
 						if srcStr == dstStr {
+							// Content is identical, but the file MODE may have drifted
+							// from what apply maintains (op.Mode). A content-identical
+							// chmod produces no text hunk, so surface it as a small
+							// "mode" hunk instead of reporting "no diff" — the mode
+							// analog of a content drift hunk (render.Writer.Write
+							// re-converges it on the next apply).
+							if src, dst, ok := modeHunk(op.Path, op.Mode); ok {
+								hunks = append(hunks, diffHunk{Path: op.Path, Pointer: "mode", Source: src, Dest: dst})
+							}
 							continue
 						}
 						hunks = append(hunks, diffHunk{Path: op.Path, Source: srcStr, Dest: dstStr})
@@ -276,6 +285,28 @@ func renderDiffText(p *ui.Printer, diffs []diffmatchpatch.Diff) string {
 		}
 	}
 	return b.String()
+}
+
+// modeHunk describes a permission-bit mismatch between the mode apply would
+// maintain for path (wantMode, from op.Mode) and the file's current perm on
+// disk. ok is false when they match, wantMode is 0 (unspecified), or the file is
+// absent/symlinked/non-regular (the content path already covers those). It lets
+// `diff` surface a content-identical chmod — which yields no text hunk — rather
+// than silently reporting "no diff".
+func modeHunk(path string, wantMode uint32) (source, dest string, ok bool) {
+	if wantMode == 0 {
+		return "", "", false
+	}
+	fi, err := os.Lstat(path)
+	if err != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
+		return "", "", false
+	}
+	want := os.FileMode(wantMode).Perm()
+	got := fi.Mode().Perm()
+	if want == got {
+		return "", "", false
+	}
+	return fmt.Sprintf("mode %04o", want), fmt.Sprintf("mode %04o", got), true
 }
 
 func marshalPretty(v any) string {

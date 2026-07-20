@@ -103,6 +103,7 @@ func TestNoDirectDestructiveOSCallsOutsideAllowedFiles(t *testing.T) {
 	// repo scaffolding, iox internals, and a writability probe.
 	allowed := map[string]bool{
 		"internal/render/writer.go":              true, // the DestWriter — owns delete + backup
+		"internal/source/writer.go":              true, // canonical-source writer; WriteSkill prunes orphaned bundled files (os.Remove)
 		"internal/adapter/testwriter.go":         true, // PassThroughWriter test helper
 		"internal/iox/atomic.go":                 true,
 		"internal/git/init.go":                   true, // local git-backup repo scaffolding
