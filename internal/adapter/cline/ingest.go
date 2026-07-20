@@ -22,7 +22,11 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 
 	// MCP from ~/.cline/mcp.json (user scope only).
 	if p.MCP != "" {
-		if data, err := os.ReadFile(p.MCP); err == nil {
+		data, present, err := adapter.ReadFileOptional(p.MCP)
+		if err != nil {
+			return c, fmt.Errorf("read %s: %w", p.MCP, err)
+		}
+		if present {
 			var top map[string]any
 			if err := json.Unmarshal(data, &top); err != nil {
 				return c, fmt.Errorf("parse %s: %w", p.MCP, err)
@@ -40,15 +44,27 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 
 	// Commands from .clinerules/workflows/<name>.md (project scope; plain markdown).
+	// Cline implements no diagnostics sink (WarnEmitter), so a per-workflow read
+	// error is RETURNED rather than warned — it is still surfaced loudly, never
+	// swallowed into a silently-short Commands slice. An absent entry (rare race)
+	// stays a benign skip.
 	if p.WorkflowsDir != "" {
-		if entries, err := os.ReadDir(p.WorkflowsDir); err == nil {
+		entries, present, err := adapter.ReadDirOptional(p.WorkflowsDir)
+		if err != nil {
+			return c, fmt.Errorf("read workflows dir %s: %w", p.WorkflowsDir, err)
+		}
+		if present {
 			for _, e := range entries {
 				if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 					continue
 				}
-				data, err := os.ReadFile(filepath.Join(p.WorkflowsDir, e.Name()))
+				wfPath := filepath.Join(p.WorkflowsDir, e.Name())
+				data, err := os.ReadFile(wfPath)
 				if err != nil {
-					continue
+					if os.IsNotExist(err) {
+						continue
+					}
+					return c, fmt.Errorf("read workflow %s: %w", wfPath, err)
 				}
 				name := e.Name()[:len(e.Name())-len(".md")]
 				c.Commands = append(c.Commands, source.Command{Name: name, Frontmatter: map[string]any{}, Body: string(data)})
@@ -58,7 +74,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 
 	// Memory from .clinerules/agentsync.md (project scope; plain markdown).
 	if p.RulesDir != "" {
-		if data, err := os.ReadFile(filepath.Join(p.RulesDir, memoryRuleFile)); err == nil {
+		ruleFile := filepath.Join(p.RulesDir, memoryRuleFile)
+		data, present, err := adapter.ReadFileOptional(ruleFile)
+		if err != nil {
+			return c, fmt.Errorf("read memory %s: %w", ruleFile, err)
+		}
+		if present {
 			c.Memory.Body = source.StripManagedBanner(string(data)) // banner stripped — see claude/ingest.go
 		}
 	}

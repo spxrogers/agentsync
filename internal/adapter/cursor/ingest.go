@@ -26,7 +26,9 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	var c source.Canonical
 
 	// MCP from .cursor/mcp.json (mcpServers — same shape as Claude).
-	if data, err := os.ReadFile(p.MCP); err == nil {
+	if data, present, err := adapter.ReadFileOptional(p.MCP); err != nil {
+		return c, fmt.Errorf("read %s: %w", p.MCP, err)
+	} else if present {
 		var top map[string]any
 		if err := json.Unmarshal(data, &top); err != nil {
 			return c, fmt.Errorf("parse %s: %w", p.MCP, err)
@@ -45,14 +47,21 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	warn := a.stderr()
 
 	// Skills from .cursor/skills/<name>/ (SKILL.md + bundled files).
-	if entries, err := os.ReadDir(p.SkillsDir); err == nil {
-		for _, e := range entries {
+	skillEntries, present, err := adapter.ReadDirOptional(p.SkillsDir)
+	if err != nil {
+		return c, fmt.Errorf("read skills dir %s: %w", p.SkillsDir, err)
+	}
+	if present {
+		for _, e := range skillEntries {
 			if !e.IsDir() {
 				continue
 			}
 			skillDir := filepath.Join(p.SkillsDir, e.Name())
 			data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
 			if err != nil {
+				if !os.IsNotExist(err) {
+					fmt.Fprintf(warn, "warning: skipping skill %q: read SKILL.md: %v\n", e.Name(), err)
+				}
 				continue
 			}
 			fm, body, lenient, err := claude.ParseFrontmatterWithReport(data)
@@ -73,16 +82,23 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 
 	// Subagents from .cursor/agents/<name>.md.
-	if entries, err := os.ReadDir(p.AgentsDir); err == nil {
-		for _, e := range entries {
+	agentEntries, present, err := adapter.ReadDirOptional(p.AgentsDir)
+	if err != nil {
+		return c, fmt.Errorf("read agents dir %s: %w", p.AgentsDir, err)
+	}
+	if present {
+		for _, e := range agentEntries {
 			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 				continue
 			}
+			name := e.Name()[:len(e.Name())-len(".md")]
 			data, err := os.ReadFile(filepath.Join(p.AgentsDir, e.Name()))
 			if err != nil {
+				if !os.IsNotExist(err) {
+					fmt.Fprintf(warn, "warning: skipping subagent %q: read: %v\n", name, err)
+				}
 				continue
 			}
-			name := e.Name()[:len(e.Name())-len(".md")]
 			fm, body, lenient, err := claude.ParseFrontmatterWithReport(data)
 			if err != nil {
 				fmt.Fprintf(warn, "warning: skipping subagent %q: %v\n", name, err)
@@ -99,16 +115,23 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	// markdown; ParseFrontmatterWithReport returns an empty frontmatter map and
 	// the whole file as body when there is no `---` fence (the common case, since
 	// Render writes body-only), and still captures any frontmatter a user did add.
-	if entries, err := os.ReadDir(p.CommandsDir); err == nil {
-		for _, e := range entries {
+	commandEntries, present, err := adapter.ReadDirOptional(p.CommandsDir)
+	if err != nil {
+		return c, fmt.Errorf("read commands dir %s: %w", p.CommandsDir, err)
+	}
+	if present {
+		for _, e := range commandEntries {
 			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 				continue
 			}
+			name := e.Name()[:len(e.Name())-len(".md")]
 			data, err := os.ReadFile(filepath.Join(p.CommandsDir, e.Name()))
 			if err != nil {
+				if !os.IsNotExist(err) {
+					fmt.Fprintf(warn, "warning: skipping command %q: read: %v\n", name, err)
+				}
 				continue
 			}
-			name := e.Name()[:len(e.Name())-len(".md")]
 			fm, body, lenient, err := claude.ParseFrontmatterWithReport(data)
 			if err != nil {
 				fmt.Fprintf(warn, "warning: skipping command %q: %v\n", name, err)
@@ -122,18 +145,25 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 
 	// Hooks from .cursor/hooks.json (camelCase events mapped back to canonical;
-	// unrepresentable events are skipped with a warning — see ingestHooks).
-	if data, err := os.ReadFile(p.Hooks); err == nil {
+	// unrepresentable events are skipped with a warning — see ingestHooks). A
+	// corrupt-but-present hooks.json fails loudly rather than reading as "no
+	// hooks", matching the MCP block above.
+	if data, present, err := adapter.ReadFileOptional(p.Hooks); err != nil {
+		return c, fmt.Errorf("read %s: %w", p.Hooks, err)
+	} else if present {
 		var top map[string]any
-		if json.Unmarshal(data, &top) == nil {
-			c.Hooks = append(c.Hooks, ingestHooks(top["hooks"], warn)...)
+		if err := json.Unmarshal(data, &top); err != nil {
+			return c, fmt.Errorf("parse %s: %w", p.Hooks, err)
 		}
+		c.Hooks = append(c.Hooks, ingestHooks(top["hooks"], warn)...)
 	}
 
 	// Memory from AGENTS.md (project scope only — user-scope rules live in
 	// Cursor's app-local storage, so p.Memory is empty at user scope).
 	if p.Memory != "" {
-		if data, err := os.ReadFile(p.Memory); err == nil {
+		if data, present, err := adapter.ReadFileOptional(p.Memory); err != nil {
+			return c, fmt.Errorf("read memory %s: %w", p.Memory, err)
+		} else if present {
 			c.Memory.Body = source.StripManagedBanner(string(data)) // banner stripped — see claude/ingest.go
 		}
 	}

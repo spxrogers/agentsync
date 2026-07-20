@@ -26,7 +26,11 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 
 	// MCP from ~/.codeium/windsurf/mcp_config.json (user scope only).
 	if p.MCP != "" {
-		if data, err := os.ReadFile(p.MCP); err == nil {
+		data, present, err := adapter.ReadFileOptional(p.MCP)
+		if err != nil {
+			return c, fmt.Errorf("read %s: %w", p.MCP, err)
+		}
+		if present {
 			var top map[string]any
 			if err := json.Unmarshal(data, &top); err != nil {
 				return c, fmt.Errorf("parse %s: %w", p.MCP, err)
@@ -46,16 +50,23 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	// Commands from workflows (.windsurf/workflows/ at project scope,
 	// ~/.codeium/windsurf/global_workflows/ at user scope; plain markdown).
 	if p.WorkflowsDir != "" {
-		if entries, err := os.ReadDir(p.WorkflowsDir); err == nil {
+		entries, present, err := adapter.ReadDirOptional(p.WorkflowsDir)
+		if err != nil {
+			return c, fmt.Errorf("read workflows dir %s: %w", p.WorkflowsDir, err)
+		}
+		if present {
 			for _, e := range entries {
 				if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 					continue
 				}
+				name := e.Name()[:len(e.Name())-len(".md")]
 				data, err := os.ReadFile(filepath.Join(p.WorkflowsDir, e.Name()))
 				if err != nil {
+					if !os.IsNotExist(err) {
+						fmt.Fprintf(warn, "warning: skipping workflow %q: read: %v\n", name, err)
+					}
 					continue
 				}
-				name := e.Name()[:len(e.Name())-len(".md")]
 				// Windsurf workflows are plain markdown with no honored frontmatter,
 				// but a user may have hand-authored a leading `---`…`---` block; strip
 				// it so a stray fence never folds into the canonical command body.
@@ -70,19 +81,28 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	// then drop the agentsync managed-file banner — a render-time decoration with
 	// no canonical home (see claude/ingest.go).
 	if p.RulesDir != "" {
-		if data, err := os.ReadFile(filepath.Join(p.RulesDir, memoryRuleFile)); err == nil {
+		ruleFile := filepath.Join(p.RulesDir, memoryRuleFile)
+		data, present, err := adapter.ReadFileOptional(ruleFile)
+		if err != nil {
+			return c, fmt.Errorf("read memory rule %s: %w", ruleFile, err)
+		}
+		if present {
 			body, _, foreign := stripMemoryRuleFrontmatter(data)
 			// Warn only when a FOREIGN (non-`always_on`) fence was stripped — its
 			// activation mode has no canonical home. A frontmatter-less rule (no
 			// fence) does not warn, and the agentsync block round-trips silently.
 			if foreign {
-				fmt.Fprintf(warn, "warning: %s does not start with the agentsync-rendered `trigger: always_on` frontmatter; Windsurf activation metadata has no canonical home and is not captured\n", filepath.Join(p.RulesDir, memoryRuleFile))
+				fmt.Fprintf(warn, "warning: %s does not start with the agentsync-rendered `trigger: always_on` frontmatter; Windsurf activation metadata has no canonical home and is not captured\n", ruleFile)
 			}
 			c.Memory.Body = source.StripManagedBanner(body)
 		}
 	}
 	if p.GlobalRules != "" {
-		if data, err := os.ReadFile(p.GlobalRules); err == nil {
+		data, present, err := adapter.ReadFileOptional(p.GlobalRules)
+		if err != nil {
+			return c, fmt.Errorf("read global rules %s: %w", p.GlobalRules, err)
+		}
+		if present {
 			c.Memory.Body = source.StripManagedBanner(string(data))
 		}
 	}

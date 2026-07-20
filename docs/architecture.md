@@ -134,6 +134,16 @@ Two design points worth internalizing:
   the narrowest waist rather than a silent wrong-scope I/O. The CLI's
   `resolveScope` already guarantees a non-empty root for project scope, so this
   is defense-in-depth against a future or non-CLI caller.
+- **Ingest treats only `os.IsNotExist` as "component absent."** A native config
+  file (or component directory) the user never created is a silent skip; any
+  *other* read or parse error on a *present* file — a permission error, an
+  `EISDIR`, transient I/O, or a corrupt `settings.json`/`config.toml` — is
+  returned, so a transient failure never reads as an empty component that drift
+  could misclassify as "the user cleared it" and reconcile could then write back
+  as nothing over the canonical source. The shared `adapter.ReadFileOptional` /
+  `adapter.ReadDirOptional` helpers enforce this absent-vs-error split uniformly
+  across every adapter's `Ingest` (a per-entry read inside a component-directory
+  loop stays a deliberate skip, surfaced as a warning where a warn sink exists).
 
 **Component support is expressed by what `Render` emits, not a capability
 declaration.** When an agent has no native target for a component, its `Render`

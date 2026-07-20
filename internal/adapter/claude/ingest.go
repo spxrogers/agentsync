@@ -31,7 +31,11 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	// `claude mcp add --scope project` writes; settings.json is never project MCP).
 	// mcpDest centralizes the scope→file choice shared with renderMCP.
 	mcpFile := p.mcpDest(scope)
-	if data, err := os.ReadFile(mcpFile); err == nil {
+	data, present, err := adapter.ReadFileOptional(mcpFile)
+	if err != nil {
+		return c, fmt.Errorf("read %s: %w", mcpFile, err)
+	}
+	if present {
 		var top map[string]any
 		if err := json.Unmarshal(data, &top); err != nil {
 			return c, fmt.Errorf("parse %s: %w", mcpFile, err)
@@ -59,14 +63,24 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	warn := a.stderr()
 
 	// Skills from ~/.claude/skills/<name>/ (SKILL.md + bundled files)
-	if entries, err := os.ReadDir(p.SkillsDir); err == nil {
-		for _, e := range entries {
+	skillEntries, present, err := adapter.ReadDirOptional(p.SkillsDir)
+	if err != nil {
+		return c, fmt.Errorf("read skills dir %s: %w", p.SkillsDir, err)
+	}
+	if present {
+		for _, e := range skillEntries {
 			if !e.IsDir() {
 				continue
 			}
 			skillDir := filepath.Join(p.SkillsDir, e.Name())
 			data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
 			if err != nil {
+				// A directory with no SKILL.md is not a skill — skip silently.
+				// A present-but-unreadable SKILL.md is surfaced (never a silent
+				// drop) so the user can fix it, matching the parse-error warning.
+				if !os.IsNotExist(err) {
+					fmt.Fprintf(warn, "warning: skipping skill %q: read SKILL.md: %v\n", e.Name(), err)
+				}
 				continue
 			}
 			fm, body, lenient, err := ParseFrontmatterWithReport(data)
@@ -89,16 +103,23 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 
 	// Subagents from ~/.claude/agents/<name>.md
-	if entries, err := os.ReadDir(p.AgentsDir); err == nil {
-		for _, e := range entries {
+	agentEntries, present, err := adapter.ReadDirOptional(p.AgentsDir)
+	if err != nil {
+		return c, fmt.Errorf("read agents dir %s: %w", p.AgentsDir, err)
+	}
+	if present {
+		for _, e := range agentEntries {
 			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 				continue
 			}
+			name := e.Name()[:len(e.Name())-len(".md")]
 			data, err := os.ReadFile(filepath.Join(p.AgentsDir, e.Name()))
 			if err != nil {
+				if !os.IsNotExist(err) {
+					fmt.Fprintf(warn, "warning: skipping subagent %q: read: %v\n", name, err)
+				}
 				continue
 			}
-			name := e.Name()[:len(e.Name())-len(".md")]
 			fm, body, lenient, err := ParseFrontmatterWithReport(data)
 			if err != nil {
 				fmt.Fprintf(warn, "warning: skipping subagent %q: %v\n", name, err)
@@ -112,16 +133,23 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 
 	// Commands from ~/.claude/commands/<name>.md
-	if entries, err := os.ReadDir(p.CommandsDir); err == nil {
-		for _, e := range entries {
+	commandEntries, present, err := adapter.ReadDirOptional(p.CommandsDir)
+	if err != nil {
+		return c, fmt.Errorf("read commands dir %s: %w", p.CommandsDir, err)
+	}
+	if present {
+		for _, e := range commandEntries {
 			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 				continue
 			}
+			name := e.Name()[:len(e.Name())-len(".md")]
 			data, err := os.ReadFile(filepath.Join(p.CommandsDir, e.Name()))
 			if err != nil {
+				if !os.IsNotExist(err) {
+					fmt.Fprintf(warn, "warning: skipping command %q: read: %v\n", name, err)
+				}
 				continue
 			}
-			name := e.Name()[:len(e.Name())-len(".md")]
 			fm, body, lenient, err := ParseFrontmatterWithReport(data)
 			if err != nil {
 				fmt.Fprintf(warn, "warning: skipping command %q: %v\n", name, err)
@@ -134,14 +162,22 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		}
 	}
 
-	// Hooks from settings.json /hooks/<event>
-	if data, err := os.ReadFile(p.Settings); err == nil {
+	// Hooks from settings.json /hooks/<event>. A corrupt-but-present settings.json
+	// now fails loudly (parse error returned), matching the MCP block above and
+	// removing the old MCP-loud / hooks-silent asymmetry: a swallowed parse error
+	// would have read as "no hooks", which drift could classify as "hooks cleared".
+	settingsData, present, err := adapter.ReadFileOptional(p.Settings)
+	if err != nil {
+		return c, fmt.Errorf("read %s: %w", p.Settings, err)
+	}
+	if present {
 		var top map[string]any
-		if json.Unmarshal(data, &top) == nil {
-			// ingestHooks takes any and does its own map assertion (mirroring the
-			// gemini adapter's call site), so pass the raw value straight through.
-			c.Hooks = append(c.Hooks, ingestHooks(top["hooks"], warn)...)
+		if err := json.Unmarshal(settingsData, &top); err != nil {
+			return c, fmt.Errorf("parse %s: %w", p.Settings, err)
 		}
+		// ingestHooks takes any and does its own map assertion (mirroring the
+		// gemini adapter's call site), so pass the raw value straight through.
+		c.Hooks = append(c.Hooks, ingestHooks(top["hooks"], warn)...)
 	}
 
 	// Memory from CLAUDE.md. The agentsync managed-file banner is a render-time
@@ -150,8 +186,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	// carries the banner. Fragment markers, by contrast, are STRUCTURAL signal
 	// kept verbatim; their reverse-collapse into AGENTS.md + fragment files
 	// happens in the write-back layer (source.CollapseMemoryMarkers).
-	if data, err := os.ReadFile(p.Memory); err == nil {
-		c.Memory.Body = source.StripManagedBanner(string(data))
+	memData, present, err := adapter.ReadFileOptional(p.Memory)
+	if err != nil {
+		return c, fmt.Errorf("read memory %s: %w", p.Memory, err)
+	}
+	if present {
+		c.Memory.Body = source.StripManagedBanner(string(memData))
 	}
 
 	return c, nil

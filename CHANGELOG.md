@@ -225,6 +225,22 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Ingest now distinguishes an unreadable or corrupt native config file from an
+  absent one, and fails loudly instead of silently treating it as a cleared
+  component (issue #159).** Every deep adapter's `Ingest` (and the generic breadth
+  tier) previously read native files with `if data, err := os.ReadFile(…); err ==
+  nil { … }`, which swallowed *all* read errors — a permission error, an `EISDIR`,
+  transient I/O, or a corrupt `settings.json` read identically to "file absent" and
+  yielded an empty component. `status`/`diff` could then classify that empty
+  component as "the user cleared their memory/commands/hooks," and a subsequent
+  `reconcile`/`import` could write nothing back over the canonical
+  `~/.agentsync/` source. Ingest now treats only `os.IsNotExist` as "component
+  absent" (still a silent skip) and surfaces every other read/parse error, via the
+  new shared `adapter.ReadFileOptional` / `adapter.ReadDirOptional` helpers. This
+  also removes Claude's internal asymmetry where a corrupt `settings.json` failed
+  loudly for MCP but silently for **hooks**. Read-side only: no change to the
+  `Adapter`/`Ingest` signatures, the canonical schema, or any render/write-back
+  path.
 - **CLI write-path correctness batch (issue #171).** Five disjoint fixes: (1)
   `setDestinationGitBackupMode` now re-parses the spliced `agentsync.toml` before
   writing and **refuses** (leaving the file untouched) if the splice would no longer

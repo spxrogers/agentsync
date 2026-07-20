@@ -26,8 +26,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	warn := a.stderr()
 
 	// MCP from .continue/mcpServers/*.yaml (one or more server entries per block).
-	if entries, err := os.ReadDir(p.MCPDir); err == nil {
-		for _, e := range entries {
+	mcpEntries, present, err := adapter.ReadDirOptional(p.MCPDir)
+	if err != nil {
+		return c, fmt.Errorf("read MCP dir %s: %w", p.MCPDir, err)
+	}
+	if present {
+		for _, e := range mcpEntries {
 			if e.IsDir() {
 				continue
 			}
@@ -78,8 +82,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	// NOT be captured as a canonical command (re-applying it would silently
 	// convert it into a slash command). Only the canonical-relevant
 	// `description` is captured; other keys are dropped with a warning.
-	if entries, err := os.ReadDir(p.PromptsDir); err == nil {
-		for _, e := range entries {
+	promptEntries, present, err := adapter.ReadDirOptional(p.PromptsDir)
+	if err != nil {
+		return c, fmt.Errorf("read prompts dir %s: %w", p.PromptsDir, err)
+	}
+	if present {
+		for _, e := range promptEntries {
 			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 				continue
 			}
@@ -125,7 +133,10 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 
 	// Memory from .continue/rules/agentsync.md (the agentsync-owned always-apply
 	// rule), captured verbatim.
-	if data, err := os.ReadFile(filepath.Join(p.RulesDir, memoryRuleFile)); err == nil {
+	memFile := filepath.Join(p.RulesDir, memoryRuleFile)
+	if data, present, err := adapter.ReadFileOptional(memFile); err != nil {
+		return c, fmt.Errorf("read memory %s: %w", memFile, err)
+	} else if present {
 		c.Memory.Body = source.StripManagedBanner(string(data)) // banner stripped — see claude/ingest.go
 	}
 
