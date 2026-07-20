@@ -42,8 +42,18 @@ test-release:
 # Anything that touches the FS (even tmp dirs) is gated behind the
 # container — see internal/testenv/container.go.
 # Iteration only — pure-unit tests on the host (no container, no FS).
+#
+# `-skip` excludes the FS-touching helper tests in internal/adapter
+# (TestReadFileOptional/TestReadDirOptional exercise real EISDIR/ENOTDIR errors
+# via t.TempDir, so they are container-gated by testenv.RequireContainer, which
+# fail-fasts on the host). Every other test in the listed packages is pure-unit
+# and host-safe. RequireContainer stays fail-hard, so a direct
+# `go test ./internal/adapter` on the host still fails loudly — and a NEW
+# FS-touching test in a listed package will fail-fast here too: add it to this
+# -skip list or keep it out of the host recipe.
 test-fast:
     go test -race -count=1 \
+        -skip 'TestReadFileOptional|TestReadDirOptional' \
         ./internal/log/... \
         ./internal/jsonkeys/... \
         ./internal/drift/... \
