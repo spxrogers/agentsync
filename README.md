@@ -50,8 +50,13 @@ New here? The **[User guide](docs/user-guide.md)** takes you 0→100.
     agentsync agent add claude
     agentsync agent add opencode
     agentsync mcp add github --command npx --args "-y,@modelcontextprotocol/server-github"
+    agentsync mcp add linear --type http --url https://mcp.linear.app/sse \
+      --header "Authorization: Bearer ${secret:LINEAR_TOKEN}"   # remote auth via a secret ref
     agentsync apply --dry-run    # preview what would change vs. is already synced
     agentsync apply
+    # … in CI, fail the build on drift (exit 2 when out of sync, 0 when clean):
+    agentsync status --exit-code
+    agentsync diff --agents claude --exit-code
     # … later, if an apply goes wrong:
     agentsync revert claude      # roll ~/.claude back to the previous checkpoint
 
@@ -216,6 +221,7 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 | `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` | Skip the 0600 mode check on the age identity file (ACL'd NFS). |
 | `AGENTSYNC_MAX_TARBALL_MB=<N>` | Override the per-tarball decompressed-bytes cap (default 512). 0 disables. |
 | `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |
+| `AGENTSYNC_LOCK_TIMEOUT_MS=<N>` | Override how long a mutating command waits for the global lock before erroring (default 30000ms). |
 
 ## Troubleshooting
 

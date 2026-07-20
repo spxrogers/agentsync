@@ -198,6 +198,12 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		return err
 	}
 
+	// Count convergence-time removals NOW, before PruneStaleState drops the
+	// state entries SkillOrphanDeletes reads — so the summary can report
+	// "removed: N ops" instead of mislabeling a delete-only run as "up to date"
+	// / "applied: 0 ops".
+	removed, appliedOps := removalCounts(plan, s, userHome, sc, projectRoot)
+
 	// Pre-apply baseline (issue #143): BEFORE render.Apply overwrites anything,
 	// commit the current on-disk state of each version root this apply will write
 	// into, so even the FIRST apply is revertible — the apply checkpoint's parent is
@@ -265,12 +271,21 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	}
 
 	w := p.Out
-	// Report a clean no-op distinctly from real work: when every destination
-	// path already held our exact bytes (write skipped, no mtime churn), say so
-	// instead of the misleading "applied: N ops".
-	if len(written) > 0 && len(unchanged) == len(written) {
+	// Headline honesty, four cases:
+	//   - removals only (a skill/MCP/key removed from source, no real writes) →
+	//     "removed: N ops"; never "up to date" / "applied: 0 ops".
+	//   - writes AND removals → "applied: X ops, removed: Y ops".
+	//   - a genuine clean re-apply (every dest already held our exact bytes,
+	//     nothing removed) → "up to date" (unchanged detection preserved).
+	//   - normal writes → "applied: N ops".
+	switch {
+	case removed > 0 && appliedOps == 0:
+		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green(fmt.Sprintf("removed: %d ops", removed)))
+	case removed > 0:
+		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green(fmt.Sprintf("applied: %d ops, removed: %d ops", appliedOps, removed)))
+	case len(written) > 0 && len(unchanged) == len(written):
 		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green(fmt.Sprintf("up to date: %d ops, no changes", plan.Total())))
-	} else {
+	default:
 		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green(fmt.Sprintf("applied: %d ops", plan.Total())))
 	}
 	report := render.BuildReport(reportCanonical(c, sc), plan, agents)
@@ -326,6 +341,47 @@ func planSyncCounts(plan render.RenderPlan, wouldChange map[string]bool) (toWrit
 		}
 	}
 	return toWrite, synced
+}
+
+// removalCounts inspects the plan (against the pre-apply state) for the two kinds
+// of convergence-time removals `apply` performs, so the summary headline can
+// report them instead of mislabeling a delete-only run "up to date" / "applied: 0
+// ops":
+//
+//   - whole skill-file deletes (a skill, or a bundled file, removed from source),
+//     surfaced by render.SkillOrphanDeletes and deduped across agents that share a
+//     skills dir; and
+//   - orphan-cleanup key removals — an emptied merge section renders as a "{}"
+//     key-merge op carrying the owned pointers to drop (render.orphanCleanupOps),
+//     so each such op removes len(OwnedKeys) keys rather than writing anything.
+//
+// appliedOps is plan.Total() with those pure "{}" removal ops subtracted, so a
+// mixed run reports the removal under "removed:" and does not also count it as an
+// applied write. MUST be called BEFORE PruneStaleState, which drops the state
+// entries SkillOrphanDeletes reads.
+func removalCounts(plan render.RenderPlan, s *state.Targets, userHome string, sc adapter.Scope, projectRoot string) (removed, appliedOps int) {
+	appliedOps = plan.Total()
+	skillDeletes := map[string]bool{}
+	for name, res := range plan.PerAgent {
+		for _, del := range render.SkillOrphanDeletes(s, userHome, name, sc, projectRoot, res.Ops) {
+			skillDeletes[del.Path] = true
+		}
+		for _, op := range res.Ops {
+			// An orphan-cleanup op is a key-merge op whose rendered content is the
+			// empty object "{}" but which carries owned pointers to delete. Adapters
+			// never render "{}" for a populated section, so this signature is unique
+			// to the cleanup synthesis.
+			if render.IsKeyMerge(op.MergeStrategy) && strings.TrimSpace(string(op.Content)) == "{}" && len(op.OwnedKeys) > 0 {
+				removed += len(op.OwnedKeys)
+				appliedOps-- // a removal, not an applied write
+			}
+		}
+	}
+	removed += len(skillDeletes)
+	if appliedOps < 0 {
+		appliedOps = 0
+	}
+	return removed, appliedOps
 }
 
 // plannedDestinations returns the set of destination paths the plan will WRITE (not
@@ -586,7 +642,11 @@ func stdinIsTerminal(cmd *cobra.Command) bool {
 // default — an empty or invalid line re-prompts — so the choice is always a
 // deliberate keystroke.
 func promptScopeChoice(cmd *cobra.Command, projectRoot, userHome string) (adapter.Scope, string, error) {
-	w := cmd.OutOrStdout()
+	// The menu goes to STDERR, never stdout: scope is resolved before a command
+	// like `status --json`/`diff --json` produces its payload, so writing the
+	// prompt to stdout would corrupt the machine-readable output a caller is
+	// piping. stdin is still read from InOrStdin so the keystroke reaches us.
+	w := cmd.ErrOrStderr()
 	r := bufio.NewReader(cmd.InOrStdin())
 	fmt.Fprintf(w, "ℹ this repo has a .agentsync/ project tree.\n")
 	fmt.Fprintf(w, "  [1] project scope (%s)\n", projectRoot)

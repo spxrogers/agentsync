@@ -3,12 +3,14 @@ package cli
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/sergi/go-diff/diffmatchpatch"
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -38,7 +40,22 @@ type reconcileItem struct {
 	scope       adapter.Scope
 	projectRoot string
 	orphan      bool // owned-in-state whole-file dest no agent renders anymore
+	// srcText/dstText carry the actual (masked-on-display) source and destination
+	// content so the prompt/[d]iff can show a real value diff instead of only SHA
+	// prefixes. hasText is false for items with no meaningful textual content
+	// (orphans), which fall back to the hash display.
+	srcText string
+	dstText string
+	hasText bool
 }
+
+// errDestDroppedServer signals that the destination no longer contains the MCP
+// server a key-level write-back item targets — the user hand-deleted it in the
+// native config. attemptWriteBack turns it into a guarded deletion of the
+// canonical mcp/<id>.toml: a pure deletion carries no secret to re-reference, so
+// os.Remove (the same primitive `mcp remove` uses) is the approved funnel, and it
+// runs only when the user explicitly chose [w]rite-back for that item.
+var errDestDroppedServer = errors.New("destination dropped server")
 
 func newReconcileCmd() *cobra.Command {
 	var (
@@ -79,6 +96,23 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 		return err
 	}
 
+	p, err := newPrinter(cmd)
+	if err != nil {
+		return err
+	}
+
+	// Redaction map for the prompt/[d]iff value display. The destination content
+	// was written by a prior apply with ${secret:…} substituted to cleartext, so
+	// showing the real value would leak it; mask every resolved value back to its
+	// placeholder — the same fail-closed pattern diff.go uses. When any reference
+	// cannot be resolved now (locked/absent backend), the dest cleartext cannot be
+	// masked, so canMask is false and the display falls back to SHA prefixes rather
+	// than risk printing a credential.
+	secBackend := secrets.SelectBackend(c.Config.Secrets, home, userHome)
+	envBackend := secrets.EnvBackend{}
+	redact := secrets.CollectResolved(&c, secBackend, envBackend)
+	canMask := len(secrets.UnresolvedSecretRefs(&c, secBackend, envBackend)) == 0
+
 	statePath := filepath.Join(home, ".state", "targets.json")
 	s, err := state.Load(statePath)
 	if err != nil {
@@ -103,7 +137,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 	items := collectItems(plan, reg, s, sc, projectRoot, userHome)
 	items = append(items, collectOrphanFileItems(plan, reg, s, sc, projectRoot, userHome)...)
 
-	w := cmd.OutOrStdout()
+	w := p.Out
 	// stateDirty tracks orphan removals so we persist the pruned state at the end.
 	stateDirty := false
 
@@ -150,7 +184,8 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 
 	br := bufio.NewReader(in)
 
-	for _, it := range items {
+	for idx := range items {
+		it := items[idx]
 		if !requiresAction(it.cls) && !it.orphan {
 			continue
 		}
@@ -235,8 +270,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 			// Interactive prompt.
 			label := itemLabelDisp(it)
 			fmt.Fprintf(w, "\n%s  (%s)\n", label, it.cls)
-			fmt.Fprintf(w, "  source:      %s\n", shortVal(it.hsrc))
-			fmt.Fprintf(w, "  destination: %s\n", shortVal(it.hdest))
+			renderItemValues(w, p, it, redact, canMask)
 			fmt.Fprintf(w, "  [w]rite-back  [o]verride  [s]kip  [i]gnore  [d]iff  [q]uit\n  > ")
 
 		prompt:
@@ -257,9 +291,16 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 						// silently no-op data away across the whole
 						// queue. Show the count and require an
 						// explicit y/N. Default is N.
+						//
+						// The count is the TRUE blast radius of this bulk action:
+						// the items from HERE forward it will actually act on —
+						// remaining actionable, non-orphan items (orphans have their
+						// own r/k prompt and are never swept by a bulk choice). The
+						// prior count walked the WHOLE queue including items already
+						// handled, overstating the reach.
 						remaining := 0
-						for _, ri := range items {
-							if requiresAction(ri.cls) {
+						for j := idx; j < len(items); j++ {
+							if requiresAction(items[j].cls) && !items[j].orphan {
 								remaining++
 							}
 						}
@@ -283,7 +324,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 					fmt.Fprintf(w, "%c\n", ch)
 					break prompt
 				case 'd':
-					printItemDiff(w, it)
+					printItemDiff(w, p, it, redact, canMask)
 					fmt.Fprintf(w, "  [w]rite-back  [o]verride  [s]kip  [i]gnore  [d]iff  [q]uit\n  > ")
 				default:
 					// ignore unknown key
@@ -411,6 +452,9 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 						hdest:       hdest,
 						scope:       sc,
 						projectRoot: projectRoot,
+						srcText:     marshalPretty(getPointerValue(ours, ptr)),
+						dstText:     marshalPretty(getPointerValue(final, ptr)),
+						hasText:     true,
 					})
 				}
 			} else {
@@ -422,6 +466,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 				happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, op.Path)].SHA256
 				hdest := hashFile(op.Path)
 				cls := drift.Classify(hsrc, happlied, hdest)
+				dstBytes, _ := os.ReadFile(op.Path)
 				items = append(items, reconcileItem{
 					agentName:   name,
 					op:          op,
@@ -431,6 +476,9 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 					hdest:       hdest,
 					scope:       sc,
 					projectRoot: projectRoot,
+					srcText:     string(op.Content),
+					dstText:     string(dstBytes),
+					hasText:     true,
 				})
 			}
 		}
@@ -542,8 +590,35 @@ func shortVal(hash string) string {
 	return hash
 }
 
-func printItemDiff(w io.Writer, it reconcileItem) {
-	fmt.Fprintf(w, "  --- source\n  +++ dest\n  (hash) src=%s dest=%s\n", shortVal(it.hsrc), shortVal(it.hdest))
+// renderItemValues shows the differing source/destination CONTENT for an item as
+// a masked text diff, so a destructive [w]rite-back/[o]verride is an informed
+// choice rather than a blind pick between two SHA-256 prefixes. It reuses the
+// same masking (secrets.MaskResolved over the resolved-value map) and text-diff
+// renderer as `agentsync diff`, so a resolved secret is shown as its ${secret:…}
+// placeholder, never in cleartext.
+//
+// It falls back to the SHA-prefix display when there is no textual content
+// (orphans) OR when we cannot safely mask (an unresolved reference means the
+// destination cleartext can't be redacted) — never print a value we can't mask.
+func renderItemValues(w io.Writer, p *ui.Printer, it reconcileItem, redact map[string]string, canMask bool) {
+	if !it.hasText || !canMask {
+		fmt.Fprintf(w, "  source:      %s\n", shortVal(it.hsrc))
+		fmt.Fprintf(w, "  destination: %s\n", shortVal(it.hdest))
+		return
+	}
+	src := secrets.MaskResolved(it.srcText, redact)
+	dst := secrets.MaskResolved(it.dstText, redact)
+	fmt.Fprintf(w, "  %s\n", p.Red("--- source"))
+	fmt.Fprintf(w, "  %s\n", p.Green("+++ dest"))
+	dmp := diffmatchpatch.New()
+	diffs := dmp.DiffMain(dst, src, false)
+	for _, line := range strings.Split(renderDiffText(p, diffs), "\n") {
+		fmt.Fprintf(w, "  %s\n", line)
+	}
+}
+
+func printItemDiff(w io.Writer, p *ui.Printer, it reconcileItem, redact map[string]string, canMask bool) {
+	renderItemValues(w, p, it, redact, canMask)
 }
 
 // readChar reads a single non-whitespace character from r.
@@ -579,14 +654,22 @@ func attemptWriteBack(cmd *cobra.Command, w io.Writer, home string, it reconcile
 	if srcFile != "" {
 		prior, priorWritten = writtenSources[srcFile]
 	}
-	if err := writeBackItem(cmd, home, it); err != nil {
-		fmt.Fprintf(w, "  write-back error: %s\n", ui.Sanitize(err.Error()))
+	werr := writeBackItem(cmd, home, it)
+	if errors.Is(werr, errDestDroppedServer) {
+		// Tombstone: the user deleted this MCP server from the native config, and
+		// chose [w]rite-back to persist that. A pure deletion carries no secret, so
+		// remove the canonical mcp/<id>.toml directly (the same os.Remove primitive
+		// `mcp remove` uses) rather than routing an empty spec through capture.
+		return removeDroppedSource(w, home, it, srcFile, prior, priorWritten, writtenSources)
+	}
+	if werr != nil {
+		fmt.Fprintf(w, "  write-back error: %s\n", ui.Sanitize(werr.Error()))
 		return true
 	}
 	if srcFile != "" {
 		if after, rerr := os.ReadFile(srcFile); rerr == nil {
 			if priorWritten && string(prior) != string(after) {
-				_ = iox.AtomicWrite(srcFile, prior, 0o644) // revert to the first write
+				revertSource(srcFile, prior) // undo this write; keep the first
 				rel, _ := filepath.Rel(home, srcFile)
 				fmt.Fprintf(w, "  conflict: %s — another agent drifted the same source (%s) to a different "+
 					"value this run; kept the first write and skipped this one. Make the agents agree, or "+
@@ -598,6 +681,54 @@ func attemptWriteBack(cmd *cobra.Command, w io.Writer, home string, it reconcile
 	}
 	fmt.Fprintf(w, "  write-back: %s\n", itemLabelDisp(it))
 	return false
+}
+
+// removeDroppedSource persists a destination-side MCP-server deletion by removing
+// the canonical mcp/<id>.toml. It guards the same multi-agent fan-out
+// attemptWriteBack's content path does: if a PRIOR write this run already
+// produced this source file (another agent still renders the server and wrote its
+// drifted value), deleting it would strand that write — so refuse and keep it,
+// reporting a conflict (non-zero exit). On success it records a deletion sentinel
+// (nil bytes) in writtenSources so a LATER content write-back to the same file
+// this run is likewise flagged rather than silently resurrecting it. Returns true
+// on failure/conflict.
+func removeDroppedSource(w io.Writer, home string, it reconcileItem, srcFile string, prior []byte, priorWritten bool, writtenSources map[string][]byte) bool {
+	if srcFile == "" {
+		fmt.Fprintf(w, "  write-back error: %s — cannot locate the canonical source file to delete\n", itemLabelDisp(it))
+		return true
+	}
+	// Defense-in-depth: srcFile derives from a native-config-supplied server id;
+	// never let a traversal segment escape ~/.agentsync into an arbitrary unlink.
+	if !withinDir(home, srcFile) {
+		fmt.Fprintf(w, "  write-back error: %s — refusing to delete outside the source tree\n", itemLabelDisp(it))
+		return true
+	}
+	if priorWritten && len(prior) > 0 {
+		rel, _ := filepath.Rel(home, srcFile)
+		fmt.Fprintf(w, "  conflict: %s — another agent wrote this source (%s) this run, so it is still in use; "+
+			"not deleting it. Make the agents agree (remove it from every native config), then re-run.\n",
+			itemLabelDisp(it), ui.Sanitize(rel))
+		return true
+	}
+	if rmErr := os.Remove(srcFile); rmErr != nil && !os.IsNotExist(rmErr) {
+		fmt.Fprintf(w, "  write-back error: remove %s: %s\n", itemLabelDisp(it), ui.Sanitize(rmErr.Error()))
+		return true
+	}
+	writtenSources[srcFile] = nil // deletion sentinel for a later same-file write
+	rel, _ := filepath.Rel(home, srcFile)
+	fmt.Fprintf(w, "  write-back: removed source %s (destination dropped %s)\n", ui.Sanitize(rel), itemLabelDisp(it))
+	return false
+}
+
+// revertSource undoes this run's write to srcFile, restoring the FIRST writer's
+// bytes. When that first write was itself a deletion (prior is empty), restoring
+// it means deleting the file again rather than writing a 0-byte one.
+func revertSource(srcFile string, prior []byte) {
+	if len(prior) == 0 {
+		_ = os.Remove(srcFile)
+		return
+	}
+	_ = iox.AtomicWrite(srcFile, prior, 0o644)
 }
 
 // itemSourceFile returns the absolute canonical source file a write-back item
@@ -665,12 +796,12 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 		}
 		specRaw, ok := mcpServers[serverID]
 		if !ok {
-			// Server removed from dest; nothing to write back. We treat
-			// this as a tombstone — the user wants the source dropped to
-			// match — but persisting that requires source-side mutation
-			// which isn't safe to do silently here. Surface as an error
-			// so the user can pick [d]elete-source via a follow-up flow.
-			return fmt.Errorf("destination dropped %s/%s — no write-back possible; remove the source manually or use [o]verride to push canonical back", topKey, serverIDDisp)
+			// Server removed from dest: the user deleted it from the native
+			// config and chose [w]rite-back to persist that. Signal a tombstone;
+			// attemptWriteBack deletes the canonical mcp/<id>.toml through the
+			// approved os.Remove funnel (a pure deletion carries no secret), with
+			// the multi-agent fan-out guard.
+			return errDestDroppedServer
 		}
 		var spec source.MCPServerSpec
 		switch topKey {

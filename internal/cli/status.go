@@ -46,11 +46,53 @@ type statusModel struct {
 	Summary map[string]int `json:"summary"`
 }
 
+// exitCodeDrift is the process exit code `status`/`diff` return under
+// --exit-code when drift (status) or hunks (diff) exist. It is deliberately
+// distinct from the generic error exit (1) so a CI gate can tell "drift
+// detected" apart from "the command itself failed".
+const exitCodeDrift = 2
+
+// ExitCoder is implemented by the quiet sentinel error `status`/`diff` return
+// under --exit-code. main() maps it to a process exit code and prints nothing
+// (the sentinel's Error() is empty), so a CI gate gets a stable non-zero exit
+// without a spurious "agentsync: ..." line. The root command already sets
+// SilenceErrors, so cobra prints nothing for it either.
+type ExitCoder interface{ ExitCode() int }
+
+// exitCodeError is a quiet sentinel carrying a process exit code. Its message
+// is empty on purpose: the drift signal is the exit code, not stderr text.
+type exitCodeError struct{ code int }
+
+func (e *exitCodeError) Error() string { return "" }
+func (e *exitCodeError) ExitCode() int { return e.code }
+
+// newDriftExitError returns the quiet --exit-code sentinel (exitCodeDrift).
+func newDriftExitError() error { return &exitCodeError{code: exitCodeDrift} }
+
+// statusHasDrift reports whether the model contains any item that is not fully
+// in sync — i.e. any class other than clean/converged. It is the --exit-code
+// predicate: a CI gate wants a non-zero exit whenever the tree is not exactly
+// what a fresh apply would produce (drift/conflict/orphan) OR carries unapplied
+// changes (new/pending).
+func statusHasDrift(m statusModel) bool {
+	for cls, n := range m.Summary {
+		if n == 0 {
+			continue
+		}
+		if cls == "clean" || cls == "converged" {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func newStatusCmd() *cobra.Command {
 	var (
 		scopeFlag   string
 		projectFlag string
 		jsonOut     bool
+		exitCode    bool
 		agentsCSV   string
 	)
 	cmd := &cobra.Command{
@@ -139,15 +181,26 @@ func newStatusCmd() *cobra.Command {
 				// is never collapsed: it carries every tracked item so scripts
 				// see the same per-file model regardless of the human view.
 				emitStatusWarnings(p, c, reg, s, enabledAgents, selected)
-				return emitJSON(p.Out, model)
+				if err := emitJSON(p.Out, model); err != nil {
+					return err
+				}
+			} else {
+				renderStatusText(p, model, statusVerbose(cmd))
+				emitStatusWarnings(p, c, reg, s, enabledAgents, selected)
 			}
-			renderStatusText(p, model, statusVerbose(cmd))
-			emitStatusWarnings(p, c, reg, s, enabledAgents, selected)
+			// --exit-code turns status into a CI gate: a non-zero (documented,
+			// stable) exit when any item is not clean/converged, exit 0 when the
+			// tree is fully in sync. The report above is emitted first either way,
+			// so the human/JSON output is unchanged — only the process exit differs.
+			if exitCode && statusHasDrift(model) {
+				return newDriftExitError()
+			}
 			return nil
 		},
 	}
 	addScopeFlags(cmd, &scopeFlag, &projectFlag)
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the formatted report")
+	cmd.Flags().BoolVar(&exitCode, "exit-code", false, fmt.Sprintf("exit %d if any drift is detected (0 when clean); for CI gates", exitCodeDrift))
 	cmd.Flags().StringVar(&agentsCSV, "agents", "", `limit the report to a comma-separated agent allowlist ("*" = all enabled; default: all enabled)`)
 	return cmd
 }
@@ -321,6 +374,13 @@ func renderStatusText(p *ui.Printer, model statusModel, verbose bool) {
 	collapsed := 0
 	for _, ag := range model.Agents {
 		fmt.Fprintln(p.Out, p.Bold("["+ag.Agent+"]"))
+		// An enabled agent that renders nothing (no components target it yet)
+		// still gets a header row; without a note it reads as a truncated/broken
+		// listing. Say so explicitly instead of leaving a bare "[agent]" line.
+		if len(ag.Items) == 0 {
+			fmt.Fprintln(p.Out, p.Faint("  (no tracked items)"))
+			continue
+		}
 		collapsed += renderAgentItems(p, ag.Items, verbose)
 	}
 

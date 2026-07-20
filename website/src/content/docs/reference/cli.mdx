@@ -22,15 +22,15 @@ import { Aside } from '@astrojs/starlight/components';
 | `doctor` | Diagnose setup: PATH, home/state writability, schema, secrets backend, destination-git-backup mode + per-dir repo status. | |
 | `verify` | Validate config; surface unresolved `${secret:}` / `${env:}` refs. `--scope project` / `--project <path>` lints the project tree instead. | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or a project tree's own `[agents]` declaration with `--scope project` / `--project <path>`. | `disable --purge --scope --project` |
-| `mcp add\|remove\|list <name>` | Manage MCP servers. | `--type --command --args --url --env --agents` |
+| `mcp add\|remove\|list <name>` | Manage MCP servers. `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site. | `--type --command --args --url --env --agents --header` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
 | `plugin install\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works). | `install <id[@marketplace]>` |
 | `secrets set\|get <key>` / `secrets edit` | Manage age-encrypted secrets (`edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
 | `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). Git-versions each destination dir (opt-out). | `--dry-run --scope --project --no-git-backup` |
 | `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (local-only git history). | `--to --all --dry-run` |
-| `status` | Summarize drift / pending across agents (skill dirs collapse by default). | `--agents --verbose --json --scope --project` |
-| `diff [<path>]` | Show pending / drift changes; secrets redacted. | `--scope --project` |
+| `status` | Summarize drift / pending across agents (skill dirs collapse by default). `--exit-code` → exit `2` on any drift, `0` when clean (CI gate). | `--agents --verbose --json --exit-code --scope --project` |
+| `diff [<path>]` | Show pending / drift changes; secrets redacted. `--exit-code` → exit `2` on any hunk, `0` when clean. | `--agents --json --exit-code --scope --project` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source. `--scope project` captures the agent's native project-scope config into the project tree. | `--dry-run --scope --project` |
 | `explain [<plugin>...]` | Show per-agent translation coverage for one or more plugins. | `--all --list --json` |
@@ -121,13 +121,19 @@ Manage MCP servers. Full guide: [MCP servers](/guides/mcp-servers/).
 
 ```bash
 agentsync mcp add github --command npx --args "-y,@modelcontextprotocol/server-github"
-agentsync mcp add linear --type http --url https://mcp.linear.app/sse
+agentsync mcp add linear --type http --url https://mcp.linear.app/sse \
+  --header "Authorization: Bearer ${secret:LINEAR_TOKEN}"
 agentsync mcp list
 agentsync mcp remove github
 ```
 
 Flags: `--type` (`stdio`|`http`|`sse`), `--command`, `--args`, `--url`, `--env`,
-`--agents`.
+`--agents`, `--header`. `--header "Name: Value"` is repeatable and **http/sse
+only** (rejected for `stdio`); it sets request headers, the usual remote-auth
+secret site. A header value may reference a secret
+(`--header "Authorization: Bearer ${secret:TOKEN}"`) — `headers` is an existing
+secret-resolving field, so the reference resolves at apply and re-references on
+capture, never landing in the canonical source as cleartext.
 
 ### `marketplace` & `plugin`
 Manage plugin registries and the plugins drawn from them. Full guide:
@@ -240,12 +246,25 @@ still flow to stderr so the JSON payload stays clean. `--json` is **never
 collapsed** — it carries every tracked file regardless of the human view — and
 omits the legend (the class field is the machine contract).
 
+For a gate that should **fail the build** on drift, add `--exit-code`:
+`agentsync status --exit-code` exits `2` when any item is not clean/converged and
+`0` when the tree is fully in sync (exit `2` is distinct from the generic error
+exit `1`, and the report itself is emitted first with no extra error line).
+Without the flag, `status` always exits `0`. Interactive prompts such as the
+scope menu are written to **stderr**, so a `--json` payload piped from stdout is
+never corrupted.
+
 ### `diff [<path>]`
 Shows the pending / drift changes in detail. **Resolved secrets are redacted**, so
-a piped diff can't leak credentials. Pass a path to scope the diff. Color is
-TTY-gated — piped output uses `[-…-]` / `{+…+}` text markers instead of raw
-ANSI. Pass `--json` for a structured hunk list (the same masked source/dest
-strings, so the redaction protects both modes).
+a piped diff can't leak credentials. Pass a **filesystem path** to scope the diff;
+a path that no enabled agent renders (a typo, or an unmanaged file) is reported
+distinctly — `path <p> is not managed by agentsync …` — rather than the ambiguous
+`no diff`. `--agents <list>` narrows the diff to an agent allowlist exactly like
+`status --agents` (same validation and empty-rejection). Color is TTY-gated —
+piped output uses `[-…-]` / `{+…+}` text markers instead of raw ANSI. Pass
+`--json` for a structured hunk list (the same masked source/dest strings, so the
+redaction protects both modes), and `--exit-code` to exit `2` when any hunk exists
+(`0` when clean) for a CI gate.
 
 ### `reconcile`
 The interactive merge UX for drift and conflicts. Full guide:
@@ -315,7 +334,9 @@ agentsync explain --list
 | `--dry-run` | apply, import | Preview without writing. |
 | `--auto-safe` | reconcile, update | Auto-resolve only no-risk changes. |
 | `--json` | status, diff, explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). `explain --list --json` emits a `plugins` array; `explain` with ids/`--all` emits the translation `rows`. |
-| `--agents <list>` | status | Scope the report to a comma-separated agent allowlist (`*` = all enabled; matches `mcp add --agents`). |
+| `--agents <list>` | status, diff | Scope the report to a comma-separated agent allowlist (`*` = all enabled; matches `mcp add --agents`; an empty or unknown value is rejected identically by both). |
+| `--exit-code` | status, diff | Exit `2` when drift (status) / any hunk (diff) exists, `0` when clean — for CI gates. Distinct from the generic error exit `1`; prints no extra error line. Default (unset) always exits `0`. |
+| `--header "Name: Value"` | mcp add | Repeatable; http/sse only. Sets a request header (secret refs allowed). |
 | `--color auto\|always\|never` | all | Control ANSI color + bold. Default `auto` (on for a TTY, off when piped/redirected; honors `NO_COLOR`). |
 | `-v`, `--verbose` | all | Verbose logging. In `status`, also expands each collapsed skill directory back to one row per bundled file. |
 | `--version` | root | Print version information and exit. The `agentsync version` subcommand is an alias. |

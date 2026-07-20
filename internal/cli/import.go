@@ -938,6 +938,14 @@ func importSkill(io *importIO, home string, c source.Canonical, name string) ([]
 			}
 		}
 		io.item(fmt.Sprintf("skills/%s/SKILL.md", sk.Name), "")
+		// A skill is a whole directory, not just SKILL.md. Enumerate the bundled
+		// files (scripts/, references/, assets/, nested) WriteSkill also writes, so
+		// the summary reflects the on-disk artifact rather than the parsed SKILL.md
+		// alone (the artifact-fidelity rule from CLAUDE.md). sk.Files paths are
+		// slash-separated and relative to the skill dir.
+		for _, f := range sk.Files {
+			io.item(fmt.Sprintf("skills/%s/%s", sk.Name, f.Path), "")
+		}
 		names = append(names, sk.Name)
 	}
 	return names, nil

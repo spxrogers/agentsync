@@ -36,6 +36,8 @@ func newDiffCmd() *cobra.Command {
 		scopeFlag   string
 		projectFlag string
 		jsonOut     bool
+		exitCode    bool
+		agentsCSV   string
 	)
 	cmd := &cobra.Command{
 		Use:   "diff [<path>]",
@@ -72,13 +74,33 @@ func newDiffCmd() *cobra.Command {
 				return err
 			}
 			reg := registryFactory()
-			var agents []string
+			var enabledAgents []string
+			enabled := map[string]bool{}
 			for name, ag := range c.Config.Agents {
 				if ag.Enabled {
-					agents = append(agents, name)
+					enabledAgents = append(enabledAgents, name)
+					enabled[name] = true
 				}
 			}
-			if len(agents) == 0 {
+			// --agents narrows the diff to a validated allowlist, mirroring
+			// `status --agents` exactly (same split/star/validation and the same
+			// empty-rejection message) so the two read-only commands stay
+			// symmetric.
+			selected := enabledAgents
+			if cmd.Flags().Changed("agents") {
+				names := splitAgents(agentsCSV)
+				if len(names) == 0 {
+					return fmt.Errorf(`--agents cannot be empty; pass "*" for all enabled agents or name one or more`)
+				}
+				if !containsStar(names) {
+					sel, serr := resolveAgentFilter(names, enabled)
+					if serr != nil {
+						return serr
+					}
+					selected = sel
+				}
+			}
+			if len(selected) == 0 {
 				if jsonOut {
 					return emitJSON(p.Out, diffModel{Hunks: []diffHunk{}})
 				}
@@ -89,7 +111,7 @@ func newDiffCmd() *cobra.Command {
 			// resolved cleartext separately, below); wrap as a render-only
 			// Resolved without substituting so it works even when the secrets
 			// backend is locked.
-			plan, err := render.Plan(secrets.ForRender(c), reg, agents, sc, projectRoot, s, userHome)
+			plan, err := render.Plan(secrets.ForRender(c), reg, selected, sc, projectRoot, s, userHome)
 			if err != nil {
 				return err
 			}
@@ -123,6 +145,11 @@ func newDiffCmd() *cobra.Command {
 			// same masked strings, so the secret-leak guards above protect
 			// both modes.
 			var hunks []diffHunk
+			// filterMatched tracks whether a <path> argument matched any rendered
+			// op across every selected agent, so a path that matches NOTHING (a
+			// typo, or an unmanaged file) can be reported distinctly from a managed
+			// path that is genuinely in sync ("no diff").
+			filterMatched := filterPath == ""
 			for _, name := range reg.Names() {
 				res, ok := plan.PerAgent[name]
 				if !ok {
@@ -133,6 +160,7 @@ func newDiffCmd() *cobra.Command {
 					if filterPath != "" && op.Path != filterPath {
 						continue
 					}
+					filterMatched = true
 					if render.IsKeyMerge(op.MergeStrategy) {
 						// Key-level diff: compare per pointer. NOT deduped by path —
 						// one agent emits several key-merge ops to one file (codex
@@ -172,35 +200,52 @@ func newDiffCmd() *cobra.Command {
 				}
 			}
 
-			if jsonOut {
-				return emitJSON(p.Out, diffModel{Hunks: hunks})
+			// A <path> that matched no rendered op is a typo or an unmanaged file
+			// — distinct from a managed path that is in sync ("no diff"). Fail with
+			// an actionable message rather than the ambiguous "no diff" so the user
+			// knows the path (not the sync state) was the problem.
+			if !filterMatched {
+				return fmt.Errorf("path %s is not managed by agentsync (no enabled agent renders it); "+
+					"diff takes a filesystem path, not an agent name", ui.Sanitize(filterPath))
 			}
 
-			if len(hunks) == 0 {
-				fmt.Fprintln(p.Out, "no diff")
-				return nil
-			}
-
-			dmp := diffmatchpatch.New()
-			for _, h := range hunks {
-				label := h.Path
-				if h.Pointer != "" {
-					label = h.Path + "#" + h.Pointer
+			switch {
+			case jsonOut:
+				if err := emitJSON(p.Out, diffModel{Hunks: hunks}); err != nil {
+					return err
 				}
-				// label embeds a config-derived component name/id; sanitize on
-				// display so an ESC in a shared config's name can't inject escapes
-				// into the diff header (issue #93/#171).
-				label = ui.Sanitize(label)
-				fmt.Fprintf(p.Out, "%s %s\n", p.Red("--- source"), label)
-				fmt.Fprintf(p.Out, "%s %s\n", p.Green("+++ dest  "), label)
-				diffs := dmp.DiffMain(h.Dest, h.Source, false)
-				fmt.Fprintln(p.Out, renderDiffText(p, diffs))
+			case len(hunks) == 0:
+				fmt.Fprintln(p.Out, "no diff")
+			default:
+				dmp := diffmatchpatch.New()
+				for _, h := range hunks {
+					label := h.Path
+					if h.Pointer != "" {
+						label = h.Path + "#" + h.Pointer
+					}
+					// label embeds a config-derived component name/id; sanitize on
+					// display so an ESC in a shared config's name can't inject escapes
+					// into the diff header (issue #93/#171).
+					label = ui.Sanitize(label)
+					fmt.Fprintf(p.Out, "%s %s\n", p.Red("--- source"), label)
+					fmt.Fprintf(p.Out, "%s %s\n", p.Green("+++ dest  "), label)
+					diffs := dmp.DiffMain(h.Dest, h.Source, false)
+					fmt.Fprintln(p.Out, renderDiffText(p, diffs))
+				}
+			}
+			// --exit-code turns diff into a CI gate: non-zero (stable) when any
+			// hunk exists, 0 when clean. The diff above is emitted first, so output
+			// is unchanged — only the process exit differs.
+			if exitCode && len(hunks) > 0 {
+				return newDriftExitError()
 			}
 			return nil
 		},
 	}
 	addScopeFlags(cmd, &scopeFlag, &projectFlag)
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the formatted diff")
+	cmd.Flags().BoolVar(&exitCode, "exit-code", false, fmt.Sprintf("exit %d if any diff hunk exists (0 when clean); for CI gates", exitCodeDrift))
+	cmd.Flags().StringVar(&agentsCSV, "agents", "", `limit the diff to a comma-separated agent allowlist ("*" = all enabled; default: all enabled)`)
 	return cmd
 }
 

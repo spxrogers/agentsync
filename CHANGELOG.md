@@ -356,6 +356,38 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **CLI honesty & CI-usability batch (issue #155).** New and corrected user-visible
+  behavior across `status`/`diff`/`apply`/`reconcile`/`mcp`/`doctor`:
+  - **`status --exit-code` / `diff --exit-code`** turn those commands into CI gates:
+    exit `2` when drift (status) or any hunk (diff) exists, `0` when clean. Exit `2`
+    is distinct from the generic error exit `1`, and the sentinel prints no extra
+    error line. Without the flag both still exit `0`.
+  - **`diff --agents <list>`** narrows the diff to an agent allowlist, mirroring
+    `status --agents` exactly (same `*`/validation and empty-rejection message).
+  - **`mcp add --header "Name: Value"`** (repeatable, http/sse only; rejected for
+    `stdio`) sets request headers — the usual remote-auth secret site. Values may
+    reference secrets (`--header "Authorization: Bearer ${secret:TOKEN}"`), which
+    resolve at apply and re-reference on capture (no schema change — `Headers` was
+    already a secret-resolving field).
+  - **`apply` delete-only summary**: a run that only removes a component from source
+    now reports `removed: N ops` (mixed runs `applied: X ops, removed: Y ops`)
+    instead of the misleading `up to date` / `applied: 0 ops`. A genuine clean
+    re-apply still reads `up to date`.
+  - **`diff <path>`** now reports a typo'd/unmanaged path (`path <p> is not managed
+    by agentsync …`) distinctly from a clean managed path (`no diff`).
+  - **`reconcile`** shows the actual differing source/destination **values** (a
+    masked text diff — resolved secrets are shown as their `${secret:…}`
+    placeholder, never cleartext) in the destructive prompt and `[d]iff`, instead of
+    bare SHA-256 prefixes; can now **persist a destination-side MCP-server deletion**
+    into the canonical source on `[w]rite-back` (through the approved deletion
+    funnel, guarded against multi-agent fan-out); and its bulk-confirm count now
+    equals the true blast radius of the chosen action.
+  - **`doctor`** now actually resolves every `${secret:…}`/`${env:…}` reference and
+    flags an unresolvable/typo'd one (a bad `${secret:…}` fails, an unset `${env:…}`
+    warns) instead of reporting all-green; resolved values are never printed.
+  - Interactive prompts reachable during a `--json` run (the scope menu) now write
+    to **stderr**, so a `--json` payload piped from stdout is never corrupted.
+
 - **Destination dirs can be git-versioned for one-command rollback (issue #118).**
   `agentsync apply` now optionally keeps each rendered destination dir in its own
   **local-only** git repo, recording a checkpoint commit after every apply that

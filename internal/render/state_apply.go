@@ -138,6 +138,16 @@ func OrphanFiles(s *state.Targets, userHome, agent string, scope adapter.Scope, 
 	return out
 }
 
+// SkillOrphanDeletes is the exported view of skillOrphanDeletes: the delete
+// FileOps `apply` will perform to reclaim skill files removed from the source
+// for agent+scope+project against ops. The CLI reads it (before Apply mutates
+// state) purely to COUNT deletions for the apply summary headline — a pure-delete
+// run must not report "up to date" / "applied: 0 ops". It never writes anything;
+// Apply remains the sole executor (and dedups these across agents itself).
+func SkillOrphanDeletes(s *state.Targets, userHome, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) []adapter.FileOp {
+	return skillOrphanDeletes(s, userHome, agent, scope, project, ops)
+}
+
 // skillOrphanDeletes returns delete FileOps for skill files this agent owns in
 // state — entries whose SourceID is under "skills/" — that the current plan no
 // longer renders. It is how `apply` converges a destination when a whole skill,

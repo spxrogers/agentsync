@@ -219,13 +219,25 @@ func TestDiff_PathFilter(t *testing.T) {
 	body, _ := os.ReadFile(dst)
 	_ = os.WriteFile(dst, []byte(strings.ReplaceAll(string(body), `"npx"`, `"npm"`)), 0o644)
 
-	// Filter to a non-existent path: should report "no diff".
+	// Filter to a non-existent path: this is a typo/unmanaged path, now reported
+	// distinctly from a clean managed path (#155 item 6) — an error naming the
+	// path, not the ambiguous "no diff".
 	out, err := runCLI(t, env, "diff", "/nonexistent/path.json")
-	if err != nil {
-		t.Fatalf("diff with filter: %v\n%s", err, out)
+	if err == nil {
+		t.Fatalf("filtered diff for an unmanaged path should error, not report 'no diff'; got: %s", out)
 	}
-	if !strings.Contains(out, "no diff") {
-		t.Fatalf("filtered diff for non-matching path should report 'no diff'; got: %s", out)
+	if !strings.Contains(err.Error(), "not managed by agentsync") {
+		t.Fatalf("unmanaged-path error should say so; got: %v", err)
+	}
+
+	// Filter to the real managed dest: the drift is shown (proves the filter
+	// narrows rather than swallowing a genuine match).
+	matched, merr := runCLI(t, env, "diff", dst)
+	if merr != nil {
+		t.Fatalf("diff <managed path>: %v\n%s", merr, matched)
+	}
+	if strings.Contains(matched, "no diff") {
+		t.Fatalf("the drifted managed path should show a diff, not 'no diff'; got:\n%s", matched)
 	}
 }
 

@@ -2,7 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -10,11 +12,24 @@ import (
 	"github.com/spxrogers/agentsync/internal/paths"
 )
 
-// lockTimeout is how long mutating CLI commands wait for the global lock
-// before giving up with a clear error. Long enough that a slow apply
-// against a large config doesn't spuriously block the next legit run, but
-// short enough that a forgotten background process is obvious.
-const lockTimeout = 30 * time.Second
+// defaultLockTimeout is how long mutating CLI commands wait for the global lock
+// before giving up with a clear error. Long enough that a slow apply against a
+// large config doesn't spuriously block the next legit run, but short enough
+// that a forgotten background process is obvious.
+const defaultLockTimeout = 30 * time.Second
+
+// lockTimeout returns the global-lock wait timeout. AGENTSYNC_LOCK_TIMEOUT_MS
+// overrides the default (in milliseconds) for tests and unusual operator setups
+// — the contention path is otherwise a 30s wait no test can afford. An unset or
+// unparseable value keeps the default; a negative value is ignored.
+func lockTimeout() time.Duration {
+	if v := os.Getenv("AGENTSYNC_LOCK_TIMEOUT_MS"); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms >= 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	return defaultLockTimeout
+}
 
 // withGlobalLock acquires the agentsync global lock and runs fn. It must
 // wrap any command that mutates ~/.agentsync/, native agent destinations,
@@ -26,7 +41,7 @@ const lockTimeout = 30 * time.Second
 // 0o600 (owner-only) and it is re-used across runs.
 func withGlobalLock(home string, fn func() error) error {
 	lockPath := filepath.Join(home, ".state", "agentsync.lock")
-	lock, err := iox.AcquireLockTimeout(lockPath, lockTimeout)
+	lock, err := iox.AcquireLockTimeout(lockPath, lockTimeout())
 	if err != nil {
 		return fmt.Errorf("acquire agentsync lock at %s: %w (another agentsync process running?)", lockPath, err)
 	}
