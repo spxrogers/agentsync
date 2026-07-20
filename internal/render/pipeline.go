@@ -87,41 +87,44 @@ func (p RenderPlan) Total() int {
 // home — dest files live under $HOME, not under ~/.agentsync.
 func Plan(r secrets.Resolved, reg *adapter.Registry, agents []string, scope adapter.Scope, project string, s *state.Targets, userHome string) (RenderPlan, error) {
 	out := RenderPlan{PerAgent: map[string]AgentResult{}}
-	// Every text component's canonical Name is joined into a destination filename
-	// by ~10 adapters (filepath.Join(dir, Name+ext)); a Name like "../../../tmp/x"
-	// would render a FileOp.Path that escapes the agent's config dir — a
-	// write-anywhere primitive on apply. The dest->source boundary already refuses
-	// such an id (source.ValidateComponentID); enforce the SAME sanitizer here, at
-	// the single dispatch waist, so source->dest and dest->source share one source
-	// of truth and every current-and-future adapter inherits the guard for free.
-	// (Names only — a string-only accessor, so this never unwraps the Resolved.)
-	ids := r.ComponentIDs()
+	// Primary path-traversal guard (symmetric with capture.Capture): every
+	// component id an adapter joins into a destination filename — subagent, command,
+	// skill Names AND MCP/LSP server ids (continuedev writes one file per MCP
+	// server) — must be a clean single-segment id before that join. A Name/id like
+	// "../../../tmp/x" would otherwise render a FileOp.Path that escapes the agent's
+	// config dir (a write-anywhere primitive on apply); a marketplace-projected MCP
+	// id is an especially untrusted source (a raw manifest key). The dest->source
+	// boundary already refuses such an id (source.ValidateComponentID); enforce the
+	// SAME sanitizer here at the single dispatch waist, so both boundaries share one
+	// source of truth (it also rejects control/deceptive runes via
+	// untrusted.Sanitize, not just ".."). The id set is model-wide (agent-agnostic),
+	// so validate it ONCE up front, not per-agent; a traversal-bearing id refuses
+	// the whole plan (never an adapter.Skip). Names only — ComponentIDs is a
+	// string-only accessor, so this never unwraps the Resolved.
+	for _, id := range r.ComponentIDs() {
+		if err := source.ValidateComponentID(id.Kind, id.Name); err != nil {
+			return out, fmt.Errorf("render: component %s %q: %w", id.Kind, id.Name, err)
+		}
+	}
 	for _, name := range agents {
 		a := reg.Lookup(name)
 		if a == nil {
 			return out, fmt.Errorf("adapter %q not registered", name)
 		}
-		// Primary guard (symmetric with capture.Capture): a component id must be a
-		// clean single-segment filename before the adapter joins it into a dest
-		// path. ValidateComponentID also rejects control/deceptive runes (via
-		// untrusted.Sanitize), not just "..", so this is not a hand-rolled check.
-		// A traversal-bearing name is a hard error — the whole plan is refused,
-		// matching how the write-back side refuses the write (never an adapter.Skip).
-		for _, id := range ids {
-			if err := source.ValidateComponentID(id.Kind, id.Name); err != nil {
-				return out, fmt.Errorf("render %s: component %s %q: %w", name, id.Kind, id.Name, err)
-			}
-		}
 		ops, skips, err := a.Render(r, scope, project)
 		if err != nil {
 			return out, fmt.Errorf("render %s: %w", name, err)
 		}
-		// Containment backstop (defense-in-depth): even a bundled skill-file path
-		// (Skill.Files[*].Path, which legitimately contains '/', so it must NOT go
-		// through ValidateComponentID) must not escape via a surviving ".."
-		// segment. Plan does not know each adapter's dest root, so this is a
-		// conservative reject of any write whose own cleaned path still traverses
-		// upward — never a silent "fix".
+		// Containment backstop (defense-in-depth): reject any write whose own cleaned
+		// path still contains a ".." segment (an unrooted / relative-with-leading-".."
+		// path). This is deliberately narrow — Plan does not know each adapter's dest
+		// root, and filepath.Join collapses interior ".." into a rooted ABSOLUTE path,
+		// so a traversal that resolves to an absolute path is NOT caught here; that
+		// case is prevented upstream by the component-id validation above (which now
+		// covers MCP/LSP ids too). Bundled skill-file paths (Skill.Files[*].Path)
+		// legitimately contain '/', so they bypass ValidateComponentID, but they are
+		// derived from a filesystem walk via filepath.Rel with symlinks skipped, so a
+		// ".." can never enter them — this remains the last conservative net.
 		for _, op := range ops {
 			if op.Action == "write" && pathEscapes(op.Path) {
 				return out, fmt.Errorf("render %s: refusing FileOp path %q: escapes its destination directory via '..'", name, op.Path)

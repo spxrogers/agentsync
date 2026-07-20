@@ -141,6 +141,18 @@ func TestPlan_RejectsTraversalComponentName(t *testing.T) {
 		{"skill", func(id string) source.Canonical {
 			return source.Canonical{Skills: []source.Skill{{Name: id, Frontmatter: map[string]any{"name": "s"}, Body: "b\n"}}}
 		}},
+		// MCP/LSP server ids also become a destination filename stem for adapters
+		// that write one file per server (continuedev joins id into
+		// filepath.Join(MCPDir, id+".yaml")). A marketplace-projected id is a raw
+		// manifest map key with no traversal check of its own, so the dispatch-waist
+		// guard MUST validate these ids too — a plugin declaring an mcpServers key
+		// like "../../../etc/x" would otherwise render a write-anywhere FileOp.
+		{"mcp", func(id string) source.Canonical {
+			return source.Canonical{MCPServers: []source.MCPServer{{ID: id, Server: source.MCPServerSpec{Type: "stdio", Command: "x"}}}}
+		}},
+		{"lsp", func(id string) source.Canonical {
+			return source.Canonical{LSPServers: []source.LSPServer{{ID: id, Spec: source.LSPServerSpec{Command: "x"}}}}
+		}},
 	}
 
 	for _, k := range kinds {
@@ -155,13 +167,16 @@ func TestPlan_RejectsTraversalComponentName(t *testing.T) {
 				if tc.wantErr != (err != nil) {
 					t.Fatalf("Plan(%s=%q) err=%v; wantErr=%v", k.kind, tc.id, err, tc.wantErr)
 				}
-				// The error must name the agent, the component kind, and (via the
-				// wrapped ValidateComponentID error) explain why — so an operator
-				// can locate the offending component.
+				// The error must name the component kind + id and (via the wrapped
+				// ValidateComponentID error) explain why — so an operator can locate
+				// the offending component. It is deliberately agent-AGNOSTIC: the id
+				// check is hoisted out of the per-agent loop (a traversal id is
+				// model-wide, not one agent's fault), so it names "render:" + the
+				// component, not any single agent.
 				if tc.wantErr {
 					msg := err.Error()
-					if !strings.Contains(msg, "render claude") || !strings.Contains(msg, "component "+k.kind) {
-						t.Errorf("error %q missing agent/kind context (want 'render claude' + 'component %s')", msg, k.kind)
+					if !strings.Contains(msg, "render:") || !strings.Contains(msg, "component "+k.kind) {
+						t.Errorf("error %q missing render/kind context (want 'render:' + 'component %s')", msg, k.kind)
 					}
 				}
 			})

@@ -62,12 +62,14 @@ func TestWrite_ChmodReconverges(t *testing.T) {
 	}
 }
 
-// TestRecordOpsState_MergeTomlNumericNoFalseDrift pins issue #162 item F: a
-// merge-toml-keys owned value whose leaf is numeric/datetime would hash
-// differently under the JSON source and the TOML dest and report perpetual false
-// drift. The guard (assertHashStableTOMLValue) surfaces that LOUDLY at record
-// time instead of silently recording a false-drifting hash, while a string-only
-// owned value (the sole real consumer's shape) records cleanly.
+// TestRecordOpsState_MergeTomlNumericNoFalseDrift pins issue #162 item F after
+// the review-loop correction: a merge-toml-keys owned value whose leaf is numeric
+// (e.g. a codex MCP `timeout` — a routine passthrough Extra field) records
+// WITHOUT error. A hard guard here used to FAIL apply on exactly this ordinary
+// config; it was removed because an in-range integer hashes identically as the
+// JSON source and the TOML dest, so there is no false drift. The only residual —
+// an integer > 2^53 or a TOML datetime, unreachable with real configs — is
+// documented at the record site, not guarded, so apply never fails on a number.
 func TestRecordOpsState_MergeTomlNumericNoFalseDrift(t *testing.T) {
 	testenv.RequireContainer(t)
 	cases := []struct {
@@ -77,10 +79,10 @@ func TestRecordOpsState_MergeTomlNumericNoFalseDrift(t *testing.T) {
 		wantErr string // "" = expect success
 	}{
 		{
-			name:    "numeric owned value surfaced",
+			name:    "numeric owned value records cleanly (no apply failure)",
 			dest:    "[mcp_servers.github]\ntimeout = 30\n",
 			ours:    `{"mcp_servers":{"github":{"timeout":30}}}`,
-			wantErr: "non-string leaf",
+			wantErr: "",
 		},
 		{
 			name:    "string owned value records cleanly",

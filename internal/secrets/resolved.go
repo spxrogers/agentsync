@@ -65,11 +65,12 @@ type ComponentID struct {
 	Name string
 }
 
-// ComponentIDs returns every text-component id reachable in the resolved model —
-// subagent, command, and skill names, INCLUDING the project overlay — so a
-// caller (render.Plan) can validate each against source.ValidateComponentID
-// before any adapter joins it into a FileOp path. A Name like "../../../tmp/x"
-// would otherwise render a path that escapes the agent's config dir.
+// ComponentIDs returns every component id reachable in the resolved model that an
+// adapter joins into a destination FileOp path — subagent, command, and skill
+// names plus MCP and LSP server ids, INCLUDING the project overlay — so a caller
+// (render.Plan) can validate each against source.ValidateComponentID before any
+// adapter joins it into a path. A Name/id like "../../../tmp/x" would otherwise
+// render a path that escapes the agent's config dir.
 //
 // It is deliberately a STRING-only accessor: it reads the id strings off the
 // private canonical directly (never through the fenced Canonical() egress) and
@@ -91,6 +92,20 @@ func componentIDs(c source.Canonical) []ComponentID {
 	}
 	for _, sk := range c.Skills {
 		out = append(out, ComponentID{Kind: "skill", Name: sk.Name})
+	}
+	// MCP/LSP server ids are joined into a destination FILENAME by adapters that
+	// write one file per server (continuedev: filepath.Join(MCPDir, id+".yaml")).
+	// A marketplace-projected id is a raw manifest map key with no traversal check
+	// of its own, so a plugin declaring an mcpServers key like "../../../etc/x"
+	// would otherwise render a write-anywhere FileOp — validate it here like every
+	// other id. (For adapters where the id is a JSON key in a shared file rather
+	// than a filename, rejecting a traversal id is still correct — it is never a
+	// legitimate server id.)
+	for _, m := range c.MCPServers {
+		out = append(out, ComponentID{Kind: "mcp", Name: m.ID})
+	}
+	for _, l := range c.LSPServers {
+		out = append(out, ComponentID{Kind: "lsp", Name: l.ID})
 	}
 	// A project-scope model carries the project-only set in Project; recurse so a
 	// traversal-bearing project component is caught too. User-scope models have a

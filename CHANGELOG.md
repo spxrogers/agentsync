@@ -110,19 +110,26 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 ### Security
 
 - **Render-time path-traversal guard at the adapter dispatch layer (issue #156).**
-  Every deep adapter joined a component's canonical `Name` (subagent/command/skill)
-  straight into a destination filename, with no Render-time check — a `Name` like
+  Every deep adapter joined a component id straight into a destination filename,
+  with no Render-time check — a subagent/command/skill `Name`, and (for adapters
+  that write one file per server, e.g. continuedev's
+  `filepath.Join(MCPDir, id+".yaml")`) an MCP/LSP server id. An id like
   `../../../tmp/x` would render a `FileOp.Path` that escapes the agent's config dir
-  (a write-anywhere primitive on apply). `render.Plan` (the single dispatch waist)
-  now validates every text-component id against the **same** `source.ValidateComponentID`
-  the dest→source write boundary already used, so **all** adapters — current and
-  future — inherit the guard uniformly, closing the recurring Gemini/Windsurf (and
-  all-adapter) unsanitized-name gap. A traversal-, separator-, absolute-, bare-`.`,
-  all-whitespace-, or control/deceptive-rune-bearing name now refuses the whole plan
-  (never a silent `Skip`); a `filepath.Clean` containment backstop additionally
-  rejects any emitted write whose cleaned path still traverses upward (covering
-  bundled skill-file paths too). `Plan` reads only the id strings, so the guard
-  never unwraps the resolved model and the secrets lint fence is unchanged.
+  (a write-anywhere primitive on apply); a marketplace-projected MCP id is an
+  especially untrusted source (a raw manifest map key). `render.Plan` (the single
+  dispatch waist) now validates **every** such id — subagent/command/skill `Name`
+  **and** MCP/LSP server id, project overlay included — against the **same**
+  `source.ValidateComponentID` the dest→source write boundary already used, so
+  **all** adapters — current and future — inherit the guard uniformly, closing the
+  recurring Gemini/Windsurf (and all-adapter) unsanitized-name gap. The id set is
+  model-wide, so it is validated **once up front** (not per-agent) and a
+  traversal-, separator-, absolute-, bare-`.`, all-whitespace-, or
+  control/deceptive-rune-bearing id refuses the whole plan (never a silent `Skip`)
+  with an agent-agnostic error naming the component kind and id; a `filepath.Clean`
+  containment backstop additionally rejects any emitted write whose cleaned path
+  still traverses upward (covering bundled skill-file paths too). `Plan` reads only
+  the id strings (a string-only `secrets.Resolved.ComponentIDs()` accessor), so the
+  guard never unwraps the resolved model and the secrets lint fence is unchanged.
 - **Offline `verify` no longer prints unsanitized malformed-reference candidates
   (issue #171 hardening).** `agentsync verify` in offline mode
   (`AGENTSYNC_ALLOW_OFFLINE_VERIFY=1`, the documented CI path) reports each

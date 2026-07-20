@@ -233,7 +233,6 @@ func RecordOpsState(s *state.Targets, userHome, agent string, scope adapter.Scop
 			if err := json.Unmarshal(op.Content, &ours); err != nil {
 				return fmt.Errorf("parse our payload for %s: %w", op.Path, err)
 			}
-			tomlKeys := op.MergeStrategy == "merge-toml-keys"
 			for _, ptr := range CollectPointers(ours, "") {
 				v, present := getPointerOK(final, ptr)
 				if !present {
@@ -248,11 +247,15 @@ func RecordOpsState(s *state.Targets, userHome, agent string, scope adapter.Scop
 					// Skip it; only record what actually landed.
 					continue
 				}
-				if tomlKeys {
-					if err := assertHashStableTOMLValue(ptr, v); err != nil {
-						return fmt.Errorf("record state for %s: %w", op.Path, err)
-					}
-				}
+				// v is the on-disk value the merge produced (TOML-decoded for
+				// merge-toml-keys, JSON otherwise); status/diff re-read and re-hash the
+				// same on-disk value the same way, so record and re-read stay
+				// shape-consistent for every scalar reachable today. Residual
+				// (documented, not guarded — #162 item F): a codex merge-toml-keys
+				// owned value that is an integer > 2^53 or a TOML datetime would hash
+				// differently as JSON source vs TOML dest and show a benign false-drift
+				// (no data loss). A hard guard here was removed — it wrongly FAILED
+				// apply on ordinary numeric passthrough (e.g. a codex MCP timeout).
 				hash := hashAny(v)
 				key := fmt.Sprintf("%s:%s:%s:%s:%s", agent, scope.String(), portableProject, portablePath, ptr)
 				s.Keys[key] = state.KeyEntry{
@@ -277,55 +280,6 @@ func RecordOpsState(s *state.Targets, userHome, agent string, scope adapter.Scop
 		}
 	}
 	return nil
-}
-
-// assertHashStableTOMLValue guards the one latent shape hazard in
-// merge-toml-keys owned-key state recording. op.Content ("ours") is decoded as
-// JSON, but the destination it merges into is decoded as TOML
-// (decodeDestObject), and the two decoders map some scalars to DIFFERENT Go
-// types — a TOML datetime → time.Time (JSON has only a string), an integer
-// beyond float64's exact range, etc. The owned-key hash recorded here is taken
-// from the TOML-decoded value, while status/diff hash the JSON-decoded source
-// value; a value whose json.Marshal differs between the two forms would report
-// perpetual (false) drift that no apply can converge.
-//
-// The ONLY current merge-toml-keys consumer (Codex's mcp_servers/hooks) owns
-// string-valued leaves exclusively, so this never fires today. It is a
-// deliberate tripwire: the day an owned merge-toml-keys value carries a
-// datetime, a number, or any other non-string/non-bool scalar, apply fails
-// LOUDLY here — with an actionable message — instead of silently false-drifting
-// forever. If that day comes, make the recorded and compared hashes
-// shape-consistent (normalize both the JSON source and the TOML dest through one
-// representation) before removing this guard. bool is permitted: JSON and TOML
-// both decode it to Go bool, which json.Marshal renders identically.
-func assertHashStableTOMLValue(ptr string, v any) error {
-	var check func(where string, x any) error
-	check = func(where string, x any) error {
-		switch xx := x.(type) {
-		case nil, string, bool:
-			return nil
-		case map[string]any:
-			for k, c := range xx {
-				if err := check(where+"/"+k, c); err != nil {
-					return err
-				}
-			}
-			return nil
-		case []any:
-			for i, c := range xx {
-				if err := check(fmt.Sprintf("%s[%d]", where, i), c); err != nil {
-					return err
-				}
-			}
-			return nil
-		default:
-			return fmt.Errorf("owned merge-toml-keys value at %s has a non-string leaf of type %T; "+
-				"the JSON source and TOML dest decode it to different Go types, so its recorded and "+
-				"re-read hashes would diverge and report perpetual false drift — make the owned-key "+
-				"hashing shape-consistent before introducing a numeric/datetime owned value", where, x)
-		}
-	}
-	return check(ptr, v)
 }
 
 // CollectPointers walks m and returns JSON pointers for every leaf-or-object
