@@ -31,6 +31,21 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   the reconcile-after-revert step, the shared-dir caveat, and the
   never-pushed/cleartext-history note. Wired into the `Guides` sidebar and
   cross-linked from the `revert` reference in `reference/cli.mdx`.
+- **Empirically verified release reproducibility and corrected the
+  `.goreleaser.yaml` claim to match (issue #173).** Building two snapshot releases
+  from the same commit with the release-pinned goreleaser `2.16.0` and diffing the
+  `dist/` trees showed the binaries and the six tar.gz/zip archives are
+  byte-for-byte identical run-to-run (the archive-mtime pinning restored in #138
+  works), but the nfpms deb/rpm — and therefore `checksums.txt`, which hashes
+  them — are **not**: the packages embed the wall-clock build time (deb
+  directory-entry mtimes and the rpm `BUILDTIME` header), not the commit date. The
+  `release`/`archives`/`checksum` comments claiming "(reproducible, identical)"
+  assets and "an identical checksums.txt" were corrected (comment text only, no
+  behavioral config change — pinning `nfpms.mtime` belongs with #138). Added
+  `internal/release/reproducibility_test.go`, a guard that reads the on-disk
+  `.goreleaser.yaml` and fails if the archive-entry mtime pins are stripped (the
+  PR #115 regression class), keeping the reproducible-archives claim
+  self-certifying.
 - **Synced the v1.0 git-backup feature's contract docs (issue #141).** The
   components map now carries `internal/git` (the leaf go-git wrapper) and
   `internal/ui`, the full adapter set (9 deep adapters + generic breadth tier +
