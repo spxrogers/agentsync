@@ -55,6 +55,20 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 			})
 			continue
 		}
+		// Codex only EXECUTES `command` hook handlers; it tolerates (parses and
+		// skips) any other/empty `type` without rejecting the file. So a
+		// non-command handler still round-trips through render, but it is a silent
+		// no-op at runtime — surface that as a reduced skip so the user is told it
+		// won't run. Empty type is left unreported (it is the common default and
+		// not necessarily a mistake). See https://developers.openai.com/codex/.
+		if h.Type != "" && h.Type != "command" {
+			skips = append(skips, adapter.Skip{
+				Component: "hook",
+				Name:      h.Event.String(),
+				Reason:    "Codex only runs `command` hook handlers; this handler type is parsed but never executed",
+				Kind:      adapter.SkipReduced,
+			})
+		}
 		entry := map[string]any{
 			"matcher": h.Matcher,
 			"hooks": []map[string]any{{
@@ -67,15 +81,16 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 	if len(byEvent) == 0 {
 		return nil, skips, nil
 	}
-	var ownedKeys []string
-	for event := range byEvent {
-		ownedKeys = append(ownedKeys, "/hooks/"+event)
-	}
 	obj := map[string]any{"hooks": byEvent}
 	body, err := json.MarshalIndent(obj, "", "  ")
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal hooks: %w", err)
 	}
+	// OwnedKeys is intentionally left unset here: render.Plan populates it from
+	// persisted state for every merge-toml-keys op (scoped to the op's sections),
+	// so a hand-set value would be dead — always overwritten before Apply. The
+	// hook orphan-cleanup path is exercised directly in settings_test.go
+	// (TestMergeTOML_RemovesOrphanedHookKey). See adapter.FileOp.OwnedKeys.
 	return []adapter.FileOp{{
 		Action:        "write",
 		Path:          p.Config,
@@ -83,6 +98,5 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 		Mode:          0o644,
 		SourceID:      "hooks/* (multiple)",
 		MergeStrategy: "merge-toml-keys",
-		OwnedKeys:     ownedKeys,
 	}}, skips, nil
 }

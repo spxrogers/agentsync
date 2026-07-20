@@ -34,10 +34,11 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 	var ops []adapter.FileOp
 	var skips []adapter.Skip
 
-	if mcpOps, err := a.renderMCP(renderC, p); err != nil {
+	if mcpOps, mcpSkips, err := a.renderMCP(renderC, p); err != nil {
 		return nil, nil, err
 	} else {
 		ops = append(ops, mcpOps...)
+		skips = append(skips, mcpSkips...)
 	}
 	if memOps, err := a.renderMemory(renderC, p); err != nil {
 		return nil, nil, err

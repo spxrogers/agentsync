@@ -241,6 +241,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   loudly for MCP but silently for **hooks**. Read-side only: no change to the
   `Adapter`/`Ingest` signatures, the canonical schema, or any render/write-back
   path.
+- **Codex adapter no longer drops MCP servers or non-command hook handlers
+  silently (issue #151).** Disabled (`enabled = false`) and non-targeted (a
+  server whose `agents` allowlist excludes codex) MCP servers now surface an
+  `adapter.Skip` in the translation report instead of vanishing, and a Codex hook
+  handler whose `type` is set but not `command` now surfaces a reduced Skip
+  telling the user Codex will parse but never execute it (the handler still
+  renders — Codex tolerates any type, so nothing that would make it reject
+  `config.toml` was added). Also removed a dead hand-set `OwnedKeys` loop in
+  `renderHooks` (the render pipeline populates `OwnedKeys` from persisted state,
+  always overwriting the adapter-set value); hook orphan-cleanup is now covered
+  directly against `MergeTOML`.
 - **CLI write-path correctness batch (issue #171).** Five disjoint fixes: (1)
   `setDestinationGitBackupMode` now re-parses the spliced `agentsync.toml` before
   writing and **refuses** (leaving the file untouched) if the splice would no longer
