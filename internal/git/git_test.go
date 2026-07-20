@@ -1267,3 +1267,96 @@ func TestPlan_ModifyAndUnknown(t *testing.T) {
 		t.Fatalf("Kind = %q, want \"modify\" (explicit merkletrie.Modify case)", got.Kind)
 	}
 }
+
+// contentInHead returns the content of rel as committed in the repo's HEAD tree.
+func contentInHead(t *testing.T, dir, rel string) string {
+	t.Helper()
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := tree.File(rel)
+	if err != nil {
+		t.Fatalf("%s not found in HEAD tree: %v", rel, err)
+	}
+	content, err := f.Contents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
+}
+
+// TestSnapshotDirtyTracked_CleartextCapture pins the two-sided contract of the
+// pre-destructive safety snapshot (issue #167): it commits dirty TRACKED files
+// verbatim — including a rendered dest file whose ${secret:…} was resolved to
+// CLEARTEXT, the accepted at-rest exposure that is only tolerable because these
+// repos are never pushed — while NEVER sweeping in the user's untracked scratch
+// files (isUntracked honored). Unlike TestSnapshotDirtyTrackedAndIsClean it reads
+// the committed blob back to prove the cleartext was actually captured, and pins
+// `now` for a deterministic commit.
+func TestSnapshotDirtyTracked_CleartextCapture(t *testing.T) {
+	testenv.RequireContainer(t)
+	orig := now
+	defer func() { now = orig }()
+	now = func() time.Time { return time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC) }
+
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A tracked rendered file that starts life with a benign placeholder value.
+	commitFile(t, r, dir, "rendered.json", `{"token":"placeholder"}`, "baseline apply")
+
+	// The user (or a re-apply) rewrites the tracked file to hold a resolved
+	// cleartext secret, and separately drops an untracked scratch file.
+	const cleartext = `{"token":"ghp_SUPER_SECRET_CLEARTEXT"}`
+	writeFile(t, dir, "rendered.json", cleartext)
+	writeFile(t, dir, "user-scratch.txt", "my own notes — do not commit")
+
+	snap, err := r.SnapshotDirtyTracked("safety snapshot", DefaultIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap == "" {
+		t.Fatal("SnapshotDirtyTracked should have committed the dirty tracked file")
+	}
+
+	// (a) The modified tracked file is captured, cleartext and all — this is the
+	//     accepted design (local-only history), not a leak the snapshot must block.
+	if !inHead(t, dir, "rendered.json") {
+		t.Fatal("the modified tracked file must be captured in the snapshot commit")
+	}
+	if got := contentInHead(t, dir, "rendered.json"); got != cleartext {
+		t.Fatalf("snapshot captured %q, want the verbatim cleartext %q", got, cleartext)
+	}
+
+	// (b) The untracked scratch file is NEVER swept into the snapshot commit...
+	if inHead(t, dir, "user-scratch.txt") {
+		t.Fatal("an untracked user file must NOT be committed by the snapshot")
+	}
+	// ...and is left untouched on disk.
+	if got := readFile(t, dir, "user-scratch.txt"); got != "my own notes — do not commit" {
+		t.Fatalf("untracked scratch file was disturbed: %q", got)
+	}
+
+	// The pinned clock makes the snapshot commit deterministic.
+	repo, _ := gogit.PlainOpen(dir)
+	ref, _ := repo.Head()
+	c, _ := repo.CommitObject(ref.Hash())
+	if want := time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC); !c.Author.When.Equal(want) {
+		t.Errorf("snapshot commit time = %v, want pinned %v", c.Author.When, want)
+	}
+}
