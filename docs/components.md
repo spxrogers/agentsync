@@ -312,7 +312,11 @@ noop-registered agent unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`.
 ### `internal/render`
 Orchestrates apply: canonical + registry → per-agent `FileOp`s/`Skip`s, runs
 collision detection and backups, records state, synthesizes cleanup ops for
-orphaned owned keys, and builds the translation report.
+orphaned owned keys, and builds the translation report. `Plan` also validates
+every text-component id (subagent/command/skill `Name`) against
+`source.ValidateComponentID` before any adapter joins it into a destination
+filename — the Render-time path-traversal guard, symmetric with the dest→source
+write boundary (see architecture §7).
 - **Key:** `Plan`; `Apply`; `PreviewApply` (dry-run: collision preview +
   synced/would-change verdict); `Writer`
   (`NewWriter`/`NewPreviewWriter`); `TranslationReport` (`PrintText`/`PrintJSON`);

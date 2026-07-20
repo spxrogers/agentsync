@@ -600,6 +600,26 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    URLs, user-supplied CLI args, enum modes, and the `import`-only diagnostics
    surface — native marketplace ids / source types) stay plain strings. See
    `SECURITY.md`.
+7. **Render-time component-id guard** (`render.Plan`) — every deep adapter joins a
+   text component's canonical `Name` into a destination filename
+   (`filepath.Join(dir, Name+ext)`); a `Name` like `../../../tmp/x` would render a
+   `FileOp.Path` that escapes the agent's config dir — a write-anywhere primitive
+   on apply. The dispatch waist closes this for **all** adapters at once: before an
+   adapter's FileOps are collected, `Plan` validates every text-component id
+   (subagent / command / skill `Name`, project overlay included) with the **same**
+   `source.ValidateComponentID` the dest→source write boundary uses (§5), so the
+   source→dest and dest→source boundaries share one sanitizer — a separator, `..`,
+   absolute path, bare `.`, all-whitespace, or control/deceptive rune is refused
+   identically in both directions. A traversal-bearing name is a hard error: the
+   **whole plan is refused** (never an `adapter.Skip`, which would imply a benign
+   capability gap). A conservative `filepath.Clean` containment backstop
+   additionally rejects any emitted write whose cleaned path still traverses upward
+   — defense-in-depth that also covers bundled skill-file paths
+   (`Skill.Files[*].Path`), which legitimately contain `/` and so are not single
+   ids. `Plan` reads only the id **strings** (via a string-only
+   `secrets.Resolved.ComponentIDs()` accessor), never unwrapping the resolved model
+   to a writable `source.Canonical`, so the guard doesn't cross the secrets lint
+   fence (§8).
 
 ---
 

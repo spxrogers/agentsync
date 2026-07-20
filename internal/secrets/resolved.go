@@ -56,6 +56,52 @@ func ForRender(c source.Canonical) Resolved { return Resolved{c: c} }
 // stop — you almost certainly want capture.Capture instead.
 func (r Resolved) Canonical() source.Canonical { return r.c }
 
+// ComponentID is a (kind, name) pair for a text component whose canonical Name
+// becomes a destination filename stem at Render (subagent/command/skill). Kind
+// is the label source.ValidateComponentID expects ("subagent", "command",
+// "skill").
+type ComponentID struct {
+	Kind string
+	Name string
+}
+
+// ComponentIDs returns every text-component id reachable in the resolved model —
+// subagent, command, and skill names, INCLUDING the project overlay — so a
+// caller (render.Plan) can validate each against source.ValidateComponentID
+// before any adapter joins it into a FileOp path. A Name like "../../../tmp/x"
+// would otherwise render a path that escapes the agent's config dir.
+//
+// It is deliberately a STRING-only accessor: it reads the id strings off the
+// private canonical directly (never through the fenced Canonical() egress) and
+// never returns the writable source.Canonical. So it neither trips the
+// secrets.Resolved.Canonical forbidigo fence nor gives the caller a seam to
+// launder resolved cleartext back toward source — the dispatch-layer guard gets
+// exactly the names it must validate and nothing more.
+func (r Resolved) ComponentIDs() []ComponentID {
+	return componentIDs(r.c)
+}
+
+func componentIDs(c source.Canonical) []ComponentID {
+	var out []ComponentID
+	for _, s := range c.Subagents {
+		out = append(out, ComponentID{Kind: "subagent", Name: s.Name})
+	}
+	for _, cmd := range c.Commands {
+		out = append(out, ComponentID{Kind: "command", Name: cmd.Name})
+	}
+	for _, sk := range c.Skills {
+		out = append(out, ComponentID{Kind: "skill", Name: sk.Name})
+	}
+	// A project-scope model carries the project-only set in Project; recurse so a
+	// traversal-bearing project component is caught too. User-scope models have a
+	// nil Project (no overlay is loaded), so this is a no-op there — it never
+	// rejects a user-scope apply for a name only the project overlay would render.
+	if c.Project != nil {
+		out = append(out, componentIDs(*c.Project)...)
+	}
+	return out
+}
+
 // cloneForResolve copies c so SubstituteCanonical can resolve secrets into the
 // copy while the caller's source.Canonical stays templated. Only the containers
 // the secret walk mutates (Args/Env/Headers slices+maps, the MCP/LSP/Hook
