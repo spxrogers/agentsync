@@ -112,10 +112,16 @@ func componentIDs(c source.Canonical) []ComponentID {
 	for _, l := range c.LSPServers {
 		out = append(out, ComponentID{Kind: "lsp", Name: l.ID})
 	}
-	// A project-scope model carries the project-only set in Project; recurse so a
-	// traversal-bearing project component is caught too. User-scope models have a
-	// nil Project (no overlay is loaded), so this is a no-op there — it never
-	// rejects a user-scope apply for a name only the project overlay would render.
+	// Recurse into the project overlay as forward-looking defense-in-depth — NOT
+	// the primary guard. In the production flow this is belt-and-suspenders:
+	// project.Merge (internal/project, via overlayByKey) already mirrors every
+	// project component id into the TOP-LEVEL merged slices above, so render.Plan —
+	// the sole caller — validates each project id through the top-level loop
+	// regardless, and dropping this recursion would not open a real gap. It costs
+	// only duplicate (already-validated) ids today; its value is guarding a would-be
+	// caller that ever passed an UNMERGED project-only model. User-scope models have
+	// a nil Project (no overlay loaded), so this is a no-op there — it never rejects
+	// a user-scope apply for a name only the project overlay would render.
 	if c.Project != nil {
 		out = append(out, componentIDs(*c.Project)...)
 	}

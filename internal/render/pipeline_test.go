@@ -184,12 +184,15 @@ func TestPlan_RejectsTraversalComponentName(t *testing.T) {
 	}
 }
 
-// TestPlan_RejectsTraversalInProjectOverlay proves the id-validation recursion is
-// wired end-to-end: a traversal-bearing id living ONLY in the project overlay (the
-// top-level model is clean) still refuses the whole plan. This ties the
-// ComponentIDs `c.Project` recursion (internal/secrets) to the render-time guard —
-// a regression that stopped descending into the overlay would render a
-// write-anywhere FileOp for a project-only component.
+// TestPlan_RejectsTraversalInProjectOverlay exercises the ComponentIDs `c.Project`
+// recursion (internal/secrets) end-to-end: a traversal-bearing id present ONLY in
+// the project overlay still refuses the whole plan. The model is DELIBERATELY
+// synthetic — in the production flow project.Merge (overlayByKey) always mirrors
+// every project id into the top-level slices too, so the top-level loop would
+// already catch this id and the recursion is defense-in-depth, not the sole guard.
+// The test pins that defense-in-depth branch: if a future caller ever fed Plan an
+// unmerged project-only model, a traversal id there must still be rejected, never
+// rendered as a write-anywhere FileOp.
 func TestPlan_RejectsTraversalInProjectOverlay(t *testing.T) {
 	reg := adapter.NewRegistry()
 	if err := reg.Register(noop.New("claude")); err != nil {

@@ -11,11 +11,12 @@ import (
 // ComponentIDs surfaces every id an adapter joins into a destination path —
 // subagent/command/skill Names AND MCP/LSP server ids — for BOTH the top-level
 // model and the project overlay. render.Plan validates each returned id against
-// source.ValidateComponentID, so a kind or a scope missing here is a
-// path-traversal id that would reach an adapter unchecked. The project-overlay
-// recursion (the `c.Project != nil` branch) is the specific gap this closes: it
-// was previously exercised only indirectly through Plan, and never for a
-// component that lives ONLY in the project overlay.
+// source.ValidateComponentID. The model here is DELIBERATELY synthetic: in
+// production project.Merge (overlayByKey) also mirrors every project id into the
+// top-level slices, so the recursion into `c.Project` is forward-looking
+// defense-in-depth, not the sole guard. This test pins that the recursion branch
+// is nonetheless wired for all five kinds — so a would-be caller that ever passed
+// an unmerged project-only model still gets every id validated.
 func TestComponentIDs_EnumeratesAllKindsIncludingProjectOverlay(t *testing.T) {
 	proj := source.Canonical{
 		Subagents:  []source.Subagent{{Name: "proj-sub"}},
