@@ -114,7 +114,9 @@ docs-publish:
 # golangci-lint) so local `just ci` can't drift from the version CI/release use;
 # the ci.yml version-parity guard asserts all three agree (issue #138).
 ci: lint test-release
-    go run github.com/goreleaser/goreleaser/v2@v2.16.0 release --snapshot --skip=publish --clean
+    # Skip sign too: the snapshot signs by default, but cosign is a release-only
+    # dep (release.yml installs it); `just ci` proves the cross-build, not signing.
+    go run github.com/goreleaser/goreleaser/v2@v2.16.0 release --snapshot --skip=publish,sign --clean
 
 # Cut a release: validate `v`+semver, then tag & push (which fires the release workflow). Usage: `just release v0.1.0`
 # No laptop? Trigger the same release from the GitHub UI/mobile app instead:

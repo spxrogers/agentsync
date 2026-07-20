@@ -152,8 +152,12 @@ jobs:
         with:
           version: "2.16.0"
           # --skip publish already skips the (publish-phase) scoop/chocolatey
-          # pipes; chocolatey is also named explicitly because its pack step
-          # shells out to the `choco` CLI, which this CI runner does not install
-          # (the release workflow sets choco up under Mono; CI only proves the
-          # cross-build stays viable).
-          args: release --snapshot --skip=publish,chocolatey --clean
+          # pipes; chocolatey AND sign are also named explicitly because their
+          # steps shell out to CLIs this CI runner does not install — `choco`
+          # (release sets it up under Mono) and `cosign` (release installs it via
+          # sigstore/cosign-installer for the keyless checksum signature, #138).
+          # The snapshot runs on every commit, and it signs by default; skipping
+          # sign here keeps CI cosign-free while `goreleaser check` above still
+          # validates the signs: block's schema. CI only proves the cross-build
+          # stays viable — release.yml is the run that actually signs.
+          args: release --snapshot --skip=publish,chocolatey,sign --clean
