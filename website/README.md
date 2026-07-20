@@ -21,10 +21,13 @@ bun run dev        # http://localhost:4321
 | `bun run build` | Production build to `./dist/`. |
 | `bun run preview` | Serve the production build locally. |
 | `bun run sync:docs` | Regenerate the mirrored contract pages (see below). |
+| `bun run check:links` | Validate in-site links & heading anchors (see below). |
+| `bun run test` | Run the `scripts/` unit tests (`node --test`). |
 
-`predev` and `prebuild` run `sync:docs` automatically, so a plain
-`bun run dev` / `bun run build` always has the mirrored pages in place. Running
-`astro build` directly (bypassing the scripts) will not.
+`predev` and `prebuild` run `sync:docs` **and then** `check:links`
+automatically, so a plain `bun run dev` / `bun run build` always has the
+mirrored pages in place *and* fails fast on a broken in-site link or heading
+anchor. Running `astro build` directly (bypassing the scripts) does neither.
 
 ## Content layout
 
@@ -34,7 +37,7 @@ Pages live in `src/content/docs/`. The sidebar is defined in `astro.config.mjs`.
 src/content/docs/
 ├── index.mdx                 # landing / splash
 ├── getting-started/          # what is it, mental model, install, first sync, import
-├── guides/                   # daily loop, mcp, memory, plugins, secrets, projects, …
+├── guides/                   # daily loop, rollback, mcp, memory, plugins, secrets, …
 ├── recipes/                  # task-shaped cookbook
 ├── reference/                # CLI, configuration, environment, capability matrix*
 ├── concepts/                 # concepts & glossary*
@@ -62,6 +65,31 @@ in-repo contract docs (see [`../CLAUDE.md`](../CLAUDE.md)).
 The remaining pages are authored here and are the source of truth for their own
 prose. When the CLI surface changes, update both `docs/user-guide.md` and the
 relevant page under `reference/` (the sync table in `CLAUDE.md` lists this).
+
+## Link & anchor checking (build-time)
+
+[`scripts/check-links.mjs`](scripts/check-links.mjs) is a build-time guard that
+validates every **in-site** link in the content tree. It runs from `predev` /
+`prebuild` **after** `sync:docs` (so it sees the generated + authored pages
+together), walks all `.md`/`.mdx` under `src/content/docs/`, and fails the build
+(non-zero exit, one report line per breakage naming file, line, and target) when:
+
+- a site-absolute `/route` link points at a page that does not exist, or
+- a `#anchor` does not match a real heading slug on the **target** page.
+
+Heading slugs are computed with [`github-slugger`](https://github.com/Flet/github-slugger),
+the same GitHub-style slugger Starlight uses, so the check matches the anchors
+the site actually generates. External links (`http(s)://`, `mailto:`) and the
+GitHub blob/edit URLs the mirror emits are skipped. A clean run prints a
+one-line summary and exits 0.
+
+Run it standalone with `bun run check:links`. Its own unit tests (the slugger
+fixture pinning the real slugs, plus a checker run over a temp fixture tree) live
+in [`scripts/check-links.test.mjs`](scripts/check-links.test.mjs) and run via
+`bun run test` (`node --test`). A rare **pre-existing** breakage owned by another
+issue can be parked in the `ALLOWLIST` at the top of the script (each entry
+carries a `// TODO(#NNN)` reference and is reported as a known exception, not a
+failure) — never silently edit a mirrored/canonical doc to make the check pass.
 
 ## Deploy
 

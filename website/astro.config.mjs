@@ -132,6 +132,7 @@ export default defineConfig({
 					label: 'Guides',
 					items: [
 						{ label: 'The daily loop', slug: 'guides/daily-loop' },
+						{ label: 'Rolling back a bad apply', slug: 'guides/rollback' },
 						{ label: 'MCP servers', slug: 'guides/mcp-servers' },
 						{ label: 'Memory', slug: 'guides/memory' },
 						{ label: 'Marketplaces & plugins', slug: 'guides/plugins' },

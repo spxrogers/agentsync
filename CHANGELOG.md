@@ -11,6 +11,26 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Documentation
 
+- **Build-time link/anchor checker for the docs website (issue #170).** New
+  `website/scripts/check-links.mjs` walks every `.md`/`.mdx` under
+  `website/src/content/docs/` and fails the build on any broken in-site link —
+  a site-absolute `/route` that resolves to no page, or a `#anchor` that is not
+  a real heading slug on the target page (computed with `github-slugger`, the
+  GitHub-style slugger Starlight uses). It runs from `predev`/`prebuild` after
+  `sync:docs`, is runnable standalone via `bun run check:links`, and skips
+  external/`mailto:`/GitHub-blob links. Script unit tests
+  (`website/scripts/check-links.test.mjs`, `bun run test` → `node --test`) pin
+  the real slugs and exercise the checker over a temp fixture tree. A single
+  pre-existing `concepts.md` → `/getting-started/introduction/#command-reference`
+  anchor breakage (owned by #145) is parked in an explicit `ALLOWLIST`.
+- **New "Rolling back a bad apply" website guide (issue #170).** Added
+  `website/src/content/docs/guides/rollback.mdx` (mirroring the
+  `docs/user-guide.md` rollback section): the destination git-backup enable
+  prompt and `[destination_directory_git_backup]` modes, `apply --no-git-backup`,
+  `agentsync doctor` status, the append-only `revert` (`--to`/`--all`/`--dry-run`),
+  the reconcile-after-revert step, the shared-dir caveat, and the
+  never-pushed/cleartext-history note. Wired into the `Guides` sidebar and
+  cross-linked from the `revert` reference in `reference/cli.mdx`.
 - **Synced the v1.0 git-backup feature's contract docs (issue #141).** The
   components map now carries `internal/git` (the leaf go-git wrapper) and
   `internal/ui`, the full adapter set (9 deep adapters + generic breadth tier +
