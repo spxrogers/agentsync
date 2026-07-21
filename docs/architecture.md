@@ -134,6 +134,16 @@ Two design points worth internalizing:
   the narrowest waist rather than a silent wrong-scope I/O. The CLI's
   `resolveScope` already guarantees a non-empty root for project scope, so this
   is defense-in-depth against a future or non-CLI caller.
+- **Ingest treats only `os.IsNotExist` as "component absent."** A native config
+  file (or component directory) the user never created is a silent skip; any
+  *other* read or parse error on a *present* file — a permission error, an
+  `EISDIR`, transient I/O, or a corrupt `settings.json`/`config.toml` — is
+  returned, so a transient failure never reads as an empty component that drift
+  could misclassify as "the user cleared it" and reconcile could then write back
+  as nothing over the canonical source. The shared `adapter.ReadFileOptional` /
+  `adapter.ReadDirOptional` helpers enforce this absent-vs-error split uniformly
+  across every adapter's `Ingest` (a per-entry read inside a component-directory
+  loop stays a deliberate skip, surfaced as a warning where a warn sink exists).
 
 **Component support is expressed by what `Render` emits, not a capability
 declaration.** When an agent has no native target for a component, its `Render`
@@ -600,6 +610,32 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    URLs, user-supplied CLI args, enum modes, and the `import`-only diagnostics
    surface — native marketplace ids / source types) stay plain strings. See
    `SECURITY.md`.
+7. **Render-time component-id guard** (`render.Plan`) — every deep adapter joins a
+   component id into a destination filename: a text component's canonical `Name`
+   (`filepath.Join(dir, Name+ext)`), and, for adapters that write one file per
+   server, an MCP/LSP server id (continuedev's
+   `filepath.Join(MCPDir, id+".yaml")`). An id like `../../../tmp/x` would render a
+   `FileOp.Path` that escapes the agent's config dir — a write-anywhere primitive
+   on apply; a marketplace-projected MCP id is an especially untrusted source (a
+   raw manifest map key with no traversal check of its own). The dispatch waist
+   closes this for **all** adapters at once: the id set is model-wide, so `Plan`
+   validates it **once up front** — every subagent / command / skill `Name` **and**
+   every MCP / LSP server id (project overlay included) — with the **same**
+   `source.ValidateComponentID` the dest→source write boundary uses (§5), so the
+   source→dest and dest→source boundaries share one sanitizer — a separator, `..`,
+   absolute path, bare `.`, all-whitespace, or control/deceptive rune is refused
+   identically in both directions. A traversal-bearing id is a hard error: the
+   **whole plan is refused** (never an `adapter.Skip`, which would imply a benign
+   capability gap), with an agent-agnostic message that names the component kind and
+   id — the id is model-wide, not one agent's fault. A conservative `filepath.Clean`
+   containment backstop
+   additionally rejects any emitted write whose cleaned path still traverses upward
+   — defense-in-depth that also covers bundled skill-file paths
+   (`Skill.Files[*].Path`), which legitimately contain `/` and so are not single
+   ids. `Plan` reads only the id **strings** (via a string-only
+   `secrets.Resolved.ComponentIDs()` accessor), never unwrapping the resolved model
+   to a writable `source.Canonical`, so the guard doesn't cross the secrets lint
+   fence (§8).
 
 ---
 
@@ -641,6 +677,20 @@ are a **deliberate exception**: they are not in `walkSecretFields`, so a
 `${secret:…}` in `Extra` is written literally rather than resolved. The leak
 backstop scans `Extra` separately (`scanExtraResidual`) and refuses a write that
 would persist a live secret value through it.
+
+**The `__` prefix is an agentsync-reserved `Extra` namespace.** A `__`-prefixed
+`Extra` key is agentsync-INTERNAL round-trip metadata, never a verbatim native
+field — the sole current use is continuedev's `__block_version` / `__block_schema`,
+which round-trip a Continue MCP block's `version`/`schema` header through the
+shared `Extra` map. Because `Extra` is a **shared** canonical field, this namespace
+is owned by agentsync symmetrically on both sides of the round trip: the shared
+`claude.MergeExtra` (render) never projects a `__` key into a destination, and
+`claude.ExtraNativeKeys` (capture) never ingests one — so one adapter's synthetic
+keys can never leak into another agent's native config, and a stray native `__`
+key can never be captured-then-silently-dropped. An adapter that owns reserved
+keys reads and writes them directly (continuedev's `blockHeader` /
+`applyBlockHeader` operate at the block level, bypassing both shared helpers). No
+supported harness uses a `__`-prefixed native config key.
 
 > If you ever find yourself unwrapping a `secrets.Resolved` outside an adapter's
 > `Render`, stop — you almost certainly want `capture.Capture`. The full set of

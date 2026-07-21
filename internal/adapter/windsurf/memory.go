@@ -40,6 +40,12 @@ func (a *Adapter) renderMemory(c source.Canonical, p Paths) ([]adapter.FileOp, [
 		// fence stays at byte 0 (Windsurf only parses frontmatter at the top of
 		// the file). Ingest strips the frontmatter and capture strips the banner,
 		// so both round-trip cleanly out of the canonical body.
+		//
+		// Windsurf documents a 12,000-character-per-file limit for workspace rules
+		// (`.windsurf/rules/*.md`) — larger than the 6,000-char global-rules limit
+		// below (verified against docs.devin.ai). As with the global file, agentsync
+		// writes the body verbatim and leaves enforcement to Windsurf; it neither
+		// truncates nor flags an oversized rule (documented in the capability matrix).
 		body := source.RenderManagedMemory(c.Memory.Body, c.Memory.Fragments, memoryRuleFile, banner)
 		return []adapter.FileOp{{
 			Action:        "write",

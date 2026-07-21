@@ -8,6 +8,10 @@ import (
 	"github.com/spxrogers/agentsync/internal/cli"
 )
 
+// TestRoot_VersionFlag is a smoke test: it only proves `--version` runs and
+// prints the hardcoded command name. That assertion holds even if the version
+// metadata were never injected, so it is NOT the wiring oracle — see
+// TestRoot_VersionInjection for the end-to-end injection coverage.
 func TestRoot_VersionFlag(t *testing.T) {
 	out, err := runCLI(t, nil, "--version")
 	if err != nil {
@@ -15,6 +19,67 @@ func TestRoot_VersionFlag(t *testing.T) {
 	}
 	if !strings.Contains(out, "agentsync") {
 		t.Fatalf("version output missing 'agentsync': %s", out)
+	}
+}
+
+// TestRoot_VersionInjection is the end-to-end oracle for the build-time
+// version-injection chain: GoReleaser ldflags → package main vars →
+// cli.Version/cli.Commit/cli.Date → the cobra version template. Because those
+// exported package vars are read by NewRoot() at construction time, assigning
+// distinctive non-default sentinels here is the in-process equivalent of the
+// ldflags injection. The test then asserts all three sentinels reach the
+// rendered output of BOTH surfaces (`--version` and the `version` subcommand),
+// so it goes red if any field is dropped from the template or any leg of the
+// injection chain (main→cli copy, template embedding, subcommand re-dispatch)
+// regresses — unlike TestRoot_VersionFlag, which only ever sees the literal
+// command name.
+func TestRoot_VersionInjection(t *testing.T) {
+	const (
+		wantVersion = "9.9.9-test"
+		wantCommit  = "deadbeef-test"
+		wantDate    = "2026-01-02T03:04:05Z-test"
+	)
+
+	// cli.Version/Commit/Date are exported package vars shared across the whole
+	// test binary; leaving them mutated would pollute sibling tests (e.g. the
+	// raw-byte parity guard). Snapshot and restore around this test.
+	origVersion, origCommit, origDate := cli.Version, cli.Commit, cli.Date
+	t.Cleanup(func() {
+		cli.Version, cli.Commit, cli.Date = origVersion, origCommit, origDate
+	})
+	// Assign sentinels BEFORE any runCLI call: runCLI builds the root via
+	// cli.NewRoot(), which reads these vars (Version: and the version template)
+	// at construction time.
+	cli.Version, cli.Commit, cli.Date = wantVersion, wantCommit, wantDate
+
+	sentinels := []struct {
+		field string
+		value string
+	}{
+		{field: "version", value: wantVersion},
+		{field: "commit", value: wantCommit},
+		{field: "date", value: wantDate},
+	}
+
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{name: "flag", args: []string{"--version"}},
+		{name: "subcommand", args: []string{"version"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runCLI(t, nil, tc.args...)
+			if err != nil {
+				t.Fatalf("runCLI %v: %v", tc.args, err)
+			}
+			for _, s := range sentinels {
+				if !strings.Contains(out, s.value) {
+					t.Fatalf("%v output missing injected %s %q; got: %s", tc.args, s.field, s.value, out)
+				}
+			}
+		})
 	}
 }
 

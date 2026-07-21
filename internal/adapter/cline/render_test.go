@@ -122,8 +122,16 @@ func TestRender_ProjectScope_RulesAndWorkflows(t *testing.T) {
 		t.Fatalf("memory rule wrong (under managed banner): %+v", memOp)
 	}
 	cmdOp := findOp(ops, ".clinerules/workflows/deploy.md")
-	if cmdOp == nil || string(cmdOp.Content) != "Run deploy.\n" {
-		t.Fatalf("workflow should be plain body: %+v", cmdOp)
+	if cmdOp == nil {
+		t.Fatal("workflow op missing")
+	}
+	// Workflows carry a leading ownership marker (so ingest captures only
+	// agentsync-owned workflows); the body under it is the plain command body.
+	if !strings.HasPrefix(string(cmdOp.Content), "<!-- agentsync:managed cline-workflow -->\n") {
+		t.Fatalf("expected managed workflow marker prefix: %q", cmdOp.Content)
+	}
+	if !strings.HasSuffix(string(cmdOp.Content), "Run deploy.\n") {
+		t.Fatalf("workflow body under marker wrong: %q", cmdOp.Content)
 	}
 	if !hasSkip(skips, "command", "deploy", adapter.SkipReduced) {
 		t.Errorf("expected reduced command skip, got %+v", skips)

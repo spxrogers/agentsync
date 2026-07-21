@@ -130,6 +130,105 @@ func TestRender_MCP_SkipsDisabledAndOtherAgents(t *testing.T) {
 	}
 }
 
+// TestRenderMCP_SkipsDisabledAndNonTargeted proves the C2 no-silent-drop property:
+// a disabled server and a server whose agents allowlist excludes codex are each
+// dropped from the render AND reported as an mcp Skip (Kind=SkipDropped), while the
+// one enabled+targeted server lands. The table iterates the two drop reasons.
+func TestRenderMCP_SkipsDisabledAndNonTargeted(t *testing.T) {
+	enabled := true
+	disabled := false
+	c := source.Canonical{MCPServers: []source.MCPServer{
+		{ID: "keep", Server: source.MCPServerSpec{Command: "npx", Agents: []string{"codex"}, Enabled: &enabled}},
+		{ID: "off", Server: source.MCPServerSpec{Command: "x", Enabled: &disabled}},
+		{ID: "claude-only", Server: source.MCPServerSpec{Command: "x", Agents: []string{"claude"}}},
+	}}
+	a := codex.New(codex.Options{TargetRoot: t.TempDir()})
+	ops, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exactly the enabled+targeted server lands in the emitted config.toml op.
+	op := findOp(ops, "config.toml")
+	if op == nil {
+		t.Fatal("config.toml op missing; the enabled+targeted server should land")
+	}
+	var ours map[string]any
+	if err := json.Unmarshal(op.Content, &ours); err != nil {
+		t.Fatalf("op.Content not JSON: %v\n%s", err, op.Content)
+	}
+	servers, _ := ours["mcp_servers"].(map[string]any)
+	if len(servers) != 1 || servers["keep"] == nil {
+		t.Fatalf("only the enabled+targeted server should land, got %v", servers)
+	}
+	// Collect the mcp skips; each must set Kind=SkipDropped and appear once.
+	got := map[string]adapter.Skip{}
+	for _, s := range skips {
+		if s.Component != "mcp" {
+			continue
+		}
+		if s.Kind != adapter.SkipDropped {
+			t.Fatalf("mcp skip %q has Kind=%v, want SkipDropped", s.Name, s.Kind)
+		}
+		if _, dup := got[s.Name]; dup {
+			t.Fatalf("duplicate mcp skip for %q", s.Name)
+		}
+		got[s.Name] = s
+	}
+	if _, ok := got["keep"]; ok {
+		t.Fatalf("the landed server must not be reported as a skip: %+v", got["keep"])
+	}
+	for _, tc := range []struct {
+		name, wantReason string
+	}{
+		{"off", "disabled"},
+		{"claude-only", "allowlist"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, ok := got[tc.name]
+			if !ok {
+				t.Fatalf("no mcp skip for dropped server %q; skips=%+v", tc.name, skips)
+			}
+			if !strings.Contains(s.Reason, tc.wantReason) {
+				t.Fatalf("skip reason for %q = %q, want substring %q", tc.name, s.Reason, tc.wantReason)
+			}
+		})
+	}
+}
+
+// TestRenderMCP_AllDroppedStillReportsSkips guards the len(servers)==0 early return:
+// when every MCP server is disabled/non-targeted, no config.toml op is emitted but a
+// Skip is still returned per server (a nil return would swallow the skips).
+func TestRenderMCP_AllDroppedStillReportsSkips(t *testing.T) {
+	disabled := false
+	c := source.Canonical{MCPServers: []source.MCPServer{
+		{ID: "off", Server: source.MCPServerSpec{Command: "x", Enabled: &disabled}},
+		{ID: "claude-only", Server: source.MCPServerSpec{Command: "x", Agents: []string{"claude"}}},
+	}}
+	a := codex.New(codex.Options{TargetRoot: t.TempDir()})
+	ops, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op := findOp(ops, "config.toml"); op != nil {
+		t.Fatalf("no config.toml op should be emitted when all MCP servers drop: %s", op.Content)
+	}
+	names := map[string]bool{}
+	for _, s := range skips {
+		if s.Component != "mcp" {
+			continue
+		}
+		if s.Kind != adapter.SkipDropped {
+			t.Fatalf("mcp skip %q Kind=%v, want SkipDropped", s.Name, s.Kind)
+		}
+		names[s.Name] = true
+	}
+	for _, want := range []string{"off", "claude-only"} {
+		if !names[want] {
+			t.Fatalf("all-dropped config must still report a skip for %q; got %+v", want, skips)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Memory
 // ---------------------------------------------------------------------------
@@ -368,6 +467,41 @@ func TestRender_Hooks_KnownAndUnknownEvents(t *testing.T) {
 	}
 	if !sawSkip {
 		t.Fatalf("expected a skip for unknown event SessionEnd, got %+v", skips)
+	}
+}
+
+// TestRenderHooks_NonCommandHandlerSkipped covers the P3 report-line improvement:
+// Codex only EXECUTES `command` hook handlers but tolerates any type, so a
+// non-command handler must still render (round-trip preserved) yet surface a
+// reduced Skip telling the user it won't run. This is render-surface only — the
+// full on-disk round-trip is owned by the coexistence/fidelity tests.
+func TestRenderHooks_NonCommandHandlerSkipped(t *testing.T) {
+	c := source.Canonical{Hooks: []source.Hook{
+		{Event: "PreToolUse", Matcher: "Bash", Type: "prompt", Command: "summarize the diff"},
+	}}
+	a := codex.New(codex.Options{TargetRoot: t.TempDir()})
+	ops, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The handler still renders — Codex tolerates any type, so it round-trips.
+	op := findOp(ops, "config.toml")
+	if op == nil {
+		t.Fatal("config.toml hooks op missing; a non-command handler must still render")
+	}
+	var ours map[string]any
+	_ = json.Unmarshal(op.Content, &ours)
+	if ours["hooks"].(map[string]any)["PreToolUse"] == nil {
+		t.Fatalf("non-command PreToolUse handler dropped from render: %s", op.Content)
+	}
+	var sawSkip bool
+	for _, s := range skips {
+		if s.Component == "hook" && s.Name == "PreToolUse" && s.Kind == adapter.SkipReduced {
+			sawSkip = true
+		}
+	}
+	if !sawSkip {
+		t.Fatalf("expected a reduced hook skip for the non-command handler, got %+v", skips)
 	}
 }
 

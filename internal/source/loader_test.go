@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/testenv"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // TestLoad_AgentsyncTOMLRejectsTypos guards against the silent-drop bug
@@ -489,6 +490,70 @@ command = "echo intercepting Bash"
 	}
 	if c.Hooks[0].Matcher != "Write|Edit" {
 		t.Fatalf("matcher = %q", c.Hooks[0].Matcher)
+	}
+}
+
+// TestLoadHooks_EventIsUntrusted anchors to the on-disk artifact: it seeds a real
+// hooks/<event>.toml file (whose NAME is the untrusted, user/marketplace-controllable
+// event origin), loads it through the real loader, and asserts (a) Hook.Event is
+// statically untrusted.Text, (b) its raw value round-trips to the file name, and (c)
+// the source writer re-emits the file at the SAME hooks/<event>.toml path with the
+// same entry — so the fidelity check is over the file tree, not the parsed model.
+// requireUntrustedText accepts only an untrusted.Text; passing a differently-typed
+// value to it is a compile error. Used as a compile-time type assertion.
+func requireUntrustedText(untrusted.Text) {}
+
+func TestLoadHooks_EventIsUntrusted(t *testing.T) {
+	testenv.RequireContainer(t)
+	home := t.TempDir()
+
+	hooksDir := filepath.Join(home, "hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fixture := "[[hook]]\nmatcher = \"Write|Edit\"\ntype    = \"command\"\ncommand = \"echo hi\"\n"
+	if err := os.WriteFile(filepath.Join(hooksDir, "PreToolUse.toml"), []byte(fixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := source.Load(afero.NewOsFs(), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Hooks) != 1 {
+		t.Fatalf("hooks = %d, want 1", len(c.Hooks))
+	}
+	h := c.Hooks[0]
+
+	// (b) Event is statically untrusted.Text — passing it to a param of that exact
+	// type is a compile-time proof (fails to build if the field ever reverts to a
+	// plain string). A `var _ untrusted.Text = h.Event` would trip staticcheck
+	// QF1011 as a "redundant" annotation, which is precisely the property we assert.
+	requireUntrustedText(h.Event)
+	// (a) the raw event round-trips to the file NAME.
+	if got := h.Event.Unverified(); got != "PreToolUse" {
+		t.Fatalf("Event.Unverified() = %q, want %q", got, "PreToolUse")
+	}
+
+	// (c) Writer round-trip anchored to the artifact: re-emit and re-load, asserting
+	// the file lands back at hooks/PreToolUse.toml with the same entry.
+	out := t.TempDir()
+	if err := source.WriteHooks(out, h.Event.Unverified(), c.Hooks); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "hooks", "PreToolUse.toml")); err != nil {
+		t.Fatalf("expected hooks/PreToolUse.toml to be re-emitted: %v", err)
+	}
+	rt, err := source.Load(afero.NewOsFs(), out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.Hooks) != 1 {
+		t.Fatalf("round-trip hooks = %d, want 1", len(rt.Hooks))
+	}
+	got := rt.Hooks[0]
+	if got.Event.Unverified() != "PreToolUse" || got.Matcher != "Write|Edit" || got.Command != "echo hi" || got.Type != "command" {
+		t.Fatalf("round-trip mismatch: %+v", got)
 	}
 }
 

@@ -17,6 +17,11 @@ import (
 // TestRoundTrip_ProjectScope renders MCP + memory + commands at project scope,
 // applies, ingests, and asserts they survive (MCP transport + headers, command
 // description + argument-hint, memory byte-clean).
+//
+// MODEL-ANCHORED: this deliberately stays a model-level round-trip check (asserts the
+// parsed MCP/memory/command MODEL survives). The on-disk BYTE oracle for the command
+// artifact is now provided separately by TestRoundTrip_Command_ByteStable in this file,
+// so this one is kept as the model-level unit check, not the byte-stability oracle.
 func TestRoundTrip_ProjectScope(t *testing.T) {
 	proj := t.TempDir()
 	a := roo.New(roo.Options{TargetRoot: t.TempDir()})
@@ -154,5 +159,62 @@ func TestIngest_Command_WarnsOnDroppedRooKeys(t *testing.T) {
 	}
 	if !strings.Contains(warn.String(), `command "review" frontmatter keys not modeled by agentsync dropped on import: mode`) {
 		t.Fatalf("expected dropped-keys warning:\n%s", warn.String())
+	}
+}
+
+// TestRoundTrip_Command_ByteStable is a byte-stability oracle for the Roo command
+// artifact: render a command to disk, ingest the on-disk file, re-render from what
+// was ingested, and assert the on-disk bytes are IDENTICAL. Unlike
+// TestRoundTrip_ProjectScope (which asserts the parsed MODEL survives), this anchors
+// on the on-disk artifact — a render→ingest→render that isn't a fixed point would
+// churn the native file on every apply. Mirrors TestRoundTrip_ProjectScope's fixture.
+func TestRoundTrip_Command_ByteStable(t *testing.T) {
+	proj := t.TempDir()
+	a := roo.New(roo.Options{TargetRoot: t.TempDir()})
+	in := projOf(source.Canonical{
+		Commands: []source.Command{{
+			Name:        "deploy",
+			Frontmatter: map[string]any{"description": "Deploy", "argument-hint": "<env>"},
+			Body:        "Deploy it.\n",
+		}},
+	})
+
+	render := func(c source.Canonical) {
+		t.Helper()
+		ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeProject, proj)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// First render → apply → capture the on-disk command bytes.
+	render(in)
+	cmdPath := filepath.Join(proj, ".roo", "commands", "deploy.md")
+	first, err := os.ReadFile(cmdPath)
+	if err != nil {
+		t.Fatalf("read rendered command: %v", err)
+	}
+
+	// Ingest the on-disk artifact, then re-render from what we captured. The ingested
+	// canonical carries the command at top level (Project nil), which project-scope
+	// Render renders directly.
+	got, err := a.Ingest(adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Commands) != 1 {
+		t.Fatalf("ingest did not recover the command: %+v", got.Commands)
+	}
+	render(got)
+	second, err := os.ReadFile(cmdPath)
+	if err != nil {
+		t.Fatalf("read re-rendered command: %v", err)
+	}
+
+	if !bytes.Equal(first, second) {
+		t.Fatalf("command file not byte-stable across ingest→re-render:\nfirst:\n%q\nsecond:\n%q", first, second)
 	}
 }

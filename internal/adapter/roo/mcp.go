@@ -92,7 +92,9 @@ func rooMCPSpec(s source.MCPServerSpec) map[string]any {
 }
 
 // isRemote reports whether a canonical server maps to a Roo remote transport. An
-// untyped server carrying a URL but no command is treated as remote.
+// UNTYPED server (Type == "") carrying a URL but no command is treated as remote —
+// see the transport-normalization note on IngestMCPSpec: such a server round-trips
+// to a stable canonical Type == "http".
 func isRemote(s source.MCPServerSpec) bool {
 	switch s.Type {
 	case "http", "sse":
@@ -115,22 +117,46 @@ func rooTransport(s source.MCPServerSpec) string {
 
 // IngestMCPSpec translates one Roo-native server entry (the value under
 // .roo/mcp.json `mcpServers.<id>`) into the canonical MCPServerSpec. Inverse of
-// rooMCPSpec: `streamable-http` → http, `sse` → sse, otherwise stdio. Native keys
-// agentsync doesn't model (cwd, timeout, alwaysAllow, …) are preserved in Extra.
+// rooMCPSpec: `streamable-http`/`http` → http, `sse` → sse, and stdio otherwise.
+// Native keys agentsync doesn't model (cwd, timeout, alwaysAllow, …) are preserved
+// in Extra.
+//
+// Transport normalization (documented in docs/capability-matrix.md → "Roo Code /
+// MCP remote"): Roo records a remote server's transport in an explicit `type`
+// (`streamable-http`/`sse`), so a native `sse` server round-trips `sse → sse`
+// losslessly. A canonical server with NO explicit transport — Type == "" with a
+// URL and no command — is treated as remote by rooMCPSpec.isRemote and rendered as
+// `type: streamable-http`, so it canonicalizes to `http` on capture and thereafter
+// round-trips `http → streamable-http → http` STABLY. To make that same
+// normalization hold for a HAND-authored native entry that carries only a `url`
+// (no `type`, no `command`), a url-bearing/command-less untyped entry is also
+// canonicalized to `http` here — otherwise it would be misread as `stdio` and its
+// URL dropped on the next render. So the single rule, in both directions, is:
+// "url + no command, no explicit transport ⇒ remote http".
 func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
+	command := asStr(raw["command"])
+	url := asStr(raw["url"])
 	canonType := "stdio"
 	switch asStr(raw["type"]) {
 	case "streamable-http", "http":
 		canonType = "http"
 	case "sse":
 		canonType = "sse"
+	case "stdio":
+		canonType = "stdio"
+	default:
+		// No explicit Roo transport `type`. A url-bearing, command-less entry is a
+		// remote server (matching rooMCPSpec.isRemote) → normalize to http.
+		if url != "" && command == "" {
+			canonType = "http"
+		}
 	}
 	return source.MCPServerSpec{
 		Type:    canonType,
-		Command: asStr(raw["command"]),
+		Command: command,
 		Args:    asStrSlice(raw["args"]),
 		Env:     asStrMap(raw["env"]),
-		URL:     asStr(raw["url"]),
+		URL:     url,
 		Headers: asStrMap(raw["headers"]),
 		Extra:   claude.ExtraNativeKeys(raw, "type", "command", "args", "env", "url", "headers"),
 	}

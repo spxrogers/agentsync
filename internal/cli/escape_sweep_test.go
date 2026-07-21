@@ -125,7 +125,14 @@ func TestEscapeSweep_ApplyPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A skill directory name carries a raw ESC byte; source.Load reads it verbatim
-	// into the model, so the rendered dest path in the apply plan preview embeds it.
+	// into the model. The Render-time component-id guard (issue #156) now REFUSES
+	// such a name at render.Plan — a control/deceptive rune in a component id is
+	// exactly what source.ValidateComponentID rejects, symmetric with the
+	// dest->source write boundary — so `apply --dry-run` errors instead of
+	// embedding the raw byte in an apply-plan preview line. The escape-injection
+	// invariant still holds on the refusal path: the error is built with %q, which
+	// escapes the ESC while keeping the marker visible, so no raw byte reaches the
+	// terminal or a CI log.
 	skillDir := filepath.Join(tmp, ".agentsync", "skills", "sk\x1b[31mSKILLHACK")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -134,10 +141,12 @@ func TestEscapeSweep_ApplyPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := runCLI(t, env, "apply", "--dry-run")
-	if err != nil {
-		t.Fatalf("apply --dry-run: %v\n%s", err, out)
+	if err == nil {
+		t.Fatalf("apply --dry-run: expected the render guard to refuse a skill id carrying a raw ESC byte; got nil error\n%s", out)
 	}
-	assertSanitized(t, out, "SKILLHACK")
+	// The refusal message is itself a print/log surface: assert it (and any buffered
+	// output) never carries the raw ESC yet still names the offending skill.
+	assertSanitized(t, out+"\n"+err.Error(), "SKILLHACK")
 }
 
 func TestEscapeSweep_ImportDryRun(t *testing.T) {

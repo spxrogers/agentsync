@@ -6,9 +6,14 @@ project_name: agentsync
 # Make a re-run idempotent. The whole release ships in one job (see release.yml),
 # so re-running the workflow is the recovery path if any single publisher hiccups
 # (e.g. a flaky `choco push`) after the Release + archives were already uploaded.
-# `replace_existing_artifacts` re-uploads the (reproducible, identical) assets on
-# the second pass instead of erroring on "asset already exists"; release.mode
-# defaults to keep-existing, so the existing Release itself is left intact.
+# `replace_existing_artifacts` overwrites the existing assets on the second pass
+# instead of erroring on "asset already exists"; release.mode defaults to
+# keep-existing, so the existing Release itself is left intact. (Overwrite is
+# correct whether or not the re-cut bytes match — and they only partly do: the
+# binaries and the tar.gz/zip archives are byte-identical run-to-run, but the
+# nfpms deb/rpm — and therefore checksums.txt, which hashes them — are NOT.
+# Empirically verified by diffing two snapshot releases in issue #173; see the
+# `checksum` block below for the attribution.)
 release:
   replace_existing_artifacts: true
 
@@ -39,15 +44,18 @@ archives:
         formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     # Pin every in-archive entry's mtime to the commit date (RFC3339) so re-cutting
-    # a release produces byte-identical archives (and therefore an identical
-    # checksums.txt) — the "reproducible, identical" guarantee the `release:` block
-    # above relies on for `replace_existing_artifacts`. goreleaser 2.16.0 has no
+    # a release produces byte-identical archives — empirically verified in issue #173
+    # by diffing two snapshot releases: all six tar.gz/zip archives (and every
+    # extracted binary) hashed identically run-to-run. goreleaser 2.16.0 has no
     # top-level archives.mtime, so the binary is pinned via builds_info.mtime and the
     # bundled docs (the same LICENSE/README/CHANGELOG set goreleaser includes by
     # default) via files[].info.mtime. The binary itself is already host-independent
     # (-trimpath + mod_timestamp above); this pins the wall-clock mtime the tar/zip
     # would otherwise stamp on each entry. PR #115 dropped this scaffolding; restored
-    # here (issue #138).
+    # here (issue #138). NOTE: this pin makes only the ARCHIVES reproducible — the
+    # nfpms deb/rpm below still carry the wall-clock build time, so checksums.txt is
+    # NOT byte-identical run-to-run (see the `checksum` block). The archive half of
+    # the claim is guarded in code: internal/release/reproducibility_test.go.
     builds_info:
       mtime: "{{ .CommitDate }}"
     files:
@@ -61,6 +69,20 @@ archives:
         info:
           mtime: "{{ .CommitDate }}"
 
+# checksums.txt hashes every archive AND every nfpms deb/rpm. Issue #173 diffed two
+# snapshot releases built from the same commit and found this file is NOT byte-
+# identical run-to-run: the six archive lines match, but the four deb/rpm lines
+# differ every run. Attribution — the packages embed the wall-clock BUILD time, not
+# the commit date: the deb `data.tar` differs in exactly 4 bytes (the octal mtime of
+# the synthesized `./usr` + `./usr/bin` directory entries; the packaged binary keeps
+# the pinned commit mtime), and the rpm differs in ~60 header bytes (RPMTAG_BUILDTIME
+# plus the signature digests over it). The compressed payloads are otherwise
+# identical. Making the packages reproducible needs an `nfpms.mtime` pin — a
+# behavioral change that is out of #173's (QA-only) scope and belongs with the
+# archive-pinning work in #138. Because the full checksums.txt is not stable
+# run-to-run, there is deliberately NO CI job diffing it across two snapshots (it
+# would be permanently red); the reproducible half (archives) is guarded instead by
+# internal/release/reproducibility_test.go.
 checksum:
   name_template: "checksums.txt"
 

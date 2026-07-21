@@ -153,10 +153,13 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 	byEvent := map[string][]source.Hook{}
 	var eventOrder []string
 	for _, h := range ingested.Hooks {
-		if _, seen := byEvent[h.Event]; !seen {
-			eventOrder = append(eventOrder, h.Event)
+		// event is a map key and the hooks/<event>.toml file stem — the raw
+		// machine value, not the sanitizing String().
+		event := h.Event.Unverified()
+		if _, seen := byEvent[event]; !seen {
+			eventOrder = append(eventOrder, event)
 		}
-		byEvent[h.Event] = append(byEvent[h.Event], h)
+		byEvent[event] = append(byEvent[event], h)
 	}
 	for _, event := range eventOrder {
 		if err := source.WriteHooks(home, event, byEvent[event]); err != nil {

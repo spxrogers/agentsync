@@ -1,0 +1,113 @@
+---
+title: Rolling back a bad apply
+description: agentsync keeps each destination dir in its own local-only git repo, so a bad apply is one `agentsync revert` away — including the very first apply. How the backup works, how to revert, and the caveats.
+sidebar:
+  order: 8
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+
+`apply` can keep each user-scope destination dir (`~/.claude`, `~/.codex`, …) in
+its **own local-only git repo**, recording a checkpoint commit after every apply
+that changes managed files there. If an apply ever goes wrong, you roll it back
+with `agentsync revert` — no manual git surgery, no lost work.
+
+## The backup: what `apply` versions
+
+After a successful user-scope apply that changes managed files, `apply` commits a
+checkpoint to each affected destination dir's local repo. **Even the first apply is
+revertible:** before that apply overwrites the dir, agentsync records a **pre-apply
+baseline** commit of the prior content of the files it is about to manage, so the
+apply checkpoint's parent is the genuine pre-apply state — there is no "the first
+apply can't be undone" gap.
+
+Pre-existing files agentsync did **not** write — an agent's credentials,
+conversation transcripts, your own scratch files — are deliberately left **out** of
+the versioned history, so it never becomes a durable copy of your secrets. They stay
+untracked, so a revert leaves them untouched anyway.
+
+<Aside type="caution" title="These repos are never pushed">
+	The rendered files they version contain secrets resolved to **cleartext**
+	(unlike the canonical source, which keeps `${secret:…}` references), so the
+	history can hold secrets — which is fine precisely because it stays local. The
+	thing you commit and push is still `~/.agentsync/`, references only. See the
+	[security model](/internals/security/) and the [Secrets guide](/guides/secrets/).
+</Aside>
+
+## Enabling it: the prompt and the modes
+
+The first apply to an untracked dir **asks** before initializing the repo (an
+opt-out prompt); it takes the pre-apply baseline the moment you agree, so that first
+apply is covered too. Answer once and it's remembered in `agentsync.toml`:
+
+```toml
+[destination_directory_git_backup]
+mode = "on"          # "prompt" (default) | "on" | "off"
+# author_name  = "agentsync"      # optional commit-identity overrides
+# author_email = "agentsync@localhost"
+```
+
+`mode` accepts exactly `prompt`, `on`, or `off` (case-sensitive; an omitted `mode`
+defaults to `prompt`). Any other value — a typo like `"On"`, `"yes"`, or `"true"` —
+is **rejected at load** with a path-prefixed error, so every command that reads the
+config (`apply`, `doctor`, …) agrees.
+
+| To… | Do this |
+| --- | --- |
+| Skip the backup for one run (CI/scripting) | `agentsync apply --no-git-backup` |
+| Turn it on/off by default | set `mode` in `[destination_directory_git_backup]` |
+| See the current mode + per-dir repo status | `agentsync doctor` |
+
+`apply --no-git-backup` skips it for a single run without touching config.
+`agentsync doctor` shows the current mode and per-dir status.
+
+## Reverting
+
+```bash frame="terminal"
+agentsync revert claude              # undo the most recent apply to ~/.claude
+agentsync revert claude --to HEAD~3  # roll back to an older checkpoint
+agentsync revert --all --dry-run     # preview reverting every managed dir
+```
+
+`revert` is **append-only** — it records a new commit rather than rewriting
+history, so the bad apply stays in the log and the revert is itself revertible. By
+default it undoes the most recent apply (restores the previous checkpoint); `--to
+<ref>` picks a specific one (a commit hash or `HEAD~3`), `--all` reverts every
+managed dir, and `--dry-run` previews the file changes without writing.
+
+If you hand-edited a **tracked** file after the last apply, revert snapshots that
+edit into history first, so **nothing tracked is lost** (recover it with `revert
+--to <snapshot>`). The snapshot covers **tracked files only** — untracked scratch
+files you dropped into a managed dir are never committed and are outside the
+snapshot (they are also left untouched by the rollback, not deleted). `revert
+--dry-run` notes when such files are present. Only agentsync-managed (git-backed)
+user-scope dirs can be reverted.
+
+<Aside type="note" title="Reconcile after a revert">
+	`revert` moves only the **destination**. The next `apply` re-renders from the
+	canonical source and would overwrite the reverted state, so revert prints a
+	notice telling you to **reconcile** (`agentsync reconcile` / `import`) or fix the
+	canonical source first. See the [daily loop](/guides/daily-loop/) for how
+	reconcile resolves drift.
+</Aside>
+
+## Caveat: the unit is the directory, not the agent
+
+Each agent's config dir **plus any shared cross-agent dir it writes** (e.g.
+`~/.agents/skills`, which Codex and several agents share) is versioned — shared dirs
+are de-duplicated to a single repo, and a dir nested under another (like
+`~/.claude/skills` under `~/.claude`) is folded into the parent, so there's never a
+repo inside a repo.
+
+Because a shared dir is one repo, `revert <agent>` of a shared dir rolls back
+*every* agent's files in it — revert **warns you** when that happens. A destination
+dir you already keep under your own git (e.g. `~/.claude` in a dotfiles repo) is
+detected and left untouched. (`~/.claude.json`, written directly in `$HOME`, is not
+versioned — agentsync never inits a repo at `$HOME`; it keeps the existing
+`.state/backups` safety net.)
+
+<LinkCard
+	title="`revert` in the CLI reference"
+	description="The command reference for revert and the apply-time destination git backup, with every flag."
+	href="/reference/cli/#revert-agent"
+/>

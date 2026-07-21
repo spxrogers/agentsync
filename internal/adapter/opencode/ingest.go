@@ -39,23 +39,29 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
 	var c source.Canonical
 
-	// MCP from opencode.json /mcp/<id>
-	if data, err := os.ReadFile(p.Settings); err == nil {
-		parsed, parseErr := hujson.Parse(data)
-		if parseErr == nil {
-			parsed.Standardize()
-			var top map[string]any
-			if json.Unmarshal(parsed.Pack(), &top) == nil {
-				if servers, ok := top["mcp"].(map[string]any); ok {
-					for id, raw := range servers {
-						spec, ok := raw.(map[string]any)
-						if !ok {
-							continue
-						}
-						m := source.MCPServer{ID: id, Server: IngestMCPSpec(spec)}
-						c.MCPServers = append(c.MCPServers, m)
-					}
+	// MCP from opencode.json /mcp/<id>. A corrupt-but-present opencode.json now
+	// fails loudly (parse error returned) rather than silently reading as "no
+	// MCP", which drift could misclassify as the servers being cleared.
+	if data, present, err := adapter.ReadFileOptional(p.Settings); err != nil {
+		return c, fmt.Errorf("read %s: %w", p.Settings, err)
+	} else if present {
+		parsed, err := hujson.Parse(data)
+		if err != nil {
+			return c, fmt.Errorf("parse %s: %w", p.Settings, err)
+		}
+		parsed.Standardize()
+		var top map[string]any
+		if err := json.Unmarshal(parsed.Pack(), &top); err != nil {
+			return c, fmt.Errorf("parse %s: %w", p.Settings, err)
+		}
+		if servers, ok := top["mcp"].(map[string]any); ok {
+			for id, raw := range servers {
+				spec, ok := raw.(map[string]any)
+				if !ok {
+					continue
 				}
+				m := source.MCPServer{ID: id, Server: IngestMCPSpec(spec)}
+				c.MCPServers = append(c.MCPServers, m)
 			}
 		}
 	}
@@ -63,14 +69,21 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	warn := a.stderr()
 
 	// Skills from ~/.claude/skills/<name>/ (SKILL.md + bundled files; shared with Claude)
-	if entries, err := os.ReadDir(p.ClaudeSkillsDir); err == nil {
-		for _, e := range entries {
+	skillEntries, present, err := adapter.ReadDirOptional(p.ClaudeSkillsDir)
+	if err != nil {
+		return c, fmt.Errorf("read skills dir %s: %w", p.ClaudeSkillsDir, err)
+	}
+	if present {
+		for _, e := range skillEntries {
 			if !e.IsDir() {
 				continue
 			}
 			skillDir := filepath.Join(p.ClaudeSkillsDir, e.Name())
 			data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
 			if err != nil {
+				if !os.IsNotExist(err) {
+					fmt.Fprintf(warn, "warning: skipping skill %q: read SKILL.md: %v\n", e.Name(), err)
+				}
 				continue
 			}
 			fm, body, lenient, err := claude.ParseFrontmatterWithReport(data)
@@ -113,8 +126,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 
 	// Subagents from <AgentsDir>/<name>.md — frontmatter munged back to canonical:
 	// preserve `mode` (primary/all/subagent), retain `description` + `model`.
-	if entries, err := os.ReadDir(p.AgentsDir); err == nil {
-		for _, e := range entries {
+	agentEntries, present, err := adapter.ReadDirOptional(p.AgentsDir)
+	if err != nil {
+		return c, fmt.Errorf("read agents dir %s: %w", p.AgentsDir, err)
+	}
+	if present {
+		for _, e := range agentEntries {
 			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 				continue
 			}
@@ -122,11 +139,14 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			if !a.destOwned(ownState, scope, project, destPath) {
 				continue // hand-authored / agentsync-unmanaged file — leave it alone
 			}
+			name := e.Name()[:len(e.Name())-len(".md")]
 			data, err := os.ReadFile(destPath)
 			if err != nil {
+				if !os.IsNotExist(err) {
+					fmt.Fprintf(warn, "warning: skipping subagent %q: read: %v\n", name, err)
+				}
 				continue
 			}
-			name := e.Name()[:len(e.Name())-len(".md")]
 			fm, body, lenient, err := claude.ParseFrontmatterWithReport(data)
 			if err != nil {
 				fmt.Fprintf(warn, "warning: skipping subagent %q: %v\n", name, err)
@@ -142,8 +162,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 
 	// Commands from <CommandsDir>/<name>.md — owned files only.
-	if entries, err := os.ReadDir(p.CommandsDir); err == nil {
-		for _, e := range entries {
+	commandEntries, present, err := adapter.ReadDirOptional(p.CommandsDir)
+	if err != nil {
+		return c, fmt.Errorf("read commands dir %s: %w", p.CommandsDir, err)
+	}
+	if present {
+		for _, e := range commandEntries {
 			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 				continue
 			}
@@ -151,11 +175,14 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			if !a.destOwned(ownState, scope, project, destPath) {
 				continue // hand-authored / agentsync-unmanaged file — leave it alone
 			}
+			name := e.Name()[:len(e.Name())-len(".md")]
 			data, err := os.ReadFile(destPath)
 			if err != nil {
+				if !os.IsNotExist(err) {
+					fmt.Fprintf(warn, "warning: skipping command %q: read: %v\n", name, err)
+				}
 				continue
 			}
-			name := e.Name()[:len(e.Name())-len(".md")]
 			fm, body, lenient, err := claude.ParseFrontmatterWithReport(data)
 			if err != nil {
 				fmt.Fprintf(warn, "warning: skipping command %q: %v\n", name, err)
@@ -168,8 +195,25 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		}
 	}
 
-	// Memory from AGENTS.md (managed-file banner stripped — see claude/ingest.go)
-	if data, err := os.ReadFile(p.Memory); err == nil {
+	// Memory from AGENTS.md (managed-file banner stripped — see claude/ingest.go).
+	//
+	// Fragment round-trip: OpenCode has NO native fragment/@import concept in
+	// AGENTS.md (https://opencode.ai/docs/rules/ — it offers only an opencode.json
+	// `instructions` glob list, not in-file composition), so agentsync expands
+	// memory/fragments/ INLINE into the rendered AGENTS.md. That expansion is
+	// REVERSIBLE: RenderManagedMemory wraps each inlined fragment in HTML-comment
+	// boundary markers (source.ExpandMemoryImports) that OpenCode treats as inert.
+	// StripManagedBanner removes only the managed BANNER, never those fragment
+	// markers, so they survive into Memory.Body here — and the write-back funnel
+	// (import/reconcile → source.CollapseMemoryMarkers) reconstructs
+	// memory/AGENTS.md + the fragment files from them. So Ingest deliberately
+	// populates only Body (not Memory.Fragments), exactly like the Claude adapter:
+	// fragment reconstruction is the capture layer's single responsibility, NOT a
+	// per-adapter one. Fragments are therefore round-tripped, not silently
+	// flattened (see TestIngest_RoundTripsMemoryFragments).
+	if data, present, err := adapter.ReadFileOptional(p.Memory); err != nil {
+		return c, fmt.Errorf("read memory %s: %w", p.Memory, err)
+	} else if present {
 		c.Memory.Body = source.StripManagedBanner(string(data))
 	}
 

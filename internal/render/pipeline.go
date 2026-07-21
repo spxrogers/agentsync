@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -15,6 +16,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/secrets"
+	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
@@ -85,6 +87,25 @@ func (p RenderPlan) Total() int {
 // home — dest files live under $HOME, not under ~/.agentsync.
 func Plan(r secrets.Resolved, reg *adapter.Registry, agents []string, scope adapter.Scope, project string, s *state.Targets, userHome string) (RenderPlan, error) {
 	out := RenderPlan{PerAgent: map[string]AgentResult{}}
+	// Primary path-traversal guard (symmetric with capture.Capture): every
+	// component id an adapter joins into a destination filename — subagent, command,
+	// skill Names AND MCP/LSP server ids (continuedev writes one file per MCP
+	// server) — must be a clean single-segment id before that join. A Name/id like
+	// "../../../tmp/x" would otherwise render a FileOp.Path that escapes the agent's
+	// config dir (a write-anywhere primitive on apply); a marketplace-projected MCP
+	// id is an especially untrusted source (a raw manifest key). The dest->source
+	// boundary already refuses such an id (source.ValidateComponentID); enforce the
+	// SAME sanitizer here at the single dispatch waist, so both boundaries share one
+	// source of truth (it also rejects control/deceptive runes via
+	// untrusted.Sanitize, not just ".."). The id set is model-wide (agent-agnostic),
+	// so validate it ONCE up front, not per-agent; a traversal-bearing id refuses
+	// the whole plan (never an adapter.Skip). Names only — ComponentIDs is a
+	// string-only accessor, so this never unwraps the Resolved.
+	for _, id := range r.ComponentIDs() {
+		if err := source.ValidateComponentID(id.Kind, id.Name); err != nil {
+			return out, fmt.Errorf("render: component %s %q: %w", id.Kind, id.Name, err)
+		}
+	}
 	for _, name := range agents {
 		a := reg.Lookup(name)
 		if a == nil {
@@ -93,6 +114,21 @@ func Plan(r secrets.Resolved, reg *adapter.Registry, agents []string, scope adap
 		ops, skips, err := a.Render(r, scope, project)
 		if err != nil {
 			return out, fmt.Errorf("render %s: %w", name, err)
+		}
+		// Containment backstop (defense-in-depth): reject any write whose own cleaned
+		// path still contains a ".." segment (an unrooted / relative-with-leading-".."
+		// path). This is deliberately narrow — Plan does not know each adapter's dest
+		// root, and filepath.Join collapses interior ".." into a rooted ABSOLUTE path,
+		// so a traversal that resolves to an absolute path is NOT caught here; that
+		// case is prevented upstream by the component-id validation above (which now
+		// covers MCP/LSP ids too). Bundled skill-file paths (Skill.Files[*].Path)
+		// legitimately contain '/', so they bypass ValidateComponentID, but they are
+		// derived from a filesystem walk via filepath.Rel with symlinks skipped, so a
+		// ".." can never enter them — this remains the last conservative net.
+		for _, op := range ops {
+			if op.Action == "write" && pathEscapes(op.Path) {
+				return out, fmt.Errorf("render %s: refusing FileOp path %q: escapes its destination directory via '..'", name, op.Path)
+			}
 		}
 		if s != nil {
 			for i, op := range ops {
@@ -117,6 +153,23 @@ func Plan(r secrets.Resolved, reg *adapter.Registry, agents []string, scope adap
 		out.PerAgent[name] = AgentResult{Ops: ops, Skips: skips}
 	}
 	return out, nil
+}
+
+// pathEscapes reports whether a cleaned destination path still contains a ".."
+// segment — i.e. it would traverse out of wherever the adapter rooted it. It is
+// the conservative containment backstop behind Plan's primary component-id check:
+// because Plan does not know each adapter's dest root, it can only reject a path
+// whose own cleaned form escapes upward, not verify positive containment.
+// filepath.Clean collapses interior traversal on a rooted absolute path, so a
+// surviving ".." means the path is not anchored (relative-with-leading-.. or
+// otherwise unrooted) — refuse it rather than write anywhere.
+func pathEscapes(p string) bool {
+	for _, seg := range strings.Split(filepath.Clean(p), string(filepath.Separator)) {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // PreviewApply runs the apply pipeline through non-writing preview writers and

@@ -734,15 +734,15 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `doctor` | Diagnose setup: PATH, home/state writability, config schema, secrets backend, destination-git-backup mode + per-dir repo status; flags natively-installed plugins missing from source. | |
 | `verify` | Validate config and surface every unresolved `${secret:}`/`${env:}` ref. `--scope project`/`--project <path>` schema-lints the project tree and validates its references against the inherited user secrets backend. | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or with `--scope project`/`--project <path>` the project tree's own `[agents]` declaration (which project scope renders from; never inherited). At project scope `disable --purge` touches only that project's rendered files. | `disable --purge --scope --project` |
-| `mcp add\|remove\|list <name>` | Manage MCP servers. | `--type --command --args --url --env --agents` |
+| `mcp add\|remove\|list <name>` | Manage MCP servers. `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site, e.g. `--header "Authorization: Bearer ${secret:TOKEN}"`. | `--type --command --args --url --env --agents --header` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
 | `plugin install\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works). | `install <id[@marketplace]>` |
 | `secrets set\|get <key>` / `secrets edit` | Manage age-encrypted secrets (`edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
 | `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
-| `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. | `--dry-run --scope --project --no-git-backup` |
+| `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. A delete-only run (a component removed from source) reports `removed: N ops`, and a mixed run `applied: X ops, removed: Y ops`, rather than mislabeling itself `up to date`/`applied: 0 ops`. | `--dry-run --scope --project --no-git-backup` |
 | `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. Skips (or, with `--strict`, errors on) a dir under which a foreign git repo has appeared. | `--to --all --dry-run` |
-| `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. Skill directories collapse to one summary row by default (`--verbose` expands them). | `--agents --verbose --scope --project --json` |
-| `diff [<path>]` | Show pending/drift changes; secrets redacted. | `--scope --project --json` |
+| `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. Skill directories collapse to one summary row by default (`--verbose` expands them). `--exit-code` makes it a CI gate: exit `2` when any drift is detected, `0` when clean. | `--agents --verbose --scope --project --json --exit-code` |
+| `diff [<path>]` | Show pending/drift changes; secrets redacted. `<path>` is a filesystem path; an unmanaged/typo'd path is reported distinctly from a clean one. `--agents` narrows to an agent allowlist (like `status`); `--exit-code` exits `2` when any hunk exists, `0` when clean. | `--agents --scope --project --json --exit-code` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. Includes `plugin` (Claude), which re-fetches installed plugins + marketplaces **(network)**. `--scope project` reads the agent's *native project-scope* config (e.g. `<root>/.claude/`) and captures it into the project tree `<root>/.agentsync/`, seeding central state with the project scope + root. Plugin import is user-scope only. | `--dry-run --scope --project` |
 | `explain [<plugin>...]` | Show per-agent translation coverage for one or more plugins. | `--all --list --json` |
@@ -752,12 +752,18 @@ Global: `-v/--verbose` for verbose logging on any command (in `status` it also
 expands each collapsed skill directory back to one row per bundled file).
 `--color=auto|always|never` controls whether output is styled with ANSI color
 and bold (default `auto` — on for a TTY, off when piped/redirected; honors
-`NO_COLOR`). `status --agents <list>` scopes the report to a comma-separated
-agent allowlist (`*` = all enabled, matching `mcp add --agents`). `status --json`
-and `diff [<path>] --json` emit
+`NO_COLOR`). `status --agents <list>` and `diff --agents <list>` scope the report
+to a comma-separated agent allowlist (`*` = all enabled, matching `mcp add
+--agents`; an empty or unknown value is rejected identically by both). `status
+--json` and `diff [<path>] --json` emit
 the structured report instead of the formatted one, suitable for CI gates and
 dashboards (`status --json` is never collapsed — it carries every tracked file;
-`diff --json` masks the same resolved secrets the formatted diff does).
+`diff --json` masks the same resolved secrets the formatted diff does). For a
+gate that should **fail the build** on drift, add `--exit-code`: `status
+--exit-code` / `diff --exit-code` exit `2` when drift/hunks exist and `0` when
+clean (exit `2` is distinct from the generic error exit `1`, and prints no extra
+error line). Interactive prompts (e.g. the scope menu) always go to **stderr**,
+so a `--json` payload piped from stdout is never corrupted.
 
 ---
 

@@ -56,6 +56,78 @@ func ForRender(c source.Canonical) Resolved { return Resolved{c: c} }
 // stop — you almost certainly want capture.Capture instead.
 func (r Resolved) Canonical() source.Canonical { return r.c }
 
+// ComponentID is a (kind, name) pair for a component id an adapter joins into a
+// destination path. For a TEXT component (subagent/command/skill) the Name is the
+// canonical Name that becomes a destination filename stem at Render. For an MCP or
+// LSP server the Name is the server id: a filename stem only for adapters that
+// write one file per server (continuedev — filepath.Join(MCPDir, id+".yaml")), and
+// a JSON key in a shared file for the rest — but a traversal id is never a
+// legitimate server id in either shape, so all kinds are validated the same way.
+// Kind is the label source.ValidateComponentID expects ("subagent", "command",
+// "skill", "mcp", "lsp").
+type ComponentID struct {
+	Kind string
+	Name string
+}
+
+// ComponentIDs returns every component id reachable in the resolved model that an
+// adapter joins into a destination FileOp path — subagent, command, and skill
+// names plus MCP and LSP server ids, INCLUDING the project overlay — so a caller
+// (render.Plan) can validate each against source.ValidateComponentID before any
+// adapter joins it into a path. A Name/id like "../../../tmp/x" would otherwise
+// render a path that escapes the agent's config dir.
+//
+// It is deliberately a STRING-only accessor: it reads the id strings off the
+// private canonical directly (never through the fenced Canonical() egress) and
+// never returns the writable source.Canonical. So it neither trips the
+// secrets.Resolved.Canonical forbidigo fence nor gives the caller a seam to
+// launder resolved cleartext back toward source — the dispatch-layer guard gets
+// exactly the names it must validate and nothing more.
+func (r Resolved) ComponentIDs() []ComponentID {
+	return componentIDs(r.c)
+}
+
+func componentIDs(c source.Canonical) []ComponentID {
+	var out []ComponentID
+	for _, s := range c.Subagents {
+		out = append(out, ComponentID{Kind: "subagent", Name: s.Name})
+	}
+	for _, cmd := range c.Commands {
+		out = append(out, ComponentID{Kind: "command", Name: cmd.Name})
+	}
+	for _, sk := range c.Skills {
+		out = append(out, ComponentID{Kind: "skill", Name: sk.Name})
+	}
+	// MCP/LSP server ids are joined into a destination FILENAME by adapters that
+	// write one file per server (continuedev: filepath.Join(MCPDir, id+".yaml")).
+	// A marketplace-projected id is a raw manifest map key with no traversal check
+	// of its own, so a plugin declaring an mcpServers key like "../../../etc/x"
+	// would otherwise render a write-anywhere FileOp — validate it here like every
+	// other id. (For adapters where the id is a JSON key in a shared file rather
+	// than a filename, rejecting a traversal id is still correct — it is never a
+	// legitimate server id.)
+	for _, m := range c.MCPServers {
+		out = append(out, ComponentID{Kind: "mcp", Name: m.ID})
+	}
+	for _, l := range c.LSPServers {
+		out = append(out, ComponentID{Kind: "lsp", Name: l.ID})
+	}
+	// Recurse into the project overlay as forward-looking defense-in-depth — NOT
+	// the primary guard. In the production flow this is belt-and-suspenders:
+	// project.Merge (internal/project, via overlayByKey) already mirrors every
+	// project component id into the TOP-LEVEL merged slices above, so render.Plan —
+	// the sole caller — validates each project id through the top-level loop
+	// regardless, and dropping this recursion would not open a real gap. It costs
+	// only duplicate (already-validated) ids today; its value is guarding a would-be
+	// caller that ever passed an UNMERGED project-only model. User-scope models have
+	// a nil Project (no overlay loaded), so this is a no-op there — it never rejects
+	// a user-scope apply for a name only the project overlay would render.
+	if c.Project != nil {
+		out = append(out, componentIDs(*c.Project)...)
+	}
+	return out
+}
+
 // cloneForResolve copies c so SubstituteCanonical can resolve secrets into the
 // copy while the caller's source.Canonical stays templated. Only the containers
 // the secret walk mutates (Args/Env/Headers slices+maps, the MCP/LSP/Hook

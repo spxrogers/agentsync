@@ -17,9 +17,18 @@ const memoryRuleFile = "agentsync.md"
 // scope), and workflows exist at BOTH scopes (project `.windsurf/workflows/`,
 // global `~/.codeium/windsurf/global_workflows/`).
 type Paths struct {
-	ConfigDir    string // ~/.codeium/windsurf (user) — also the Detect probe
-	MCP          string // ~/.codeium/windsurf/mcp_config.json (user scope only; "" at project)
-	GlobalRules  string // ~/.codeium/windsurf/memories/global_rules.md (user scope only; "" at project)
+	ConfigDir   string // ~/.codeium/windsurf (user) — also the Detect probe
+	MCP         string // ~/.codeium/windsurf/mcp_config.json (user scope only; "" at project)
+	GlobalRules string // ~/.codeium/windsurf/memories/global_rules.md (user scope only; "" at project)
+	// RulesDir is the project workspace-rules directory. Upstream rebranded
+	// Windsurf → Devin Desktop (docs.windsurf.com 307-redirects to docs.devin.ai)
+	// and now documents `.devin/rules/*.md` as the PREFERRED path that "takes
+	// precedence", with `.windsurf/rules/*.md` kept as the still-honored legacy
+	// fallback (verified against docs.devin.ai). agentsync targets the legacy
+	// `.windsurf/rules/`, which every released version still reads — nothing is
+	// broken. (Workflows were NOT rebranded: upstream docs still use
+	// `.windsurf/workflows/`, so WorkflowsDir stays as-is.) Preferring
+	// `.devin/rules/` for write+capture is a possible future enhancement.
 	RulesDir     string // <proj>/.windsurf/rules (project scope only; "" at user)
 	WorkflowsDir string // <proj>/.windsurf/workflows (project) / ~/.codeium/windsurf/global_workflows (user)
 }

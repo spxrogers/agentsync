@@ -17,7 +17,11 @@ import (
 // FileChange describes one file a restore would touch, for `revert --dry-run`.
 type FileChange struct {
 	Path string
-	Kind string // "create" | "modify" | "delete"
+	// Kind is "create" | "modify" | "delete" — the three merkletrie actions Plan
+	// maps. "unknown" is a defensive label for a future/unexpected go-git action
+	// that is neither insert nor delete nor modify (not produced today); like a
+	// modify it is applied by writing the target tree's content.
+	Kind string
 }
 
 // Plan computes what Restore(targetRev) would change in the worktree relative to
@@ -55,8 +59,13 @@ func (r *Repo) Plan(targetRev string) (targetHash string, changes []FileChange, 
 			out = append(out, FileChange{Path: ch.To.Name, Kind: "create"})
 		case merkletrie.Delete:
 			out = append(out, FileChange{Path: ch.From.Name, Kind: "delete"})
-		default:
+		case merkletrie.Modify:
 			out = append(out, FileChange{Path: ch.To.Name, Kind: "modify"})
+		default:
+			// merkletrie only defines Insert/Delete/Modify; a value here means a
+			// new go-git action we don't yet handle — label it distinctly rather
+			// than silently masquerading it as a modify.
+			out = append(out, FileChange{Path: ch.To.Name, Kind: "unknown"})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
@@ -251,10 +260,10 @@ func (r *Repo) applyRestoreDelta(wt *gogit.Worktree, targetTree *object.Tree, ch
 func restoreFailureHint(dir, orig, snapshot string, err error) error {
 	if snapshot != "" {
 		return fmt.Errorf("revert of %s failed partway; nothing is lost — your uncommitted edits are preserved in snapshot %s and the pre-revert checkpoint is %s. Recover with `git -C %s reset --hard %s` (keep your edits) or `git -C %s reset --hard %s` (discard them): %w",
-			dir, shortStr(snapshot), shortStr(orig), dir, shortStr(snapshot), dir, shortStr(orig), err)
+			dir, Short(snapshot), Short(orig), dir, Short(snapshot), dir, Short(orig), err)
 	}
 	return fmt.Errorf("revert of %s failed partway; the pre-revert checkpoint is %s. Recover with `git -C %s reset --hard %s`: %w",
-		dir, shortStr(orig), dir, shortStr(orig), err)
+		dir, Short(orig), dir, Short(orig), err)
 }
 
 // firstUnmanagedFileUnder walks absDir and returns the first regular file — as a
@@ -367,19 +376,11 @@ func (r *Repo) UntrackedPaths() ([]string, error) {
 func (r *Repo) commitTree(h plumbing.Hash) (*object.Tree, error) {
 	c, err := r.repo.CommitObject(h)
 	if err != nil {
-		return nil, fmt.Errorf("loading commit %s in %s: %w", shortStr(h.String()), r.dir, err)
+		return nil, fmt.Errorf("loading commit %s in %s: %w", Short(h.String()), r.dir, err)
 	}
 	t, err := c.Tree()
 	if err != nil {
-		return nil, fmt.Errorf("loading tree of %s in %s: %w", shortStr(h.String()), r.dir, err)
+		return nil, fmt.Errorf("loading tree of %s in %s: %w", Short(h.String()), r.dir, err)
 	}
 	return t, nil
-}
-
-// shortStr abbreviates a hex hash string to 7 chars for messages.
-func shortStr(s string) string {
-	if len(s) >= 7 {
-		return s[:7]
-	}
-	return s
 }

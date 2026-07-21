@@ -40,6 +40,11 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 				Kind:      adapter.SkipReduced,
 			})
 		}
+		// Windsurf documents a 12,000-character-per-file limit for workflows
+		// (verified against docs.devin.ai — same figure as workspace rules).
+		// agentsync writes the body verbatim and leaves enforcement to Windsurf:
+		// it neither truncates nor flags an oversized workflow, mirroring the
+		// memory handling (documented in the capability matrix).
 		ops = append(ops, adapter.FileOp{
 			Action:        "write",
 			Path:          filepath.Join(p.WorkflowsDir, cmd.Name+".md"),

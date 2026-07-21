@@ -65,7 +65,7 @@ func TestIngest_RoundTripsMCPExtra(t *testing.T) {
 				Type:    "stdio",
 				Command: "npx",
 				Extra: map[string]any{
-					"timeout":  float64(30), // JSON numbers round-trip as float64
+					"timeout":  float64(30), // authored as float64; ingest decodes with UseNumber → json.Number
 					"disabled": true,
 					"cwd":      "/work",
 				},
@@ -92,7 +92,9 @@ func TestIngest_RoundTripsMCPExtra(t *testing.T) {
 		t.Fatalf("modeled command lost: %q", srv.Command)
 	}
 	ex := srv.Extra
-	if ex["timeout"] != float64(30) || ex["disabled"] != true || ex["cwd"] != "/work" {
+	// Ingest now decodes with UseNumber, so a numeric Extra value comes back as
+	// json.Number (preserving precision) rather than float64.
+	if ex["timeout"] != json.Number("30") || ex["disabled"] != true || ex["cwd"] != "/work" {
 		t.Fatalf("unmodeled fields not preserved via Extra: %+v", ex)
 	}
 	for _, k := range []string{"type", "command"} {
@@ -157,7 +159,8 @@ func TestIngest_ProjectScopeMCP_PreservesExtra(t *testing.T) {
 	if len(out.MCPServers) != 1 {
 		t.Fatalf("mcp = %d", len(out.MCPServers))
 	}
-	if got := out.MCPServers[0].Server.Extra["timeout"]; got != float64(600000) {
+	// UseNumber decode preserves the integer as json.Number (not float64).
+	if got := out.MCPServers[0].Server.Extra["timeout"]; got != json.Number("600000") {
 		t.Fatalf("unmodeled timeout not captured into Extra: %+v", out.MCPServers[0].Server.Extra)
 	}
 
@@ -226,6 +229,11 @@ func TestIngest_RoundTripsSubagentsAndCommands(t *testing.T) {
 	}
 }
 
+// MODEL-ANCHORED: this remains a deliberate model-level unit check (Render→Apply→Ingest,
+// asserting the parsed hook survives + settings.json lspServers stays ignored). The
+// artifact-anchored on-disk hook fidelity is now backed separately by
+// TestIngest_HookArtifactRoundTrip (hook_test.go), so this one is kept as the
+// model/round-trip oracle, not the byte oracle.
 func TestIngest_RoundTripsHooksButIgnoresSettingsLSP(t *testing.T) {
 	tmp := t.TempDir()
 	in := source.Canonical{
@@ -260,6 +268,57 @@ func TestIngest_RoundTripsHooksButIgnoresSettingsLSP(t *testing.T) {
 	}
 	if len(out.LSPServers) != 0 {
 		t.Fatalf("settings.json lspServers must not be ingested as native Claude LSP: %+v", out.LSPServers)
+	}
+}
+
+// TestClaude_ExtraLargeIntPrecision is artifact-anchored: it writes a real
+// ~/.claude.json whose MCP server carries an unmodeled key with an integer > 2^53
+// (9007199254740993), ingests it, and re-renders — asserting the value survives
+// BYTE-EXACT (json.Number, no float64 rounding to 9007199254740992). This pins the
+// UseNumber decode fix; with the former plain json.Unmarshal the digit would round.
+func TestClaude_ExtraLargeIntPrecision(t *testing.T) {
+	const bigInt = "9007199254740993" // 2^53 + 1 — the first integer float64 cannot hold
+	tmp := t.TempDir()
+	// Spec-complete on-disk fixture: an MCP server with a large-int unmodeled key.
+	claudeJSON := filepath.Join(tmp, ".claude.json")
+	if err := os.WriteFile(claudeJSON,
+		[]byte(`{"mcpServers":{"api":{"command":"node","bigTimeout":`+bigInt+`}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := claude.New(claude.Options{TargetRoot: tmp})
+	out, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if len(out.MCPServers) != 1 {
+		t.Fatalf("mcp = %d", len(out.MCPServers))
+	}
+	// The large int is captured into Extra as json.Number preserving the digits.
+	if got := out.MCPServers[0].Server.Extra["bigTimeout"]; got != json.Number(bigInt) {
+		t.Fatalf("large int not preserved as json.Number in Extra: %#v", got)
+	}
+
+	// Re-render: the exact digits must reappear in the rendered ~/.claude.json bytes.
+	ops, _, err := a.Render(secrets.ForRender(source.Canonical{MCPServers: out.MCPServers}), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var content []byte
+	for _, op := range ops {
+		if strings.HasSuffix(filepath.ToSlash(op.Path), ".claude.json") {
+			content = op.Content
+		}
+	}
+	if content == nil {
+		t.Fatalf("no ~/.claude.json render op; ops=%+v", ops)
+	}
+	if !strings.Contains(string(content), bigInt) {
+		t.Fatalf("large int lost precision on re-render (want %s):\n%s", bigInt, content)
+	}
+	// The rounded float64 value must NOT appear.
+	if strings.Contains(string(content), "9007199254740992") {
+		t.Fatalf("large int rounded to float64 on re-render:\n%s", content)
 	}
 }
 

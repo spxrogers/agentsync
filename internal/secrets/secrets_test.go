@@ -89,6 +89,54 @@ func TestEnvBackend_MissingKey(t *testing.T) {
 	}
 }
 
+// TestEnvBackend_EmptyVsUnset pins the empty-vs-unset contract EnvBackend settled
+// on in #163: presence (not emptiness) is the criterion. A var set to "" resolves
+// to ("", nil) — matching AgeBackend's cache-presence model — while only an UNSET
+// var errors. os.LookupEnv (via the package-private osLookupEnv seam) is what
+// distinguishes the two.
+//
+// NOTE (divergence from the #167 issue text): the issue was filed against an older
+// EnvBackend that treated empty and unset IDENTICALLY (both → error) via an
+// osGetenv indirection, and asked this test to assert "both → error". That code no
+// longer exists; asserting it would be false. The safety the issue cares about —
+// an env value cannot reach the fail-closed backstop as a cleartext "" — is still
+// guaranteed, but by a DIFFERENT mechanism: ${env:…} is never inverted by
+// re-reference, and backstopSecretValues drops every len-0 value, so an empty
+// resolution can never enter the backstop's detection set regardless of whether
+// EnvBackend returns ("", nil) or an error. This test therefore asserts the ACTUAL
+// (post-#163) behavior.
+func TestEnvBackend_EmptyVsUnset(t *testing.T) {
+	b := secrets.EnvBackend{}
+
+	t.Run("unset returns an error", func(t *testing.T) {
+		if _, err := b.Resolve("AGENTSYNC_ENVBACKEND_UNSET_XYZ"); err == nil {
+			t.Fatal("an unset env var must resolve to an error")
+		}
+	})
+
+	t.Run("present-but-empty resolves to empty, not an error", func(t *testing.T) {
+		t.Setenv("AGENTSYNC_ENVBACKEND_EMPTY", "")
+		v, err := b.Resolve("AGENTSYNC_ENVBACKEND_EMPTY")
+		if err != nil {
+			t.Fatalf("a present-but-empty env var must resolve to (\"\", nil), got err=%v", err)
+		}
+		if v != "" {
+			t.Fatalf("present-but-empty resolved to %q, want \"\"", v)
+		}
+	})
+
+	t.Run("present-and-set resolves to its value", func(t *testing.T) {
+		t.Setenv("AGENTSYNC_ENVBACKEND_SET", "value")
+		v, err := b.Resolve("AGENTSYNC_ENVBACKEND_SET")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if v != "value" {
+			t.Fatalf("resolved %q, want \"value\"", v)
+		}
+	})
+}
+
 // TestSelectBackend_RelativeFilePathUsesFilepathJoin guards against the
 // pre-fix bug where SelectBackend joined homeDir+"/"+ageFile with a
 // hard-coded forward slash, breaking on Windows.

@@ -26,8 +26,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	warn := a.stderr()
 
 	// MCP from .continue/mcpServers/*.yaml (one or more server entries per block).
-	if entries, err := os.ReadDir(p.MCPDir); err == nil {
-		for _, e := range entries {
+	mcpEntries, present, err := adapter.ReadDirOptional(p.MCPDir)
+	if err != nil {
+		return c, fmt.Errorf("read MCP dir %s: %w", p.MCPDir, err)
+	}
+	if present {
+		for _, e := range mcpEntries {
 			if e.IsDir() {
 				continue
 			}
@@ -49,6 +53,10 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			if !ok {
 				continue
 			}
+			// The block-level version/schema header is preserved (when non-default)
+			// so a re-render round-trips a hand-authored block instead of rewriting
+			// its header to the 0.0.1/v1 defaults — see applyBlockHeader.
+			blockVersion, blockSchema := asStr(block["version"]), asStr(block["schema"])
 			fallbackID := e.Name()[:len(e.Name())-len(ext)]
 			for _, raw := range servers {
 				srv, ok := raw.(map[string]any)
@@ -67,7 +75,9 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				if id != fallbackID || len(servers) > 1 {
 					fmt.Fprintf(warn, "warning: MCP server %q in block %q: apply renders one %s.yaml per server; remove the original block after import to avoid duplicate definitions\n", id, e.Name(), id)
 				}
-				c.MCPServers = append(c.MCPServers, source.MCPServer{ID: id, Server: IngestMCPSpec(srv)})
+				spec := IngestMCPSpec(srv)
+				applyBlockHeader(&spec, blockVersion, blockSchema)
+				c.MCPServers = append(c.MCPServers, source.MCPServer{ID: id, Server: spec})
 			}
 		}
 	}
@@ -78,8 +88,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	// NOT be captured as a canonical command (re-applying it would silently
 	// convert it into a slash command). Only the canonical-relevant
 	// `description` is captured; other keys are dropped with a warning.
-	if entries, err := os.ReadDir(p.PromptsDir); err == nil {
-		for _, e := range entries {
+	promptEntries, present, err := adapter.ReadDirOptional(p.PromptsDir)
+	if err != nil {
+		return c, fmt.Errorf("read prompts dir %s: %w", p.PromptsDir, err)
+	}
+	if present {
+		for _, e := range promptEntries {
 			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 				continue
 			}
@@ -125,7 +139,10 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 
 	// Memory from .continue/rules/agentsync.md (the agentsync-owned always-apply
 	// rule), captured verbatim.
-	if data, err := os.ReadFile(filepath.Join(p.RulesDir, memoryRuleFile)); err == nil {
+	memFile := filepath.Join(p.RulesDir, memoryRuleFile)
+	if data, present, err := adapter.ReadFileOptional(memFile); err != nil {
+		return c, fmt.Errorf("read memory %s: %w", memFile, err)
+	} else if present {
 		c.Memory.Body = source.StripManagedBanner(string(data)) // banner stripped — see claude/ingest.go
 	}
 

@@ -23,7 +23,11 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	var c source.Canonical
 
 	if mcpPath := a.mcpPath(scope, project); mcpPath != "" {
-		if data, err := os.ReadFile(mcpPath); err == nil {
+		data, present, err := adapter.ReadFileOptional(mcpPath)
+		if err != nil {
+			return c, fmt.Errorf("read %s: %w", mcpPath, err)
+		}
+		if present {
 			// JSONC-tolerant (shared jsonkeys.DecodeJSONC): comments/trailing
 			// commas in a hand-edited settings file (Zed, Copilot, Amp) ingest
 			// cleanly, and json.Number survives for large foreign integers.
@@ -44,13 +48,21 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 
 	if memPath := a.memoryPath(scope, project); memPath != "" {
-		if data, err := os.ReadFile(memPath); err == nil {
+		data, present, err := adapter.ReadFileOptional(memPath)
+		if err != nil {
+			return c, fmt.Errorf("read memory %s: %w", memPath, err)
+		}
+		if present {
 			c.Memory.Body = source.StripManagedBanner(string(data)) // banner stripped — see claude/ingest.go
 		}
 	}
 
 	if skillsDir := a.skillsPath(scope, project); skillsDir != "" {
-		c.Skills = append(c.Skills, a.ingestSkills(skillsDir)...)
+		skills, err := a.ingestSkills(skillsDir)
+		if err != nil {
+			return c, err
+		}
+		c.Skills = append(c.Skills, skills...)
 	}
 
 	return c, nil
@@ -59,22 +71,29 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 // ingestSkills reads each <name>/SKILL.md subtree under the spec's Agent-Skills
 // root back into canonical skills (SKILL.md frontmatter + body + bundled files),
 // the inverse of renderSkills. Mirrors the deep adapters' skill ingest so a
-// breadth-tier round-trip is not lossy for bundled scripts/references/assets. A
-// skill whose SKILL.md is missing or unparseable is skipped (not fatal): a stray
-// directory in a shared skills root must not break import of the rest.
+// breadth-tier round-trip is not lossy for bundled scripts/references/assets.
 //
-// Deliberate no-diagnostics stance: unlike the deep adapters (which thread an
-// a.stderr() warn sink), the generic tier's Ingest has no diagnostics channel,
-// so a malformed/leniently-parsed SKILL.md is skipped silently — exactly as this
-// tier's MCP ingest silently skips a non-map server entry. This is acknowledged
-// (not an accidental silent drop): the lossy case is a *native* file the tier
-// can't parse, never a canonical component the tier fails to project. Threading a
-// warn sink through the breadth-tier Ingest is a deferred tier-wide change, not a
-// skills-specific one.
-func (a *Adapter) ingestSkills(skillsDir string) []source.Skill {
-	entries, err := os.ReadDir(skillsDir)
+// Read-error discrimination: an ABSENT skills root (os.IsNotExist) is a benign
+// skip — the user configured no skills — while a present-but-unreadable skills
+// directory (permission, transient I/O) is RETURNED as an error rather than read
+// as "no skills", which drift could misclassify as the whole set being cleared.
+//
+// Per-entry deliberate no-diagnostics stance: unlike the deep adapters (which
+// thread an a.stderr() warn sink), the generic tier's Ingest has no diagnostics
+// channel, so a per-skill SKILL.md that is missing or unparseable is skipped
+// silently — exactly as this tier's MCP ingest silently skips a non-map server
+// entry. This is acknowledged (not an accidental silent drop): a stray directory
+// in a shared skills root must not break import of the rest, and the lossy case
+// is a *native* file the tier can't parse, never a canonical component the tier
+// fails to project. Threading a warn sink through the breadth-tier Ingest is a
+// deferred tier-wide change, not a skills-specific one.
+func (a *Adapter) ingestSkills(skillsDir string) ([]source.Skill, error) {
+	entries, present, err := adapter.ReadDirOptional(skillsDir)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("read skills dir %s: %w", skillsDir, err)
+	}
+	if !present {
+		return nil, nil
 	}
 	var skills []source.Skill
 	for _, e := range entries {
@@ -96,7 +115,7 @@ func (a *Adapter) ingestSkills(skillsDir string) []source.Skill {
 		}
 		skills = append(skills, source.Skill{Name: e.Name(), Frontmatter: fm, Body: body, Files: files})
 	}
-	return skills
+	return skills, nil
 }
 
 // ingestMCPSpec is the inverse of mcpServerMap for the spec's dialect. When the

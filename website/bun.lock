@@ -13,6 +13,9 @@
         "mermaid": "^11.15.0",
         "sharp": "^0.34.5",
       },
+      "devDependencies": {
+        "github-slugger": "^2.0.0",
+      },
     },
   },
   "packages": {

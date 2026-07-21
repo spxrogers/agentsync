@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -158,6 +159,15 @@ func WriteMarketplace(home, name string, m Marketplace) error {
 // references/, assets/, …) from sk into home. Each file is written atomically
 // with its preserved permission bits; bundled content is written verbatim
 // (never frontmatter-encoded), so binary assets round-trip byte-for-byte.
+//
+// WriteSkill is IDEMPOTENT with respect to deletions: after writing the current
+// members it prunes any regular file already on disk under skills/<name>/ that
+// is neither SKILL.md nor in sk.Files, and removes the subdirectories those
+// deletions empty out. A skill is a whole DIRECTORY (source.Skill), so a bundled
+// file removed upstream and re-imported no longer strands its orphan on disk —
+// which would otherwise survive and re-project to every agent on the next apply
+// (import was previously non-idempotent w.r.t. deletions). The prune is rooted
+// at the skill dir and cannot escape it (see pruneOrphanSkillFiles).
 func WriteSkill(home string, sk Skill) error {
 	if err := ValidateComponentID("skill", sk.Name); err != nil {
 		return err
@@ -186,7 +196,74 @@ func WriteSkill(home string, sk Skill) error {
 			return err
 		}
 	}
+	if err := pruneOrphanSkillFiles(dir, sk.Files); err != nil {
+		return fmt.Errorf("prune skills/%s: %w", sk.Name, err)
+	}
 	return nil
+}
+
+// pruneOrphanSkillFiles deletes every regular file under the skill directory
+// dir that is not SKILL.md and not present in files, then removes the
+// subdirectories those deletions empty out. It is what makes WriteSkill
+// idempotent w.r.t. deletions (see its doc).
+//
+// The walk is rooted at dir and never removes dir itself; only regular files
+// are deleted (symlinks/devices are left untouched, matching ReadSkillFiles'
+// capture rule), so the prune cannot escape the skill directory or clobber a
+// non-file. Empty subdirectories are removed deepest-first; a directory that
+// still holds a kept file simply fails the os.Remove and is left in place.
+func pruneOrphanSkillFiles(dir string, files []SkillFile) error {
+	keep := map[string]bool{"SKILL.md": true}
+	for _, f := range files {
+		keep[filepath.ToSlash(filepath.Clean(filepath.FromSlash(f.Path)))] = true
+	}
+	var subdirs []string
+	walkErr := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == dir {
+			return nil
+		}
+		rel := filepath.ToSlash(mustRel(dir, path))
+		if info.IsDir() {
+			subdirs = append(subdirs, path)
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return nil // leave symlinks/devices alone
+		}
+		if keep[rel] {
+			return nil
+		}
+		if rerr := os.Remove(path); rerr != nil { //nolint:forbidigo // canonical-source prune, not a native destination
+			return fmt.Errorf("remove orphan %s: %w", rel, rerr)
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return walkErr
+	}
+	// Deepest-first so a nested dir empties before its parent is considered.
+	sort.Slice(subdirs, func(i, j int) bool { return len(subdirs[i]) > len(subdirs[j]) })
+	for _, d := range subdirs {
+		// os.Remove fails (and is ignored) on a directory that still holds a
+		// kept file — only genuinely-emptied subdirs are pruned.
+		_ = os.Remove(d) //nolint:forbidigo // canonical-source prune, not a native destination
+	}
+	return nil
+}
+
+// mustRel returns the slash-cleanable relative path of target under base. base
+// is always a prefix of target here (both come from one filepath.Walk rooted at
+// base), so Rel cannot fail; on the impossible error it returns the base name of
+// target so the caller still gets a non-escaping key.
+func mustRel(base, target string) string {
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return filepath.Base(target)
+	}
+	return rel
 }
 
 // validateSkillFilePath rejects a bundled-file path that would escape the skill

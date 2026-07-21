@@ -38,6 +38,7 @@ func newMCPAddCmd() *cobra.Command {
 		url        string
 		envCSV     string
 		agentsCSV  string
+		headers    []string
 	)
 	cmd := &cobra.Command{
 		Use:   "add <id>",
@@ -47,7 +48,7 @@ func newMCPAddCmd() *cobra.Command {
 			id := args[0]
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			return withGlobalLock(home, func() error {
-				return mcpAddRun(cmd, home, id, serverType, command, argsCSV, url, envCSV, agentsCSV)
+				return mcpAddRun(cmd, home, id, serverType, command, argsCSV, url, envCSV, agentsCSV, headers)
 			})
 		},
 	}
@@ -57,10 +58,16 @@ func newMCPAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&url, "url", "", "server URL for http/sse transport")
 	cmd.Flags().StringVar(&envCSV, "env", "", "KEY=VAL,KEY=VAL environment overrides")
 	cmd.Flags().StringVar(&agentsCSV, "agents", "*", "comma-separated agent allowlist (\"*\" = all enabled)")
+	// Repeatable --header sets request headers for http/sse transports (the usual
+	// remote-auth secret site). A value may reference a secret, e.g.
+	// --header "Authorization: Bearer ${secret:TOKEN}"; Headers is already a
+	// secret-resolving field (walkSecretFields), so the reference resolves at
+	// apply and re-references on capture with no schema/walk change.
+	cmd.Flags().StringArrayVar(&headers, "header", nil, `HTTP header "Name: Value" for http/sse transport (repeatable; secrets allowed)`)
 	return cmd
 }
 
-func mcpAddRun(cmd *cobra.Command, home, id, serverType, command, argsCSV, url, envCSV, agentsCSV string) error {
+func mcpAddRun(cmd *cobra.Command, home, id, serverType, command, argsCSV, url, envCSV, agentsCSV string, headers []string) error {
 	if err := validateMCPID(id); err != nil {
 		return err
 	}
@@ -76,6 +83,15 @@ func mcpAddRun(cmd *cobra.Command, home, id, serverType, command, argsCSV, url, 
 	if err := validateMCPSpec(serverType, command, url); err != nil {
 		return err
 	}
+	// Headers are http/sse-only: a stdio server speaks over stdin/stdout and has
+	// no request headers, so --header there is a user error, not a silent no-op.
+	if len(headers) > 0 && serverType == "stdio" {
+		return fmt.Errorf("--header is only valid for http/sse transport, not stdio")
+	}
+	parsedHeaders, err := parseHeaders(headers)
+	if err != nil {
+		return err
+	}
 
 	spec := source.MCPServerSpec{Type: serverType}
 	switch serverType {
@@ -84,6 +100,7 @@ func mcpAddRun(cmd *cobra.Command, home, id, serverType, command, argsCSV, url, 
 		spec.Args = splitArgs(argsCSV)
 	case "http", "sse":
 		spec.URL = url
+		spec.Headers = parsedHeaders
 	}
 	if envCSV != "" {
 		env, err := parseEnvCSV(envCSV)
@@ -245,6 +262,35 @@ func parseEnvCSV(s string) (map[string]string, error) {
 			return nil, fmt.Errorf("--env entry %q must be KEY=VAL", pair)
 		}
 		out[pair[:i]] = pair[i+1:]
+	}
+	return out, nil
+}
+
+// parseHeaders parses repeatable --header "Name: Value" strings into a header
+// map. The name is everything before the first colon; the value is the remainder
+// (so a value may itself contain colons, e.g. "Bearer x:y"). A missing colon or
+// empty name is a user error, and a header set twice is rejected rather than
+// silently last-writer-wins. The value is stored verbatim — a ${secret:…}
+// reference is preserved literally so it resolves at apply and re-references on
+// capture (Headers is already in walkSecretFields).
+func parseHeaders(headers []string) (map[string]string, error) {
+	if len(headers) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(headers))
+	for _, h := range headers {
+		i := strings.IndexByte(h, ':')
+		if i <= 0 {
+			return nil, fmt.Errorf("--header %q must be in \"Name: Value\" form", h)
+		}
+		name := strings.TrimSpace(h[:i])
+		if name == "" {
+			return nil, fmt.Errorf("--header %q has an empty name", h)
+		}
+		if _, dup := out[name]; dup {
+			return nil, fmt.Errorf("--header %q set more than once", name)
+		}
+		out[name] = strings.TrimSpace(h[i+1:])
 	}
 	return out, nil
 }

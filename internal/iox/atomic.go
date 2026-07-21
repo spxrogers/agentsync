@@ -89,9 +89,13 @@ func AtomicWrite(dest string, data []byte, mode os.FileMode) error {
 		return fmt.Errorf("chmod %s to %o: %w", dest, mode, err)
 	}
 	if err := fsyncDir(parent); err != nil {
-		// Fsync of the directory is durability-only — the rename already
-		// succeeded. Surface as a wrapped error so callers can decide;
-		// state.Save in particular treats the file as written.
+		// The rename already succeeded, so the new content IS on disk; this
+		// directory fsync only hardens the directory entry against a power loss.
+		// AtomicWrite RETURNS the wrapped error rather than swallowing it, so
+		// each caller decides. In particular state.Save propagates AtomicWrite's
+		// return value verbatim (it is `return iox.AtomicWrite(...)`), so a
+		// directory-fsync failure surfaces as a Save error — state.Save does NOT
+		// treat the file as written on this path.
 		return fmt.Errorf("fsync parent %s: %w", parent, err)
 	}
 	return nil

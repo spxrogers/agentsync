@@ -29,10 +29,11 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 	var ops []adapter.FileOp
 	var skips []adapter.Skip
 
-	if mcpOps, err := a.renderMCP(renderC, p); err != nil {
+	if mcpOps, mcpSkips, err := a.renderMCP(renderC, p); err != nil {
 		return nil, nil, err
 	} else {
 		ops = append(ops, mcpOps...)
+		skips = append(skips, mcpSkips...)
 	}
 	if memOps, err := a.renderMemory(renderC, p); err != nil {
 		return nil, nil, err
@@ -54,7 +55,7 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 		skips = append(skips, adapter.Skip{Component: "subagent", Name: s.Name, Reason: "Continue agents are top-level assistants, not per-file subagents", Kind: adapter.SkipDropped})
 	}
 	for _, h := range renderC.Hooks {
-		skips = append(skips, adapter.Skip{Component: "hook", Name: h.Event, Reason: "Continue has no declarative hook concept", Kind: adapter.SkipDropped})
+		skips = append(skips, adapter.Skip{Component: "hook", Name: h.Event.String(), Reason: "Continue has no declarative hook concept", Kind: adapter.SkipDropped})
 	}
 	for _, l := range renderC.LSPServers {
 		skips = append(skips, adapter.Skip{Component: "lsp", Name: l.ID, Reason: "Continue has no LSP configuration concept", Kind: adapter.SkipDropped})

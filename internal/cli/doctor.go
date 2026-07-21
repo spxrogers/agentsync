@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
@@ -41,7 +42,7 @@ func newDoctorCmd() *cobra.Command {
 			fails := 0
 			fails += checkHomeDir(p, home)
 			fails += checkStateDir(p, home)
-			cfg, schemaOK := checkSchema(p, home)
+			c, schemaOK := checkSchema(p, home)
 			if !schemaOK {
 				fails++
 			}
@@ -49,7 +50,12 @@ func newDoctorCmd() *cobra.Command {
 			fmt.Fprintln(p.Out, "")
 			p.Section("Secrets")
 			if schemaOK {
-				fails += checkSecrets(p, cfg.Secrets, home)
+				fails += checkSecrets(p, c.Config.Secrets, home)
+				// Beyond the [secrets] block's shape, actually try to resolve every
+				// ${secret:…}/${env:…} reference the canonical carries — a typo'd or
+				// missing key would otherwise pass as healthy and only surface as a
+				// broken apply.
+				fails += checkSecretReferences(p, c, home)
 			} else {
 				fmt.Fprintln(p.Out, "  skipped (schema invalid above)")
 			}
@@ -93,7 +99,7 @@ func newDoctorCmd() *cobra.Command {
 			fmt.Fprintln(p.Out, "")
 			p.Section("Destination git backup")
 			if schemaOK {
-				checkDestinationGitBackup(p, cfg.DestinationGitBackup)
+				checkDestinationGitBackup(p, c.Config.DestinationGitBackup)
 			} else {
 				fmt.Fprintln(p.Out, "  skipped (schema invalid above)")
 			}
@@ -187,20 +193,60 @@ func checkStateDir(p *ui.Printer, home string) int {
 	return 0
 }
 
-// checkSchema validates agentsync.toml. Returns the parsed Config plus a
-// success flag so secrets checks can reuse it.
-func checkSchema(p *ui.Printer, home string) (source.Config, bool) {
+// checkSchema validates agentsync.toml. Returns the parsed Canonical plus a
+// success flag so the secrets checks can reuse it (the reference-resolution
+// check needs the whole canonical, not just [secrets]).
+func checkSchema(p *ui.Printer, home string) (source.Canonical, bool) {
 	c, err := source.Load(afero.NewOsFs(), home)
 	if err != nil {
 		// A strict-decode error embeds the raw offending config source line
 		// (go-toml's StrictMissingError.String()), which can carry ESC/bidi bytes
 		// from a shared config; sanitize the whole rendering (issue #93/#171).
 		failCheck(p, "schema     ", fmt.Sprintf("invalid: %s", untrusted.Wrap(err.Error())))
-		return source.Config{}, false
+		return source.Canonical{}, false
 	}
 	okCheck(p, "schema     ", fmt.Sprintf("ok (%d mcp, %d plugin(s), %d marketplace(s))",
 		len(c.MCPServers), len(c.Plugins), len(c.Marketplaces)))
-	return c.Config, true
+	return c, true
+}
+
+// checkSecretReferences resolves every ${secret:…}/${env:…} reference the
+// canonical carries against the configured backends and reports any that cannot
+// resolve now — a typo'd vault key (${secret:GITHUB_TOEKN}), a ref with no
+// [secrets] backend configured, or an env var unset in this shell. Without it,
+// doctor validated only the [secrets] block's SHAPE and reported all-green while
+// a broken reference would fail the next apply.
+//
+// A ${secret:…} that cannot resolve is a hard fail (the vault has no such entry,
+// or no backend is configured); a ${env:…} that cannot resolve is a warning, since
+// an env var may legitimately be set only in the apply environment (CI). Resolved
+// VALUES are never printed — only the reference names, and those through
+// untrusted.Wrap so a config-derived key with control bytes is sanitized.
+func checkSecretReferences(p *ui.Printer, c source.Canonical, home string) int {
+	userHome := paths.HomeDir(paths.OSEnv{})
+	secBackend := secrets.SelectBackend(c.Config.Secrets, home, userHome)
+	missing := secrets.UnresolvedSecretRefs(&c, secBackend, secrets.EnvBackend{})
+	if len(missing) == 0 {
+		// Only affirm when there is actually something to resolve, so a config with
+		// no references stays silent instead of adding a spurious "ok" line.
+		if resolved := secrets.CollectResolved(&c, secBackend, secrets.EnvBackend{}); len(resolved) > 0 {
+			okCheck(p, "references ", fmt.Sprintf("ok (%d reference(s) resolve)", len(resolved)))
+		}
+		return 0
+	}
+	fails := 0
+	for _, ref := range missing {
+		// ref is machine-generated as "secret:KEY" / "env:KEY"; the KEY is
+		// config-derived (a shareable dotfile), so display via untrusted.Wrap.
+		disp := untrusted.Wrap(ref)
+		if strings.HasPrefix(ref, "env:") {
+			warnCheck(p, "references ", fmt.Sprintf("%s does not resolve (env var unset here; may be set at apply time)", disp))
+			continue
+		}
+		failCheck(p, "references ", fmt.Sprintf("%s does not resolve (no such vault key, or no [secrets] backend configured)", disp))
+		fails++
+	}
+	return fails
 }
 
 // checkPlugins surfaces plugins installed natively in an agent (Claude and Codex)

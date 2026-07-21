@@ -12,6 +12,7 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/spxrogers/agentsync/internal/testenv"
 )
@@ -1160,7 +1161,7 @@ func TestRestoreFailureHint(t *testing.T) {
 	t.Run("with snapshot names orig and snapshot", func(t *testing.T) {
 		err := restoreFailureHint("/dest/.claude", orig, snap, inner)
 		msg := err.Error()
-		for _, want := range []string{shortStr(snap), shortStr(orig), "reset --hard", "disk full"} {
+		for _, want := range []string{Short(snap), Short(orig), "reset --hard", "disk full"} {
 			if !strings.Contains(msg, want) {
 				t.Errorf("hint %q missing %q", msg, want)
 			}
@@ -1172,11 +1173,274 @@ func TestRestoreFailureHint(t *testing.T) {
 	t.Run("without snapshot still names orig", func(t *testing.T) {
 		err := restoreFailureHint("/dest/.claude", orig, "", inner)
 		msg := err.Error()
-		if !strings.Contains(msg, shortStr(orig)) || !strings.Contains(msg, "reset --hard") {
+		if !strings.Contains(msg, Short(orig)) || !strings.Contains(msg, "reset --hard") {
 			t.Errorf("hint %q should name orig + a reset --hard recovery command", msg)
 		}
-		if strings.Contains(msg, shortStr(snap)) {
+		if strings.Contains(msg, Short(snap)) {
 			t.Errorf("hint without a snapshot must not name a snapshot hash: %q", msg)
 		}
 	})
+}
+
+// TestShort pins the single shared 7-char hex abbreviator (formerly the three
+// identical shortStr/shortHash/shortRef copies).
+func TestShort(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{name: "full 40-char hex", in: "0123456789abcdef0123456789abcdef01234567", want: "0123456"},
+		{name: "exactly 7", in: "abcdef0", want: "abcdef0"},
+		{name: "shorter than 7", in: "abc", want: "abc"},
+		{name: "empty", in: "", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Short(tt.in); got != tt.want {
+				t.Fatalf("Short(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDetect_ErrorReturnsForeign pins the fail-safe: on a non-ErrRepositoryNotExists
+// open error Detect returns StateForeign ("leave it alone"), never the init-eligible
+// StateUntracked, so a caller reading State before err cannot init into an unreadable
+// repo. The happy path still reports (StateUntracked, nil) for a plain dir.
+func TestDetect_ErrorReturnsForeign(t *testing.T) {
+	testenv.RequireContainer(t)
+
+	t.Run("malformed .git returns foreign + error", func(t *testing.T) {
+		dir := t.TempDir()
+		// A .git FILE with no "gitdir:" prefix opens with an error that is NOT
+		// ErrRepositoryNotExists (go-git: ".git file has no gitdir: prefix").
+		if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("not a gitfile\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		st, err := Detect(dir)
+		if err == nil {
+			t.Fatalf("expected an open error for a malformed .git, got nil (state %v)", st)
+		}
+		if st != StateForeign {
+			t.Fatalf("state on error = %v, want StateForeign (fail-safe)", st)
+		}
+	})
+
+	t.Run("plain dir returns untracked + nil", func(t *testing.T) {
+		st, err := Detect(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st != StateUntracked {
+			t.Fatalf("state = %v, want StateUntracked", st)
+		}
+	})
+}
+
+// TestPlan_ModifyAndUnknown asserts a real HEAD↔target diff that MODIFIES a file
+// yields Kind "modify" via the explicit merkletrie.Modify case (not the former
+// default-arm masquerade). The "unknown" default is defensive only — merkletrie's
+// Action() returns exactly Insert/Delete/Modify, so it is unreachable via a real
+// diff and cannot be exercised here without fabricating an invalid change.
+func TestPlan_ModifyAndUnknown(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	repo, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, repo, dir, "f.txt", "A\n", "one")
+	commitFile(t, repo, dir, "f.txt", "B\n", "two") // same path, new content → a MODIFY
+
+	_, changes, err := repo.Plan("HEAD~1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got *FileChange
+	for i := range changes {
+		if changes[i].Path == "f.txt" {
+			got = &changes[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("f.txt not in plan: %+v", changes)
+	}
+	if got.Kind != "modify" {
+		t.Fatalf("Kind = %q, want \"modify\" (explicit merkletrie.Modify case)", got.Kind)
+	}
+}
+
+// contentInHead returns the content of rel as committed in the repo's HEAD tree.
+func contentInHead(t *testing.T, dir, rel string) string {
+	t.Helper()
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := tree.File(rel)
+	if err != nil {
+		t.Fatalf("%s not found in HEAD tree: %v", rel, err)
+	}
+	content, err := f.Contents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
+}
+
+// TestSnapshotDirtyTracked_CleartextCapture pins the two-sided contract of the
+// pre-destructive safety snapshot (issue #167): it commits dirty TRACKED files
+// verbatim — including a rendered dest file whose ${secret:…} was resolved to
+// CLEARTEXT, the accepted at-rest exposure that is only tolerable because these
+// repos are never pushed — while NEVER sweeping in the user's untracked scratch
+// files (isUntracked honored). Unlike TestSnapshotDirtyTrackedAndIsClean it reads
+// the committed blob back to prove the cleartext was actually captured, and pins
+// `now` for a deterministic commit.
+func TestSnapshotDirtyTracked_CleartextCapture(t *testing.T) {
+	testenv.RequireContainer(t)
+	orig := now
+	defer func() { now = orig }()
+	now = func() time.Time { return time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC) }
+
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A tracked rendered file that starts life with a benign placeholder value.
+	commitFile(t, r, dir, "rendered.json", `{"token":"placeholder"}`, "baseline apply")
+
+	// The user (or a re-apply) rewrites the tracked file to hold a resolved
+	// cleartext secret, and separately drops an untracked scratch file.
+	const cleartext = `{"token":"ghp_SUPER_SECRET_CLEARTEXT"}`
+	writeFile(t, dir, "rendered.json", cleartext)
+	writeFile(t, dir, "user-scratch.txt", "my own notes — do not commit")
+
+	snap, err := r.SnapshotDirtyTracked("safety snapshot", DefaultIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap == "" {
+		t.Fatal("SnapshotDirtyTracked should have committed the dirty tracked file")
+	}
+
+	// (a) The modified tracked file is captured, cleartext and all — this is the
+	//     accepted design (local-only history), not a leak the snapshot must block.
+	if !inHead(t, dir, "rendered.json") {
+		t.Fatal("the modified tracked file must be captured in the snapshot commit")
+	}
+	if got := contentInHead(t, dir, "rendered.json"); got != cleartext {
+		t.Fatalf("snapshot captured %q, want the verbatim cleartext %q", got, cleartext)
+	}
+
+	// (b) The untracked scratch file is NEVER swept into the snapshot commit...
+	if inHead(t, dir, "user-scratch.txt") {
+		t.Fatal("an untracked user file must NOT be committed by the snapshot")
+	}
+	// ...and is left untouched on disk.
+	if got := readFile(t, dir, "user-scratch.txt"); got != "my own notes — do not commit" {
+		t.Fatalf("untracked scratch file was disturbed: %q", got)
+	}
+
+	// The pinned clock makes the snapshot commit deterministic.
+	repo, _ := gogit.PlainOpen(dir)
+	ref, _ := repo.Head()
+	c, _ := repo.CommitObject(ref.Hash())
+	if want := time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC); !c.Author.When.Equal(want) {
+		t.Errorf("snapshot commit time = %v, want pinned %v", c.Author.When, want)
+	}
+}
+
+func TestStage_WriteDriven(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Baseline checkpoint: three tracked files, exec.sh starting NON-executable.
+	commitFile(t, r, dir, "same.txt", "unchanged-bytes\n", "baseline same")
+	commitFileMode(t, r, dir, "exec.sh", "#!/bin/sh\necho hi\n", 0o644, "baseline exec")
+	commitFile(t, r, dir, "changed.txt", "v1\n", "baseline changed")
+
+	// A second apply WRITES a set of files regardless of whether the bytes moved:
+	//   (a) same.txt    — rewritten with byte-identical content.
+	//   (b) exec.sh     — mode-only change (chmod +x), same bytes.
+	//   (c) changed.txt — genuinely new content (keeps the checkpoint non-empty).
+	writeFile(t, dir, "same.txt", "unchanged-bytes\n") // identical bytes
+	if err := os.Chmod(filepath.Join(dir, "exec.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "changed.txt", "v2\n")
+
+	written := []string{"same.txt", "exec.sh", "changed.txt"}
+	if err := r.Stage(written); err != nil {
+		t.Fatalf("stage the written set: %v", err)
+	}
+	h, err := r.CommitStaged("write-driven checkpoint", DefaultIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h == "" {
+		t.Fatal("checkpoint should be non-empty (changed.txt moved)")
+	}
+
+	// Every member of the written set is present in the checkpoint tree.
+	tree := headTreePaths(t, r)
+	for _, p := range written {
+		if !tree[p] {
+			t.Fatalf("written path %q missing from checkpoint tree %v", p, tree)
+		}
+	}
+	// (a) the byte-identical rewrite survives with its bytes intact.
+	if got := blobAt(t, dir, h, "same.txt"); got != "unchanged-bytes\n" {
+		t.Fatalf("same.txt in checkpoint = %q, want the unchanged bytes", got)
+	}
+	// (b) the mode-only change is captured: the tree entry is executable, proving
+	//     the exec bit rode into the checkpoint though not one content byte changed.
+	if mode := treeEntryMode(t, r, "exec.sh"); mode != filemode.Executable {
+		t.Fatalf("exec.sh checkpoint mode = %v, want Executable (mode-only change captured)", mode)
+	}
+	// (c) the genuinely-changed file carries its new bytes.
+	if got := blobAt(t, dir, h, "changed.txt"); got != "v2\n" {
+		t.Fatalf("changed.txt in checkpoint = %q, want v2", got)
+	}
+}
+
+// treeEntryMode returns the git filemode of rel in the repo's current HEAD tree.
+func treeEntryMode(t *testing.T, r *Repo, rel string) filemode.FileMode {
+	t.Helper()
+	repo, err := gogit.PlainOpen(r.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := tree.FindEntry(rel)
+	if err != nil {
+		t.Fatalf("find %s in HEAD tree: %v", rel, err)
+	}
+	return e.Mode
 }

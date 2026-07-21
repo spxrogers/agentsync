@@ -11,6 +11,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // Ingest reads Codex's native config files and returns a partial
@@ -31,34 +32,46 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	var c source.Canonical
 
 	// MCP ([mcp_servers.<id>]) and hooks ([hooks.<event>]) both live in
-	// config.toml, so parse it once.
-	if data, err := os.ReadFile(p.Config); err == nil {
+	// config.toml, so parse it once. A corrupt-but-present config.toml fails
+	// loudly (parse error returned) rather than silently reading as "no MCP, no
+	// hooks", which drift could misclassify as both components cleared.
+	if data, present, err := adapter.ReadFileOptional(p.Config); err != nil {
+		return c, fmt.Errorf("read %s: %w", p.Config, err)
+	} else if present {
 		var top map[string]any
-		if toml.Unmarshal(data, &top) == nil {
-			if servers, ok := top["mcp_servers"].(map[string]any); ok {
-				for id, raw := range servers {
-					spec, ok := raw.(map[string]any)
-					if !ok {
-						continue
-					}
-					c.MCPServers = append(c.MCPServers, source.MCPServer{ID: id, Server: IngestMCPSpec(spec)})
-				}
-			}
-			c.Hooks = append(c.Hooks, ingestHooks(top["hooks"])...)
+		if err := toml.Unmarshal(data, &top); err != nil {
+			return c, fmt.Errorf("parse %s: %w", p.Config, err)
 		}
+		if servers, ok := top["mcp_servers"].(map[string]any); ok {
+			for id, raw := range servers {
+				spec, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				c.MCPServers = append(c.MCPServers, source.MCPServer{ID: id, Server: IngestMCPSpec(spec)})
+			}
+		}
+		c.Hooks = append(c.Hooks, ingestHooks(top["hooks"])...)
 	}
 
 	warn := a.stderr()
 
 	// Skills from ~/.agents/skills/<name>/ (SKILL.md + bundled files)
-	if entries, err := os.ReadDir(p.SkillsDir); err == nil {
-		for _, e := range entries {
+	skillEntries, present, err := adapter.ReadDirOptional(p.SkillsDir)
+	if err != nil {
+		return c, fmt.Errorf("read skills dir %s: %w", p.SkillsDir, err)
+	}
+	if present {
+		for _, e := range skillEntries {
 			if !e.IsDir() {
 				continue
 			}
 			skillDir := filepath.Join(p.SkillsDir, e.Name())
 			data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
 			if err != nil {
+				if !os.IsNotExist(err) {
+					fmt.Fprintf(warn, "warning: skipping skill %q: read SKILL.md: %v\n", e.Name(), err)
+				}
 				continue
 			}
 			fm, body, lenient, err := claude.ParseFrontmatterWithReport(data)
@@ -79,17 +92,26 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 
 	// Subagents from ~/.codex/agents/<name>.toml (TOML → frontmatter + body)
-	if entries, err := os.ReadDir(p.AgentsDir); err == nil {
-		for _, e := range entries {
+	agentEntries, present, err := adapter.ReadDirOptional(p.AgentsDir)
+	if err != nil {
+		return c, fmt.Errorf("read agents dir %s: %w", p.AgentsDir, err)
+	}
+	if present {
+		for _, e := range agentEntries {
 			if e.IsDir() || filepath.Ext(e.Name()) != ".toml" {
 				continue
 			}
+			name := e.Name()[:len(e.Name())-len(".toml")]
 			data, err := os.ReadFile(filepath.Join(p.AgentsDir, e.Name()))
 			if err != nil {
+				if !os.IsNotExist(err) {
+					fmt.Fprintf(warn, "warning: skipping subagent %q: read: %v\n", name, err)
+				}
 				continue
 			}
 			var af codexAgentFile
-			if toml.Unmarshal(data, &af) != nil {
+			if err := toml.Unmarshal(data, &af); err != nil {
+				fmt.Fprintf(warn, "warning: skipping subagent %q: %v\n", name, err)
 				continue
 			}
 			fm := map[string]any{}
@@ -111,7 +133,6 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			// The canonical Name stays derived from the filename — it is the
 			// on-disk identity / SourceID stem — while the frontmatter carries the
 			// TOML `name` value above.
-			name := e.Name()[:len(e.Name())-len(".toml")]
 			c.Subagents = append(c.Subagents, source.Subagent{Name: name, Frontmatter: fm, Body: af.DeveloperInstructions})
 		}
 	}
@@ -121,16 +142,23 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	// <project>/.codex/prompts/ (which Codex ignores) is not captured as a
 	// phantom project-scope command that apply would never write back.
 	if scope == adapter.ScopeUser {
-		if entries, err := os.ReadDir(p.PromptsDir); err == nil {
-			for _, e := range entries {
+		promptEntries, present, err := adapter.ReadDirOptional(p.PromptsDir)
+		if err != nil {
+			return c, fmt.Errorf("read prompts dir %s: %w", p.PromptsDir, err)
+		}
+		if present {
+			for _, e := range promptEntries {
 				if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 					continue
 				}
+				name := e.Name()[:len(e.Name())-len(".md")]
 				data, err := os.ReadFile(filepath.Join(p.PromptsDir, e.Name()))
 				if err != nil {
+					if !os.IsNotExist(err) {
+						fmt.Fprintf(warn, "warning: skipping command %q: read: %v\n", name, err)
+					}
 					continue
 				}
-				name := e.Name()[:len(e.Name())-len(".md")]
 				fm, body, lenient, err := claude.ParseFrontmatterWithReport(data)
 				if err != nil {
 					fmt.Fprintf(warn, "warning: skipping command %q: %v\n", name, err)
@@ -145,7 +173,9 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 
 	// Memory from AGENTS.md (managed-file banner stripped — see claude/ingest.go)
-	if data, err := os.ReadFile(p.Memory); err == nil {
+	if data, present, err := adapter.ReadFileOptional(p.Memory); err != nil {
+		return c, fmt.Errorf("read memory %s: %w", p.Memory, err)
+	} else if present {
 		c.Memory.Body = source.StripManagedBanner(string(data))
 	}
 
@@ -180,7 +210,7 @@ func ingestHooks(raw any) []source.Hook {
 					continue
 				}
 				out = append(out, source.Hook{
-					Event:   event,
+					Event:   untrusted.Wrap(event), // native config map key
 					Matcher: matcher,
 					Type:    asStr(h["type"]),
 					Command: asStr(h["command"]),

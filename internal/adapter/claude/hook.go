@@ -9,6 +9,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // renderHooks writes a single op for settings.json containing /hooks/<event>
@@ -36,7 +37,7 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 		if h.Type != "" && h.Type != "command" {
 			skips = append(skips, adapter.Skip{
 				Component: "hook",
-				Name:      h.Event,
+				Name:      h.Event.String(),
 				Reason:    fmt.Sprintf("agentsync models only command hooks; type %q is not projected", h.Type),
 				Kind:      adapter.SkipDropped,
 			})
@@ -49,7 +50,9 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 				"command": h.Command,
 			}},
 		}
-		byEvent[h.Event] = append(byEvent[h.Event], entry)
+		// event is a machine map key / owned-key stem — raw, not the sanitizing String().
+		event := h.Event.Unverified()
+		byEvent[event] = append(byEvent[event], entry)
 	}
 	if len(byEvent) == 0 {
 		return nil, skips, nil
@@ -178,7 +181,7 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 					break defs
 				}
 				captured = append(captured, source.Hook{
-					Event:   event,
+					Event:   untrusted.Wrap(event), // native settings.json map key
 					Matcher: matcher,
 					Type:    asStr(h["type"]),
 					Command: asStr(h["command"]),

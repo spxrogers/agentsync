@@ -1,6 +1,7 @@
 package render_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -98,6 +99,145 @@ func TestPipeline_DedupesIdenticalWritesAcrossAdapters(t *testing.T) {
 	}
 	if totalWrites != 1 {
 		t.Fatalf("expected exactly 1 write to shared path across adapters, got %d", totalWrites)
+	}
+}
+
+// TestPlan_RejectsTraversalComponentName pins the Render-time path-traversal
+// guard at its own layer, independent of the full adapter registry. Plan must
+// refuse any plan whose component Name (subagent/command/skill) fails
+// source.ValidateComponentID — path separators, "..", absolute, bare ".",
+// all-whitespace, AND control/deceptive runes — proving it delegates to the
+// shared sanitizer (untrusted.Sanitize) rather than a hand-rolled "..-only"
+// check that would miss the rune cases. A legitimate name still renders.
+func TestPlan_RejectsTraversalComponentName(t *testing.T) {
+	cases := []struct {
+		name    string
+		id      string
+		wantErr bool
+	}{
+		{"legitimate", "review", false},
+		{"parent-traversal", "../../../tmp/x", true},
+		{"slash", "a/b", true},
+		{"backslash", `a\b`, true},
+		{"absolute", "/etc/passwd", true},
+		{"bare-dot", ".", true},
+		{"whitespace", "  ", true},
+		{"bidi-override", "name\u202egnp", true}, // RLO — delegation-to-Sanitize proof
+		{"esc-recolor", "good\x1b[31m", true},    // ESC/CSI — delegation-to-Sanitize proof
+		{"zero-width", "na\u200bme", true},       // ZWSP — delegation-to-Sanitize proof
+	}
+
+	// Each component kind that becomes a filename stem must be guarded.
+	kinds := []struct {
+		kind  string
+		build func(id string) source.Canonical
+	}{
+		{"subagent", func(id string) source.Canonical {
+			return source.Canonical{Subagents: []source.Subagent{{Name: id, Body: "b\n"}}}
+		}},
+		{"command", func(id string) source.Canonical {
+			return source.Canonical{Commands: []source.Command{{Name: id, Body: "b\n"}}}
+		}},
+		{"skill", func(id string) source.Canonical {
+			return source.Canonical{Skills: []source.Skill{{Name: id, Frontmatter: map[string]any{"name": "s"}, Body: "b\n"}}}
+		}},
+		// MCP/LSP server ids also become a destination filename stem for adapters
+		// that write one file per server (continuedev joins id into
+		// filepath.Join(MCPDir, id+".yaml")). A marketplace-projected id is a raw
+		// manifest map key with no traversal check of its own, so the dispatch-waist
+		// guard MUST validate these ids too — a plugin declaring an mcpServers key
+		// like "../../../etc/x" would otherwise render a write-anywhere FileOp.
+		{"mcp", func(id string) source.Canonical {
+			return source.Canonical{MCPServers: []source.MCPServer{{ID: id, Server: source.MCPServerSpec{Type: "stdio", Command: "x"}}}}
+		}},
+		{"lsp", func(id string) source.Canonical {
+			return source.Canonical{LSPServers: []source.LSPServer{{ID: id, Spec: source.LSPServerSpec{Command: "x"}}}}
+		}},
+	}
+
+	for _, k := range kinds {
+		for _, tc := range cases {
+			t.Run(k.kind+"/"+tc.name, func(t *testing.T) {
+				reg := adapter.NewRegistry()
+				if err := reg.Register(noop.New("claude")); err != nil {
+					t.Fatal(err)
+				}
+				model := k.build(tc.id)
+				_, err := render.Plan(secrets.ForRender(model), reg, []string{"claude"}, adapter.ScopeUser, "", nil, "/tmp")
+				if tc.wantErr != (err != nil) {
+					t.Fatalf("Plan(%s=%q) err=%v; wantErr=%v", k.kind, tc.id, err, tc.wantErr)
+				}
+				// The error must name the component kind + id and (via the wrapped
+				// ValidateComponentID error) explain why — so an operator can locate
+				// the offending component. It is deliberately agent-AGNOSTIC: the id
+				// check is hoisted out of the per-agent loop (a traversal id is
+				// model-wide, not one agent's fault), so it names "render:" + the
+				// component, not any single agent.
+				if tc.wantErr {
+					msg := err.Error()
+					if !strings.Contains(msg, "render:") || !strings.Contains(msg, "component "+k.kind) {
+						t.Errorf("error %q missing render/kind context (want 'render:' + 'component %s')", msg, k.kind)
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestPlan_RejectsTraversalInProjectOverlay exercises the ComponentIDs `c.Project`
+// recursion (internal/secrets) end-to-end: a traversal-bearing id present ONLY in
+// the project overlay still refuses the whole plan. The model is DELIBERATELY
+// synthetic — in the production flow project.Merge (overlayByKey) always mirrors
+// every project id into the top-level slices too, so the top-level loop would
+// already catch this id and the recursion is defense-in-depth, not the sole guard.
+// The test pins that defense-in-depth branch: if a future caller ever fed Plan an
+// unmerged project-only model, a traversal id there must still be rejected, never
+// rendered as a write-anywhere FileOp.
+func TestPlan_RejectsTraversalInProjectOverlay(t *testing.T) {
+	reg := adapter.NewRegistry()
+	if err := reg.Register(noop.New("claude")); err != nil {
+		t.Fatal(err)
+	}
+	proj := source.Canonical{
+		MCPServers: []source.MCPServer{{ID: "../../../etc/x", Server: source.MCPServerSpec{Type: "stdio", Command: "x"}}},
+	}
+	model := source.Canonical{Project: &proj}
+	_, err := render.Plan(secrets.ForRender(model), reg, []string{"claude"}, adapter.ScopeProject, "/tmp/proj", nil, "/tmp")
+	if err == nil {
+		t.Fatal("Plan accepted a traversal MCP id living only in the project overlay")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "render:") || !strings.Contains(msg, "component mcp") {
+		t.Errorf("error %q missing render/kind context (want 'render:' + 'component mcp')", msg)
+	}
+}
+
+// TestPlan_ContainmentBackstopRejectsEscapingFileOp exercises the second,
+// path-based guard directly: a stub adapter emits a write op whose path still
+// contains a surviving ".." after cleaning, while the model carries no component
+// ids at all (so the primary id check passes). The backstop must still refuse it
+// — this is the defense-in-depth layer that also covers bundled skill-file paths,
+// which are not single component ids.
+func TestPlan_ContainmentBackstopRejectsEscapingFileOp(t *testing.T) {
+	reg := adapter.NewRegistry()
+	esc := &countingAdapter{
+		Adapter: noop.New("claude"),
+		renderOps: []adapter.FileOp{{
+			Action:        "write",
+			Path:          "../escape.md", // filepath.Clean keeps the leading ".."
+			Content:       []byte("x"),
+			Mode:          0o644,
+			MergeStrategy: "replace",
+		}},
+	}
+	if err := reg.Register(esc); err != nil {
+		t.Fatal(err)
+	}
+	_, err := render.Plan(secrets.ForRender(source.Canonical{}), reg, []string{"claude"}, adapter.ScopeUser, "", nil, "/tmp")
+	if err == nil {
+		t.Fatal("Plan accepted a FileOp whose path escapes via '..'; want rejection")
+	}
+	if !strings.Contains(err.Error(), "escapes its destination") {
+		t.Errorf("error %q does not describe the containment failure", err.Error())
 	}
 }
 

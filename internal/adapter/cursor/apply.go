@@ -14,21 +14,9 @@ import (
 // than calling iox.AtomicWrite directly. This is the contract that keeps the
 // foreign-collision backup guarantee honest — see the doc on adapter.DestWriter.
 func (a *Adapter) Apply(ops []adapter.FileOp, w adapter.DestWriter) error {
-	for _, op := range ops {
-		switch op.Action {
-		case "delete":
-			if err := w.Delete(op); err != nil {
-				return fmt.Errorf("delete %s: %w", op.Path, err)
-			}
-		case "", "write":
-			if err := a.applyWrite(op, w); err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("unknown action %q", op.Action)
-		}
-	}
-	return nil
+	return adapter.DispatchOps(ops, w, func(op adapter.FileOp) error {
+		return a.applyWrite(op, w)
+	})
 }
 
 // applyWrite performs the per-op merge (for merge-json-keys) and hands the

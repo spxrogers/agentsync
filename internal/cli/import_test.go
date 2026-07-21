@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -687,6 +688,83 @@ func TestImport_SkillFromClaude(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "Steps to deploy") {
 		t.Fatalf("skill body not captured:\n%s", data)
+	}
+}
+
+// TestImport_BundledSkillFromClaude is the CLI-level artifact-anchored counterpart
+// to the adapter's TestIngest_RoundTripsSkillBundledFiles: it seeds a SPEC-COMPLETE
+// on-disk skill directory (SKILL.md + scripts/ + references/ + assets/ + a nested
+// references/sub/) in Claude's native location and asserts `import claude:skill:deploy`
+// captures the WHOLE directory into the canonical source — every bundled file
+// byte-for-byte and the script's 0o755 exec bit — not just SKILL.md. This is the
+// end-to-end guard for the "a skill is a directory, not just SKILL.md" fidelity rule
+// on the import write-back path (source.WriteSkill), which the older
+// TestImport_SkillFromClaude (SKILL.md only) does not exercise.
+func TestImport_BundledSkillFromClaude(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	skillDir := filepath.Join(tmp, ".claude", "skills", "deploy")
+
+	binary := []byte{0x00, 0x01, 0xff, 0x7f}
+	type seed struct {
+		rel     string
+		content []byte
+		mode    os.FileMode
+	}
+	// A spec-complete skill directory: SKILL.md plus bundled scripts/, references/,
+	// assets/, and a nested references/sub/ file.
+	seeds := []seed{
+		{"SKILL.md", []byte("---\nname: deploy\ndescription: ship it\n---\nSteps to deploy.\n"), 0o644},
+		{"scripts/deploy.sh", []byte("#!/bin/sh\necho deploying\n"), 0o755},
+		{"references/notes.md", []byte("# Notes\nread me\n"), 0o644},
+		{"assets/logo.png", binary, 0o644},
+		{"references/sub/extra.md", []byte("nested reference\n"), 0o644},
+	}
+	for _, s := range seeds {
+		abs := filepath.Join(skillDir, filepath.FromSlash(s.rel))
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(abs, s.content, s.mode); err != nil {
+			t.Fatal(err)
+		}
+		// os.WriteFile only honors perm on create; pin the exec bit explicitly.
+		if err := os.Chmod(abs, s.mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if out, err := runCLI(t, env, "import", "claude:skill:deploy"); err != nil {
+		t.Fatalf("import bundled skill: %v\n%s", err, out)
+	}
+
+	canonicalDir := filepath.Join(tmp, ".agentsync", "skills", "deploy")
+	for _, s := range seeds {
+		abs := filepath.Join(canonicalDir, filepath.FromSlash(s.rel))
+		got, err := os.ReadFile(abs)
+		if err != nil {
+			t.Fatalf("bundled path %q not written to canonical skill dir: %v", s.rel, err)
+		}
+		if s.rel == "SKILL.md" {
+			// SKILL.md is frontmatter-parsed and re-encoded, so its exact bytes are
+			// not guaranteed; assert the body survives (the bundled files below carry
+			// the byte-for-byte guarantee).
+			if !bytes.Contains(got, []byte("Steps to deploy")) {
+				t.Fatalf("SKILL.md body not captured:\n%s", got)
+			}
+			continue
+		}
+		// Bundled resources are captured verbatim — byte-for-byte, binary included.
+		if !bytes.Equal(got, s.content) {
+			t.Fatalf("bundled path %q bytes mismatch:\n got %q\nwant %q", s.rel, got, s.content)
+		}
+	}
+	// The executable bit on scripts/deploy.sh survives the import.
+	info, err := os.Stat(filepath.Join(canonicalDir, "scripts", "deploy.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("scripts/deploy.sh mode = %o, want 0755 (exec bit lost on import)", info.Mode().Perm())
 	}
 }
 

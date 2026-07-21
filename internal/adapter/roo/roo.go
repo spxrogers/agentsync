@@ -23,13 +23,11 @@ package roo
 import (
 	"io"
 	"os"
-	"os/exec"
 )
 
 // Options configure the adapter at construction.
 type Options struct {
-	TargetRoot string // honors AGENTSYNC_TARGET_ROOT
-	LookPath   func(file string) (string, error)
+	TargetRoot string    // honors AGENTSYNC_TARGET_ROOT
 	Stderr     io.Writer // Ingest warnings; nil means os.Stderr
 }
 
@@ -55,16 +53,16 @@ func (a *Adapter) Name() string { return "roo" }
 // only file whose keys agentsync co-owns; rules/commands are whole-file writes).
 func (a *Adapter) KeyMergeStrategy() string { return "merge-json-keys" }
 
+// Detect reports whether Roo Code appears installed under the target root by the
+// presence of its `.roo/` config dir. Roo Code is a VS Code(-family) extension
+// with NO standalone `roo` CLI on PATH (see the package doc and docs.roocode.com),
+// so — unlike agents backed by a real binary — there is no executable to probe:
+// a `LookPath("roo")` check could only ever fire on an unrelated binary, so it is
+// deliberately absent. Detection is the config-dir stat only. Informational (the
+// `doctor` command consumes it); it never gates apply.
 func (a *Adapter) Detect() (bool, error) {
 	p := ResolvePaths(a.opts.TargetRoot, "", false)
 	if _, err := os.Stat(p.ConfigDir); err == nil {
-		return true, nil
-	}
-	lookPath := a.opts.LookPath
-	if lookPath == nil {
-		lookPath = exec.LookPath
-	}
-	if _, err := lookPath("roo"); err == nil {
 		return true, nil
 	}
 	return false, nil

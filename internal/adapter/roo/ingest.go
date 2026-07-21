@@ -25,7 +25,11 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 
 	// MCP from .roo/mcp.json (project scope only).
 	if p.MCP != "" {
-		if data, err := os.ReadFile(p.MCP); err == nil {
+		data, present, err := adapter.ReadFileOptional(p.MCP)
+		if err != nil {
+			return c, fmt.Errorf("read %s: %w", p.MCP, err)
+		}
+		if present {
 			var top map[string]any
 			if err := json.Unmarshal(data, &top); err != nil {
 				return c, fmt.Errorf("parse %s: %w", p.MCP, err)
@@ -45,16 +49,34 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	warn := a.stderr()
 
 	// Commands from .roo/commands/<name>.md (markdown + frontmatter).
-	if entries, err := os.ReadDir(p.CommandsDir); err == nil {
-		for _, e := range entries {
+	//
+	// Non-recursive by design, and VERIFIED correct for plain subdirectories:
+	// per RooCodeInc/Roo-Code's scanCommandDirectory, Roo names a command by its
+	// bare basename and does NOT walk plain nested subdirectories, so a flat,
+	// non-recursive read drops nothing Roo honors for ordinary nested dirs. The one
+	// known, narrow residual: Roo DOES follow a *symlinked* directory under
+	// .roo/commands (depth ≤5) to find .md commands within it, whereas this flat
+	// read does not — a symlink entry is not a `.md` file (and reading it as a file
+	// fails), so its contents are skipped. This is an accepted, acknowledged gap (a
+	// symlinked command dir is an unusual authoring choice); if it ever needs
+	// closing, mirror scanCommandDirectory's depth-bounded symlink follow here.
+	commandEntries, present, err := adapter.ReadDirOptional(p.CommandsDir)
+	if err != nil {
+		return c, fmt.Errorf("read commands dir %s: %w", p.CommandsDir, err)
+	}
+	if present {
+		for _, e := range commandEntries {
 			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 				continue
 			}
+			name := e.Name()[:len(e.Name())-len(".md")]
 			data, err := os.ReadFile(filepath.Join(p.CommandsDir, e.Name()))
 			if err != nil {
+				if !os.IsNotExist(err) {
+					fmt.Fprintf(warn, "warning: skipping command %q: read: %v\n", name, err)
+				}
 				continue
 			}
-			name := e.Name()[:len(e.Name())-len(".md")]
 			fm, body, lenient, err := claude.ParseFrontmatterWithReport(data)
 			if err != nil {
 				fmt.Fprintf(warn, "warning: skipping command %q: %v\n", name, err)
@@ -85,7 +107,10 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 
 	// Memory from .roo/rules/agentsync.md (banner stripped — see claude/ingest.go).
-	if data, err := os.ReadFile(filepath.Join(p.RulesDir, memoryRuleFile)); err == nil {
+	memFile := filepath.Join(p.RulesDir, memoryRuleFile)
+	if data, present, err := adapter.ReadFileOptional(memFile); err != nil {
+		return c, fmt.Errorf("read memory %s: %w", memFile, err)
+	} else if present {
 		c.Memory.Body = source.StripManagedBanner(string(data))
 	}
 

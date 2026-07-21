@@ -2,8 +2,10 @@ package gemini
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -30,7 +32,9 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	// supported state of the file), so ingest must tolerate them too;
 	// DecodeJSONC also preserves json.Number so large foreign integers survive
 	// a later re-render unrounded.
-	if data, err := os.ReadFile(p.Settings); err == nil {
+	if data, present, err := adapter.ReadFileOptional(p.Settings); err != nil {
+		return c, fmt.Errorf("read %s: %w", p.Settings, err)
+	} else if present {
 		top, err := jsonkeys.DecodeJSONC(data)
 		if err != nil {
 			return c, fmt.Errorf("parse %s: %w", p.Settings, err)
@@ -47,42 +51,69 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		c.Hooks = append(c.Hooks, ingestHooks(top["hooks"], warn)...)
 	}
 
-	// Commands from .gemini/commands/<name>.toml (TOML → description + body).
-	if entries, err := os.ReadDir(p.CommandsDir); err == nil {
-		for _, e := range entries {
-			if e.IsDir() || filepath.Ext(e.Name()) != ".toml" {
-				continue
+	// Commands from .gemini/commands/**/<name>.toml (TOML → description + body).
+	// Gemini namespaces commands via subdirectories: commands/git/commit.toml is
+	// the `/git:commit` command (the on-disk path separator becomes the ':'
+	// invocation separator). Walk recursively and encode the subdir path into
+	// Command.Name as a forward-slash relpath (e.g. "git/commit"); renderCommands
+	// inverts it (filepath.FromSlash) back to the subdirectory layout so the
+	// native→native round-trip is stable. A real read error on the dir is surfaced
+	// loudly; an absent dir (os.IsNotExist) is a silent skip (#159).
+	if _, present, derr := adapter.ReadDirOptional(p.CommandsDir); derr != nil {
+		return c, fmt.Errorf("read commands dir %s: %w", p.CommandsDir, derr)
+	} else if present {
+		walkErr := filepath.WalkDir(p.CommandsDir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
 			}
-			name := e.Name()[:len(e.Name())-len(".toml")]
-			data, err := os.ReadFile(filepath.Join(p.CommandsDir, e.Name()))
+			if d.IsDir() || filepath.Ext(d.Name()) != ".toml" {
+				return nil
+			}
+			rel, err := filepath.Rel(p.CommandsDir, path)
+			if err != nil {
+				return err
+			}
+			name := filepath.ToSlash(strings.TrimSuffix(rel, ".toml"))
+			data, err := os.ReadFile(path)
 			if err != nil {
 				fmt.Fprintf(warn, "warning: skipping command %q: %v\n", name, err)
-				continue
+				return nil
 			}
 			var cf geminiCommandFile
 			if err := toml.Unmarshal(data, &cf); err != nil {
 				fmt.Fprintf(warn, "warning: skipping command %q: %v\n", name, err)
-				continue
+				return nil
 			}
 			fm := map[string]any{}
 			if cf.Description != "" {
 				fm["description"] = cf.Description
 			}
 			c.Commands = append(c.Commands, source.Command{Name: name, Frontmatter: fm, Body: cf.Prompt})
+			return nil
+		})
+		if walkErr != nil {
+			fmt.Fprintf(warn, "warning: reading commands dir %q: %v\n", p.CommandsDir, walkErr)
 		}
 	}
 
 	// Subagents from .gemini/agents/<name>.md (markdown → frontmatter + body).
-	if entries, err := os.ReadDir(p.AgentsDir); err == nil {
-		for _, e := range entries {
+	agentEntries, present, err := adapter.ReadDirOptional(p.AgentsDir)
+	if err != nil {
+		return c, fmt.Errorf("read agents dir %s: %w", p.AgentsDir, err)
+	}
+	if present {
+		for _, e := range agentEntries {
 			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 				continue
 			}
+			name := e.Name()[:len(e.Name())-len(".md")]
 			data, err := os.ReadFile(filepath.Join(p.AgentsDir, e.Name()))
 			if err != nil {
+				if !os.IsNotExist(err) {
+					fmt.Fprintf(warn, "warning: skipping subagent %q: read: %v\n", name, err)
+				}
 				continue
 			}
-			name := e.Name()[:len(e.Name())-len(".md")]
 			fm, body, lenient, err := claude.ParseFrontmatterWithReport(data)
 			if err != nil {
 				fmt.Fprintf(warn, "warning: skipping subagent %q: %v\n", name, err)
@@ -96,7 +127,9 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 
 	// Memory from GEMINI.md (managed-file banner stripped — see claude/ingest.go).
-	if data, err := os.ReadFile(p.Memory); err == nil {
+	if data, present, err := adapter.ReadFileOptional(p.Memory); err != nil {
+		return c, fmt.Errorf("read memory %s: %w", p.Memory, err)
+	} else if present {
 		c.Memory.Body = source.StripManagedBanner(string(data))
 	}
 

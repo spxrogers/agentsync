@@ -1,8 +1,6 @@
 package continuedev
 
 import (
-	"fmt"
-
 	"github.com/spxrogers/agentsync/internal/adapter"
 )
 
@@ -12,19 +10,7 @@ import (
 // the op's content verbatim. The DestWriter owns the foreign-collision backup
 // invariant — see the doc on adapter.DestWriter.
 func (a *Adapter) Apply(ops []adapter.FileOp, w adapter.DestWriter) error {
-	for _, op := range ops {
-		switch op.Action {
-		case "delete":
-			if err := w.Delete(op); err != nil {
-				return fmt.Errorf("delete %s: %w", op.Path, err)
-			}
-		case "", "write":
-			if err := w.Write(op, op.Content); err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("unknown action %q", op.Action)
-		}
-	}
-	return nil
+	return adapter.DispatchOps(ops, w, func(op adapter.FileOp) error {
+		return w.Write(op, op.Content)
+	})
 }

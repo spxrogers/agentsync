@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // ProjectionResult collects the canonical model entries derived from a plugin's
@@ -1010,7 +1011,7 @@ func appendCommandHook(pr *ProjectionResult, event, matcher, typ, command, cache
 		return
 	}
 	pr.Hooks = append(pr.Hooks, source.Hook{
-		Event:   event,
+		Event:   untrusted.Wrap(event), // event name is fetched marketplace metadata
 		Matcher: matcher,
 		Type:    typ,
 		Command: resolvePluginRoot(command, cacheDir),

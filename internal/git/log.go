@@ -38,7 +38,7 @@ func (r *Repo) Log(n int) ([]Checkpoint, error) {
 	err = iter.ForEach(func(c *object.Commit) error {
 		out = append(out, Checkpoint{
 			Hash:    c.Hash.String(),
-			Short:   shortHash(c.Hash),
+			Short:   Short(c.Hash.String()),
 			Subject: strings.SplitN(c.Message, "\n", 2)[0],
 			When:    c.Author.When,
 		})
@@ -82,9 +82,11 @@ func (r *Repo) headHash() (plumbing.Hash, error) {
 	return ref.Hash(), nil
 }
 
-// shortHash renders the conventional 7-char abbreviation.
-func shortHash(h plumbing.Hash) string {
-	s := h.String()
+// Short abbreviates a hex hash string to the conventional 7-char form for
+// display and diagnostics. A string already shorter than 7 chars is returned
+// unchanged. A plumbing.Hash caller passes h.String(). This is the single
+// hash-abbreviation helper for the package and the CLI (via agit.Short).
+func Short(s string) string {
 	if len(s) >= 7 {
 		return s[:7]
 	}

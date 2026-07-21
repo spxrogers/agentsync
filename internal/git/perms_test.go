@@ -106,3 +106,80 @@ func TestInitTightensGitDir(t *testing.T) {
 		t.Errorf(".git mode = %o after Init, want 700", got)
 	}
 }
+
+// TestGitPermLifecycle exercises the full #126 `.git` permission lifecycle end to
+// end — Init → external chmod drift → a real checkpoint commit through the loosened
+// dir → EnsureDirSecure re-tighten — which the narrower TestInitTightensGitDir
+// (no drift/commit) and TestEnsureDirSecureRetightensLoosened (no commit) do not
+// combine. It pins two facts about where the re-tighten actually lives:
+//
+//   - the low-level commit primitives (Stage + CommitStaged) do NOT re-tighten
+//     `.git`; they commit successfully through a loosened dir but leave its perms
+//     as they found them;
+//   - EnsureDirSecure — the control the CLI commit path invokes (internal/cli/
+//     gitbackup.go) — is what re-tightens the loosened `.git` back to 0o700 and
+//     surfaces a warning.
+//
+// The Windows branch of tightenGitDir is a compile-guarded no-op; POSIX perm bits
+// are meaningless there, so this skips on Windows like the sibling perm tests.
+func TestGitPermLifecycle(t *testing.T) {
+	testenv.RequireContainer(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX perm bits are meaningless on Windows")
+	}
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitDir := filepath.Join(dir, ".git")
+
+	// (a) Init tightens .git to 0o700.
+	if got := statPerm(t, gitDir); got != 0o700 {
+		t.Fatalf(".git mode = %o after Init, want 700", got)
+	}
+
+	// (b) External drift loosens .git (a git gc, a restore-from-tar, an admin chmod).
+	if err := os.Chmod(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// (c) A real checkpoint commits cleanly through the loosened .git.
+	writeFile(t, dir, "rendered.json", `{"token":"cleartext"}`)
+	if err := r.Stage([]string{"rendered.json"}); err != nil {
+		t.Fatalf("stage through loosened .git: %v", err)
+	}
+	hash, err := r.CommitStaged("checkpoint", DefaultIdentity)
+	if err != nil {
+		t.Fatalf("commit through loosened .git: %v", err)
+	}
+	if hash == "" {
+		t.Fatal("commit through loosened .git returned an empty hash")
+	}
+	// The commit primitive itself does NOT re-tighten — the drift is still present.
+	if got := statPerm(t, gitDir); got != 0o755 {
+		t.Fatalf(".git mode = %o after a bare commit, want it left at 755 "+
+			"(re-tighten is EnsureDirSecure's job, not the commit primitive's)", got)
+	}
+
+	// (d) EnsureDirSecure (the #126 control the CLI commit path invokes) re-tightens
+	//     the loosened .git to 0o700 and warns about the drifted cleartext history.
+	var warned []string
+	r.EnsureDirSecure(func(msg string) { warned = append(warned, msg) })
+	if got := statPerm(t, gitDir); got != 0o700 {
+		t.Errorf(".git mode = %o after EnsureDirSecure, want 700", got)
+	}
+	if len(warned) == 0 {
+		t.Error("EnsureDirSecure should warn when it re-tightens a loosened cleartext-secret history")
+	}
+}
+
+// statPerm returns the permission bits of path, failing the test on a stat error.
+func statPerm(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Mode().Perm()
+}

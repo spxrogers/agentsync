@@ -258,6 +258,24 @@ func (s *gitBackupSession) checkpoint(written map[string]bool) error {
 			warnNestedForeignRepoOnCommit(s.p, root)
 		}
 
+		// Per-root cost, and its short-circuit. Without one, every root runs
+		// repo.Stage (one wt.Add per written file, each an internal full-tree git
+		// status) + StageTrackedDeletions (one status) + CommitStaged→indexClean
+		// (one status) — O(roots × (writtenFiles × status + 2 status)) on EVERY
+		// apply, even a clean re-apply that changed nothing. Short-circuit an
+		// agentsync-owned root that WROTE nothing this run: stage any tracked
+		// deletions first (the only change a delete-only apply carries under this
+		// root), and if there are none either, skip the Stage(notice)+CommitStaged
+		// round-trip entirely — a no-write, no-delete root produces no checkpoint
+		// anyway (CommitStaged returns "" on a clean index), so nothing is lost.
+		deleted, err := repo.StageTrackedDeletions()
+		if err != nil {
+			fmt.Fprintf(s.p.Err, "%s git backup for %s: %v\n", s.p.Yellow("agentsync:"), root, err)
+			continue
+		}
+		if len(rels) == 0 && len(deleted) == 0 {
+			continue // nothing written and nothing deleted under this root
+		}
 		// Stage the written files + the notice (so a freshly-inited repo tracks it,
 		// a no-op on an already-owned repo). Build a fresh slice — don't append onto
 		// rels' backing array.
@@ -265,11 +283,6 @@ func (s *gitBackupSession) checkpoint(written map[string]bool) error {
 		toStage = append(toStage, rels...)
 		toStage = append(toStage, agit.NoticeFile)
 		if err := repo.Stage(toStage); err != nil {
-			fmt.Fprintf(s.p.Err, "%s git backup for %s: %v\n", s.p.Yellow("agentsync:"), root, err)
-			continue
-		}
-		deleted, err := repo.StageTrackedDeletions()
-		if err != nil {
 			fmt.Fprintf(s.p.Err, "%s git backup for %s: %v\n", s.p.Yellow("agentsync:"), root, err)
 			continue
 		}
@@ -311,6 +324,14 @@ func baselineMessage(root string) string {
 // the directory: a shared dir declared by several agents appears once, and a dir
 // nested under another (e.g. ~/.claude/skills under ~/.claude) is dropped in favor
 // of the ancestor — so agentsync never creates a repo inside another repo.
+//
+// DEDUP CASING (nit, issue #175): the seen[] key is the BYTE-EXACT cleaned path
+// (filepath.Clean), so on a case-insensitive filesystem two roots differing only in
+// case would be treated as distinct and could both be inited. That is safe today
+// because every version root is a hardcoded string literal with fixed casing (the
+// deep adapters' Paths + generic.versionRootOf), so no two roots ever differ only in
+// case — the dedup relies on that. If a future adapter derives a root from a
+// case-varying source, this key would need case-folding on case-insensitive FSes.
 func enabledVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Scope, project string) []string {
 	seen := map[string]bool{}
 	var all []string
@@ -466,6 +487,14 @@ func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mo
 			}
 			// Sticky "yes": stop asking on future applies (even if THIS dir was
 			// skipped for a nesting conflict — other dirs should still auto-init).
+			if repo == nil {
+				// initGuarded skipped THIS dir for a nesting conflict (it already
+				// warned why), yet the user said "yes" — surface that the global
+				// switch is flipping on regardless, so the persisted mode=on below
+				// is not a silent change.
+				fmt.Fprintf(p.Err, "%s this directory was skipped, but auto-backup is now enabled for future directories and applies.\n",
+					p.Faint(ui.GlyphInfo))
+			}
 			if perr := setDestinationGitBackupMode(home, source.GitBackupModeOn); perr != nil {
 				fmt.Fprintf(p.Err, "%s could not persist git-backup mode: %v\n", p.Yellow("agentsync:"), perr)
 			}
@@ -500,6 +529,12 @@ func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mo
 // git repo below it — agentsync never creates a repo that would wrap another (the
 // cross-run nesting hazard: a child dir was versioned in an earlier run, before a
 // parent-dir agent was enabled). Returns (nil, nil) and warns when it skips.
+//
+// The nesting probe (agit.HasNestedRepoBelow) is a full-subtree WalkDir that
+// short-circuits only on finding a nested `.git`; for a version root that collapses
+// to a busy IDE/app dir this is a one-time full-tree walk on first init — a bounded
+// but potentially large apply-tail cost. See HasNestedRepoBelow's COST note for why
+// it is left unbounded.
 func initGuarded(p *ui.Printer, dir string) (*agit.Repo, error) {
 	nested, err := agit.HasNestedRepoBelow(dir)
 	if err != nil {

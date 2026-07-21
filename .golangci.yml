@@ -133,6 +133,11 @@ linters:
       - path: '(^|/)internal/render/writer\.go$'
         linters: [forbidigo]
         text: 'direct os\.\* is reserved'
+      # source/writer.go writes the canonical source (~/.agentsync/*), not a native
+      # destination; WriteSkill prunes orphaned bundled files via os.Remove.
+      - path: '(^|/)internal/source/writer\.go$'
+        linters: [forbidigo]
+        text: 'direct os\.\* is reserved'
       # PassThroughWriter test helper — delegating the delete is its job.
       - path: '(^|/)internal/adapter/testwriter\.go$'
         linters: [forbidigo]

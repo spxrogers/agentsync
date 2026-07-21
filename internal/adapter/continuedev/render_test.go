@@ -117,6 +117,65 @@ func TestRender_MCP_SkipsDisabledAndOtherAgents(t *testing.T) {
 	}
 }
 
+// TestRender_MCP_CommandAndURL_Ambiguous asserts a server carrying BOTH a command
+// and a url with no explicit type is never silently rendered as stdio with the url
+// dropped: the block still renders (stdio, command wins) AND the dropped url is
+// reported via a reduced Skip. A cleanly-typed server produces no such skip.
+func TestRender_MCP_CommandAndURL_Ambiguous(t *testing.T) {
+	cases := []struct {
+		name        string
+		server      source.MCPServerSpec
+		wantSkip    bool
+		wantURLGone bool
+	}{
+		{
+			name:        "both command and url, no type -> reduced skip, stdio wins",
+			server:      source.MCPServerSpec{Command: "x", URL: "https://y/mcp"},
+			wantSkip:    true,
+			wantURLGone: true,
+		},
+		{
+			name:     "explicit stdio type is unambiguous -> no skip",
+			server:   source.MCPServerSpec{Type: "stdio", Command: "x"},
+			wantSkip: false,
+		},
+		{
+			name:     "explicit http type is unambiguous -> no skip",
+			server:   source.MCPServerSpec{Type: "http", URL: "https://y/mcp"},
+			wantSkip: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := source.Canonical{MCPServers: []source.MCPServer{{ID: "srv", Server: tc.server}}}
+			ops, skips, err := continuedev.New(continuedev.Options{TargetRoot: t.TempDir()}).Render(secrets.ForRender(c), adapter.ScopeUser, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotSkip := hasSkip(skips, "mcp", "srv", adapter.SkipReduced)
+			if gotSkip != tc.wantSkip {
+				t.Fatalf("skip present = %v, want %v (skips=%+v)", gotSkip, tc.wantSkip, skips)
+			}
+			if tc.wantURLGone {
+				op := findOp(ops, ".continue/mcpServers/srv.yaml")
+				if op == nil {
+					t.Fatal("srv.yaml block op missing (ambiguous server must still render as stdio)")
+				}
+				srv := parseServer(t, op.Content)
+				if srv["type"] != "stdio" || srv["command"] != "x" {
+					t.Fatalf("ambiguous server must render as stdio (command wins): %v", srv)
+				}
+				// The dropped url must be reported in the skip, so its loss is not silent.
+				for i := range skips {
+					if skips[i].Component == "mcp" && !strings.Contains(skips[i].Reason, "https://y/mcp") {
+						t.Fatalf("skip reason must name the dropped url: %q", skips[i].Reason)
+					}
+				}
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Memory — a plain (no-frontmatter) always-apply rule
 // ---------------------------------------------------------------------------

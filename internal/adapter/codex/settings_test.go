@@ -83,6 +83,36 @@ command = "npx"
 	}
 }
 
+// TestMergeTOML_RemovesOrphanedHookKey proves hook orphan cleanup works through
+// the real MergeTOML path: an owned `/hooks/<event>` pointer absent from `ours`
+// is deleted while a foreign top-level key survives. This is the coverage the
+// removed hand-set renderHooks OwnedKeys loop never actually exercised (render.Plan
+// populates OwnedKeys from state, so the adapter-set value was always overwritten),
+// and the hooks complement to TestMergeTOML_RemovesOrphanedOwnedKeys (mcp_servers).
+func TestMergeTOML_RemovesOrphanedHookKey(t *testing.T) {
+	existing := []byte(`model = "gpt-5.5"
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo hi"
+`)
+	// ours no longer contains hooks.PreToolUse; the owned pointer drives removal.
+	ours := map[string]any{"hooks": map[string]any{}}
+	out, err := codex.MergeTOML(existing, ours, []string{"/hooks/PreToolUse"})
+	if err != nil {
+		t.Fatalf("MergeTOML: %v", err)
+	}
+	if strings.Contains(string(out), "PreToolUse") {
+		t.Fatalf("orphaned hook event not removed:\n%s", out)
+	}
+	if !strings.Contains(string(out), "gpt-5.5") {
+		t.Fatalf("foreign key removed during hook cleanup:\n%s", out)
+	}
+}
+
 // TestMergeTOML_EmptyExisting handles a first apply with no config.toml yet.
 func TestMergeTOML_EmptyExisting(t *testing.T) {
 	ours := map[string]any{

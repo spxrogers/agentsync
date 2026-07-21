@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"sigs.k8s.io/yaml"
+
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/continuedev"
 	"github.com/spxrogers/agentsync/internal/secrets"
@@ -276,6 +278,73 @@ mcpServers:
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("re-rendered block lost %q:\n%s", want, data)
 		}
+	}
+}
+
+// TestRoundTrip_MCP_BlockHeaderPreserved is the artifact-anchored guard for the
+// block-header round trip: a hand-authored block whose version/schema are NON-
+// default must survive Ingest → Render to a fresh target unchanged ON DISK,
+// instead of being silently regenerated to the 0.0.1/v1 defaults. The reserved
+// Extra keys that carry the header must not leak into the inner server map.
+func TestRoundTrip_MCP_BlockHeaderPreserved(t *testing.T) {
+	src := t.TempDir()
+	blockDir := filepath.Join(src, ".continue", "mcpServers")
+	if err := os.MkdirAll(blockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	native := `name: srv
+version: 2.0.0
+schema: v2
+mcpServers:
+  - name: srv
+    type: stdio
+    command: my-server
+    args:
+      - --flag
+`
+	if err := os.WriteFile(filepath.Join(blockDir, "srv.yaml"), []byte(native), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := continuedev.New(continuedev.Options{TargetRoot: src})
+	got, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.MCPServers) != 1 {
+		t.Fatalf("expected one server, got %+v", got.MCPServers)
+	}
+
+	// Re-render the captured canonical to a FRESH target and read the block back
+	// from disk — the header must still be 2.0.0/v2, not regenerated.
+	dst := t.TempDir()
+	b := continuedev.New(continuedev.Options{TargetRoot: dst})
+	renderApply(t, b, got)
+	data, err := os.ReadFile(filepath.Join(dst, ".continue", "mcpServers", "srv.yaml"))
+	if err != nil {
+		t.Fatalf("re-rendered block missing: %v", err)
+	}
+	var block map[string]any
+	if err := yaml.Unmarshal(data, &block); err != nil {
+		t.Fatalf("re-rendered block not YAML: %v\n%s", err, data)
+	}
+	if block["version"] != "2.0.0" {
+		t.Fatalf("block version regenerated; want 2.0.0, got %v:\n%s", block["version"], data)
+	}
+	if block["schema"] != "v2" {
+		t.Fatalf("block schema regenerated; want v2, got %v:\n%s", block["schema"], data)
+	}
+	// The reserved header keys must NOT have leaked into the inner server map.
+	servers := block["mcpServers"].([]any)
+	inner := servers[0].(map[string]any)
+	if _, bad := inner["__block_version"]; bad {
+		t.Fatalf("reserved __block_version leaked into inner server: %v", inner)
+	}
+	if _, bad := inner["__block_schema"]; bad {
+		t.Fatalf("reserved __block_schema leaked into inner server: %v", inner)
+	}
+	if inner["command"] != "my-server" {
+		t.Fatalf("inner stdio command lost: %v", inner)
 	}
 }
 

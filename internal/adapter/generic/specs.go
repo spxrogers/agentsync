@@ -119,6 +119,14 @@ func Specs() []Spec {
 		},
 		// GitHub Copilot (VS Code) — `.github/copilot-instructions.md`; MCP
 		// `.vscode/mcp.json` under `servers` with explicit `type`.
+		//
+		// NOT auto-detectable (no DetectBin, no DetectDir): Copilot is a VS Code
+		// extension with no stable user-home install marker — its config lives in
+		// per-project `.github/`/`.vscode/` and its extension state in VS Code's
+		// OS-specific storage, so any user-home stat would be a false positive.
+		// Detection is informational only (doctor's per-agent line); coverage still
+		// applies whenever the user enables copilot explicitly. See
+		// docs/capability-matrix.md → "Breadth tier / detection".
 		{
 			Name:   "copilot",
 			Memory: FileTarget{Project: ".github/copilot-instructions.md"},
@@ -186,6 +194,10 @@ func Specs() []Spec {
 			Memory: FileTarget{Project: "AGENTS.md"},
 		},
 		// Trae AI — `.trae/rules/project_rules.md`. MCP is a non-standard array shape.
+		// DetectDir `.trae` IS a user-home marker: Trae Desktop keeps its per-user
+		// state under `~/.trae` (distinct from the PROJECT-relative `.trae/rules/`
+		// above), so Detect legitimately fires at user scope. (Contrast copilot /
+		// jetbrains below, which have no user-home marker.)
 		{
 			Name: "trae", DetectDir: ".trae",
 			Memory: FileTarget{Project: ".trae/rules/project_rules.md"},
@@ -193,6 +205,14 @@ func Specs() []Spec {
 			Skills: FileTarget{Project: ".agents/skills"},
 		},
 		// JetBrains AI Assistant — `.aiassistant/rules/`. MCP is IDE app-storage.
+		//
+		// NOT auto-detectable at user scope: DetectDir `.aiassistant` is a
+		// PROJECT-relative rules directory (`<project>/.aiassistant/rules/`), not a
+		// user-home install marker — JetBrains IDEs keep their own state under the
+		// OS-specific `~/.config/JetBrains/…` (Linux) family, never `~/.aiassistant`.
+		// Detect stats `~/.aiassistant`, which effectively never exists, so detection
+		// never fires from the home dir; it is informational only and coverage still
+		// applies on explicit enable. See docs/capability-matrix.md.
 		{
 			Name: "jetbrains", DetectDir: ".aiassistant",
 			Memory: FileTarget{Project: ".aiassistant/rules/agentsync.md"},

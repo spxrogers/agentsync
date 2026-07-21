@@ -10,10 +10,12 @@ import (
 )
 
 // renderMCP converts canonical MCP servers into a single op targeting
-// `.cursor/mcp.json` under the `mcpServers` object. Cursor uses the SAME schema
-// Claude does (type/command/args/env/url/headers, `${env:…}` references), so
-// this is a full-fidelity projection — the canonical Type round-trips and
-// passthrough native keys carry through `Extra`. op.Content is JSON and the
+// `.cursor/mcp.json` under the `mcpServers` object. Cursor's stdio schema matches
+// Claude's (type/command/args/env, `${env:…}` references), but its documented
+// REMOTE schema is url+headers with NO `type` key (per cursor.com/docs, MCP) —
+// so `type` is emitted only for a stdio-shaped server and a remote server round-
+// trips its transport via url presence (Cursor infers remote), not a label.
+// Passthrough native keys carry through `Extra`. op.Content is JSON and the
 // merge-json-keys strategy preserves a hand-authored mcp.json's foreign servers.
 func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, error) {
 	targeted := map[string]any{}
@@ -25,7 +27,14 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, erro
 			continue
 		}
 		spec := map[string]any{}
-		if m.Server.Type != "" {
+		// Emit `type` only for a stdio-shaped server (a command, no url). Cursor's
+		// documented remote schema is url+headers with no `type`, so writing it on
+		// a remote server would be an off-spec key.
+		// TODO(#164): whether real Cursor *rejects* vs silently *ignores* an
+		// unknown remote `type` is unconfirmed upstream (its docs are silent on
+		// unknown-field tolerance); revisit the drop-vs-keep verdict when #164's
+		// real-Cursor test lands.
+		if m.Server.Type != "" && m.Server.Command != "" && m.Server.URL == "" {
 			spec["type"] = m.Server.Type
 		}
 		if m.Server.Command != "" {
@@ -68,6 +77,9 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, erro
 // `.cursor/mcp.json` `mcpServers.<id>` — into the canonical MCPServerSpec. It is
 // the inverse of renderMCP: type/command/args/env/url/headers carry over and any
 // other native key (timeout, envFile, auth, …) is preserved verbatim in Extra.
+// It stays tolerant of a `type` key on read (forward-compat) even though renderMCP
+// no longer writes one on remote servers, so a hand-authored remote server that
+// still carries `type` captures it rather than dropping it.
 func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
 	return source.MCPServerSpec{
 		Type:    asStr(raw["type"]),

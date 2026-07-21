@@ -307,6 +307,83 @@ func TestGitBackup_PromptNeverPersistsOff(t *testing.T) {
 	}
 }
 
+// TestGitBackup_ShortCircuitCleanOwnedRoot: an agentsync-owned root with no written
+// files and a clean tree records no new checkpoint and does not error (the per-apply
+// git-status short-circuit).
+func TestGitBackup_ShortCircuitCleanOwnedRoot(t *testing.T) {
+	h := newGBHarness(t)
+	abs := h.writeManaged("settings.json", `{"a":1}`)
+	// First run inits the owned repo and checkpoints the written file.
+	h.run(source.DestinationGitBackupConfig{Mode: source.GitBackupModeOn}, map[string]bool{abs: true}, false)
+	repo, err := agit.Open(h.claudDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := repo.Log(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("precondition: want 1 checkpoint, got %d", len(before))
+	}
+
+	// Second run: nothing written under the root, clean tree → short-circuited. No
+	// new checkpoint, no error.
+	h.run(source.DestinationGitBackupConfig{Mode: source.GitBackupModeOn}, map[string]bool{}, false)
+
+	repo2, err := agit.Open(h.claudDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := repo2.Log(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("clean no-write re-apply added a checkpoint: before=%d after=%d", len(before), len(after))
+	}
+}
+
+// TestGitBackup_PromptYesStickyNoteOnNestedSkip: when prompt-yes lands on a dir that
+// initGuarded skips for a nested-repo conflict, agentsync still persists mode=on
+// globally AND prints a one-line note that auto-backup is nonetheless enabled.
+func TestGitBackup_PromptYesStickyNoteOnNestedSkip(t *testing.T) {
+	h := newGBHarness(t)
+	abs := h.writeManaged("settings.json", "{}")
+	// A nested git repo STRICTLY BELOW ~/.claude makes initGuarded refuse (a repo
+	// inside a repo), returning (nil, nil) — the skipped-init path.
+	nested := filepath.Join(h.claudDir, "plugins", "inner")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitPlainInit(nested); err != nil {
+		t.Fatal(err)
+	}
+	restore := stubPrompter(promptYes)
+	defer restore()
+
+	var errBuf bytes.Buffer
+	p := ui.New(io.Discard, &errBuf, ui.ColorNever)
+	if err := runDestinationGitBackup(h.cmd, p, h.reg, []string{"claude"},
+		adapter.ScopeUser, "", h.home,
+		source.DestinationGitBackupConfig{Mode: source.GitBackupModePrompt}, map[string]bool{abs: true}, false); err != nil {
+		t.Fatalf("runDestinationGitBackup: %v", err)
+	}
+
+	// The dir itself was skipped (not inited as an agentsync-owned repo)...
+	if ok, _ := agit.OwnsExactly(h.claudDir); ok {
+		t.Fatal("nested-conflict dir must not be inited as agentsync-owned")
+	}
+	// ...but sticky mode=on is still persisted...
+	if got := loadMode(t, h.home); got != source.GitBackupModeOn {
+		t.Fatalf("persisted mode = %q, want on", got)
+	}
+	// ...and the user is told so on stderr.
+	if !strings.Contains(errBuf.String(), "auto-backup is now enabled for future") {
+		t.Fatalf("expected sticky-skip note on stderr, got: %q", errBuf.String())
+	}
+}
+
 func TestInterpretPromptLine(t *testing.T) {
 	cases := map[string]struct {
 		want promptResult
