@@ -294,7 +294,9 @@ func TestRevertSnapshotPrintsCleartextCaution(t *testing.T) {
 // TestRevert_FoldedSharedDirNoted is the regression for the folded-dir revert
 // ISSUE: ~/.claude/skills is versioned as part of ~/.claude (de-nested), so
 // `revert opencode` must NOT error trying to open a repo at ~/.claude/skills — it
-// notes the dir is covered by a parent and moves on.
+// notes the dir is covered by a parent and moves on (leaving the files alone).
+// It also proves the note's claim on disk: reverting the PARENT is what rolls the
+// folded skill back, byte-for-byte, to the prior checkpoint.
 func TestRevert_FoldedSharedDirNoted(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
@@ -306,10 +308,22 @@ func TestRevert_FoldedSharedDirNoted(t *testing.T) {
 	_ = f.Close()
 	srcSkill := filepath.Join(tmp, ".agentsync", "skills", "demo", "SKILL.md")
 	_ = os.MkdirAll(filepath.Dir(srcSkill), 0o755)
-	_ = os.WriteFile(srcSkill, []byte("---\nname: demo\ndescription: d\n---\nbody\n"), 0o644)
-	if out, err := runCLI(t, env, "apply"); err != nil {
-		t.Fatalf("apply: %v\n%s", err, out)
+	apply := func(body string) {
+		_ = os.WriteFile(srcSkill, []byte("---\nname: demo\ndescription: d\n---\n"+body+"\n"), 0o644)
+		if out, err := runCLI(t, env, "apply"); err != nil {
+			t.Fatalf("apply: %v\n%s", err, out)
+		}
 	}
+	foldedSkill := filepath.Join(tmp, ".claude", "skills", "demo", "SKILL.md")
+	apply("v1")
+	wantV1, err := os.ReadFile(foldedSkill)
+	if err != nil {
+		t.Fatalf("apply v1 should render the folded skill: %v", err)
+	}
+	if !strings.Contains(string(wantV1), "v1") {
+		t.Fatalf("precondition: captured v1 bytes should contain v1:\n%s", wantV1)
+	}
+	apply("v2") // ~/.claude (the folding parent) now has two checkpoints
 
 	// ~/.claude/skills exists but has no .git of its own (folded into ~/.claude).
 	if _, err := os.Stat(filepath.Join(tmp, ".claude", "skills", ".git")); !os.IsNotExist(err) {
@@ -321,6 +335,19 @@ func TestRevert_FoldedSharedDirNoted(t *testing.T) {
 	}
 	if !strings.Contains(out, "versioned as part of a parent") {
 		t.Errorf("expected the folded-dir note for ~/.claude/skills; got:\n%s", out)
+	}
+	// The child's revert only NOTES the folding — it must not have rolled the
+	// folded dir back itself: the skill still holds the v2 bytes.
+	if b, _ := os.ReadFile(foldedSkill); !strings.Contains(string(b), "v2") {
+		t.Fatalf("revert opencode must leave the folded dir to the parent; skill:\n%s", b)
+	}
+	// And the note's claim must be TRUE: reverting the parent (claude) actually
+	// rolls the folded shared dir back to the exact v1 bytes.
+	if out, err := runCLI(t, env, "revert", "claude"); err != nil {
+		t.Fatalf("revert claude: %v\n%s", err, out)
+	}
+	if got, _ := os.ReadFile(foldedSkill); string(got) != string(wantV1) {
+		t.Fatalf("revert claude must roll the folded skill back to the v1 bytes:\n got %q\nwant %q", got, wantV1)
 	}
 }
 
@@ -395,7 +422,8 @@ func TestRevert_DryRunWarnsUntracked(t *testing.T) {
 
 // TestRevert_SharedDirWarnsBlastRadius asserts the user-facing warning that
 // reverting a shared dir (~/.agents/skills, owned by codex + warp) rolls back the
-// other agent's files too.
+// other agent's files too — and that the rollback the warning describes really
+// happened on disk (the shared dest is back to its exact prior-checkpoint bytes).
 func TestRevert_SharedDirWarnsBlastRadius(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
@@ -413,7 +441,16 @@ func TestRevert_SharedDirWarnsBlastRadius(t *testing.T) {
 			t.Fatalf("apply: %v\n%s", err, out)
 		}
 	}
+	// The shared dest file BOTH owners read (codex and warp render the same path).
+	sharedSkill := filepath.Join(tmp, ".agents", "skills", "demo", "SKILL.md")
 	apply("v1")
+	wantV1, err := os.ReadFile(sharedSkill)
+	if err != nil {
+		t.Fatalf("apply v1 should render the shared skill: %v", err)
+	}
+	if !strings.Contains(string(wantV1), "v1") {
+		t.Fatalf("precondition: captured v1 bytes should contain v1:\n%s", wantV1)
+	}
 	apply("v2") // ~/.agents/skills now has two checkpoints
 
 	// ~/.agents/skills is its own repo, shared by codex + warp.
@@ -426,6 +463,16 @@ func TestRevert_SharedDirWarnsBlastRadius(t *testing.T) {
 	}
 	if !strings.Contains(out, "shared with") || !strings.Contains(out, "warp") {
 		t.Fatalf("expected a shared-dir blast-radius warning naming warp; got:\n%s", out)
+	}
+	// The warning is only honest if the rollback really happened: the shared file
+	// — the other owner's (warp's) file too, since both render the same dest — is
+	// back to its exact v1 bytes on disk.
+	got, err := os.ReadFile(sharedSkill)
+	if err != nil {
+		t.Fatalf("shared skill missing after revert: %v", err)
+	}
+	if string(got) != string(wantV1) {
+		t.Fatalf("revert codex must roll the shared dir back to the v1 bytes:\n got %q\nwant %q", got, wantV1)
 	}
 }
 
