@@ -346,6 +346,27 @@ func WriteHooks(home, event string, hooks []Hook) error {
 	return iox.AtomicWrite(filepath.Join(dir, event+".toml"), body, 0o644)
 }
 
+// RemoveHooks deletes hooks/<event>.toml, reporting whether a file was removed.
+// It exists for import's stale-hook retirement (adapter.HookIngestGuard): when a
+// native hook event can no longer be captured (unrepresentable handler/fields),
+// the stale canonical file must go, or the next apply keeps owning — and lossily
+// rewriting — the user's native array. The event name comes from the native
+// config (untrusted), so it is validated exactly like WriteHooks' before it
+// touches a path.
+func RemoveHooks(home, event string) (bool, error) {
+	if err := ValidateComponentID("hook event", event); err != nil {
+		return false, err
+	}
+	p := filepath.Join(home, "hooks", event+".toml")
+	if err := os.Remove(p); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("remove hooks/%s.toml: %w", event, err)
+	}
+	return true, nil
+}
+
 // lspFileOut is the TOML shape written to lsp/<id>.toml.
 type lspFileOut struct {
 	Server LSPServerSpec `toml:"server"`

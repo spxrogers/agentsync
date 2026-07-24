@@ -225,9 +225,11 @@ literally, never resolved.)
   carries a field agentsync doesn't model (e.g. `timeout`), is **reported, not
   silently dropped**: on render a non-command handler surfaces as a Skip and is
   never emitted (so agentsync's owned-array write can't clobber a native handler),
-  and on ingest the whole event is left uncaptured with a warning — so the next
-  apply never *owns*, and therefore never rewrites, your richer native entry. This
-  guard-and-warn behavior is anchored by the artifact-anchored
+  and on ingest the whole event is left uncaptured with a warning. If agentsync
+  *previously* captured the event (it was clean then, enriched natively since),
+  `import` also retires the now-stale canonical `hooks/<event>.toml` — so the
+  next apply never *owns*, and therefore never rewrites, your richer native
+  entry. This guard-and-warn behavior is anchored by the artifact-anchored
   `TestIngest_HookArtifactRoundTrip` (`internal/adapter/claude`).
 
 **OpenCode**

@@ -305,6 +305,19 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projec
 		return importErr
 	}
 
+	// Retire stale canonical hook files for events the destination carries but
+	// ingest REFUSED to capture (adapter.HookIngestGuard): an event captured
+	// while clean and later enriched natively (a timeout field, a non-command
+	// handler) is skipped by Ingest, so capture never rewrites its canonical
+	// file — and the stale file would keep the next apply owning the whole
+	// per-event array, rewriting the user's native entry without the fields
+	// agentsync cannot model (the second-order corruption class of issue #124).
+	// Import's contract is "the destination is the source of truth", so the
+	// canonical file goes and apply hands the event back to the agent.
+	if component == "" || component == "hook" {
+		retireRefusedHookEvents(io, agentsyncHome, srcHome, a, agentName, sc, projectRoot)
+	}
+
 	// Seed state with the destination's current content hash so the next
 	// \`apply\` sees Clean/Converged instead of ForeignCollision and
 	// silently overwriting the file the user just imported from. We do
@@ -351,6 +364,72 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projec
 //
 // We render canonical → ops, build the set of (path, pointer) pairs
 // canonical claims, and diff against the actual on-disk contents.
+// retireRefusedHookEvents removes the stale canonical hooks/<event>.toml for
+// every hook event the destination carries but the adapter's ingest refused to
+// capture (adapter.HookIngestGuard). See the call site in runImport for why a
+// stale file must not survive an import. Best-effort: a failure here degrades
+// to the pre-existing behavior (stale file kept, apply keeps owning the event)
+// with a warning, never a failed import.
+func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adapter.Adapter, agentName string, sc adapter.Scope, projectRoot string) {
+	g, ok := a.(adapter.HookIngestGuard)
+	if !ok {
+		return
+	}
+	refused, err := g.RefusedHookEvents(sc, projectRoot)
+	if err != nil {
+		io.warnf("could not check for stale canonical hook files: %v", err)
+		return
+	}
+	var retired []string
+	for _, event := range refused {
+		removed, rerr := source.RemoveHooks(srcHome, event)
+		if rerr != nil {
+			io.warnf("could not retire stale canonical hooks/%s.toml: %v; the next apply "+
+				"will keep rewriting the native %s entry without its uncaptured fields — "+
+				"delete the file by hand to hand the event back to the agent", event, rerr, event)
+			continue
+		}
+		if removed {
+			retired = append(retired, event)
+			io.note(fmt.Sprintf("retired canonical hooks/%s.toml — the native entry now has "+
+				"content agentsync cannot represent, so agentsync no longer manages this "+
+				"event (apply will leave the native entry untouched)", event))
+		}
+	}
+	if len(retired) == 0 {
+		return
+	}
+	// Also DISOWN the retired events' key-state entries: with the canonical file
+	// gone but the "/hooks/<event>" pointer still recorded as owned, the next
+	// apply's orphan-key cleanup would DELETE the user's native entry — the exact
+	// clobber the retirement exists to prevent. Event names passed
+	// ValidateComponentID (no ':'), so the ":/hooks/<event>" suffix match on the
+	// "<agent>:<scope>:<project>:<file>:<pointer>" key shape is exact.
+	statePath := filepath.Join(agentsyncHome, ".state", "targets.json")
+	st, serr := state.Load(statePath)
+	if serr != nil {
+		io.warnf("could not load state to disown retired hook events: %v", serr)
+		return
+	}
+	changed := false
+	for key := range st.Keys {
+		if !strings.HasPrefix(key, agentName+":") {
+			continue
+		}
+		for _, event := range retired {
+			if strings.HasSuffix(key, ":/hooks/"+event) {
+				delete(st.Keys, key)
+				changed = true
+			}
+		}
+	}
+	if changed {
+		if serr := state.Save(statePath, st); serr != nil {
+			io.warnf("could not save state after disowning retired hook events: %v", serr)
+		}
+	}
+}
+
 func unimportedDestPointers(agentsyncHome, srcHome, agentName string, reg *adapter.Registry, sc adapter.Scope, projectRoot string) []string {
 	pluginCacheRoot := filepath.Join(agentsyncHome, ".state", "cache", "plugins")
 	// Lenient: this is a post-import diagnostic re-render. A strict plugin

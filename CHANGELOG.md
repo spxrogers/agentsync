@@ -11,6 +11,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`import` now retires a stale canonical hook file when the native event can
+  no longer be captured, closing the second-order `/hooks/<event>` clobber.**
+  A Claude hook event captured while it was a clean command hook and *later*
+  enriched natively (a `timeout` field, a non-`command` handler) is refused by
+  ingest — but its stale canonical `hooks/<event>.toml` kept the next `apply`
+  owning the whole per-event array, rewriting the user's enriched native entry
+  without those fields, and no agentsync flow could preserve the edit short of
+  hand-deleting the canonical file. `import` (full-agent or `:hook`) now asks
+  the adapter which events it refused (`adapter.HookIngestGuard` /
+  `RefusedHookEvents`) and removes each one's stale canonical file with a
+  notice, handing the event back to the agent; the next apply leaves the
+  native entry untouched.
 - **The pre-apply git baseline now covers planned deletions, so a delete-only
   first apply is recoverable.** The baseline staged only the paths the plan
   would *write*; a file the apply was about to *delete* (a skill dropped from
@@ -756,8 +768,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   dropping the extra fields and emitting a structurally invalid
   `{"type":"…","command":""}` entry. Ingest now leaves any hook event it cannot
   fully represent **uncaptured** with a warning (matching the Gemini adapter), so
-  the next apply never owns or overwrites that event, and Render reports a dropped
-  `Skip` for a non-`command` handler instead of emitting an empty-command entry.
+  a never-captured event is never owned or overwritten by the next apply, and
+  Render reports a dropped `Skip` for a non-`command` handler instead of emitting
+  an empty-command entry. (An event captured while clean and *later* enriched
+  natively still had a stale canonical file that apply kept rewriting; see the
+  stale-hook retirement entry above for that half of the fix.)
 - **Codex subagent `name` now survives a round-trip, and colliding effective
   names are caught (issue #144).** A Codex custom agent whose frontmatter `name`
   deliberately differs from its file stem (rendered into the TOML `name` field

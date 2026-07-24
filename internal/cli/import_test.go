@@ -1129,3 +1129,67 @@ func TestImport_UnknownComponent(t *testing.T) {
 		t.Fatal("expected error for unknown component 'widget'; got nil")
 	}
 }
+
+// TestImport_RetiresStaleHookOnNativeEnrichment closes the second-order
+// issue #124 corruption path: a hook event captured while it was a clean
+// command hook, then enriched natively (here: a "timeout" field), is refused by
+// ingest — but before this fix the stale canonical hooks/<event>.toml kept the
+// next apply owning the whole per-event array, rewriting the user's enriched
+// native entry without the timeout. import must retire the stale canonical file
+// so apply leaves the native entry byte-untouched.
+func TestImport_RetiresStaleHookOnNativeEnrichment(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mustRun(t, env, "agent", "add", "claude")
+	settings := filepath.Join(tmp, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clean := `{
+		"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi"}]}]}
+	}`
+	if err := os.WriteFile(settings, []byte(clean), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// First import captures the clean command hook into canonical.
+	if out, err := runCLI(t, env, "import", "claude:hook:PreToolUse"); err != nil {
+		t.Fatalf("import clean hook: %v\n%s", err, out)
+	}
+	canonical := filepath.Join(tmp, ".agentsync", "hooks", "PreToolUse.toml")
+	if _, err := os.Stat(canonical); err != nil {
+		t.Fatalf("precondition: canonical hook not captured: %v", err)
+	}
+
+	// The user enriches the native entry with a field agentsync cannot model.
+	enriched := `{
+		"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 30}]}]}
+	}`
+	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-import: the event is refused (warning) AND the stale canonical file is
+	// retired, with a notice naming it.
+	out, err := runCLI(t, env, "import", "claude")
+	if err != nil {
+		t.Fatalf("re-import: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "retired canonical hooks/PreToolUse.toml") {
+		t.Fatalf("import did not announce the stale-hook retirement:\n%s", out)
+	}
+	if _, err := os.Stat(canonical); !os.IsNotExist(err) {
+		t.Fatalf("stale canonical hooks/PreToolUse.toml should be retired; stat err=%v", err)
+	}
+
+	// The apply after the retirement must leave the enriched native entry
+	// byte-for-byte untouched — agentsync no longer owns the event.
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != enriched {
+		t.Fatalf("apply rewrote the native hooks entry it no longer owns:\n got %s\nwant %s", got, enriched)
+	}
+}

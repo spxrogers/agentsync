@@ -276,6 +276,19 @@ type PluginIngester interface {
 	IngestPlugins(scope Scope, project string) ([]NativeMarketplace, []NativePlugin, error)
 }
 
+// HookIngestGuard is an OPTIONAL extension to Adapter for agents whose hook
+// ingest REFUSES unrepresentable native events (non-command handlers, unmodeled
+// fields) rather than capturing a lossy subset. RefusedHookEvents re-reads the
+// destination and returns those refused event names, so `import` can retire a
+// stale canonical hooks/<event>.toml: an event captured while clean and later
+// enriched natively is skipped by Ingest, but a stale canonical file left in
+// place keeps the next apply — which owns the whole per-event array — lossily
+// rewriting the user's native entry (the second-order corruption class of
+// issue #124). Like Render/Ingest it MUST honor RequireProjectRoot.
+type HookIngestGuard interface {
+	RefusedHookEvents(scope Scope, project string) ([]string, error)
+}
+
 // VersionedDirs is an OPTIONAL extension to Adapter: an adapter that writes into
 // one or more on-disk directories declares them so the apply tail can git-init and
 // checkpoint those directories as a local-only rollback history (issue #118). An

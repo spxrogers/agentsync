@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
@@ -106,16 +107,16 @@ var (
 // structurally-malformed shapes (non-object def/handler, non-array event value or
 // "hooks" value) that Gemini's ingestHooks drops silently. Bringing Gemini to
 // parity is a separate follow-up (out of this issue's scope).
-func ingestHooks(raw any, warn io.Writer) []source.Hook {
+func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) {
 	hooks, ok := raw.(map[string]any)
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	var out []source.Hook
 	for event, rawEntries := range hooks {
 		entries, ok := rawEntries.([]any)
 		if !ok {
 			fmt.Fprintf(warn, "warning: hook event %q value is not an array; event not captured\n", event)
+			refused = append(refused, event)
 			continue
 		}
 		var captured []source.Hook
@@ -190,9 +191,38 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 		}
 		if representable {
 			out = append(out, captured...)
+		} else {
+			refused = append(refused, event)
 		}
 	}
-	return out
+	sort.Strings(refused) // map iteration order — keep output deterministic
+	return out, refused
+}
+
+// RefusedHookEvents implements adapter.HookIngestGuard: it re-reads the
+// destination settings file and returns the hook events whose native entries
+// ingestHooks refuses to capture (non-command handlers, unmodeled fields,
+// malformed shapes). Import uses this to retire a stale canonical
+// hooks/<event>.toml: an event that was captured while clean and then enriched
+// natively is skipped by Ingest, but its stale canonical file would keep the
+// next apply owning — and lossily rewriting — the user's native array (the
+// second-order corruption class of issue #124). Warnings are discarded here;
+// Ingest already emitted them on the same shapes.
+func (a *Adapter) RefusedHookEvents(scope adapter.Scope, project string) ([]string, error) {
+	if err := adapter.RequireProjectRoot(scope, project); err != nil {
+		return nil, err
+	}
+	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
+	data, present, err := adapter.ReadFileOptional(p.Settings)
+	if err != nil || !present {
+		return nil, err
+	}
+	top, err := jsonkeys.DecodeObject(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", p.Settings, err)
+	}
+	_, refused := ingestHooks(top["hooks"], io.Discard)
+	return refused, nil
 }
 
 // unmodeledKeys returns the sorted keys of m that are not in modeled.
