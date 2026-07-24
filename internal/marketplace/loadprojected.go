@@ -77,7 +77,7 @@ func loadProjected(fs afero.Fs, home, pluginCacheRoot string, disabled []string,
 	// resolution is O(plugins + marketplaces), not O(plugins × marketplaces):
 	// the previous per-plugin scan re-read and re-parsed every cached
 	// marketplace.json for EVERY installed plugin (issue #162 item G).
-	mpIndex := buildMarketplaceIndex(home)
+	mpIndex := buildMarketplaceIndex(fs, home)
 	for _, pl := range c.Plugins {
 		proj, ok, perr := projectOnePlugin(fs, home, pluginCacheRoot, pl, disabledByProject, lenient, mpIndex)
 		if perr != nil {
@@ -149,16 +149,18 @@ func projectOnePlugin(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugi
 	if err := verifyPluginManifestSHA(fs, pluginDir, pl.Plugin.ManifestSHA, id); err != nil {
 		return ProjectionResult{}, false, err
 	}
-	// Read the projected component bodies AND directory listings through the SAME
-	// injected fs that the tamper guard hashed (verifyPluginManifestSHA →
-	// PluginTreeHash), so on a non-OS fs (tests, or any future virtual fs) the
-	// guard and the data it protects can never read DIFFERENT trees. Passing
-	// os.ReadFile/os.ReadDir here (the old behavior) hashed the injected fs while
-	// projecting the real OS filesystem — an integrity guarantee that was unsound
-	// off the real filesystem (issue #162 item E).
+	// Read the projected component bodies, directory listings, AND the
+	// marketplace-entry resolution (resolveInstalledEntry / the pre-built index —
+	// entry overrides can inject components) through the SAME injected fs that the
+	// tamper guard hashed (verifyPluginManifestSHA → PluginTreeHash), so on a
+	// non-OS fs (tests, or any future virtual fs) the guard and the data it
+	// protects can never read DIFFERENT trees. Passing os.ReadFile/os.ReadDir
+	// here (the old behavior) hashed the injected fs while projecting the real OS
+	// filesystem — an integrity guarantee that was unsound off the real
+	// filesystem (issue #162 item E).
 	readFile := func(p string) ([]byte, error) { return afero.ReadFile(fs, p) }
 	readDir := func(p string) ([]os.DirEntry, error) { return aferoReadDirEntries(fs, p) }
-	proj, perr := projectWithFuncs(resolveInstalledEntry(home, id, mpName, mpIndex), pluginDir, readFile, readDir, lenient)
+	proj, perr := projectWithFuncs(resolveInstalledEntry(fs, home, id, mpName, mpIndex), pluginDir, readFile, readDir, lenient)
 	if perr != nil {
 		return ProjectionResult{}, false, fmt.Errorf("project plugin %s: %w", id, perr)
 	}
@@ -289,7 +291,7 @@ func lspRenderFields(s source.LSPServerSpec) source.LSPServerSpec {
 // inline overrides may be slightly ahead of the installed content. Project
 // unions plugin.json with the entry, so this never DROPS the plugin's own
 // components; at worst a stale entry adds a slightly-ahead override.
-func resolveInstalledEntry(home, id, mpName string, idx marketplaceIndex) PluginEntry {
+func resolveInstalledEntry(fs afero.Fs, home, id, mpName string, idx marketplaceIndex) PluginEntry {
 	if mpName == "" {
 		return PluginEntry{Name: untrusted.Wrap(id)}
 	}
@@ -306,10 +308,10 @@ func resolveInstalledEntry(home, id, mpName string, idx marketplaceIndex) Plugin
 		return PluginEntry{Name: untrusted.Wrap(id)}
 	}
 	// Fallback (ProjectInstalled diagnostic path, or any nil-index caller): the
-	// direct per-call scan, byte-for-byte the prior behavior — any read/parse
-	// failure or unmatched entry degrades to a bare strict entry.
+	// direct per-call scan through the same injected fs — any read/parse failure
+	// or unmatched entry degrades to a bare strict entry.
 	cacheRoot := filepath.Join(home, ".state", "cache", "marketplaces")
-	dirs, err := os.ReadDir(cacheRoot)
+	dirs, err := afero.ReadDir(fs, cacheRoot)
 	if err != nil {
 		return PluginEntry{Name: untrusted.Wrap(id)}
 	}
@@ -317,7 +319,7 @@ func resolveInstalledEntry(home, id, mpName string, idx marketplaceIndex) Plugin
 		if !d.IsDir() {
 			continue
 		}
-		data, rerr := os.ReadFile(filepath.Join(cacheRoot, d.Name(), ".claude-plugin", "marketplace.json"))
+		data, rerr := afero.ReadFile(fs, filepath.Join(cacheRoot, d.Name(), ".claude-plugin", "marketplace.json"))
 		if rerr != nil {
 			continue
 		}
@@ -346,17 +348,19 @@ func resolveInstalledEntry(home, id, mpName string, idx marketplaceIndex) Plugin
 type marketplaceIndex map[string][]PluginEntry
 
 // buildMarketplaceIndex reads and parses each cached marketplace.json exactly
-// once, indexing every marketplace's entries by its declared name. It preserves
-// the scan's fallback semantics precisely: an unreadable cache root, an
-// unreadable/unparseable marketplace.json, or a missing entry all yield "no
-// match" (resolveInstalledEntry then returns a bare strict entry). Entries from
-// multiple cached marketplaces that declare the SAME name are concatenated in
-// os.ReadDir (sorted) order, so a lookup still finds the first matching entry —
-// matching the old first-dir-wins scan for the pathological name-collision case.
-func buildMarketplaceIndex(home string) marketplaceIndex {
+// once — through the injected fs, the same one the tamper guard hashes and
+// projection reads — indexing every marketplace's entries by its declared name.
+// It preserves the scan's fallback semantics precisely: an unreadable cache
+// root, an unreadable/unparseable marketplace.json, or a missing entry all
+// yield "no match" (resolveInstalledEntry then returns a bare strict entry).
+// Entries from multiple cached marketplaces that declare the SAME name are
+// concatenated in afero.ReadDir (sorted) order, so a lookup still finds the
+// first matching entry — matching the old first-dir-wins scan for the
+// pathological name-collision case.
+func buildMarketplaceIndex(fs afero.Fs, home string) marketplaceIndex {
 	idx := marketplaceIndex{}
 	cacheRoot := filepath.Join(home, ".state", "cache", "marketplaces")
-	dirs, err := os.ReadDir(cacheRoot)
+	dirs, err := afero.ReadDir(fs, cacheRoot)
 	if err != nil {
 		return idx
 	}
@@ -364,7 +368,7 @@ func buildMarketplaceIndex(home string) marketplaceIndex {
 		if !d.IsDir() {
 			continue
 		}
-		data, rerr := os.ReadFile(filepath.Join(cacheRoot, d.Name(), ".claude-plugin", "marketplace.json"))
+		data, rerr := afero.ReadFile(fs, filepath.Join(cacheRoot, d.Name(), ".claude-plugin", "marketplace.json"))
 		if rerr != nil {
 			continue
 		}

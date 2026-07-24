@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/spf13/afero"
 )
 
 // writeMarketplaceCacheJSON lays down home/.state/cache/marketplaces/<dir>/
@@ -31,12 +33,13 @@ func writeMarketplaceCacheJSON(t *testing.T, home, dir, body string) {
 // each marketplace.json parsed at most once.
 func TestResolveInstalledEntry_MemoizedScan(t *testing.T) {
 	home := t.TempDir()
+	osfs := afero.NewOsFs()
 	writeMarketplaceCacheJSON(t, home, "a",
 		`{"name":"mpA","plugins":[{"name":"plug1","description":"the real plug1"},{"name":"plug2"}]}`)
 	writeMarketplaceCacheJSON(t, home, "b",
 		`{"name":"mpB","plugins":[{"name":"plug3"}]}`)
 
-	idx := buildMarketplaceIndex(home)
+	idx := buildMarketplaceIndex(osfs, home)
 
 	// Memoized resolution equals the direct scan for present entries and fallbacks.
 	checks := []struct {
@@ -49,8 +52,8 @@ func TestResolveInstalledEntry_MemoizedScan(t *testing.T) {
 		{"plug1", "mpZ", "plug1"},     // unknown marketplace → bare
 	}
 	for _, c := range checks {
-		memo := resolveInstalledEntry(home, c.id, c.mp, idx)
-		scan := resolveInstalledEntry(home, c.id, c.mp, nil)
+		memo := resolveInstalledEntry(osfs, home, c.id, c.mp, idx)
+		scan := resolveInstalledEntry(osfs, home, c.id, c.mp, nil)
 		if memo.Name.Unverified() != c.wantName {
 			t.Errorf("memoized(%q,%q).Name = %q, want %q", c.id, c.mp, memo.Name.Unverified(), c.wantName)
 		}
@@ -60,7 +63,7 @@ func TestResolveInstalledEntry_MemoizedScan(t *testing.T) {
 	}
 
 	// The real plug1 entry carries an inline description; a bare fallback does not.
-	if got := resolveInstalledEntry(home, "plug1", "mpA", idx); got.Description != "the real plug1" {
+	if got := resolveInstalledEntry(osfs, home, "plug1", "mpA", idx); got.Description != "the real plug1" {
 		t.Fatalf("memoized entry lost its inline metadata: %q", got.Description)
 	}
 
@@ -70,10 +73,10 @@ func TestResolveInstalledEntry_MemoizedScan(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(home, ".state", "cache", "marketplaces")); err != nil {
 		t.Fatal(err)
 	}
-	if got := resolveInstalledEntry(home, "plug1", "mpA", idx); got.Description != "the real plug1" {
+	if got := resolveInstalledEntry(osfs, home, "plug1", "mpA", idx); got.Description != "the real plug1" {
 		t.Fatalf("memoized index re-read the deleted cache (or lost data): desc=%q", got.Description)
 	}
-	if got := resolveInstalledEntry(home, "plug1", "mpA", nil); got.Description != "" {
+	if got := resolveInstalledEntry(osfs, home, "plug1", "mpA", nil); got.Description != "" {
 		t.Fatalf("scan should miss after cache deletion, returning a bare entry; got desc=%q", got.Description)
 	}
 }
