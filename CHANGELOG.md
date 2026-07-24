@@ -11,6 +11,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`verify` now checks secret-reference shape in online mode too.** The
+  malformed-reference check (`${secret:}` empty key, missing colon, illegal
+  characters) ran only under `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1`, while the
+  online resolver silently passed the malformed token through as literal text —
+  so a green local `verify` ("all references resolve") could contradict a red
+  offline CI verify on the same config. Both modes now reject malformed
+  references; online verify additionally checks resolvability, as before.
 - **`import` now retires a stale canonical hook file when the native event can
   no longer be captured, closing the second-order `/hooks/<event>` clobber.**
   A Claude hook event captured while it was a clean command hook and *later*
