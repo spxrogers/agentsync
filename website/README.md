@@ -69,7 +69,8 @@ relevant page under `reference/` (the sync table in `CLAUDE.md` lists this).
 ## Link & anchor checking (build-time)
 
 [`scripts/check-links.mjs`](scripts/check-links.mjs) is a build-time guard that
-validates every **in-site** link in the content tree. It runs from `predev` /
+validates the **site-absolute** in-site links (`/route…` hrefs) and `#anchor`
+targets in the content tree. It runs from `predev` /
 `prebuild` **after** `sync:docs` (so it sees the generated + authored pages
 together), walks all `.md`/`.mdx` under `src/content/docs/`, and fails the build
 (non-zero exit, one report line per breakage naming file, line, and target) when:
@@ -79,9 +80,10 @@ together), walks all `.md`/`.mdx` under `src/content/docs/`, and fails the build
 
 Heading slugs are computed with [`github-slugger`](https://github.com/Flet/github-slugger),
 the same GitHub-style slugger Starlight uses, so the check matches the anchors
-the site actually generates. External links (`http(s)://`, `mailto:`) and the
-GitHub blob/edit URLs the mirror emits are skipped. A clean run prints a
-one-line summary and exits 0.
+the site actually generates. External links (`http(s)://`, `mailto:`), the
+GitHub blob/edit URLs the mirror emits, and **relative** links (`../foo`, bare
+`foo.md` — outside the route/anchor scope the checker owns) are skipped. A
+clean run prints a one-line summary and exits 0.
 
 Run it standalone with `bun run check:links`. Its own unit tests (the slugger
 fixture pinning the real slugs, plus a checker run over a temp fixture tree) live
