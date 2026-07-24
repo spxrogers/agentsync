@@ -218,6 +218,16 @@ vault secret value would still be written verbatim, or a `${secret:K}` the sourc
 group referenced is now absent from the ingested group (rotated/edited away),
 Capture **refuses the whole write** rather than persist cleartext. It errs toward
 refusing; the user updates the vault or edits the canonical source directly.
+Two narrow **deletion-only** exceptions sit outside the funnel: `reconcile`'s
+`removeDroppedSource` (`internal/cli/reconcile.go`) unlinks a canonical
+`mcp/<id>.toml` when the user explicitly chooses `[w]rite-back` for a
+destination-side server deletion, and `source.RemoveHooks` deletes a stale
+`hooks/<event>.toml` during import's stale-hook retirement. Both are safe
+without Capture because a pure deletion carries no content to re-reference —
+there is no secret material to persist — and both are guarded (the reconcile
+path is keystroke-gated and `withinDir`-bounded to `~/.agentsync`; RemoveHooks
+validates the native-supplied event id before touching a path). Anything that
+*writes content* dest→source still MUST go through `capture.Capture`.
 
 **3. Resolved vs templated types.** `secrets.SubstituteCanonical` returns
 `secrets.Resolved` (a wrapper, NOT assignable to `source.Canonical`); it is the

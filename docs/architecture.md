@@ -506,7 +506,14 @@ with `UseNumber`, and a `json.Number` left in an MCP/LSP `Extra` map would be
 marshaled by go-toml as a TOML *string* (`timeout = '30'`), silently flipping the
 value's native type on the next render — so Capture converts every `json.Number`
 to `int64`/`float64` before writing. No other
-code path writes destination data back into the source.
+code path writes destination data back into the source. (Two guarded code paths
+*delete* canonical files without going through Capture: `reconcile`'s
+`removeDroppedSource` unlinks `mcp/<id>.toml` when the user writes back a
+destination-side server deletion — keystroke-gated, `withinDir`-bounded to
+`~/.agentsync` — and import's stale-hook retirement calls `source.RemoveHooks`
+on `hooks/<event>.toml`. A pure deletion carries no content to re-reference, so
+the funnel's secret guarantees are not in play; anything that writes *content*
+back still must go through `capture.Capture`.)
 
 Re-reference matches by value, so it cannot distinguish a *moved or rotated*
 secret from a deliberate non-secret edit. As a **fail-closed backstop**,
