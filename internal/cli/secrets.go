@@ -185,15 +185,31 @@ func writeSecretsVerified(plain []byte, cfg source.SecretsConfig, home string) e
 //
 // The legitimate cases still succeed: an in-place scalar update (scalar leaf →
 // new scalar leaf) and a new nested key under an absent or table parent. Error
-// messages carry only KEY names, never a secret *value* byte (the
-// no-secret-in-stderr convention honored by resolveSecretKeyValue).
+// messages name the FULL dotted paths the user typed (e.g. `a.b.c` clashing
+// with scalar `a.b`, not the recursion's local `b.c`/`b`) and carry only KEY
+// names, never a secret *value* byte (the no-secret-in-stderr convention
+// honored by resolveSecretKeyValue).
 func setNestedKey(m map[string]any, dottedKey, value string) error {
+	return setNestedKeyAt(m, "", dottedKey, value)
+}
+
+// setNestedKeyAt is setNestedKey's recursion. prefix is the dotted path already
+// consumed by outer levels ("" at the root); joining it back onto the local key
+// names is what lets a refusal deep in the recursion report the full paths the
+// user typed.
+func setNestedKeyAt(m map[string]any, prefix, dottedKey, value string) error {
+	full := func(k string) string {
+		if prefix == "" {
+			return k
+		}
+		return prefix + "." + k
+	}
 	parts := strings.SplitN(dottedKey, ".", 2)
 	if len(parts) == 1 {
 		if existing, ok := m[parts[0]]; ok {
 			if _, isMap := existing.(map[string]any); isMap {
 				return fmt.Errorf("setting %q would overwrite the existing table at %q; refusing to destroy it — choose a different key or remove %q first",
-					parts[0], parts[0], parts[0])
+					full(parts[0]), full(parts[0]), full(parts[0]))
 			}
 		}
 		m[parts[0]] = value
@@ -207,9 +223,9 @@ func setNestedKey(m map[string]any, dottedKey, value string) error {
 	subMap, ok := sub.(map[string]any)
 	if !ok {
 		return fmt.Errorf("setting %q would overwrite the existing secret at %q (a scalar value); refusing to destroy it — choose a different key or remove %q first",
-			dottedKey, parts[0], parts[0])
+			full(dottedKey), full(parts[0]), full(parts[0]))
 	}
-	return setNestedKey(subMap, parts[1], value)
+	return setNestedKeyAt(subMap, full(parts[0]), parts[1], value)
 }
 
 // editorArgv builds the editor argv from $EDITOR and the file to edit. $EDITOR
