@@ -500,7 +500,12 @@ the server targeting the destination doesn't fully carry: an MCP/LSP server's
 `agents` list is source-only (no native dest carries it) and is always restored,
 while `enabled` — which some destinations *do* carry (Codex reads a native
 `enabled` back, issue #152) — is restored from source only when the ingest carried
-none, so a real native enable/disable round-trips instead of being reset. No other
+none, so a real native enable/disable round-trips instead of being reset. It also
+**normalizes numeric passthrough values**: adapter ingests decode native JSON/JSONC
+with `UseNumber`, and a `json.Number` left in an MCP/LSP `Extra` map would be
+marshaled by go-toml as a TOML *string* (`timeout = '30'`), silently flipping the
+value's native type on the next render — so Capture converts every `json.Number`
+to `int64`/`float64` before writing. No other
 code path writes destination data back into the source.
 
 Re-reference matches by value, so it cannot distinguish a *moved or rotated*

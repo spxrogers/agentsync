@@ -11,6 +11,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Numeric passthrough values no longer flip to strings through the canonical
+  source.** Adapter ingests decode native JSON/JSONC with `UseNumber` so large
+  integers survive exactly, but a `json.Number` persisted into an MCP/LSP
+  `extra` map marshaled as a TOML *string* (`timeout = '30'`), so an
+  `import`→`apply` cycle silently rewrote every unmodeled numeric native field
+  as a string (`"timeout": "30"`). The capture funnel now normalizes
+  `json.Number` to `int64`/`float64` before writing the canonical source,
+  keeping >2^53 integers exact and the native type intact.
 - **Gemini adapter: hook group shape, empty `type`, and always-fire matchers
   (issue #166).** Rendering `.gemini/settings.json` `hooks` now reconstructs the
   native multi-handler shape from the flat canonical model — consecutive hooks

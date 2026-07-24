@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/spf13/afero"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -42,6 +43,9 @@ type Result struct {
 // both import and reconcile build a single-item canonical and call it.
 //
 // For every component present in ingested it, in one place:
+//  0. normalizes json.Number values in the MCP/LSP Extra passthrough maps to
+//     int64/float64 (normalizeExtraNumbers) so a UseNumber-decoded native
+//     integer is persisted as a TOML integer, not a string;
 //  1. re-references resolved secrets back to ${secret:…} against the current
 //     source (secrets.ReReferenceCanonical), so a live credential apply wrote
 //     into the destination is never persisted into ~/.agentsync;
@@ -70,6 +74,7 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 	if ingested == nil {
 		return res, nil
 	}
+	normalizeExtraNumbers(ingested)
 
 	cur, cerr := source.Load(afero.NewOsFs(), home)
 	if cerr != nil {
@@ -184,6 +189,33 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 		}
 	}
 	return res, nil
+}
+
+// normalizeExtraNumbers rewrites every json.Number in the ingested canonical's
+// MCP/LSP Extra passthrough maps (recursively through the project overlay) to
+// int64/float64. Adapter ingests decode native JSON/JSONC with UseNumber so an
+// unmodeled integer beyond 2^53 survives in memory — but json.Number's
+// underlying type is a string, and go-toml marshals it as a TOML *string*
+// (`timeout = '30'`), so persisting it unconverted through source.Write* flips
+// the value's native type on the next render (30 -> "30"). Extra is the only
+// TOML-persisted passthrough surface (Subagent/Command/Skill frontmatter decode
+// via DecodeYAML, which already converts), so the funnel normalizes exactly
+// here — before the leak backstop, which compares string values and never
+// matches a number either way.
+func normalizeExtraNumbers(c *source.Canonical) {
+	for i := range c.MCPServers {
+		if x := c.MCPServers[i].Server.Extra; x != nil {
+			c.MCPServers[i].Server.Extra, _ = jsonkeys.ConvertNumbers(x).(map[string]any)
+		}
+	}
+	for i := range c.LSPServers {
+		if x := c.LSPServers[i].Spec.Extra; x != nil {
+			c.LSPServers[i].Spec.Extra, _ = jsonkeys.ConvertNumbers(x).(map[string]any)
+		}
+	}
+	if c.Project != nil {
+		normalizeExtraNumbers(c.Project)
+	}
 }
 
 // secretKindRefs filters UnresolvedSecretRefs output down to the `secret:` kind

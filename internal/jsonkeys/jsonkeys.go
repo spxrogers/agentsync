@@ -63,6 +63,18 @@ func DecodeYAML(yml []byte) (map[string]any, error) {
 	return m, nil
 }
 
+// ConvertNumbers walks v, replacing every json.Number with an int64 (when it
+// parses as an integer) or float64 otherwise, recursing through maps and
+// slices. DecodeObject/DecodeJSONC deliberately KEEP json.Number so a merge
+// re-marshals foreign JSON keys with their exact digits — but a json.Number
+// that escapes into a TOML-persisted field is a hazard: go-toml marshals the
+// underlying string type as a TOML *string* (`timeout = '30'`), silently
+// flipping the value's type on the next render. Callers that persist decoded
+// values outside JSON (the capture dest->source funnel) normalize through this
+// first; int64 keeps large integers (snowflake ids, nanosecond timestamps)
+// exact, matching DecodeYAML's behavior.
+func ConvertNumbers(v any) any { return convertJSONNumbers(v) }
+
 // convertJSONNumbers walks v, replacing every json.Number with an int64 (when
 // it parses as an integer) or float64 otherwise, recursing through maps and
 // slices. This keeps large integers exact while leaving non-numeric values
