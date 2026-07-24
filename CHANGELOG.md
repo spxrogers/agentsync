@@ -136,6 +136,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Documentation
 
+- **The Gemini subagent frontmatter passthrough is documented as a deliberate
+  secret-machinery exception.** Subagent frontmatter (including a command/env-shaped
+  `mcpServers` block) is never secret-resolved and never re-referenced; the
+  capability matrix, the adapter doc comment, and the project memory's
+  secret-invariants section now say so explicitly.
 - **Build-time link/anchor checker for the docs website (issue #170).** New
   `website/scripts/check-links.mjs` walks every `.md`/`.mdx` under
   `website/src/content/docs/` and fails the build on any broken in-site link —

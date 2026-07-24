@@ -313,7 +313,12 @@ literally, never resolved.)
   `Read`/`Grep`, so copying it verbatim would name tools Gemini doesn't have) and
   `color` (no Gemini agent field) are dropped with a report, and the reported `Skip`
   lists only those keys. `name` is defaulted to the filename when absent (Gemini
-  requires it).
+  requires it). The passthrough is a *deliberate secret-machinery exception* (like
+  the MCP `extra` passthrough): subagent frontmatter — including a command/env-shaped
+  `mcpServers` block — is never secret-resolved and never re-referenced, so a
+  `${secret:…}` written there stays a literal string, and a live secret hand-pasted
+  into *native* frontmatter is captured verbatim like any other hand-authored text
+  component — keep your dotfiles repo private.
 - **Slash command** — Gemini commands are TOML (`.gemini/commands/*.toml`) with
   `description` + `prompt`. The body becomes `prompt` and `description` carries
   over; `argument-hint`/`allowed-tools` have no Gemini field and drop. Gemini's

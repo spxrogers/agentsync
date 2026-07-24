@@ -195,6 +195,17 @@ being classified.
 > value through it. If you ever make `Extra` secret-resolving, it MUST join
 > `walkSecretFields` (and the paired re-reference) like every other field.
 
+> **Deliberate exception — Gemini subagent frontmatter passthrough.** The Gemini
+> adapter re-emits captured subagent frontmatter verbatim (a drop-list, not an
+> allowlist), including a command/env-shaped `mcpServers` block. Subagent
+> frontmatter is part of a text component: it is never secret-resolved (a
+> `${secret:…}` there is written literally) and never flows through
+> `capture.Capture`'s re-reference or leak backstop — so no rendered vault
+> secret can leak this way, and a live secret hand-pasted into *native*
+> frontmatter is captured verbatim like any other hand-authored text file (keep
+> dotfiles repos private). See the doc comment on `renderSubagents` in
+> `internal/adapter/gemini/subagent.go`.
+
 **2. One dest→source path.** All write-backs go through `capture.Capture`
 (`internal/capture`). It re-references secrets (`secrets.ReReferenceCanonical`),
 preserves source-only fields the rendered dest never carries (MCP/LSP
