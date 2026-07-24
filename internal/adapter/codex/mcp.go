@@ -16,38 +16,27 @@ import (
 // on-disk config.toml as TOML (see settings.go).
 func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, []adapter.Skip, error) {
 	servers := map[string]any{}
-	var skips []adapter.Skip
 	for _, m := range c.MCPServers {
+		// A disabled server (Enabled=false) or one whose agents allowlist
+		// excludes codex is honored silently, matching the other adapters:
+		// obeying a deliberate canonical setting is not a "drop" — the
+		// capture-it-or-acknowledge-it rule targets data agentsync cannot
+		// represent, not settings it is following.
 		if m.Server.Enabled != nil && !*m.Server.Enabled {
-			skips = append(skips, adapter.Skip{
-				Component: "mcp",
-				Name:      m.ID,
-				Reason:    "MCP server is disabled in canonical config",
-				Kind:      adapter.SkipDropped,
-			})
 			continue
 		}
 		if !agentTargeted("codex", m.Server.Agents) {
-			skips = append(skips, adapter.Skip{
-				Component: "mcp",
-				Name:      m.ID,
-				Reason:    "Codex is not in this MCP server's agents allowlist",
-				Kind:      adapter.SkipDropped,
-			})
 			continue
 		}
 		servers[m.ID] = codexMCPSpec(m.Server)
 	}
-	// Return the accumulated skips even when nothing lands: a config whose only
-	// MCP servers are all disabled/non-targeted must still report each drop, not
-	// swallow them behind a nil return.
 	if len(servers) == 0 {
-		return nil, skips, nil
+		return nil, nil, nil
 	}
 	ours := map[string]any{"mcp_servers": servers}
 	body, err := json.MarshalIndent(ours, "", "  ")
 	if err != nil {
-		return nil, skips, fmt.Errorf("marshal codex mcp: %w", err)
+		return nil, nil, fmt.Errorf("marshal codex mcp: %w", err)
 	}
 	return []adapter.FileOp{{
 		Action:        "write",
@@ -56,7 +45,7 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, []ad
 		Mode:          0o644,
 		SourceID:      "mcp/* (multiple)",
 		MergeStrategy: "merge-toml-keys",
-	}}, skips, nil
+	}}, nil, nil
 }
 
 // codexMCPSpec projects a canonical MCP server into Codex's native config.toml

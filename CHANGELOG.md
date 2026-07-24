@@ -11,6 +11,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Codex no longer reports a deliberately disabled or non-targeted MCP server
+  as a "drop" on every apply.** The codex adapter alone emitted a `SkipDropped`
+  in the translation report for every MCP server the user disabled
+  (`enabled = false`) or excluded via the `agents` allowlist — recurring noise
+  for a setting agentsync was obeying, not data it failed to represent. The
+  other eight adapters honor the same condition silently; codex now matches
+  the fleet. Skips for content codex genuinely cannot render are unchanged.
 - **Windsurf adapter: stripping a hand-authored leading fence from a workflow
   now warns instead of deleting the bytes silently.** Windsurf workflows honor
   no frontmatter, so ingest strips a hand-authored leading `---`…`---` block
@@ -378,17 +385,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   loudly for MCP but silently for **hooks**. Read-side only: no change to the
   `Adapter`/`Ingest` signatures, the canonical schema, or any render/write-back
   path.
-- **Codex adapter no longer drops MCP servers or non-command hook handlers
-  silently (issue #151).** Disabled (`enabled = false`) and non-targeted (a
-  server whose `agents` allowlist excludes codex) MCP servers now surface an
-  `adapter.Skip` in the translation report instead of vanishing, and a Codex hook
-  handler whose `type` is set but not `command` now surfaces a reduced Skip
-  telling the user Codex will parse but never execute it (the handler still
-  renders — Codex tolerates any type, so nothing that would make it reject
-  `config.toml` was added). Also removed a dead hand-set `OwnedKeys` loop in
-  `renderHooks` (the render pipeline populates `OwnedKeys` from persisted state,
-  always overwriting the adapter-set value); hook orphan-cleanup is now covered
-  directly against `MergeTOML`.
+- **Codex adapter no longer renders a non-command hook handler silently
+  (issue #151).** A Codex hook handler whose `type` is set but not `command` now
+  surfaces a reduced Skip telling the user Codex will parse but never execute it
+  (the handler still renders — Codex tolerates any type, so nothing that would
+  make it reject `config.toml` was added). Also removed a dead hand-set
+  `OwnedKeys` loop in `renderHooks` (the render pipeline populates `OwnedKeys`
+  from persisted state, always overwriting the adapter-set value); hook
+  orphan-cleanup is now covered directly against `MergeTOML`. (An earlier
+  revision of this fix also reported disabled/non-targeted MCP servers as
+  drops; that report was removed again before release — see the entry above.)
 - **Continue & Cursor MCP round-trip and off-spec-key fixes (issue #172).** Three
   behavior changes: (1) **Cursor** no longer writes a `type` key on **remote**
   (`url`-bearing) MCP servers — Cursor's documented remote schema is `url`+`headers`
