@@ -168,6 +168,20 @@ func WriteMarketplace(home, name string, m Marketplace) error {
 // which would otherwise survive and re-project to every agent on the next apply
 // (import was previously non-idempotent w.r.t. deletions). The prune is rooted
 // at the skill dir and cannot escape it (see pruneOrphanSkillFiles).
+//
+// CALLER CONTRACT — sk.Files MUST be spec-complete. Because of that prune,
+// WriteSkill treats sk.Files as the authoritative, exhaustive inventory of the
+// skill directory: every on-disk regular file absent from it is DELETED. Any
+// producer that hands WriteSkill a PARTIAL Files set — an ingest modeling only
+// SKILL.md, a projection that skips scripts/references/assets — turns import
+// from "stale file left behind" into "canonical files deleted": the
+// impoverished-model bug class CLAUDE.md's "models must stay faithful to their
+// on-disk artifacts" rule exists for, made destructive. Capture the whole
+// skill directory (cf. ReadSkillFiles) before calling this. The last-resort
+// safety net is the documented canonical-source layout itself — a
+// git-committed dotfiles repo, where a wrongful prune is recoverable. The
+// artifact-anchored regression test for the prune is
+// TestWriteSkill_PrunesRemovedBundledFiles (internal/source/iss162_test.go).
 func WriteSkill(home string, sk Skill) error {
 	if err := ValidateComponentID("skill", sk.Name); err != nil {
 		return err
