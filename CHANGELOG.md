@@ -11,6 +11,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **The apply-time baseline snapshot now carries the revert snapshot's
+  cleartext caution, and skips roots the apply doesn't touch.** When the
+  pre-apply baseline commits something — typically a hand-typed edit to a
+  tracked dest file since the last apply, the same class of content the revert
+  snapshot warns may hold freshly-typed secrets — `apply` now prints the same
+  "kept in the local-only history … may contain secrets in cleartext" caution,
+  once per run. And a version root with no planned write or delete under it is
+  no longer baseline-snapshotted at all: previously an apply could quietly grow
+  "pre-apply baseline" commits in dirs it never touched whenever they held
+  uncommitted tracked drift; that drift now stays on disk, uncommitted, exactly
+  as a `--no-git-backup` run would leave it.
 - **`revert --to` now validates the target against the checkpoint history.**
   Any revision whose object existed in the backup repo was accepted — including
   a commit from an orphaned or rewound lineage that was never one of the dir's

@@ -373,6 +373,94 @@ func TestModeOnNewDirEmitsCleartextNotice(t *testing.T) {
 	}
 }
 
+// TestApply_BaselineSnapshotPrintsCleartextCaution pins the apply-time side of
+// issue #126: when the pre-apply baseline actually commits something (here, a
+// hand-typed edit to a tracked dest file since the last apply — exactly the class
+// of content that may hold a freshly-typed secret), apply prints the same
+// cleartext caution the revert snapshot prints, once per run.
+func TestApply_BaselineSnapshotPrintsCleartextCaution(t *testing.T) {
+	_, env, destSkill := setupGitBackedClaude(t)
+
+	// Hand-edit a tracked dest file; the next apply's baseline snapshots it into
+	// the local-only history before overwriting it.
+	if err := os.WriteFile(destSkill, []byte("HAND-TYPED ghp_fresh_secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "pre-apply baseline") {
+		t.Fatalf("expected a baseline commit for the hand-edit, got:\n%s", out)
+	}
+	if n := strings.Count(out, "may contain secrets in cleartext"); n != 1 {
+		t.Fatalf("baseline cleartext caution should appear exactly once, got %d:\n%s", n, out)
+	}
+
+	// A clean re-apply commits no baseline — and so must print no caution.
+	out2, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("re-apply: %v\n%s", err, out2)
+	}
+	if strings.Contains(out2, "may contain secrets in cleartext") {
+		t.Errorf("a no-op apply must not re-emit the cleartext caution:\n%s", out2)
+	}
+}
+
+// TestApply_NoBaselineCommitInUntouchedRoot pins the baseline pass's scope: an
+// agentsync-owned root that this apply plans NO write or delete under must not
+// grow a "pre-apply baseline" commit, even when it holds uncommitted tracked
+// drift. (resolveBackupRepo opens owned roots unconditionally for the checkpoint
+// pass's delete-only case; the baseline pass must not snapshot through that into
+// dirs the apply never touches — the drift stays on disk, exactly as a
+// --no-git-backup run would leave it.)
+func TestApply_NoBaselineCommitInUntouchedRoot(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+	writeSkillSource(t, tmp, "demo", "d")
+	if out, err := runCLI(t, env, "apply"); err != nil { // inits ~/.claude: baseline + checkpoint
+		t.Fatalf("apply 1: %v\n%s", err, out)
+	}
+	// Drop the skill from source; the delete-only apply removes it (planned delete).
+	if err := os.RemoveAll(filepath.Join(tmp, ".agentsync", "skills", "demo")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply 2: %v\n%s", err, out)
+	}
+
+	// ~/.claude now receives NO planned paths at all. Dirty a TRACKED file (the
+	// notice) so a snapshot WOULD have something to commit if it ran.
+	claude := filepath.Join(tmp, ".claude")
+	const drift = "hand-edited notice — uncommitted drift\n"
+	if err := os.WriteFile(filepath.Join(claude, agit.NoticeFile), []byte(drift), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := agit.Open(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := repo.Log(0)
+
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply 3: %v\n%s", err, out)
+	}
+	after, _ := repo.Log(0)
+	if len(after) != len(before) {
+		t.Fatalf("an apply with no planned path under ~/.claude must record no baseline there: %d -> %d commits", len(before), len(after))
+	}
+	// The drift is untouched on disk and still uncommitted.
+	if b, _ := os.ReadFile(filepath.Join(claude, agit.NoticeFile)); string(b) != drift {
+		t.Fatalf("untouched root's drift was disturbed: %q", b)
+	}
+	if clean, _ := repo.IsClean(); clean {
+		t.Fatal("the tracked drift must remain uncommitted (no snapshot ran)")
+	}
+}
+
 // committedBlob returns the contents of rel in the repo-at-dir's HEAD commit tree.
 func committedBlob(t *testing.T, dir, rel string) string {
 	t.Helper()
