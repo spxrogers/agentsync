@@ -11,6 +11,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **The pre-apply git baseline now covers planned deletions, so a delete-only
+  first apply is recoverable.** The baseline staged only the paths the plan
+  would *write*; a file the apply was about to *delete* (a skill dropped from
+  source) was removed without a writer backup and its bytes landed in no
+  baseline, no checkpoint, and no backup dir — unrecoverable. The baseline now
+  stages the pre-apply content of every planned write *and* delete (including
+  writer-derived skill orphan deletes), and on an already-owned root it also
+  stages a planned path that is still untracked (created while backup was off
+  or declined) before the apply overwrites or deletes it. Other untracked files
+  remain untouched, as before.
 - **Numeric passthrough values no longer flip to strings through the canonical
   source.** Adapter ingests decode native JSON/JSONC with `UseNumber` so large
   integers survive exactly, but a `json.Number` persisted into an MCP/LSP

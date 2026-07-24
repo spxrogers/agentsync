@@ -212,7 +212,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	// a loud warning — a baseline failure never aborts the apply (honors
 	// --no-git-backup / mode=off / project scope / a declined prompt, all as nil).
 	gb := newGitBackupSession(cmd, p, reg, agents, sc, projectRoot, home, c.Config.DestinationGitBackup, noGitBackup)
-	gb.baseline(plannedDestinations(plan))
+	gb.baseline(baselinePaths(plan, s, userHome, sc, projectRoot))
 
 	collisions, written, unchanged, applyErr := render.Apply(plan, reg, s, home, userHome, sc, projectRoot)
 	if len(collisions) > 0 {
@@ -392,18 +392,26 @@ func removalCounts(plan render.RenderPlan, s *state.Targets, userHome string, sc
 	return removed, appliedOps
 }
 
-// plannedDestinations returns the set of destination paths the plan will WRITE (not
-// delete), so the pre-apply baseline pass (issue #143) knows which version roots this
-// apply will touch BEFORE render.Apply runs and produces the concrete `written` set.
-// It is a superset of `written` (a planned write may turn out already-in-sync), which
-// is exactly right for deciding which roots to baseline.
-func plannedDestinations(plan render.RenderPlan) map[string]bool {
+// baselinePaths returns the set of destination paths the plan will WRITE or
+// DELETE — every explicit op regardless of action, plus the writer-derived
+// skill orphan deletes — so the pre-apply baseline pass (issue #143) knows
+// which paths' pre-apply content to stage BEFORE render.Apply runs. Planned
+// deletes MUST be included: the writer removes an in-sync orphan without a
+// backup (it is agentsync's own output), so a deleted file's bytes land in no
+// checkpoint unless the baseline captured them — omitting them made the first
+// git-backed apply's deletions unrecoverable. It is a superset of the eventual
+// `written` set (a planned op may turn out already-in-sync), which is exactly
+// right for deciding which roots to baseline. MUST be called before
+// render.PruneStaleState, which drops the state entries SkillOrphanDeletes
+// reads.
+func baselinePaths(plan render.RenderPlan, s *state.Targets, userHome string, sc adapter.Scope, projectRoot string) map[string]bool {
 	out := map[string]bool{}
-	for _, res := range plan.PerAgent {
+	for name, res := range plan.PerAgent {
 		for _, op := range res.Ops {
-			if op.Action == "" || op.Action == "write" {
-				out[op.Path] = true
-			}
+			out[op.Path] = true
+		}
+		for _, del := range render.SkillOrphanDeletes(s, userHome, name, sc, projectRoot, res.Ops) {
+			out[del.Path] = true
 		}
 	}
 	return out

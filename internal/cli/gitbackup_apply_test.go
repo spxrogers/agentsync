@@ -861,3 +861,58 @@ func TestApply_NoGitBackupFlag(t *testing.T) {
 		t.Fatal("--no-git-backup must not create a repo")
 	}
 }
+
+// TestApply_GitBackupBaselineCoversOrphanDeletes closes the planned-deletes gap
+// in issue #143's baseline: an apply whose only change is REMOVING a managed
+// file (a skill dropped from source) deletes an in-sync orphan without a writer
+// backup, so unless the pre-apply baseline stages that file's bytes, the first
+// git-backed apply's deletion is unrecoverable — no baseline, no checkpoint
+// (never tracked), no backup dir. Scenario: the file was written by an earlier
+// apply with git backup OFF (state entries exist, no repo), then backup is
+// enabled on the delete-only apply.
+func TestApply_GitBackupBaselineCoversOrphanDeletes(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	writeSkillSource(t, tmp, "doomed", "precious-body")
+
+	// First apply with backup OFF: the skill lands on disk and in state, but in
+	// no git history.
+	if out, err := runCLI(t, env, "apply", "--no-git-backup"); err != nil {
+		t.Fatalf("apply --no-git-backup: %v\n%s", err, out)
+	}
+	claude := filepath.Join(tmp, ".claude")
+	skillDest := filepath.Join(claude, "skills", "doomed", "SKILL.md")
+	preApply, err := os.ReadFile(skillDest)
+	if err != nil {
+		t.Fatalf("first apply should have written the skill: %v", err)
+	}
+
+	// Drop the skill from source and enable backup: the second apply's ONLY
+	// change is the orphan delete.
+	if err := os.RemoveAll(filepath.Join(tmp, ".agentsync", "skills", "doomed")); err != nil {
+		t.Fatal(err)
+	}
+	enableGitBackupOn(t, tmp)
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("delete-only apply: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(skillDest); !os.IsNotExist(err) {
+		t.Fatalf("apply should have removed the orphaned skill; stat err=%v", err)
+	}
+
+	// The deleted bytes must be recoverable: revert to the pre-apply baseline
+	// restores the skill byte-for-byte.
+	out, err := runCLI(t, env, "revert", "claude")
+	if err != nil {
+		t.Fatalf("revert: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(skillDest)
+	if err != nil {
+		t.Fatalf("revert did not restore the deleted skill (its bytes were in no baseline): %v\n%s", err, out)
+	}
+	if string(got) != string(preApply) {
+		t.Fatalf("restored skill differs from pre-apply bytes:\n got %q\nwant %q", got, preApply)
+	}
+}

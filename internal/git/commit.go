@@ -92,6 +92,19 @@ func (r *Repo) CommitStaged(message string, id Identity) (string, error) {
 // is deliberately NO fail-closed backstop here (unlike capture.Capture's), so callers
 // surface a cleartext caution to the user instead.
 func (r *Repo) SnapshotDirtyTracked(message string, id Identity) (string, error) {
+	return r.SnapshotPreApply(message, id, nil)
+}
+
+// SnapshotPreApply is SnapshotDirtyTracked plus the pre-apply content of
+// plannedRels: slash-relative paths the imminent apply will write or delete.
+// A planned path that exists on disk but is UNTRACKED (it was created while
+// git backup was off or declined) has bytes nowhere in history — if the apply
+// then overwrites or deletes it, those bytes are unrecoverable unless the
+// baseline stages them now. Untracked files NOT in plannedRels remain the
+// user's own and are never touched (#128). Returns ("", nil) when there is
+// nothing to commit. The issue #126 cleartext caution on SnapshotDirtyTracked
+// applies here identically.
+func (r *Repo) SnapshotPreApply(message string, id Identity, plannedRels []string) (string, error) {
 	wt, err := r.repo.Worktree()
 	if err != nil {
 		return "", fmt.Errorf("worktree for %s: %w", r.dir, err)
@@ -100,14 +113,22 @@ func (r *Repo) SnapshotDirtyTracked(message string, id Identity) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("git status in %s: %w", r.dir, err)
 	}
+	planned := map[string]bool{}
+	for _, rel := range plannedRels {
+		planned[rel] = true
+	}
 	var dirty []string
 	for path, fs := range st {
 		if isUntracked(fs) {
-			continue // the user's own files — never snapshot or touch them
+			if !planned[path] {
+				continue // the user's own files — never snapshot or touch them
+			}
+			// An untracked path this apply will write/delete: stage its pre-apply
+			// bytes so the imminent overwrite/deletion is recoverable.
+		} else if fs.Worktree == gogit.Unmodified && fs.Staging == gogit.Unmodified {
+			continue
 		}
-		if fs.Worktree != gogit.Unmodified || fs.Staging != gogit.Unmodified {
-			dirty = append(dirty, path)
-		}
+		dirty = append(dirty, path)
 	}
 	if len(dirty) == 0 {
 		return "", nil

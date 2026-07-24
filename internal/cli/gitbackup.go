@@ -112,11 +112,14 @@ func (s *gitBackupSession) resolveBackupRepo(root string, st agit.State, hasWrit
 }
 
 // baseline records a PRE-APPLY baseline checkpoint of every version root this apply
-// will write into, BEFORE render.Apply overwrites anything — so even the FIRST apply
+// will touch, BEFORE render.Apply overwrites anything — so even the FIRST apply
 // into a dir is revertible (the apply checkpoint's parent is the genuine pre-apply
-// state), not just the second apply onward (issue #143). plannedWrites is the set of
-// destination paths the plan will write, so this pass manages exactly the roots the
-// post-apply checkpoint pass would.
+// state), not just the second apply onward (issue #143). planned is the set of
+// destination paths the plan will write OR delete (including writer-derived skill
+// orphan deletes — see baselinePaths): a to-be-deleted file's pre-apply bytes must
+// land in the baseline, because the writer removes an in-sync orphan without a
+// backup and a deletion can't be recovered from any later checkpoint. This pass
+// manages exactly the roots the post-apply checkpoint pass would.
 //
 // FAILURE POLICY — best-effort WITH A LOUD WARNING. Unlike the post-apply checkpoint
 // (best-effort-silent, because the files are already written), the baseline runs
@@ -125,12 +128,12 @@ func (s *gitBackupSession) resolveBackupRepo(root string, st agit.State, hasWrit
 // first apply to that dir will not be revertible. Foreign dirs (the user's own source
 // control) and mode/scope skips are honored exactly as the checkpoint pass honors
 // them, and a declined prompt does not block apply.
-func (s *gitBackupSession) baseline(plannedWrites map[string]bool) {
+func (s *gitBackupSession) baseline(planned map[string]bool) {
 	if s == nil {
 		return
 	}
 	for _, root := range s.roots {
-		hasWrites := len(managedRelsUnder(root, plannedWrites)) > 0
+		hasWrites := len(managedRelsUnder(root, planned)) > 0
 		st, err := agit.Detect(root)
 		if err != nil {
 			fmt.Fprintf(s.p.Err, "%s git baseline: %v\n", s.p.Yellow("agentsync:"), err)
@@ -170,7 +173,7 @@ func (s *gitBackupSession) baseline(plannedWrites map[string]bool) {
 			// new, so a revert still has a target that removes exactly what this apply
 			// creates.
 			toStage := []string{agit.NoticeFile}
-			for _, rel := range managedRelsUnder(root, plannedWrites) {
+			for _, rel := range managedRelsUnder(root, planned) {
 				if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); statErr == nil {
 					toStage = append(toStage, rel) // capture a managed path's pre-apply content
 				}
@@ -181,12 +184,15 @@ func (s *gitBackupSession) baseline(plannedWrites map[string]bool) {
 			}
 			h, cerr = repo.CommitStaged(baselineMessage(root), s.id)
 		} else {
-			// Already-owned (a later apply): history already makes this dir revertible,
-			// so the baseline only snapshots uncommitted TRACKED drift — it must NOT
-			// sweep in the user's untracked files (#128), which git add -A would.
-			// SnapshotDirtyTracked is a no-op on a clean worktree, so a re-apply with
-			// no drift records no spurious baseline commit.
-			h, cerr = repo.SnapshotDirtyTracked(baselineMessage(root), s.id)
+			// Already-owned (a later apply): history already makes this dir revertible
+			// for TRACKED content, so the baseline snapshots uncommitted tracked drift
+			// plus the pre-apply bytes of any PLANNED path that is still untracked
+			// (created while backup was off or declined — this apply is about to
+			// overwrite or delete bytes history has never seen). It must NOT sweep in
+			// the user's other untracked files (#128), which git add -A would.
+			// SnapshotPreApply is a no-op on a clean worktree with no untracked planned
+			// paths, so a re-apply with no drift records no spurious baseline commit.
+			h, cerr = repo.SnapshotPreApply(baselineMessage(root), s.id, managedRelsUnder(root, planned))
 		}
 		if cerr != nil {
 			s.warnFirstApplyUnrevertible(root, cerr)
