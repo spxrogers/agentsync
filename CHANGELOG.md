@@ -813,6 +813,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `.goreleaser.yaml` and fails if the archive-entry mtime pins are stripped (the
   PR #115 regression class), keeping the reproducible-archives claim
   self-certifying.
+- **The #173 two-snapshot reproducibility diff is now a committed, re-runnable
+  script.** `scripts/reproducibility-diff.sh` builds two goreleaser snapshots
+  (release-pinned 2.16.0, sleeping across a second boundary between runs),
+  byte-compares the tar.gz/zip archives — any difference fails — and reports
+  the known-nonreproducible deb/rpm and `checksums.txt` informationally.
+  Deliberately not wired into CI: a full artifact diff would be permanently
+  red on the nfpms half (declined in #173).
 - **Synced the v1.0 git-backup feature's contract docs (issue #141).** The
   components map now carries `internal/git` (the leaf go-git wrapper) and
   `internal/ui`, the full adapter set (9 deep adapters + generic breadth tier +
