@@ -57,11 +57,27 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	// invocation separator). Walk recursively and encode the subdir path into
 	// Command.Name as a forward-slash relpath (e.g. "git/commit"); renderCommands
 	// inverts it (filepath.FromSlash) back to the subdirectory layout so the
-	// native→native round-trip is stable. A real read error on the dir is surfaced
-	// loudly; an absent dir (os.IsNotExist) is a silent skip (#159).
-	if _, present, derr := adapter.ReadDirOptional(p.CommandsDir); derr != nil {
-		return c, fmt.Errorf("read commands dir %s: %w", p.CommandsDir, derr)
-	} else if present {
+	// native→native round-trip is stable.
+	//
+	// Error discipline (#159, cf. adapter.ReadDirOptional's doc): only an ABSENT
+	// commands dir (os.IsNotExist) is a silent skip. Every structural error —
+	// an unstat-able root, a file sitting at the dir path, a mid-walk failure
+	// such as an unreadable subdirectory — RETURNS loudly: a demoted warning
+	// would hand back nil error with a silently short Commands slice, which
+	// drift/capture could misread as "the user deleted those commands". Only
+	// genuinely per-entry read/parse failures on an individual .toml file warn
+	// and continue (one corrupt file must not hide every other command),
+	// matching the sibling adapters' per-entry handling. The root is checked
+	// with os.Stat rather than ReadDirOptional so the directory is listed once
+	// (by WalkDir), not twice.
+	switch fi, serr := os.Stat(p.CommandsDir); {
+	case serr != nil && os.IsNotExist(serr):
+		// Absent commands dir — a clean no-op.
+	case serr != nil:
+		return c, fmt.Errorf("read commands dir %s: %w", p.CommandsDir, serr)
+	case !fi.IsDir():
+		return c, fmt.Errorf("read commands dir %s: not a directory", p.CommandsDir)
+	default:
 		walkErr := filepath.WalkDir(p.CommandsDir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -92,7 +108,7 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			return nil
 		})
 		if walkErr != nil {
-			fmt.Fprintf(warn, "warning: reading commands dir %q: %v\n", p.CommandsDir, walkErr)
+			return c, fmt.Errorf("read commands dir %s: %w", p.CommandsDir, walkErr)
 		}
 	}
 

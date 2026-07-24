@@ -11,6 +11,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Gemini adapter: a structural error while walking the commands tree now
+  fails ingest loudly instead of being demoted to a warning.** A mid-walk
+  failure (an unreadable subdirectory, a file sitting at the commands-dir
+  path) used to warn and return success with a silently short `Commands`
+  slice — exactly the state drift/capture can misread as "the user deleted
+  those commands" (#159's loud-dir policy, which every other adapter follows).
+  Such errors now abort the ingest; an absent commands dir stays a clean
+  no-op, and a genuinely per-entry failure (one corrupt `.toml`) still warns
+  and continues so one bad file never hides the rest. The redundant double
+  listing of the commands dir (a pre-check list plus the walk's own list) is
+  also gone.
 - **Codex no longer reports a deliberately disabled or non-targeted MCP server
   as a "drop" on every apply.** The codex adapter alone emitted a `SkipDropped`
   in the translation report for every MCP server the user disabled
