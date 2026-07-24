@@ -1074,11 +1074,24 @@ func importCommand(io *importIO, home string, c source.Canonical, name string) (
 		}
 		return nil, nil
 	}
+	// An invalid captured name (a namespaced Gemini command like "git/commit"
+	// carries its subdirectory in the name, which the canonical flat namespace
+	// rejects) must not abort a BULK import — one such native file used to fail
+	// the entire run, importing nothing. Skip it with a warning and import the
+	// rest; a named single-item import still fails loudly, since the user asked
+	// for exactly that item.
+	valid := matched[:0]
 	for _, cm := range matched {
 		if err := source.ValidateComponentID("command", cm.Name); err != nil {
-			return nil, err
+			if name != "" {
+				return nil, err
+			}
+			io.warnf("skipping command %q: %v (preserved on disk, not captured)", cm.Name, err)
+			continue
 		}
+		valid = append(valid, cm)
 	}
+	matched = valid
 	names := make([]string, 0, len(matched))
 	for _, cm := range matched {
 		if !io.dryRun {

@@ -325,8 +325,9 @@ literally, never resolved.)
   file (byte-stable native→native round-trip). This is scoped to the adapter
   round-trip: the flat canonical loader/writer (`source.ValidateComponentID` rejects
   `/`) can't carry a namespaced name, so a namespaced command does not survive a full
-  `import`→canonical-source→`apply` cycle — the namespace is preserved on disk, never
-  silently truncated.
+  `import`→canonical-source→`apply` cycle — a bulk `import` **skips it with a
+  warning** (it never aborts the rest of the run, and a named single-item import
+  fails loudly), and the namespace is preserved on disk, never silently truncated.
 - **Hook** — Gemini hooks live in `settings.json` under `hooks` in the *same nested
   shape* as Claude, so only the event name is remapped (`PreToolUse`→`BeforeTool`,
   `PostToolUse`→`AfterTool`, `UserPromptSubmit`→`BeforeAgent`, `Stop`→`AfterAgent`,

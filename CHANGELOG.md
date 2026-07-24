@@ -11,6 +11,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **A namespaced Gemini command no longer aborts bulk `import`.** Gemini
+  namespaces commands by subdirectory (`commands/git/commit.toml` is
+  `/git:commit`), and ingest captures the subdir path into the command name
+  (`git/commit`) — which the flat canonical namespace rejects. One such native
+  file used to fail the entire `import gemini` run (commands, hooks, memory —
+  nothing imported). A bulk import now skips the namespaced command with a
+  warning naming it (preserved on disk, not captured) and imports everything
+  else; a named single-item import still fails loudly.
 - **`verify` now checks secret-reference shape in online mode too.** The
   malformed-reference check (`${secret:}` empty key, missing colon, illegal
   characters) ran only under `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1`, while the

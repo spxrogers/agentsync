@@ -1193,3 +1193,45 @@ func TestImport_RetiresStaleHookOnNativeEnrichment(t *testing.T) {
 		t.Fatalf("apply rewrote the native hooks entry it no longer owns:\n got %s\nwant %s", got, enriched)
 	}
 }
+
+// TestImport_GeminiNamespacedCommandSkippedNotAborted pins the bulk-import
+// behavior for a namespaced Gemini command: `commands/git/commit.toml` is
+// captured by ingest as Command{Name: "git/commit"}, which the flat canonical
+// namespace rejects (ValidateComponentID refuses '/'). That single native file
+// used to fail the ENTIRE bulk import — commands, hooks, memory, everything.
+// It must instead be skipped with a warning while its flat sibling imports.
+func TestImport_GeminiNamespacedCommandSkippedNotAborted(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	commandsDir := filepath.Join(tmp, ".gemini", "commands")
+	if err := os.MkdirAll(filepath.Join(commandsDir, "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(commandsDir, "git", "commit.toml"),
+		[]byte("description = \"commit helper\"\nprompt = \"commit it\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(commandsDir, "deploy.toml"),
+		[]byte("description = \"deploy helper\"\nprompt = \"ship it\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "import", "gemini")
+	if err != nil {
+		t.Fatalf("bulk import must not abort on a namespaced command: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "git/commit") {
+		t.Fatalf("skip warning should name the namespaced command:\n%s", out)
+	}
+	// The flat sibling imported despite the namespaced skip.
+	if _, err := os.Stat(filepath.Join(tmp, ".agentsync", "commands", "deploy.md")); err != nil {
+		t.Fatalf("flat command should have been imported: %v", err)
+	}
+	// The namespaced command was skipped, not flattened into canonical.
+	if _, err := os.Stat(filepath.Join(tmp, ".agentsync", "commands", "commit.md")); !os.IsNotExist(err) {
+		t.Fatalf("namespaced command must not be captured under a truncated name; stat err=%v", err)
+	}
+	// A named single-item import of the namespaced command still fails loudly.
+	if _, err := runCLI(t, env, "import", "gemini:command:git/commit"); err == nil {
+		t.Fatal("named import of a namespaced command should fail loudly")
+	}
+}
