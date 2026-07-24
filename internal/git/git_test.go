@@ -761,6 +761,55 @@ func assertPerm(t *testing.T, dir, rel string, want os.FileMode) {
 	}
 }
 
+// TestRestore_PrunesEmptiedDirs is the regression for the stray-empty-dir gap:
+// go-git's wt.Remove deletes only the file, so a revert that deletes skill/deep/
+// SKILL.md used to leave skill/ and skill/deep/ behind as empty dirs (unlike
+// `git reset --hard`). The delete pass must now prune each deleted file's emptied
+// parent chain — while NEVER removing a dir that still has entries: an untracked
+// user file in the same dir keeps that dir (and its ancestors) alive.
+func TestRestore_PrunesEmptiedDirs(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// c1 (target): only keep.txt exists — no skill/, no shared/.
+	commitFile(t, r, dir, "keep.txt", "k", "c1: baseline")
+	// c2..c3 (HEAD): a nested managed file plus a managed file in a dir the user
+	// also drops their own file into.
+	commitFile(t, r, dir, "skill/deep/SKILL.md", "body", "c2: nested skill")
+	commitFile(t, r, dir, "shared/managed.txt", "m", "c3: shared managed")
+	const userBody = "mine — keep this dir alive\n"
+	writeFile(t, dir, "shared/user.txt", userBody)
+
+	// Revert to c1: the delta deletes skill/deep/SKILL.md and shared/managed.txt.
+	h, _, err := r.Restore("HEAD~2", "agentsync revert: prune", DefaultIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h == "" {
+		t.Fatal("Restore returned empty hash")
+	}
+	// The fully-emptied chain is pruned: neither skill/deep nor skill remains.
+	for _, rel := range []string{"skill/deep", "skill"} {
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); !os.IsNotExist(err) {
+			t.Errorf("emptied dir %q should be pruned after the revert delete pass; stat err = %v", rel, err)
+		}
+	}
+	// The dir holding the user's untracked file survives, file intact, managed
+	// sibling gone.
+	if info, err := os.Stat(filepath.Join(dir, "shared")); err != nil || !info.IsDir() {
+		t.Fatalf("shared/ holds an untracked user file and must survive; stat = (%v, %v)", info, err)
+	}
+	if got := readFile(t, dir, "shared/user.txt"); got != userBody {
+		t.Fatalf("untracked user file mutated: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "shared", "managed.txt")); !os.IsNotExist(err) {
+		t.Fatalf("managed shared/managed.txt should be deleted by the revert; stat err = %v", err)
+	}
+}
+
 // TestRestore_PreservesFileMode backs restoreFileFromTree's documented
 // mode-preservation contract (notably the exec bit): a revert that re-creates a
 // tracked 0o755 script must restore it executable, not as 0o644. Without an

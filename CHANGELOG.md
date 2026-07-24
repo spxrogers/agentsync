@@ -11,6 +11,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`revert` now prunes the directories its delete pass empties.** Rolling back
+  past the apply that created a nested file (e.g. a skill's
+  `skills/deep/SKILL.md`) removed only the file and left `skills/deep/` and any
+  emptied ancestors behind as stray empty directories — unlike `git reset
+  --hard`. The restore now removes each deleted file's emptied parent chain,
+  stopping at the repo root and keeping any directory that still holds entries
+  (your own untracked file in the same dir keeps it — and its ancestors — alive).
 - **A namespaced Gemini command no longer aborts bulk `import`.** Gemini
   namespaces commands by subdirectory (`commands/git/commit.toml` is
   `/git:commit`), and ingest captures the subdir path into the command name

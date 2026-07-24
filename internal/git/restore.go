@@ -226,7 +226,9 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (revertHash, snap
 // can replace it with the file "a". The reverse (delete file "a", then create "a/b")
 // likewise needs the delete first so MkdirAll("a") succeeds. Delete and create paths are
 // otherwise disjoint (a tree diff never both deletes and creates the same path), so the
-// two passes are order-independent within themselves.
+// two passes are order-independent within themselves. Between the passes,
+// pruneEmptiedDirs clears the directories the deletes emptied (wt.Remove leaves them
+// behind, unlike `git reset --hard`) without ever touching a dir that still has entries.
 func (r *Repo) applyRestoreDelta(wt *gogit.Worktree, targetTree *object.Tree, changes []FileChange) error {
 	for _, ch := range changes {
 		if ch.Kind != "delete" {
@@ -237,6 +239,7 @@ func (r *Repo) applyRestoreDelta(wt *gogit.Worktree, targetTree *object.Tree, ch
 			return fmt.Errorf("removing %s during revert in %s: %w", ch.Path, r.dir, err)
 		}
 	}
+	pruneEmptiedDirs(wt, changes)
 	for _, ch := range changes {
 		if ch.Kind == "delete" {
 			continue // "create" | "modify"
@@ -249,6 +252,36 @@ func (r *Repo) applyRestoreDelta(wt *gogit.Worktree, targetTree *object.Tree, ch
 		}
 	}
 	return nil
+}
+
+// pruneEmptiedDirs removes parent directories the delete pass left EMPTY. go-git's
+// wt.Remove deletes only the file itself — unlike `git reset --hard`, which also
+// clears the directories a delete empties — so reverting away skill/deep/SKILL.md
+// would otherwise strand skill/ and skill/deep/ as empty dirs. Only ancestors of the
+// delta's own deleted paths are considered: each deleted file's parent chain is
+// pruned upward, stopping at the repo root and at the FIRST directory that still has
+// entries (an untracked user file in the same dir keeps its whole chain alive — a
+// dir with entries is NEVER removed). Best-effort by design: git does not track
+// directories, so a stray empty dir can never make the restored tree wrong, and a
+// readdir/remove hiccup must not fail a revert whose tracked delta already applied.
+// It runs BEFORE the create pass, so a dir it prunes that the target repopulates is
+// simply recreated by restoreFileFromTree's MkdirAll.
+func pruneEmptiedDirs(wt *gogit.Worktree, changes []FileChange) {
+	fs := wt.Filesystem
+	for _, ch := range changes {
+		if ch.Kind != "delete" {
+			continue
+		}
+		for parent := path.Dir(ch.Path); parent != "." && parent != "/"; parent = path.Dir(parent) {
+			entries, err := fs.ReadDir(parent)
+			if err != nil || len(entries) > 0 {
+				break // already gone (a sibling pruned it), unreadable, or still holds entries — keep it and everything above
+			}
+			if err := fs.Remove(parent); err != nil {
+				break
+			}
+		}
+	}
 }
 
 // restoreFailureHint wraps a failure that struck once the worktree delta-apply had begun
