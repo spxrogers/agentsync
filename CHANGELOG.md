@@ -773,6 +773,15 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   the real slugs and exercise the checker over a temp fixture tree. A single
   pre-existing `concepts.md` → `/getting-started/introduction/#command-reference`
   anchor breakage (owned by #145) is parked in an explicit `ALLOWLIST`.
+- **The website link checker now runs in CI on every PR and fails on stale
+  allowlist entries.** Previously the checker only ran from the site's
+  `predev`/`prebuild` hooks, which CI never invoked — a broken in-site link
+  merged cleanly and only failed at docs-publish time. A new `docs-links` job
+  in `ci.yml` (bun, matching `docs-publish`) regenerates the mirrored contract
+  pages, runs the checker, and runs its unit tests on every PR. The checker
+  itself now also fails when an `ALLOWLIST` entry matched zero violations in a
+  run: a stale exception means the underlying link was fixed, and it must be
+  removed rather than linger to mask a future regression.
 - **New "Rolling back a bad apply" website guide (issue #170).** Added
   `website/src/content/docs/guides/rollback.mdx` (mirroring the
   `docs/user-guide.md` rollback section): the destination git-backup enable

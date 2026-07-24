@@ -17,6 +17,9 @@
 // mirror emits for off-site repo docs are skipped. It collects ALL violations,
 // prints a report (file, line, bad target, closest-anchor hints), and exits
 // non-zero on any breakage; a clean run prints a one-line summary and exits 0.
+// An ALLOWLIST entry that matched zero violations this run is STALE (the
+// underlying link was fixed, or the page moved) and also fails the run with a
+// remove-the-entry message, so dead exceptions cannot linger silently.
 //
 // Kept dependency-light and Astro-free (node: builtins + github-slugger) so it
 // runs standalone in CI/local and under `node --test` without a full build.
@@ -34,6 +37,9 @@ const defaultRoot = resolve(here, '..', 'src', 'content', 'docs');
 // issue deletes the entry when it lands. The checker treats an allowlisted
 // violation as non-fatal (reported as a note, exit 0). Keep this EMPTY unless a
 // genuine breakage this issue is not responsible for fixing survives on `main`.
+// Staleness is ENFORCED: an entry that matches zero violations in a run fails
+// the checker (see main), so forgetting to delete it when the underlying link
+// is fixed shows up as a red run, not a silently dead exception.
 const ALLOWLIST = [
 	// docs/concepts.md links `[user guide](user-guide.md#command-reference)`.
 	// sync-docs maps user-guide.md → /getting-started/introduction/, but that
@@ -305,11 +311,23 @@ export function checkTree(root) {
 	};
 }
 
-function isAllowlisted(violation, root) {
+// The index of the allowlist entry shielding this violation, or -1. Indexes
+// (not a boolean) so main can tell which entries matched — an entry that
+// matched nothing is stale and fails the run.
+function allowlistIndex(violation, root, allowlist) {
 	const rel = relative(root, violation.file).split(sep).join('/');
-	return ALLOWLIST.some(
+	return allowlist.findIndex(
 		(e) => e.file === rel && e.target === violation.target,
 	);
+}
+
+// Test seam: CHECK_LINKS_ALLOWLIST (a JSON array of { file, target }) replaces
+// the hardcoded ALLOWLIST, so the CLI tests can exercise the allowlisted and
+// stale paths over fixture trees without the real entries bleeding into (or
+// stale-failing) their runs. Production runs never set it.
+function loadAllowlist() {
+	const env = process.env.CHECK_LINKS_ALLOWLIST;
+	return env === undefined ? ALLOWLIST : JSON.parse(env);
 }
 
 function reportPath(file) {
@@ -322,9 +340,19 @@ function main() {
 		? resolve(process.env.CHECK_LINKS_ROOT)
 		: defaultRoot;
 
+	const allowlist = loadAllowlist();
 	const { violations, stats } = checkTree(root);
-	const fatal = violations.filter((v) => !isAllowlisted(v, root));
+	const matched = new Set();
+	const fatal = [];
+	for (const v of violations) {
+		const idx = allowlistIndex(v, root, allowlist);
+		if (idx >= 0) matched.add(idx);
+		else fatal.push(v);
+	}
 	const allowed = violations.length - fatal.length;
+	// A stale entry shields nothing: its breakage was fixed (or the page moved),
+	// so the exception must be deleted, not left to mask a future regression.
+	const stale = allowlist.filter((_, i) => !matched.has(i));
 
 	if (fatal.length === 0) {
 		console.log(
@@ -335,29 +363,41 @@ function main() {
 				`  (${allowed} known pre-existing exception(s) allowlisted; see ALLOWLIST in scripts/check-links.mjs)`,
 			);
 		}
-		return 0;
-	}
-
-	console.error(
-		`check-links: found ${fatal.length} broken in-site link(s) across ${stats.pages} pages:\n`,
-	);
-	for (const v of fatal) {
-		const loc = `${reportPath(v.file)}:${v.line}`;
-		if (v.kind === 'route') {
-			console.error(`  ${loc}  broken route -> ${v.target}`);
-		} else {
-			console.error(`  ${loc}  broken anchor -> ${v.target}`);
-			if (v.hints && v.hints.length > 0) {
-				console.error(
-					`      did you mean: ${v.hints.map((h) => `#${h}`).join('  ')} ?`,
-				);
+	} else {
+		console.error(
+			`check-links: found ${fatal.length} broken in-site link(s) across ${stats.pages} pages:\n`,
+		);
+		for (const v of fatal) {
+			const loc = `${reportPath(v.file)}:${v.line}`;
+			if (v.kind === 'route') {
+				console.error(`  ${loc}  broken route -> ${v.target}`);
+			} else {
+				console.error(`  ${loc}  broken anchor -> ${v.target}`);
+				if (v.hints && v.hints.length > 0) {
+					console.error(
+						`      did you mean: ${v.hints.map((h) => `#${h}`).join('  ')} ?`,
+					);
+				}
 			}
 		}
+		console.error(
+			`\ncheck-links: ${stats.pages} pages, ${stats.links} in-site links, ${fatal.length} broken.`,
+		);
 	}
-	console.error(
-		`\ncheck-links: ${stats.pages} pages, ${stats.links} in-site links, ${fatal.length} broken.`,
-	);
-	return 1;
+
+	if (stale.length > 0) {
+		console.error(
+			`\ncheck-links: ${stale.length} stale ALLOWLIST entr${stale.length === 1 ? 'y' : 'ies'} matched zero violations this run:`,
+		);
+		for (const e of stale) {
+			console.error(`  ${e.file}  ->  ${e.target}`);
+		}
+		console.error(
+			'  the underlying link was fixed (or the page moved) — remove the stale entry from ALLOWLIST in scripts/check-links.mjs.',
+		);
+	}
+
+	return fatal.length > 0 || stale.length > 0 ? 1 : 0;
 }
 
 // Run as a CLI only when invoked directly (not when imported by tests).

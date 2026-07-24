@@ -66,7 +66,7 @@ The remaining pages are authored here and are the source of truth for their own
 prose. When the CLI surface changes, update both `docs/user-guide.md` and the
 relevant page under `reference/` (the sync table in `CLAUDE.md` lists this).
 
-## Link & anchor checking (build-time)
+## Link & anchor checking (build-time + CI)
 
 [`scripts/check-links.mjs`](scripts/check-links.mjs) is a build-time guard that
 validates the **site-absolute** in-site links (`/route…` hrefs) and `#anchor`
@@ -92,6 +92,15 @@ in [`scripts/check-links.test.mjs`](scripts/check-links.test.mjs) and run via
 issue can be parked in the `ALLOWLIST` at the top of the script (each entry
 carries a `// TODO(#NNN)` reference and is reported as a known exception, not a
 failure) — never silently edit a mirrored/canonical doc to make the check pass.
+Staleness is enforced: an `ALLOWLIST` entry that matches **zero** violations in
+a run means the underlying link was fixed, and the checker fails with a
+remove-the-entry message rather than letting the dead exception linger.
+
+The checker also runs in CI on every pull request — the `docs-links` job in
+[`ci.yml`](../.github/workflows/ci.yml) runs `bun install --frozen-lockfile`,
+`sync:docs`, `check:links`, and the `scripts/` unit tests — so a broken in-site
+link (or a stale allowlist entry) fails the PR instead of surfacing only when
+the site is next deployed by `docs-publish`.
 
 ## Deploy
 

@@ -143,6 +143,31 @@ jobs:
           done < <(grep -oE 'releases/latest/download/[^ )"]+\.(deb|rpm)' README.md | sed 's#.*/##' | sort -u)
           exit $fails
 
+  # The website's link/anchor checker otherwise runs only at deploy time
+  # (docs-publish's `bun run build` triggers the prebuild hook), so a broken
+  # in-site link would merge cleanly and only fail when the site is next
+  # published. Run the checker here on every PR instead: regenerate the
+  # mirrored contract pages first (check-links validates the generated +
+  # authored pages together — see website/scripts/sync-docs.mjs), then the
+  # checker, then its own unit tests. Uses the same bun runtime docs-publish
+  # uses; no Astro build — the checker is deliberately standalone (node
+  # builtins + github-slugger). The checker also fails on a stale ALLOWLIST
+  # entry (one that matched zero violations), so dead exceptions are caught
+  # here too.
+  docs-links:
+    name: docs-links (website link checker)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run sync:docs
+      - run: bun run check:links
+      - run: bun run test
+
   goreleaser-snapshot:
     name: goreleaser-snapshot (cross-build matrix)
     runs-on: ubuntu-latest
