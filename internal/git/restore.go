@@ -148,10 +148,13 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (revertHash, snap
 	//   (1) a path that is a file in the target but CURRENTLY a directory whose
 	//       contents aren't all being deleted (it holds untracked/gitignored files)
 	//       — replacing it with a file would delete them;
-	//  (1b) a CREATE path that is currently a regular file — since a create means
-	//       HEAD doesn't track this path, that file is the user's own
+	//  (1b) a CREATE path that is currently occupied by any non-directory entry —
+	//       a regular file, a symlink to one, or a DANGLING symlink — since a
+	//       create means HEAD doesn't track this path, that entry is the user's own
 	//       (untracked/gitignored); overwriting + committing it would violate the
-	//       untouched-files promise;
+	//       untouched-files promise. os.Lstat (not os.Stat) so a symlink is seen as
+	//       itself: a dangling link Stat-errors and would slip past both arms, only
+	//       for restoreFileFromTree to silently Remove it and write over it;
 	//   (2) a create whose ancestor is an existing unmanaged FILE — MkdirAll would
 	//       fail over it.
 	// A non-transactional restore can't guarantee zero partial state for every
@@ -169,7 +172,10 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (revertHash, snap
 			continue
 		}
 		abs := filepath.Join(r.dir, filepath.FromSlash(ch.Path))
-		info, statErr := os.Stat(abs)
+		// Lstat, not Stat: a symlink at the path — even a DANGLING one, which Stat
+		// reports as nonexistent — is a user-owned entry the restore must refuse to
+		// destroy, not something to silently delete and overwrite.
+		info, statErr := os.Lstat(abs)
 		switch {
 		case statErr == nil && info.IsDir():
 			blocker, werr := firstUnmanagedFileUnder(r.dir, abs, deleting)

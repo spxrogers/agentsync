@@ -1117,6 +1117,62 @@ func TestRestore_CreatePathCollidesWithUntrackedFile(t *testing.T) {
 	}
 }
 
+// TestRestore_DanglingSymlinkAtCreatePathBlocked closes the pre-flight's Stat
+// blind spot: a DANGLING untracked symlink at a path the restore will create
+// resolves to nothing under os.Stat, so it matched neither refusal arm and
+// restoreFileFromTree silently removed the user's symlink and wrote the managed
+// file over it. With os.Lstat the link is seen as itself and refused like every
+// other create-path conflict — all-or-nothing, before anything is mutated. (A
+// symlink to an EXISTING file at a create path was already refused; that arm now
+// covers both.)
+func TestRestore_DanglingSymlinkAtCreatePathBlocked(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "a.txt", "v1", "c1")
+	commitFile(t, r, dir, "X", "managed-content", "c2: add managed X") // target has X
+	// c3 (HEAD): remove X and bump a.txt, so reverting to c2 is
+	// {create X, modify a.txt}.
+	if err := os.Remove(filepath.Join(dir, "X")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "a.txt", "v2")
+	if err := r.Stage([]string{"a.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c3: remove X, bump a.txt", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	// The user drops a DANGLING symlink at the create path X.
+	linkTarget := filepath.Join(dir, "no-such-target")
+	if err := os.Symlink(linkTarget, filepath.Join(dir, "X")); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	_, _, err = r.Restore("HEAD~1", "agentsync revert: dangling symlink", DefaultIdentity)
+	if err == nil {
+		t.Fatal("Restore should refuse a dangling symlink at a create path")
+	}
+	if !strings.Contains(err.Error(), "agentsync does not manage") {
+		t.Fatalf("error should be the unmanaged-entry refusal; got: %v", err)
+	}
+	// The user's symlink survives, still pointing where they aimed it.
+	if got, lerr := os.Readlink(filepath.Join(dir, "X")); lerr != nil || got != linkTarget {
+		t.Fatalf("dangling symlink must survive the refused revert: target=%q err=%v", got, lerr)
+	}
+	// All-or-nothing: the refusal fires in the pre-flight, so the OTHER change in
+	// the delta (the a.txt modify) was not applied either.
+	if got := readFile(t, dir, "a.txt"); got != "v2" {
+		t.Fatalf("refusal must be all-or-nothing: a.txt = %q, want the unreverted v2", got)
+	}
+}
+
 // blobAt returns the content of rel in the tree of commit hash.
 func blobAt(t *testing.T, dir, hash, rel string) string {
 	t.Helper()

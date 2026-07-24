@@ -11,6 +11,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`revert` refuses a dangling symlink at a path it would create instead of
+  silently deleting it.** The structural pre-flight used `os.Stat`, which
+  follows links, so a dangling untracked symlink at a create path looked like
+  "nothing there"; the restore then removed the user's symlink and committed a
+  managed file over it. The pre-flight now uses `os.Lstat`: a symlink at a
+  create path — dangling or not — is refused all-or-nothing like the other
+  conflict classes, and the symlink survives untouched.
 - **`revert` now prunes the directories its delete pass empties.** Rolling back
   past the apply that created a nested file (e.g. a skill's
   `skills/deep/SKILL.md`) removed only the file and left `skills/deep/` and any
