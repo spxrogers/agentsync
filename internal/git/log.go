@@ -63,6 +63,38 @@ func (r *Repo) Resolve(rev string) (string, error) {
 	return h.String(), nil
 }
 
+// IsAncestorOfHead reports whether the commit named by hash (a full hex hash, as
+// returned by Resolve) is reachable from the repo's current HEAD — HEAD itself
+// included. Resolve alone accepts ANY revision whose object exists in the store,
+// including a commit from an orphaned/rewound lineage that is NOT one of this
+// repo's checkpoints; restoring to such a commit would have undefined semantics
+// for an append-only checkpoint history, so revert gates --to on this. Walks the
+// full commit graph from HEAD (not just first parents), short-circuiting on a hit.
+func (r *Repo) IsAncestorOfHead(hash string) (bool, error) {
+	target := plumbing.NewHash(hash)
+	headH, err := r.headHash()
+	if err != nil {
+		return false, err
+	}
+	iter, err := r.repo.Log(&gogit.LogOptions{From: headH})
+	if err != nil {
+		return false, fmt.Errorf("walking history in %s: %w", r.dir, err)
+	}
+	defer iter.Close()
+	found := false
+	err = iter.ForEach(func(c *object.Commit) error {
+		if c.Hash == target {
+			found = true
+			return storer.ErrStop
+		}
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("walking history in %s: %w", r.dir, err)
+	}
+	return found, nil
+}
+
 // HasMultipleCheckpoints reports whether the repo has at least two commits, so a
 // default "undo the most recent apply" (HEAD~1) has somewhere to land.
 func (r *Repo) HasMultipleCheckpoints() (bool, error) {

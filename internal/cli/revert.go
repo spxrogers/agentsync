@@ -256,6 +256,9 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 	if err != nil {
 		return true, err
 	}
+	if err := ensureCheckpointInHistory(repo, root, targetHash); err != nil {
+		return true, err
+	}
 	msg := fmt.Sprintf("agentsync revert: %s → %s", root, agit.Short(targetHash))
 	// Restore folds in SnapshotDirtyTracked and returns its hash. Do NOT announce the
 	// snapshot before the revert lands: on a partial failure Restore returns a hinted
@@ -287,10 +290,34 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 	return true, nil
 }
 
+// ensureCheckpointInHistory refuses a --to target that resolves (its object
+// exists in the backup repo) but is NOT one of the repo's checkpoints — i.e. not
+// the current HEAD or one of its ancestors. git.Resolve alone accepts any
+// resolvable revision, so without this gate a user could "revert" to an arbitrary
+// commit (e.g. a snapshot from a rewound lineage) with undefined semantics for
+// the append-only checkpoint history. There is no agentsync command that lists
+// checkpoints, so the hint points at the repo's own git log.
+func ensureCheckpointInHistory(repo *agit.Repo, root, targetHash string) error {
+	ok, err := repo.IsAncestorOfHead(targetHash)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("commit %s is not a checkpoint in %s's history; --to accepts only the current checkpoint or one of its ancestors — list them with `git -C %s log --oneline`",
+			agit.Short(targetHash), root, root)
+	}
+	return nil
+}
+
 // previewRevert prints what a revert would change, without writing.
 func previewRevert(p *ui.Printer, repo *agit.Repo, root, target string) error {
 	targetHash, changes, err := repo.Plan(target)
 	if err != nil {
+		return err
+	}
+	// The preview must predict the real command: a --to outside the checkpoint
+	// history is refused here exactly as the mutating path refuses it.
+	if err := ensureCheckpointInHistory(repo, root, targetHash); err != nil {
 		return err
 	}
 	subject := checkpointSubject(repo, targetHash)

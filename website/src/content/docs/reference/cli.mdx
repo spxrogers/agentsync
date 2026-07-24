@@ -203,7 +203,9 @@ revertible. Untracked files you dropped into the dir (and gitignored files) are
 **left untouched** — revert only rewinds the files agentsync versions, so your own
 scratch files are never deleted. By default it undoes the most recent apply
 (restores the previous checkpoint); `--to <ref>` picks a specific one (a commit
-hash or `HEAD~2`), `--all` reverts every managed dir, and `--dry-run` previews the
+hash or `HEAD~2`) and must name one of the dir's own checkpoints — the current
+one or an ancestor; any other resolvable commit is refused. `--all` reverts
+every managed dir, and `--dry-run` previews the
 file changes without writing (noting when untracked files are present). Because the
 first apply records a **pre-apply baseline** (see `apply` above), even reverting a
 brand-new dir's first apply works — it rolls back to that baseline rather than

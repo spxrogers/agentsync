@@ -11,6 +11,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`revert --to` now validates the target against the checkpoint history.**
+  Any revision whose object existed in the backup repo was accepted — including
+  a commit from an orphaned or rewound lineage that was never one of the dir's
+  checkpoints — and restored with undefined semantics. `revert` (and its
+  `--dry-run` preview) now refuses a `--to` that is not the current checkpoint
+  or one of its ancestors, naming the hash and pointing at
+  `git -C <dir> log --oneline` to list the real checkpoints.
 - **`revert --dry-run` warns when it cannot enumerate untracked files instead
   of silently dropping the note.** The preview swallowed a git-status error, so
   the "N untracked file(s) in this dir are left untouched" note could vanish

@@ -436,6 +436,40 @@ func TestLogAndResolve(t *testing.T) {
 	}
 }
 
+// TestIsAncestorOfHead pins the checkpoint-membership helper revert's --to
+// validation rides on: HEAD itself and its ancestors are in, a hash outside the
+// history is out.
+func TestIsAncestorOfHead(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h1 := commitFile(t, r, dir, "a.txt", "1", "c1")
+	h2 := commitFile(t, r, dir, "a.txt", "2", "c2")
+
+	tests := []struct {
+		name, hash string
+		want       bool
+	}{
+		{name: "HEAD itself", hash: h2, want: true},
+		{name: "an ancestor checkpoint", hash: h1, want: true},
+		{name: "a hash outside the history", hash: "0123456789abcdef0123456789abcdef01234567", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := r.IsAncestorOfHead(tt.hash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("IsAncestorOfHead(%s) = %v, want %v", tt.hash, got, tt.want)
+			}
+		})
+	}
+}
+
 // inHead reports whether rel is present in the repo's HEAD tree.
 func inHead(t *testing.T, dir, rel string) bool {
 	t.Helper()

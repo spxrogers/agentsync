@@ -6,9 +6,48 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	agit "github.com/spxrogers/agentsync/internal/git"
 )
+
+// orphanCommitIn records a real commit in the repo at dir and then rewinds the
+// branch to its previous tip — leaving the commit's object in the store
+// (resolvable by hash) but NOT an ancestor of HEAD, i.e. a commit outside the
+// checkpoint history. The worktree and index are reset back, so the repo is left
+// exactly as found.
+func orphanCommitIn(t *testing.T, dir string) string {
+	t.Helper()
+	gr, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := gr.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt, err := gr.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "stray.txt"), []byte("off-history\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wt.Add("stray.txt"); err != nil {
+		t.Fatal(err)
+	}
+	sig := &object.Signature{Name: "test", Email: "test@example.com", When: time.Unix(1_700_000_000, 0).UTC()}
+	h, err := wt.Commit("stray lineage", &gogit.CommitOptions{Author: sig, Committer: sig})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wt.Reset(&gogit.ResetOptions{Mode: gogit.HardReset, Commit: head.Hash()}); err != nil {
+		t.Fatal(err)
+	}
+	return h.String()
+}
 
 // setupGitBackedClaude inits an agentsync home with claude + git backup on, then
 // applies twice (skill body "v1" then "v2") so ~/.claude has two checkpoints.
@@ -142,14 +181,27 @@ func TestRevert_Errors(t *testing.T) {
 		}
 	})
 	t.Run("non-ancestor to ref rejected", func(t *testing.T) {
-		// TODO(ancestor-validation): revert does NOT yet validate that --to names a
-		// commit that is actually a checkpoint (ancestor of HEAD) in the target repo.
-		// internal/git/log.go Resolve() accepts ANY resolvable revision, and
-		// revertRoot in internal/cli/revert.go passes it straight to repo.Restore
-		// without a membership/ancestor check. Until that validation exists, asserting
-		// a non-checkpoint --to is "rejected" would be asserting behavior the code does
-		// not have. Skip rather than pin the unsafe current behavior.
-		t.Skip("ancestor/checkpoint-membership validation for --to is not implemented (git.Resolve accepts any resolvable commit); see revert.go revertRoot + log.go Resolve")
+		// A commit whose OBJECT exists in the backup repo but which is not an
+		// ancestor of HEAD (an orphaned lineage). git.Resolve alone accepts it;
+		// revert must refuse it rather than restore to an arbitrary commit with
+		// undefined semantics for the append-only checkpoint history.
+		tmp2, env2, destSkill := setupGitBackedClaude(t)
+		orphan := orphanCommitIn(t, filepath.Join(tmp2, ".claude"))
+		out, rerr := runCLI(t, env2, "revert", "claude", "--to", orphan)
+		if rerr == nil {
+			t.Fatalf("expected revert --to <non-ancestor> to be refused, got:\n%s", out)
+		}
+		if !strings.Contains(rerr.Error(), "not a checkpoint") || !strings.Contains(rerr.Error(), agit.Short(orphan)) {
+			t.Errorf("refusal should name the hash and explain it is not a checkpoint: %v", rerr)
+		}
+		// All-or-nothing: the refused revert mutated nothing.
+		if b, _ := os.ReadFile(destSkill); !strings.Contains(string(b), "v2") {
+			t.Fatalf("refused revert must not mutate the dest:\n%s", b)
+		}
+		// The dry-run preview predicts the same refusal.
+		if _, derr := runCLI(t, env2, "revert", "claude", "--dry-run", "--to", orphan); derr == nil {
+			t.Error("revert --dry-run must refuse a non-ancestor --to as well")
+		}
 	})
 	t.Run("no target", func(t *testing.T) {
 		if _, err := runCLI(t, env, "revert"); err == nil {
