@@ -153,9 +153,16 @@ linters:
       - path: '(^|/)internal/marketplace/.*'
         linters: [forbidigo]
         text: 'direct os\.\* is reserved'
-      # CLI files writing to canonical source (~/.agentsync/*), the vault, the
-      # plugin/marketplace cache, or a writability probe — not native destinations.
-      - path: '(^|/)internal/cli/(init|secrets|marketplace|plugin|update|mcp|agent|doctor|reconcile)\.go$'
+      # CLI os.* sites are line-scoped, not whole-file: each call site carries a
+      # `//nolint:forbidigo // <reason>` naming why it is exempt — canonical
+      # source under ~/.agentsync, the vault, the plugin/marketplace cache, a
+      # temp/probe file — plus ONE genuine NATIVE-destination exception:
+      # reconcile.go's interactive orphan removal (os.Remove of a native dest
+      # file), which is safe only because render.BackupFile runs first; its
+      # nolint says so. Only update.go keeps a whole-file exclude: its six os.*
+      # sites are all marketplace/plugin-cache scratch (temp fetch dirs + the
+      # swap-in rename), never a native destination.
+      - path: '(^|/)internal/cli/update\.go$'
         linters: [forbidigo]
         text: 'direct os\.\* is reserved'
       # BDD/e2e harness code writes fixtures to temp dirs, never a native destination.

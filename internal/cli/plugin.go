@@ -269,7 +269,7 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
 
 	cacheDir := pluginCacheDir(home, id)
 	// Remove old cache so we get a fresh fetch.
-	_ = os.RemoveAll(cacheDir)
+	_ = os.RemoveAll(cacheDir) //nolint:forbidigo // clears the plugin cache under .state/cache for a fresh fetch, not a native destination
 
 	src := mpEntry.Source
 	if src.Relative != "" {
@@ -435,7 +435,7 @@ func pluginRemoveRun(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	}
-	if err := os.Remove(pluginPath); err != nil {
+	if err := os.Remove(pluginPath); err != nil { //nolint:forbidigo // removes plugins/<id>.toml (canonical source), not a native destination
 		// Match upgrade/enable/disable: a typo'd or already-removed id is an
 		// error, not a cheerful "removed plugin X" no-op.
 		if os.IsNotExist(err) {
@@ -445,7 +445,7 @@ func pluginRemoveRun(cmd *cobra.Command, args []string) error {
 	}
 
 	cacheDir := pluginCacheDir(home, id)
-	if err := os.RemoveAll(cacheDir); err != nil {
+	if err := os.RemoveAll(cacheDir); err != nil { //nolint:forbidigo // removes the plugin cache under .state/cache, not a native destination
 		return fmt.Errorf("remove cache %s: %w", cacheDir, err)
 	}
 

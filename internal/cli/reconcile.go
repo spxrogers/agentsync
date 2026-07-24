@@ -217,7 +217,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 					if bk != "" {
 						fmt.Fprintf(w, "  backup: %s\n", ui.Sanitize(bk))
 					}
-					if rmErr := os.Remove(it.op.Path); rmErr != nil && !os.IsNotExist(rmErr) {
+					if rmErr := os.Remove(it.op.Path); rmErr != nil && !os.IsNotExist(rmErr) { //nolint:forbidigo // the one NATIVE-destination delete outside DestWriter: interactive orphan removal, safe only because render.BackupFile succeeded just above
 						fmt.Fprintf(w, "  remove failed: %s\n", ui.Sanitize(rmErr.Error()))
 						break orphanPrompt
 					}
@@ -712,7 +712,7 @@ func removeDroppedSource(w io.Writer, home string, it reconcileItem, srcFile str
 			itemLabelDisp(it), ui.Sanitize(rel))
 		return true
 	}
-	if rmErr := os.Remove(srcFile); rmErr != nil && !os.IsNotExist(rmErr) {
+	if rmErr := os.Remove(srcFile); rmErr != nil && !os.IsNotExist(rmErr) { //nolint:forbidigo // removes a canonical source file under ~/.agentsync (withinDir-guarded above), not a native destination
 		fmt.Fprintf(w, "  write-back error: remove %s: %s\n", itemLabelDisp(it), ui.Sanitize(rmErr.Error()))
 		return true
 	}
@@ -727,7 +727,7 @@ func removeDroppedSource(w io.Writer, home string, it reconcileItem, srcFile str
 // it means deleting the file again rather than writing a 0-byte one.
 func revertSource(srcFile string, prior []byte) {
 	if len(prior) == 0 {
-		_ = os.Remove(srcFile)
+		_ = os.Remove(srcFile) //nolint:forbidigo // reverts this run's own canonical-source write, not a native destination
 		return
 	}
 	_ = iox.AtomicWrite(srcFile, prior, 0o644)
@@ -943,7 +943,7 @@ func withinDir(dir, path string) bool {
 // appendIgnore appends the label to ~/.agentsync/ignore.toml (best-effort).
 func appendIgnore(home, label string) error {
 	p := filepath.Join(home, "ignore.toml")
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644) //nolint:forbidigo // appends to ~/.agentsync/ignore.toml (canonical source), not a native destination
 	if err != nil {
 		return err
 	}

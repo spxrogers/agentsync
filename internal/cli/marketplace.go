@@ -129,7 +129,7 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string) (m
 		newCacheDir := marketplaceCacheDir(home, mpName)
 		if newCacheDir != cacheDir {
 			if err := os.MkdirAll(filepath.Dir(newCacheDir), 0o755); err == nil {
-				_ = os.Rename(cacheDir, newCacheDir)
+				_ = os.Rename(cacheDir, newCacheDir) //nolint:forbidigo // re-slots the marketplace cache under .state/cache, not a native destination
 			}
 		}
 	}
@@ -202,12 +202,12 @@ func marketplaceRemoveRun(cmd *cobra.Command, args []string) error {
 		}
 		return fmt.Errorf("stat %s: %w", tomlPath, err)
 	}
-	if err := os.Remove(tomlPath); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(tomlPath); err != nil && !os.IsNotExist(err) { //nolint:forbidigo // removes marketplaces/<name>.toml (canonical source), not a native destination
 		return fmt.Errorf("remove %s: %w", tomlPath, err)
 	}
 
 	cacheDir := marketplaceCacheDir(home, name)
-	if err := os.RemoveAll(cacheDir); err != nil {
+	if err := os.RemoveAll(cacheDir); err != nil { //nolint:forbidigo // removes the marketplace cache under .state/cache, not a native destination
 		return fmt.Errorf("remove cache %s: %w", cacheDir, err)
 	}
 

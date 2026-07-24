@@ -91,16 +91,23 @@ func TestNoDirectAtomicWriteOutsideAllowedFiles(t *testing.T) {
 // destination path, even to read, should be reviewed. Allowlist a genuine
 // non-destination read-open with a comment.)
 //
-// The allowlist here is PER-FILE and is a subset of (i.e. at least as tight as)
-// the .golangci.yml os.* exclusions, which exclude internal/iox, internal/git,
-// and internal/marketplace whole-dir; keep BOTH in sync when adding a legitimate
-// non-destination os.* site.
+// The allowlist here is PER-FILE, so it is coarser than the .golangci.yml os.*
+// fence for the internal/cli files, where the lint exclusions are line-scoped
+// `//nolint:forbidigo // <reason>` comments at each call site (only
+// internal/cli/update.go keeps a whole-file lint exclude); the whole-dir lint
+// excludes (internal/iox, internal/git, internal/marketplace) are conversely
+// coarser than this list. Keep BOTH in sync when adding a legitimate
+// non-destination os.* site: a new site in an already-listed CLI file still
+// needs its own line-scoped nolint to pass lint.
 func TestNoDirectDestructiveOSCallsOutsideAllowedFiles(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 
 	// Files allowed direct os.* — the DestWriter itself plus non-destination
 	// writers: canonical source, the vault, plugin/marketplace cache, git-backup
-	// repo scaffolding, iox internals, and a writability probe.
+	// repo scaffolding, iox internals, and a writability probe. One deliberate
+	// NATIVE-destination exception rides along: reconcile.go's interactive
+	// orphan removal os.Remove's a native dest file, safe only because
+	// render.BackupFile runs first (see its line-scoped nolint).
 	allowed := map[string]bool{
 		"internal/render/writer.go":              true, // the DestWriter — owns delete + backup
 		"internal/source/writer.go":              true, // canonical-source writer; WriteSkill prunes orphaned bundled files (os.Remove)
@@ -110,15 +117,14 @@ func TestNoDirectDestructiveOSCallsOutsideAllowedFiles(t *testing.T) {
 		"internal/marketplace/fetch_git.go":      true, // fetch scratch dirs + swap-in rename
 		"internal/marketplace/fetch_relative.go": true, // copies fetched files into the cache
 		"internal/marketplace/fetch_npm.go":      true, // unpacks the npm tarball into the cache
-		"internal/cli/init.go":                   true,
-		"internal/cli/secrets.go":                true,
-		"internal/cli/marketplace.go":            true,
-		"internal/cli/plugin.go":                 true,
-		"internal/cli/update.go":                 true,
-		"internal/cli/mcp.go":                    true,
-		"internal/cli/agent.go":                  true,
+		"internal/cli/init.go":                   true, // scaffolds ~/.agentsync (canonical source)
+		"internal/cli/secrets.go":                true, // vault rollback + cleartext temp cleanup
+		"internal/cli/marketplace.go":            true, // canonical source + marketplace cache
+		"internal/cli/plugin.go":                 true, // canonical source + plugin cache
+		"internal/cli/update.go":                 true, // marketplace/plugin cache scratch + swap-in rename
+		"internal/cli/mcp.go":                    true, // removes mcp/<id>.toml (canonical source)
 		"internal/cli/doctor.go":                 true, // ~/.agentsync writability probe
-		"internal/cli/reconcile.go":              true,
+		"internal/cli/reconcile.go":              true, // canonical-source write-back + the backed-up native orphan removal
 	}
 	forbidden := []string{"os.Remove", "os.RemoveAll", "os.WriteFile", "os.Create", "os.OpenFile", "os.Rename", "os.Truncate"}
 

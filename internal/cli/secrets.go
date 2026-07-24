@@ -163,9 +163,9 @@ func writeSecretsVerified(plain []byte, cfg source.SecretsConfig, home string) e
 	if _, err := secrets.Decrypt(agePath, resolveIdentityPath(cfg, home)); err != nil {
 		// Roll back so a misconfiguration can never destroy access to the store.
 		if hadPrev {
-			_ = os.WriteFile(agePath, prev, 0o600)
+			_ = os.WriteFile(agePath, prev, 0o600) //nolint:forbidigo // vault rollback: restores secrets.age (canonical source), not a native destination
 		} else {
-			_ = os.Remove(agePath)
+			_ = os.Remove(agePath) //nolint:forbidigo // vault rollback: removes the just-written secrets.age (canonical source), not a native destination
 		}
 		return fmt.Errorf("the new secrets would be unreadable by identity_file (recipient %q does not match it); "+
 			"refusing to lock you out — check [secrets].recipient and identity_file: %w", cfg.Recipient, err)
@@ -293,7 +293,7 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 	tmpPath := tmpFile.Name()
 	defer func() {
 		// Always remove cleartext tmp; errors ignored.
-		_ = os.Remove(tmpPath)
+		_ = os.Remove(tmpPath) //nolint:forbidigo // cleartext temp file in os.TempDir(), not a native destination
 	}()
 	// A plain defer does NOT run when the process dies on an unhandled signal —
 	// and aborting the editor with Ctrl-C (SIGINT) is the normal way to bail on
@@ -305,8 +305,8 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 	go func() {
 		select {
 		case <-sigCh:
-			_ = os.Remove(tmpPath)
-			os.Exit(130) // 128 + SIGINT
+			_ = os.Remove(tmpPath) //nolint:forbidigo // cleartext temp file in os.TempDir(), not a native destination
+			os.Exit(130)           // 128 + SIGINT
 		case <-editDone:
 		}
 	}()
