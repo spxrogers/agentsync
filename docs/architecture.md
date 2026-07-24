@@ -750,8 +750,9 @@ flowchart TD
 
 `internal/drift`, `internal/git`, `internal/iox`, `internal/jsonkeys`,
 `internal/paths`, `internal/log`, and `internal/untrusted` have no internal
-dependencies — they're the leaves (`internal/git` is reached only from `cli`, via
-`internal/cli/gitbackup.go`); `internal/ui` builds only on `internal/untrusted`.
+dependencies — they're the leaves (`internal/git` is reached only from `cli` —
+`internal/cli/gitbackup.go`, `doctor.go`, and `revert.go`); `internal/ui` builds
+only on `internal/untrusted`.
 See the [component map](components.md) for what each package contains.
 
 **Documented layering exception (`opencode → state`).** Adapters otherwise depend
