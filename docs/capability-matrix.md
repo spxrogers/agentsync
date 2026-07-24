@@ -491,7 +491,9 @@ A few ✓ cells still change shape on the way out — same content, no loss:
   than regenerated to the `0.0.1`/`v1` defaults. A canonical server carrying both a
   `command` and a `url` with no explicit `type` is ambiguous (a Continue block is
   single-transport): agentsync renders it as stdio (command wins) and reports the
-  dropped `url` via a reduced `Skip` rather than dropping it silently.
+  dropped `url` via a reduced `Skip` rather than dropping it silently; an
+  explicitly-typed `stdio` server that also carries a `url` drops the unused
+  `url` with the same report.
 - **Continue memory** — the body lands as `.continue/rules/agentsync.md`, a
   frontmatter-less rule Continue always applies (byte-clean round-trip).
 - **Windsurf MCP** — `~/.codeium/windsurf/mcp_config.json` `mcpServers`: stdio

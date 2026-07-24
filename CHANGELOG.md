@@ -11,6 +11,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Continue adapter: an explicitly-typed stdio MCP server that also carries a
+  `url` now reports the dropped url.** The single-transport drop report fired
+  only for the untyped command+url ambiguity; a server with `type: "stdio"`
+  plus a `url` dropped the url with no report at all — the same silent loss
+  the ambiguity Skip exists to prevent. Both cases now surface the unused url
+  via the same reduced Skip.
 - **Gemini adapter: a structural error while walking the commands tree now
   fails ingest loudly instead of being demoted to a warning.** A mid-walk
   failure (an unreadable subdirectory, a file sitting at the commands-dir
