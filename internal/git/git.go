@@ -165,7 +165,9 @@ func OwnsExactly(dir string) (bool, error) {
 // fails the apply), just potentially slow: an unbounded one-time apply-tail cost. It
 // is left unbounded deliberately — a depth cap would have to exceed however deep
 // agentsync (or a user) might nest a managed dir, and mis-sizing it would silently
-// weaken the nesting guard, a worse failure than a slow first init.
+// weaken the nesting guard, a worse failure than a slow first init. Measured cost
+// (BenchmarkHasNestedRepoBelow, in-container): ~10ms per walk over a 2,000-leaf-dir
+// tree at depth 4 — the no-nested-repo worst case that cannot short-circuit.
 //
 // Symlink-aware: `filepath.WalkDir` does not descend into symlinked directories, so a
 // symlinked foreign repo below dir (e.g. ~/.claude/plugins -> /elsewhere/checkout)

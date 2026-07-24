@@ -756,6 +756,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Documentation
 
+- **The epic #178 QA remainder is recorded in-repo.**
+  [`docs/qa/2026-07-epic-178-remainder.md`](docs/qa/2026-07-epic-178-remainder.md)
+  states what issue #164's real-harness QA demanded, which regression fixtures
+  were delivered instead (now including `TestRestore_PackedHistory` across a
+  fully repacked object store and the measured `BenchmarkHasNestedRepoBelow`
+  walk cost), and what remains genuinely un-executed (live harness launches,
+  real-machine wall-clock numbers) — so the v1.0 tag decision weighs the gap
+  explicitly.
 - **The Gemini subagent frontmatter passthrough is documented as a deliberate
   secret-machinery exception.** Subagent frontmatter (including a command/env-shaped
   `mcpServers` block) is never secret-resolved and never re-referenced; the

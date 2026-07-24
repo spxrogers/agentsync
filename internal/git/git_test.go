@@ -2,6 +2,7 @@ package git
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1555,6 +1556,138 @@ func TestStage_WriteDriven(t *testing.T) {
 	// (c) the genuinely-changed file carries its new bytes.
 	if got := blobAt(t, dir, h, "changed.txt"); got != "v2\n" {
 		t.Fatalf("changed.txt in checkpoint = %q, want v2", got)
+	}
+}
+
+// TestRestore_PackedHistory pins that the delta-based Restore reads PACKED
+// objects, not just loose ones — the state `git gc` (or go-git's RepackObjects)
+// leaves a long-lived backup repo in (issue #164's packed/gc'd-history QA
+// case). The whole loose object store is repacked into a single packfile (the
+// loose copies deleted) between the checkpoints and the restore, and the repo
+// is re-opened from disk so nothing is served from a warm in-memory storer;
+// the restored file must come back byte-for-byte.
+func TestRestore_PackedHistory(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "a.txt", "v1", "apply 1")    // HEAD~2 target
+	commitFile(t, r, dir, "a.txt", "v2", "apply 2")    // HEAD~1
+	commitFile(t, r, dir, "b.txt", "added", "apply 3") // HEAD
+
+	// Pack the object store (go-git's programmatic `git gc` equivalent): every
+	// reachable object lands in one packfile and the loose copies are deleted,
+	// so any object read below MUST be served from the pack.
+	if err := r.repo.RepackObjects(&gogit.RepackConfig{}); err != nil {
+		t.Fatalf("RepackObjects: %v", err)
+	}
+	// Non-vacuity: prove the store really is packed — >=1 packfile and ZERO
+	// loose objects — otherwise the restore would just re-read loose objects
+	// and this test would prove nothing beyond TestRestoreAppendOnly.
+	packs, loose := objectStoreShape(t, dir)
+	if packs == 0 {
+		t.Fatal("RepackObjects left no packfile under .git/objects/pack")
+	}
+	if len(loose) != 0 {
+		t.Fatalf("RepackObjects left loose objects behind: %v", loose)
+	}
+
+	// Re-open from disk: a fresh storer with no warm cache of the pre-pack
+	// loose objects.
+	r2, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, _, err := r2.Restore("HEAD~2", "agentsync revert: packed history", DefaultIdentity)
+	if err != nil {
+		t.Fatalf("Restore across packed history: %v", err)
+	}
+	if h == "" {
+		t.Fatal("Restore returned empty hash")
+	}
+	if got := readFile(t, dir, "a.txt"); got != "v1" {
+		t.Fatalf("after packed-history restore a.txt = %q, want v1 byte-for-byte", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "b.txt")); !os.IsNotExist(err) {
+		t.Fatalf("after packed-history restore b.txt should be gone, stat err = %v", err)
+	}
+}
+
+// objectStoreShape counts packfiles and lists loose objects under
+// dir/.git/objects: pack/*.pack are packs, info/ is metadata, and every other
+// subdirectory is a 2-hex-char loose-object fan-out dir.
+func objectStoreShape(t *testing.T, dir string) (packs int, loose []string) {
+	t.Helper()
+	objects := filepath.Join(dir, ".git", "objects")
+	entries, err := os.ReadDir(objects)
+	if err != nil {
+		t.Fatalf("read %s: %v", objects, err)
+	}
+	for _, e := range entries {
+		switch e.Name() {
+		case "pack":
+			packEntries, err := os.ReadDir(filepath.Join(objects, "pack"))
+			if err != nil {
+				t.Fatalf("read pack dir: %v", err)
+			}
+			for _, p := range packEntries {
+				if strings.HasSuffix(p.Name(), ".pack") {
+					packs++
+				}
+			}
+		case "info":
+			// object-store metadata, not objects
+		default:
+			sub, err := os.ReadDir(filepath.Join(objects, e.Name()))
+			if err != nil {
+				t.Fatalf("read %s: %v", e.Name(), err)
+			}
+			for _, o := range sub {
+				loose = append(loose, e.Name()+"/"+o.Name())
+			}
+		}
+	}
+	return packs, loose
+}
+
+// BenchmarkHasNestedRepoBelow measures the full-tree WalkDir cost documented on
+// HasNestedRepoBelow, over a synthetic tree WITHOUT a nested repo (the common,
+// worst case: the walk cannot short-circuit) — 2,000 leaf dirs at depth 4, one
+// file each. Run in-container with:
+//
+//	AGENTSYNC_TEST_IN_CONTAINER=1 go test -bench HasNestedRepoBelow -benchtime 1x -run '^$' ./internal/git/
+func BenchmarkHasNestedRepoBelow(b *testing.B) {
+	testenv.RequireContainer(b)
+	root := b.TempDir()
+	// 10 × 5 × 5 × 8 = 2,000 leaf dirs at depth 4, each holding one file.
+	for i := range 10 {
+		for j := range 5 {
+			for k := range 5 {
+				for l := range 8 {
+					leaf := filepath.Join(root,
+						fmt.Sprintf("d%02d", i), fmt.Sprintf("e%d", j),
+						fmt.Sprintf("f%d", k), fmt.Sprintf("g%d", l))
+					if err := os.MkdirAll(leaf, 0o755); err != nil {
+						b.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(leaf, "file.txt"), []byte("x"), 0o644); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		}
+	}
+	b.ResetTimer()
+	for range b.N {
+		found, err := HasNestedRepoBelow(root)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if found {
+			b.Fatal("synthetic tree must not contain a nested repo")
+		}
 	}
 }
 
