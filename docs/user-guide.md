@@ -253,7 +253,10 @@ is the genuine pre-apply state — there is no "the first apply can't be undone"
 Pre-existing files agentsync did **not** write (an agent's credentials, conversation
 transcripts, your own scratch files) are deliberately left **out** of the versioned
 history so it never becomes a durable copy of your secrets — they are untracked, so a
-revert leaves them untouched anyway. If an apply ever goes wrong, roll it back:
+revert leaves them untouched anyway. The flip side: such files are **preserved, not
+versioned** — a revert never deletes them, but because they are never committed, the
+backup history cannot restore one *you* delete. If an apply ever goes wrong, roll it
+back:
 
 ```bash
 agentsync revert claude              # undo the most recent apply to ~/.claude

@@ -182,7 +182,9 @@ first apply overwrites a dir, agentsync records a **pre-apply baseline** commit 
 prior content of the files it manages, so the apply checkpoint's parent is the genuine
 pre-apply state and `revert` right after a first apply restores it. Pre-existing files
 agentsync did not write (credentials, transcripts, your own files) are left out of the
-history — untracked, so a revert leaves them untouched. The first apply to an untracked
+history — untracked, so a revert leaves them untouched. They are **preserved, not
+versioned**: a revert never deletes them, but the history cannot restore one *you*
+delete. The first apply to an untracked
 dir **prompts** to enable this (opt-out); answer once and it's remembered in
 `[destination_directory_git_backup]`. These repos are **never pushed** (the history
 may hold cleartext secrets, like the files it versions — which is why it stays
