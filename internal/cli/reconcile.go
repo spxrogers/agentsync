@@ -501,7 +501,9 @@ func collectOrphanFileItems(plan render.RenderPlan, reg *adapter.Registry, s *st
 			continue
 		}
 		for _, op := range res.Ops {
-			if op.Action != "" && op.Action != "write" {
+			// Plan ops never carry the "" Action spelling (Plan normalizes it
+			// to "write" at intake).
+			if op.Action != "write" {
 				continue
 			}
 			if render.IsKeyMerge(op.MergeStrategy) {

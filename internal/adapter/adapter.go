@@ -54,8 +54,11 @@ func (s Scope) String() string {
 
 // FileOp describes one destination-side change. Action is "write" (the default;
 // the empty string is treated as "write") or "delete" — see the Action field and
-// DispatchOps, which both accept "" as write. Path is absolute (after
-// AGENTSYNC_TARGET_ROOT redirection).
+// DispatchOps, which both accept "" as write. render.Plan normalizes "" to
+// "write" as it collects each adapter's ops, before any pipeline guard runs, so
+// consumers of a RenderPlan never see the empty spelling; only code reading raw
+// adapter Render output (or state-derived ops) must still accept "" as write.
+// Path is absolute (after AGENTSYNC_TARGET_ROOT redirection).
 //
 // CONTRACT — Content is ALWAYS JSON for a key-merge op, regardless of the
 // destination file's on-disk format. MergeStrategy names the on-disk format the
@@ -75,7 +78,7 @@ func (s Scope) String() string {
 // format-specific merge). A new TOML/YAML-backed agent must keep Content JSON,
 // not emit the on-disk format here.
 type FileOp struct {
-	Action        string // "" | "write" | "delete"  ("" == "write")
+	Action        string // "" | "write" | "delete"  ("" == "write"; render.Plan rewrites "" → "write" at intake)
 	Path          string
 	Content       []byte
 	Mode          uint32

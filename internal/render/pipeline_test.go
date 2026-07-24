@@ -241,6 +241,63 @@ func TestPlan_ContainmentBackstopRejectsEscapingFileOp(t *testing.T) {
 	}
 }
 
+// TestPlan_NormalizesEmptyActionBeforeGuards pins the "" == "write" boundary
+// normalization: an adapter op emitted with the documented empty-Action default
+// would be WRITTEN by every executor, yet the containment backstop and the
+// apply-time dedup/divergence check match the literal "write" — so before Plan
+// normalized "" at intake, an escaping op with Action "" slid past the backstop.
+// The traversal path here must be refused exactly like the explicit-"write"
+// case above; a second, benign "" op proves the plan output carries "write".
+func TestPlan_NormalizesEmptyActionBeforeGuards(t *testing.T) {
+	t.Run("empty-Action traversal op is refused", func(t *testing.T) {
+		reg := adapter.NewRegistry()
+		esc := &countingAdapter{
+			Adapter: noop.New("claude"),
+			renderOps: []adapter.FileOp{{
+				Action:        "", // documented write default — must not dodge the backstop
+				Path:          "../escape.md",
+				Content:       []byte("x"),
+				Mode:          0o644,
+				MergeStrategy: "replace",
+			}},
+		}
+		if err := reg.Register(esc); err != nil {
+			t.Fatal(err)
+		}
+		_, err := render.Plan(secrets.ForRender(source.Canonical{}), reg, []string{"claude"}, adapter.ScopeUser, "", nil, "/tmp")
+		if err == nil {
+			t.Fatal("Plan accepted an empty-Action FileOp whose path escapes via '..'; want rejection")
+		}
+		if !strings.Contains(err.Error(), "escapes its destination") {
+			t.Errorf("error %q does not describe the containment failure", err.Error())
+		}
+	})
+	t.Run("empty Action is rewritten to write in the plan", func(t *testing.T) {
+		reg := adapter.NewRegistry()
+		a := &countingAdapter{
+			Adapter: noop.New("claude"),
+			renderOps: []adapter.FileOp{{
+				Action:        "",
+				Path:          "/tmp/dest/file.md",
+				Content:       []byte("x"),
+				Mode:          0o644,
+				MergeStrategy: "replace",
+			}},
+		}
+		if err := reg.Register(a); err != nil {
+			t.Fatal(err)
+		}
+		plan, err := render.Plan(secrets.ForRender(source.Canonical{}), reg, []string{"claude"}, adapter.ScopeUser, "", nil, "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ops := plan.PerAgent["claude"].Ops
+		if len(ops) != 1 || ops[0].Action != "write" {
+			t.Fatalf("Plan must rewrite Action \"\" to \"write\" at intake, got %+v", ops)
+		}
+	})
+}
+
 // TestPipeline_OwnedKeysInjected verifies that Plan injects OwnedKeys from
 // state.Keys into merge-json-keys ops for the matching agent+scope+project+path.
 func TestPipeline_OwnedKeysInjected(t *testing.T) {

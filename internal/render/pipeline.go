@@ -115,6 +115,18 @@ func Plan(r secrets.Resolved, reg *adapter.Registry, agents []string, scope adap
 		if err != nil {
 			return out, fmt.Errorf("render %s: %w", name, err)
 		}
+		// Normalize the documented `"" == "write"` Action default ONCE at the
+		// plan boundary, before any guard runs: executors (DispatchOps) treat
+		// "" as write, but the containment backstop below and the apply-time
+		// dedup/divergence check match the literal "write" — so an op emitted
+		// with the empty spelling would be written by every adapter while
+		// dodging both guards. After this loop (and Plan's own synthesized
+		// ops, which set Action explicitly), plan ops never carry "".
+		for i := range ops {
+			if ops[i].Action == "" {
+				ops[i].Action = "write"
+			}
+		}
 		// Containment backstop (defense-in-depth): reject any write whose own cleaned
 		// path still contains a ".." segment (an unrooted / relative-with-leading-".."
 		// path). This is deliberately narrow — Plan does not know each adapter's dest
