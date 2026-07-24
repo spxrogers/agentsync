@@ -155,6 +155,15 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		toWrite, synced := planSyncCounts(plan, wouldChange)
 		fmt.Fprintf(w, "%s %d ops total across %d agent(s) — %d to write, %d already synced\n",
 			p.Bold("Plan:"), plan.Total(), len(plan.PerAgent), toWrite, synced)
+		// Preview convergence-time removals with the same counts the real apply
+		// reports in its headline, so a delete-only run no longer previews as
+		// "Plan: 0 ops … 0 to write" and then surprises with "removed: …" on the
+		// real run. Dry-run never prunes state, so the state entries
+		// SkillOrphanDeletes reads are still intact here.
+		if removedKeys, removedFiles, _ := removalCounts(plan, s, userHome, sc, projectRoot); removedKeys+removedFiles > 0 {
+			fmt.Fprintf(w, "%s %s (the real apply will remove these)\n",
+				p.Bold("Removals:"), removedLabel(removedKeys, removedFiles))
+		}
 		for _, name := range reg.Names() {
 			res, ok := plan.PerAgent[name]
 			if !ok {
@@ -200,9 +209,10 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 
 	// Count convergence-time removals NOW, before PruneStaleState drops the
 	// state entries SkillOrphanDeletes reads — so the summary can report
-	// "removed: N ops" instead of mislabeling a delete-only run as "up to date"
-	// / "applied: 0 ops".
-	removed, appliedOps := removalCounts(plan, s, userHome, sc, projectRoot)
+	// "removed: N key(s)/file(s)" instead of mislabeling a delete-only run as
+	// "up to date" / "applied: 0 ops".
+	removedKeys, removedFiles, appliedOps := removalCounts(plan, s, userHome, sc, projectRoot)
+	removed := removedKeys + removedFiles
 
 	// Pre-apply baseline (issue #143): BEFORE render.Apply overwrites anything,
 	// commit the current on-disk state of each version root this apply will write
@@ -281,16 +291,16 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	w := p.Out
 	// Headline honesty, four cases:
 	//   - removals only (a skill/MCP/key removed from source, no real writes) →
-	//     "removed: N ops"; never "up to date" / "applied: 0 ops".
-	//   - writes AND removals → "applied: X ops, removed: Y ops".
+	//     "removed: N key(s), M file(s)"; never "up to date" / "applied: 0 ops".
+	//   - writes AND removals → "applied: X ops, removed: N key(s), M file(s)".
 	//   - a genuine clean re-apply (every dest already held our exact bytes,
 	//     nothing removed) → "up to date" (unchanged detection preserved).
 	//   - normal writes → "applied: N ops".
 	switch {
 	case removed > 0 && appliedOps == 0:
-		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green(fmt.Sprintf("removed: %d ops", removed)))
+		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green("removed: "+removedLabel(removedKeys, removedFiles)))
 	case removed > 0:
-		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green(fmt.Sprintf("applied: %d ops, removed: %d ops", appliedOps, removed)))
+		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green(fmt.Sprintf("applied: %d ops, removed: %s", appliedOps, removedLabel(removedKeys, removedFiles))))
 	case len(written) > 0 && len(unchanged) == len(written):
 		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green(fmt.Sprintf("up to date: %d ops, no changes", plan.Total())))
 	default:
@@ -355,18 +365,22 @@ func planSyncCounts(plan render.RenderPlan, wouldChange map[string]bool) (toWrit
 // report them instead of mislabeling a delete-only run "up to date" / "applied: 0
 // ops":
 //
-//   - whole skill-file deletes (a skill, or a bundled file, removed from source),
-//     surfaced by render.SkillOrphanDeletes and deduped across agents that share a
-//     skills dir; and
-//   - orphan-cleanup key removals — an emptied merge section renders as a "{}"
-//     key-merge op carrying the owned pointers to drop (render.orphanCleanupOps),
-//     so each such op removes len(OwnedKeys) keys rather than writing anything.
+//   - removedFiles: whole skill-file deletes (a skill, or a bundled file, removed
+//     from source), surfaced by render.SkillOrphanDeletes and deduped across
+//     agents that share a skills dir; and
+//   - removedKeys: orphan-cleanup key removals — an emptied merge section renders
+//     as a "{}" key-merge op carrying the owned pointers to drop
+//     (render.orphanCleanupOps), so each such op removes len(OwnedKeys) keys
+//     rather than writing anything.
 //
-// appliedOps is plan.Total() with those pure "{}" removal ops subtracted, so a
+// The two counts are returned separately so the headline can label them
+// distinctly (a deleted key is not an "op" in the same sense a deleted file is).
+// appliedOps is plan.Total() with the pure "{}" removal ops subtracted, so a
 // mixed run reports the removal under "removed:" and does not also count it as an
 // applied write. MUST be called BEFORE PruneStaleState, which drops the state
-// entries SkillOrphanDeletes reads.
-func removalCounts(plan render.RenderPlan, s *state.Targets, userHome string, sc adapter.Scope, projectRoot string) (removed, appliedOps int) {
+// entries SkillOrphanDeletes reads. (Dry-run never prunes, so it can call this
+// at any point.)
+func removalCounts(plan render.RenderPlan, s *state.Targets, userHome string, sc adapter.Scope, projectRoot string) (removedKeys, removedFiles, appliedOps int) {
 	appliedOps = plan.Total()
 	skillDeletes := map[string]bool{}
 	for name, res := range plan.PerAgent {
@@ -376,19 +390,34 @@ func removalCounts(plan render.RenderPlan, s *state.Targets, userHome string, sc
 		for _, op := range res.Ops {
 			// An orphan-cleanup op is a key-merge op whose rendered content is the
 			// empty object "{}" but which carries owned pointers to delete. Adapters
-			// never render "{}" for a populated section, so this signature is unique
-			// to the cleanup synthesis.
+			// never render "{}" for a populated section (pinned by
+			// TestAdapters_NeverRenderEmptyObjectForPopulatedSection), so this
+			// signature is unique to the cleanup synthesis.
 			if render.IsKeyMerge(op.MergeStrategy) && strings.TrimSpace(string(op.Content)) == "{}" && len(op.OwnedKeys) > 0 {
-				removed += len(op.OwnedKeys)
+				removedKeys += len(op.OwnedKeys)
 				appliedOps-- // a removal, not an applied write
 			}
 		}
 	}
-	removed += len(skillDeletes)
+	removedFiles = len(skillDeletes)
 	if appliedOps < 0 {
 		appliedOps = 0
 	}
-	return removed, appliedOps
+	return removedKeys, removedFiles, appliedOps
+}
+
+// removedLabel renders the removal counts with the two kinds labeled
+// distinctly — "2 key(s), 1 file(s)" — omitting a zero count. Callers only use
+// it when keys+files > 0.
+func removedLabel(keys, files int) string {
+	var parts []string
+	if keys > 0 {
+		parts = append(parts, fmt.Sprintf("%d key(s)", keys))
+	}
+	if files > 0 {
+		parts = append(parts, fmt.Sprintf("%d file(s)", files))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // baselinePaths returns the set of destination paths the plan will WRITE or

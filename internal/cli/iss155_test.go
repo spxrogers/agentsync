@@ -226,12 +226,21 @@ func TestApplySummary_DeleteOnly(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(tmp, ".agentsync", "skills", "demo")); err != nil {
 		t.Fatal(err)
 	}
+	// Dry-run parity: the preview must show the same removal the real apply will
+	// report, not "Plan: 0 ops … 0 to write" with the removal invisible.
+	dry, err := runCLI(t, env, "apply", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run before delete-only apply: %v\n%s", err, dry)
+	}
+	if !strings.Contains(dry, "Removals:") || !strings.Contains(dry, "1 file(s)") {
+		t.Fatalf("delete-only dry-run should preview the removal counts; got:\n%s", dry)
+	}
 	out, err := runCLI(t, env, "apply")
 	if err != nil {
 		t.Fatalf("re-apply: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "removed:") {
-		t.Fatalf("delete-only apply should report a removal in the headline; got:\n%s", out)
+	if !strings.Contains(out, "removed: 1 file(s)") {
+		t.Fatalf("delete-only apply should report the file removal distinctly in the headline; got:\n%s", out)
 	}
 	if strings.Contains(out, "applied: 0 ops") {
 		t.Fatalf("delete-only apply must not read as 'applied: 0 ops'; got:\n%s", out)

@@ -11,6 +11,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`apply --dry-run` now previews convergence-time removals, and the apply
+  headline counts key-removals and file-deletes distinctly.** A delete-only run
+  previewed as "Plan: 0 ops … 0 to write" and then surprised with a removal
+  headline on the real apply; the dry-run now prints the same removal counts
+  the real run will report. The headline also no longer conflates per-key
+  removals and whole-file skill deletes under one "ops" number: it reads
+  `removed: N key(s), M file(s)` (and `applied: X ops, removed: …` for a
+  mixed run).
 - **`plugin upgrade|enable|disable|remove` refuse a ref whose marketplace
   qualifier doesn't match the installed plugin.** The lifecycle subcommands
   accepted `id@marketplace` but silently discarded the qualifier, so
