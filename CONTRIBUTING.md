@@ -99,6 +99,16 @@ cover.
 3. Ensure **`just test-release`** is green and `just lint` is clean.
 4. Open the PR and fill in the template (what changed, why, test plan).
 
+**Squash-merge hygiene.** When a PR is squash-merged, the squash commit's
+message is the only record `git log` keeps of it — so it must follow the same
+conventional-commit form as any other commit, and for a multi-commit PR the
+squash **body must preserve the per-commit messages** (GitHub's default
+"concatenate commit messages" body is fine; a title-only squash is not). The
+v1.0 remediation waves 1/2/4 landed title-only while wave 3 kept its full body:
+only wave 3's contents are reconstructible from the repository alone — the
+others require chasing PR descriptions. Don't repeat that: if the detail lives
+only in the PR body, copy it into the squash message before merging.
+
 For anything security-sensitive, **don't** open a public PR/issue first — use the
 private reporting path in [`SECURITY.md`](SECURITY.md).
 
