@@ -19,6 +19,9 @@ import (
 // rather than racing or hanging forever.
 func TestConcurrentRevert_LockSerializes(t *testing.T) {
 	tmp, env, _ := setupGitBackedClaude(t)
+	// Wait out the lock in milliseconds, not the 30s production default — the
+	// env override lock.go exposes for exactly this (see lock_test.go).
+	env["AGENTSYNC_LOCK_TIMEOUT_MS"] = "400"
 
 	// Hold the global lock from another goroutine; the CLI's revert path must
 	// observe contention and error rather than proceed.
@@ -46,7 +49,8 @@ func TestConcurrentRevert_LockSerializes(t *testing.T) {
 		}{out, runErr}
 	}()
 
-	// flock contention surfaces within the 30s lockTimeout; cap well above it for CI.
+	// flock contention surfaces within the 400ms test lockTimeout; cap well
+	// above it for CI variance.
 	select {
 	case res := <-done:
 		if res.err == nil {
@@ -56,7 +60,7 @@ func TestConcurrentRevert_LockSerializes(t *testing.T) {
 		if !strings.Contains(lower, "busy") && !strings.Contains(lower, "another agentsync") {
 			t.Fatalf("revert error should name contention; got: %v", res.err)
 		}
-	case <-time.After(45 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("revert never returned; lock contention not surfaced as error")
 	}
 }
