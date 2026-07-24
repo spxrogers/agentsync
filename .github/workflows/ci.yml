@@ -83,27 +83,43 @@ jobs:
             echo "::error file=.goreleaser.yaml::publisher token/private_key must use a bare {{ .Env.X }} template — envOrDefault/isEnvSet are unavailable in that context and fail at publish"
             exit 1
           fi
-      # The goreleaser version is pinned in THREE places (ci.yml x2, release.yml,
-      # justfile). This is the C3 "dual-list drift" class — assert they never
-      # diverge, so the toolchain that validates a release can't differ from the
-      # one that ships it (issue #138).
+      # The goreleaser version is pinned in FOUR places (ci.yml x2, release.yml
+      # x1, justfile x1). This is the C3 "dual-list drift" class — assert they
+      # never diverge, so the toolchain that validates a release can't differ
+      # from the one that ships it (issue #138). The workflow-side pins are
+      # anchored to the goreleaser-action steps themselves (the `version:` input
+      # inside each `uses: goreleaser/goreleaser-action@…` step's `with:` block)
+      # rather than grepping for ANY `version: "N.N.N"` — so a future unrelated
+      # action input named `version` can neither satisfy nor miscount this
+      # guard, and a goreleaser-action step MISSING its pin fails it too.
       - name: Guard goreleaser version pin (CI == release == just)
         run: |
           set -euo pipefail
+          wf='.github/workflows/ci.yml .github/workflows/release.yml'
+          steps=$(grep -hE '^[[:space:]]*-[[:space:]]*uses:[[:space:]]*goreleaser/goreleaser-action@' $wf | wc -l)
+          if [ "$steps" -lt 3 ]; then
+            echo "::error::expected >=3 goreleaser-action steps across ci.yml/release.yml (ci.yml x2, release.yml x1); found $steps — the parity guard's anchors moved, update this step"
+            exit 1
+          fi
           mapfile -t vers < <(
-            grep -hoE 'version: "[0-9]+\.[0-9]+\.[0-9]+"' .github/workflows/ci.yml .github/workflows/release.yml \
-              | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'
+            awk '
+              /^[[:space:]]*-[[:space:]]*uses:[[:space:]]*goreleaser\/goreleaser-action@/ { instep=1; next }
+              instep && /^[[:space:]]*-[[:space:]]*(name|uses|run):/ { instep=0 }
+              instep && match($0, /version:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"/) {
+                v=substr($0, RSTART, RLENGTH); gsub(/[^0-9.]/, "", v); print v; instep=0
+              }
+            ' $wf
             grep -hoE 'goreleaser/v2@v[0-9]+\.[0-9]+\.[0-9]+' justfile | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'
           )
-          if [ "${#vers[@]}" -lt 4 ]; then
-            echo "::error::expected >=4 goreleaser version pins (ci.yml x2, release.yml x1, justfile x1); found ${#vers[@]}: ${vers[*]:-none}"
+          if [ "${#vers[@]}" -ne "$((steps + 1))" ]; then
+            echo "::error::found $steps goreleaser-action step(s) plus the justfile pin, but ${#vers[@]} version pin(s) (${vers[*]:-none}) — every goreleaser-action step must carry a quoted version: pin and the justfile go-run pin must be present"
             exit 1
           fi
           if [ "$(printf '%s\n' "${vers[@]}" | sort -u | wc -l)" -ne 1 ]; then
             echo "::error::goreleaser version pins disagree across ci.yml / release.yml / justfile: ${vers[*]}"
             exit 1
           fi
-          echo "goreleaser pinned consistently to ${vers[0]} across ci.yml, release.yml, justfile"
+          echo "goreleaser pinned consistently to ${vers[0]} across $steps goreleaser-action step(s) + justfile"
       # The nfpms file_name_template is version-less specifically so the README's
       # releases/latest/download/ URLs resolve. Assert the coupling so a change to
       # either side fails CI instead of silently 404ing the install command (#138).
