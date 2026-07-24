@@ -11,6 +11,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Continue adapter: colliding prompt command names are refused on ingest
+  instead of silently clobbering.** Continue keys a slash command off the
+  frontmatter `name`, so two prompt files (say `foo.md` and `baz.md`) can both
+  resolve to the same effective command name — and since the canonical model
+  and every downstream write-back/render key off `Command.Name`, capturing both
+  let one silently vanish. Ingest now keeps the first file, skips the later
+  one, and warns naming both files and the colliding name.
+
 - **The apply-time baseline snapshot now carries the revert snapshot's
   cleartext caution, and skips roots the apply doesn't touch.** When the
   pre-apply baseline commits something — typically a hand-typed edit to a

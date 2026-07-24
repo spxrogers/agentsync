@@ -93,6 +93,14 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		return c, fmt.Errorf("read prompts dir %s: %w", p.PromptsDir, err)
 	}
 	if present {
+		// seenNames maps each captured command name to the prompt file that
+		// first produced it. Continue keys a slash command off the frontmatter
+		// `name`, so two prompt files can resolve to the same effective name —
+		// and the canonical model (plus every downstream write-back/render)
+		// keys off Command.Name, so capturing both would let one silently
+		// vanish later. Mirror the codex effective-name collision guard: never
+		// drop silently — keep the first, warn, and skip the later file.
+		seenNames := map[string]string{}
 		for _, e := range promptEntries {
 			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 				continue
@@ -126,6 +134,11 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				fmt.Fprintf(warn, "warning: prompt %q is not invokable (no `invokable: true`); not captured as a slash command\n", name)
 				continue
 			}
+			if first, dup := seenNames[name]; dup {
+				fmt.Fprintf(warn, "warning: skipping prompt %q: its command name %q collides with prompt %q; only the first is captured — rename one prompt's `name` to keep both\n", e.Name(), name, first)
+				continue
+			}
+			seenNames[name] = e.Name()
 			cf := map[string]any{}
 			if d, ok := fm["description"].(string); ok && d != "" {
 				cf["description"] = d
