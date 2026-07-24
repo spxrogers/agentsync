@@ -455,7 +455,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   VS Code extension) — detection is the `.roo/` config dir only; (3) **Cline**
   workflow ingest now captures only agentsync-owned workflows (each rendered
   workflow carries a reversible ownership marker) instead of over-capturing
-  human-authored ones, matching memory's ownership scoping; (4) **Claude** MCP and
+  human-authored ones, matching memory's ownership scoping — upgrade note:
+  workflows rendered by a pre-marker agentsync carry no marker and are treated
+  as human-authored, so `import`/`reconcile` skip them and each shows one-time
+  drift until the next `apply` re-stamps them; (4) **Claude** MCP and
   hooks ingest decode with `UseNumber`, so an unmodeled native key holding an
   integer larger than 2^53 (e.g. a nanosecond timeout) survives `import`/`reconcile`
   byte-exact instead of being rounded through `float64`; (5) the capability matrix
