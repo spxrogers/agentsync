@@ -1210,6 +1210,50 @@ func TestPlugin_SubcommandsAcceptMarketplaceRef(t *testing.T) {
 	})
 }
 
+// TestPlugin_SubcommandsRejectMismatchedMarketplaceRef pins that a
+// marketplace-qualified ref must name the marketplace the plugin was actually
+// installed from: upgrade/enable/disable/remove on demo@wrong-mp refuse (naming
+// both the typed qualifier and the recorded marketplace) instead of silently
+// acting on the demo installed from test-mp. A matching qualifier still works
+// (also covered by TestPlugin_SubcommandsAcceptMarketplaceRef).
+func TestPlugin_SubcommandsRejectMismatchedMarketplaceRef(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+		t.Fatalf("install: %v\n%s", err, out)
+	}
+
+	for _, sub := range []string{"upgrade", "enable", "disable", "remove"} {
+		t.Run(sub, func(t *testing.T) {
+			_, err := runCLI(t, env, "plugin", sub, "demo@wrong-mp")
+			if err == nil {
+				t.Fatalf("%s demo@wrong-mp should refuse: plugin was installed from test-mp", sub)
+			}
+			if !strings.Contains(err.Error(), `"test-mp"`) || !strings.Contains(err.Error(), `"wrong-mp"`) {
+				t.Fatalf("%s error should name both the recorded and the typed marketplace; got: %v", sub, err)
+			}
+		})
+	}
+
+	// The refusals must not have touched the plugin: a matching qualifier still
+	// disables it, proving the recorded marketplace is intact and the guard
+	// passes on a match.
+	if out, err := runCLI(t, env, "plugin", "disable", "demo@test-mp"); err != nil {
+		t.Fatalf("disable demo@test-mp after refusals: %v\n%s", err, out)
+	}
+	p := readPluginTOMLFixture(t, filepath.Join(tmp, ".agentsync", "plugins", "demo.toml"))
+	if !p.Plugin.Disabled {
+		t.Fatal("matching-qualifier disable should have set disabled=true")
+	}
+}
+
 // TestPlugin_NotInstalledReportsFriendlyError pins that upgrade/enable/disable/
 // remove on a never-installed id report a clean "is not installed" message rather
 // than leaking a raw file-not-found (#168).

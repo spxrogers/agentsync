@@ -237,8 +237,9 @@ func newPluginUpgradeCmd() *cobra.Command {
 func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
 	// Accept the id@marketplace ref that `install` accepts; operate on the bare id
 	// (the on-disk file is plugins/<id>.toml). The stored id (below) is
-	// authoritative for the marketplace, so the CLI marketplace segment is ignored.
-	id, _ := splitPluginRef(args[0])
+	// authoritative for the marketplace; a typed qualifier must MATCH it (checked
+	// below) rather than being silently ignored.
+	id, typedMP := splitPluginRef(args[0])
 	if err := validateCacheKey("plugin", id); err != nil {
 		return err
 	}
@@ -251,6 +252,9 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("plugin %q is not installed", id)
 		}
+		return err
+	}
+	if err := checkPluginRefMarketplace(existing, id, typedMP); err != nil {
 		return err
 	}
 
@@ -317,7 +321,7 @@ func newPluginEnableCmd() *cobra.Command {
 }
 
 func pluginEnableRun(cmd *cobra.Command, args []string) error {
-	id, _ := splitPluginRef(args[0]) // accept id@marketplace like install; operate on the bare id
+	id, typedMP := splitPluginRef(args[0]) // accept id@marketplace like install; a qualifier must match the recorded marketplace
 	if err := validateCacheKey("plugin", id); err != nil {
 		return err
 	}
@@ -329,6 +333,9 @@ func pluginEnableRun(cmd *cobra.Command, args []string) error {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("plugin %q is not installed", id)
 		}
+		return err
+	}
+	if err := checkPluginRefMarketplace(existing, id, typedMP); err != nil {
 		return err
 	}
 	// Only flip the disabled bit. Do NOT touch Agents: re-materializing ["*"] over
@@ -360,7 +367,7 @@ func newPluginDisableCmd() *cobra.Command {
 }
 
 func pluginDisableRun(cmd *cobra.Command, args []string) error {
-	id, _ := splitPluginRef(args[0]) // accept id@marketplace like install; operate on the bare id
+	id, typedMP := splitPluginRef(args[0]) // accept id@marketplace like install; a qualifier must match the recorded marketplace
 	if err := validateCacheKey("plugin", id); err != nil {
 		return err
 	}
@@ -372,6 +379,9 @@ func pluginDisableRun(cmd *cobra.Command, args []string) error {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("plugin %q is not installed", id)
 		}
+		return err
+	}
+	if err := checkPluginRefMarketplace(existing, id, typedMP); err != nil {
 		return err
 	}
 	// Only set the disabled bit. The `disabled = true` flag alone suppresses the
@@ -403,13 +413,28 @@ func newPluginRemoveCmd() *cobra.Command {
 }
 
 func pluginRemoveRun(cmd *cobra.Command, args []string) error {
-	id, _ := splitPluginRef(args[0]) // accept id@marketplace like install; operate on the bare id
+	id, typedMP := splitPluginRef(args[0]) // accept id@marketplace like install; a qualifier must match the recorded marketplace
 	if err := validateCacheKey("plugin", id); err != nil {
 		return err
 	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 
 	pluginPath := filepath.Join(home, "plugins", id+".toml")
+	// A qualified ref must name the marketplace the plugin was actually installed
+	// from, so read the TOML before deleting anything. (A corrupt TOML therefore
+	// refuses a qualified remove — the bare id still removes it.)
+	if typedMP != "" {
+		existing, err := readPluginTOML(pluginPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("plugin %q is not installed", id)
+			}
+			return err
+		}
+		if err := checkPluginRefMarketplace(existing, id, typedMP); err != nil {
+			return err
+		}
+	}
 	if err := os.Remove(pluginPath); err != nil {
 		// Match upgrade/enable/disable: a typo'd or already-removed id is an
 		// error, not a cheerful "removed plugin X" no-op.
@@ -488,6 +513,29 @@ func splitPluginRef(ref string) (id, mpName string) {
 		return ref[:idx], ref[idx+1:]
 	}
 	return ref, ""
+}
+
+// checkPluginRefMarketplace refuses a marketplace-qualified ref whose qualifier
+// does not match the marketplace recorded for the installed plugin (the
+// "id@marketplace" written to plugins/<id>.toml at install). The lifecycle
+// subcommands operate on the bare id, so silently discarding the qualifier let
+// `plugin disable demo@wrong-mp` act on the demo installed from another
+// marketplace. An unqualified ref (typedMP == "") is unchanged. The recorded
+// value comes from a hand-editable file; %q renders any control bytes inert.
+func checkPluginRefMarketplace(existing pluginTOML, id, typedMP string) error {
+	if typedMP == "" {
+		return nil
+	}
+	_, recorded := splitPluginRef(existing.Plugin.ID.Unverified())
+	if recorded == typedMP {
+		return nil
+	}
+	if recorded == "" {
+		return fmt.Errorf("plugin %q records no marketplace, so the ref %q cannot be verified; use the bare id %q",
+			id, id+"@"+typedMP, id)
+	}
+	return fmt.Errorf("plugin %q is installed from marketplace %q, not %q; use %q or the bare id %q",
+		id, recorded, typedMP, id+"@"+recorded, id)
 }
 
 // resolveMarketplaceName returns the marketplace name, defaulting to "default"

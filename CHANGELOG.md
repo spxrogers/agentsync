@@ -11,6 +11,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`plugin upgrade|enable|disable|remove` refuse a ref whose marketplace
+  qualifier doesn't match the installed plugin.** The lifecycle subcommands
+  accepted `id@marketplace` but silently discarded the qualifier, so
+  `agentsync plugin disable demo@wrong-mp` acted on the `demo` installed from
+  `test-mp`. A qualified ref is now checked against the marketplace recorded
+  in `plugins/<id>.toml` and refused on mismatch, naming both; a bare id (or
+  matching qualifier) works as before.
 - **Continue adapter: an explicitly-typed stdio MCP server that also carries a
   `url` now reports the dropped url.** The single-transport drop report fired
   only for the untyped command+url ambiguity; a server with `type: "stdio"`
