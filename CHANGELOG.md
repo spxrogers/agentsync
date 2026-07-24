@@ -11,6 +11,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Windsurf adapter: stripping a hand-authored leading fence from a workflow
+  now warns instead of deleting the bytes silently.** Windsurf workflows honor
+  no frontmatter, so ingest strips a hand-authored leading `---`…`---` block
+  before capturing the body — but unlike the rules path, the workflow path
+  said nothing, silently discarding user-authored bytes with no canonical
+  home. The strip behavior is unchanged; ingest now emits a warning naming
+  the workflow, symmetric with the rules-path warning.
 - **Continue adapter: colliding prompt command names are refused on ingest
   instead of silently clobbering.** Continue keys a slash command off the
   frontmatter `name`, so two prompt files (say `foo.md` and `baz.md`) can both
