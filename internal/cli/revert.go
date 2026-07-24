@@ -299,7 +299,13 @@ func previewRevert(p *ui.Printer, repo *agit.Repo, root, target string) error {
 	if clean, _ := repo.IsClean(); !clean {
 		fmt.Fprintf(p.Out, "  (uncommitted changes to tracked files would be snapshotted first, then preserved in history)\n")
 	}
-	if untracked, _ := repo.UntrackedPaths(); len(untracked) > 0 {
+	// #128's advertised dry-run note. On a status error, warn rather than silently
+	// drop the note — the preview would otherwise imply "no untracked files here".
+	untracked, uerr := repo.UntrackedPaths()
+	if uerr != nil {
+		fmt.Fprintf(p.Err, "%s could not enumerate untracked files in %s: %v\n", p.Yellow("agentsync:"), root, uerr)
+	}
+	if len(untracked) > 0 {
 		fmt.Fprintf(p.Out, "  (%d untracked file(s) in this dir are left untouched)\n", len(untracked))
 	}
 	if len(changes) == 0 {

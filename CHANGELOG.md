@@ -11,6 +11,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`revert --dry-run` warns when it cannot enumerate untracked files instead
+  of silently dropping the note.** The preview swallowed a git-status error, so
+  the "N untracked file(s) in this dir are left untouched" note could vanish
+  with no indication anything went wrong — implying the dir held none. The
+  preview now prints a warning naming the error and continues.
 - **`revert` refuses a dangling symlink at a path it would create instead of
   silently deleting it.** The structural pre-flight used `os.Stat`, which
   follows links, so a dangling untracked symlink at a create path looked like
