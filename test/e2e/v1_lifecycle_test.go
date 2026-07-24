@@ -20,9 +20,19 @@ import (
 // buildBinary compiles the agentsync binary into a tmp dir and returns its path.
 func buildBinary(t *testing.T) string {
 	t.Helper()
+	return buildBinaryWith(t)
+}
+
+// buildBinaryWith compiles the agentsync binary with extra `go build` arguments
+// (e.g. the release ldflags — see TestE2E_VersionLdflagsInjection) into a tmp
+// dir and returns its path.
+func buildBinaryWith(t *testing.T, extraArgs ...string) string {
+	t.Helper()
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "agentsync")
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/agentsync")
+	args := append([]string{"build"}, extraArgs...)
+	args = append(args, "-o", bin, "./cmd/agentsync")
+	cmd := exec.Command("go", args...)
 	cmd.Dir = repoRoot(t)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build agentsync: %v\n%s", err, out)
