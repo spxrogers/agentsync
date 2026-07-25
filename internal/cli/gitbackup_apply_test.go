@@ -362,6 +362,12 @@ func TestModeOnNewDirEmitsCleartextNotice(t *testing.T) {
 	if n := strings.Count(out, "may contain secrets in cleartext"); n != 1 {
 		t.Fatalf("mode=on cleartext notice should appear exactly once across new dirs, got %d:\n%s", n, out)
 	}
+	// …but EVERY inited dir must announce itself: only the caution clause is
+	// once-per-run. Before the round-3 fix the whole notice was gated, so the
+	// second dir was inited silently.
+	if n := strings.Count(out, "git backup of"); n < 2 {
+		t.Fatalf("every mode=on auto-inited dir should announce itself (want >=2 announcements), got %d:\n%s", n, out)
+	}
 
 	// A second apply (no source change) only commits into now-owned dirs — no notice.
 	out2, err := runCLI(t, env, "apply")

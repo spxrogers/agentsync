@@ -216,3 +216,31 @@ test('CLI fails when an ALLOWLIST entry matches zero violations (stale)', () => 
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test('CLI names a DUPLICATE allowlist entry instead of a confusing stale', () => {
+	const root = mkdtempSync(join(tmpdir(), 'check-links-dupe-'));
+	try {
+		// One real violation shielded by the first copy; the second copy can
+		// never match (allowlistIndex returns the first index), so without the
+		// dedicated diagnostic it would surface as a permanently "stale" entry
+		// the user can't fix by fixing links. The failure must name the
+		// duplicate directly (and never open with the success banner).
+		writeFileSync(
+			join(root, 'index.md'),
+			'---\ntitle: "Home"\n---\n\nSee [gone](/long-gone/).\n',
+		);
+		const entry = { file: 'index.md', target: '/long-gone/' };
+		const res = runCLI(root, [entry, { ...entry }]);
+		assert.equal(res.status, 1, 'a duplicate allowlist entry must fail the run');
+		const out = res.stdout + res.stderr;
+		assert.match(out, /DUPLICATE ALLOWLIST/);
+		assert.match(out, /delete the duplicate/);
+		assert.doesNotMatch(
+			res.stdout,
+			/0 broken/,
+			'a failing run must not open with the success banner',
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
