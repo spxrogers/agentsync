@@ -287,6 +287,15 @@ func (r *Repo) applyRestoreDelta(wt *gogit.Worktree, targetTree *object.Tree, ch
 		if err := restoreFileFromTree(wt, targetTree, ch.Path); err != nil {
 			return fmt.Errorf("restoring %s during revert in %s: %w", ch.Path, r.dir, err)
 		}
+		// wt.Add re-READS the path: a symlink raced in between the write above
+		// and this staging would stage outside-repo bytes into the local revert
+		// commit. Re-verify the leaf is still the regular file we just wrote.
+		// (The remaining un-closable window is the Lstat->syscall gap inside
+		// each check — closing it needs openat2/O_NOFOLLOW dirfds go-git does
+		// not expose; that is the PR's sole accepted TOCTOU residual.)
+		if info, lerr := wt.Filesystem.Lstat(ch.Path); lerr != nil || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to stage %s during revert in %s: the just-restored file changed underneath the revert (lstat err=%v)", ch.Path, r.dir, lerr)
+		}
 		if _, err := wt.Add(ch.Path); err != nil {
 			return fmt.Errorf("staging %s during revert in %s: %w", ch.Path, r.dir, err)
 		}
@@ -441,6 +450,19 @@ func hasDeletedDescendant(deleting map[string]bool, dir string) bool {
 // dirs, so a tracked symlink blob does not arise in practice.
 func restoreFileFromTree(wt *gogit.Worktree, tree *object.Tree, p string) error {
 	fs := wt.Filesystem
+	// Leaf-symlink TOCTOU backstop: the pre-flight refuses a symlink at a
+	// CREATE path (1b) and the ancestor rechecks cover parents, but a link
+	// planted at the leaf AFTER the pre-flight (or at a modify leaf, which the
+	// pre-flight doesn't inspect — the leaf is tracked content) would be
+	// silently unlinked by the fs.Remove below and overwritten. That never
+	// escapes the repo (unlink doesn't follow), but it destroys the user's
+	// link — refuse like every other structural conflict instead. The narrow
+	// legitimate loss: a TRACKED symlink being restored to a regular file now
+	// refuses too (move the link and re-run), which errs on the never-destroy-
+	// a-user-link side.
+	if info, lerr := fs.Lstat(p); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("cannot restore %q: it is currently a symlink agentsync does not manage; move or remove it, then re-run revert", p)
+	}
 	f, err := tree.File(p)
 	if err != nil {
 		return fmt.Errorf("loading blob %s from target checkpoint: %w", p, err)

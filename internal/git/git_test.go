@@ -2296,3 +2296,46 @@ func TestRestore_WorksThroughSymlinkedRepoRoot(t *testing.T) {
 		t.Fatalf("restore through the symlinked root should land v1, got %q", got)
 	}
 }
+
+// TestRestore_RefusesSymlinkLeaf pins the leaf-symlink TOCTOU backstop: the
+// pre-flight refuses links at CREATE paths but never inspects a MODIFY leaf
+// (it is tracked content), so a symlink sitting at one used to be silently
+// unlinked and overwritten by restoreFileFromTree — no repo escape, but the
+// user's link died. It must refuse instead, with the link and its target
+// intact.
+func TestRestore_RefusesSymlinkLeaf(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	outside := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "a.txt", "v1", "apply 1")
+	commitFile(t, r, dir, "a.txt", "v2", "apply 2")
+	// The user replaces the tracked file with a symlink to their own file.
+	target := filepath.Join(outside, "mine.txt")
+	if err := os.WriteFile(target, []byte("USER DATA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, rerr := r.Restore("HEAD~1", "agentsync revert: symlink leaf", DefaultIdentity)
+	if rerr == nil {
+		t.Fatal("restoring over a symlink leaf must refuse")
+	}
+	if !strings.Contains(rerr.Error(), "symlink") {
+		t.Fatalf("refusal should name the symlink; got: %v", rerr)
+	}
+	if fi, lerr := os.Lstat(filepath.Join(dir, "a.txt")); lerr != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the user's symlink must survive; err=%v", lerr)
+	}
+	if b, ferr := os.ReadFile(target); ferr != nil || string(b) != "USER DATA" {
+		t.Fatalf("the link target must survive byte-for-byte; err=%v content=%q", ferr, b)
+	}
+}
