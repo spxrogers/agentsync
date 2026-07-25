@@ -209,7 +209,7 @@ func TestIngest_Hooks_SkipsUnrepresentableEvents(t *testing.T) {
 	}
 	out := warn.String()
 	for _, wantMsg := range []string{
-		`unmodeled fields (timeout)`,
+		`unmodeled fields ("timeout")`,
 		`"prompt"-type entry`,
 		`"afterFileEdit" has no canonical equivalent`,
 	} {

@@ -8,9 +8,11 @@ import (
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
-// codexHookEvents is the set of lifecycle events Codex recognizes in
-// hooks.json (per the Codex hooks docs). A canonical hook whose event is not in
-// this set has no Codex target and is dropped with a reported Skip.
+// codexHookEvents is the set of lifecycle events Codex recognizes in its hook
+// config (per the Codex hooks docs; Codex reads hooks.json or config.toml
+// [hooks.*] tables — agentsync renders the config.toml form, see renderHooks).
+// A canonical hook whose event is not in this set has no Codex target and is
+// dropped with a reported Skip.
 var codexHookEvents = map[string]bool{
 	"SessionStart":      true,
 	"SubagentStart":     true,

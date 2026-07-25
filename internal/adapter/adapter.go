@@ -282,8 +282,8 @@ type PluginIngester interface {
 }
 
 // HookIngestGuard is an OPTIONAL extension to Adapter for agents whose hook
-// ingest REFUSES unrepresentable native events (non-command handlers, unmodeled
-// fields) rather than capturing a lossy subset. RefusedHookEvents re-reads the
+// ingest REFUSES unrepresentable native events (unmodeled fields; on most
+// adapters also non-command handlers) rather than capturing a lossy subset. RefusedHookEvents re-reads the
 // destination (Ingest's ten-adapter (source.Canonical, error) signature has no
 // channel for refusals) and returns the SEMANTICALLY refused event names —
 // structurally-malformed native shapes are excluded, since the caller deletes
@@ -297,10 +297,16 @@ type PluginIngester interface {
 // that scope (see cli.retireRefusedHookEvents). Like Render/Ingest it MUST
 // honor RequireProjectRoot.
 //
-// Implemented by claude only. Gemini's ingestHooks has the same refusal
-// semantics (internal/adapter/gemini/hook.go) but does NOT yet implement this
-// interface, so the second-order clobber this closes for Claude is still live
-// for a Gemini-side enrichment — a known follow-up, not an oversight.
+// Implemented by claude, gemini, cursor, and codex — every hook-rendering
+// adapter. Event names are always CANONICAL: a renaming adapter (gemini spells
+// PreToolUse as BeforeTool natively, cursor as preToolUse) must map its
+// refused native events back to the canonical spelling, because the caller
+// retires hooks/<canonical>.toml — and a native event with no canonical
+// equivalent must never be returned (there is no canonical file to retire).
+// WHAT counts as a semantic refusal is per-adapter (codex, whose render
+// round-trips non-command handler types verbatim, refuses only unmodeled
+// fields); the registry-wide guard TestHookIngestGuard_ReportsCanonicalNames
+// (internal/cli) pins the canonical-spelling contract for every implementor.
 type HookIngestGuard interface {
 	RefusedHookEvents(scope Scope, project string) ([]string, error)
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/jsonkeys"
@@ -103,10 +102,9 @@ var (
 // non-command handlers), and this ingest guard keeps unrepresentable events out
 // of the canonical source in the first place.
 //
-// This is intentionally MORE diagnostic than Gemini's twin: it also warns on the
-// structurally-malformed shapes (non-object def/handler, non-array event value or
-// "hooks" value) that Gemini's ingestHooks drops silently. Bringing Gemini to
-// parity is a separate follow-up (out of this issue's scope).
+// Gemini's twin carries the same structural diagnostics and refusal reporting
+// (parity landed with the epic #178 residual close); its refused list maps
+// native event names back to canonical, since Gemini renames events.
 func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) {
 	hooks, ok := raw.(map[string]any)
 	if !ok {
@@ -121,11 +119,19 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 		var captured []source.Hook
 		representable := true
 		// structural distinguishes a MALFORMED native shape (non-object def/handler,
-		// non-string matcher/type, missing hooks array — likely a settings.json typo)
-		// from a well-formed entry agentsync cannot MODEL (unmodeled fields, a
-		// non-command handler). Only the latter joins refused: import retires the
-		// canonical hooks/<event>.toml for refused events, and deleting canonical
-		// config because the user typo'd their native JSON would be destructive.
+		// non-string matcher/type/command, missing hooks array — likely a
+		// settings.json typo) from a well-formed entry agentsync cannot MODEL
+		// (unmodeled fields, a non-command handler). Only the latter joins refused:
+		// import retires the canonical hooks/<event>.toml for refused events, and
+		// deleting canonical config because the user typo'd their native JSON would
+		// be destructive. First failure wins — the scan stops at the first
+		// unrepresentable def/handler, so a structural typo EARLIER in the array
+		// masks a semantic def later (no retirement that round). Deliberate: an
+		// event containing a malformed shape can't be trusted for retirement at
+		// all, every skip is warned, and fixing the typo re-runs the scan. The
+		// converse also holds: a SEMANTIC hit stops the scan before a later
+		// structural typo is seen, so the event still retires — correct, since
+		// the unmodeled field alone proves the event unrepresentable.
 		structural := false
 	defs:
 		for _, rawEntry := range entries {
@@ -136,8 +142,8 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 				structural = true
 				break
 			}
-			if extra := unmodeledKeys(entry, claudeHookDefModeledKeys); len(extra) > 0 {
-				fmt.Fprintf(warn, "warning: hook event %q has a definition with unmodeled fields (%s); event not captured\n", event, strings.Join(extra, ", "))
+			if extra := adapter.UnmodeledKeys(entry, claudeHookDefModeledKeys); len(extra) > 0 {
+				fmt.Fprintf(warn, "warning: hook event %q has a definition with unmodeled fields (%s); event not captured\n", event, adapter.QuotedKeys(extra))
 				representable = false
 				break
 			}
@@ -187,9 +193,31 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 					representable = false
 					break defs
 				}
-				if extra := unmodeledKeys(h, claudeHookEntryModeledKeys); len(extra) > 0 {
-					fmt.Fprintf(warn, "warning: hook event %q has a handler with unmodeled fields (%s); event not captured\n", event, strings.Join(extra, ", "))
+				if extra := adapter.UnmodeledKeys(h, claudeHookEntryModeledKeys); len(extra) > 0 {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler with unmodeled fields (%s); event not captured\n", event, adapter.QuotedKeys(extra))
 					representable = false
+					break defs
+				}
+				// The unmodeled-keys check runs BEFORE the command checks (matching
+				// codex): a handler carrying an unmodeled field AND lacking a command
+				// must surface as a SEMANTIC (retirement-triggering) refusal on the
+				// field, not be short-circuited into a structural skip.
+				// An absent or non-string command would be asStr-coerced to "" and
+				// captured as an EMPTY-command handler — which the next apply, owning
+				// the whole per-event array, would write over the user's native
+				// handler. Checked AFTER the type and unmodeled-keys checks so it governs
+				// only fully-modeled command-type handlers: a semantically-refusable
+				// handler (prompt-type, or carrying an unmodeled field) must keep its
+				// retirement-triggering refusal above.
+				if rawCmd, present := h["command"]; !present {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler without a \"command\"; event not captured\n", event)
+					representable = false
+					structural = true
+					break defs
+				} else if _, isStr := rawCmd.(string); !isStr {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler whose \"command\" is not a string; event not captured\n", event)
+					representable = false
+					structural = true
 					break defs
 				}
 				captured = append(captured, source.Hook{
@@ -210,19 +238,16 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 	return out, refused
 }
 
-// RefusedHookEvents implements adapter.HookIngestGuard: it re-reads the
-// destination settings file and returns the hook events whose native entries
-// ingestHooks refuses to capture for SEMANTIC reasons — a non-command handler
-// or unmodeled fields on a well-formed entry. Structurally-malformed shapes
-// (a settings.json typo) are warned about by Ingest but deliberately excluded
-// here: import retires the canonical hooks/<event>.toml for every returned
-// event, and deleting canonical config over a native typo would be
-// destructive. The re-read exists because Ingest's (source.Canonical, error)
-// signature — shared by ten adapters — has no channel for refusals; note the
-// destination may have changed between Ingest and this call (both run within
-// one import, so the window is small and the worst case is a stale warning).
-// See the corruption class this closes on adapter.HookIngestGuard (issue #124).
-// Warnings are discarded here; Ingest already emitted them on the same shapes.
+// RefusedHookEvents implements adapter.HookIngestGuard — see the interface doc
+// for the shared contract (semantic-only refusals, canonical names, the issue
+// #124 corruption class this closes) and ingestHooks for what claude refuses.
+// Claude leg: settings.json is re-read with the same strict-JSON UseNumber
+// decode Ingest uses (jsonkeys.DecodeObject); claude spells events
+// canonically, so refused needs no name mapping. Warnings are discarded here —
+// Ingest already emitted them on the same shapes. The re-read exists because
+// Ingest's shared (source.Canonical, error) signature has no channel for
+// refusals; both calls run within one import, so the worst case of the
+// destination changing between them is a stale warning.
 func (a *Adapter) RefusedHookEvents(scope adapter.Scope, project string) ([]string, error) {
 	if err := adapter.RequireProjectRoot(scope, project); err != nil {
 		return nil, err
@@ -238,16 +263,4 @@ func (a *Adapter) RefusedHookEvents(scope adapter.Scope, project string) ([]stri
 	}
 	_, refused := ingestHooks(top["hooks"], io.Discard)
 	return refused, nil
-}
-
-// unmodeledKeys returns the sorted keys of m that are not in modeled.
-func unmodeledKeys(m map[string]any, modeled map[string]bool) []string {
-	var out []string
-	for k := range m {
-		if !modeled[k] {
-			out = append(out, k)
-		}
-	}
-	sort.Strings(out)
-	return out
 }

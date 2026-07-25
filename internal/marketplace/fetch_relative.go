@@ -15,7 +15,13 @@ import (
 // If src.RootDir is non-empty, the resolved Relative path is required to
 // be contained within RootDir — this prevents a malicious marketplace
 // entry from setting `"source": "../../../../etc"` and copying arbitrary
-// host files into the plugin cache.
+// host files into the plugin cache. Containment is checked both textually
+// and on symlink-resolved paths, so neither a symlinked source path nor a
+// symlinked intermediate directory can point the copy outside the root; a
+// symlink that RESOLVES inside the root is allowed (mirroring the git
+// fetcher's in-tree-symlink policy). A rootless call (RootDir == "") is a
+// user-named local path with no boundary to defend and is followed as-is.
+// Entries INSIDE the copied tree are always symlink-refused by copyDir.
 type RelativeFetcher struct{}
 
 // Fetch copies src.Relative (a local directory) into into.
@@ -31,6 +37,7 @@ func (f *RelativeFetcher) Fetch(src Source, into string) (FetchResult, error) {
 	}
 	abs = filepath.Clean(abs)
 
+	var rootAbs string
 	if src.RootDir != "" {
 		root, err := filepath.Abs(src.RootDir)
 		if err != nil {
@@ -40,8 +47,18 @@ func (f *RelativeFetcher) Fetch(src Source, into string) (FetchResult, error) {
 		if !pathContains(root, abs) {
 			return FetchResult{}, fmt.Errorf("relative fetcher: source %q escapes marketplace root %q", abs, root)
 		}
+		rootAbs = root
 	}
 
+	// os.Stat (following a symlinked source) is deliberate. A ROOTLESS call
+	// (RootDir == "") is a user-named path — `marketplace add ~/dev/mp`, which
+	// may legitimately be a symlink in a dotfiles layout; there is no trust
+	// boundary to defend, so it is followed exactly as it always was. A ROOTED
+	// call is governed by the resolved-containment check below instead: a
+	// symlink is fine as long as it RESOLVES inside the root (mirroring the git
+	// fetcher's in-tree-symlink policy), and an escaping one is refused there.
+	// Existence is checked before the resolve step so a missing source still
+	// reports the familiar "stat …: no such file or directory".
 	info, err := os.Stat(abs)
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("relative fetcher: stat %s: %w", abs, err)
@@ -50,8 +67,40 @@ func (f *RelativeFetcher) Fetch(src Source, into string) (FetchResult, error) {
 		return FetchResult{}, fmt.Errorf("relative fetcher: %s is not a directory", abs)
 	}
 
-	if err := copyDir(abs, into); err != nil {
-		return FetchResult{}, fmt.Errorf("relative fetcher: copy %s → %s: %w", abs, into, err)
+	copySrc := abs
+	if src.RootDir != "" {
+		// The containment check above is purely textual, so a symlink UNDER the
+		// root defeats it: with root/a → /etc, the path root/a/b is "contained"
+		// while the tree actually copied lives outside; likewise a symlinked
+		// leaf. Re-check containment on fully-resolved paths. The walk-time
+		// rejection in copyDir cannot catch either case — it only sees entries
+		// INSIDE the tree being copied, never the components leading to it.
+		resolvedRoot, err := filepath.EvalSymlinks(rootAbs)
+		if err != nil {
+			return FetchResult{}, fmt.Errorf("relative fetcher: resolve root %s: %w", rootAbs, err)
+		}
+		resolvedAbs, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return FetchResult{}, fmt.Errorf("relative fetcher: resolve %s: %w", abs, err)
+		}
+		if !pathContains(resolvedRoot, resolvedAbs) {
+			return FetchResult{}, fmt.Errorf("relative fetcher: source %q escapes marketplace root %q after resolving symlinks", abs, rootAbs)
+		}
+		// Copy from the RESOLVED path: it has no symlink components left, so a
+		// link swapped in between the check above and the walk cannot redirect
+		// the copy (the check-to-copy race the unresolved path would leave
+		// open). A rootless copy keeps the user-named path as-is.
+		copySrc = resolvedAbs
+	}
+
+	if err := copyDir(copySrc, into); err != nil {
+		from := copySrc
+		if copySrc != abs {
+			// Name the user-recognizable path too — the resolved spelling alone
+			// can be surprising in an error about a path the user never typed.
+			from = fmt.Sprintf("%s (resolved from %s)", copySrc, abs)
+		}
+		return FetchResult{}, fmt.Errorf("relative fetcher: copy %s → %s: %w", from, into, err)
 	}
 	return FetchResult{}, nil
 }

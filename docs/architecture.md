@@ -412,13 +412,25 @@ type HookEventNamer interface {
 }
 ```
 
-- **`HookIngestGuard`** (claude only today) re-reads the destination and
-  returns the hook events ingest *semantically* refused — unmodeled fields or
-  non-command handlers on well-formed entries; structurally-malformed shapes
-  (a settings.json typo) are excluded, because import deletes the canonical
-  file for every returned event and a native typo must never be destructive.
-  Gemini has the same refusal semantics in its ingest but no implementation
-  yet, so the clobber this closes remains live there (a known follow-up).
+- **`HookIngestGuard`** (claude, gemini, cursor, codex — every hook-rendering
+  adapter) re-reads the destination and returns the hook events ingest
+  *semantically* refused: unmodeled fields on well-formed entries, plus
+  non-command handlers where the adapter's render cannot round-trip them
+  (claude, gemini, cursor); codex re-renders non-command types verbatim, so
+  it refuses unmodeled fields only.
+  Structurally-malformed shapes (a settings.json typo) are excluded, because
+  import deletes the canonical file for every returned event and a native
+  typo must never be destructive.
+  Returned names are always *canonical*: a renaming adapter maps its refused
+  native spellings back (gemini `BeforeTool` → `PreToolUse`, cursor
+  `preToolUse` → `PreToolUse`), and a native-only event (`BeforeModel`,
+  `afterFileEdit`, …) is never returned — no canonical file exists to retire.
+  The registry-wide guard `TestHookIngestGuard_ReportsCanonicalNames`
+  (`internal/cli`) enforces the canonical-spelling half of that contract for
+  every implementor; the never-return-a-native-only-event half stays pinned
+  per-adapter (no native-only event can exist in the guard's
+  canonical-rendered fixture, so each adapter's guard table carries its own
+  "native-only event is never refused" row).
 - **`HookEventNamer`** (gemini, cursor) reports the *native* spelling an
   adapter uses in its owned `/hooks/<name>` pointers (`PreToolUse` →
   `BeforeTool` / `preToolUse`). Canonical hooks are **shared** across agents,
@@ -754,9 +766,12 @@ cache, which keeps `apply` fast, offline, and reproducible in CI.
 
 Untrusted-input hardening at this boundary: fetchers reject symlinks in tarballs
 (and confine git-cloned symlinks to the fetched tree, refusing any that escape),
-cap decompressed size (`AGENTSYNC_MAX_TARBALL_MB`), verify manifest SHAs, bound
-component paths to the plugin cache, and reject `http://`/`git://` sources unless
-`AGENTSYNC_ALLOW_INSECURE_URLS=1`.
+symlink-resolve a local marketplace entry's source path before the
+marketplace-root containment check (so neither a symlinked path nor a symlinked
+intermediate directory can point the copy outside the root — see
+`RelativeFetcher`), cap decompressed size (`AGENTSYNC_MAX_TARBALL_MB`), verify
+manifest SHAs, bound component paths to the plugin cache, and reject
+`http://`/`git://` sources unless `AGENTSYNC_ALLOW_INSECURE_URLS=1`.
 
 ---
 

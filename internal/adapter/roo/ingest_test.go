@@ -157,7 +157,7 @@ func TestIngest_Command_WarnsOnDroppedRooKeys(t *testing.T) {
 	if _, ok := fm["mode"]; ok {
 		t.Fatalf("mode must not be captured (no canonical home): %+v", fm)
 	}
-	if !strings.Contains(warn.String(), `command "review" frontmatter keys not modeled by agentsync dropped on import: mode`) {
+	if !strings.Contains(warn.String(), `command "review" frontmatter keys not modeled by agentsync dropped on import: "mode"`) {
 		t.Fatalf("expected dropped-keys warning:\n%s", warn.String())
 	}
 }

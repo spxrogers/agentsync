@@ -55,7 +55,10 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				c.MCPServers = append(c.MCPServers, source.MCPServer{ID: id, Server: IngestMCPSpec(spec)})
 			}
 		}
-		c.Hooks = append(c.Hooks, ingestHooks(top["hooks"], warn)...)
+		// Refused events surface via RefusedHookEvents (adapter.HookIngestGuard):
+		// import uses that to retire a stale canonical hooks/<event>.toml.
+		hooks, _ := ingestHooks(top["hooks"], warn)
+		c.Hooks = append(c.Hooks, hooks...)
 	}
 
 	// Commands from .gemini/commands/**/<name>.toml (TOML → description + body).

@@ -194,7 +194,7 @@ func TestIngest_JSONC_CommentedSettings(t *testing.T) {
 	}
 	out := warn.String()
 	for _, wantMsg := range []string{
-		`unmodeled fields (timeout)`,
+		`unmodeled fields ("timeout")`,
 		`"BeforeModel" has no canonical equivalent`,
 	} {
 		if !strings.Contains(out, wantMsg) {

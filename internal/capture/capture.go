@@ -195,16 +195,19 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 // MCP/LSP Extra passthrough maps (recursively through the project overlay) via
 // jsonkeys.ConvertNumbers: int64 within range, float64 beyond it, and the
 // literal string for an extreme that parses as neither (see ConvertNumbers'
-// range contract). The precision-preserving adapter ingests — claude, gemini,
-// and the generic tier via UseNumber (jsonkeys.DecodeObject/DecodeJSONC), and
-// codex via toml.Unmarshal (go-toml decodes integers as int64 natively, no
-// json.Number involved) — keep an unmodeled integer beyond 2^53 exact in memory — cline/cursor/roo/windsurf/
-// opencode still decode with plain json.Unmarshal, so their Extra ints beyond
-// 2^53 are already float64-rounded before this funnel (a pre-existing
-// precision limit of those ingests, not something normalization can restore).
-// Either way json.Number is the hazard here: its
-// underlying type is a string, and go-toml marshals it as a TOML *string*
-// (`timeout = '30'`), so persisting it unconverted through source.Write* flips
+// range contract). Every adapter ingest that decodes native JSON into the
+// canonical MODEL is precision-preserving — claude, gemini, the generic tier,
+// and (since the epic-#178 residual close) cline/cursor/roo/windsurf/opencode
+// all decode with UseNumber (jsonkeys.DecodeObject/DecodeJSONC), and codex
+// sidesteps the issue via toml.Unmarshal (go-toml decodes integers as int64
+// natively, no json.Number involved) — so an unmodeled integer beyond 2^53
+// reaches this funnel with its exact digits intact. (claude's plugin
+// enable-state ingest still uses plain json.Unmarshal — harmless: it reads
+// strings/bools only and feeds no Extra map or canonical component.)
+//
+// json.Number is the hazard here: its underlying type is a string, and go-toml
+// marshals it as a TOML *string* (`timeout = '30'`), so persisting it
+// unconverted through source.Write* flips
 // the value's native type on the next render (30 -> "30"). Extra is the only
 // TOML-persisted passthrough surface (Subagent/Command/Skill frontmatter decode
 // via DecodeYAML, which already converts), so the funnel normalizes exactly

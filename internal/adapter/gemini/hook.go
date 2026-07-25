@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
@@ -175,19 +175,32 @@ var (
 // ingestHooks decodes settings.json's `hooks` object into canonical hooks,
 // warning on anything it cannot capture. Inverse of renderHooks: each Gemini
 // event is mapped back to its canonical name, and each {type, command} handler
-// becomes a source.Hook sharing the group's matcher. Two fail-safe skips, both
-// warned: a Gemini-only event with no canonical equivalent (BeforeModel,
-// AfterModel, BeforeToolSelection), and an event containing a definition or
-// handler the canonical model cannot represent (non-command type, `sequential`,
-// `name`, `timeout`, …). Capturing a lossy subset would let the next apply —
-// which owns the whole per-event array — rewrite the user's native entry without
-// those fields, so the WHOLE event is left uncaptured instead.
-func ingestHooks(raw any, warn io.Writer) []source.Hook {
+// becomes a source.Hook sharing the group's matcher. A Gemini-only event with
+// no canonical equivalent (BeforeModel, AfterModel, BeforeToolSelection) is
+// warned and skipped — never refused: no canonical hooks/<event>.toml can
+// exist for it, so there is nothing for import to retire. For a mappable
+// event, if ANY definition carries an unmodeled key (`sequential`), or ANY
+// handler is a non-empty non-"command" type, or ANY handler carries an
+// unmodeled key (`name`, `timeout`, …), the WHOLE event is left uncaptured
+// with a warning: capturing a lossy subset would let the next apply — which
+// owns the whole per-event array — rewrite the user's native entry without
+// those fields.
+//
+// refused reports the SEMANTICALLY refused events under their CANONICAL names
+// (the spelling import retires — hooks/<canonical>.toml), sorted. The
+// structural flag mirrors the claude twin: a malformed native shape (non-object
+// def/handler, non-string matcher/type/command, missing hooks array — likely a
+// settings.json typo) warns and skips capture but never joins refused, because
+// import deletes canonical config for every refused event and a native typo
+// must not be destructive. First failure wins — a structural typo earlier in
+// the array masks a semantic def later (deliberate; see the claude twin's
+// comment). Diagnostics are at parity with claude's ingestHooks (malformed
+// shapes warn instead of dropping silently).
+func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) {
 	hooks, ok := raw.(map[string]any)
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	var out []source.Hook
 	for geminiEvent, rawEntries := range hooks {
 		canonEvent, ok := geminiToCanonicalHookEvent[geminiEvent]
 		if !ok {
@@ -196,38 +209,95 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 		}
 		entries, ok := rawEntries.([]any)
 		if !ok {
-			continue
+			fmt.Fprintf(warn, "warning: hook event %q value is not an array; event not captured\n", geminiEvent)
+			continue // structural: warn + skip capture, but never a retire-triggering refusal
 		}
 		var captured []source.Hook
 		representable := true
+		structural := false
 	defs:
 		for _, rawEntry := range entries {
 			entry, ok := rawEntry.(map[string]any)
 			if !ok {
+				fmt.Fprintf(warn, "warning: hook event %q has a malformed definition (not an object); event not captured\n", geminiEvent)
+				representable = false
+				structural = true
+				break
+			}
+			if extra := adapter.UnmodeledKeys(entry, geminiHookDefModeledKeys); len(extra) > 0 {
+				fmt.Fprintf(warn, "warning: hook event %q has a definition with unmodeled fields (%s); event not captured\n", geminiEvent, adapter.QuotedKeys(extra))
 				representable = false
 				break
 			}
-			if extra := unmodeledKeys(entry, geminiHookDefModeledKeys); len(extra) > 0 {
-				fmt.Fprintf(warn, "warning: hook event %q has a definition with unmodeled fields (%s); event not captured\n", geminiEvent, strings.Join(extra, ", "))
-				representable = false
-				break
+			// A non-string matcher would be coerced to "" by asStr and captured as a
+			// match-all — refuse the event rather than silently rewrite it.
+			if rawMatcher, present := entry["matcher"]; present {
+				if _, isStr := rawMatcher.(string); !isStr {
+					fmt.Fprintf(warn, "warning: hook event %q has a definition whose \"matcher\" is not a string; event not captured\n", geminiEvent)
+					representable = false
+					structural = true
+					break
+				}
 			}
 			matcher := asStr(entry["matcher"])
-			hooksArr, _ := entry["hooks"].([]any)
+			// A definition must carry a "hooks" ARRAY of handlers — see the claude
+			// twin for why an absent/invalid one refuses the whole event instead of
+			// silently contributing zero handlers. An empty array is fine.
+			hooksArr, isArr := entry["hooks"].([]any)
+			if !isArr {
+				fmt.Fprintf(warn, "warning: hook event %q has a definition without a valid \"hooks\" array; event not captured\n", geminiEvent)
+				representable = false
+				structural = true
+				break
+			}
 			for _, rawH := range hooksArr {
 				h, ok := rawH.(map[string]any)
 				if !ok {
+					fmt.Fprintf(warn, "warning: hook event %q has a malformed handler (not an object); event not captured\n", geminiEvent)
 					representable = false
+					structural = true
 					break defs
+				}
+				// A non-string type would be coerced to "" by asStr and captured as a
+				// command handler; refuse the malformed shape instead.
+				if rawType, present := h["type"]; present {
+					if _, isStr := rawType.(string); !isStr {
+						fmt.Fprintf(warn, "warning: hook event %q has a handler whose \"type\" is not a string; event not captured\n", geminiEvent)
+						representable = false
+						structural = true
+						break defs
+					}
 				}
 				if typ := asStr(h["type"]); typ != "" && typ != "command" {
 					fmt.Fprintf(warn, "warning: hook event %q has a %q-type handler agentsync cannot represent; event not captured\n", geminiEvent, typ)
 					representable = false
 					break defs
 				}
-				if extra := unmodeledKeys(h, geminiHookEntryModeledKeys); len(extra) > 0 {
-					fmt.Fprintf(warn, "warning: hook event %q has a handler with unmodeled fields (%s); event not captured\n", geminiEvent, strings.Join(extra, ", "))
+				if extra := adapter.UnmodeledKeys(h, geminiHookEntryModeledKeys); len(extra) > 0 {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler with unmodeled fields (%s); event not captured\n", geminiEvent, adapter.QuotedKeys(extra))
 					representable = false
+					break defs
+				}
+				// The unmodeled-keys check runs BEFORE the command checks (matching
+				// codex): a handler carrying an unmodeled field AND lacking a command
+				// must surface as a SEMANTIC (retirement-triggering) refusal on the
+				// field, not be short-circuited into a structural skip.
+				// An absent or non-string command would be asStr-coerced to "" and
+				// captured as an EMPTY-command handler — which the next apply, owning
+				// the whole per-event array, would write over the user's native
+				// handler. Checked AFTER the type and unmodeled-keys checks so it governs
+				// only fully-modeled command-type handlers: a semantically-refusable
+				// handler (prompt-type, or carrying an unmodeled field) must keep its
+				// retirement-triggering refusal above.
+				if rawCmd, present := h["command"]; !present {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler without a \"command\"; event not captured\n", geminiEvent)
+					representable = false
+					structural = true
+					break defs
+				} else if _, isStr := rawCmd.(string); !isStr {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler whose \"command\" is not a string; event not captured\n", geminiEvent)
+					representable = false
+					structural = true
 					break defs
 				}
 				captured = append(captured, source.Hook{
@@ -240,21 +310,36 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 		}
 		if representable {
 			out = append(out, captured...)
+		} else if !structural {
+			refused = append(refused, canonEvent)
 		}
 	}
-	return out
+	sort.Strings(refused) // map iteration order — keep output deterministic
+	return out, refused
 }
 
-// unmodeledKeys returns the sorted keys of m that are not in modeled.
-func unmodeledKeys(m map[string]any, modeled map[string]bool) []string {
-	var out []string
-	for k := range m {
-		if !modeled[k] {
-			out = append(out, k)
-		}
+// RefusedHookEvents implements adapter.HookIngestGuard — see the interface doc
+// for the shared contract and ingestHooks for what gemini refuses. Gemini leg:
+// settings.json is re-read as JSONC (jsonkeys.DecodeJSONC), exactly as Ingest
+// parses it; refused events surface under their CANONICAL names (BeforeTool →
+// PreToolUse), and Gemini-only events (BeforeModel, …) never appear — no
+// canonical file exists to retire. Warnings are discarded here; Ingest already
+// emitted them on the same shapes.
+func (a *Adapter) RefusedHookEvents(scope adapter.Scope, project string) ([]string, error) {
+	if err := adapter.RequireProjectRoot(scope, project); err != nil {
+		return nil, err
 	}
-	sort.Strings(out)
-	return out
+	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
+	data, present, err := adapter.ReadFileOptional(p.Settings)
+	if err != nil || !present {
+		return nil, err
+	}
+	top, err := jsonkeys.DecodeJSONC(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", p.Settings, err)
+	}
+	_, refused := ingestHooks(top["hooks"], io.Discard)
+	return refused, nil
 }
 
 // NativeHookEvent implements adapter.HookEventNamer: Gemini renames canonical

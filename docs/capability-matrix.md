@@ -280,7 +280,14 @@ literally, never resolved.)
   has a single key-merge file), but recognizes a fixed set of lifecycle events
   (SessionStart, SubagentStart, PreToolUse, PermissionRequest, PostToolUse,
   Pre/PostCompact, UserPromptSubmit, SubagentStop, Stop); Claude events outside
-  that set (e.g. `SessionEnd`, `Notification`) have no target and drop.
+  that set (e.g. `SessionEnd`, `Notification`) have no target and drop. Ingest
+  has the same guard-and-warn posture as the other hook adapters — an event
+  whose tables carry fields agentsync doesn't model is refused whole, never
+  captured lossily — and the adapter implements `HookIngestGuard`, so a
+  natively-enriched event triggers import's stale-hook retirement. One
+  deliberate divergence: a non-`command` handler *type* is **not** refused —
+  Codex parses-and-skips unknown types at runtime and agentsync re-renders the
+  type verbatim (with a reported reduced Skip), so it round-trips losslessly.
 
 **Cursor**
 
@@ -302,8 +309,13 @@ literally, never resolved.)
   `command`/`matcher`/`type` entry fields; on `import`, a Cursor-native event
   agentsync can't render (`afterFileEdit`, `beforeShellExecution`, …) — or an
   event containing an entry it can't fully represent (a `prompt`-type hook, or
-  fields like `timeout`/`failClosed`) — is left uncaptured with a warning, so a
-  later `apply` never takes ownership of an array it would lossily rewrite.
+  fields like `timeout`/`failClosed`) — is left uncaptured with a warning. And
+  because Cursor implements `HookIngestGuard`, an event that was captured while
+  clean and *later* enriched natively triggers import's stale-hook retirement
+  (reported under its *canonical* name — `preToolUse` retires
+  `hooks/PreToolUse.toml`), so a later `apply` never keeps ownership of an
+  array it would lossily rewrite; a structurally-malformed hooks.json shape
+  warns but never triggers retirement.
 
 **Gemini CLI**
 
@@ -350,6 +362,11 @@ literally, never resolved.)
   every lifecycle event (`BeforeAgent`/`AfterAgent`/`Session*`/`PreCompress`/
   `Notification`) is always-fire, a non-empty matcher on an always-fire event is
   dropped with a reported `SkipReduced` rather than emitted where Gemini ignores it.
+  Ingest has the same guard-and-warn posture as Claude's — an event carrying
+  unmodeled fields (`sequential`, `name`, `timeout`) or a non-command handler is
+  refused whole, never captured lossily — and the adapter implements
+  `HookIngestGuard`, so a natively-enriched event triggers import's stale-hook
+  retirement (reported under its *canonical* name) exactly as it does for Claude.
 
 **Continue**
 

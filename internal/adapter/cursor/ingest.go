@@ -1,7 +1,6 @@
 package cursor
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -29,8 +29,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	if data, present, err := adapter.ReadFileOptional(p.MCP); err != nil {
 		return c, fmt.Errorf("read %s: %w", p.MCP, err)
 	} else if present {
-		var top map[string]any
-		if err := json.Unmarshal(data, &top); err != nil {
+		// Decode with UseNumber (jsonkeys.DecodeObject) so an unmodeled large
+		// integer in the Extra passthrough survives as json.Number rather than
+		// a rounded float64 — same precision contract as the claude/gemini/
+		// generic ingests; capture normalizes json.Number at its funnel.
+		top, err := jsonkeys.DecodeObject(data)
+		if err != nil {
 			return c, fmt.Errorf("parse %s: %w", p.MCP, err)
 		}
 		if servers, ok := top["mcpServers"].(map[string]any); ok {
@@ -151,11 +155,17 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	if data, present, err := adapter.ReadFileOptional(p.Hooks); err != nil {
 		return c, fmt.Errorf("read %s: %w", p.Hooks, err)
 	} else if present {
-		var top map[string]any
-		if err := json.Unmarshal(data, &top); err != nil {
+		// UseNumber decode purely for uniformity with the MCP block above — no
+		// behavior change here: hook fields agentsync captures are all strings,
+		// and the unmodeled-key refusal inspects keys only, never values.
+		top, err := jsonkeys.DecodeObject(data)
+		if err != nil {
 			return c, fmt.Errorf("parse %s: %w", p.Hooks, err)
 		}
-		c.Hooks = append(c.Hooks, ingestHooks(top["hooks"], warn)...)
+		// Refused events surface via RefusedHookEvents (adapter.HookIngestGuard):
+		// import uses that to retire a stale canonical hooks/<event>.toml.
+		hooks, _ := ingestHooks(top["hooks"], warn)
+		c.Hooks = append(c.Hooks, hooks...)
 	}
 
 	// Memory from AGENTS.md (project scope only — user-scope rules live in

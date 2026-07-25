@@ -1195,6 +1195,209 @@ func TestImport_RetiresStaleHookOnNativeEnrichment(t *testing.T) {
 	}
 }
 
+// TestImport_RetiresStaleHookOnGeminiEnrichment is the gemini-driven twin of
+// TestImport_RetiresStaleHookOnNativeEnrichment, exercising the renaming leg
+// end-to-end: the native entry is spelled "BeforeTool" in .gemini/settings.json,
+// gemini's HookIngestGuard reports the refusal under the CANONICAL name, import
+// retires hooks/PreToolUse.toml, and the next apply leaves the enriched native
+// entry byte-untouched.
+func TestImport_RetiresStaleHookOnGeminiEnrichment(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mustRun(t, env, "agent", "add", "gemini")
+	settings := filepath.Join(tmp, ".gemini", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clean := `{
+		"hooks": {"BeforeTool": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi"}]}]}
+	}`
+	if err := os.WriteFile(settings, []byte(clean), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// First import captures the clean command hook into canonical under its
+	// canonical event name.
+	if out, err := runCLI(t, env, "import", "gemini:hook:PreToolUse"); err != nil {
+		t.Fatalf("import clean hook: %v\n%s", err, out)
+	}
+	canonical := filepath.Join(tmp, ".agentsync", "hooks", "PreToolUse.toml")
+	if _, err := os.Stat(canonical); err != nil {
+		t.Fatalf("precondition: canonical hook not captured: %v", err)
+	}
+
+	// The user enriches the native BeforeTool entry with a field agentsync
+	// cannot model.
+	enriched := `{
+		"hooks": {"BeforeTool": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 30}]}]}
+	}`
+	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-import: the refusal is reported under the canonical name and the stale
+	// canonical file is retired.
+	out, err := runCLI(t, env, "import", "gemini")
+	if err != nil {
+		t.Fatalf("re-import: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "retired canonical hooks/PreToolUse.toml") {
+		t.Fatalf("import did not announce the stale-hook retirement under the canonical name:\n%s", out)
+	}
+	if _, err := os.Stat(canonical); !os.IsNotExist(err) {
+		t.Fatalf("stale canonical hooks/PreToolUse.toml should be retired; stat err=%v", err)
+	}
+
+	// The apply after the retirement must leave the enriched native entry
+	// byte-for-byte untouched — agentsync no longer owns the event.
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != enriched {
+		t.Fatalf("apply rewrote the native hooks entry it no longer owns:\n got %s\nwant %s", got, enriched)
+	}
+}
+
+// TestImport_RetiresStaleHookOnCursorEnrichment is the cursor-driven twin of
+// TestImport_RetiresStaleHookOnGeminiEnrichment, over Cursor's FLAT hooks.json
+// shape and camelCase renaming: the native entry is spelled "preToolUse",
+// cursor's HookIngestGuard reports the refusal under the CANONICAL name,
+// import retires hooks/PreToolUse.toml, and the next apply leaves the
+// enriched native file byte-untouched.
+func TestImport_RetiresStaleHookOnCursorEnrichment(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mustRun(t, env, "agent", "add", "cursor")
+	hooksPath := filepath.Join(tmp, ".cursor", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clean := `{
+		"version": 1,
+		"hooks": {"preToolUse": [{"command": "echo hi", "matcher": "Bash"}]}
+	}`
+	if err := os.WriteFile(hooksPath, []byte(clean), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// First import captures the clean command hook into canonical under its
+	// canonical event name.
+	if out, err := runCLI(t, env, "import", "cursor:hook:PreToolUse"); err != nil {
+		t.Fatalf("import clean hook: %v\n%s", err, out)
+	}
+	canonical := filepath.Join(tmp, ".agentsync", "hooks", "PreToolUse.toml")
+	if _, err := os.Stat(canonical); err != nil {
+		t.Fatalf("precondition: canonical hook not captured: %v", err)
+	}
+
+	// The user enriches the native preToolUse entry with a field agentsync
+	// cannot model.
+	enriched := `{
+		"version": 1,
+		"hooks": {"preToolUse": [{"command": "echo hi", "matcher": "Bash", "timeout": 30}]}
+	}`
+	if err := os.WriteFile(hooksPath, []byte(enriched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-import: the refusal is reported under the canonical name and the stale
+	// canonical file is retired.
+	out, err := runCLI(t, env, "import", "cursor")
+	if err != nil {
+		t.Fatalf("re-import: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "retired canonical hooks/PreToolUse.toml") {
+		t.Fatalf("import did not announce the stale-hook retirement under the canonical name:\n%s", out)
+	}
+	if _, err := os.Stat(canonical); !os.IsNotExist(err) {
+		t.Fatalf("stale canonical hooks/PreToolUse.toml should be retired; stat err=%v", err)
+	}
+
+	// The apply after the retirement must leave the enriched native file
+	// byte-for-byte untouched — agentsync no longer owns the event.
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != enriched {
+		t.Fatalf("apply rewrote the native hooks file it no longer owns:\n got %s\nwant %s", got, enriched)
+	}
+}
+
+// TestImport_RetiresStaleHookOnCodexEnrichment is the codex-driven twin of the
+// claude/gemini/cursor enrichment tests, over Codex's TOML config: codex
+// spells events canonically, so no renaming leg — the load-bearing difference
+// is the format (config.toml `[[hooks.PreToolUse]]` arrays-of-tables, written
+// through MergeTOML's whole-file rewrite, which makes the byte-untouched
+// assertion a stronger detector here than on the JSON adapters).
+func TestImport_RetiresStaleHookOnCodexEnrichment(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mustRun(t, env, "agent", "add", "codex")
+	cfgPath := filepath.Join(tmp, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clean := `[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo hi"
+`
+	if err := os.WriteFile(cfgPath, []byte(clean), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// First import captures the clean command hook into canonical.
+	if out, err := runCLI(t, env, "import", "codex:hook:PreToolUse"); err != nil {
+		t.Fatalf("import clean hook: %v\n%s", err, out)
+	}
+	canonical := filepath.Join(tmp, ".agentsync", "hooks", "PreToolUse.toml")
+	if _, err := os.Stat(canonical); err != nil {
+		t.Fatalf("precondition: canonical hook not captured: %v", err)
+	}
+
+	// The user enriches the native handler with a field agentsync cannot model.
+	enriched := `[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo hi"
+timeout = 30
+`
+	if err := os.WriteFile(cfgPath, []byte(enriched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-import: the event is refused and the stale canonical file is retired.
+	out, err := runCLI(t, env, "import", "codex")
+	if err != nil {
+		t.Fatalf("re-import: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "retired canonical hooks/PreToolUse.toml") {
+		t.Fatalf("import did not announce the stale-hook retirement:\n%s", out)
+	}
+	if _, err := os.Stat(canonical); !os.IsNotExist(err) {
+		t.Fatalf("stale canonical hooks/PreToolUse.toml should be retired; stat err=%v", err)
+	}
+
+	// The apply after the retirement must leave the enriched native config
+	// byte-for-byte untouched — agentsync no longer owns the event.
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != enriched {
+		t.Fatalf("apply rewrote the native hooks config it no longer owns:\n got %s\nwant %s", got, enriched)
+	}
+}
+
 // TestImport_GeminiNamespacedCommandSkippedNotAborted pins the bulk-import
 // behavior for a namespaced Gemini command: `commands/git/commit.toml` is
 // captured by ingest as Command{Name: "git/commit"}, which the flat canonical

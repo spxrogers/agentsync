@@ -1,7 +1,6 @@
 package opencode
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
@@ -50,8 +50,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			return c, fmt.Errorf("parse %s: %w", p.Settings, err)
 		}
 		parsed.Standardize()
-		var top map[string]any
-		if err := json.Unmarshal(parsed.Pack(), &top); err != nil {
+		// Decode the comment-stripped JSON with UseNumber (jsonkeys.DecodeObject)
+		// so an unmodeled large integer in the Extra passthrough survives as
+		// json.Number rather than a rounded float64 — same precision contract as
+		// the claude/gemini/generic ingests; capture normalizes at its funnel.
+		top, err := jsonkeys.DecodeObject(parsed.Pack())
+		if err != nil {
 			return c, fmt.Errorf("parse %s: %w", p.Settings, err)
 		}
 		if servers, ok := top["mcp"].(map[string]any); ok {

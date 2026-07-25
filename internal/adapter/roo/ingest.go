@@ -1,15 +1,14 @@
 package roo
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -30,8 +29,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			return c, fmt.Errorf("read %s: %w", p.MCP, err)
 		}
 		if present {
-			var top map[string]any
-			if err := json.Unmarshal(data, &top); err != nil {
+			// Decode with UseNumber (jsonkeys.DecodeObject) so an unmodeled large
+			// integer in the Extra passthrough survives as json.Number rather than
+			// a rounded float64 — same precision contract as the claude/gemini/
+			// generic ingests; capture normalizes json.Number at its funnel.
+			top, err := jsonkeys.DecodeObject(data)
+			if err != nil {
 				return c, fmt.Errorf("parse %s: %w", p.MCP, err)
 			}
 			if servers, ok := top["mcpServers"].(map[string]any); ok {
@@ -100,7 +103,7 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			}
 			if len(dropped) > 0 {
 				sort.Strings(dropped)
-				fmt.Fprintf(warn, "warning: command %q frontmatter keys not modeled by agentsync dropped on import: %s\n", name, strings.Join(dropped, ", "))
+				fmt.Fprintf(warn, "warning: command %q frontmatter keys not modeled by agentsync dropped on import: %s\n", name, adapter.QuotedKeys(dropped))
 			}
 			c.Commands = append(c.Commands, source.Command{Name: name, Frontmatter: cf, Body: body})
 		}

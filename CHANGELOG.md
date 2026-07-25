@@ -11,6 +11,73 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`RelativeFetcher` (local-directory marketplaces) closes two symlink escapes
+  of the marketplace-root containment check.** Containment was purely textual,
+  so a marketplace entry whose source path *is* a symlink — or sits *behind* a
+  symlinked intermediate directory — pointed the copy outside the root while
+  the path itself looked contained (the walk-time symlink rejection only sees
+  entries inside the tree being copied). Containment is now re-checked on
+  fully symlink-resolved paths. No compatible layout breaks: a symlink that
+  *resolves inside* the root is still followed (matching the git fetcher's
+  in-tree-symlink policy), and a rootless, user-named `marketplace add` path
+  may be a symlink exactly as before. (Closes an epic #178 residual.)
+- **Codex hook ingest no longer captures a lossy modeled subset, and implements
+  `HookIngestGuard`.** Codex was the one hook-rendering adapter whose ingest
+  silently captured just the `matcher`/`type`/`command` it models: a native
+  `[[hooks.<event>.hooks]]` table enriched with an unmodeled field (a
+  `timeout`, …) was captured without it, and the next apply — owning the whole
+  per-event array — rewrote the user's config.toml entry minus the field, with
+  no warning anywhere (the *first-order* issue #124 loss). Codex's ingest now
+  has the shared guard-and-warn posture: an event with unmodeled fields is
+  refused whole and triggers import's stale-hook retirement; malformed shapes
+  warn without capturing and never retire. One deliberate divergence: a
+  non-`command` handler *type* stays captured — Codex parses-and-skips unknown
+  types and agentsync re-renders the type verbatim, so nothing is lost on it.
+- **Cursor now implements `HookIngestGuard` too** — the same stale-hook
+  clobber was still live for a Cursor-side enrichment: a hook event captured
+  while clean and later enriched natively in `.cursor/hooks.json` (a
+  `timeout`, a `failClosed`, a `prompt`-type entry) left a stale canonical
+  `hooks/<event>.toml` the next apply kept rewriting lossily. Cursor's import
+  now retires the stale canonical file, reporting refused events under their
+  *canonical* names (`preToolUse` → `PreToolUse`); Cursor-only events
+  (`afterFileEdit`, …) are never retired, and a structurally-malformed
+  hooks.json shape (including a non-string `command`/`matcher`/`type`) warns
+  without capturing and never triggers retirement.
+- **Claude/Gemini/Cursor hook ingests refuse a malformed or absent `command`
+  instead of capturing an empty one.** A native handler whose `command` was a
+  non-string — or missing entirely — passed the ingest guards, was captured
+  as an empty-command hook, and the next apply (owning the whole per-event
+  array) wrote `"command": ""` over the user's native handler. For Claude
+  this was a pre-existing hole; all three now warn and leave the event
+  uncaptured (a malformed shape never triggers retirement), and a handler
+  that is refused *semantically* — a prompt-type handler, or one carrying an
+  unmodeled field — keeps its retirement-triggering refusal even when it
+  also lacks a command (the semantic checks run first, matching codex's
+  ordering; the missing command never downgrades it). Unmodeled
+  native key names in ingest warnings are now quoted, so a hostile key
+  cannot forge warning lines.
+- **Gemini now implements `HookIngestGuard`, closing the stale-hook clobber for
+  Gemini-side enrichments.** A hook event captured while clean and later
+  enriched natively in `.gemini/settings.json` (a `timeout`, a `sequential`, a
+  non-command handler) left a stale canonical `hooks/<event>.toml` that the
+  next apply kept rewriting lossily — the second-order issue #124 corruption
+  class, previously closed for Claude only. Gemini's import now retires the
+  stale canonical file, reporting refused events under their *canonical* names
+  (`BeforeTool` → `PreToolUse`); Gemini-only events are never retired. Its
+  hook ingest also gained diagnostic parity with Claude's: structurally
+  malformed native shapes (a settings.json typo) warn instead of dropping
+  silently — and, like Claude, a typo never triggers retirement. (Closes an
+  epic #178 residual.)
+- **Cline/Cursor/Roo/Windsurf/OpenCode ingests no longer round unmodeled
+  integers beyond 2^53.** The five remaining JSON ingests decoded native config
+  with plain `json.Unmarshal`, so a foreign integer larger than 2^53 (a
+  snowflake id, a nanosecond timestamp) in a passthrough `Extra` field was
+  float64-rounded before it ever reached the capture funnel. Every ingest that
+  decodes native JSON into the canonical model now decodes with `UseNumber`
+  (`jsonkeys.DecodeObject`), matching claude/gemini/generic — the exact digits
+  survive ingest → render and capture's TOML normalization. (Closes an epic
+  #178 residual.)
+
 - **`apply --dry-run` now previews convergence-time removals, and the apply
   headline counts key-removals and file-deletes distinctly.** A delete-only run
   previewed as "Plan: 0 ops … 0 to write" and then surprised with a removal
