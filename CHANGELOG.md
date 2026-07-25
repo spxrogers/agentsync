@@ -21,6 +21,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   *resolves inside* the root is still followed (matching the git fetcher's
   in-tree-symlink policy), and a rootless, user-named `marketplace add` path
   may be a symlink exactly as before. (Closes an epic #178 residual.)
+- **Codex hook ingest no longer captures a lossy modeled subset, and implements
+  `HookIngestGuard`.** Codex was the one hook-rendering adapter whose ingest
+  silently captured just the `matcher`/`type`/`command` it models: a native
+  `[[hooks.<event>.hooks]]` table enriched with an unmodeled field (a
+  `timeout`, …) was captured without it, and the next apply — owning the whole
+  per-event array — rewrote the user's config.toml entry minus the field, with
+  no warning anywhere (the *first-order* issue #124 loss). Codex's ingest now
+  has the shared guard-and-warn posture: an event with unmodeled fields is
+  refused whole and triggers import's stale-hook retirement; malformed shapes
+  warn without capturing and never retire. One deliberate divergence: a
+  non-`command` handler *type* stays captured — Codex parses-and-skips unknown
+  types and agentsync re-renders the type verbatim, so nothing is lost on it.
 - **Cursor now implements `HookIngestGuard` too** — the round-1 review of this
   PR's Gemini work found the same stale-hook clobber still live (and newly
   unacknowledged) for a Cursor-side enrichment: a hook event captured while

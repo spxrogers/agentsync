@@ -280,7 +280,14 @@ literally, never resolved.)
   has a single key-merge file), but recognizes a fixed set of lifecycle events
   (SessionStart, SubagentStart, PreToolUse, PermissionRequest, PostToolUse,
   Pre/PostCompact, UserPromptSubmit, SubagentStop, Stop); Claude events outside
-  that set (e.g. `SessionEnd`, `Notification`) have no target and drop.
+  that set (e.g. `SessionEnd`, `Notification`) have no target and drop. Ingest
+  has the same guard-and-warn posture as the other hook adapters — an event
+  whose tables carry fields agentsync doesn't model is refused whole, never
+  captured lossily — and the adapter implements `HookIngestGuard`, so a
+  natively-enriched event triggers import's stale-hook retirement. One
+  deliberate divergence: a non-`command` handler *type* is **not** refused —
+  Codex parses-and-skips unknown types at runtime and agentsync re-renders the
+  type verbatim (with a reported reduced Skip), so it round-trips losslessly.
 
 **Cursor**
 

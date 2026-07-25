@@ -181,7 +181,13 @@ Implements `PluginIngester` (parses `[plugins."<name>@<source>"]` enable-state
 on `import`); Render does **not** re-emit those tables on `apply`, matching the
 cross-adapter invariant — see
 [architecture.md § PluginIngester (read-only)](architecture.md#pluginingester-read-only).
-Skips LSP (Codex has no LSP concept).
+Skips LSP (Codex has no LSP concept). Hook ingest has the shared guard-and-warn
+posture and implements `adapter.HookIngestGuard` (`RefusedHookEvents` over the
+same `toml.Unmarshal` parse Ingest uses), with one deliberate divergence from
+the claude/gemini/cursor twins: a non-`command` handler *type* is representable
+(Codex parses-and-skips unknown types; Render re-emits `Type` verbatim with a
+reported reduced Skip) and therefore never refused — only unmodeled fields
+trigger retirement.
 - **Key:** `New(Options) *Adapter`; the `Adapter` + `PluginIngester` methods;
   `MergeTOML`; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter helpers), secrets, source,
