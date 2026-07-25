@@ -350,6 +350,11 @@ literally, never resolved.)
   every lifecycle event (`BeforeAgent`/`AfterAgent`/`Session*`/`PreCompress`/
   `Notification`) is always-fire, a non-empty matcher on an always-fire event is
   dropped with a reported `SkipReduced` rather than emitted where Gemini ignores it.
+  Ingest has the same guard-and-warn posture as Claude's — an event carrying
+  unmodeled fields (`sequential`, `name`, `timeout`) or a non-command handler is
+  refused whole, never captured lossily — and the adapter implements
+  `HookIngestGuard`, so a natively-enriched event triggers import's stale-hook
+  retirement (reported under its *canonical* name) exactly as it does for Claude.
 
 **Continue**
 

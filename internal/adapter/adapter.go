@@ -297,10 +297,11 @@ type PluginIngester interface {
 // that scope (see cli.retireRefusedHookEvents). Like Render/Ingest it MUST
 // honor RequireProjectRoot.
 //
-// Implemented by claude only. Gemini's ingestHooks has the same refusal
-// semantics (internal/adapter/gemini/hook.go) but does NOT yet implement this
-// interface, so the second-order clobber this closes for Claude is still live
-// for a Gemini-side enrichment — a known follow-up, not an oversight.
+// Implemented by claude and gemini. Event names are always CANONICAL: a
+// renaming adapter (gemini spells PreToolUse as BeforeTool natively) must map
+// its refused native events back to the canonical spelling, because the caller
+// retires hooks/<canonical>.toml — and a native event with no canonical
+// equivalent must never be returned (there is no canonical file to retire).
 type HookIngestGuard interface {
 	RefusedHookEvents(scope Scope, project string) ([]string, error)
 }

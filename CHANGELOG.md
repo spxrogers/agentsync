@@ -11,6 +11,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Gemini now implements `HookIngestGuard`, closing the stale-hook clobber for
+  Gemini-side enrichments.** A hook event captured while clean and later
+  enriched natively in `.gemini/settings.json` (a `timeout`, a `sequential`, a
+  non-command handler) left a stale canonical `hooks/<event>.toml` that the
+  next apply kept rewriting lossily — the second-order issue #124 corruption
+  class, previously closed for Claude only. Gemini's import now retires the
+  stale canonical file, reporting refused events under their *canonical* names
+  (`BeforeTool` → `PreToolUse`); Gemini-only events are never retired. Its
+  hook ingest also gained diagnostic parity with Claude's: structurally
+  malformed native shapes (a settings.json typo) warn instead of dropping
+  silently — and, like Claude, a typo never triggers retirement. (Closes an
+  epic #178 residual.)
 - **Cline/Cursor/Roo/Windsurf/OpenCode ingests no longer round unmodeled
   integers beyond 2^53.** The five remaining JSON ingests decoded native config
   with plain `json.Unmarshal`, so a foreign integer larger than 2^53 (a

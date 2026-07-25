@@ -220,7 +220,12 @@ user's other keys (`theme`, `model`, …) are preserved. Memory projects to
 to `.gemini/commands/<name>.toml` (`description` + `prompt`); subagents to
 `.gemini/agents/<name>.md`. Skips Skill (Gemini uses extensions, not Agent
 Skills) and LSP (no LSP concept) — both ✗ skip. No `PluginIngester` (no
-native plugin enable-state agentsync models).
+native plugin enable-state agentsync models). Hook ingest has the same
+guard-and-warn posture as Claude's — an unrepresentable event is refused whole,
+never captured lossily — and implements `adapter.HookIngestGuard`
+(`RefusedHookEvents`, reporting refused events under their *canonical* names),
+so a Gemini-side native enrichment triggers import's stale-hook retirement just
+like a Claude-side one.
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter helpers), secrets, source,
   paths, iox, jsonkeys, go-toml/v2.

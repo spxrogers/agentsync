@@ -103,10 +103,9 @@ var (
 // non-command handlers), and this ingest guard keeps unrepresentable events out
 // of the canonical source in the first place.
 //
-// This is intentionally MORE diagnostic than Gemini's twin: it also warns on the
-// structurally-malformed shapes (non-object def/handler, non-array event value or
-// "hooks" value) that Gemini's ingestHooks drops silently. Bringing Gemini to
-// parity is a separate follow-up (out of this issue's scope).
+// Gemini's twin carries the same structural diagnostics and refusal reporting
+// (parity landed with the epic #178 residual close); its refused list maps
+// native event names back to canonical, since Gemini renames events.
 func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) {
 	hooks, ok := raw.(map[string]any)
 	if !ok {
