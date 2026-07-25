@@ -184,6 +184,65 @@ func TestRelativeFetcher_RejectsPathTraversal(t *testing.T) {
 	}
 }
 
+// TestRelativeFetcher_RejectsSymlinkSource pins the leaf-symlink hole the
+// Lstat check closes: the top-level source path itself is a symlink whose
+// target sits outside the marketplace root. The textual containment check
+// passes (the PATH is inside the root), and copyDir's walk-time rejection
+// never sees it (that only covers entries INSIDE the tree), so before the fix
+// the target's whole tree was copied into the plugin cache. Covered both with
+// a RootDir (resolved-containment refusal) and without one (Lstat refusal).
+func TestRelativeFetcher_RejectsSymlinkSource(t *testing.T) {
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("you should not see this"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mpRoot := t.TempDir()
+	link := filepath.Join(mpRoot, "plugins")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unsupported on this platform: %v", err)
+	}
+
+	for _, rootDir := range []string{mpRoot, ""} {
+		dst := t.TempDir()
+		src := marketplace.Source{Relative: link, RootDir: rootDir}
+		if _, err := marketplace.Dispatch(src).Fetch(src, dst); err == nil {
+			t.Fatalf("RootDir=%q: expected error for symlinked source path", rootDir)
+		}
+		if _, statErr := os.Stat(filepath.Join(dst, "secret.txt")); statErr == nil {
+			t.Fatalf("RootDir=%q: symlinked source escaped — secret.txt copied into dst", rootDir)
+		}
+	}
+}
+
+// TestRelativeFetcher_RejectsSymlinkedIntermediateEscape pins the
+// intermediate-symlink hole the resolved-containment re-check closes: the
+// source path's LEAF is a real directory, but a directory on the way to it
+// (mpRoot/plugins → outside) is a symlink, so the textual containment check
+// passes and Lstat on the leaf sees a plain directory — yet the tree copied
+// lives outside the marketplace root.
+func TestRelativeFetcher_RejectsSymlinkedIntermediateEscape(t *testing.T) {
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(outside, "demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "demo", "secret.txt"), []byte("you should not see this"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mpRoot := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(mpRoot, "plugins")); err != nil {
+		t.Skipf("symlink unsupported on this platform: %v", err)
+	}
+
+	dst := t.TempDir()
+	src := marketplace.Source{Relative: filepath.Join(mpRoot, "plugins", "demo"), RootDir: mpRoot}
+	if _, err := marketplace.Dispatch(src).Fetch(src, dst); err == nil {
+		t.Fatal("expected error for source behind a symlinked intermediate directory")
+	}
+	if _, statErr := os.Stat(filepath.Join(dst, "secret.txt")); statErr == nil {
+		t.Fatal("intermediate symlink escaped — secret.txt copied into dst")
+	}
+}
+
 func TestRelativeFetcher_AllowsContainedPath(t *testing.T) {
 	mpRoot := t.TempDir()
 	pluginDir := filepath.Join(mpRoot, "plugins", "demo")

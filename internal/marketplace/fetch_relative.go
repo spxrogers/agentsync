@@ -15,7 +15,10 @@ import (
 // If src.RootDir is non-empty, the resolved Relative path is required to
 // be contained within RootDir — this prevents a malicious marketplace
 // entry from setting `"source": "../../../../etc"` and copying arbitrary
-// host files into the plugin cache.
+// host files into the plugin cache. Containment is checked both textually
+// and on symlink-resolved paths, and the source path itself is rejected if
+// it is a symlink — the same escapes-by-symlink policy copyDir applies to
+// every entry inside the tree.
 type RelativeFetcher struct{}
 
 // Fetch copies src.Relative (a local directory) into into.
@@ -40,11 +43,36 @@ func (f *RelativeFetcher) Fetch(src Source, into string) (FetchResult, error) {
 		if !pathContains(root, abs) {
 			return FetchResult{}, fmt.Errorf("relative fetcher: source %q escapes marketplace root %q", abs, root)
 		}
+		// The check above is purely textual, so a symlink UNDER the root defeats
+		// it: with root/a → /etc, the path root/a/b is "contained" while the tree
+		// actually copied lives outside. Re-check containment on fully-resolved
+		// paths (EvalSymlinks also resolves a symlinked leaf, closing the same
+		// hole for the source path itself). The walk-time rejection in copyDir
+		// cannot catch either case — it only sees entries INSIDE the tree being
+		// copied, never the components leading to it.
+		resolvedRoot, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			return FetchResult{}, fmt.Errorf("relative fetcher: resolve root %s: %w", root, err)
+		}
+		resolvedAbs, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return FetchResult{}, fmt.Errorf("relative fetcher: resolve %s: %w", abs, err)
+		}
+		if !pathContains(resolvedRoot, resolvedAbs) {
+			return FetchResult{}, fmt.Errorf("relative fetcher: source %q escapes marketplace root %q after resolving symlinks", abs, root)
+		}
 	}
 
-	info, err := os.Stat(abs)
+	// Lstat, not Stat: the source path itself must not be a symlink — the same
+	// policy copyDir enforces for every entry inside the tree. A rootless call
+	// (RootDir == "") has no containment re-check above, so following a symlink
+	// here would copy an arbitrary target the caller never named.
+	info, err := os.Lstat(abs)
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("relative fetcher: stat %s: %w", abs, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return FetchResult{}, fmt.Errorf("relative fetcher: %s is a symlink (refusing — marketplace trees must contain only regular files and directories)", abs)
 	}
 	if !info.IsDir() {
 		return FetchResult{}, fmt.Errorf("relative fetcher: %s is not a directory", abs)
