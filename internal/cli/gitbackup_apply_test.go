@@ -1004,3 +1004,54 @@ func TestApply_GitBackupBaselineCoversOrphanDeletes(t *testing.T) {
 		t.Fatalf("restored skill differs from pre-apply bytes:\n got %q\nwant %q", got, preApply)
 	}
 }
+
+// TestApply_GitBackupBaselineStagesUntrackedPlannedPath pins the PRODUCTION
+// call site of git.SnapshotPreApply (the already-owned branch of the baseline
+// pass): a managed file that exists on disk but is UNTRACKED — it was written
+// by an apply that ran with git backup off — is about to be overwritten, and
+// its pre-apply bytes exist in no history. The baseline must stage them, or
+// the overwrite is unrecoverable. Reverting the gitbackup.go call to
+// SnapshotDirtyTracked leaves this red: tracked-dirt-only snapshots skip the
+// untracked planned path.
+func TestApply_GitBackupBaselineStagesUntrackedPlannedPath(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+
+	// Apply 1 (backup on): skill A becomes tracked; the root is agentsync-owned.
+	writeSkillSource(t, tmp, "tracked", "a1")
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply 1: %v\n%s", err, out)
+	}
+
+	// Apply 2 (backup OFF): skill B lands on disk with bytes no history has.
+	writeSkillSource(t, tmp, "untracked", "precious-b2")
+	if out, err := runCLI(t, env, "apply", "--no-git-backup"); err != nil {
+		t.Fatalf("apply 2: %v\n%s", err, out)
+	}
+
+	// Apply 3 (backup on): source changes B, so the apply overwrites the
+	// untracked-but-planned file — SnapshotPreApply must baseline "precious-b2".
+	writeSkillSource(t, tmp, "untracked", "b3-overwrites")
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply 3: %v\n%s", err, out)
+	}
+	skillB := filepath.Join(tmp, ".claude", "skills", "untracked", "SKILL.md")
+	if b, _ := os.ReadFile(skillB); !strings.Contains(string(b), "b3-overwrites") {
+		t.Fatalf("precondition: apply 3 should have overwritten skill B:\n%s", b)
+	}
+
+	// Revert: the pre-apply bytes of the untracked planned path must come back.
+	if out, err := runCLI(t, env, "revert", "claude"); err != nil {
+		t.Fatalf("revert: %v\n%s", err, out)
+	}
+	b, err := os.ReadFile(skillB)
+	if err != nil {
+		t.Fatalf("revert removed skill B entirely: %v", err)
+	}
+	if !strings.Contains(string(b), "precious-b2") {
+		t.Fatalf("revert did not restore the untracked planned path's pre-apply bytes:\n%s", b)
+	}
+}
