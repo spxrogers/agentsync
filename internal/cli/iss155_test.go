@@ -551,3 +551,39 @@ func TestImportSummary_EnumeratesBundledFiles(t *testing.T) {
 		}
 	}
 }
+
+// TestApplyDryRun_CleanupOpNotCountedToWrite pins the dry-run/real headline
+// agreement for KEY removals: an emptied MCP section renders as the synthesized
+// "{}"+OwnedKeys cleanup op, which the real apply reports under "removed: N
+// key(s)" and subtracts from "applied: X ops" — the dry-run must not count the
+// same op in "N to write" (it is previewed under "Removals:" instead).
+func TestApplyDryRun_CleanupOpNotCountedToWrite(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "srv.toml")
+	if err := os.MkdirAll(filepath.Dir(mcp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mcp, []byte("[server]\ntype = \"stdio\"\ncommand = \"npx\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, env, "apply")
+
+	// Remove the only MCP server → the next apply's only work is the "{}"
+	// cleanup op deleting the owned /mcpServers/srv pointer.
+	if err := os.Remove(mcp); err != nil {
+		t.Fatal(err)
+	}
+	dry, err := runCLI(t, env, "apply", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run: %v\n%s", err, dry)
+	}
+	if !strings.Contains(dry, "Removals:") || !strings.Contains(dry, "key(s)") {
+		t.Fatalf("dry-run should preview the key removal; got:\n%s", dry)
+	}
+	if !strings.Contains(dry, "0 to write") {
+		t.Fatalf("the cleanup op must not be double-counted in 'to write' (it is a removal); got:\n%s", dry)
+	}
+}

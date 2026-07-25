@@ -236,6 +236,11 @@ test('CLI names a DUPLICATE allowlist entry instead of a confusing stale', () =>
 		assert.match(out, /DUPLICATE ALLOWLIST/);
 		assert.match(out, /delete the duplicate/);
 		assert.doesNotMatch(
+			out,
+			/stale ALLOWLIST/,
+			'a duplicate gets ONE diagnostic — not a second, misleading stale report',
+		);
+		assert.doesNotMatch(
 			res.stdout,
 			/0 broken/,
 			'a failing run must not open with the success banner',

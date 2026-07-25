@@ -34,8 +34,11 @@ func TestIngest_MidWalkErrorFailsLoud(t *testing.T) {
 	orig := walkCommandsDir
 	defer func() { walkCommandsDir = orig }()
 	walkCommandsDir = func(root string, fn fs.WalkDirFunc) error {
-		// Deliver the real entries first, then the mid-walk error, exactly as
-		// WalkDir does when it hits an unreadable subdirectory.
+		// Deliver the real entries first, then the mid-walk error. Real WalkDir
+		// passes a NON-nil DirEntry on a mid-walk ReadDir failure (nil only on
+		// the root Lstat failure); nil here is fine because the callback checks
+		// err before touching d — but this injection is the root-failure shape,
+		// not a byte-faithful mid-walk one.
 		if err := filepath.WalkDir(root, fn); err != nil {
 			return err
 		}
