@@ -305,6 +305,22 @@ type HookIngestGuard interface {
 	RefusedHookEvents(scope Scope, project string) ([]string, error)
 }
 
+// HookEventNamer is an OPTIONAL extension to Adapter for agents that RENAME
+// canonical hook events in their native config (Gemini: PreToolUse→BeforeTool;
+// Cursor: PreToolUse→preToolUse). NativeHookEvent returns the native spelling
+// the adapter uses in its owned "/hooks/<name>" state pointers, or ("", false)
+// when the canonical event has no native equivalent on this agent. Import's
+// stale-hook retirement needs it: the all-agents state disown
+// (cli.retireRefusedHookEvents) matches keys by event name, and matching only
+// the CANONICAL spelling would leave a renaming agent's key owned with no
+// canonical render behind it — the next apply's orphan cleanup would then
+// delete the event from that agent's native config, the exact clobber
+// retirement exists to prevent. An adapter that renders hooks under the
+// canonical name (claude, codex) does not implement it.
+type HookEventNamer interface {
+	NativeHookEvent(canonical string) (string, bool)
+}
+
 // VersionedDirs is an OPTIONAL extension to Adapter: an adapter that writes into
 // one or more on-disk directories declares them so the apply tail can git-init and
 // checkpoint those directories as a local-only rollback history (issue #118). An

@@ -360,6 +360,15 @@ func WriteHooks(home, event string, hooks []Hook) error {
 	return iox.AtomicWrite(filepath.Join(dir, event+".toml"), body, 0o644)
 }
 
+// HookPath returns the canonical path of hooks/<event>.toml under home — the
+// single definition of the hook-file layout, shared by WriteHooks/RemoveHooks
+// and import's retirement preview (a hardcoded copy in a caller would silently
+// under-report the preview if the layout ever moved). The event is NOT
+// validated here; mutating callers validate via ValidateComponentID first.
+func HookPath(home, event string) string {
+	return filepath.Join(home, "hooks", event+".toml")
+}
+
 // RemoveHooks deletes hooks/<event>.toml, reporting whether a file was removed.
 // It exists for import's stale-hook retirement (adapter.HookIngestGuard): when a
 // native hook event can no longer be captured (unrepresentable handler/fields),
@@ -371,7 +380,7 @@ func RemoveHooks(home, event string) (bool, error) {
 	if err := ValidateComponentID("hook event", event); err != nil {
 		return false, err
 	}
-	p := filepath.Join(home, "hooks", event+".toml")
+	p := HookPath(home, event)
 	if err := os.Remove(p); err != nil {
 		if os.IsNotExist(err) {
 			return false, nil

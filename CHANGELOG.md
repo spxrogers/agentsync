@@ -139,7 +139,15 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   notice. Canonical hooks are shared across agents, so the retirement disowns
   the event's state key for **every** agent at exactly that scope — each
   agent's native entry is left frozen as-is, and no orphan cleanup fires
-  against it on the next apply. `import --dry-run` now previews the same
+  against it on the next apply — including agents that RENAME the event
+  natively (Gemini's `BeforeTool`, Cursor's `preToolUse`): the disown matches
+  each retired event's full alias set via the new `adapter.HookEventNamer`
+  extension, since matching only the canonical spelling left a renaming
+  agent's key owned and its native hooks were wiped by the next apply.
+  Retirement also disowns state *before* removing the canonical file — the
+  reverse order was unrecoverable if the state write failed (the file was
+  already gone, so a re-run had nothing left to trigger the disown).
+  `import --dry-run` now previews the same
   retirement (a "would retire canonical `hooks/<event>.toml`" note, computed
   read-only) instead of silently omitting it from the preview.
 - **The pre-apply git baseline now covers planned deletions, so a delete-only

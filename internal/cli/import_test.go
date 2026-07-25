@@ -1247,6 +1247,12 @@ func TestImport_RetireFreezesOtherAgentsHooks(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	mustRun(t, env, "agent", "add", "claude")
 	mustRun(t, env, "agent", "add", "codex")
+	// gemini and cursor RENAME hook events natively (PreToolUse -> BeforeTool /
+	// preToolUse), so their state keys are only disowned via the
+	// adapter.HookEventNamer alias set — the round that matched canonical names
+	// only wiped gemini's settings.json hooks on the next apply.
+	mustRun(t, env, "agent", "add", "gemini")
+	mustRun(t, env, "agent", "add", "cursor")
 	settings := filepath.Join(tmp, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
 		t.Fatal(err)
@@ -1266,6 +1272,16 @@ func TestImport_RetireFreezesOtherAgentsHooks(t *testing.T) {
 	codexBefore, err := os.ReadFile(codexConfig)
 	if err != nil || !strings.Contains(string(codexBefore), "echo hi") {
 		t.Fatalf("precondition: codex config should carry the hook (err=%v):\n%s", err, codexBefore)
+	}
+	geminiConfig := filepath.Join(tmp, ".gemini", "settings.json")
+	geminiBefore, err := os.ReadFile(geminiConfig)
+	if err != nil || !strings.Contains(string(geminiBefore), "BeforeTool") {
+		t.Fatalf("precondition: gemini config should carry the renamed hook (err=%v):\n%s", err, geminiBefore)
+	}
+	cursorConfig := filepath.Join(tmp, ".cursor", "hooks.json")
+	cursorBefore, err := os.ReadFile(cursorConfig)
+	if err != nil || !strings.Contains(string(cursorBefore), "preToolUse") {
+		t.Fatalf("precondition: cursor config should carry the renamed hook (err=%v):\n%s", err, cursorBefore)
 	}
 
 	// Claude's native entry is enriched; re-import retires the SHARED canonical.
@@ -1288,6 +1304,20 @@ func TestImport_RetireFreezesOtherAgentsHooks(t *testing.T) {
 	}
 	if !strings.Contains(string(codexAfter), "echo hi") {
 		t.Fatalf("retirement let orphan cleanup delete codex's native hook:\nbefore:\n%s\nafter:\n%s", codexBefore, codexAfter)
+	}
+	geminiAfter, err := os.ReadFile(geminiConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(geminiAfter), "BeforeTool") || !strings.Contains(string(geminiAfter), "echo hi") {
+		t.Fatalf("retirement let orphan cleanup delete gemini's RENAMED native hook:\nbefore:\n%s\nafter:\n%s", geminiBefore, geminiAfter)
+	}
+	cursorAfter, err := os.ReadFile(cursorConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(cursorAfter), "preToolUse") || !strings.Contains(string(cursorAfter), "echo hi") {
+		t.Fatalf("retirement let orphan cleanup delete cursor's RENAMED native hook:\nbefore:\n%s\nafter:\n%s", cursorBefore, cursorAfter)
 	}
 	if got, _ := os.ReadFile(settings); string(got) != enriched {
 		t.Fatalf("claude's enriched native entry should be untouched:\n got %s\nwant %s", got, enriched)
@@ -1383,13 +1413,19 @@ func TestImport_RetireDisownIsScopeExact(t *testing.T) {
 		t.Fatalf("import: %v\n%s", err, out)
 	}
 	// Plant a project-scope key for the same agent+event alongside the real
-	// user-scope one written by the import's state seeding.
+	// user-scope one written by the import's state seeding. The planted key
+	// MUST use the exact spelling render.RecordOpsState emits — the
+	// "${HOME}/…" form paths.HomeRelative produces — or the survival
+	// assertion is trivially true against a spelling the disown could never
+	// match anyway (and the project-leg mutation this test guards would go
+	// undetected: dropping HomeRelative from scopeMid must disown this key
+	// and fail the test).
 	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
 	st, err := state.Load(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const projectKey = "claude:project:~/proj:~/proj/.claude/settings.json:/hooks/PreToolUse"
+	const projectKey = "claude:project:${HOME}/proj:${HOME}/proj/.claude/settings.json:/hooks/PreToolUse"
 	st.Keys[projectKey] = state.KeyEntry{SHA256: "deadbeef", SourceID: "hooks/PreToolUse.toml"}
 	if err := state.Save(statePath, st); err != nil {
 		t.Fatal(err)
