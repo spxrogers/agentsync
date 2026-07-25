@@ -1,6 +1,7 @@
 package render_test
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -294,6 +295,78 @@ func TestPlan_NormalizesEmptyActionBeforeGuards(t *testing.T) {
 		ops := plan.PerAgent["claude"].Ops
 		if len(ops) != 1 || ops[0].Action != "write" {
 			t.Fatalf("Plan must rewrite Action \"\" to \"write\" at intake, got %+v", ops)
+		}
+	})
+}
+
+// TestApply_NormalizesEmptyActionForCallerBuiltPlans pins the same "" == "write"
+// intake normalization at the OTHER exported entries: Apply and PreviewApply
+// accept a caller-built RenderPlan that never went through Plan, so before they
+// re-normalized at intake, an op with the documented empty-Action default was
+// written by every executor while dodging both the traversal containment
+// backstop and the cross-agent divergence check (each matches the literal
+// "write"). A hand-built plan carrying an escaping empty-Action op must be
+// refused exactly like Plan refuses it, and a benign empty-Action op must reach
+// the adapter already normalized to "write".
+func TestApply_NormalizesEmptyActionForCallerBuiltPlans(t *testing.T) {
+	planFor := func(op adapter.FileOp) render.RenderPlan {
+		return render.RenderPlan{PerAgent: map[string]render.AgentResult{
+			"claude": {Ops: []adapter.FileOp{op}},
+		}}
+	}
+	escaping := adapter.FileOp{
+		Action:        "", // documented write default — hand-built, never normalized by Plan
+		Path:          "../escape.md",
+		Content:       []byte("x"),
+		Mode:          0o644,
+		MergeStrategy: "replace",
+	}
+
+	entries := []struct {
+		name string
+		run  func(p render.RenderPlan, reg *adapter.Registry) error
+	}{
+		{"Apply", func(p render.RenderPlan, reg *adapter.Registry) error {
+			_, _, _, err := render.Apply(p, reg, state.New(), t.TempDir(), t.TempDir(), adapter.ScopeUser, "")
+			return err
+		}},
+		{"PreviewApply", func(p render.RenderPlan, reg *adapter.Registry) error {
+			_, _, _, err := render.PreviewApply(p, reg, state.New(), t.TempDir(), t.TempDir(), adapter.ScopeUser, "")
+			return err
+		}},
+	}
+	for _, e := range entries {
+		t.Run(e.name+"/empty-Action traversal op is refused", func(t *testing.T) {
+			a := &countingAdapter{Adapter: noop.New("claude")}
+			reg := adapter.NewRegistry()
+			if err := reg.Register(a); err != nil {
+				t.Fatal(err)
+			}
+			err := e.run(planFor(escaping), reg)
+			if err == nil {
+				t.Fatalf("%s accepted an empty-Action FileOp whose path escapes via '..'; want refusal", e.name)
+			}
+			if !strings.Contains(err.Error(), "escapes its destination") {
+				t.Errorf("error %q does not describe the containment failure", err.Error())
+			}
+			if len(a.ops) != 0 {
+				t.Errorf("adapter Apply ran despite the refusal; got ops %+v", a.ops)
+			}
+		})
+	}
+	t.Run("benign empty Action reaches the adapter as write", func(t *testing.T) {
+		a := &countingAdapter{Adapter: noop.New("claude")}
+		reg := adapter.NewRegistry()
+		if err := reg.Register(a); err != nil {
+			t.Fatal(err)
+		}
+		benign := escaping
+		benign.Path = filepath.Join(t.TempDir(), "dest", "file.md")
+		if _, _, _, err := render.Apply(planFor(benign), reg, state.New(), t.TempDir(), t.TempDir(), adapter.ScopeUser, ""); err != nil {
+			t.Fatal(err)
+		}
+		if len(a.ops) != 1 || a.ops[0].Action != "write" {
+			t.Fatalf("Apply must rewrite Action \"\" to \"write\" at intake, got %+v", a.ops)
 		}
 	})
 }
