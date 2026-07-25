@@ -152,9 +152,15 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 			return perr
 		}
 		w := p.Out
-		toWrite, synced := planSyncCounts(plan, wouldChange)
-		fmt.Fprintf(w, "%s %d ops total across %d agent(s) — %d to write, %d already synced\n",
-			p.Bold("Plan:"), plan.Total(), len(plan.PerAgent), toWrite, synced)
+		toWrite, synced, removalOps := planSyncCounts(plan, wouldChange)
+		// The three counts partition plan.Total(), so the headline always sums.
+		if removalOps > 0 {
+			fmt.Fprintf(w, "%s %d ops total across %d agent(s) — %d to write, %d already synced, %d removal(s)\n",
+				p.Bold("Plan:"), plan.Total(), len(plan.PerAgent), toWrite, synced, removalOps)
+		} else {
+			fmt.Fprintf(w, "%s %d ops total across %d agent(s) — %d to write, %d already synced\n",
+				p.Bold("Plan:"), plan.Total(), len(plan.PerAgent), toWrite, synced)
+		}
 		// Preview convergence-time removals with the same counts the real apply
 		// reports in its headline, so a delete-only run no longer previews as
 		// "Plan: 0 ops … 0 to write" and then surprises with "removed: …" on the
@@ -355,15 +361,17 @@ func isSyncedOp(op adapter.FileOp, wouldChange map[string]bool) bool {
 // planSyncCounts splits the plan's ops into how many a real apply would write
 // (or delete) versus how many are already in sync, so the dry-run summary line
 // can quantify what the per-op labels show.
-func planSyncCounts(plan render.RenderPlan, wouldChange map[string]bool) (toWrite, synced int) {
+func planSyncCounts(plan render.RenderPlan, wouldChange map[string]bool) (toWrite, synced, removals int) {
 	for _, res := range plan.PerAgent {
 		for _, op := range res.Ops {
 			// A pure orphan-cleanup op (the "{}"+OwnedKeys signature — same
 			// predicate as removalCounts) is previewed under "Removals:", and
 			// the real apply's headline subtracts it from "applied: X ops" —
 			// counting it in "to write" too made the dry-run and real headlines
-			// disagree by one per cleanup op.
+			// disagree by one per cleanup op. It is returned as its own count so
+			// the Plan line still sums to the total.
 			if render.IsKeyMerge(op.MergeStrategy) && strings.TrimSpace(string(op.Content)) == "{}" && len(op.OwnedKeys) > 0 {
+				removals++
 				continue
 			}
 			if isSyncedOp(op, wouldChange) {
@@ -373,7 +381,7 @@ func planSyncCounts(plan render.RenderPlan, wouldChange map[string]bool) (toWrit
 			}
 		}
 	}
-	return toWrite, synced
+	return toWrite, synced, removals
 }
 
 // removalCounts inspects the plan (against the pre-apply state) for the two kinds

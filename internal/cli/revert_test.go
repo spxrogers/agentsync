@@ -500,3 +500,44 @@ func TestRevert_All(t *testing.T) {
 		t.Fatalf("after revert --all, dest skill should hold v1:\n%s", b)
 	}
 }
+
+// TestRevert_RefusalStillAnnouncesSnapshot pins the round-5 finding: Restore
+// snapshots dirty tracked edits BEFORE its pre-flight, so a refusal can leave
+// HEAD advanced — the CLI must announce the snapshot (with the issue-#126
+// cleartext caution) on the error path too, not silently swallow it.
+func TestRevert_RefusalStillAnnouncesSnapshot(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+	writeSkillSource(t, tmp, "demo", "v1")
+	mustRun(t, env, "apply")
+	writeSkillSource(t, tmp, "demo", "v2")
+	mustRun(t, env, "apply")
+
+	claude := filepath.Join(tmp, ".claude")
+	// Dirty TRACKED edit → Restore will snapshot it before the pre-flight…
+	skillDest := filepath.Join(claude, "skills", "demo", "SKILL.md")
+	if err := os.WriteFile(skillDest, []byte("dirty tracked edit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// …and a symlinked ancestor at a path the revert must touch forces a
+	// pre-flight refusal.
+	outside := t.TempDir()
+	if err := os.RemoveAll(filepath.Join(claude, "skills")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(claude, "skills")); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "revert", "claude")
+	if err == nil {
+		t.Fatalf("revert through a symlinked ancestor should refuse:\n%s", out)
+	}
+	if !strings.Contains(out, "had already preserved uncommitted changes") ||
+		!strings.Contains(out, "cleartext") {
+		t.Fatalf("a refusal after the safety snapshot must announce the snapshot + cleartext caution:\n%s", out)
+	}
+}

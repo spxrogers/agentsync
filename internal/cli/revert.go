@@ -266,6 +266,17 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 	// only once the revert actually succeeds and the error can't contradict it.
 	h, snap, err := repo.Restore(targetHash, msg, id)
 	if err != nil {
+		// Even a pre-flight refusal may have advanced HEAD: Restore snapshots
+		// dirty tracked edits BEFORE the pre-flight, so when snap != "" the
+		// snapshot commit exists regardless of the error. Announce it (plus the
+		// issue-#126 cleartext caution) rather than leave a silently advanced
+		// HEAD — a mid-restore failure's own hint also names the snapshot, so
+		// the two surfaces stay consistent.
+		if snap != "" {
+			fmt.Fprintf(p.Err, "%s the refused revert had already preserved uncommitted changes in %s as snapshot %s; "+
+				"that snapshot is kept in the local-only history and, like the files it versions, may contain secrets in cleartext.\n",
+				p.Faint(ui.GlyphInfo), root, agit.Short(snap))
+		}
 		return true, err
 	}
 	if snap != "" {

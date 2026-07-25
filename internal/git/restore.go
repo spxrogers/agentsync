@@ -105,8 +105,11 @@ const snapshotMessage = "agentsync revert: snapshot uncommitted changes before r
 // If a failure strikes AFTER the snapshot advanced HEAD (mid delta-apply or at the
 // final commit), the returned error carries a recovery hint naming the pre-revert HEAD
 // and the snapshot commit (restoreFailureHint) so a half-applied worktree has a clear
-// path back. A pre-flight refusal is all-or-nothing (nothing is mutated) and returns
-// its own actionable error without that hint.
+// path back. A pre-flight refusal mutates no WORKTREE file and returns its own
+// actionable error without that hint — but the safety snapshot above may already
+// have advanced HEAD (it runs before the pre-flight, deliberately: refusing must
+// never cost the user their uncommitted edits), so callers surface snapshotHash
+// even on error.
 func (r *Repo) Restore(targetRev, message string, id Identity) (revertHash, snapshotHash string, err error) {
 	// Resolve the target to a CONCRETE hash up front — the snapshot below advances
 	// HEAD, after which a relative ref like "HEAD~1" would resolve elsewhere.
@@ -358,8 +361,9 @@ func symlinkAncestor(root, rel string) (string, bool) {
 // — after Restore's snapshot may already have advanced HEAD — with an actionable
 // recovery pointer. It names the pre-revert HEAD (orig) and, when one was taken, the
 // snapshot commit that preserved the user's uncommitted tracked edits, so a half-applied
-// worktree still has a clear path back. A pre-flight refusal is all-or-nothing and does
-// NOT go through here (nothing was mutated, so there is nothing to recover).
+// worktree still has a clear path back. A pre-flight refusal does NOT go through
+// here (no worktree file was mutated, so there is nothing to recover; the
+// pre-refusal snapshot, when one was taken, is surfaced by the caller).
 func restoreFailureHint(dir, orig, snapshot string, err error) error {
 	if snapshot != "" {
 		return fmt.Errorf("revert of %s failed partway; nothing is lost — your uncommitted edits are preserved in snapshot %s and the pre-revert checkpoint is %s. Recover with `git -C %s reset --hard %s` (keep your edits) or `git -C %s reset --hard %s` (discard them): %w",
