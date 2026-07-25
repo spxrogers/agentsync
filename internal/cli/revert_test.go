@@ -548,4 +548,10 @@ func TestRevert_RefusalStillAnnouncesSnapshot(t *testing.T) {
 		!strings.Contains(out, "cleartext") {
 		t.Fatalf("a refusal after the safety snapshot must announce the snapshot + cleartext caution:\n%s", out)
 	}
+	// Routing pin: the refusal must be the PRE-flight (all-or-nothing, no
+	// worktree mutation) — a regression to a mid-restore failure would also
+	// print the announcement, so assert the partial-failure hint is absent.
+	if strings.Contains(out, "failed partway") {
+		t.Fatalf("expected a pre-flight refusal, not a mid-restore failure:\n%s", out)
+	}
 }

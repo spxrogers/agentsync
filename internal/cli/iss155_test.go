@@ -586,4 +586,15 @@ func TestApplyDryRun_CleanupOpNotCountedToWrite(t *testing.T) {
 	if !strings.Contains(dry, "0 to write") {
 		t.Fatalf("the cleanup op must not be double-counted in 'to write' (it is a removal); got:\n%s", dry)
 	}
+	// The headline's removal partition and the per-op label are their own
+	// behaviors (both were revertible with the suite green): the Plan line must
+	// carry the op-count partition so it sums, and the op listing must label
+	// the cleanup op "remove" — never "write", and never "synced" even when the
+	// dest already converged (the label arm is checked before isSyncedOp).
+	if !strings.Contains(dry, "1 removal op(s)") {
+		t.Fatalf("Plan headline should carry the removal-op partition; got:\n%s", dry)
+	}
+	if !strings.Contains(dry, "remove") {
+		t.Fatalf("the cleanup op should be listed with the remove label; got:\n%s", dry)
+	}
 }
