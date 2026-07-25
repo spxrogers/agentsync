@@ -315,21 +315,13 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 	return out, refused
 }
 
-// RefusedHookEvents implements adapter.HookIngestGuard: it re-reads the
-// destination settings file and returns the CANONICAL names of hook events
-// whose native entries ingestHooks refuses to capture for SEMANTIC reasons — a
-// non-command handler or unmodeled fields on a well-formed entry.
-// Structurally-malformed shapes (a settings.json typo) are warned about by
-// Ingest but deliberately excluded here: import retires the canonical
-// hooks/<event>.toml for every returned event, and deleting canonical config
-// over a native typo would be destructive. Gemini-only events (BeforeModel, …)
-// never appear — they have no canonical file to retire. The re-read exists
-// because Ingest's shared (source.Canonical, error) signature has no channel
-// for refusals; the destination may have changed between Ingest and this call
-// (both run within one import, so the window is small and the worst case is a
-// stale warning). Settings are parsed as JSONC, exactly as Ingest reads them.
-// Warnings are discarded here; Ingest already emitted them on the same shapes.
-// See the corruption class this closes on adapter.HookIngestGuard (issue #124).
+// RefusedHookEvents implements adapter.HookIngestGuard — see the interface doc
+// for the shared contract and ingestHooks for what gemini refuses. Gemini leg:
+// settings.json is re-read as JSONC (jsonkeys.DecodeJSONC), exactly as Ingest
+// parses it; refused events surface under their CANONICAL names (BeforeTool →
+// PreToolUse), and Gemini-only events (BeforeModel, …) never appear — no
+// canonical file exists to retire. Warnings are discarded here; Ingest already
+// emitted them on the same shapes.
 func (a *Adapter) RefusedHookEvents(scope adapter.Scope, project string) ([]string, error) {
 	if err := adapter.RequireProjectRoot(scope, project); err != nil {
 		return nil, err

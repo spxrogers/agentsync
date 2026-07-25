@@ -232,19 +232,16 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 	return out, refused
 }
 
-// RefusedHookEvents implements adapter.HookIngestGuard: it re-reads the
-// destination settings file and returns the hook events whose native entries
-// ingestHooks refuses to capture for SEMANTIC reasons — a non-command handler
-// or unmodeled fields on a well-formed entry. Structurally-malformed shapes
-// (a settings.json typo) are warned about by Ingest but deliberately excluded
-// here: import retires the canonical hooks/<event>.toml for every returned
-// event, and deleting canonical config over a native typo would be
-// destructive. The re-read exists because Ingest's (source.Canonical, error)
-// signature — shared by ten adapters — has no channel for refusals; note the
-// destination may have changed between Ingest and this call (both run within
-// one import, so the window is small and the worst case is a stale warning).
-// See the corruption class this closes on adapter.HookIngestGuard (issue #124).
-// Warnings are discarded here; Ingest already emitted them on the same shapes.
+// RefusedHookEvents implements adapter.HookIngestGuard — see the interface doc
+// for the shared contract (semantic-only refusals, canonical names, the issue
+// #124 corruption class this closes) and ingestHooks for what claude refuses.
+// Claude leg: settings.json is re-read with the same strict-JSON UseNumber
+// decode Ingest uses (jsonkeys.DecodeObject); claude spells events
+// canonically, so refused needs no name mapping. Warnings are discarded here —
+// Ingest already emitted them on the same shapes. The re-read exists because
+// Ingest's shared (source.Canonical, error) signature has no channel for
+// refusals; both calls run within one import, so the worst case of the
+// destination changing between them is a stale warning.
 func (a *Adapter) RefusedHookEvents(scope adapter.Scope, project string) ([]string, error) {
 	if err := adapter.RequireProjectRoot(scope, project); err != nil {
 		return nil, err

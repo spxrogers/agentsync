@@ -249,20 +249,13 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 	return out, refused
 }
 
-// RefusedHookEvents implements adapter.HookIngestGuard: it re-reads the
-// destination hooks.json and returns the CANONICAL names of hook events whose
-// native entries ingestHooks refuses to capture for SEMANTIC reasons — a
-// non-command entry type or unmodeled fields (timeout, failClosed, loop_limit,
-// prompt/model) on a well-formed entry. Structurally-malformed shapes (a
-// hooks.json typo) are warned about by Ingest but deliberately excluded here:
-// import retires the canonical hooks/<event>.toml for every returned event,
-// and deleting canonical config over a native typo would be destructive.
-// Cursor-only events (afterFileEdit, …) never appear — they have no canonical
-// file to retire. The re-read exists because Ingest's shared
-// (source.Canonical, error) signature has no channel for refusals; hooks.json
-// is parsed exactly as Ingest parses it (strict JSON, UseNumber). Warnings are
-// discarded here; Ingest already emitted them on the same shapes. See the
-// corruption class this closes on adapter.HookIngestGuard (issue #124).
+// RefusedHookEvents implements adapter.HookIngestGuard — see the interface doc
+// for the shared contract and ingestHooks for what cursor refuses. Cursor leg:
+// hooks.json is re-read exactly as Ingest parses it (strict JSON, UseNumber);
+// refused events surface under their CANONICAL names (preToolUse →
+// PreToolUse), and Cursor-only events (afterFileEdit, …) never appear — no
+// canonical file exists to retire. Warnings are discarded here; Ingest already
+// emitted them on the same shapes.
 func (a *Adapter) RefusedHookEvents(scope adapter.Scope, project string) ([]string, error) {
 	if err := adapter.RequireProjectRoot(scope, project); err != nil {
 		return nil, err

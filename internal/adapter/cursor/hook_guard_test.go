@@ -16,7 +16,11 @@ import (
 // under their CANONICAL spelling (native "preToolUse" reports as "PreToolUse"
 // — the name import retires), and a Cursor-only event with no canonical
 // equivalent is NEVER refused even when it carries semantic-refusal content,
-// because no canonical hooks/<event>.toml can exist for it.
+// because no canonical hooks/<event>.toml can exist for it. Fixtures are
+// strict JSON — deliberately, unlike the gemini twin's JSONC rows:
+// RefusedHookEvents parses hooks.json exactly as Ingest does (strict JSON,
+// jsonkeys.DecodeObject), so if Cursor ever documents JSONC for hooks.json,
+// both parse sites and this test change together.
 func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 	testenv.RequireContainer(t)
 	tests := []struct {

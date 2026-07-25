@@ -204,9 +204,10 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 // reaches this funnel with its exact digits intact. (claude's plugin
 // enable-state ingest still uses plain json.Unmarshal — harmless: it reads
 // strings/bools only and feeds no Extra map or canonical component.)
-// json.Number is the hazard here: its
-// underlying type is a string, and go-toml marshals it as a TOML *string*
-// (`timeout = '30'`), so persisting it unconverted through source.Write* flips
+//
+// json.Number is the hazard here: its underlying type is a string, and go-toml
+// marshals it as a TOML *string* (`timeout = '30'`), so persisting it
+// unconverted through source.Write* flips
 // the value's native type on the next render (30 -> "30"). Extra is the only
 // TOML-persisted passthrough surface (Subagent/Command/Skill frontmatter decode
 // via DecodeYAML, which already converts), so the funnel normalizes exactly

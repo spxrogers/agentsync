@@ -33,17 +33,27 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   warn without capturing and never retire. One deliberate divergence: a
   non-`command` handler *type* stays captured — Codex parses-and-skips unknown
   types and agentsync re-renders the type verbatim, so nothing is lost on it.
-- **Cursor now implements `HookIngestGuard` too** — the round-1 review of this
-  PR's Gemini work found the same stale-hook clobber still live (and newly
-  unacknowledged) for a Cursor-side enrichment: a hook event captured while
-  clean and later enriched natively in `.cursor/hooks.json` (a `timeout`, a
-  `failClosed`, a `prompt`-type entry) left a stale canonical
+- **Cursor now implements `HookIngestGuard` too** — the same stale-hook
+  clobber was still live for a Cursor-side enrichment: a hook event captured
+  while clean and later enriched natively in `.cursor/hooks.json` (a
+  `timeout`, a `failClosed`, a `prompt`-type entry) left a stale canonical
   `hooks/<event>.toml` the next apply kept rewriting lossily. Cursor's import
   now retires the stale canonical file, reporting refused events under their
   *canonical* names (`preToolUse` → `PreToolUse`); Cursor-only events
   (`afterFileEdit`, …) are never retired, and a structurally-malformed
   hooks.json shape (including a non-string `command`/`matcher`/`type`) warns
   without capturing and never triggers retirement.
+- **Claude/Gemini/Cursor hook ingests refuse a malformed or absent `command`
+  instead of capturing an empty one.** A native handler whose `command` was a
+  non-string — or missing entirely — passed the ingest guards, was captured
+  as an empty-command hook, and the next apply (owning the whole per-event
+  array) wrote `"command": ""` over the user's native handler. For Claude
+  this was a pre-existing hole; all three now warn and leave the event
+  uncaptured (a malformed shape never triggers retirement), and a
+  prompt-type handler with no command keeps its retirement-triggering
+  refusal on the *type*, not a downgrade on the missing command. Unmodeled
+  native key names in ingest warnings are now quoted, so a hostile key
+  cannot forge warning lines.
 - **Gemini now implements `HookIngestGuard`, closing the stale-hook clobber for
   Gemini-side enrichments.** A hook event captured while clean and later
   enriched natively in `.gemini/settings.json` (a `timeout`, a `sequential`, a
