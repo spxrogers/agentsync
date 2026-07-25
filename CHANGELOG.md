@@ -958,7 +958,9 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   local-history NOTICE is written **before** the managed marker (and the half-created
   `.git` is rolled back on failure), so a repo that `Detect`s as agentsync-owned always
   carries the "do not push / may contain cleartext" notice. A `mode = "on"` apply that
-  auto-inits a new dir now prints a one-time-per-run caution that the local-only history
+  auto-inits a new dir now announces **every** dir it inits ("started a local-only
+  git backup of <dir>" — a second new dir in the same run is never silent), with a
+  one-time-per-run caution clause that the local-only history
   may hold cleartext secrets, and `revert`'s dirty-tracked snapshot prints the same
   caution before it commits possibly-just-typed cleartext. All of this stays
   best-effort: a chmod failure never aborts the apply, and no push surface is added.

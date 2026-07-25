@@ -352,17 +352,21 @@ function main() {
 	const allowed = violations.length - fatal.length;
 	// A stale entry shields nothing: its breakage was fixed (or the page moved),
 	// so the exception must be deleted, not left to mask a future regression.
-	const stale = allowlist.filter((_, i) => !matched.has(i));
 	// A DUPLICATE allowlist entry can never match (allowlistIndex returns the
-	// first index), so it would surface as a confusing "stale" forever — name
-	// the real problem instead.
+	// first index), so it would surface as a confusing "stale" forever, with
+	// advice ("the underlying link was fixed") that cannot fix it. Name the
+	// real problem instead, and EXCLUDE duplicates from the stale list so each
+	// defect gets exactly one accurate diagnostic — which also makes the
+	// dupes term in cleanRun below load-bearing, not redundant.
 	const seenEntries = new Set();
-	const dupes = [];
-	for (const e of allowlist) {
+	const dupeIdx = new Set();
+	for (const [i, e] of allowlist.entries()) {
 		const k = `${e.file}\u0000${e.target}`;
-		if (seenEntries.has(k)) dupes.push(e);
+		if (seenEntries.has(k)) dupeIdx.add(i);
 		seenEntries.add(k);
 	}
+	const dupes = allowlist.filter((_, i) => dupeIdx.has(i));
+	const stale = allowlist.filter((_, i) => !matched.has(i) && !dupeIdx.has(i));
 
 	const cleanRun = fatal.length === 0 && stale.length === 0 && dupes.length === 0;
 	if (cleanRun) {

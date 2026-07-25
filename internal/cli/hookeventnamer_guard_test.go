@@ -73,11 +73,12 @@ func TestHookEventNamer_CoversEveryRenamedPointer(t *testing.T) {
 			}
 		})
 	}
-	// Vacuity guard: claude, codex, gemini, and cursor all emit a hooks section
-	// for this fixture today (claude/codex under the canonical spelling, gemini/
-	// cursor renamed). If a refactor made this walk see none of them, every
-	// assertion above would pass over nothing.
-	if hookEmitters < 4 {
-		t.Fatalf("fixture exercised only %d hook-emitting renders; expected >= 4 — the guard went vacuous", hookEmitters)
+	// Vacuity guard: claude, codex, gemini, and cursor each emit a hooks
+	// section for this fixture at BOTH scopes (8 emitters today — claude/codex
+	// under the canonical spelling, gemini/cursor renamed). Require all 8 so a
+	// single renaming adapter silently dropping out of the walk cannot leave
+	// the guard vacuously green for exactly the agent it exists to check.
+	if hookEmitters < 8 {
+		t.Fatalf("fixture exercised only %d hook-emitting renders; expected >= 8 (4 agents x 2 scopes) — the guard went partially vacuous", hookEmitters)
 	}
 }
