@@ -15,10 +15,6 @@ import (
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
-// Ingest reads Gemini CLI's native config files and returns a partial
-// source.Canonical. It is the inverse of Render (modulo the documented projected
-// loss — subagent tools/color, command argument-hint/allowed-tools — which Render
-// drops with a reported Skip).
 // walkCommandsDir is filepath.WalkDir behind a seam: the mid-walk error branch
 // (an unreadable subdirectory reaching the callback's err argument) cannot be
 // planted deterministically in the privileged test container, so the loud-
@@ -26,6 +22,10 @@ import (
 // var to inject the error. Production never reassigns it.
 var walkCommandsDir = filepath.WalkDir
 
+// Ingest reads Gemini CLI's native config files and returns a partial
+// source.Canonical. It is the inverse of Render (modulo the documented projected
+// loss — subagent tools/color, command argument-hint/allowed-tools — which Render
+// drops with a reported Skip).
 func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical, error) {
 	if err := adapter.RequireProjectRoot(scope, project); err != nil {
 		return source.Canonical{}, err
