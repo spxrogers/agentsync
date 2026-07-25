@@ -483,11 +483,21 @@ func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adap
 	// A renaming agent's pointer spells the event NATIVELY (gemini
 	// /hooks/BeforeTool, cursor /hooks/preToolUse for canonical PreToolUse), so
 	// each retired event's disown matches its full alias set — canonical plus
-	// every registered adapter.HookEventNamer's native spelling. Matching only
-	// the canonical name left a renaming agent's key owned with no canonical
-	// render behind it, and the next apply's orphan cleanup deleted the event
-	// from that agent's native config. Over-matching errs safe: a key disowned
-	// while its event still renders is simply re-recorded by the next apply.
+	// every registered adapter.HookEventNamer's non-empty native spelling
+	// (identity mappings are excluded by native != event, and gemini/cursor's
+	// native values intersect canonical names only at identities — so an alias
+	// collision takes a user-authored canonical event named like another
+	// agent's native spelling, e.g. hooks/BeforeTool.toml while PreToolUse
+	// retires). Matching only the canonical name left a renaming agent's key
+	// owned with no canonical render behind it, and the next apply's orphan
+	// cleanup deleted the event from that agent's native config. Over-matching
+	// errs toward the RECOVERABLE side, not a free pass: a key disowned while
+	// its event still renders shows as a ForeignCollision in status/reconcile
+	// until the next apply re-records it — and if the user deletes the
+	// canonical file inside that window, the now-unowned native entry is left
+	// behind for good (never clobbered, though). Aliases are NOT id-gated the
+	// way retired events are, but a ':'-bearing native spelling still cannot
+	// cross a key boundary: canonical pointers never contain ':'.
 	var aliases []string
 	for _, event := range retired {
 		aliases = append(aliases, event)
@@ -496,7 +506,7 @@ func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adap
 			if !ok {
 				continue
 			}
-			if native, ok := namer.NativeHookEvent(event); ok && native != event {
+			if native, ok := namer.NativeHookEvent(event); ok && native != "" && native != event {
 				aliases = append(aliases, native)
 			}
 		}
