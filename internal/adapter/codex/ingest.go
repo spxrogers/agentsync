@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
-	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/afero"
@@ -244,8 +242,8 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 				structural = true
 				break
 			}
-			if extra := unmodeledKeys(entry, codexHookDefModeledKeys); len(extra) > 0 {
-				fmt.Fprintf(warn, "warning: hook event %q has a definition with unmodeled fields (%s); event not captured\n", event, quotedKeys(extra))
+			if extra := adapter.UnmodeledKeys(entry, codexHookDefModeledKeys); len(extra) > 0 {
+				fmt.Fprintf(warn, "warning: hook event %q has a definition with unmodeled fields (%s); event not captured\n", event, adapter.QuotedKeys(extra))
 				representable = false
 				break
 			}
@@ -281,8 +279,8 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 						break defs
 					}
 				}
-				if extra := unmodeledKeys(h, codexHookEntryModeledKeys); len(extra) > 0 {
-					fmt.Fprintf(warn, "warning: hook event %q has a handler with unmodeled fields (%s); event not captured\n", event, quotedKeys(extra))
+				if extra := adapter.UnmodeledKeys(h, codexHookEntryModeledKeys); len(extra) > 0 {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler with unmodeled fields (%s); event not captured\n", event, adapter.QuotedKeys(extra))
 					representable = false
 					break defs
 				}
@@ -341,27 +339,4 @@ func (a *Adapter) RefusedHookEvents(scope adapter.Scope, project string) ([]stri
 	}
 	_, refused := ingestHooks(top["hooks"], io.Discard)
 	return refused, nil
-}
-
-// unmodeledKeys returns the sorted keys of m that are not in modeled.
-func unmodeledKeys(m map[string]any, modeled map[string]bool) []string {
-	var out []string
-	for k := range m {
-		if !modeled[k] {
-			out = append(out, k)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-// quotedKeys renders untrusted native key names for a warning line: each key
-// %q-quoted (control bytes escaped — a key containing a newline cannot forge
-// a second warning line), comma-separated.
-func quotedKeys(keys []string) string {
-	qs := make([]string, len(keys))
-	for i, k := range keys {
-		qs[i] = strconv.Quote(k)
-	}
-	return strings.Join(qs, ", ")
 }

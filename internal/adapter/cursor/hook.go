@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strconv"
-	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/jsonkeys"
@@ -210,8 +208,8 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 				representable = false
 				break
 			}
-			if extra := unmodeledKeys(entry, cursorHookEntryModeledKeys); len(extra) > 0 {
-				fmt.Fprintf(warn, "warning: hook event %q has an entry with unmodeled fields (%s); event not captured\n", cursorEvent, quotedKeys(extra))
+			if extra := adapter.UnmodeledKeys(entry, cursorHookEntryModeledKeys); len(extra) > 0 {
+				fmt.Fprintf(warn, "warning: hook event %q has an entry with unmodeled fields (%s); event not captured\n", cursorEvent, adapter.QuotedKeys(extra))
 				representable = false
 				break
 			}
@@ -277,18 +275,6 @@ func (a *Adapter) RefusedHookEvents(scope adapter.Scope, project string) ([]stri
 	return refused, nil
 }
 
-// unmodeledKeys returns the sorted keys of entry that are not in modeled.
-func unmodeledKeys(entry map[string]any, modeled map[string]bool) []string {
-	var out []string
-	for k := range entry {
-		if !modeled[k] {
-			out = append(out, k)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
 // NativeHookEvent implements adapter.HookEventNamer: Cursor camelCases
 // canonical hook events in hooks.json (PreToolUse -> preToolUse, …), so
 // import's stale-hook retirement must disown cursor's "/hooks/<native>" state
@@ -298,15 +284,4 @@ func unmodeledKeys(entry map[string]any, modeled map[string]bool) []string {
 func (a *Adapter) NativeHookEvent(canonical string) (string, bool) {
 	native, ok := canonicalToCursorHookEvent[canonical]
 	return native, ok
-}
-
-// quotedKeys renders untrusted native key names for a warning line: each key
-// %q-quoted (control bytes escaped — a key containing a newline cannot forge
-// a second warning line), comma-separated.
-func quotedKeys(keys []string) string {
-	qs := make([]string, len(keys))
-	for i, k := range keys {
-		qs[i] = strconv.Quote(k)
-	}
-	return strings.Join(qs, ", ")
 }

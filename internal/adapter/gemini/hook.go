@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strconv"
-	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/jsonkeys"
@@ -226,8 +224,8 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 				structural = true
 				break
 			}
-			if extra := unmodeledKeys(entry, geminiHookDefModeledKeys); len(extra) > 0 {
-				fmt.Fprintf(warn, "warning: hook event %q has a definition with unmodeled fields (%s); event not captured\n", geminiEvent, quotedKeys(extra))
+			if extra := adapter.UnmodeledKeys(entry, geminiHookDefModeledKeys); len(extra) > 0 {
+				fmt.Fprintf(warn, "warning: hook event %q has a definition with unmodeled fields (%s); event not captured\n", geminiEvent, adapter.QuotedKeys(extra))
 				representable = false
 				break
 			}
@@ -275,8 +273,8 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 					representable = false
 					break defs
 				}
-				if extra := unmodeledKeys(h, geminiHookEntryModeledKeys); len(extra) > 0 {
-					fmt.Fprintf(warn, "warning: hook event %q has a handler with unmodeled fields (%s); event not captured\n", geminiEvent, quotedKeys(extra))
+				if extra := adapter.UnmodeledKeys(h, geminiHookEntryModeledKeys); len(extra) > 0 {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler with unmodeled fields (%s); event not captured\n", geminiEvent, adapter.QuotedKeys(extra))
 					representable = false
 					break defs
 				}
@@ -343,18 +341,6 @@ func (a *Adapter) RefusedHookEvents(scope adapter.Scope, project string) ([]stri
 	return refused, nil
 }
 
-// unmodeledKeys returns the sorted keys of m that are not in modeled.
-func unmodeledKeys(m map[string]any, modeled map[string]bool) []string {
-	var out []string
-	for k := range m {
-		if !modeled[k] {
-			out = append(out, k)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
 // NativeHookEvent implements adapter.HookEventNamer: Gemini renames canonical
 // hook events in settings.json (PreToolUse -> BeforeTool, …), so import's
 // stale-hook retirement must disown gemini's "/hooks/<native>" state key under
@@ -364,15 +350,4 @@ func unmodeledKeys(m map[string]any, modeled map[string]bool) []string {
 func (a *Adapter) NativeHookEvent(canonical string) (string, bool) {
 	native, ok := canonicalToGeminiHookEvent[canonical]
 	return native, ok
-}
-
-// quotedKeys renders untrusted native key names for a warning line: each key
-// %q-quoted (control bytes escaped — a key containing a newline cannot forge
-// a second warning line), comma-separated.
-func quotedKeys(keys []string) string {
-	qs := make([]string, len(keys))
-	for i, k := range keys {
-		qs[i] = strconv.Quote(k)
-	}
-	return strings.Join(qs, ", ")
 }
