@@ -170,6 +170,13 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (revertHash, snap
 	}
 	for _, ch := range changes {
 		if ch.Kind == "delete" {
+			// Deletes get the ancestor-symlink check only (below): removing a
+			// tracked path THROUGH a symlinked parent would resolve outside the
+			// repo and destroy the user's file at the link target. The leaf
+			// checks don't apply — the leaf itself is tracked content.
+			if parent, isLink := symlinkAncestor(r.dir, ch.Path); isLink {
+				return "", snapshotHash, fmt.Errorf("cannot restore: %q would be deleted through the symlink %q agentsync does not manage; move or remove it, then re-run revert", ch.Path, parent)
+			}
 			continue
 		}
 		abs := filepath.Join(r.dir, filepath.FromSlash(ch.Path))
@@ -192,8 +199,16 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (revertHash, snap
 			// rather than overwrite and commit it.
 			return "", snapshotHash, fmt.Errorf("cannot restore %q: a file agentsync does not manage already exists there; move or remove it, then re-run revert", ch.Path)
 		}
+		if parent, isLink := symlinkAncestor(r.dir, ch.Path); isLink {
+			// Lstat-based: a SYMLINKED ancestor Stat-reports as a real
+			// directory, and billy's chroot fs doesn't resolve symlinks either —
+			// so writing "through" it would land managed content (including
+			// resolved cleartext secrets) OUTSIDE the repo, at wherever the
+			// user's link points. Refuse it like every other structural conflict.
+			return "", snapshotHash, fmt.Errorf("cannot restore %q: its parent %q is a symlink agentsync does not manage — restoring through it would write outside the backup; move or remove it, then re-run revert", ch.Path, parent)
+		}
 		for parent := path.Dir(ch.Path); parent != "." && parent != "/"; parent = path.Dir(parent) {
-			pinfo, statErr := os.Stat(filepath.Join(r.dir, filepath.FromSlash(parent)))
+			pinfo, statErr := os.Lstat(filepath.Join(r.dir, filepath.FromSlash(parent)))
 			if statErr != nil {
 				continue // doesn't exist yet — MkdirAll will create it
 			}
@@ -280,6 +295,15 @@ func pruneEmptiedDirs(wt *gogit.Worktree, changes []FileChange) {
 			continue
 		}
 		for parent := path.Dir(ch.Path); parent != "." && parent != "/"; parent = path.Dir(parent) {
+			// Lstat first: billy's ReadDir/Remove FOLLOW symlinks, so if the
+			// user exposed a managed dir via a symlink (~/.claude/skills ->
+			// /elsewhere), "pruning" the emptied dir would unlink the USER'S
+			// SYMLINK — a user-owned entry the restore contract leaves alone
+			// (the same class the create-path Lstat refusal guards). A symlink
+			// (or anything that is not a real directory) ends the chain.
+			if info, lerr := fs.Lstat(parent); lerr != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				break
+			}
 			entries, err := fs.ReadDir(parent)
 			if err != nil || len(entries) > 0 {
 				break // already gone (a sibling pruned it), unreadable, or still holds entries — keep it and everything above
@@ -289,6 +313,25 @@ func pruneEmptiedDirs(wt *gogit.Worktree, changes []FileChange) {
 			}
 		}
 	}
+}
+
+// symlinkAncestor walks rel's parent chain (slash-separated, repo-relative)
+// and reports the first ancestor that is a symlink, if any. Every mutation the
+// restore performs — create, modify, delete, prune — resolves paths through
+// the OS (billy's chroot fs does not resolve symlinks itself but the syscalls
+// under it do), so any symlinked ancestor redirects the mutation OUTSIDE the
+// repo; the pre-flight refuses all of them through this one walk.
+func symlinkAncestor(root, rel string) (string, bool) {
+	for parent := path.Dir(rel); parent != "." && parent != "/"; parent = path.Dir(parent) {
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(parent)))
+		if err != nil {
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return parent, true
+		}
+	}
+	return "", false
 }
 
 // restoreFailureHint wraps a failure that struck once the worktree delta-apply had begun

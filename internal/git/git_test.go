@@ -2117,3 +2117,110 @@ func TestRestore_RecreatedParentDirsMode(t *testing.T) {
 		}
 	}
 }
+
+// TestRestore_RefusesSymlinkedAncestorOnCreate pins the round-4 blocker: a
+// symlinked ancestor Stat-reports as a real directory, so a restore CREATE
+// under it would write managed content (resolved cleartext secrets included)
+// through the link, OUTSIDE the repo. The pre-flight must refuse before any
+// mutation, and the link target must stay untouched.
+func TestRestore_RefusesSymlinkedAncestorOnCreate(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	outside := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "sub/managed.txt", "v1", "apply 1") // target: has the file
+	commitFile(t, r, dir, "keep.txt", "k", "apply 2")
+	// Simulate the delete of sub/ then the user planting a symlink at its path.
+	if err := os.RemoveAll(filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.SnapshotDirtyTracked("drop sub", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, rerr := r.Restore("HEAD~2", "agentsync revert: symlinked ancestor", DefaultIdentity)
+	if rerr == nil {
+		t.Fatal("restore creating under a symlinked ancestor must refuse")
+	}
+	if !strings.Contains(rerr.Error(), "symlink") {
+		t.Fatalf("refusal should name the symlink; got: %v", rerr)
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Fatalf("restore wrote through the symlink into the outside dir: %v", entries)
+	}
+	if fi, lerr := os.Lstat(filepath.Join(dir, "sub")); lerr != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the user's symlink must survive the refusal; err=%v", lerr)
+	}
+}
+
+// TestRestore_RefusesDeleteThroughSymlinkedAncestor pins the delete half of the
+// same blocker: removing a tracked path whose parent the user replaced with a
+// symlink would resolve through the link and destroy the user's file at the
+// link target. Deletions skip the leaf pre-flight, so the ancestor walk must
+// cover them explicitly.
+func TestRestore_RefusesDeleteThroughSymlinkedAncestor(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	outside := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "base.txt", "b", "apply 1") // target: no sub/doomed.txt
+	commitFile(t, r, dir, "sub/doomed.txt", "tracked", "apply 2")
+	// The user replaces sub/ with a symlink to an outside dir holding a file at
+	// the tracked name.
+	if err := os.RemoveAll(filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "doomed.txt"), []byte("USER DATA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, rerr := r.Restore("HEAD~1", "agentsync revert: delete through symlink", DefaultIdentity)
+	if rerr == nil {
+		t.Fatal("restore deleting through a symlinked ancestor must refuse")
+	}
+	if !strings.Contains(rerr.Error(), "symlink") {
+		t.Fatalf("refusal should name the symlink; got: %v", rerr)
+	}
+	if b, ferr := os.ReadFile(filepath.Join(outside, "doomed.txt")); ferr != nil || string(b) != "USER DATA" {
+		t.Fatalf("the user's file behind the link must survive byte-for-byte; err=%v content=%q", ferr, b)
+	}
+}
+
+// TestPruneEmptiedDirs_KeepsUserSymlink pins the prune guard directly (the
+// pre-flight refuses reachable symlink cases, so this is the defense-in-depth
+// layer for a link appearing mid-restore): billy's ReadDir/Remove follow
+// symlinks, so without the Lstat gate the prune would UNLINK a user's symlink
+// whose target happens to be empty.
+func TestPruneEmptiedDirs_KeepsUserSymlink(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	outside := t.TempDir() // empty: exactly the "emptied dir" shape prune removes
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "keep.txt", "k", "seed")
+	if err := os.Symlink(outside, filepath.Join(dir, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	wt, err := r.repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pruneEmptiedDirs(wt, []FileChange{{Kind: "delete", Path: "linked/file.txt"}})
+	if fi, lerr := os.Lstat(filepath.Join(dir, "linked")); lerr != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("prune must never unlink a user's symlink; err=%v", lerr)
+	}
+}
