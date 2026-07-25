@@ -285,9 +285,10 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 				// An absent or non-string command would be asStr-coerced to "" and
 				// captured as an EMPTY-command handler — which the next apply, owning
 				// the whole per-event array, would write over the user's native
-				// handler. Checked AFTER the type check so it governs only command-type
-				// handlers: a native prompt-type handler legitimately has no command,
-				// and must keep its SEMANTIC (retirement-triggering) refusal above.
+				// handler. Checked AFTER the type and unmodeled-keys checks so it governs
+				// only fully-modeled command-type handlers: a semantically-refusable
+				// handler (prompt-type, or carrying an unmodeled field) must keep its
+				// retirement-triggering refusal above.
 				if rawCmd, present := h["command"]; !present {
 					fmt.Fprintf(warn, "warning: hook event %q has a handler without a \"command\"; event not captured\n", geminiEvent)
 					representable = false

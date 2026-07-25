@@ -128,7 +128,10 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 		// unrepresentable def/handler, so a structural typo EARLIER in the array
 		// masks a semantic def later (no retirement that round). Deliberate: an
 		// event containing a malformed shape can't be trusted for retirement at
-		// all, every skip is warned, and fixing the typo re-runs the scan.
+		// all, every skip is warned, and fixing the typo re-runs the scan. The
+		// converse also holds: a SEMANTIC hit stops the scan before a later
+		// structural typo is seen, so the event still retires — correct, since
+		// the unmodeled field alone proves the event unrepresentable.
 		structural := false
 	defs:
 		for _, rawEntry := range entries {
@@ -202,9 +205,10 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 				// An absent or non-string command would be asStr-coerced to "" and
 				// captured as an EMPTY-command handler — which the next apply, owning
 				// the whole per-event array, would write over the user's native
-				// handler. Checked AFTER the type check so it governs only command-type
-				// handlers: a native prompt-type handler legitimately has no command,
-				// and must keep its SEMANTIC (retirement-triggering) refusal above.
+				// handler. Checked AFTER the type and unmodeled-keys checks so it governs
+				// only fully-modeled command-type handlers: a semantically-refusable
+				// handler (prompt-type, or carrying an unmodeled field) must keep its
+				// retirement-triggering refusal above.
 				if rawCmd, present := h["command"]; !present {
 					fmt.Fprintf(warn, "warning: hook event %q has a handler without a \"command\"; event not captured\n", event)
 					representable = false

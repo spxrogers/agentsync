@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"sigs.k8s.io/yaml"
 
@@ -144,7 +143,7 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				cf["description"] = d
 			}
 			if dropped := droppedPromptKeys(fm); len(dropped) > 0 {
-				fmt.Fprintf(warn, "warning: prompt %q frontmatter keys not modeled by agentsync dropped on import: %s\n", name, strings.Join(dropped, ", "))
+				fmt.Fprintf(warn, "warning: prompt %q frontmatter keys not modeled by agentsync dropped on import: %s\n", name, adapter.QuotedKeys(dropped))
 			}
 			c.Commands = append(c.Commands, source.Command{Name: name, Frontmatter: cf, Body: body})
 		}

@@ -219,10 +219,10 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 			// field, not be short-circuited into a structural skip.
 			// An absent or non-string command would be asStr-coerced to "" and
 			// captured as an EMPTY-command entry the next apply would then write
-			// over the user's native entry. Checked AFTER the type check so it
-			// governs only command-type entries: a native prompt-type entry
-			// legitimately has no command, and must keep its SEMANTIC
-			// (retirement-triggering) refusal above.
+			// over the user's native entry. Checked AFTER the type and unmodeled-keys
+			// checks so it governs only fully-modeled command-type entries: a
+			// semantically-refusable entry (prompt-type, or carrying an unmodeled
+			// field) must keep its retirement-triggering refusal above.
 			if rawCmd, present := entry["command"]; !present {
 				fmt.Fprintf(warn, "warning: hook event %q has an entry without a \"command\"; event not captured\n", cursorEvent)
 				representable = false

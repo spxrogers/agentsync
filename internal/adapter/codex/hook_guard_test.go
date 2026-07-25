@@ -66,6 +66,16 @@ prompt = "review"
 `, true,
 		},
 		{
+			"semantic: unmodeled handler field with a non-string command (unmodeled wins over the non-string-command structural check)",
+			`[[hooks.PreToolUse]]
+matcher = "Bash"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 123
+timeout = 30
+`, true,
+		},
+		{
 			"codex divergence: non-command type with a command is representable — never refused",
 			`[[hooks.PreToolUse]]
 matcher = "Bash"
