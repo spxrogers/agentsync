@@ -141,7 +141,9 @@ retiring the stale canonical file for every *semantically* refused event
 structurally-malformed native shape — a settings.json typo — warns but never
 deletes canonical config). Because canonical hooks are shared across agents,
 retirement hands the event back to **every** hook-rendering agent at that
-scope: each agent's `/hooks/<event>` state key is disowned so no orphan
+scope: each agent's hook state key is disowned — under the agent's *native*
+event spelling for renaming agents (Gemini `BeforeTool`, Cursor `preToolUse`,
+via `adapter.HookEventNamer`) — so no orphan
 cleanup fires, and every native entry is left frozen as-is. So an
 import→apply round-trip never rewrites the user's native `/hooks/<event>`
 array lossily. It also owns the

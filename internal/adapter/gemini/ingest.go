@@ -19,6 +19,13 @@ import (
 // source.Canonical. It is the inverse of Render (modulo the documented projected
 // loss — subagent tools/color, command argument-hint/allowed-tools — which Render
 // drops with a reported Skip).
+// walkCommandsDir is filepath.WalkDir behind a seam: the mid-walk error branch
+// (an unreadable subdirectory reaching the callback's err argument) cannot be
+// planted deterministically in the privileged test container, so the loud-
+// return contract at the walkErr check is pinned by a test overriding this
+// var to inject the error. Production never reassigns it.
+var walkCommandsDir = filepath.WalkDir
+
 func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical, error) {
 	if err := adapter.RequireProjectRoot(scope, project); err != nil {
 		return source.Canonical{}, err
@@ -78,7 +85,7 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	case !fi.IsDir():
 		return c, fmt.Errorf("read commands dir %s: not a directory", p.CommandsDir)
 	default:
-		walkErr := filepath.WalkDir(p.CommandsDir, func(path string, d fs.DirEntry, err error) error {
+		walkErr := walkCommandsDir(p.CommandsDir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}

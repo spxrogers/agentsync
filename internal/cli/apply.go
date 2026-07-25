@@ -350,6 +350,14 @@ func isSyncedOp(op adapter.FileOp, wouldChange map[string]bool) bool {
 func planSyncCounts(plan render.RenderPlan, wouldChange map[string]bool) (toWrite, synced int) {
 	for _, res := range plan.PerAgent {
 		for _, op := range res.Ops {
+			// A pure orphan-cleanup op (the "{}"+OwnedKeys signature — same
+			// predicate as removalCounts) is previewed under "Removals:", and
+			// the real apply's headline subtracts it from "applied: X ops" —
+			// counting it in "to write" too made the dry-run and real headlines
+			// disagree by one per cleanup op.
+			if render.IsKeyMerge(op.MergeStrategy) && strings.TrimSpace(string(op.Content)) == "{}" && len(op.OwnedKeys) > 0 {
+				continue
+			}
 			if isSyncedOp(op, wouldChange) {
 				synced++
 			} else {

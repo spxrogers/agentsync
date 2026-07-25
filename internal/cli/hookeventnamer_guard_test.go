@@ -33,7 +33,7 @@ func TestHookEventNamer_CoversEveryRenamedPointer(t *testing.T) {
 	resolved := secrets.ForRender(fixture)
 
 	reg := registryFactory()
-	hookEmitters := 0
+	hookEmitters := map[string]int{}
 	for _, name := range reg.Names() {
 		a := reg.Lookup(name)
 		t.Run(name, func(t *testing.T) {
@@ -54,7 +54,7 @@ func TestHookEventNamer_CoversEveryRenamedPointer(t *testing.T) {
 					if !ok {
 						continue
 					}
-					hookEmitters++
+					hookEmitters[name]++
 					want := map[string]bool{event: true}
 					if namer, ok := a.(adapter.HookEventNamer); ok {
 						if native, ok := namer.NativeHookEvent(event); ok {
@@ -73,12 +73,14 @@ func TestHookEventNamer_CoversEveryRenamedPointer(t *testing.T) {
 			}
 		})
 	}
-	// Vacuity guard: claude, codex, gemini, and cursor each emit a hooks
-	// section for this fixture at BOTH scopes (8 emitters today — claude/codex
-	// under the canonical spelling, gemini/cursor renamed). Require all 8 so a
-	// single renaming adapter silently dropping out of the walk cannot leave
-	// the guard vacuously green for exactly the agent it exists to check.
-	if hookEmitters < 8 {
-		t.Fatalf("fixture exercised only %d hook-emitting renders; expected >= 8 (4 agents x 2 scopes) — the guard went partially vacuous", hookEmitters)
+	// Vacuity guard: assert the four hook-emitting agents BY NAME at both
+	// scopes (claude/codex under the canonical spelling, gemini/cursor
+	// renamed) — a bare count could be satisfied by claude+codex alone,
+	// leaving the guard vacuous for exactly the renaming adapters it exists
+	// to check.
+	for _, agent := range []string{"claude", "codex", "gemini", "cursor"} {
+		if hookEmitters[agent] < 2 {
+			t.Fatalf("agent %s emitted a hooks section in %d renders; expected both scopes — the guard went vacuous for it", agent, hookEmitters[agent])
+		}
 	}
 }
