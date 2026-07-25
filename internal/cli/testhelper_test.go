@@ -38,6 +38,19 @@ func runCLIWithStdin(t *testing.T, env map[string]string, stdinContent string, a
 	return strings.TrimSpace(string(out)), err
 }
 
+// setenvAll applies env via t.Setenv on the calling (test) goroutine. The
+// concurrency tests use it to pre-set the environment BEFORE spawning the
+// goroutine that calls runCLI with a nil env: t.Setenv must never run off the
+// test goroutine — when the test goroutine fails first (a t.Fatal on the
+// contention timeout), a t.Setenv from the still-running spawned goroutine
+// panics ("Setenv used after test ended").
+func setenvAll(t *testing.T, env map[string]string) {
+	t.Helper()
+	for k, v := range env {
+		t.Setenv(k, v)
+	}
+}
+
 // runCLISplit runs the CLI capturing stdout and stderr into SEPARATE buffers,
 // returning (stdout, stderr, err) each trimmed of surrounding whitespace. Use it
 // to assert stream separation — e.g. that a --json payload lands cleanly on

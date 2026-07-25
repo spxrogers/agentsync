@@ -61,12 +61,18 @@ func TestConcurrentApply_LockSerializes(t *testing.T) {
 		out string
 		err error
 	}, 1)
+	// Every t.Setenv must happen HERE, on the test goroutine, before spawning:
+	// if the timeout arm below t.Fatals while the goroutine is still inside
+	// runCLI, a t.Setenv from that surviving goroutine would panic ("Setenv
+	// used after test ended"). Pre-set the env and pass nil to the goroutine's
+	// runCLI so it performs no Setenv of its own.
+	setenvAll(t, env)
 	go func() {
 		// Subtle: the CLI tests share process state through cobra's
 		// flag mutation; isolate this run inside a goroutine and wait
 		// with a deadline so a hang would still fail the test rather
 		// than blocking forever.
-		out, runErr := runCLI(t, env, "apply")
+		out, runErr := runCLI(t, nil, "apply")
 		done <- struct {
 			out string
 			err error
@@ -113,10 +119,13 @@ func TestConcurrentApply_DryRunDoesNotContend(t *testing.T) {
 	}
 	defer func() { _ = holder.Release() }()
 
-	// Dry-run must finish promptly even with the lock held.
+	// Dry-run must finish promptly even with the lock held. Setenv is hoisted
+	// onto the test goroutine (see TestConcurrentApply_LockSerializes); the
+	// goroutine's runCLI gets nil env so it never calls t.Setenv itself.
+	setenvAll(t, env)
 	done := make(chan error, 1)
 	go func() {
-		_, runErr := runCLI(t, env, "apply", "--dry-run")
+		_, runErr := runCLI(t, nil, "apply", "--dry-run")
 		done <- runErr
 	}()
 	select {
