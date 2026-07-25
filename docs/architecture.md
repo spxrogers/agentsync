@@ -755,9 +755,12 @@ cache, which keeps `apply` fast, offline, and reproducible in CI.
 
 Untrusted-input hardening at this boundary: fetchers reject symlinks in tarballs
 (and confine git-cloned symlinks to the fetched tree, refusing any that escape),
-cap decompressed size (`AGENTSYNC_MAX_TARBALL_MB`), verify manifest SHAs, bound
-component paths to the plugin cache, and reject `http://`/`git://` sources unless
-`AGENTSYNC_ALLOW_INSECURE_URLS=1`.
+symlink-resolve a local marketplace entry's source path before the
+marketplace-root containment check (so neither a symlinked path nor a symlinked
+intermediate directory can point the copy outside the root — see
+`RelativeFetcher`), cap decompressed size (`AGENTSYNC_MAX_TARBALL_MB`), verify
+manifest SHAs, bound component paths to the plugin cache, and reject
+`http://`/`git://` sources unless `AGENTSYNC_ALLOW_INSECURE_URLS=1`.
 
 ---
 

@@ -16,9 +16,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   so a marketplace entry whose source path *is* a symlink — or sits *behind* a
   symlinked intermediate directory — pointed the copy outside the root while
   the path itself looked contained (the walk-time symlink rejection only sees
-  entries inside the tree being copied). The source path is now `Lstat`ed and
-  refused if it is a symlink, and containment is re-checked on fully
-  symlink-resolved paths. (Closes an epic #178 residual.)
+  entries inside the tree being copied). Containment is now re-checked on
+  fully symlink-resolved paths. No compatible layout breaks: a symlink that
+  *resolves inside* the root is still followed (matching the git fetcher's
+  in-tree-symlink policy), and a rootless, user-named `marketplace add` path
+  may be a symlink exactly as before. (Closes an epic #178 residual.)
 - **Gemini now implements `HookIngestGuard`, closing the stale-hook clobber for
   Gemini-side enrichments.** A hook event captured while clean and later
   enriched natively in `.gemini/settings.json` (a `timeout`, a `sequential`, a

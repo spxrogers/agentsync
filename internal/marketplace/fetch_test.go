@@ -184,14 +184,14 @@ func TestRelativeFetcher_RejectsPathTraversal(t *testing.T) {
 	}
 }
 
-// TestRelativeFetcher_RejectsSymlinkSource pins the leaf-symlink hole the
-// Lstat check closes: the top-level source path itself is a symlink whose
-// target sits outside the marketplace root. The textual containment check
-// passes (the PATH is inside the root), and copyDir's walk-time rejection
-// never sees it (that only covers entries INSIDE the tree), so before the fix
-// the target's whole tree was copied into the plugin cache. Covered both with
-// a RootDir (resolved-containment refusal) and without one (Lstat refusal).
-func TestRelativeFetcher_RejectsSymlinkSource(t *testing.T) {
+// TestRelativeFetcher_RejectsSymlinkSourceEscape pins the leaf-symlink hole
+// the resolved-containment check closes: the top-level source path is a
+// symlink whose target sits OUTSIDE the marketplace root. The textual
+// containment check passes (the PATH is inside the root), and copyDir's
+// walk-time rejection never sees it (that only covers entries INSIDE the
+// tree), so before the fix the target's whole tree was copied into the
+// plugin cache.
+func TestRelativeFetcher_RejectsSymlinkSourceEscape(t *testing.T) {
 	outside := t.TempDir()
 	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("you should not see this"), 0o644); err != nil {
 		t.Fatal(err)
@@ -202,14 +202,79 @@ func TestRelativeFetcher_RejectsSymlinkSource(t *testing.T) {
 		t.Skipf("symlink unsupported on this platform: %v", err)
 	}
 
+	dst := t.TempDir()
+	src := marketplace.Source{Relative: link, RootDir: mpRoot}
+	if _, err := marketplace.Dispatch(src).Fetch(src, dst); err == nil {
+		t.Fatal("expected error for symlinked source escaping the root")
+	}
+	if _, statErr := os.Stat(filepath.Join(dst, "secret.txt")); statErr == nil {
+		t.Fatal("symlinked source escaped — secret.txt copied into dst")
+	}
+}
+
+// TestRelativeFetcher_FollowsBenignSymlinkSource pins the two symlink shapes
+// that must KEEP working (round-1 review: three reviewers flagged the interim
+// blanket Lstat refusal as a compat break): a ROOTLESS user-named path that is
+// a symlink (`marketplace add ~/dev/mp` in a dotfiles layout — no trust
+// boundary to defend), and a ROOTED source symlink that RESOLVES inside the
+// marketplace root (legitimate per the git fetcher's in-tree-symlink policy).
+func TestRelativeFetcher_FollowsBenignSymlinkSource(t *testing.T) {
+	// Rootless: symlink to an arbitrary real directory.
+	real := t.TempDir()
+	if err := os.WriteFile(filepath.Join(real, "README.md"), []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "mp")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink unsupported on this platform: %v", err)
+	}
+	dst := t.TempDir()
+	src := marketplace.Source{Relative: link}
+	if _, err := marketplace.Dispatch(src).Fetch(src, dst); err != nil {
+		t.Fatalf("rootless symlinked source must be followed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "README.md")); err != nil {
+		t.Fatalf("rootless symlinked source not copied: %v", err)
+	}
+
+	// Rooted: symlink resolving INSIDE the root.
+	mpRoot := t.TempDir()
+	pluginDir := filepath.Join(mpRoot, "real-plugin")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "README.md"), []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inLink := filepath.Join(mpRoot, "alias")
+	if err := os.Symlink(pluginDir, inLink); err != nil {
+		t.Skipf("symlink unsupported on this platform: %v", err)
+	}
+	dst2 := t.TempDir()
+	src2 := marketplace.Source{Relative: inLink, RootDir: mpRoot}
+	if _, err := marketplace.Dispatch(src2).Fetch(src2, dst2); err != nil {
+		t.Fatalf("in-root-resolving symlinked source must be followed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst2, "README.md")); err != nil {
+		t.Fatalf("in-root-resolving symlinked source not copied: %v", err)
+	}
+}
+
+// TestRelativeFetcher_ErrorLegs pins the failure-path ordering the round-1
+// review flagged as reshuffled (and then untested): existence is checked
+// BEFORE the resolve step, so a missing source — rooted or not — reports the
+// familiar "stat …" error rather than a surprising EvalSymlinks one. (The
+// "resolve root" leg is a defensive belt: a source can only pass the textual
+// containment AND exist while its root doesn't in exotic races, so it has no
+// deterministic fixture — the stat-first ordering is the observable contract.)
+func TestRelativeFetcher_ErrorLegs(t *testing.T) {
+	mpRoot := t.TempDir()
 	for _, rootDir := range []string{mpRoot, ""} {
-		dst := t.TempDir()
-		src := marketplace.Source{Relative: link, RootDir: rootDir}
-		if _, err := marketplace.Dispatch(src).Fetch(src, dst); err == nil {
-			t.Fatalf("RootDir=%q: expected error for symlinked source path", rootDir)
-		}
-		if _, statErr := os.Stat(filepath.Join(dst, "secret.txt")); statErr == nil {
-			t.Fatalf("RootDir=%q: symlinked source escaped — secret.txt copied into dst", rootDir)
+		missing := filepath.Join(mpRoot, "nope")
+		src := marketplace.Source{Relative: missing, RootDir: rootDir}
+		_, err := marketplace.Dispatch(src).Fetch(src, t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "stat ") {
+			t.Fatalf("RootDir=%q: missing source should fail at stat, got: %v", rootDir, err)
 		}
 	}
 }

@@ -31,8 +31,13 @@ can resolve secrets into native config files. Areas of particular interest:
   deletion carries no secret content to persist, and anything that writes
   content back still goes through `capture.Capture`.
 - **Untrusted marketplaces / plugins**: a marketplace or plugin you add is
-  treated as untrusted input. The npm/relative fetchers reject every symlink;
-  the git fetcher allows a symlink only when its resolved target stays inside the
+  treated as untrusted input. The npm fetcher rejects every symlink; the
+  relative (local-directory) fetcher rejects every symlink *inside* the copied
+  tree and requires a marketplace entry's source path to *resolve* inside the
+  marketplace root — a symlinked path or intermediate directory cannot point
+  the copy outside it, while one resolving in-root is followed (and a
+  rootless, user-named `marketplace add` path is trusted as typed); the git
+  fetcher allows a symlink only when its resolved target stays inside the
   fetched tree (an escaping link — `skills/x -> /etc` — is refused, as is an
   unresolvable one), so a plugin's legitimate in-tree link is kept without
   letting a read escape the cache. Fetchers also cap decompressed tarball size
