@@ -1716,3 +1716,155 @@ func treeEntryMode(t *testing.T, r *Repo, rel string) filemode.FileMode {
 	}
 	return e.Mode
 }
+
+// TestSnapshotPreApply pins the pre-apply baseline contract directly at the
+// engine level, one behavior per case: an untracked path the imminent apply
+// will overwrite is staged+committed so its bytes are recoverable; untracked
+// files outside plannedRels stay the user's own; nil plannedRels degrades to
+// exactly the tracked-dirt snapshot (the SnapshotDirtyTracked delegation); a
+// GITIGNORED planned path is silently not baselined (go-git's status omits
+// ignored files — the user opted that path out of versioning); and a planned
+// symlink is staged as a symlink blob holding the link target, never followed
+// to the outside content it points at.
+func TestSnapshotPreApply(t *testing.T) {
+	testenv.RequireContainer(t)
+
+	cases := []struct {
+		name string
+		run  func(t *testing.T, r *Repo, dir string)
+	}{
+		{
+			name: "untracked planned path is baselined",
+			run: func(t *testing.T, r *Repo, dir string) {
+				commitFile(t, r, dir, "base.txt", "b", "c1")
+				const preApply = "pre-apply bytes — must be recoverable\n"
+				writeFile(t, dir, "planned.txt", preApply)
+
+				h, err := r.SnapshotPreApply("pre-apply", DefaultIdentity, []string{"planned.txt"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if h == "" {
+					t.Fatal("SnapshotPreApply should commit the planned untracked file")
+				}
+				if got := blobAt(t, dir, h, "planned.txt"); got != preApply {
+					t.Fatalf("baselined bytes = %q, want %q", got, preApply)
+				}
+			},
+		},
+		{
+			name: "untracked file not planned is never touched",
+			run: func(t *testing.T, r *Repo, dir string) {
+				commitFile(t, r, dir, "tracked.txt", "v1", "c1")
+				writeFile(t, dir, "tracked.txt", "dirty") // guarantees a snapshot commit
+				const scratch = "mine — not agentsync's\n"
+				writeFile(t, dir, "scratch.txt", scratch)
+
+				h, err := r.SnapshotPreApply("pre-apply", DefaultIdentity, []string{"tracked.txt"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if h == "" {
+					t.Fatal("the dirty tracked file should still produce a snapshot")
+				}
+				if inHead(t, dir, "scratch.txt") {
+					t.Fatal("an untracked file outside plannedRels must not be committed")
+				}
+				if got := readFile(t, dir, "scratch.txt"); got != scratch {
+					t.Fatalf("untracked user file disturbed: %q", got)
+				}
+			},
+		},
+		{
+			name: "nil plannedRels still snapshots tracked dirt",
+			run: func(t *testing.T, r *Repo, dir string) {
+				commitFile(t, r, dir, "a.txt", "v1", "c1")
+				writeFile(t, dir, "a.txt", "hand-edited")
+
+				h, err := r.SnapshotPreApply("pre-apply", DefaultIdentity, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if h == "" {
+					t.Fatal("tracked dirt must still snapshot with nil plannedRels")
+				}
+				if got := blobAt(t, dir, h, "a.txt"); got != "hand-edited" {
+					t.Fatalf("snapshot blob = %q, want the hand edit", got)
+				}
+			},
+		},
+		{
+			name: "gitignored planned path is silently not baselined",
+			run: func(t *testing.T, r *Repo, dir string) {
+				commitFile(t, r, dir, ".gitignore", "secrets.env\n", "c1: ignore secrets.env")
+				commitFile(t, r, dir, "tracked.txt", "v1", "c2")
+				writeFile(t, dir, "tracked.txt", "dirty") // a commit happens, so absence is meaningful
+				const ignored = "TOKEN=pre-apply\n"
+				writeFile(t, dir, "secrets.env", ignored)
+
+				h, err := r.SnapshotPreApply("pre-apply", DefaultIdentity, []string{"secrets.env", "tracked.txt"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if h == "" {
+					t.Fatal("the dirty tracked file should still produce a snapshot")
+				}
+				if inHead(t, dir, "secrets.env") {
+					t.Fatal("a gitignored planned path must NOT be staged: go-git status omits ignored files, so its pre-apply bytes are not baselined")
+				}
+				if got := readFile(t, dir, "secrets.env"); got != ignored {
+					t.Fatalf("gitignored file disturbed on disk: %q", got)
+				}
+			},
+		},
+		{
+			name: "planned symlink staged as a symlink blob, not followed",
+			run: func(t *testing.T, r *Repo, dir string) {
+				commitFile(t, r, dir, "base.txt", "b", "c1")
+				const secret = "outside content — must not enter history\n"
+				outside := filepath.Join(t.TempDir(), "outside.txt")
+				if err := os.WriteFile(outside, []byte(secret), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outside, filepath.Join(dir, "link")); err != nil {
+					t.Skipf("symlinks unavailable on this platform: %v", err)
+				}
+
+				h, err := r.SnapshotPreApply("pre-apply", DefaultIdentity, []string{"link"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if h == "" {
+					t.Fatal("the planned untracked symlink should be baselined")
+				}
+				if mode := treeEntryMode(t, r, "link"); mode != filemode.Symlink {
+					t.Fatalf("link staged with mode %v, want filemode.Symlink", mode)
+				}
+				// The blob holds a REPRESENTATION of the link target, never the
+				// outside file's bytes. Pin that loosely: go-git's chrooted
+				// worktree fs (billy) rewrites an absolute target OUTSIDE the
+				// repo relative to the repo root (e.g. "/../002/outside.txt"),
+				// so asserting byte-equality with the original absolute target
+				// would pin a billy implementation detail rather than the
+				// contract that matters (no content following).
+				blob := blobAt(t, dir, h, "link")
+				if blob == secret {
+					t.Fatal("snapshot followed the symlink and captured outside content into history")
+				}
+				if !strings.HasSuffix(blob, "outside.txt") {
+					t.Errorf("symlink blob = %q, want a path form of the link target %q", blob, outside)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			r, err := Init(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.run(t, r, dir)
+		})
+	}
+}

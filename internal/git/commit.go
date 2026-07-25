@@ -101,9 +101,11 @@ func (r *Repo) SnapshotDirtyTracked(message string, id Identity) (string, error)
 // git backup was off or declined) has bytes nowhere in history — if the apply
 // then overwrites or deletes it, those bytes are unrecoverable unless the
 // baseline stages them now. Untracked files NOT in plannedRels remain the
-// user's own and are never touched (#128). Returns ("", nil) when there is
-// nothing to commit. The issue #126 cleartext caution on SnapshotDirtyTracked
-// applies here identically.
+// user's own and are never touched (#128). A GITIGNORED planned path is
+// silently not staged — go-git's status omits ignored files — so its pre-apply
+// bytes are not baselined; the user opted that path out of versioning.
+// Returns ("", nil) when there is nothing to commit. The issue #126 cleartext
+// caution on SnapshotDirtyTracked applies here identically.
 func (r *Repo) SnapshotPreApply(message string, id Identity, plannedRels []string) (string, error) {
 	wt, err := r.repo.Worktree()
 	if err != nil {
