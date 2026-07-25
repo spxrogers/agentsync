@@ -203,7 +203,12 @@ storage); skills to `.cursor/skills/`; subagents to `.cursor/agents/<name>.md`
 markdown — frontmatter dropped). Skips LSP (Cursor has no LSP concept).
 Implements no `PluginIngester` yet — Cursor's native plugin enable-state location
 is undocumented, so plugin discovery on `import` is deferred; `apply` still fans
-out plugin components like every adapter.
+out plugin components like every adapter. Hook ingest has the same
+guard-and-warn posture as Claude's/Gemini's — an unrepresentable event is
+refused whole, never captured lossily — and implements
+`adapter.HookIngestGuard` (`RefusedHookEvents`, reporting refused events under
+their *canonical* names), so a Cursor-side native enrichment triggers import's
+stale-hook retirement just like a Claude- or Gemini-side one.
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter/skill/extra helpers),
   secrets, source, paths, iox, jsonkeys, afero.

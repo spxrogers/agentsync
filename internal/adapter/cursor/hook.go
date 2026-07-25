@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
@@ -138,17 +139,27 @@ var cursorHookEntryModeledKeys = map[string]bool{"command": true, "matcher": tru
 // top-level "hooks" key) into canonical hooks, warning on anything it cannot
 // capture. Inverse of renderHooks: each Cursor camelCase event is mapped back to
 // its canonical PascalCase name, and each flat `{command, matcher, type}` entry
-// becomes a source.Hook with a missing type defaulting to "command". Two fail-safe
-// skips, both warned: a Cursor-native event with no canonical equivalent
-// (afterFileEdit, beforeShellExecution, …), and an event containing an entry the
-// canonical model cannot represent (non-command type or an unmodeled field) — see
-// cursorHookEntryModeledKeys.
-func ingestHooks(raw any, warn io.Writer) []source.Hook {
+// becomes a source.Hook with a missing type defaulting to "command". A
+// Cursor-native event with no canonical equivalent (afterFileEdit,
+// beforeShellExecution, …) is warned and skipped — never refused: no canonical
+// hooks/<event>.toml can exist for it, so there is nothing for import to
+// retire. A mappable event containing an entry the canonical model cannot
+// represent (non-command type or an unmodeled field — see
+// cursorHookEntryModeledKeys) is left uncaptured whole, with a warning.
+//
+// refused reports the SEMANTICALLY refused events under their CANONICAL names
+// (the spelling import retires — hooks/<canonical>.toml), sorted. The
+// structural flag mirrors the claude/gemini twins: a malformed native shape
+// (non-object entry, non-string matcher/type/command — likely a hooks.json
+// typo) warns and skips capture but never joins refused, because import
+// deletes canonical config for every refused event and a native typo must not
+// be destructive. First failure wins — a structural typo earlier in the array
+// masks a semantic entry later (deliberate; see the claude twin's comment).
+func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) {
 	hooks, ok := raw.(map[string]any)
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	var out []source.Hook
 	for cursorEvent, rawEntries := range hooks {
 		canonEvent, ok := cursorToCanonicalHookEvent[cursorEvent]
 		if !ok {
@@ -157,14 +168,37 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 		}
 		entries, ok := rawEntries.([]any)
 		if !ok {
-			continue
+			fmt.Fprintf(warn, "warning: hook event %q value is not an array; event not captured\n", cursorEvent)
+			continue // structural: warn + skip capture, but never a retire-triggering refusal
 		}
 		var captured []source.Hook
 		representable := true
+		structural := false
 		for _, rawEntry := range entries {
 			entry, ok := rawEntry.(map[string]any)
 			if !ok {
+				fmt.Fprintf(warn, "warning: hook event %q has a malformed entry (not an object); event not captured\n", cursorEvent)
 				representable = false
+				structural = true
+				break
+			}
+			// A non-string matcher/type/command would be asStr-coerced ("" match-all,
+			// "" type promoted to "command", "" command destroying the handler's
+			// meaning) and captured wrong; refuse the malformed shape instead —
+			// structurally, so a typo never triggers retirement.
+			bad := false
+			for _, key := range []string{"matcher", "type", "command"} {
+				if rawVal, present := entry[key]; present {
+					if _, isStr := rawVal.(string); !isStr {
+						fmt.Fprintf(warn, "warning: hook event %q has an entry whose %q is not a string; event not captured\n", cursorEvent, key)
+						bad = true
+						break
+					}
+				}
+			}
+			if bad {
+				representable = false
+				structural = true
 				break
 			}
 			typ := asStr(entry["type"])
@@ -190,9 +224,43 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 		}
 		if representable {
 			out = append(out, captured...)
+		} else if !structural {
+			refused = append(refused, canonEvent)
 		}
 	}
-	return out
+	sort.Strings(refused) // map iteration order — keep output deterministic
+	return out, refused
+}
+
+// RefusedHookEvents implements adapter.HookIngestGuard: it re-reads the
+// destination hooks.json and returns the CANONICAL names of hook events whose
+// native entries ingestHooks refuses to capture for SEMANTIC reasons — a
+// non-command entry type or unmodeled fields (timeout, failClosed, loop_limit,
+// prompt/model) on a well-formed entry. Structurally-malformed shapes (a
+// hooks.json typo) are warned about by Ingest but deliberately excluded here:
+// import retires the canonical hooks/<event>.toml for every returned event,
+// and deleting canonical config over a native typo would be destructive.
+// Cursor-only events (afterFileEdit, …) never appear — they have no canonical
+// file to retire. The re-read exists because Ingest's shared
+// (source.Canonical, error) signature has no channel for refusals; hooks.json
+// is parsed exactly as Ingest parses it (strict JSON, UseNumber). Warnings are
+// discarded here; Ingest already emitted them on the same shapes. See the
+// corruption class this closes on adapter.HookIngestGuard (issue #124).
+func (a *Adapter) RefusedHookEvents(scope adapter.Scope, project string) ([]string, error) {
+	if err := adapter.RequireProjectRoot(scope, project); err != nil {
+		return nil, err
+	}
+	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
+	data, present, err := adapter.ReadFileOptional(p.Hooks)
+	if err != nil || !present {
+		return nil, err
+	}
+	top, err := jsonkeys.DecodeObject(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", p.Hooks, err)
+	}
+	_, refused := ingestHooks(top["hooks"], io.Discard)
+	return refused, nil
 }
 
 // unmodeledKeys returns the sorted keys of entry that are not in modeled.

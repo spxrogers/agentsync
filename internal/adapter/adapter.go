@@ -297,10 +297,11 @@ type PluginIngester interface {
 // that scope (see cli.retireRefusedHookEvents). Like Render/Ingest it MUST
 // honor RequireProjectRoot.
 //
-// Implemented by claude and gemini. Event names are always CANONICAL: a
-// renaming adapter (gemini spells PreToolUse as BeforeTool natively) must map
-// its refused native events back to the canonical spelling, because the caller
-// retires hooks/<canonical>.toml — and a native event with no canonical
+// Implemented by claude, gemini, and cursor — every adapter whose hook ingest
+// refuses semantically. Event names are always CANONICAL: a renaming adapter
+// (gemini spells PreToolUse as BeforeTool natively, cursor as preToolUse) must
+// map its refused native events back to the canonical spelling, because the
+// caller retires hooks/<canonical>.toml — and a native event with no canonical
 // equivalent must never be returned (there is no canonical file to retire).
 type HookIngestGuard interface {
 	RefusedHookEvents(scope Scope, project string) ([]string, error)

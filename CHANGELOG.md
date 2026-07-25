@@ -21,6 +21,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   *resolves inside* the root is still followed (matching the git fetcher's
   in-tree-symlink policy), and a rootless, user-named `marketplace add` path
   may be a symlink exactly as before. (Closes an epic #178 residual.)
+- **Cursor now implements `HookIngestGuard` too** — the round-1 review of this
+  PR's Gemini work found the same stale-hook clobber still live (and newly
+  unacknowledged) for a Cursor-side enrichment: a hook event captured while
+  clean and later enriched natively in `.cursor/hooks.json` (a `timeout`, a
+  `failClosed`, a `prompt`-type entry) left a stale canonical
+  `hooks/<event>.toml` the next apply kept rewriting lossily. Cursor's import
+  now retires the stale canonical file, reporting refused events under their
+  *canonical* names (`preToolUse` → `PreToolUse`); Cursor-only events
+  (`afterFileEdit`, …) are never retired, and a structurally-malformed
+  hooks.json shape (including a non-string `command`/`matcher`/`type`) warns
+  without capturing and never triggers retirement.
 - **Gemini now implements `HookIngestGuard`, closing the stale-hook clobber for
   Gemini-side enrichments.** A hook event captured while clean and later
   enriched natively in `.gemini/settings.json` (a `timeout`, a `sequential`, a

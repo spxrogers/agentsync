@@ -162,7 +162,10 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		if err != nil {
 			return c, fmt.Errorf("parse %s: %w", p.Hooks, err)
 		}
-		c.Hooks = append(c.Hooks, ingestHooks(top["hooks"], warn)...)
+		// Refused events surface via RefusedHookEvents (adapter.HookIngestGuard):
+		// import uses that to retire a stale canonical hooks/<event>.toml.
+		hooks, _ := ingestHooks(top["hooks"], warn)
+		c.Hooks = append(c.Hooks, hooks...)
 	}
 
 	// Memory from AGENTS.md (project scope only — user-scope rules live in

@@ -412,14 +412,19 @@ type HookEventNamer interface {
 }
 ```
 
-- **`HookIngestGuard`** (claude, gemini) re-reads the destination and
+- **`HookIngestGuard`** (claude, gemini, cursor — every adapter whose hook
+  ingest refuses semantically) re-reads the destination and
   returns the hook events ingest *semantically* refused — unmodeled fields or
   non-command handlers on well-formed entries; structurally-malformed shapes
   (a settings.json typo) are excluded, because import deletes the canonical
   file for every returned event and a native typo must never be destructive.
-  Returned names are always *canonical*: gemini maps its refused native
-  spellings back (`BeforeTool` → `PreToolUse`), and a Gemini-only event
-  (`BeforeModel`, …) is never returned — no canonical file exists to retire.
+  Returned names are always *canonical*: a renaming adapter maps its refused
+  native spellings back (gemini `BeforeTool` → `PreToolUse`, cursor
+  `preToolUse` → `PreToolUse`), and a native-only event (`BeforeModel`,
+  `afterFileEdit`, …) is never returned — no canonical file exists to retire.
+  The registry-wide guard `TestHookIngestGuard_ReportsCanonicalNames`
+  (`internal/cli`) enforces both halves of that contract for every
+  implementor.
 - **`HookEventNamer`** (gemini, cursor) reports the *native* spelling an
   adapter uses in its owned `/hooks/<name>` pointers (`PreToolUse` →
   `BeforeTool` / `preToolUse`). Canonical hooks are **shared** across agents,

@@ -302,8 +302,13 @@ literally, never resolved.)
   `command`/`matcher`/`type` entry fields; on `import`, a Cursor-native event
   agentsync can't render (`afterFileEdit`, `beforeShellExecution`, …) — or an
   event containing an entry it can't fully represent (a `prompt`-type hook, or
-  fields like `timeout`/`failClosed`) — is left uncaptured with a warning, so a
-  later `apply` never takes ownership of an array it would lossily rewrite.
+  fields like `timeout`/`failClosed`) — is left uncaptured with a warning. And
+  because Cursor implements `HookIngestGuard`, an event that was captured while
+  clean and *later* enriched natively triggers import's stale-hook retirement
+  (reported under its *canonical* name — `preToolUse` retires
+  `hooks/PreToolUse.toml`), so a later `apply` never keeps ownership of an
+  array it would lossily rewrite; a structurally-malformed hooks.json shape
+  warns but never triggers retirement.
 
 **Gemini CLI**
 
