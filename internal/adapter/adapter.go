@@ -282,12 +282,23 @@ type PluginIngester interface {
 // HookIngestGuard is an OPTIONAL extension to Adapter for agents whose hook
 // ingest REFUSES unrepresentable native events (non-command handlers, unmodeled
 // fields) rather than capturing a lossy subset. RefusedHookEvents re-reads the
-// destination and returns those refused event names, so `import` can retire a
-// stale canonical hooks/<event>.toml: an event captured while clean and later
-// enriched natively is skipped by Ingest, but a stale canonical file left in
-// place keeps the next apply — which owns the whole per-event array — lossily
-// rewriting the user's native entry (the second-order corruption class of
-// issue #124). Like Render/Ingest it MUST honor RequireProjectRoot.
+// destination (Ingest's ten-adapter (source.Canonical, error) signature has no
+// channel for refusals) and returns the SEMANTICALLY refused event names —
+// structurally-malformed native shapes are excluded, since the caller deletes
+// canonical config for every returned event and a native typo must not be
+// destructive. `import` uses it to retire a stale canonical hooks/<event>.toml:
+// an event captured while clean and later enriched natively is skipped by
+// Ingest, but a stale canonical file left in place keeps the next apply —
+// which owns the whole per-event array — lossily rewriting the user's native
+// entry (the second-order corruption class of issue #124). Canonical hooks are
+// SHARED across agents, so retirement freezes the event for every agent at
+// that scope (see cli.retireRefusedHookEvents). Like Render/Ingest it MUST
+// honor RequireProjectRoot.
+//
+// Implemented by claude only. Gemini's ingestHooks has the same refusal
+// semantics (internal/adapter/gemini/hook.go) but does NOT yet implement this
+// interface, so the second-order clobber this closes for Claude is still live
+// for a Gemini-side enrichment — a known follow-up, not an oversight.
 type HookIngestGuard interface {
 	RefusedHookEvents(scope Scope, project string) ([]string, error)
 }

@@ -229,7 +229,10 @@ literally, never resolved.)
   *previously* captured the event (it was clean then, enriched natively since),
   `import` also retires the now-stale canonical `hooks/<event>.toml` — so the
   next apply never *owns*, and therefore never rewrites, your richer native
-  entry. This guard-and-warn behavior is anchored by the artifact-anchored
+  entry. Canonical hooks are shared, so a retirement hands the event back to
+  *every* hook-rendering agent at that scope (each native entry frozen as-is);
+  a structurally-malformed native shape warns but never triggers retirement.
+  This guard-and-warn behavior is anchored by the artifact-anchored
   `TestIngest_HookArtifactRoundTrip` (`internal/adapter/claude`).
 
 **OpenCode**

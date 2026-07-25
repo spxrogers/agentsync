@@ -124,11 +124,15 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   ingest — but its stale canonical `hooks/<event>.toml` kept the next `apply`
   owning the whole per-event array, rewriting the user's enriched native entry
   without those fields, and no agentsync flow could preserve the edit short of
-  hand-deleting the canonical file. `import` (full-agent or `:hook`) now asks
-  the adapter which events it refused (`adapter.HookIngestGuard` /
-  `RefusedHookEvents`) and removes each one's stale canonical file with a
-  notice, handing the event back to the agent; the next apply leaves the
-  native entry untouched.
+  hand-deleting the canonical file. `import` (full-agent or `:hook`; a named
+  `:hook:<event>` import retires only that event) now asks the adapter which
+  events it *semantically* refused (`adapter.HookIngestGuard` /
+  `RefusedHookEvents` — a structurally-malformed native shape warns but never
+  deletes canonical config) and removes each one's stale canonical file with a
+  notice. Canonical hooks are shared across agents, so the retirement disowns
+  the event's state key for **every** agent at exactly that scope — each
+  agent's native entry is left frozen as-is, and no orphan cleanup fires
+  against it on the next apply.
 - **The pre-apply git baseline now covers planned deletions, so a delete-only
   first apply is recoverable.** The baseline staged only the paths the plan
   would *write*; a file the apply was about to *delete* (a skill dropped from

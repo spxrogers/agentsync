@@ -136,10 +136,15 @@ hook rather than emitting an empty-command entry. An event that was captured
 while clean and *later* enriched natively would leave a stale canonical
 `hooks/<event>.toml` behind that the next apply — which owns the whole
 per-event array — would still rewrite lossily; `import` closes that hole by
-retiring the stale canonical file for every refused event
-(`RefusedHookEvents`, the `adapter.HookIngestGuard` extension), handing the
-event back to Claude Code. So an import→apply round-trip never rewrites the
-user's native `/hooks/<event>` array lossily. It also owns the
+retiring the stale canonical file for every *semantically* refused event
+(`RefusedHookEvents`, the `adapter.HookIngestGuard` extension; a
+structurally-malformed native shape — a settings.json typo — warns but never
+deletes canonical config). Because canonical hooks are shared across agents,
+retirement hands the event back to **every** hook-rendering agent at that
+scope: each agent's `/hooks/<event>` state key is disowned so no orphan
+cleanup fires, and every native entry is left frozen as-is. So an
+import→apply round-trip never rewrites the user's native `/hooks/<event>`
+array lossily. It also owns the
 shared `Extra` passthrough helpers reused by every MCP-capable adapter:
 `ExtraNativeKeys` (capture unmodeled native fields into `source.*Spec.Extra`) and
 `MergeExtra` (project them back on render). Both reserve the `__` prefix as an

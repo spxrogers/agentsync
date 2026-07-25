@@ -315,7 +315,7 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projec
 	// Import's contract is "the destination is the source of truth", so the
 	// canonical file goes and apply hands the event back to the agent.
 	if component == "" || component == "hook" {
-		retireRefusedHookEvents(io, agentsyncHome, srcHome, a, agentName, sc, projectRoot)
+		retireRefusedHookEvents(io, agentsyncHome, srcHome, a, name, sc, projectRoot)
 	}
 
 	// Seed state with the destination's current content hash so the next
@@ -366,11 +366,25 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projec
 // canonical claims, and diff against the actual on-disk contents.
 // retireRefusedHookEvents removes the stale canonical hooks/<event>.toml for
 // every hook event the destination carries but the adapter's ingest refused to
-// capture (adapter.HookIngestGuard). See the call site in runImport for why a
-// stale file must not survive an import. Best-effort: a failure here degrades
-// to the pre-existing behavior (stale file kept, apply keeps owning the event)
-// with a warning, never a failed import.
-func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adapter.Adapter, agentName string, sc adapter.Scope, projectRoot string) {
+// capture for semantic reasons (adapter.HookIngestGuard; malformed native
+// shapes never retire). See the call site in runImport for why a stale file
+// must not survive an import. name narrows a `<agent>:hook:<event>` import to
+// exactly that event — a named import must never touch siblings the user
+// didn't ask about. Best-effort: a failure here degrades to the pre-existing
+// behavior (stale file kept, apply keeps owning the event) with a warning,
+// never a failed import.
+//
+// CROSS-AGENT SEMANTICS — canonical hooks are SHARED. source.Hook carries no
+// per-agent targeting, so hooks/<event>.toml feeds every hook-rendering agent
+// (claude, codex, gemini, cursor). Retiring the file because ONE agent's
+// native entry became unrepresentable therefore stops agentsync managing the
+// event for ALL of them at this scope — and the disown below must clear EVERY
+// agent's "/hooks/<event>" key at this scope, not just the importing agent's:
+// a still-owned key with no canonical render would make the next apply's
+// orphan-key cleanup DELETE the event from that agent's native config. With
+// all keys disowned, each agent's native entry is left frozen as-is, which is
+// the honest reading of "hand the event back to the agents".
+func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adapter.Adapter, name string, sc adapter.Scope, projectRoot string) {
 	g, ok := a.(adapter.HookIngestGuard)
 	if !ok {
 		return
@@ -382,6 +396,9 @@ func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adap
 	}
 	var retired []string
 	for _, event := range refused {
+		if name != "" && event != name {
+			continue // a named import retires only the event the user named
+		}
 		removed, rerr := source.RemoveHooks(srcHome, event)
 		if rerr != nil {
 			io.warnf("could not retire stale canonical hooks/%s.toml: %v; the next apply "+
@@ -392,19 +409,24 @@ func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adap
 		if removed {
 			retired = append(retired, event)
 			io.note(fmt.Sprintf("retired canonical hooks/%s.toml — the native entry now has "+
-				"content agentsync cannot represent, so agentsync no longer manages this "+
-				"event (apply will leave the native entry untouched)", event))
+				"content agentsync cannot represent. Canonical hooks are shared, so agentsync "+
+				"no longer manages this event for ANY agent at this scope; every agent's "+
+				"native entry is left as-is", event))
 		}
 	}
 	if len(retired) == 0 {
 		return
 	}
-	// Also DISOWN the retired events' key-state entries: with the canonical file
-	// gone but the "/hooks/<event>" pointer still recorded as owned, the next
-	// apply's orphan-key cleanup would DELETE the user's native entry — the exact
-	// clobber the retirement exists to prevent. Event names passed
-	// ValidateComponentID (no ':'), so the ":/hooks/<event>" suffix match on the
-	// "<agent>:<scope>:<project>:<file>:<pointer>" key shape is exact.
+	// DISOWN the retired events' key-state entries — for EVERY agent, at exactly
+	// this scope+project (see the cross-agent note above; a user-scope retirement
+	// must not disown project-scope keys whose canonical overlay file survives,
+	// and vice versa). Key shape: "<agent>:<scope>:<project>:<file>:<pointer>"
+	// (render.RecordOpsState); agent names carry no ':', the scope/project legs
+	// are matched as one exact ":"-delimited run right after the agent leg, and
+	// event names passed ValidateComponentID (no ':'), so the ":/hooks/<event>"
+	// suffix match is exact.
+	userHome := paths.HomeDir(paths.OSEnv{})
+	scopeMid := ":" + sc.String() + ":" + paths.HomeRelative(userHome, projectRoot) + ":"
 	statePath := filepath.Join(agentsyncHome, ".state", "targets.json")
 	st, serr := state.Load(statePath)
 	if serr != nil {
@@ -413,7 +435,8 @@ func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adap
 	}
 	changed := false
 	for key := range st.Keys {
-		if !strings.HasPrefix(key, agentName+":") {
+		agentEnd := strings.Index(key, ":")
+		if agentEnd < 0 || !strings.HasPrefix(key[agentEnd:], scopeMid) {
 			continue
 		}
 		for _, event := range retired {

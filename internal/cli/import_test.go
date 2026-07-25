@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/state"
 )
 
 // mcpKeySHA returns the seeded state hash for /mcpServers/<id>, or "".
@@ -1233,5 +1234,184 @@ func TestImport_GeminiNamespacedCommandSkippedNotAborted(t *testing.T) {
 	// A named single-item import of the namespaced command still fails loudly.
 	if _, err := runCLI(t, env, "import", "gemini:command:git/commit"); err == nil {
 		t.Fatal("named import of a namespaced command should fail loudly")
+	}
+}
+
+// TestImport_RetireFreezesOtherAgentsHooks pins the cross-agent retirement
+// semantics: canonical hooks are SHARED (source.Hook has no per-agent
+// targeting), so retiring hooks/<event>.toml because CLAUDE's native entry
+// became unrepresentable must not let the next apply's orphan-key cleanup
+// DELETE the event from codex's native config — every agent's "/hooks/<event>"
+// state key is disowned and every native entry is left frozen as-is.
+func TestImport_RetireFreezesOtherAgentsHooks(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mustRun(t, env, "agent", "add", "claude")
+	mustRun(t, env, "agent", "add", "codex")
+	settings := filepath.Join(tmp, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clean := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi"}]}]}}`
+	if err := os.WriteFile(settings, []byte(clean), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude:hook:PreToolUse"); err != nil {
+		t.Fatalf("import clean hook: %v\n%s", err, out)
+	}
+	// Apply projects the shared canonical hook into BOTH agents' configs.
+	if out, err := runCLI(t, env, "apply", "--no-git-backup"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	codexConfig := filepath.Join(tmp, ".codex", "config.toml")
+	codexBefore, err := os.ReadFile(codexConfig)
+	if err != nil || !strings.Contains(string(codexBefore), "echo hi") {
+		t.Fatalf("precondition: codex config should carry the hook (err=%v):\n%s", err, codexBefore)
+	}
+
+	// Claude's native entry is enriched; re-import retires the SHARED canonical.
+	enriched := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 30}]}]}}`
+	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude"); err != nil {
+		t.Fatalf("re-import: %v\n%s", err, out)
+	}
+
+	// The apply after retirement must leave codex's native hook FROZEN — not
+	// orphan-deleted (codex's state key was disowned along with claude's).
+	if out, err := runCLI(t, env, "apply", "--no-git-backup"); err != nil {
+		t.Fatalf("apply after retirement: %v\n%s", err, out)
+	}
+	codexAfter, err := os.ReadFile(codexConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(codexAfter), "echo hi") {
+		t.Fatalf("retirement let orphan cleanup delete codex's native hook:\nbefore:\n%s\nafter:\n%s", codexBefore, codexAfter)
+	}
+	if got, _ := os.ReadFile(settings); string(got) != enriched {
+		t.Fatalf("claude's enriched native entry should be untouched:\n got %s\nwant %s", got, enriched)
+	}
+}
+
+// TestImport_NamedHookRetireScopedToName pins that `import claude:hook:<event>`
+// retires ONLY the named event — a sibling refused event's canonical file must
+// survive a named import the user didn't ask about.
+func TestImport_NamedHookRetireScopedToName(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mustRun(t, env, "agent", "add", "claude")
+	settings := filepath.Join(tmp, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clean := `{"hooks": {
+		"PreToolUse":  [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo pre"}]}],
+		"PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo post"}]}]
+	}}`
+	if err := os.WriteFile(settings, []byte(clean), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude:hook"); err != nil {
+		t.Fatalf("import hooks: %v\n%s", err, out)
+	}
+	// BOTH native events get enriched (both now refused by ingest).
+	enriched := `{"hooks": {
+		"PreToolUse":  [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo pre", "timeout": 5}]}],
+		"PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo post", "timeout": 5}]}]
+	}}`
+	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The named import may fail its own capture ("not found" semantics differ);
+	// what matters is the retirement side effect, so ignore the exit error.
+	out, _ := runCLI(t, env, "import", "claude:hook:PreToolUse")
+	pre := filepath.Join(tmp, ".agentsync", "hooks", "PreToolUse.toml")
+	post := filepath.Join(tmp, ".agentsync", "hooks", "PostToolUse.toml")
+	if _, err := os.Stat(pre); !os.IsNotExist(err) {
+		t.Fatalf("named import should retire the named refused event; stat err=%v\n%s", err, out)
+	}
+	if _, err := os.Stat(post); err != nil {
+		t.Fatalf("named import must NOT retire the sibling event the user didn't name: %v\n%s", err, out)
+	}
+}
+
+// TestImport_MalformedHookShapeNeverRetires pins the structural/semantic split:
+// a settings.json typo (an event value that is not an array) warns and skips
+// capture, but must never delete the user's canonical hook file.
+func TestImport_MalformedHookShapeNeverRetires(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mustRun(t, env, "agent", "add", "claude")
+	settings := filepath.Join(tmp, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clean := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi"}]}]}}`
+	if err := os.WriteFile(settings, []byte(clean), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude:hook:PreToolUse"); err != nil {
+		t.Fatalf("import clean hook: %v\n%s", err, out)
+	}
+	// A typo makes the event's value a string — structurally malformed.
+	if err := os.WriteFile(settings, []byte(`{"hooks": {"PreToolUse": "oops"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude"); err != nil {
+		t.Fatalf("re-import: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, ".agentsync", "hooks", "PreToolUse.toml")); err != nil {
+		t.Fatalf("a malformed native shape must never retire canonical config: %v", err)
+	}
+}
+
+// TestImport_RetireDisownIsScopeExact pins that a user-scope retirement disowns
+// only user-scope state keys: a project-scope "/hooks/<event>" key (whose
+// canonical overlay file is untouched by a user-scope RemoveHooks) must
+// survive, or the next project apply would misclassify its own file as foreign.
+func TestImport_RetireDisownIsScopeExact(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mustRun(t, env, "agent", "add", "claude")
+	settings := filepath.Join(tmp, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clean := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi"}]}]}}`
+	if err := os.WriteFile(settings, []byte(clean), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude:hook:PreToolUse"); err != nil {
+		t.Fatalf("import: %v\n%s", err, out)
+	}
+	// Plant a project-scope key for the same agent+event alongside the real
+	// user-scope one written by the import's state seeding.
+	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
+	st, err := state.Load(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const projectKey = "claude:project:~/proj:~/proj/.claude/settings.json:/hooks/PreToolUse"
+	st.Keys[projectKey] = state.KeyEntry{SHA256: "deadbeef", SourceID: "hooks/PreToolUse.toml"}
+	if err := state.Save(statePath, st); err != nil {
+		t.Fatal(err)
+	}
+
+	enriched := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 30}]}]}}`
+	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude"); err != nil {
+		t.Fatalf("re-import: %v\n%s", err, out)
+	}
+	st2, err := state.Load(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st2.Keys[projectKey]; !ok {
+		t.Fatal("user-scope retirement disowned a PROJECT-scope key whose canonical overlay file survives")
+	}
+	for key := range st2.Keys {
+		if strings.HasPrefix(key, "claude:user:") && strings.HasSuffix(key, ":/hooks/PreToolUse") {
+			t.Fatalf("user-scope key should have been disowned by the retirement: %s", key)
+		}
 	}
 }
