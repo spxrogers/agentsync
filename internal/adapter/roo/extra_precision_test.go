@@ -7,7 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/roo"
+	"github.com/spxrogers/agentsync/internal/secrets"
+	"github.com/spxrogers/agentsync/internal/source"
 )
 
 // TestIngest_PreservesLargeIntegerExtra is artifact-anchored on a real
@@ -32,7 +35,30 @@ func TestIngest_PreservesLargeIntegerExtra(t *testing.T) {
 		t.Fatalf("large integer not preserved into Extra as json.Number: %#v", v)
 	}
 
-	data := renderApplyRooMCP(t, a, proj, spec)
+	c := projOf(source.Canonical{MCPServers: []source.MCPServer{{ID: "srv", Server: spec}}})
+	ops, _, err := a.Render(secrets.ForRender(c), adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Precondition (round-1 test-rigor finding): the fixture file already
+	// contains the exact digits, so if render produced no op for it the byte
+	// assertion below would pass vacuously against the never-rewritten fixture.
+	found := false
+	for _, op := range ops {
+		if op.Path == mcpPath {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("render produced no op for %s — on-disk assertion would be vacuous; ops=%+v", mcpPath, ops)
+	}
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !bytes.Contains(data, []byte("9007199254740993")) || bytes.Contains(data, []byte("9007199254740992")) {
 		t.Fatalf("re-rendered mcp.json lost integer precision: %s", data)
 	}

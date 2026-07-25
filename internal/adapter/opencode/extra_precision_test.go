@@ -46,6 +46,18 @@ func TestIngest_PreservesLargeIntegerExtra(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Precondition (round-1 test-rigor finding): the fixture file already
+	// contains the exact digits, so if render produced no op for it the byte
+	// assertion below would pass vacuously against the never-rewritten fixture.
+	found := false
+	for _, op := range ops {
+		if op.Path == settingsPath {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("render produced no op for %s — on-disk assertion would be vacuous; ops=%+v", settingsPath, ops)
+	}
 	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
 		t.Fatal(err)
 	}

@@ -17,6 +17,15 @@ import (
 // 2^53 (snowflake ids, nanosecond timestamps) on re-marshal. json.Number keeps
 // the literal digits and re-marshals exactly. nil/empty input yields an empty
 // map.
+//
+// Lax at the edges by design, and slightly laxer than json.Unmarshal: content
+// AFTER the first top-level value is ignored rather than refused
+// (json.Decoder reads one value), so a truncated-concatenation like `{…}{…}`
+// decodes its first object instead of erroring; a corrupt single value still
+// errors. Every JSON config read — adapter ingests AND the key-merge
+// machinery — shares these semantics, so tightening here would change how
+// merges read existing native files; callers that need whole-input strictness
+// must enforce it themselves. Pinned by TestDecodeObject_LaxEdges.
 func DecodeObject(data []byte) (map[string]any, error) {
 	m := map[string]any{}
 	if len(data) == 0 {
