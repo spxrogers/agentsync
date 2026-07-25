@@ -413,11 +413,11 @@ type HookEventNamer interface {
 ```
 
 - **`HookIngestGuard`** (claude, gemini, cursor, codex — every hook-rendering
-  adapter) re-reads the destination and
-  returns the hook events ingest *semantically* refused — unmodeled fields on
-  well-formed entries, plus (where the adapter's render cannot round-trip
-  them: claude, gemini, cursor) non-command handlers; codex re-renders
-  non-command types verbatim, so it refuses unmodeled fields only.
+  adapter) re-reads the destination and returns the hook events ingest
+  *semantically* refused: unmodeled fields on well-formed entries, plus
+  non-command handlers where the adapter's render cannot round-trip them
+  (claude, gemini, cursor); codex re-renders non-command types verbatim, so
+  it refuses unmodeled fields only.
   Structurally-malformed shapes (a settings.json typo) are excluded, because
   import deletes the canonical file for every returned event and a native
   typo must never be destructive.

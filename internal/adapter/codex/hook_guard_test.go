@@ -38,43 +38,88 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 	}{
 		{
 			"semantic: unmodeled def field",
-			"[[hooks.PreToolUse]]\nmatcher = \"Bash\"\nsequential = true\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"x\"\n", true,
+			`[[hooks.PreToolUse]]
+matcher = "Bash"
+sequential = true
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "x"
+`, true,
 		},
 		{
 			"semantic: unmodeled handler field",
-			"[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"x\"\ntimeout = 30\n", true,
+			`[[hooks.PreToolUse]]
+matcher = "Bash"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "x"
+timeout = 30
+`, true,
 		},
 		{
 			"semantic: converted engine shape (unmodeled field wins over the absent-command structural check)",
-			"[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n[[hooks.PreToolUse.hooks]]\ntype = \"prompt\"\nprompt = \"review\"\n", true,
+			`[[hooks.PreToolUse]]
+matcher = "Bash"
+[[hooks.PreToolUse.hooks]]
+type = "prompt"
+prompt = "review"
+`, true,
 		},
 		{
 			"codex divergence: non-command type with a command is representable — never refused",
-			"[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n[[hooks.PreToolUse.hooks]]\ntype = \"prompt\"\ncommand = \"x\"\n", false,
+			`[[hooks.PreToolUse]]
+matcher = "Bash"
+[[hooks.PreToolUse.hooks]]
+type = "prompt"
+command = "x"
+`, false,
 		},
 		{
 			"structural: event value not an array of tables",
-			"[hooks.PreToolUse]\nmatcher = \"Bash\"\n", false,
+			`[hooks.PreToolUse]
+matcher = "Bash"
+`, false,
 		},
 		{
 			"structural: matcher not a string",
-			"[[hooks.PreToolUse]]\nmatcher = 5\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"x\"\n", false,
+			`[[hooks.PreToolUse]]
+matcher = 5
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "x"
+`, false,
 		},
 		{
 			"structural: missing hooks array",
-			"[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n", false,
+			`[[hooks.PreToolUse]]
+matcher = "Bash"
+`, false,
 		},
 		{
 			"structural: handler type not a string",
-			"[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n[[hooks.PreToolUse.hooks]]\ntype = 5\ncommand = \"x\"\n", false,
+			`[[hooks.PreToolUse]]
+matcher = "Bash"
+[[hooks.PreToolUse.hooks]]
+type = 5
+command = "x"
+`, false,
 		},
 		{
 			"structural: handler command not a string",
-			"[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = 123\n", false,
+			`[[hooks.PreToolUse]]
+matcher = "Bash"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 123
+`, false,
 		},
 		{
 			"structural: handler without a command",
-			"[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\n", false,
+			`[[hooks.PreToolUse]]
+matcher = "Bash"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+`, false,
 		},
 	}
 	for _, tt := range tests {
@@ -100,8 +145,8 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 // TestIngest_RefusesMalformedEntryShapes pins the CAPTURE side for codex —
 // each malformed shape must leave the event uncaptured instead of captured
 // with asStr-coerced fields — plus the codex divergence positive: a
-// non-command handler WITH a command is captured verbatim (Type preserved),
-// because renderHooks re-emits it losslessly.
+// non-command handler WITH a command is captured verbatim (Type, Matcher, and
+// Command all preserved), because renderHooks re-emits it losslessly.
 func TestIngest_RefusesMalformedEntryShapes(t *testing.T) {
 	testenv.RequireContainer(t)
 	tests := []struct {
@@ -110,19 +155,38 @@ func TestIngest_RefusesMalformedEntryShapes(t *testing.T) {
 	}{
 		{
 			"non-string matcher",
-			"[[hooks.PreToolUse]]\nmatcher = 5\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"x\"\n",
+			`[[hooks.PreToolUse]]
+matcher = 5
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "x"
+`,
 		},
 		{
 			"non-string type",
-			"[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n[[hooks.PreToolUse.hooks]]\ntype = 5\ncommand = \"x\"\n",
+			`[[hooks.PreToolUse]]
+matcher = "Bash"
+[[hooks.PreToolUse.hooks]]
+type = 5
+command = "x"
+`,
 		},
 		{
 			"non-string command",
-			"[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = 123\n",
+			`[[hooks.PreToolUse]]
+matcher = "Bash"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 123
+`,
 		},
 		{
 			"absent command",
-			"[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\n",
+			`[[hooks.PreToolUse]]
+matcher = "Bash"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+`,
 		},
 	}
 	for _, tt := range tests {
@@ -142,14 +206,18 @@ func TestIngest_RefusesMalformedEntryShapes(t *testing.T) {
 
 	t.Run("codex divergence: non-command type with a command is captured verbatim", func(t *testing.T) {
 		tmp := t.TempDir()
-		writeCodexConfig(t, tmp,
-			"[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n[[hooks.PreToolUse.hooks]]\ntype = \"prompt\"\ncommand = \"x\"\n")
+		writeCodexConfig(t, tmp, `[[hooks.PreToolUse]]
+matcher = "Bash"
+[[hooks.PreToolUse.hooks]]
+type = "prompt"
+command = "x"
+`)
 		a := codex.New(codex.Options{TargetRoot: tmp})
 		out, err := a.Ingest(adapter.ScopeUser, "")
 		if err != nil {
 			t.Fatalf("Ingest: %v", err)
 		}
-		if len(out.Hooks) != 1 || out.Hooks[0].Type != "prompt" || out.Hooks[0].Command != "x" {
+		if len(out.Hooks) != 1 || out.Hooks[0].Type != "prompt" || out.Hooks[0].Command != "x" || out.Hooks[0].Matcher != "Bash" {
 			t.Fatalf("representable non-command handler must be captured verbatim, got %+v", out.Hooks)
 		}
 	})

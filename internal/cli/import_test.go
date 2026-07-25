@@ -1330,9 +1330,9 @@ func TestImport_RetiresStaleHookOnCursorEnrichment(t *testing.T) {
 // TestImport_RetiresStaleHookOnCodexEnrichment is the codex-driven twin of the
 // claude/gemini/cursor enrichment tests, over Codex's TOML config: codex
 // spells events canonically, so no renaming leg — the load-bearing difference
-// is the format (config.toml `[[hooks.PreToolUse]]` arrays-of-tables) and
-// that codex's guard landed last (round-2 review; it was the one hook ingest
-// still capturing a lossy modeled subset).
+// is the format (config.toml `[[hooks.PreToolUse]]` arrays-of-tables, written
+// through MergeTOML's whole-file rewrite, which makes the byte-untouched
+// assertion a stronger detector here than on the JSON adapters).
 func TestImport_RetiresStaleHookOnCodexEnrichment(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	mustRun(t, env, "agent", "add", "codex")

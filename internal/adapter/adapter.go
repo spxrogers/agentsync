@@ -282,8 +282,8 @@ type PluginIngester interface {
 }
 
 // HookIngestGuard is an OPTIONAL extension to Adapter for agents whose hook
-// ingest REFUSES unrepresentable native events (non-command handlers, unmodeled
-// fields) rather than capturing a lossy subset. RefusedHookEvents re-reads the
+// ingest REFUSES unrepresentable native events (unmodeled fields; on most
+// adapters also non-command handlers) rather than capturing a lossy subset. RefusedHookEvents re-reads the
 // destination (Ingest's ten-adapter (source.Canonical, error) signature has no
 // channel for refusals) and returns the SEMANTICALLY refused event names —
 // structurally-malformed native shapes are excluded, since the caller deletes

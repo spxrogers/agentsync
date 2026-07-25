@@ -94,7 +94,13 @@ func (f *RelativeFetcher) Fetch(src Source, into string) (FetchResult, error) {
 	}
 
 	if err := copyDir(copySrc, into); err != nil {
-		return FetchResult{}, fmt.Errorf("relative fetcher: copy %s → %s: %w", copySrc, into, err)
+		from := copySrc
+		if copySrc != abs {
+			// Name the user-recognizable path too — the resolved spelling alone
+			// can be surprising in an error about a path the user never typed.
+			from = fmt.Sprintf("%s (resolved from %s)", copySrc, abs)
+		}
+		return FetchResult{}, fmt.Errorf("relative fetcher: copy %s → %s: %w", from, into, err)
 	}
 	return FetchResult{}, nil
 }
