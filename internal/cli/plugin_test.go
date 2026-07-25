@@ -1324,3 +1324,26 @@ func TestPlugin_BareIDInstallSentinelQualifierHonest(t *testing.T) {
 		t.Fatal("bare-id disable should have set disabled=true")
 	}
 }
+
+// TestPlugin_UpgradeAfterBareIDInstall pins the upgrade path's handling of the
+// "default" sentinel: a bare-id install records `demo@default`, and upgrade
+// must map that sentinel back to a fresh all-caches search (exactly like the
+// original install) rather than looking for a marketplace literally named
+// "default" — which doesn't exist and would fail the re-fetch.
+func TestPlugin_UpgradeAfterBareIDInstall(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "plugin", "install", "demo"); err != nil {
+		t.Fatalf("bare-id install: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "plugin", "upgrade", "demo"); err != nil {
+		t.Fatalf("upgrade of a bare-id-installed plugin must re-search the caches, not look for a %q marketplace: %v\n%s", "default", err, out)
+	}
+}

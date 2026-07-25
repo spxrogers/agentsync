@@ -557,7 +557,12 @@ func checkPluginRefMarketplace(existing pluginTOML, id, typedMP string) error {
 }
 
 // resolveMarketplaceName returns the marketplace name, defaulting to "default"
-// if empty.
+// if empty. NOTE: "default" is a SENTINEL, not a marketplace — but nothing
+// reserves the name, so a user-registered marketplace literally named
+// "default" is ambiguous with it (its qualified refs get the "installed by
+// bare id" refusal and its upgrades re-search all caches). Accepted residual:
+// reserving the name would break any existing marketplace so named, and the
+// all-caches search still resolves the right entry.
 func resolveMarketplaceName(name string) string {
 	if name == "" {
 		return "default"
@@ -614,9 +619,8 @@ func validateCacheKey(kind, s string) error {
 }
 
 // resolveMarketplaceEntry loads the marketplace's marketplace.json from cache
-// and finds the named plugin entry. Returns the raw bytes (for SHA computation)
-// and the entry.
-// resolveMarketplaceEntry returns the marketplace.json bytes, the plugin's
+// and finds the named plugin entry. Returns the raw bytes (for SHA
+// computation), the plugin's
 // entry, and the RESOLVED marketplace cache name — mpName when one was named,
 // or the cache dir the search actually found the plugin in for a bare-id
 // lookup (callers must fetch relative sources against the resolved name; the
@@ -652,7 +656,6 @@ func resolveMarketplaceEntry(home, mpName, pluginID string) ([]byte, marketplace
 	return nil, marketplace.PluginEntry{}, "", fmt.Errorf("plugin %q not found in marketplace %q", pluginID, mpName)
 }
 
-// searchAllMarketplaces scans all cached marketplace.json files for a plugin.
 // searchAllMarketplaces scans every marketplace cache for pluginID, returning
 // the marketplace.json bytes, the entry, and the cache-dir NAME it was found
 // in (the resolved marketplace a relative source must fetch against).
