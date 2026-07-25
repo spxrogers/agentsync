@@ -170,11 +170,14 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run sync:docs
       - run: bun run check:links
-      # A shell-expanded glob (not `bun run test`, whose quoted
-      # "scripts/**/*.test.mjs" node glob exits 0 with "# tests 0" on zero
-      # matches): if no *.test.mjs exists, bash passes the literal pattern and
-      # node fails loudly — and a future scripts/*.test.mjs still runs here.
-      - run: node --test scripts/*.test.mjs
+      # failglob: zero matches is a SHELL error, closing the hollow-out both
+      # ways — an unquoted pattern reaching node would otherwise be globbed by
+      # node itself (>=22) and exit 0 with "# tests 0", and `bun run test`'s
+      # quoted glob does the same. globstar matches package.json's recursive
+      # "scripts/**/*.test.mjs" so a future nested test file runs here too.
+      - run: |
+          shopt -s failglob globstar
+          node --test scripts/**/*.test.mjs
 
   goreleaser-snapshot:
     name: goreleaser-snapshot (cross-build matrix)

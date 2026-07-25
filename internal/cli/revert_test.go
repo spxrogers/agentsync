@@ -517,9 +517,17 @@ func TestRevert_RefusalStillAnnouncesSnapshot(t *testing.T) {
 	mustRun(t, env, "apply")
 
 	claude := filepath.Join(tmp, ".claude")
-	// Dirty TRACKED edit → Restore will snapshot it before the pre-flight…
-	skillDest := filepath.Join(claude, "skills", "demo", "SKILL.md")
-	if err := os.WriteFile(skillDest, []byte("dirty tracked edit"), 0o644); err != nil {
+	// Dirty TRACKED edit on a file that SURVIVES the refusal fixture (the
+	// NOTICE is tracked from init) — editing a file under skills/ and then
+	// replacing skills/ with the symlink would make the snapshot preserve a
+	// deletion, not the edit this test is about. Restore snapshots this edit
+	// before the pre-flight…
+	notice := filepath.Join(claude, "AGENTSYNC_LOCAL_HISTORY.md")
+	orig, err := os.ReadFile(notice)
+	if err != nil {
+		t.Fatalf("tracked NOTICE should exist: %v", err)
+	}
+	if err := os.WriteFile(notice, append(orig, []byte("\ndirty tracked edit\n")...), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// …and a symlinked ancestor at a path the revert must touch forces a

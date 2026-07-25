@@ -155,7 +155,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 		toWrite, synced, removalOps := planSyncCounts(plan, wouldChange)
 		// The three counts partition plan.Total(), so the headline always sums.
 		if removalOps > 0 {
-			fmt.Fprintf(w, "%s %d ops total across %d agent(s) — %d to write, %d already synced, %d removal(s)\n",
+			fmt.Fprintf(w, "%s %d ops total across %d agent(s) — %d to write, %d already synced, %d removal op(s)\n",
 				p.Bold("Plan:"), plan.Total(), len(plan.PerAgent), toWrite, synced, removalOps)
 		} else {
 			fmt.Fprintf(w, "%s %d ops total across %d agent(s) — %d to write, %d already synced\n",
@@ -330,16 +330,18 @@ func printPlannedOp(w io.Writer, p *ui.Printer, op adapter.FileOp, wouldChange m
 	// an ESC in a shared config's name can't inject escapes into the plan preview
 	// (issue #93/#171).
 	dispPath := ui.Sanitize(op.Path)
-	if isSyncedOp(op, wouldChange) {
-		fmt.Fprintf(w, "    %s %s %s\n", p.Green(ui.GlyphOK), p.Green(ui.Pad("synced", 6)), dispPath)
-		return
-	}
 	// A pure orphan-cleanup op (the "{}"+OwnedKeys signature) is a key REMOVAL:
 	// it is excluded from the "to write" headline count (planSyncCounts) and
 	// summarized under "Removals:", so labeling it "write" here would make the
-	// listing disagree with both.
+	// listing disagree with both. Checked BEFORE isSyncedOp — planSyncCounts
+	// classifies it as a removal first too, and an already-converged cleanup op
+	// printing "synced" would reopen the same listing/headline split.
 	if render.IsKeyMerge(op.MergeStrategy) && strings.TrimSpace(string(op.Content)) == "{}" && len(op.OwnedKeys) > 0 {
 		fmt.Fprintf(w, "    %s %s %s\n", p.Yellow(ui.GlyphArrow), p.Yellow(ui.Pad("remove", 6)), dispPath)
+		return
+	}
+	if isSyncedOp(op, wouldChange) {
+		fmt.Fprintf(w, "    %s %s %s\n", p.Green(ui.GlyphOK), p.Green(ui.Pad("synced", 6)), dispPath)
 		return
 	}
 	// Plan ops never carry the "" Action spelling (Plan normalizes it to

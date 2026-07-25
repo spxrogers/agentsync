@@ -270,10 +270,12 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 		// dirty tracked edits BEFORE the pre-flight, so when snap != "" the
 		// snapshot commit exists regardless of the error. Announce it (plus the
 		// issue-#126 cleartext caution) rather than leave a silently advanced
-		// HEAD — a mid-restore failure's own hint also names the snapshot, so
-		// the two surfaces stay consistent.
+		// HEAD. This fires on EVERY Restore error — refusals and mid-restore
+		// failures alike (the wording stays neutral for that reason); a
+		// mid-restore failure's restoreFailureHint also names the snapshot,
+		// which is redundancy in the safe direction, not a contradiction.
 		if snap != "" {
-			fmt.Fprintf(p.Err, "%s the refused revert had already preserved uncommitted changes in %s as snapshot %s; "+
+			fmt.Fprintf(p.Err, "%s the revert did not complete, but it had already preserved uncommitted changes in %s as snapshot %s; "+
 				"that snapshot is kept in the local-only history and, like the files it versions, may contain secrets in cleartext.\n",
 				p.Faint(ui.GlyphInfo), root, agit.Short(snap))
 		}

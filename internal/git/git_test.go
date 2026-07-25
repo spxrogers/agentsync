@@ -2270,3 +2270,29 @@ func TestApplyRestoreDelta_RechecksSymlinkAncestors(t *testing.T) {
 		t.Fatalf("nothing may cross the link: %v", entries)
 	}
 }
+
+// TestRestore_WorksThroughSymlinkedRepoRoot pins the claim on symlinkAncestor's
+// doc: the ancestor walk never inspects the repo root itself, so a user whose
+// ENTIRE config dir is a symlink (~/.claude -> /elsewhere/claude) reverts
+// normally — no over-refusal.
+func TestRestore_WorksThroughSymlinkedRepoRoot(t *testing.T) {
+	testenv.RequireContainer(t)
+	real := t.TempDir()
+	linkParent := t.TempDir()
+	link := filepath.Join(linkParent, "claude")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Init(link) // opened THROUGH the symlink
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, link, "sub/a.txt", "v1", "apply 1")
+	commitFile(t, r, link, "sub/a.txt", "v2", "apply 2")
+	if _, _, err := r.Restore("HEAD~1", "agentsync revert: via symlinked root", DefaultIdentity); err != nil {
+		t.Fatalf("a symlinked repo ROOT must not trip the ancestor refusal: %v", err)
+	}
+	if got := readFile(t, link, "sub/a.txt"); got != "v1" {
+		t.Fatalf("restore through the symlinked root should land v1, got %q", got)
+	}
+}
