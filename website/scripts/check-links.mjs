@@ -353,8 +353,19 @@ function main() {
 	// A stale entry shields nothing: its breakage was fixed (or the page moved),
 	// so the exception must be deleted, not left to mask a future regression.
 	const stale = allowlist.filter((_, i) => !matched.has(i));
+	// A DUPLICATE allowlist entry can never match (allowlistIndex returns the
+	// first index), so it would surface as a confusing "stale" forever — name
+	// the real problem instead.
+	const seenEntries = new Set();
+	const dupes = [];
+	for (const e of allowlist) {
+		const k = `${e.file}\u0000${e.target}`;
+		if (seenEntries.has(k)) dupes.push(e);
+		seenEntries.add(k);
+	}
 
-	if (fatal.length === 0) {
+	const cleanRun = fatal.length === 0 && stale.length === 0 && dupes.length === 0;
+	if (cleanRun) {
 		console.log(
 			`check-links: ${stats.pages} pages, ${stats.links} in-site links, 0 broken`,
 		);
@@ -363,7 +374,7 @@ function main() {
 				`  (${allowed} known pre-existing exception(s) allowlisted; see ALLOWLIST in scripts/check-links.mjs)`,
 			);
 		}
-	} else {
+	} else if (fatal.length > 0) {
 		console.error(
 			`check-links: found ${fatal.length} broken in-site link(s) across ${stats.pages} pages:\n`,
 		);
@@ -385,6 +396,14 @@ function main() {
 		);
 	}
 
+	if (dupes.length > 0) {
+		console.error(
+			`\ncheck-links: ${dupes.length} DUPLICATE ALLOWLIST entr${dupes.length === 1 ? 'y' : 'ies'} (only the first copy can ever match — delete the duplicate):`,
+		);
+		for (const e of dupes) {
+			console.error(`  ${e.file}  ->  ${e.target}`);
+		}
+	}
 	if (stale.length > 0) {
 		console.error(
 			`\ncheck-links: ${stale.length} stale ALLOWLIST entr${stale.length === 1 ? 'y' : 'ies'} matched zero violations this run:`,
@@ -397,7 +416,7 @@ function main() {
 		);
 	}
 
-	return fatal.length > 0 || stale.length > 0 ? 1 : 0;
+	return cleanRun ? 0 : 1;
 }
 
 // Run as a CLI only when invoked directly (not when imported by tests).

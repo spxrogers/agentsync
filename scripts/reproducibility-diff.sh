@@ -95,6 +95,16 @@ if [ "$found_archives" -eq 0 ]; then
 	echo "ERROR: no tar.gz/zip archives found in $out/a — did the snapshot build run?" >&2
 	exit 1
 fi
+# The loop above walks run A, so an archive present ONLY in run B (a
+# nondeterministic artifact set — itself a reproducibility failure) would
+# otherwise escape comparison entirely.
+for f in "$out"/b/*.tar.gz "$out"/b/*.zip; do
+	[ -e "$f" ] || continue
+	if [ ! -f "$out/a/$(basename "$f")" ]; then
+		echo "MISSING   $(basename "$f") (present in run B, absent in run A)"
+		fatal=1
+	fi
+done
 
 echo
 echo "==> known-nonreproducible artifacts (deb/rpm/checksums.txt) — informational only"
