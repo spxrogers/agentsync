@@ -91,7 +91,11 @@ jobs:
       # inside each `uses: goreleaser/goreleaser-action@…` step's `with:` block)
       # rather than grepping for ANY `version: "N.N.N"` — so a future unrelated
       # action input named `version` can neither satisfy nor miscount this
-      # guard, and a goreleaser-action step MISSING its pin fails it too.
+      # guard, and a goreleaser-action step MISSING its pin fails it too. The
+      # version extraction is line-anchored (leading whitespace, then
+      # `version:`), so a COMMENT inside a step's lines — a full comment line or
+      # a trailing `# version: "N.N.N"` remark — can never satisfy the count or
+      # feed a bogus version into the parity comparison.
       - name: Guard goreleaser version pin (CI == release == just)
         run: |
           set -euo pipefail
@@ -105,7 +109,7 @@ jobs:
             awk '
               /^[[:space:]]*-[[:space:]]*uses:[[:space:]]*goreleaser\/goreleaser-action@/ { instep=1; next }
               instep && /^[[:space:]]*-[[:space:]]*(name|uses|run):/ { instep=0 }
-              instep && match($0, /version:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"/) {
+              instep && match($0, /^[[:space:]]*version:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"/) {
                 v=substr($0, RSTART, RLENGTH); gsub(/[^0-9.]/, "", v); print v; instep=0
               }
             ' $wf
