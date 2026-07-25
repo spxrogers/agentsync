@@ -448,10 +448,14 @@ func applyPlan(
 		// went through Plan, so an op here can still carry the documented
 		// `"" == "write"` Action default — which every executor writes, while
 		// the traversal backstop and the dedup/divergence check below match the
-		// literal "write". Normalize once at this shared entry (a Plan-built
-		// plan is already normalized, so this is a no-op for it) and re-run the
+		// literal "write". Normalize at this shared entry (a Plan-built plan is
+		// already normalized, so this is a no-op for it) and re-run the
 		// backstop, so a hand-built plan cannot smuggle an unanchored ".." path
-		// past the guards Plan enforces.
+		// past the guards Plan enforces. Scope honesty: "shared" covers the
+		// Apply/PreviewApply funnel only — cli/reconcile.go and cli/agent.go
+		// call an adapter's Apply directly with plan-derived or explicit-Action
+		// ops and stay outside this normalization; raw-adapter-output consumers
+		// keep their own `"" ==` guards.
 		for i := range res.Ops {
 			if res.Ops[i].Action == "" {
 				res.Ops[i].Action = "write"
