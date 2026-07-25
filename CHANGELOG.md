@@ -49,9 +49,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   as an empty-command hook, and the next apply (owning the whole per-event
   array) wrote `"command": ""` over the user's native handler. For Claude
   this was a pre-existing hole; all three now warn and leave the event
-  uncaptured (a malformed shape never triggers retirement), and a
-  prompt-type handler with no command keeps its retirement-triggering
-  refusal on the *type*, not a downgrade on the missing command. Unmodeled
+  uncaptured (a malformed shape never triggers retirement), and a handler
+  that is refused *semantically* — a prompt-type handler, or one carrying an
+  unmodeled field — keeps its retirement-triggering refusal even when it
+  also lacks a command (the semantic checks run first, matching codex's
+  ordering; the missing command never downgrades it). Unmodeled
   native key names in ingest warnings are now quoted, so a hostile key
   cannot forge warning lines.
 - **Gemini now implements `HookIngestGuard`, closing the stale-hook clobber for

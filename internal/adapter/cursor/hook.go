@@ -210,6 +210,15 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 				representable = false
 				break
 			}
+			if extra := unmodeledKeys(entry, cursorHookEntryModeledKeys); len(extra) > 0 {
+				fmt.Fprintf(warn, "warning: hook event %q has an entry with unmodeled fields (%s); event not captured\n", cursorEvent, quotedKeys(extra))
+				representable = false
+				break
+			}
+			// The unmodeled-keys check runs BEFORE the command checks (matching
+			// codex): an entry carrying an unmodeled field AND lacking a command
+			// must surface as a SEMANTIC (retirement-triggering) refusal on the
+			// field, not be short-circuited into a structural skip.
 			// An absent or non-string command would be asStr-coerced to "" and
 			// captured as an EMPTY-command entry the next apply would then write
 			// over the user's native entry. Checked AFTER the type check so it
@@ -225,11 +234,6 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 				fmt.Fprintf(warn, "warning: hook event %q has an entry whose \"command\" is not a string; event not captured\n", cursorEvent)
 				representable = false
 				structural = true
-				break
-			}
-			if extra := unmodeledKeys(entry, cursorHookEntryModeledKeys); len(extra) > 0 {
-				fmt.Fprintf(warn, "warning: hook event %q has an entry with unmodeled fields (%s); event not captured\n", cursorEvent, quotedKeys(extra))
-				representable = false
 				break
 			}
 			captured = append(captured, source.Hook{

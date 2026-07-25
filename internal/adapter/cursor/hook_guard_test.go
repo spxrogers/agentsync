@@ -41,6 +41,10 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 			`{ "preToolUse": [ { "type": "prompt" } ] }`, true,
 		},
 		{
+			"semantic: unmodeled entry field without a command (unmodeled wins over the absent-command structural check)",
+			`{ "preToolUse": [ { "timeout": 30 } ] }`, true,
+		},
+		{
 			"structural: event value not an array",
 			`{ "preToolUse": { "command": "x" } }`, false,
 		},

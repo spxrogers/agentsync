@@ -192,6 +192,15 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 					representable = false
 					break defs
 				}
+				if extra := unmodeledKeys(h, claudeHookEntryModeledKeys); len(extra) > 0 {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler with unmodeled fields (%s); event not captured\n", event, quotedKeys(extra))
+					representable = false
+					break defs
+				}
+				// The unmodeled-keys check runs BEFORE the command checks (matching
+				// codex): a handler carrying an unmodeled field AND lacking a command
+				// must surface as a SEMANTIC (retirement-triggering) refusal on the
+				// field, not be short-circuited into a structural skip.
 				// An absent or non-string command would be asStr-coerced to "" and
 				// captured as an EMPTY-command handler — which the next apply, owning
 				// the whole per-event array, would write over the user's native
@@ -207,11 +216,6 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 					fmt.Fprintf(warn, "warning: hook event %q has a handler whose \"command\" is not a string; event not captured\n", event)
 					representable = false
 					structural = true
-					break defs
-				}
-				if extra := unmodeledKeys(h, claudeHookEntryModeledKeys); len(extra) > 0 {
-					fmt.Fprintf(warn, "warning: hook event %q has a handler with unmodeled fields (%s); event not captured\n", event, quotedKeys(extra))
-					representable = false
 					break defs
 				}
 				captured = append(captured, source.Hook{

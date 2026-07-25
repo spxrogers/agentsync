@@ -360,6 +360,14 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "prompt" } ] } ] }`, true,
 		},
 		{
+			"semantic: unmodeled handler field without a command (unmodeled wins over the absent-command structural check)",
+			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "timeout": 30 } ] } ] }`, true,
+		},
+		{
+			"semantic: typeless converted engine shape (unmodeled field, no type, no command)",
+			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "prompt": "do it" } ] } ] }`, true,
+		},
+		{
 			"structural: event value not an array",
 			`{ "PreToolUse": { "matcher": "Bash" } }`, false,
 		},
