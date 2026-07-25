@@ -1417,9 +1417,11 @@ func TestImport_RetireDisownIsScopeExact(t *testing.T) {
 	// MUST use the exact spelling render.RecordOpsState emits — the
 	// "${HOME}/…" form paths.HomeRelative produces — or the survival
 	// assertion is trivially true against a spelling the disown could never
-	// match anyway (and the project-leg mutation this test guards would go
-	// undetected: dropping HomeRelative from scopeMid must disown this key
-	// and fail the test).
+	// match anyway. What this pins is the SCOPE leg (dropping sc.String()
+	// from scopeMid disowns this key and fails the test); at user scope the
+	// project leg is empty on both sides, so the project-leg distinction
+	// between two different projects is exercised only via the scope word —
+	// the accepted residual documented on retireRefusedHookEvents.
 	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
 	st, err := state.Load(statePath)
 	if err != nil {
@@ -1519,5 +1521,50 @@ func TestImport_DryRunPreviewsStaleHookRetirement(t *testing.T) {
 	}
 	if _, err := os.Stat(canonical); err != nil {
 		t.Fatalf("named dry-run must not delete the canonical hook file: %v", err)
+	}
+}
+
+// TestImport_RetireStateFailureLeavesCanonicalIntact pins the disown-BEFORE-
+// remove ordering: when the state file cannot be loaded (planted as a
+// directory — EISDIR defeats even a privileged container), retirement must
+// warn and leave the canonical hook file IN PLACE, so a re-run can retry.
+// Under the pre-fix order the file was removed first: a state failure then
+// stranded every agent's key owned with no canonical render — the next apply
+// clobbered their native configs and a re-run had nothing left to trigger the
+// disown.
+func TestImport_RetireStateFailureLeavesCanonicalIntact(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mustRun(t, env, "agent", "add", "claude")
+	settings := filepath.Join(tmp, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clean := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi"}]}]}}`
+	if err := os.WriteFile(settings, []byte(clean), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude:hook:PreToolUse"); err != nil {
+		t.Fatalf("import clean hook: %v\n%s", err, out)
+	}
+	enriched := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 30}]}]}}`
+	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Plant the state file as a DIRECTORY so state.Load fails deterministically.
+	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
+	if err := os.Remove(statePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(statePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _ := runCLI(t, env, "import", "claude") // import may error on the planted state; the invariant is below
+	if !strings.Contains(out, "retirement skipped this") {
+		t.Fatalf("state failure should surface the skip-and-retry warning:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, ".agentsync", "hooks", "PreToolUse.toml")); err != nil {
+		t.Fatalf("state failure must leave the canonical hook file in place for a retry (disown-first ordering): %v\n%s", err, out)
 	}
 }
