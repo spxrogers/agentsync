@@ -40,7 +40,11 @@ can resolve secrets into native config files. Areas of particular interest:
   fetcher allows a symlink only when its resolved target stays inside the
   fetched tree (an escaping link — `skills/x -> /etc` — is refused, as is an
   unresolvable one), so a plugin's legitimate in-tree link is kept without
-  letting a read escape the cache. Fetchers also cap decompressed tarball size
+  letting a read escape the cache. Hard links are out of scope for the local
+  (relative) fetcher: a hard-linked file inside a local marketplace tree is
+  indistinguishable from a regular file and its content is copied — the
+  local tree is the user's own disk, so this discloses nothing a plain copy
+  of that tree wouldn't. Fetchers also cap decompressed tarball size
   and bound manifest-listed component paths and names to the plugin cache. Each
   installed plugin is pinned with a content hash over its *entire* cache tree
   (every projected component body, not just `plugin.json`; a cached symlink is

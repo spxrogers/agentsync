@@ -67,6 +67,7 @@ func (f *RelativeFetcher) Fetch(src Source, into string) (FetchResult, error) {
 		return FetchResult{}, fmt.Errorf("relative fetcher: %s is not a directory", abs)
 	}
 
+	copySrc := abs
 	if src.RootDir != "" {
 		// The containment check above is purely textual, so a symlink UNDER the
 		// root defeats it: with root/a → /etc, the path root/a/b is "contained"
@@ -85,10 +86,15 @@ func (f *RelativeFetcher) Fetch(src Source, into string) (FetchResult, error) {
 		if !pathContains(resolvedRoot, resolvedAbs) {
 			return FetchResult{}, fmt.Errorf("relative fetcher: source %q escapes marketplace root %q after resolving symlinks", abs, rootAbs)
 		}
+		// Copy from the RESOLVED path: it has no symlink components left, so a
+		// link swapped in between the check above and the walk cannot redirect
+		// the copy (the check-to-copy race the unresolved path would leave
+		// open). A rootless copy keeps the user-named path as-is.
+		copySrc = resolvedAbs
 	}
 
-	if err := copyDir(abs, into); err != nil {
-		return FetchResult{}, fmt.Errorf("relative fetcher: copy %s → %s: %w", abs, into, err)
+	if err := copyDir(copySrc, into); err != nil {
+		return FetchResult{}, fmt.Errorf("relative fetcher: copy %s → %s: %w", copySrc, into, err)
 	}
 	return FetchResult{}, nil
 }

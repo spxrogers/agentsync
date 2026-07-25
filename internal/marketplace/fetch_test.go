@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -273,8 +275,13 @@ func TestRelativeFetcher_ErrorLegs(t *testing.T) {
 		missing := filepath.Join(mpRoot, "nope")
 		src := marketplace.Source{Relative: missing, RootDir: rootDir}
 		_, err := marketplace.Dispatch(src).Fetch(src, t.TempDir())
-		if err == nil || !strings.Contains(err.Error(), "stat ") {
-			t.Fatalf("RootDir=%q: missing source should fail at stat, got: %v", rootDir, err)
+		// Pin the exact syscall op: EvalSymlinks failures surface as Op
+		// "lstat", so a substring match on "stat" would still pass if the
+		// resolve step regressed to running before the existence check —
+		// the precise ordering this test exists to hold.
+		var pathErr *fs.PathError
+		if err == nil || !errors.As(err, &pathErr) || pathErr.Op != "stat" {
+			t.Fatalf("RootDir=%q: missing source should fail at os.Stat (Op \"stat\"), got: %v", rootDir, err)
 		}
 	}
 }
