@@ -25,7 +25,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `agentsync plugin disable demo@wrong-mp` acted on the `demo` installed from
   `test-mp`. A qualified ref is now checked against the marketplace recorded
   in `plugins/<id>.toml` and refused on mismatch, naming both; a bare id (or
-  matching qualifier) works as before.
+  matching qualifier) works as before. A plugin installed by **bare id**
+  records the internal `default` sentinel rather than a real marketplace, so a
+  later qualified ref refuses with an honest "cannot be verified; use the bare
+  id" instead of claiming the plugin came from a marketplace named `default`.
+  Relatedly, a bare-id install (and `upgrade` of a bare-id-installed plugin)
+  of a plugin with a *relative* source now fetches against the marketplace
+  cache that actually supplied the entry — previously the fetch resolved
+  against a nonexistent cache dir and failed.
 - **Continue adapter: an explicitly-typed stdio MCP server that also carries a
   `url` now reports the dropped url.** The single-transport drop report fired
   only for the untyped command+url ambiguity; a server with `type: "stdio"`

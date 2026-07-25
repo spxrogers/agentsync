@@ -1282,3 +1282,45 @@ func TestPlugin_NotInstalledReportsFriendlyError(t *testing.T) {
 		})
 	}
 }
+
+// TestPlugin_BareIDInstallSentinelQualifierHonest pins the review-loop fix for
+// the "@default" sentinel: a BARE-ID install records `demo@default` (the
+// marketplace was searched, not named), so a later qualified ref cannot be
+// verified — the refusal must say exactly that (and suggest the bare id), not
+// claim the plugin was "installed from marketplace \"default\"", a marketplace
+// that does not exist. The bare id keeps working throughout.
+func TestPlugin_BareIDInstallSentinelQualifierHonest(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	mpDir := makeLocalMarketplace(t, t.TempDir())
+	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatal(err)
+	}
+	// Bare-id install: records the "default" sentinel, not test-mp.
+	if out, err := runCLI(t, env, "plugin", "install", "demo"); err != nil {
+		t.Fatalf("bare-id install: %v\n%s", err, out)
+	}
+
+	_, err := runCLI(t, env, "plugin", "disable", "demo@test-mp")
+	if err == nil {
+		t.Fatal("a qualified ref against a sentinel-recorded plugin cannot be verified and must refuse")
+	}
+	if !strings.Contains(err.Error(), "cannot be verified") || !strings.Contains(err.Error(), `bare id "demo"`) {
+		t.Fatalf("refusal should explain unverifiability and suggest the bare id; got: %v", err)
+	}
+	if strings.Contains(err.Error(), `installed from marketplace "default"`) {
+		t.Fatalf("refusal must not point at the nonexistent %q marketplace: %v", "default", err)
+	}
+
+	// The bare id still works.
+	if out, err := runCLI(t, env, "plugin", "disable", "demo"); err != nil {
+		t.Fatalf("bare-id disable: %v\n%s", err, out)
+	}
+	p := readPluginTOMLFixture(t, filepath.Join(tmp, ".agentsync", "plugins", "demo.toml"))
+	if !p.Plugin.Disabled {
+		t.Fatal("bare-id disable should have set disabled=true")
+	}
+}
