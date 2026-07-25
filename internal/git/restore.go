@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -178,12 +179,12 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (revertHash, snap
 		info, statErr := os.Lstat(abs)
 		switch {
 		case statErr == nil && info.IsDir():
-			blocker, werr := firstUnmanagedFileUnder(r.dir, abs, deleting)
+			blocker, werr := firstUnmanagedEntryUnder(r.dir, abs, deleting)
 			if werr != nil {
 				return "", snapshotHash, fmt.Errorf("scanning %s during revert in %s: %w", ch.Path, r.dir, werr)
 			}
 			if blocker != "" {
-				return "", snapshotHash, fmt.Errorf("cannot restore %q to a file: the directory holds files agentsync does not manage (e.g. %q); move or remove them, then re-run revert", ch.Path, blocker)
+				return "", snapshotHash, fmt.Errorf("cannot restore %q to a file: the directory holds entries agentsync does not manage (e.g. %q); move or remove them, then re-run revert", ch.Path, blocker)
 			}
 		case statErr == nil && ch.Kind == "create":
 			// (1b) a create over an existing regular file: it is the user's own
@@ -305,30 +306,60 @@ func restoreFailureHint(dir, orig, snapshot string, err error) error {
 		dir, Short(orig), dir, Short(orig), err)
 }
 
-// firstUnmanagedFileUnder walks absDir and returns the first regular file — as a
-// repoDir-relative slash path — that is NOT in the `deleting` set: an untracked or
-// gitignored file that replacing this directory with a file would have to destroy.
-// It returns "" when the directory holds nothing agentsync isn't already removing.
-func firstUnmanagedFileUnder(repoDir, absDir string, deleting map[string]bool) (string, error) {
+// firstUnmanagedEntryUnder walks absDir and returns the first entry — as a
+// repoDir-relative slash path — that the delete pass will NOT clear away: a
+// file (untracked or gitignored) not in the `deleting` set, or a SUBDIRECTORY
+// with no deleted descendant. The delete pass removes only the files in
+// `deleting`, and pruneEmptiedDirs then prunes only the emptied ancestor chains
+// of those deleted paths — so a subdir holding no deleted file survives both
+// passes. Notably an EMPTY subdir: it holds no file for the file check to flag,
+// yet it makes the later removal of the whole directory fail mid-restore with
+// the misleading concurrent-change (TOCTOU) wording. Flagging it here keeps the
+// refusal loud, early, and all-or-nothing. Returns "" when the directory holds
+// nothing agentsync isn't already removing.
+func firstUnmanagedEntryUnder(repoDir, absDir string, deleting map[string]bool) (string, error) {
 	var found string
 	err := filepath.WalkDir(absDir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
-			return nil
+		if p == absDir {
+			return nil // the directory being replaced itself
 		}
 		rel, rerr := filepath.Rel(repoDir, p)
 		if rerr != nil {
 			return rerr
 		}
-		if slash := filepath.ToSlash(rel); !deleting[slash] {
+		slash := filepath.ToSlash(rel)
+		if d.IsDir() {
+			if hasDeletedDescendant(deleting, slash) {
+				// The delete pass empties it and pruneEmptiedDirs prunes it (it
+				// is an ancestor of a deleted path); keep walking inside it for
+				// nested blockers the deletes don't cover.
+				return nil
+			}
+			found = slash
+			return filepath.SkipAll // survives the delete pass — a blocker
+		}
+		if !deleting[slash] {
 			found = slash
 			return filepath.SkipAll // stop at the first unmanaged file
 		}
 		return nil
 	})
 	return found, err
+}
+
+// hasDeletedDescendant reports whether any path in deleting lies strictly under
+// the slash-relative directory dir.
+func hasDeletedDescendant(deleting map[string]bool, dir string) bool {
+	prefix := dir + "/"
+	for p := range deleting {
+		if strings.HasPrefix(p, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // restoreFileFromTree writes the target tree's blob for slash-path p into the
@@ -357,8 +388,11 @@ func restoreFileFromTree(wt *gogit.Worktree, tree *object.Tree, p string) error 
 	}
 	defer reader.Close()
 
+	// 0o755 matches agentsync's own writers (iox.AtomicWrite creates parents at
+	// 0o755), so a revert that re-creates a pruned parent chain yields the same
+	// directory modes an apply would.
 	if dir := path.Dir(p); dir != "." && dir != "/" {
-		if err := fs.MkdirAll(dir, 0o700); err != nil {
+		if err := fs.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("creating parent dir of %s: %w", p, err)
 		}
 	}

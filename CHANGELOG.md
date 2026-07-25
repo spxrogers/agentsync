@@ -764,6 +764,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   every page (an async floating chat button, wired to the
   `/spxrogers/agentsync` Context7 source) via a `script` tag in Starlight's
   `head` config (`website/astro.config.mjs`).
+- **`revert` refuses a dir→file restore up front when the directory holds only
+  empty user subdirectories, and re-creates pruned parent dirs at 0o755.** An
+  empty user-created subdir inside a directory being replaced by a file slipped
+  past the structural pre-flight (which scanned for files only) and failed
+  mid-restore with the misleading concurrent-change wording; the pre-flight now
+  refuses it early and all-or-nothing, like every other unmanaged-entry
+  conflict. Parent directories a revert re-creates now get 0o755 — matching
+  agentsync's own writers — instead of 0o700.
 
 ### Documentation
 

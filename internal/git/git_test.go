@@ -1979,3 +1979,141 @@ func TestIsAncestorOfHead_AcrossMergeParent(t *testing.T) {
 		})
 	}
 }
+
+// TestRestore_EmptySubdirBlocksFileReplacement closes the pre-flight's
+// empty-directory blind spot: a dir→file replacement where the directory holds
+// only an EMPTY user subdir used to pass the pre-flight (the file scan found
+// nothing) and then fail mid-restore with the misleading concurrent-change
+// (TOCTOU) wording when the dir removal hit the surviving subdir. The
+// pre-flight must now refuse it up front — same refusal wording family,
+// all-or-nothing, nothing mutated.
+func TestRestore_EmptySubdirBlocksFileReplacement(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// c1 (target): foo is a regular file.
+	commitFile(t, r, dir, "foo", "iamfile", "c1: foo is a file")
+	// c2 (HEAD): foo becomes a directory (foo/bar tracked).
+	if err := os.Remove(filepath.Join(dir, "foo")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "foo/bar", "iamdir")
+	if err := r.Stage([]string{"foo/bar"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c2: foo is a dir", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	// The user drops an EMPTY directory inside foo — no file for a file-only
+	// scan to find, but the delete pass will not clear it.
+	if err := os.MkdirAll(filepath.Join(dir, "foo", "scratch-dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = r.Restore("HEAD~1", "agentsync revert: blocked by empty dir", DefaultIdentity)
+	if err == nil {
+		t.Fatal("Restore should refuse when an empty user subdir blocks a dir->file replacement")
+	}
+	if !strings.Contains(err.Error(), "agentsync does not manage") {
+		t.Fatalf("error should be the pre-flight refusal family; got: %v", err)
+	}
+	if strings.Contains(err.Error(), "after the pre-flight") {
+		t.Fatalf("the refusal must fire in the pre-flight, not the mid-restore TOCTOU backstop; got: %v", err)
+	}
+	// All-or-nothing: the tracked foo/bar was not deleted, the user's dir survives.
+	if got := readFile(t, dir, "foo/bar"); got != "iamdir" {
+		t.Fatalf("refusal must be all-or-nothing: tracked foo/bar was mutated, got %q", got)
+	}
+	if info, serr := os.Stat(filepath.Join(dir, "foo", "scratch-dir")); serr != nil || !info.IsDir() {
+		t.Fatalf("the user's empty dir must survive the refused revert: (%v, %v)", info, serr)
+	}
+}
+
+// TestRestore_NestedClearedDirStillTransitions guards the pre-flight against
+// over-refusing: a dir→file replacement where the directory's only content is a
+// NESTED tracked file the delta deletes (foo/sub/x) must still restore — the
+// delete pass removes the file and pruneEmptiedDirs clears the emptied chain,
+// so the subdir is not a blocker.
+func TestRestore_NestedClearedDirStillTransitions(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// c1 (target): foo is a regular file.
+	commitFile(t, r, dir, "foo", "iamfile", "c1: foo is a file")
+	// c2 (HEAD): foo becomes a directory with a NESTED tracked file foo/sub/x.
+	if err := os.Remove(filepath.Join(dir, "foo")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "foo/sub/x", "nested")
+	if err := r.Stage([]string{"foo/sub/x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c2: foo is a nested dir", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := r.Restore("HEAD~1", "agentsync revert: nested dir->file", DefaultIdentity); err != nil {
+		t.Fatalf("Restore across a nested dir->file transition should not refuse: %v", err)
+	}
+	if got := readFile(t, dir, "foo"); got != "iamfile" {
+		t.Fatalf("foo = %q, want the restored file content", got)
+	}
+}
+
+// TestRestore_RecreatedParentDirsMode pins the permission alignment on
+// restoreFileFromTree's MkdirAll: a revert that re-creates a pruned parent
+// chain must produce 0o755 directories, matching agentsync's own writers
+// (iox.AtomicWrite creates parents at 0o755) — not the 0o700 it used before,
+// which made reverted trees stricter than applied ones.
+func TestRestore_RecreatedParentDirsMode(t *testing.T) {
+	testenv.RequireContainer(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permission bits")
+	}
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// c1 (target): a nested tracked file. c2 (HEAD): the whole chain deleted,
+	// so reverting to c1 re-creates skill/ and skill/deep/ from scratch.
+	commitFile(t, r, dir, "skill/deep/SKILL.md", "body", "c1: nested skill")
+	commitFile(t, r, dir, "keep.txt", "k", "c2: keep")
+	if err := os.RemoveAll(filepath.Join(dir, "skill")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c3: drop skill tree", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := r.Restore("HEAD~2", "agentsync revert: recreate parents", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, dir, "skill/deep/SKILL.md"); got != "body" {
+		t.Fatalf("restored content = %q, want body", got)
+	}
+	for _, rel := range []string{"skill", "skill/deep"} {
+		info, serr := os.Stat(filepath.Join(dir, filepath.FromSlash(rel)))
+		if serr != nil {
+			t.Fatalf("stat %s: %v", rel, serr)
+		}
+		if got := info.Mode().Perm(); got != 0o755 {
+			t.Fatalf("recreated dir %s perm = %04o, want 0755 (aligned with iox.AtomicWrite)", rel, got)
+		}
+	}
+}
