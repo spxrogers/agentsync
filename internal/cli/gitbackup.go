@@ -35,9 +35,12 @@ type gitBackupSession struct {
 	// agents) is versioned exactly once.
 	roots             []string
 	hintedUnavailable bool
-	// warnedCleartext gates the one-time-per-run mode=on cleartext notice, so an
-	// unattended (mode="on") apply that auto-inits new dirs warns about the local-only
-	// cleartext-secret history once, not once per dir.
+	// warnedCleartext gates the one-time-per-run cleartext CAUTION — the clause
+	// on the mode=on auto-init announcement AND the baseline-snapshot caution —
+	// so an apply warns about the local-only cleartext-secret history once, not
+	// once per dir, and a fresh init that already warned suppresses the baseline
+	// caution for the same run. The per-dir "started a … git backup of <dir>"
+	// announcement itself is NOT gated (see ensureUntrackedRepo).
 	warnedCleartext bool
 	// handled records roots whose init/prompt (or foreign-skip hint) decision has
 	// already been made THIS run, so the baseline and checkpoint passes never
@@ -112,11 +115,27 @@ func (s *gitBackupSession) resolveBackupRepo(root string, st agit.State, hasWrit
 }
 
 // baseline records a PRE-APPLY baseline checkpoint of every version root this apply
-// will write into, BEFORE render.Apply overwrites anything — so even the FIRST apply
+// will touch, BEFORE render.Apply overwrites anything — so even the FIRST apply
 // into a dir is revertible (the apply checkpoint's parent is the genuine pre-apply
-// state), not just the second apply onward (issue #143). plannedWrites is the set of
-// destination paths the plan will write, so this pass manages exactly the roots the
-// post-apply checkpoint pass would.
+// state), not just the second apply onward (issue #143). planned is the set of
+// destination paths the plan will write OR delete (including writer-derived skill
+// orphan deletes — see baselinePaths): a to-be-deleted file's pre-apply bytes must
+// land in the baseline, because the writer removes an in-sync orphan without a
+// backup and a deletion can't be recovered from any later checkpoint. This pass
+// manages exactly the roots the post-apply checkpoint pass would.
+//
+// A root with NO planned path under it is skipped outright: there is no imminent
+// overwrite for a baseline to protect, and — because resolveBackupRepo opens an
+// agentsync-owned root unconditionally (the checkpoint pass needs that for
+// delete-only applies) — snapshotting there would grow "pre-apply baseline"
+// commits in dirs the apply never touches whenever they hold uncommitted tracked
+// drift. That drift stays on disk exactly as a --no-git-backup run would leave
+// it; revert's own snapshot still preserves it if a revert ever runs there.
+//
+// When a baseline snapshot actually commits something, the issue #126 cleartext
+// caution is printed once per run (cautionCleartextOnce): the snapshot commits
+// freshly hand-typed dest edits verbatim, the same exposure the revert snapshot
+// warns about.
 //
 // FAILURE POLICY — best-effort WITH A LOUD WARNING. Unlike the post-apply checkpoint
 // (best-effort-silent, because the files are already written), the baseline runs
@@ -125,18 +144,21 @@ func (s *gitBackupSession) resolveBackupRepo(root string, st agit.State, hasWrit
 // first apply to that dir will not be revertible. Foreign dirs (the user's own source
 // control) and mode/scope skips are honored exactly as the checkpoint pass honors
 // them, and a declined prompt does not block apply.
-func (s *gitBackupSession) baseline(plannedWrites map[string]bool) {
+func (s *gitBackupSession) baseline(planned map[string]bool) {
 	if s == nil {
 		return
 	}
 	for _, root := range s.roots {
-		hasWrites := len(managedRelsUnder(root, plannedWrites)) > 0
+		rels := managedRelsUnder(root, planned)
+		if len(rels) == 0 {
+			continue // no planned write/delete under this root — nothing to protect (see doc comment)
+		}
 		st, err := agit.Detect(root)
 		if err != nil {
 			fmt.Fprintf(s.p.Err, "%s git baseline: %v\n", s.p.Yellow("agentsync:"), err)
 			continue
 		}
-		repo, err := s.resolveBackupRepo(root, st, hasWrites)
+		repo, err := s.resolveBackupRepo(root, st, true)
 		if err != nil {
 			s.warnFirstApplyUnrevertible(root, err)
 			continue
@@ -146,7 +168,7 @@ func (s *gitBackupSession) baseline(plannedWrites map[string]bool) {
 			// existing "under your own source control" hint already fired, so this is
 			// not our failure to warn about. Any OTHER skip of a write-bound dir (a
 			// nesting hazard, a declined prompt) means its first apply is unrevertible.
-			if hasWrites && st != agit.StateForeign {
+			if st != agit.StateForeign {
 				s.warnFirstApplyUnrevertible(root, nil)
 			}
 			continue
@@ -170,7 +192,7 @@ func (s *gitBackupSession) baseline(plannedWrites map[string]bool) {
 			// new, so a revert still has a target that removes exactly what this apply
 			// creates.
 			toStage := []string{agit.NoticeFile}
-			for _, rel := range managedRelsUnder(root, plannedWrites) {
+			for _, rel := range rels {
 				if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); statErr == nil {
 					toStage = append(toStage, rel) // capture a managed path's pre-apply content
 				}
@@ -181,12 +203,15 @@ func (s *gitBackupSession) baseline(plannedWrites map[string]bool) {
 			}
 			h, cerr = repo.CommitStaged(baselineMessage(root), s.id)
 		} else {
-			// Already-owned (a later apply): history already makes this dir revertible,
-			// so the baseline only snapshots uncommitted TRACKED drift — it must NOT
-			// sweep in the user's untracked files (#128), which git add -A would.
-			// SnapshotDirtyTracked is a no-op on a clean worktree, so a re-apply with
-			// no drift records no spurious baseline commit.
-			h, cerr = repo.SnapshotDirtyTracked(baselineMessage(root), s.id)
+			// Already-owned (a later apply): history already makes this dir revertible
+			// for TRACKED content, so the baseline snapshots uncommitted tracked drift
+			// plus the pre-apply bytes of any PLANNED path that is still untracked
+			// (created while backup was off or declined — this apply is about to
+			// overwrite or delete bytes history has never seen). It must NOT sweep in
+			// the user's other untracked files (#128), which git add -A would.
+			// SnapshotPreApply is a no-op on a clean worktree with no untracked planned
+			// paths, so a re-apply with no drift records no spurious baseline commit.
+			h, cerr = repo.SnapshotPreApply(baselineMessage(root), s.id, rels)
 		}
 		if cerr != nil {
 			s.warnFirstApplyUnrevertible(root, cerr)
@@ -195,8 +220,27 @@ func (s *gitBackupSession) baseline(plannedWrites map[string]bool) {
 		if h != "" {
 			fmt.Fprintf(s.p.Err, "%s %s\n", s.p.Faint(ui.GlyphInfo),
 				s.p.Faint(fmt.Sprintf("git backup: pre-apply baseline of %s", root)))
+			s.cautionCleartextOnce()
 		}
 	}
+}
+
+// cautionCleartextOnce prints the issue #126 cleartext caution the first time
+// THIS RUN's baseline pass durably commits dest content into the local-only
+// history — the same caution the revert snapshot prints. The baseline commits
+// freshly hand-typed dest edits (and the pre-apply bytes of planned paths)
+// verbatim, so a secret typed into a dest file since the last apply lands in the
+// history; without this the identical exposure the revert path warns about
+// happened silently on apply. Gated by the same warnedCleartext bool as the
+// mode="on" auto-init notice, so an apply cautions once per run — not once per
+// root, and not a second time when a fresh init already warned.
+func (s *gitBackupSession) cautionCleartextOnce() {
+	if s.warnedCleartext {
+		return
+	}
+	s.warnedCleartext = true
+	fmt.Fprintf(s.p.Err, "%s that baseline is kept in the local-only history and, like the files it versions, may contain secrets in cleartext.\n",
+		s.p.Faint(ui.GlyphInfo))
 }
 
 // warnFirstApplyUnrevertible tells the user, loudly, that a pre-apply baseline could
@@ -463,19 +507,32 @@ func isUnderDir(child, parent string) bool {
 // Returns (nil, nil) when init was declined or could not be offered. It may flip
 // *mode to "off" for the rest of this run when the user picks "don't ask again".
 //
-// warnedCleartext gates the mode="on" cleartext notice: unlike the interactive prompt
-// (which already warns), mode="on" auto-inits with no caution, so an unattended apply
-// would grow its cleartext-secret git footprint across new dirs silently. The notice
-// fires once per run (the first NEW dir it actually inits), never on a declined /
-// nested-skip (nil repo) init.
+// warnedCleartext gates only the CLEARTEXT CAUTION clause of the mode="on"
+// notice: unlike the interactive prompt (which already warns), mode="on"
+// auto-inits with no caution, so an unattended apply would grow its
+// cleartext-secret git footprint silently. The "started a local-only git
+// backup of <dir>" announcement itself fires for EVERY dir actually inited —
+// a second new dir in the same run is never silent — while the caution rides
+// on the first announcement only (once per run, shared with the
+// baseline-snapshot caution). Never fires on a declined / nested-skip (nil
+// repo) init.
 func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mode *string, hintedUnavailable, warnedCleartext *bool) (*agit.Repo, error) {
 	switch *mode {
 	case source.GitBackupModeOn:
 		repo, err := initGuarded(p, dir)
-		if err == nil && repo != nil && !*warnedCleartext {
-			fmt.Fprintf(p.Err, "%s started a %s git backup of %s; like the files it versions, its history may contain secrets in cleartext (it is never pushed).\n",
-				p.Faint(ui.GlyphInfo), p.Bold("local-only"), dir)
-			*warnedCleartext = true
+		if err == nil && repo != nil {
+			// Per-DIR: every auto-inited dir announces itself — a second new dir
+			// in the same run must not be inited silently. Once-per-RUN: only the
+			// cleartext caution clause, gated by warnedCleartext (shared with the
+			// baseline-snapshot caution) so the warning doesn't repeat per dir.
+			if *warnedCleartext {
+				fmt.Fprintf(p.Err, "%s started a %s git backup of %s.\n",
+					p.Faint(ui.GlyphInfo), p.Bold("local-only"), dir)
+			} else {
+				fmt.Fprintf(p.Err, "%s started a %s git backup of %s; like the files it versions, its history may contain secrets in cleartext (it is never pushed).\n",
+					p.Faint(ui.GlyphInfo), p.Bold("local-only"), dir)
+				*warnedCleartext = true
+			}
 		}
 		return repo, err
 	case source.GitBackupModePrompt:

@@ -2,8 +2,10 @@ package secrets
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,26 @@ import (
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
+
+// pathlessErr unwraps a *fs.PathError (or *os.LinkError) to its inner errno so
+// a caller can %w the error CHAIN without re-embedding the raw path —
+// PathError.Error() prints the unsanitized, config-derived path, which would
+// defeat the sanitized untrusted.Wrap operand printed beside it and re-open
+// the #93 terminal-escape-injection class through main.go's raw error print.
+// errors.Is(err, fs.ErrNotExist) etc. still hold on the result: syscall.Errno
+// implements Is against the fs sentinel errors. A non-path error is returned
+// unchanged.
+func pathlessErr(err error) error {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err
+	}
+	var le *os.LinkError
+	if errors.As(err, &le) {
+		return le.Err
+	}
+	return err
+}
 
 // AgeBackend reads an age-encrypted TOML file (secrets.age), decrypts it using
 // the identity file specified in agentsync.toml [secrets], parses as TOML, and
@@ -38,9 +60,18 @@ func (b *AgeBackend) load() error {
 	if err := CheckIdentityPermissions(b.IdentityFile); err != nil {
 		return err
 	}
+	// Error pattern for these os-error sites: the config-derived PATH operand
+	// is the untrusted display component and is sanitized via untrusted.Wrap;
+	// the underlying os error is wrapped with %w THROUGH pathlessErr so
+	// errors.Is/As matchability survives WITHOUT re-embedding the raw path —
+	// a *fs.PathError's own Error() prints the unsanitized path, so wrapping
+	// it verbatim (as a first pass at restoring the chain did) defeated the
+	// sanitized operand and re-opened the #93 escape-injection class through
+	// main.go's raw error print. (The `decrypt %s: %w` sibling wraps an age
+	// error, which carries no path — it needs no unwrapping.)
 	idData, err := os.ReadFile(b.IdentityFile)
 	if err != nil {
-		return fmt.Errorf("read identity %s: %s", untrusted.Wrap(b.IdentityFile), untrusted.Wrap(err.Error()))
+		return fmt.Errorf("read identity %s: %w", untrusted.Wrap(b.IdentityFile), pathlessErr(err))
 	}
 	ids, err := age.ParseIdentities(strings.NewReader(string(idData)))
 	if err != nil {
@@ -48,7 +79,7 @@ func (b *AgeBackend) load() error {
 	}
 	encFile, err := os.Open(b.AgeFile)
 	if err != nil {
-		return fmt.Errorf("open age file %s: %s", untrusted.Wrap(b.AgeFile), untrusted.Wrap(err.Error()))
+		return fmt.Errorf("open age file %s: %w", untrusted.Wrap(b.AgeFile), pathlessErr(err))
 	}
 	defer encFile.Close()
 	rd, err := age.Decrypt(encFile, ids...)
@@ -151,7 +182,7 @@ func Encrypt(plaintext []byte, recipient string, dest string) error {
 		return fmt.Errorf("parse age recipient: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return fmt.Errorf("mkdir parent of %s: %s", untrusted.Wrap(dest), untrusted.Wrap(err.Error()))
+		return fmt.Errorf("mkdir parent of %s: %w", untrusted.Wrap(dest), pathlessErr(err))
 	}
 	// Encrypt to an in-memory buffer first so a write failure mid-stream
 	// cannot truncate the user's existing secrets.age.
@@ -179,7 +210,7 @@ func Decrypt(ageFile, identityFile string) ([]byte, error) {
 	// We want raw bytes, not parsed; bypass the cache and re-decrypt directly.
 	idData, err := os.ReadFile(identityFile)
 	if err != nil {
-		return nil, fmt.Errorf("read identity %s: %s", untrusted.Wrap(identityFile), untrusted.Wrap(err.Error()))
+		return nil, fmt.Errorf("read identity %s: %w", untrusted.Wrap(identityFile), pathlessErr(err))
 	}
 	ids, err := age.ParseIdentities(strings.NewReader(string(idData)))
 	if err != nil {
@@ -187,7 +218,7 @@ func Decrypt(ageFile, identityFile string) ([]byte, error) {
 	}
 	encFile, err := os.Open(ageFile)
 	if err != nil {
-		return nil, fmt.Errorf("open age file %s: %s", untrusted.Wrap(ageFile), untrusted.Wrap(err.Error()))
+		return nil, fmt.Errorf("open age file %s: %w", untrusted.Wrap(ageFile), pathlessErr(err))
 	}
 	defer encFile.Close()
 	rd, err := age.Decrypt(encFile, ids...)

@@ -22,17 +22,22 @@ func TestRoot_VersionFlag(t *testing.T) {
 	}
 }
 
-// TestRoot_VersionInjection is the end-to-end oracle for the build-time
-// version-injection chain: GoReleaser ldflags → package main vars →
-// cli.Version/cli.Commit/cli.Date → the cobra version template. Because those
-// exported package vars are read by NewRoot() at construction time, assigning
-// distinctive non-default sentinels here is the in-process equivalent of the
-// ldflags injection. The test then asserts all three sentinels reach the
-// rendered output of BOTH surfaces (`--version` and the `version` subcommand),
-// so it goes red if any field is dropped from the template or any leg of the
-// injection chain (main→cli copy, template embedding, subcommand re-dispatch)
-// regresses — unlike TestRoot_VersionFlag, which only ever sees the literal
-// command name.
+// TestRoot_VersionInjection is the in-process oracle for the cli-side half of
+// the version-injection chain: cli.Version/cli.Commit/cli.Date → the cobra
+// version template. Because those exported package vars are read by NewRoot()
+// at construction time, assigning distinctive non-default sentinels here
+// stands in for the values main() copies over at startup. The test asserts all
+// three sentinels reach the rendered output of BOTH surfaces (`--version` and
+// the `version` subcommand), so it goes red if a field is dropped from the
+// template or the subcommand re-dispatch regresses — unlike
+// TestRoot_VersionFlag, which only ever sees the literal command name.
+//
+// What it deliberately CANNOT see: the ldflags → cmd/agentsync/main.go leg
+// (goreleaser's `-X main.version=…` hitting the actual package-main vars and
+// the main→cli copy). Renaming `var version` in main.go would keep this test
+// green while releases print "dev". That leg is pinned end-to-end by
+// TestE2E_VersionLdflagsInjection (test/e2e/version_injection_test.go), which
+// builds the real binary with the real flag spellings.
 func TestRoot_VersionInjection(t *testing.T) {
 	const (
 		wantVersion = "9.9.9-test"

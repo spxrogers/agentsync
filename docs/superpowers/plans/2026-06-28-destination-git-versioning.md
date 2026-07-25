@@ -12,7 +12,9 @@
 > breadth), and the apply tail unions/de-nests/de-dups the roots so **shared
 > cross-agent dirs like `~/.agents/skills` are versioned, deduped to one repo**.
 > (2) `revert` takes the global lock and snapshots uncommitted tracked edits before
-> its hard reset (no data loss).
+> restoring; since #128 the restore applies only the tracked HEAD↔target delta
+> file-by-file (no hard reset), so the user's untracked/gitignored files survive
+> (no data loss).
 
 ---
 

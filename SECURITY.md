@@ -24,7 +24,12 @@ can resolve secrets into native config files. Areas of particular interest:
   **refuses the whole write** if a live secret value would still be persisted as
   cleartext — including when the backend is *locked/unavailable* and therefore
   cannot verify the source's `${secret:…}` refs (the leak check would be blind),
-  so a locked vault never silently degrades into persisting a credential.
+  so a locked vault never silently degrades into persisting a credential. The
+  only write-backs outside this path are two guarded pure *deletions* of
+  canonical files (reconcile's dest-dropped MCP-server removal, keystroke-gated
+  and path-bounded to `~/.agentsync`; import's stale-hook retirement) — a
+  deletion carries no secret content to persist, and anything that writes
+  content back still goes through `capture.Capture`.
 - **Untrusted marketplaces / plugins**: a marketplace or plugin you add is
   treated as untrusted input. The npm/relative fetchers reject every symlink;
   the git fetcher allows a symlink only when its resolved target stays inside the

@@ -168,6 +168,20 @@ func WriteMarketplace(home, name string, m Marketplace) error {
 // which would otherwise survive and re-project to every agent on the next apply
 // (import was previously non-idempotent w.r.t. deletions). The prune is rooted
 // at the skill dir and cannot escape it (see pruneOrphanSkillFiles).
+//
+// CALLER CONTRACT — sk.Files MUST be spec-complete. Because of that prune,
+// WriteSkill treats sk.Files as the authoritative, exhaustive inventory of the
+// skill directory: every on-disk regular file absent from it is DELETED. Any
+// producer that hands WriteSkill a PARTIAL Files set — an ingest modeling only
+// SKILL.md, a projection that skips scripts/references/assets — turns import
+// from "stale file left behind" into "canonical files deleted": the
+// impoverished-model bug class CLAUDE.md's "models must stay faithful to their
+// on-disk artifacts" rule exists for, made destructive. Capture the whole
+// skill directory (cf. ReadSkillFiles) before calling this. The last-resort
+// safety net is the documented canonical-source layout itself — a
+// git-committed dotfiles repo, where a wrongful prune is recoverable. The
+// artifact-anchored regression test for the prune is
+// TestWriteSkill_PrunesRemovedBundledFiles (internal/source/iss162_test.go).
 func WriteSkill(home string, sk Skill) error {
 	if err := ValidateComponentID("skill", sk.Name); err != nil {
 		return err
@@ -327,7 +341,7 @@ func WriteHooks(home, event string, hooks []Hook) error {
 	if err := ValidateComponentID("hook event", event); err != nil {
 		return err
 	}
-	dir := filepath.Join(home, "hooks")
+	dir := filepath.Dir(HookPath(home, event))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir hooks: %w", err)
 	}
@@ -343,7 +357,39 @@ func WriteHooks(home, event string, hooks []Hook) error {
 	if err != nil {
 		return fmt.Errorf("marshal hooks/%s: %w", event, err)
 	}
-	return iox.AtomicWrite(filepath.Join(dir, event+".toml"), body, 0o644)
+	return iox.AtomicWrite(HookPath(home, event), body, 0o644)
+}
+
+// HookPath returns the canonical path of hooks/<event>.toml under home — the
+// single definition of the hook-file layout, shared by WriteHooks/RemoveHooks,
+// import's retirement preview, and reconcile's pointer→source mapping (a
+// hardcoded copy in a caller would silently under-report the preview if the
+// layout ever moved; loadHooks walks the directory rather than composing
+// per-event paths, so it reads filepath.Dir of this). The event is NOT
+// validated here; mutating callers validate via ValidateComponentID first.
+func HookPath(home, event string) string {
+	return filepath.Join(home, "hooks", event+".toml")
+}
+
+// RemoveHooks deletes hooks/<event>.toml, reporting whether a file was removed.
+// It exists for import's stale-hook retirement (adapter.HookIngestGuard): when a
+// native hook event can no longer be captured (unrepresentable handler/fields),
+// the stale canonical file must go, or the next apply keeps owning — and lossily
+// rewriting — the user's native array. The event name comes from the native
+// config (untrusted), so it is validated exactly like WriteHooks' before it
+// touches a path.
+func RemoveHooks(home, event string) (bool, error) {
+	if err := ValidateComponentID("hook event", event); err != nil {
+		return false, err
+	}
+	p := HookPath(home, event)
+	if err := os.Remove(p); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("remove hooks/%s.toml: %w", event, err)
+	}
+	return true, nil
 }
 
 // lspFileOut is the TOML shape written to lsp/<id>.toml.

@@ -362,6 +362,12 @@ func TestModeOnNewDirEmitsCleartextNotice(t *testing.T) {
 	if n := strings.Count(out, "may contain secrets in cleartext"); n != 1 {
 		t.Fatalf("mode=on cleartext notice should appear exactly once across new dirs, got %d:\n%s", n, out)
 	}
+	// …but EVERY inited dir must announce itself: only the caution clause is
+	// once-per-run. Before the round-3 fix the whole notice was gated, so the
+	// second dir was inited silently.
+	if n := strings.Count(out, "git backup of"); n < 2 {
+		t.Fatalf("every mode=on auto-inited dir should announce itself (want >=2 announcements), got %d:\n%s", n, out)
+	}
 
 	// A second apply (no source change) only commits into now-owned dirs — no notice.
 	out2, err := runCLI(t, env, "apply")
@@ -370,6 +376,94 @@ func TestModeOnNewDirEmitsCleartextNotice(t *testing.T) {
 	}
 	if strings.Contains(out2, "may contain secrets in cleartext") {
 		t.Errorf("second apply into owned dirs must not re-emit the cleartext notice:\n%s", out2)
+	}
+}
+
+// TestApply_BaselineSnapshotPrintsCleartextCaution pins the apply-time side of
+// issue #126: when the pre-apply baseline actually commits something (here, a
+// hand-typed edit to a tracked dest file since the last apply — exactly the class
+// of content that may hold a freshly-typed secret), apply prints the same
+// cleartext caution the revert snapshot prints, once per run.
+func TestApply_BaselineSnapshotPrintsCleartextCaution(t *testing.T) {
+	_, env, destSkill := setupGitBackedClaude(t)
+
+	// Hand-edit a tracked dest file; the next apply's baseline snapshots it into
+	// the local-only history before overwriting it.
+	if err := os.WriteFile(destSkill, []byte("HAND-TYPED ghp_fresh_secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "pre-apply baseline") {
+		t.Fatalf("expected a baseline commit for the hand-edit, got:\n%s", out)
+	}
+	if n := strings.Count(out, "may contain secrets in cleartext"); n != 1 {
+		t.Fatalf("baseline cleartext caution should appear exactly once, got %d:\n%s", n, out)
+	}
+
+	// A clean re-apply commits no baseline — and so must print no caution.
+	out2, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("re-apply: %v\n%s", err, out2)
+	}
+	if strings.Contains(out2, "may contain secrets in cleartext") {
+		t.Errorf("a no-op apply must not re-emit the cleartext caution:\n%s", out2)
+	}
+}
+
+// TestApply_NoBaselineCommitInUntouchedRoot pins the baseline pass's scope: an
+// agentsync-owned root that this apply plans NO write or delete under must not
+// grow a "pre-apply baseline" commit, even when it holds uncommitted tracked
+// drift. (resolveBackupRepo opens owned roots unconditionally for the checkpoint
+// pass's delete-only case; the baseline pass must not snapshot through that into
+// dirs the apply never touches — the drift stays on disk, exactly as a
+// --no-git-backup run would leave it.)
+func TestApply_NoBaselineCommitInUntouchedRoot(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+	writeSkillSource(t, tmp, "demo", "d")
+	if out, err := runCLI(t, env, "apply"); err != nil { // inits ~/.claude: baseline + checkpoint
+		t.Fatalf("apply 1: %v\n%s", err, out)
+	}
+	// Drop the skill from source; the delete-only apply removes it (planned delete).
+	if err := os.RemoveAll(filepath.Join(tmp, ".agentsync", "skills", "demo")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply 2: %v\n%s", err, out)
+	}
+
+	// ~/.claude now receives NO planned paths at all. Dirty a TRACKED file (the
+	// notice) so a snapshot WOULD have something to commit if it ran.
+	claude := filepath.Join(tmp, ".claude")
+	const drift = "hand-edited notice — uncommitted drift\n"
+	if err := os.WriteFile(filepath.Join(claude, agit.NoticeFile), []byte(drift), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := agit.Open(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := repo.Log(0)
+
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply 3: %v\n%s", err, out)
+	}
+	after, _ := repo.Log(0)
+	if len(after) != len(before) {
+		t.Fatalf("an apply with no planned path under ~/.claude must record no baseline there: %d -> %d commits", len(before), len(after))
+	}
+	// The drift is untouched on disk and still uncommitted.
+	if b, _ := os.ReadFile(filepath.Join(claude, agit.NoticeFile)); string(b) != drift {
+		t.Fatalf("untouched root's drift was disturbed: %q", b)
+	}
+	if clean, _ := repo.IsClean(); clean {
+		t.Fatal("the tracked drift must remain uncommitted (no snapshot ran)")
 	}
 }
 
@@ -859,5 +953,111 @@ func TestApply_NoGitBackupFlag(t *testing.T) {
 	st, _ := agit.Detect(filepath.Join(tmp, ".claude"))
 	if st == agit.StateAgentsyncOwned {
 		t.Fatal("--no-git-backup must not create a repo")
+	}
+}
+
+// TestApply_GitBackupBaselineCoversOrphanDeletes closes the planned-deletes gap
+// in issue #143's baseline: an apply whose only change is REMOVING a managed
+// file (a skill dropped from source) deletes an in-sync orphan without a writer
+// backup, so unless the pre-apply baseline stages that file's bytes, the first
+// git-backed apply's deletion is unrecoverable — no baseline, no checkpoint
+// (never tracked), no backup dir. Scenario: the file was written by an earlier
+// apply with git backup OFF (state entries exist, no repo), then backup is
+// enabled on the delete-only apply.
+func TestApply_GitBackupBaselineCoversOrphanDeletes(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	writeSkillSource(t, tmp, "doomed", "precious-body")
+
+	// First apply with backup OFF: the skill lands on disk and in state, but in
+	// no git history.
+	if out, err := runCLI(t, env, "apply", "--no-git-backup"); err != nil {
+		t.Fatalf("apply --no-git-backup: %v\n%s", err, out)
+	}
+	claude := filepath.Join(tmp, ".claude")
+	skillDest := filepath.Join(claude, "skills", "doomed", "SKILL.md")
+	preApply, err := os.ReadFile(skillDest)
+	if err != nil {
+		t.Fatalf("first apply should have written the skill: %v", err)
+	}
+
+	// Drop the skill from source and enable backup: the second apply's ONLY
+	// change is the orphan delete.
+	if err := os.RemoveAll(filepath.Join(tmp, ".agentsync", "skills", "doomed")); err != nil {
+		t.Fatal(err)
+	}
+	enableGitBackupOn(t, tmp)
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("delete-only apply: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(skillDest); !os.IsNotExist(err) {
+		t.Fatalf("apply should have removed the orphaned skill; stat err=%v", err)
+	}
+
+	// The deleted bytes must be recoverable: revert to the pre-apply baseline
+	// restores the skill byte-for-byte.
+	out, err := runCLI(t, env, "revert", "claude")
+	if err != nil {
+		t.Fatalf("revert: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(skillDest)
+	if err != nil {
+		t.Fatalf("revert did not restore the deleted skill (its bytes were in no baseline): %v\n%s", err, out)
+	}
+	if string(got) != string(preApply) {
+		t.Fatalf("restored skill differs from pre-apply bytes:\n got %q\nwant %q", got, preApply)
+	}
+}
+
+// TestApply_GitBackupBaselineStagesUntrackedPlannedPath pins the PRODUCTION
+// call site of git.SnapshotPreApply (the already-owned branch of the baseline
+// pass): a managed file that exists on disk but is UNTRACKED — it was written
+// by an apply that ran with git backup off — is about to be overwritten, and
+// its pre-apply bytes exist in no history. The baseline must stage them, or
+// the overwrite is unrecoverable. Reverting the gitbackup.go call to
+// SnapshotDirtyTracked leaves this red: tracked-dirt-only snapshots skip the
+// untracked planned path.
+func TestApply_GitBackupBaselineStagesUntrackedPlannedPath(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	enableGitBackupOn(t, tmp)
+
+	// Apply 1 (backup on): skill A becomes tracked; the root is agentsync-owned.
+	writeSkillSource(t, tmp, "tracked", "a1")
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply 1: %v\n%s", err, out)
+	}
+
+	// Apply 2 (backup OFF): skill B lands on disk with bytes no history has.
+	writeSkillSource(t, tmp, "untracked", "precious-b2")
+	if out, err := runCLI(t, env, "apply", "--no-git-backup"); err != nil {
+		t.Fatalf("apply 2: %v\n%s", err, out)
+	}
+
+	// Apply 3 (backup on): source changes B, so the apply overwrites the
+	// untracked-but-planned file — SnapshotPreApply must baseline "precious-b2".
+	writeSkillSource(t, tmp, "untracked", "b3-overwrites")
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply 3: %v\n%s", err, out)
+	}
+	skillB := filepath.Join(tmp, ".claude", "skills", "untracked", "SKILL.md")
+	if b, _ := os.ReadFile(skillB); !strings.Contains(string(b), "b3-overwrites") {
+		t.Fatalf("precondition: apply 3 should have overwritten skill B:\n%s", b)
+	}
+
+	// Revert: the pre-apply bytes of the untracked planned path must come back.
+	if out, err := runCLI(t, env, "revert", "claude"); err != nil {
+		t.Fatalf("revert: %v\n%s", err, out)
+	}
+	b, err := os.ReadFile(skillB)
+	if err != nil {
+		t.Fatalf("revert removed skill B entirely: %v", err)
+	}
+	if !strings.Contains(string(b), "precious-b2") {
+		t.Fatalf("revert did not restore the untracked planned path's pre-apply bytes:\n%s", b)
 	}
 }

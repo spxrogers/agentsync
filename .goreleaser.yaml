@@ -82,7 +82,9 @@ archives:
 # archive-pinning work in #138. Because the full checksums.txt is not stable
 # run-to-run, there is deliberately NO CI job diffing it across two snapshots (it
 # would be permanently red); the reproducible half (archives) is guarded instead by
-# internal/release/reproducibility_test.go.
+# internal/release/reproducibility_test.go. The two-snapshot diff itself is
+# re-runnable on demand via scripts/reproducibility-diff.sh (archives fatal,
+# deb/rpm/checksums.txt informational).
 checksum:
   name_template: "checksums.txt"
 

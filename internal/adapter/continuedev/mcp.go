@@ -50,8 +50,9 @@ var blockHeaderExtraKeys = map[string]bool{
 // rewrites it. A server that carries BOTH a command and a url with no explicit
 // `type` is ambiguous — Continue's block is single-transport — so agentsync
 // renders it as stdio (command wins) and reports the dropped url via a reduced
-// Skip rather than silently discarding it; the returned skips are threaded out to
-// Render.
+// Skip rather than silently discarding it; an explicitly-typed stdio server that
+// also carries a url drops the url just the same and gets the same report. The
+// returned skips are threaded out to Render.
 func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, []adapter.Skip, error) {
 	var ops []adapter.FileOp
 	var skips []adapter.Skip
@@ -62,13 +63,27 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, []ad
 		if !agentTargeted("continue", m.Server.Agents) {
 			continue
 		}
-		// command+url with no type: single-transport block forces a choice.
-		// Documented rule: command wins (stdio); the url is dropped with a report.
-		if m.Server.Type == "" && m.Server.Command != "" && m.Server.URL != "" {
+		// A Continue block is single-transport, so a url on a server that
+		// renders as stdio is dropped — and the drop is NEVER silent. Two ways
+		// to get there: command+url with no type (the documented ambiguity
+		// rule: command wins) and an EXPLICIT `type: "stdio"` that also
+		// carries a url (the user chose stdio; the url is unused). Both report
+		// the dropped url via the same reduced Skip, with wording matching how
+		// the transport was chosen.
+		switch {
+		case m.Server.Type == "" && m.Server.Command != "" && m.Server.URL != "":
 			skips = append(skips, adapter.Skip{
 				Component: "mcp",
 				Name:      m.ID,
 				Reason: fmt.Sprintf("server declares both a command and a url with no explicit type; a Continue block is single-transport, so it renders as stdio (command wins) and the url %q is dropped — set type to \"http\" or \"sse\" to render it as a remote server instead",
+					m.Server.URL),
+				Kind: adapter.SkipReduced,
+			})
+		case m.Server.Type == "stdio" && m.Server.URL != "":
+			skips = append(skips, adapter.Skip{
+				Component: "mcp",
+				Name:      m.ID,
+				Reason: fmt.Sprintf("server is explicitly typed stdio but also carries a url; a Continue block is single-transport, so the url %q is unused and dropped — set type to \"http\" or \"sse\" to render it as a remote server instead",
 					m.Server.URL),
 				Kind: adapter.SkipReduced,
 			})

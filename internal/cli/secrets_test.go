@@ -264,20 +264,34 @@ func TestSecretsSet_LegacyArgWarns(t *testing.T) {
 func TestSecretsSet_RefusesClobberOfScalarParent(t *testing.T) {
 	const liveSecret = "ghp_live_DO_NOT_DESTROY"
 	cases := []struct {
-		name        string
-		seed        string            // decrypted TOML pre-encrypted into the vault
-		setArg      string            // argument to `secrets set`
-		wantRefused bool              // must the set be refused?
-		mustNotLeak []string          // secret values that must never appear on a refusal
-		survivors   map[string]string // `secrets get` key -> expected substring afterwards
+		name           string
+		seed           string            // decrypted TOML pre-encrypted into the vault
+		setArg         string            // argument to `secrets set`
+		wantRefused    bool              // must the set be refused?
+		wantErrSubstrs []string          // full dotted paths the refusal must name
+		mustNotLeak    []string          // secret values that must never appear on a refusal
+		survivors      map[string]string // `secrets get` key -> expected substring afterwards
 	}{
 		{
-			name:        "scalar parent refused",
-			seed:        fmt.Sprintf("token = %q\n", liveSecret),
-			setArg:      "token.scope=repo",
-			wantRefused: true,
-			mustNotLeak: []string{liveSecret},
-			survivors:   map[string]string{"token": liveSecret},
+			name:           "scalar parent refused",
+			seed:           fmt.Sprintf("token = %q\n", liveSecret),
+			setArg:         "token.scope=repo",
+			wantRefused:    true,
+			wantErrSubstrs: []string{`"token.scope"`, `"token"`},
+			mustNotLeak:    []string{liveSecret},
+			survivors:      map[string]string{"token": liveSecret},
+		},
+		{
+			// Regression: with scalar `a.b`, `set a.b.c=v` used to report the
+			// recursion's LOCAL names — `"b.c"` clashing with `"b"` — not the
+			// full dotted paths the user typed.
+			name:           "deep scalar parent refusal names the full dotted paths",
+			seed:           fmt.Sprintf("[a]\nb = %q\n", liveSecret),
+			setArg:         "a.b.c=repo",
+			wantRefused:    true,
+			wantErrSubstrs: []string{`"a.b.c"`, `"a.b"`},
+			mustNotLeak:    []string{liveSecret},
+			survivors:      map[string]string{"a.b": liveSecret},
 		},
 		{
 			name:        "table parent allowed",
@@ -301,12 +315,24 @@ func TestSecretsSet_RefusesClobberOfScalarParent(t *testing.T) {
 			survivors:   map[string]string{"github.token": "new_tok"},
 		},
 		{
-			name:        "table leaf overwrite refused",
-			seed:        "[github]\ntoken = \"gh_tok\"\n",
-			setArg:      "github=whole_value",
-			wantRefused: true,
-			mustNotLeak: []string{"gh_tok"},
-			survivors:   map[string]string{"github.token": "gh_tok"},
+			name:           "table leaf overwrite refused",
+			seed:           "[github]\ntoken = \"gh_tok\"\n",
+			setArg:         "github=whole_value",
+			wantRefused:    true,
+			wantErrSubstrs: []string{`"github"`},
+			mustNotLeak:    []string{"gh_tok"},
+			survivors:      map[string]string{"github.token": "gh_tok"},
+		},
+		{
+			// The nested-table variant of the same refusal must also name the
+			// full path (`a.b`, not the recursion-local `b`).
+			name:           "nested table leaf overwrite refusal names the full dotted path",
+			seed:           "[a.b]\nc = \"nested_tok\"\n",
+			setArg:         "a.b=whole_value",
+			wantRefused:    true,
+			wantErrSubstrs: []string{`"a.b"`},
+			mustNotLeak:    []string{"nested_tok"},
+			survivors:      map[string]string{"a.b.c": "nested_tok"},
 		},
 	}
 	for _, tc := range cases {
@@ -340,6 +366,13 @@ func TestSecretsSet_RefusesClobberOfScalarParent(t *testing.T) {
 				for _, s := range tc.mustNotLeak {
 					if strings.Contains(setErr.Error(), s) || strings.Contains(out, s) {
 						t.Fatalf("SECURITY: refusal leaked secret value %q:\nerr=%v\nout=%s", s, setErr, out)
+					}
+				}
+				// The refusal must name the FULL dotted paths the user typed,
+				// not the recursion's local remainder.
+				for _, want := range tc.wantErrSubstrs {
+					if !strings.Contains(setErr.Error(), want) {
+						t.Fatalf("refusal should name the full dotted path %s; got: %v", want, setErr)
 					}
 				}
 			} else if setErr != nil {

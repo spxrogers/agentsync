@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
@@ -106,26 +107,33 @@ var (
 // structurally-malformed shapes (non-object def/handler, non-array event value or
 // "hooks" value) that Gemini's ingestHooks drops silently. Bringing Gemini to
 // parity is a separate follow-up (out of this issue's scope).
-func ingestHooks(raw any, warn io.Writer) []source.Hook {
+func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) {
 	hooks, ok := raw.(map[string]any)
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	var out []source.Hook
 	for event, rawEntries := range hooks {
 		entries, ok := rawEntries.([]any)
 		if !ok {
 			fmt.Fprintf(warn, "warning: hook event %q value is not an array; event not captured\n", event)
-			continue
+			continue // structural: warn + skip capture, but never a retire-triggering refusal
 		}
 		var captured []source.Hook
 		representable := true
+		// structural distinguishes a MALFORMED native shape (non-object def/handler,
+		// non-string matcher/type, missing hooks array — likely a settings.json typo)
+		// from a well-formed entry agentsync cannot MODEL (unmodeled fields, a
+		// non-command handler). Only the latter joins refused: import retires the
+		// canonical hooks/<event>.toml for refused events, and deleting canonical
+		// config because the user typo'd their native JSON would be destructive.
+		structural := false
 	defs:
 		for _, rawEntry := range entries {
 			entry, ok := rawEntry.(map[string]any)
 			if !ok {
 				fmt.Fprintf(warn, "warning: hook event %q has a malformed definition (not an object); event not captured\n", event)
 				representable = false
+				structural = true
 				break
 			}
 			if extra := unmodeledKeys(entry, claudeHookDefModeledKeys); len(extra) > 0 {
@@ -139,6 +147,7 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 				if _, isStr := rawMatcher.(string); !isStr {
 					fmt.Fprintf(warn, "warning: hook event %q has a definition whose \"matcher\" is not a string; event not captured\n", event)
 					representable = false
+					structural = true
 					break
 				}
 			}
@@ -152,6 +161,7 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 			if !isArr {
 				fmt.Fprintf(warn, "warning: hook event %q has a definition without a valid \"hooks\" array; event not captured\n", event)
 				representable = false
+				structural = true
 				break
 			}
 			for _, rawH := range hooksArr {
@@ -159,6 +169,7 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 				if !ok {
 					fmt.Fprintf(warn, "warning: hook event %q has a malformed handler (not an object); event not captured\n", event)
 					representable = false
+					structural = true
 					break defs
 				}
 				// A non-string type would be coerced to "" by asStr and captured as a
@@ -167,6 +178,7 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 					if _, isStr := rawType.(string); !isStr {
 						fmt.Fprintf(warn, "warning: hook event %q has a handler whose \"type\" is not a string; event not captured\n", event)
 						representable = false
+						structural = true
 						break defs
 					}
 				}
@@ -190,9 +202,42 @@ func ingestHooks(raw any, warn io.Writer) []source.Hook {
 		}
 		if representable {
 			out = append(out, captured...)
+		} else if !structural {
+			refused = append(refused, event)
 		}
 	}
-	return out
+	sort.Strings(refused) // map iteration order — keep output deterministic
+	return out, refused
+}
+
+// RefusedHookEvents implements adapter.HookIngestGuard: it re-reads the
+// destination settings file and returns the hook events whose native entries
+// ingestHooks refuses to capture for SEMANTIC reasons — a non-command handler
+// or unmodeled fields on a well-formed entry. Structurally-malformed shapes
+// (a settings.json typo) are warned about by Ingest but deliberately excluded
+// here: import retires the canonical hooks/<event>.toml for every returned
+// event, and deleting canonical config over a native typo would be
+// destructive. The re-read exists because Ingest's (source.Canonical, error)
+// signature — shared by ten adapters — has no channel for refusals; note the
+// destination may have changed between Ingest and this call (both run within
+// one import, so the window is small and the worst case is a stale warning).
+// See the corruption class this closes on adapter.HookIngestGuard (issue #124).
+// Warnings are discarded here; Ingest already emitted them on the same shapes.
+func (a *Adapter) RefusedHookEvents(scope adapter.Scope, project string) ([]string, error) {
+	if err := adapter.RequireProjectRoot(scope, project); err != nil {
+		return nil, err
+	}
+	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
+	data, present, err := adapter.ReadFileOptional(p.Settings)
+	if err != nil || !present {
+		return nil, err
+	}
+	top, err := jsonkeys.DecodeObject(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", p.Settings, err)
+	}
+	_, refused := ingestHooks(top["hooks"], io.Discard)
+	return refused, nil
 }
 
 // unmodeledKeys returns the sorted keys of m that are not in modeled.

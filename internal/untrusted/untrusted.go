@@ -16,6 +16,7 @@
 //     fmt.Stringer, a Text printed through fmt.Fprint* / fmt.Sprintf is
 //     sanitized BY DEFAULT. A new print site of an untrusted field therefore
 //     cannot reintroduce the #93 class by accident — the type sanitizes itself.
+//
 //   - The only way to obtain the raw, UNSANITIZED bytes is the explicit,
 //     deliberately-alarming Unverified() method. Every call is a greppable
 //     acknowledgement that the caller is bypassing display sanitization; it is
@@ -31,6 +32,12 @@
 // is the same shape of *accepted residual* documented for secrets.Resolved
 // (the lint fence there is likewise defeatable by a deliberate two-step). No
 // innocent print produces it; Unverified() is the blessed, named unwrap.
+//
+// WRAPPED-ERROR HAZARD: sanitizing a path operand (`%s` + Wrap) beside a `%w`
+// of the raw os error is NOT enough — a *fs.PathError's own Error() re-embeds
+// the raw, unsanitized path right after your sanitized copy. Unwrap to the
+// inner errno first (see secrets.pathlessErr; promote it here on a second
+// call site) so the chain survives without the raw path.
 //
 // # Machine vs terminal contract
 //

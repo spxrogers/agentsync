@@ -174,11 +174,11 @@ func checkStateDir(p *ui.Printer, home string) int {
 		return 1
 	}
 	probe := filepath.Join(stateDir, ".doctor-write-probe")
-	if err := os.WriteFile(probe, []byte{}, 0o600); err != nil {
+	if err := os.WriteFile(probe, []byte{}, 0o600); err != nil { //nolint:forbidigo // .state writability probe under ~/.agentsync, not a native destination
 		failCheck(p, ".state/    ", fmt.Sprintf("not writable: %v", err))
 		return 1
 	}
-	_ = os.Remove(probe)
+	_ = os.Remove(probe) //nolint:forbidigo // removes the probe file it just wrote, not a native destination
 	okCheck(p, ".state/    ", "ok (writable)")
 
 	// Verify targets.json parses — the same load status/apply/diff/reconcile

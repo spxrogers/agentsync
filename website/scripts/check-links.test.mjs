@@ -1,12 +1,17 @@
 // Tests for scripts/check-links.mjs. Run with `node --test scripts/`.
 //
-// Two concerns:
+// Three concerns:
 //   1. The slugger produces the EXACT GitHub-style slugs the docs rely on
 //      (github-slugger under the hood) — pinned as a regression guard,
 //      including the two load-bearing slugs that motivated the checker.
 //   2. The checker, run over a real on-disk fixture tree (written to a temp
 //      dir per the "fidelity tests anchor to the artifact" principle), reports
 //      exactly the broken targets and nothing else, and exits non-zero.
+//   3. The ALLOWLIST paths: a matching entry keeps a known breakage non-fatal
+//      (exit 0, reported as a note), and an entry that matches NOTHING is
+//      stale and fails the run. The CLI tests inject the allowlist via the
+//      CHECK_LINKS_ALLOWLIST test seam — the hardcoded production entries
+//      would otherwise be stale relative to every fixture tree.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -126,13 +131,25 @@ test('checkTree reports exactly the broken targets, no false positives', () => {
 	}
 });
 
+// Spawn the checker CLI over root with an injected allowlist (JSON array of
+// { file, target }). Always injected — the hardcoded production ALLOWLIST
+// entries can never match a fixture tree, and a zero-match entry now fails the
+// run as stale, so fixture runs must control the allowlist explicitly.
+function runCLI(root, allowlist = []) {
+	return spawnSync(process.execPath, [scriptPath], {
+		env: {
+			...process.env,
+			CHECK_LINKS_ROOT: root,
+			CHECK_LINKS_ALLOWLIST: JSON.stringify(allowlist),
+		},
+		encoding: 'utf8',
+	});
+}
+
 test('CLI exits non-zero on breakage and names the bad targets', () => {
 	const root = writeFixtureTree();
 	try {
-		const res = spawnSync(process.execPath, [scriptPath], {
-			env: { ...process.env, CHECK_LINKS_ROOT: root },
-			encoding: 'utf8',
-		});
+		const res = runCLI(root);
 		assert.equal(res.status, 1, 'process exits non-zero on breakage');
 		const out = res.stdout + res.stderr;
 		assert.match(out, /\/page-a\/#nope-not-real/);
@@ -149,12 +166,85 @@ test('CLI exits zero on a clean tree', () => {
 			join(root, 'index.md'),
 			'---\ntitle: "Home"\n---\n\n## Overview\n\nAll [good](#overview).\n',
 		);
-		const res = spawnSync(process.execPath, [scriptPath], {
-			env: { ...process.env, CHECK_LINKS_ROOT: root },
-			encoding: 'utf8',
-		});
+		const res = runCLI(root);
 		assert.equal(res.status, 0, 'process exits zero on a clean tree');
 		assert.match(res.stdout, /0 broken/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+// ---------------------------------------------------------------------------
+// 3. ALLOWLIST behavior: matching entries shield, stale entries fail.
+// ---------------------------------------------------------------------------
+
+test('CLI allowlists matching entries: exit 0, reported as known exceptions', () => {
+	const root = writeFixtureTree();
+	try {
+		// Both fixture breakages are shielded, so nothing is fatal and nothing
+		// is stale — the run passes with the allowlisted note.
+		const res = runCLI(root, [
+			{ file: 'sub/bad.md', target: '/page-a/#nope-not-real' },
+			{ file: 'sub/bad.md', target: '/does-not-exist/' },
+		]);
+		assert.equal(res.status, 0, 'fully allowlisted breakage exits zero');
+		assert.match(res.stdout, /0 broken/);
+		assert.match(res.stdout, /2 known pre-existing exception\(s\) allowlisted/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('CLI fails when an ALLOWLIST entry matches zero violations (stale)', () => {
+	const root = mkdtempSync(join(tmpdir(), 'check-links-stale-'));
+	try {
+		// A clean tree, but the allowlist still carries an entry: the underlying
+		// link was fixed, so the entry is stale and must fail the run loudly.
+		writeFileSync(
+			join(root, 'index.md'),
+			'---\ntitle: "Home"\n---\n\n## Overview\n\nAll [good](#overview).\n',
+		);
+		const res = runCLI(root, [
+			{ file: 'index.md', target: '/long-gone/#nope' },
+		]);
+		assert.equal(res.status, 1, 'a stale allowlist entry must fail the run');
+		const out = res.stdout + res.stderr;
+		assert.match(out, /stale ALLOWLIST/);
+		assert.match(out, /\/long-gone\/#nope/);
+		assert.match(out, /remove the stale entry/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test('CLI names a DUPLICATE allowlist entry instead of a confusing stale', () => {
+	const root = mkdtempSync(join(tmpdir(), 'check-links-dupe-'));
+	try {
+		// One real violation shielded by the first copy; the second copy can
+		// never match (allowlistIndex returns the first index), so without the
+		// dedicated diagnostic it would surface as a permanently "stale" entry
+		// the user can't fix by fixing links. The failure must name the
+		// duplicate directly (and never open with the success banner).
+		writeFileSync(
+			join(root, 'index.md'),
+			'---\ntitle: "Home"\n---\n\nSee [gone](/long-gone/).\n',
+		);
+		const entry = { file: 'index.md', target: '/long-gone/' };
+		const res = runCLI(root, [entry, { ...entry }]);
+		assert.equal(res.status, 1, 'a duplicate allowlist entry must fail the run');
+		const out = res.stdout + res.stderr;
+		assert.match(out, /DUPLICATE ALLOWLIST/);
+		assert.match(out, /delete the duplicate/);
+		assert.doesNotMatch(
+			out,
+			/stale ALLOWLIST/,
+			'a duplicate gets ONE diagnostic — not a second, misleading stale report',
+		);
+		assert.doesNotMatch(
+			res.stdout,
+			/0 broken/,
+			'a failing run must not open with the success banner',
+		);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

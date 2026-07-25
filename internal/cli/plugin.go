@@ -130,7 +130,7 @@ func keptLifecycleSummary(spec pluginTOMLSpec) string {
 // and `import` use it so the two produce byte-identical canonical artifacts.
 func installPluginInto(home, id, mpName string) (pluginTOMLSpec, error) {
 	// Resolve marketplace.json from the marketplace cache.
-	mpData, mpEntry, err := resolveMarketplaceEntry(home, mpName, id)
+	mpData, mpEntry, resolvedMP, err := resolveMarketplaceEntry(home, mpName, id)
 	if err != nil {
 		return pluginTOMLSpec{}, err
 	}
@@ -142,8 +142,12 @@ func installPluginInto(home, id, mpName string) (pluginTOMLSpec, error) {
 	src := mpEntry.Source
 	// For relative sources, resolve relative to the marketplace cache root
 	// AND constrain the fetcher so a hostile entry cannot escape that root.
+	// resolvedMP, not mpName: a bare-id install (mpName == "") found the entry
+	// by searching the caches, and the relative source must resolve against
+	// the marketplace that actually supplied it — the raw "" would sanitize to
+	// the nonexistent cache dir "_" and fail the fetch.
 	if src.Relative != "" {
-		mpCacheRoot := marketplaceCacheDir(home, mpName)
+		mpCacheRoot := marketplaceCacheDir(home, resolvedMP)
 		src.Relative = filepath.Join(mpCacheRoot, src.Relative)
 		src.RootDir = mpCacheRoot
 	}
@@ -237,8 +241,9 @@ func newPluginUpgradeCmd() *cobra.Command {
 func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
 	// Accept the id@marketplace ref that `install` accepts; operate on the bare id
 	// (the on-disk file is plugins/<id>.toml). The stored id (below) is
-	// authoritative for the marketplace, so the CLI marketplace segment is ignored.
-	id, _ := splitPluginRef(args[0])
+	// authoritative for the marketplace; a typed qualifier must MATCH it (checked
+	// below) rather than being silently ignored.
+	id, typedMP := splitPluginRef(args[0])
 	if err := validateCacheKey("plugin", id); err != nil {
 		return err
 	}
@@ -253,23 +258,32 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
 		}
 		return err
 	}
+	if err := checkPluginRefMarketplace(existing, id, typedMP); err != nil {
+		return err
+	}
 
-	// Parse marketplace name from the stored id "name@marketplace".
+	// Parse marketplace name from the stored id "name@marketplace". The
+	// "default" sentinel (bare-id install) names no real marketplace — map it
+	// to "" so the entry is re-resolved by searching all caches, exactly like
+	// the original install.
 	_, mpName := splitPluginRef(existing.Plugin.ID.Unverified())
+	if mpName == "default" {
+		mpName = ""
+	}
 
 	// Re-resolve marketplace entry.
-	mpData, mpEntry, err := resolveMarketplaceEntry(home, mpName, id)
+	mpData, mpEntry, resolvedMP, err := resolveMarketplaceEntry(home, mpName, id)
 	if err != nil {
 		return err
 	}
 
 	cacheDir := pluginCacheDir(home, id)
 	// Remove old cache so we get a fresh fetch.
-	_ = os.RemoveAll(cacheDir)
+	_ = os.RemoveAll(cacheDir) //nolint:forbidigo // clears the plugin cache under .state/cache for a fresh fetch, not a native destination
 
 	src := mpEntry.Source
 	if src.Relative != "" {
-		mpCacheRoot := marketplaceCacheDir(home, mpName)
+		mpCacheRoot := marketplaceCacheDir(home, resolvedMP)
 		src.Relative = filepath.Join(mpCacheRoot, src.Relative)
 		src.RootDir = mpCacheRoot
 	}
@@ -317,7 +331,7 @@ func newPluginEnableCmd() *cobra.Command {
 }
 
 func pluginEnableRun(cmd *cobra.Command, args []string) error {
-	id, _ := splitPluginRef(args[0]) // accept id@marketplace like install; operate on the bare id
+	id, typedMP := splitPluginRef(args[0]) // accept id@marketplace like install; a qualifier must match the recorded marketplace
 	if err := validateCacheKey("plugin", id); err != nil {
 		return err
 	}
@@ -329,6 +343,9 @@ func pluginEnableRun(cmd *cobra.Command, args []string) error {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("plugin %q is not installed", id)
 		}
+		return err
+	}
+	if err := checkPluginRefMarketplace(existing, id, typedMP); err != nil {
 		return err
 	}
 	// Only flip the disabled bit. Do NOT touch Agents: re-materializing ["*"] over
@@ -360,7 +377,7 @@ func newPluginDisableCmd() *cobra.Command {
 }
 
 func pluginDisableRun(cmd *cobra.Command, args []string) error {
-	id, _ := splitPluginRef(args[0]) // accept id@marketplace like install; operate on the bare id
+	id, typedMP := splitPluginRef(args[0]) // accept id@marketplace like install; a qualifier must match the recorded marketplace
 	if err := validateCacheKey("plugin", id); err != nil {
 		return err
 	}
@@ -372,6 +389,9 @@ func pluginDisableRun(cmd *cobra.Command, args []string) error {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("plugin %q is not installed", id)
 		}
+		return err
+	}
+	if err := checkPluginRefMarketplace(existing, id, typedMP); err != nil {
 		return err
 	}
 	// Only set the disabled bit. The `disabled = true` flag alone suppresses the
@@ -403,14 +423,29 @@ func newPluginRemoveCmd() *cobra.Command {
 }
 
 func pluginRemoveRun(cmd *cobra.Command, args []string) error {
-	id, _ := splitPluginRef(args[0]) // accept id@marketplace like install; operate on the bare id
+	id, typedMP := splitPluginRef(args[0]) // accept id@marketplace like install; a qualifier must match the recorded marketplace
 	if err := validateCacheKey("plugin", id); err != nil {
 		return err
 	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 
 	pluginPath := filepath.Join(home, "plugins", id+".toml")
-	if err := os.Remove(pluginPath); err != nil {
+	// A qualified ref must name the marketplace the plugin was actually installed
+	// from, so read the TOML before deleting anything. (A corrupt TOML therefore
+	// refuses a qualified remove — the bare id still removes it.)
+	if typedMP != "" {
+		existing, err := readPluginTOML(pluginPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("plugin %q is not installed", id)
+			}
+			return err
+		}
+		if err := checkPluginRefMarketplace(existing, id, typedMP); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(pluginPath); err != nil { //nolint:forbidigo // removes plugins/<id>.toml (canonical source), not a native destination
 		// Match upgrade/enable/disable: a typo'd or already-removed id is an
 		// error, not a cheerful "removed plugin X" no-op.
 		if os.IsNotExist(err) {
@@ -420,7 +455,7 @@ func pluginRemoveRun(cmd *cobra.Command, args []string) error {
 	}
 
 	cacheDir := pluginCacheDir(home, id)
-	if err := os.RemoveAll(cacheDir); err != nil {
+	if err := os.RemoveAll(cacheDir); err != nil { //nolint:forbidigo // removes the plugin cache under .state/cache, not a native destination
 		return fmt.Errorf("remove cache %s: %w", cacheDir, err)
 	}
 
@@ -490,8 +525,44 @@ func splitPluginRef(ref string) (id, mpName string) {
 	return ref, ""
 }
 
+// checkPluginRefMarketplace refuses a marketplace-qualified ref whose qualifier
+// does not match the marketplace recorded for the installed plugin (the
+// "id@marketplace" written to plugins/<id>.toml at install). The lifecycle
+// subcommands operate on the bare id, so silently discarding the qualifier let
+// `plugin disable demo@wrong-mp` act on the demo installed from another
+// marketplace. An unqualified ref (typedMP == "") is unchanged. The recorded
+// value comes from a hand-editable file; %q renders any control bytes inert.
+func checkPluginRefMarketplace(existing pluginTOML, id, typedMP string) error {
+	if typedMP == "" {
+		return nil
+	}
+	_, recorded := splitPluginRef(existing.Plugin.ID.Unverified())
+	if recorded == typedMP {
+		return nil
+	}
+	// A bare-id install records the "default" SENTINEL (resolveMarketplaceName:
+	// the marketplace was searched across all caches, not named). "default"
+	// identifies no real marketplace, so a typed qualifier can be neither
+	// confirmed nor contradicted — refuse like the no-record branch below with
+	// an honest message, rather than claiming the plugin was "installed from
+	// marketplace \"default\"" (a marketplace that doesn't exist; the update
+	// flow depends on the sentinel staying recorded as-is, so re-recording the
+	// resolved name at install is a bigger change than this guard should make).
+	if recorded == "" || recorded == "default" {
+		return fmt.Errorf("plugin %q was installed by bare id (its marketplace is not recorded), so the ref %q cannot be verified; use the bare id %q",
+			id, id+"@"+typedMP, id)
+	}
+	return fmt.Errorf("plugin %q is installed from marketplace %q, not %q; use %q or the bare id %q",
+		id, recorded, typedMP, id+"@"+recorded, id)
+}
+
 // resolveMarketplaceName returns the marketplace name, defaulting to "default"
-// if empty.
+// if empty. NOTE: "default" is a SENTINEL, not a marketplace — but nothing
+// reserves the name, so a user-registered marketplace literally named
+// "default" is ambiguous with it (its qualified refs get the "installed by
+// bare id" refusal and its upgrades re-search all caches). Accepted residual:
+// reserving the name would break any existing marketplace so named, and the
+// all-caches search still resolves the right entry.
 func resolveMarketplaceName(name string) string {
 	if name == "" {
 		return "default"
@@ -548,9 +619,13 @@ func validateCacheKey(kind, s string) error {
 }
 
 // resolveMarketplaceEntry loads the marketplace's marketplace.json from cache
-// and finds the named plugin entry. Returns the raw bytes (for SHA computation)
-// and the entry.
-func resolveMarketplaceEntry(home, mpName, pluginID string) ([]byte, marketplace.PluginEntry, error) {
+// and finds the named plugin entry. Returns the raw bytes (for SHA
+// computation), the plugin's
+// entry, and the RESOLVED marketplace cache name — mpName when one was named,
+// or the cache dir the search actually found the plugin in for a bare-id
+// lookup (callers must fetch relative sources against the resolved name; the
+// raw "" would sanitize to a nonexistent cache dir).
+func resolveMarketplaceEntry(home, mpName, pluginID string) ([]byte, marketplace.PluginEntry, string, error) {
 	if mpName == "" {
 		// No marketplace specified — look in all marketplace caches.
 		return searchAllMarketplaces(home, pluginID)
@@ -561,37 +636,39 @@ func resolveMarketplaceEntry(home, mpName, pluginID string) ([]byte, marketplace
 	data, err := os.ReadFile(mpJSONPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, marketplace.PluginEntry{}, fmt.Errorf(
+			return nil, marketplace.PluginEntry{}, "", fmt.Errorf(
 				"marketplace %q not found in cache; run: agentsync marketplace add <url>", mpName,
 			)
 		}
-		return nil, marketplace.PluginEntry{}, fmt.Errorf("read %s: %w", mpJSONPath, err)
+		return nil, marketplace.PluginEntry{}, "", fmt.Errorf("read %s: %w", mpJSONPath, err)
 	}
 
 	var mp marketplace.Marketplace
 	if err := json.Unmarshal(data, &mp); err != nil {
-		return nil, marketplace.PluginEntry{}, fmt.Errorf("parse marketplace.json: %w", err)
+		return nil, marketplace.PluginEntry{}, "", fmt.Errorf("parse marketplace.json: %w", err)
 	}
 
 	for _, entry := range mp.Plugins {
 		if entry.Name.Unverified() == pluginID {
-			return data, entry, nil
+			return data, entry, mpName, nil
 		}
 	}
-	return nil, marketplace.PluginEntry{}, fmt.Errorf("plugin %q not found in marketplace %q", pluginID, mpName)
+	return nil, marketplace.PluginEntry{}, "", fmt.Errorf("plugin %q not found in marketplace %q", pluginID, mpName)
 }
 
-// searchAllMarketplaces scans all cached marketplace.json files for a plugin.
-func searchAllMarketplaces(home, pluginID string) ([]byte, marketplace.PluginEntry, error) {
+// searchAllMarketplaces scans every marketplace cache for pluginID, returning
+// the marketplace.json bytes, the entry, and the cache-dir NAME it was found
+// in (the resolved marketplace a relative source must fetch against).
+func searchAllMarketplaces(home, pluginID string) ([]byte, marketplace.PluginEntry, string, error) {
 	cacheRoot := filepath.Join(home, ".state", "cache", "marketplaces")
 	entries, err := os.ReadDir(cacheRoot)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, marketplace.PluginEntry{}, fmt.Errorf(
+			return nil, marketplace.PluginEntry{}, "", fmt.Errorf(
 				"no marketplaces cached; run: agentsync marketplace add <url>",
 			)
 		}
-		return nil, marketplace.PluginEntry{}, err
+		return nil, marketplace.PluginEntry{}, "", err
 	}
 
 	for _, e := range entries {
@@ -609,11 +686,11 @@ func searchAllMarketplaces(home, pluginID string) ([]byte, marketplace.PluginEnt
 		}
 		for _, entry := range mp.Plugins {
 			if entry.Name.Unverified() == pluginID {
-				return data, entry, nil
+				return data, entry, e.Name(), nil
 			}
 		}
 	}
-	return nil, marketplace.PluginEntry{}, fmt.Errorf("plugin %q not found in any cached marketplace", pluginID)
+	return nil, marketplace.PluginEntry{}, "", fmt.Errorf("plugin %q not found in any cached marketplace", pluginID)
 }
 
 // computeManifestSHA records the SHA that the loader's verifyPluginManifestSHA

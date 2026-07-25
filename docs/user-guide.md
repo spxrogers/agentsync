@@ -253,7 +253,10 @@ is the genuine pre-apply state — there is no "the first apply can't be undone"
 Pre-existing files agentsync did **not** write (an agent's credentials, conversation
 transcripts, your own scratch files) are deliberately left **out** of the versioned
 history so it never becomes a durable copy of your secrets — they are untracked, so a
-revert leaves them untouched anyway. If an apply ever goes wrong, roll it back:
+revert leaves them untouched anyway. The flip side: such files are **preserved, not
+versioned** — a revert never deletes them, but because they are never committed, the
+backup history cannot restore one *you* delete. If an apply ever goes wrong, roll it
+back:
 
 ```bash
 agentsync revert claude              # undo the most recent apply to ~/.claude
@@ -736,11 +739,11 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or with `--scope project`/`--project <path>` the project tree's own `[agents]` declaration (which project scope renders from; never inherited). At project scope `disable --purge` touches only that project's rendered files. | `disable --purge --scope --project` |
 | `mcp add\|remove\|list <name>` | Manage MCP servers. `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site, e.g. `--header "Authorization: Bearer ${secret:TOKEN}"`. | `--type --command --args --url --env --agents --header` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
-| `plugin install\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works). | `install <id[@marketplace]>` |
+| `plugin install\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). | `install <id[@marketplace]>` |
 | `secrets set\|get <key>` / `secrets edit` | Manage age-encrypted secrets (`edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
 | `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
-| `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. A delete-only run (a component removed from source) reports `removed: N ops`, and a mixed run `applied: X ops, removed: Y ops`, rather than mislabeling itself `up to date`/`applied: 0 ops`. | `--dry-run --scope --project --no-git-backup` |
-| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. Skips (or, with `--strict`, errors on) a dir under which a foreign git repo has appeared. | `--to --all --dry-run` |
+| `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. A delete-only run (a component removed from source) reports `removed: N key(s), M file(s)` — key-removals and file-deletes counted distinctly — and a mixed run `applied: X ops, removed: …`, rather than mislabeling itself `up to date`/`applied: 0 ops`; `--dry-run` previews the same removal counts. | `--dry-run --scope --project --no-git-backup` |
+| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. `--to` must name one of the dir's own checkpoints (the current one or an ancestor) — anything else is refused. Skips (or, with `--strict`, errors on) a dir under which a foreign git repo has appeared. | `--to --all --dry-run` |
 | `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. Skill directories collapse to one summary row by default (`--verbose` expands them). `--exit-code` makes it a CI gate: exit `2` when any drift is detected, `0` when clean. | `--agents --verbose --scope --project --json --exit-code` |
 | `diff [<path>]` | Show pending/drift changes; secrets redacted. `<path>` is a filesystem path; an unmanaged/typo'd path is reported distinctly from a clean one. `--agents` narrows to an agent allowlist (like `status`); `--exit-code` exits `2` when any hunk exists, `0` when clean. | `--agents --scope --project --json --exit-code` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |

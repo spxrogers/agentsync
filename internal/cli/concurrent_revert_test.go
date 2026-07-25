@@ -19,6 +19,9 @@ import (
 // rather than racing or hanging forever.
 func TestConcurrentRevert_LockSerializes(t *testing.T) {
 	tmp, env, _ := setupGitBackedClaude(t)
+	// Wait out the lock in milliseconds, not the 30s production default — the
+	// env override lock.go exposes for exactly this (see lock_test.go).
+	env["AGENTSYNC_LOCK_TIMEOUT_MS"] = "400"
 
 	// Hold the global lock from another goroutine; the CLI's revert path must
 	// observe contention and error rather than proceed.
@@ -38,15 +41,23 @@ func TestConcurrentRevert_LockSerializes(t *testing.T) {
 		out string
 		err error
 	}, 1)
+	// Every t.Setenv must happen HERE, on the test goroutine, before spawning
+	// (notably the AGENTSYNC_LOCK_TIMEOUT_MS added above, which no earlier
+	// runCLI applied): if the timeout arm below t.Fatals while the goroutine is
+	// still inside runCLI, a t.Setenv from that surviving goroutine would panic
+	// ("Setenv used after test ended"). Pre-set the env and pass nil to the
+	// goroutine's runCLI so it performs no Setenv of its own.
+	setenvAll(t, env)
 	go func() {
-		out, runErr := runCLI(t, env, "revert", "claude")
+		out, runErr := runCLI(t, nil, "revert", "claude")
 		done <- struct {
 			out string
 			err error
 		}{out, runErr}
 	}()
 
-	// flock contention surfaces within the 30s lockTimeout; cap well above it for CI.
+	// flock contention surfaces within the 400ms test lockTimeout; cap well
+	// above it for CI variance.
 	select {
 	case res := <-done:
 		if res.err == nil {
@@ -56,7 +67,7 @@ func TestConcurrentRevert_LockSerializes(t *testing.T) {
 		if !strings.Contains(lower, "busy") && !strings.Contains(lower, "another agentsync") {
 			t.Fatalf("revert error should name contention; got: %v", res.err)
 		}
-	case <-time.After(45 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("revert never returned; lock contention not surfaced as error")
 	}
 }
@@ -78,10 +89,13 @@ func TestConcurrentRevert_DryRunDoesNotContend(t *testing.T) {
 	}
 	defer func() { _ = holder.Release() }()
 
-	// Dry-run must finish promptly even with the lock held.
+	// Dry-run must finish promptly even with the lock held. Setenv is hoisted
+	// onto the test goroutine (see TestConcurrentRevert_LockSerializes); the
+	// goroutine's runCLI gets nil env so it never calls t.Setenv itself.
+	setenvAll(t, env)
 	done := make(chan error, 1)
 	go func() {
-		_, runErr := runCLI(t, env, "revert", "claude", "--dry-run")
+		_, runErr := runCLI(t, nil, "revert", "claude", "--dry-run")
 		done <- runErr
 	}()
 	select {

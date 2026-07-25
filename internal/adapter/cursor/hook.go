@@ -206,3 +206,14 @@ func unmodeledKeys(entry map[string]any, modeled map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+// NativeHookEvent implements adapter.HookEventNamer: Cursor camelCases
+// canonical hook events in hooks.json (PreToolUse -> preToolUse, …), so
+// import's stale-hook retirement must disown cursor's "/hooks/<native>" state
+// key under the NATIVE spelling — matching only the canonical name would leave
+// the key owned with no canonical render, and the next apply's orphan cleanup
+// would delete the event from the user's hooks.json.
+func (a *Adapter) NativeHookEvent(canonical string) (string, bool) {
+	native, ok := canonicalToCursorHookEvent[canonical]
+	return native, ok
+}

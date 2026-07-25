@@ -383,7 +383,7 @@ type hookEntry struct {
 // Claude hook event (e.g. "PreToolUse"). Entries within the file become
 // individual Hook records sharing the same Event.
 func loadHooks(fs afero.Fs, home string) ([]Hook, error) {
-	dir := filepath.Join(home, "hooks")
+	dir := filepath.Join(home, "hooks") // the dir side of the HookPath layout (walked, not composed per-event)
 	entries, err := afero.ReadDir(fs, dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

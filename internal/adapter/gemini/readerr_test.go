@@ -1,9 +1,13 @@
 package gemini_test
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -59,6 +63,81 @@ func TestIngest_UnreadableMemory_FailsLoud(t *testing.T) {
 			}
 			if got.Memory.Body != tt.wantBody {
 				t.Fatalf("memory body: got %q want %q", got.Memory.Body, tt.wantBody)
+			}
+		})
+	}
+}
+
+// TestIngest_UnreadableCommandsDir_FailsLoud: the commands tree follows the #159
+// loud-dir policy — only an ABSENT dir is a silent skip; a structural error (a
+// regular file sitting at the commands-dir path) RETURNS loudly instead of
+// yielding nil error with a silently short Commands slice, which drift/capture
+// could misread as "the user deleted those commands". A genuinely per-entry
+// failure — one corrupt .toml — warns and continues, so one bad file never
+// hides the rest. (The remaining mid-walk structural class, an unreadable
+// SUBdirectory, is permission-based and cannot be planted root-proof in the
+// privileged container; it takes the same loud walkErr return path as these.)
+func TestIngest_UnreadableCommandsDir_FailsLoud(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T, cmdDir string)
+		wantErr  bool
+		wantCmds []string
+		wantWarn string
+	}{
+		{
+			name:  "absent commands dir is a silent skip",
+			setup: func(t *testing.T, cmdDir string) {},
+		},
+		{
+			name: "present nested command ingests",
+			setup: func(t *testing.T, cmdDir string) {
+				plantContent(t, filepath.Join(cmdDir, "git", "commit.toml"), "prompt = \"commit\"\n")
+			},
+			wantCmds: []string{"git/commit"},
+		},
+		{
+			name:    "file at the commands dir path fails loud",
+			setup:   func(t *testing.T, cmdDir string) { plantContent(t, cmdDir, "not a directory") },
+			wantErr: true,
+		},
+		{
+			name: "one corrupt command file warns and the rest ingest",
+			setup: func(t *testing.T, cmdDir string) {
+				plantContent(t, filepath.Join(cmdDir, "bad.toml"), "= not toml")
+				plantContent(t, filepath.Join(cmdDir, "good.toml"), "prompt = \"ok\"\n")
+			},
+			wantCmds: []string{"good"},
+			wantWarn: `skipping command "bad"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			cmdDir := filepath.Join(tmp, ".gemini", "commands")
+			tt.setup(t, cmdDir)
+			var warn bytes.Buffer
+			a := gemini.New(gemini.Options{TargetRoot: tmp, Stderr: &warn})
+			got, err := a.Ingest(adapter.ScopeUser, "")
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected a loud ingest error for an unreadable commands dir, got nil (cmds=%+v)", got.Commands)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			var names []string
+			for _, cmd := range got.Commands {
+				names = append(names, cmd.Name)
+			}
+			sort.Strings(names)
+			if !reflect.DeepEqual(names, tt.wantCmds) {
+				t.Fatalf("commands: got %v want %v", names, tt.wantCmds)
+			}
+			if tt.wantWarn != "" && !strings.Contains(warn.String(), tt.wantWarn) {
+				t.Fatalf("missing per-entry warning %q in:\n%s", tt.wantWarn, warn.String())
 			}
 		})
 	}

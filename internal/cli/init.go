@@ -162,7 +162,7 @@ func scaffoldHome(cmd *cobra.Command, home string) error {
 	if err := os.MkdirAll(filepath.Join(home, "secrets"), 0o700); err != nil {
 		return fmt.Errorf("mkdir secrets: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "agentsync.toml"), []byte(initialAgentsyncTOML), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "agentsync.toml"), []byte(initialAgentsyncTOML), 0o644); err != nil { //nolint:forbidigo // scaffolds ~/.agentsync/agentsync.toml (canonical source), not a native destination
 		return fmt.Errorf("write agentsync.toml: %w", err)
 	}
 	if err := ensureStateGitignore(home); err != nil {
@@ -228,7 +228,7 @@ func scaffoldProjectHome(cmd *cobra.Command, root string) error {
 	if err := os.MkdirAll(filepath.Join(home, "secrets"), 0o700); err != nil {
 		return fmt.Errorf("mkdir secrets: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "agentsync.toml"), []byte(initialProjectAgentsyncTOML), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "agentsync.toml"), []byte(initialProjectAgentsyncTOML), 0o644); err != nil { //nolint:forbidigo // scaffolds the project .agentsync/agentsync.toml (canonical source), not a native destination
 		return fmt.Errorf("write agentsync.toml: %w", err)
 	}
 	w := cmd.OutOrStdout()
@@ -299,13 +299,13 @@ func ensureStateGitignore(home string) error {
 			out += "\n"
 		}
 		out += rule + "\n"
-		if werr := os.WriteFile(p, []byte(out), 0o644); werr != nil {
+		if werr := os.WriteFile(p, []byte(out), 0o644); werr != nil { //nolint:forbidigo // updates ~/.agentsync/.gitignore (canonical source), not a native destination
 			return fmt.Errorf("update .gitignore: %w", werr)
 		}
 		return nil
 	case os.IsNotExist(err):
 		body := "# agentsync: local state + plaintext config backups — never commit.\n" + rule + "\n"
-		if werr := os.WriteFile(p, []byte(body), 0o644); werr != nil {
+		if werr := os.WriteFile(p, []byte(body), 0o644); werr != nil { //nolint:forbidigo // creates ~/.agentsync/.gitignore (canonical source), not a native destination
 			return fmt.Errorf("write .gitignore: %w", werr)
 		}
 		return nil

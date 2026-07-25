@@ -396,6 +396,40 @@ reports directories to back up. The contract every implementor honours:
 An adapter with no versionable directory (e.g. `noop`) does not implement it. The
 apply tail's use of these roots is the step-9 narrative in §4.
 
+### HookIngestGuard and HookEventNamer (optional)
+
+Two further **optional** extensions serve `import`'s stale-hook retirement
+(the second-order issue #124 fix — a hook event captured while clean and later
+enriched natively must not leave a stale canonical `hooks/<event>.toml` that
+the next apply rewrites lossily):
+
+```go
+type HookIngestGuard interface {
+    RefusedHookEvents(scope Scope, project string) ([]string, error)
+}
+type HookEventNamer interface {
+    NativeHookEvent(canonical string) (string, bool)
+}
+```
+
+- **`HookIngestGuard`** (claude only today) re-reads the destination and
+  returns the hook events ingest *semantically* refused — unmodeled fields or
+  non-command handlers on well-formed entries; structurally-malformed shapes
+  (a settings.json typo) are excluded, because import deletes the canonical
+  file for every returned event and a native typo must never be destructive.
+  Gemini has the same refusal semantics in its ingest but no implementation
+  yet, so the clobber this closes remains live there (a known follow-up).
+- **`HookEventNamer`** (gemini, cursor) reports the *native* spelling an
+  adapter uses in its owned `/hooks/<name>` pointers (`PreToolUse` →
+  `BeforeTool` / `preToolUse`). Canonical hooks are **shared** across agents,
+  so a retirement disowns every agent's state key for the event at that scope
+  — and a renaming agent's key is only findable under its native spelling.
+  An adapter that renames without declaring would silently escape the disown
+  and the next apply's orphan cleanup would delete the event from its native
+  config; the registry-wide guard
+  `TestHookEventNamer_CoversEveryRenamedPointer` (`internal/cli`) makes that
+  state unrepresentable.
+
 ---
 
 ## 4. The apply pipeline (Source ▶ Destination)
@@ -500,8 +534,20 @@ the server targeting the destination doesn't fully carry: an MCP/LSP server's
 `agents` list is source-only (no native dest carries it) and is always restored,
 while `enabled` — which some destinations *do* carry (Codex reads a native
 `enabled` back, issue #152) — is restored from source only when the ingest carried
-none, so a real native enable/disable round-trips instead of being reset. No other
-code path writes destination data back into the source.
+none, so a real native enable/disable round-trips instead of being reset. It also
+**normalizes numeric passthrough values**: adapter ingests decode native JSON/JSONC
+with `UseNumber`, and a `json.Number` left in an MCP/LSP `Extra` map would be
+marshaled by go-toml as a TOML *string* (`timeout = '30'`), silently flipping the
+value's native type on the next render — so Capture converts every `json.Number`
+to `int64`/`float64` before writing. No other
+code path writes destination data back into the source. (Two guarded code paths
+*delete* canonical files without going through Capture: `reconcile`'s
+`removeDroppedSource` unlinks `mcp/<id>.toml` when the user writes back a
+destination-side server deletion — keystroke-gated, `withinDir`-bounded to
+`~/.agentsync` — and import's stale-hook retirement calls `source.RemoveHooks`
+on `hooks/<event>.toml`. A pure deletion carries no content to re-reference, so
+the funnel's secret guarantees are not in play; anything that writes *content*
+back still must go through `capture.Capture`.)
 
 Re-reference matches by value, so it cannot distinguish a *moved or rotated*
 secret from a deliberate non-secret edit. As a **fail-closed backstop**,
@@ -745,8 +791,9 @@ flowchart TD
 
 `internal/drift`, `internal/git`, `internal/iox`, `internal/jsonkeys`,
 `internal/paths`, `internal/log`, and `internal/untrusted` have no internal
-dependencies — they're the leaves (`internal/git` is reached only from `cli`, via
-`internal/cli/gitbackup.go`); `internal/ui` builds only on `internal/untrusted`.
+dependencies — they're the leaves (`internal/git` is reached only from `cli` —
+`internal/cli/gitbackup.go`, `doctor.go`, and `revert.go`); `internal/ui` builds
+only on `internal/untrusted`.
 See the [component map](components.md) for what each package contains.
 
 **Documented layering exception (`opencode → state`).** Adapters otherwise depend

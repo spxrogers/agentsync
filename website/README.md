@@ -66,10 +66,11 @@ The remaining pages are authored here and are the source of truth for their own
 prose. When the CLI surface changes, update both `docs/user-guide.md` and the
 relevant page under `reference/` (the sync table in `CLAUDE.md` lists this).
 
-## Link & anchor checking (build-time)
+## Link & anchor checking (build-time + CI)
 
 [`scripts/check-links.mjs`](scripts/check-links.mjs) is a build-time guard that
-validates every **in-site** link in the content tree. It runs from `predev` /
+validates the **site-absolute** in-site links (`/route…` hrefs) and `#anchor`
+targets in the content tree. It runs from `predev` /
 `prebuild` **after** `sync:docs` (so it sees the generated + authored pages
 together), walks all `.md`/`.mdx` under `src/content/docs/`, and fails the build
 (non-zero exit, one report line per breakage naming file, line, and target) when:
@@ -79,9 +80,10 @@ together), walks all `.md`/`.mdx` under `src/content/docs/`, and fails the build
 
 Heading slugs are computed with [`github-slugger`](https://github.com/Flet/github-slugger),
 the same GitHub-style slugger Starlight uses, so the check matches the anchors
-the site actually generates. External links (`http(s)://`, `mailto:`) and the
-GitHub blob/edit URLs the mirror emits are skipped. A clean run prints a
-one-line summary and exits 0.
+the site actually generates. External links (`http(s)://`, `mailto:`), the
+GitHub blob/edit URLs the mirror emits, and **relative** links (`../foo`, bare
+`foo.md` — outside the route/anchor scope the checker owns) are skipped. A
+clean run prints a one-line summary and exits 0.
 
 Run it standalone with `bun run check:links`. Its own unit tests (the slugger
 fixture pinning the real slugs, plus a checker run over a temp fixture tree) live
@@ -90,6 +92,15 @@ in [`scripts/check-links.test.mjs`](scripts/check-links.test.mjs) and run via
 issue can be parked in the `ALLOWLIST` at the top of the script (each entry
 carries a `// TODO(#NNN)` reference and is reported as a known exception, not a
 failure) — never silently edit a mirrored/canonical doc to make the check pass.
+Staleness is enforced: an `ALLOWLIST` entry that matches **zero** violations in
+a run means the underlying link was fixed, and the checker fails with a
+remove-the-entry message rather than letting the dead exception linger.
+
+The checker also runs in CI on every pull request — the `docs-links` job in
+[`ci.yml`](../.github/workflows/ci.yml) runs `bun install --frozen-lockfile`,
+`sync:docs`, `check:links`, and the `scripts/` unit tests — so a broken in-site
+link (or a stale allowlist entry) fails the PR instead of surfacing only when
+the site is next deployed by `docs-publish`.
 
 ## Deploy
 

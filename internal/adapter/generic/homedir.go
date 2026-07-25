@@ -49,7 +49,7 @@ func (a *Adapter) VersionRoots(scope adapter.Scope, project string) []string {
 // ~/.config/zed, kiro's steering to ~/.kiro — so the local-rollback repo
 // (adapter.VersionedDirs, issue #118) inits `.git` AMID unrelated app state. That is
 // deliberate and its blast radius is bounded by design: only agentsync-WRITTEN files
-// are ever tracked (the apply tail stages exactly managedRelsUnder(root, plannedWrites),
+// are ever tracked (the apply tail stages exactly managedRelsUnder(root, planned),
 // StageTrackedDeletions touches only already-tracked files, and go-git's HardReset
 // runs no `git clean`), so untracked IDE files are never committed, reset, or deleted —
 // the repo simply co-exists with them. The alternative (a narrower per-file root) was

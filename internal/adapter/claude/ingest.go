@@ -185,7 +185,10 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		}
 		// ingestHooks takes any and does its own map assertion (mirroring the
 		// gemini adapter's call site), so pass the raw value straight through.
-		c.Hooks = append(c.Hooks, ingestHooks(top["hooks"], warn)...)
+		// Refused events surface via RefusedHookEvents (adapter.HookIngestGuard):
+		// import uses that to retire a stale canonical hooks/<event>.toml.
+		hooks, _ := ingestHooks(top["hooks"], warn)
+		c.Hooks = append(c.Hooks, hooks...)
 	}
 
 	// Memory from CLAUDE.md. The agentsync managed-file banner is a render-time

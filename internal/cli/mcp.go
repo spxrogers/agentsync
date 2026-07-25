@@ -137,7 +137,7 @@ func newMCPRemoveCmd() *cobra.Command {
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			return withGlobalLock(home, func() error {
 				p := filepath.Join(home, "mcp", id+".toml")
-				if err := os.Remove(p); err != nil {
+				if err := os.Remove(p); err != nil { //nolint:forbidigo // removes mcp/<id>.toml (canonical source), not a native destination
 					if os.IsNotExist(err) {
 						return fmt.Errorf("mcp/%s.toml not found", id)
 					}

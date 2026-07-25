@@ -217,7 +217,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 					if bk != "" {
 						fmt.Fprintf(w, "  backup: %s\n", ui.Sanitize(bk))
 					}
-					if rmErr := os.Remove(it.op.Path); rmErr != nil && !os.IsNotExist(rmErr) {
+					if rmErr := os.Remove(it.op.Path); rmErr != nil && !os.IsNotExist(rmErr) { //nolint:forbidigo // the one NATIVE-destination delete outside DestWriter: interactive orphan removal, safe only because render.BackupFile succeeded just above
 						fmt.Fprintf(w, "  remove failed: %s\n", ui.Sanitize(rmErr.Error()))
 						break orphanPrompt
 					}
@@ -501,7 +501,9 @@ func collectOrphanFileItems(plan render.RenderPlan, reg *adapter.Registry, s *st
 			continue
 		}
 		for _, op := range res.Ops {
-			if op.Action != "" && op.Action != "write" {
+			// Plan ops never carry the "" Action spelling (Plan normalizes it
+			// to "write" at intake).
+			if op.Action != "write" {
 				continue
 			}
 			if render.IsKeyMerge(op.MergeStrategy) {
@@ -710,7 +712,7 @@ func removeDroppedSource(w io.Writer, home string, it reconcileItem, srcFile str
 			itemLabelDisp(it), ui.Sanitize(rel))
 		return true
 	}
-	if rmErr := os.Remove(srcFile); rmErr != nil && !os.IsNotExist(rmErr) {
+	if rmErr := os.Remove(srcFile); rmErr != nil && !os.IsNotExist(rmErr) { //nolint:forbidigo // removes a canonical source file under ~/.agentsync (withinDir-guarded above), not a native destination
 		fmt.Fprintf(w, "  write-back error: remove %s: %s\n", itemLabelDisp(it), ui.Sanitize(rmErr.Error()))
 		return true
 	}
@@ -725,7 +727,7 @@ func removeDroppedSource(w io.Writer, home string, it reconcileItem, srcFile str
 // it means deleting the file again rather than writing a 0-byte one.
 func revertSource(srcFile string, prior []byte) {
 	if len(prior) == 0 {
-		_ = os.Remove(srcFile)
+		_ = os.Remove(srcFile) //nolint:forbidigo // reverts this run's own canonical-source write, not a native destination
 		return
 	}
 	_ = iox.AtomicWrite(srcFile, prior, 0o644)
@@ -752,7 +754,13 @@ func itemSourceFile(home string, it reconcileItem) string {
 	case "lspServers", "lsp":
 		return filepath.Join(home, "lsp", parts[1]+".toml")
 	case "hooks":
-		return filepath.Join(home, "hooks", parts[1]+".toml")
+		// LATENT (renamed-event class, round-2 review): parts[1] is a NATIVE
+		// pointer segment, which for a renaming agent (gemini BeforeTool,
+		// cursor preToolUse) is not the canonical event this maps to. Inert
+		// today because hook write-back is refused below ("not implemented in
+		// v1"); if hook write-back is ever implemented, this mapping must
+		// translate through adapter.HookEventNamer first.
+		return source.HookPath(home, parts[1])
 	}
 	return ""
 }
@@ -941,7 +949,7 @@ func withinDir(dir, path string) bool {
 // appendIgnore appends the label to ~/.agentsync/ignore.toml (best-effort).
 func appendIgnore(home, label string) error {
 	p := filepath.Join(home, "ignore.toml")
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644) //nolint:forbidigo // appends to ~/.agentsync/ignore.toml (canonical source), not a native destination
 	if err != nil {
 		return err
 	}

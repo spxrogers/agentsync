@@ -226,12 +226,21 @@ func TestApplySummary_DeleteOnly(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(tmp, ".agentsync", "skills", "demo")); err != nil {
 		t.Fatal(err)
 	}
+	// Dry-run parity: the preview must show the same removal the real apply will
+	// report, not "Plan: 0 ops … 0 to write" with the removal invisible.
+	dry, err := runCLI(t, env, "apply", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run before delete-only apply: %v\n%s", err, dry)
+	}
+	if !strings.Contains(dry, "Removals:") || !strings.Contains(dry, "1 file(s)") {
+		t.Fatalf("delete-only dry-run should preview the removal counts; got:\n%s", dry)
+	}
 	out, err := runCLI(t, env, "apply")
 	if err != nil {
 		t.Fatalf("re-apply: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "removed:") {
-		t.Fatalf("delete-only apply should report a removal in the headline; got:\n%s", out)
+	if !strings.Contains(out, "removed: 1 file(s)") {
+		t.Fatalf("delete-only apply should report the file removal distinctly in the headline; got:\n%s", out)
 	}
 	if strings.Contains(out, "applied: 0 ops") {
 		t.Fatalf("delete-only apply must not read as 'applied: 0 ops'; got:\n%s", out)
@@ -540,5 +549,52 @@ func TestImportSummary_EnumeratesBundledFiles(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("import summary should enumerate bundled file %q; got:\n%s", want, out)
 		}
+	}
+}
+
+// TestApplyDryRun_CleanupOpNotCountedToWrite pins the dry-run/real headline
+// agreement for KEY removals: an emptied MCP section renders as the synthesized
+// "{}"+OwnedKeys cleanup op, which the real apply reports under "removed: N
+// key(s)" and subtracts from "applied: X ops" — the dry-run must not count the
+// same op in "N to write" (it is previewed under "Removals:" instead).
+func TestApplyDryRun_CleanupOpNotCountedToWrite(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "srv.toml")
+	if err := os.MkdirAll(filepath.Dir(mcp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mcp, []byte("[server]\ntype = \"stdio\"\ncommand = \"npx\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, env, "apply")
+
+	// Remove the only MCP server → the next apply's only work is the "{}"
+	// cleanup op deleting the owned /mcpServers/srv pointer.
+	if err := os.Remove(mcp); err != nil {
+		t.Fatal(err)
+	}
+	dry, err := runCLI(t, env, "apply", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run: %v\n%s", err, dry)
+	}
+	if !strings.Contains(dry, "Removals:") || !strings.Contains(dry, "key(s)") {
+		t.Fatalf("dry-run should preview the key removal; got:\n%s", dry)
+	}
+	if !strings.Contains(dry, "0 to write") {
+		t.Fatalf("the cleanup op must not be double-counted in 'to write' (it is a removal); got:\n%s", dry)
+	}
+	// The headline's removal partition and the per-op label are their own
+	// behaviors (both were revertible with the suite green): the Plan line must
+	// carry the op-count partition so it sums, and the op listing must label
+	// the cleanup op "remove" — never "write", and never "synced" even when the
+	// dest already converged (the label arm is checked before isSyncedOp).
+	if !strings.Contains(dry, "1 removal op(s)") {
+		t.Fatalf("Plan headline should carry the removal-op partition; got:\n%s", dry)
+	}
+	if !strings.Contains(dry, "remove") {
+		t.Fatalf("the cleanup op should be listed with the remove label; got:\n%s", dry)
 	}
 }

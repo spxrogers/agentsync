@@ -16,8 +16,9 @@ import (
 // assert serialization." We can't actually fork the process from a Go
 // test cheaply, so we model the same condition by holding the global
 // lock externally and asserting a fresh apply blocks (returns a clear
-// "another agentsync process running?" error after the 30s lock
-// timeout) — capped short via a separate apply.lock check below.
+// "another agentsync process running?" error after the lock timeout,
+// lowered from the 30s production default via AGENTSYNC_LOCK_TIMEOUT_MS
+// so the suite doesn't wait out the full window).
 //
 // The contract under test: a second apply against the same lockfile
 // MUST NOT proceed concurrently with the first. flock guarantees this
@@ -25,7 +26,12 @@ import (
 // error rather than blocking forever or silently racing.
 func TestConcurrentApply_LockSerializes(t *testing.T) {
 	tmp := t.TempDir()
-	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	env := map[string]string{
+		"AGENTSYNC_TARGET_ROOT": tmp,
+		// Wait out the lock in milliseconds, not the 30s production default —
+		// the env override lock.go exposes for exactly this (see lock_test.go).
+		"AGENTSYNC_LOCK_TIMEOUT_MS": "400",
+	}
 	if _, err := runCLI(t, env, "init"); err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -55,19 +61,25 @@ func TestConcurrentApply_LockSerializes(t *testing.T) {
 		out string
 		err error
 	}, 1)
+	// Every t.Setenv must happen HERE, on the test goroutine, before spawning:
+	// if the timeout arm below t.Fatals while the goroutine is still inside
+	// runCLI, a t.Setenv from that surviving goroutine would panic ("Setenv
+	// used after test ended"). Pre-set the env and pass nil to the goroutine's
+	// runCLI so it performs no Setenv of its own.
+	setenvAll(t, env)
 	go func() {
 		// Subtle: the CLI tests share process state through cobra's
 		// flag mutation; isolate this run inside a goroutine and wait
 		// with a deadline so a hang would still fail the test rather
 		// than blocking forever.
-		out, runErr := runCLI(t, env, "apply")
+		out, runErr := runCLI(t, nil, "apply")
 		done <- struct {
 			out string
 			err error
 		}{out, runErr}
 	}()
 
-	// flock contention surfaces within the 30s lockTimeout. Cap the
+	// flock contention surfaces within the 400ms test lockTimeout. Cap the
 	// test deadline well above that to allow CI variance.
 	select {
 	case res := <-done:
@@ -79,7 +91,7 @@ func TestConcurrentApply_LockSerializes(t *testing.T) {
 		if !strings.Contains(lower, "busy") && !strings.Contains(lower, "another agentsync") {
 			t.Fatalf("apply error should name contention; got: %v", res.err)
 		}
-	case <-time.After(45 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("apply never returned; lock contention not surfaced as error")
 	}
 }
@@ -107,10 +119,13 @@ func TestConcurrentApply_DryRunDoesNotContend(t *testing.T) {
 	}
 	defer func() { _ = holder.Release() }()
 
-	// Dry-run must finish promptly even with the lock held.
+	// Dry-run must finish promptly even with the lock held. Setenv is hoisted
+	// onto the test goroutine (see TestConcurrentApply_LockSerializes); the
+	// goroutine's runCLI gets nil env so it never calls t.Setenv itself.
+	setenvAll(t, env)
 	done := make(chan error, 1)
 	go func() {
-		_, runErr := runCLI(t, env, "apply", "--dry-run")
+		_, runErr := runCLI(t, nil, "apply", "--dry-run")
 		done <- runErr
 	}()
 	select {

@@ -128,3 +128,56 @@ func TestMergeKeys_ReplacesOwnedObjectWholesale(t *testing.T) {
 		t.Fatalf("url not written on transport switch: %+v", srv)
 	}
 }
+
+// TestConvertNumbers pins the range contract stated on ConvertNumbers: integers
+// within int64 stay exact (beyond float64's 2^53), an integer beyond int64
+// falls to float64 (lossy, but TOML integers are int64 so exactness past that
+// bound is unrepresentable anyway), and a numeric that parses as neither int64
+// nor float64 (1e309) falls back to its literal string.
+func TestConvertNumbers(t *testing.T) {
+	cases := []struct {
+		name string
+		in   json.Number
+		want any
+	}{
+		{"int64 max exact", json.Number("9223372036854775807"), int64(9223372036854775807)},
+		{"2^53+1 exact beyond float64 precision", json.Number("9007199254740993"), int64(9007199254740993)},
+		{"2^63 beyond int64 falls to float64", json.Number("9223372036854775808"), float64(9223372036854775808)},
+		{"1e309 beyond float64 falls to literal string", json.Number("1e309"), "1e309"},
+		{"fraction to float64", json.Number("0.5"), float64(0.5)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := jsonkeys.ConvertNumbers(tc.in)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ConvertNumbers(%q) = %v (%T); want %v (%T)", tc.in, got, got, tc.want, tc.want)
+			}
+		})
+	}
+}
+
+// TestConvertNumbers_RecursesThroughMapsAndSlices proves the walk reaches
+// json.Number values nested inside maps and slices (and leaves non-numeric
+// values untouched), matching what a UseNumber-decoded Extra map holds.
+func TestConvertNumbers_RecursesThroughMapsAndSlices(t *testing.T) {
+	in := map[string]any{
+		"timeout": json.Number("30"),
+		"nested": map[string]any{
+			"snowflake": json.Number("9007199254740993"),
+			"list":      []any{json.Number("1"), "keep-me", json.Number("2.5")},
+		},
+		"untouched": "string",
+	}
+	want := map[string]any{
+		"timeout": int64(30),
+		"nested": map[string]any{
+			"snowflake": int64(9007199254740993),
+			"list":      []any{int64(1), "keep-me", float64(2.5)},
+		},
+		"untouched": "string",
+	}
+	got := jsonkeys.ConvertNumbers(in)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ConvertNumbers nested walk mismatch:\n got %#v\nwant %#v", got, want)
+	}
+}

@@ -88,25 +88,31 @@ func newVerifyCmd() *cobra.Command {
 			if err := verifySecrets(c.Config.Secrets, home); err != nil {
 				return fmt.Errorf("verify secrets: %w", err)
 			}
-			// Reference checking. Online (default) resolves every ${secret:…}/
-			// ${env:…} against the live backends. Offline (AGENTSYNC_ALLOW_OFFLINE_VERIFY=1,
-			// the documented CI path without an age key) can't RESOLVE, but it still
-			// validates reference SHAPE — flagging a malformed ref (${secret:} empty
-			// key, missing colon, illegal char) that the strict resolver would
-			// otherwise silently pass through as literal text. It does NOT catch a
-			// well-shaped-but-wrong/unresolvable name (a typo'd key, a missing vault
-			// entry); that requires running WITHOUT the offline flag. (issue #171)
+			// Reference checking, two layers (issue #171):
+			//   1. SHAPE — both modes. A malformed ref (${secret:} empty key,
+			//      missing colon, illegal char) is flagged here because the strict
+			//      resolver silently passes it through as literal text; before this
+			//      ran online too, a green local `verify` ("all references resolve")
+			//      could contradict a red offline CI verify on the same config.
+			//   2. RESOLVABILITY — online (default) only: every ${secret:…}/${env:…}
+			//      resolves against the live backends, catching a well-shaped-but-
+			//      unresolvable name (a typo'd key, a missing vault entry). Offline
+			//      (AGENTSYNC_ALLOW_OFFLINE_VERIFY=1, the documented CI path without
+			//      an age key) cannot resolve, so it stops at shape.
 			offline := os.Getenv("AGENTSYNC_ALLOW_OFFLINE_VERIFY") == "1"
-			if offline {
-				if bad := secrets.MalformedSecretRefs(&c); len(bad) > 0 {
-					// bad is []untrusted.Text — untrusted.Join sanitizes each token
-					// on display, so a config-crafted ESC/control byte in a malformed
-					// ref can't inject terminal escapes here (issue #171 / #93).
-					return fmt.Errorf("verify: malformed secret/env reference(s): %s "+
-						"(offline mode checks reference shape only; run without "+
-						"AGENTSYNC_ALLOW_OFFLINE_VERIFY=1 to also check resolvability)", untrusted.Join(bad, ", "))
+			if bad := secrets.MalformedSecretRefs(&c); len(bad) > 0 {
+				// bad is []untrusted.Text — untrusted.Join sanitizes each token
+				// on display, so a config-crafted ESC/control byte in a malformed
+				// ref can't inject terminal escapes here (issue #171 / #93).
+				hint := ""
+				if offline {
+					hint = " (offline mode checks reference shape only; run without " +
+						"AGENTSYNC_ALLOW_OFFLINE_VERIFY=1 to also check resolvability)"
 				}
-			} else {
+				return fmt.Errorf("verify: malformed secret/env reference(s): %s%s",
+					untrusted.Join(bad, ", "), hint)
+			}
+			if !offline {
 				secBackend := secrets.SelectBackend(c.Config.Secrets, home, userHome)
 				envBackend := secrets.EnvBackend{}
 				if _, err := secrets.SubstituteCanonical(c, secBackend, envBackend); err != nil {

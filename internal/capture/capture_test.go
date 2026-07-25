@@ -1,6 +1,7 @@
 package capture_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -558,4 +559,78 @@ func TestCapture_PreservesIngestedEnabled(t *testing.T) {
 			t.Fatalf("source-only enabled=true was NOT preserved when ingest carried none; got %v", got.Server.Enabled)
 		}
 	})
+}
+
+// TestCapture_NormalizesExtraNumbersToTOML proves the funnel converts
+// UseNumber-decoded passthrough values before persisting: a json.Number left in
+// an Extra map marshals through go-toml as a TOML *string* (`timeout = '30'`),
+// silently flipping the value's native type on the next render. The oracle is
+// the on-disk TOML artifact (raw bytes), not the parsed model — a model
+// round-trip cannot see this bug.
+func TestCapture_NormalizesExtraNumbersToTOML(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, "agentsync.toml"), "[secrets]\nbackend = \"env\"\n")
+
+	ingested := &source.Canonical{
+		MCPServers: []source.MCPServer{{
+			ID: "srv",
+			Server: source.MCPServerSpec{
+				Type:    "stdio",
+				Command: "npx",
+				Extra: map[string]any{
+					"timeout": json.Number("30"),
+					// 2^53+1: the value UseNumber exists to keep exact.
+					"snowflake": json.Number("9007199254740993"),
+					"ratio":     json.Number("0.5"),
+					"nested":    map[string]any{"retries": json.Number("4")},
+				},
+			},
+		}},
+		LSPServers: []source.LSPServer{{
+			ID: "lsp",
+			Spec: source.LSPServerSpec{
+				Command: "gopls",
+				Extra:   map[string]any{"port": json.Number("9000")},
+			},
+		}},
+	}
+	if _, err := capture.Capture(home, ingested, capture.Opts{}); err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(home, "mcp", "srv.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	toml := string(raw)
+	for _, want := range []string{"timeout = 30", "snowflake = 9007199254740993", "ratio = 0.5", "retries = 4"} {
+		if !strings.Contains(toml, want) {
+			t.Errorf("mcp/srv.toml missing bare TOML value %q; got:\n%s", want, toml)
+		}
+	}
+	for _, leak := range []string{"'30'", "\"30\"", "'9007199254740993'", "\"9007199254740993\""} {
+		if strings.Contains(toml, leak) {
+			t.Errorf("mcp/srv.toml persisted a numeric Extra value as a TOML string %q:\n%s", leak, toml)
+		}
+	}
+	rawLSP, err := os.ReadFile(filepath.Join(home, "lsp", "lsp.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rawLSP), "port = 9000") {
+		t.Errorf("lsp/lsp.toml missing bare TOML value %q; got:\n%s", "port = 9000", string(rawLSP))
+	}
+
+	// The loaded model must carry native number types, so the next render emits
+	// JSON numbers (30), not strings ("30").
+	got, ok, err := source.ReadMCP(home, "srv")
+	if err != nil || !ok {
+		t.Fatalf("read back: ok=%v err=%v", ok, err)
+	}
+	if v, isInt := got.Server.Extra["timeout"].(int64); !isInt || v != 30 {
+		t.Errorf("loaded Extra timeout = %[1]v (%[1]T), want int64(30)", got.Server.Extra["timeout"])
+	}
+	if v, isInt := got.Server.Extra["snowflake"].(int64); !isInt || v != 9007199254740993 {
+		t.Errorf("loaded Extra snowflake = %[1]v (%[1]T), want int64(9007199254740993)", got.Server.Extra["snowflake"])
+	}
 }

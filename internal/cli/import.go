@@ -300,9 +300,28 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projec
 
 	// A dry-run wrote nothing, so there is no state to seed and the
 	// foreign-collision warning below would describe the pre-import world.
-	// Stop here with just the preview (surfacing any selector/not-found error).
+	// But the preview must not OMIT a mutation the real run performs: report
+	// which stale canonical hook files the retirement below would remove (a
+	// pure read — RefusedHookEvents + os.Stat), then stop with just the
+	// preview (surfacing any selector/not-found error).
 	if dryRun {
+		if component == "" || component == "hook" {
+			previewRefusedHookRetirement(io, srcHome, a, name, sc, projectRoot)
+		}
 		return importErr
+	}
+
+	// Retire stale canonical hook files for events the destination carries but
+	// ingest REFUSED to capture (adapter.HookIngestGuard): an event captured
+	// while clean and later enriched natively (a timeout field, a non-command
+	// handler) is skipped by Ingest, so capture never rewrites its canonical
+	// file — and the stale file would keep the next apply owning the whole
+	// per-event array, rewriting the user's native entry without the fields
+	// agentsync cannot model (the second-order corruption class of issue #124).
+	// Import's contract is "the destination is the source of truth", so the
+	// canonical file goes and apply hands the event back to the agent.
+	if component == "" || component == "hook" {
+		retireRefusedHookEvents(io, agentsyncHome, srcHome, a, reg, name, sc, projectRoot)
 	}
 
 	// Seed state with the destination's current content hash so the next
@@ -343,14 +362,201 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projec
 	return importErr
 }
 
-// unimportedDestPointers returns a list of human-readable labels for
-// destination pointers / files that exist on disk for the given agent
-// but are NOT in the canonical model after the import. Used to alert
-// the user that import covers ONE item and the rest of the destination
-// is still unowned.
+// previewRefusedHookRetirement is the dry-run counterpart of
+// retireRefusedHookEvents: it reports which stale canonical hooks/<event>.toml
+// files a real import would retire, mutating nothing — RefusedHookEvents only
+// reads the destination, and the canonical file's existence is probed with
+// os.Stat. The name filter matches the real path exactly, and the semantic-only
+// refusal set is the adapter guard's own (malformed native shapes never appear
+// in it). An event whose name fails ValidateComponentID is skipped silently
+// here: the real run's RemoveHooks refuses it with a warning and retires
+// nothing, so there is no retirement to preview (and the untrusted name never
+// reaches a filesystem path).
+func previewRefusedHookRetirement(io *importIO, srcHome string, a adapter.Adapter, name string, sc adapter.Scope, projectRoot string) {
+	g, ok := a.(adapter.HookIngestGuard)
+	if !ok {
+		return
+	}
+	refused, err := g.RefusedHookEvents(sc, projectRoot)
+	if err != nil {
+		io.warnf("could not check for stale canonical hook files: %v", err)
+		return
+	}
+	for _, event := range refused {
+		if name != "" && event != name {
+			continue // a named import retires only the event the user named
+		}
+		if source.ValidateComponentID("hook event", event) != nil {
+			continue
+		}
+		if _, serr := os.Stat(source.HookPath(srcHome, event)); serr != nil {
+			continue // no canonical file — a real run has nothing to retire
+		}
+		io.note(fmt.Sprintf("would retire canonical hooks/%s.toml — the native entry has content "+
+			"agentsync cannot represent. Canonical hooks are shared, so a real import would stop "+
+			"agentsync managing this event for ANY agent at this scope", event))
+	}
+}
+
+// retireRefusedHookEvents removes the stale canonical hooks/<event>.toml for
+// every hook event the destination carries but the adapter's ingest refused to
+// capture for semantic reasons (adapter.HookIngestGuard; malformed native
+// shapes never retire). See the call site in runImport for why a stale file
+// must not survive an import. name narrows a `<agent>:hook:<event>` import to
+// exactly that event — a named import must never touch siblings the user
+// didn't ask about. Best-effort: a failure here degrades to the pre-existing
+// behavior (stale file kept, apply keeps owning the event) with a warning,
+// never a failed import.
 //
-// We render canonical → ops, build the set of (path, pointer) pairs
-// canonical claims, and diff against the actual on-disk contents.
+// CROSS-AGENT SEMANTICS — canonical hooks are SHARED. source.Hook carries no
+// per-agent targeting, so hooks/<event>.toml feeds every hook-rendering agent
+// (claude, codex, gemini, cursor). Retiring the file because ONE agent's
+// native entry became unrepresentable therefore stops agentsync managing the
+// event for ALL of them at this scope — and the disown below must clear EVERY
+// agent's key for the event at this scope, not just the importing agent's: a
+// still-owned key with no canonical render would make the next apply's
+// orphan-key cleanup DELETE the event from that agent's native config. With
+// all keys disowned, each agent's native entry is left frozen as-is, which is
+// the honest reading of "hand the event back to the agents".
+func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adapter.Adapter, reg *adapter.Registry, name string, sc adapter.Scope, projectRoot string) {
+	g, ok := a.(adapter.HookIngestGuard)
+	if !ok {
+		return
+	}
+	refused, err := g.RefusedHookEvents(sc, projectRoot)
+	if err != nil {
+		io.warnf("could not check for stale canonical hook files: %v", err)
+		return
+	}
+	// Determine which refused events actually have a canonical file to retire
+	// at this scope. Event names are native-config-derived (untrusted): an
+	// invalid id would be refused by RemoveHooks below anyway, so filtering it
+	// here just avoids disowning keys for a file that can never be removed —
+	// and it guarantees every event reaching the messages below passed
+	// ValidateComponentID (control/bidi runes rejected), so %s is safe
+	// (importIO.warnf/note do NOT sanitize; a hostile event name is exactly
+	// the case that would reach a failure message).
+	var retired []string
+	for _, event := range refused {
+		if name != "" && event != name {
+			continue // a named import retires only the event the user named
+		}
+		if source.ValidateComponentID("hook event", event) != nil {
+			continue
+		}
+		if _, statErr := os.Stat(source.HookPath(srcHome, event)); statErr != nil {
+			continue // no canonical file at this scope — nothing to retire
+		}
+		retired = append(retired, event)
+	}
+	if len(retired) == 0 {
+		return
+	}
+	// ORDER MATTERS — disown BEFORE removing the canonical files. A failed
+	// disown with the files still present is self-healing (this function reruns
+	// on the next import; a still-rendered event is simply re-recorded by the
+	// next apply). The reverse order was unrecoverable: with the file already
+	// gone, a state failure left every agent's key owned with no canonical
+	// render, the next apply's orphan cleanup deleted the event from their
+	// native configs, and a re-run could not repair it (nothing left to
+	// "remove", so the disown never re-ran).
+	//
+	// DISOWN the retired events' key-state entries — for EVERY agent, at exactly
+	// this scope+project (see the cross-agent note above; a user-scope retirement
+	// must not disown project-scope keys whose canonical overlay file survives,
+	// and vice versa). Key shape: "<agent>:<scope>:<project>:<file>:<pointer>"
+	// (render.RecordOpsState); agent names carry no ':' and the scope/project
+	// legs are matched as one exact ":"-delimited run right after the agent leg.
+	// Residual (accepted): a project path that itself contains ':' can prefix-
+	// match a sibling project's run — bounded to a benign over-disown (the key
+	// is re-recorded by that project's next apply), and the key format offers
+	// no unambiguous parse to do better.
+	userHome := paths.HomeDir(paths.OSEnv{})
+	scopeMid := ":" + sc.String() + ":" + paths.HomeRelative(userHome, projectRoot) + ":"
+	statePath := filepath.Join(agentsyncHome, ".state", "targets.json")
+	st, serr := state.Load(statePath)
+	if serr != nil {
+		io.warnf("could not load state to disown hook events %q: %v; retirement skipped this "+
+			"run — re-run `agentsync import` once the state file is readable", retired, serr)
+		return
+	}
+	// A renaming agent's pointer spells the event NATIVELY (gemini
+	// /hooks/BeforeTool, cursor /hooks/preToolUse for canonical PreToolUse), so
+	// each retired event's disown matches its full alias set — canonical plus
+	// every registered adapter.HookEventNamer's non-empty native spelling
+	// (identity mappings are excluded by native != event, and gemini/cursor's
+	// native values intersect canonical names only at identities — so an alias
+	// collision takes a user-authored canonical event named like another
+	// agent's native spelling, e.g. hooks/BeforeTool.toml while PreToolUse
+	// retires). Matching only the canonical name left a renaming agent's key
+	// owned with no canonical render behind it, and the next apply's orphan
+	// cleanup deleted the event from that agent's native config. Over-matching
+	// errs toward the RECOVERABLE side, not a free pass: a key disowned while
+	// its event still renders shows as a ForeignCollision in status/reconcile
+	// until the next apply re-records it — and if the user deletes the
+	// canonical file inside that window, the now-unowned native entry is left
+	// behind for good (never clobbered, though). Aliases are NOT id-gated the
+	// way retired events are, but a ':'-bearing native spelling still cannot
+	// cross a key boundary: canonical pointers never contain ':'.
+	var aliases []string
+	for _, event := range retired {
+		aliases = append(aliases, event)
+		for _, agName := range reg.Names() {
+			namer, ok := reg.Lookup(agName).(adapter.HookEventNamer)
+			if !ok {
+				continue
+			}
+			if native, ok := namer.NativeHookEvent(event); ok && native != "" && native != event {
+				aliases = append(aliases, native)
+			}
+		}
+	}
+	changed := false
+	for key := range st.Keys {
+		agentEnd := strings.Index(key, ":")
+		if agentEnd < 0 || !strings.HasPrefix(key[agentEnd:], scopeMid) {
+			continue
+		}
+		for _, alias := range aliases {
+			if strings.HasSuffix(key, ":/hooks/"+alias) {
+				delete(st.Keys, key)
+				changed = true
+			}
+		}
+	}
+	if changed {
+		if serr := state.Save(statePath, st); serr != nil {
+			io.warnf("could not save state to disown hook events %q: %v; retirement skipped this "+
+				"run — re-run `agentsync import` once the state file is writable", retired, serr)
+			return
+		}
+	}
+
+	// Only now, with every agent's ownership cleared, remove the canonical
+	// files. A failure here is also self-healing: the disowned keys are
+	// re-recorded by the next apply while the event keeps rendering, and the
+	// next import retries the removal.
+	for _, event := range retired {
+		removed, rerr := source.RemoveHooks(srcHome, event)
+		if rerr != nil {
+			io.warnf("could not retire stale canonical hooks/%s.toml: %v; the next apply "+
+				"will keep rewriting the native entry without its uncaptured fields — "+
+				"delete the file by hand, or re-run `agentsync import`", event, rerr)
+			continue
+		}
+		if removed {
+			io.note(fmt.Sprintf("retired canonical hooks/%s.toml — the native entry now has "+
+				"content agentsync cannot represent. Canonical hooks are shared, so agentsync "+
+				"no longer manages this event for ANY agent at this scope; every agent's "+
+				"native entry is left as-is", event))
+		}
+	}
+}
+
+// unimportedDestPointers returns a list of human-readable labels for
+// destination pointers that exist in the native config but were not captured
+// by the import — scoped to top-level sections the canonical actually renders,
+// so the user learns exactly what stayed behind (see the call site's comment).
 func unimportedDestPointers(agentsyncHome, srcHome, agentName string, reg *adapter.Registry, sc adapter.Scope, projectRoot string) []string {
 	pluginCacheRoot := filepath.Join(agentsyncHome, ".state", "cache", "plugins")
 	// Lenient: this is a post-import diagnostic re-render. A strict plugin
@@ -478,6 +684,8 @@ func seedStateFromCurrentDest(agentsyncHome, srcHome, agentName string, reg *ada
 
 	now := time.Now().UTC()
 	for _, op := range ops {
+		// These ops are RAW adapter Render output (not plan-normalized), so ""
+		// must still be accepted as the documented "write" default.
 		if op.Action != "" && op.Action != "write" {
 			continue
 		}
@@ -995,11 +1203,24 @@ func importCommand(io *importIO, home string, c source.Canonical, name string) (
 		}
 		return nil, nil
 	}
+	// An invalid captured name (a namespaced Gemini command like "git/commit"
+	// carries its subdirectory in the name, which the canonical flat namespace
+	// rejects) must not abort a BULK import — one such native file used to fail
+	// the entire run, importing nothing. Skip it with a warning and import the
+	// rest; a named single-item import still fails loudly, since the user asked
+	// for exactly that item.
+	valid := matched[:0]
 	for _, cm := range matched {
 		if err := source.ValidateComponentID("command", cm.Name); err != nil {
-			return nil, err
+			if name != "" {
+				return nil, err
+			}
+			io.warnf("skipping command %q: %v (preserved on disk, not captured)", cm.Name, err)
+			continue
 		}
+		valid = append(valid, cm)
 	}
+	matched = valid
 	names := make([]string, 0, len(matched))
 	for _, cm := range matched {
 		if !io.dryRun {

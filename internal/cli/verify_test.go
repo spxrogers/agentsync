@@ -285,6 +285,27 @@ func TestVerify_OfflineMode(t *testing.T) {
 		}
 	})
 
+	// The shape check must run ONLINE too: the strict resolver passes a
+	// malformed token through as literal text, so before the check ran in both
+	// modes a green local `verify` ("all references resolve") contradicted a
+	// red offline CI verify on the same config.
+	t.Run("online-rejects-malformed-ref", func(t *testing.T) {
+		tmp := t.TempDir()
+		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+		_, _ = runCLI(t, env, "init")
+		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:}\"\n")
+		_, err := runCLI(t, env, "verify")
+		if err == nil {
+			t.Fatal("online verify must reject a malformed ${secret:} reference (offline CI does)")
+		}
+		if !strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("error should name the malformed ref; got: %v", err)
+		}
+		if strings.Contains(err.Error(), "offline mode checks reference shape only") {
+			t.Fatalf("online error should not carry the offline-mode hint; got: %v", err)
+		}
+	})
+
 	// A malformed ref is config-derived and can carry hostile bytes (agentsync
 	// configs are shareable dotfiles). looseRefRe's `[^}]*` tail captures ESC/C1
 	// bytes, so the offline error must sanitize the candidate on display —

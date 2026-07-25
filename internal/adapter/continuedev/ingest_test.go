@@ -348,6 +348,48 @@ mcpServers:
 	}
 }
 
+// TestIngest_Prompts_CollidingNames pins the ingest collision guard: two prompt
+// files whose frontmatter `name` resolves to the same effective command name
+// must NOT ingest as two Command{Name: "bar"} entries — downstream write-back
+// and render key off Name, so one would silently vanish. The first file (in
+// directory order) is captured; the later one is skipped with a warning naming
+// both files and the colliding name.
+func TestIngest_Prompts_CollidingNames(t *testing.T) {
+	tmp := t.TempDir()
+	promptsDir := filepath.Join(tmp, ".continue", "prompts")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// ReadDir returns entries sorted by filename, so baz.md is captured first
+	// and foo.md is the skipped duplicate.
+	files := map[string]string{
+		"baz.md": "---\nname: bar\ndescription: first\ninvokable: true\n---\nfirst body\n",
+		"foo.md": "---\nname: bar\ndescription: second\ninvokable: true\n---\nsecond body\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(promptsDir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var warn bytes.Buffer
+	a := continuedev.New(continuedev.Options{TargetRoot: tmp, Stderr: &warn})
+	got, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Commands) != 1 {
+		t.Fatalf("colliding names must capture exactly one command, got %+v", got.Commands)
+	}
+	if got.Commands[0].Name != "bar" || got.Commands[0].Body != "first body\n" {
+		t.Fatalf("the FIRST prompt file must win the collision, got %+v", got.Commands[0])
+	}
+	for _, want := range []string{`"foo.md"`, `"baz.md"`, `"bar"`} {
+		if !strings.Contains(warn.String(), want) {
+			t.Fatalf("collision warning must name both files and the colliding name; missing %s in:\n%s", want, warn.String())
+		}
+	}
+}
+
 // TestIngest_Prompts_SkipsNonInvokable: Continue only treats a prompt as a slash
 // command when `invokable: true`; capturing anything else (and re-applying it
 // with invokable forced true) would silently convert a user's plain prompt into

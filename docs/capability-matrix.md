@@ -225,9 +225,14 @@ literally, never resolved.)
   carries a field agentsync doesn't model (e.g. `timeout`), is **reported, not
   silently dropped**: on render a non-command handler surfaces as a Skip and is
   never emitted (so agentsync's owned-array write can't clobber a native handler),
-  and on ingest the whole event is left uncaptured with a warning — so the next
-  apply never *owns*, and therefore never rewrites, your richer native entry. This
-  guard-and-warn behavior is anchored by the artifact-anchored
+  and on ingest the whole event is left uncaptured with a warning. If agentsync
+  *previously* captured the event (it was clean then, enriched natively since),
+  `import` also retires the now-stale canonical `hooks/<event>.toml` — so the
+  next apply never *owns*, and therefore never rewrites, your richer native
+  entry. Canonical hooks are shared, so a retirement hands the event back to
+  *every* hook-rendering agent at that scope (each native entry frozen as-is);
+  a structurally-malformed native shape warns but never triggers retirement.
+  This guard-and-warn behavior is anchored by the artifact-anchored
   `TestIngest_HookArtifactRoundTrip` (`internal/adapter/claude`).
 
 **OpenCode**
@@ -311,7 +316,12 @@ literally, never resolved.)
   `Read`/`Grep`, so copying it verbatim would name tools Gemini doesn't have) and
   `color` (no Gemini agent field) are dropped with a report, and the reported `Skip`
   lists only those keys. `name` is defaulted to the filename when absent (Gemini
-  requires it).
+  requires it). The passthrough is a *deliberate secret-machinery exception* (like
+  the MCP `extra` passthrough): subagent frontmatter — including a command/env-shaped
+  `mcpServers` block — is never secret-resolved and never re-referenced, so a
+  `${secret:…}` written there stays a literal string, and a live secret hand-pasted
+  into *native* frontmatter is captured verbatim like any other hand-authored text
+  component — keep your dotfiles repo private.
 - **Slash command** — Gemini commands are TOML (`.gemini/commands/*.toml`) with
   `description` + `prompt`. The body becomes `prompt` and `description` carries
   over; `argument-hint`/`allowed-tools` have no Gemini field and drop. Gemini's
@@ -323,8 +333,9 @@ literally, never resolved.)
   file (byte-stable native→native round-trip). This is scoped to the adapter
   round-trip: the flat canonical loader/writer (`source.ValidateComponentID` rejects
   `/`) can't carry a namespaced name, so a namespaced command does not survive a full
-  `import`→canonical-source→`apply` cycle — the namespace is preserved on disk, never
-  silently truncated.
+  `import`→canonical-source→`apply` cycle — a bulk `import` **skips it with a
+  warning** (it never aborts the rest of the run, and a named single-item import
+  fails loudly), and the namespace is preserved on disk, never silently truncated.
 - **Hook** — Gemini hooks live in `settings.json` under `hooks` in the *same nested
   shape* as Claude, so only the event name is remapped (`PreToolUse`→`BeforeTool`,
   `PostToolUse`→`AfterTool`, `UserPromptSubmit`→`BeforeAgent`, `Stop`→`AfterAgent`,
@@ -483,7 +494,9 @@ A few ✓ cells still change shape on the way out — same content, no loss:
   than regenerated to the `0.0.1`/`v1` defaults. A canonical server carrying both a
   `command` and a `url` with no explicit `type` is ambiguous (a Continue block is
   single-transport): agentsync renders it as stdio (command wins) and reports the
-  dropped `url` via a reduced `Skip` rather than dropping it silently.
+  dropped `url` via a reduced `Skip` rather than dropping it silently; an
+  explicitly-typed `stdio` server that also carries a `url` drops the unused
+  `url` with the same report.
 - **Continue memory** — the body lands as `.continue/rules/agentsync.md`, a
   frontmatter-less rule Continue always applies (byte-clean round-trip).
 - **Windsurf MCP** — `~/.codeium/windsurf/mcp_config.json` `mcpServers`: stdio

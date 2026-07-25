@@ -68,8 +68,13 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				}
 				// Windsurf workflows are plain markdown with no honored frontmatter,
 				// but a user may have hand-authored a leading `---`…`---` block; strip
-				// it so a stray fence never folds into the canonical command body.
-				body, _ := stripLeadingFrontmatter(string(data))
+				// it so a stray fence never folds into the canonical command body —
+				// and warn (mirroring the rules path), since the strip deletes
+				// user-authored bytes that have no canonical home.
+				body, stripped := stripLeadingFrontmatter(string(data))
+				if stripped {
+					fmt.Fprintf(a.stderr(), "warning: workflow %q starts with a `---` frontmatter fence; Windsurf workflows honor no frontmatter, so the fence has no canonical home and is not captured\n", name)
+				}
 				c.Commands = append(c.Commands, source.Command{Name: name, Frontmatter: map[string]any{}, Body: body})
 			}
 		}

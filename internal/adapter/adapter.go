@@ -54,8 +54,13 @@ func (s Scope) String() string {
 
 // FileOp describes one destination-side change. Action is "write" (the default;
 // the empty string is treated as "write") or "delete" — see the Action field and
-// DispatchOps, which both accept "" as write. Path is absolute (after
-// AGENTSYNC_TARGET_ROOT redirection).
+// DispatchOps, which both accept "" as write. render.Plan normalizes "" to
+// "write" as it collects each adapter's ops, and render.Apply/PreviewApply
+// re-normalize at intake before any pipeline guard runs (they are exported and
+// accept a caller-built RenderPlan that never went through Plan), so the
+// pipeline guards always see the literal "write"; only code reading raw
+// adapter Render output (or state-derived ops) must still accept "" as write.
+// Path is absolute (after AGENTSYNC_TARGET_ROOT redirection).
 //
 // CONTRACT — Content is ALWAYS JSON for a key-merge op, regardless of the
 // destination file's on-disk format. MergeStrategy names the on-disk format the
@@ -75,7 +80,7 @@ func (s Scope) String() string {
 // format-specific merge). A new TOML/YAML-backed agent must keep Content JSON,
 // not emit the on-disk format here.
 type FileOp struct {
-	Action        string // "" | "write" | "delete"  ("" == "write")
+	Action        string // "" | "write" | "delete"  ("" == "write"; render.Plan and render.Apply/PreviewApply rewrite "" → "write" at intake)
 	Path          string
 	Content       []byte
 	Mode          uint32
@@ -274,6 +279,46 @@ type PluginIngester interface {
 	// project-scope call with no root, even though import only ever calls it at
 	// user scope today (plugins are a user-scope concept).
 	IngestPlugins(scope Scope, project string) ([]NativeMarketplace, []NativePlugin, error)
+}
+
+// HookIngestGuard is an OPTIONAL extension to Adapter for agents whose hook
+// ingest REFUSES unrepresentable native events (non-command handlers, unmodeled
+// fields) rather than capturing a lossy subset. RefusedHookEvents re-reads the
+// destination (Ingest's ten-adapter (source.Canonical, error) signature has no
+// channel for refusals) and returns the SEMANTICALLY refused event names —
+// structurally-malformed native shapes are excluded, since the caller deletes
+// canonical config for every returned event and a native typo must not be
+// destructive. `import` uses it to retire a stale canonical hooks/<event>.toml:
+// an event captured while clean and later enriched natively is skipped by
+// Ingest, but a stale canonical file left in place keeps the next apply —
+// which owns the whole per-event array — lossily rewriting the user's native
+// entry (the second-order corruption class of issue #124). Canonical hooks are
+// SHARED across agents, so retirement freezes the event for every agent at
+// that scope (see cli.retireRefusedHookEvents). Like Render/Ingest it MUST
+// honor RequireProjectRoot.
+//
+// Implemented by claude only. Gemini's ingestHooks has the same refusal
+// semantics (internal/adapter/gemini/hook.go) but does NOT yet implement this
+// interface, so the second-order clobber this closes for Claude is still live
+// for a Gemini-side enrichment — a known follow-up, not an oversight.
+type HookIngestGuard interface {
+	RefusedHookEvents(scope Scope, project string) ([]string, error)
+}
+
+// HookEventNamer is an OPTIONAL extension to Adapter for agents that RENAME
+// canonical hook events in their native config (Gemini: PreToolUse→BeforeTool;
+// Cursor: PreToolUse→preToolUse). NativeHookEvent returns the native spelling
+// the adapter uses in its owned "/hooks/<name>" state pointers, or ("", false)
+// when the canonical event has no native equivalent on this agent. Import's
+// stale-hook retirement needs it: the all-agents state disown
+// (cli.retireRefusedHookEvents) matches keys by event name, and matching only
+// the CANONICAL spelling would leave a renaming agent's key owned with no
+// canonical render behind it — the next apply's orphan cleanup would then
+// delete the event from that agent's native config, the exact clobber
+// retirement exists to prevent. An adapter that renders hooks under the
+// canonical name (claude, codex) does not implement it.
+type HookEventNamer interface {
+	NativeHookEvent(canonical string) (string, bool)
 }
 
 // VersionedDirs is an OPTIONAL extension to Adapter: an adapter that writes into

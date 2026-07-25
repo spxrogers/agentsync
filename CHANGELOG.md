@@ -11,6 +11,163 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`apply --dry-run` now previews convergence-time removals, and the apply
+  headline counts key-removals and file-deletes distinctly.** A delete-only run
+  previewed as "Plan: 0 ops … 0 to write" and then surprised with a removal
+  headline on the real apply; the dry-run now prints the same removal counts
+  the real run will report. The headline also no longer conflates per-key
+  removals and whole-file skill deletes under one "ops" number: it reads
+  `removed: N key(s), M file(s)` (and `applied: X ops, removed: …` for a
+  mixed run).
+- **`plugin upgrade|enable|disable|remove` refuse a ref whose marketplace
+  qualifier doesn't match the installed plugin.** The lifecycle subcommands
+  accepted `id@marketplace` but silently discarded the qualifier, so
+  `agentsync plugin disable demo@wrong-mp` acted on the `demo` installed from
+  `test-mp`. A qualified ref is now checked against the marketplace recorded
+  in `plugins/<id>.toml` and refused on mismatch, naming both; a bare id (or
+  matching qualifier) works as before. A plugin installed by **bare id**
+  records the internal `default` sentinel rather than a real marketplace, so a
+  later qualified ref refuses with an honest "cannot be verified; use the bare
+  id" instead of claiming the plugin came from a marketplace named `default`.
+  Relatedly, a bare-id install (and `upgrade` of a bare-id-installed plugin)
+  of a plugin with a *relative* source now fetches against the marketplace
+  cache that actually supplied the entry — previously the fetch resolved
+  against a nonexistent cache dir and failed.
+- **Continue adapter: an explicitly-typed stdio MCP server that also carries a
+  `url` now reports the dropped url.** The single-transport drop report fired
+  only for the untyped command+url ambiguity; a server with `type: "stdio"`
+  plus a `url` dropped the url with no report at all — the same silent loss
+  the ambiguity Skip exists to prevent. Both cases now surface the unused url
+  via the same reduced Skip.
+- **Gemini adapter: a structural error while walking the commands tree now
+  fails ingest loudly instead of being demoted to a warning.** A mid-walk
+  failure (an unreadable subdirectory, a file sitting at the commands-dir
+  path) used to warn and return success with a silently short `Commands`
+  slice — exactly the state drift/capture can misread as "the user deleted
+  those commands" (#159's loud-dir policy, which every other adapter follows).
+  Such errors now abort the ingest; an absent commands dir stays a clean
+  no-op, and a genuinely per-entry failure (one corrupt `.toml`) still warns
+  and continues so one bad file never hides the rest. The redundant double
+  listing of the commands dir (a pre-check list plus the walk's own list) is
+  also gone.
+- **Codex no longer reports a deliberately disabled or non-targeted MCP server
+  as a "drop" on every apply.** The codex adapter alone emitted a `SkipDropped`
+  in the translation report for every MCP server the user disabled
+  (`enabled = false`) or excluded via the `agents` allowlist — recurring noise
+  for a setting agentsync was obeying, not data it failed to represent. The
+  other eight adapters honor the same condition silently; codex now matches
+  the fleet. Skips for content codex genuinely cannot render are unchanged.
+- **Windsurf adapter: stripping a hand-authored leading fence from a workflow
+  now warns instead of deleting the bytes silently.** Windsurf workflows honor
+  no frontmatter, so ingest strips a hand-authored leading `---`…`---` block
+  before capturing the body — but unlike the rules path, the workflow path
+  said nothing, silently discarding user-authored bytes with no canonical
+  home. The strip behavior is unchanged; ingest now emits a warning naming
+  the workflow, symmetric with the rules-path warning.
+- **Continue adapter: colliding prompt command names are refused on ingest
+  instead of silently clobbering.** Continue keys a slash command off the
+  frontmatter `name`, so two prompt files (say `foo.md` and `baz.md`) can both
+  resolve to the same effective command name — and since the canonical model
+  and every downstream write-back/render key off `Command.Name`, capturing both
+  let one silently vanish. Ingest now keeps the first file, skips the later
+  one, and warns naming both files and the colliding name.
+
+- **The apply-time baseline snapshot now carries the revert snapshot's
+  cleartext caution, and skips roots the apply doesn't touch.** When the
+  pre-apply baseline commits something — typically a hand-typed edit to a
+  tracked dest file since the last apply, the same class of content the revert
+  snapshot warns may hold freshly-typed secrets — `apply` now prints the same
+  "kept in the local-only history … may contain secrets in cleartext" caution,
+  once per run. And a version root with no planned write or delete under it is
+  no longer baseline-snapshotted at all: previously an apply could quietly grow
+  "pre-apply baseline" commits in dirs it never touched whenever they held
+  uncommitted tracked drift; that drift now stays on disk, uncommitted, exactly
+  as a `--no-git-backup` run would leave it.
+- **`revert --to` now validates the target against the checkpoint history.**
+  Any revision whose object existed in the backup repo was accepted — including
+  a commit from an orphaned or rewound lineage that was never one of the dir's
+  checkpoints — and restored with undefined semantics. `revert` (and its
+  `--dry-run` preview) now refuses a `--to` that is not the current checkpoint
+  or one of its ancestors, naming the hash and pointing at
+  `git -C <dir> log --oneline` to list the real checkpoints.
+- **`revert --dry-run` warns when it cannot enumerate untracked files instead
+  of silently dropping the note.** The preview swallowed a git-status error, so
+  the "N untracked file(s) in this dir are left untouched" note could vanish
+  with no indication anything went wrong — implying the dir held none. The
+  preview now prints a warning naming the error and continues.
+- **`revert` refuses a dangling symlink at a path it would create instead of
+  silently deleting it.** The structural pre-flight used `os.Stat`, which
+  follows links, so a dangling untracked symlink at a create path looked like
+  "nothing there"; the restore then removed the user's symlink and committed a
+  managed file over it. The pre-flight now uses `os.Lstat`: a symlink at a
+  create path — dangling or not — is refused all-or-nothing like the other
+  conflict classes, and the symlink survives untouched.
+- **`revert` now prunes the directories its delete pass empties.** Rolling back
+  past the apply that created a nested file (e.g. a skill's
+  `skills/deep/SKILL.md`) removed only the file and left `skills/deep/` and any
+  emptied ancestors behind as stray empty directories — unlike `git reset
+  --hard`. The restore now removes each deleted file's emptied parent chain,
+  stopping at the repo root and keeping any directory that still holds entries
+  (your own untracked file in the same dir keeps it — and its ancestors — alive).
+- **A namespaced Gemini command no longer aborts bulk `import`.** Gemini
+  namespaces commands by subdirectory (`commands/git/commit.toml` is
+  `/git:commit`), and ingest captures the subdir path into the command name
+  (`git/commit`) — which the flat canonical namespace rejects. One such native
+  file used to fail the entire `import gemini` run (commands, hooks, memory —
+  nothing imported). A bulk import now skips the namespaced command with a
+  warning naming it (preserved on disk, not captured) and imports everything
+  else; a named single-item import still fails loudly.
+- **`verify` now checks secret-reference shape in online mode too.** The
+  malformed-reference check (`${secret:}` empty key, missing colon, illegal
+  characters) ran only under `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1`, while the
+  online resolver silently passed the malformed token through as literal text —
+  so a green local `verify` ("all references resolve") could contradict a red
+  offline CI verify on the same config. Both modes now reject malformed
+  references; online verify additionally checks resolvability, as before.
+- **`import` now retires a stale canonical hook file when the native event can
+  no longer be captured, closing the second-order `/hooks/<event>` clobber.**
+  A Claude hook event captured while it was a clean command hook and *later*
+  enriched natively (a `timeout` field, a non-`command` handler) is refused by
+  ingest — but its stale canonical `hooks/<event>.toml` kept the next `apply`
+  owning the whole per-event array, rewriting the user's enriched native entry
+  without those fields, and no agentsync flow could preserve the edit short of
+  hand-deleting the canonical file. `import` (full-agent or `:hook`; a named
+  `:hook:<event>` import retires only that event) now asks the adapter which
+  events it *semantically* refused (`adapter.HookIngestGuard` /
+  `RefusedHookEvents` — a structurally-malformed native shape warns but never
+  deletes canonical config) and removes each one's stale canonical file with a
+  notice. Canonical hooks are shared across agents, so the retirement disowns
+  the event's state key for **every** agent at exactly that scope — each
+  agent's native entry is left frozen as-is, and no orphan cleanup fires
+  against it on the next apply — including agents that RENAME the event
+  natively (Gemini's `BeforeTool`, Cursor's `preToolUse`): the disown matches
+  each retired event's full alias set via the new `adapter.HookEventNamer`
+  extension, since matching only the canonical spelling left a renaming
+  agent's key owned and its native hooks were wiped by the next apply.
+  Retirement also disowns state *before* removing the canonical file — the
+  reverse order was unrecoverable if the state write failed (the file was
+  already gone, so a re-run had nothing left to trigger the disown).
+  `import --dry-run` now previews the same
+  retirement (a "would retire canonical `hooks/<event>.toml`" note, computed
+  read-only) instead of silently omitting it from the preview.
+- **The pre-apply git baseline now covers planned deletions, so a delete-only
+  first apply is recoverable.** The baseline staged only the paths the plan
+  would *write*; a file the apply was about to *delete* (a skill dropped from
+  source) was removed without a writer backup and its bytes landed in no
+  baseline, no checkpoint, and no backup dir — unrecoverable. The baseline now
+  stages the pre-apply content of every planned write *and* delete (including
+  writer-derived skill orphan deletes), and on an already-owned root it also
+  stages a planned path that is still untracked (created while backup was off
+  or declined) before the apply overwrites or deletes it. Other untracked files
+  remain untouched, as before.
+- **Numeric passthrough values no longer flip to strings through the canonical
+  source.** Adapter ingests decode native JSON/JSONC with `UseNumber` so large
+  integers survive exactly, but a `json.Number` persisted into an MCP/LSP
+  `extra` map marshaled as a TOML *string* (`timeout = '30'`), so an
+  `import`→`apply` cycle silently rewrote every unmodeled numeric native field
+  as a string (`"timeout": "30"`). The capture funnel now normalizes
+  `json.Number` to `int64`/`float64` before writing the canonical source,
+  keeping >2^53 integers exact and the native type intact.
 - **Gemini adapter: hook group shape, empty `type`, and always-fire matchers
   (issue #166).** Rendering `.gemini/settings.json` `hooks` now reconstructs the
   native multi-handler shape from the flat canonical model — consecutive hooks
@@ -37,229 +194,6 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   read-time corruption risk. The canonical source is unaffected — it still holds the
   `${secret:…}` reference — so this is destination corruption, not a cleartext leak.
 
-### Documentation
-
-- **Build-time link/anchor checker for the docs website (issue #170).** New
-  `website/scripts/check-links.mjs` walks every `.md`/`.mdx` under
-  `website/src/content/docs/` and fails the build on any broken in-site link —
-  a site-absolute `/route` that resolves to no page, or a `#anchor` that is not
-  a real heading slug on the target page (computed with `github-slugger`, the
-  GitHub-style slugger Starlight uses). It runs from `predev`/`prebuild` after
-  `sync:docs`, is runnable standalone via `bun run check:links`, and skips
-  external/`mailto:`/GitHub-blob links. Script unit tests
-  (`website/scripts/check-links.test.mjs`, `bun run test` → `node --test`) pin
-  the real slugs and exercise the checker over a temp fixture tree. A single
-  pre-existing `concepts.md` → `/getting-started/introduction/#command-reference`
-  anchor breakage (owned by #145) is parked in an explicit `ALLOWLIST`.
-- **New "Rolling back a bad apply" website guide (issue #170).** Added
-  `website/src/content/docs/guides/rollback.mdx` (mirroring the
-  `docs/user-guide.md` rollback section): the destination git-backup enable
-  prompt and `[destination_directory_git_backup]` modes, `apply --no-git-backup`,
-  `agentsync doctor` status, the append-only `revert` (`--to`/`--all`/`--dry-run`),
-  the reconcile-after-revert step, the shared-dir caveat, and the
-  never-pushed/cleartext-history note. Wired into the `Guides` sidebar and
-  cross-linked from the `revert` reference in `reference/cli.mdx`.
-- **Empirically verified release reproducibility and corrected the
-  `.goreleaser.yaml` claim to match (issue #173).** Building two snapshot releases
-  from the same commit with the release-pinned goreleaser `2.16.0` and diffing the
-  `dist/` trees showed the binaries and the six tar.gz/zip archives are
-  byte-for-byte identical run-to-run (the archive-mtime pinning restored in #138
-  works), but the nfpms deb/rpm — and therefore `checksums.txt`, which hashes
-  them — are **not**: the packages embed the wall-clock build time (deb
-  directory-entry mtimes and the rpm `BUILDTIME` header), not the commit date. The
-  `release`/`archives`/`checksum` comments claiming "(reproducible, identical)"
-  assets and "an identical checksums.txt" were corrected (comment text only, no
-  behavioral config change — pinning `nfpms.mtime` belongs with #138). Added
-  `internal/release/reproducibility_test.go`, a guard that reads the on-disk
-  `.goreleaser.yaml` and fails if the archive-entry mtime pins are stripped (the
-  PR #115 regression class), keeping the reproducible-archives claim
-  self-certifying.
-- **Synced the v1.0 git-backup feature's contract docs (issue #141).** The
-  components map now carries `internal/git` (the leaf go-git wrapper) and
-  `internal/ui`, the full adapter set (9 deep adapters + generic breadth tier +
-  noop), each deep adapter's `homedir.go`, and the `revert` / `version` commands;
-  the architecture §10 package-layering graph gains a `git` node (no push surface)
-  and a new `### VersionedDirs (optional)` §3 subsection; the `doctor` reference
-  (CLI + user-guide command tables and the `### doctor` body) documents its
-  Destination-git-backup section (mode + per-dir repo status); and the README
-  gains a "Known limits" bullet for the local-only, never-pushed backup history.
-  Also corrected the stale `internal/project` `.agentsync.toml`-marker description
-  to the current `.agentsync/`-directory overlay, added the
-  `comparison/index.md` ↔ `docs/comparison.md` mirrored-pages row to
-  `website/README.md`, and refreshed a few `Files` lists (secrets `leakscan.go`/
-  `runtime.go`, marketplace `treehash.go`).
-- **Cleared the carried-over doc-vs-code drift cluster (issue #145).** Corrected six
-  "plugin import is Claude-only" claims (Codex implements `PluginIngester` too),
-  the Windsurf `components.md` scope/`WarnEmitter` description (memory + commands
-  render at both scopes; it *does* implement `WarnEmitter`), Gemini's
-  `merge-json-keys`→`merge-jsonc-keys` source comments, a broken `concepts.md`
-  architecture anchor, and copy nits (agent count `30+`→`31`, "three axes"→"four").
-  Acknowledged Windsurf's separate 12,000-char workspace-rule/workflow limit in the
-  capability matrix (verified against upstream docs).
-- **Install & git-backup docs: macOS Gatekeeper guidance, arm64 download URLs, and
-  qualified safety promises (issue #132).** The README and the website install page
-  now tell raw-archive macOS users that the prebuilt binaries are unsigned/
-  un-notarized (Gatekeeper blocks first run) and how to clear the quarantine
-  attribute (`xattr -dr com.apple.quarantine`), noting Homebrew users don't need it;
-  both now show the `arm64` `.deb`/`.rpm` download URLs alongside `amd64`.
-  `docs/concepts.md` records that the local git-backup `.git` `0700` hardening is
-  POSIX-only (a Windows no-op → ACLs are the boundary), and the user-guide's revert
-  "nothing is lost" promise is qualified to **tracked files only** (untracked scratch
-  files are outside the snapshot).
-
-### Security
-
-- **Render-time path-traversal guard at the adapter dispatch layer (issue #156).**
-  Every deep adapter joined a component id straight into a destination filename,
-  with no Render-time check — a subagent/command/skill `Name`, and (for adapters
-  that write one file per server, e.g. continuedev's
-  `filepath.Join(MCPDir, id+".yaml")`) an MCP/LSP server id. An id like
-  `../../../tmp/x` would render a `FileOp.Path` that escapes the agent's config dir
-  (a write-anywhere primitive on apply); a marketplace-projected MCP id is an
-  especially untrusted source (a raw manifest map key). `render.Plan` (the single
-  dispatch waist) now validates **every** such id — subagent/command/skill `Name`
-  **and** MCP/LSP server id, project overlay included — against the **same**
-  `source.ValidateComponentID` the dest→source write boundary already used, so
-  **all** adapters — current and future — inherit the guard uniformly, closing the
-  recurring Gemini/Windsurf (and all-adapter) unsanitized-name gap. The id set is
-  model-wide, so it is validated **once up front** (not per-agent) and a
-  traversal-, separator-, absolute-, bare-`.`, all-whitespace-, or
-  control/deceptive-rune-bearing id refuses the whole plan (never a silent `Skip`)
-  with an agent-agnostic error naming the component kind and id; a `filepath.Clean`
-  containment backstop additionally rejects any emitted write whose cleaned path
-  still traverses upward (covering bundled skill-file paths too). `Plan` reads only
-  the id strings (a string-only `secrets.Resolved.ComponentIDs()` accessor), so the
-  guard never unwraps the resolved model and the secrets lint fence is unchanged.
-- **Offline `verify` no longer prints unsanitized malformed-reference candidates
-  (issue #171 hardening).** `agentsync verify` in offline mode
-  (`AGENTSYNC_ALLOW_OFFLINE_VERIFY=1`, the documented CI path) reports each
-  `${secret:…}`/`${env:…}`-shaped token whose reference shape is invalid. Those
-  tokens are config-derived — agentsync configs are shareable dotfiles — and the
-  loose shape-matcher's tail can capture raw ESC / C1 / newline bytes, so a crafted
-  config could smuggle terminal escapes into the CI log through the error message.
-  `secrets.MalformedSecretRefs` now returns `[]untrusted.Text` and `verify` renders
-  them via `untrusted.Join`, so every displayed candidate is sanitized by
-  construction. A **systematic sweep of the whole `#93/#171` class** (a
-  config-/native-config-derived string reaching the terminal raw) then closed
-  every remaining site the review surfaced across the CLI: `verify`'s
-  `[agents.<name>]` validation error (now `%q`); `verify`'s and `doctor`'s
-  `[secrets]` `identity_file`/`age_file` path errors (which print even for a
-  non-existent path); `doctor`'s schema-invalid line (which echoes the raw
-  offending config source line via go-toml's strict-decode error);
-  `marketplace list`'s `url`/`head_sha` columns; `agent list`'s `[agents.<name>]`
-  key and display-only `scope` value; `mcp list`'s server-id (filename-stem)
-  column; the `status`/`diff`/`apply` path dashboards and interactive
-  `reconcile`'s item-label + mcp-server-id; and `secrets`'s age-backend path
-  errors (`internal/secrets/age.go`) — each sanitized at its display boundary via
-  `ui.Sanitize`/`untrusted.Text`, with `reconcile`'s ignore-pattern write kept
-  raw so the persisted pattern is exact. A follow-up verification pass then closed
-  the *indirect* leaks of the same class — the config-derived path surfacing
-  through an **error value** or a **derived path** rather than a direct print:
-  `render.CollisionReport.String()` (printed by `reconcile` override + `update
-  --apply`); `reconcile`'s orphan backup/remove errors, write-back error, and the
-  `filepath.Rel` conflict path; `import`'s dry-run marketplace preview (a
-  plain-string native marketplace id, ungated by `ValidateComponentID`) and its
-  undeclared-native-items warning; and `revert --dry-run`'s change list. New
-  `escape_sweep_test.go` + `render/collision_report_test.go` drive each command
-  with a hostile fixture and assert no raw ESC/bidi byte reaches stdout
-  (representative sites break-verified). The offline shape check itself was also corrected to
-  match the WHOLE candidate (an anchored check), so a malformed outer ref that
-  merely embeds a well-formed nested ref (`${secret:${env:FOO}}`) is now flagged
-  instead of silently accepted. Separately, broadened the direct-`os.*`
-  destination-write guard (issue #163) to cover `os.OpenFile`/`os.Rename`/`os.Truncate`
-  in addition to `Remove`/`RemoveAll`/`WriteFile`/`Create`, closing the
-  truncate-write / rename bypass of the `DestWriter` foreign-collision backup.
-- **The local `.git` rollback history's secret-at-rest control is now re-asserted on
-  every apply (issue #126).** Destination git-backup repos deliberately persist
-  *resolved cleartext secrets* into a **local-only** `.git` history; that exception is
-  made acceptable by two controls — the repo is never pushed, and `.git` is tightened
-  to `0o700`. The `0o700` control used to be set **once at init** (with a silently
-  swallowed error) and never re-checked, so a history whose perms later drifted looser
-  (a `git gc`, a restore-from-tar, an admin `chmod`) stayed world/group-readable while
-  every apply wrote fresh secret blobs into it. `.git` perms are now stat-checked and
-  best-effort re-tightened to `0o700` on every apply's Open/commit path (a POSIX no-op
-  when already tight; a warning to stderr when it had drifted); the init-time chmod
-  failure is surfaced the same way instead of swallowed. `Init` is now atomic-ish — the
-  local-history NOTICE is written **before** the managed marker (and the half-created
-  `.git` is rolled back on failure), so a repo that `Detect`s as agentsync-owned always
-  carries the "do not push / may contain cleartext" notice. A `mode = "on"` apply that
-  auto-inits a new dir now prints a one-time-per-run caution that the local-only history
-  may hold cleartext secrets, and `revert`'s dirty-tracked snapshot prints the same
-  caution before it commits possibly-just-typed cleartext. All of this stays
-  best-effort: a chmod failure never aborts the apply, and no push surface is added.
-- **Secret-invariant edges hardened (issue #163).** `capture.Capture` is now
-  fail-closed under indeterminacy: when the secrets backend can't resolve a
-  `${secret:…}` the source references (vault locked/unavailable), the leak-check
-  value prong is blind, so Capture **refuses** the write-back instead of degrading
-  to a warning. `EnvBackend` now uses presence semantics (`os.LookupEnv`) so a
-  set-but-empty env var resolves to `""` like `AgeBackend`. The `DestWriter`
-  write-ban is now fenced for the destructive `os.*` family
-  (`os.Remove`/`os.RemoveAll`/`os.WriteFile`/`os.Create`) via a forbidigo rule +
-  a source-scanning test (previously only `iox.AtomicWrite` was fenced). Plus
-  smaller edge hardening: the age identity-permission stat-bypass is documented +
-  directly tested, the drift classifier's deleted-destination rows are pinned, and
-  the capture residual warning is reworded to describe what it actually checks.
-
-### Changed
-
-- **Carried-over core/git nits: fail-safe `git.Detect`, cheaper re-applies, and a
-  visible sticky-skip note (issue #176).** `apply` no longer runs the full per-root
-  git-status round-trip on an agentsync-owned destination dir that had nothing
-  written and no tracked deletions this run (clean re-applies are faster). When you
-  answer "yes" to the git-backup prompt for a directory that is then skipped for a
-  nested-repo conflict, agentsync now prints a one-line note that auto-backup was
-  still enabled globally (previously the `mode=on` switch flipped silently).
-  Internally, `git.Detect` now returns the fail-safe `foreign` state (never the
-  init-eligible `untracked`) alongside any open error, the hook `Event` field is
-  modeled as sanitizing `untrusted.Text`, and the ten identical adapter `Apply`
-  dispatchers collapse to one shared helper — no user-visible behavior change from
-  those.
-- **`agentsync secrets set` refuses an empty value by default (issue #165).** An
-  empty or whitespace-only value (a fat-fingered paste, an empty `pbpaste`/
-  `1password` pipe) across any input mode (`--stdin`, interactive prompt, legacy
-  `key=`) is now refused with a value-free error rather than silently stored as a
-  broken secret that resolves to `""` at apply time. Pass the new `--allow-empty`
-  flag to store an empty value deliberately.
-- **`Detect()` is now wired into `doctor`; the dead `Capabilities()` bitmask is
-  removed from the `Adapter` interface (issue #177).** Both methods previously had
-  no production consumer. `doctor`'s adapter-detection section now calls each
-  adapter's richer `Detect()` (config-dir stat + PATH fallback) instead of a
-  PATH-only lookup — reported informationally, never failing the check. The
-  per-agent `Capability` bitmask, which nothing in the pipeline consumed and which
-  could silently drift from real `Render`/`Skip` behavior, is deleted along with the
-  `Capability` type and `Cap*` consts; component support is (and was) expressed by
-  `Render` returning `[]Skip`, and `docs/architecture.md`'s false "the pipeline
-  reports those components as skipped [via the bitmask]" claim is corrected.
-- **Capability matrix: the Claude Hook cell is corrected from `✓` to `◐` (issue
-  #147).** agentsync models only `command` hooks (`matcher` + `command`); those
-  round-trip losslessly, but a non-`command` handler type or an unmodeled field
-  (e.g. `timeout`) is now *reported* (a render Skip / an ingest warning that leaves
-  your native entry untouched) rather than claimed as full-fidelity. The ◐ is
-  backed by the artifact-anchored `TestIngest_HookArtifactRoundTrip`.
-- **Capability matrix: the Codex subagent `name` claim is corrected (issue #150).**
-  The matrix now states that a Codex subagent's `name`/`description`/`model`
-  round-trip in **both** directions — a frontmatter `name` diverging from the file
-  stem survives ingest (re-populated from the TOML `name`) instead of being
-  silently rederived from the filename — and that colliding effective names are
-  refused at render, matching the shipped fix.
-- **Each adapter's key-merge strategy is now a machine-checked, load-bearing
-  invariant (issue #157).** A new central guard
-  (`TestKeyMergeStrategy_MatchesEmittedOps`) renders a real MCP+hook fixture
-  through every registered adapter and asserts `KeyMergeStrategy()` — the single
-  static value `orphanCleanupOps` trusts for its destructive cleanup writes —
-  equals the `MergeStrategy` on every key-merge `FileOp` the adapter emits (and
-  `""` ⇒ no key-merge ops). The interface + architecture docs now record the
-  single-strategy-per-adapter constraint explicitly, and correct a stale
-  architecture-doc line that listed Gemini under `merge-json-keys` (it emits
-  `merge-jsonc-keys`).
-- **A project-scope `[destination_directory_git_backup]` override is no longer copied
-  into the merged config (issue #126).** Git backup is a user-scope-only feature
-  (`VersionRoots` returns nil at project scope), so a project override could never take
-  effect; the overlay is dropped and the merge comment made honest, rather than
-  silently accepting an inert value.
-
-### Fixed
-
 - **Ingest now distinguishes an unreadable or corrupt native config file from an
   absent one, and fails loudly instead of silently treating it as a cleared
   component (issue #159).** Every deep adapter's `Ingest` (and the generic breadth
@@ -276,17 +210,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   loudly for MCP but silently for **hooks**. Read-side only: no change to the
   `Adapter`/`Ingest` signatures, the canonical schema, or any render/write-back
   path.
-- **Codex adapter no longer drops MCP servers or non-command hook handlers
-  silently (issue #151).** Disabled (`enabled = false`) and non-targeted (a
-  server whose `agents` allowlist excludes codex) MCP servers now surface an
-  `adapter.Skip` in the translation report instead of vanishing, and a Codex hook
-  handler whose `type` is set but not `command` now surfaces a reduced Skip
-  telling the user Codex will parse but never execute it (the handler still
-  renders — Codex tolerates any type, so nothing that would make it reject
-  `config.toml` was added). Also removed a dead hand-set `OwnedKeys` loop in
-  `renderHooks` (the render pipeline populates `OwnedKeys` from persisted state,
-  always overwriting the adapter-set value); hook orphan-cleanup is now covered
-  directly against `MergeTOML`.
+- **Codex adapter no longer renders a non-command hook handler silently
+  (issue #151).** A Codex hook handler whose `type` is set but not `command` now
+  surfaces a reduced Skip telling the user Codex will parse but never execute it
+  (the handler still renders — Codex tolerates any type, so nothing that would
+  make it reject `config.toml` was added). Also removed a dead hand-set
+  `OwnedKeys` loop in `renderHooks` (the render pipeline populates `OwnedKeys`
+  from persisted state, always overwriting the adapter-set value); hook
+  orphan-cleanup is now covered directly against `MergeTOML`. (An earlier
+  revision of this fix also reported disabled/non-targeted MCP servers as
+  drops; that report was removed again before release — see the entry above.)
 - **Continue & Cursor MCP round-trip and off-spec-key fixes (issue #172).** Three
   behavior changes: (1) **Cursor** no longer writes a `type` key on **remote**
   (`url`-bearing) MCP servers — Cursor's documented remote schema is `url`+`headers`
@@ -330,7 +263,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   VS Code extension) — detection is the `.roo/` config dir only; (3) **Cline**
   workflow ingest now captures only agentsync-owned workflows (each rendered
   workflow carries a reversible ownership marker) instead of over-capturing
-  human-authored ones, matching memory's ownership scoping; (4) **Claude** MCP and
+  human-authored ones, matching memory's ownership scoping — upgrade note:
+  workflows rendered by a pre-marker agentsync carry no marker and are treated
+  as human-authored, so `import`/`reconcile` skip them and each shows one-time
+  drift until the next `apply` re-stamps them; (4) **Claude** MCP and
   hooks ingest decode with `UseNumber`, so an unmodeled native key holding an
   integer larger than 2^53 (e.g. a nanosecond timeout) survives `import`/`reconcile`
   byte-exact instead of being rounded through `float64`; (5) the capability matrix
@@ -404,255 +340,6 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   prompt), the apply still proceeds but you're told that first apply won't be
   revertible; it honors `--no-git-backup`, `mode = "off"`, project scope, and dirs
   under your own source control exactly as the post-apply checkpoint does.
-
-### Changed
-
-- **Chocolatey publishing is temporarily paused (issue #188).** The `chocolateys`
-  block in `.goreleaser.yaml` is commented out while the `agentsync` package
-  waits in Chocolatey's community moderation queue — `choco push` returns 403
-  until it clears review, and that failure sank the tail of the v0.10.0 publish
-  after every other channel had shipped. Homebrew, Scoop, deb/rpm, and the
-  GitHub Release archives are unaffected. The block will be re-enabled verbatim
-  once the package is approved.
-- **BREAKING: project scope now requires the project to declare its own agents
-  (issue #183).** A project tree's `[agents]` table in
-  `<root>/.agentsync/agentsync.toml` is now **authoritative**: project-scope
-  rendering targets exactly the agents the project declares, and an empty or
-  missing table is a **hard error** on every scope-aware render path —
-  `apply`/`status`/`diff`/`reconcile`/`update --apply`/`verify` — instead of
-  silently inheriting the current user's enabled agents.
-  Inheritance made the committed project tree render differently on each
-  collaborator's machine (whoever ran apply decided which `.claude/`, `.codex/`,
-  … trees existed); now identical source always produces an identical render.
-  `import --scope project` is deliberately exempt so a tree can still be
-  bootstrapped from native config before agents are declared. **Migration:**
-  projects that relied on an empty `[agents]` must now declare their agents —
-  run `agentsync agent add <name> --scope project` (or edit the `[agents]`
-  table) for each agent the project should render to.
-- **All `agent` subcommands are scope-aware.** `agent
-  add|remove|list|enable|disable` now take `--scope project` / `--project
-  <path>` and edit the project tree's own `[agents]` declaration (project
-  entries are written without the redundant `scope` key). At project scope,
-  `agent disable --purge` removes only that project's rendered files and state
-  — never the user's machine-wide destinations or another repo's files. (At
-  user scope, `--purge` keeps its historical semantics: it cleans up that
-  agent's rendered files across every scope and project.) `agent add/enable/…`
-  rewrites of the `[agents]` table are now also validated fail-closed: if the
-  regenerated file would not re-parse, or would alter ANY data outside the
-  `[agents]` table (e.g. an exotic TOML construct the rewriter cannot splice,
-  like a multi-line string containing an `[agents]`-shaped line), the command
-  refuses and leaves the file untouched.
-
-- **Docs website: new "drafting table" visual identity.** agentsync.cc gets its
-  own look instead of stock Starlight: Space Grotesk / JetBrains Mono
-  (self-hosted), a warm graphite + amber palette (manila drafting-paper light
-  mode), gruvbox code themes, square-cornered chrome, and an animated
-  source-to-agents fan-out hero on the landing page. Styling only — no content
-  or navigation changes. The `og.png` social card is regenerated to match
-  (amber-on-graphite, same typefaces), so link previews carry the new brand;
-  `og-light.png` is a manila-paper variant of the same card (an alternate for
-  surfaces like GitHub's repo social preview — `og:image` still points at
-  `og.png`), and the favicon is recolored to the amber palette.
-
-### Added
-
-- **CLI honesty & CI-usability batch (issue #155).** New and corrected user-visible
-  behavior across `status`/`diff`/`apply`/`reconcile`/`mcp`/`doctor`:
-  - **`status --exit-code` / `diff --exit-code`** turn those commands into CI gates:
-    exit `2` when drift (status) or any hunk (diff) exists, `0` when clean. Exit `2`
-    is distinct from the generic error exit `1`, and the sentinel prints no extra
-    error line. Without the flag both still exit `0`.
-  - **`diff --agents <list>`** narrows the diff to an agent allowlist, mirroring
-    `status --agents` exactly (same `*`/validation and empty-rejection message).
-  - **`mcp add --header "Name: Value"`** (repeatable, http/sse only; rejected for
-    `stdio`) sets request headers — the usual remote-auth secret site. Values may
-    reference secrets (`--header "Authorization: Bearer ${secret:TOKEN}"`), which
-    resolve at apply and re-reference on capture (no schema change — `Headers` was
-    already a secret-resolving field).
-  - **`apply` delete-only summary**: a run that only removes a component from source
-    now reports `removed: N ops` (mixed runs `applied: X ops, removed: Y ops`)
-    instead of the misleading `up to date` / `applied: 0 ops`. A genuine clean
-    re-apply still reads `up to date`.
-  - **`diff <path>`** now reports a typo'd/unmanaged path (`path <p> is not managed
-    by agentsync …`) distinctly from a clean managed path (`no diff`).
-  - **`reconcile`** shows the actual differing source/destination **values** (a
-    masked text diff — resolved secrets are shown as their `${secret:…}`
-    placeholder, never cleartext) in the destructive prompt and `[d]iff`, instead of
-    bare SHA-256 prefixes; can now **persist a destination-side MCP-server deletion**
-    into the canonical source on `[w]rite-back` (through the approved deletion
-    funnel, guarded against multi-agent fan-out); and its bulk-confirm count now
-    equals the true blast radius of the chosen action.
-  - **`doctor`** now actually resolves every `${secret:…}`/`${env:…}` reference and
-    flags an unresolvable/typo'd one (a bad `${secret:…}` fails, an unset `${env:…}`
-    warns) instead of reporting all-green; resolved values are never printed.
-  - Interactive prompts reachable during a `--json` run (the scope menu) now write
-    to **stderr**, so a `--json` payload piped from stdout is never corrupted.
-
-- **Destination dirs can be git-versioned for one-command rollback (issue #118).**
-  `agentsync apply` now optionally keeps each rendered destination dir in its own
-  **local-only** git repo, recording a checkpoint commit after every apply that
-  changes managed files there. The unit is the **directory**: every agent's config
-  dir (`~/.claude`, `~/.codex`, …) plus shared cross-agent dirs (e.g.
-  `~/.agents/skills`, which Codex and several agents all write to) are versioned,
-  with shared dirs de-duplicated to a single repo and nested dirs collapsed (no
-  repo inside a repo). A new first-class **`agentsync revert <agent>`** rolls a
-  dir back to a prior checkpoint (append-only — it records a new commit, never
-  rewrites history; uncommitted hand-edits to tracked files are preserved as a
-  snapshot first, so nothing is lost; `--to` picks a checkpoint, `--all` covers
-  every managed dir, `--dry-run` previews) and warns you to reconcile before the
-  next apply. Behavior is controlled by a new global
-  `[destination_directory_git_backup]` table in `agentsync.toml`
-  (`mode = "prompt"` (default) `| "on" | "off"`, plus optional `author_name` /
-  `author_email`); the first apply to an untracked dir **prompts** (opt-out), and
-  `apply --no-git-backup` bypasses it for CI/scripting. `agentsync doctor` shows
-  the current mode and per-dir status. These repos are **never pushed** — the
-  history may hold the cleartext secrets the rendered files already contain, which
-  is acceptable precisely because it stays local (the canonical `~/.agentsync/`
-  source you push still carries only secret *references*). An existing user-managed
-  repo in a destination dir is detected and left untouched.
-- **Windows distribution via Scoop and Chocolatey is wired and ready to ship
-  (issues #74, #75).** `.goreleaser.yaml` now carries fully-configured `scoops`
-  and `chocolateys` blocks, and the whole release — GitHub Release, archives,
-  deb/rpm, Homebrew cask, Scoop bucket, and the Chocolatey `.nupkg` — is produced
-  by one `goreleaser release` run on a single Linux job (`choco` runs there under
-  Mono, so no separate Windows runner is needed). Scoop pushes
-  `bucket/agentsync.json` to `spxrogers/scoop-bucket` with the
-  `SCOOP_BUCKET_GITHUB_TOKEN` secret (a plain `{{ .Env.… }}` token, like the
-  Homebrew cask). Chocolatey is gated on the *presence* of `CHOCOLATEY_API_KEY`:
-  the pipe is skipped (`--skip=chocolatey`) and the choco CLI isn't even set up
-  unless the secret is set — adding it is the whole "go live on choco" step. The
-  CI snapshot job explicitly skips chocolatey (the CI runner has no `choco`).
-- **Releases can now be cut from the GitHub UI / mobile app, no laptop
-  required.** The `release` workflow grew a `workflow_dispatch` trigger with a
-  `version` input alongside the existing `push: tags` one: "Actions → release →
-  Run workflow → enter `vX.Y.Z`" validates the version (same `v`+semver check as
-  the `just release` recipe), creates and pushes the annotated tag at the
-  dispatched ref's HEAD, then publishes — all in a single run. Tagging and
-  publishing happen in the same job on purpose: a tag pushed with the default
-  `GITHUB_TOKEN` does not start a new workflow run, so a "push the tag and let
-  the tag trigger fire" design would tag but never publish (and conversely, that
-  same rule is what stops the manual run from kicking off a duplicate release).
-  The laptop path (`just release vX.Y.Z`) is unchanged. Both paths now share a
-  single validator, `scripts/release-tag.sh` (CI exercises it via `--self-test`),
-  so the `v`+semver rule lives in exactly one place; the workflow also gained a
-  `concurrency` guard so a dispatch and a tag push can't race to publish the same
-  version.
-- **Untrusted plugin/marketplace metadata is now sanitized by type, not by
-  convention (`internal/untrusted`).** Issue #93 / PR #100 sanitized ~24 terminal
-  print sites by hand-wrapping each fetched id/version/marketplace-name in
-  `ui.Sanitize`, but nothing stopped the *next* `Fprintf` from printing one raw
-  and silently reintroducing the escape-injection class. Those fields are now the
-  defined string type `untrusted.Text`, whose `String()` sanitizes — so printing
-  one through `fmt` is safe **by construction**, and obtaining the raw bytes
-  requires the explicit, greppable `Unverified()` (filesystem/lookup use only).
-  The canonical TOML / marketplace.json wire format is unchanged (`Text` is a
-  string kind: `omitempty` still elides an empty value, and `--json` surfaces
-  still emit the raw value — the machine contract). Reflection-based
-  `TestUntrustedFieldGuard`s in `internal/{source,marketplace,render}` fail the
-  build if a new string field is added to the plugin/marketplace identity or
-  report-row structs without being classified untrusted-or-trusted, and the
-  established carve-outs (hex SHAs, `%q` URLs, user-supplied CLI args, enum modes)
-  stay plain strings. `ui.Sanitize` is unchanged in behavior (it now delegates to
-  `untrusted.Sanitize`).
-  - **Extended to native-ingested plugin names (#104).** The one untrusted source
-    left out of the by-type pass above — the plugin name an adapter's
-    `PluginIngester` reports, which `status`/`doctor` print in their "undeclared
-    native plugins" notes — is now carried as `untrusted.Text` end to end
-    (`adapter.NativePlugin.Name` → `undeclaredNativePlugins` → the print sites,
-    joined via the new `untrusted.Join`). The previous per-site `ui.Sanitize`
-    wrappers at those sinks are gone (the type sanitizes by construction), and a
-    new `TestUntrustedFieldGuard` over `adapter.NativePlugin` fails the build if a
-    future native-config string ships unclassified. No behavior change — the
-    notes still strip terminal escapes from a hostile plugin name.
-  - **`ValidateComponentID` now rejects control / deceptive-format runes.** The
-    single dest→source write boundary (reached by `import`/`reconcile` with
-    ids taken from a native config) previously rejected only path separators,
-    traversal, and degenerate ids — a separator-free name carrying an ESC byte or
-    a Trojan-Source bidi override (e.g. `good␛[31m`) passed, becoming a
-    pathological filename and leaking raw bytes when later echoed in an
-    `import` skip diagnostic. It now also rejects any id the display sanitizer
-    would alter (tied to `untrusted.Sanitize`'s rune set), so such an id is
-    skipped with a sanitized warning and never installed. Legitimate non-ASCII
-    ids (e.g. `naïve`, `日本語`) are unaffected.
-
-- **`explain` describes every component kind a plugin hosts, not just MCP +
-  commands.** Each agent row's count tail previously read `N mcp · N commands`
-  even for a plugin that ships only skills, subagents, hooks, or an LSP server —
-  so an LSP-only plugin reported a misleading `0 mcp · 0 commands`. The tail now
-  lists every non-zero kind it hosts for that agent (`mcp`, `commands`, `skills`,
-  `subagents`, `hooks`, `lsp`), e.g. `1 mcp · 2 skills · 1 lsp`; a plugin that
-  contributes nothing to an agent reads `no components`. The counts describe the
-  inventory (what the plugin hosts, MCP/LSP honouring each server's
-  `enabled`/`agents` targeting) — a hosted component the agent cannot translate is
-  still counted and reported under `(N skipped)`. `explain --json` rows gain the
-  matching `skills`, `subagents`, `hooks`, and `lsp` integer fields alongside the
-  existing `mcp`/`commands` (`render.PluginRow`). Coverage now derives `partial`
-  vs `none` from whether the adapter actually rendered anything for the agent
-  (rather than from `mcp`/`commands` alone), fixing a latent case where a plugin
-  whose skills rendered but whose hook was skipped was mislabeled `none`.
-
-- **`explain` itemizes what each agent couldn't fully translate, split into
-  "reduced" vs "dropped".** A `◐ partial` row is no longer a dead-end `(N
-  skipped)` tally that reads as if N whole components were discarded. The
-  trailing note now breaks down by kind — `(N reduced · M dropped)` — and each
-  part is listed beneath the agent row under a framing header
-  (`→ <agent> couldn't fully translate — reduced = rendered without some fields;
-  dropped = not emitted:`), tagged `reduced` (the component still rendered, just
-  without fields the agent has no home for — e.g. a subagent's Claude-only
-  `tools`/`color`) or `dropped` (the whole component had no native target and was
-  not emitted — e.g. an LSP server on an agent with no LSP concept), with the
-  reason. The label names the component kind plainly (`subagent reviewer`). The
-  structured surface gains a `skipDetails` array (`{component, name, reason,
-  kind}`) on every `explain --json` row. The translation report carries the
-  detail end-to-end (`render.PluginRow.SkipDetails`) rather than collapsing skips
-  to a bare count, and the counts/skips are scoped to the named plugin (see the
-  `explain` fix below).
-
-- **Skip severity is a typed field, not a `-frontmatter` string convention
-  (#98).** The reduced-vs-dropped distinction `explain` shows was previously
-  derived at the presentation layer by string-matching a `-frontmatter` suffix on
-  the skip's `component` (e.g. `subagent-frontmatter`) — load-bearing for
-  user-facing output yet enforced only by an undocumented naming convention with
-  no compile-time guard. It is now a typed `adapter.Skip.Kind`
-  (`SkipDropped`/`SkipReduced`) the adapter sets at each skip site, carried
-  through `render.SkipDetail` to `explain`. `internal/cli/explain.go` reads
-  `Kind` directly (the `isReducedSkip`/`HasSuffix` heuristic is gone), and a new
-  reflective exhaustiveness guard (`TestEveryAdapterClassifiesSkips`) renders
-  every registered adapter at both scopes and fails if any skip ships with `Kind`
-  unset — so a new adapter or skip site can no longer silently misclassify.
-  - **Breaking change to `explain --json`.** Each `skipDetails` entry gains an
-    explicit `kind` field (`"reduced"`/`"dropped"`), and `component` is now the
-    plain kind (`subagent`, `command`, …) — it no longer carries the
-    `-frontmatter` suffix machine consumers had to parse. Read `kind` instead.
-- **`status` now collapses skill directories and gains `--agents` / `--verbose`.**
-  A skill bundling scripts/references/assets used to print one row per file, so a
-  handful of asset-heavy skills could push `status` past a thousand lines. By
-  default each skill directory now renders as a single row — the skill dir, its
-  *most-severe* drift class (so a drifted `SKILL.md` hiding among clean assets
-  still shows red), and a faint `SKILL.md + N files` count with a per-class
-  breakdown when the bundled files don't all share one class. A directory is
-  recognized as a skill by an actual `…/skills/<name>/SKILL.md` (not a bare
-  `skills` path segment), so an unrelated ancestor dir named `skills` can't sweep
-  non-skill files into a bogus group. Pass `-v`/`--verbose` to expand every skill
-  back to one row per file (the previous view). A new `--agents <list>` flag
-  (comma-separated allowlist, `*` = all enabled — matching `mcp add --agents`)
-  scopes the report to specific agents; orphaned-state warnings still consider the
-  full enabled set so narrowing never mislabels a deselected agent as an orphan.
-  `status --json` is
-  unchanged and **never collapsed** — it still carries every tracked file, so the
-  machine contract is stable.
-- **`agentsync version` is now a subcommand alias for `agentsync --version`.**
-  The subcommand delegates to cobra's own version renderer — it re-dispatches
-  the root with its `--version` flag set, so the same precompiled,
-  `FuncMap`-bearing template function renders the same data against the same
-  flag-owning (root) command. Its output is therefore byte-identical to
-  `--version` by construction and can never drift, even if the version template
-  later uses a cobra template function such as `rpad` or `trim`. (Previously the
-  subcommand hand-parsed the template with a bare `text/template` that had no
-  `FuncMap`, so such an edit would have silently broken `agentsync version`
-  while `--version` kept working; a raw-byte parity test now pins the guarantee.)
-
-### Fixed
 
 - **`revert`: the uncommitted-tracked-edit safety is now enforced in the engine,
   and partial-reset failures surface a recovery hint (issue #146).** `internal/git.Repo.Restore`
@@ -738,8 +425,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   dropping the extra fields and emitting a structurally invalid
   `{"type":"…","command":""}` entry. Ingest now leaves any hook event it cannot
   fully represent **uncaptured** with a warning (matching the Gemini adapter), so
-  the next apply never owns or overwrites that event, and Render reports a dropped
-  `Skip` for a non-`command` handler instead of emitting an empty-command entry.
+  a never-captured event is never owned or overwritten by the next apply, and
+  Render reports a dropped `Skip` for a non-`command` handler instead of emitting
+  an empty-command entry. (An event captured while clean and *later* enriched
+  natively still had a stale canonical file that apply kept rewriting; see the
+  stale-hook retirement entry above for that half of the fix.)
 - **Codex subagent `name` now survives a round-trip, and colliding effective
   names are caught (issue #144).** A Codex custom agent whose frontmatter `name`
   deliberately differs from its file stem (rendered into the TOML `name` field
@@ -1084,6 +774,511 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   every page (an async floating chat button, wired to the
   `/spxrogers/agentsync` Context7 source) via a `script` tag in Starlight's
   `head` config (`website/astro.config.mjs`).
+- **`revert` refuses a dir→file restore up front when the directory holds only
+  empty user subdirectories, and re-creates pruned parent dirs at 0o755.** An
+  empty user-created subdir inside a directory being replaced by a file slipped
+  past the structural pre-flight (which scanned for files only) and failed
+  mid-restore with the misleading concurrent-change wording; the pre-flight now
+  refuses it early and all-or-nothing, like every other unmanaged-entry
+  conflict. Parent directories a revert re-creates now get 0o755 — matching
+  agentsync's own writers — instead of 0o700.
+
+### Documentation
+
+- **The epic #178 QA remainder is recorded in-repo.**
+  [`docs/qa/2026-07-epic-178-remainder.md`](docs/qa/2026-07-epic-178-remainder.md)
+  states what issue #164's real-harness QA demanded, which regression fixtures
+  were delivered instead (now including `TestRestore_PackedHistory` across a
+  fully repacked object store and the measured `BenchmarkHasNestedRepoBelow`
+  walk cost), and what remains genuinely un-executed (live harness launches,
+  real-machine wall-clock numbers) — so the v1.0 tag decision weighs the gap
+  explicitly.
+- **The Gemini subagent frontmatter passthrough is documented as a deliberate
+  secret-machinery exception.** Subagent frontmatter (including a command/env-shaped
+  `mcpServers` block) is never secret-resolved and never re-referenced; the
+  capability matrix, the adapter doc comment, and the project memory's
+  secret-invariants section now say so explicitly.
+- **Build-time link/anchor checker for the docs website (issue #170).** New
+  `website/scripts/check-links.mjs` walks every `.md`/`.mdx` under
+  `website/src/content/docs/` and fails the build on any broken in-site link —
+  a site-absolute `/route` that resolves to no page, or a `#anchor` that is not
+  a real heading slug on the target page (computed with `github-slugger`, the
+  GitHub-style slugger Starlight uses). It runs from `predev`/`prebuild` after
+  `sync:docs`, is runnable standalone via `bun run check:links`, and skips
+  external/`mailto:`/GitHub-blob links. Script unit tests
+  (`website/scripts/check-links.test.mjs`, `bun run test` → `node --test`) pin
+  the real slugs and exercise the checker over a temp fixture tree. A single
+  pre-existing `concepts.md` → `/getting-started/introduction/#command-reference`
+  anchor breakage (owned by #145) is parked in an explicit `ALLOWLIST`.
+- **The website link checker now runs in CI on every PR and fails on stale
+  allowlist entries.** Previously the checker only ran from the site's
+  `predev`/`prebuild` hooks, which CI never invoked — a broken in-site link
+  merged cleanly and only failed at docs-publish time. A new `docs-links` job
+  in `ci.yml` (bun, matching `docs-publish`) regenerates the mirrored contract
+  pages, runs the checker, and runs its unit tests on every PR. The checker
+  itself now also fails when an `ALLOWLIST` entry matched zero violations in a
+  run: a stale exception means the underlying link was fixed, and it must be
+  removed rather than linger to mask a future regression.
+- **New "Rolling back a bad apply" website guide (issue #170).** Added
+  `website/src/content/docs/guides/rollback.mdx` (mirroring the
+  `docs/user-guide.md` rollback section): the destination git-backup enable
+  prompt and `[destination_directory_git_backup]` modes, `apply --no-git-backup`,
+  `agentsync doctor` status, the append-only `revert` (`--to`/`--all`/`--dry-run`),
+  the reconcile-after-revert step, the shared-dir caveat, and the
+  never-pushed/cleartext-history note. Wired into the `Guides` sidebar and
+  cross-linked from the `revert` reference in `reference/cli.mdx`.
+- **Empirically verified release reproducibility and corrected the
+  `.goreleaser.yaml` claim to match (issue #173).** Building two snapshot releases
+  from the same commit with the release-pinned goreleaser `2.16.0` and diffing the
+  `dist/` trees showed the binaries and the six tar.gz/zip archives are
+  byte-for-byte identical run-to-run (the archive-mtime pinning restored in #138
+  works), but the nfpms deb/rpm — and therefore `checksums.txt`, which hashes
+  them — are **not**: the packages embed the wall-clock build time (deb
+  directory-entry mtimes and the rpm `BUILDTIME` header), not the commit date. The
+  `release`/`archives`/`checksum` comments claiming "(reproducible, identical)"
+  assets and "an identical checksums.txt" were corrected (comment text only, no
+  behavioral config change — pinning `nfpms.mtime` belongs with #138). Added
+  `internal/release/reproducibility_test.go`, a guard that reads the on-disk
+  `.goreleaser.yaml` and fails if the archive-entry mtime pins are stripped (the
+  PR #115 regression class), keeping the reproducible-archives claim
+  self-certifying.
+- **The #173 two-snapshot reproducibility diff is now a committed, re-runnable
+  script.** `scripts/reproducibility-diff.sh` builds two goreleaser snapshots
+  (release-pinned 2.16.0, sleeping across a second boundary between runs),
+  byte-compares the tar.gz/zip archives — any difference fails — and reports
+  the known-nonreproducible deb/rpm and `checksums.txt` informationally.
+  Deliberately not wired into CI: a full artifact diff would be permanently
+  red on the nfpms half (declined in #173).
+- **Synced the v1.0 git-backup feature's contract docs (issue #141).** The
+  components map now carries `internal/git` (the leaf go-git wrapper) and
+  `internal/ui`, the full adapter set (9 deep adapters + generic breadth tier +
+  noop), each deep adapter's `homedir.go`, and the `revert` / `version` commands;
+  the architecture §10 package-layering graph gains a `git` node (no push surface)
+  and a new `### VersionedDirs (optional)` §3 subsection; the `doctor` reference
+  (CLI + user-guide command tables and the `### doctor` body) documents its
+  Destination-git-backup section (mode + per-dir repo status); and the README
+  gains a "Known limits" bullet for the local-only, never-pushed backup history.
+  Also corrected the stale `internal/project` `.agentsync.toml`-marker description
+  to the current `.agentsync/`-directory overlay, added the
+  `comparison/index.md` ↔ `docs/comparison.md` mirrored-pages row to
+  `website/README.md`, and refreshed a few `Files` lists (secrets `leakscan.go`/
+  `runtime.go`, marketplace `treehash.go`).
+- **Cleared the carried-over doc-vs-code drift cluster (issue #145).** Corrected six
+  "plugin import is Claude-only" claims (Codex implements `PluginIngester` too),
+  the Windsurf `components.md` scope/`WarnEmitter` description (memory + commands
+  render at both scopes; it *does* implement `WarnEmitter`), Gemini's
+  `merge-json-keys`→`merge-jsonc-keys` source comments, a broken `concepts.md`
+  architecture anchor, and copy nits (agent count `30+`→`31`, "three axes"→"four").
+  Acknowledged Windsurf's separate 12,000-char workspace-rule/workflow limit in the
+  capability matrix (verified against upstream docs).
+- **Install & git-backup docs: macOS Gatekeeper guidance, arm64 download URLs, and
+  qualified safety promises (issue #132).** The README and the website install page
+  now tell raw-archive macOS users that the prebuilt binaries are unsigned/
+  un-notarized (Gatekeeper blocks first run) and how to clear the quarantine
+  attribute (`xattr -dr com.apple.quarantine`), noting Homebrew users don't need it;
+  both now show the `arm64` `.deb`/`.rpm` download URLs alongside `amd64`.
+  `docs/concepts.md` records that the local git-backup `.git` `0700` hardening is
+  POSIX-only (a Windows no-op → ACLs are the boundary), and the user-guide's revert
+  "nothing is lost" promise is qualified to **tracked files only** (untracked scratch
+  files are outside the snapshot).
+
+### Security
+
+- **Render-time path-traversal guard at the adapter dispatch layer (issue #156).**
+  Every deep adapter joined a component id straight into a destination filename,
+  with no Render-time check — a subagent/command/skill `Name`, and (for adapters
+  that write one file per server, e.g. continuedev's
+  `filepath.Join(MCPDir, id+".yaml")`) an MCP/LSP server id. An id like
+  `../../../tmp/x` would render a `FileOp.Path` that escapes the agent's config dir
+  (a write-anywhere primitive on apply); a marketplace-projected MCP id is an
+  especially untrusted source (a raw manifest map key). `render.Plan` (the single
+  dispatch waist) now validates **every** such id — subagent/command/skill `Name`
+  **and** MCP/LSP server id, project overlay included — against the **same**
+  `source.ValidateComponentID` the dest→source write boundary already used, so
+  **all** adapters — current and future — inherit the guard uniformly, closing the
+  recurring Gemini/Windsurf (and all-adapter) unsanitized-name gap. The id set is
+  model-wide, so it is validated **once up front** (not per-agent) and a
+  traversal-, separator-, absolute-, bare-`.`, all-whitespace-, or
+  control/deceptive-rune-bearing id refuses the whole plan (never a silent `Skip`)
+  with an agent-agnostic error naming the component kind and id; a `filepath.Clean`
+  containment backstop additionally rejects any emitted write whose cleaned path
+  still traverses upward (covering bundled skill-file paths too). `Plan` reads only
+  the id strings (a string-only `secrets.Resolved.ComponentIDs()` accessor), so the
+  guard never unwraps the resolved model and the secrets lint fence is unchanged.
+- **Offline `verify` no longer prints unsanitized malformed-reference candidates
+  (issue #171 hardening).** `agentsync verify` in offline mode
+  (`AGENTSYNC_ALLOW_OFFLINE_VERIFY=1`, the documented CI path) reports each
+  `${secret:…}`/`${env:…}`-shaped token whose reference shape is invalid. Those
+  tokens are config-derived — agentsync configs are shareable dotfiles — and the
+  loose shape-matcher's tail can capture raw ESC / C1 / newline bytes, so a crafted
+  config could smuggle terminal escapes into the CI log through the error message.
+  `secrets.MalformedSecretRefs` now returns `[]untrusted.Text` and `verify` renders
+  them via `untrusted.Join`, so every displayed candidate is sanitized by
+  construction. A **systematic sweep of the whole `#93/#171` class** (a
+  config-/native-config-derived string reaching the terminal raw) then closed
+  every remaining site the review surfaced across the CLI: `verify`'s
+  `[agents.<name>]` validation error (now `%q`); `verify`'s and `doctor`'s
+  `[secrets]` `identity_file`/`age_file` path errors (which print even for a
+  non-existent path); `doctor`'s schema-invalid line (which echoes the raw
+  offending config source line via go-toml's strict-decode error);
+  `marketplace list`'s `url`/`head_sha` columns; `agent list`'s `[agents.<name>]`
+  key and display-only `scope` value; `mcp list`'s server-id (filename-stem)
+  column; the `status`/`diff`/`apply` path dashboards and interactive
+  `reconcile`'s item-label + mcp-server-id; and `secrets`'s age-backend path
+  errors (`internal/secrets/age.go`) — each sanitized at its display boundary via
+  `ui.Sanitize`/`untrusted.Text`, with `reconcile`'s ignore-pattern write kept
+  raw so the persisted pattern is exact. A follow-up verification pass then closed
+  the *indirect* leaks of the same class — the config-derived path surfacing
+  through an **error value** or a **derived path** rather than a direct print:
+  `render.CollisionReport.String()` (printed by `reconcile` override + `update
+  --apply`); `reconcile`'s orphan backup/remove errors, write-back error, and the
+  `filepath.Rel` conflict path; `import`'s dry-run marketplace preview (a
+  plain-string native marketplace id, ungated by `ValidateComponentID`) and its
+  undeclared-native-items warning; and `revert --dry-run`'s change list. New
+  `escape_sweep_test.go` + `render/collision_report_test.go` drive each command
+  with a hostile fixture and assert no raw ESC/bidi byte reaches stdout
+  (representative sites break-verified). The offline shape check itself was also corrected to
+  match the WHOLE candidate (an anchored check), so a malformed outer ref that
+  merely embeds a well-formed nested ref (`${secret:${env:FOO}}`) is now flagged
+  instead of silently accepted. Separately, broadened the direct-`os.*`
+  destination-write guard (issue #163) to cover `os.OpenFile`/`os.Rename`/`os.Truncate`
+  in addition to `Remove`/`RemoveAll`/`WriteFile`/`Create`, closing the
+  truncate-write / rename bypass of the `DestWriter` foreign-collision backup.
+- **The local `.git` rollback history's secret-at-rest control is now re-asserted on
+  every apply (issue #126).** Destination git-backup repos deliberately persist
+  *resolved cleartext secrets* into a **local-only** `.git` history; that exception is
+  made acceptable by two controls — the repo is never pushed, and `.git` is tightened
+  to `0o700`. The `0o700` control used to be set **once at init** (with a silently
+  swallowed error) and never re-checked, so a history whose perms later drifted looser
+  (a `git gc`, a restore-from-tar, an admin `chmod`) stayed world/group-readable while
+  every apply wrote fresh secret blobs into it. `.git` perms are now stat-checked and
+  best-effort re-tightened to `0o700` on every apply's Open/commit path (a POSIX no-op
+  when already tight; a warning to stderr when it had drifted); the init-time chmod
+  failure is surfaced the same way instead of swallowed. `Init` is now atomic-ish — the
+  local-history NOTICE is written **before** the managed marker (and the half-created
+  `.git` is rolled back on failure), so a repo that `Detect`s as agentsync-owned always
+  carries the "do not push / may contain cleartext" notice. A `mode = "on"` apply that
+  auto-inits a new dir now announces **every** dir it inits ("started a local-only
+  git backup of <dir>" — a second new dir in the same run is never silent), with a
+  one-time-per-run caution clause that the local-only history
+  may hold cleartext secrets, and `revert`'s dirty-tracked snapshot prints the same
+  caution before it commits possibly-just-typed cleartext. All of this stays
+  best-effort: a chmod failure never aborts the apply, and no push surface is added.
+- **Secret-invariant edges hardened (issue #163).** `capture.Capture` is now
+  fail-closed under indeterminacy: when the secrets backend can't resolve a
+  `${secret:…}` the source references (vault locked/unavailable), the leak-check
+  value prong is blind, so Capture **refuses** the write-back instead of degrading
+  to a warning. `EnvBackend` now uses presence semantics (`os.LookupEnv`) so a
+  set-but-empty env var resolves to `""` like `AgeBackend`. The `DestWriter`
+  write-ban is now fenced for the destructive `os.*` family
+  (`os.Remove`/`os.RemoveAll`/`os.WriteFile`/`os.Create`) via a forbidigo rule +
+  a source-scanning test (previously only `iox.AtomicWrite` was fenced). Plus
+  smaller edge hardening: the age identity-permission stat-bypass is documented +
+  directly tested, the drift classifier's deleted-destination rows are pinned, and
+  the capture residual warning is reworded to describe what it actually checks.
+
+### Changed
+
+- **Carried-over core/git nits: fail-safe `git.Detect`, cheaper re-applies, and a
+  visible sticky-skip note (issue #176).** `apply` no longer runs the full per-root
+  git-status round-trip on an agentsync-owned destination dir that had nothing
+  written and no tracked deletions this run (clean re-applies are faster). When you
+  answer "yes" to the git-backup prompt for a directory that is then skipped for a
+  nested-repo conflict, agentsync now prints a one-line note that auto-backup was
+  still enabled globally (previously the `mode=on` switch flipped silently).
+  Internally, `git.Detect` now returns the fail-safe `foreign` state (never the
+  init-eligible `untracked`) alongside any open error, the hook `Event` field is
+  modeled as sanitizing `untrusted.Text`, and the ten identical adapter `Apply`
+  dispatchers collapse to one shared helper — no user-visible behavior change from
+  those.
+- **`agentsync secrets set` refuses an empty value by default (issue #165).** An
+  empty or whitespace-only value (a fat-fingered paste, an empty `pbpaste`/
+  `1password` pipe) across any input mode (`--stdin`, interactive prompt, legacy
+  `key=`) is now refused with a value-free error rather than silently stored as a
+  broken secret that resolves to `""` at apply time. Pass the new `--allow-empty`
+  flag to store an empty value deliberately.
+- **`Detect()` is now wired into `doctor`; the dead `Capabilities()` bitmask is
+  removed from the `Adapter` interface (issue #177).** Both methods previously had
+  no production consumer. `doctor`'s adapter-detection section now calls each
+  adapter's richer `Detect()` (config-dir stat + PATH fallback) instead of a
+  PATH-only lookup — reported informationally, never failing the check. The
+  per-agent `Capability` bitmask, which nothing in the pipeline consumed and which
+  could silently drift from real `Render`/`Skip` behavior, is deleted along with the
+  `Capability` type and `Cap*` consts; component support is (and was) expressed by
+  `Render` returning `[]Skip`, and `docs/architecture.md`'s false "the pipeline
+  reports those components as skipped [via the bitmask]" claim is corrected.
+- **Capability matrix: the Claude Hook cell is corrected from `✓` to `◐` (issue
+  #147).** agentsync models only `command` hooks (`matcher` + `command`); those
+  round-trip losslessly, but a non-`command` handler type or an unmodeled field
+  (e.g. `timeout`) is now *reported* (a render Skip / an ingest warning that leaves
+  your native entry untouched) rather than claimed as full-fidelity. The ◐ is
+  backed by the artifact-anchored `TestIngest_HookArtifactRoundTrip`.
+- **Capability matrix: the Codex subagent `name` claim is corrected (issue #150).**
+  The matrix now states that a Codex subagent's `name`/`description`/`model`
+  round-trip in **both** directions — a frontmatter `name` diverging from the file
+  stem survives ingest (re-populated from the TOML `name`) instead of being
+  silently rederived from the filename — and that colliding effective names are
+  refused at render, matching the shipped fix.
+- **Each adapter's key-merge strategy is now a machine-checked, load-bearing
+  invariant (issue #157).** A new central guard
+  (`TestKeyMergeStrategy_MatchesEmittedOps`) renders a real MCP+hook fixture
+  through every registered adapter and asserts `KeyMergeStrategy()` — the single
+  static value `orphanCleanupOps` trusts for its destructive cleanup writes —
+  equals the `MergeStrategy` on every key-merge `FileOp` the adapter emits (and
+  `""` ⇒ no key-merge ops). The interface + architecture docs now record the
+  single-strategy-per-adapter constraint explicitly, and correct a stale
+  architecture-doc line that listed Gemini under `merge-json-keys` (it emits
+  `merge-jsonc-keys`).
+- **A project-scope `[destination_directory_git_backup]` override is no longer copied
+  into the merged config (issue #126).** Git backup is a user-scope-only feature
+  (`VersionRoots` returns nil at project scope), so a project override could never take
+  effect; the overlay is dropped and the merge comment made honest, rather than
+  silently accepting an inert value.
+
+- **Chocolatey publishing is temporarily paused (issue #188).** The `chocolateys`
+  block in `.goreleaser.yaml` is commented out while the `agentsync` package
+  waits in Chocolatey's community moderation queue — `choco push` returns 403
+  until it clears review, and that failure sank the tail of the v0.10.0 publish
+  after every other channel had shipped. Homebrew, Scoop, deb/rpm, and the
+  GitHub Release archives are unaffected. The block will be re-enabled verbatim
+  once the package is approved.
+- **BREAKING: project scope now requires the project to declare its own agents
+  (issue #183).** A project tree's `[agents]` table in
+  `<root>/.agentsync/agentsync.toml` is now **authoritative**: project-scope
+  rendering targets exactly the agents the project declares, and an empty or
+  missing table is a **hard error** on every scope-aware render path —
+  `apply`/`status`/`diff`/`reconcile`/`update --apply`/`verify` — instead of
+  silently inheriting the current user's enabled agents.
+  Inheritance made the committed project tree render differently on each
+  collaborator's machine (whoever ran apply decided which `.claude/`, `.codex/`,
+  … trees existed); now identical source always produces an identical render.
+  `import --scope project` is deliberately exempt so a tree can still be
+  bootstrapped from native config before agents are declared. **Migration:**
+  projects that relied on an empty `[agents]` must now declare their agents —
+  run `agentsync agent add <name> --scope project` (or edit the `[agents]`
+  table) for each agent the project should render to.
+- **All `agent` subcommands are scope-aware.** `agent
+  add|remove|list|enable|disable` now take `--scope project` / `--project
+  <path>` and edit the project tree's own `[agents]` declaration (project
+  entries are written without the redundant `scope` key). At project scope,
+  `agent disable --purge` removes only that project's rendered files and state
+  — never the user's machine-wide destinations or another repo's files. (At
+  user scope, `--purge` keeps its historical semantics: it cleans up that
+  agent's rendered files across every scope and project.) `agent add/enable/…`
+  rewrites of the `[agents]` table are now also validated fail-closed: if the
+  regenerated file would not re-parse, or would alter ANY data outside the
+  `[agents]` table (e.g. an exotic TOML construct the rewriter cannot splice,
+  like a multi-line string containing an `[agents]`-shaped line), the command
+  refuses and leaves the file untouched.
+
+- **Docs website: new "drafting table" visual identity.** agentsync.cc gets its
+  own look instead of stock Starlight: Space Grotesk / JetBrains Mono
+  (self-hosted), a warm graphite + amber palette (manila drafting-paper light
+  mode), gruvbox code themes, square-cornered chrome, and an animated
+  source-to-agents fan-out hero on the landing page. Styling only — no content
+  or navigation changes. The `og.png` social card is regenerated to match
+  (amber-on-graphite, same typefaces), so link previews carry the new brand;
+  `og-light.png` is a manila-paper variant of the same card (an alternate for
+  surfaces like GitHub's repo social preview — `og:image` still points at
+  `og.png`), and the favicon is recolored to the amber palette.
+
+### Added
+
+- **CLI honesty & CI-usability batch (issue #155).** New and corrected user-visible
+  behavior across `status`/`diff`/`apply`/`reconcile`/`mcp`/`doctor`:
+  - **`status --exit-code` / `diff --exit-code`** turn those commands into CI gates:
+    exit `2` when drift (status) or any hunk (diff) exists, `0` when clean. Exit `2`
+    is distinct from the generic error exit `1`, and the sentinel prints no extra
+    error line. Without the flag both still exit `0`.
+  - **`diff --agents <list>`** narrows the diff to an agent allowlist, mirroring
+    `status --agents` exactly (same `*`/validation and empty-rejection message).
+  - **`mcp add --header "Name: Value"`** (repeatable, http/sse only; rejected for
+    `stdio`) sets request headers — the usual remote-auth secret site. Values may
+    reference secrets (`--header "Authorization: Bearer ${secret:TOKEN}"`), which
+    resolve at apply and re-reference on capture (no schema change — `Headers` was
+    already a secret-resolving field).
+  - **`apply` delete-only summary**: a run that only removes a component from source
+    now reports `removed: N ops` (mixed runs `applied: X ops, removed: Y ops`)
+    instead of the misleading `up to date` / `applied: 0 ops`. A genuine clean
+    re-apply still reads `up to date`.
+  - **`diff <path>`** now reports a typo'd/unmanaged path (`path <p> is not managed
+    by agentsync …`) distinctly from a clean managed path (`no diff`).
+  - **`reconcile`** shows the actual differing source/destination **values** (a
+    masked text diff — resolved secrets are shown as their `${secret:…}`
+    placeholder, never cleartext) in the destructive prompt and `[d]iff`, instead of
+    bare SHA-256 prefixes; can now **persist a destination-side MCP-server deletion**
+    into the canonical source on `[w]rite-back` (through the approved deletion
+    funnel, guarded against multi-agent fan-out); and its bulk-confirm count now
+    equals the true blast radius of the chosen action.
+  - **`doctor`** now actually resolves every `${secret:…}`/`${env:…}` reference and
+    flags an unresolvable/typo'd one (a bad `${secret:…}` fails, an unset `${env:…}`
+    warns) instead of reporting all-green; resolved values are never printed.
+  - Interactive prompts reachable during a `--json` run (the scope menu) now write
+    to **stderr**, so a `--json` payload piped from stdout is never corrupted.
+
+- **Destination dirs can be git-versioned for one-command rollback (issue #118).**
+  `agentsync apply` now optionally keeps each rendered destination dir in its own
+  **local-only** git repo, recording a checkpoint commit after every apply that
+  changes managed files there. The unit is the **directory**: every agent's config
+  dir (`~/.claude`, `~/.codex`, …) plus shared cross-agent dirs (e.g.
+  `~/.agents/skills`, which Codex and several agents all write to) are versioned,
+  with shared dirs de-duplicated to a single repo and nested dirs collapsed (no
+  repo inside a repo). A new first-class **`agentsync revert <agent>`** rolls a
+  dir back to a prior checkpoint (append-only — it records a new commit, never
+  rewrites history; uncommitted hand-edits to tracked files are preserved as a
+  snapshot first, so nothing is lost; `--to` picks a checkpoint, `--all` covers
+  every managed dir, `--dry-run` previews) and warns you to reconcile before the
+  next apply. Behavior is controlled by a new global
+  `[destination_directory_git_backup]` table in `agentsync.toml`
+  (`mode = "prompt"` (default) `| "on" | "off"`, plus optional `author_name` /
+  `author_email`); the first apply to an untracked dir **prompts** (opt-out), and
+  `apply --no-git-backup` bypasses it for CI/scripting. `agentsync doctor` shows
+  the current mode and per-dir status. These repos are **never pushed** — the
+  history may hold the cleartext secrets the rendered files already contain, which
+  is acceptable precisely because it stays local (the canonical `~/.agentsync/`
+  source you push still carries only secret *references*). An existing user-managed
+  repo in a destination dir is detected and left untouched.
+- **Windows distribution via Scoop and Chocolatey is wired and ready to ship
+  (issues #74, #75).** `.goreleaser.yaml` now carries fully-configured `scoops`
+  and `chocolateys` blocks, and the whole release — GitHub Release, archives,
+  deb/rpm, Homebrew cask, Scoop bucket, and the Chocolatey `.nupkg` — is produced
+  by one `goreleaser release` run on a single Linux job (`choco` runs there under
+  Mono, so no separate Windows runner is needed). Scoop pushes
+  `bucket/agentsync.json` to `spxrogers/scoop-bucket` with the
+  `SCOOP_BUCKET_GITHUB_TOKEN` secret (a plain `{{ .Env.… }}` token, like the
+  Homebrew cask). Chocolatey is gated on the *presence* of `CHOCOLATEY_API_KEY`:
+  the pipe is skipped (`--skip=chocolatey`) and the choco CLI isn't even set up
+  unless the secret is set — adding it is the whole "go live on choco" step. The
+  CI snapshot job explicitly skips chocolatey (the CI runner has no `choco`).
+- **Releases can now be cut from the GitHub UI / mobile app, no laptop
+  required.** The `release` workflow grew a `workflow_dispatch` trigger with a
+  `version` input alongside the existing `push: tags` one: "Actions → release →
+  Run workflow → enter `vX.Y.Z`" validates the version (same `v`+semver check as
+  the `just release` recipe), creates and pushes the annotated tag at the
+  dispatched ref's HEAD, then publishes — all in a single run. Tagging and
+  publishing happen in the same job on purpose: a tag pushed with the default
+  `GITHUB_TOKEN` does not start a new workflow run, so a "push the tag and let
+  the tag trigger fire" design would tag but never publish (and conversely, that
+  same rule is what stops the manual run from kicking off a duplicate release).
+  The laptop path (`just release vX.Y.Z`) is unchanged. Both paths now share a
+  single validator, `scripts/release-tag.sh` (CI exercises it via `--self-test`),
+  so the `v`+semver rule lives in exactly one place; the workflow also gained a
+  `concurrency` guard so a dispatch and a tag push can't race to publish the same
+  version.
+- **Untrusted plugin/marketplace metadata is now sanitized by type, not by
+  convention (`internal/untrusted`).** Issue #93 / PR #100 sanitized ~24 terminal
+  print sites by hand-wrapping each fetched id/version/marketplace-name in
+  `ui.Sanitize`, but nothing stopped the *next* `Fprintf` from printing one raw
+  and silently reintroducing the escape-injection class. Those fields are now the
+  defined string type `untrusted.Text`, whose `String()` sanitizes — so printing
+  one through `fmt` is safe **by construction**, and obtaining the raw bytes
+  requires the explicit, greppable `Unverified()` (filesystem/lookup use only).
+  The canonical TOML / marketplace.json wire format is unchanged (`Text` is a
+  string kind: `omitempty` still elides an empty value, and `--json` surfaces
+  still emit the raw value — the machine contract). Reflection-based
+  `TestUntrustedFieldGuard`s in `internal/{source,marketplace,render}` fail the
+  build if a new string field is added to the plugin/marketplace identity or
+  report-row structs without being classified untrusted-or-trusted, and the
+  established carve-outs (hex SHAs, `%q` URLs, user-supplied CLI args, enum modes)
+  stay plain strings. `ui.Sanitize` is unchanged in behavior (it now delegates to
+  `untrusted.Sanitize`).
+  - **Extended to native-ingested plugin names (#104).** The one untrusted source
+    left out of the by-type pass above — the plugin name an adapter's
+    `PluginIngester` reports, which `status`/`doctor` print in their "undeclared
+    native plugins" notes — is now carried as `untrusted.Text` end to end
+    (`adapter.NativePlugin.Name` → `undeclaredNativePlugins` → the print sites,
+    joined via the new `untrusted.Join`). The previous per-site `ui.Sanitize`
+    wrappers at those sinks are gone (the type sanitizes by construction), and a
+    new `TestUntrustedFieldGuard` over `adapter.NativePlugin` fails the build if a
+    future native-config string ships unclassified. No behavior change — the
+    notes still strip terminal escapes from a hostile plugin name.
+  - **`ValidateComponentID` now rejects control / deceptive-format runes.** The
+    single dest→source write boundary (reached by `import`/`reconcile` with
+    ids taken from a native config) previously rejected only path separators,
+    traversal, and degenerate ids — a separator-free name carrying an ESC byte or
+    a Trojan-Source bidi override (e.g. `good␛[31m`) passed, becoming a
+    pathological filename and leaking raw bytes when later echoed in an
+    `import` skip diagnostic. It now also rejects any id the display sanitizer
+    would alter (tied to `untrusted.Sanitize`'s rune set), so such an id is
+    skipped with a sanitized warning and never installed. Legitimate non-ASCII
+    ids (e.g. `naïve`, `日本語`) are unaffected.
+
+- **`explain` describes every component kind a plugin hosts, not just MCP +
+  commands.** Each agent row's count tail previously read `N mcp · N commands`
+  even for a plugin that ships only skills, subagents, hooks, or an LSP server —
+  so an LSP-only plugin reported a misleading `0 mcp · 0 commands`. The tail now
+  lists every non-zero kind it hosts for that agent (`mcp`, `commands`, `skills`,
+  `subagents`, `hooks`, `lsp`), e.g. `1 mcp · 2 skills · 1 lsp`; a plugin that
+  contributes nothing to an agent reads `no components`. The counts describe the
+  inventory (what the plugin hosts, MCP/LSP honouring each server's
+  `enabled`/`agents` targeting) — a hosted component the agent cannot translate is
+  still counted and reported under `(N skipped)`. `explain --json` rows gain the
+  matching `skills`, `subagents`, `hooks`, and `lsp` integer fields alongside the
+  existing `mcp`/`commands` (`render.PluginRow`). Coverage now derives `partial`
+  vs `none` from whether the adapter actually rendered anything for the agent
+  (rather than from `mcp`/`commands` alone), fixing a latent case where a plugin
+  whose skills rendered but whose hook was skipped was mislabeled `none`.
+
+- **`explain` itemizes what each agent couldn't fully translate, split into
+  "reduced" vs "dropped".** A `◐ partial` row is no longer a dead-end `(N
+  skipped)` tally that reads as if N whole components were discarded. The
+  trailing note now breaks down by kind — `(N reduced · M dropped)` — and each
+  part is listed beneath the agent row under a framing header
+  (`→ <agent> couldn't fully translate — reduced = rendered without some fields;
+  dropped = not emitted:`), tagged `reduced` (the component still rendered, just
+  without fields the agent has no home for — e.g. a subagent's Claude-only
+  `tools`/`color`) or `dropped` (the whole component had no native target and was
+  not emitted — e.g. an LSP server on an agent with no LSP concept), with the
+  reason. The label names the component kind plainly (`subagent reviewer`). The
+  structured surface gains a `skipDetails` array (`{component, name, reason,
+  kind}`) on every `explain --json` row. The translation report carries the
+  detail end-to-end (`render.PluginRow.SkipDetails`) rather than collapsing skips
+  to a bare count, and the counts/skips are scoped to the named plugin (see the
+  `explain` fix below).
+
+- **Skip severity is a typed field, not a `-frontmatter` string convention
+  (#98).** The reduced-vs-dropped distinction `explain` shows was previously
+  derived at the presentation layer by string-matching a `-frontmatter` suffix on
+  the skip's `component` (e.g. `subagent-frontmatter`) — load-bearing for
+  user-facing output yet enforced only by an undocumented naming convention with
+  no compile-time guard. It is now a typed `adapter.Skip.Kind`
+  (`SkipDropped`/`SkipReduced`) the adapter sets at each skip site, carried
+  through `render.SkipDetail` to `explain`. `internal/cli/explain.go` reads
+  `Kind` directly (the `isReducedSkip`/`HasSuffix` heuristic is gone), and a new
+  reflective exhaustiveness guard (`TestEveryAdapterClassifiesSkips`) renders
+  every registered adapter at both scopes and fails if any skip ships with `Kind`
+  unset — so a new adapter or skip site can no longer silently misclassify.
+  - **Breaking change to `explain --json`.** Each `skipDetails` entry gains an
+    explicit `kind` field (`"reduced"`/`"dropped"`), and `component` is now the
+    plain kind (`subagent`, `command`, …) — it no longer carries the
+    `-frontmatter` suffix machine consumers had to parse. Read `kind` instead.
+- **`status` now collapses skill directories and gains `--agents` / `--verbose`.**
+  A skill bundling scripts/references/assets used to print one row per file, so a
+  handful of asset-heavy skills could push `status` past a thousand lines. By
+  default each skill directory now renders as a single row — the skill dir, its
+  *most-severe* drift class (so a drifted `SKILL.md` hiding among clean assets
+  still shows red), and a faint `SKILL.md + N files` count with a per-class
+  breakdown when the bundled files don't all share one class. A directory is
+  recognized as a skill by an actual `…/skills/<name>/SKILL.md` (not a bare
+  `skills` path segment), so an unrelated ancestor dir named `skills` can't sweep
+  non-skill files into a bogus group. Pass `-v`/`--verbose` to expand every skill
+  back to one row per file (the previous view). A new `--agents <list>` flag
+  (comma-separated allowlist, `*` = all enabled — matching `mcp add --agents`)
+  scopes the report to specific agents; orphaned-state warnings still consider the
+  full enabled set so narrowing never mislabels a deselected agent as an orphan.
+  `status --json` is
+  unchanged and **never collapsed** — it still carries every tracked file, so the
+  machine contract is stable.
+- **`agentsync version` is now a subcommand alias for `agentsync --version`.**
+  The subcommand delegates to cobra's own version renderer — it re-dispatches
+  the root with its `--version` flag set, so the same precompiled,
+  `FuncMap`-bearing template function renders the same data against the same
+  flag-owning (root) command. Its output is therefore byte-identical to
+  `--version` by construction and can never drift, even if the version template
+  later uses a cobra template function such as `rpad` or `trim`. (Previously the
+  subcommand hand-parsed the template with a bare `text/template` that had no
+  `FuncMap`, so such an edit would have silently broken `agentsync version`
+  while `--version` kept working; a raw-byte parity test now pins the guarantee.)
 
 ## [0.7.3] — 2026-06-20
 

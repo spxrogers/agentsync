@@ -117,10 +117,11 @@ func TestRender_MCP_SkipsDisabledAndOtherAgents(t *testing.T) {
 	}
 }
 
-// TestRender_MCP_CommandAndURL_Ambiguous asserts a server carrying BOTH a command
-// and a url with no explicit type is never silently rendered as stdio with the url
-// dropped: the block still renders (stdio, command wins) AND the dropped url is
-// reported via a reduced Skip. A cleanly-typed server produces no such skip.
+// TestRender_MCP_CommandAndURL_Ambiguous asserts a url dropped by the
+// single-transport stdio projection is never silent: an untyped command+url
+// server (ambiguous; command wins) AND an explicitly-typed stdio server that
+// also carries a url both render as stdio with the dropped url reported via a
+// reduced Skip. A cleanly-typed server with no stray url produces no skip.
 func TestRender_MCP_CommandAndURL_Ambiguous(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -138,6 +139,12 @@ func TestRender_MCP_CommandAndURL_Ambiguous(t *testing.T) {
 			name:     "explicit stdio type is unambiguous -> no skip",
 			server:   source.MCPServerSpec{Type: "stdio", Command: "x"},
 			wantSkip: false,
+		},
+		{
+			name:        "explicit stdio type with a url -> reduced skip, url dropped",
+			server:      source.MCPServerSpec{Type: "stdio", Command: "x", URL: "https://y/mcp"},
+			wantSkip:    true,
+			wantURLGone: true,
 		},
 		{
 			name:     "explicit http type is unambiguous -> no skip",

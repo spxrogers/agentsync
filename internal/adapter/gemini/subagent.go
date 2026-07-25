@@ -39,6 +39,20 @@ var geminiAgentDroppedKeys = map[string]bool{
 // which are dropped with a reported Skip; `name` is defaulted to the filename when
 // absent (Gemini requires it). Native Gemini keys (kind/temperature/max_turns/
 // timeout_mins/mcpServers/…) that round-tripped through canonical are preserved.
+//
+// Deliberate secret-machinery exception (cf. MCPServerSpec.Extra): the verbatim
+// passthrough includes `mcpServers` — a command/env-shaped, conventionally
+// secret-bearing structure — yet subagent frontmatter sits OUTSIDE
+// secrets.walkSecretFields (a `${secret:…}` here is written literally, never
+// resolved) and OUTSIDE the capture leak backstop (subagents are text
+// components; their frontmatter never flows through capture.Capture's
+// re-reference or scanExtraResidual). That is safe because agentsync itself
+// never resolves vault values into subagent frontmatter, so no RENDERED secret
+// can leak through this path; a live secret hand-pasted into native frontmatter
+// is captured verbatim, exactly like any other hand-authored text component
+// (memory, skills, commands) — keep dotfiles repos private. If subagent
+// frontmatter ever becomes secret-resolving, it MUST join walkSecretFields
+// (and the paired re-reference) like every other secret-bearing field.
 func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp, []adapter.Skip, error) {
 	var ops []adapter.FileOp
 	var skips []adapter.Skip

@@ -132,8 +132,21 @@ Hook fidelity: the canonical `Hook` models only command handlers, so (like
 Gemini) Ingest leaves a `settings.json` hook event uncaptured with a warning if
 it carries an unmodeled definition/handler field (e.g. `timeout`) or a
 non-command handler, and Render reports a dropped `Skip` for any non-command
-hook rather than emitting an empty-command entry — an import→apply round-trip
-never rewrites the user's native `/hooks/<event>` array lossily. It also owns the
+hook rather than emitting an empty-command entry. An event that was captured
+while clean and *later* enriched natively would leave a stale canonical
+`hooks/<event>.toml` behind that the next apply — which owns the whole
+per-event array — would still rewrite lossily; `import` closes that hole by
+retiring the stale canonical file for every *semantically* refused event
+(`RefusedHookEvents`, the `adapter.HookIngestGuard` extension; a
+structurally-malformed native shape — a settings.json typo — warns but never
+deletes canonical config). Because canonical hooks are shared across agents,
+retirement hands the event back to **every** hook-rendering agent at that
+scope: each agent's hook state key is disowned — under the agent's *native*
+event spelling for renaming agents (Gemini `BeforeTool`, Cursor `preToolUse`,
+via `adapter.HookEventNamer`) — so no orphan
+cleanup fires, and every native entry is left frozen as-is. So an
+import→apply round-trip never rewrites the user's native `/hooks/<event>`
+array lossily. It also owns the
 shared `Extra` passthrough helpers reused by every MCP-capable adapter:
 `ExtraNativeKeys` (capture unmodeled native fields into `source.*Spec.Extra`) and
 `MergeExtra` (project them back on render). Both reserve the `__` prefix as an

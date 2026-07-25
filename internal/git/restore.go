@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -104,8 +105,11 @@ const snapshotMessage = "agentsync revert: snapshot uncommitted changes before r
 // If a failure strikes AFTER the snapshot advanced HEAD (mid delta-apply or at the
 // final commit), the returned error carries a recovery hint naming the pre-revert HEAD
 // and the snapshot commit (restoreFailureHint) so a half-applied worktree has a clear
-// path back. A pre-flight refusal is all-or-nothing (nothing is mutated) and returns
-// its own actionable error without that hint.
+// path back. A pre-flight refusal mutates no WORKTREE file and returns its own
+// actionable error without that hint — but the safety snapshot above may already
+// have advanced HEAD (it runs before the pre-flight, deliberately: refusing must
+// never cost the user their uncommitted edits), so callers surface snapshotHash
+// even on error.
 func (r *Repo) Restore(targetRev, message string, id Identity) (revertHash, snapshotHash string, err error) {
 	// Resolve the target to a CONCRETE hash up front — the snapshot below advances
 	// HEAD, after which a relative ref like "HEAD~1" would resolve elsewhere.
@@ -148,10 +152,13 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (revertHash, snap
 	//   (1) a path that is a file in the target but CURRENTLY a directory whose
 	//       contents aren't all being deleted (it holds untracked/gitignored files)
 	//       — replacing it with a file would delete them;
-	//  (1b) a CREATE path that is currently a regular file — since a create means
-	//       HEAD doesn't track this path, that file is the user's own
+	//  (1b) a CREATE path that is currently occupied by any non-directory entry —
+	//       a regular file, a symlink to one, or a DANGLING symlink — since a
+	//       create means HEAD doesn't track this path, that entry is the user's own
 	//       (untracked/gitignored); overwriting + committing it would violate the
-	//       untouched-files promise;
+	//       untouched-files promise. os.Lstat (not os.Stat) so a symlink is seen as
+	//       itself: a dangling link Stat-errors and would slip past both arms, only
+	//       for restoreFileFromTree to silently Remove it and write over it;
 	//   (2) a create whose ancestor is an existing unmanaged FILE — MkdirAll would
 	//       fail over it.
 	// A non-transactional restore can't guarantee zero partial state for every
@@ -166,18 +173,28 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (revertHash, snap
 	}
 	for _, ch := range changes {
 		if ch.Kind == "delete" {
+			// Deletes get the ancestor-symlink check only (below): removing a
+			// tracked path THROUGH a symlinked parent would resolve outside the
+			// repo and destroy the user's file at the link target. The leaf
+			// checks don't apply — the leaf itself is tracked content.
+			if parent, isLink := symlinkAncestor(r.dir, ch.Path); isLink {
+				return "", snapshotHash, fmt.Errorf("cannot restore: %q would be deleted through the symlink %q agentsync does not manage; move or remove it, then re-run revert", ch.Path, parent)
+			}
 			continue
 		}
 		abs := filepath.Join(r.dir, filepath.FromSlash(ch.Path))
-		info, statErr := os.Stat(abs)
+		// Lstat, not Stat: a symlink at the path — even a DANGLING one, which Stat
+		// reports as nonexistent — is a user-owned entry the restore must refuse to
+		// destroy, not something to silently delete and overwrite.
+		info, statErr := os.Lstat(abs)
 		switch {
 		case statErr == nil && info.IsDir():
-			blocker, werr := firstUnmanagedFileUnder(r.dir, abs, deleting)
+			blocker, werr := firstUnmanagedEntryUnder(r.dir, abs, deleting)
 			if werr != nil {
 				return "", snapshotHash, fmt.Errorf("scanning %s during revert in %s: %w", ch.Path, r.dir, werr)
 			}
 			if blocker != "" {
-				return "", snapshotHash, fmt.Errorf("cannot restore %q to a file: the directory holds files agentsync does not manage (e.g. %q); move or remove them, then re-run revert", ch.Path, blocker)
+				return "", snapshotHash, fmt.Errorf("cannot restore %q to a file: the directory holds entries agentsync does not manage (e.g. %q); move or remove them, then re-run revert", ch.Path, blocker)
 			}
 		case statErr == nil && ch.Kind == "create":
 			// (1b) a create over an existing regular file: it is the user's own
@@ -185,8 +202,16 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (revertHash, snap
 			// rather than overwrite and commit it.
 			return "", snapshotHash, fmt.Errorf("cannot restore %q: a file agentsync does not manage already exists there; move or remove it, then re-run revert", ch.Path)
 		}
+		if parent, isLink := symlinkAncestor(r.dir, ch.Path); isLink {
+			// Lstat-based: a SYMLINKED ancestor Stat-reports as a real
+			// directory, and billy's chroot fs doesn't resolve symlinks either —
+			// so writing "through" it would land managed content (including
+			// resolved cleartext secrets) OUTSIDE the repo, at wherever the
+			// user's link points. Refuse it like every other structural conflict.
+			return "", snapshotHash, fmt.Errorf("cannot restore %q: its parent %q is a symlink agentsync does not manage — restoring through it would write outside the backup; move or remove it, then re-run revert", ch.Path, parent)
+		}
 		for parent := path.Dir(ch.Path); parent != "." && parent != "/"; parent = path.Dir(parent) {
-			pinfo, statErr := os.Stat(filepath.Join(r.dir, filepath.FromSlash(parent)))
+			pinfo, statErr := os.Lstat(filepath.Join(r.dir, filepath.FromSlash(parent)))
 			if statErr != nil {
 				continue // doesn't exist yet — MkdirAll will create it
 			}
@@ -226,23 +251,50 @@ func (r *Repo) Restore(targetRev, message string, id Identity) (revertHash, snap
 // can replace it with the file "a". The reverse (delete file "a", then create "a/b")
 // likewise needs the delete first so MkdirAll("a") succeeds. Delete and create paths are
 // otherwise disjoint (a tree diff never both deletes and creates the same path), so the
-// two passes are order-independent within themselves.
+// two passes are order-independent within themselves. Between the passes,
+// pruneEmptiedDirs clears the directories the deletes emptied (wt.Remove leaves them
+// behind, unlike `git reset --hard`) without ever touching a dir that still has entries.
 func (r *Repo) applyRestoreDelta(wt *gogit.Worktree, targetTree *object.Tree, changes []FileChange) error {
 	for _, ch := range changes {
 		if ch.Kind != "delete" {
 			continue
+		}
+		// Mutation-time ancestor re-check (TOCTOU): the pre-flight already
+		// refused symlinked ancestors, but a link planted BETWEEN pre-flight
+		// and this pass would still redirect the syscall outside the repo —
+		// the prune got exactly this defense-in-depth gate, the mutating
+		// passes need it too. A mid-restore refusal here is wrapped by
+		// restoreFailureHint upstream, so the user still gets a recovery path.
+		if parent, isLink := symlinkAncestor(r.dir, ch.Path); isLink {
+			return fmt.Errorf("refusing to remove %s during revert in %s: its parent %q became a symlink mid-restore", ch.Path, r.dir, parent)
 		}
 		// wt.Remove both deletes the worktree file and stages the deletion.
 		if _, err := wt.Remove(ch.Path); err != nil {
 			return fmt.Errorf("removing %s during revert in %s: %w", ch.Path, r.dir, err)
 		}
 	}
+	pruneEmptiedDirs(wt, changes)
 	for _, ch := range changes {
 		if ch.Kind == "delete" {
 			continue // "create" | "modify"
 		}
+		// Same mutation-time re-check for the write path: without it, managed
+		// content (resolved cleartext secrets included) would land wherever a
+		// freshly planted ancestor link points.
+		if parent, isLink := symlinkAncestor(r.dir, ch.Path); isLink {
+			return fmt.Errorf("refusing to restore %s during revert in %s: its parent %q became a symlink mid-restore", ch.Path, r.dir, parent)
+		}
 		if err := restoreFileFromTree(wt, targetTree, ch.Path); err != nil {
 			return fmt.Errorf("restoring %s during revert in %s: %w", ch.Path, r.dir, err)
+		}
+		// wt.Add re-READS the path: a symlink raced in between the write above
+		// and this staging would stage outside-repo bytes into the local revert
+		// commit. Re-verify the leaf is still the regular file we just wrote.
+		// (The remaining un-closable window is the Lstat->syscall gap inside
+		// each check — closing it needs openat2/O_NOFOLLOW dirfds go-git does
+		// not expose; that is the PR's sole accepted TOCTOU residual.)
+		if info, lerr := wt.Filesystem.Lstat(ch.Path); lerr != nil || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to stage %s during revert in %s: the just-restored file changed underneath the revert (lstat err=%v)", ch.Path, r.dir, lerr)
 		}
 		if _, err := wt.Add(ch.Path); err != nil {
 			return fmt.Errorf("staging %s during revert in %s: %w", ch.Path, r.dir, err)
@@ -251,12 +303,76 @@ func (r *Repo) applyRestoreDelta(wt *gogit.Worktree, targetTree *object.Tree, ch
 	return nil
 }
 
+// pruneEmptiedDirs removes parent directories the delete pass left EMPTY. go-git's
+// wt.Remove deletes only the file itself — unlike `git reset --hard`, which also
+// clears the directories a delete empties — so reverting away skill/deep/SKILL.md
+// would otherwise strand skill/ and skill/deep/ as empty dirs. Only ancestors of the
+// delta's own deleted paths are considered: each deleted file's parent chain is
+// pruned upward, stopping at the repo root and at the FIRST directory that still has
+// entries (an untracked user file in the same dir keeps its whole chain alive — a
+// dir with entries is NEVER removed). Best-effort by design: git does not track
+// directories, so a stray empty dir can never make the restored tree wrong, and a
+// readdir/remove hiccup must not fail a revert whose tracked delta already applied.
+// It runs BEFORE the create pass, so a dir it prunes that the target repopulates is
+// simply recreated by restoreFileFromTree's MkdirAll.
+func pruneEmptiedDirs(wt *gogit.Worktree, changes []FileChange) {
+	fs := wt.Filesystem
+	for _, ch := range changes {
+		if ch.Kind != "delete" {
+			continue
+		}
+		for parent := path.Dir(ch.Path); parent != "." && parent != "/"; parent = path.Dir(parent) {
+			// Lstat first: billy's ReadDir/Remove FOLLOW symlinks, so if the
+			// user exposed a managed dir via a symlink (~/.claude/skills ->
+			// /elsewhere), "pruning" the emptied dir would unlink the USER'S
+			// SYMLINK — a user-owned entry the restore contract leaves alone
+			// (the same class the create-path Lstat refusal guards). A symlink
+			// (or anything that is not a real directory) ends the chain.
+			if info, lerr := fs.Lstat(parent); lerr != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				break
+			}
+			entries, err := fs.ReadDir(parent)
+			if err != nil || len(entries) > 0 {
+				break // already gone (a sibling pruned it), unreadable, or still holds entries — keep it and everything above
+			}
+			if err := fs.Remove(parent); err != nil {
+				break
+			}
+		}
+	}
+}
+
+// symlinkAncestor walks rel's parent chain (slash-separated, repo-relative)
+// and reports the first ancestor that is a symlink, if any. Every mutation the
+// restore performs — create, modify, delete, prune — resolves paths through
+// the OS (billy's chroot fs does not resolve symlinks itself but the syscalls
+// under it do), so any symlinked ancestor redirects the mutation OUTSIDE the
+// repo. Two layers use this walk: the pre-flight refuses up front
+// (all-or-nothing, nothing mutated), and applyRestoreDelta re-checks at
+// mutation time so a link planted between the two cannot slip through
+// (pruneEmptiedDirs carries its own Lstat gate). The walk never inspects the
+// repo root itself, so a user whose whole config dir is a symlink is
+// unaffected.
+func symlinkAncestor(root, rel string) (string, bool) {
+	for parent := path.Dir(rel); parent != "." && parent != "/"; parent = path.Dir(parent) {
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(parent)))
+		if err != nil {
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return parent, true
+		}
+	}
+	return "", false
+}
+
 // restoreFailureHint wraps a failure that struck once the worktree delta-apply had begun
 // — after Restore's snapshot may already have advanced HEAD — with an actionable
 // recovery pointer. It names the pre-revert HEAD (orig) and, when one was taken, the
 // snapshot commit that preserved the user's uncommitted tracked edits, so a half-applied
-// worktree still has a clear path back. A pre-flight refusal is all-or-nothing and does
-// NOT go through here (nothing was mutated, so there is nothing to recover).
+// worktree still has a clear path back. A pre-flight refusal does NOT go through
+// here (no worktree file was mutated, so there is nothing to recover; the
+// pre-refusal snapshot, when one was taken, is surfaced by the caller).
 func restoreFailureHint(dir, orig, snapshot string, err error) error {
 	if snapshot != "" {
 		return fmt.Errorf("revert of %s failed partway; nothing is lost — your uncommitted edits are preserved in snapshot %s and the pre-revert checkpoint is %s. Recover with `git -C %s reset --hard %s` (keep your edits) or `git -C %s reset --hard %s` (discard them): %w",
@@ -266,30 +382,60 @@ func restoreFailureHint(dir, orig, snapshot string, err error) error {
 		dir, Short(orig), dir, Short(orig), err)
 }
 
-// firstUnmanagedFileUnder walks absDir and returns the first regular file — as a
-// repoDir-relative slash path — that is NOT in the `deleting` set: an untracked or
-// gitignored file that replacing this directory with a file would have to destroy.
-// It returns "" when the directory holds nothing agentsync isn't already removing.
-func firstUnmanagedFileUnder(repoDir, absDir string, deleting map[string]bool) (string, error) {
+// firstUnmanagedEntryUnder walks absDir and returns the first entry — as a
+// repoDir-relative slash path — that the delete pass will NOT clear away: a
+// file (untracked or gitignored) not in the `deleting` set, or a SUBDIRECTORY
+// with no deleted descendant. The delete pass removes only the files in
+// `deleting`, and pruneEmptiedDirs then prunes only the emptied ancestor chains
+// of those deleted paths — so a subdir holding no deleted file survives both
+// passes. Notably an EMPTY subdir: it holds no file for the file check to flag,
+// yet it makes the later removal of the whole directory fail mid-restore with
+// the misleading concurrent-change (TOCTOU) wording. Flagging it here keeps the
+// refusal loud, early, and all-or-nothing. Returns "" when the directory holds
+// nothing agentsync isn't already removing.
+func firstUnmanagedEntryUnder(repoDir, absDir string, deleting map[string]bool) (string, error) {
 	var found string
 	err := filepath.WalkDir(absDir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
-			return nil
+		if p == absDir {
+			return nil // the directory being replaced itself
 		}
 		rel, rerr := filepath.Rel(repoDir, p)
 		if rerr != nil {
 			return rerr
 		}
-		if slash := filepath.ToSlash(rel); !deleting[slash] {
+		slash := filepath.ToSlash(rel)
+		if d.IsDir() {
+			if hasDeletedDescendant(deleting, slash) {
+				// The delete pass empties it and pruneEmptiedDirs prunes it (it
+				// is an ancestor of a deleted path); keep walking inside it for
+				// nested blockers the deletes don't cover.
+				return nil
+			}
+			found = slash
+			return filepath.SkipAll // survives the delete pass — a blocker
+		}
+		if !deleting[slash] {
 			found = slash
 			return filepath.SkipAll // stop at the first unmanaged file
 		}
 		return nil
 	})
 	return found, err
+}
+
+// hasDeletedDescendant reports whether any path in deleting lies strictly under
+// the slash-relative directory dir.
+func hasDeletedDescendant(deleting map[string]bool, dir string) bool {
+	prefix := dir + "/"
+	for p := range deleting {
+		if strings.HasPrefix(p, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // restoreFileFromTree writes the target tree's blob for slash-path p into the
@@ -304,6 +450,19 @@ func firstUnmanagedFileUnder(repoDir, absDir string, deleting map[string]bool) (
 // dirs, so a tracked symlink blob does not arise in practice.
 func restoreFileFromTree(wt *gogit.Worktree, tree *object.Tree, p string) error {
 	fs := wt.Filesystem
+	// Leaf-symlink TOCTOU backstop: the pre-flight refuses a symlink at a
+	// CREATE path (1b) and the ancestor rechecks cover parents, but a link
+	// planted at the leaf AFTER the pre-flight (or at a modify leaf, which the
+	// pre-flight doesn't inspect — the leaf is tracked content) would be
+	// silently unlinked by the fs.Remove below and overwritten. That never
+	// escapes the repo (unlink doesn't follow), but it destroys the user's
+	// link — refuse like every other structural conflict instead. The narrow
+	// legitimate loss: a TRACKED symlink being restored to a regular file now
+	// refuses too (move the link and re-run), which errs on the never-destroy-
+	// a-user-link side.
+	if info, lerr := fs.Lstat(p); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("cannot restore %q: it is currently a symlink agentsync does not manage; move or remove it, then re-run revert", p)
+	}
 	f, err := tree.File(p)
 	if err != nil {
 		return fmt.Errorf("loading blob %s from target checkpoint: %w", p, err)
@@ -318,8 +477,11 @@ func restoreFileFromTree(wt *gogit.Worktree, tree *object.Tree, p string) error 
 	}
 	defer reader.Close()
 
+	// 0o755 matches agentsync's own writers (iox.AtomicWrite creates parents at
+	// 0o755), so a revert that re-creates a pruned parent chain yields the same
+	// directory modes an apply would.
 	if dir := path.Dir(p); dir != "." && dir != "/" {
-		if err := fs.MkdirAll(dir, 0o700); err != nil {
+		if err := fs.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("creating parent dir of %s: %w", p, err)
 		}
 	}

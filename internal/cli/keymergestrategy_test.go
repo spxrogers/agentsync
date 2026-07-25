@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -120,5 +121,59 @@ func TestKeyMergeStrategy_MatchesEmittedOps(t *testing.T) {
 	if totalKeyMergeOps == 0 {
 		t.Fatal("fixture exercised no key-merge ops across the whole registry; the " +
 			"MCP/hook fixture is not populating any adapter's key-merge destination")
+	}
+}
+
+// TestAdapters_NeverRenderEmptyObjectForPopulatedSection pins the assumption
+// removalCounts (internal/cli/apply.go) rests on: a key-merge op whose trimmed
+// content is "{}" AND which carries OwnedKeys is uniquely the orphan-cleanup op
+// render.Plan synthesizes for an emptied section — no adapter renders "{}" for
+// a POPULATED section. Cleanup ops only exist post-Plan, so ANY trimmed-"{}"
+// key-merge op straight out of an adapter's Render on this populated fixture
+// would collide with that signature (once Plan attached owned pointers, apply
+// would count the section's keys as "removed" and delete them). Renders the
+// same MCP+hook fixture as TestKeyMergeStrategy_MatchesEmittedOps through every
+// registered adapter at both scopes and asserts none emits it.
+func TestAdapters_NeverRenderEmptyObjectForPopulatedSection(t *testing.T) {
+	testenv.RequireContainer(t)
+	fixture := keyMergeFixture()
+	resolved := secrets.ForRender(fixture)
+
+	reg := registryFactory()
+	totalKeyMergeOps := 0
+	for _, name := range reg.Names() {
+		a := reg.Lookup(name)
+		if a == nil {
+			t.Fatalf("registry has name %q but Lookup returned nil", name)
+		}
+		for _, sc := range []struct {
+			name    string
+			scope   adapter.Scope
+			project string
+		}{
+			{"user", adapter.ScopeUser, ""},
+			{"project", adapter.ScopeProject, t.TempDir()},
+		} {
+			ops, _, err := a.Render(resolved, sc.scope, sc.project)
+			if err != nil {
+				t.Errorf("[%s] Render(%s) errored: %v", name, sc.name, err)
+				continue
+			}
+			for _, op := range ops {
+				if !render.IsKeyMerge(op.MergeStrategy) {
+					continue
+				}
+				totalKeyMergeOps++
+				if strings.TrimSpace(string(op.Content)) == "{}" {
+					t.Errorf("[%s/%s] rendered a trimmed-\"{}\" key-merge op for %q "+
+						"(OwnedKeys=%v) from a populated fixture — this collides with the "+
+						"synthesized-cleanup signature removalCounts keys off",
+						name, sc.name, op.Path, op.OwnedKeys)
+				}
+			}
+		}
+	}
+	if totalKeyMergeOps == 0 {
+		t.Fatal("fixture exercised no key-merge ops across the whole registry; the guard is vacuous")
 	}
 }

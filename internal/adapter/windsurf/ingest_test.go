@@ -287,7 +287,9 @@ func TestRoundTrip_ProjectRule_NonAlwaysOnTrigger_NoDoubleFence(t *testing.T) {
 // TestRoundTrip_Workflow_StripsHandAuthoredFrontmatter proves the benign
 // D3-windsurf-workflow-frontmatter-fold sub-fix: a hand-authored leading `---`…`---`
 // block in a workflow file is stripped on ingest so it never folds into the
-// canonical command body. Workflows are plain markdown, so Frontmatter stays empty.
+// canonical command body — and the strip WARNS (symmetric with the rules path),
+// since it deletes user-authored bytes that have no canonical home. Workflows
+// are plain markdown, so Frontmatter stays empty.
 func TestRoundTrip_Workflow_StripsHandAuthoredFrontmatter(t *testing.T) {
 	proj := t.TempDir()
 	wfFile := filepath.Join(proj, ".windsurf", "workflows", "deploy.md")
@@ -297,7 +299,8 @@ func TestRoundTrip_Workflow_StripsHandAuthoredFrontmatter(t *testing.T) {
 	if err := os.WriteFile(wfFile, []byte("---\nname: deploy\n---\n\n1. tag\n2. push\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	a := windsurf.New(windsurf.Options{TargetRoot: t.TempDir()})
+	var warn bytes.Buffer
+	a := windsurf.New(windsurf.Options{TargetRoot: t.TempDir(), Stderr: &warn})
 	got, err := a.Ingest(adapter.ScopeProject, proj)
 	if err != nil {
 		t.Fatal(err)
@@ -310,5 +313,35 @@ func TestRoundTrip_Workflow_StripsHandAuthoredFrontmatter(t *testing.T) {
 	}
 	if len(got.Commands[0].Frontmatter) != 0 {
 		t.Fatalf("Windsurf workflows carry no frontmatter; got %+v", got.Commands[0].Frontmatter)
+	}
+	// The strip must not be silent: the warning names the workflow and says the
+	// fence is not captured.
+	if !strings.Contains(warn.String(), `workflow "deploy"`) || !strings.Contains(warn.String(), "not captured") {
+		t.Fatalf("stripping a hand-authored fence must warn, got:\n%s", warn.String())
+	}
+}
+
+// TestIngest_Workflow_NoFence_NoWarning: a plain workflow (no leading fence)
+// must ingest silently — the strip warning fires only when bytes are removed.
+func TestIngest_Workflow_NoFence_NoWarning(t *testing.T) {
+	proj := t.TempDir()
+	wfFile := filepath.Join(proj, ".windsurf", "workflows", "deploy.md")
+	if err := os.MkdirAll(filepath.Dir(wfFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wfFile, []byte("1. tag\n2. push\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var warn bytes.Buffer
+	a := windsurf.New(windsurf.Options{TargetRoot: t.TempDir(), Stderr: &warn})
+	got, err := a.Ingest(adapter.ScopeProject, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Commands) != 1 || got.Commands[0].Body != "1. tag\n2. push\n" {
+		t.Fatalf("plain workflow must ingest verbatim, got %+v", got.Commands)
+	}
+	if warn.Len() != 0 {
+		t.Fatalf("no warning expected for a fence-less workflow, got:\n%s", warn.String())
 	}
 }

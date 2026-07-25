@@ -115,6 +115,18 @@ func Plan(r secrets.Resolved, reg *adapter.Registry, agents []string, scope adap
 		if err != nil {
 			return out, fmt.Errorf("render %s: %w", name, err)
 		}
+		// Normalize the documented `"" == "write"` Action default ONCE at the
+		// plan boundary, before any guard runs: executors (DispatchOps) treat
+		// "" as write, but the containment backstop below and the apply-time
+		// dedup/divergence check match the literal "write" — so an op emitted
+		// with the empty spelling would be written by every adapter while
+		// dodging both guards. After this loop (and Plan's own synthesized
+		// ops, which set Action explicitly), plan ops never carry "".
+		for i := range ops {
+			if ops[i].Action == "" {
+				ops[i].Action = "write"
+			}
+		}
 		// Containment backstop (defense-in-depth): reject any write whose own cleaned
 		// path still contains a ".." segment (an unrooted / relative-with-leading-".."
 		// path). This is deliberately narrow — Plan does not know each adapter's dest
@@ -430,6 +442,29 @@ func applyPlan(
 		a := reg.Lookup(name)
 		if a == nil {
 			return reports, written, unchanged, wouldChange, fmt.Errorf("adapter %q not registered at apply", name)
+		}
+		// Intake normalization + containment backstop for caller-built plans.
+		// Apply and PreviewApply are exported and accept a RenderPlan that never
+		// went through Plan, so an op here can still carry the documented
+		// `"" == "write"` Action default — which every executor writes, while
+		// the traversal backstop and the dedup/divergence check below match the
+		// literal "write". Normalize at this shared entry (a Plan-built plan is
+		// already normalized, so this is a no-op for it) and re-run the
+		// backstop, so a hand-built plan cannot smuggle an unanchored ".." path
+		// past the guards Plan enforces. Scope honesty: "shared" covers the
+		// Apply/PreviewApply funnel only — cli/reconcile.go and cli/agent.go
+		// call an adapter's Apply directly with plan-derived or explicit-Action
+		// ops and stay outside this normalization; raw-adapter-output consumers
+		// keep their own `"" ==` guards.
+		for i := range res.Ops {
+			if res.Ops[i].Action == "" {
+				res.Ops[i].Action = "write"
+			}
+			if res.Ops[i].Action == "write" && pathEscapes(res.Ops[i].Path) {
+				return reports, written, unchanged, wouldChange, fmt.Errorf(
+					"apply %s: refusing FileOp path %q: escapes its destination directory via '..'", name, res.Ops[i].Path,
+				)
+			}
 		}
 		var deduped []adapter.FileOp
 		for _, op := range res.Ops {

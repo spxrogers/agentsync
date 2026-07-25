@@ -30,6 +30,16 @@ func wrapManagedWorkflow(body string) string {
 // content, reporting whether the file was agentsync-owned (carried the marker). A
 // file without the marker is a human-authored workflow: owned is false and the
 // caller skips it, so a foreign workflow is never captured into the canonical model.
+//
+// Migration window (pre-marker → marker builds): a workflow rendered by an
+// agentsync build predating the marker carries none, so after upgrading, this
+// classification reads agentsync's own earlier output as human-authored —
+// import/reconcile stop capturing those files, and each such workflow shows
+// drift once. A single `apply` heals it: render re-stamps every managed
+// workflow (a whole-file replace with the marker prepended), after which
+// capture and drift converge again. The transient under-capture is the
+// deliberate side of the tradeoff — the pre-marker behavior permanently
+// over-captured human-authored workflows.
 func stripManagedWorkflow(content string) (body string, owned bool) {
 	return strings.CutPrefix(content, managedWorkflowMarker+"\n")
 }

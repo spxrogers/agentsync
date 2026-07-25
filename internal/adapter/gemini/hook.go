@@ -256,3 +256,14 @@ func unmodeledKeys(m map[string]any, modeled map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+// NativeHookEvent implements adapter.HookEventNamer: Gemini renames canonical
+// hook events in settings.json (PreToolUse -> BeforeTool, …), so import's
+// stale-hook retirement must disown gemini's "/hooks/<native>" state key under
+// the NATIVE spelling — matching only the canonical name would leave the key
+// owned with no canonical render, and the next apply's orphan cleanup would
+// delete the event from the user's settings.json.
+func (a *Adapter) NativeHookEvent(canonical string) (string, bool) {
+	native, ok := canonicalToGeminiHookEvent[canonical]
+	return native, ok
+}

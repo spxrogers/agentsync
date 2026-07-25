@@ -2,6 +2,7 @@ package git
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -436,6 +437,40 @@ func TestLogAndResolve(t *testing.T) {
 	}
 }
 
+// TestIsAncestorOfHead pins the checkpoint-membership helper revert's --to
+// validation rides on: HEAD itself and its ancestors are in, a hash outside the
+// history is out.
+func TestIsAncestorOfHead(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h1 := commitFile(t, r, dir, "a.txt", "1", "c1")
+	h2 := commitFile(t, r, dir, "a.txt", "2", "c2")
+
+	tests := []struct {
+		name, hash string
+		want       bool
+	}{
+		{name: "HEAD itself", hash: h2, want: true},
+		{name: "an ancestor checkpoint", hash: h1, want: true},
+		{name: "a hash outside the history", hash: "0123456789abcdef0123456789abcdef01234567", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := r.IsAncestorOfHead(tt.hash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("IsAncestorOfHead(%s) = %v, want %v", tt.hash, got, tt.want)
+			}
+		})
+	}
+}
+
 // inHead reports whether rel is present in the repo's HEAD tree.
 func inHead(t *testing.T, dir, rel string) bool {
 	t.Helper()
@@ -761,6 +796,55 @@ func assertPerm(t *testing.T, dir, rel string, want os.FileMode) {
 	}
 }
 
+// TestRestore_PrunesEmptiedDirs is the regression for the stray-empty-dir gap:
+// go-git's wt.Remove deletes only the file, so a revert that deletes skill/deep/
+// SKILL.md used to leave skill/ and skill/deep/ behind as empty dirs (unlike
+// `git reset --hard`). The delete pass must now prune each deleted file's emptied
+// parent chain — while NEVER removing a dir that still has entries: an untracked
+// user file in the same dir keeps that dir (and its ancestors) alive.
+func TestRestore_PrunesEmptiedDirs(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// c1 (target): only keep.txt exists — no skill/, no shared/.
+	commitFile(t, r, dir, "keep.txt", "k", "c1: baseline")
+	// c2..c3 (HEAD): a nested managed file plus a managed file in a dir the user
+	// also drops their own file into.
+	commitFile(t, r, dir, "skill/deep/SKILL.md", "body", "c2: nested skill")
+	commitFile(t, r, dir, "shared/managed.txt", "m", "c3: shared managed")
+	const userBody = "mine — keep this dir alive\n"
+	writeFile(t, dir, "shared/user.txt", userBody)
+
+	// Revert to c1: the delta deletes skill/deep/SKILL.md and shared/managed.txt.
+	h, _, err := r.Restore("HEAD~2", "agentsync revert: prune", DefaultIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h == "" {
+		t.Fatal("Restore returned empty hash")
+	}
+	// The fully-emptied chain is pruned: neither skill/deep nor skill remains.
+	for _, rel := range []string{"skill/deep", "skill"} {
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); !os.IsNotExist(err) {
+			t.Errorf("emptied dir %q should be pruned after the revert delete pass; stat err = %v", rel, err)
+		}
+	}
+	// The dir holding the user's untracked file survives, file intact, managed
+	// sibling gone.
+	if info, err := os.Stat(filepath.Join(dir, "shared")); err != nil || !info.IsDir() {
+		t.Fatalf("shared/ holds an untracked user file and must survive; stat = (%v, %v)", info, err)
+	}
+	if got := readFile(t, dir, "shared/user.txt"); got != userBody {
+		t.Fatalf("untracked user file mutated: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "shared", "managed.txt")); !os.IsNotExist(err) {
+		t.Fatalf("managed shared/managed.txt should be deleted by the revert; stat err = %v", err)
+	}
+}
+
 // TestRestore_PreservesFileMode backs restoreFileFromTree's documented
 // mode-preservation contract (notably the exec bit): a revert that re-creates a
 // tracked 0o755 script must restore it executable, not as 0o644. Without an
@@ -1065,6 +1149,62 @@ func TestRestore_CreatePathCollidesWithUntrackedFile(t *testing.T) {
 	}
 	if got := readFile(t, dir, "X"); got != user {
 		t.Fatalf("user's untracked file at X must survive, got %q", got)
+	}
+}
+
+// TestRestore_DanglingSymlinkAtCreatePathBlocked closes the pre-flight's Stat
+// blind spot: a DANGLING untracked symlink at a path the restore will create
+// resolves to nothing under os.Stat, so it matched neither refusal arm and
+// restoreFileFromTree silently removed the user's symlink and wrote the managed
+// file over it. With os.Lstat the link is seen as itself and refused like every
+// other create-path conflict — all-or-nothing, before anything is mutated. (A
+// symlink to an EXISTING file at a create path was already refused; that arm now
+// covers both.)
+func TestRestore_DanglingSymlinkAtCreatePathBlocked(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "a.txt", "v1", "c1")
+	commitFile(t, r, dir, "X", "managed-content", "c2: add managed X") // target has X
+	// c3 (HEAD): remove X and bump a.txt, so reverting to c2 is
+	// {create X, modify a.txt}.
+	if err := os.Remove(filepath.Join(dir, "X")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "a.txt", "v2")
+	if err := r.Stage([]string{"a.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c3: remove X, bump a.txt", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	// The user drops a DANGLING symlink at the create path X.
+	linkTarget := filepath.Join(dir, "no-such-target")
+	if err := os.Symlink(linkTarget, filepath.Join(dir, "X")); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	_, _, err = r.Restore("HEAD~1", "agentsync revert: dangling symlink", DefaultIdentity)
+	if err == nil {
+		t.Fatal("Restore should refuse a dangling symlink at a create path")
+	}
+	if !strings.Contains(err.Error(), "agentsync does not manage") {
+		t.Fatalf("error should be the unmanaged-entry refusal; got: %v", err)
+	}
+	// The user's symlink survives, still pointing where they aimed it.
+	if got, lerr := os.Readlink(filepath.Join(dir, "X")); lerr != nil || got != linkTarget {
+		t.Fatalf("dangling symlink must survive the refused revert: target=%q err=%v", got, lerr)
+	}
+	// All-or-nothing: the refusal fires in the pre-flight, so the OTHER change in
+	// the delta (the a.txt modify) was not applied either.
+	if got := readFile(t, dir, "a.txt"); got != "v2" {
+		t.Fatalf("refusal must be all-or-nothing: a.txt = %q, want the unreverted v2", got)
 	}
 }
 
@@ -1419,6 +1559,138 @@ func TestStage_WriteDriven(t *testing.T) {
 	}
 }
 
+// TestRestore_PackedHistory pins that the delta-based Restore reads PACKED
+// objects, not just loose ones — the state `git gc` (or go-git's RepackObjects)
+// leaves a long-lived backup repo in (issue #164's packed/gc'd-history QA
+// case). The whole loose object store is repacked into a single packfile (the
+// loose copies deleted) between the checkpoints and the restore, and the repo
+// is re-opened from disk so nothing is served from a warm in-memory storer;
+// the restored file must come back byte-for-byte.
+func TestRestore_PackedHistory(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "a.txt", "v1", "apply 1")    // HEAD~2 target
+	commitFile(t, r, dir, "a.txt", "v2", "apply 2")    // HEAD~1
+	commitFile(t, r, dir, "b.txt", "added", "apply 3") // HEAD
+
+	// Pack the object store (go-git's programmatic `git gc` equivalent): every
+	// reachable object lands in one packfile and the loose copies are deleted,
+	// so any object read below MUST be served from the pack.
+	if err := r.repo.RepackObjects(&gogit.RepackConfig{}); err != nil {
+		t.Fatalf("RepackObjects: %v", err)
+	}
+	// Non-vacuity: prove the store really is packed — >=1 packfile and ZERO
+	// loose objects — otherwise the restore would just re-read loose objects
+	// and this test would prove nothing beyond TestRestoreAppendOnly.
+	packs, loose := objectStoreShape(t, dir)
+	if packs == 0 {
+		t.Fatal("RepackObjects left no packfile under .git/objects/pack")
+	}
+	if len(loose) != 0 {
+		t.Fatalf("RepackObjects left loose objects behind: %v", loose)
+	}
+
+	// Re-open from disk: a fresh storer with no warm cache of the pre-pack
+	// loose objects.
+	r2, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, _, err := r2.Restore("HEAD~2", "agentsync revert: packed history", DefaultIdentity)
+	if err != nil {
+		t.Fatalf("Restore across packed history: %v", err)
+	}
+	if h == "" {
+		t.Fatal("Restore returned empty hash")
+	}
+	if got := readFile(t, dir, "a.txt"); got != "v1" {
+		t.Fatalf("after packed-history restore a.txt = %q, want v1 byte-for-byte", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "b.txt")); !os.IsNotExist(err) {
+		t.Fatalf("after packed-history restore b.txt should be gone, stat err = %v", err)
+	}
+}
+
+// objectStoreShape counts packfiles and lists loose objects under
+// dir/.git/objects: pack/*.pack are packs, info/ is metadata, and every other
+// subdirectory is a 2-hex-char loose-object fan-out dir.
+func objectStoreShape(t *testing.T, dir string) (packs int, loose []string) {
+	t.Helper()
+	objects := filepath.Join(dir, ".git", "objects")
+	entries, err := os.ReadDir(objects)
+	if err != nil {
+		t.Fatalf("read %s: %v", objects, err)
+	}
+	for _, e := range entries {
+		switch e.Name() {
+		case "pack":
+			packEntries, err := os.ReadDir(filepath.Join(objects, "pack"))
+			if err != nil {
+				t.Fatalf("read pack dir: %v", err)
+			}
+			for _, p := range packEntries {
+				if strings.HasSuffix(p.Name(), ".pack") {
+					packs++
+				}
+			}
+		case "info":
+			// object-store metadata, not objects
+		default:
+			sub, err := os.ReadDir(filepath.Join(objects, e.Name()))
+			if err != nil {
+				t.Fatalf("read %s: %v", e.Name(), err)
+			}
+			for _, o := range sub {
+				loose = append(loose, e.Name()+"/"+o.Name())
+			}
+		}
+	}
+	return packs, loose
+}
+
+// BenchmarkHasNestedRepoBelow measures the full-tree WalkDir cost documented on
+// HasNestedRepoBelow, over a synthetic tree WITHOUT a nested repo (the common,
+// worst case: the walk cannot short-circuit) — 2,000 leaf dirs at depth 4, one
+// file each. Run in-container with:
+//
+//	AGENTSYNC_TEST_IN_CONTAINER=1 go test -bench HasNestedRepoBelow -benchtime 1x -run '^$' ./internal/git/
+func BenchmarkHasNestedRepoBelow(b *testing.B) {
+	testenv.RequireContainer(b)
+	root := b.TempDir()
+	// 10 × 5 × 5 × 8 = 2,000 leaf dirs at depth 4, each holding one file.
+	for i := range 10 {
+		for j := range 5 {
+			for k := range 5 {
+				for l := range 8 {
+					leaf := filepath.Join(root,
+						fmt.Sprintf("d%02d", i), fmt.Sprintf("e%d", j),
+						fmt.Sprintf("f%d", k), fmt.Sprintf("g%d", l))
+					if err := os.MkdirAll(leaf, 0o755); err != nil {
+						b.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(leaf, "file.txt"), []byte("x"), 0o644); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		}
+	}
+	b.ResetTimer()
+	for range b.N {
+		found, err := HasNestedRepoBelow(root)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if found {
+			b.Fatal("synthetic tree must not contain a nested repo")
+		}
+	}
+}
+
 // treeEntryMode returns the git filemode of rel in the repo's current HEAD tree.
 func treeEntryMode(t *testing.T, r *Repo, rel string) filemode.FileMode {
 	t.Helper()
@@ -1443,4 +1715,627 @@ func treeEntryMode(t *testing.T, r *Repo, rel string) filemode.FileMode {
 		t.Fatalf("find %s in HEAD tree: %v", rel, err)
 	}
 	return e.Mode
+}
+
+// TestSnapshotPreApply pins the pre-apply baseline contract directly at the
+// engine level, one behavior per case: an untracked path the imminent apply
+// will overwrite is staged+committed so its bytes are recoverable; untracked
+// files outside plannedRels stay the user's own; nil plannedRels degrades to
+// exactly the tracked-dirt snapshot (the SnapshotDirtyTracked delegation); a
+// GITIGNORED planned path is silently not baselined (go-git's status omits
+// ignored files — the user opted that path out of versioning); and a planned
+// symlink is staged as a symlink blob holding the link target, never followed
+// to the outside content it points at.
+func TestSnapshotPreApply(t *testing.T) {
+	testenv.RequireContainer(t)
+
+	cases := []struct {
+		name string
+		run  func(t *testing.T, r *Repo, dir string)
+	}{
+		{
+			name: "untracked planned path is baselined",
+			run: func(t *testing.T, r *Repo, dir string) {
+				commitFile(t, r, dir, "base.txt", "b", "c1")
+				const preApply = "pre-apply bytes — must be recoverable\n"
+				writeFile(t, dir, "planned.txt", preApply)
+
+				h, err := r.SnapshotPreApply("pre-apply", DefaultIdentity, []string{"planned.txt"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if h == "" {
+					t.Fatal("SnapshotPreApply should commit the planned untracked file")
+				}
+				if got := blobAt(t, dir, h, "planned.txt"); got != preApply {
+					t.Fatalf("baselined bytes = %q, want %q", got, preApply)
+				}
+			},
+		},
+		{
+			name: "untracked file not planned is never touched",
+			run: func(t *testing.T, r *Repo, dir string) {
+				commitFile(t, r, dir, "tracked.txt", "v1", "c1")
+				writeFile(t, dir, "tracked.txt", "dirty") // guarantees a snapshot commit
+				const scratch = "mine — not agentsync's\n"
+				writeFile(t, dir, "scratch.txt", scratch)
+
+				h, err := r.SnapshotPreApply("pre-apply", DefaultIdentity, []string{"tracked.txt"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if h == "" {
+					t.Fatal("the dirty tracked file should still produce a snapshot")
+				}
+				if inHead(t, dir, "scratch.txt") {
+					t.Fatal("an untracked file outside plannedRels must not be committed")
+				}
+				if got := readFile(t, dir, "scratch.txt"); got != scratch {
+					t.Fatalf("untracked user file disturbed: %q", got)
+				}
+			},
+		},
+		{
+			name: "nil plannedRels still snapshots tracked dirt",
+			run: func(t *testing.T, r *Repo, dir string) {
+				commitFile(t, r, dir, "a.txt", "v1", "c1")
+				writeFile(t, dir, "a.txt", "hand-edited")
+
+				h, err := r.SnapshotPreApply("pre-apply", DefaultIdentity, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if h == "" {
+					t.Fatal("tracked dirt must still snapshot with nil plannedRels")
+				}
+				if got := blobAt(t, dir, h, "a.txt"); got != "hand-edited" {
+					t.Fatalf("snapshot blob = %q, want the hand edit", got)
+				}
+			},
+		},
+		{
+			name: "gitignored planned path is silently not baselined",
+			run: func(t *testing.T, r *Repo, dir string) {
+				commitFile(t, r, dir, ".gitignore", "secrets.env\n", "c1: ignore secrets.env")
+				commitFile(t, r, dir, "tracked.txt", "v1", "c2")
+				writeFile(t, dir, "tracked.txt", "dirty") // a commit happens, so absence is meaningful
+				const ignored = "TOKEN=pre-apply\n"
+				writeFile(t, dir, "secrets.env", ignored)
+
+				h, err := r.SnapshotPreApply("pre-apply", DefaultIdentity, []string{"secrets.env", "tracked.txt"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if h == "" {
+					t.Fatal("the dirty tracked file should still produce a snapshot")
+				}
+				if inHead(t, dir, "secrets.env") {
+					t.Fatal("a gitignored planned path must NOT be staged: go-git status omits ignored files, so its pre-apply bytes are not baselined")
+				}
+				if got := readFile(t, dir, "secrets.env"); got != ignored {
+					t.Fatalf("gitignored file disturbed on disk: %q", got)
+				}
+			},
+		},
+		{
+			name: "planned symlink staged as a symlink blob, not followed",
+			run: func(t *testing.T, r *Repo, dir string) {
+				commitFile(t, r, dir, "base.txt", "b", "c1")
+				const secret = "outside content — must not enter history\n"
+				outside := filepath.Join(t.TempDir(), "outside.txt")
+				if err := os.WriteFile(outside, []byte(secret), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outside, filepath.Join(dir, "link")); err != nil {
+					t.Skipf("symlinks unavailable on this platform: %v", err)
+				}
+
+				h, err := r.SnapshotPreApply("pre-apply", DefaultIdentity, []string{"link"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if h == "" {
+					t.Fatal("the planned untracked symlink should be baselined")
+				}
+				if mode := treeEntryMode(t, r, "link"); mode != filemode.Symlink {
+					t.Fatalf("link staged with mode %v, want filemode.Symlink", mode)
+				}
+				// The blob holds a REPRESENTATION of the link target, never the
+				// outside file's bytes. Pin that loosely: go-git's chrooted
+				// worktree fs (billy) rewrites an absolute target OUTSIDE the
+				// repo relative to the repo root (e.g. "/../002/outside.txt"),
+				// so asserting byte-equality with the original absolute target
+				// would pin a billy implementation detail rather than the
+				// contract that matters (no content following).
+				blob := blobAt(t, dir, h, "link")
+				if blob == secret {
+					t.Fatal("snapshot followed the symlink and captured outside content into history")
+				}
+				if !strings.HasSuffix(blob, "outside.txt") {
+					t.Errorf("symlink blob = %q, want a path form of the link target %q", blob, outside)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			r, err := Init(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.run(t, r, dir)
+		})
+	}
+}
+
+// commitWithParents stages rel and commits it with the given EXPLICIT parents
+// (overriding the default single HEAD parent), returning the new hash. go-git
+// has no porcelain branch-merge, so merge-shaped history is constructed
+// directly via CommitOptions.Parents. HEAD moves to the new commit.
+func commitWithParents(t *testing.T, r *Repo, dir, rel, content, msg string, parents ...string) string {
+	t.Helper()
+	writeFile(t, dir, rel, content)
+	wt, err := r.repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wt.Add(rel); err != nil {
+		t.Fatalf("stage %s: %v", rel, err)
+	}
+	hashes := make([]plumbing.Hash, len(parents))
+	for i, p := range parents {
+		hashes[i] = plumbing.NewHash(p)
+	}
+	sig := signature(DefaultIdentity)
+	h, err := wt.Commit(msg, &gogit.CommitOptions{Author: sig, Committer: sig, Parents: hashes})
+	if err != nil {
+		t.Fatalf("commit %s: %v", msg, err)
+	}
+	return h.String()
+}
+
+// rewindHead points the current branch ref back at hash without touching the
+// worktree, so a commit created beyond it stays in the object store as a
+// DESCENDANT of HEAD that is no longer reachable from it.
+func rewindHead(t *testing.T, r *Repo, hash string) {
+	t.Helper()
+	ref, err := r.repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.repo.Storer.SetReference(plumbing.NewHashReference(ref.Name(), plumbing.NewHash(hash))); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestIsAncestorOfHead_AcrossMergeParent backs the "walks the full commit
+// graph, not just first parents" claim on IsAncestorOfHead with a real merge
+// commit: a hash reachable ONLY through the merge's SECOND parent must still
+// validate as an ancestor (a first-parent-only walk would miss it), while a
+// descendant of HEAD sitting in the object store and a disjoint hash both
+// still refuse.
+func TestIsAncestorOfHead_AcrossMergeParent(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := commitFile(t, r, dir, "a.txt", "base", "c1: base")
+	mainline := commitFile(t, r, dir, "a.txt", "main", "c2: mainline")
+	// Side chain forked off base: sideA -> sideB. Neither is on the
+	// first-parent lineage of the merge below.
+	sideA := commitWithParents(t, r, dir, "side.txt", "a", "sideA", base)
+	sideB := commitWithParents(t, r, dir, "side.txt", "b", "sideB", sideA)
+	// The merge: first parent the mainline tip, second parent the side tip.
+	merge := commitWithParents(t, r, dir, "merge.txt", "m", "merge", mainline, sideB)
+	// A commit BEYOND the merge, then rewind HEAD back — child stays stored but
+	// unreachable from HEAD.
+	child := commitWithParents(t, r, dir, "child.txt", "c", "child", merge)
+	rewindHead(t, r, merge)
+
+	// Preconditions: HEAD is the merge and it really has two parents with sideB
+	// second — otherwise the "only via the second parent" claim below is vacuous.
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Hash().String() != merge {
+		t.Fatalf("HEAD = %s, want the merge %s", ref.Hash(), merge)
+	}
+	mc, err := repo.CommitObject(plumbing.NewHash(merge))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mc.NumParents() != 2 || mc.ParentHashes[1].String() != sideB {
+		t.Fatalf("merge parents = %v, want [%s %s]", mc.ParentHashes, mainline, sideB)
+	}
+
+	tests := []struct {
+		name, hash string
+		want       bool
+	}{
+		{name: "the second parent itself", hash: sideB, want: true},
+		{name: "reachable ONLY via the second parent", hash: sideA, want: true},
+		{name: "the first-parent lineage", hash: mainline, want: true},
+		{name: "the shared root", hash: base, want: true},
+		{name: "a stored descendant of HEAD", hash: child, want: false},
+		{name: "a disjoint hash", hash: "0123456789abcdef0123456789abcdef01234567", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := r.IsAncestorOfHead(tt.hash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("IsAncestorOfHead(%s) = %v, want %v", tt.hash, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRestore_EmptySubdirBlocksFileReplacement closes the pre-flight's
+// empty-directory blind spot: a dir→file replacement where the directory holds
+// only an EMPTY user subdir used to pass the pre-flight (the file scan found
+// nothing) and then fail mid-restore with the misleading concurrent-change
+// (TOCTOU) wording when the dir removal hit the surviving subdir. The
+// pre-flight must now refuse it up front — same refusal wording family,
+// all-or-nothing, nothing mutated.
+func TestRestore_EmptySubdirBlocksFileReplacement(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// c1 (target): foo is a regular file.
+	commitFile(t, r, dir, "foo", "iamfile", "c1: foo is a file")
+	// c2 (HEAD): foo becomes a directory (foo/bar tracked).
+	if err := os.Remove(filepath.Join(dir, "foo")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "foo/bar", "iamdir")
+	if err := r.Stage([]string{"foo/bar"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c2: foo is a dir", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	// The user drops an EMPTY directory inside foo — no file for a file-only
+	// scan to find, but the delete pass will not clear it.
+	if err := os.MkdirAll(filepath.Join(dir, "foo", "scratch-dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = r.Restore("HEAD~1", "agentsync revert: blocked by empty dir", DefaultIdentity)
+	if err == nil {
+		t.Fatal("Restore should refuse when an empty user subdir blocks a dir->file replacement")
+	}
+	if !strings.Contains(err.Error(), "agentsync does not manage") {
+		t.Fatalf("error should be the pre-flight refusal family; got: %v", err)
+	}
+	if strings.Contains(err.Error(), "after the pre-flight") {
+		t.Fatalf("the refusal must fire in the pre-flight, not the mid-restore TOCTOU backstop; got: %v", err)
+	}
+	// All-or-nothing: the tracked foo/bar was not deleted, the user's dir survives.
+	if got := readFile(t, dir, "foo/bar"); got != "iamdir" {
+		t.Fatalf("refusal must be all-or-nothing: tracked foo/bar was mutated, got %q", got)
+	}
+	if info, serr := os.Stat(filepath.Join(dir, "foo", "scratch-dir")); serr != nil || !info.IsDir() {
+		t.Fatalf("the user's empty dir must survive the refused revert: (%v, %v)", info, serr)
+	}
+}
+
+// TestRestore_NestedClearedDirStillTransitions guards the pre-flight against
+// over-refusing: a dir→file replacement where the directory's only content is a
+// NESTED tracked file the delta deletes (foo/sub/x) must still restore — the
+// delete pass removes the file and pruneEmptiedDirs clears the emptied chain,
+// so the subdir is not a blocker.
+func TestRestore_NestedClearedDirStillTransitions(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// c1 (target): foo is a regular file.
+	commitFile(t, r, dir, "foo", "iamfile", "c1: foo is a file")
+	// c2 (HEAD): foo becomes a directory with a NESTED tracked file foo/sub/x.
+	if err := os.Remove(filepath.Join(dir, "foo")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "foo/sub/x", "nested")
+	if err := r.Stage([]string{"foo/sub/x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c2: foo is a nested dir", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := r.Restore("HEAD~1", "agentsync revert: nested dir->file", DefaultIdentity); err != nil {
+		t.Fatalf("Restore across a nested dir->file transition should not refuse: %v", err)
+	}
+	if got := readFile(t, dir, "foo"); got != "iamfile" {
+		t.Fatalf("foo = %q, want the restored file content", got)
+	}
+}
+
+// TestRestore_RecreatedParentDirsMode pins the permission alignment on
+// restoreFileFromTree's MkdirAll: a revert that re-creates a pruned parent
+// chain must produce 0o755 directories, matching agentsync's own writers
+// (iox.AtomicWrite creates parents at 0o755) — not the 0o700 it used before,
+// which made reverted trees stricter than applied ones.
+func TestRestore_RecreatedParentDirsMode(t *testing.T) {
+	testenv.RequireContainer(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permission bits")
+	}
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// c1 (target): a nested tracked file. c2 (HEAD): the whole chain deleted,
+	// so reverting to c1 re-creates skill/ and skill/deep/ from scratch.
+	commitFile(t, r, dir, "skill/deep/SKILL.md", "body", "c1: nested skill")
+	commitFile(t, r, dir, "keep.txt", "k", "c2: keep")
+	if err := os.RemoveAll(filepath.Join(dir, "skill")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.StageTrackedDeletions(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CommitStaged("c3: drop skill tree", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := r.Restore("HEAD~2", "agentsync revert: recreate parents", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, dir, "skill/deep/SKILL.md"); got != "body" {
+		t.Fatalf("restored content = %q, want body", got)
+	}
+	for _, rel := range []string{"skill", "skill/deep"} {
+		info, serr := os.Stat(filepath.Join(dir, filepath.FromSlash(rel)))
+		if serr != nil {
+			t.Fatalf("stat %s: %v", rel, serr)
+		}
+		if got := info.Mode().Perm(); got != 0o755 {
+			t.Fatalf("recreated dir %s perm = %04o, want 0755 (aligned with iox.AtomicWrite)", rel, got)
+		}
+	}
+}
+
+// TestRestore_RefusesSymlinkedAncestorOnCreate pins the round-4 blocker: a
+// symlinked ancestor Stat-reports as a real directory, so a restore CREATE
+// under it would write managed content (resolved cleartext secrets included)
+// through the link, OUTSIDE the repo. The pre-flight must refuse before any
+// mutation, and the link target must stay untouched.
+func TestRestore_RefusesSymlinkedAncestorOnCreate(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	outside := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "sub/managed.txt", "v1", "apply 1") // target: has the file
+	commitFile(t, r, dir, "keep.txt", "k", "apply 2")
+	// Simulate the delete of sub/ then the user planting a symlink at its path.
+	if err := os.RemoveAll(filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.SnapshotDirtyTracked("drop sub", DefaultIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, rerr := r.Restore("HEAD~2", "agentsync revert: symlinked ancestor", DefaultIdentity)
+	if rerr == nil {
+		t.Fatal("restore creating under a symlinked ancestor must refuse")
+	}
+	if !strings.Contains(rerr.Error(), "symlink") {
+		t.Fatalf("refusal should name the symlink; got: %v", rerr)
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Fatalf("restore wrote through the symlink into the outside dir: %v", entries)
+	}
+	if fi, lerr := os.Lstat(filepath.Join(dir, "sub")); lerr != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the user's symlink must survive the refusal; err=%v", lerr)
+	}
+}
+
+// TestRestore_RefusesDeleteThroughSymlinkedAncestor pins the delete half of the
+// same blocker: removing a tracked path whose parent the user replaced with a
+// symlink would resolve through the link and destroy the user's file at the
+// link target. Deletions skip the leaf pre-flight, so the ancestor walk must
+// cover them explicitly.
+func TestRestore_RefusesDeleteThroughSymlinkedAncestor(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	outside := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "base.txt", "b", "apply 1") // target: no sub/doomed.txt
+	commitFile(t, r, dir, "sub/doomed.txt", "tracked", "apply 2")
+	// The user replaces sub/ with a symlink to an outside dir holding a file at
+	// the tracked name.
+	if err := os.RemoveAll(filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "doomed.txt"), []byte("USER DATA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, rerr := r.Restore("HEAD~1", "agentsync revert: delete through symlink", DefaultIdentity)
+	if rerr == nil {
+		t.Fatal("restore deleting through a symlinked ancestor must refuse")
+	}
+	if !strings.Contains(rerr.Error(), "symlink") {
+		t.Fatalf("refusal should name the symlink; got: %v", rerr)
+	}
+	if b, ferr := os.ReadFile(filepath.Join(outside, "doomed.txt")); ferr != nil || string(b) != "USER DATA" {
+		t.Fatalf("the user's file behind the link must survive byte-for-byte; err=%v content=%q", ferr, b)
+	}
+}
+
+// TestPruneEmptiedDirs_KeepsUserSymlink pins the prune guard directly (the
+// pre-flight refuses reachable symlink cases, so this is the defense-in-depth
+// layer for a link appearing mid-restore): billy's ReadDir/Remove follow
+// symlinks, so without the Lstat gate the prune would UNLINK a user's symlink
+// whose target happens to be empty.
+func TestPruneEmptiedDirs_KeepsUserSymlink(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	outside := t.TempDir() // empty: exactly the "emptied dir" shape prune removes
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "keep.txt", "k", "seed")
+	if err := os.Symlink(outside, filepath.Join(dir, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	wt, err := r.repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pruneEmptiedDirs(wt, []FileChange{{Kind: "delete", Path: "linked/file.txt"}})
+	if fi, lerr := os.Lstat(filepath.Join(dir, "linked")); lerr != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("prune must never unlink a user's symlink; err=%v", lerr)
+	}
+}
+
+// TestApplyRestoreDelta_RechecksSymlinkAncestors pins the mutation-time TOCTOU
+// gate: applyRestoreDelta is driven DIRECTLY (bypassing Restore's pre-flight,
+// exactly the state a link planted between pre-flight and mutation produces)
+// with a symlinked ancestor on each pass — the write and delete passes must
+// refuse rather than resolve through the link, and the outside dir stays
+// untouched.
+func TestApplyRestoreDelta_RechecksSymlinkAncestors(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	outside := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "sub/managed.txt", "v1", "seed")
+	headH, err := r.headHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := r.commitTree(headH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt, err := r.repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The "planted between pre-flight and mutation" state: sub is now a link.
+	if err := os.RemoveAll(filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.applyRestoreDelta(wt, tree, []FileChange{{Kind: "create", Path: "sub/managed.txt"}}); err == nil {
+		t.Fatal("write pass must refuse a symlinked ancestor at mutation time")
+	}
+	if err := r.applyRestoreDelta(wt, tree, []FileChange{{Kind: "delete", Path: "sub/managed.txt"}}); err == nil {
+		t.Fatal("delete pass must refuse a symlinked ancestor at mutation time")
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Fatalf("nothing may cross the link: %v", entries)
+	}
+}
+
+// TestRestore_WorksThroughSymlinkedRepoRoot pins the claim on symlinkAncestor's
+// doc: the ancestor walk never inspects the repo root itself, so a user whose
+// ENTIRE config dir is a symlink (~/.claude -> /elsewhere/claude) reverts
+// normally — no over-refusal.
+func TestRestore_WorksThroughSymlinkedRepoRoot(t *testing.T) {
+	testenv.RequireContainer(t)
+	real := t.TempDir()
+	linkParent := t.TempDir()
+	link := filepath.Join(linkParent, "claude")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Init(link) // opened THROUGH the symlink
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, link, "sub/a.txt", "v1", "apply 1")
+	commitFile(t, r, link, "sub/a.txt", "v2", "apply 2")
+	if _, _, err := r.Restore("HEAD~1", "agentsync revert: via symlinked root", DefaultIdentity); err != nil {
+		t.Fatalf("a symlinked repo ROOT must not trip the ancestor refusal: %v", err)
+	}
+	if got := readFile(t, link, "sub/a.txt"); got != "v1" {
+		t.Fatalf("restore through the symlinked root should land v1, got %q", got)
+	}
+}
+
+// TestRestore_RefusesSymlinkLeaf pins the leaf-symlink TOCTOU backstop: the
+// pre-flight refuses links at CREATE paths but never inspects a MODIFY leaf
+// (it is tracked content), so a symlink sitting at one used to be silently
+// unlinked and overwritten by restoreFileFromTree — no repo escape, but the
+// user's link died. It must refuse instead, with the link and its target
+// intact.
+func TestRestore_RefusesSymlinkLeaf(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	outside := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "a.txt", "v1", "apply 1")
+	commitFile(t, r, dir, "a.txt", "v2", "apply 2")
+	// The user replaces the tracked file with a symlink to their own file.
+	target := filepath.Join(outside, "mine.txt")
+	if err := os.WriteFile(target, []byte("USER DATA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, rerr := r.Restore("HEAD~1", "agentsync revert: symlink leaf", DefaultIdentity)
+	if rerr == nil {
+		t.Fatal("restoring over a symlink leaf must refuse")
+	}
+	if !strings.Contains(rerr.Error(), "symlink") {
+		t.Fatalf("refusal should name the symlink; got: %v", rerr)
+	}
+	if fi, lerr := os.Lstat(filepath.Join(dir, "a.txt")); lerr != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the user's symlink must survive; err=%v", lerr)
+	}
+	if b, ferr := os.ReadFile(target); ferr != nil || string(b) != "USER DATA" {
+		t.Fatalf("the link target must survive byte-for-byte; err=%v content=%q", ferr, b)
+	}
 }

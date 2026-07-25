@@ -1,6 +1,8 @@
 package secrets
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -159,5 +161,29 @@ func TestFlatten_AllowsDistinctKeys(t *testing.T) {
 	}
 	if out["github.token"] != "A" || out["github.user"] != "B" || out["openai.key"] != "C" {
 		t.Fatalf("distinct keys flattened wrong: %+v", out)
+	}
+}
+
+// TestAgeErrors_ChainWithoutRawPath pins BOTH properties of the age.go os-error
+// sites at once: the chain survives (errors.Is sees fs.ErrNotExist through the
+// pathlessErr unwrap) AND the error string never re-embeds the raw
+// config-derived path — a *fs.PathError wrapped verbatim prints the
+// unsanitized path, defeating the sanitized untrusted.Wrap operand beside it
+// (the #93 escape-injection class; main.go prints errors raw).
+func TestAgeErrors_ChainWithoutRawPath(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	hostile := filepath.Join(dir, "no\x1b[31mpe") // missing, ESC-bearing path
+	b := NewAgeBackend(filepath.Join(dir, "secrets.age"), hostile)
+
+	_, err := b.Resolve("k")
+	if err == nil {
+		t.Fatal("Resolve on a missing identity must error")
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("error chain must surface fs.ErrNotExist; got %v", err)
+	}
+	if strings.Contains(err.Error(), "\x1b") {
+		t.Fatalf("error string re-embeds a raw ESC byte from the config-derived path: %q", err.Error())
 	}
 }
