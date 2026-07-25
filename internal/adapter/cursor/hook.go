@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -182,12 +183,11 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 				structural = true
 				break
 			}
-			// A non-string matcher/type/command would be asStr-coerced ("" match-all,
-			// "" type promoted to "command", "" command destroying the handler's
-			// meaning) and captured wrong; refuse the malformed shape instead —
-			// structurally, so a typo never triggers retirement.
+			// A non-string matcher/type would be asStr-coerced ("" match-all, ""
+			// type promoted to "command") and captured wrong; refuse the malformed
+			// shape instead — structurally, so a typo never triggers retirement.
 			bad := false
-			for _, key := range []string{"matcher", "type", "command"} {
+			for _, key := range []string{"matcher", "type"} {
 				if rawVal, present := entry[key]; present {
 					if _, isStr := rawVal.(string); !isStr {
 						fmt.Fprintf(warn, "warning: hook event %q has an entry whose %q is not a string; event not captured\n", cursorEvent, key)
@@ -210,8 +210,25 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 				representable = false
 				break
 			}
+			// An absent or non-string command would be asStr-coerced to "" and
+			// captured as an EMPTY-command entry the next apply would then write
+			// over the user's native entry. Checked AFTER the type check so it
+			// governs only command-type entries: a native prompt-type entry
+			// legitimately has no command, and must keep its SEMANTIC
+			// (retirement-triggering) refusal above.
+			if rawCmd, present := entry["command"]; !present {
+				fmt.Fprintf(warn, "warning: hook event %q has an entry without a \"command\"; event not captured\n", cursorEvent)
+				representable = false
+				structural = true
+				break
+			} else if _, isStr := rawCmd.(string); !isStr {
+				fmt.Fprintf(warn, "warning: hook event %q has an entry whose \"command\" is not a string; event not captured\n", cursorEvent)
+				representable = false
+				structural = true
+				break
+			}
 			if extra := unmodeledKeys(entry, cursorHookEntryModeledKeys); len(extra) > 0 {
-				fmt.Fprintf(warn, "warning: hook event %q has an entry with unmodeled fields (%s); event not captured\n", cursorEvent, strings.Join(extra, ", "))
+				fmt.Fprintf(warn, "warning: hook event %q has an entry with unmodeled fields (%s); event not captured\n", cursorEvent, quotedKeys(extra))
 				representable = false
 				break
 			}
@@ -284,4 +301,15 @@ func unmodeledKeys(entry map[string]any, modeled map[string]bool) []string {
 func (a *Adapter) NativeHookEvent(canonical string) (string, bool) {
 	native, ok := canonicalToCursorHookEvent[canonical]
 	return native, ok
+}
+
+// quotedKeys renders untrusted native key names for a warning line: each key
+// %q-quoted (control bytes escaped — a key containing a newline cannot forge
+// a second warning line), comma-separated.
+func quotedKeys(keys []string) string {
+	qs := make([]string, len(keys))
+	for i, k := range keys {
+		qs[i] = strconv.Quote(k)
+	}
+	return strings.Join(qs, ", ")
 }

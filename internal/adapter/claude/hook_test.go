@@ -251,7 +251,7 @@ func TestIngest_HookGuardWarnsAndSkips(t *testing.T) {
 		{
 			name:      "unmodeled handler field",
 			hooks:     `{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo before", "timeout": 30 } ] } ] }`,
-			wantWarns: []string{"unmodeled fields (timeout)", "event not captured"},
+			wantWarns: []string{"unmodeled fields (\"timeout\")", "event not captured"},
 		},
 		{
 			name:      "non-command handler",
@@ -356,6 +356,10 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "prompt", "command": "x" } ] } ] }`, true,
 		},
 		{
+			"semantic: non-command handler without a command (type wins over the absent-command structural check)",
+			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "prompt" } ] } ] }`, true,
+		},
+		{
 			"structural: event value not an array",
 			`{ "PreToolUse": { "matcher": "Bash" } }`, false,
 		},
@@ -382,6 +386,10 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 		{
 			"structural: handler command not a string",
 			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": 123 } ] } ] }`, false,
+		},
+		{
+			"structural: handler without a command",
+			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command" } ] } ] }`, false,
 		},
 	}
 	for _, tt := range tests {

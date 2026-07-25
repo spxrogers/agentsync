@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -141,7 +142,7 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 				break
 			}
 			if extra := unmodeledKeys(entry, claudeHookDefModeledKeys); len(extra) > 0 {
-				fmt.Fprintf(warn, "warning: hook event %q has a definition with unmodeled fields (%s); event not captured\n", event, strings.Join(extra, ", "))
+				fmt.Fprintf(warn, "warning: hook event %q has a definition with unmodeled fields (%s); event not captured\n", event, quotedKeys(extra))
 				representable = false
 				break
 			}
@@ -186,31 +187,30 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 						break defs
 					}
 				}
-				// A non-string command would be coerced to "" by asStr and captured as
-				// an EMPTY-command handler — which the next apply, owning the whole
-				// per-event array, would write over the user's native handler. The
-				// same coercion hazard as matcher/type, on the one field where the
-				// loss is guaranteed to destroy the handler's meaning.
-				if rawCmd, present := h["command"]; present {
-					if _, isStr := rawCmd.(string); !isStr {
-						fmt.Fprintf(warn, "warning: hook event %q has a handler whose \"command\" is not a string; event not captured\n", event)
-						representable = false
-						structural = true
-						break defs
-					}
-				}
-				// A non-string command would be coerced to "" by asStr and captured as
-				// an EMPTY-command handler — which the next apply, owning the whole
-				// per-event array, would write over the user's native handler. The
-				// same coercion hazard as matcher/type, on the one field where the
-				// loss is guaranteed to destroy the handler's meaning.
 				if typ := asStr(h["type"]); typ != "" && typ != "command" {
 					fmt.Fprintf(warn, "warning: hook event %q has a %q-type handler agentsync cannot represent; event not captured\n", event, typ)
 					representable = false
 					break defs
 				}
+				// An absent or non-string command would be asStr-coerced to "" and
+				// captured as an EMPTY-command handler — which the next apply, owning
+				// the whole per-event array, would write over the user's native
+				// handler. Checked AFTER the type check so it governs only command-type
+				// handlers: a native prompt-type handler legitimately has no command,
+				// and must keep its SEMANTIC (retirement-triggering) refusal above.
+				if rawCmd, present := h["command"]; !present {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler without a \"command\"; event not captured\n", event)
+					representable = false
+					structural = true
+					break defs
+				} else if _, isStr := rawCmd.(string); !isStr {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler whose \"command\" is not a string; event not captured\n", event)
+					representable = false
+					structural = true
+					break defs
+				}
 				if extra := unmodeledKeys(h, claudeHookEntryModeledKeys); len(extra) > 0 {
-					fmt.Fprintf(warn, "warning: hook event %q has a handler with unmodeled fields (%s); event not captured\n", event, strings.Join(extra, ", "))
+					fmt.Fprintf(warn, "warning: hook event %q has a handler with unmodeled fields (%s); event not captured\n", event, quotedKeys(extra))
 					representable = false
 					break defs
 				}
@@ -272,4 +272,15 @@ func unmodeledKeys(m map[string]any, modeled map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// quotedKeys renders untrusted native key names for a warning line: each key
+// %q-quoted (control bytes escaped — a key containing a newline cannot forge
+// a second warning line), comma-separated.
+func quotedKeys(keys []string) string {
+	qs := make([]string, len(keys))
+	for i, k := range keys {
+		qs[i] = strconv.Quote(k)
+	}
+	return strings.Join(qs, ", ")
 }

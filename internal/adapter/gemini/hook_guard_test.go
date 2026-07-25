@@ -38,6 +38,10 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "prompt", "command": "x" } ] } ] }`, true,
 		},
 		{
+			"semantic: non-command handler without a command (type wins over the absent-command structural check)",
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "prompt" } ] } ] }`, true,
+		},
+		{
 			"structural: event value not an array",
 			`{ "BeforeTool": { "matcher": "Bash" } }`, false,
 		},
@@ -64,6 +68,10 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 		{
 			"structural: handler command not a string",
 			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": 123 } ] } ] }`, false,
+		},
+		{
+			"structural: handler without a command",
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command" } ] } ] }`, false,
 		},
 		{
 			"gemini-only event is never refused, even on semantic content",
@@ -97,28 +105,52 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 	}
 }
 
-// TestIngest_RefusesNonStringCommand pins the capture side of the non-string
-// "command" guard (round-1 adversarial finding, gemini twin — see the claude
-// version for the full rationale): the event must be left uncaptured rather
-// than captured with an asStr-coerced empty command the next apply would then
-// write over the user's native handler.
-func TestIngest_RefusesNonStringCommand(t *testing.T) {
+// TestIngest_RefusesMalformedEntryShapes pins the CAPTURE side of the
+// structural coercion guards (gemini twin — see the claude version for the
+// full rationale): each shape must leave the event uncaptured rather than
+// captured with asStr-coerced fields the next apply would then write over the
+// user's native handler.
+func TestIngest_RefusesMalformedEntryShapes(t *testing.T) {
 	testenv.RequireContainer(t)
-	tmp := t.TempDir()
-	settings := filepath.Join(tmp, ".gemini", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name  string
+		hooks string
+	}{
+		{
+			"non-string matcher",
+			`{ "BeforeTool": [ { "matcher": 5, "hooks": [ { "type": "command", "command": "x" } ] } ] }`,
+		},
+		{
+			"non-string type",
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": 5, "command": "x" } ] } ] }`,
+		},
+		{
+			"non-string command",
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": 123 } ] } ] }`,
+		},
+		{
+			"absent command",
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command" } ] } ] }`,
+		},
 	}
-	native := `{ "hooks": { "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": 123 } ] } ] } }`
-	if err := os.WriteFile(settings, []byte(native), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	a := gemini.New(gemini.Options{TargetRoot: tmp})
-	out, err := a.Ingest(adapter.ScopeUser, "")
-	if err != nil {
-		t.Fatalf("Ingest: %v", err)
-	}
-	if len(out.Hooks) != 0 {
-		t.Fatalf("non-string command must leave the event uncaptured, got %+v", out.Hooks)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			settings := filepath.Join(tmp, ".gemini", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(settings, []byte(`{ "hooks": `+tt.hooks+` }`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			a := gemini.New(gemini.Options{TargetRoot: tmp})
+			out, err := a.Ingest(adapter.ScopeUser, "")
+			if err != nil {
+				t.Fatalf("Ingest: %v", err)
+			}
+			if len(out.Hooks) != 0 {
+				t.Fatalf("malformed shape must leave the event uncaptured, got %+v", out.Hooks)
+			}
+		})
 	}
 }
