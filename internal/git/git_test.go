@@ -2224,3 +2224,49 @@ func TestPruneEmptiedDirs_KeepsUserSymlink(t *testing.T) {
 		t.Fatalf("prune must never unlink a user's symlink; err=%v", lerr)
 	}
 }
+
+// TestApplyRestoreDelta_RechecksSymlinkAncestors pins the mutation-time TOCTOU
+// gate: applyRestoreDelta is driven DIRECTLY (bypassing Restore's pre-flight,
+// exactly the state a link planted between pre-flight and mutation produces)
+// with a symlinked ancestor on each pass — the write and delete passes must
+// refuse rather than resolve through the link, and the outside dir stays
+// untouched.
+func TestApplyRestoreDelta_RechecksSymlinkAncestors(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	outside := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, r, dir, "sub/managed.txt", "v1", "seed")
+	headH, err := r.headHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := r.commitTree(headH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt, err := r.repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The "planted between pre-flight and mutation" state: sub is now a link.
+	if err := os.RemoveAll(filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.applyRestoreDelta(wt, tree, []FileChange{{Kind: "create", Path: "sub/managed.txt"}}); err == nil {
+		t.Fatal("write pass must refuse a symlinked ancestor at mutation time")
+	}
+	if err := r.applyRestoreDelta(wt, tree, []FileChange{{Kind: "delete", Path: "sub/managed.txt"}}); err == nil {
+		t.Fatal("delete pass must refuse a symlinked ancestor at mutation time")
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Fatalf("nothing may cross the link: %v", entries)
+	}
+}

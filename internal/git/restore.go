@@ -256,6 +256,15 @@ func (r *Repo) applyRestoreDelta(wt *gogit.Worktree, targetTree *object.Tree, ch
 		if ch.Kind != "delete" {
 			continue
 		}
+		// Mutation-time ancestor re-check (TOCTOU): the pre-flight already
+		// refused symlinked ancestors, but a link planted BETWEEN pre-flight
+		// and this pass would still redirect the syscall outside the repo —
+		// the prune got exactly this defense-in-depth gate, the mutating
+		// passes need it too. A mid-restore refusal here is wrapped by
+		// restoreFailureHint upstream, so the user still gets a recovery path.
+		if parent, isLink := symlinkAncestor(r.dir, ch.Path); isLink {
+			return fmt.Errorf("refusing to remove %s during revert in %s: its parent %q became a symlink mid-restore", ch.Path, r.dir, parent)
+		}
 		// wt.Remove both deletes the worktree file and stages the deletion.
 		if _, err := wt.Remove(ch.Path); err != nil {
 			return fmt.Errorf("removing %s during revert in %s: %w", ch.Path, r.dir, err)
@@ -265,6 +274,12 @@ func (r *Repo) applyRestoreDelta(wt *gogit.Worktree, targetTree *object.Tree, ch
 	for _, ch := range changes {
 		if ch.Kind == "delete" {
 			continue // "create" | "modify"
+		}
+		// Same mutation-time re-check for the write path: without it, managed
+		// content (resolved cleartext secrets included) would land wherever a
+		// freshly planted ancestor link points.
+		if parent, isLink := symlinkAncestor(r.dir, ch.Path); isLink {
+			return fmt.Errorf("refusing to restore %s during revert in %s: its parent %q became a symlink mid-restore", ch.Path, r.dir, parent)
 		}
 		if err := restoreFileFromTree(wt, targetTree, ch.Path); err != nil {
 			return fmt.Errorf("restoring %s during revert in %s: %w", ch.Path, r.dir, err)
@@ -320,7 +335,12 @@ func pruneEmptiedDirs(wt *gogit.Worktree, changes []FileChange) {
 // restore performs — create, modify, delete, prune — resolves paths through
 // the OS (billy's chroot fs does not resolve symlinks itself but the syscalls
 // under it do), so any symlinked ancestor redirects the mutation OUTSIDE the
-// repo; the pre-flight refuses all of them through this one walk.
+// repo. Two layers use this walk: the pre-flight refuses up front
+// (all-or-nothing, nothing mutated), and applyRestoreDelta re-checks at
+// mutation time so a link planted between the two cannot slip through
+// (pruneEmptiedDirs carries its own Lstat gate). The walk never inspects the
+// repo root itself, so a user whose whole config dir is a symlink is
+// unaffected.
 func symlinkAncestor(root, rel string) (string, bool) {
 	for parent := path.Dir(rel); parent != "." && parent != "/"; parent = path.Dir(parent) {
 		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(parent)))

@@ -328,6 +328,14 @@ func printPlannedOp(w io.Writer, p *ui.Printer, op adapter.FileOp, wouldChange m
 		fmt.Fprintf(w, "    %s %s %s\n", p.Green(ui.GlyphOK), p.Green(ui.Pad("synced", 6)), dispPath)
 		return
 	}
+	// A pure orphan-cleanup op (the "{}"+OwnedKeys signature) is a key REMOVAL:
+	// it is excluded from the "to write" headline count (planSyncCounts) and
+	// summarized under "Removals:", so labeling it "write" here would make the
+	// listing disagree with both.
+	if render.IsKeyMerge(op.MergeStrategy) && strings.TrimSpace(string(op.Content)) == "{}" && len(op.OwnedKeys) > 0 {
+		fmt.Fprintf(w, "    %s %s %s\n", p.Yellow(ui.GlyphArrow), p.Yellow(ui.Pad("remove", 6)), dispPath)
+		return
+	}
 	// Plan ops never carry the "" Action spelling (Plan normalizes it to
 	// "write" at intake), so op.Action can be printed directly.
 	fmt.Fprintf(w, "    %s %s %s\n", p.Cyan(ui.GlyphArrow), p.Cyan(ui.Pad(op.Action, 6)), dispPath)

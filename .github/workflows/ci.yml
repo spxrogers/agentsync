@@ -170,10 +170,11 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run sync:docs
       - run: bun run check:links
-      # The explicit file (not `bun run test`, whose "scripts/**/*.test.mjs"
-      # glob exits 0 with "# tests 0" if it matches nothing) so a moved or
-      # renamed test file fails this job instead of hollowing it out.
-      - run: node --test scripts/check-links.test.mjs
+      # A shell-expanded glob (not `bun run test`, whose quoted
+      # "scripts/**/*.test.mjs" node glob exits 0 with "# tests 0" on zero
+      # matches): if no *.test.mjs exists, bash passes the literal pattern and
+      # node fails loudly — and a future scripts/*.test.mjs still runs here.
+      - run: node --test scripts/*.test.mjs
 
   goreleaser-snapshot:
     name: goreleaser-snapshot (cross-build matrix)
