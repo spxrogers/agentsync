@@ -47,7 +47,11 @@ several tiers of defense, in increasing distance from the danger:
 A marketplace or plugin you add is treated as untrusted input. At the network
 boundary, fetchers:
 
-- **reject symlinks** in npm / relative / git sources,
+- **reject symlinks** in npm tarballs and inside locally-copied (relative)
+  marketplace trees; a relative *source path* must **resolve inside the
+  marketplace root** (a symlinked path or intermediate directory cannot point
+  the copy outside it, while one resolving in-root — like a git-fetched
+  in-tree link — is followed),
 - **cap** decompressed tarball size (`AGENTSYNC_MAX_TARBALL_MB`, default 512 MB),
 - **bound** manifest-listed component paths and names to the plugin cache,
 - **reject** `http://` / `git://` sources unless `AGENTSYNC_ALLOW_INSECURE_URLS=1`,

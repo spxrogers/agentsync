@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
@@ -104,7 +103,7 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			}
 			if len(dropped) > 0 {
 				sort.Strings(dropped)
-				fmt.Fprintf(warn, "warning: command %q frontmatter keys not modeled by agentsync dropped on import: %s\n", name, strings.Join(dropped, ", "))
+				fmt.Fprintf(warn, "warning: command %q frontmatter keys not modeled by agentsync dropped on import: %s\n", name, adapter.QuotedKeys(dropped))
 			}
 			c.Commands = append(c.Commands, source.Command{Name: name, Frontmatter: cf, Body: body})
 		}
