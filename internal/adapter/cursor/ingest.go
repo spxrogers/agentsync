@@ -155,9 +155,9 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	if data, present, err := adapter.ReadFileOptional(p.Hooks); err != nil {
 		return c, fmt.Errorf("read %s: %w", p.Hooks, err)
 	} else if present {
-		// UseNumber decode for consistency with the MCP block above (hook fields
-		// agentsync captures are all strings, but an unmodeled-key refusal must
-		// see the same value shapes every other decode site sees).
+		// UseNumber decode purely for uniformity with the MCP block above — no
+		// behavior change here: hook fields agentsync captures are all strings,
+		// and the unmodeled-key refusal inspects keys only, never values.
 		top, err := jsonkeys.DecodeObject(data)
 		if err != nil {
 			return c, fmt.Errorf("parse %s: %w", p.Hooks, err)

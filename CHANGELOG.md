@@ -48,10 +48,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   integers beyond 2^53.** The five remaining JSON ingests decoded native config
   with plain `json.Unmarshal`, so a foreign integer larger than 2^53 (a
   snowflake id, a nanosecond timestamp) in a passthrough `Extra` field was
-  float64-rounded before it ever reached the capture funnel. All JSON-decoding
-  ingests now decode with `UseNumber` (`jsonkeys.DecodeObject`), matching
-  claude/gemini/generic — the exact digits survive ingest → render and
-  capture's TOML normalization. (Closes an epic #178 residual.)
+  float64-rounded before it ever reached the capture funnel. Every ingest that
+  decodes native JSON into the canonical model now decodes with `UseNumber`
+  (`jsonkeys.DecodeObject`), matching claude/gemini/generic — the exact digits
+  survive ingest → render and capture's TOML normalization. (Closes an epic
+  #178 residual.)
 
 - **`apply --dry-run` now previews convergence-time removals, and the apply
   headline counts key-removals and file-deletes distinctly.** A delete-only run
