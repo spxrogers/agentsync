@@ -35,10 +35,12 @@ type gitBackupSession struct {
 	// agents) is versioned exactly once.
 	roots             []string
 	hintedUnavailable bool
-	// warnedCleartext gates the one-time-per-run cleartext notices — the mode=on
-	// auto-init notice AND the baseline-snapshot caution — so an apply warns about
-	// the local-only cleartext-secret history once, not once per dir, and a fresh
-	// init that already warned suppresses the baseline caution for the same run.
+	// warnedCleartext gates the one-time-per-run cleartext CAUTION — the clause
+	// on the mode=on auto-init announcement AND the baseline-snapshot caution —
+	// so an apply warns about the local-only cleartext-secret history once, not
+	// once per dir, and a fresh init that already warned suppresses the baseline
+	// caution for the same run. The per-dir "started a … git backup of <dir>"
+	// announcement itself is NOT gated (see ensureUntrackedRepo).
 	warnedCleartext bool
 	// handled records roots whose init/prompt (or foreign-skip hint) decision has
 	// already been made THIS run, so the baseline and checkpoint passes never
@@ -505,19 +507,32 @@ func isUnderDir(child, parent string) bool {
 // Returns (nil, nil) when init was declined or could not be offered. It may flip
 // *mode to "off" for the rest of this run when the user picks "don't ask again".
 //
-// warnedCleartext gates the mode="on" cleartext notice: unlike the interactive prompt
-// (which already warns), mode="on" auto-inits with no caution, so an unattended apply
-// would grow its cleartext-secret git footprint across new dirs silently. The notice
-// fires once per run (the first NEW dir it actually inits), never on a declined /
-// nested-skip (nil repo) init.
+// warnedCleartext gates only the CLEARTEXT CAUTION clause of the mode="on"
+// notice: unlike the interactive prompt (which already warns), mode="on"
+// auto-inits with no caution, so an unattended apply would grow its
+// cleartext-secret git footprint silently. The "started a local-only git
+// backup of <dir>" announcement itself fires for EVERY dir actually inited —
+// a second new dir in the same run is never silent — while the caution rides
+// on the first announcement only (once per run, shared with the
+// baseline-snapshot caution). Never fires on a declined / nested-skip (nil
+// repo) init.
 func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mode *string, hintedUnavailable, warnedCleartext *bool) (*agit.Repo, error) {
 	switch *mode {
 	case source.GitBackupModeOn:
 		repo, err := initGuarded(p, dir)
-		if err == nil && repo != nil && !*warnedCleartext {
-			fmt.Fprintf(p.Err, "%s started a %s git backup of %s; like the files it versions, its history may contain secrets in cleartext (it is never pushed).\n",
-				p.Faint(ui.GlyphInfo), p.Bold("local-only"), dir)
-			*warnedCleartext = true
+		if err == nil && repo != nil {
+			// Per-DIR: every auto-inited dir announces itself — a second new dir
+			// in the same run must not be inited silently. Once-per-RUN: only the
+			// cleartext caution clause, gated by warnedCleartext (shared with the
+			// baseline-snapshot caution) so the warning doesn't repeat per dir.
+			if *warnedCleartext {
+				fmt.Fprintf(p.Err, "%s started a %s git backup of %s.\n",
+					p.Faint(ui.GlyphInfo), p.Bold("local-only"), dir)
+			} else {
+				fmt.Fprintf(p.Err, "%s started a %s git backup of %s; like the files it versions, its history may contain secrets in cleartext (it is never pushed).\n",
+					p.Faint(ui.GlyphInfo), p.Bold("local-only"), dir)
+				*warnedCleartext = true
+			}
 		}
 		return repo, err
 	case source.GitBackupModePrompt:

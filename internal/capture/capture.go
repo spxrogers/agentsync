@@ -195,8 +195,13 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 // MCP/LSP Extra passthrough maps (recursively through the project overlay) via
 // jsonkeys.ConvertNumbers: int64 within range, float64 beyond it, and the
 // literal string for an extreme that parses as neither (see ConvertNumbers'
-// range contract). Adapter ingests decode native JSON/JSONC with UseNumber so
-// an unmodeled integer beyond 2^53 survives in memory — but json.Number's
+// range contract). The UseNumber-decoding adapter ingests (claude, gemini,
+// codex, and the generic tier via jsonkeys.DecodeObject/DecodeJSONC) keep an
+// unmodeled integer beyond 2^53 exact in memory — cline/cursor/roo/windsurf/
+// opencode still decode with plain json.Unmarshal, so their Extra ints beyond
+// 2^53 are already float64-rounded before this funnel (a pre-existing
+// precision limit of those ingests, not something normalization can restore).
+// Either way json.Number is the hazard here: its
 // underlying type is a string, and go-toml marshals it as a TOML *string*
 // (`timeout = '30'`), so persisting it unconverted through source.Write* flips
 // the value's native type on the next render (30 -> "30"). Extra is the only

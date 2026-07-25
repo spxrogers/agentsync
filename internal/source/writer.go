@@ -341,7 +341,7 @@ func WriteHooks(home, event string, hooks []Hook) error {
 	if err := ValidateComponentID("hook event", event); err != nil {
 		return err
 	}
-	dir := filepath.Join(home, "hooks")
+	dir := filepath.Dir(HookPath(home, event))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir hooks: %w", err)
 	}
@@ -357,13 +357,15 @@ func WriteHooks(home, event string, hooks []Hook) error {
 	if err != nil {
 		return fmt.Errorf("marshal hooks/%s: %w", event, err)
 	}
-	return iox.AtomicWrite(filepath.Join(dir, event+".toml"), body, 0o644)
+	return iox.AtomicWrite(HookPath(home, event), body, 0o644)
 }
 
 // HookPath returns the canonical path of hooks/<event>.toml under home — the
-// single definition of the hook-file layout, shared by WriteHooks/RemoveHooks
-// and import's retirement preview (a hardcoded copy in a caller would silently
-// under-report the preview if the layout ever moved). The event is NOT
+// single definition of the hook-file layout, shared by WriteHooks/RemoveHooks,
+// import's retirement preview, and reconcile's pointer→source mapping (a
+// hardcoded copy in a caller would silently under-report the preview if the
+// layout ever moved; loadHooks walks the directory rather than composing
+// per-event paths, so it reads filepath.Dir of this). The event is NOT
 // validated here; mutating callers validate via ValidateComponentID first.
 func HookPath(home, event string) string {
 	return filepath.Join(home, "hooks", event+".toml")

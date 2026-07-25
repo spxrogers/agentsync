@@ -754,7 +754,13 @@ func itemSourceFile(home string, it reconcileItem) string {
 	case "lspServers", "lsp":
 		return filepath.Join(home, "lsp", parts[1]+".toml")
 	case "hooks":
-		return filepath.Join(home, "hooks", parts[1]+".toml")
+		// LATENT (renamed-event class, round-2 review): parts[1] is a NATIVE
+		// pointer segment, which for a renaming agent (gemini BeforeTool,
+		// cursor preToolUse) is not the canonical event this maps to. Inert
+		// today because hook write-back is refused below ("not implemented in
+		// v1"); if hook write-back is ever implemented, this mapping must
+		// translate through adapter.HookEventNamer first.
+		return source.HookPath(home, parts[1])
 	}
 	return ""
 }
