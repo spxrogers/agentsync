@@ -1415,3 +1415,73 @@ func TestImport_RetireDisownIsScopeExact(t *testing.T) {
 		}
 	}
 }
+
+// TestImport_DryRunPreviewsStaleHookRetirement pins preview honesty for the
+// stale-hook retirement: `import --dry-run` used to return before
+// retireRefusedHookEvents ran, silently omitting a mutation the real run
+// performs. The dry-run must announce the would-be retirement — through a pure
+// read (RefusedHookEvents + os.Stat) — while deleting nothing and leaving
+// state byte-identical. The named selector previews the same note.
+func TestImport_DryRunPreviewsStaleHookRetirement(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mustRun(t, env, "agent", "add", "claude")
+	settings := filepath.Join(tmp, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clean := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi"}]}]}}`
+	if err := os.WriteFile(settings, []byte(clean), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude:hook:PreToolUse"); err != nil {
+		t.Fatalf("import clean hook: %v\n%s", err, out)
+	}
+	canonical := filepath.Join(tmp, ".agentsync", "hooks", "PreToolUse.toml")
+	if _, err := os.Stat(canonical); err != nil {
+		t.Fatalf("precondition: canonical hook not captured: %v", err)
+	}
+	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
+	stateBefore, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The user enriches the native entry with a field agentsync cannot model,
+	// so ingest refuses the event and a REAL import would retire the file.
+	enriched := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 30}]}]}}`
+	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "import", "claude", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "would retire canonical hooks/PreToolUse.toml") {
+		t.Fatalf("dry-run must preview the stale-hook retirement:\n%s", out)
+	}
+	if strings.Contains(out, "retired canonical") {
+		t.Fatalf("dry-run must not claim a retirement actually happened:\n%s", out)
+	}
+	if _, err := os.Stat(canonical); err != nil {
+		t.Fatalf("dry-run must not delete the canonical hook file: %v", err)
+	}
+	stateAfter, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stateBefore, stateAfter) {
+		t.Fatalf("dry-run must not touch state:\nbefore: %s\nafter:  %s", stateBefore, stateAfter)
+	}
+
+	// The named selector previews the retirement too (the capture itself errors
+	// "not found" since ingest refused the event — same as the real named run —
+	// so only the note is asserted, not the exit code).
+	out, _ = runCLI(t, env, "import", "claude:hook:PreToolUse", "--dry-run")
+	if !strings.Contains(out, "would retire canonical hooks/PreToolUse.toml") {
+		t.Fatalf("named dry-run must preview the stale-hook retirement:\n%s", out)
+	}
+	if _, err := os.Stat(canonical); err != nil {
+		t.Fatalf("named dry-run must not delete the canonical hook file: %v", err)
+	}
+}

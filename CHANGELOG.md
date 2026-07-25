@@ -139,7 +139,9 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   notice. Canonical hooks are shared across agents, so the retirement disowns
   the event's state key for **every** agent at exactly that scope — each
   agent's native entry is left frozen as-is, and no orphan cleanup fires
-  against it on the next apply.
+  against it on the next apply. `import --dry-run` now previews the same
+  retirement (a "would retire canonical `hooks/<event>.toml`" note, computed
+  read-only) instead of silently omitting it from the preview.
 - **The pre-apply git baseline now covers planned deletions, so a delete-only
   first apply is recoverable.** The baseline staged only the paths the plan
   would *write*; a file the apply was about to *delete* (a skill dropped from

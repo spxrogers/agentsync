@@ -300,8 +300,14 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projec
 
 	// A dry-run wrote nothing, so there is no state to seed and the
 	// foreign-collision warning below would describe the pre-import world.
-	// Stop here with just the preview (surfacing any selector/not-found error).
+	// But the preview must not OMIT a mutation the real run performs: report
+	// which stale canonical hook files the retirement below would remove (a
+	// pure read — RefusedHookEvents + os.Stat), then stop with just the
+	// preview (surfacing any selector/not-found error).
 	if dryRun {
+		if component == "" || component == "hook" {
+			previewRefusedHookRetirement(io, srcHome, a, name, sc, projectRoot)
+		}
 		return importErr
 	}
 
@@ -356,14 +362,42 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projec
 	return importErr
 }
 
-// unimportedDestPointers returns a list of human-readable labels for
-// destination pointers / files that exist on disk for the given agent
-// but are NOT in the canonical model after the import. Used to alert
-// the user that import covers ONE item and the rest of the destination
-// is still unowned.
-//
-// We render canonical → ops, build the set of (path, pointer) pairs
-// canonical claims, and diff against the actual on-disk contents.
+// previewRefusedHookRetirement is the dry-run counterpart of
+// retireRefusedHookEvents: it reports which stale canonical hooks/<event>.toml
+// files a real import would retire, mutating nothing — RefusedHookEvents only
+// reads the destination, and the canonical file's existence is probed with
+// os.Stat. The name filter matches the real path exactly, and the semantic-only
+// refusal set is the adapter guard's own (malformed native shapes never appear
+// in it). An event whose name fails ValidateComponentID is skipped silently
+// here: the real run's RemoveHooks refuses it with a warning and retires
+// nothing, so there is no retirement to preview (and the untrusted name never
+// reaches a filesystem path).
+func previewRefusedHookRetirement(io *importIO, srcHome string, a adapter.Adapter, name string, sc adapter.Scope, projectRoot string) {
+	g, ok := a.(adapter.HookIngestGuard)
+	if !ok {
+		return
+	}
+	refused, err := g.RefusedHookEvents(sc, projectRoot)
+	if err != nil {
+		io.warnf("could not check for stale canonical hook files: %v", err)
+		return
+	}
+	for _, event := range refused {
+		if name != "" && event != name {
+			continue // a named import retires only the event the user named
+		}
+		if source.ValidateComponentID("hook event", event) != nil {
+			continue
+		}
+		if _, serr := os.Stat(filepath.Join(srcHome, "hooks", event+".toml")); serr != nil {
+			continue // no canonical file — a real run has nothing to retire
+		}
+		io.note(fmt.Sprintf("would retire canonical hooks/%s.toml — the native entry has content "+
+			"agentsync cannot represent. Canonical hooks are shared, so a real import would stop "+
+			"agentsync managing this event for ANY agent at this scope", event))
+	}
+}
+
 // retireRefusedHookEvents removes the stale canonical hooks/<event>.toml for
 // every hook event the destination carries but the adapter's ingest refused to
 // capture for semantic reasons (adapter.HookIngestGuard; malformed native
@@ -453,6 +487,14 @@ func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adap
 	}
 }
 
+// unimportedDestPointers returns a list of human-readable labels for
+// destination pointers / files that exist on disk for the given agent
+// but are NOT in the canonical model after the import. Used to alert
+// the user that import covers ONE item and the rest of the destination
+// is still unowned.
+//
+// We render canonical → ops, build the set of (path, pointer) pairs
+// canonical claims, and diff against the actual on-disk contents.
 func unimportedDestPointers(agentsyncHome, srcHome, agentName string, reg *adapter.Registry, sc adapter.Scope, projectRoot string) []string {
 	pluginCacheRoot := filepath.Join(agentsyncHome, ".state", "cache", "plugins")
 	// Lenient: this is a post-import diagnostic re-render. A strict plugin
