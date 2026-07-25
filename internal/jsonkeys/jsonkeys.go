@@ -34,14 +34,15 @@ func DecodeObject(data []byte) (map[string]any, error) {
 }
 
 // DecodeYAML parses YAML (e.g. component frontmatter) into a map, preserving
-// integer precision beyond 2^53. A plain yaml.Unmarshal into interface{} decodes
-// every number as float64, silently rounding a large integer (snowflake id,
-// nanosecond timestamp) — and since yaml.Marshal then re-emits the rounded
-// value, the corruption is persisted on render and on source write-back. This
-// routes YAML→JSON (which keeps the integer literal), decodes with UseNumber,
-// then converts each json.Number to int64 (or float64) so yaml.Marshal re-emits
-// a bare integer. Empty/null input yields an empty map; a non-mapping document
-// is an error (frontmatter must be a mapping).
+// integer precision beyond 2^53 (up to int64). A plain yaml.Unmarshal into
+// interface{} decodes every number as float64, silently rounding a large
+// integer (snowflake id, nanosecond timestamp) — and since yaml.Marshal then
+// re-emits the rounded value, the corruption is persisted on render and on
+// source write-back. This routes YAML→JSON (which keeps the integer literal),
+// decodes with UseNumber, then normalizes through ConvertNumbers so
+// yaml.Marshal re-emits a bare integer; see ConvertNumbers' range contract for
+// the beyond-int64 and unparseable extremes. Empty/null input yields an empty
+// map; a non-mapping document is an error (frontmatter must be a mapping).
 func DecodeYAML(yml []byte) (map[string]any, error) {
 	jb, err := yaml.YAMLToJSON(yml)
 	if err != nil {
@@ -56,39 +57,41 @@ func DecodeYAML(yml []byte) (map[string]any, error) {
 	if raw == nil {
 		return map[string]any{}, nil
 	}
-	m, ok := convertJSONNumbers(raw).(map[string]any)
+	m, ok := ConvertNumbers(raw).(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("yaml document is not a mapping")
 	}
 	return m, nil
 }
 
-// ConvertNumbers walks v, replacing every json.Number with an int64 (when it
-// parses as an integer) or float64 otherwise, recursing through maps and
-// slices. DecodeObject/DecodeJSONC deliberately KEEP json.Number so a merge
-// re-marshals foreign JSON keys with their exact digits — but a json.Number
-// that escapes into a TOML-persisted field is a hazard: go-toml marshals the
-// underlying string type as a TOML *string* (`timeout = '30'`), silently
-// flipping the value's type on the next render. Callers that persist decoded
-// values outside JSON (the capture dest->source funnel) normalize through this
-// first; int64 keeps large integers (snowflake ids, nanosecond timestamps)
-// exact, matching DecodeYAML's behavior.
-func ConvertNumbers(v any) any { return convertJSONNumbers(v) }
-
-// convertJSONNumbers walks v, replacing every json.Number with an int64 (when
-// it parses as an integer) or float64 otherwise, recursing through maps and
-// slices. This keeps large integers exact while leaving non-numeric values
-// untouched.
-func convertJSONNumbers(v any) any {
+// ConvertNumbers walks v, replacing every json.Number with a Go numeric,
+// recursing through maps and slices and leaving non-numeric values untouched.
+// DecodeObject/DecodeJSONC deliberately KEEP json.Number so a merge re-marshals
+// foreign JSON keys with their exact digits — but a json.Number that escapes
+// into a TOML-persisted field is a hazard: go-toml marshals the underlying
+// string type as a TOML *string* (`timeout = '30'`), silently flipping the
+// value's type on the next render. Callers that persist decoded values outside
+// JSON (the capture dest->source funnel, DecodeYAML) normalize through this
+// first.
+//
+// Range contract: an integer within int64 stays exact (snowflake ids and
+// nanosecond timestamps beyond float64's 2^53 survive); an integer BEYOND
+// int64 falls to float64 and is lossy — TOML integers are int64, so exactness
+// past that bound is unrepresentable in the persisted form anyway; a numeric
+// literal that parses as neither int64 nor float64 (e.g. `1e309`, `1e400`)
+// falls back to its literal string, persisted as a TOML string — acceptable
+// for an unrepresentable extreme, and the capture leak backstop still scans
+// strings.
+func ConvertNumbers(v any) any {
 	switch x := v.(type) {
 	case map[string]any:
 		for k, vv := range x {
-			x[k] = convertJSONNumbers(vv)
+			x[k] = ConvertNumbers(vv)
 		}
 		return x
 	case []any:
 		for i, vv := range x {
-			x[i] = convertJSONNumbers(vv)
+			x[i] = ConvertNumbers(vv)
 		}
 		return x
 	case json.Number:
