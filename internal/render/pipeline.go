@@ -462,7 +462,8 @@ func applyPlan(
 			}
 			if res.Ops[i].Action == "write" && pathEscapes(res.Ops[i].Path) {
 				return reports, written, unchanged, wouldChange, fmt.Errorf(
-					"apply %s: refusing FileOp path %q: escapes its destination directory via '..'", name, res.Ops[i].Path)
+					"apply %s: refusing FileOp path %q: escapes its destination directory via '..'", name, res.Ops[i].Path,
+				)
 			}
 		}
 		var deduped []adapter.FileOp

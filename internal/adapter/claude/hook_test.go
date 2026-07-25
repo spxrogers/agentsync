@@ -343,24 +343,42 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 		hooks       string // JSON value of the settings.json "hooks" object
 		wantRefused bool
 	}{
-		{"semantic: unmodeled def field",
-			`{ "PreToolUse": [ { "matcher": "Bash", "sequential": true, "hooks": [ { "type": "command", "command": "x" } ] } ] }`, true},
-		{"semantic: unmodeled handler field",
-			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "x", "timeout": 30 } ] } ] }`, true},
-		{"semantic: non-command handler",
-			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "prompt", "command": "x" } ] } ] }`, true},
-		{"structural: event value not an array",
-			`{ "PreToolUse": { "matcher": "Bash" } }`, false},
-		{"structural: definition not an object",
-			`{ "PreToolUse": [ "oops" ] }`, false},
-		{"structural: matcher not a string",
-			`{ "PreToolUse": [ { "matcher": 5, "hooks": [ { "type": "command", "command": "x" } ] } ] }`, false},
-		{"structural: missing hooks array",
-			`{ "PreToolUse": [ { "matcher": "Bash" } ] }`, false},
-		{"structural: handler not an object",
-			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ 5 ] } ] }`, false},
-		{"structural: handler type not a string",
-			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": 5, "command": "x" } ] } ] }`, false},
+		{
+			"semantic: unmodeled def field",
+			`{ "PreToolUse": [ { "matcher": "Bash", "sequential": true, "hooks": [ { "type": "command", "command": "x" } ] } ] }`, true,
+		},
+		{
+			"semantic: unmodeled handler field",
+			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "x", "timeout": 30 } ] } ] }`, true,
+		},
+		{
+			"semantic: non-command handler",
+			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "prompt", "command": "x" } ] } ] }`, true,
+		},
+		{
+			"structural: event value not an array",
+			`{ "PreToolUse": { "matcher": "Bash" } }`, false,
+		},
+		{
+			"structural: definition not an object",
+			`{ "PreToolUse": [ "oops" ] }`, false,
+		},
+		{
+			"structural: matcher not a string",
+			`{ "PreToolUse": [ { "matcher": 5, "hooks": [ { "type": "command", "command": "x" } ] } ] }`, false,
+		},
+		{
+			"structural: missing hooks array",
+			`{ "PreToolUse": [ { "matcher": "Bash" } ] }`, false,
+		},
+		{
+			"structural: handler not an object",
+			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ 5 ] } ] }`, false,
+		},
+		{
+			"structural: handler type not a string",
+			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": 5, "command": "x" } ] } ] }`, false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
