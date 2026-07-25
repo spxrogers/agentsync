@@ -1868,3 +1868,114 @@ func TestSnapshotPreApply(t *testing.T) {
 		})
 	}
 }
+
+// commitWithParents stages rel and commits it with the given EXPLICIT parents
+// (overriding the default single HEAD parent), returning the new hash. go-git
+// has no porcelain branch-merge, so merge-shaped history is constructed
+// directly via CommitOptions.Parents. HEAD moves to the new commit.
+func commitWithParents(t *testing.T, r *Repo, dir, rel, content, msg string, parents ...string) string {
+	t.Helper()
+	writeFile(t, dir, rel, content)
+	wt, err := r.repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wt.Add(rel); err != nil {
+		t.Fatalf("stage %s: %v", rel, err)
+	}
+	hashes := make([]plumbing.Hash, len(parents))
+	for i, p := range parents {
+		hashes[i] = plumbing.NewHash(p)
+	}
+	sig := signature(DefaultIdentity)
+	h, err := wt.Commit(msg, &gogit.CommitOptions{Author: sig, Committer: sig, Parents: hashes})
+	if err != nil {
+		t.Fatalf("commit %s: %v", msg, err)
+	}
+	return h.String()
+}
+
+// rewindHead points the current branch ref back at hash without touching the
+// worktree, so a commit created beyond it stays in the object store as a
+// DESCENDANT of HEAD that is no longer reachable from it.
+func rewindHead(t *testing.T, r *Repo, hash string) {
+	t.Helper()
+	ref, err := r.repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.repo.Storer.SetReference(plumbing.NewHashReference(ref.Name(), plumbing.NewHash(hash))); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestIsAncestorOfHead_AcrossMergeParent backs the "walks the full commit
+// graph, not just first parents" claim on IsAncestorOfHead with a real merge
+// commit: a hash reachable ONLY through the merge's SECOND parent must still
+// validate as an ancestor (a first-parent-only walk would miss it), while a
+// descendant of HEAD sitting in the object store and a disjoint hash both
+// still refuse.
+func TestIsAncestorOfHead_AcrossMergeParent(t *testing.T) {
+	testenv.RequireContainer(t)
+	dir := t.TempDir()
+	r, err := Init(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := commitFile(t, r, dir, "a.txt", "base", "c1: base")
+	mainline := commitFile(t, r, dir, "a.txt", "main", "c2: mainline")
+	// Side chain forked off base: sideA -> sideB. Neither is on the
+	// first-parent lineage of the merge below.
+	sideA := commitWithParents(t, r, dir, "side.txt", "a", "sideA", base)
+	sideB := commitWithParents(t, r, dir, "side.txt", "b", "sideB", sideA)
+	// The merge: first parent the mainline tip, second parent the side tip.
+	merge := commitWithParents(t, r, dir, "merge.txt", "m", "merge", mainline, sideB)
+	// A commit BEYOND the merge, then rewind HEAD back — child stays stored but
+	// unreachable from HEAD.
+	child := commitWithParents(t, r, dir, "child.txt", "c", "child", merge)
+	rewindHead(t, r, merge)
+
+	// Preconditions: HEAD is the merge and it really has two parents with sideB
+	// second — otherwise the "only via the second parent" claim below is vacuous.
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Hash().String() != merge {
+		t.Fatalf("HEAD = %s, want the merge %s", ref.Hash(), merge)
+	}
+	mc, err := repo.CommitObject(plumbing.NewHash(merge))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mc.NumParents() != 2 || mc.ParentHashes[1].String() != sideB {
+		t.Fatalf("merge parents = %v, want [%s %s]", mc.ParentHashes, mainline, sideB)
+	}
+
+	tests := []struct {
+		name, hash string
+		want       bool
+	}{
+		{name: "the second parent itself", hash: sideB, want: true},
+		{name: "reachable ONLY via the second parent", hash: sideA, want: true},
+		{name: "the first-parent lineage", hash: mainline, want: true},
+		{name: "the shared root", hash: base, want: true},
+		{name: "a stored descendant of HEAD", hash: child, want: false},
+		{name: "a disjoint hash", hash: "0123456789abcdef0123456789abcdef01234567", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := r.IsAncestorOfHead(tt.hash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("IsAncestorOfHead(%s) = %v, want %v", tt.hash, got, tt.want)
+			}
+		})
+	}
+}
