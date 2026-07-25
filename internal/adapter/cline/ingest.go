@@ -1,12 +1,12 @@
 package cline
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
@@ -27,8 +27,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 			return c, fmt.Errorf("read %s: %w", p.MCP, err)
 		}
 		if present {
-			var top map[string]any
-			if err := json.Unmarshal(data, &top); err != nil {
+			// Decode with UseNumber (jsonkeys.DecodeObject) so an unmodeled large
+			// integer in the Extra passthrough survives as json.Number rather than
+			// a rounded float64 — same precision contract as the claude/gemini/
+			// generic ingests; capture normalizes json.Number at its funnel.
+			top, err := jsonkeys.DecodeObject(data)
+			if err != nil {
 				return c, fmt.Errorf("parse %s: %w", p.MCP, err)
 			}
 			if servers, ok := top["mcpServers"].(map[string]any); ok {
