@@ -396,6 +396,40 @@ reports directories to back up. The contract every implementor honours:
 An adapter with no versionable directory (e.g. `noop`) does not implement it. The
 apply tail's use of these roots is the step-9 narrative in §4.
 
+### HookIngestGuard and HookEventNamer (optional)
+
+Two further **optional** extensions serve `import`'s stale-hook retirement
+(the second-order issue #124 fix — a hook event captured while clean and later
+enriched natively must not leave a stale canonical `hooks/<event>.toml` that
+the next apply rewrites lossily):
+
+```go
+type HookIngestGuard interface {
+    RefusedHookEvents(scope Scope, project string) ([]string, error)
+}
+type HookEventNamer interface {
+    NativeHookEvent(canonical string) (string, bool)
+}
+```
+
+- **`HookIngestGuard`** (claude only today) re-reads the destination and
+  returns the hook events ingest *semantically* refused — unmodeled fields or
+  non-command handlers on well-formed entries; structurally-malformed shapes
+  (a settings.json typo) are excluded, because import deletes the canonical
+  file for every returned event and a native typo must never be destructive.
+  Gemini has the same refusal semantics in its ingest but no implementation
+  yet, so the clobber this closes remains live there (a known follow-up).
+- **`HookEventNamer`** (gemini, cursor) reports the *native* spelling an
+  adapter uses in its owned `/hooks/<name>` pointers (`PreToolUse` →
+  `BeforeTool` / `preToolUse`). Canonical hooks are **shared** across agents,
+  so a retirement disowns every agent's state key for the event at that scope
+  — and a renaming agent's key is only findable under its native spelling.
+  An adapter that renames without declaring would silently escape the disown
+  and the next apply's orphan cleanup would delete the event from its native
+  config; the registry-wide guard
+  `TestHookEventNamer_CoversEveryRenamedPointer` (`internal/cli`) makes that
+  state unrepresentable.
+
 ---
 
 ## 4. The apply pipeline (Source ▶ Destination)

@@ -488,19 +488,18 @@ func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adap
 	// render behind it, and the next apply's orphan cleanup deleted the event
 	// from that agent's native config. Over-matching errs safe: a key disowned
 	// while its event still renders is simply re-recorded by the next apply.
-	aliases := map[string][]string{}
+	var aliases []string
 	for _, event := range retired {
-		names := []string{event}
+		aliases = append(aliases, event)
 		for _, agName := range reg.Names() {
 			namer, ok := reg.Lookup(agName).(adapter.HookEventNamer)
 			if !ok {
 				continue
 			}
 			if native, ok := namer.NativeHookEvent(event); ok && native != event {
-				names = append(names, native)
+				aliases = append(aliases, native)
 			}
 		}
-		aliases[event] = names
 	}
 	changed := false
 	for key := range st.Keys {
@@ -508,12 +507,10 @@ func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adap
 		if agentEnd < 0 || !strings.HasPrefix(key[agentEnd:], scopeMid) {
 			continue
 		}
-		for _, names := range aliases {
-			for _, alias := range names {
-				if strings.HasSuffix(key, ":/hooks/"+alias) {
-					delete(st.Keys, key)
-					changed = true
-				}
+		for _, alias := range aliases {
+			if strings.HasSuffix(key, ":/hooks/"+alias) {
+				delete(st.Keys, key)
+				changed = true
 			}
 		}
 	}
@@ -545,6 +542,11 @@ func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adap
 		}
 	}
 }
+
+// unimportedDestPointers returns a list of human-readable labels for
+// destination pointers that exist in the native config but were not captured
+// by the import — scoped to top-level sections the canonical actually renders,
+// so the user learns exactly what stayed behind (see the call site's comment).
 func unimportedDestPointers(agentsyncHome, srcHome, agentName string, reg *adapter.Registry, sc adapter.Scope, projectRoot string) []string {
 	pluginCacheRoot := filepath.Join(agentsyncHome, ".state", "cache", "plugins")
 	// Lenient: this is a post-import diagnostic re-render. A strict plugin
