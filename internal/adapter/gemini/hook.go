@@ -190,11 +190,13 @@ var (
 // refused reports the SEMANTICALLY refused events under their CANONICAL names
 // (the spelling import retires — hooks/<canonical>.toml), sorted. The
 // structural flag mirrors the claude twin: a malformed native shape (non-object
-// def/handler, non-string matcher/type, missing hooks array — likely a
+// def/handler, non-string matcher/type/command, missing hooks array — likely a
 // settings.json typo) warns and skips capture but never joins refused, because
 // import deletes canonical config for every refused event and a native typo
-// must not be destructive. Diagnostics are at parity with claude's ingestHooks
-// (malformed shapes warn instead of dropping silently).
+// must not be destructive. First failure wins — a structural typo earlier in
+// the array masks a semantic def later (deliberate; see the claude twin's
+// comment). Diagnostics are at parity with claude's ingestHooks (malformed
+// shapes warn instead of dropping silently).
 func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) {
 	hooks, ok := raw.(map[string]any)
 	if !ok {
@@ -262,6 +264,19 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 				if rawType, present := h["type"]; present {
 					if _, isStr := rawType.(string); !isStr {
 						fmt.Fprintf(warn, "warning: hook event %q has a handler whose \"type\" is not a string; event not captured\n", geminiEvent)
+						representable = false
+						structural = true
+						break defs
+					}
+				}
+				// A non-string command would be coerced to "" by asStr and captured as
+				// an EMPTY-command handler — which the next apply, owning the whole
+				// per-event array, would write over the user's native handler. The
+				// same coercion hazard as matcher/type, on the one field where the
+				// loss is guaranteed to destroy the handler's meaning.
+				if rawCmd, present := h["command"]; present {
+					if _, isStr := rawCmd.(string); !isStr {
+						fmt.Fprintf(warn, "warning: hook event %q has a handler whose \"command\" is not a string; event not captured\n", geminiEvent)
 						representable = false
 						structural = true
 						break defs

@@ -62,6 +62,10 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": 5, "command": "x" } ] } ] }`, false,
 		},
 		{
+			"structural: handler command not a string",
+			`{ "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": 123 } ] } ] }`, false,
+		},
+		{
 			"gemini-only event is never refused, even on semantic content",
 			`{ "BeforeModel": [ { "matcher": "x", "hooks": [ { "type": "command", "command": "x", "timeout": 30 } ] } ] }`, false,
 		},
@@ -90,5 +94,31 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 				t.Fatalf("this shape must never trigger retirement; got %v", refused)
 			}
 		})
+	}
+}
+
+// TestIngest_RefusesNonStringCommand pins the capture side of the non-string
+// "command" guard (round-1 adversarial finding, gemini twin — see the claude
+// version for the full rationale): the event must be left uncaptured rather
+// than captured with an asStr-coerced empty command the next apply would then
+// write over the user's native handler.
+func TestIngest_RefusesNonStringCommand(t *testing.T) {
+	testenv.RequireContainer(t)
+	tmp := t.TempDir()
+	settings := filepath.Join(tmp, ".gemini", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	native := `{ "hooks": { "BeforeTool": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": 123 } ] } ] } }`
+	if err := os.WriteFile(settings, []byte(native), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := gemini.New(gemini.Options{TargetRoot: tmp})
+	out, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if len(out.Hooks) != 0 {
+		t.Fatalf("non-string command must leave the event uncaptured, got %+v", out.Hooks)
 	}
 }

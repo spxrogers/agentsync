@@ -379,6 +379,10 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 			"structural: handler type not a string",
 			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": 5, "command": "x" } ] } ] }`, false,
 		},
+		{
+			"structural: handler command not a string",
+			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": 123 } ] } ] }`, false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

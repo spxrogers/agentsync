@@ -120,11 +120,16 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 		var captured []source.Hook
 		representable := true
 		// structural distinguishes a MALFORMED native shape (non-object def/handler,
-		// non-string matcher/type, missing hooks array — likely a settings.json typo)
-		// from a well-formed entry agentsync cannot MODEL (unmodeled fields, a
-		// non-command handler). Only the latter joins refused: import retires the
-		// canonical hooks/<event>.toml for refused events, and deleting canonical
-		// config because the user typo'd their native JSON would be destructive.
+		// non-string matcher/type/command, missing hooks array — likely a
+		// settings.json typo) from a well-formed entry agentsync cannot MODEL
+		// (unmodeled fields, a non-command handler). Only the latter joins refused:
+		// import retires the canonical hooks/<event>.toml for refused events, and
+		// deleting canonical config because the user typo'd their native JSON would
+		// be destructive. First failure wins — the scan stops at the first
+		// unrepresentable def/handler, so a structural typo EARLIER in the array
+		// masks a semantic def later (no retirement that round). Deliberate: an
+		// event containing a malformed shape can't be trusted for retirement at
+		// all, every skip is warned, and fixing the typo re-runs the scan.
 		structural := false
 	defs:
 		for _, rawEntry := range entries {
@@ -181,6 +186,24 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 						break defs
 					}
 				}
+				// A non-string command would be coerced to "" by asStr and captured as
+				// an EMPTY-command handler — which the next apply, owning the whole
+				// per-event array, would write over the user's native handler. The
+				// same coercion hazard as matcher/type, on the one field where the
+				// loss is guaranteed to destroy the handler's meaning.
+				if rawCmd, present := h["command"]; present {
+					if _, isStr := rawCmd.(string); !isStr {
+						fmt.Fprintf(warn, "warning: hook event %q has a handler whose \"command\" is not a string; event not captured\n", event)
+						representable = false
+						structural = true
+						break defs
+					}
+				}
+				// A non-string command would be coerced to "" by asStr and captured as
+				// an EMPTY-command handler — which the next apply, owning the whole
+				// per-event array, would write over the user's native handler. The
+				// same coercion hazard as matcher/type, on the one field where the
+				// loss is guaranteed to destroy the handler's meaning.
 				if typ := asStr(h["type"]); typ != "" && typ != "command" {
 					fmt.Fprintf(warn, "warning: hook event %q has a %q-type handler agentsync cannot represent; event not captured\n", event, typ)
 					representable = false
