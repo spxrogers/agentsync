@@ -79,6 +79,23 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
     `update` is the command most likely to live in cron, `explain` is
     interactive. `agentsync explain <plugin-id>` fails from this release.
 
+### Documentation
+
+- **`revert --strict` was documented but never existed.** `revert` registers
+  only `--to`, `--all`, and `--dry-run`; strictness follows the invocation
+  (naming an agent is strict, `--all` skips-with-a-warning). The user guide's
+  prose and command table now describe the shipped behavior instead of a flag.
+- **The v1.0 design spec's §"CLI surface" and §"Source repo layout" were
+  written pre-implementation and carried more fiction than the standing
+  "trust the code" warning covered.** Corrected in place: `agentsync skill
+  {add,remove,list}` and `mcp set` were never implemented (a skill is a
+  *directory*, and `mcp add` already overwrites); `apply --strict`/`--force`/
+  `--agent`, `--scope all`, and a slug-valued `--project` were never wired;
+  the layout block never listed `subagents/`, `commands/`, `hooks/`, or
+  `lsp/`; and "`update` is the only network-touching command" was false from
+  v1.0. The `[plugin.overrides.<agent>]` table and `apply --strict` are now
+  explicitly marked not-wired rather than reading as shipped.
+
 ### Fixed
 
 - **`RelativeFetcher` (local-directory marketplaces) closes two symlink escapes

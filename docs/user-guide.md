@@ -279,8 +279,10 @@ Any **untracked files** you dropped into the dir (and gitignored files) are **le
 untouched** — revert only rewinds the files agentsync itself versions, so your own
 scratch files are never deleted. `revert --dry-run` notes when such files are
 present. And if you later clone your own git repo *inside* a managed dir (e.g.
-`~/.claude/skills/.git`), revert **skips that dir** with a warning (or errors under
-`--strict`) rather than hard-reset over your repo's checked-out files. It moves only the *destination*, so afterwards it reminds you to
+`~/.claude/skills/.git`), revert refuses to hard-reset over your repo's checked-out
+files: naming an agent (`agentsync revert claude`) **errors**, while `--all`
+**skips that dir** with a warning and carries on with the rest. (Strictness follows
+the invocation — there is no `--strict` flag.) It moves only the *destination*, so afterwards it reminds you to
 **reconcile** (or fix the canonical source) before the next `apply` re-renders over
 it.
 
@@ -763,7 +765,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `secrets set\|get <key>` / `secrets edit` | Manage age-encrypted secrets (`edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
 | `update` | **(deprecated)** Forwards to `plugin outdated` / `plugin upgrade --all [--lossless]` with a warning; removed in a future minor. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. A delete-only run (a component removed from source) reports `removed: N key(s), M file(s)` — key-removals and file-deletes counted distinctly — and a mixed run `applied: X ops, removed: …`, rather than mislabeling itself `up to date`/`applied: 0 ops`; `--dry-run` previews the same removal counts. | `--dry-run --scope --project --no-git-backup` |
-| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. `--to` must name one of the dir's own checkpoints (the current one or an ancestor) — anything else is refused. Skips (or, with `--strict`, errors on) a dir under which a foreign git repo has appeared. | `--to --all --dry-run` |
+| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. `--to` must name one of the dir's own checkpoints (the current one or an ancestor) — anything else is refused. A dir under which a foreign git repo has appeared (or that isn't an agentsync-managed backup) is an **error** when you name the agent, and a **skip with a warning** under `--all` — strictness follows the invocation; there is no `--strict` flag. | `--to --all --dry-run` |
 | `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. Skill directories collapse to one summary row by default (`--verbose` expands them). `--exit-code` makes it a CI gate: exit `2` when any drift is detected, `0` when clean. | `--agents --verbose --scope --project --json --exit-code` |
 | `diff [<path>]` | Show pending/drift changes; secrets redacted. `<path>` is a filesystem path; an unmanaged/typo'd path is reported distinctly from a clean one. `--agents` narrows to an agent allowlist (like `status`); `--exit-code` exits `2` when any hunk exists, `0` when clean. | `--agents --scope --project --json --exit-code` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
