@@ -24,7 +24,27 @@ import (
 // need plugin components expanded into the model use marketplace.LoadProjected
 // (which owns the single plugin projector). This keeps source free of any
 // dependency on plugin/marketplace concepts.
+//
+// Load also GATES on the retired agents/ → subagents/ layout: a home that still
+// carries a non-empty agents/ directory returns a *LegacySubagentDirError and
+// loads nothing. The gate is fail-closed on purpose — loading such a tree would
+// report zero subagents, and PruneStaleState reads "no longer rendered" as
+// "source component removed", so one apply would disown every subagent already
+// rendered. Diagnostics that must report the condition rather than die use
+// LoadTolerant.
 func Load(fs afero.Fs, home string) (Canonical, error) {
+	if err := CheckSubagentLayout(fs, home); err != nil {
+		return Canonical{}, err
+	}
+	return LoadTolerant(fs, home)
+}
+
+// LoadTolerant is Load WITHOUT the legacy-subagent-directory gate. It exists
+// for one caller: `agentsync doctor`, which must surface a pending migration as
+// a failing check with the fix instead of aborting at load. Every other caller
+// must use Load — a tolerant load of an unmigrated tree silently under-reports
+// subagents.
+func LoadTolerant(fs afero.Fs, home string) (Canonical, error) {
 	var c Canonical
 	if err := loadConfig(fs, home, &c.Config); err != nil {
 		return c, err
@@ -308,9 +328,9 @@ func ReadSkillFiles(fs afero.Fs, skillDir string) ([]SkillFile, error) {
 	return files, nil
 }
 
-// loadSubagents walks agents/<name>.md, parsing YAML frontmatter if present.
+// loadSubagents walks subagents/<name>.md, parsing YAML frontmatter if present.
 func loadSubagents(fs afero.Fs, home string) ([]Subagent, error) {
-	dir := filepath.Join(home, "agents")
+	dir := filepath.Join(home, SubagentsDir)
 	entries, err := afero.ReadDir(fs, dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

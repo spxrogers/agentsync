@@ -22,6 +22,7 @@ import { Aside } from '@astrojs/starlight/components';
 | `doctor` | Diagnose setup: PATH, home/state writability, schema, secrets backend, destination-git-backup mode + per-dir repo status. | |
 | `verify` | Validate config; surface unresolved `${secret:}` / `${env:}` refs. `--scope project` / `--project <path>` lints the project tree instead. | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or a project tree's own `[agents]` declaration with `--scope project` / `--project <path>`. | `disable --purge --scope --project` |
+| `migrate subagents` | One-shot move of the retired canonical `agents/` directory to `subagents/` (rewrites that tree's recorded `source_id` values). | `--scope --project` |
 | `mcp add\|remove\|list <name>` | Manage MCP servers. `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site. | `--type --command --args --url --env --agents --header` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
 | `plugin install\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). | `install <id[@marketplace]>` |
@@ -46,12 +47,35 @@ to clone an existing bootstrap config instead of starting empty (user scope only
 
 `--scope project` scaffolds a **project source tree** at `<cwd>/.agentsync/`
 instead — the same on-disk layout as the user tree (`agentsync.toml` plus `mcp/`,
-`lsp/`, `skills/`, `agents/`, `commands/`, `hooks/`, `memory/` with `fragments/`,
+`lsp/`, `skills/`, `subagents/`, `commands/`, `hooks/`, `memory/` with `fragments/`,
 `plugins/`, `secrets/`), but **no `.state/`** (apply records state centrally under
 `~/.agentsync/.state/`, keyed by project root). `--project <path>` targets
 `<path>/.agentsync/` and implies project scope; `--scope user` together with
 `--project` is an error. Commit the `.agentsync/` tree to share project agent
 config with collaborators. Full guide: [Project-local config](/guides/projects/).
+
+### `migrate subagents`
+A one-shot migration for a retired canonical layout. agentsync used to spell the
+canonical subagent directory `agents/`, one directory away from the `[agents]`
+harness registry in `agentsync.toml` — the same word naming two different types.
+The subagent side moved to `subagents/`; the harness side did **not** (`[agents]`,
+`--agents`, and the `agent` command group are unchanged).
+
+Until a tree is migrated, every command that loads the source refuses with a
+distinguishable error naming this command, and `doctor` reports it as a failing
+check. That refusal is deliberate: an unmigrated tree loads with **zero**
+subagents, and one `apply` would then delete every subagent it had already
+rendered.
+
+```bash
+agentsync migrate subagents                     # the user tree
+agentsync migrate subagents --project ~/code/x  # a project's committed tree
+```
+
+Interactively, the refusal offers to run the move for you. The move never
+overwrites: if a file exists under both `agents/` and `subagents/`, it refuses
+with the colliding names and moves nothing. After a user-scope move, commit the
+rename — `~/.agentsync` is usually a dotfiles repo.
 
 ### `doctor`
 A health check: verifies your `PATH`, that home and state directories are

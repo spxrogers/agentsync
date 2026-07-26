@@ -24,7 +24,7 @@ func TestWriteSubagent_PreservesLargeIntFrontmatter(t *testing.T) {
 	if err := source.WriteSubagent(home, sa); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(home, "agents", "big.md"))
+	data, err := os.ReadFile(filepath.Join(home, source.SubagentsDir, "big.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestWriteSubagent_PreservesListAndMapFrontmatter(t *testing.T) {
 	if err := source.WriteSubagent(home, sa); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(home, "agents", "reviewer.md"))
+	data, err := os.ReadFile(filepath.Join(home, source.SubagentsDir, "reviewer.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

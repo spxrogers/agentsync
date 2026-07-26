@@ -164,6 +164,7 @@ agentsync import claude                 # the agent's full native config
 agentsync import claude:mcp             # every MCP server
 agentsync import claude:mcp:github      # a single MCP server
 agentsync import claude:plugin          # every installed plugin + marketplace
+agentsync import opencode:subagent:reviewer
 agentsync import opencode:mcp:linear
 
 # Now it's in ~/.agentsync/ — apply to fan it out to your other agents.
@@ -332,7 +333,8 @@ first-class. Layout:
 ├── agentsync.toml            # agents, update defaults, secrets backend, [memory] banner, [destination_directory_git_backup]
 ├── mcp/<server>.toml         # one MCP server per file
 ├── lsp/<server>.toml         # one LSP server per file
-├── agents/<name>.md          # one subagent per file
+├── subagents/<name>.md       # one subagent per file (NOT `agents/` — that
+│                             #   word names the harness registry in agentsync.toml)
 ├── commands/<name>.md        # one slash command per file
 ├── hooks/<event>.toml        # one hook per file
 ├── marketplaces/<name>.toml  # one marketplace per file (its `head_sha`/`name`
@@ -348,7 +350,7 @@ first-class. Layout:
 
 A **project source tree** at a repo's `<root>/.agentsync/` has the *same*
 on-disk layout (created by `agentsync init --scope project`) — `agentsync.toml`
-plus `mcp/`, `lsp/`, `agents/`, `commands/`, `hooks/`, `memory/` (with
+plus `mcp/`, `lsp/`, `subagents/`, `commands/`, `hooks/`, `memory/` (with
 `fragments/`), `skills/`, `plugins/`, and `secrets/`. The one difference: it has
 **no `.state/`** — apply records state centrally under `~/.agentsync/.state/`,
 keyed by project root. Commit the `.agentsync/` tree to the repo to share project
@@ -587,7 +589,7 @@ agentsync init --project ~/code/myrepo
 ```
 
 That writes `<root>/.agentsync/agentsync.toml` plus `mcp/`, `lsp/`, `skills/`,
-`agents/`, `commands/`, `hooks/`, `memory/`, `plugins/`, and `secrets/` — the
+`subagents/`, `commands/`, `hooks/`, `memory/`, `plugins/`, and `secrets/` — the
 same files as the user tree, minus `.state/` (apply records state centrally under
 `~/.agentsync/.state/`, keyed by project root). Author the project's config in
 this tree:
@@ -737,6 +739,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `doctor` | Diagnose setup: PATH, home/state writability, config schema, secrets backend, destination-git-backup mode + per-dir repo status; flags natively-installed plugins missing from source. | |
 | `verify` | Validate config and surface every unresolved `${secret:}`/`${env:}` ref. `--scope project`/`--project <path>` schema-lints the project tree and validates its references against the inherited user secrets backend. | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or with `--scope project`/`--project <path>` the project tree's own `[agents]` declaration (which project scope renders from; never inherited). At project scope `disable --purge` touches only that project's rendered files. | `disable --purge --scope --project` |
+| `migrate subagents` | One-shot move of the retired canonical `agents/` directory to `subagents/`, rewriting that tree's recorded `source_id` values. Run once per tree (`--scope project` / `--project <path>` for a project tree). Refuses, listing the names, if a file exists under both directories. | `--scope --project` |
 | `mcp add\|remove\|list <name>` | Manage MCP servers. `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site, e.g. `--header "Authorization: Bearer ${secret:TOKEN}"`. | `--type --command --args --url --env --agents --header` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
 | `plugin install\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). | `install <id[@marketplace]>` |

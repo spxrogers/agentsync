@@ -524,6 +524,12 @@ func loadProjectedForScope(cmd *cobra.Command, fs afero.Fs, home, scopeFlag, pro
 	if err != nil {
 		return source.Canonical{}, sc, projectRoot, err
 	}
+	// Offer the retired-layout migration before loading. source.Load is already
+	// fail-closed on an unmigrated agents/ tree; running the check here first
+	// turns that refusal into a guided move for the commands users hit daily.
+	if err := ensureSubagentLayout(cmd, home, sc, projectRoot); err != nil {
+		return source.Canonical{}, sc, projectRoot, err
+	}
 	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
 	load := marketplace.LoadProjectedExcluding
 	if lenient {

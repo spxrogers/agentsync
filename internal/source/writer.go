@@ -299,14 +299,14 @@ func validateSkillFilePath(rel string) error {
 	return nil
 }
 
-// WriteSubagent writes agents/<name>.md from sa into home. Overwrites atomically.
+// WriteSubagent writes subagents/<name>.md from sa into home. Overwrites atomically.
 func WriteSubagent(home string, sa Subagent) error {
 	if err := ValidateComponentID("subagent", sa.Name); err != nil {
 		return err
 	}
-	dir := filepath.Join(home, "agents")
+	dir := filepath.Join(home, SubagentsDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("mkdir agents: %w", err)
+		return fmt.Errorf("mkdir %s: %w", SubagentsDir, err)
 	}
 	content := renderFrontmatter(sa.Frontmatter) + sa.Body
 	return iox.AtomicWrite(filepath.Join(dir, sa.Name+".md"), []byte(content), 0o644)

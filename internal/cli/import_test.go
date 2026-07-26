@@ -609,7 +609,7 @@ func TestImport_SubagentFromClaude(t *testing.T) {
 	}
 
 	// Verify canonical source was written.
-	canonicalPath := filepath.Join(tmp, ".agentsync", "agents", "reviewer.md")
+	canonicalPath := filepath.Join(tmp, ".agentsync", "subagents", "reviewer.md")
 	data, err := os.ReadFile(canonicalPath)
 	if err != nil {
 		t.Fatalf("canonical agents/reviewer.md not written: %v", err)
@@ -1022,7 +1022,7 @@ func TestImport_FullAgentFromClaude(t *testing.T) {
 	wantFiles := []string{
 		filepath.Join("mcp", "github.toml"),
 		filepath.Join("hooks", "PreToolUse.toml"),
-		filepath.Join("agents", "reviewer.md"),
+		filepath.Join("subagents", "reviewer.md"),
 		filepath.Join("commands", "review.md"),
 		filepath.Join("skills", "deploy", "SKILL.md"),
 		filepath.Join("memory", "AGENTS.md"),

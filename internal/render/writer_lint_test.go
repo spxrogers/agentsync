@@ -118,6 +118,7 @@ func TestNoDirectDestructiveOSCallsOutsideAllowedFiles(t *testing.T) {
 		"internal/marketplace/fetch_relative.go": true, // copies fetched files into the cache
 		"internal/marketplace/fetch_npm.go":      true, // unpacks the npm tarball into the cache
 		"internal/cli/init.go":                   true, // scaffolds ~/.agentsync (canonical source)
+		"internal/cli/migrate.go":                true, // moves the canonical agents/ dir to subagents/ (canonical source)
 		"internal/cli/secrets.go":                true, // vault rollback + cleartext temp cleanup
 		"internal/cli/marketplace.go":            true, // canonical source + marketplace cache
 		"internal/cli/plugin.go":                 true, // canonical source + plugin cache

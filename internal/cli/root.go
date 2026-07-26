@@ -42,6 +42,7 @@ func NewRoot() *cobra.Command {
 	cmd.AddCommand(
 		newInitCmd(),
 		newAgentCmd(),
+		newMigrateCmd(),
 		newDoctorCmd(),
 		newVerifyCmd(),
 		newApplyCmd(),

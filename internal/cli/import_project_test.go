@@ -52,14 +52,14 @@ func TestIntegration_Import_ProjectScope(t *testing.T) {
 	declareProjectAgent(t, env, proj, "claude")
 
 	// Captured config must land in the PROJECT tree, not the user home.
-	if _, err := os.Stat(filepath.Join(proj, ".agentsync", "agents", "rev.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(proj, ".agentsync", "subagents", "rev.md")); err != nil {
 		t.Fatalf("project subagent not captured into project tree: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(proj, ".agentsync", "mcp", "projapi.toml")); err != nil {
 		t.Fatalf("project MCP not captured into project tree: %v", err)
 	}
 	// It must NOT have written into the user home.
-	if _, err := os.Stat(filepath.Join(tmpHome, ".agentsync", "agents", "rev.md")); err == nil {
+	if _, err := os.Stat(filepath.Join(tmpHome, ".agentsync", "subagents", "rev.md")); err == nil {
 		t.Fatal("project import leaked into the user-scope home")
 	}
 

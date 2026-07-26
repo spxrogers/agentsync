@@ -9,6 +9,39 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (canonical layout): the subagent directory is now `subagents/`,
+  not `agents/`.** The canonical tree carried both the `[agents]` harness
+  registry (`agentsync.toml`) and the subagent files one directory apart — the
+  same word naming two different types. Only the **subagent** side moved. The
+  harness side is entirely unchanged: the `[agents]` TOML table, `--agents` on
+  `status`/`diff`/`mcp add`, `MCPServerSpec.Agents` / `LSPServerSpec.Agents`,
+  `statusModel.Agents` in `--json`, and the `agent` command group are all
+  exactly as before, so no `--json` consumer and no `agentsync.toml` key
+  breaks. What does change on disk: `~/.agentsync/agents/*.md` (and a project
+  tree's `<root>/.agentsync/agents/*.md`) move to `subagents/`, and the
+  `source_id` values recorded in `.state/targets.json` for subagents change
+  spelling with them. Rendered **destination** paths are untouched — every
+  harness still spells its own directory `agents/` (`~/.claude/agents/`,
+  `.cursor/agents/`, …), so the mapping is now deliberately asymmetric
+  (`subagents/reviewer.md` → `~/.claude/agents/reviewer.md`).
+  - **Migration: `agentsync migrate subagents`** (new command; add `--scope
+    project` / `--project <path>` for a project tree). It moves the files and
+    rewrites that tree's recorded `source_id` values in one step. Until a tree
+    is migrated, **every command that loads the source refuses** with a
+    distinguishable error naming the command, and `doctor` reports it as a
+    failing check with the fix. The refusal is deliberate rather than
+    permissive: an unmigrated tree loads with zero subagents, and a single
+    `apply` would then disown — and delete — every subagent already rendered.
+    Interactively the refusal offers to run the move; under `--no-input` (or
+    with no TTY) it hard-errors and names the command. A name present under
+    *both* directories refuses the whole migration, listing the collisions —
+    nothing is ever overwritten.
+- **`import` spells the subagent selector component `subagent`.** `agentsync
+  import opencode:subagent:reviewer` is the canonical form; `agent` stays
+  accepted as an alias, so existing invocations keep working.
+
 ### Fixed
 
 - **`RelativeFetcher` (local-directory marketplaces) closes two symlink escapes

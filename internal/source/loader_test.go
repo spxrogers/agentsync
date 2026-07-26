@@ -409,7 +409,7 @@ Body.
 
 func TestLoad_Subagents(t *testing.T) {
 	fs := afero.NewMemMapFs()
-	_ = afero.WriteFile(fs, "/home/.agentsync/agents/reviewer.md", []byte(`---
+	_ = afero.WriteFile(fs, "/home/.agentsync/subagents/reviewer.md", []byte(`---
 description: Code reviewer subagent
 tools:
   - read

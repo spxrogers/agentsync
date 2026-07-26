@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/project"
+	"github.com/spxrogers/agentsync/internal/source"
 )
 
 const initialAgentsyncTOML = `# agentsync source-of-truth config
@@ -151,7 +152,7 @@ func scaffoldHome(cmd *cobra.Command, home string) error {
 	subs := []string{
 		"mcp", "marketplaces", "plugins",
 		"memory", "memory/fragments",
-		"skills", "agents", "commands", "hooks", "lsp",
+		"skills", source.SubagentsDir, "commands", "hooks", "lsp",
 		".state",
 	}
 	for _, sub := range subs {
@@ -190,7 +191,7 @@ const initialProjectAgentsyncTOML = `# agentsync project-scope config
 # share project-scoped agent config with collaborators.
 #
 # Author project components by adding files under this tree (mcp/<id>.toml,
-# skills/<name>/SKILL.md, agents/<name>.md, commands/<name>.md, hooks/<event>.toml,
+# skills/<name>/SKILL.md, subagents/<name>.md, commands/<name>.md, hooks/<event>.toml,
 # lsp/<id>.toml, memory/AGENTS.md) or capture existing native config with
 # 'agentsync import <agent> --scope project'.
 #
@@ -217,7 +218,7 @@ func scaffoldProjectHome(cmd *cobra.Command, root string) error {
 		return err
 	}
 	subs := []string{
-		"mcp", "lsp", "skills", "agents", "commands", "hooks",
+		"mcp", "lsp", "skills", source.SubagentsDir, "commands", "hooks",
 		"memory", "memory/fragments",
 	}
 	for _, sub := range subs {

@@ -38,7 +38,7 @@ func TestInit_FreshScaffold(t *testing.T) {
 	required := []string{
 		"mcp", "marketplaces", "plugins",
 		"memory", "memory/fragments",
-		"skills", "agents", "commands", "hooks", "lsp",
+		"skills", "subagents", "commands", "hooks", "lsp",
 		"secrets", ".state",
 	}
 	for _, d := range required {

@@ -111,7 +111,7 @@ Bulk hotkeys (`W`/`O`/`S`) and non-interactive flags (`--auto-writeback`,
 Config applies at **user** scope (the whole machine) or **project** scope (one
 repo). A repo opts in by holding a `.agentsync/` **source tree** at its root —
 the same on-disk layout as `~/.agentsync/` (an `agentsync.toml` plus `mcp/`,
-`skills/`, `agents/`, `commands/`, `hooks/`, `lsp/`, `memory/`). Scaffold it with
+`skills/`, `subagents/`, `commands/`, `hooks/`, `lsp/`, `memory/`). Scaffold it with
 `agentsync init --scope project`; commit it to share project agent config with
 collaborators. Project scope is always an **explicit opt-in** — pass `--scope
 project` (walks up from cwd for the tree) or `--project <path>`. Commands default

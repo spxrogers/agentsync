@@ -56,7 +56,7 @@ func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp
 			Path:          filepath.Join(p.AgentsDir, s.Name+".md"),
 			Content:       body,
 			Mode:          0o644,
-			SourceID:      filepath.Join("agents", s.Name+".md"),
+			SourceID:      source.SubagentSourceID(s.Name),
 			MergeStrategy: "replace",
 		})
 	}
