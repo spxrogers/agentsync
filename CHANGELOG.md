@@ -79,6 +79,36 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
     `update` is the command most likely to live in cron, `explain` is
     interactive. `agentsync explain <plugin-id>` fails from this release.
 
+### Added
+
+- **`agentsync explain <path>[#<pointer>]` — provenance for a destination
+  file.** `diff` answers "what changed"; this answers "where did this come
+  from", which is exactly the question a *converged* file (where `diff` is
+  empty) leaves you with — and the one a merged `~/.claude/settings.json`, part
+  agentsync's and part yours, makes genuinely hard. Per item it reports the
+  source of record, the plugin origin when the component came from a
+  projection, the adapter transform (what was reduced or dropped en route), the
+  ownership (`managed` / `untracked` / `foreign`), the drift class in the
+  classifier's own vocabulary, and which `${secret:…}`/`${env:…}` references
+  resolved there. `--json` emits the same data as a structured envelope.
+  - **Metadata only — it never prints destination content.** No key values, no
+    drift snippets. With nothing to redact it answers even when the secrets
+    vault is locked, where `diff` must fail closed rather than print cleartext
+    it cannot mask. The only secret-adjacent output is the *fact* that a
+    reference resolved at a location.
+  - **Per-key provenance is real, not the coarse recorded value.**
+    `state.KeyEntry.SourceID` inherits the op-level id, which for every MCP/hook
+    key-merge op is a `"<kind>/* (multiple)"` sentinel — the state file does not
+    say which `mcp/<id>.toml` produced `/mcpServers/github`. explain derives it
+    from the pointer shape instead.
+  - Memory decomposes to `memory/AGENTS.md` **plus its fragments** (the
+    SourceID alone names only `AGENTS.md`, which would under-report exactly the
+    provenance this command promises). Paths are symlink-resolved before
+    matching, project scope is inferred when the path lies inside a project
+    tree, output is grouped per owning agent (agents share destinations), and
+    an unmanaged or typo'd path is reported distinctly — with the nearest
+    managed path suggested — mirroring `diff [<path>]`.
+
 ### Documentation
 
 - **`revert --strict` was documented but never existed.** `revert` registers
@@ -97,6 +127,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   explicitly marked not-wired rather than reading as shipped.
 
 ### Fixed
+
+- **Renamed hook events now invert to their canonical source file.**
+  `itemSourceFile` mapped a NATIVE key-merge pointer segment straight to
+  `hooks/<segment>.toml`, which for a renaming agent (gemini `BeforeTool`,
+  cursor `preToolUse`) is not the canonical event — a documented latent bug,
+  inert only because hook write-back is refused. `explain <path>#/hooks/…` is
+  the feature that made it live, so the mapping now translates through
+  `adapter.HookEventNamer`, and reconcile's write-back shares the fixed helper.
 
 - **`RelativeFetcher` (local-directory marketplaces) closes two symlink escapes
   of the marketplace-root containment check.** Containment was purely textual,

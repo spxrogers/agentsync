@@ -171,11 +171,11 @@ The architecture below makes that hard to do by accident. Do not weaken it.
 **1. One field list.** Every secret-bearing canonical field is enumerated in
 exactly one place: `walkSecretFields` in `internal/secrets/walk.go` (MCP/LSP
 `Command,URL,Args,Env,Headers`; Hook `Command`; recursive `Project`).
-`SubstituteCanonical`, `CollectResolved`, `UnresolvedSecretRefs`, and
-`ReReferenceCanonical` all delegate to it. **Add a new secret-bearing field ONLY
-there** — every operation then picks it up automatically. `TestNewSecretFieldGuard`
-(reflect-based) fails if a string-shaped field is added to those structs without
-being classified.
+`SubstituteCanonical`, `CollectResolved`, `UnresolvedSecretRefs`,
+`SecretRefsByComponent`, and `ReReferenceCanonical` all delegate to it. **Add a
+new secret-bearing field ONLY there** — every operation then picks it up
+automatically. `TestNewSecretFieldGuard` (reflect-based) fails if a
+string-shaped field is added to those structs without being classified.
 
 > **Deliberate exception — `MCPServerSpec.Extra` / `LSPServerSpec.Extra`.** These
 > `map[string]any` passthrough maps hold unmodeled native fields verbatim and are

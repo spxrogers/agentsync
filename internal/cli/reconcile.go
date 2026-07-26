@@ -335,7 +335,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 		switch action {
 		case 'w':
 			// write-back: persist destination value into the canonical source.
-			if attemptWriteBack(cmd, w, home, it, writtenSources) {
+			if attemptWriteBack(cmd, w, home, it, canonicalHookEvents(c), writtenSources) {
 				writeBackFailed++
 			}
 		case 'o':
@@ -649,8 +649,8 @@ func readChar(r *bufio.Reader) (byte, error) {
 // file and this write changes it, revert to the first write and report a
 // conflict (counted as a failure → non-zero exit) for the user to resolve.
 // Returns true on failure/conflict.
-func attemptWriteBack(cmd *cobra.Command, w io.Writer, home string, it reconcileItem, writtenSources map[string][]byte) bool {
-	srcFile := itemSourceFile(home, it)
+func attemptWriteBack(cmd *cobra.Command, w io.Writer, home string, it reconcileItem, hookEvents []string, writtenSources map[string][]byte) bool {
+	srcFile := itemSourceFile(home, it, hookEvents)
 	var prior []byte
 	priorWritten := false
 	if srcFile != "" {
@@ -737,32 +737,92 @@ func revertSource(srcFile string, prior []byte) {
 // targets, so two agents writing the same component can be detected. Both the
 // claude (/mcpServers/<id>) and opencode (/mcp/<id>) pointers map to the SAME
 // mcp/<id>.toml. Returns "" for items with no single source-of-record.
-func itemSourceFile(home string, it reconcileItem) string {
+func itemSourceFile(home string, it reconcileItem, hookEvents []string) string {
 	if it.ptr == "" {
 		if it.op.SourceID == "" || strings.HasSuffix(it.op.SourceID, "(multiple)") {
 			return ""
 		}
 		return filepath.Join(home, it.op.SourceID)
 	}
-	parts := strings.SplitN(strings.TrimPrefix(it.ptr, "/"), "/", 3)
+	return pointerSourceFile(home, it.agentName, it.ptr, hookEvents)
+}
+
+// pointerSourceFile maps a NATIVE key-merge JSON pointer back to the canonical
+// source file that produced it. It is shared by reconcile's write-back and
+// `agentsync explain <path>#<pointer>`, which is the feature that made the
+// renamed-hook-event translation below load-bearing rather than latent.
+//
+// agent names the rendering adapter, which matters for hooks: a RENAMING agent
+// (gemini `BeforeTool`, cursor `preToolUse`) spells the pointer segment
+// natively, so it must be translated back through adapter.HookEventNamer.
+// Without that, `/hooks/BeforeTool` resolved to a nonexistent
+// `hooks/BeforeTool.toml` — a wrong answer for explain and, once hook
+// write-back is implemented, a write to the wrong path for reconcile.
+//
+// canonicalEvents is the set of canonical hook events to invert against: the
+// events the loaded canonical actually carries. Every rendered hook pointer
+// comes from one of them, so scanning that set is both sufficient and free of a
+// second, drift-prone enumeration of the event vocabulary.
+//
+// Returns "" when the pointer names no single canonical source-of-record.
+func pointerSourceFile(home, agent, ptr string, canonicalEvents []string) string {
+	parts := strings.SplitN(strings.TrimPrefix(ptr, "/"), "/", 3)
 	if len(parts) < 2 || parts[1] == "" {
 		return ""
 	}
 	switch parts[0] {
-	case "mcpServers", "mcp":
+	case "mcpServers", "mcp", "mcp_servers":
 		return filepath.Join(home, "mcp", parts[1]+".toml")
 	case "lspServers", "lsp":
 		return filepath.Join(home, "lsp", parts[1]+".toml")
 	case "hooks":
-		// LATENT (renamed-event class, round-2 review): parts[1] is a NATIVE
-		// pointer segment, which for a renaming agent (gemini BeforeTool,
-		// cursor preToolUse) is not the canonical event this maps to. Inert
-		// today because hook write-back is refused below ("not implemented in
-		// v1"); if hook write-back is ever implemented, this mapping must
-		// translate through adapter.HookEventNamer first.
-		return source.HookPath(home, parts[1])
+		event, ok := canonicalHookEvent(agent, parts[1], canonicalEvents)
+		if !ok {
+			return ""
+		}
+		return source.HookPath(home, event)
 	}
 	return ""
+}
+
+// canonicalHookEvent inverts an agent's native hook-event spelling back to the
+// canonical one. An adapter that renders hooks under the canonical name (claude,
+// codex — no HookEventNamer) passes the segment through. A renaming adapter is
+// inverted by asking it for the native spelling of each candidate canonical
+// event; ok is false when nothing matches.
+func canonicalHookEvent(agent, native string, canonicalEvents []string) (string, bool) {
+	namer, ok := registryFactory().Lookup(agent).(adapter.HookEventNamer)
+	if !ok {
+		return native, true
+	}
+	for _, canonical := range canonicalEvents {
+		if got, has := namer.NativeHookEvent(canonical); has && got == native {
+			return canonical, true
+		}
+	}
+	return "", false
+}
+
+// canonicalHookEvents lists the canonical hook events the loaded model carries
+// — the inversion candidates for canonicalHookEvent. Deliberately derived from
+// the model rather than from a second hard-coded event vocabulary: every hook
+// pointer a render emits comes from one of these, and a standalone list would
+// be one more thing to keep in sync with the adapters.
+func canonicalHookEvents(c source.Canonical) []string {
+	if len(c.Hooks) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(c.Hooks))
+	for _, h := range c.Hooks {
+		e := h.Event.Unverified()
+		if e == "" || seen[e] {
+			continue
+		}
+		seen[e] = true
+		out = append(out, e)
+	}
+	return out
 }
 
 func writeBackItem(cmd *cobra.Command, home string, it reconcileItem) error {

@@ -36,6 +36,7 @@ import { Aside } from '@astrojs/starlight/components';
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source. `--scope project` captures the agent's native project-scope config into the project tree. | `--dry-run --scope --project` |
 | `plugin explain [<plugin>...]` | Show per-agent translation coverage for one or more plugins. | `--all --json` |
+| `explain <path>[#<pointer>]` | Show what produced a destination file (or one merged key). Metadata only — never file content. | `--pointer --scope --project --json` |
 | `version` | Print version information (alias for `--version`). | |
 
 ---
@@ -375,17 +376,56 @@ agentsync plugin explain atlassian@anthropic superpowers@obra
 agentsync plugin explain --all
 ```
 
+### `explain <path>[#<pointer>]`
+Answers "why does this file look like this?" for a destination an agent reads.
+`diff` tells you what changed; `explain` tells you where it came from — which is
+exactly what you need on a *converged* file, where `diff` is empty.
+
+```bash
+agentsync explain ~/.claude/agents/reviewer.md
+agentsync explain ~/.claude.json#/mcpServers/github
+agentsync explain ~/.claude.json --pointer /mcpServers/github
+agentsync explain ~/.claude.json --json
+```
+
+Per item it reports the **source of record** (`mcp/github.toml`,
+`subagents/reviewer.md`, `memory/AGENTS.md` **plus its fragments**), the
+**plugin origin** when the component came from a projection, the **adapter
+transform** (what was reduced or dropped en route), the **ownership**
+(`managed` / `untracked` / `foreign`), the **drift class** in the classifier's
+own vocabulary, and which `${secret:…}` / `${env:…}` references resolved there.
+
+<Aside type="note" title="Metadata only — and that's the point">
+	explain never prints destination content: no key values, no drift snippets.
+	With nothing to redact it works even when your secrets vault is **locked**,
+	where `diff` must fail closed rather than print cleartext it cannot mask. The
+	only secret-adjacent output is the *fact* that a reference resolved at a
+	location. For the content itself, use `diff <path>`.
+</Aside>
+
+The argument splits on the **last** `#`; `--pointer` is the unambiguous escape
+hatch and wins over an in-argument `#`. Paths are symlink-resolved before
+matching, project scope is inferred when the path lies inside a project tree,
+and an unmanaged or typo'd path is reported distinctly (with the nearest managed
+path suggested) — mirroring `diff [<path>]`.
+
+One path can have several owners (the breadth tier shares `~/.agents/skills/`),
+so output is grouped **per owning agent**, and two agents rendering *different*
+content to one path is surfaced as its own answer rather than an error.
+
+For per-plugin translation coverage, see [`plugin explain`](#plugin-explain-plugin).
+
 ---
 
 ## Flags that work across commands
 
 | Flag | Applies to | Effect |
 |---|---|---|
-| `--scope user\|project` | init, verify, import, apply, status, diff, reconcile, migrate, plugin upgrade | Force the config scope. |
-| `--project <path>` | init, verify, import, apply, status, diff, reconcile, migrate, plugin upgrade | Target / apply a specific project's tree. |
+| `--scope user\|project` | init, verify, import, apply, status, diff, reconcile, explain, migrate, plugin upgrade | Force the config scope. |
+| `--project <path>` | init, verify, import, apply, status, diff, reconcile, explain, migrate, plugin upgrade | Target / apply a specific project's tree. |
 | `--dry-run` | apply, import | Preview without writing. |
 | `--auto-safe` | reconcile | Auto-resolve only no-risk drift classes. (The plugin-side flag of the same name became `plugin upgrade --lossless` — they meant two unrelated things.) |
-| `--json` | status, diff, plugin explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). `plugin explain --json` emits the translation `rows`. |
+| `--json` | status, diff, explain, plugin explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). `plugin explain --json` emits the translation `rows`; `explain <path> --json` emits the provenance envelope (and still emits it, with `"unmanaged": true`, on a path nothing renders). |
 | `--agents <list>` | status, diff | Scope the report to a comma-separated agent allowlist (`*` = all enabled; matches `mcp add --agents`; an empty or unknown value is rejected identically by both). |
 | `--exit-code` | status, diff | Exit `2` when drift (status) / any hunk (diff) exists, `0` when clean — for CI gates. Distinct from the generic error exit `1`; prints no extra error line. Default (unset) always exits `0`. |
 | `--header "Name: Value"` | mcp add | Repeatable; http/sse only. Sets a request header (secret refs allowed). |

@@ -55,6 +55,7 @@ func NewRoot() *cobra.Command {
 		newMarketplaceCmd(),
 		newUpdateCmd(),
 		newSecretsCmd(),
+		newExplainCmd(),
 		newImportCmd(),
 		newVersionCmd(),
 	)

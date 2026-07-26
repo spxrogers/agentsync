@@ -516,7 +516,8 @@ agentsync plugin explain --all                                 # every installed
 agentsync plugin explain atlassian@anthropic --json            # machine-readable
 ```
 
-(`agentsync plugin list` prints the installed ids.)
+(`agentsync plugin list` prints the installed ids. The top-level `explain` name
+answers a different question — see [Where did this file come from?](#where-did-this-file-come-from).)
 
 Control fan-out per plugin with `agents = [...]` in the plugin's TOML file. (A
 per-component `[plugin.overrides.<agent>]` table was specced but is **not wired
@@ -701,6 +702,47 @@ systemd / Task Scheduler.
 
 ---
 
+## Where did this file come from?
+
+`diff` answers "what changed". `explain <path>` answers the other question — the
+one a merged file like `~/.claude/settings.json` makes hard:
+
+```bash
+agentsync explain ~/.claude/agents/reviewer.md          # a whole file
+agentsync explain ~/.claude.json#/mcpServers/github     # one merged key
+agentsync explain ~/.claude.json --pointer /mcpServers/github   # same, unambiguous
+agentsync explain ~/.claude.json --json                 # machine-readable
+```
+
+For each item it reports the **source of record** (`mcp/github.toml`,
+`subagents/reviewer.md`, `memory/AGENTS.md` *plus its fragments*), the **plugin
+origin** if the component came from a projection, the **adapter transform**
+(what was reduced or dropped en route), the **ownership** — `managed`,
+`untracked` (rendered, not applied yet), or `foreign` (yours; preserved by the
+key merge) — the **drift class** in the classifier's own vocabulary, and which
+`${secret:…}`/`${env:…}` references resolved there.
+
+Three things worth knowing:
+
+- **It prints metadata only.** No key values, no drift snippets, no file
+  content. That is what lets it answer with a **locked secrets vault**, where
+  `diff` has to fail closed rather than print cleartext it can't redact. Want
+  the content? That's `agentsync diff <path>`.
+- **It re-renders live**, like `diff` — so it is honest about an unapplied
+  source tree instead of narrating the last apply.
+- **One path can have several owners.** Agents share destinations (the breadth
+  tier shares `~/.agents/skills/`), so output is grouped per owning agent, and
+  two agents rendering *different* content to one path is reported as its own
+  answer.
+
+An unmanaged or typo'd path is reported distinctly from a clean one (with the
+nearest managed path suggested), exactly as `diff [<path>]` does.
+
+For per-plugin translation coverage — "what can each agent do with this plugin"
+— use [`agentsync plugin explain`](#multi-agent-fan-out) instead.
+
+---
+
 ## Multi-agent fan-out
 
 Not every agent supports every component, and agentsync never pretends
@@ -771,6 +813,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. Includes `plugin` (Claude), which re-fetches installed plugins + marketplaces **(network)**. `--scope project` reads the agent's *native project-scope* config (e.g. `<root>/.claude/`) and captures it into the project tree `<root>/.agentsync/`, seeding central state with the project scope + root. Plugin import is user-scope only. | `--dry-run --scope --project` |
 
+| `explain <path>[#<pointer>]` | Show what produced a destination file (or one merged key): source of record, plugin origin, adapter transform, ownership, drift class, and any `${secret:…}` references. **Metadata only** — never destination content, so it answers even when the secrets vault is locked (where `diff` must fail closed). `--pointer` is the unambiguous alternative to an in-argument `#`. Project scope is inferred when the path lies inside a project tree. | `--pointer --scope --project --json` |
 | `version` | Print version information (alias for `--version`). | |
 
 Global: `-v/--verbose` for verbose logging on any command (in `status` it also

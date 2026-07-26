@@ -80,11 +80,12 @@ cleartext back to `${secret:…}` for write-back; masks resolved values for disp
 The `Resolved` wrapper type is the load-bearing leak guard.
 - **Key:** `Resolver` (interface); `Resolved` (resolved-model wrapper);
   `SubstituteCanonical` (→ `Resolved`); `ReReferenceCanonical`; `CollectResolved`;
-  `UnresolvedSecretRefs`; `MaskResolved`; `AgeBackend`/`EnvBackend`/`NopResolver`;
+  `UnresolvedSecretRefs`; `SecretRefsByComponent` (per-component REFERENCES, for
+  `explain`); `MaskResolved`; `AgeBackend`/`EnvBackend`/`NopResolver`;
   `SelectBackend`; and the single field list `walkSecretFields` (in `walk.go`).
 - **Depends on:** source, iox.
 - **Files:** `secrets.go`, `age.go`, `resolved.go`, `substitute.go`,
-  `rereference.go`, `mask.go`, `walk.go`, `secretpaths.go`, `leakscan.go`
+  `rereference.go`, `mask.go`, `refs.go`, `walk.go`, `secretpaths.go`, `leakscan.go`
   (the `ResidualSecretCleartext` backstop), `runtime.go`.
 
 ### `internal/project`
