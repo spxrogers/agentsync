@@ -24,12 +24,12 @@ Feature: Marketplaces and plugins
     And the file ".claude.json" contains "demo-mcp"
     And the file ".config/opencode/opencode.json" contains "demo-mcp"
 
-  Scenario: explain --json produces parseable JSON
+  Scenario: plugin explain --json produces parseable JSON
     Given I create a local marketplace "fixture-mp" with plugin "demo-plugin" exposing MCP "demo-mcp" command "echo"
     And I run "agentsync marketplace add ./fixture-mp"
     And I run "agentsync plugin install demo-plugin@fixture-mp"
     And I run "agentsync apply"
-    When I run "agentsync explain --json demo-plugin"
+    When I run "agentsync plugin explain --json demo-plugin"
     Then the command succeeds
     And the output is valid JSON
     And the output contains "demo-plugin"

@@ -21,6 +21,14 @@ import (
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
+// newUpdateCmd is the DEPRECATED top-level `update`, kept for one minor as an
+// alias after the plugin lifecycle verbs consolidated under `plugin` (#200 F2).
+//
+// It keeps its FULL old flag surface and forwards, because the invocation most
+// worth protecting is the cron line `agentsync update --apply`: an alias that
+// only mapped bare `update` → `plugin outdated` would die on an unknown flag,
+// failing its own purpose. `explain` deliberately got no such alias — it is
+// interactive, `update` is not.
 func newUpdateCmd() *cobra.Command {
 	var (
 		apply       bool
@@ -30,25 +38,29 @@ func newUpdateCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "update",
-		Short: "poll marketplaces for new plugin versions and report pending bumps",
-		Long: `update re-fetches all registered marketplaces, computes which installed
-plugins have newer versions available, and prints the pending bumps.
+		Short: "(deprecated) use `plugin outdated` / `plugin upgrade --all`",
+		Long: `update is DEPRECATED and will be removed in a future minor. It now forwards
+to the consolidated plugin lifecycle verbs:
 
-By default, update is read-only (it does NOT touch agent configs). Use
---apply to immediately upgrade all track-mode plugins and apply the result.
-Use --auto-safe to only bump plugins whose translation is non-lossy (requires
---apply). "Non-lossy" means the candidate version introduces no new translation
-loss (adapter skip) for an enabled agent, judged by projecting the plugin
-exactly as apply does and diffing the skips.
+  agentsync update                 → agentsync plugin outdated
+  agentsync update --apply         → agentsync plugin upgrade --all
+  agentsync update --apply --auto-safe
+                                   → agentsync plugin upgrade --all --lossless
 
-When --apply is set, the same scope/project resolution as 'agentsync apply'
-is used (--scope project or --project <path>; default user) so the
-re-render lands in the right place when running inside a project.`,
+--scope / --project pass through unchanged. Behavior is identical; only the
+command names moved.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			warnUpdateDeprecated(cmd, apply, autoSafe)
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			return withGlobalLock(home, func() error {
-				return updateRun(cmd, apply, autoSafe, scopeFlag, projectFlag)
+				return pollPluginsRun(cmd, pollOpts{
+					doApply:      apply,
+					lossless:     autoSafe,
+					losslessFlag: "--auto-safe",
+					scopeFlag:    scopeFlag,
+					projectFlag:  projectFlag,
+				})
 			})
 		},
 	}
@@ -59,10 +71,61 @@ re-render lands in the right place when running inside a project.`,
 	return cmd
 }
 
-func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFlag string) error {
-	if autoSafe && !doApply {
-		return fmt.Errorf("--auto-safe requires --apply (it only filters which bumps are applied)")
+// warnUpdateDeprecated names the exact replacement for the flags actually
+// given, on STDERR so a piped stdout stays clean.
+func warnUpdateDeprecated(cmd *cobra.Command, apply, autoSafe bool) {
+	replacement := "agentsync plugin outdated"
+	switch {
+	case apply && autoSafe:
+		replacement = "agentsync plugin upgrade --all --lossless"
+	case apply:
+		replacement = "agentsync plugin upgrade --all"
 	}
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"warning: `agentsync update` is deprecated and will be removed in a future minor; use `%s`\n",
+		replacement)
+}
+
+// pollOpts configures the shared marketplace-poll engine behind `plugin
+// outdated`, `plugin upgrade --all`, and the deprecated `update` alias.
+type pollOpts struct {
+	// doApply upgrades every pending bump and re-applies to the agents.
+	doApply bool
+	// lossless drops bumps whose candidate version would introduce a new
+	// adapter Skip for an enabled agent.
+	lossless bool
+	// losslessFlag is the flag NAME to blame in the "requires --all" error, so
+	// the deprecated alias reports `--auto-safe` and `plugin upgrade` reports
+	// `--lossless`.
+	losslessFlag string
+	// applyFlag is the flag NAME the lossless filter requires (`--apply` on the
+	// deprecated alias, `--all` on `plugin upgrade`).
+	applyFlag   string
+	scopeFlag   string
+	projectFlag string
+}
+
+// pollPluginsRun re-fetches every registered marketplace, records the fresh
+// fetch timestamps + head SHAs, checks installed plugins' manifest SHAs for a
+// same-version re-upload, and reports the pending bumps. With doApply it also
+// upgrades each pending bump and re-applies to the agents.
+//
+// It is NOT read-only even without doApply: the marketplace re-fetch writes the
+// cache, and the fetch timestamps + SHAs land in the state file. `plugin
+// outdated`'s help owns that, because the `npm outdated` prior reads as pure.
+func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
+	doApply, autoSafe := o.doApply, o.lossless
+	if autoSafe && !doApply {
+		applyFlag, losslessFlag := o.applyFlag, o.losslessFlag
+		if applyFlag == "" {
+			applyFlag = "--apply"
+		}
+		if losslessFlag == "" {
+			losslessFlag = "--lossless"
+		}
+		return fmt.Errorf("%s requires %s (it only filters which bumps are applied)", losslessFlag, applyFlag)
+	}
+	scopeFlag, projectFlag := o.scopeFlag, o.projectFlag
 	p, err := newPrinter(cmd)
 	if err != nil {
 		return err
@@ -151,17 +214,18 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 	// Compute pending bumps.
 	bumps := marketplace.ComputePendingBumps(st, c.Marketplaces, c.Plugins, fetched, c.Config.Updates.DefaultMode)
 
-	// --auto-safe: drop bumps whose candidate version would introduce a new
-	// translation loss (an adapter Skip) for any enabled agent. Each bump is
-	// evaluated by projecting the plugin's installed vs candidate manifest and
-	// diffing the skip identities a render emits; comparing both under identical
-	// conditions makes any render quirk cancel, so the delta is exactly the
-	// bump's effect. Evaluation failures are treated as lossy (conservative).
+	// --lossless (historically --auto-safe): drop bumps whose candidate version
+	// would introduce a new translation loss (an adapter Skip) for any enabled
+	// agent. Each bump is evaluated by projecting the plugin's installed vs
+	// candidate manifest and diffing the skip identities a render emits;
+	// comparing both under identical conditions makes any render quirk cancel, so
+	// the delta is exactly the bump's effect. An excluded bump is REPORTED, never
+	// silently dropped. Evaluation failures are treated as lossy (conservative).
 	if autoSafe {
 		safe, lossy := filterSafeBumps(home, bumps, fetched, c.Config, userHome, cmd.OutOrStdout())
 		for _, b := range lossy {
 			fmt.Fprintf(cmd.OutOrStdout(),
-				"auto-safe: skipping lossy bump %s %s → %s (candidate version drops translation for an agent)\n",
+				"lossless: skipping lossy bump %s %s → %s (candidate version drops translation for an agent)\n",
 				b.ID, b.From, b.To)
 		}
 		bumps = safe
@@ -184,12 +248,12 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 
 	if !doApply {
 		if len(bumps) > 0 {
-			fmt.Fprintln(cmd.OutOrStdout(), "\nRun `agentsync update --apply` to upgrade and apply.")
+			fmt.Fprintln(cmd.OutOrStdout(), "\nRun `agentsync plugin upgrade --all` to upgrade and apply.")
 		}
 		return nil
 	}
 
-	// --apply: upgrade each plugin with a pending bump.
+	// Upgrade each plugin with a pending bump.
 	for _, b := range bumps {
 		if err := applyPluginBump(home, b, fetched); err != nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "warning: upgrade %s failed: %v\n", b.ID, err)
@@ -199,65 +263,73 @@ func updateRun(cmd *cobra.Command, doApply, autoSafe bool, scopeFlag, projectFla
 		}
 	}
 
-	// Re-apply to agents if any bumps were applied. Mirror the apply
-	// pipeline: project-overlay merge, secret substitution, scope-aware
-	// state recording. Without this, a project-scope user would have their
-	// project state silently ignored, and \${secret:...\} references would
-	// land literally in agent native files.
-	if len(bumps) > 0 {
-		c2, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, scopeFlag, projectFlag, false)
-		if err != nil {
-			return fmt.Errorf("reload source after upgrade: %w", err)
-		}
+	if len(bumps) == 0 {
+		return nil
+	}
+	return reapplyAfterPluginChange(cmd, home, userHome, statePath, st, scopeFlag, projectFlag)
+}
 
-		secBackend := secrets.SelectBackend(c2.Config.Secrets, home, userHome)
-		envBackend := secrets.EnvBackend{}
-		resolved, serr := secrets.SubstituteCanonical(c2, secBackend, envBackend)
-		if serr != nil {
-			return fmt.Errorf("substitute secrets after update: %w", serr)
-		}
-
-		agents := []string{}
-		for name, ag := range c2.Config.Agents {
-			if ag.Enabled {
-				agents = append(agents, name)
-			}
-		}
-		reg := registryFactory()
-		plan, err := render.Plan(resolved, reg, agents, sc, projectRoot, st, userHome)
-		if err != nil {
-			return fmt.Errorf("plan after update: %w", err)
-		}
-		collisions, written, _, applyErr := render.Apply(plan, reg, st, home, userHome, sc, projectRoot)
-		if applyErr != nil {
-			// Mirror `apply`: if render.Apply fails mid-pipeline, the files
-			// that already landed must be recorded so the next apply doesn't
-			// treat them as foreign collisions. Without this best-effort save,
-			// a half-applied bump leaves the dest diverged from state.
-			_ = saveBestEffortState(st, statePath, plan, userHome, sc, projectRoot, written)
-			return fmt.Errorf("apply after update: %w", applyErr)
-		}
-		if len(collisions) > 0 {
-			ew := cmd.ErrOrStderr()
-			fmt.Fprintf(ew, "agentsync: update --apply backed up %d pre-existing target(s):\n", len(collisions))
-			for _, r := range collisions {
-				fmt.Fprintf(ew, "  %s\n", r.String())
-			}
-		}
-		for name, res := range plan.PerAgent {
-			render.PruneStaleState(st, userHome, name, sc, projectRoot, res.Ops)
-		}
-		for name, res := range plan.PerAgent {
-			if err := render.RecordOpsState(st, userHome, name, sc, projectRoot, res.Ops); err != nil {
-				return err
-			}
-		}
-		if err := state.Save(statePath, st); err != nil {
-			return err
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), "applied:", plan.Total(), "ops")
+// reapplyAfterPluginChange re-renders the canonical to the agents after a
+// plugin's pinned version changed, so a plugin upgrade lands in the agents in
+// the same command rather than leaving them stale until the next `apply`.
+//
+// It mirrors the apply pipeline deliberately: project-overlay merge, secret
+// substitution, scope-aware state recording. Without the overlay a
+// project-scope user would have their project state silently ignored, and
+// without substitution ${secret:…} references would land literally in agent
+// native files.
+func reapplyAfterPluginChange(cmd *cobra.Command, home, userHome, statePath string, st *state.Targets, scopeFlag, projectFlag string) error {
+	c2, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, scopeFlag, projectFlag, false)
+	if err != nil {
+		return fmt.Errorf("reload source after upgrade: %w", err)
 	}
 
+	secBackend := secrets.SelectBackend(c2.Config.Secrets, home, userHome)
+	envBackend := secrets.EnvBackend{}
+	resolved, serr := secrets.SubstituteCanonical(c2, secBackend, envBackend)
+	if serr != nil {
+		return fmt.Errorf("substitute secrets after upgrade: %w", serr)
+	}
+
+	agents := []string{}
+	for name, ag := range c2.Config.Agents {
+		if ag.Enabled {
+			agents = append(agents, name)
+		}
+	}
+	reg := registryFactory()
+	plan, err := render.Plan(resolved, reg, agents, sc, projectRoot, st, userHome)
+	if err != nil {
+		return fmt.Errorf("plan after upgrade: %w", err)
+	}
+	collisions, written, _, applyErr := render.Apply(plan, reg, st, home, userHome, sc, projectRoot)
+	if applyErr != nil {
+		// Mirror `apply`: if render.Apply fails mid-pipeline, the files
+		// that already landed must be recorded so the next apply doesn't
+		// treat them as foreign collisions. Without this best-effort save,
+		// a half-applied bump leaves the dest diverged from state.
+		_ = saveBestEffortState(st, statePath, plan, userHome, sc, projectRoot, written)
+		return fmt.Errorf("apply after upgrade: %w", applyErr)
+	}
+	if len(collisions) > 0 {
+		ew := cmd.ErrOrStderr()
+		fmt.Fprintf(ew, "agentsync: plugin upgrade backed up %d pre-existing target(s):\n", len(collisions))
+		for _, r := range collisions {
+			fmt.Fprintf(ew, "  %s\n", r.String())
+		}
+	}
+	for name, res := range plan.PerAgent {
+		render.PruneStaleState(st, userHome, name, sc, projectRoot, res.Ops)
+	}
+	for name, res := range plan.PerAgent {
+		if err := render.RecordOpsState(st, userHome, name, sc, projectRoot, res.Ops); err != nil {
+			return err
+		}
+	}
+	if err := state.Save(statePath, st); err != nil {
+		return err
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "applied:", plan.Total(), "ops")
 	return nil
 }
 
@@ -489,33 +561,42 @@ func bumpIsLossy(home string, b marketplace.Bump, fetched map[string]map[string]
 		return false, fmt.Errorf("plugin %q not found in marketplace %q", b.ID, mpName)
 	}
 
-	oldSkips, err := projectedSkips(mpEntry, pluginCacheDir(home, bID), cfg, reg, agents, userHome)
+	return entryIsLossy(home, bID, mpEntry, marketplaceCacheDir(home, mpName), cfg, reg, agents, userHome)
+}
+
+// entryIsLossy is the id-level lossiness check bumpIsLossy delegates to, shared
+// with `plugin upgrade <id> --lossless` (which has no marketplace.Bump to work
+// from — it upgrades to whatever the marketplace currently advertises). It
+// compares the skip identities rendered from the plugin's INSTALLED cache
+// against those from a freshly-fetched candidate in a throwaway dir, and
+// reports whether the candidate adds one.
+func entryIsLossy(home, id string, mpEntry marketplace.PluginEntry, mpCacheRoot string, cfg source.Config, reg *adapter.Registry, agents []string, userHome string) (bool, error) {
+	oldSkips, err := projectedSkips(mpEntry, pluginCacheDir(home, id), cfg, reg, agents, userHome)
 	if err != nil {
 		return false, err
 	}
 
 	// Fetch the candidate into a throwaway temp dir (never the live cache).
-	mpCacheRoot := marketplaceCacheDir(home, mpName)
 	src := mpEntry.Source
 	if src.Relative != "" {
 		src.Relative = filepath.Join(mpCacheRoot, src.Relative)
 		src.RootDir = mpCacheRoot
 	}
-	tmp, err := os.MkdirTemp("", "agentsync-autosafe-")
+	tmp, err := os.MkdirTemp("", "agentsync-lossless-")
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
 	if _, err := marketplace.Dispatch(src).Fetch(src, tmp); err != nil {
-		return false, fmt.Errorf("fetch candidate %s: %w", b.ID, err)
+		return false, fmt.Errorf("fetch candidate %s: %w", id, err)
 	}
 	newSkips, err := projectedSkips(mpEntry, tmp, cfg, reg, agents, userHome)
 	if err != nil {
 		return false, err
 	}
 
-	for id := range newSkips {
-		if !oldSkips[id] {
+	for skipID := range newSkips {
+		if !oldSkips[skipID] {
 			return true, nil
 		}
 	}

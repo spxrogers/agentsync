@@ -19,32 +19,29 @@ import (
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
-func newExplainCmd() *cobra.Command {
+// newPluginExplainCmd is `agentsync plugin explain` — the per-plugin
+// translation-coverage report. It lives under `plugin` because that is what it
+// describes; the top-level `explain` name now answers a different question
+// ("what produced this destination file", see explain.go).
+func newPluginExplainCmd() *cobra.Command {
 	var (
 		jsonOut bool
-		list    bool
 		all     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "explain [<plugin-id>...]",
 		Short: "show per-agent translation for one or more plugins",
 		Long: "Show per-agent translation coverage for installed plugins.\n\n" +
-			"Pass one or more plugin ids (space-separated) to explain just those,\n" +
-			"--all to explain every installed plugin, or --list to print the set of\n" +
-			"installed plugin ids without rendering coverage.",
+			"Pass one or more plugin ids (space-separated) to explain just those, or\n" +
+			"--all to explain every installed plugin. To see which plugins are\n" +
+			"installed, use `agentsync plugin list`.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if list && all {
-				return fmt.Errorf("--list and --all are mutually exclusive")
-			}
-			if list && len(args) > 0 {
-				return fmt.Errorf("--list does not take plugin ids")
-			}
 			if all && len(args) > 0 {
 				return fmt.Errorf("--all does not take plugin ids; it explains every installed plugin")
 			}
-			if !list && !all && len(args) == 0 {
-				return fmt.Errorf("explain needs at least one plugin id, --all, or --list")
+			if !all && len(args) == 0 {
+				return fmt.Errorf("plugin explain needs at least one plugin id or --all; run `agentsync plugin list` to see what is installed")
 			}
 
 			home := paths.AgentsyncHome(paths.OSEnv{})
@@ -60,10 +57,6 @@ func newExplainCmd() *cobra.Command {
 			p, err := newPrinter(cmd)
 			if err != nil {
 				return err
-			}
-
-			if list {
-				return runExplainList(p, c, jsonOut)
 			}
 
 			// Resolve the requested plugin ids (--all expands to every installed
@@ -83,7 +76,6 @@ func newExplainCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "structured JSON output")
-	cmd.Flags().BoolVar(&list, "list", false, "list installed plugin ids and exit")
 	cmd.Flags().BoolVar(&all, "all", false, "explain every installed plugin")
 	return cmd
 }
@@ -124,77 +116,6 @@ func resolveExplainTargets(c source.Canonical, args []string, all bool) (matched
 		matched = append(matched, pl)
 	}
 	return matched, missing
-}
-
-// runExplainList prints the set of installed plugin ids so users don't have to
-// jump to `plugin list` just to remember what they can explain.
-func runExplainList(p *ui.Printer, c source.Canonical, jsonOut bool) error {
-	type listRow struct {
-		ID       string `json:"id"`
-		Version  string `json:"version,omitempty"`
-		Disabled bool   `json:"disabled,omitempty"`
-	}
-	plugins := make([]source.Plugin, len(c.Plugins))
-	copy(plugins, c.Plugins)
-	sort.Slice(plugins, func(i, j int) bool { return explainLabel(plugins[i]) < explainLabel(plugins[j]) })
-
-	if jsonOut {
-		rows := make([]listRow, 0, len(plugins))
-		for _, pl := range plugins {
-			rows = append(rows, listRow{
-				// --json is the machine contract: emit the RAW id/version, the
-				// consumer owns escaping (Unverified bypasses display sanitization).
-				ID:       explainLabel(pl).Unverified(),
-				Version:  pl.Plugin.Version.Unverified(),
-				Disabled: pl.Plugin.Disabled,
-			})
-		}
-		return emitJSON(p.Out, struct {
-			Plugins []listRow `json:"plugins"`
-		}{Plugins: rows})
-	}
-
-	if len(plugins) == 0 {
-		fmt.Fprintf(p.Out, "%s\n", p.Faint("no plugins installed — try `agentsync plugin install <id@marketplace>`"))
-		return nil
-	}
-
-	fmt.Fprintf(p.Out, "%s %s\n", p.Bold("Installed plugins"),
-		p.Faint(fmt.Sprintf("(%d)", len(plugins))))
-	// Plugin id + version come from fetched marketplace metadata (untrusted), so
-	// sanitize before width/Pad and display to keep terminal escapes out of the
-	// text listing. (The --json branch above leaves them raw — that's the machine
-	// contract, where the consumer owns escaping.)
-	maxLabel := 0
-	for _, pl := range plugins {
-		if n := visibleLen(explainLabel(pl).String()); n > maxLabel {
-			maxLabel = n
-		}
-	}
-	for _, pl := range plugins {
-		// explainLabel/Version are untrusted.Text; String() sanitizes for display.
-		label := explainLabel(pl).String()
-		hasTrail := !pl.Plugin.Version.Empty() || pl.Plugin.Disabled
-		// Only pad the label when something follows it — a bare row with
-		// trailing spaces just leaves visible whitespace at end-of-line.
-		shown := label
-		if hasTrail {
-			shown = ui.Pad(label, maxLabel)
-		}
-		line := fmt.Sprintf("  %s %s", p.Cyan(ui.GlyphInfo), shown)
-		if !pl.Plugin.Version.Empty() {
-			line += "  " + p.Faint("v"+pl.Plugin.Version.String())
-		}
-		if pl.Plugin.Disabled {
-			line += "  " + p.Yellow("(disabled)")
-		}
-		fmt.Fprintln(p.Out, line)
-	}
-	fmt.Fprintln(p.Out, "")
-	fmt.Fprintf(p.Out, "%s %s\n",
-		p.Faint(ui.GlyphArrow),
-		p.Faint("explain coverage: `agentsync explain <plugin>` or `--all`"))
-	return nil
 }
 
 // runExplainEmpty handles `--all` when no plugins are installed.
@@ -249,7 +170,7 @@ func runExplain(w io.Writer, p *ui.Printer, fs afero.Fs, c source.Canonical, wan
 	// Text path: render plugin-by-plugin so each gets its own styled section
 	// header (with version + disabled marker), separated by a blank line.
 	fmt.Fprintf(w, "%s %s\n",
-		p.Bold("agentsync explain"),
+		p.Bold("agentsync plugin explain"),
 		p.Faint(fmt.Sprintf("— translation coverage for %s", pluralize(len(wanted), "plugin"))))
 	fmt.Fprintln(w, "")
 

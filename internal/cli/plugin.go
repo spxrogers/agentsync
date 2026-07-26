@@ -15,6 +15,8 @@ import (
 	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/state"
 	"github.com/spxrogers/agentsync/internal/ui"
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
@@ -26,11 +28,13 @@ func newPluginCmd() *cobra.Command {
 	}
 	cmd.AddCommand(
 		newPluginInstallCmd(),
+		newPluginOutdatedCmd(),
 		newPluginUpgradeCmd(),
 		newPluginEnableCmd(),
 		newPluginDisableCmd(),
 		newPluginRemoveCmd(),
 		newPluginListCmd(),
+		newPluginExplainCmd(),
 	)
 	return cmd
 }
@@ -227,18 +231,95 @@ func installPluginInto(home, id, mpName string) (pluginTOMLSpec, error) {
 	return spec, nil
 }
 
-// ---- upgrade ----------------------------------------------------------------
+// ---- outdated ---------------------------------------------------------------
 
-func newPluginUpgradeCmd() *cobra.Command {
+// newPluginOutdatedCmd polls the registered marketplaces and reports pending
+// version bumps. It is `agentsync update`'s read side, moved under the noun it
+// operates on (#200 F2).
+func newPluginOutdatedCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "upgrade <id>",
-		Short: "re-fetch a plugin and update its manifest sha",
-		Args:  cobra.ExactArgs(1),
-		RunE:  lockedRun(pluginUpgradeRun),
+		Use:   "outdated",
+		Short: "(network) poll marketplaces and report pending plugin version bumps",
+		Long: `outdated re-fetches every registered marketplace, computes which installed
+plugins have newer versions available, and prints the pending bumps.
+
+It does NOT touch agent configs — run 'agentsync plugin upgrade --all' for that.
+It is not, however, a pure read: unlike the 'npm outdated' its name evokes, this
+command USES THE NETWORK (it re-fetches each marketplace into the cache) and
+WRITES STATE (each marketplace's fetch timestamp and head SHA land in
+.state/targets.json). It also re-checks every installed plugin's manifest SHA
+and warns when a plugin was re-uploaded at the same version with different
+content.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			home := paths.AgentsyncHome(paths.OSEnv{})
+			return withGlobalLock(home, func() error {
+				return pollPluginsRun(cmd, pollOpts{})
+			})
+		},
 	}
 }
 
-func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
+// ---- upgrade ----------------------------------------------------------------
+
+// newPluginUpgradeCmd upgrades one plugin, or every plugin with a pending bump
+// (--all). BOTH forms finish by re-applying to the agents: one verb, one ending
+// state. That is a behavior change to the pre-#200 `plugin upgrade <id>`, which
+// re-fetched and left the agents stale until the next `apply`; leaving the id
+// form fetch-only while --all re-applied would make the same verb mean two
+// different things.
+func newPluginUpgradeCmd() *cobra.Command {
+	var (
+		all         bool
+		lossless    bool
+		scopeFlag   string
+		projectFlag string
+	)
+	cmd := &cobra.Command{
+		Use:   "upgrade [<id>]",
+		Short: "(network) re-fetch a plugin (or every pending bump) and re-apply",
+		Long: `upgrade re-fetches a plugin, updates its recorded version + manifest sha,
+and re-applies the result to your agents so the upgrade lands in the same
+command.
+
+With --all it first polls every registered marketplace (like 'plugin outdated'),
+then upgrades every plugin with a pending bump and re-applies once.
+
+--lossless only upgrades when the candidate version introduces no NEW
+translation loss (an adapter skip) for an enabled agent, judged by projecting
+the plugin exactly as apply does and diffing the skips. An excluded upgrade is
+reported, never silently dropped.
+
+The same scope/project resolution as 'agentsync apply' is used (--scope project
+or --project <path>; default user) so the re-render lands in the right place
+when running inside a project.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: lockedRun(func(cmd *cobra.Command, args []string) error {
+			switch {
+			case all && len(args) > 0:
+				return fmt.Errorf("--all does not take a plugin id; it upgrades every plugin with a pending bump")
+			case !all && len(args) == 0:
+				return fmt.Errorf("upgrade needs a plugin id, or --all to upgrade every plugin with a pending bump")
+			case all:
+				return pollPluginsRun(cmd, pollOpts{
+					doApply:      true,
+					lossless:     lossless,
+					losslessFlag: "--lossless",
+					applyFlag:    "--all",
+					scopeFlag:    scopeFlag,
+					projectFlag:  projectFlag,
+				})
+			}
+			return pluginUpgradeRun(cmd, args, lossless, scopeFlag, projectFlag)
+		}),
+	}
+	cmd.Flags().BoolVar(&all, "all", false, "poll marketplaces and upgrade every plugin with a pending bump")
+	cmd.Flags().BoolVar(&lossless, "lossless", false, "only upgrade when the candidate version introduces no new translation loss")
+	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	return cmd
+}
+
+func pluginUpgradeRun(cmd *cobra.Command, args []string, lossless bool, scopeFlag, projectFlag string) error {
 	// Accept the id@marketplace ref that `install` accepts; operate on the bare id
 	// (the on-disk file is plugins/<id>.toml). The stored id (below) is
 	// authoritative for the marketplace; a typed qualifier must MATCH it (checked
@@ -275,6 +356,34 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
 	mpData, mpEntry, resolvedMP, err := resolveMarketplaceEntry(home, mpName, id)
 	if err != nil {
 		return err
+	}
+
+	// --lossless: judge the candidate BEFORE touching the live cache. The check
+	// renders the installed cache and a throwaway fetch of the candidate and
+	// compares skip identities; a candidate that adds one is reported and the
+	// upgrade is refused, leaving cache + TOML exactly as they were. An
+	// evaluation failure is conservatively lossy, matching --all's filter.
+	if lossless {
+		userHome := paths.HomeDir(paths.OSEnv{})
+		c, cerr := source.Load(afero.NewOsFs(), home)
+		if cerr != nil {
+			return fmt.Errorf("load source: %w", cerr)
+		}
+		var agents []string
+		for name, ag := range c.Config.Agents {
+			if ag.Enabled {
+				agents = append(agents, name)
+			}
+		}
+		isLossy, lerr := entryIsLossy(home, id, mpEntry, marketplaceCacheDir(home, resolvedMP), c.Config, registryFactory(), agents, userHome)
+		switch {
+		case lerr != nil:
+			return fmt.Errorf("--lossless: cannot evaluate %s (%w); refusing the upgrade to be safe", id, lerr)
+		case isLossy:
+			fmt.Fprintf(cmd.OutOrStdout(),
+				"lossless: skipping lossy upgrade %s (candidate version drops translation for an agent)\n", id)
+			return nil
+		}
 	}
 
 	cacheDir := pluginCacheDir(home, id)
@@ -316,7 +425,16 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(cmd.OutOrStdout(), "upgraded plugin %s (sha=%s)\n",
 		id, truncate(manifestSHA, 12))
-	return nil
+
+	// Re-apply so the upgraded plugin's components reach the agents now. Same
+	// ending state as `plugin upgrade --all` — see the command's doc comment.
+	userHome := paths.HomeDir(paths.OSEnv{})
+	statePath := filepath.Join(home, ".state", "targets.json")
+	st, err := state.Load(statePath)
+	if err != nil {
+		return fmt.Errorf("load state: %w", err)
+	}
+	return reapplyAfterPluginChange(cmd, home, userHome, statePath, st, scopeFlag, projectFlag)
 }
 
 // ---- enable -----------------------------------------------------------------

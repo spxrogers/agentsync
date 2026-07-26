@@ -65,7 +65,7 @@ scope   = "user"   # display-only; the file an entry lives in is the scope of re
 [agents.opencode]
 enabled = true
 
-# Plugin update defaults (used by `agentsync update`).
+# Plugin update defaults (used by `agentsync plugin outdated` / `plugin upgrade`).
 [updates]
 default_mode     = "track"   # pinned | track | manual — a plugin's own `update`
                              # wins; this is the fallback. Only "track" plugins are
@@ -87,7 +87,8 @@ banner = true   # default; set false to omit the managed-file banner from
                 # rendered memory files (CLAUDE.md, AGENTS.md, …)
 ```
 
-`[updates]` sets the default plugin-update policy for `agentsync update`.
+`[updates]` sets the default plugin-update policy for `agentsync plugin outdated` /
+`agentsync plugin upgrade --all`.
 `default_mode` is `pinned` (never auto-bump), `track` (auto-bump to the latest
 marketplace version), or `manual` (bump only on explicit action); a plugin's own
 `update` key overrides it, and an unset `default_mode` behaves as `track`.

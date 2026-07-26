@@ -158,7 +158,7 @@ Claude plugins in v1; the others have no native LSP config concept).
 (`adapter.SkipKind`): `SkipDropped` when the whole component had no native target
 and was not emitted, `SkipReduced` when it rendered but lost fields the agent has
 no home for (a subagent's Claude-only `tools`/`color`, a command's frontmatter).
-The adapter that builds the `Skip` sets `Kind` — the CLI's `explain` reads it
+The adapter that builds the `Skip` sets `Kind` — the CLI's `plugin explain` reads it
 directly and `explain --json` surfaces it as `kind` (`"reduced"`/`"dropped"`).
 The zero value `SkipKindUnset` is invalid: `Component` is the plain kind (`mcp`,
 `subagent`, …) and no longer encodes the distinction via a `-frontmatter` suffix.
@@ -447,7 +447,7 @@ type HookEventNamer interface {
 ## 4. The apply pipeline (Source ▶ Destination)
 
 `agentsync apply` is local-only and offline. It renders from the cache that
-`agentsync update` populated.
+`agentsync plugin outdated` populated.
 
 ```mermaid
 flowchart TD
@@ -758,11 +758,14 @@ supported harness uses a `__`-prefixed native config key.
 
 ## 9. Network boundary
 
-`agentsync update` is the **only** command that touches the network. It clones
-or fetches marketplaces (`go-git`, with a `git` shell-out fallback for sparse
-clones) and npm tarballs (registry HTTP, no `npm` binary required), writing them
-to `.state/cache/`. Everything else — including `apply` — reads only from that
-cache, which keeps `apply` fast, offline, and reproducible in CI.
+Every networked path lives in `internal/marketplace`'s fetchers, and every one
+of them writes only to `.state/cache/`. The commands that reach the network are
+`plugin outdated`, `plugin upgrade`, `plugin install`, `marketplace add`,
+`import <agent>:plugin`, and `init <git-url>` (plus the deprecated `update`
+alias). They clone or fetch marketplaces (`go-git`, with a `git` shell-out
+fallback for sparse clones) and npm tarballs (registry HTTP, no `npm` binary
+required). Everything else — including `apply` — reads only from that cache,
+which keeps `apply` fast, offline, and reproducible in CI.
 
 Untrusted-input hardening at this boundary: fetchers reject symlinks in tarballs
 (and confine git-cloned symlinks to the fetched tree, refusing any that escape),

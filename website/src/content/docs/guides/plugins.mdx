@@ -27,10 +27,10 @@ every enabled agent gets the components it understands.
    agentsync plugin install atlassian@anthropic
    ```
 
-3. **Fetch from the network** — `update` is the networked verb of the daily loop (`import`'s `plugin` component is the other, setup-time, networked path):
+3. **Fetch from the network** — `plugin outdated` is the polling verb of the daily loop:
 
    ```bash
-   agentsync update
+   agentsync plugin outdated
    ```
 
 4. **Apply** — renders from the local cache to all agents:
@@ -41,8 +41,10 @@ every enabled agent gets the components it understands.
 
 </Steps>
 
-<Aside type="note" title="update fetches, apply renders">
-	`update` is the **only** command that touches the network. It refreshes the
+<Aside type="note" title="polling fetches, apply renders">
+	`plugin outdated` is the daily loop's networked verb (`plugin install`,
+	`plugin upgrade`, `marketplace add`, `import <agent>:plugin`, and
+	`init <git-url>` fetch too). It refreshes the
 	local plugin cache and recomputes version pins. `apply` then renders entirely
 	from that cache — so it's fast, offline, and reproducible. See
 	[Updating from the network](/guides/updating/).
@@ -62,8 +64,8 @@ plugin: atlassian@anthropic
 Inspect a plugin's coverage *without* applying:
 
 ```bash
-agentsync explain atlassian@anthropic
-agentsync explain atlassian@anthropic --json
+agentsync plugin explain atlassian@anthropic
+agentsync plugin explain atlassian@anthropic --json
 ```
 
 ## Controlling per-plugin fan-out

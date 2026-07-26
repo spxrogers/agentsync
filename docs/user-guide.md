@@ -462,8 +462,8 @@ and every enabled agent gets the components it understands:
 agentsync marketplace add github:anthropics/claude-plugins-official
 agentsync plugin install atlassian@anthropic
 
-agentsync update           # fetch from the network (refresh + re-pin plugins)
-agentsync apply            # render from cache → all agents
+agentsync plugin outdated  # fetch from the network (refresh cache, show bumps)
+agentsync plugin upgrade --all   # re-pin every pending bump and re-apply
 ```
 
 A plugin is a bag of components (MCP servers, skills, subagents, commands, hooks,
@@ -508,12 +508,13 @@ component string. `component` is the plain component kind (`subagent`, `command`
 Inspect any plugin's coverage without applying:
 
 ```bash
-agentsync explain atlassian@anthropic                   # one plugin
-agentsync explain atlassian@anthropic superpowers@obra  # space-separated
-agentsync explain --all                                 # every installed plugin
-agentsync explain --list                                # just the ids (skip rendering)
-agentsync explain atlassian@anthropic --json            # machine-readable
+agentsync plugin explain atlassian@anthropic                   # one plugin
+agentsync plugin explain atlassian@anthropic superpowers@obra  # space-separated
+agentsync plugin explain --all                                 # every installed plugin
+agentsync plugin explain atlassian@anthropic --json            # machine-readable
 ```
+
+(`agentsync plugin list` prints the installed ids.)
 
 Control fan-out per plugin with `agents = [...]` in the plugin's TOML file. (A
 per-component `[plugin.overrides.<agent>]` table was specced but is **not wired
@@ -634,7 +635,7 @@ project memory is appended after user memory. The project's `[agents]` table is
 **authoritative** — project scope renders only to the agents the project itself
 declares, never your user-scope agents. A project that declares none is a hard
 error on every scope-aware render path — `apply`/`status`/`diff`/`reconcile`/
-`update --apply`/`verify` (run `agentsync agent add <name> --scope project` to
+`plugin upgrade --all`/`verify` (run `agentsync agent add <name> --scope project` to
 fix); `import --scope project` still works before any agents are declared, so
 you can bootstrap the tree from native config first.
 
@@ -665,20 +666,36 @@ at `agentsync init --scope project` — it never silently falls back to user sco
 
 ## Updating from the network
 
-`update` is the **only** command that touches the network. It polls
-marketplaces, refreshes the local cache, and recomputes version pins — without
+`plugin outdated` is the polling verb of the daily loop: it re-fetches every
+registered marketplace into the local cache and recomputes version pins, without
 touching any agent config. `apply` then renders from that cache, so it's always
 fast, offline, and reproducible.
 
 ```bash
-agentsync update                  # refresh cache + show pending plugin bumps
-agentsync update --apply          # refresh, then apply
-agentsync update --apply --auto-safe   # same, auto-resolving only safe changes
+agentsync plugin outdated                      # refresh cache + show pending bumps
+agentsync plugin upgrade --all                 # re-pin every pending bump, then re-apply
+agentsync plugin upgrade --all --lossless      # same, skipping bumps that would lose translation
+agentsync plugin upgrade atlassian             # re-fetch one plugin, then re-apply
 ```
 
+Both `upgrade` forms end in a re-apply, so an upgrade lands in your agents in one
+command rather than leaving them stale until the next `apply`.
+
+`plugin outdated` is not a pure read despite the `npm outdated` prior: it uses
+the network and it writes state (each marketplace's fetch timestamp and head
+SHA). Nor is it the *only* networked command — `plugin install`, `plugin
+upgrade`, `marketplace add`, `import <agent>:plugin`, and `init <git-url>` all
+fetch. It is simply the one the daily loop runs.
+
+> **Deprecated:** top-level `agentsync update` still works for one minor as a
+> forwarding alias — bare `update` → `plugin outdated`, `--apply` → `plugin
+> upgrade --all`, `--apply --auto-safe` → `plugin upgrade --all --lossless`
+> (`--scope`/`--project` pass through) — printing a warning that names the
+> replacement. Move your cron lines over.
+
 Want nightly refreshes? agentsync ships no daemon — wire
-`agentsync update --apply --auto-safe` into your own cron / launchd / systemd /
-Task Scheduler.
+`agentsync plugin upgrade --all --lossless` into your own cron / launchd /
+systemd / Task Scheduler.
 
 ---
 
@@ -742,16 +759,16 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `migrate subagents` | One-shot move of the retired canonical `agents/` directory to `subagents/`, rewriting that tree's recorded `source_id` values. Run once per tree (`--scope project` / `--project <path>` for a project tree). Refuses, listing the names, if a file exists under both directories. | `--scope --project` |
 | `mcp add\|remove\|list <name>` | Manage MCP servers. `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site, e.g. `--header "Authorization: Bearer ${secret:TOKEN}"`. | `--type --command --args --url --env --agents --header` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
-| `plugin install\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). | `install <id[@marketplace]>` |
+| `plugin install\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` / `outdated` / `explain` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). `outdated` **(network)** polls the marketplaces and reports pending bumps — it also writes each marketplace's fetch timestamp + head SHA to state. `upgrade` **(network)** re-fetches one plugin, or with `--all` every plugin with a pending bump, and **re-applies** in both cases; `--lossless` skips an upgrade that would introduce a new translation loss, reporting it. `explain` shows per-agent translation coverage. | `outdated` · `upgrade [<id>] --all --lossless --scope --project` · `explain [<id>...] --all --json` |
 | `secrets set\|get <key>` / `secrets edit` | Manage age-encrypted secrets (`edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
-| `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
+| `update` | **(deprecated)** Forwards to `plugin outdated` / `plugin upgrade --all [--lossless]` with a warning; removed in a future minor. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. A delete-only run (a component removed from source) reports `removed: N key(s), M file(s)` — key-removals and file-deletes counted distinctly — and a mixed run `applied: X ops, removed: …`, rather than mislabeling itself `up to date`/`applied: 0 ops`; `--dry-run` previews the same removal counts. | `--dry-run --scope --project --no-git-backup` |
 | `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. `--to` must name one of the dir's own checkpoints (the current one or an ancestor) — anything else is refused. Skips (or, with `--strict`, errors on) a dir under which a foreign git repo has appeared. | `--to --all --dry-run` |
 | `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. Skill directories collapse to one summary row by default (`--verbose` expands them). `--exit-code` makes it a CI gate: exit `2` when any drift is detected, `0` when clean. | `--agents --verbose --scope --project --json --exit-code` |
 | `diff [<path>]` | Show pending/drift changes; secrets redacted. `<path>` is a filesystem path; an unmanaged/typo'd path is reported distinctly from a clean one. `--agents` narrows to an agent allowlist (like `status`); `--exit-code` exits `2` when any hunk exists, `0` when clean. | `--agents --scope --project --json --exit-code` |
 | `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. Includes `plugin` (Claude), which re-fetches installed plugins + marketplaces **(network)**. `--scope project` reads the agent's *native project-scope* config (e.g. `<root>/.claude/`) and captures it into the project tree `<root>/.agentsync/`, seeding central state with the project scope + root. Plugin import is user-scope only. | `--dry-run --scope --project` |
-| `explain [<plugin>...]` | Show per-agent translation coverage for one or more plugins. | `--all --list --json` |
+
 | `version` | Print version information (alias for `--version`). | |
 
 Global: `-v/--verbose` for verbose logging on any command (in `status` it also
@@ -789,7 +806,7 @@ Quick hits:
 
 - **`${secret:foo}` not resolving?** `agentsync secrets get foo` to confirm the
   key exists in the decrypted vault.
-- **`update` can't fetch a marketplace?** Sanity-check the URL with
+- **`plugin outdated` can't fetch a marketplace?** Sanity-check the URL with
   `git ls-remote`.
 - **First apply backed up a pile of files?** Expected on a populated machine —
   they're in `.state/backups/<ts>/`, nothing was lost.

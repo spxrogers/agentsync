@@ -41,6 +41,43 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 - **`import` spells the subagent selector component `subagent`.** `agentsync
   import opencode:subagent:reviewer` is the canonical form; `agent` stays
   accepted as an alias, so existing invocations keep working.
+- **BREAKING (CLI): the plugin lifecycle verbs consolidated under `plugin`.**
+  Two general-purpose top-level names were held by plugin-scoped operations,
+  and `update` additionally collided with its own sibling `plugin upgrade`
+  while reading — per the `brew`/`apt`/`npm`/`rustup` priors — as "update the
+  tool itself".
+
+  | Before | After |
+  |---|---|
+  | `agentsync update` | `agentsync plugin outdated` |
+  | `agentsync update --apply` | `agentsync plugin upgrade --all` |
+  | `agentsync update --auto-safe` | `agentsync plugin upgrade --lossless` |
+  | `agentsync explain <plugin>` | `agentsync plugin explain <plugin>` |
+  | `agentsync explain --list` | dropped — use `agentsync plugin list` |
+
+  - **`plugin upgrade` now re-applies, in BOTH forms.** `--all` carries over
+    `update --apply`'s complete re-apply (scope resolution, secret
+    substitution, plan/apply, state recording), so it is behavior-identical to
+    what `update --apply` did. The single-id `plugin upgrade <id>` gains that
+    same re-apply — a **behavior change**: it used to re-fetch and leave your
+    agents stale until the next `apply`. One verb, one ending state.
+  - **`--auto-safe` became `--lossless` on the plugin side**, because the name
+    meant two unrelated things: `reconcile --auto-safe` is about drift classes
+    that can't lose work, while the plugin one is about a candidate version
+    introducing no new adapter skip. `reconcile --auto-safe` is unchanged. A
+    bump excluded as lossy is reported, never silently dropped.
+  - **`plugin outdated` is not read-only**, whatever the `npm outdated` prior
+    suggests, and its help says so: it re-fetches every marketplace (network)
+    and writes each one's fetch timestamp + head SHA to state, plus the
+    manifest-SHA tamper check.
+  - **`update` survives one minor as a deprecated alias with its FULL old flag
+    surface** — `--apply`, `--auto-safe`, `--scope`, `--project` all still
+    parse and forward, each with a warning naming the replacement on stderr.
+    An alias that rejected `--apply` would break the very cron lines it exists
+    to protect.
+  - **`explain` gets NO alias.** The asymmetry with `update` is deliberate:
+    `update` is the command most likely to live in cron, `explain` is
+    interactive. `agentsync explain <plugin-id>` fails from this release.
 
 ### Fixed
 

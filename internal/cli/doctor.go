@@ -214,7 +214,8 @@ func checkSubagentLayout(p *ui.Printer, home string) int {
 	}
 	failCheck(p, "subagents  ", fmt.Sprintf(
 		"%d file(s) still in the retired %s directory — run `agentsync migrate subagents` to move them to %s",
-		len(files), filepath.Join(home, source.LegacySubagentsDir), filepath.Join(home, source.SubagentsDir)))
+		len(files), filepath.Join(home, source.LegacySubagentsDir), filepath.Join(home, source.SubagentsDir),
+	))
 	return 1
 }
 

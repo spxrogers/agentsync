@@ -84,7 +84,7 @@ Component support across agents.
 
 > The ◐/✗ cells are *features*, not bugs: agentsync refuses to invent a
 > translation that would mislead you. Every ◐ and ✗ is printed in the apply
-> report and queryable with `agentsync explain <plugin> --json`.
+> report and queryable with `agentsync plugin explain <plugin> --json`.
 
 ## Breadth tier
 
@@ -189,7 +189,7 @@ included pending a faithful implementation. Replit/Rovo Dev are likewise deferre
 
 ## Reading the report
 
-Every `apply` and `explain` ends with a coverage report — per plugin, per agent
+Every `apply` and `plugin explain` ends with a coverage report — per plugin, per agent
 — using the same three marks (`verify` does not print one; it only schema-lints
 the source and validates secrets):
 

@@ -125,7 +125,7 @@ table is **authoritative**: project scope renders only to the agents the project
 itself declares, never the user's enabled agents — so a committed tree produces
 the same render on every collaborator's machine. A project that declares no
 agents is a hard error on every scope-aware render path —
-`apply`/`status`/`diff`/`reconcile`/`update --apply`/`verify` (declare agents
+`apply`/`status`/`diff`/`reconcile`/`plugin upgrade`/`verify` (declare agents
 with `agentsync agent add <name> --scope project`); `import --scope project`
 stays available for bootstrapping the tree from native config first. A
 project `plugins/<id>.toml` with `disabled = true`
@@ -188,7 +188,7 @@ for discovery, `apply` never re-emits it. See
 for the full rationale.
 
 ### Translation report & coverage
-Every `apply` and `explain` ends with a report showing, per plugin per agent,
+Every `apply` and `plugin explain` ends with a report showing, per plugin per agent,
 what landed (`verify` only schema-lints the source and validates secrets — it
 does not project plugins or print a coverage report):
 
@@ -196,13 +196,14 @@ does not project plugins or print a coverage report):
 - **◐ projected** — lossy but defensible translation, explicitly reported.
 - **✗ skipped** — no honest translation exists; logged so it's never silent.
 
-### Update (the networked verb)
-`agentsync update` is the command that touches the network in the daily loop: it
-polls marketplaces, refreshes the cache, and recomputes version pins. `apply`
-then runs entirely from cache. This split keeps `apply` fast, reproducible, and
-offline-safe. (The one other networked path is setup-time: `import`'s `plugin`
-component re-fetches the plugins + marketplaces it captures from an agent's
-native config.)
+### Polling (the networked verb of the daily loop)
+`agentsync plugin outdated` is the command that touches the network in the daily
+loop: it polls marketplaces, refreshes the cache, and recomputes version pins.
+`agentsync plugin upgrade --all` then re-pins every pending bump and re-applies.
+`apply` itself runs entirely from cache — the split keeps it fast, reproducible,
+and offline-safe. It is not the only networked command (`plugin install`,
+`marketplace add`, `import <agent>:plugin`, and `init <git-url>` all fetch), just
+the one the loop runs.
 
 ---
 
@@ -219,8 +220,9 @@ native config.)
                                               agentsync reconcile / import
                                                   (dest ▶ source capture)
 
-   agentsync update  ──network──▶  refresh marketplace cache & pins
-                                   (then apply renders from cache, offline)
+   agentsync plugin outdated ─network─▶ refresh marketplace cache & pins
+   agentsync plugin upgrade --all      re-pin pending bumps, then re-apply
+                                       (plain apply renders from cache, offline)
 ```
 
 Next: see the [architecture](architecture.md) for how these are implemented, or

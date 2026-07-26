@@ -23,8 +23,8 @@ Feature: Release smoke
     And the output contains "marketplace"
     And the output contains "plugin"
     And the output contains "secrets"
-    And the output contains "explain"
     And the output contains "import"
+    And the output contains "migrate"
     And the output contains "update"
 
   Scenario: full v1.0 lifecycle on a fresh box

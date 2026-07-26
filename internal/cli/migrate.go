@@ -104,7 +104,8 @@ func runSubagentMigration(p *ui.Printer, userAgentsyncHome string, sc adapter.Sc
 	}
 	if sc != adapter.ScopeProject {
 		fmt.Fprintf(p.Out, "\n%s\n", p.Faint(
-			"note: ~/.agentsync is often a committed dotfiles repo — commit the rename so other machines pick it up."))
+			"note: ~/.agentsync is often a committed dotfiles repo — commit the rename so other machines pick it up.",
+		))
 	}
 	return nil
 }
@@ -152,7 +153,8 @@ func migrateSubagentTree(userAgentsyncHome, srcHome string, sc adapter.Scope, pr
 		return nil, fmt.Errorf(
 			"refusing to migrate: %d file(s) exist under BOTH %s and %s (%s). "+
 				"Nothing was moved. Reconcile the duplicates by hand (keep one copy of each), then re-run",
-			len(collisions), legacyDir, newDir, strings.Join(collisions, ", "))
+			len(collisions), legacyDir, newDir, strings.Join(collisions, ", "),
+		)
 	}
 
 	if err := os.MkdirAll(newDir, 0o755); err != nil {

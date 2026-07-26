@@ -350,14 +350,14 @@ GITHUB_TOKEN = "${secret:github.token}"
 		}
 	}
 
-	// ── Phase 9: explain <plugin> ────────────────────────────────────────────
-	explainOut := r.mustRun("explain", "demo-plugin")
+	// ── Phase 9: plugin explain <plugin> ─────────────────────────────────────
+	explainOut := r.mustRun("plugin", "explain", "demo-plugin")
 	if !strings.Contains(explainOut, "demo-plugin") {
 		t.Errorf("explain output missing plugin id 'demo-plugin'; got:\n%s", explainOut)
 	}
 
 	// JSON mode.
-	explainJSON := r.mustRun("explain", "--json", "demo-plugin")
+	explainJSON := r.mustRun("plugin", "explain", "--json", "demo-plugin")
 	var explainData any
 	if err := json.Unmarshal([]byte(explainJSON), &explainData); err != nil {
 		t.Errorf("explain --json produced invalid JSON: %v\noutput:\n%s", err, explainJSON)
