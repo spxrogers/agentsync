@@ -233,6 +233,35 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **The first-run-after-upgrade notice no longer silently disables the
+  `--scope` / `--project` refusal.** Wiring the notice assigned the root
+  command's `PersistentPreRunE` a SECOND time, and cobra's hook is a plain
+  field — so the assignment discarded the one calling `enforceScopeStance`, and
+  every scope-unaware command went back to accepting the flags and ignoring
+  them (exactly the bug #200 F6 shipped to kill). Nothing failed: the three
+  scope tests all read annotations, so none of them ever executed the hook. The
+  root now composes both concerns in one closure, and two guards cover the
+  shape — `TestRootDeclaresExactlyOnePersistentPreRun` (a second assignment
+  fails the build) and a behavioral table asserting scope-unaware commands
+  really do refuse.
+
+- **A corrupt run record no longer suppresses the upgrade notice forever.** Any
+  parse failure was treated like an I/O error: the notice was skipped and the
+  file was never rewritten, so one truncated or empty `last-run.json` — the
+  classic crash-mid-write or full-disk artifact — meant the user *never* learned
+  their canonical layout had moved. That directly contradicted the documented
+  contract. A record that cannot be parsed carries no information, so it is now
+  read as "this machine has shown nothing": the notice prints and the record is
+  repaired. `state.LoadLastRun` distinguishes `ErrCorruptLastRun` from a real
+  I/O error and always returns a usable record.
+
+- **The run record is gitignored on the path that creates it.** The notice is a
+  second place that can create `.state/` (`init` is the other) and it fires
+  precisely for pre-existing homes — which may predate the `.gitignore`
+  scaffolding — so in a dotfiles repo one `git add -A` committed one machine's
+  run marker and carried it to every other machine, silently suppressing the
+  notice there.
+
 - **`agentsync explain` no longer prints a resolved secret through an adapter
   skip reason.** `explain` renders from the secret-RESOLVED canonical (it must,
   to hash the same bytes `apply` writes), and the Continue adapter interpolated

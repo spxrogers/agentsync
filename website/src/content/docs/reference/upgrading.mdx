@@ -21,6 +21,15 @@ newest first. It is what the CLI's one-time upgrade notice links to.
 	dotfiles repo). A brand-new install never sees it — nothing can have broken
 	under a user who has no config yet. Silence it permanently with
 	`AGENTSYNC_NO_UPGRADE_NOTICE=1`.
+
+	Each notice is keyed by a stable **id**, never by comparing versions, so
+	jumping several releases still shows every notice you missed. A record that
+	is missing or unreadable just means the notice shows again later — it is
+	never a reason to fail your command.
+
+	*Maintainers: every section on this page pairs with an entry in
+	`upgradeNotices` (`internal/cli/upgrade_notice.go`). Add both, and never
+	rename a shipped id.*
 </Aside>
 
 ## 0.11.0

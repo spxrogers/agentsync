@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,8 +43,17 @@ type upgradeNotice struct {
 	Path string
 }
 
-// upgradeNotices is the ordered set of notices this binary can show. Append
-// only; never renumber an ID.
+// upgradeNotices is the ordered set of notices this binary can show.
+//
+// APPEND ONLY; never renumber or rename an ID — the ID is the key recorded in
+// .state/last-run.json, so a rename re-shows the notice to every user who
+// already dismissed it, and a duplicate makes the second entry unreachable.
+// TestUpgradeNoticeTableIsWellFormed enforces the shape.
+//
+// Every entry here needs a matching section in
+// website/src/content/docs/reference/upgrading.mdx — the page Path points at.
+// The two are maintained by hand in parallel; adding a notice without the
+// section ships a banner whose "read more" link lands on nothing.
 var upgradeNotices = []upgradeNotice{
 	{
 		ID:       "0.11.0-cli-surface",
@@ -71,6 +81,20 @@ var upgradeNotices = []upgradeNotice{
 // Output goes to STDERR, always. Several commands emit a machine-readable
 // payload on stdout (`status --json`, `diff --json`, `explain --json`), and a
 // banner there would corrupt what a caller is piping.
+//
+// Two accepted residuals, both deliberate:
+//
+//   - The silent returns are undiagnosable. Wiring internal/log through here
+//     would mean threading a writer + verbosity into a function whose entire
+//     contract is "never get in the way"; the failure modes are also
+//     self-announcing (the notice either shows again next run, or the user
+//     never sees it and reads the upgrade page instead). A corrupt record no
+//     longer hides the notice, which was the one silent failure that mattered.
+//   - "Once per machine" is lock-free, so N truly simultaneous invocations can
+//     each print. Taking the global lock for a banner would serialize every
+//     command in the tool behind a UX marker — a far worse trade than a
+//     duplicated banner in the rare concurrent case. iox.AtomicWrite keeps the
+//     record itself well-formed under that race.
 func maybePrintUpgradeNotice(cmd *cobra.Command) {
 	// A build with no version stamped is a local `go build` or a test binary.
 	// Showing (and recording) a notice there would fire in every test run and
@@ -89,18 +113,32 @@ func maybePrintUpgradeNotice(cmd *cobra.Command) {
 	// `agentsync init` refuse ("already contains files"). `init` seeds the record
 	// itself (seedUpgradeNoticeRecord), so "home exists + no record" means
 	// exactly one thing: a home created by a version that predates the record.
+	//
+	// This keys off the USER home even at project scope, and that is correct
+	// rather than an oversight: apply records state centrally under
+	// ~/.agentsync/.state/ keyed by project root, so any project-scope user who
+	// has ever applied HAS a user home and does see the notice. The only window
+	// where a project-scope user misses it is between `init --scope project` and
+	// their first apply — at which point agentsync has rendered nothing for them,
+	// so nothing has broken under them either. Pinned by
+	// TestUpgradeNotice_ProjectScopeUserSeesItAfterApply.
 	if !homeExists(home) {
 		return
 	}
 	recordPath := filepath.Join(home, ".state", state.LastRunFile)
 
 	rec, err := state.LoadLastRun(recordPath)
-	if err != nil {
-		return // corrupt record: say nothing rather than guess
-	}
-
-	if rec == nil {
-		rec = &state.LastRun{}
+	switch {
+	case errors.Is(err, state.ErrCorruptLastRun):
+		// A record that cannot be parsed carries no information, so the honest
+		// reading is "this machine has shown nothing" — show the notice and
+		// overwrite the file. Bailing here instead meant one truncated or empty
+		// last-run.json (a crash mid-write, a full disk) suppressed the notice
+		// PERMANENTLY, which is the one direction this feature must not fail in:
+		// the user silently never learns their config layout moved. LoadLastRun
+		// hands back a usable zero record for exactly this.
+	case err != nil:
+		return // real I/O trouble: say nothing rather than guess
 	}
 
 	var pending []upgradeNotice
@@ -132,6 +170,13 @@ func maybePrintUpgradeNotice(cmd *cobra.Command) {
 	if mkErr := os.MkdirAll(filepath.Dir(recordPath), 0o755); mkErr != nil {
 		return
 	}
+	// This is a second path that can CREATE .state/ (init is the other), and
+	// ~/.agentsync is routinely a committed dotfiles repo — so the record must
+	// be ignored here too, or `git add -A` sweeps one machine's run marker into
+	// the repo and carries it to every other machine. A home created by a
+	// version that predates the .gitignore scaffolding is exactly the population
+	// this notice fires for.
+	_ = ensureStateGitignore(home)
 	_ = state.SaveLastRun(recordPath, rec)
 }
 
@@ -176,5 +221,6 @@ func seedUpgradeNoticeRecord(home string) {
 	for _, n := range upgradeNotices {
 		rec.MarkSeen(n.ID)
 	}
+	_ = ensureStateGitignore(home)
 	_ = state.SaveLastRun(filepath.Join(home, ".state", state.LastRunFile), rec)
 }

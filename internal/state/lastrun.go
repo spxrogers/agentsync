@@ -61,22 +61,45 @@ func (l *LastRun) MarkSeen(id string) {
 	sort.Strings(l.NoticesSeen)
 }
 
-// LoadLastRun reads the run record at path. A MISSING file returns (nil, nil):
-// absence is meaningful — it distinguishes "this machine has run a version that
-// predates the record" from "this machine has a record". A corrupt file is
-// reported as an error; callers degrade to skipping the notice rather than
-// failing the command.
+// ErrCorruptLastRun reports a run record that exists but cannot be parsed.
+//
+// It is distinguished from an I/O error on purpose. A record is a UX marker with
+// no authority: an unparseable one carries no information, so the honest reading
+// is "this machine has shown nothing", NOT "say nothing forever". Treating a
+// parse failure like an I/O failure meant a single truncated file — the classic
+// crash-mid-write artifact, or an empty file after a full disk — suppressed the
+// notice permanently, silently contradicting the documented contract that a
+// corrupt record only means the notice shows again later.
+//
+// LoadLastRun therefore returns a USABLE zero record alongside this error, so a
+// caller that wants the forgiving behavior can take it and overwrite the file,
+// while one that wants to bail can still check the error.
+var ErrCorruptLastRun = errors.New("corrupt last-run record")
+
+// LoadLastRun reads the run record at path.
+//
+// It always returns a non-nil record, so callers never nil-check before calling
+// Seen/MarkSeen. A MISSING file yields the zero record with a nil error —
+// absence is not an error condition, and "has this machine seen notice X?" is
+// correctly "no" for a machine with no record at all. (Distinguishing a fresh
+// install from an upgrade is NOT this function's job: that is the existence of
+// the agentsync home, checked by the caller.)
+//
+// A record that exists but does not parse yields the zero record wrapped with
+// ErrCorruptLastRun. Any other failure (a real I/O error — .state is a regular
+// file, permissions, a bad mount) returns the zero record and that error;
+// callers skip the notice rather than fail the command.
 func LoadLastRun(path string) (*LastRun, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return &LastRun{}, nil
 		}
-		return nil, fmt.Errorf("read %s: %w", path, err)
+		return &LastRun{}, fmt.Errorf("read %s: %w", path, err)
 	}
 	var l LastRun
 	if err := json.Unmarshal(data, &l); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return &LastRun{}, fmt.Errorf("%w at %s: %w", ErrCorruptLastRun, path, err)
 	}
 	return &l, nil
 }
