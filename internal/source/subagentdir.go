@@ -54,10 +54,19 @@ type LegacySubagentDirError struct {
 }
 
 func (e *LegacySubagentDirError) Error() string {
+	// Name the command that migrates THIS tree. The bare `agentsync migrate
+	// subagents` targets the USER tree, so handing it to someone whose project
+	// tree is unmigrated sends them to a command that reports "nothing to
+	// migrate" and leaves them exactly where they were. The home's parent is the
+	// project root when this is a project tree, and package source cannot tell
+	// the two apart (both end in .agentsync), so name both forms rather than
+	// guess.
+	fix := fmt.Sprintf("Run `agentsync migrate subagents` to move them "+
+		"(for a project tree: `agentsync migrate subagents --project %s`)", filepath.Dir(e.Home))
 	return fmt.Sprintf(
 		"%s still exists and holds %d subagent file(s) (%s); agentsync now reads subagents from %s. "+
 			"Nothing loads the old directory, so proceeding would report zero subagents and let the next apply "+
-			"delete every subagent already rendered to your agents. Run `agentsync migrate subagents` to move them",
+			"delete every subagent already rendered to your agents. %s",
 		filepath.Join(e.Home, LegacySubagentsDir), len(e.Files),
 		// Files are directory basenames from a tree that is routinely a CLONED
 		// dotfiles repo, so they are untrusted input on their way to a terminal:
@@ -65,7 +74,7 @@ func (e *LegacySubagentDirError) Error() string {
 		// main's error printer. The interactive prompt for this same condition
 		// already sanitizes; this is the non-interactive path.
 		untrusted.Sanitize(strings.Join(e.Files, ", ")),
-		filepath.Join(e.Home, SubagentsDir),
+		filepath.Join(e.Home, SubagentsDir), fix,
 	)
 }
 

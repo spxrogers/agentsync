@@ -225,6 +225,17 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 
 ## Troubleshooting
 
+Reach for `agentsync doctor` first — it checks the machine (PATH, home/state
+writability, adapter detection, secrets backend), while `agentsync check`
+validates the config itself.
+
+- **Every command refuses, naming `agentsync migrate subagents`**: the canonical
+  subagent directory moved from `agents/` to `subagents/`. Run `agentsync
+  migrate subagents` once per tree (add `--project <root>` for a project tree);
+  it moves the files and rewrites that tree's recorded state in one step. The
+  refusal is deliberate — an unmigrated tree loads with *zero* subagents, and
+  one `apply` would then delete every subagent it had already rendered. See
+  [Upgrading](https://agentsync.cc/reference/upgrading/).
 - **First apply on a populated machine**: agentsync sees pre-existing native config files and triggers `foreign-collision`. The original is backed up to `~/.agentsync/.state/backups/<ts>/` before the new content lands. Recommend `agentsync apply --dry-run` first to preview the translation report.
 - **One-time backup churn after upgrading**: state keys are now stored `${HOME}`-relative (portable across machines) instead of with absolute paths. If you ran a pre-portability build, the first `apply` after upgrading will not recognize the old absolute-path entries, so every managed destination is treated as a `foreign-collision` once: the current content is backed up to `~/.agentsync/.state/backups/<ts>/` and then re-owned. This is expected, non-destructive (nothing is lost — it's backed up), and self-heals after that single apply. Run `agentsync apply --dry-run` first if you want to see which files will be backed up.
 - **`agentsync plugin outdated` fails to fetch a marketplace**: verify the marketplace URL with `git ls-remote`. agentsync uses `go-git` and falls back to system `git` for sparse clones if needed.
