@@ -22,12 +22,14 @@ func newMarketplaceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "marketplace",
 		Short: "manage plugin marketplaces",
+		Args:  cobra.NoArgs,
 	}
 	cmd.AddCommand(
 		newMarketplaceAddCmd(),
 		newMarketplaceRemoveCmd(),
 		newMarketplaceListCmd(),
 	)
+	strictGroup(cmd)
 	markGroupScopeUnaware(cmd, "marketplaces are registered per machine — marketplaces/*.toml and the fetch cache "+
 		"live under ~/.agentsync, and a project tree pins plugins rather than registering sources")
 	return cmd

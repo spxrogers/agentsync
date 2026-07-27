@@ -271,7 +271,7 @@ Why the asymmetry rather than a tidy round-trip:
 
 The CLI's `import` maps each `NativePlugin` result onto an agentsync
 marketplace source and re-fetches it through the same code path as
-`marketplace add` + `plugin install`, so a captured plugin lands as a normal
+`marketplace add` + `plugin add`, so a captured plugin lands as a normal
 `plugins/<id>.toml` + `marketplaces/<name>.toml` pair with a pinned manifest
 SHA. From then on, the projection layer drives every apply.
 
@@ -760,7 +760,7 @@ supported harness uses a `__`-prefixed native config key.
 
 Every networked path lives in `internal/marketplace`'s fetchers, and every one
 of them writes only to `.state/cache/`. The commands that reach the network are
-`plugin outdated`, `plugin upgrade`, `plugin install`, `marketplace add`,
+`plugin outdated`, `plugin upgrade`, `plugin add`, `marketplace add`,
 `import <agent>:plugin`, and `init <git-url>` (plus the deprecated `update`
 alias). They clone or fetch marketplaces (`go-git`, with a `git` shell-out
 fallback for sparse clones) and npm tarballs (registry HTTP, no `npm` binary

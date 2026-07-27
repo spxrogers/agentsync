@@ -82,7 +82,7 @@ func TestFirstRun_ActionableHints(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 
-	if _, err := runCLI(t, env, "secrets", "get", "x"); err == nil {
+	if _, err := runCLI(t, env, "secret", "get", "x"); err == nil {
 		t.Fatal("secrets get before init should error")
 	} else if !strings.Contains(err.Error(), "init") {
 		t.Fatalf("secrets-before-init error should point at init; got: %v", err)

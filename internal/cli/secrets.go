@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -20,7 +21,9 @@ import (
 )
 
 func newSecretsCmd() *cobra.Command {
-	sec := &cobra.Command{Use: "secrets", Short: "manage age-encrypted secrets"}
+	// Singular `secret`, matching every other noun group (agent, mcp, plugin,
+	// marketplace, skill, …) — #200 F4. Renamed outright, no alias.
+	sec := &cobra.Command{Use: "secret", Short: "manage age-encrypted secrets", Args: cobra.NoArgs}
 	sec.AddCommand(
 		&cobra.Command{
 			Use:   "edit",
@@ -37,7 +40,10 @@ func newSecretsCmd() *cobra.Command {
 			RunE:  secretsGet,
 		},
 		newSecretsSetCmd(),
+		newSecretsListCmd(),
+		newSecretsRemoveCmd(),
 	)
+	strictGroup(sec)
 	markGroupScopeUnaware(sec, "the vault is per machine — secrets/secrets.age and the age identity live under "+
 		"~/.agentsync, and a project tree references secrets rather than storing them")
 	return sec
@@ -363,7 +369,7 @@ func secretsGet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if cfg.Backend != "age" {
-		return fmt.Errorf("secrets get requires backend = \"age\" in agentsync.toml [secrets]")
+		return fmt.Errorf("secret get requires backend = \"age\" in agentsync.toml [secrets]")
 	}
 
 	m, err := decryptToMap(cfg, home)
@@ -506,4 +512,132 @@ func resolveSecretKeyValue(cmd *cobra.Command, arg string, useStdin bool) (strin
 		return "", "", fmt.Errorf("read secret: %w", err)
 	}
 	return key, string(pwBytes), nil
+}
+
+// newSecretsListCmd lists the KEYS in the vault — never the values (#200 F4).
+// The vault was write-and-read-one-at-a-time: there was no way to answer "what
+// is in here?" short of `secret edit`, which decrypts the whole thing to a temp
+// file in $EDITOR. Listing keys needs none of that exposure.
+func newSecretsListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "list secret KEYS in the vault (never values)",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, home, err := loadSecretsConfig()
+			if err != nil {
+				return err
+			}
+			if cfg.Backend != "age" {
+				return fmt.Errorf("secret list requires backend = \"age\" in agentsync.toml [secrets]")
+			}
+			m, err := decryptToMap(cfg, home)
+			if err != nil {
+				return err
+			}
+			keys := flattenSecretKeys(m, "")
+			sort.Strings(keys)
+			w := cmd.OutOrStdout()
+			if len(keys) == 0 {
+				fmt.Fprintln(w, "(vault is empty; add one with `agentsync secret set <key>`)")
+				return nil
+			}
+			for _, k := range keys {
+				fmt.Fprintln(w, ui.Sanitize(k))
+			}
+			return nil
+		},
+	}
+}
+
+// flattenSecretKeys walks the decrypted vault and returns dotted key paths. Only
+// the PATHS are collected — no value ever leaves this function.
+func flattenSecretKeys(m map[string]any, prefix string) []string {
+	var out []string
+	for k, v := range m {
+		path := k
+		if prefix != "" {
+			path = prefix + "." + k
+		}
+		if nested, ok := v.(map[string]any); ok {
+			out = append(out, flattenSecretKeys(nested, path)...)
+			continue
+		}
+		out = append(out, path)
+	}
+	return out
+}
+
+// newSecretsRemoveCmd deletes one key from the vault and re-encrypts (#200 F4).
+// Before this the only way to remove a secret was `secret edit` — decrypting the
+// whole vault into $EDITOR to delete one line.
+func newSecretsRemoveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "remove <key>",
+		Aliases: []string{"rm"},
+		Short:   "delete a secret key from the vault",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			home := paths.AgentsyncHome(paths.OSEnv{})
+			return withGlobalLock(home, func() error { return secretsRemove(cmd, args[0]) })
+		},
+	}
+}
+
+// secretsRemove deletes key from the vault and re-encrypts. It mirrors
+// secretsSet's ordering exactly: mutate the decrypted map FIRST and only
+// encrypt on success, so a refused removal (missing key) leaves the on-disk
+// vault byte-for-byte unchanged.
+func secretsRemove(cmd *cobra.Command, key string) error {
+	cfg, home, err := loadSecretsConfig()
+	if err != nil {
+		return err
+	}
+	if cfg.Backend != "age" {
+		return fmt.Errorf("secret remove requires backend = \"age\" in agentsync.toml [secrets]")
+	}
+	m, err := decryptToMap(cfg, home)
+	if err != nil {
+		return err
+	}
+	if _, ok := getNestedKey(m, key); !ok {
+		return fmt.Errorf("secret %q not found; run `agentsync secret list` to see the keys in the vault", key)
+	}
+	if !deleteNestedKey(m, key) {
+		return fmt.Errorf("secret %q could not be removed (it is a table, not a value); edit the vault with `agentsync secret edit`", key)
+	}
+	if err := encryptMap(m, cfg, home); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "secret %q removed\n", key)
+	return nil
+}
+
+// deleteNestedKey removes a dotted key path from the decrypted vault map,
+// reporting whether a VALUE was removed. A path naming an intermediate table is
+// refused (ok=false): deleting a whole subtree on a typo'd key is not a thing a
+// one-word command should do silently.
+func deleteNestedKey(m map[string]any, key string) bool {
+	parts := strings.Split(key, ".")
+	cur := m
+	for i, p := range parts {
+		v, ok := cur[p]
+		if !ok {
+			return false
+		}
+		if i == len(parts)-1 {
+			if _, isTable := v.(map[string]any); isTable {
+				return false
+			}
+			delete(cur, p)
+			return true
+		}
+		next, isTable := v.(map[string]any)
+		if !isTable {
+			return false
+		}
+		cur = next
+	}
+	return false
 }

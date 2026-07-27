@@ -22,11 +22,12 @@ import { Aside } from '@astrojs/starlight/components';
 | `doctor` | Diagnose setup: PATH, home/state writability, schema, secrets backend, destination-git-backup mode + per-dir repo status. | |
 | `check` | Validate the **config**: schema lint + unresolved `${secret:}` / `${env:}` refs. `--scope project` / `--project <path>` lints the project tree instead. (Renamed from `verify`.) | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or a project tree's own `[agents]` declaration with `--scope project` / `--project <path>`. | `disable --purge --scope --project` |
+| `skill\|subagent\|command\|hook\|lsp list` | List that component in the canonical source (read-side only — none of these is flag-authorable). | `--scope --project` |
 | `migrate subagents` | One-shot move of the retired canonical `agents/` directory to `subagents/` (rewrites that tree's recorded `source_id` values). | `--scope --project` |
-| `mcp add\|remove\|list <name>` | Manage MCP servers. `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site. | `--type --command --args --url --env --agents --header` |
+| `mcp add\|remove\|list\|enable\|disable <name>` | Manage MCP servers. `enable`/`disable` flip the `enabled` bit (keep the definition, stop rendering). `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site. | `--type --command --args --url --env --agents --header` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
-| `plugin install\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` / `outdated` / `explain` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). | `install <id[@marketplace]>` |
-| `secrets set\|get <key>` / `secrets edit` | Manage age-encrypted secrets (`edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
+| `plugin add\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` / `outdated` / `explain` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). | `install <id[@marketplace]>` |
+| `secrets set\|get <key>` / `secret edit` | Manage age-encrypted secrets (`edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
 | `plugin outdated` / `plugin upgrade [<id>]` | **(network)** Poll marketplaces and report pending bumps / re-fetch a plugin (or `--all` pending bumps) and re-apply. | `upgrade --all --lossless --scope --project` |
 | `update` | **(deprecated)** Forwards to `plugin outdated` / `plugin upgrade --all [--lossless]` with a warning. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). Git-versions each destination dir (opt-out). | `--dry-run --scope --project --no-git-backup` |
@@ -173,7 +174,7 @@ Manage plugin registries and the plugins drawn from them. Full guide:
 
 ```bash
 agentsync marketplace add github:anthropics/claude-plugins-official
-agentsync plugin install atlassian@anthropic
+agentsync plugin add atlassian@anthropic
 agentsync plugin list
 ```
 
@@ -181,12 +182,12 @@ agentsync plugin list
 Manage the age-encrypted vault. Full guide: [Secrets](/guides/secrets/).
 
 ```bash
-agentsync secrets set github.token --stdin
-agentsync secrets get github.token
-agentsync secrets edit
+agentsync secret set github.token --stdin
+agentsync secret get github.token
+agentsync secret edit
 ```
 
-`secrets set` refuses an empty (or whitespace-only) value by default; pass
+`secret set` refuses an empty (or whitespace-only) value by default; pass
 `--allow-empty` to store one deliberately.
 
 ---

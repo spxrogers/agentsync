@@ -426,7 +426,7 @@ func TestExplainPath_PluginOriginAttributed(t *testing.T) {
 	mustRun(t, env, "agent", "add", "claude")
 	mpDir := makeVersionedMarketplace(t, base, "1.2.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 	mustRun(t, env, "apply")
 
 	dest := filepath.Join(tmp, ".claude.json")
@@ -477,7 +477,7 @@ func TestExplainPath_UserAuthoredHasNoPluginOrigin(t *testing.T) {
 	mustRun(t, env, "agent", "add", "claude")
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 	mustRun(t, env, "mcp", "add", "mine", "--command", "echo")
 	mustRun(t, env, "apply")
 

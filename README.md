@@ -181,11 +181,11 @@ agentsync is single-machine. To sync `~/.agentsync/` across machines, use chezmo
 
 If you lose your age private key, you lose access to all encrypted secrets. Recommended: store the key in a 1Password Secure Note or your machine-setup repo. agentsync does not back up the key for you.
 
-`agentsync secrets set` accepts the value three ways:
+`agentsync secret set` accepts the value three ways:
 
-    agentsync secrets set github.token --stdin    # value from stdin (best for scripts / 1Password CLI)
-    agentsync secrets set github.token            # prompt with echo off
-    agentsync secrets set github.token=ghp_…      # back-compat; warns — argv is visible to ps(1) and shell history
+    agentsync secret set github.token --stdin    # value from stdin (best for scripts / 1Password CLI)
+    agentsync secret set github.token            # prompt with echo off
+    agentsync secret set github.token=ghp_…      # back-compat; warns — argv is visible to ps(1) and shell history
 
 `agentsync diff` redacts every resolved `${secret:…}` value before printing, so a piped diff doesn't leak credentials to logs.
 
@@ -228,7 +228,7 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 - **First apply on a populated machine**: agentsync sees pre-existing native config files and triggers `foreign-collision`. The original is backed up to `~/.agentsync/.state/backups/<ts>/` before the new content lands. Recommend `agentsync apply --dry-run` first to preview the translation report.
 - **One-time backup churn after upgrading**: state keys are now stored `${HOME}`-relative (portable across machines) instead of with absolute paths. If you ran a pre-portability build, the first `apply` after upgrading will not recognize the old absolute-path entries, so every managed destination is treated as a `foreign-collision` once: the current content is backed up to `~/.agentsync/.state/backups/<ts>/` and then re-owned. This is expected, non-destructive (nothing is lost — it's backed up), and self-heals after that single apply. Run `agentsync apply --dry-run` first if you want to see which files will be backed up.
 - **`agentsync plugin outdated` fails to fetch a marketplace**: verify the marketplace URL with `git ls-remote`. agentsync uses `go-git` and falls back to system `git` for sparse clones if needed.
-- **`${secret:foo}` not resolving**: run `agentsync secrets get foo` to verify the key exists in the decrypted file. age library errors will surface here.
+- **`${secret:foo}` not resolving**: run `agentsync secret get foo` to verify the key exists in the decrypted file. age library errors will surface here.
 
 ## Testing
 

@@ -67,6 +67,9 @@ func NewRoot() *cobra.Command {
 		newImportCmd(),
 		newVersionCmd(),
 	)
+	// #200 F5: every peer component gets the READ side, so `mcp` is no longer the
+	// only component you can ask about.
+	cmd.AddCommand(newComponentListCmds()...)
 	return cmd
 }
 

@@ -21,16 +21,20 @@ func newMCPCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "manage MCP servers in the canonical source",
+		Args:  cobra.NoArgs,
 	}
 	cmd.AddCommand(
 		newMCPAddCmd(),
 		newMCPRemoveCmd(),
 		newMCPListCmd(),
+		newMCPEnableCmd(),
+		newMCPDisableCmd(),
 	)
 	// Project-scope mcp/<id>.toml is a documented part of the project tree
 	// layout, but before #200 F6 every mcp subcommand hardcoded the user home —
 	// so `mcp add … --scope project` silently wrote to ~/.agentsync. The whole
 	// group is scope-aware now.
+	strictGroup(cmd)
 	markScopeAware(cmd)
 	for _, sub := range cmd.Commands() {
 		markScopeAware(sub)
@@ -324,4 +328,63 @@ func splitAgents(s string) []string {
 		}
 	}
 	return out
+}
+
+// newMCPEnableCmd / newMCPDisableCmd flip mcp/<id>.toml's `enabled` bit (#200
+// F4). The field already existed on MCPServerSpec and was already read by the
+// loader — a server could be disabled only by hand-editing the TOML, while
+// `plugin` had had enable/disable verbs all along. This closes that gap without
+// touching the schema.
+//
+// `disabled` here means "keep the definition, stop rendering it" — the same
+// contract `plugin disable` has. To remove the server entirely, use `mcp rm`.
+func newMCPEnableCmd() *cobra.Command { return newMCPToggleCmd(true) }
+
+func newMCPDisableCmd() *cobra.Command { return newMCPToggleCmd(false) }
+
+func newMCPToggleCmd(enable bool) *cobra.Command {
+	verb, past := "disable", "disabled"
+	short := "stop rendering an MCP server, keeping its definition"
+	if enable {
+		verb, past = "enable", "enabled"
+		short = "resume rendering a disabled MCP server"
+	}
+	cmd := &cobra.Command{
+		Use:   verb + " <id>",
+		Short: short,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id := args[0]
+			home, _, _, err := scopedSourceHome(cmd)
+			if err != nil {
+				return err
+			}
+			return withGlobalLock(paths.AgentsyncHome(paths.OSEnv{}), func() error {
+				m, ok, rerr := source.ReadMCP(home, id)
+				if rerr != nil {
+					return rerr
+				}
+				if !ok {
+					return fmt.Errorf("mcp/%s.toml not found; run `agentsync mcp list` to see what is defined", id)
+				}
+				// Enabled is a *bool where nil means "default-on", so enabling an
+				// already-default server clears the field rather than writing an
+				// explicit true — keeping the canonical file as close to what the
+				// user hand-authored as possible.
+				if enable {
+					m.Server.Enabled = nil
+				} else {
+					off := false
+					m.Server.Enabled = &off
+				}
+				if werr := source.WriteMCP(home, id, m); werr != nil {
+					return werr
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s mcp server: %s\n", past, id)
+				return nil
+			})
+		},
+	}
+	markScopeAware(cmd)
+	return cmd
 }

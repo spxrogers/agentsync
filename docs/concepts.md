@@ -201,7 +201,7 @@ does not project plugins or print a coverage report):
 loop: it polls marketplaces, refreshes the cache, and recomputes version pins.
 `agentsync plugin upgrade --all` then re-pins every pending bump and re-applies.
 `apply` itself runs entirely from cache — the split keeps it fast, reproducible,
-and offline-safe. It is not the only networked command (`plugin install`,
+and offline-safe. It is not the only networked command (`plugin add`,
 `marketplace add`, `import <agent>:plugin`, and `init <git-url>` all fetch), just
 the one the loop runs.
 

@@ -25,9 +25,13 @@ func newPluginCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "plugin",
 		Short: "manage plugins from marketplaces",
+		// NoArgs so an unknown subcommand is an ERROR, not a silent help dump —
+		// otherwise `plugin install` (renamed to `add` in #200 F4) would look
+		// like it still works.
+		Args: cobra.NoArgs,
 	}
 	cmd.AddCommand(
-		newPluginInstallCmd(),
+		newPluginAddCmd(),
 		newPluginOutdatedCmd(),
 		newPluginUpgradeCmd(),
 		newPluginEnableCmd(),
@@ -40,6 +44,7 @@ func newPluginCmd() *cobra.Command {
 	// installs under ~/.claude, not per-repo), and the registry + cache live
 	// under ~/.agentsync — so the group refuses scope flags. `plugin upgrade`
 	// is the one exception: its re-apply step honors scope, and re-marks itself.
+	strictGroup(cmd)
 	markGroupScopeUnaware(cmd, "plugins are a user-scope concept — the registry (plugins/*.toml) and cache "+
 		"live under ~/.agentsync. A project tree can only DISABLE a plugin, by committing plugins/<id>.toml with `disabled = true`")
 	markScopeAware(findSub(cmd, "upgrade"))
@@ -76,16 +81,21 @@ type pluginTOMLSpec struct {
 
 // ---- install ----------------------------------------------------------------
 
-func newPluginInstallCmd() *cobra.Command {
+// newPluginAddCmd is `plugin add`. It was `plugin install` until #200 F4, which
+// unified the five noun groups on one verb set: every other group creates with
+// `add`, and `install` additionally read as "install it into the agent", which
+// is not what happens — agentsync registers + pins the plugin and fans its
+// COMPONENTS out at apply.
+func newPluginAddCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "install <id[@marketplace]>",
-		Short: "fetch a plugin and register it",
+		Use:   "add <id[@marketplace]>",
+		Short: "fetch a plugin, register it, and pin its manifest",
 		Args:  cobra.ExactArgs(1),
-		RunE:  lockedRun(pluginInstallRun),
+		RunE:  lockedRun(pluginAddRun),
 	}
 }
 
-func pluginInstallRun(cmd *cobra.Command, args []string) error {
+func pluginAddRun(cmd *cobra.Command, args []string) error {
 	id, mpName := splitPluginRef(args[0])
 	if err := validateCacheKey("plugin", id); err != nil {
 		return err
@@ -633,7 +643,7 @@ func pluginListRun(cmd *cobra.Command, _ []string) error {
 	sort.Strings(names)
 
 	if len(names) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "(no plugins installed; try: agentsync plugin install <id@marketplace>)")
+		fmt.Fprintln(cmd.OutOrStdout(), "(no plugins installed; try: agentsync plugin add <id@marketplace>)")
 		return nil
 	}
 	for _, name := range names {

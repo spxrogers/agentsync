@@ -29,8 +29,10 @@ func newMigrateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "migrate",
 		Short: "one-shot migrations for retired canonical layouts",
+		Args:  cobra.NoArgs,
 	}
 	cmd.AddCommand(newMigrateSubagentsCmd())
+	strictGroup(cmd)
 	markScopeAware(cmd) // `migrate subagents` migrates one tree, chosen by scope
 	return cmd
 }

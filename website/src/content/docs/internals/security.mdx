@@ -39,7 +39,7 @@ several tiers of defense, in increasing distance from the danger:
   read a group/other-readable identity unless `AGENTSYNC_AGE_SKIP_PERM_CHECK=1`.
 - agentsync **never** writes decrypted secret values to durable storage and
   **redacts** resolved `${secret:…}` values in `agentsync diff`.
-- `agentsync secrets set --stdin` keeps secret values off `argv`, shell history,
+- `agentsync secret set --stdin` keeps secret values off `argv`, shell history,
   and process listings.
 
 ## Untrusted marketplaces & plugins

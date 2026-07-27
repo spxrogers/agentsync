@@ -21,7 +21,7 @@ func TestPluginOutdated_ReportsPendingBumps(t *testing.T) {
 	mustRun(t, env, "agent", "add", "claude")
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 	mustRun(t, env, "apply")
 
 	_ = makeVersionedMarketplace(t, base, "1.0.1")
@@ -57,7 +57,7 @@ func TestPluginUpgradeAll_UpgradesAndReapplies(t *testing.T) {
 	mustRun(t, env, "agent", "add", "claude")
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 	mustRun(t, env, "apply")
 
 	_ = makeVersionedMarketplace(t, base, "1.0.1")
@@ -91,7 +91,7 @@ func TestPluginUpgradeID_Reapplies(t *testing.T) {
 	mustRun(t, env, "agent", "add", "claude")
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 	mustRun(t, env, "apply")
 
 	_ = makeVersionedMarketplace(t, base, "1.0.1")
@@ -139,8 +139,8 @@ func TestPluginUpgrade_Lossless(t *testing.T) {
 
 	mpDir := makeAutoSafeMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "cleanp@as-mp")
-	mustRun(t, env, "plugin", "install", "lossyp@as-mp")
+	mustRun(t, env, "plugin", "add", "cleanp@as-mp")
+	mustRun(t, env, "plugin", "add", "lossyp@as-mp")
 	mustRun(t, env, "apply")
 
 	// 2.0.0: lossyp gains an opencode-skipped LSP server; cleanp stays MCP-only.
@@ -195,7 +195,7 @@ func TestUpdateAlias_ForwardsFullFlagSurface(t *testing.T) {
 	mustRun(t, env, "agent", "add", "claude")
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 	mustRun(t, env, "apply")
 	_ = makeVersionedMarketplace(t, base, "1.0.1")
 

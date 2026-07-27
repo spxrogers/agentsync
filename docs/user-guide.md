@@ -180,7 +180,7 @@ list the source files an import would write without touching `~/.agentsync/`.
 **Plugins are a special case.** The `plugin` component (Claude and Codex) reads
 the agent's installed plugins and their marketplaces and re-fetches each one into
 the agentsync cache, pinning a manifest SHA — the same artifacts `marketplace
-add` + `plugin install` produce. Because it re-fetches, a real plugin import (not
+add` + `plugin add` produce. Because it re-fetches, a real plugin import (not
 `--dry-run`) needs network access. A plugin's marketplace is resolved from
 agentsync's own registered marketplaces first, then the agent's native config. A
 plugin whose marketplace is registered in neither — for example a plugin from
@@ -462,7 +462,7 @@ and every enabled agent gets the components it understands:
 
 ```bash
 agentsync marketplace add github:anthropics/claude-plugins-official
-agentsync plugin install atlassian@anthropic
+agentsync plugin add atlassian@anthropic
 
 agentsync plugin outdated  # fetch from the network (refresh cache, show bumps)
 agentsync plugin upgrade --all   # re-pin every pending bump and re-apply
@@ -558,13 +558,13 @@ identity_file = "${env:HOME}/.config/agentsync/age.key"
 Store the value in the age-encrypted vault — three ways:
 
 ```bash
-agentsync secrets set github.token --stdin    # from stdin (best for scripts / 1Password CLI)
-agentsync secrets set github.token            # interactive prompt, echo off
-agentsync secrets edit                        # open the whole vault in $EDITOR
-agentsync secrets get github.token            # read one back (to verify)
+agentsync secret set github.token --stdin    # from stdin (best for scripts / 1Password CLI)
+agentsync secret set github.token            # interactive prompt, echo off
+agentsync secret edit                        # open the whole vault in $EDITOR
+agentsync secret get github.token            # read one back (to verify)
 ```
 
-`secrets set` refuses an **empty or whitespace-only** value by default (a
+`secret set` refuses an **empty or whitespace-only** value by default (a
 fat-fingered paste or an empty `pbpaste`/`1password` pipe would otherwise store a
 silently-broken secret that resolves to `""` at apply time); pass `--allow-empty`
 to store an empty value deliberately.
@@ -686,7 +686,7 @@ command rather than leaving them stale until the next `apply`.
 
 `plugin outdated` is not a pure read despite the `npm outdated` prior: it uses
 the network and it writes state (each marketplace's fetch timestamp and head
-SHA). Nor is it the *only* networked command — `plugin install`, `plugin
+SHA). Nor is it the *only* networked command — `plugin add`, `plugin
 upgrade`, `marketplace add`, `import <agent>:plugin`, and `init <git-url>` all
 fetch. It is simply the one the daily loop runs.
 
@@ -800,11 +800,12 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `doctor` | Diagnose setup: PATH, home/state writability, config schema, secrets backend, destination-git-backup mode + per-dir repo status; flags natively-installed plugins missing from source. | |
 | `check` | Validate the **config**: schema lint plus every `${secret:}`/`${env:}` reference resolved. `--scope project`/`--project <path>` lints the project tree against the inherited user secrets backend. Its sibling is `doctor`, which validates the **machine**. (Renamed from `verify` — see [Upgrading](#command-reference).) | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or with `--scope project`/`--project <path>` the project tree's own `[agents]` declaration (which project scope renders from; never inherited). At project scope `disable --purge` touches only that project's rendered files. | `disable --purge --scope --project` |
+| `skill\|subagent\|command\|hook\|lsp list` | List that component in the canonical source. Read-only by design: unlike an MCP server, none of these is flag-authorable — a skill is a *directory*, a subagent is a markdown file — so you author them on disk or capture them with `import`. | `--scope --project` |
 | `migrate subagents` | One-shot move of the retired canonical `agents/` directory to `subagents/`, rewriting that tree's recorded `source_id` values. Run once per tree (`--scope project` / `--project <path>` for a project tree). Refuses, listing the names, if a file exists under both directories. | `--scope --project` |
-| `mcp add\|remove\|list <name>` | Manage MCP servers. `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site, e.g. `--header "Authorization: Bearer ${secret:TOKEN}"`. | `--type --command --args --url --env --agents --header` |
+| `mcp add\|remove\|list\|enable\|disable <name>` | Manage MCP servers. `enable`/`disable` flip the server's `enabled` bit — keeping the definition but stopping the render (`remove` deletes it). `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site, e.g. `--header "Authorization: Bearer ${secret:TOKEN}"`. | `--type --command --args --url --env --agents --header` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
-| `plugin install\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` / `outdated` / `explain` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). `outdated` **(network)** polls the marketplaces and reports pending bumps — it also writes each marketplace's fetch timestamp + head SHA to state. `upgrade` **(network)** re-fetches one plugin, or with `--all` every plugin with a pending bump, and **re-applies** in both cases; `--lossless` skips an upgrade that would introduce a new translation loss, reporting it. `explain` shows per-agent translation coverage. | `outdated` · `upgrade [<id>] --all --lossless --scope --project` · `explain [<id>...] --all --json` |
-| `secrets set\|get <key>` / `secrets edit` | Manage age-encrypted secrets (`edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
+| `plugin add\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` / `outdated` / `explain` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). `outdated` **(network)** polls the marketplaces and reports pending bumps — it also writes each marketplace's fetch timestamp + head SHA to state. `upgrade` **(network)** re-fetches one plugin, or with `--all` every plugin with a pending bump, and **re-applies** in both cases; `--lossless` skips an upgrade that would introduce a new translation loss, reporting it. `explain` shows per-agent translation coverage. | `outdated` · `upgrade [<id>] --all --lossless --scope --project` · `explain [<id>...] --all --json` |
+| `secrets set\|get <key>` / `secret edit` | Manage age-encrypted secrets (`edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
 | `update` | **(deprecated)** Forwards to `plugin outdated` / `plugin upgrade --all [--lossless]` with a warning; removed in a future minor. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. A delete-only run (a component removed from source) reports `removed: N key(s), M file(s)` — key-removals and file-deletes counted distinctly — and a mixed run `applied: X ops, removed: …`, rather than mislabeling itself `up to date`/`applied: 0 ops`; `--dry-run` previews the same removal counts. | `--dry-run --scope --project --no-git-backup` |
 | `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. `--to` must name one of the dir's own checkpoints (the current one or an ancestor) — anything else is refused. A dir under which a foreign git repo has appeared (or that isn't an agentsync-managed backup) is an **error** when you name the agent, and a **skip with a warning** under `--all` — strictness follows the invocation; there is no `--strict` flag. | `--to --all --dry-run` |
@@ -860,7 +861,7 @@ and the complete environment-variable table. The ones you'll reach for most:
 
 Quick hits:
 
-- **`${secret:foo}` not resolving?** `agentsync secrets get foo` to confirm the
+- **`${secret:foo}` not resolving?** `agentsync secret get foo` to confirm the
   key exists in the decrypted vault.
 - **`plugin outdated` can't fetch a marketplace?** Sanity-check the URL with
   `git ls-remote`.

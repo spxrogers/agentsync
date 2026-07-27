@@ -41,6 +41,34 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 - **`import` spells the subagent selector component `subagent`.** `agentsync
   import opencode:subagent:reviewer` is the canonical form; `agent` stays
   accepted as an alias, so existing invocations keep working.
+- **BREAKING (CLI): the noun groups share one verb set (#200 F4).**
+  - **`agentsync plugin install` is now `agentsync plugin add`** — every other
+    group creates with `add`, and `install` additionally read as "install it
+    into the agent", which is not what happens: agentsync registers and pins
+    the plugin, then fans its *components* out at apply. **No alias.**
+  - **`agentsync secrets` is now `agentsync secret`**, singular like every
+    other noun group. **No alias.**
+  - **New `mcp enable` / `mcp disable`.** `MCPServerSpec.enabled` already
+    existed and was already read by the loader, but the only way to flip it was
+    hand-editing the TOML — while `plugin` had had enable/disable all along.
+    `disable` keeps the definition and stops the render; `remove` deletes it.
+  - **New `secret list` and `secret remove`.** The vault was
+    write-and-read-one-key-at-a-time: answering "what's in here?" or deleting a
+    key meant `secret edit`, which decrypts the whole vault into `$EDITOR`.
+    `secret list` prints **keys only**, never values.
+- **A noun group now REJECTS an unknown subcommand** instead of printing help
+  and exiting 0. Cobra returns `ErrHelp` for a non-runnable parent before it
+  validates args, so `agentsync plugin install x` silently succeeded — which
+  would have made every hard rename in this release look like it still worked.
+
+- **Every peer component now has a read side (#200 F5).** `mcp` was the only
+  one of the eight with a management group, so "what skills do I have?" had no
+  answer short of `ls ~/.agentsync/skills`. `skill`, `subagent`, `command`,
+  `hook`, and `lsp` each gain `list` (and `ls`), scope-aware like the rest.
+  There is deliberately **no `add`**: unlike an MCP server none of these is
+  flag-authorable — a skill is a *directory*, a subagent a markdown file — so
+  you author them on disk or capture them with `import`.
+
 - **`--agents` is now the one "which agents" selector (#200 F10).** There were
   four grammars for the same question, and the sharpest edge was that **`apply`
   had none at all** — the daily loop is status → diff → reconcile → apply, so

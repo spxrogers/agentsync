@@ -26,7 +26,7 @@ func TestUpdate_ApplyRecordsFreshManifestSHA(t *testing.T) {
 	// Install demo@1.0.0 (records version + sha256(plugin.json@1.0.0)).
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 	mustRun(t, env, "apply")
 
 	// Publish 1.0.1 in place — plugin.json content changes, so its SHA does too.
@@ -69,7 +69,7 @@ func TestUpdate_ApplyProjectScope_RequiresDeclaredAgents(t *testing.T) {
 	// A pending bump so the re-apply (and therefore the reload) actually runs.
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 	mustRun(t, env, "apply")
 	_ = makeVersionedMarketplace(t, base, "1.0.1")
 
@@ -104,7 +104,7 @@ func TestUpdate_ApplyBumpFailureLeavesCacheConsistent(t *testing.T) {
 	// Install demo@1.0.0 (records version + sha256(plugin.json@1.0.0)).
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 	mustRun(t, env, "apply")
 
 	// Turn plugins/demo.toml into a symlink: applyPluginBump can READ it
@@ -213,7 +213,7 @@ func TestUpdate_DetectsManifestSHADrift(t *testing.T) {
 
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 
 	// Re-upload the SAME version 1.0.0 with DIFFERENT plugin.json content
 	// (a tampered re-publish) by rewriting the marketplace fixture in place.
@@ -288,8 +288,8 @@ func TestUpdate_AutoSafe(t *testing.T) {
 
 	mpDir := makeAutoSafeMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "cleanp@as-mp")
-	mustRun(t, env, "plugin", "install", "lossyp@as-mp")
+	mustRun(t, env, "plugin", "add", "cleanp@as-mp")
+	mustRun(t, env, "plugin", "add", "lossyp@as-mp")
 	mustRun(t, env, "apply")
 
 	// Publish 2.0.0: lossyp gains an opencode-skipped LSP server; cleanp stays MCP-only.
@@ -369,7 +369,7 @@ func TestUpdate_FetchesMarketplaceAndReportsUpToDate(t *testing.T) {
 	}
 
 	// Install a plugin.
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -465,7 +465,7 @@ func TestUpdate_SanitizesUntrustedBumpVersion(t *testing.T) {
 	mustRun(t, env, "agent", "add", "claude")
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 	mustRun(t, env, "apply")
 	// Publish a non-semver candidate carrying control bytes -> a pending bump.
 	hostile := "9.9" + string(rune(0x1b)) + "[31m" + string(rune(0x0d))

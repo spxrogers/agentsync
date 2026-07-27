@@ -123,7 +123,7 @@ func runExplainEmpty(p *ui.Printer, jsonOut bool) error {
 	if jsonOut {
 		return emitJSON(p.Out, render.TranslationReport{})
 	}
-	fmt.Fprintf(p.Out, "%s\n", p.Faint("no plugins installed — try `agentsync plugin install <id@marketplace>`"))
+	fmt.Fprintf(p.Out, "%s\n", p.Faint("no plugins installed — try `agentsync plugin add <id@marketplace>`"))
 	return nil
 }
 

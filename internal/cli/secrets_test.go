@@ -60,7 +60,7 @@ func TestSecretsGetSet(t *testing.T) {
 	}
 
 	// get existing key
-	out, err := runCLI(t, env, "secrets", "get", "github.token")
+	out, err := runCLI(t, env, "secret", "get", "github.token")
 	if err != nil {
 		t.Fatalf("secrets get: %v\n%s", err, out)
 	}
@@ -69,13 +69,13 @@ func TestSecretsGetSet(t *testing.T) {
 	}
 
 	// set new key
-	out, err = runCLI(t, env, "secrets", "set", "linear.api_key=lin_xyz")
+	out, err = runCLI(t, env, "secret", "set", "linear.api_key=lin_xyz")
 	if err != nil {
 		t.Fatalf("secrets set: %v\n%s", err, out)
 	}
 
 	// get newly set key
-	out, err = runCLI(t, env, "secrets", "get", "linear.api_key")
+	out, err = runCLI(t, env, "secret", "get", "linear.api_key")
 	if err != nil {
 		t.Fatalf("secrets get after set: %v\n%s", err, out)
 	}
@@ -84,7 +84,7 @@ func TestSecretsGetSet(t *testing.T) {
 	}
 
 	// original key still present
-	out, err = runCLI(t, env, "secrets", "get", "github.token")
+	out, err = runCLI(t, env, "secret", "get", "github.token")
 	if err != nil {
 		t.Fatalf("get original after set: %v\n%s", err, out)
 	}
@@ -102,11 +102,11 @@ func TestSecretsGet_RejectsNonStringLeaf(t *testing.T) {
 	if err := secrets_pkg.Encrypt(plain, id.Recipient().String(), agePath); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "secrets", "get", "svc.port"); err == nil {
+	if _, err := runCLI(t, env, "secret", "get", "svc.port"); err == nil {
 		t.Fatal("get of a non-string leaf must error (matches apply's flatten contract)")
 	}
 	// A string leaf in the same vault still works.
-	if out, err := runCLI(t, env, "secrets", "get", "svc.name"); err != nil || !strings.Contains(out, "ok") {
+	if out, err := runCLI(t, env, "secret", "get", "svc.name"); err != nil || !strings.Contains(out, "ok") {
 		t.Fatalf("get of a string leaf must succeed: err=%v out=%q", err, out)
 	}
 }
@@ -125,10 +125,10 @@ func TestSecretsEdit_EditorWithArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("EDITOR", ed+" --wait")
-	if out, err := runCLI(t, env, "secrets", "edit"); err != nil {
+	if out, err := runCLI(t, env, "secret", "edit"); err != nil {
 		t.Fatalf("secrets edit with $EDITOR carrying a flag must work: %v\n%s", err, out)
 	}
-	if out, err := runCLI(t, env, "secrets", "get", "edited.val"); err != nil || !strings.Contains(out, "yes") {
+	if out, err := runCLI(t, env, "secret", "get", "edited.val"); err != nil || !strings.Contains(out, "yes") {
 		t.Fatalf("edit did not save via the flagged editor: err=%v out=%q", err, out)
 	}
 }
@@ -147,7 +147,7 @@ func TestSecretsEdit_RejectsCollidingKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("EDITOR", ed)
-	if _, err := runCLI(t, env, "secrets", "edit"); err == nil {
+	if _, err := runCLI(t, env, "secret", "edit"); err == nil {
 		t.Fatal("edit must reject a flatten-colliding vault rather than save it")
 	}
 }
@@ -174,11 +174,11 @@ func TestSecretsSet_RejectsRecipientIdentityMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := runCLI(t, env, "secrets", "set", "x.y=z"); err == nil {
+	if _, err := runCLI(t, env, "secret", "set", "x.y=z"); err == nil {
 		t.Fatal("secrets set with a recipient the identity can't decrypt should be rejected")
 	}
 	// The original store must still be readable (rolled back, not clobbered).
-	out, gerr := runCLI(t, env, "secrets", "get", "a.b")
+	out, gerr := runCLI(t, env, "secret", "get", "a.b")
 	if gerr != nil || !strings.Contains(out, "c") {
 		t.Fatalf("original store not preserved after rejected set: err=%v out=%q", gerr, out)
 	}
@@ -191,21 +191,21 @@ func TestSecretsGet_MissingKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := runCLI(t, env, "secrets", "get", "nonexistent.key")
+	_, err := runCLI(t, env, "secret", "get", "nonexistent.key")
 	if err == nil {
 		t.Fatal("expected error for missing key")
 	}
 }
 
 // TestSecretsSet_NoEqualsNonTTYErrors is the regression for the bug where
-// `agentsync secrets set <something>` (no `=`) printed the user's argument
+// `agentsync secret set <something>` (no `=`) printed the user's argument
 // back via `got %q` — leaking it if the argument was a real token. The
 // new behaviour refuses without echoing the argument when stdin is not a
 // TTY (the test environment).
 func TestSecretsSet_NoEqualsNonTTYErrors(t *testing.T) {
 	const sentinel = "ghp_SENTINEL_NEVER_ECHO_THIS_TOKEN"
 	env, _, _, _ := setupSecretsEnv(t)
-	out, err := runCLI(t, env, "secrets", "set", sentinel)
+	out, err := runCLI(t, env, "secret", "set", sentinel)
 	if err == nil {
 		t.Fatal("expected error when no '=' and stdin is not a terminal")
 	}
@@ -223,11 +223,11 @@ func TestSecretsSet_NoEqualsNonTTYErrors(t *testing.T) {
 func TestSecretsSet_StdinPath(t *testing.T) {
 	env, _, _, _ := setupSecretsEnv(t)
 	const value = "ghp_VIA_STDIN_FLOW_123"
-	out, err := runCLIWithStdin(t, env, value+"\n", "secrets", "set", "github.token", "--stdin")
+	out, err := runCLIWithStdin(t, env, value+"\n", "secret", "set", "github.token", "--stdin")
 	if err != nil {
 		t.Fatalf("secrets set --stdin: %v\n%s", err, out)
 	}
-	got, err := runCLI(t, env, "secrets", "get", "github.token")
+	got, err := runCLI(t, env, "secret", "get", "github.token")
 	if err != nil {
 		t.Fatalf("get after stdin set: %v\n%s", err, got)
 	}
@@ -240,7 +240,7 @@ func TestSecretsSet_StdinPath(t *testing.T) {
 // but warns the user that the value just hit argv.
 func TestSecretsSet_LegacyArgWarns(t *testing.T) {
 	env, _, _, _ := setupSecretsEnv(t)
-	out, err := runCLI(t, env, "secrets", "set", "legacy.key=legacy_value")
+	out, err := runCLI(t, env, "secret", "set", "legacy.key=legacy_value")
 	if err != nil {
 		t.Fatalf("legacy set: %v\n%s", err, out)
 	}
@@ -346,7 +346,7 @@ func TestSecretsSet_RefusesClobberOfScalarParent(t *testing.T) {
 				t.Fatalf("read vault before set: %v", err)
 			}
 
-			out, setErr := runCLI(t, env, "secrets", "set", tc.setArg)
+			out, setErr := runCLI(t, env, "secret", "set", tc.setArg)
 
 			if tc.wantRefused {
 				if setErr == nil {
@@ -382,7 +382,7 @@ func TestSecretsSet_RefusesClobberOfScalarParent(t *testing.T) {
 			// The survivors / results are observable via `secrets get` against
 			// the real encrypted vault.
 			for key, want := range tc.survivors {
-				got, gErr := runCLI(t, env, "secrets", "get", key)
+				got, gErr := runCLI(t, env, "secret", "get", key)
 				if gErr != nil {
 					t.Fatalf("secrets get %q: %v\n%s", key, gErr, got)
 				}
@@ -417,7 +417,7 @@ func TestSecretsSet_ValidatesVaultBeforePersist(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, setErr := runCLI(t, env, "secrets", "set", "x.y=two")
+	out, setErr := runCLI(t, env, "secret", "set", "x.y=two")
 	if setErr == nil {
 		t.Fatalf("a set that yields a flatten collision must be refused, got success\n%s", out)
 	}
@@ -453,10 +453,10 @@ func TestSecretsSet_RefusesEmptyValue(t *testing.T) {
 		stdin    string
 		args     []string
 	}{
-		{"stdin-empty", true, "", []string{"secrets", "set", "github.token", "--stdin"}},
-		{"stdin-newline-only", true, "\n", []string{"secrets", "set", "github.token", "--stdin"}},
-		{"stdin-whitespace-only", true, "   ", []string{"secrets", "set", "github.token", "--stdin"}},
-		{"legacy-empty", false, "", []string{"secrets", "set", "github.token="}},
+		{"stdin-empty", true, "", []string{"secret", "set", "github.token", "--stdin"}},
+		{"stdin-newline-only", true, "\n", []string{"secret", "set", "github.token", "--stdin"}},
+		{"stdin-whitespace-only", true, "   ", []string{"secret", "set", "github.token", "--stdin"}},
+		{"legacy-empty", false, "", []string{"secret", "set", "github.token="}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -475,7 +475,7 @@ func TestSecretsSet_RefusesEmptyValue(t *testing.T) {
 				t.Fatalf("refusal should explain the empty-value; got: %v", err)
 			}
 			// Nothing was stored: get on the key fails (no vault / not found).
-			if got, gerr := runCLI(t, env, "secrets", "get", "github.token"); gerr == nil {
+			if got, gerr := runCLI(t, env, "secret", "get", "github.token"); gerr == nil {
 				t.Fatalf("no secret should have been stored; get returned: %s", got)
 			}
 		})
@@ -486,10 +486,10 @@ func TestSecretsSet_RefusesEmptyValue(t *testing.T) {
 // value end-to-end through encrypt->decrypt (issue #165).
 func TestSecretsSet_AllowEmptyStoresEmpty(t *testing.T) {
 	env, _, _, _ := setupSecretsEnv(t)
-	if out, err := runCLIWithStdin(t, env, "", "secrets", "set", "github.token", "--stdin", "--allow-empty"); err != nil {
+	if out, err := runCLIWithStdin(t, env, "", "secret", "set", "github.token", "--stdin", "--allow-empty"); err != nil {
 		t.Fatalf("--allow-empty should store an empty value; got err=%v\n%s", err, out)
 	}
-	got, err := runCLI(t, env, "secrets", "get", "github.token")
+	got, err := runCLI(t, env, "secret", "get", "github.token")
 	if err != nil {
 		t.Fatalf("get after allow-empty set: %v\n%s", err, got)
 	}

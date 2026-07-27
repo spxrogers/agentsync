@@ -112,3 +112,19 @@ func enforceScopeStance(cmd *cobra.Command) error {
 	return fmt.Errorf("`%s` does not take %s: %s",
 		cmd.CommandPath(), strings.Join(used, "/"), reason)
 }
+
+// strictGroup makes a noun-group parent REJECT an unknown subcommand instead of
+// silently printing help and exiting 0.
+//
+// Cobra returns flag.ErrHelp for a non-runnable command BEFORE it validates
+// args, so `Args: cobra.NoArgs` on a bare parent never fires — `agentsync
+// plugin install x` printed the plugin help and exited 0. That makes a hard
+// rename (#200 F4/F8 ship several) look like it still works, which is the worst
+// possible outcome for a deprecation with no alias. Giving the parent a RunE
+// makes it runnable, so NoArgs is enforced and a bare invocation still prints
+// help.
+func strictGroup(cmd *cobra.Command) *cobra.Command {
+	cmd.Args = cobra.NoArgs
+	cmd.RunE = func(c *cobra.Command, _ []string) error { return c.Help() }
+	return cmd
+}

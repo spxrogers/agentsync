@@ -64,7 +64,7 @@ func TestIntegration_M4_PluginFanoutClaudeAndOpenCode(t *testing.T) {
 	}
 
 	// Plugin install.
-	out, err = runCLI(t, env, "plugin", "install", "demo@test-mp")
+	out, err = runCLI(t, env, "plugin", "add", "demo@test-mp")
 	if err != nil {
 		t.Fatalf("plugin install: %v\n%s", err, out)
 	}
@@ -137,7 +137,7 @@ func TestIntegration_M4_SHAPinning(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 

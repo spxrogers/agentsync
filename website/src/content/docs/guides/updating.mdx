@@ -31,7 +31,7 @@ command instead of leaving them stale until the next `apply`.
 
 `plugin outdated` is **not** a pure read, despite the `npm outdated` prior: it
 uses the network and writes state (each marketplace's fetch timestamp and head
-SHA). It is also not the *only* networked command — `plugin install`, `plugin
+SHA). It is also not the *only* networked command — `plugin add`, `plugin
 upgrade`, `marketplace add`, `import <agent>:plugin`, and `init <git-url>` all
 fetch. It is simply the one the daily loop runs.
 

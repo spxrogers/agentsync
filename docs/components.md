@@ -48,7 +48,7 @@ is the only package that depends on nearly all the others.
   `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
   `mcp {add,remove,list}`,
   `plugin {install,outdated,upgrade,enable,disable,remove,list,explain}`,
-  `marketplace {add,remove,list}`, `update` (deprecated alias), `secrets {edit,get,set}`,
+  `marketplace {add,remove,list}`, `update` (deprecated alias), `secret {edit,get,set,list,remove}`,
   `migrate subagents`, `explain <path>`,
   `version`.
 - **Depends on:** adapter, source, state, secrets, paths, render, marketplace,

@@ -14,7 +14,7 @@ Feature: Marketplaces and plugins
     When I run "agentsync marketplace list"
     Then the command succeeds
     And the output contains "fixture-mp"
-    When I run "agentsync plugin install demo-plugin@fixture-mp"
+    When I run "agentsync plugin add demo-plugin@fixture-mp"
     Then the command succeeds
     When I run "agentsync plugin list"
     Then the command succeeds
@@ -27,7 +27,7 @@ Feature: Marketplaces and plugins
   Scenario: plugin explain --json produces parseable JSON
     Given I create a local marketplace "fixture-mp" with plugin "demo-plugin" exposing MCP "demo-mcp" command "echo"
     And I run "agentsync marketplace add ./fixture-mp"
-    And I run "agentsync plugin install demo-plugin@fixture-mp"
+    And I run "agentsync plugin add demo-plugin@fixture-mp"
     And I run "agentsync apply"
     When I run "agentsync plugin explain --json demo-plugin"
     Then the command succeeds
@@ -42,7 +42,7 @@ Feature: Marketplaces and plugins
     Given I create a local marketplace "fixture-proj-mp" with plugin "proj-plugin" with explicit skills commands and agents
     When I run "agentsync marketplace add ./fixture-proj-mp"
     Then the command succeeds
-    When I run "agentsync plugin install proj-plugin@fixture-proj-mp"
+    When I run "agentsync plugin add proj-plugin@fixture-proj-mp"
     Then the command succeeds
     When I run "agentsync apply"
     Then the command succeeds

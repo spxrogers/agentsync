@@ -215,7 +215,7 @@ func TestE2E_FullV1Lifecycle(t *testing.T) {
 		t.Errorf("marketplace list missing v1-test-mp; got: %s", mpList)
 	}
 
-	r.mustRun("plugin", "install", "demo-plugin@v1-test-mp")
+	r.mustRun("plugin", "add", "demo-plugin@v1-test-mp")
 
 	pluginList := r.mustRun("plugin", "list")
 	if !strings.Contains(pluginList, "demo-plugin") {
@@ -274,14 +274,14 @@ identity_file = "%s"
 	}
 
 	// secrets get must resolve the token.
-	getOut := r.mustRun("secrets", "get", "github.token")
+	getOut := r.mustRun("secret", "get", "github.token")
 	if !strings.Contains(getOut, "ghp_e2e_tok") {
 		t.Errorf("secrets get: expected 'ghp_e2e_tok'; got: %s", getOut)
 	}
 
 	// secrets set then get must round-trip.
-	r.mustRun("secrets", "set", "openai.key=sk-e2e-test")
-	getOut2 := r.mustRun("secrets", "get", "openai.key")
+	r.mustRun("secret", "set", "openai.key=sk-e2e-test")
+	getOut2 := r.mustRun("secret", "get", "openai.key")
 	if !strings.Contains(getOut2, "sk-e2e-test") {
 		t.Errorf("secrets get after set: expected 'sk-e2e-test'; got: %s", getOut2)
 	}

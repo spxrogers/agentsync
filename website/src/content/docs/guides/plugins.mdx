@@ -24,7 +24,7 @@ every enabled agent gets the components it understands.
 2. **Install a plugin** from it:
 
    ```bash
-   agentsync plugin install atlassian@anthropic
+   agentsync plugin add atlassian@anthropic
    ```
 
 3. **Fetch from the network** — `plugin outdated` is the polling verb of the daily loop:
@@ -42,7 +42,7 @@ every enabled agent gets the components it understands.
 </Steps>
 
 <Aside type="note" title="polling fetches, apply renders">
-	`plugin outdated` is the daily loop's networked verb (`plugin install`,
+	`plugin outdated` is the daily loop's networked verb (`plugin add`,
 	`plugin upgrade`, `marketplace add`, `import <agent>:plugin`, and
 	`init <git-url>` fetch too). It refreshes the
 	local plugin cache and recomputes version pins. `apply` then renders entirely
@@ -88,7 +88,7 @@ hooks, and skills can carry `${secret:…}` credentials, so `agents = ["claude"]
 keeps that blast radius scoped to Claude only.
 
 <Aside type="note" title="Lifecycle commands preserve your allowlist">
-	`plugin disable`/`enable` and re-running `plugin install` on an
+	`plugin disable`/`enable` and re-running `plugin add` on an
 	already-registered plugin **preserve** its `agents` allowlist (and its `update`
 	mode and `disabled` state) — they never silently re-broaden a narrowed plugin
 	back to every agent. Only `id`/`version`/`manifest_sha` are refreshed by a
@@ -99,7 +99,7 @@ keeps that blast radius scoped to Claude only.
 ## Plugin lifecycle
 
 ```bash
-agentsync plugin install <id[@marketplace]>
+agentsync plugin add <id[@marketplace]>
 agentsync plugin upgrade  <id[@marketplace]>
 agentsync plugin enable   <id[@marketplace]>
 agentsync plugin disable  <id[@marketplace]>

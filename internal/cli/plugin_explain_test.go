@@ -43,7 +43,7 @@ func TestExplain_TextOutput(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -75,7 +75,7 @@ func TestExplain_JSONOutput(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -123,7 +123,7 @@ func TestExplain_JSONAgentOrderDeterministic(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -186,7 +186,7 @@ func TestExplain_MultipleArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"alpha@multi-mp", "beta@multi-mp"} {
-		if _, err := runCLI(t, env, "plugin", "install", id); err != nil {
+		if _, err := runCLI(t, env, "plugin", "add", id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -239,7 +239,7 @@ func TestExplain_All(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"alpha@multi-mp", "beta@multi-mp"} {
-		if _, err := runCLI(t, env, "plugin", "install", id); err != nil {
+		if _, err := runCLI(t, env, "plugin", "add", id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -332,7 +332,7 @@ func TestExplain_ListsSkips(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "skipdemo@skip-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "skipdemo@skip-mp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -418,7 +418,7 @@ func TestExplain_ScopesToNamedPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"clean@cross-mp", "noisy@cross-mp"} {
-		if _, err := runCLI(t, env, "plugin", "install", id); err != nil {
+		if _, err := runCLI(t, env, "plugin", "add", id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -517,7 +517,7 @@ func TestExplain_AllAttributesPerRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"clean@cross-mp", "noisy@cross-mp"} {
-		if _, err := runCLI(t, env, "plugin", "install", id); err != nil {
+		if _, err := runCLI(t, env, "plugin", "add", id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -580,7 +580,7 @@ func TestExplain_DisabledPluginRendersMarker(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runCLI(t, env, "plugin", "disable", "demo"); err != nil {
@@ -618,7 +618,7 @@ func TestExplain_DescribesAllComponentKinds(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "lsponly@lsp-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "lsponly@lsp-mp"); err != nil {
 		t.Fatal(err)
 	}
 

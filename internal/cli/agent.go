@@ -103,6 +103,7 @@ func newAgentCmd() *cobra.Command {
 		newAgentEnableCmd(),
 		newAgentDisableCmd(),
 	)
+	strictGroup(cmd)
 	markScopeAware(cmd) // the group's subcommands all honor scope
 	return cmd
 }
