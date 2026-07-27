@@ -111,21 +111,36 @@ func maybePrintUpgradeNotice(cmd *cobra.Command) {
 	// can have broken under a user who has no config. Return WITHOUT writing —
 	// creating .state/ here would materialize the home and make the user's first
 	// `agentsync init` refuse ("already contains files"). `init` seeds the record
-	// itself (seedUpgradeNoticeRecord), so "home exists + no record" means
-	// exactly one thing: a home created by a version that predates the record.
-	//
-	// This keys off the USER home even at project scope, and that is correct
-	// rather than an oversight: apply records state centrally under
-	// ~/.agentsync/.state/ keyed by project root, so any project-scope user who
-	// has ever applied HAS a user home and does see the notice. The only window
-	// where a project-scope user misses it is between `init --scope project` and
-	// their first apply — at which point agentsync has rendered nothing for them,
-	// so nothing has broken under them either. Pinned by
-	// TestUpgradeNotice_ProjectScopeUserSeesItAfterApply.
+	// itself (seedUpgradeNoticeRecord).
 	if !homeExists(home) {
 		return
 	}
 	recordPath := filepath.Join(home, ".state", state.LastRunFile)
+
+	// The home EXISTING is not enough to call this an upgrade. A project-scope
+	// user never runs `agentsync init` at user scope, but apply records state
+	// CENTRALLY under ~/.agentsync/.state/ keyed by project root — so the first
+	// project-scope command that touches state materializes a user home that
+	// `init` never seeded. Read literally, "home exists + no record" then
+	// misfires on a brand-new install: a 0.11.0-native user was told to run
+	// `agentsync migrate subagents` against a tree that never had an agents/
+	// directory.
+	//
+	// agentsync.toml is the marker that distinguishes the two: `init` writes it,
+	// central state never does. Its absence means this home was materialized for
+	// state-keeping, not by a user config that a release could have broken — so
+	// seed the record (the home already exists, so writing is safe here, unlike
+	// the fresh-install path above) and stay quiet.
+	//
+	// A project-scope-only user upgrading from an older release therefore does
+	// not get the banner. They are not left stranded: the retired layout is
+	// fail-closed at load, so their next command refuses with an error naming
+	// `agentsync migrate subagents` for that tree — a stronger mechanism than a
+	// one-time banner, and one that fires per tree rather than per machine.
+	if !hasUserConfig(home) {
+		seedUpgradeNoticeRecord(home)
+		return
+	}
 
 	rec, err := state.LoadLastRun(recordPath)
 	switch {
@@ -180,11 +195,23 @@ func maybePrintUpgradeNotice(cmd *cobra.Command) {
 	_ = state.SaveLastRun(recordPath, rec)
 }
 
-// homeExists reports whether the agentsync home is present as a directory —
-// the signal that separates an upgrade from a first install.
+// homeExists reports whether the agentsync home is present as a directory.
 func homeExists(home string) bool {
 	fi, err := os.Stat(home)
 	return err == nil && fi.IsDir()
+}
+
+// hasUserConfig reports whether the home holds a USER-scope config, as opposed
+// to having been materialized purely to keep central state for a project tree.
+//
+// agentsync.toml is the discriminator: `agentsync init` writes it (and seeds the
+// run record alongside), while the central-state path under .state/ never does.
+// Without this check, the first project-scope command to record state creates
+// ~/.agentsync/ with no record, and "home exists + no record" reads as an
+// upgrade — firing a breaking-change banner at a brand-new user.
+func hasUserConfig(home string) bool {
+	_, err := os.Stat(filepath.Join(home, "agentsync.toml"))
+	return err == nil
 }
 
 // printUpgradeNotices renders the banner to stderr.

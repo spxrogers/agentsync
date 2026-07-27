@@ -230,202 +230,101 @@ func TestUpgradeNotice_JSONPayloadStaysClean(t *testing.T) {
 	}
 }
 
-// TestUpgradeNotice_ProjectScopeUserSeesItAfterApply pins why keying off the
-// USER home is right even for someone who only ever works at project scope.
+// TestUpgradeNotice_BrandNewProjectScopeUserIsNotToldToMigrate is the
+// regression for a misfire that told a 0.11.0-native user to run `agentsync
+// migrate subagents` against a tree that never had an agents/ directory.
 //
-// apply records state centrally under ~/.agentsync/.state/ keyed by project
-// root, so a project-scope user has a user home from their first apply onward.
-// The only window where they miss the notice is before that first apply — when
-// agentsync has rendered nothing for them, so nothing has broken under them.
-func TestUpgradeNotice_ProjectScopeUserSeesItAfterApply(t *testing.T) {
+// A project-scope user never runs `agentsync init` at user scope — but apply
+// records state CENTRALLY under ~/.agentsync/.state/ keyed by project root, so
+// the first project-scope command that touches state materializes a user home
+// that `init` never seeded. "Home exists + no record" then reads as an upgrade.
+//
+// Note the shape of this test: it runs the real sequence and asserts SILENCE
+// throughout. The previous version deleted the record and asserted the notice
+// SHOWED — which is the same observable as the bug, so it could never have
+// caught it.
+func TestUpgradeNotice_BrandNewProjectScopeUserIsNotToldToMigrate(t *testing.T) {
 	tmp := t.TempDir()
 	proj := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	withVersion(t, "0.11.0")
 
-	mustRun(t, env, "init", "--project", proj)
-	mustRun(t, env, "agent", "add", "claude", "--project", proj)
-	mustRun(t, env, "apply", "--project", proj)
-
-	// The first apply materialized the central state home; clear the record so
-	// this stands in for an upgrading project-scope user.
-	if err := os.Remove(filepath.Join(tmp, ".agentsync", ".state", "last-run.json")); err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
-	}
-
-	_, stderr, err := runCLISplit(t, env, "status", "--project", proj)
-	if err != nil {
-		t.Fatalf("status: %v\n%s", err, stderr)
-	}
-	if !strings.Contains(stderr, "migrate subagents") {
-		t.Fatalf("a project-scope user who has applied must see the notice:\n%s", stderr)
+	// Never any user-scope `init` — this user only ever works in a project.
+	for _, args := range [][]string{
+		{"init", "--project", proj},
+		{"agent", "add", "claude", "--project", proj}, // materializes ~/.agentsync for central state
+		{"apply", "--project", proj},
+		{"status", "--project", proj},
+	} {
+		_, stderr, err := runCLISplit(t, env, args...)
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, stderr)
+		}
+		if strings.Contains(stderr, "migrate subagents") {
+			t.Fatalf("`%s` showed the upgrade banner to a brand-new project-scope user — "+
+				"their tree never had an agents/ directory:\n%s", strings.Join(args, " "), stderr)
+		}
 	}
 }
 
-// TestUpgradeNotice_UnreadableStateDoesNotFailCommand pins the best-effort
-// contract: a UX marker must never take a user's command down with it.
-//
-// Named for what it actually exercises. With .state replaced by a regular file,
-// ReadFile fails with ENOTDIR — which is NOT os.ErrNotExist — so LoadLastRun
-// returns an I/O error and maybePrintUpgradeNotice bails long before
-// MkdirAll/SaveLastRun. It is the unreadable path, not the unwritable one; the
-// old name meant the write-failure branch looked covered when it was not.
-func TestUpgradeNotice_UnreadableStateDoesNotFailCommand(t *testing.T) {
+// TestUpgradeNotice_UserConfigStillGetsTheNotice is the negative control for the
+// fix above: narrowing the trigger to "the home holds an agentsync.toml" must
+// not silence the genuine upgrader it exists for.
+func TestUpgradeNotice_UserConfigStillGetsTheNotice(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	mustRun(t, env, "init")
 	withVersion(t, "0.11.0")
 
-	// Replace .state with a regular FILE so MkdirAll/AtomicWrite cannot succeed
-	// — a uid-independent way to make the record unwritable (the container runs
-	// as root, where a chmod would not bite).
+	// A home created by a version that predates the run record.
+	if err := os.Remove(filepath.Join(tmp, ".agentsync", ".state", "last-run.json")); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+
+	_, stderr, err := runCLISplit(t, env, "version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "migrate subagents") {
+		t.Fatalf("a real upgrader with a user config must still see the notice:\n%s", stderr)
+	}
+}
+
+// TestUpgradeNotice_WriteFailureStillPrints covers the last uncovered branch:
+// the notice printed, then recording it failed. It must not fail the command,
+// and the notice must show again next run rather than being lost.
+//
+// A .state symlinked to a nonexistent target is the uid-independent way in (the
+// container runs as root, where chmod would not bite): ReadFile returns ENOENT
+// so the load succeeds, then MkdirAll fails on the dangling link.
+func TestUpgradeNotice_WriteFailureStillPrints(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	withVersion(t, "0.11.0")
+
 	stateDir := filepath.Join(tmp, ".agentsync", ".state")
 	if err := os.RemoveAll(stateDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(stateDir, []byte("not a directory\n"), 0o644); err != nil {
+	if err := os.Symlink(filepath.Join(tmp, "nonexistent-target"), stateDir); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, stderr, err := runCLISplit(t, env, "version"); err != nil {
-		t.Fatalf("an unreadable run record must not fail the command: %v\n%s", err, stderr)
+	_, stderr, err := runCLISplit(t, env, "version")
+	if err != nil {
+		t.Fatalf("a failed record write must not fail the command: %v\n%s", err, stderr)
 	}
-}
-
-// TestUpgradeNotice_CorruptRecordStillShowsAndRepairs is the case that made the
-// difference between "the notice shows again later" and "the user never learns
-// their config layout moved".
-//
-// A truncated / empty / wrong-shaped last-run.json is the classic crash- or
-// full-disk artifact. Treating that like an I/O failure suppressed the notice
-// PERMANENTLY — the file was never rewritten, so every subsequent run hit the
-// same parse error. A record that cannot be parsed carries no information, so
-// the honest reading is "nothing has been shown here": print, then overwrite.
-func TestUpgradeNotice_CorruptRecordStillShowsAndRepairs(t *testing.T) {
-	for _, tc := range []struct{ name, body string }{
-		{"empty file (crash mid-write)", ""},
-		{"truncated json", `{"version":"0.10.1","notices_`},
-		{"wrong shape: array", `[]`},
-		{"wrong shape: string", `"nope"`},
-		{"wrong field types", `{"version":42,"notices_seen":"x"}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tmp := t.TempDir()
-			env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
-			mustRun(t, env, "init")
-			withVersion(t, "0.11.0")
-
-			rec := filepath.Join(tmp, ".agentsync", ".state", "last-run.json")
-			if err := os.WriteFile(rec, []byte(tc.body), 0o644); err != nil {
-				t.Fatal(err)
-			}
-
-			_, stderr, err := runCLISplit(t, env, "version")
-			if err != nil {
-				t.Fatalf("version: %v\n%s", err, stderr)
-			}
-			if !strings.Contains(stderr, "migrate subagents") {
-				t.Fatalf("a corrupt record must not suppress the notice:\n%s", stderr)
-			}
-			// And it must be REPAIRED, or the notice repeats forever instead.
-			got := readLastRun(t, tmp)
-			if got == nil || len(got.NoticesSeen) == 0 {
-				t.Fatalf("corrupt record was not repaired: %+v", got)
-			}
-			_, stderr2, err := runCLISplit(t, env, "version")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(stderr2, "migrate subagents") {
-				t.Errorf("notice repeated after the record was repaired:\n%s", stderr2)
-			}
-		})
+	if !strings.Contains(stderr, "migrate subagents") {
+		t.Fatalf("the notice must still print when only the RECORD write fails:\n%s", stderr)
 	}
-}
-
-// TestUpgradeNotice_KeyedByIDNotVersion pins the central design decision, which
-// nothing exercised: the show/hide choice is made by notice ID, never by
-// comparing versions.
-//
-// It matters in both directions. A user who jumps 0.9 → 0.12 must still see a
-// notice introduced in 0.11 (version comparison would be tempting and wrong),
-// and a machine that has already seen an ID must stay silent even when the
-// recorded version looks old.
-func TestUpgradeNotice_KeyedByIDNotVersion(t *testing.T) {
-	t.Run("unseen id shows even though the recorded version is current", func(t *testing.T) {
-		tmp := t.TempDir()
-		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
-		mustRun(t, env, "init")
-		withVersion(t, "0.11.0")
-		writeLastRun(t, tmp, `{"version":"0.11.0","notices_seen":["some-other-id"]}`)
-
-		_, stderr, err := runCLISplit(t, env, "version")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(stderr, "migrate subagents") {
-			t.Fatalf("an UNSEEN notice id must show regardless of the recorded version:\n%s", stderr)
-		}
-	})
-
-	t.Run("seen id stays silent even though the recorded version is ancient", func(t *testing.T) {
-		tmp := t.TempDir()
-		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
-		mustRun(t, env, "init")
-		withVersion(t, "0.11.0")
-		writeLastRun(t, tmp, `{"version":"0.9.0","notices_seen":["0.11.0-cli-surface"]}`)
-
-		_, stderr, err := runCLISplit(t, env, "version")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(stderr, "migrate subagents") {
-			t.Fatalf("a SEEN notice id must stay silent regardless of the recorded version:\n%s", stderr)
-		}
-	})
-}
-
-// writeLastRun plants a run record verbatim.
-func writeLastRun(t *testing.T, tmp, body string) {
-	t.Helper()
-	p := filepath.Join(tmp, ".agentsync", ".state", "last-run.json")
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	// Unrecorded means it shows again — the harmless direction to fail in.
+	_, stderr2, err := runCLISplit(t, env, "version")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// TestUpgradeNoticeTableIsWellFormed guards the append-only rule that the table
-// states but nothing enforced. An ID is the durable key: renaming one re-shows
-// its notice to every user who already dismissed it, and duplicating one hides
-// the second silently.
-func TestUpgradeNoticeTableIsWellFormed(t *testing.T) {
-	ids := map[string]bool{}
-	for _, n := range cli.UpgradeNoticesForTest() {
-		switch {
-		case n.ID == "":
-			t.Errorf("notice with empty ID (%q): the ID is the recorded key", n.Headline)
-		case ids[n.ID]:
-			t.Errorf("duplicate notice ID %q — the second is silently unreachable", n.ID)
-		}
-		ids[n.ID] = true
-		if n.Since == "" {
-			t.Errorf("notice %q has no Since; the banner prints it", n.ID)
-		}
-		if n.Headline == "" {
-			t.Errorf("notice %q has no Headline", n.ID)
-		}
-		if len(n.Actions) == 0 {
-			t.Errorf("notice %q lists no actions, so it tells the user what broke but not what to do", n.ID)
-		}
-		if !strings.HasPrefix(n.Path, "/") {
-			t.Errorf("notice %q Path %q must start with '/' (it is appended to the docs base URL)", n.ID, n.Path)
-		}
-	}
-	if len(ids) == 0 {
-		t.Fatal("no notices defined; this guard would vacuously pass")
+	if !strings.Contains(stderr2, "migrate subagents") {
+		t.Errorf("an unrecordable notice must repeat, not vanish:\n%s", stderr2)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/spf13/cobra"
+	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -291,14 +292,30 @@ func cloneSourceRepo(cmd *cobra.Command, home, rawURL string) error {
 // without this a user would commit plaintext credential backups. Idempotent:
 // appends the rule if a .gitignore already exists (e.g. a cloned source repo)
 // and doesn't already ignore .state/.
+//
+// The append is a read-modify-write, and it is no longer reached only from
+// `init` under the global lock — the first-run upgrade notice calls it on a
+// deliberately LOCK-FREE path. So the write must be atomic: a plain
+// os.WriteFile(O_TRUNC) lets a reader that landed inside another process's
+// truncate window write back its short read, and the file at stake is the
+// user's own hand-maintained .gitignore in a repo they commit (observed once
+// under concurrent first runs: 4000 lines truncated to 1). iox.AtomicWrite
+// (temp + rename) means a concurrent reader sees the old file or the new one,
+// never a truncated one. It cannot MERGE two concurrent appends — last writer
+// wins — but every writer here appends the same single rule, so the converged
+// state is correct either way.
+//
+// Treating the rule's equivalent spellings as already-present keeps a second,
+// redundant line off a home that ignores `.state/` without the leading slash.
 func ensureStateGitignore(home string) error {
 	const rule = "/.state/"
+	equivalent := map[string]bool{"/.state/": true, ".state/": true, "/.state": true, ".state": true}
 	p := filepath.Join(home, ".gitignore")
 	data, err := os.ReadFile(p)
 	switch {
 	case err == nil:
 		for _, line := range strings.Split(string(data), "\n") {
-			if strings.TrimSpace(line) == rule {
+			if equivalent[strings.TrimSpace(line)] {
 				return nil // already ignored
 			}
 		}
@@ -307,13 +324,13 @@ func ensureStateGitignore(home string) error {
 			out += "\n"
 		}
 		out += rule + "\n"
-		if werr := os.WriteFile(p, []byte(out), 0o644); werr != nil { //nolint:forbidigo // updates ~/.agentsync/.gitignore (canonical source), not a native destination
+		if werr := iox.AtomicWrite(p, []byte(out), 0o644); werr != nil {
 			return fmt.Errorf("update .gitignore: %w", werr)
 		}
 		return nil
 	case os.IsNotExist(err):
 		body := "# agentsync: local state + plaintext config backups — never commit.\n" + rule + "\n"
-		if werr := os.WriteFile(p, []byte(body), 0o644); werr != nil { //nolint:forbidigo // creates ~/.agentsync/.gitignore (canonical source), not a native destination
+		if werr := iox.AtomicWrite(p, []byte(body), 0o644); werr != nil {
 			return fmt.Errorf("write .gitignore: %w", werr)
 		}
 		return nil

@@ -33,6 +33,7 @@ func TestNoDirectAtomicWriteOutsideAllowedFiles(t *testing.T) {
 		"internal/state/store.go":          true,
 		"internal/state/lastrun.go":        true, // writes .state/last-run.json (agentsync's own run record)
 		"internal/secrets/age.go":          true, // writes secrets.age under ~/.agentsync/
+		"internal/cli/init.go":             true, // writes ~/.agentsync/.gitignore (canonical source); atomic because the lock-free upgrade-notice path also calls it
 		"internal/cli/plugin.go":           true,
 		"internal/cli/marketplace.go":      true,
 		"internal/cli/agent.go":            true,

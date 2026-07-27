@@ -233,6 +233,27 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **The upgrade notice no longer fires at a brand-new project-scope user.** It
+  treated "the user home exists but has no run record" as an upgrade — but a
+  project-scope user never runs `agentsync init` at user scope, and
+  `~/.agentsync/` gets materialized anyway the first time any mutating command
+  takes the global lock or records central state. A 0.11.0-native user was
+  therefore told to run `agentsync migrate subagents` against a tree that never
+  had an `agents/` directory, and that `verify` is now `check` having never
+  seen `verify`. The trigger is now `agentsync.toml` — written by `init`, never
+  by the state path — and a home without one is seeded silently instead. A
+  project-scope-only user upgrading from an older release still gets the
+  retired layout reported per tree by the fail-closed load gate, which names
+  the same command.
+
+- **`ensureStateGitignore` writes atomically.** The upgrade notice calls it
+  from a deliberately lock-free path, and it was a plain read-modify-write with
+  `os.WriteFile(O_TRUNC)` — so a reader landing inside another process's
+  truncate window wrote back its short read. Observed under concurrent first
+  runs: a 4000-line `~/.agentsync/.gitignore` reduced to one line, the user's
+  own rules gone. It also no longer appends a duplicate rule to a home that
+  already ignores `.state/` in one of its equivalent spellings.
+
 - **The first-run-after-upgrade notice no longer silently disables the
   `--scope` / `--project` refusal.** Wiring the notice assigned the root
   command's `PersistentPreRunE` a SECOND time, and cobra's hook is a plain
