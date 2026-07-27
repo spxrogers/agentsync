@@ -369,7 +369,7 @@ func emitSkipDetails(w io.Writer, p *ui.Printer, agent string, skips []render.Sk
 			p.Faint(ui.GlyphInfo),
 			ui.Pad(labels[i], width),
 			color(ui.Pad(word, len("dropped"))),
-			p.Faint(ui.Sanitize(s.Reason)))
+			p.Faint(s.Reason.String()))
 	}
 }
 

@@ -119,6 +119,7 @@ func TestScopeUnawareCommandsActuallyRefuse(t *testing.T) {
 		{"marketplace"},
 		{"secret"},
 	}
+	checked := 0
 	for _, flag := range [][]string{{"--scope", "project"}, {"--project", "/tmp/x"}} {
 		for _, path := range paths {
 			name := strings.Join(path, " ") + " " + flag[0]
@@ -134,6 +135,7 @@ func TestScopeUnawareCommandsActuallyRefuse(t *testing.T) {
 				if target.Annotations[scopeStanceAnnotation] != scopeStanceUnaware {
 					t.Skipf("%s is no longer scope-unaware; move it out of this table", name)
 				}
+				checked++
 
 				root.SetArgs(append(append([]string{}, path...), flag...))
 				root.SetOut(io.Discard)
@@ -158,6 +160,11 @@ func TestScopeUnawareCommandsActuallyRefuse(t *testing.T) {
 				}
 			})
 		}
+	}
+	// Every case t.Skipf-ing would leave this test green while asserting
+	// nothing — the same vacuous-pass shape its siblings guard against.
+	if checked == 0 {
+		t.Fatal("no scope-unaware command was actually exercised; this table has gone vacuous")
 	}
 }
 
@@ -254,9 +261,18 @@ func TestUnknownSubcommandOfEveryGroupFails(t *testing.T) {
 			root.SetOut(io.Discard)
 			root.SetErr(io.Discard)
 			root.SetArgs(append(strings.Fields(g), "definitely-not-a-verb"))
-			if err := root.Execute(); err == nil {
+			err := root.Execute()
+			if err == nil {
 				t.Fatalf("`agentsync %s definitely-not-a-verb` exited 0 — an unknown subcommand must be an "+
 					"error, or a hard-renamed spelling looks like it still works", g)
+			}
+			// Assert it is the RIGHT error. Without this the test passes on any
+			// incidental failure (a missing home, an unreadable config), which
+			// would make it green even if unknown verbs were accepted again.
+			if !strings.Contains(err.Error(), "unknown command") &&
+				!strings.Contains(err.Error(), "accepts 0 arg") {
+				t.Errorf("`agentsync %s definitely-not-a-verb` failed for an unrelated reason, so this "+
+					"test would not catch the verb being accepted: %v", g, err)
 			}
 		})
 	}

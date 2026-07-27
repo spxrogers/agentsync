@@ -62,11 +62,19 @@ type PluginRow struct {
 // for the report's machine-readable surface.
 type SkipDetail struct {
 	Component string `json:"component"`
-	// Name is the skipped component's name, which for a plugin component derives
-	// from fetched marketplace metadata (untrusted) — untrusted.Text so a display
-	// site sanitizes it by construction. Reason is adapter-authored (trusted).
+	// Name and Reason are BOTH untrusted.Text so every display site sanitizes
+	// them by construction rather than by remembering to.
+	//
+	// Name derives from fetched marketplace metadata for a plugin component. And
+	// Reason — despite being "adapter-authored", which it was previously
+	// documented as and trusted for — routinely INTERPOLATES adapter input: the
+	// codex subagent adapter joins arbitrary frontmatter keys into its dropped-key
+	// reason, and for a plugin-projected subagent that frontmatter is fetched
+	// marketplace data. A raw ESC in a YAML key therefore reached a terminal
+	// through any display site that forgot ui.Sanitize. Two sites remembered; the
+	// type now makes the third impossible to get wrong.
 	Name   untrusted.Text `json:"name,omitempty"`
-	Reason string         `json:"reason"`
+	Reason untrusted.Text `json:"reason"`
 	// Kind classifies the loss as "reduced" (the component still rendered, minus
 	// some fields) or "dropped" (the whole component was not emitted). It is set by
 	// the adapter and carried verbatim from adapter.Skip; explain reads it directly
@@ -85,7 +93,7 @@ func skipDetails(skips []adapter.Skip) []SkipDetail {
 		// s.Name is the plugin component's name (untrusted upstream); tag it as
 		// untrusted.Text at this boundary so every display site sanitizes it. Kind
 		// carries the adapter's reduced/dropped classification through verbatim.
-		out[i] = SkipDetail{Component: s.Component, Name: untrusted.Wrap(s.Name), Reason: s.Reason, Kind: s.Kind}
+		out[i] = SkipDetail{Component: s.Component, Name: untrusted.Wrap(s.Name), Reason: untrusted.Wrap(s.Reason), Kind: s.Kind}
 	}
 	return out
 }

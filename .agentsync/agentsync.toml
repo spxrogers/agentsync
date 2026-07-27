@@ -4,7 +4,7 @@
 # share project-scoped agent config with collaborators.
 #
 # Author project components by adding files under this tree (mcp/<id>.toml,
-# skills/<name>/SKILL.md, agents/<name>.md, commands/<name>.md, hooks/<event>.toml,
+# skills/<name>/SKILL.md, subagents/<name>.md, commands/<name>.md, hooks/<event>.toml,
 # lsp/<id>.toml, memory/AGENTS.md) or capture existing native config with
 # 'agentsync import <agent> --scope project'.
 #

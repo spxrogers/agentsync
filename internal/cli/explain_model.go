@@ -341,7 +341,7 @@ func matchingSkips(skips []adapter.Skip, kind, name string) []render.SkipDetail 
 		out = append(out, render.SkipDetail{
 			Component: s.Component,
 			Name:      untrusted.Wrap(s.Name),
-			Reason:    s.Reason,
+			Reason:    untrusted.Wrap(s.Reason),
 			Kind:      s.Kind,
 		})
 	}

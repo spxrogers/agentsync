@@ -3,6 +3,7 @@ package source_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -104,20 +105,23 @@ func walkGoFiles(root string, fn func(rel, src string)) error {
 	return walk(root)
 }
 
-// findRepoRootForGuard walks up from the test's cwd until it finds go.mod.
+// findRepoRootForGuard locates the repo root relative to THIS source file, not
+// the process cwd: `go test` shares one process per package, so a sibling test
+// that chdirs would otherwise silently redirect this walk.
 func findRepoRootForGuard(t *testing.T) string {
 	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
 	}
+	dir := filepath.Dir(thisFile)
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			t.Fatal("could not find go.mod walking up from test cwd")
+			t.Fatal("could not find go.mod walking up from " + thisFile)
 		}
 		dir = parent
 	}

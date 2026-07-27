@@ -262,7 +262,7 @@ func TestEmitSkipDetails_ColumnsAlignUnderColor(t *testing.T) {
 	offsets := make([]int, len(lines))
 	for i, line := range lines {
 		plain := stripANSI(line)
-		reason := skips[i].Reason
+		reason := skips[i].Reason.String()
 		idx := strings.Index(plain, reason)
 		if idx < 0 {
 			t.Fatalf("line %d missing reason %q after stripping ANSI: %q", i, reason, plain)

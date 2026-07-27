@@ -95,8 +95,14 @@ func runSubagentMigration(p *ui.Printer, userAgentsyncHome string, sc adapter.Sc
 	// the read-only status/diff/explain paths. Those callers still perform the
 	// real mutation (an os.Rename loop plus a read-modify-write of
 	// .state/targets.json), and lock.go requires the lock around exactly that.
-	// Taking it here covers every caller by construction; callers must NOT wrap
-	// this in withGlobalLock, since flock is not reentrant within a process.
+	// Taking it here covers every caller by construction.
+	//
+	// Callers on the OTHER side — apply (non-dry-run), import, reconcile — reach
+	// this while already holding the lock. That is fine because withGlobalLock is
+	// reentrant within a process; it was NOT fine before that, and accepting the
+	// migration offer from those three blocked for the full lock timeout and then
+	// failed blaming a nonexistent second process. See withGlobalLock's doc and
+	// TestEnsureSubagentLayout_AcceptUnderLockHoldingCommand.
 	var moved []string
 	if err := withGlobalLock(userAgentsyncHome, func() error {
 		var merr error

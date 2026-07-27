@@ -59,9 +59,20 @@ func TestSkipReasonsNeverCarrySecretValues(t *testing.T) {
 			// already literal values, exactly as a resolved ${secret:…} would be.
 			_, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
 			if err != nil {
-				// An adapter that cannot render this shape at all still tells us
-				// nothing about reasons; skip rather than fail the guard.
-				t.Skipf("render: %v", err)
+				// Do NOT t.Skipf here. A skipped subtest reads as a pass, so an
+				// adapter that errored on the fixture would opt itself out of the
+				// guard silently — the fixture is deliberately renderable by every
+				// adapter, so an error means the fixture drifted and needs fixing.
+				t.Fatalf("render failed, so this adapter is NOT covered by the "+
+					"secret-leak guard; fix the fixture rather than letting it opt out: %v", err)
+			}
+			// A guard that runs over zero skips proves nothing. Every adapter
+			// should reduce or drop SOMETHING here: the fixture carries a server
+			// with both a command and a url, unmodeled transports, and an LSP
+			// server and hook that most adapters do not support.
+			if len(skips) == 0 {
+				t.Fatalf("adapter %q produced no skips for a fixture designed to provoke them — "+
+					"the canary is never compared against anything", name)
 			}
 			for _, s := range skips {
 				if strings.Contains(s.Reason, canary) {

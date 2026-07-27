@@ -86,7 +86,7 @@ func printExplainItem(p *ui.Printer, item explainItem) {
 	for _, t := range item.Transforms {
 		word, color := skipStatus(p, t.Kind)
 		fmt.Fprintf(p.Out, "      %s %s  %s\n", p.Faint("transform:"),
-			color(word), p.Faint(ui.Sanitize(t.Reason)))
+			color(word), p.Faint(t.Reason.String()))
 	}
 	if len(item.Secrets) > 0 {
 		// References only — never a resolved value. This is what lets explain

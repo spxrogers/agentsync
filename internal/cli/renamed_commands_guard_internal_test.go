@@ -31,28 +31,47 @@ func TestNoStaleRenamedCommandReferences(t *testing.T) {
 		"agentsync plugin install": "agentsync plugin add",
 	}
 
-	// update.go IS the deprecation shim: naming the old spelling is its job.
+	// Files that exist precisely to say "the old spelling is gone", so naming it
+	// is their job rather than a stale hint:
+	//   - upgrade_notice.go is the first-run-after-upgrade banner, whose entire
+	//     content is old-name → new-name lines.
+	//   - upgrading.mdx and CHANGELOG.md document the renames themselves.
 	exempt := map[string]bool{
-		"internal/cli/update.go": true,
+		"internal/cli/upgrade_notice.go":                   true,
+		"website/src/content/docs/reference/upgrading.mdx": true,
+		"CHANGELOG.md": true,
 	}
 
 	type hit struct{ file, old, line string }
 	var hits []hit
+	seenExempt := map[string]bool{}
 
-	walkErr := walkRepoGoFiles(repoRoot, func(rel, src string) {
-		if exempt[rel] {
-			return
-		}
+	scan := func(rel, src string) {
+		hitHere := false
 		for _, line := range strings.Split(src, "\n") {
 			for old := range renamed {
 				if strings.Contains(line, old) {
-					hits = append(hits, hit{rel, old, strings.TrimSpace(line)})
+					hitHere = true
+					if !exempt[rel] {
+						hits = append(hits, hit{rel, old, strings.TrimSpace(line)})
+					}
 				}
 			}
 		}
-	})
-	if walkErr != nil {
-		t.Fatalf("walk: %v", walkErr)
+		if hitHere && exempt[rel] {
+			seenExempt[rel] = true
+		}
+	}
+
+	// Go sources…
+	if err := walkRepoGoFiles(repoRoot, scan); err != nil {
+		t.Fatalf("walk go files: %v", err)
+	}
+	// …AND the prose. Round 1's BLOCKER in this class lived in docs/user-guide.md
+	// and the website command reference, not in Go at all — a guard that reads
+	// only .go files would have missed the very bug that motivated it.
+	if err := walkRepoDocs(repoRoot, scan); err != nil {
+		t.Fatalf("walk docs: %v", err)
 	}
 
 	for _, h := range hits {
@@ -60,6 +79,85 @@ func TestNoStaleRenamedCommandReferences(t *testing.T) {
 			"unknown command for the user. Write `%s` instead.\n    %s",
 			h.file, strings.TrimSpace(h.old), renamed[h.old], h.line)
 	}
+
+	// An allowlist that has gone stale reads as coverage while pinning nothing.
+	// A file that does not exist is not stale, though: some exempt entries name
+	// files that arrive in a later change, and a guard that failed for their
+	// absence would block the branch that adds them.
+	for rel := range exempt {
+		if seenExempt[rel] {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(repoRoot, filepath.FromSlash(rel))); os.IsNotExist(err) {
+			continue
+		}
+		t.Errorf("%s is exempted from the renamed-command check but no longer mentions any "+
+			"renamed command — drop it from the exempt map", rel)
+	}
+}
+
+// walkRepoDocs visits the user-facing prose: docs/*.md, README.md, CHANGELOG.md,
+// and the authored website pages. The generated website copies under
+// website/src/content/docs/{concepts,architecture,components,reference/capability-matrix}
+// are excluded — they are produced from docs/*.md at build time and are
+// gitignored, so flagging them would report the same line twice.
+func walkRepoDocs(root string, fn func(rel, src string)) error {
+	var walk func(dir string) error
+	walk = func(dir string) error {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		for _, e := range entries {
+			p := filepath.Join(dir, e.Name())
+			if e.IsDir() {
+				switch e.Name() {
+				case "node_modules", "dist", ".astro":
+					continue
+				case "superpowers":
+					// docs/superpowers/{specs,plans} are dated design records of
+					// what was built when. They describe the surface as it stood
+					// at the time, so "correcting" them would falsify the
+					// archive; they are not guidance a user follows.
+					continue
+				}
+				if err := walk(p); err != nil {
+					return err
+				}
+				continue
+			}
+			name := e.Name()
+			if !strings.HasSuffix(name, ".md") && !strings.HasSuffix(name, ".mdx") {
+				continue
+			}
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			rel, _ := filepath.Rel(root, p)
+			fn(filepath.ToSlash(rel), string(data))
+		}
+		return nil
+	}
+	for _, sub := range []string{"docs", "website/src/content/docs"} {
+		if err := walk(filepath.Join(root, filepath.FromSlash(sub))); err != nil {
+			return err
+		}
+	}
+	for _, f := range []string{"README.md", "CHANGELOG.md"} {
+		data, err := os.ReadFile(filepath.Join(root, f))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		fn(f, string(data))
+	}
+	return nil
 }
 
 // walkRepoGoFiles visits every non-test .go file under root with its
@@ -118,4 +216,14 @@ func repoRootFromCaller(t *testing.T) string {
 		}
 		dir = parent
 	}
+}
+
+// readFileForGuard reads a repo-relative file for a guard test.
+func readFileForGuard(t *testing.T, root, rel string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	return string(data)
 }

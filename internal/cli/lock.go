@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -31,6 +32,14 @@ func lockTimeout() time.Duration {
 	return defaultLockTimeout
 }
 
+// heldLocks counts, per lock path, how many withGlobalLock frames this PROCESS
+// currently has open. It makes the global lock reentrant within a process while
+// leaving it exclusive between processes — see withGlobalLock.
+var (
+	heldLocksMu sync.Mutex
+	heldLocks   = map[string]int{}
+)
+
 // withGlobalLock acquires the agentsync global lock and runs fn. It must
 // wrap any command that mutates ~/.agentsync/, native agent destinations,
 // or .state/targets.json. Concurrent runs without this serialization can
@@ -39,13 +48,56 @@ func lockTimeout() time.Duration {
 //
 // The lock file lives at <home>/.state/agentsync.lock. gofrs/flock creates it
 // 0o600 (owner-only) and it is re-used across runs.
+//
+// It is REENTRANT WITHIN A PROCESS: a nested call for the same home runs fn
+// directly instead of acquiring again. gofrs/flock is not reentrant — a second
+// acquire from the same process blocks until the timeout and then reports
+// "another agentsync process running?", naming a process that does not exist.
+//
+// This is not a theoretical nicety. The subagent migration must run under the
+// lock (it renames canonical files and does a read-modify-write of
+// targets.json), and it is reachable BOTH from `migrate subagents` (no lock
+// held) and from the interactive offer inside apply/import/reconcile (lock
+// already held). Requiring every caller to know which side it is on is exactly
+// the kind of whole-call-graph audit that silently rots: the first attempt at
+// this got it wrong and deadlocked all three commands on the accept branch.
+// Making the primitive reentrant fixes the class.
+//
+// Between processes nothing changes — the flock is still held for the whole
+// outermost frame, and only the outermost frame releases it.
 func withGlobalLock(home string, fn func() error) error {
 	lockPath := filepath.Join(home, ".state", "agentsync.lock")
+
+	heldLocksMu.Lock()
+	depth := heldLocks[lockPath]
+	if depth > 0 {
+		heldLocks[lockPath] = depth + 1
+		heldLocksMu.Unlock()
+		defer func() {
+			heldLocksMu.Lock()
+			heldLocks[lockPath]--
+			heldLocksMu.Unlock()
+		}()
+		return fn()
+	}
+	heldLocksMu.Unlock()
+
 	lock, err := iox.AcquireLockTimeout(lockPath, lockTimeout())
 	if err != nil {
 		return fmt.Errorf("acquire agentsync lock at %s: %w (another agentsync process running?)", lockPath, err)
 	}
-	defer func() { _ = lock.Release() }()
+	heldLocksMu.Lock()
+	heldLocks[lockPath] = 1
+	heldLocksMu.Unlock()
+
+	defer func() {
+		// Drop the bookkeeping BEFORE releasing the flock, so the path is never
+		// recorded as held by this process while another process could take it.
+		heldLocksMu.Lock()
+		delete(heldLocks, lockPath)
+		heldLocksMu.Unlock()
+		_ = lock.Release()
+	}()
 	return fn()
 }
 
@@ -53,9 +105,11 @@ func withGlobalLock(home string, fn func() error) error {
 // lock. Used by the agent/plugin mutators that do a read-modify-write of
 // agentsync.toml or plugins/<id>.toml: without serialization, two concurrent
 // runs (or one racing a locked `apply`/`update`) lose an update — AtomicWrite
-// prevents a torn file but not a stale-read overwrite. The wrapped function
-// must NOT acquire the global lock itself (gofrs/flock would deadlock on the
-// re-entrant acquire from the same process).
+// prevents a torn file but not a stale-read overwrite.
+//
+// The wrapped function MAY acquire the global lock itself: withGlobalLock is
+// reentrant within a process, so a nested acquire for the same home is a no-op
+// rather than the self-deadlock it used to be.
 func lockedRun(fn func(*cobra.Command, []string) error) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		home := paths.AgentsyncHome(paths.OSEnv{})
