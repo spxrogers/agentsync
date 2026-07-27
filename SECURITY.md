@@ -93,7 +93,7 @@ can resolve secrets into native config files. Areas of particular interest:
 ## Sensitive files
 
 Do not commit your age identity file, decrypted secrets, or
-`~/.agentsync/.state/` to a public repository. `agentsync secrets set
+`~/.agentsync/.state/` to a public repository. `agentsync secret set
 --stdin` keeps secret values off `argv`, shell history, and process listings.
 
 ## Supported versions

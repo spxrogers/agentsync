@@ -30,7 +30,9 @@ resolved at apply time from an age-encrypted vault.
 - [`docs/superpowers/specs/2026-05-04-agentsync-design.md`](docs/superpowers/specs/2026-05-04-agentsync-design.md)
   — the authoritative v1.0 design. Note: a few items in its §"CLI surface" were
   aspirational and not wired in v1.0 (`apply --strict/--force/--agent` flags, an
-  `agentsync skill` command) — trust the code over the spec on the CLI surface.
+  an `agentsync skill` command) — trust the code over the spec on the CLI
+  surface. Note the last of those has since SHIPPED: F5 added `skill list`
+  alongside `subagent`/`command`/`hook`/`lsp list`.
 
 ## This repo is agentsync-managed — change `.agentsync/`, not the rendered files
 

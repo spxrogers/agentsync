@@ -36,6 +36,8 @@ func TestNoStaleRenamedCommandReferences(t *testing.T) {
 	//   - upgrade_notice.go is the first-run-after-upgrade banner, whose entire
 	//     content is old-name → new-name lines.
 	//   - upgrading.mdx and CHANGELOG.md document the renames themselves.
+	//   - the negative acceptance tests assert the old spellings no longer
+	//     resolve, so they must name them.
 	exempt := map[string]bool{
 		"internal/cli/upgrade_notice.go":                   true,
 		"website/src/content/docs/reference/upgrading.mdx": true,
@@ -96,8 +98,10 @@ func TestNoStaleRenamedCommandReferences(t *testing.T) {
 	}
 }
 
-// walkRepoDocs visits the user-facing prose: docs/*.md, README.md, CHANGELOG.md,
-// and the authored website pages. The generated website copies under
+// walkRepoDocs visits the user-facing prose: docs/*.md, the authored website
+// pages, test/ (its README and the .feature files, whose assertions are
+// behavior locks that can go green on a stale string), and the root
+// README/CHANGELOG/SECURITY/CONTRIBUTING. The generated website copies under
 // website/src/content/docs/{concepts,architecture,components,reference/capability-matrix}
 // are excluded — they are produced from docs/*.md at build time and are
 // gitignored, so flagging them would report the same line twice.
@@ -130,7 +134,8 @@ func walkRepoDocs(root string, fn func(rel, src string)) error {
 				continue
 			}
 			name := e.Name()
-			if !strings.HasSuffix(name, ".md") && !strings.HasSuffix(name, ".mdx") {
+			if !strings.HasSuffix(name, ".md") && !strings.HasSuffix(name, ".mdx") &&
+				!strings.HasSuffix(name, ".feature") {
 				continue
 			}
 			data, err := os.ReadFile(p)
@@ -142,12 +147,12 @@ func walkRepoDocs(root string, fn func(rel, src string)) error {
 		}
 		return nil
 	}
-	for _, sub := range []string{"docs", "website/src/content/docs"} {
+	for _, sub := range []string{"docs", "website/src/content/docs", "test"} {
 		if err := walk(filepath.Join(root, filepath.FromSlash(sub))); err != nil {
 			return err
 		}
 	}
-	for _, f := range []string{"README.md", "CHANGELOG.md"} {
+	for _, f := range []string{"README.md", "CHANGELOG.md", "SECURITY.md", "CONTRIBUTING.md"} {
 		data, err := os.ReadFile(filepath.Join(root, f))
 		if err != nil {
 			if os.IsNotExist(err) {

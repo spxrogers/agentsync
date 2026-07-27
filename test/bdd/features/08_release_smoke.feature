@@ -22,7 +22,7 @@ Feature: Release smoke
     And the output contains "check"
     And the output contains "marketplace"
     And the output contains "plugin"
-    And the output contains "secrets"
+    And the output contains "secret"
     And the output contains "import"
     And the output contains "migrate"
     And the output contains "update"

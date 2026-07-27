@@ -371,12 +371,22 @@ Recurring runs (e.g. nightly refresh) are delegated: user wires their own cron /
 
 ## CLI surface
 
-> **This section was written pre-implementation and has been corrected to the
-> shipped surface** (the aspirational entries it carried — `agentsync skill`,
-> `mcp set`, `apply --strict/--force/--agent`, `--scope all`, `--project <slug>`,
-> and "update is the only network-touching command" — were never wired). Trust
-> `agentsync --help` and [`docs/user-guide.md`](../../user-guide.md) as the
-> authority; this block is kept in sync with them, not the other way round.
+> **This section is a DATED RECORD, not a live reference. It is stale, and
+> deliberately not maintained.** It was written pre-implementation and last
+> corrected before the v1.x CLI lock-in, so it still spells `verify` (now
+> `check`), `secrets` (now `secret`), and `plugin install` (now `plugin add`),
+> and it lists `agentsync skill` among entries that "were never wired" — a
+> `skill list` command has since shipped, alongside `subagent`/`command`/
+> `hook`/`lsp list`. Other entries here genuinely were never wired: `mcp set`,
+> `apply --strict/--force/--agent`, `--scope all`, `--project <slug>`, and
+> "update is the only network-touching command".
+>
+> Trust `agentsync --help` and [`docs/user-guide.md`](../../user-guide.md) as
+> the authority. An earlier version of this banner claimed the block was "kept
+> in sync" with them; it was not, and asserting it made a stale block read as
+> current. Rewriting the archive to match each release would falsify the
+> record — so it is labelled instead, and the stale-command guard skips
+> `docs/superpowers/` for that reason.
 
 ```
 # Bootstrap & inspect
