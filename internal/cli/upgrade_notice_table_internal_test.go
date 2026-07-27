@@ -76,7 +76,9 @@ func TestEveryNoticeHasAnUpgradingDocsSection(t *testing.T) {
 // since it is only added at Execute time and never appears in NewRoot's tree.
 func TestNoCommandIsNamedCompletion(t *testing.T) {
 	var offenders []string
+	seen := 0
 	walkCommands(NewRoot(), func(path string, c *cobra.Command) {
+		seen++
 		names := append([]string{c.Name()}, c.Aliases...)
 		for _, n := range names {
 			if n == "completion" {
@@ -84,6 +86,9 @@ func TestNoCommandIsNamedCompletion(t *testing.T) {
 			}
 		}
 	})
+	if seen == 0 {
+		t.Fatal("the command walk yielded nothing; this guard would vacuously pass")
+	}
 	if len(offenders) > 0 {
 		t.Fatalf("these commands are named (or aliased) `completion`: %s\n"+
 			"isCompletionRequest exempts that name from the first-run upgrade notice, so this command "+

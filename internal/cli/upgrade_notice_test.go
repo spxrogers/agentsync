@@ -577,11 +577,28 @@ func TestUpgradeNotice_ShellCompletionDoesNotConsumeIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Every completion entry point, including a bare TAB, a partial word, and
-	// NESTED completion (`agentsync mcp <TAB>`). The nested form is the reason
-	// isCompletionRequest walks the PARENT CHAIN rather than checking cmd.Name()
-	// — cobra dispatches it to the subcommand, so a name-only check would miss
-	// it and every `agentsync <group> <TAB>` would eat the notice.
+	// Every completion entry point.
+	//
+	// WHICH case makes the parent-chain walk load-bearing, precisely — an
+	// earlier version of this comment got it backwards. Measured dispatch
+	// chains (the command whose PersistentPreRunE actually runs, and its
+	// ancestors):
+	//
+	//	__complete ""          -> [__complete agentsync]
+	//	__complete mcp ""      -> [__complete agentsync]   (NOT the mcp command)
+	//	completion bash        -> [bash completion agentsync]
+	//
+	// Cobra resolves the completion TARGET inside `__complete`'s own RunE and
+	// never runs the target's hooks — so every `__complete` form is caught by
+	// the name alone, nested or not. It is `completion <shell>` that needs the
+	// walk, because cobra dispatches to the shell subcommand UNDER `completion`
+	// and only its parent carries the name.
+	//
+	// So `completion bash` / `completion zsh` are the discriminating cases here;
+	// mutating isCompletionRequest to a name-only check fails on those first.
+	// The `__complete` rows still earn their place as entry-point coverage —
+	// they are what a real TAB press invokes — but do not delete the
+	// `completion <shell>` rows believing the others subsume them.
 	for _, args := range [][]string{
 		{"__complete", ""},
 		{"__complete", "ap"},
