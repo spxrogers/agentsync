@@ -45,7 +45,7 @@ Wires every cobra subcommand into the root tree and dispatches to handlers; this
 is the only package that depends on nearly all the others.
 - **Key:** `NewRoot() *cobra.Command`, `Execute() error`, `Version`/`Commit`/`Date`.
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,
-  `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `verify`,
+  `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
   `mcp {add,remove,list}`,
   `plugin {install,outdated,upgrade,enable,disable,remove,list,explain}`,
   `marketplace {add,remove,list}`, `update` (deprecated alias), `secrets {edit,get,set}`,

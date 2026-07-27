@@ -142,8 +142,8 @@ func TestApply_SecretsDocumentedTemplateShape(t *testing.T) {
 		"file = \"secrets/secrets.age\"\n",
 		"identity_file = \"${env:HOME}/.config/agentsync/age.key\"\n")
 
-	if _, err := runCLI(t, env, "verify"); err != nil {
-		t.Fatalf("verify with documented template shape failed: %v", err)
+	if _, err := runCLI(t, env, "check"); err != nil {
+		t.Fatalf("check with documented template shape failed: %v", err)
 	}
 	if out, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("apply with documented template shape failed: %v\n%s", err, out)

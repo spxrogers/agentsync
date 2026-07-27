@@ -19,7 +19,7 @@ Feature: Release smoke
     And the output contains "diff"
     And the output contains "reconcile"
     And the output contains "doctor"
-    And the output contains "verify"
+    And the output contains "check"
     And the output contains "marketplace"
     And the output contains "plugin"
     And the output contains "secrets"

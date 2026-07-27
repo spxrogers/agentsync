@@ -23,7 +23,7 @@ func TestVerify_HalfInitMissingToml(t *testing.T) {
 	if err := os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"y\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := runCLI(t, env, "verify")
+	_, err := runCLI(t, env, "check")
 	if err == nil {
 		t.Fatal("verify on a home missing agentsync.toml must error")
 	}
@@ -36,7 +36,7 @@ func TestVerify_UninitializedHomeErrors(t *testing.T) {
 	tmp := t.TempDir()
 	// Note: no `init` — the agentsync home does not exist.
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
-	out, err := runCLI(t, env, "verify")
+	out, err := runCLI(t, env, "check")
 	if err == nil {
 		t.Fatalf("verify on uninitialized home should error; got ok:\n%s", out)
 	}
@@ -50,7 +50,7 @@ func TestVerify_Empty(t *testing.T) {
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	_, _ = runCLI(t, env, "init")
 
-	out, err := runCLI(t, env, "verify")
+	out, err := runCLI(t, env, "check")
 	if err != nil {
 		t.Fatalf("verify on empty home: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestVerify_BadTOML(t *testing.T) {
 	_ = os.MkdirAll(filepath.Dir(badPath), 0o755)
 	_ = os.WriteFile(badPath, []byte("[server\nmissing-bracket"), 0o644)
 
-	_, err := runCLI(t, env, "verify")
+	_, err := runCLI(t, env, "check")
 	if err == nil {
 		t.Fatal("verify should fail on malformed TOML")
 	}
@@ -91,7 +91,7 @@ identity_file = "` + identity + `"
 `
 	_ = os.WriteFile(cfgPath, []byte(body), 0o644)
 
-	out, err := runCLI(t, env, "verify")
+	out, err := runCLI(t, env, "check")
 	if err == nil {
 		t.Fatalf("verify should fail when recipient is missing; got:\n%s", out)
 	}
@@ -118,7 +118,7 @@ identity_file = "` + identity + `"
 `
 	_ = os.WriteFile(cfgPath, []byte(body), 0o644)
 
-	out, err := runCLI(t, env, "verify")
+	out, err := runCLI(t, env, "check")
 	if err == nil {
 		t.Fatalf("verify should fail on 0644 identity; got:\n%s", out)
 	}
@@ -135,7 +135,7 @@ func TestVerify_UnknownAgent(t *testing.T) {
 	body = append(body, []byte("\n[agents]\nbogus = { enabled = true }\n")...)
 	_ = os.WriteFile(cfg, body, 0o644)
 
-	_, err := runCLI(t, env, "verify")
+	_, err := runCLI(t, env, "check")
 	if err == nil {
 		t.Fatal("verify should reject unknown agent name")
 	}
@@ -144,7 +144,7 @@ func TestVerify_UnknownAgent(t *testing.T) {
 // TestVerify_HelpListsScopeFlags is the acceptance check that `verify --help`
 // now documents --scope and --project, matching status/diff.
 func TestVerify_HelpListsScopeFlags(t *testing.T) {
-	out, _ := runCLI(t, nil, "verify", "--help")
+	out, _ := runCLI(t, nil, "check", "--help")
 	for _, flag := range []string{"--scope", "--project"} {
 		if !strings.Contains(out, flag) {
 			t.Fatalf("verify --help missing %q. Got:\n%s", flag, out)
@@ -176,7 +176,7 @@ func TestVerify_ProjectScope_OK(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "verify", "--project", proj)
+	out, err := runCLI(t, env, "check", "--project", proj)
 	if err != nil {
 		t.Fatalf("verify --project: %v\n%s", err, out)
 	}
@@ -203,7 +203,7 @@ func TestVerify_ProjectScope_BadTOML(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := runCLI(t, env, "verify", "--scope", "project", "--project", proj); err == nil {
+	if _, err := runCLI(t, env, "check", "--scope", "project", "--project", proj); err == nil {
 		t.Fatal("verify --scope project should fail on malformed project TOML")
 	}
 }
@@ -226,7 +226,7 @@ func TestVerify_ProjectScope_HalfInit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := runCLI(t, env, "verify", "--project", proj)
+	_, err := runCLI(t, env, "check", "--project", proj)
 	if err == nil {
 		t.Fatal("verify on a half-initialized project tree must error")
 	}
@@ -246,7 +246,7 @@ func TestVerify_ProjectScope_NoTree(t *testing.T) {
 	if _, err := runCLI(t, env, "init"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := runCLI(t, env, "verify", "--project", proj)
+	_, err := runCLI(t, env, "check", "--project", proj)
 	if err == nil {
 		t.Fatal("verify --project with no .agentsync/ tree should error")
 	}
@@ -276,7 +276,7 @@ func TestVerify_OfflineMode(t *testing.T) {
 		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
 		_, _ = runCLI(t, env, "init")
 		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:}\"\n")
-		_, err := runCLI(t, env, "verify")
+		_, err := runCLI(t, env, "check")
 		if err == nil {
 			t.Fatal("offline verify must reject a malformed ${secret:} reference")
 		}
@@ -294,7 +294,7 @@ func TestVerify_OfflineMode(t *testing.T) {
 		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 		_, _ = runCLI(t, env, "init")
 		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:}\"\n")
-		_, err := runCLI(t, env, "verify")
+		_, err := runCLI(t, env, "check")
 		if err == nil {
 			t.Fatal("online verify must reject a malformed ${secret:} reference (offline CI does)")
 		}
@@ -319,7 +319,7 @@ func TestVerify_OfflineMode(t *testing.T) {
 		// TOML  decodes to a raw ESC byte inside the Command field; the key
 		// after the colon is illegal, so it is flagged malformed and displayed.
 		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:\\u001b[2K\\u001b[31mHACKED}\"\n")
-		_, err := runCLI(t, env, "verify")
+		_, err := runCLI(t, env, "check")
 		if err == nil {
 			t.Fatal("offline verify must reject the malformed ref")
 		}
@@ -340,7 +340,7 @@ func TestVerify_OfflineMode(t *testing.T) {
 		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
 		_, _ = runCLI(t, env, "init")
 		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:${env:FOO}}\"\n")
-		_, err := runCLI(t, env, "verify")
+		_, err := runCLI(t, env, "check")
 		if err == nil {
 			t.Fatal("offline verify must reject a nested/partial ${secret:${env:…}} reference")
 		}
@@ -354,7 +354,7 @@ func TestVerify_OfflineMode(t *testing.T) {
 		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
 		_, _ = runCLI(t, env, "init")
 		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:some.key}\"\n")
-		out, err := runCLI(t, env, "verify")
+		out, err := runCLI(t, env, "check")
 		if err != nil {
 			t.Fatalf("offline verify must NOT resolve a well-formed ref: %v\n%s", err, out)
 		}
@@ -368,7 +368,7 @@ func TestVerify_OfflineMode(t *testing.T) {
 		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp} // online: no offline flag
 		_, _ = runCLI(t, env, "init")
 		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:some.key}\"\n")
-		_, err := runCLI(t, env, "verify")
+		_, err := runCLI(t, env, "check")
 		if err == nil {
 			t.Fatal("online verify must fail to resolve ${secret:some.key}")
 		}
@@ -390,7 +390,7 @@ func TestVerify_SanitizesHostileAgentKey(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := runCLI(t, env, "verify")
+	_, err := runCLI(t, env, "check")
 	if err == nil {
 		t.Fatal("verify must reject an unknown agent")
 	}
@@ -420,7 +420,7 @@ func TestVerify_SanitizesHostileSecretPath(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := runCLI(t, env, "verify")
+	_, err := runCLI(t, env, "check")
 	if err == nil {
 		t.Fatal("verify must fail on a non-existent identity_file")
 	}

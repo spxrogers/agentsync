@@ -66,7 +66,7 @@ from projection in that repo. The project's `[agents]` table is **authoritative*
 committed source renders identically for every collaborator. An empty or absent
 project `[agents]` is rejected before render by `requireProjectAgents`
 (`internal/cli`), which every scope-aware command reaches via
-`loadProjectedForScope` (`verify` calls it on its own load path); the error
+`loadProjectedForScope` (`check` calls it on its own load path); the error
 points at `agentsync agent add <name> --scope project`. `import --scope project`
 is deliberately exempt: it is the capture path used to bootstrap a tree. The retired M5 single-file `.agentsync.toml` marker is no longer
 read — `project.Discover` surfaces a migration error if it finds one.

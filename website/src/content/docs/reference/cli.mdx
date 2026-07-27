@@ -20,7 +20,7 @@ import { Aside } from '@astrojs/starlight/components';
 |---|---|---|
 | `init [<git-url>]` | Create `~/.agentsync/`; optionally clone a bootstrap repo. `--scope project` / `--project <path>` scaffolds a project tree instead. | `--scope --project` |
 | `doctor` | Diagnose setup: PATH, home/state writability, schema, secrets backend, destination-git-backup mode + per-dir repo status. | |
-| `verify` | Validate config; surface unresolved `${secret:}` / `${env:}` refs. `--scope project` / `--project <path>` lints the project tree instead. | `--scope --project` |
+| `check` | Validate the **config**: schema lint + unresolved `${secret:}` / `${env:}` refs. `--scope project` / `--project <path>` lints the project tree instead. (Renamed from `verify`.) | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or a project tree's own `[agents]` declaration with `--scope project` / `--project <path>`. | `disable --purge --scope --project` |
 | `migrate subagents` | One-shot move of the retired canonical `agents/` directory to `subagents/` (rewrites that tree's recorded `source_id` values). | `--scope --project` |
 | `mcp add\|remove\|list <name>` | Manage MCP servers. `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site. | `--type --command --args --url --env --agents --header` |
@@ -91,9 +91,15 @@ candidate dir that contains a nested git repo below it is flagged as a warning,
 since `apply` refuses to init a repo inside a repo and skips git backup there.
 Run it first when something feels off.
 
-### `verify`
-Validates the canonical config and surfaces **every** unresolved `${secret:…}` /
-`${env:…}` reference. Ideal for CI — see
+### `check`
+Validates your **config** — the sibling of `doctor`, which validates your
+**machine**. Reach for `doctor` when something is set up wrong, and `check` when
+something is written wrong. (This command was named `verify` before v0.2.0;
+folding it into `doctor --config` was considered and declined, because `check` is
+scope-aware and `doctor` is not.)
+
+It schema-lints the canonical source and surfaces **every** unresolved
+`${secret:…}` / `${env:…}` reference. Ideal for CI — see
 [Verify config in CI](/recipes/ci-verification/). Pair with
 `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` on runners without an age key: offline mode
 validates reference **shape** (a malformed `${secret:}` still fails) but skips

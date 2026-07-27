@@ -41,6 +41,19 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 - **`import` spells the subagent selector component `subagent`.** `agentsync
   import opencode:subagent:reviewer` is the canonical form; `agent` stays
   accepted as an alias, so existing invocations keep working.
+- **BREAKING (CLI): `agentsync verify` is now `agentsync check` (#200 F8).**
+  `verify` and `doctor` overlapped without a stated boundary. They are now
+  split along the axis they actually differ on: **`doctor` validates your
+  MACHINE** (PATH, home/state writability, adapter detection, secrets backend,
+  destination git state), **`check` validates your CONFIG** (schema lint plus
+  every `${secret:…}`/`${env:…}` reference, scope-aware). Reach for `doctor`
+  when something is set up wrong and `check` when something is written wrong.
+  Folding it into `doctor --config` was the other option on the table and was
+  declined: `check` is scope-aware and `doctor` is not, so a project-scope
+  config lint has no business inside a machine readiness report. **There is no
+  `verify` alias** — update CI pipelines (`AGENTSYNC_ALLOW_OFFLINE_VERIFY=1`
+  keeps its name, since it names the behavior rather than the command).
+
 - **`--scope` / `--project` are now root flags (#200 F6).** They were declared
   by seven of seventeen commands and silently ignored by the rest — so
   `agentsync mcp add … --scope project` looked accepted and wrote to the user

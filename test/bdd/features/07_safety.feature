@@ -31,10 +31,10 @@ Feature: Safety primitives
     Then the command succeeds
     And the file ".agentsync/.state/targets.json" exists
 
-  Scenario: invalid TOML fails verify, not apply silently
+  Scenario: invalid TOML fails check, not apply silently
     Given I write the file ".agentsync/mcp/broken.toml" with:
       """
       this is not valid toml = = =
       """
-    When I run "agentsync verify" and it fails
+    When I run "agentsync check" and it fails
     Then the command fails

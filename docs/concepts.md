@@ -125,7 +125,7 @@ table is **authoritative**: project scope renders only to the agents the project
 itself declares, never the user's enabled agents — so a committed tree produces
 the same render on every collaborator's machine. A project that declares no
 agents is a hard error on every scope-aware render path —
-`apply`/`status`/`diff`/`reconcile`/`plugin upgrade`/`verify` (declare agents
+`apply`/`status`/`diff`/`reconcile`/`plugin upgrade`/`check` (declare agents
 with `agentsync agent add <name> --scope project`); `import --scope project`
 stays available for bootstrapping the tree from native config first. A
 project `plugins/<id>.toml` with `disabled = true`
@@ -189,7 +189,7 @@ for the full rationale.
 
 ### Translation report & coverage
 Every `apply` and `plugin explain` ends with a report showing, per plugin per agent,
-what landed (`verify` only schema-lints the source and validates secrets — it
+what landed (`check` only schema-lints the source and validates secrets — it
 does not project plugins or print a coverage report):
 
 - **✓ native** — full fidelity; the agent has the concept directly.

@@ -1,6 +1,6 @@
 Feature: Bootstrap and inspect commands
   As an engineer setting up agentsync on a new machine
-  I want `init`, `doctor`, and `verify` to behave predictably
+  I want `init`, `doctor`, and `check` to behave predictably
   So that I can trust the tool before I commit any config to it.
 
   Scenario: init scaffolds the source layout
@@ -21,10 +21,10 @@ Feature: Bootstrap and inspect commands
     Then the command fails
     And the output contains "already contains"
 
-  Scenario: verify reports valid schema after init
+  Scenario: check reports valid schema after init
     Given a clean agentsync home
     And I have run "agentsync init"
-    When I run "agentsync verify"
+    When I run "agentsync check"
     Then the command succeeds
     And the output contains "ok"
 

@@ -17,7 +17,7 @@ the rest are escape hatches you'll rarely need.
 | `AGENTSYNC_HOME` | Override the `~/.agentsync/` location (absolute path). |
 | `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations (e.g. chezmoi-managed files). |
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://` / `git://` plugin & marketplace sources. |
-| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `verify` validate reference *shape* only, skipping resolution (CI without an age key). |
+| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `check` validate reference *shape* only, skipping resolution (CI without an age key). |
 
 ## All overrides
 
@@ -29,7 +29,7 @@ the rest are escape hatches you'll rarely need.
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://` and `git://` plugin / marketplace sources. |
 | `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` | Register an agent with no implemented adapter yet (none today — every valid agent is real). |
 | `AGENTSYNC_ALLOW_PLUGIN_DRIFT=1` | Bypass the plugin-cache manifest-SHA check (after hand-editing). |
-| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Skip `${secret:…}` resolution in `verify`; reference *shape* (well-formed `${secret:…}`/`${env:…}`) is still validated (CI without an age key). |
+| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Skip `${secret:…}` resolution in `check`; reference *shape* (well-formed `${secret:…}`/`${env:…}`) is still validated (CI without an age key). |
 | `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` | Skip the 0600 mode check on the age identity file (ACL'd NFS). |
 | `AGENTSYNC_MAX_TARBALL_MB=<N>` | Override the per-tarball decompressed-bytes cap (default 512; 0 disables). |
 | `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |

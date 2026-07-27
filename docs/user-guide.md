@@ -638,7 +638,7 @@ project memory is appended after user memory. The project's `[agents]` table is
 **authoritative** — project scope renders only to the agents the project itself
 declares, never your user-scope agents. A project that declares none is a hard
 error on every scope-aware render path — `apply`/`status`/`diff`/`reconcile`/
-`plugin upgrade --all`/`verify` (run `agentsync agent add <name> --scope project` to
+`plugin upgrade --all`/`check` (run `agentsync agent add <name> --scope project` to
 fix); `import --scope project` still works before any agents are declared, so
 you can bootstrap the tree from native config first.
 
@@ -798,7 +798,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 |---|---|---|
 | `init [<git-url>]` | Create `~/.agentsync/` (user scope); optionally clone a bootstrap repo. `--scope project` scaffolds a project tree at `<cwd>/.agentsync/` instead; `--project <path>` targets `<path>/.agentsync/` (implies project scope). A git-URL clone is user-scope only. | `--scope --project` |
 | `doctor` | Diagnose setup: PATH, home/state writability, config schema, secrets backend, destination-git-backup mode + per-dir repo status; flags natively-installed plugins missing from source. | |
-| `verify` | Validate config and surface every unresolved `${secret:}`/`${env:}` ref. `--scope project`/`--project <path>` schema-lints the project tree and validates its references against the inherited user secrets backend. | `--scope --project` |
+| `check` | Validate the **config**: schema lint plus every `${secret:}`/`${env:}` reference resolved. `--scope project`/`--project <path>` lints the project tree against the inherited user secrets backend. Its sibling is `doctor`, which validates the **machine**. (Renamed from `verify` — see [Upgrading](#command-reference).) | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or with `--scope project`/`--project <path>` the project tree's own `[agents]` declaration (which project scope renders from; never inherited). At project scope `disable --purge` touches only that project's rendered files. | `disable --purge --scope --project` |
 | `migrate subagents` | One-shot move of the retired canonical `agents/` directory to `subagents/`, rewriting that tree's recorded `source_id` values. Run once per tree (`--scope project` / `--project <path>` for a project tree). Refuses, listing the names, if a file exists under both directories. | `--scope --project` |
 | `mcp add\|remove\|list <name>` | Manage MCP servers. `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site, e.g. `--header "Authorization: Bearer ${secret:TOKEN}"`. | `--type --command --args --url --env --agents --header` |
@@ -853,7 +853,7 @@ and the complete environment-variable table. The ones you'll reach for most:
 | `AGENTSYNC_HOME` | Override the `~/.agentsync/` location. |
 | `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations (e.g. chezmoi-managed files). |
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://`/`git://` plugin/marketplace sources. |
-| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `verify` validate reference *shape* only, skipping resolution (CI without an age key). |
+| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `check` validate reference *shape* only, skipping resolution (CI without an age key). |
 
 Quick hits:
 

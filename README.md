@@ -217,7 +217,7 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept http:// and git:// plugin / marketplace sources. |
 | `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` | Register an agent that has no implemented adapter yet (none today — every valid agent is real). |
 | `AGENTSYNC_ALLOW_PLUGIN_DRIFT=1` | Bypass the plugin-cache manifest-SHA check (after hand-editing). |
-| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Skip `${secret:…}` resolution in `agentsync verify`; reference *shape* is still validated (CI without an age key). |
+| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Skip `${secret:…}` resolution in `agentsync check`; reference *shape* is still validated (CI without an age key). |
 | `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` | Skip the 0600 mode check on the age identity file (ACL'd NFS). |
 | `AGENTSYNC_MAX_TARBALL_MB=<N>` | Override the per-tarball decompressed-bytes cap (default 512). 0 disables. |
 | `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |
