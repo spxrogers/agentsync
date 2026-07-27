@@ -9,6 +9,12 @@ Feature: Release smoke
     And the output contains "agentsync"
     And the output contains "Available Commands"
 
+  # NOTE: this is a SMOKE check, not the guard for the command set. It matches
+  # substrings of --help output, and every one of these names also occurs inside
+  # other commands' one-line descriptions — "secret" appears in both `check`'s
+  # and `doctor`'s Short, so this scenario passes with the whole `secret` group
+  # deleted. TestTopLevelCommandSurfaceIsPinned (internal/cli) compares the
+  # actual command SET and is what will fail if the surface changes.
   Scenario: every documented top-level subcommand is wired
     Given a clean agentsync home
     When I run "agentsync --help"

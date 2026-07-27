@@ -36,8 +36,9 @@ func TestNoStaleRenamedCommandReferences(t *testing.T) {
 	//   - upgrade_notice.go is the first-run-after-upgrade banner, whose entire
 	//     content is old-name → new-name lines.
 	//   - upgrading.mdx and CHANGELOG.md document the renames themselves.
-	//   - the negative acceptance tests assert the old spellings no longer
-	//     resolve, so they must name them.
+	//
+	// (The negative acceptance tests naming the old spellings need no entry:
+	// _test.go files are never scanned.)
 	exempt := map[string]bool{
 		"internal/cli/upgrade_notice.go":                   true,
 		"website/src/content/docs/reference/upgrading.mdx": true,

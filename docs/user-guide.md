@@ -818,8 +818,8 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 
 Global: `--scope user|project` and `--project <path>` are **root flags**, declared
 once and accepted by every command that operates on a scoped source tree (`init`,
-`agent`, `mcp`, `apply`, `status`, `diff`, `reconcile`, `import`, `explain`,
-`migrate`, `plugin upgrade`, and the component `list`s). A command that *cannot*
+`agent`, `mcp`, `apply`, `check`, `status`, `diff`, `reconcile`, `import`,
+`explain`, `migrate`, `update`, `plugin upgrade`, and the component `list`s). A command that *cannot*
 honor them — `doctor`, `revert`, `version`, and the `plugin` / `marketplace` /
 `secret` groups, all of which act on per-machine state — **refuses them with the
 reason** rather than accepting and ignoring them.
@@ -857,6 +857,7 @@ and the complete environment-variable table. The ones you'll reach for most:
 | `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations (e.g. chezmoi-managed files). |
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://`/`git://` plugin/marketplace sources. |
 | `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `check` validate reference *shape* only, skipping resolution (CI without an age key). |
+| `AGENTSYNC_NO_UPGRADE_NOTICE=1` | Never show the one-time first-run-after-upgrade notice. |
 
 Quick hits:
 
