@@ -37,6 +37,8 @@ func newSecretsCmd() *cobra.Command {
 		},
 		newSecretsSetCmd(),
 	)
+	markGroupScopeUnaware(sec, "the vault is per machine — secrets/secrets.age and the age identity live under "+
+		"~/.agentsync, and a project tree references secrets rather than storing them")
 	return sec
 }
 

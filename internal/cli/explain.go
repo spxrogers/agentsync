@@ -115,8 +115,6 @@ func newExplainCmd() *cobra.Command {
 	var (
 		jsonOut     bool
 		pointerFlag string
-		scopeFlag   string
-		projectFlag string
 	)
 	cmd := &cobra.Command{
 		Use:   "explain <path>[#<pointer>]",
@@ -149,12 +147,12 @@ For per-plugin translation coverage, see 'agentsync plugin explain'.`,
 			if ptr != "" && !strings.HasPrefix(ptr, "/") {
 				return fmt.Errorf("pointer %q must start with '/' (e.g. /mcpServers/github)", ui.Sanitize(ptr))
 			}
-			return explainRun(cmd, rawPath, ptr, scopeFlag, projectFlag, jsonOut)
+			return explainRun(cmd, rawPath, ptr, jsonOut)
 		},
 	}
 	cmd.Flags().StringVar(&pointerFlag, "pointer", "", "JSON pointer of one merged key (unambiguous alternative to <path>#<pointer>)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit the structured provenance payload instead of the formatted report")
-	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	markScopeAware(cmd)
 	return cmd
 }
 
@@ -175,7 +173,8 @@ func splitPathPointer(arg string) (path, pointer string) {
 	return arg[:i], rest
 }
 
-func explainRun(cmd *cobra.Command, rawPath, ptr, scopeFlag, projectFlag string, jsonOut bool) error {
+func explainRun(cmd *cobra.Command, rawPath, ptr string, jsonOut bool) error {
+	scopeFlag, projectFlag := scopeFlagValues(cmd)
 	p, err := newPrinter(cmd)
 	if err != nil {
 		return err
@@ -202,7 +201,11 @@ func explainRun(cmd *cobra.Command, rawPath, ptr, scopeFlag, projectFlag string,
 	// Live re-render, like `diff`: state alone describes the LAST apply and is
 	// empty before the first one, so it would silently narrate history. State is
 	// still consulted below, to tell "what was applied" from "what would be".
-	c, sc, projectRoot, err := loadProjectedForScope(cmd, fs, home, scopeFlag, projectFlag, true)
+	//
+	// The Flags variant, not the flag-reading one: the inference above may have
+	// supplied a project root the user never typed, and re-reading the command's
+	// flags here would throw it away.
+	c, sc, projectRoot, err := loadProjectedForScopeFlags(cmd, fs, home, scopeFlag, projectFlag, true)
 	if err != nil {
 		return err
 	}

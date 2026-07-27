@@ -28,6 +28,8 @@ func newMarketplaceCmd() *cobra.Command {
 		newMarketplaceRemoveCmd(),
 		newMarketplaceListCmd(),
 	)
+	markGroupScopeUnaware(cmd, "marketplaces are registered per machine — marketplaces/*.toml and the fetch cache "+
+		"live under ~/.agentsync, and a project tree pins plugins rather than registering sources")
 	return cmd
 }
 

@@ -816,7 +816,15 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `explain <path>[#<pointer>]` | Show what produced a destination file (or one merged key): source of record, plugin origin, adapter transform, ownership, drift class, and any `${secret:…}` references. **Metadata only** — never destination content, so it answers even when the secrets vault is locked (where `diff` must fail closed). `--pointer` is the unambiguous alternative to an in-argument `#`. Project scope is inferred when the path lies inside a project tree. | `--pointer --scope --project --json` |
 | `version` | Print version information (alias for `--version`). | |
 
-Global: `-v/--verbose` for verbose logging on any command (in `status` it also
+Global: `--scope user|project` and `--project <path>` are **root flags**, declared
+once and accepted by every command that operates on a scoped source tree (`init`,
+`agent`, `mcp`, `apply`, `status`, `diff`, `reconcile`, `import`, `explain`,
+`migrate`, `plugin upgrade`, and the component `list`s). A command that *cannot*
+honor them — `doctor`, `revert`, `version`, and the `plugin` / `marketplace` /
+`secret` groups, all of which act on per-machine state — **refuses them with the
+reason** rather than accepting and ignoring them.
+
+`-v/--verbose` for verbose logging on any command (in `status` it also
 expands each collapsed skill directory back to one row per bundled file).
 `--color=auto|always|never` controls whether output is styled with ANSI color
 and bold (default `auto` — on for a TTY, off when piped/redirected; honors

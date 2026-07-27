@@ -84,6 +84,8 @@ An agent may version more than one directory (its config dir plus a shared dir l
 	cmd.Flags().StringVar(&toRef, "to", "", "checkpoint to restore (commit hash or relative like HEAD~2); default: undo the most recent apply")
 	cmd.Flags().BoolVar(&all, "all", false, "revert every agentsync-managed destination dir to its last checkpoint")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would change without writing")
+	markScopeUnaware(cmd, "revert rolls back USER-scope destination directories (~/.claude, ~/.codex, …), which is "+
+		"where the local git backup lives; a project's rendered files are versioned by the project's own repo")
 	return cmd
 }
 

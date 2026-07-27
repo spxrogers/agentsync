@@ -143,10 +143,7 @@ func getJSONPointer(m map[string]any, ptr string) (any, bool) {
 // Selector grammar: <agent>[:<component>[:<name>]]
 // e.g. claude (full config), claude:mcp (all servers), claude:mcp:github (one).
 func newImportCmd() *cobra.Command {
-	var (
-		dryRun                 bool
-		scopeFlag, projectFlag string
-	)
+	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "import <agent>[:<component>[:<name>]]",
 		Args:  cobra.ExactArgs(1),
@@ -189,26 +186,26 @@ Examples:
 			// neither, so it is read-only and skips the lock — matching
 			// `apply --dry-run`.
 			if dryRun {
-				return importRun(cmd, args, true, scopeFlag, projectFlag)
+				return importRun(cmd, args, true)
 			}
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			return withGlobalLock(home, func() error {
-				return importRun(cmd, args, false, scopeFlag, projectFlag)
+				return importRun(cmd, args, false)
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview which source files would be written, without writing")
-	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	markScopeAware(cmd)
 	return cmd
 }
 
-func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projectFlag string) error {
+func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	sel := args[0]
 	agentName, component, name, err := parseSelector(sel)
 	if err != nil {
 		return err
 	}
-	sc, projectRoot, err := resolveScope(cmd, scopeFlag, projectFlag, noInputFlag(cmd))
+	sc, projectRoot, err := resolveScope(cmd, noInputFlag(cmd))
 	if err != nil {
 		return err
 	}

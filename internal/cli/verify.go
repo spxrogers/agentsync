@@ -16,10 +16,7 @@ import (
 )
 
 func newVerifyCmd() *cobra.Command {
-	var (
-		scopeFlag   string
-		projectFlag string
-	)
+	var ()
 	cmd := &cobra.Command{
 		Use:   "verify",
 		Short: "schema-lint the canonical source and validate secrets resolvability on demand",
@@ -37,7 +34,7 @@ func newVerifyCmd() *cobra.Command {
 			// Resolve scope ONCE — resolveScope may prompt interactively when cwd
 			// sits inside a project tree and no scope was given, so calling it
 			// twice (here and again inside a shared loader) would prompt twice.
-			sc, projectRoot, err := resolveScope(cmd, scopeFlag, projectFlag, noInputFlag(cmd))
+			sc, projectRoot, err := resolveScope(cmd, noInputFlag(cmd))
 			if err != nil {
 				return err
 			}
@@ -127,7 +124,7 @@ func newVerifyCmd() *cobra.Command {
 			return nil
 		},
 	}
-	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	markScopeAware(cmd)
 	return cmd
 }
 

@@ -14,7 +14,7 @@ import (
 // drift — even if the version template later starts using a cobra template
 // function. TestRoot_VersionCommandRawByteParity pins that guarantee.
 func newVersionCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print version information (alias for --version)",
 		Args:  cobra.NoArgs,
@@ -37,4 +37,6 @@ func newVersionCmd() *cobra.Command {
 			return root.Execute()
 		},
 	}
+	markScopeUnaware(cmd, "version reports the binary's build metadata, which has no source tree")
+	return cmd
 }

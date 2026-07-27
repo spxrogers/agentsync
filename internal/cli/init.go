@@ -53,7 +53,6 @@ default_interval = "24h"
 `
 
 func newInitCmd() *cobra.Command {
-	var scopeFlag, projectFlag string
 	cmd := &cobra.Command{
 		Use:   "init [<git-url>]",
 		Short: "scaffold ~/.agentsync/ (user) or <repo>/.agentsync/ (project)",
@@ -75,6 +74,7 @@ The destination must not exist or be empty; init refuses to overwrite a
 populated home so a careless re-run on a working install does not nuke it.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			scopeFlag, projectFlag := scopeFlagValues(cmd)
 			projectMode, projectRoot, err := initProjectRoot(scopeFlag, projectFlag)
 			if err != nil {
 				return err
@@ -96,8 +96,7 @@ populated home so a careless re-run on a working install does not nuke it.`,
 			return scaffoldHome(cmd, home)
 		},
 	}
-	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user)")
-	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+	markScopeAware(cmd)
 	return cmd
 }
 

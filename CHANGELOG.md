@@ -41,6 +41,21 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 - **`import` spells the subagent selector component `subagent`.** `agentsync
   import opencode:subagent:reviewer` is the canonical form; `agent` stays
   accepted as an alias, so existing invocations keep working.
+- **`--scope` / `--project` are now root flags (#200 F6).** They were declared
+  by seven of seventeen commands and silently ignored by the rest — so
+  `agentsync mcp add … --scope project` looked accepted and wrote to the user
+  tree anyway, even though project-scope `mcp/*.toml` is a documented part of
+  the project layout. They are now declared once on the root and inherited
+  everywhere.
+  - **`mcp add` / `remove` / `list` are scope-aware**, closing that gap: they
+    author and read the project tree's `mcp/*.toml` when scoped to a project.
+  - **A command that cannot honor scope refuses it, with the reason** —
+    `doctor`, `revert`, `version`, and the `plugin` / `marketplace` / `secret`
+    groups all act on per-machine state. Inheriting the flags everywhere would
+    otherwise have moved the silent-ignore bug rather than fixed it, so every
+    command now declares a stance and `TestEveryCommandDeclaresScopeStance`
+    fails the build for one that doesn't.
+
 - **BREAKING (CLI): the plugin lifecycle verbs consolidated under `plugin`.**
   Two general-purpose top-level names were held by plugin-scoped operations,
   and `update` additionally collided with its own sibling `plugin upgrade`

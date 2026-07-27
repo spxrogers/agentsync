@@ -31,11 +31,11 @@ func newMigrateCmd() *cobra.Command {
 		Short: "one-shot migrations for retired canonical layouts",
 	}
 	cmd.AddCommand(newMigrateSubagentsCmd())
+	markScopeAware(cmd) // `migrate subagents` migrates one tree, chosen by scope
 	return cmd
 }
 
 func newMigrateSubagentsCmd() *cobra.Command {
-	var scopeFlag, projectFlag string
 	cmd := &cobra.Command{
 		Use:   "subagents",
 		Short: "move the canonical agents/ directory to subagents/",
@@ -56,7 +56,7 @@ project's committed .agentsync/ tree.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			return withGlobalLock(home, func() error {
-				sc, projectRoot, err := resolveScope(cmd, scopeFlag, projectFlag, noInputFlag(cmd))
+				sc, projectRoot, err := resolveScope(cmd, noInputFlag(cmd))
 				if err != nil {
 					return err
 				}
@@ -68,7 +68,7 @@ project's committed .agentsync/ tree.`,
 			})
 		},
 	}
-	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	markScopeAware(cmd)
 	return cmd
 }
 

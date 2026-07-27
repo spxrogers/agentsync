@@ -31,10 +31,8 @@ import (
 // interactive, `update` is not.
 func newUpdateCmd() *cobra.Command {
 	var (
-		apply       bool
-		autoSafe    bool
-		scopeFlag   string
-		projectFlag string
+		apply    bool
+		autoSafe bool
 	)
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -58,16 +56,13 @@ command names moved.`,
 					doApply:      apply,
 					lossless:     autoSafe,
 					losslessFlag: "--auto-safe",
-					scopeFlag:    scopeFlag,
-					projectFlag:  projectFlag,
 				})
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&apply, "apply", false, "upgrade plugins and apply to agents after polling")
 	cmd.Flags().BoolVar(&autoSafe, "auto-safe", false, "only bump plugins with non-lossy translation (requires --apply)")
-	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree) — only used with --apply")
-	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project) — only used with --apply")
+	markScopeAware(cmd)
 	return cmd
 }
 
@@ -100,9 +95,7 @@ type pollOpts struct {
 	losslessFlag string
 	// applyFlag is the flag NAME the lossless filter requires (`--apply` on the
 	// deprecated alias, `--all` on `plugin upgrade`).
-	applyFlag   string
-	scopeFlag   string
-	projectFlag string
+	applyFlag string
 }
 
 // pollPluginsRun re-fetches every registered marketplace, records the fresh
@@ -125,7 +118,6 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 		}
 		return fmt.Errorf("%s requires %s (it only filters which bumps are applied)", losslessFlag, applyFlag)
 	}
-	scopeFlag, projectFlag := o.scopeFlag, o.projectFlag
 	p, err := newPrinter(cmd)
 	if err != nil {
 		return err
@@ -266,7 +258,7 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 	if len(bumps) == 0 {
 		return nil
 	}
-	return reapplyAfterPluginChange(cmd, home, userHome, statePath, st, scopeFlag, projectFlag)
+	return reapplyAfterPluginChange(cmd, home, userHome, statePath, st)
 }
 
 // reapplyAfterPluginChange re-renders the canonical to the agents after a
@@ -278,8 +270,8 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 // project-scope user would have their project state silently ignored, and
 // without substitution ${secret:…} references would land literally in agent
 // native files.
-func reapplyAfterPluginChange(cmd *cobra.Command, home, userHome, statePath string, st *state.Targets, scopeFlag, projectFlag string) error {
-	c2, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, scopeFlag, projectFlag, false)
+func reapplyAfterPluginChange(cmd *cobra.Command, home, userHome, statePath string, st *state.Targets) error {
+	c2, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, false)
 	if err != nil {
 		return fmt.Errorf("reload source after upgrade: %w", err)
 	}

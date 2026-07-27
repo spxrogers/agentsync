@@ -421,8 +421,8 @@ For per-plugin translation coverage, see [`plugin explain`](#plugin-explain-plug
 
 | Flag | Applies to | Effect |
 |---|---|---|
-| `--scope user\|project` | init, verify, import, apply, status, diff, reconcile, explain, migrate, plugin upgrade | Force the config scope. |
-| `--project <path>` | init, verify, import, apply, status, diff, reconcile, explain, migrate, plugin upgrade | Target / apply a specific project's tree. |
+| `--scope user\|project` | **root flag** — every scope-aware command (init, check, import, apply, status, diff, reconcile, explain, migrate, agent, mcp, plugin upgrade, the component `list`s) | Force the config scope. Commands that act on per-machine state (doctor, revert, version, the plugin / marketplace / secret groups) **refuse it with a reason** instead of ignoring it. |
+| `--project <path>` | **root flag** — same set as `--scope` | Target a specific project's tree (implies `--scope project`). |
 | `--dry-run` | apply, import | Preview without writing. |
 | `--auto-safe` | reconcile | Auto-resolve only no-risk drift classes. (The plugin-side flag of the same name became `plugin upgrade --lossless` — they meant two unrelated things.) |
 | `--json` | status, diff, explain, plugin explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). `plugin explain --json` emits the translation `rows`; `explain <path> --json` emits the provenance envelope (and still emits it, with `"unmanaged": true`, on a path nothing renders). |

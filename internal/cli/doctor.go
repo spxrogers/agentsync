@@ -21,7 +21,7 @@ import (
 )
 
 func newDoctorCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "diagnose first-run readiness: environment, schema, secrets, adapters",
 		Args:  cobra.NoArgs,
@@ -115,6 +115,9 @@ func newDoctorCmd() *cobra.Command {
 			return nil
 		},
 	}
+	markScopeUnaware(cmd, "doctor reports on THIS MACHINE (paths, adapters, the secrets backend), which is not scoped; "+
+		"to validate a project tree's config run `agentsync check --scope project`")
+	return cmd
 }
 
 // okCheck / failCheck / warnCheck render one readiness line. The label carries

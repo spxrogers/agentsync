@@ -38,6 +38,14 @@ func NewRoot() *cobra.Command {
 	cmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose logging (in `status`, also expands collapsed skill directories)")
 	cmd.PersistentFlags().StringVar(&colorFlag, "color", "auto", "colorize output: auto | always | never")
 	cmd.PersistentFlags().Bool("no-input", false, "never prompt; fail instead when a choice is required (for headless/non-interactive use)")
+	// Scope is declared ONCE and inherited (#200 F6). A command that cannot
+	// honor it refuses rather than silently ignoring it — see scope_flags.go.
+	cmd.PersistentFlags().String("scope", "", "user | project (default: user; prompts when run inside a project tree)")
+	cmd.PersistentFlags().String("project", "", "explicit path to project root (implies --scope project)")
+
+	cmd.PersistentPreRunE = func(c *cobra.Command, _ []string) error {
+		return enforceScopeStance(c)
+	}
 
 	cmd.AddCommand(
 		newInitCmd(),

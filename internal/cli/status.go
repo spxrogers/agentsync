@@ -89,11 +89,9 @@ func statusHasDrift(m statusModel) bool {
 
 func newStatusCmd() *cobra.Command {
 	var (
-		scopeFlag   string
-		projectFlag string
-		jsonOut     bool
-		exitCode    bool
-		agentsCSV   string
+		jsonOut   bool
+		exitCode  bool
+		agentsCSV string
 	)
 	cmd := &cobra.Command{
 		Use:   "status",
@@ -109,7 +107,7 @@ func newStatusCmd() *cobra.Command {
 			// same plugin-projected components `apply` writes; source.Load
 			// alone would report plugin-managed files/keys as untracked.
 			userHome := paths.HomeDir(paths.OSEnv{})
-			c, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, scopeFlag, projectFlag, true)
+			c, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, true)
 			if err != nil {
 				return err
 			}
@@ -198,7 +196,7 @@ func newStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
-	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	markScopeAware(cmd)
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the formatted report")
 	cmd.Flags().BoolVar(&exitCode, "exit-code", false, fmt.Sprintf("exit %d if any drift is detected (0 when clean); for CI gates", exitCodeDrift))
 	cmd.Flags().StringVar(&agentsCSV, "agents", "", `limit the report to a comma-separated agent allowlist ("*" = all enabled; default: all enabled)`)

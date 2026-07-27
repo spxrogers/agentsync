@@ -27,6 +27,14 @@ func newMCPCmd() *cobra.Command {
 		newMCPRemoveCmd(),
 		newMCPListCmd(),
 	)
+	// Project-scope mcp/<id>.toml is a documented part of the project tree
+	// layout, but before #200 F6 every mcp subcommand hardcoded the user home —
+	// so `mcp add … --scope project` silently wrote to ~/.agentsync. The whole
+	// group is scope-aware now.
+	markScopeAware(cmd)
+	for _, sub := range cmd.Commands() {
+		markScopeAware(sub)
+	}
 	return cmd
 }
 
@@ -46,8 +54,11 @@ func newMCPAddCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := args[0]
-			home := paths.AgentsyncHome(paths.OSEnv{})
-			return withGlobalLock(home, func() error {
+			home, _, _, err := scopedSourceHome(cmd)
+			if err != nil {
+				return err
+			}
+			return withGlobalLock(paths.AgentsyncHome(paths.OSEnv{}), func() error {
 				return mcpAddRun(cmd, home, id, serverType, command, argsCSV, url, envCSV, agentsCSV, headers)
 			})
 		},
@@ -134,8 +145,11 @@ func newMCPRemoveCmd() *cobra.Command {
 			if err := validateMCPID(id); err != nil {
 				return err
 			}
-			home := paths.AgentsyncHome(paths.OSEnv{})
-			return withGlobalLock(home, func() error {
+			home, _, _, err := scopedSourceHome(cmd)
+			if err != nil {
+				return err
+			}
+			return withGlobalLock(paths.AgentsyncHome(paths.OSEnv{}), func() error {
 				p := filepath.Join(home, "mcp", id+".toml")
 				if err := os.Remove(p); err != nil { //nolint:forbidigo // removes mcp/<id>.toml (canonical source), not a native destination
 					if os.IsNotExist(err) {
@@ -156,7 +170,10 @@ func newMCPListCmd() *cobra.Command {
 		Short: "list MCP servers in the canonical source",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			home := paths.AgentsyncHome(paths.OSEnv{})
+			home, _, _, err := scopedSourceHome(cmd)
+			if err != nil {
+				return err
+			}
 			dir := filepath.Join(home, "mcp")
 			entries, err := os.ReadDir(dir)
 			if err != nil && !os.IsNotExist(err) {

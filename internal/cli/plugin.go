@@ -36,7 +36,25 @@ func newPluginCmd() *cobra.Command {
 		newPluginListCmd(),
 		newPluginExplainCmd(),
 	)
+	// Plugins are a user-scope concept across every supported harness (Claude
+	// installs under ~/.claude, not per-repo), and the registry + cache live
+	// under ~/.agentsync — so the group refuses scope flags. `plugin upgrade`
+	// is the one exception: its re-apply step honors scope, and re-marks itself.
+	markGroupScopeUnaware(cmd, "plugins are a user-scope concept — the registry (plugins/*.toml) and cache "+
+		"live under ~/.agentsync. A project tree can only DISABLE a plugin, by committing plugins/<id>.toml with `disabled = true`")
+	markScopeAware(findSub(cmd, "upgrade"))
 	return cmd
+}
+
+// findSub returns the named direct subcommand, or nil. Used to re-mark one
+// member of a group whose blanket stance does not apply to it.
+func findSub(parent *cobra.Command, name string) *cobra.Command {
+	for _, sub := range parent.Commands() {
+		if sub.Name() == name {
+			return sub
+		}
+	}
+	return nil
 }
 
 // pluginTOML is the shape of plugins/<id>.toml.
@@ -270,10 +288,8 @@ content.`,
 // different things.
 func newPluginUpgradeCmd() *cobra.Command {
 	var (
-		all         bool
-		lossless    bool
-		scopeFlag   string
-		projectFlag string
+		all      bool
+		lossless bool
 	)
 	cmd := &cobra.Command{
 		Use:   "upgrade [<id>]",
@@ -306,20 +322,18 @@ when running inside a project.`,
 					lossless:     lossless,
 					losslessFlag: "--lossless",
 					applyFlag:    "--all",
-					scopeFlag:    scopeFlag,
-					projectFlag:  projectFlag,
 				})
 			}
-			return pluginUpgradeRun(cmd, args, lossless, scopeFlag, projectFlag)
+			return pluginUpgradeRun(cmd, args, lossless)
 		}),
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "poll marketplaces and upgrade every plugin with a pending bump")
 	cmd.Flags().BoolVar(&lossless, "lossless", false, "only upgrade when the candidate version introduces no new translation loss")
-	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	markScopeAware(cmd)
 	return cmd
 }
 
-func pluginUpgradeRun(cmd *cobra.Command, args []string, lossless bool, scopeFlag, projectFlag string) error {
+func pluginUpgradeRun(cmd *cobra.Command, args []string, lossless bool) error {
 	// Accept the id@marketplace ref that `install` accepts; operate on the bare id
 	// (the on-disk file is plugins/<id>.toml). The stored id (below) is
 	// authoritative for the marketplace; a typed qualifier must MATCH it (checked
@@ -434,7 +448,7 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string, lossless bool, scopeFla
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
 	}
-	return reapplyAfterPluginChange(cmd, home, userHome, statePath, st, scopeFlag, projectFlag)
+	return reapplyAfterPluginChange(cmd, home, userHome, statePath, st)
 }
 
 // ---- enable -----------------------------------------------------------------

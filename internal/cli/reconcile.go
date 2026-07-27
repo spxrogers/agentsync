@@ -58,10 +58,7 @@ type reconcileItem struct {
 var errDestDroppedServer = errors.New("destination dropped server")
 
 func newReconcileCmd() *cobra.Command {
-	var (
-		autoWB, autoOR, autoSafe bool
-		scopeFlag, projectFlag   string
-	)
+	var autoWB, autoOR, autoSafe bool
 	cmd := &cobra.Command{
 		Use:   "reconcile",
 		Short: "interactively resolve drift",
@@ -69,18 +66,18 @@ func newReconcileCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			return withGlobalLock(home, func() error {
-				return reconcileRun(cmd, cmd.InOrStdin(), autoWB, autoOR, autoSafe, scopeFlag, projectFlag)
+				return reconcileRun(cmd, cmd.InOrStdin(), autoWB, autoOR, autoSafe)
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&autoWB, "auto-writeback", false, "auto-resolve drift by writing dest back to source")
 	cmd.Flags().BoolVar(&autoOR, "auto-override", false, "auto-resolve drift by re-applying source to dest")
 	cmd.Flags().BoolVar(&autoSafe, "auto-safe", false, "auto-resolve only converged/pending/new (no-op)")
-	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	markScopeAware(cmd)
 	return cmd
 }
 
-func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe bool, scopeFlag, projectFlag string) error {
+func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe bool) error {
 	// The three auto modes are mutually exclusive — writeback (dest→source)
 	// and override (source→dest) are exact opposites, and silently accepting
 	// both (writeback won) was a data-loss footgun.
@@ -91,7 +88,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 	userHome := paths.HomeDir(paths.OSEnv{})
 	// Project plugins like apply does so drift classification covers
 	// plugin-managed components instead of reporting them as untracked.
-	c, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, scopeFlag, projectFlag, false)
+	c, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, false)
 	if err != nil {
 		return err
 	}
