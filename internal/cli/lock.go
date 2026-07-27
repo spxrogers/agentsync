@@ -64,7 +64,9 @@ var (
 // held) and from the interactive offer inside apply/import/reconcile (lock
 // already held). Requiring every caller to know which side it is on is exactly
 // the kind of whole-call-graph audit that silently rots — the first attempt at
-// this got it wrong and deadlocked three commands on the accept branch.
+// this got it wrong and deadlocked several commands on the accept branch, and
+// two later attempts to enumerate exactly which were each wrong in a different
+// direction. Hence: reentrant primitive, no caller list to keep true.
 //
 // PRECONDITION, and the honest limit of the mechanism: the counter is keyed by
 // lock PATH ONLY, with no owner identity. It therefore means "some frame in
@@ -99,15 +101,19 @@ func withGlobalLock(home string, fn func() error) error {
 		return fmt.Errorf("acquire agentsync lock at %s: %w (another agentsync process running?)", lockPath, err)
 	}
 	heldLocksMu.Lock()
-	heldLocks[lockPath] = 1
+	// Increment rather than assign 1: if another goroutine raced past the
+	// depth check above and is inside its own frame, assigning would erase its
+	// claim and let this frame's releaseHeld delete the entry out from under it.
+	// (That race is outside the documented precondition, but the counter should
+	// not be the thing that makes it worse.)
+	heldLocks[lockPath]++
 	heldLocksMu.Unlock()
 
 	defer func() {
-		// Release the flock FIRST, then drop the bookkeeping. The other order
-		// leaves a window where this process no longer records the lock but
-		// still holds it — and if Release fails, that window never closes, so a
-		// later frame would re-acquire and hit the very "another agentsync
-		// process running?" error this reentrancy exists to remove.
+		// Release the flock, then drop the bookkeeping. Both orders converge on
+		// the same end state (Release's error is discarded and releaseHeld runs
+		// either way), so this is ordering for readability, not for safety: the
+		// process stops advertising the lock only once it has actually let go.
 		_ = lock.Release()
 		releaseHeld(lockPath)
 	}()

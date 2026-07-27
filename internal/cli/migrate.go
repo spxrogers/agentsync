@@ -97,12 +97,18 @@ func runSubagentMigration(p *ui.Printer, userAgentsyncHome string, sc adapter.Sc
 	// .state/targets.json), and lock.go requires the lock around exactly that.
 	// Taking it here covers every caller by construction.
 	//
-	// Callers on the OTHER side — apply (non-dry-run), import, reconcile — reach
-	// this while already holding the lock. That is fine because withGlobalLock is
-	// reentrant within a process; it was NOT fine before that, and accepting the
-	// migration offer from those three blocked for the full lock timeout and then
-	// failed blaming a nonexistent second process. See withGlobalLock's doc and
-	// TestEnsureSubagentLayout_AcceptUnderLockHoldingCommand.
+	// Callers on the OTHER side reach this while ALREADY holding the lock —
+	// apply (non-dry-run), import, reconcile, and `plugin upgrade <id>` without
+	// --lossless (its RunE is lockedRun, and the fail-closed source.Load runs
+	// only under --lossless, so the offer is reachable under the lock). That is
+	// fine because withGlobalLock is reentrant within a process; it was NOT fine
+	// before that, and accepting the offer from any of them blocked for the full
+	// lock timeout and then failed blaming a nonexistent second process.
+	//
+	// Do not treat this list as exhaustive — that is the point of making the
+	// primitive reentrant rather than auditing callers. Two attempts at
+	// enumerating them were wrong in opposite directions. See withGlobalLock's
+	// doc and TestEnsureSubagentLayout_AcceptUnderLockHoldingCommand.
 	var moved []string
 	if err := withGlobalLock(userAgentsyncHome, func() error {
 		var merr error
