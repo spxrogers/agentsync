@@ -105,6 +105,17 @@ func maybePrintUpgradeNotice(cmd *cobra.Command) {
 	if os.Getenv(NoUpgradeNoticeEnv) == "1" {
 		return
 	}
+	// A shell-completion request is not a user reading output. Cobra runs this
+	// hook for `__complete` too, and the generated bash/zsh scripts invoke it as
+	// `out=$(eval "${requestComp}" 2>/dev/null)` — stderr DISCARDED. So a single
+	// TAB after `agentsync ` would print the banner into /dev/null and then
+	// record it as seen, and the user's next real command would say nothing.
+	// That is the one failure direction this feature must not have: silently
+	// never telling them their config layout moved. Anyone with completions
+	// installed would have hit it before ever seeing the notice.
+	if isCompletionRequest(cmd) {
+		return
+	}
 
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	// A home that does not exist yet is a FRESH INSTALL, not an upgrade: nothing
@@ -198,6 +209,22 @@ func maybePrintUpgradeNotice(cmd *cobra.Command) {
 	// this notice fires for.
 	_ = ensureStateGitignore(home)
 	_ = state.SaveLastRun(recordPath, rec)
+}
+
+// isCompletionRequest reports whether cmd is (or is under) a shell-completion
+// command: cobra's hidden `__complete` / `__completeNoDesc` request commands, or
+// the user-facing `completion` generator.
+//
+// Their output is consumed by a shell, not read by a person — and the generated
+// scripts discard stderr — so anything "shown" during one is shown to nobody.
+func isCompletionRequest(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		switch c.Name() {
+		case cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd, "completion":
+			return true
+		}
+	}
+	return false
 }
 
 // homeExists reports whether the agentsync home is present as a directory.

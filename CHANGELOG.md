@@ -233,6 +233,15 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Shell completion no longer consumes the upgrade notice.** Cobra runs the
+  root pre-run hook for its hidden `__complete` request too, and the generated
+  bash/zsh scripts invoke it with stderr discarded — so a single TAB after
+  `agentsync ` printed the banner into `/dev/null`, recorded it as seen, and the
+  user's next real command said nothing. Anyone with completions installed
+  would have hit that before ever seeing the notice, which is the one outcome
+  the feature exists to prevent. Completion requests now return before the
+  notice is considered.
+
 - **The upgrade notice no longer fires at a brand-new project-scope user.** It
   treated "the user home exists but has no run record" as an upgrade — but a
   project-scope user never runs `agentsync init` at user scope, and

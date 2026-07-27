@@ -554,3 +554,51 @@ func TestUpgradeNotice_StateOnlyHomeIsNotSilencedForever(t *testing.T) {
 		t.Fatalf("a home that gained a user config was permanently silenced:\n%s", stderr)
 	}
 }
+
+// TestUpgradeNotice_ShellCompletionDoesNotConsumeIt is the regression for the
+// way this feature could have failed for almost everyone who has completions
+// installed.
+//
+// Cobra runs the root PersistentPreRunE for its hidden `__complete` request
+// too, and the generated bash/zsh scripts invoke it as
+// `out=$(eval "${requestComp}" 2>/dev/null)` — stderr DISCARDED. So one TAB
+// after `agentsync ` printed the banner into /dev/null and recorded it as seen,
+// and the user's next real command said nothing. Silently never telling a user
+// their config layout moved is the single outcome this feature exists to
+// prevent.
+func TestUpgradeNotice_ShellCompletionDoesNotConsumeIt(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	withVersion(t, "0.11.0")
+
+	// A home created by a version that predates the record — a real upgrader.
+	if err := os.Remove(filepath.Join(tmp, ".agentsync", ".state", "last-run.json")); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+
+	// Every completion entry point, including a bare TAB and a partial word.
+	for _, args := range [][]string{
+		{"__complete", ""},
+		{"__complete", "ap"},
+		{"__completeNoDesc", ""},
+		{"completion", "bash"},
+	} {
+		if _, _, err := runCLISplit(t, env, args...); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if rec := readLastRun(t, tmp); rec != nil && len(rec.NoticesSeen) > 0 {
+			t.Fatalf("`%v` recorded the notice as seen. Completion output is consumed by a shell "+
+				"with stderr discarded, so the user never saw it — and now never will: %+v", args, rec)
+		}
+	}
+
+	// The user's next real command still gets it.
+	_, stderr, err := runCLISplit(t, env, "version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "migrate subagents") {
+		t.Fatalf("completion consumed the notice; the real command shows nothing:\n%s", stderr)
+	}
+}
