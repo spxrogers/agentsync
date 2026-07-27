@@ -429,7 +429,7 @@ func checkSecrets(p *ui.Printer, cfg source.SecretsConfig, home string) int {
 	agePath := secrets.ResolveAgeFile(cfg, home, userHome)
 	ageDisp := untrusted.Wrap(agePath)
 	if _, err := os.Stat(agePath); err != nil {
-		warnCheck(p, "age file   ", fmt.Sprintf("%s — not yet created (run `agentsync secrets edit` to author)", ageDisp))
+		warnCheck(p, "age file   ", fmt.Sprintf("%s — not yet created (run `agentsync secret edit` to author)", ageDisp))
 	} else {
 		okCheck(p, "age file   ", ageDisp.String())
 	}

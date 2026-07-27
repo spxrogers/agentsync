@@ -204,6 +204,57 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`agentsync explain` no longer prints a resolved secret through an adapter
+  skip reason.** `explain` renders from the secret-RESOLVED canonical (it must,
+  to hash the same bytes `apply` writes), and the Continue adapter interpolated
+  `%q` of an MCP server's `url` — a secret-bearing field — into a reduced-skip
+  reason. Those reasons are emitted as *metadata*, in both the text output and
+  `--json`, so `agentsync explain ~/.continue/mcpServers/<id>.yaml` printed the
+  live URL two lines above the literal text "(reference only; never the
+  value)". Skip reasons now name the offending FIELD and never its value —
+  `Component`+`Name` already identify the item. `adapter.Skip.Reason` documents
+  the rule and `TestSkipReasonsNeverCarrySecretValues` plants a canary in every
+  secret-bearing field and renders it through every registered adapter.
+  (`apply`'s translation report carried the same reason, so it is fixed there
+  too; `status`/`diff`/`check` render templated and were never affected.)
+
+- **`agentsync subagent list` refuses an unmigrated tree instead of reporting
+  zero.** The new component listings load tolerantly so a pending subagent
+  migration does not stop you listing skills — but `LoadTolerant` does not read
+  the legacy `agents/` directory, so the *subagent* listing printed "(no
+  subagents; author one by …)" to a user who had a dozen. That is the exact
+  silent-zero reading the fail-closed `source.Load` gate exists to prevent, and
+  it is worst of all in a listing, since that is the command a user runs to
+  check whether the upgrade ate their subagents. The subagent lister now gates
+  on `CheckSubagentLayout`; the other four stay tolerant on purpose.
+
+- **The subagent migration takes the global lock on every path.** `migrate
+  subagents` locked correctly, but the same mutation is reachable through the
+  interactive offer from `apply`/`import` — including `apply --dry-run`, which
+  is deliberately lock-free because it "touches neither destinations nor
+  state", and the read-only `status`/`diff`/`explain` paths. Those callers ran
+  an `os.Rename` loop plus a read-modify-write of `.state/targets.json`
+  unlocked. The lock now lives inside `runSubagentMigration`, covering every
+  caller by construction.
+
+- **`agentsync import <agent>:subagent` reports the path it actually wrote.**
+  It printed `agents/<name>.md` while `source.WriteSubagent` wrote
+  `subagents/<name>.md`, sending the user to a directory the import did not
+  create. (The test that covered it asserted a substring of the correct path,
+  so it passed either way — now pinned exactly.)
+
+- **Hints no longer name hard-renamed commands.** Five user-facing messages
+  still said `agentsync secrets …` — in the vault-write failure path, doctor's
+  missing-age-file warning, and both capture leak-backstop refusals — which,
+  with no alias, hands the user an unknown command at the moment they are
+  already stuck. `TestNoStaleRenamedCommandReferences` now fails the build on a
+  new one.
+
+- **Unmigrated-layout and collision errors sanitize the filenames they echo.**
+  Both take basenames off disk in what is routinely a *cloned* dotfiles repo
+  and printed them raw to a terminal; the interactive prompt for the same
+  condition already sanitized.
+
 - **Renamed hook events now invert to their canonical source file.**
   `itemSourceFile` mapped a NATIVE key-merge pointer segment straight to
   `hooks/<segment>.toml`, which for a renaming agent (gemini `BeforeTool`,

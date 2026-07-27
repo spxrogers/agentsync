@@ -286,7 +286,7 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 	agePath := resolveAgePath(cfg, home)
 	var plain []byte
 	if _, err := os.Stat(agePath); os.IsNotExist(err) {
-		plain = []byte("# agentsync secrets — TOML format\n# Example:\n# [github]\n# token = \"ghp_...\"\n")
+		plain = []byte("# agentsync secret vault — TOML format\n# Example:\n# [github]\n# token = \"ghp_...\"\n")
 	} else {
 		plain, err = secrets.Decrypt(agePath, resolveIdentityPath(cfg, home))
 		if err != nil {
@@ -489,7 +489,7 @@ func resolveSecretKeyValue(cmd *cobra.Command, arg string, useStdin bool) (strin
 		fmt.Fprintln(cmd.ErrOrStderr(),
 			"agentsync: warning: passing the value on argv exposes it to ps(1), shell history, and process auditing.")
 		fmt.Fprintln(cmd.ErrOrStderr(),
-			"  Use `agentsync secrets set <key> --stdin` or omit the value to be prompted.")
+			"  Use `agentsync secret set <key> --stdin` or omit the value to be prompted.")
 		return key, value, nil
 	}
 

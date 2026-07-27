@@ -99,7 +99,7 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 	if blind := secretKindRefs(secrets.UnresolvedSecretRefs(&cur, sec, secrets.EnvBackend{})); len(blind) > 0 {
 		return res, fmt.Errorf("refusing to write back: the secrets backend could not resolve %s that the "+
 			"canonical source references, so agentsync cannot verify a resolved secret would not be persisted "+
-			"as cleartext into ~/.agentsync. Unlock/restore the vault (`agentsync secrets …`) and retry, or "+
+			"as cleartext into ~/.agentsync. Unlock/restore the vault (`agentsync secret …`) and retry, or "+
 			"edit the canonical source directly", strings.Join(blind, ", "))
 	}
 
@@ -113,7 +113,7 @@ func Capture(home string, ingested *source.Canonical, opts Opts) (Result, error)
 	if leaks := secrets.ResidualSecretCleartext(ingested, &cur, sec, secrets.EnvBackend{}); len(leaks) > 0 {
 		return res, fmt.Errorf("refusing to write back: a resolved secret would be persisted as "+
 			"cleartext into ~/.agentsync at %s — re-reference could not restore the ${secret:…} "+
-			"reference (the value was moved or rotated). Update the vault (`agentsync secrets set`) "+
+			"reference (the value was moved or rotated). Update the vault (`agentsync secret set`) "+
 			"and/or edit the canonical source directly, then retry; set AGENTSYNC_ALLOW_PLUGIN_DRIFT "+
 			"is NOT a bypass here", strings.Join(leaks, ", "))
 	}

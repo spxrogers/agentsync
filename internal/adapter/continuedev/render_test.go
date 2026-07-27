@@ -172,10 +172,21 @@ func TestRender_MCP_CommandAndURL_Ambiguous(t *testing.T) {
 				if srv["type"] != "stdio" || srv["command"] != "x" {
 					t.Fatalf("ambiguous server must render as stdio (command wins): %v", srv)
 				}
-				// The dropped url must be reported in the skip, so its loss is not silent.
+				// The dropped url must be reported so its loss is not silent —
+				// but by NAMING THE FIELD, never by interpolating its value.
+				// Render runs on the secret-RESOLVED canonical and `url` is
+				// secret-bearing, so a value here is live cleartext that
+				// `agentsync explain` would print as "metadata". See the doc
+				// comment on adapter.Skip.Reason.
 				for i := range skips {
-					if skips[i].Component == "mcp" && !strings.Contains(skips[i].Reason, "https://y/mcp") {
-						t.Fatalf("skip reason must name the dropped url: %q", skips[i].Reason)
+					if skips[i].Component != "mcp" {
+						continue
+					}
+					if !strings.Contains(skips[i].Reason, "url") {
+						t.Fatalf("skip reason must name the dropped url field: %q", skips[i].Reason)
+					}
+					if strings.Contains(skips[i].Reason, tc.server.URL) {
+						t.Fatalf("skip reason leaks the url VALUE (a resolved secret at render time): %q", skips[i].Reason)
 					}
 				}
 			}

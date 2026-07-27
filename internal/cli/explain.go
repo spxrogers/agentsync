@@ -129,8 +129,12 @@ the adapter did to it on the way, and whether it has drifted.
   agentsync explain ~/.claude/settings.json --json
 
 The argument splits on the LAST '#' (a filename may contain '#'; the JSON
-pointers here never do — they are '/'-delimited). --pointer is the unambiguous
-escape hatch and wins over an in-argument '#'.
+pointers here never do — they are '/'-delimited). --pointer names the pointer
+unambiguously and OVERRIDES one written after a '#' in the argument.
+
+Note it overrides the POINTER, not the split: the path is still taken as
+everything before the last '#', so a destination file whose own name contains
+'#' cannot be addressed. No shipped harness writes such a path.
 
 explain prints METADATA ONLY — provenance, ownership, adapter transforms, and
 the drift classification. It never prints destination content: no foreign key

@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/spf13/afero"
+
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // SubagentsDir is the canonical directory name for subagents, relative to an
@@ -38,13 +40,6 @@ func SubagentSourceID(name string) string {
 	return filepath.Join(SubagentsDir, name+".md")
 }
 
-// LegacySubagentSourceID returns the pre-rename canonical-relative path. Only
-// migration and backwards-tolerant readers (e.g. `explain`, which must degrade
-// gracefully on a state entry written before the rename) should use it.
-func LegacySubagentSourceID(name string) string {
-	return filepath.Join(LegacySubagentsDir, name+".md")
-}
-
 // LegacySubagentDirError reports that <Home>/agents/ still holds subagent files
 // that must be moved to <Home>/subagents/ before the tree can be loaded.
 //
@@ -63,7 +58,13 @@ func (e *LegacySubagentDirError) Error() string {
 		"%s still exists and holds %d subagent file(s) (%s); agentsync now reads subagents from %s. "+
 			"Nothing loads the old directory, so proceeding would report zero subagents and let the next apply "+
 			"delete every subagent already rendered to your agents. Run `agentsync migrate subagents` to move them",
-		filepath.Join(e.Home, LegacySubagentsDir), len(e.Files), strings.Join(e.Files, ", "),
+		filepath.Join(e.Home, LegacySubagentsDir), len(e.Files),
+		// Files are directory basenames from a tree that is routinely a CLONED
+		// dotfiles repo, so they are untrusted input on their way to a terminal:
+		// an embedded ESC or bidi rune would otherwise reach stderr raw through
+		// main's error printer. The interactive prompt for this same condition
+		// already sanitizes; this is the non-interactive path.
+		untrusted.Sanitize(strings.Join(e.Files, ", ")),
 		filepath.Join(e.Home, SubagentsDir),
 	)
 }

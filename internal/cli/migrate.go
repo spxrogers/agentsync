@@ -57,17 +57,17 @@ project's committed .agentsync/ tree.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := paths.AgentsyncHome(paths.OSEnv{})
-			return withGlobalLock(home, func() error {
-				sc, projectRoot, err := resolveScope(cmd, noInputFlag(cmd))
-				if err != nil {
-					return err
-				}
-				p, perr := newPrinter(cmd)
-				if perr != nil {
-					return perr
-				}
-				return runSubagentMigration(p, home, sc, projectRoot)
-			})
+			// Scope resolution can PROMPT, so it stays outside the lock;
+			// runSubagentMigration takes the lock around the mutation itself.
+			sc, projectRoot, err := resolveScope(cmd, noInputFlag(cmd))
+			if err != nil {
+				return err
+			}
+			p, perr := newPrinter(cmd)
+			if perr != nil {
+				return perr
+			}
+			return runSubagentMigration(p, home, sc, projectRoot)
 		},
 	}
 	markScopeAware(cmd)
@@ -88,8 +88,21 @@ func sourceHomeForScope(userAgentsyncHome string, sc adapter.Scope, projectRoot 
 // subagents` and the interactive offer, so the two can never drift.
 func runSubagentMigration(p *ui.Printer, userAgentsyncHome string, sc adapter.Scope, projectRoot string) error {
 	srcHome := sourceHomeForScope(userAgentsyncHome, sc, projectRoot)
-	moved, err := migrateSubagentTree(userAgentsyncHome, srcHome, sc, projectRoot)
-	if err != nil {
+	// The lock lives HERE, not at the command, because `migrate subagents` is
+	// not the only caller: ensureSubagentLayout offers the same move from
+	// apply/import — including `apply --dry-run`, which is deliberately
+	// lock-free because it "touches neither destinations nor state", and from
+	// the read-only status/diff/explain paths. Those callers still perform the
+	// real mutation (an os.Rename loop plus a read-modify-write of
+	// .state/targets.json), and lock.go requires the lock around exactly that.
+	// Taking it here covers every caller by construction; callers must NOT wrap
+	// this in withGlobalLock, since flock is not reentrant within a process.
+	var moved []string
+	if err := withGlobalLock(userAgentsyncHome, func() error {
+		var merr error
+		moved, merr = migrateSubagentTree(userAgentsyncHome, srcHome, sc, projectRoot)
+		return merr
+	}); err != nil {
 		return err
 	}
 	legacyDir := filepath.Join(srcHome, source.LegacySubagentsDir)
@@ -155,7 +168,9 @@ func migrateSubagentTree(userAgentsyncHome, srcHome string, sc adapter.Scope, pr
 		return nil, fmt.Errorf(
 			"refusing to migrate: %d file(s) exist under BOTH %s and %s (%s). "+
 				"Nothing was moved. Reconcile the duplicates by hand (keep one copy of each), then re-run",
-			len(collisions), legacyDir, newDir, strings.Join(collisions, ", "),
+			// Sanitize: these are basenames off disk in what is routinely a
+			// cloned dotfiles repo, and this error goes straight to a terminal.
+			len(collisions), legacyDir, newDir, ui.Sanitize(strings.Join(collisions, ", ")),
 		)
 	}
 

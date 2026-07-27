@@ -333,3 +333,39 @@ func TestMigrateSubagents_ProjectScopeIsIndependent(t *testing.T) {
 		t.Fatal("project-scope migration rewrote a USER-scope state entry; the rewrite must be scoped to the migrated tree")
 	}
 }
+
+// TestDoctor_ReportsPendingSubagentMigration pins the non-fatal surface for a
+// pending migration — and the entire justification for source.LoadTolerant
+// existing at all.
+//
+// Every other source-loading command is fail-closed on this condition, so
+// `doctor` is the one place a stuck user can still get a diagnosis. If it ever
+// starts dying at load instead, the fail-closed gate becomes a dead end with no
+// way out but reading the source.
+func TestDoctor_ReportsPendingSubagentMigration(t *testing.T) {
+	tmpHome := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	seedLegacySubagent(t, filepath.Join(tmpHome, ".agentsync"), "reviewer", migTestSubagent)
+
+	out, _ := runCLI(t, env, "doctor")
+	// doctor exits non-zero when a check fails; the diagnosis is the point.
+	if !strings.Contains(out, "migrate subagents") {
+		t.Fatalf("doctor must name the fix for a pending migration; got:\n%s", out)
+	}
+	if !strings.Contains(out, "subagents") {
+		t.Errorf("doctor output has no subagent-layout check:\n%s", out)
+	}
+
+	// After migrating, the check stops firing — so the report is keyed to the
+	// real condition, not printed unconditionally.
+	if _, err := runCLI(t, env, "migrate", "subagents", "--no-input"); err != nil {
+		t.Fatal(err)
+	}
+	out2, _ := runCLI(t, env, "doctor")
+	if strings.Contains(out2, "migrate subagents") {
+		t.Errorf("doctor still reports a pending migration after it ran:\n%s", out2)
+	}
+}

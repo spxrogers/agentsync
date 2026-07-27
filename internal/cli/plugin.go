@@ -25,9 +25,12 @@ func newPluginCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "plugin",
 		Short: "manage plugins from marketplaces",
-		// NoArgs so an unknown subcommand is an ERROR, not a silent help dump —
-		// otherwise `plugin install` (renamed to `add` in #200 F4) would look
-		// like it still works.
+		// An unknown subcommand must be an ERROR, not a silent help dump —
+		// otherwise `plugin install` (renamed to `add` in #200 F4, with no
+		// alias) would look like it still works. NoArgs alone does NOT achieve
+		// that: cobra returns flag.ErrHelp for a non-runnable parent BEFORE it
+		// validates Args. strictGroup below is what makes it bite, by giving the
+		// parent a RunE so NoArgs is actually reached.
 		Args: cobra.NoArgs,
 	}
 	cmd.AddCommand(

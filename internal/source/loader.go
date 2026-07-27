@@ -39,11 +39,27 @@ func Load(fs afero.Fs, home string) (Canonical, error) {
 	return LoadTolerant(fs, home)
 }
 
-// LoadTolerant is Load WITHOUT the legacy-subagent-directory gate. It exists
-// for one caller: `agentsync doctor`, which must surface a pending migration as
-// a failing check with the fix instead of aborting at load. Every other caller
-// must use Load — a tolerant load of an unmigrated tree silently under-reports
-// subagents.
+// LoadTolerant is Load WITHOUT the legacy-subagent-directory gate.
+//
+// It exists for callers that must keep working while a migration is pending,
+// and it is safe for exactly one shape of caller: a READ-ONLY one that either
+// reports the condition itself or does not look at subagents at all. A tolerant
+// load of an unmigrated tree silently under-reports subagents, so ANY path that
+// can reach apply/PruneStaleState must use Load — that is the difference
+// between "doctor tells you to migrate" and "one apply disowns every subagent
+// you had rendered".
+//
+// The sanctioned callers today:
+//
+//   - `agentsync doctor` — surfaces the pending migration as a failing check
+//     with the fix, so aborting at load would defeat the diagnostic.
+//   - the component `list` groups — a pending subagent migration must not stop
+//     you listing skills. The SUBAGENT lister is the one that would
+//     under-report, so it gates on CheckSubagentLayout itself first
+//     (componentLister.requiresMigratedLayout).
+//
+// TestLoadTolerantCallersAreSanctioned pins that set: a new caller fails the
+// build until it is added deliberately.
 func LoadTolerant(fs afero.Fs, home string) (Canonical, error) {
 	var c Canonical
 	if err := loadConfig(fs, home, &c.Config); err != nil {

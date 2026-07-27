@@ -26,15 +26,15 @@ import { Aside } from '@astrojs/starlight/components';
 | `migrate subagents` | One-shot move of the retired canonical `agents/` directory to `subagents/` (rewrites that tree's recorded `source_id` values). | `--scope --project` |
 | `mcp add\|remove\|list\|enable\|disable <name>` | Manage MCP servers. `enable`/`disable` flip the `enabled` bit (keep the definition, stop rendering). `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site. | `--type --command --args --url --env --agents --header` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
-| `plugin add\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` / `outdated` / `explain` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). | `install <id[@marketplace]>` |
-| `secrets set\|get <key>` / `secret edit` | Manage age-encrypted secrets (`edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
+| `plugin add\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` / `outdated` / `explain` | Manage plugins (the lifecycle subcommands all accept the same `id[@marketplace]` ref `add` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). | `add <id[@marketplace]>` |
+| `secret set\|get\|list\|remove <key>` / `secret edit` | Manage age-encrypted secrets (`list` prints KEYS only; `edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
 | `plugin outdated` / `plugin upgrade [<id>]` | **(network)** Poll marketplaces and report pending bumps / re-fetch a plugin (or `--all` pending bumps) and re-apply. | `upgrade --all --lossless --scope --project` |
 | `update` | **(deprecated)** Forwards to `plugin outdated` / `plugin upgrade --all [--lossless]` with a warning. | `--apply --auto-safe --scope --project` |
-| `apply` | Render source → write agent configs (offline). Git-versions each destination dir (opt-out). | `--dry-run --scope --project --no-git-backup` |
-| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (local-only git history). | `--to --all --dry-run` |
+| `apply` | Render source → write agent configs (offline). Git-versions each destination dir (opt-out). | `--agents --dry-run --scope --project --no-git-backup` |
+| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (local-only git history). | `--agents --to --all --dry-run` |
 | `status` | Summarize drift / pending across agents (skill dirs collapse by default). `--exit-code` → exit `2` on any drift, `0` when clean (CI gate). | `--agents --verbose --json --exit-code --scope --project` |
 | `diff [<path>]` | Show pending / drift changes; secrets redacted. `--exit-code` → exit `2` on any hunk, `0` when clean. | `--agents --json --exit-code --scope --project` |
-| `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
+| `reconcile` | Interactively merge drift back into source. | `--agents --auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source. `--scope project` captures the agent's native project-scope config into the project tree. | `--dry-run --scope --project` |
 | `plugin explain [<plugin>...]` | Show per-agent translation coverage for one or more plugins. | `--all --json` |
 | `explain <path>[#<pointer>]` | Show what produced a destination file (or one merged key). Metadata only — never file content. | `--pointer --scope --project --json` |
@@ -157,8 +157,17 @@ agentsync mcp add github --command npx --args "-y,@modelcontextprotocol/server-g
 agentsync mcp add linear --type http --url https://mcp.linear.app/sse \
   --header "Authorization: Bearer ${secret:LINEAR_TOKEN}"
 agentsync mcp list
+agentsync mcp enable github
+agentsync mcp disable github
 agentsync mcp remove github
 ```
+
+`enable` / `disable` flip the server's `enabled` bit: the definition stays in
+the canonical source, but a disabled server stops rendering to every agent (the
+next `apply` removes what it had written). That is the difference from `remove`,
+which deletes `mcp/<id>.toml` outright. The `enabled` field and the loader that
+reads it both predate these verbs — until #200 F4 the only way to flip it was to
+hand-edit the TOML.
 
 Flags: `--type` (`stdio`|`http`|`sse`), `--command`, `--args`, `--url`, `--env`,
 `--agents`, `--header`. `--header "Name: Value"` is repeatable and **http/sse
@@ -178,17 +187,27 @@ agentsync plugin add atlassian@anthropic
 agentsync plugin list
 ```
 
-### `secrets`
+### `secret`
 Manage the age-encrypted vault. Full guide: [Secrets](/guides/secrets/).
 
 ```bash
 agentsync secret set github.token --stdin
 agentsync secret get github.token
+agentsync secret list
+agentsync secret remove github.token
 agentsync secret edit
 ```
 
 `secret set` refuses an empty (or whitespace-only) value by default; pass
 `--allow-empty` to store one deliberately.
+
+`secret list` prints **keys only, never values**, which is what lets it exist
+alongside `secret edit` — `edit` decrypts the whole vault into `$EDITOR`, and
+before `list`/`remove` it was the only way to see or delete a key.
+
+`secret get` writes the raw value to stdout for piping. When stdout is a
+terminal it prints a caution first, since a bare `secret get` puts a live
+credential in your scrollback.
 
 ---
 

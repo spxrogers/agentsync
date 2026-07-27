@@ -45,8 +45,14 @@ to the consolidated plugin lifecycle verbs:
   agentsync update --apply --auto-safe
                                    → agentsync plugin upgrade --all --lossless
 
---scope / --project pass through unchanged. Behavior is identical; only the
-command names moved.`,
+--scope / --project pass through, so an existing cron line keeps working.
+
+One difference worth knowing when you move over: the replacements do not all
+take scope. "plugin upgrade" is scope-aware, but "plugin outdated" (like the
+rest of the plugin group) is not — plugins and marketplaces are user-scope — so
+it refuses --scope / --project rather than ignoring them. This shim still
+accepts them on both paths for compatibility; drop them from a poll-only
+invocation when you migrate it.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			warnUpdateDeprecated(cmd, apply, autoSafe)

@@ -60,12 +60,6 @@ func markGroupScopeUnaware(cmd *cobra.Command, reason string) {
 	}
 }
 
-// addScopeFlags marks a command as scope-aware. It no longer registers flags —
-// the root owns them — but every previously-annotated call site keeps working,
-// so the pairing of "declares the flags" and "consumes the flags" stays in one
-// place per command.
-func addScopeFlags(cmd *cobra.Command, _, _ *string) { markScopeAware(cmd) }
-
 // scopeFlagValues reads the inherited --scope/--project off a command. They are
 // persistent root flags, so cmd.Flags() resolves them through the inherited set.
 func scopeFlagValues(cmd *cobra.Command) (scope, project string) {

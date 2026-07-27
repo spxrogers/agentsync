@@ -163,9 +163,19 @@ before writing it down.
   project overlay, atomic IO + lock, JSON-pointer merge, path resolution,
   logging, test container guard.
 
-The registered command tree (`internal/cli/root.go`): `init`, `agent`, `apply`,
-`revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `verify`, `mcp`,
-`plugin`, `marketplace`, `update`, `secrets`, `explain`, `version`.
+The registered command tree (`internal/cli/root.go`): `init`, `agent`, `migrate`,
+`apply`, `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
+`mcp`, `plugin`, `marketplace`, `update` (deprecated), `secret`, `explain`,
+`version`, plus the read-only component groups `skill`, `subagent`, `command`,
+`hook`, `lsp` (each `list`/`ls` only).
+
+`--scope` / `--project` are persistent ROOT flags. Every command must declare a
+stance — `markScopeAware` or `markScopeUnaware(reason)` — and an unaware command
+REFUSES the flags naming the reason rather than ignoring them
+(`internal/cli/scope_flags.go`). Adding a command without a stance fails
+`TestEveryCommandDeclaresScopeStance`. Group parents must be wrapped in
+`strictGroup` so an unknown subcommand errors instead of printing help and
+exiting 0.
 
 ## Secret-handling invariants (read before touching secrets / capture / source writers)
 

@@ -1194,7 +1194,10 @@ func importSubagent(io *importIO, home string, c source.Canonical, name string) 
 				return names, fmt.Errorf("write subagent %s: %w", sa.Name, err)
 			}
 		}
-		io.item(fmt.Sprintf("agents/%s.md", sa.Name), "")
+		// Report the path actually written. source.WriteSubagent targets
+		// subagents/ (#200 F1); reporting the retired agents/ spelling sent the
+		// user to a directory the import did not create.
+		io.item(source.SubagentSourceID(sa.Name), "")
 		names = append(names, sa.Name)
 	}
 	return names, nil

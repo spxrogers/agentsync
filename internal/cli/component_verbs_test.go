@@ -156,3 +156,50 @@ func TestRenamedGroupsHaveNoAliases(t *testing.T) {
 		}
 	}
 }
+
+// TestSubagentList_RefusesUnmigratedTree closes the hole the F5 listings opened
+// in F1's fail-closed gate.
+//
+// `list` loads TOLERANTLY so a pending subagent migration does not stop you
+// seeing your skills — but LoadTolerant does not read the legacy `agents/`
+// directory, so the SUBAGENT listing would report "(no subagents)" to a user who
+// has several. That is the exact silent-zero reading F1 exists to prevent, and
+// it is worse in a listing than anywhere else: it is the command a user runs to
+// CHECK whether their subagents survived the upgrade.
+func TestSubagentList_RefusesUnmigratedTree(t *testing.T) {
+	tmp, env := componentFixture(t)
+
+	// Move the migrated tree back to the legacy layout, as an upgrading user's
+	// tree looks before `agentsync migrate subagents`.
+	home := filepath.Join(tmp, ".agentsync")
+	if err := os.Rename(filepath.Join(home, "subagents"), filepath.Join(home, "agents")); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "subagent", "list")
+	if err == nil {
+		t.Fatalf("subagent list must REFUSE an unmigrated tree rather than report zero; got:\n%s", out)
+	}
+	// The refusal has to be actionable — naming the command that fixes it.
+	if !strings.Contains(err.Error()+out, "migrate subagents") {
+		t.Errorf("refusal does not name `agentsync migrate subagents`:\n%v\n%s", err, out)
+	}
+	// And it must not be mistakable for an empty tree.
+	if strings.Contains(out, "no subagents") {
+		t.Errorf("refusal still printed the empty-state hint:\n%s", out)
+	}
+
+	// The other listings stay TOLERANT on purpose: a pending subagent migration
+	// is no reason to stop answering "what skills do I have?".
+	if out, err := runCLI(t, env, "skill", "list"); err != nil || !strings.Contains(out, "tidy") {
+		t.Errorf("skill list must still work with a pending subagent migration: %v\n%s", err, out)
+	}
+
+	// After migrating, the listing answers normally.
+	if out, err := runCLI(t, env, "migrate", "subagents", "--no-input"); err != nil {
+		t.Fatalf("migrate subagents: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "subagent", "list"); err != nil || !strings.Contains(out, "rev") {
+		t.Errorf("subagent list after migration: %v\n%s", err, out)
+	}
+}

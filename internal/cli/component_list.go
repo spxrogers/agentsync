@@ -31,6 +31,16 @@ type componentLister struct {
 	authoredBy string
 	// list returns the component identities present in a loaded canonical.
 	list func(c source.Canonical) []string
+	// requiresMigratedLayout marks a component whose canonical location moved in
+	// #200 F1, so a TOLERANT load would silently under-report it. Only the
+	// subagent lister sets it: an unmigrated tree still holds its files in
+	// `agents/`, which LoadTolerant does not read, so the listing would print
+	// "(no subagents)" to a user who has a dozen — the exact silent-zero failure
+	// the fail-closed source.Load gate exists to prevent, and worst of all in a
+	// listing, since that is the command a user runs to CHECK the upgrade.
+	// Listers without it stay tolerant on purpose: a pending subagent migration
+	// should not stop you seeing your skills.
+	requiresMigratedLayout bool
 }
 
 var componentListers = []componentLister{
@@ -47,7 +57,8 @@ var componentListers = []componentLister{
 	},
 	{
 		noun: "subagent", plural: "subagents",
-		authoredBy: "creating subagents/<name>.md, or capture one with `agentsync import <agent>:subagent`",
+		authoredBy:             "creating subagents/<name>.md, or capture one with `agentsync import <agent>:subagent`",
+		requiresMigratedLayout: true,
 		list: func(c source.Canonical) []string {
 			out := make([]string, 0, len(c.Subagents))
 			for _, s := range c.Subagents {
@@ -125,11 +136,19 @@ flag-authorable — %s.`, cl.noun, cl.plural, cl.noun, cl.authoredBy),
 			if err != nil {
 				return err
 			}
-			// LoadTolerant, not Load: `list` is a read-only inventory, and a
-			// pending subagent migration should not stop you seeing your skills.
-			// The subagent lister is the one that would under-report, and doctor
-			// already surfaces that condition loudly.
-			c, err := source.LoadTolerant(afero.NewOsFs(), home)
+			fs := afero.NewOsFs()
+			// A component whose canonical directory moved must REFUSE rather
+			// than under-report: LoadTolerant does not read the legacy
+			// location, so listing an unmigrated tree would print "(no
+			// subagents)" for a tree that has them. Every other component loads
+			// tolerantly on purpose — a pending subagent migration should not
+			// stop you seeing your skills.
+			if cl.requiresMigratedLayout {
+				if err := source.CheckSubagentLayout(fs, home); err != nil {
+					return err
+				}
+			}
+			c, err := source.LoadTolerant(fs, home)
 			if err != nil {
 				return fmt.Errorf("load source: %w", err)
 			}
@@ -153,15 +172,4 @@ flag-authorable — %s.`, cl.noun, cl.plural, cl.noun, cl.authoredBy),
 	strictGroup(group)
 	markScopeAware(group)
 	return group
-}
-
-// componentListNouns is the set of nouns the component groups occupy, so the
-// root registration and any future name check share one list.
-func componentListNouns() []string {
-	out := make([]string, 0, len(componentListers))
-	for _, cl := range componentListers {
-		out = append(out, cl.noun)
-	}
-	sort.Strings(out)
-	return out
 }

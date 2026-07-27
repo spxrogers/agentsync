@@ -142,8 +142,22 @@ func (k SkipKind) MarshalJSON() ([]byte, error) { return json.Marshal(k.String()
 type Skip struct {
 	Component string // "skill" | "subagent" | "command" | etc.
 	Name      string
-	Reason    string
-	Kind      SkipKind
+	// Reason explains the skip to a user. It MUST name the offending FIELD,
+	// never interpolate that field's VALUE.
+	//
+	// Render receives the secret-RESOLVED canonical, so a value taken off an
+	// MCP/LSP `Command`/`URL`/`Args`/`Env`/`Headers` or a Hook `Command` (the
+	// secret-bearing set — secrets.walkSecretFields) is live cleartext at this
+	// point. Skip reasons are emitted as METADATA by `agentsync explain` (text
+	// and --json) and by the apply translation report, both of which document
+	// themselves as never printing destination content — so interpolating one
+	// here prints a vault secret in a command the user believes is safe against
+	// a locked vault. Component+Name already identify the item; the value adds
+	// nothing a user cannot get from `agentsync diff`.
+	//
+	// Guarded by TestSkipReasonsNeverCarrySecretValues.
+	Reason string
+	Kind   SkipKind
 }
 
 // Adapter is the per-agent contract.

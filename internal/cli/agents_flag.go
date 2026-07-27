@@ -6,16 +6,28 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// `--agents` is the ONE grammar for "which agents does this act on" (#200 F10).
-// Before this there were four: `status`/`diff` had `--agents`, `apply` had
-// nothing at all, `revert` took a positional agent plus `--all`, and `mcp add`
-// used `--agents` for a different thing (fan-out targeting, not filtering).
-// The daily loop is status → diff → reconcile → apply, so the filter you use in
-// the first three silently not existing in the fourth was the sharpest edge.
+// `--agents` is the ONE grammar for "which agents does this RUN act on"
+// (#200 F10). Before this there were three spellings of that idea:
+// `status`/`diff` had `--agents`, `apply` had nothing at all, and `revert` took
+// a positional agent plus `--all`. The daily loop is status → diff → reconcile →
+// apply, so the filter you use in the first three silently not existing in the
+// fourth was the sharpest edge.
 //
-// Every command registers it through addAgentsFlag and resolves it through
-// selectAgents, so the split, the "*" convention, and the rejection messages
-// cannot drift apart.
+// The five run-scoping commands — apply, status, diff, reconcile, revert —
+// register it through addAgentsFlag and resolve it through selectAgents, so the
+// split, the "*" convention, and the rejection messages cannot drift apart.
+//
+// DELIBERATE EXCEPTION — `mcp add --agents`. That flag is spelled the same and
+// means something different, and it is NOT part of this grammar: it sets the
+// PERSISTED `agents` field on the server being authored (which agents the
+// server fans out to on every future apply), rather than narrowing the current
+// run. It therefore does not go through addAgentsFlag/selectAgents — the
+// canonical field it writes has its own validation, and "*" there is stored,
+// not resolved. The same word for a persisted target set and a per-run filter
+// is a wart we are keeping: `agents` is the canonical field's name
+// (source.MCPServerSpec.Agents) and renaming the flag would desync the flag
+// from the field it writes. Read `--agents` as "which agents" in both cases;
+// the difference is whether the answer is remembered.
 
 // addAgentsFlag registers the shared --agents filter. what names the operation
 // for the help string ("report", "diff", "apply", …).
