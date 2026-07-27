@@ -51,9 +51,18 @@ func TestTopLevelCommandSurfaceIsPinned(t *testing.T) {
 }
 
 // TestRenamedTopLevelCommandsAreGone is the negative half: the hard renames must
-// not resurrect as aliases. `TestRenamedGroupsHaveNoAliases` covers this from
-// the outside by invoking them; this pins it structurally, including aliases,
-// which an invocation test cannot distinguish from a missing command.
+// not resurrect, as a command OR as an alias.
+//
+// It does not replace TestRenamedGroupsHaveNoAliases (component_verbs_test.go),
+// which invokes the old spellings and requires them to fail — that test does
+// catch an alias resurrection, since an alias would make the invocation
+// succeed. An earlier version of this comment claimed otherwise; it was wrong.
+//
+// What this adds is structural rather than behavioral: no fixture, no process,
+// and it reads the alias list directly, so it still fires for a command that
+// would exit non-zero for some unrelated reason (bad args, missing home) and
+// thus look "gone" to an invocation test. Nested renames — `plugin install`,
+// `explain <plugin>` — are covered by those invocation tests, not here.
 func TestRenamedTopLevelCommandsAreGone(t *testing.T) {
 	gone := map[string]string{
 		"verify":  "check",

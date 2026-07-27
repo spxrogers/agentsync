@@ -819,7 +819,8 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 Global: `--scope user|project` and `--project <path>` are **root flags**, declared
 once and accepted by every command that operates on a scoped source tree (`init`,
 `agent`, `mcp`, `apply`, `check`, `status`, `diff`, `reconcile`, `import`,
-`explain`, `migrate`, `update`, `plugin upgrade`, and the component `list`s). A command that *cannot*
+`explain`, `migrate`, `update`, `plugin upgrade`, and the component `list`s). A
+command that *cannot*
 honor them — `doctor`, `revert`, `version`, and the `plugin` / `marketplace` /
 `secret` groups, all of which act on per-machine state — **refuses them with the
 reason** rather than accepting and ignoring them.
