@@ -102,7 +102,8 @@ func TestEnsureStateGitignore_ConcurrentWritersPreserveUserRules(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				cmd := exec.Command(os.Args[0], "-test.run=TestEnsureStateGitignoreHelperProcess")
-				cmd.Env = append(os.Environ(),
+				cmd.Env = append(
+					os.Environ(),
 					gitignoreHelperEnv+"=1",
 					gitignoreHelperHome+"="+home,
 					gitignoreHelperBarrier+"="+barrier,
