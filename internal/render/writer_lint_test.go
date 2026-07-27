@@ -31,6 +31,7 @@ func TestNoDirectAtomicWriteOutsideAllowedFiles(t *testing.T) {
 		"internal/render/writer.go":        true,
 		"internal/source/writer.go":        true,
 		"internal/state/store.go":          true,
+		"internal/state/lastrun.go":        true, // writes .state/last-run.json (agentsync's own run record)
 		"internal/secrets/age.go":          true, // writes secrets.age under ~/.agentsync/
 		"internal/cli/plugin.go":           true,
 		"internal/cli/marketplace.go":      true,

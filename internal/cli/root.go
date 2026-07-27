@@ -47,6 +47,19 @@ func NewRoot() *cobra.Command {
 		return enforceScopeStance(c)
 	}
 
+	// First-run-after-upgrade notice. This is the ONLY hook that reaches every
+	// installation channel — `go install` has no post-install step, a Homebrew
+	// cask's caveats print at install time only, and Scoop has nothing — so the
+	// binary tells the user itself, once per machine, on stderr.
+	//
+	// Cobra runs only the CLOSEST PersistentPreRunE in the chain, so a
+	// subcommand that grows its own would silently disable this. That is guarded
+	// by TestNoSubcommandOverridesPersistentPreRun.
+	cmd.PersistentPreRunE = func(c *cobra.Command, _ []string) error {
+		maybePrintUpgradeNotice(c)
+		return nil
+	}
+
 	cmd.AddCommand(
 		newInitCmd(),
 		newAgentCmd(),

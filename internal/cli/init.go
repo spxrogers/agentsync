@@ -168,6 +168,10 @@ func scaffoldHome(cmd *cobra.Command, home string) error {
 	if err := ensureStateGitignore(home); err != nil {
 		return err
 	}
+	// Seed the upgrade-notice record so a brand-new home never gets a banner
+	// about changes that predate it — and so the notice path can read
+	// "home exists, no record" as an unambiguous upgrade.
+	seedUpgradeNoticeRecord(home)
 	w := cmd.OutOrStdout()
 	fmt.Fprintln(w, "agentsync home initialized at", home)
 	fmt.Fprintln(w, "")
@@ -272,6 +276,10 @@ func cloneSourceRepo(cmd *cobra.Command, home, rawURL string) error {
 	if err := ensureStateGitignore(home); err != nil {
 		return err
 	}
+	// Seed the upgrade-notice record so a brand-new home never gets a banner
+	// about changes that predate it — and so the notice path can read
+	// "home exists, no record" as an unambiguous upgrade.
+	seedUpgradeNoticeRecord(home)
 	fmt.Fprintln(w, "cloned. Run `agentsync apply --dry-run` to preview against this machine.")
 	return nil
 }

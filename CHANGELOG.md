@@ -163,6 +163,29 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **A one-time upgrade notice, printed by the CLI itself.** agentsync ships
+  through channels with no usable post-install hook — `go install` has none at
+  all, a Homebrew cask's caveats print only at install time, Scoop has nothing,
+  and only deb/rpm have real scripts — so the binary is the only thing that
+  reliably reaches an upgrading user. The first time you run a release carrying
+  a notice you have not seen, it prints what changed, the exact command to run,
+  and a link to <https://agentsync.cc/reference/upgrading/>.
+  - **Once per machine**, recorded in `~/.agentsync/.state/last-run.json` (a
+    separate file from `targets.json` on purpose: a read-only `status` must be
+    able to record that it showed the notice, and a UX marker has no business
+    gating on the drift state's `SchemaVersion`). `.state/` is gitignored, so
+    the record never travels with a dotfiles repo.
+  - **On stderr, always** — `status --json` / `diff --json` / `explain --json`
+    pipe their payload on stdout and must stay clean.
+  - **Never on a fresh install**: nothing can have broken under a user with no
+    config, so `init` seeds the record as already-seen. It is also silent for
+    an unversioned (`dev`) build, which keeps it out of local builds and the
+    whole test suite.
+  - **Best-effort**: a corrupt, missing, or unwritable record only means the
+    notice shows again later. It can never fail a command.
+  - Opt out permanently with `AGENTSYNC_NO_UPGRADE_NOTICE=1`.
+
+
 - **`agentsync explain <path>[#<pointer>]` — provenance for a destination
   file.** `diff` answers "what changed"; this answers "where did this come
   from", which is exactly the question a *converged* file (where `diff` is
