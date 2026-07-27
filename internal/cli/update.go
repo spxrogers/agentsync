@@ -264,7 +264,7 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 	if len(bumps) == 0 {
 		return nil
 	}
-	return reapplyAfterPluginChange(cmd, home, userHome, statePath, st)
+	return reapplyAfterPluginChange(cmd, home, userHome, statePath)
 }
 
 // reapplyAfterPluginChange re-renders the canonical to the agents after a
@@ -276,10 +276,22 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 // project-scope user would have their project state silently ignored, and
 // without substitution ${secret:…} references would land literally in agent
 // native files.
-func reapplyAfterPluginChange(cmd *cobra.Command, home, userHome, statePath string, st *state.Targets) error {
+// The state is loaded HERE, after the source load, and deliberately not passed
+// in by the caller. loadProjectedForScope can run the pending subagent
+// migration, which rewrites this tree's recorded source_id values in
+// targets.json — so a *state.Targets read before that call is stale the moment
+// it happens, and saving it at the end silently undoes the rewrite. That was
+// reachable via `plugin upgrade <id>` on an unmigrated tree; it used to fail
+// loudly on a lock deadlock instead, which hid it.
+func reapplyAfterPluginChange(cmd *cobra.Command, home, userHome, statePath string) error {
 	c2, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, false)
 	if err != nil {
 		return fmt.Errorf("reload source after upgrade: %w", err)
+	}
+
+	st, err := state.Load(statePath)
+	if err != nil {
+		return fmt.Errorf("load state after upgrade: %w", err)
 	}
 
 	secBackend := secrets.SelectBackend(c2.Config.Secrets, home, userHome)

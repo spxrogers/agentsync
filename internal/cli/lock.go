@@ -34,7 +34,10 @@ func lockTimeout() time.Duration {
 
 // heldLocks counts, per lock path, how many withGlobalLock frames this PROCESS
 // currently has open. It makes the global lock reentrant within a process while
-// leaving it exclusive between processes — see withGlobalLock.
+// leaving it exclusive between processes.
+//
+// Keyed by path with no owner identity — read withGlobalLock's PRECONDITION
+// before relying on it, especially from a test.
 var (
 	heldLocksMu sync.Mutex
 	heldLocks   = map[string]int{}
@@ -49,35 +52,44 @@ var (
 // The lock file lives at <home>/.state/agentsync.lock. gofrs/flock creates it
 // 0o600 (owner-only) and it is re-used across runs.
 //
-// It is REENTRANT WITHIN A PROCESS: a nested call for the same home runs fn
-// directly instead of acquiring again. gofrs/flock is not reentrant — a second
-// acquire from the same process blocks until the timeout and then reports
-// "another agentsync process running?", naming a process that does not exist.
+// It is REENTRANT: a call made while this process already holds the lock for
+// the same home runs fn directly instead of acquiring again. gofrs/flock is not
+// reentrant — a second acquire from the same process blocks until the timeout
+// and then reports "another agentsync process running?", naming a process that
+// does not exist.
 //
 // This is not a theoretical nicety. The subagent migration must run under the
 // lock (it renames canonical files and does a read-modify-write of
 // targets.json), and it is reachable BOTH from `migrate subagents` (no lock
 // held) and from the interactive offer inside apply/import/reconcile (lock
 // already held). Requiring every caller to know which side it is on is exactly
-// the kind of whole-call-graph audit that silently rots: the first attempt at
-// this got it wrong and deadlocked all three commands on the accept branch.
-// Making the primitive reentrant fixes the class.
+// the kind of whole-call-graph audit that silently rots — the first attempt at
+// this got it wrong and deadlocked three commands on the accept branch.
 //
-// Between processes nothing changes — the flock is still held for the whole
-// outermost frame, and only the outermost frame releases it.
+// PRECONDITION, and the honest limit of the mechanism: the counter is keyed by
+// lock PATH ONLY, with no owner identity. It therefore means "some frame in
+// this PROCESS holds it", not "an enclosing frame on this goroutine holds it" —
+// Go exposes no goroutine identity to key on. So reentrancy is safe only for
+// STRICTLY STACK-NESTED calls on ONE goroutine, which is what the CLI does: one
+// command per process, every call site a cobra RunE.
+//
+// The consequence to know about is in TESTS, which run commands in-process: two
+// CONCURRENT goroutines calling withGlobalLock for the same home would see
+// depth > 0 and both skip the flock, so a test written that way would silently
+// pass while proving nothing about serialization. A test that needs real
+// contention must seed the lock out-of-band with iox.AcquireLock (as the
+// existing contention tests do) or spawn a separate process.
+//
+// Between processes nothing changes — the flock is held for the whole outermost
+// frame, and only the outermost frame releases it.
 func withGlobalLock(home string, fn func() error) error {
 	lockPath := filepath.Join(home, ".state", "agentsync.lock")
 
 	heldLocksMu.Lock()
-	depth := heldLocks[lockPath]
-	if depth > 0 {
-		heldLocks[lockPath] = depth + 1
+	if heldLocks[lockPath] > 0 {
+		heldLocks[lockPath]++
 		heldLocksMu.Unlock()
-		defer func() {
-			heldLocksMu.Lock()
-			heldLocks[lockPath]--
-			heldLocksMu.Unlock()
-		}()
+		defer releaseHeld(lockPath)
 		return fn()
 	}
 	heldLocksMu.Unlock()
@@ -91,14 +103,30 @@ func withGlobalLock(home string, fn func() error) error {
 	heldLocksMu.Unlock()
 
 	defer func() {
-		// Drop the bookkeeping BEFORE releasing the flock, so the path is never
-		// recorded as held by this process while another process could take it.
-		heldLocksMu.Lock()
-		delete(heldLocks, lockPath)
-		heldLocksMu.Unlock()
+		// Release the flock FIRST, then drop the bookkeeping. The other order
+		// leaves a window where this process no longer records the lock but
+		// still holds it — and if Release fails, that window never closes, so a
+		// later frame would re-acquire and hit the very "another agentsync
+		// process running?" error this reentrancy exists to remove.
 		_ = lock.Release()
+		releaseHeld(lockPath)
 	}()
 	return fn()
+}
+
+// releaseHeld drops one frame's claim on lockPath, deleting the entry at zero so
+// the map cannot accumulate keys. Decrementing uniformly (rather than deleting
+// outright in the outermost frame) keeps the count correct even if frames ever
+// unwind out of order, where a bare delete would strand a nested frame's
+// decrement and resurrect the key as -1.
+func releaseHeld(lockPath string) {
+	heldLocksMu.Lock()
+	defer heldLocksMu.Unlock()
+	if n := heldLocks[lockPath] - 1; n > 0 {
+		heldLocks[lockPath] = n
+		return
+	}
+	delete(heldLocks, lockPath)
 }
 
 // lockedRun wraps a cobra RunE so the command body executes under the global

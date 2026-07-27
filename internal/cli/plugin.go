@@ -16,7 +16,6 @@ import (
 	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/source"
-	"github.com/spxrogers/agentsync/internal/state"
 	"github.com/spxrogers/agentsync/internal/ui"
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
@@ -457,11 +456,11 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string, lossless bool) error {
 	// ending state as `plugin upgrade --all` — see the command's doc comment.
 	userHome := paths.HomeDir(paths.OSEnv{})
 	statePath := filepath.Join(home, ".state", "targets.json")
-	st, err := state.Load(statePath)
-	if err != nil {
-		return fmt.Errorf("load state: %w", err)
-	}
-	return reapplyAfterPluginChange(cmd, home, userHome, statePath, st)
+	// State is loaded inside reapplyAfterPluginChange, AFTER it reloads the
+	// source: that reload can run the pending subagent migration, which rewrites
+	// recorded source_ids, and a copy read here would be stale and would undo
+	// the rewrite when saved.
+	return reapplyAfterPluginChange(cmd, home, userHome, statePath)
 }
 
 // ---- enable -----------------------------------------------------------------
