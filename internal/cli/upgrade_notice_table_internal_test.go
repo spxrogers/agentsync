@@ -3,6 +3,8 @@ package cli
 import (
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 // TestUpgradeNoticeTableIsWellFormed guards the append-only rule the table
@@ -59,5 +61,33 @@ func TestEveryNoticeHasAnUpgradingDocsSection(t *testing.T) {
 			t.Errorf("notice %q (since %s) has no %q section in upgrading.mdx — its "+
 				"\"read more\" link lands on a page that does not document it", n.ID, n.Since, heading)
 		}
+	}
+}
+
+// TestNoCommandIsNamedCompletion guards the one soft spot in the notice's
+// completion exemption.
+//
+// isCompletionRequest matches the literal name "completion" anywhere up the
+// parent chain, because that is what cobra calls its generated
+// completion-script command. If agentsync ever adds a real command by that name
+// — or a subcommand under one — it would be silently exempted from the upgrade
+// notice, and the failure would be invisible: the notice simply never fires for
+// that path. Cobra's own generated command is excluded here by construction,
+// since it is only added at Execute time and never appears in NewRoot's tree.
+func TestNoCommandIsNamedCompletion(t *testing.T) {
+	var offenders []string
+	walkCommands(NewRoot(), func(path string, c *cobra.Command) {
+		names := append([]string{c.Name()}, c.Aliases...)
+		for _, n := range names {
+			if n == "completion" {
+				offenders = append(offenders, path)
+			}
+		}
+	})
+	if len(offenders) > 0 {
+		t.Fatalf("these commands are named (or aliased) `completion`: %s\n"+
+			"isCompletionRequest exempts that name from the first-run upgrade notice, so this command "+
+			"would silently never show it. Rename the command, or narrow isCompletionRequest to cobra's "+
+			"generated command only.", strings.Join(offenders, ", "))
 	}
 }

@@ -577,12 +577,20 @@ func TestUpgradeNotice_ShellCompletionDoesNotConsumeIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Every completion entry point, including a bare TAB and a partial word.
+	// Every completion entry point, including a bare TAB, a partial word, and
+	// NESTED completion (`agentsync mcp <TAB>`). The nested form is the reason
+	// isCompletionRequest walks the PARENT CHAIN rather than checking cmd.Name()
+	// — cobra dispatches it to the subcommand, so a name-only check would miss
+	// it and every `agentsync <group> <TAB>` would eat the notice.
 	for _, args := range [][]string{
 		{"__complete", ""},
 		{"__complete", "ap"},
+		{"__complete", "mcp", ""},
+		{"__complete", "plugin", "up"},
+		{"__complete", "--scope", ""},
 		{"__completeNoDesc", ""},
 		{"completion", "bash"},
+		{"completion", "zsh"},
 	} {
 		if _, _, err := runCLISplit(t, env, args...); err != nil {
 			t.Fatalf("%v: %v", args, err)
