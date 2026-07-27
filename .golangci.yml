@@ -116,10 +116,7 @@ linters:
         linters: [forbidigo]
         text: 'iox\.AtomicWrite is reserved'
       # CLI files writing to ~/.agentsync/* (canonical source).
-      # init.go's ensureStateGitignore is atomic on purpose: the lock-free
-      # first-run upgrade notice also calls it, and a plain O_TRUNC write can
-      # truncate a user's hand-maintained .gitignore under concurrent runs.
-      - path: '(^|/)internal/cli/(init|plugin|marketplace|agent|gitbackup_config|reconcile|plugin_poll)\.go$'
+      - path: '(^|/)internal/cli/(plugin|marketplace|agent|gitbackup_config|reconcile|plugin_poll)\.go$'
         linters: [forbidigo]
         text: 'iox\.AtomicWrite is reserved'
       # The PassThroughWriter test helper deliberately delegates to

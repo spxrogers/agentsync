@@ -241,18 +241,30 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   therefore told to run `agentsync migrate subagents` against a tree that never
   had an `agents/` directory, and that `verify` is now `check` having never
   seen `verify`. The trigger is now `agentsync.toml` — written by `init`, never
-  by the state path — and a home without one is seeded silently instead. A
+  by the state path — and a home without one is passed over without recording
+  anything, so a machine that later gains a user config (a dotfiles restore, or
+  `agentsync init` run afterwards) still hears about the changes rather than
+  being silenced forever. A
   project-scope-only user upgrading from an older release still gets the
   retired layout reported per tree by the fail-closed load gate, which names
   the same command.
 
-- **`ensureStateGitignore` writes atomically.** The upgrade notice calls it
-  from a deliberately lock-free path, and it was a plain read-modify-write with
-  `os.WriteFile(O_TRUNC)` — so a reader landing inside another process's
-  truncate window wrote back its short read. Observed under concurrent first
-  runs: a 4000-line `~/.agentsync/.gitignore` reduced to one line, the user's
-  own rules gone. It also no longer appends a duplicate rule to a home that
-  already ignores `.state/` in one of its equivalent spellings.
+- **`ensureStateGitignore` appends instead of rewriting.** The upgrade notice
+  calls it from a deliberately lock-free path — the only write in the tool that
+  can run concurrently with itself — and it was a read-modify-write with
+  `os.WriteFile(O_TRUNC)`, so a reader landing inside another writer's truncate
+  window wrote back its short read. Measured under concurrent first runs: a
+  4000-line `~/.agentsync/.gitignore` collapsed to a single line, the user's own
+  rules gone. `iox.AtomicWrite` does **not** fix this — it uses a fixed sibling
+  temp name, so N concurrent writers share one temp inode and the same collapse
+  reproduces. The rule is now appended with `O_APPEND`, which additionally
+  restores two behaviors an atomic rewrite had broken: it writes **through** a
+  symlinked `.gitignore` (chezmoi / GNU Stow manage dotfiles that way, and
+  `iox.AtomicWrite` refuses a symlinked destination outright — silently leaving
+  `.state/` unignored for exactly those users), and it preserves the file's
+  existing mode rather than chmod-ing it to 0644. It also no longer appends a
+  duplicate rule to a home that already ignores `.state/` in an equivalent
+  spelling.
 
 - **The first-run-after-upgrade notice no longer silently disables the
   `--scope` / `--project` refusal.** Wiring the notice assigned the root

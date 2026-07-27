@@ -403,3 +403,154 @@ func TestUpgradeNotice_RecordIsGitignored(t *testing.T) {
 		t.Fatalf("`.state/` is not gitignored, so the run record would be committed:\n%s", data)
 	}
 }
+
+// TestUpgradeNotice_CorruptRecordStillShowsAndRepairs is the case that made the
+// difference between "the notice shows again later" and "the user never learns
+// their config layout moved".
+//
+// A truncated / empty / wrong-shaped last-run.json is the classic crash- or
+// full-disk artifact. Treating that like an I/O failure suppressed the notice
+// PERMANENTLY — the file was never rewritten, so every subsequent run hit the
+// same parse error. A record that cannot be parsed carries no information, so
+// the honest reading is "nothing has been shown here": print, then overwrite.
+func TestUpgradeNotice_CorruptRecordStillShowsAndRepairs(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"empty file (crash mid-write)", ""},
+		{"truncated json", `{"version":"0.10.1","notices_`},
+		{"wrong shape: array", `[]`},
+		{"wrong shape: string", `"nope"`},
+		{"wrong field types", `{"version":42,"notices_seen":"x"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+			mustRun(t, env, "init")
+			withVersion(t, "0.11.0")
+
+			rec := filepath.Join(tmp, ".agentsync", ".state", "last-run.json")
+			if err := os.WriteFile(rec, []byte(tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			_, stderr, err := runCLISplit(t, env, "version")
+			if err != nil {
+				t.Fatalf("version: %v\n%s", err, stderr)
+			}
+			if !strings.Contains(stderr, "migrate subagents") {
+				t.Fatalf("a corrupt record must not suppress the notice:\n%s", stderr)
+			}
+			// And it must be REPAIRED, or the notice repeats forever instead.
+			got := readLastRun(t, tmp)
+			if got == nil || len(got.NoticesSeen) == 0 {
+				t.Fatalf("corrupt record was not repaired: %+v", got)
+			}
+			_, stderr2, err := runCLISplit(t, env, "version")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(stderr2, "migrate subagents") {
+				t.Errorf("notice repeated after the record was repaired:\n%s", stderr2)
+			}
+		})
+	}
+}
+
+// TestUpgradeNotice_KeyedByIDNotVersion pins the central design decision, which
+// nothing exercised: the show/hide choice is made by notice ID, never by
+// comparing versions.
+//
+// It matters in both directions. A user who jumps 0.9 → 0.12 must still see a
+// notice introduced in 0.11 (version comparison would be tempting and wrong),
+// and a machine that has already seen an ID must stay silent even when the
+// recorded version looks old.
+func TestUpgradeNotice_KeyedByIDNotVersion(t *testing.T) {
+	t.Run("unseen id shows even though the recorded version is current", func(t *testing.T) {
+		tmp := t.TempDir()
+		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+		mustRun(t, env, "init")
+		withVersion(t, "0.11.0")
+		writeLastRun(t, tmp, `{"version":"0.11.0","notices_seen":["some-other-id"]}`)
+
+		_, stderr, err := runCLISplit(t, env, "version")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(stderr, "migrate subagents") {
+			t.Fatalf("an UNSEEN notice id must show regardless of the recorded version:\n%s", stderr)
+		}
+	})
+
+	t.Run("seen id stays silent even though the recorded version is ancient", func(t *testing.T) {
+		tmp := t.TempDir()
+		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+		mustRun(t, env, "init")
+		withVersion(t, "0.11.0")
+		writeLastRun(t, tmp, `{"version":"0.9.0","notices_seen":["0.11.0-cli-surface"]}`)
+
+		_, stderr, err := runCLISplit(t, env, "version")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(stderr, "migrate subagents") {
+			t.Fatalf("a SEEN notice id must stay silent regardless of the recorded version:\n%s", stderr)
+		}
+	})
+}
+
+// writeLastRun plants a run record verbatim.
+func writeLastRun(t *testing.T, tmp, body string) {
+	t.Helper()
+	p := filepath.Join(tmp, ".agentsync", ".state", "last-run.json")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestUpgradeNotice_StateOnlyHomeIsNotSilencedForever pins that skipping the
+// notice for a state-only home does NOT record it as seen.
+//
+// The first version of that check seeded the record before returning. Since the
+// check runs before the record is ever read, seeding bought nothing — and it
+// permanently silenced anyone whose home gained an agentsync.toml afterwards
+// (a dotfiles restore landing after the first run, or simply running `init`
+// tomorrow). They would never hear about the breaking changes at all.
+func TestUpgradeNotice_StateOnlyHomeIsNotSilencedForever(t *testing.T) {
+	tmp := t.TempDir()
+	proj := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	withVersion(t, "0.11.0")
+
+	// Project-scope use materializes ~/.agentsync for central state, with no
+	// user-scope agentsync.toml. The notice must stay quiet…
+	mustRun(t, env, "init", "--project", proj)
+	mustRun(t, env, "agent", "add", "claude", "--project", proj)
+	_, stderr, err := runCLISplit(t, env, "apply", "--project", proj)
+	if err != nil {
+		t.Fatalf("apply --project: %v\n%s", err, stderr)
+	}
+	if strings.Contains(stderr, "migrate subagents") {
+		t.Fatalf("state-only home must not see the banner:\n%s", stderr)
+	}
+	// …and must not have recorded the notices as seen.
+	if rec := readLastRun(t, tmp); rec != nil && len(rec.NoticesSeen) > 0 {
+		t.Fatalf("a state-only home recorded notices as SEEN, so a user who later gains a "+
+			"user config is silenced forever: %+v", rec)
+	}
+
+	// Now the user config arrives — a dotfiles restore, or `init` tomorrow. They
+	// have a pre-0.11 config now, so they must hear about the changes.
+	if err := os.WriteFile(filepath.Join(tmp, ".agentsync", "agentsync.toml"),
+		[]byte("[agents]\nclaude = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, err = runCLISplit(t, env, "version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "migrate subagents") {
+		t.Fatalf("a home that gained a user config was permanently silenced:\n%s", stderr)
+	}
+}

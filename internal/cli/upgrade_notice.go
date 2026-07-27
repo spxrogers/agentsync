@@ -129,8 +129,14 @@ func maybePrintUpgradeNotice(cmd *cobra.Command) {
 	// agentsync.toml is the marker that distinguishes the two: `init` writes it,
 	// central state never does. Its absence means this home was materialized for
 	// state-keeping, not by a user config that a release could have broken — so
-	// seed the record (the home already exists, so writing is safe here, unlike
-	// the fresh-install path above) and stay quiet.
+	// stay quiet.
+	//
+	// Return WITHOUT seeding. Seeding here would mark every notice as seen for a
+	// user who has not seen them, and this check runs BEFORE the record is ever
+	// read — so it costs nothing to skip. It is not merely redundant but
+	// harmful: a home that later gains an agentsync.toml (a dotfiles restore
+	// landing after the first run, `agentsync init` run tomorrow) would be
+	// permanently silenced about changes it never heard.
 	//
 	// A project-scope-only user upgrading from an older release therefore does
 	// not get the banner. They are not left stranded: the retired layout is
@@ -138,7 +144,6 @@ func maybePrintUpgradeNotice(cmd *cobra.Command) {
 	// `agentsync migrate subagents` for that tree — a stronger mechanism than a
 	// one-time banner, and one that fires per tree rather than per machine.
 	if !hasUserConfig(home) {
-		seedUpgradeNoticeRecord(home)
 		return
 	}
 
@@ -210,8 +215,8 @@ func homeExists(home string) bool {
 // ~/.agentsync/ with no record, and "home exists + no record" reads as an
 // upgrade — firing a breaking-change banner at a brand-new user.
 func hasUserConfig(home string) bool {
-	_, err := os.Stat(filepath.Join(home, "agentsync.toml"))
-	return err == nil
+	fi, err := os.Stat(filepath.Join(home, "agentsync.toml"))
+	return err == nil && fi.Mode().IsRegular()
 }
 
 // printUpgradeNotices renders the banner to stderr.
