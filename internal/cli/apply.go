@@ -26,6 +26,7 @@ func newApplyCmd() *cobra.Command {
 	var (
 		dryRun      bool
 		noGitBackup bool
+		agentsCSV   string
 	)
 	cmd := &cobra.Command{
 		Use:   "apply",
@@ -38,16 +39,17 @@ func newApplyCmd() *cobra.Command {
 			// concurrent `status` / `diff` / other dry-runs behind a long
 			// real apply.
 			if dryRun {
-				return applyRun(cmd, home, dryRun, noGitBackup)
+				return applyRun(cmd, home, dryRun, noGitBackup, agentsCSV)
 			}
 			return withGlobalLock(home, func() error {
-				return applyRun(cmd, home, dryRun, noGitBackup)
+				return applyRun(cmd, home, dryRun, noGitBackup, agentsCSV)
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "compute plan without writing destinations")
 	markScopeAware(cmd)
 	cmd.Flags().BoolVar(&noGitBackup, "no-git-backup", false, "skip destination git versioning/checkpoint for this run (CI/scripting); does not modify agentsync.toml")
+	addAgentsFlag(cmd, &agentsCSV, "apply")
 	return cmd
 }
 
@@ -65,7 +67,7 @@ func noAgentsEnabledHint(sc adapter.Scope, projectRoot string) string {
 
 // applyRun is the lock-protected body of the apply command. It is split
 // out from newApplyCmd so the lock acquisition lives in one obvious place.
-func applyRun(cmd *cobra.Command, home string, dryRun bool, noGitBackup bool) error {
+func applyRun(cmd *cobra.Command, home string, dryRun, noGitBackup bool, agentsCSV string) error {
 	p, err := newPrinter(cmd)
 	if err != nil {
 		return err
@@ -95,10 +97,22 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, noGitBackup bool) er
 	}
 
 	agents := []string{}
+	enabled := map[string]bool{}
 	for name, ag := range c.Config.Agents {
 		if ag.Enabled {
 			agents = append(agents, name)
+			enabled[name] = true
 		}
+	}
+	// --agents narrows the apply to a validated allowlist, with the SAME parsing
+	// status/diff use (#200 F10). Applied after the enabled set is built, so an
+	// unknown or disabled name is rejected rather than silently rendering nothing.
+	if len(agents) > 0 {
+		sel, aerr := selectAgents(cmd, agents, enabled, agentsCSV)
+		if aerr != nil {
+			return aerr
+		}
+		agents = sel
 	}
 	if len(agents) == 0 {
 		// Without this hint, `apply` prints "applied: 0 ops" and a

@@ -137,9 +137,10 @@ func mcpAddRun(cmd *cobra.Command, home, id, serverType, command, argsCSV, url, 
 
 func newMCPRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "remove <id>",
-		Short: "delete mcp/<id>.toml from the canonical source",
-		Args:  cobra.ExactArgs(1),
+		Use:     "remove <id>",
+		Aliases: []string{"rm"},
+		Short:   "delete mcp/<id>.toml from the canonical source",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := args[0]
 			if err := validateMCPID(id); err != nil {
@@ -166,9 +167,10 @@ func newMCPRemoveCmd() *cobra.Command {
 
 func newMCPListCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "list MCP servers in the canonical source",
-		Args:  cobra.NoArgs,
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "list MCP servers in the canonical source",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home, _, _, err := scopedSourceHome(cmd)
 			if err != nil {

@@ -162,6 +162,12 @@ Dropping the name imports every entry of that component; dropping the
 component too imports the agent's full native config in one pass. Use
 --dry-run to preview which source files would be written, without writing.
 
+Reach for import when agentsync does NOT manage the config yet — it is how
+existing native config becomes canonical source in the first place. Its sibling
+is 'agentsync reconcile', which handles a file agentsync ALREADY manages that
+has since drifted, asking per item whether to adopt the edit or re-impose the
+source. Rule of thumb: import adopts, reconcile resolves.
+
 The plugin component captures the agent's installed plugins + their
 marketplaces (Claude and Codex): it re-fetches each marketplace and plugin
 into the agentsync cache and pins them, so a real import needs network access.

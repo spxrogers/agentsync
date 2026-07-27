@@ -16,9 +16,10 @@ import (
 
 func newRevertCmd() *cobra.Command {
 	var (
-		toRef  string
-		all    bool
-		dryRun bool
+		toRef     string
+		all       bool
+		dryRun    bool
+		agentsCSV string
 	)
 	cmd := &cobra.Command{
 		Use:   "revert [<agent>]",
@@ -49,6 +50,30 @@ An agent may version more than one directory (its config dir plus a shared dir l
 ([destination_directory_git_backup]) and run an apply first.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// --agents is the shared selector every other command uses (#200
+			// F10). On revert it is a spelling of the positional form, so the
+			// three ways of saying "which agents" stay mutually exclusive rather
+			// than becoming a fourth grammar to reconcile at runtime.
+			if cmd.Flags().Changed("agents") {
+				if all {
+					return fmt.Errorf("--agents and --all both choose which dirs to revert; pass one")
+				}
+				if len(args) > 0 {
+					return fmt.Errorf("--agents and a positional agent both choose which dirs to revert; pass one")
+				}
+				names := splitAgents(agentsCSV)
+				if len(names) == 0 {
+					return fmt.Errorf(`--agents cannot be empty; pass "*" for every managed dir or name one or more`)
+				}
+				if containsStar(names) {
+					all = true
+				} else {
+					if toRef != "" && len(names) > 1 {
+						return fmt.Errorf("--to names a checkpoint in one repo and can't apply across %d agents; revert a single agent with --to", len(names))
+					}
+					args = names
+				}
+			}
 			if all && len(args) > 0 {
 				return fmt.Errorf("--all reverts every managed dir; do not also name an agent")
 			}
@@ -73,7 +98,12 @@ An agent may version more than one directory (its config dir plus a shared dir l
 				if all {
 					return revertAll(p, reg, dryRun, id)
 				}
-				return revertAgent(p, reg, args[0], toRef, dryRun, id, true)
+				for _, name := range args {
+					if err := revertAgent(p, reg, name, toRef, dryRun, id, true); err != nil {
+						return err
+					}
+				}
+				return nil
 			}
 			if dryRun {
 				return run()
@@ -84,6 +114,7 @@ An agent may version more than one directory (its config dir plus a shared dir l
 	cmd.Flags().StringVar(&toRef, "to", "", "checkpoint to restore (commit hash or relative like HEAD~2); default: undo the most recent apply")
 	cmd.Flags().BoolVar(&all, "all", false, "revert every agentsync-managed destination dir to its last checkpoint")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would change without writing")
+	addAgentsFlag(cmd, &agentsCSV, "revert")
 	markScopeUnaware(cmd, "revert rolls back USER-scope destination directories (~/.claude, ~/.codex, …), which is "+
 		"where the local git backup lives; a project's rendered files are versioned by the project's own repo")
 	return cmd

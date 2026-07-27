@@ -120,10 +120,11 @@ func newAgentAddCmd() *cobra.Command {
 
 func newAgentRemoveCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "remove <name>",
-		Short: "unregister an agent",
-		Args:  cobra.ExactArgs(1),
-		RunE:  lockedRun(agentRemoveRun),
+		Use:     "remove <name>",
+		Aliases: []string{"rm"},
+		Short:   "unregister an agent",
+		Args:    cobra.ExactArgs(1),
+		RunE:    lockedRun(agentRemoveRun),
 	}
 	markScopeAware(cmd)
 	return cmd
@@ -450,9 +451,10 @@ func agentRemoveRun(cmd *cobra.Command, args []string) error {
 func newAgentListCmd() *cobra.Command {
 	var all bool
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "list registered agents (--all to list every supported agent)",
-		Args:  cobra.NoArgs,
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "list registered agents (--all to list every supported agent)",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return agentListRun(cmd, all)
 		},

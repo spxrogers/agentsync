@@ -84,19 +84,9 @@ func newDiffCmd() *cobra.Command {
 			// `status --agents` exactly (same split/star/validation and the same
 			// empty-rejection message) so the two read-only commands stay
 			// symmetric.
-			selected := enabledAgents
-			if cmd.Flags().Changed("agents") {
-				names := splitAgents(agentsCSV)
-				if len(names) == 0 {
-					return fmt.Errorf(`--agents cannot be empty; pass "*" for all enabled agents or name one or more`)
-				}
-				if !containsStar(names) {
-					sel, serr := resolveAgentFilter(names, enabled)
-					if serr != nil {
-						return serr
-					}
-					selected = sel
-				}
+			selected, aerr := selectAgents(cmd, enabledAgents, enabled, agentsCSV)
+			if aerr != nil {
+				return aerr
 			}
 			if len(selected) == 0 {
 				if jsonOut {
@@ -252,7 +242,7 @@ func newDiffCmd() *cobra.Command {
 	markScopeAware(cmd)
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the formatted diff")
 	cmd.Flags().BoolVar(&exitCode, "exit-code", false, fmt.Sprintf("exit %d if any diff hunk exists (0 when clean); for CI gates", exitCodeDrift))
-	cmd.Flags().StringVar(&agentsCSV, "agents", "", `limit the diff to a comma-separated agent allowlist ("*" = all enabled; default: all enabled)`)
+	addAgentsFlag(cmd, &agentsCSV, "diff")
 	return cmd
 }
 

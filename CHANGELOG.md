@@ -41,6 +41,26 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 - **`import` spells the subagent selector component `subagent`.** `agentsync
   import opencode:subagent:reviewer` is the canonical form; `agent` stays
   accepted as an alias, so existing invocations keep working.
+- **`--agents` is now the one "which agents" selector (#200 F10).** There were
+  four grammars for the same question, and the sharpest edge was that **`apply`
+  had none at all** — the daily loop is status → diff → reconcile → apply, so
+  the filter you used in the first three silently did not exist in the fourth.
+  `apply`, `status`, `diff`, `reconcile`, and `revert` now all take `--agents`,
+  routed through one parser so the split, the `*` convention, and the rejection
+  messages cannot drift. On `revert` it is a spelling of the positional form,
+  and `--agents` / a positional agent / `--all` stay mutually exclusive.
+- **`ls` and `rm` aliases (#200 F11)** on every `list` and `remove` subcommand.
+- **`secret get` now cautions when it prints to a terminal (#200 F11).** `set`
+  prompts with echo off and steers scripts to `--stdin`; `get` had no
+  counterpart hygiene. The value still goes to stdout undecorated — command
+  substitution keeps working — but when stdout is a TTY a stderr note points
+  out that it has just entered scrollback. Piped and redirected uses stay
+  silent.
+- **`import` and `reconcile` now cross-reference each other in `--help`
+  (#200 F9).** The boundary was correct but unnamed: import adopts config
+  agentsync does not manage yet, reconcile resolves a managed file that has
+  drifted.
+
 - **BREAKING (CLI): `agentsync verify` is now `agentsync check` (#200 F8).**
   `verify` and `doctor` overlapped without a stated boundary. They are now
   split along the axis they actually differ on: **`doctor` validates your

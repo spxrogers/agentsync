@@ -58,26 +58,40 @@ type reconcileItem struct {
 var errDestDroppedServer = errors.New("destination dropped server")
 
 func newReconcileCmd() *cobra.Command {
-	var autoWB, autoOR, autoSafe bool
+	var (
+		autoWB, autoOR, autoSafe bool
+		agentsCSV                string
+	)
 	cmd := &cobra.Command{
 		Use:   "reconcile",
-		Short: "interactively resolve drift",
-		Args:  cobra.NoArgs,
+		Short: "interactively resolve drift between source and destination",
+		Long: `reconcile walks the items whose DESTINATION has diverged from what agentsync
+last wrote, and asks what to do with each: adopt the destination edit into your
+canonical source ([w]rite-back), re-impose the source over it ([o]verride),
+[s]kip, [i]gnore, [d]iff, or [q]uit. Bulk hotkeys (W/O/S) and the
+--auto-writeback / --auto-override / --auto-safe flags exist for scripting.
+
+Reach for reconcile when agentsync ALREADY manages a file and it has drifted.
+Its sibling is 'agentsync import', which is for config agentsync does NOT manage
+yet — it captures an agent's native config into the canonical source for the
+first time. Rule of thumb: import adopts, reconcile resolves.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			return withGlobalLock(home, func() error {
-				return reconcileRun(cmd, cmd.InOrStdin(), autoWB, autoOR, autoSafe)
+				return reconcileRun(cmd, cmd.InOrStdin(), autoWB, autoOR, autoSafe, agentsCSV)
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&autoWB, "auto-writeback", false, "auto-resolve drift by writing dest back to source")
 	cmd.Flags().BoolVar(&autoOR, "auto-override", false, "auto-resolve drift by re-applying source to dest")
 	cmd.Flags().BoolVar(&autoSafe, "auto-safe", false, "auto-resolve only converged/pending/new (no-op)")
+	addAgentsFlag(cmd, &agentsCSV, "reconcile pass")
 	markScopeAware(cmd)
 	return cmd
 }
 
-func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe bool) error {
+func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe bool, agentsCSV string) error {
 	// The three auto modes are mutually exclusive — writeback (dest→source)
 	// and override (source→dest) are exact opposites, and silently accepting
 	// both (writeback won) was a data-loss footgun.
@@ -117,10 +131,20 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 	}
 	reg := registryFactory()
 	var agents []string
+	enabled := map[string]bool{}
 	for name, ag := range c.Config.Agents {
 		if ag.Enabled {
 			agents = append(agents, name)
+			enabled[name] = true
 		}
+	}
+	// --agents narrows the pass, with the same parsing status/diff/apply use.
+	if len(agents) > 0 {
+		sel, aerr := selectAgents(cmd, agents, enabled, agentsCSV)
+		if aerr != nil {
+			return aerr
+		}
+		agents = sel
 	}
 	// reconcile hashes the rendered TEMPLATED source for drift; wrap as a
 	// render-only Resolved without substituting (no backend needed).

@@ -15,6 +15,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/ui"
 	"golang.org/x/term"
 )
 
@@ -377,8 +378,27 @@ func secretsGet(cmd *cobra.Command, args []string) error {
 	if !isStr {
 		return fmt.Errorf("secret %q is not a string value (%T); secret values must be quoted strings (apply rejects non-string secrets)", args[0], v)
 	}
+	// Hygiene (#200 F11): `set` prompts with echo off and steers scripts to
+	// --stdin, while `get` has always printed the cleartext with no counterpart
+	// caution. The value still goes to stdout UNDECORATED — `$(agentsync secret
+	// get k)` must keep working — but when stdout is a terminal the value is
+	// about to land in scrollback (and, pasted, in shell history), so say so on
+	// stderr. Piped and redirected uses stay silent.
 	fmt.Fprintln(cmd.OutOrStdout(), s)
+	if stdoutIsTerminal(cmd) {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"agentsync: that value is now in your terminal scrollback; pipe it (`agentsync secret get %s | …`) to keep it out.\n",
+			ui.Sanitize(args[0]))
+	}
 	return nil
+}
+
+// stdoutIsTerminal reports whether the command's stdout is an interactive
+// terminal — the signal that a printed secret has just entered scrollback. The
+// test harness's buffer is not a terminal, so tests stay quiet.
+func stdoutIsTerminal(cmd *cobra.Command) bool {
+	f, ok := cmd.OutOrStdout().(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
 }
 
 func secretsSet(cmd *cobra.Command, arg string, useStdin, allowEmpty bool) error {

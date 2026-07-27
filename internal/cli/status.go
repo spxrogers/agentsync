@@ -129,21 +129,9 @@ func newStatusCmd() *cobra.Command {
 			// --agents narrows the report (and the plan) to the requested
 			// agent(s); orphan-state warnings still consider the FULL enabled
 			// set so a deselected agent isn't mistaken for an orphaned one.
-			selected := enabledAgents
-			if cmd.Flags().Changed("agents") {
-				names := splitAgents(agentsCSV)
-				if len(names) == 0 {
-					return fmt.Errorf(`--agents cannot be empty; pass "*" for all enabled agents or name one or more`)
-				}
-				// "*" = all enabled, matching `mcp add --agents`; otherwise the
-				// names are a validated allowlist.
-				if !containsStar(names) {
-					sel, serr := resolveAgentFilter(names, enabled)
-					if serr != nil {
-						return serr
-					}
-					selected = sel
-				}
+			selected, aerr := selectAgents(cmd, enabledAgents, enabled, agentsCSV)
+			if aerr != nil {
+				return aerr
 			}
 			if len(selected) == 0 {
 				if jsonOut {
@@ -199,7 +187,7 @@ func newStatusCmd() *cobra.Command {
 	markScopeAware(cmd)
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the formatted report")
 	cmd.Flags().BoolVar(&exitCode, "exit-code", false, fmt.Sprintf("exit %d if any drift is detected (0 when clean); for CI gates", exitCodeDrift))
-	cmd.Flags().StringVar(&agentsCSV, "agents", "", `limit the report to a comma-separated agent allowlist ("*" = all enabled; default: all enabled)`)
+	addAgentsFlag(cmd, &agentsCSV, "report")
 	return cmd
 }
 

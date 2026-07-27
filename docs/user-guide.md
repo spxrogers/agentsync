@@ -828,9 +828,12 @@ reason** rather than accepting and ignoring them.
 expands each collapsed skill directory back to one row per bundled file).
 `--color=auto|always|never` controls whether output is styled with ANSI color
 and bold (default `auto` — on for a TTY, off when piped/redirected; honors
-`NO_COLOR`). `status --agents <list>` and `diff --agents <list>` scope the report
-to a comma-separated agent allowlist (`*` = all enabled, matching `mcp add
---agents`; an empty or unknown value is rejected identically by both). `status
+`NO_COLOR`). `--agents <list>` is the **one** way to say which agents a command
+acts on: `apply`, `status`, `diff`, `reconcile`, and `revert` all take it, with
+identical parsing and the same `*` = all-enabled convention (an empty or unknown
+value is rejected identically by all five). On `revert` it is a spelling of the
+positional form, so `--agents`, a positional agent, and `--all` stay mutually
+exclusive. Every `list` accepts `ls`, and every `remove` accepts `rm`. `status
 --json` and `diff [<path>] --json` emit
 the structured report instead of the formatted one, suitable for CI gates and
 dashboards (`status --json` is never collapsed — it carries every tracked file;

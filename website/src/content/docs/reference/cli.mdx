@@ -431,8 +431,9 @@ For per-plugin translation coverage, see [`plugin explain`](#plugin-explain-plug
 | `--project <path>` | **root flag** — same set as `--scope` | Target a specific project's tree (implies `--scope project`). |
 | `--dry-run` | apply, import | Preview without writing. |
 | `--auto-safe` | reconcile | Auto-resolve only no-risk drift classes. (The plugin-side flag of the same name became `plugin upgrade --lossless` — they meant two unrelated things.) |
+| `ls` / `rm` | every `list` / `remove` subcommand | Aliases. |
 | `--json` | status, diff, explain, plugin explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). `plugin explain --json` emits the translation `rows`; `explain <path> --json` emits the provenance envelope (and still emits it, with `"unmanaged": true`, on a path nothing renders). |
-| `--agents <list>` | status, diff | Scope the report to a comma-separated agent allowlist (`*` = all enabled; matches `mcp add --agents`; an empty or unknown value is rejected identically by both). |
+| `--agents <list>` | apply, status, diff, reconcile, revert | The single "which agents" selector, with identical parsing everywhere (`*` = all enabled; an empty or unknown value is rejected identically by all five). On `revert` it is a spelling of the positional form — `--agents`, a positional agent, and `--all` stay mutually exclusive. |
 | `--exit-code` | status, diff | Exit `2` when drift (status) / any hunk (diff) exists, `0` when clean — for CI gates. Distinct from the generic error exit `1`; prints no extra error line. Default (unset) always exits `0`. |
 | `--header "Name: Value"` | mcp add | Repeatable; http/sse only. Sets a request header (secret refs allowed). |
 | `--color auto\|always\|never` | all | Control ANSI color + bold. Default `auto` (on for a TTY, off when piped/redirected; honors `NO_COLOR`). |

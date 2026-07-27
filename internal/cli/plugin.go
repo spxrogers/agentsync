@@ -547,10 +547,11 @@ func pluginDisableRun(cmd *cobra.Command, args []string) error {
 
 func newPluginRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "remove <id>",
-		Short: "remove a plugin and its cached files",
-		Args:  cobra.ExactArgs(1),
-		RunE:  lockedRun(pluginRemoveRun),
+		Use:     "remove <id>",
+		Aliases: []string{"rm"},
+		Short:   "remove a plugin and its cached files",
+		Args:    cobra.ExactArgs(1),
+		RunE:    lockedRun(pluginRemoveRun),
 	}
 }
 
@@ -599,10 +600,11 @@ func pluginRemoveRun(cmd *cobra.Command, args []string) error {
 
 func newPluginListCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "list installed plugins",
-		Args:  cobra.NoArgs,
-		RunE:  pluginListRun,
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "list installed plugins",
+		Args:    cobra.NoArgs,
+		RunE:    pluginListRun,
 	}
 }
 
