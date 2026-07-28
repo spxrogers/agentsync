@@ -262,6 +262,72 @@ func TestMigrateSubagents_BothDirsCollisionRefused(t *testing.T) {
 	}
 }
 
+// TestMigrateSubagents_ResumesAfterAPartialMove pins the claim the move-failure
+// error now makes to the user: "re-run … resumes with the files still left
+// behind".
+//
+// The rename loop is deliberately not atomic — unwinding successful renames
+// would be a second failure path over the filesystem that just failed — so a
+// mid-loop failure leaves files split across BOTH directories. That is only an
+// acceptable design if re-running is genuinely safe, and the subtle way it
+// could fail is the collision check: it refuses when a name exists under both
+// directories, and a naive reading of "some files are now in subagents/" is
+// exactly that shape. It is not, because a moved file no longer exists under
+// agents/ — but nothing asserted the distinction, and the two branches (refuse
+// vs resume) are one `os.Stat` apart.
+//
+// So: reproduce the on-disk state a partial move leaves and assert the re-run
+// completes rather than refusing, with both halves intact byte-for-byte.
+func TestMigrateSubagents_ResumesAfterAPartialMove(t *testing.T) {
+	tmpHome := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+	agentsyncHome := filepath.Join(tmpHome, ".agentsync")
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The exact residue of a loop that moved `planner` and then failed on
+	// `reviewer`: one file already in its final home, one still behind, and no
+	// name present in both.
+	const plannerBody = "planner body\n"
+	seedLegacySubagent(t, agentsyncHome, "reviewer", migTestSubagent)
+	newDir := filepath.Join(agentsyncHome, "subagents")
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(newDir, "planner.md"), []byte(plannerBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "migrate", "subagents")
+	if err != nil {
+		t.Fatalf("re-run after a partial move must resume, not refuse: %v\n%s", err, out)
+	}
+	// It must report only the REMAINDER as moved. Claiming the already-migrated
+	// file too would be a lie the user cannot check.
+	if !strings.Contains(out, "reviewer.md") {
+		t.Errorf("resumed migration did not report moving the leftover file:\n%s", out)
+	}
+	if strings.Contains(out, "planner.md") {
+		t.Errorf("resumed migration claimed to move a file that was already migrated:\n%s", out)
+	}
+
+	// Both halves are intact and the legacy directory is gone.
+	for name, want := range map[string]string{
+		"reviewer.md": migTestSubagent,
+		"planner.md":  plannerBody,
+	} {
+		got, rerr := os.ReadFile(filepath.Join(newDir, name))
+		if rerr != nil || string(got) != want {
+			t.Errorf("%s after resume: %v / %q, want %q", name, rerr, got, want)
+		}
+	}
+	if _, serr := os.Stat(filepath.Join(agentsyncHome, "agents")); !os.IsNotExist(serr) {
+		t.Errorf("legacy agents/ survived the resumed migration: %v", serr)
+	}
+}
+
 // TestMigrateSubagents_ProjectScopeIsIndependent is case (4): a project tree
 // migrates on its own, and the state rewrite touches only that tree's keys —
 // another project's (and the user tree's) recorded SourceIDs are left alone.

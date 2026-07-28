@@ -849,12 +849,23 @@ free to change at any time — only the ID is frozen once published.
 
 **One consequence worth knowing.** Being lock-free makes the notice path the
 only read-modify-write in the tool that can run concurrently with itself, and it
-calls `ensureStateGitignore`. That write is `O_APPEND` for exactly this reason —
-`iox.AtomicWrite` does NOT make it safe (a fixed sibling temp name means
-concurrent writers share one inode) and additionally refuses symlinked
-destinations, which would silently leave chezmoi/Stow users with `.state/`
-unignored. A structural guard pins the append and forbids whole-file writers
-there.
+performs two writes with *different* answers to that.
+
+`ensureStateGitignore` is `O_APPEND` — `iox.AtomicWrite` does NOT make it safe
+(a fixed sibling temp name means concurrent writers share one inode) and it
+additionally refuses symlinked destinations, which would silently leave
+chezmoi/Stow users with `.state/` unignored. A structural guard pins the append
+and forbids whole-file writers there.
+
+`state.SaveLastRun` *does* go through `iox.AtomicWrite`, and therefore *can*
+tear under the same race. That is a deliberate asymmetry, not an exemption: a
+torn `.gitignore` destroys rules the user wrote and cannot recover, while a torn
+`last-run.json` is a UX marker that `LoadLastRun` reports as
+`ErrCorruptLastRun` — read as "this machine has shown nothing", printed, and
+overwritten. It self-repairs at a cost of one duplicate banner, which is exactly
+why invariant 5 above treats a corrupt record as forgiving rather than fatal.
+The record is safe to tear *because* nothing depends on it; a field that made it
+authoritative would need a unique temp name or the global lock.
 
 **The banner's content is pinned too**, not just its plumbing: every retired
 command must be named, before its replacements, joined by a sanctioned break
