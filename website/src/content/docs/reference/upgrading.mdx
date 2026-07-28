@@ -135,9 +135,11 @@ the daily loop vanished at the one step that writes. `apply`, `status`, `diff`,
   likely to sit in a cron line. It was cut before shipping: it would have been
   the *only* alias in a release whose point is that the renames are hard, and
   "no aliases except this one" is a worse rule to remember than "no aliases".
-  A cron line calling `agentsync update` now fails as an unknown command — which
-  is louder, and more useful, than a warning printed to a stderr the scheduler
-  throws away.
+  A cron line calling `agentsync update` now fails as an unknown command, and
+  "louder" here means something specific: what a scheduler acts on is the **exit
+  status**, not the text. A deprecation warning would have gone to the same
+  discarded stderr as everything else, leaving the job green while doing nothing;
+  a non-zero exit is the one signal cron, systemd, and CI all actually surface.
 - **`explain` has no alias either**, and it is the one change that can break a
   script *silently*: the top-level name still exists but now answers a
   *different* question (see below), so `agentsync explain <plugin-id>` fails

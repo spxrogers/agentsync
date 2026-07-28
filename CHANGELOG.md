@@ -233,6 +233,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **The upgrade notice no longer describes a removed command as deprecated.**
+  After the top-level `update` was cut outright, the banner's action line still
+  read "`agentsync update` is deprecated". Every guard stayed green: the notice
+  source is exempt from the stale-renamed-command scan (naming old spellings is
+  its job), and that exemption is whole-file, so it can catch a *missing*
+  mention but never a *wrong* one. Telling a user their cron line has a grace
+  period it does not have is the worst thing this banner can say, to the exact
+  audience it exists for. `TestUpgradeNoticeNamesEveryRetiredCommand` now pins
+  both directions — every retired top-level spelling must be named, and no
+  action line may call anything deprecated.
+
 - **Shell completion no longer consumes the upgrade notice.** Cobra runs the
   root pre-run hook for its hidden `__complete` request too, and the generated
   bash/zsh scripts invoke it with stderr discarded — so a single TAB after

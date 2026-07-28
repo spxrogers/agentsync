@@ -64,6 +64,58 @@ func TestEveryNoticeHasAnUpgradingDocsSection(t *testing.T) {
 	}
 }
 
+// TestUpgradeNoticeNamesEveryRetiredCommand pins the notice's actual CONTENT —
+// the one thing this feature exists to get right, and the one thing nothing
+// checked.
+//
+// The bug that motivated it shipped: after the top-level `update` command was
+// removed outright, the action line still read "`agentsync update` is
+// deprecated". Every guard stayed green. `upgrade_notice.go` is exempt from
+// TestNoStaleRenamedCommandReferences — it names old spellings for a living —
+// and that exemption is whole-file, so it can catch a MISSING mention but never
+// a WRONG one. A human caught it, on a banner whose entire audience is people
+// whose scripts just broke, and whose worst possible failure is telling them
+// their command still works for a while.
+//
+// Two directions, both load-bearing:
+//
+//   - Every retired top-level spelling must be NAMED somewhere in the notice.
+//     A retirement the banner omits is one a user discovers as an unexplained
+//     "unknown command" — exactly what the banner exists to prevent. The list
+//     is retiredCommands (command_surface_internal_test.go), shared so a
+//     future retirement cannot be added to one and forgotten in the other.
+//   - No action line may describe anything as deprecated. This release has no
+//     deprecations and no aliases: everything listed is a hard break. "Is
+//     deprecated" tells a reader their cron line has a grace period it does
+//     not have, which is worse than saying nothing.
+func TestUpgradeNoticeNamesEveryRetiredCommand(t *testing.T) {
+	if len(upgradeNotices) == 0 || len(retiredCommands) == 0 {
+		t.Fatal("no notices or no retired commands; this guard would vacuously pass")
+	}
+	var lines []string
+	for _, n := range upgradeNotices {
+		lines = append(lines, n.Actions...)
+	}
+	all := strings.Join(lines, "\n")
+
+	for old, replacement := range retiredCommands {
+		if !strings.Contains(all, "agentsync "+old) {
+			t.Errorf("the upgrade notice never mentions `agentsync %s`, which was retired in favor of "+
+				"`%s`. A user whose script calls it gets an unexplained \"unknown command\" — the notice "+
+				"is the only channel that reaches every install path, so an omission here is silent.",
+				old, replacement)
+		}
+	}
+	for _, line := range lines {
+		if strings.Contains(strings.ToLower(line), "deprecat") {
+			t.Errorf("an upgrade-notice action line calls something deprecated:\n    %s\n"+
+				"Nothing in this release is deprecated — the renames are hard and alias-free. Saying "+
+				"otherwise promises a grace period that does not exist, to the exact audience whose "+
+				"automation already broke.", line)
+		}
+	}
+}
+
 // TestNoCommandIsNamedCompletion guards the one soft spot in the notice's
 // completion exemption.
 //
