@@ -130,14 +130,11 @@ func splitInvocation(invocation string) (path []string, flags []flagRef) {
 
 // TestSplitInvocationAndFlagExists covers the replacement lexer directly.
 //
-// It was argued twice that this helper needed no table, on the grounds that its
-// failure mode is a false FAILURE on a correct row rather than a silent pass.
-// That was wrong on two branches, and both were found the hard way: a
-// multi-character shorthand PANICKED the whole package (a crash is not a false
-// failure), and once the panic was guarded it silently PASSED by falling
-// through to the long-flag lookup. Inverting isFlagToken or dropping either
-// guard left the package green — no table row exercises these shapes, because
-// every real replacement is well-formed.
+// The shapes below are exactly the ones no real replacement produces, which is
+// why this helper twice shipped broken while the package stayed green: a
+// multi-character shorthand first PANICKED (ShorthandLookup aborts above one
+// character), then silently PASSED by falling through to the long-flag lookup.
+// A well-formed table cannot exercise malformed input.
 func TestSplitInvocationAndFlagExists(t *testing.T) {
 	t.Run("lexing", func(t *testing.T) {
 		cases := []struct {
@@ -187,6 +184,21 @@ func TestSplitInvocationAndFlagExists(t *testing.T) {
 			{"real long flag", flagRef{name: "all"}, true},
 			{"inherited root flag", flagRef{name: "scope"}, true},
 			{"nonexistent long flag", flagRef{name: "totally-fake"}, false},
+			// The true-returning half. Every other shorthand row is answered by
+			// the length guard, so without these two the ShorthandLookup calls
+			// are never reached: `if f.shorthand { return false }` and
+			// `…{ return true }` both left the whole package green, the second
+			// of which would certify a nonexistent `-Z`.
+			//
+			// Which of the two lookups answers `-v` is ORDER-DEPENDENT: cobra
+			// merges a parent's persistent flags into Flags() lazily, on the
+			// first mergePersistentFlags/InheritedFlags call, so on a cold
+			// command only InheritedFlags resolves it and after any earlier
+			// lookup both do. Measured both ways. That is why flagExists keeps
+			// both arms — dropping either is invisible here, and the surviving
+			// one would then depend on what happened to run first.
+			{"one-char shorthand that exists", flagRef{name: "v", shorthand: true}, true},
+			{"one-char shorthand that does not", flagRef{name: "z", shorthand: true}, false},
 			// `-all` is not `--all` written short: pflag reads it as the cluster
 			// -a -l -l. Accepting it because a long `--all` exists certified an
 			// invocation that fails at runtime.
