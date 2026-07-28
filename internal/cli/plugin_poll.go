@@ -23,19 +23,12 @@ import (
 
 // pollOpts configures the shared marketplace-poll engine behind `plugin
 // outdated` and `plugin upgrade --all`.
-//
-// There is deliberately no "which flag to blame" field. The retired top-level
-// `update` spelled these `--apply`/`--auto-safe` and could reach the engine
-// with lossless set but doApply clear, so the error naming the offending flag
-// had to be parameterized. Its two surviving callers cannot: `plugin outdated`
-// passes the zero value, and `plugin upgrade --all` always sets doApply, while
-// `--lossless` without `--all` is rejected by the command before it gets here.
 type pollOpts struct {
 	// doApply upgrades every pending bump and re-applies to the agents.
 	doApply bool
 	// lossless drops bumps whose candidate version would introduce a new
-	// adapter Skip for an enabled agent. Only meaningful with doApply — it
-	// filters which bumps are applied, and nothing is applied without it.
+	// adapter Skip for an enabled agent. Only ever set with doApply: it filters
+	// which bumps are applied, and the commands reject it standalone.
 	lossless bool
 }
 
@@ -48,7 +41,6 @@ type pollOpts struct {
 // cache, and the fetch timestamps + SHAs land in the state file. `plugin
 // outdated`'s help owns that, because the `npm outdated` prior reads as pure.
 func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
-	doApply, lossless := o.doApply, o.lossless
 	p, err := newPrinter(cmd)
 	if err != nil {
 		return err
@@ -144,7 +136,7 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 	// comparing both under identical conditions makes any render quirk cancel, so
 	// the delta is exactly the bump's effect. An excluded bump is REPORTED, never
 	// silently dropped. Evaluation failures are treated as lossy (conservative).
-	if lossless {
+	if o.lossless {
 		safe, lossy := filterSafeBumps(home, bumps, fetched, c.Config, userHome, cmd.OutOrStdout())
 		for _, b := range lossy {
 			fmt.Fprintf(cmd.OutOrStdout(),
@@ -169,7 +161,7 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 		return fmt.Errorf("save state: %w", err)
 	}
 
-	if !doApply {
+	if !o.doApply {
 		if len(bumps) > 0 {
 			fmt.Fprintln(cmd.OutOrStdout(), "\nRun `agentsync plugin upgrade --all` to upgrade and apply.")
 		}

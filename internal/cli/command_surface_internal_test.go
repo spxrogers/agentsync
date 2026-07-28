@@ -52,20 +52,6 @@ func TestTopLevelCommandSurfaceIsPinned(t *testing.T) {
 	}
 }
 
-// retiredCommands maps a retired top-level spelling to what replaces it. These
-// were HARD renames/removals with no aliases, by explicit decision.
-//
-// It is a package-level var, not a local, because two guards read it: the
-// resurrection check below, and TestUpgradeNoticeNamesEveryRetiredCommand,
-// which requires the first-run upgrade banner to actually tell users about
-// each one. A retirement the banner never mentions is the failure mode that
-// feature exists to prevent.
-var retiredCommands = map[string]string{
-	"verify":  "check",
-	"secrets": "secret",
-	"update":  "plugin outdated / plugin upgrade --all",
-}
-
 // TestRetiredCommandsAreGone is the negative half: the hard renames must not
 // resurrect, as a command OR as an alias, at ANY depth.
 //
@@ -83,15 +69,32 @@ var retiredCommands = map[string]string{
 // `NewRoot().Commands()` and was proven blind: adding `Aliases: []string{"update"}`
 // to `plugin upgrade` left the entire suite green, resurrecting `agentsync
 // plugin update` — a spelling nobody decided to ship.
+//
+// That does mean the retired spellings are reserved tree-WIDE while the
+// retirements themselves were top-level. A future `agentsync marketplace
+// update` would fail here even though nothing was resurrected. That is the
+// intended trade: these three words are the ones users' broken scripts still
+// contain, so reusing any of them anywhere in this release's surface is a
+// decision to make deliberately — by editing this table — not by accident.
 func TestRetiredCommandsAreGone(t *testing.T) {
+	gone := map[string]retirement{}
+	for _, r := range retirements {
+		if r.TopLevel {
+			gone[r.Old] = r
+		}
+	}
+	if len(gone) == 0 {
+		t.Fatal("no top-level retirements in the table — this guard would vacuously pass")
+	}
+
 	checked := 0
 	walkCommands(NewRoot(), func(path string, c *cobra.Command) {
 		checked++
 		for _, n := range append([]string{c.Name()}, c.Aliases...) {
-			if to, isGone := retiredCommands[n]; isGone {
+			if r, isGone := gone[n]; isGone {
 				t.Errorf("`%s` is reachable again as `agentsync %s` (a name or an alias) — it was retired "+
 					"with no alias by explicit decision, replaced by `%s`, so resurrecting it silently "+
-					"changes the contract", n, path, to)
+					"changes the contract", n, path, r.replacements())
 			}
 		}
 	})

@@ -24,16 +24,35 @@ import (
 func TestNoStaleRenamedCommandReferences(t *testing.T) {
 	repoRoot := repoRootFromCaller(t)
 
-	// old invocation -> what to write instead. Matched on a WORD boundary (see
-	// containsInvocation): `update` and `install` are ordinary English words, so
-	// a bare substring test would flag prose like "agentsync updates the native
-	// config" and hand the next author a bogus failure whose cheapest fix is to
-	// add their file to `exempt` — permanently un-guarding it.
-	renamed := map[string]string{
-		"agentsync secrets":        "agentsync secret …",
-		"agentsync verify":         "agentsync check",
-		"agentsync plugin install": "agentsync plugin add",
-		"agentsync update":         "agentsync plugin outdated / agentsync plugin upgrade --all",
+	// old invocation -> what to write instead, derived from the single
+	// `retirements` table (retirements_internal_test.go) rather than restated
+	// here. A hand-maintained third copy is how this guard goes blind: add a
+	// retirement to the resurrection guard's list only, and the prose scan
+	// keeps passing while every doc still names the dead command.
+	//
+	// Only the FailsAsUnknown rows belong here. `explain <plugin>` is excluded
+	// deliberately — `agentsync explain` still resolves, so a doc naming it is
+	// not handing the user a broken command, and scanning for it would flag the
+	// legitimate `explain <path>` prose this release added.
+	//
+	// Matched on a WORD boundary (see containsInvocation): `update` and
+	// `install` are ordinary English words, so a bare substring test would flag
+	// prose like "agentsync updates the native config" and hand the next author
+	// a bogus failure whose cheapest fix is to add their file to `exempt` —
+	// permanently un-guarding it.
+	renamed := map[string]string{}
+	for _, r := range retirements {
+		if !r.FailsAsUnknown {
+			continue
+		}
+		var to []string
+		for _, n := range r.New {
+			to = append(to, "agentsync "+n)
+		}
+		renamed["agentsync "+r.Old] = strings.Join(to, " / ")
+	}
+	if len(renamed) == 0 {
+		t.Fatal("no retirements fail as unknown commands — this guard would vacuously pass")
 	}
 
 	// Files that exist precisely to say "the old spelling is gone", so naming it
@@ -125,6 +144,12 @@ func TestNoStaleRenamedCommandReferences(t *testing.T) {
 // already a boundary in practice, and requiring one before it would miss the
 // common case of the invocation being backtick-quoted in markdown.
 func containsInvocation(line, old string) bool {
+	// An empty needle matches at every index and advances `i` by zero, so the
+	// loop below would spin forever — turning a typo'd table entry into a CI
+	// timeout rather than a failure. Nothing is ever a stale reference to "".
+	if old == "" {
+		return false
+	}
 	for i := 0; ; {
 		j := strings.Index(line[i:], old)
 		if j < 0 {
@@ -138,37 +163,125 @@ func containsInvocation(line, old string) bool {
 	}
 }
 
-// isWordByte reports whether b continues a command word. Only ASCII letters
-// count: `agentsync verify-ish` is prose, but `agentsync verify --json`,
-// `agentsync verify`, and `agentsync verify.` are all the command.
+// isWordByte reports whether b continues a command word. ONLY ASCII letters
+// count, which is deliberately over-inclusive at the edges: `agentsync verify
+// --json`, `agentsync verify`, and `agentsync verify.` are all matched as the
+// command, and so are `agentsync verify-ish`, `agentsync verify2`, and a
+// non-ASCII continuation like `agentsync verifyé`. The class exists to
+// separate a command from its ordinary-English inflections (`updates`,
+// `verifies`, `installs`), which are always letter-continued; a hyphen or
+// digit after a command name is far more likely to be a real invocation than
+// prose, so flagging those is the safer bias.
 func isWordByte(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
-// walkRepoLooseFiles visits the handful of non-Go, non-markdown files that
-// carry user-facing command lists: the LLM-facing summaries, the lint config's
-// prose comments, and the CI workflows. Each is named explicitly rather than
-// globbed by extension — a blanket *.json/*.yml sweep would pull in lockfiles,
-// generated output, and vendored config, none of which describe the CLI.
+// TestContainsInvocation exercises the matcher directly.
+//
+// It needs its own test because the repo scan cannot serve as one. The scan
+// currently has ZERO hits — that is the passing state — so a matcher that
+// always returned false would look identical. The exempt-staleness loop in
+// TestNoStaleRenamedCommandReferences catches a TOTAL failure, but it is a
+// per-file OR across every key: break the match for one key only (the newest
+// one, always the least protected) and the surviving keys keep the exempt files
+// hit, so the suite stays green while that retirement goes unguarded. That was
+// demonstrated, not theorized.
+func TestContainsInvocation(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		old  string
+		want bool
+	}{
+		{"bare invocation", "run agentsync update to poll", "agentsync update", true},
+		{"backtick-quoted", "run `agentsync update` nightly", "agentsync update", true},
+		{"with a flag", "agentsync update --apply", "agentsync update", true},
+		{"end of line", "just run agentsync update", "agentsync update", true},
+		{"trailing period", "use agentsync verify.", "agentsync verify", true},
+		{"in a markdown table cell", "| `agentsync verify` | `agentsync check` |", "agentsync verify", true},
+
+		// The false-positive class this matcher exists to prevent: every key
+		// ends in a word that is also ordinary English.
+		{"prose plural", "agentsync updates the native config in place", "agentsync update", false},
+		{"prose third person", "agentsync verifies every reference", "agentsync verify", false},
+		{"prose gerund", "agentsync installs nothing into the agent", "agentsync install", false},
+
+		// `secret` is a strict prefix of `secrets`, so the boundary is what
+		// keeps the two retirements from matching each other's lines.
+		{"prefix of a longer command", "agentsync secrets set FOO", "agentsync secret", false},
+		{"the longer command itself", "agentsync secrets set FOO", "agentsync secrets", true},
+
+		// A prose occurrence must not mask a real one later on the same line.
+		{"prose then real", "agentsync updates things; run agentsync update --apply", "agentsync update", true},
+		{"real then prose", "run agentsync update, since agentsync updates things", "agentsync update", true},
+
+		{"absent", "nothing to see here", "agentsync update", false},
+		// Documented deliberate calls: a hyphen/digit/underscore ends the word.
+		{"hyphenated", "agentsync verify-ish", "agentsync verify", true},
+
+		// A typo'd table entry must fail, not hang. Without the guard clause
+		// this case spins forever and the whole package times out.
+		{"empty needle", "agentsync verify", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := containsInvocation(tc.line, tc.old); got != tc.want {
+				t.Errorf("containsInvocation(%q, %q) = %v, want %v", tc.line, tc.old, got, tc.want)
+			}
+		})
+	}
+}
+
+// walkRepoLooseFiles visits the files that carry user-facing command text but
+// are not reached by walkRepoGoFiles or walkRepoDocs: the LLM-facing summaries,
+// the agent-memory files (which enumerate the registered command tree, so every
+// rename must land in them), the lint config's prose comments, the release and
+// issue-template config, the CI workflows, and the shell scripts.
+//
+// Named explicitly rather than globbed by extension. A blanket *.json/*.yml
+// sweep would pull in lockfiles, generated output, and vendored config — none
+// of which describe the CLI, all of which are noise the first time one happens
+// to contain the word "update".
 //
 // A named file that does not exist is skipped, not an error: entries may name
-// files a later change adds.
+// files a later change adds. CLAUDE.md and AGENTS.md are rendered from
+// .agentsync/memory/AGENTS.md, so all three are listed — a stale spelling
+// should be reported at the canonical source AND at the build output, since
+// fixing only the render is undone by the next `agentsync apply`.
 func walkRepoLooseFiles(root string, fn func(rel, src string)) error {
 	rels := []string{
 		"context7.json",
 		"website/public/llms.txt",
 		".golangci.yml",
 		"justfile",
+		".goreleaser.yaml",
+		"CLAUDE.md",
+		"AGENTS.md",
+		".agentsync/memory/AGENTS.md",
 	}
-	wf := filepath.Join(root, ".github", "workflows")
-	if entries, err := os.ReadDir(wf); err == nil {
+	for _, dir := range []string{
+		filepath.Join(".github", "workflows"),
+		filepath.Join(".github", "ISSUE_TEMPLATE"),
+		"scripts",
+	} {
+		entries, err := os.ReadDir(filepath.Join(root, dir))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
 		for _, e := range entries {
-			if !e.IsDir() && (strings.HasSuffix(e.Name(), ".yml") || strings.HasSuffix(e.Name(), ".yaml")) {
-				rels = append(rels, filepath.ToSlash(filepath.Join(".github", "workflows", e.Name())))
+			if e.IsDir() {
+				continue
+			}
+			switch {
+			case strings.HasSuffix(e.Name(), ".yml"),
+				strings.HasSuffix(e.Name(), ".yaml"),
+				strings.HasSuffix(e.Name(), ".sh"):
+				rels = append(rels, filepath.ToSlash(filepath.Join(dir, e.Name())))
 			}
 		}
-	} else if !os.IsNotExist(err) {
-		return err
 	}
 	for _, rel := range rels {
 		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
