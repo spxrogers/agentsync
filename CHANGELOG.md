@@ -216,6 +216,27 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Documentation
 
+- **The upgrade notice's `iox.AtomicWrite` claim was the opposite of the
+  truth.** `upgrade_notice.go` stated that "iox.AtomicWrite keeps the record
+  itself well-formed under that race", and `docs/architecture.md` §10 repeated
+  it — while `TestEnsureStateGitignoreDoesNotUseATruncatingWrite`, in the same
+  package, *bans* `iox.AtomicWrite` from the sibling write two lines away and
+  names the reason: its temp file has a fixed name, so concurrent writers share
+  one inode. Both writes sit on the same deliberately lock-free path.
+  `state.SaveLastRun` genuinely can tear there; that is tolerable only because
+  a torn record is read as `ErrCorruptLastRun` ("this machine has shown
+  nothing") and repaired on the next run, whereas a torn `.gitignore` destroys
+  rules the user cannot recover. Both sites now state the asymmetry as a
+  deliberate trade with its precondition — nothing may depend on the record —
+  instead of asserting a safety property that does not hold.
+- **The `Since` / notice-ID / upgrading-page agreement is now pinned in code.**
+  All three must match, the ID is frozen once published while the other two are
+  not, and the check was a hand-run pre-tag ritual recorded only in a commit
+  message. `TestUpgradeNoticeTableIsWellFormed` now requires every notice ID to
+  be spelled `<Since>-<slug>`, so a release that renumbers fails the build
+  rather than shipping a banner whose ID names a version it never mentions.
+  (`TestEveryNoticeHasAnUpgradingDocsSection` already pinned Since → heading;
+  what stays manual is only "does `Since` match the tag being cut".)
 - **`revert --strict` was documented but never existed.** `revert` registers
   only `--to`, `--all`, and `--dry-run`; strictness follows the invocation
   (naming an agent is strict, `--all` skips-with-a-warning). The user guide's
@@ -233,6 +254,19 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **A failed `migrate subagents` now says what state it left the tree in.** The
+  rename loop is deliberately not atomic — unwinding successful renames would
+  mean a second pass over the filesystem that just failed — so a mid-loop
+  failure leaves files split across `agents/` and `subagents/`. Re-running was
+  already the correct and safe recovery (the collision check only ever sees what
+  remains under `agents/`, so a resumed run picks up exactly the remainder), but
+  the error said none of that, while the *collision* branch beside it explicitly
+  states "Nothing was moved" — so a user reading a bare move failure had to
+  assume the worst and reconcile two directories by hand. It now reports how
+  many files were moved, that nothing was lost or overwritten, and that
+  re-running resumes. `TestMigrateSubagents_ResumesAfterAPartialMove` pins the
+  resume property itself, which was previously unasserted and is one `os.Stat`
+  away from becoming a refusal.
 - **The upgrade notice no longer describes a removed command as deprecated.**
   After the top-level `update` was cut outright, the banner's action line still
   read "`agentsync update` is deprecated". Every guard stayed green: the notice

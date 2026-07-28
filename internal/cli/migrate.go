@@ -189,11 +189,28 @@ func migrateSubagentTree(userAgentsyncHome, srcHome string, sc adapter.Scope, pr
 	if err := os.MkdirAll(newDir, 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", newDir, err)
 	}
-	for _, name := range names {
+	// The loop is NOT atomic, and deliberately so: an all-or-nothing move would
+	// mean unwinding renames that already succeeded, which is a second failure
+	// path over the same filesystem that just failed. A partial move is instead
+	// made SAFE to leave — every moved file is already in its final location,
+	// the collision check above only ever sees what still remains in agents/,
+	// and re-running therefore picks up exactly the remainder. The state rewrite
+	// is skipped on this path, which self-heals on the next apply
+	// (RecordOpsState overwrites SourceID unconditionally).
+	//
+	// Say all of that in the error. The collision branch above states "Nothing
+	// was moved" precisely because a user who reads a bare move failure has to
+	// assume the worst and reconcile two directories by hand.
+	for i, name := range names {
 		from := filepath.Join(legacyDir, name)
 		to := filepath.Join(newDir, name)
 		if err := os.Rename(from, to); err != nil { //nolint:forbidigo // moves a canonical subagent file inside an agentsync home, not a native destination
-			return nil, fmt.Errorf("move %s → %s: %w", from, to, err)
+			return nil, fmt.Errorf(
+				"move %s → %s: %w. %d of %d file(s) were already moved and are correctly placed in %s; "+
+					"the rest remain in %s. Nothing was lost or overwritten — fix the cause and re-run "+
+					"`agentsync migrate subagents`, which resumes with the files still left behind",
+				from, to, err, i, len(names), newDir, legacyDir,
+			)
 		}
 	}
 	// Drop the legacy directory once the move emptied it. A failure here is

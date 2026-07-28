@@ -32,6 +32,23 @@ func TestUpgradeNoticeTableIsWellFormed(t *testing.T) {
 		if n.Since == "" {
 			t.Errorf("notice %q has no Since; the banner prints it", n.ID)
 		}
+		// The ID, the Since string, and the `## <Since>` heading on the
+		// upgrading page must all agree, and the ID is FROZEN once published
+		// while the other two are not — so a release that renumbers (0.11.0
+		// slips to 0.12.0) can leave the ID naming a version the banner never
+		// mentions. That agreement was a hand-checked pre-tag ritual recorded
+		// only in a commit message, which is the artifact nobody re-reads at
+		// release time. Two thirds of it are mechanical: pin ID → Since here,
+		// and TestEveryNoticeHasAnUpgradingDocsSection pins Since → heading.
+		// What stays manual is only "does Since match the tag you are about to
+		// cut", which is one glance rather than a three-way diff.
+		if n.Since != "" && !strings.HasPrefix(n.ID, n.Since+"-") {
+			t.Errorf("notice ID %q does not start with %q.\n"+
+				"The ID is frozen once shipped but Since is not, so this is the pair that silently "+
+				"drifts when a release renumbers. Spell the ID `<Since>-<slug>`; if the VERSION is what "+
+				"changed, fix Since (and the `## %s` heading in upgrading.mdx) — never the published ID.",
+				n.ID, n.Since+"-", n.Since)
+		}
 		if n.Headline == "" {
 			t.Errorf("notice %q has no Headline", n.ID)
 		}

@@ -95,11 +95,26 @@ var upgradeNotices = []upgradeNotice{
 //     self-announcing (the notice either shows again next run, or the user
 //     never sees it and reads the upgrade page instead). A corrupt record no
 //     longer hides the notice, which was the one silent failure that mattered.
+//
 //   - "Once per machine" is lock-free, so N truly simultaneous invocations can
 //     each print. Taking the global lock for a banner would serialize every
 //     command in the tool behind a UX marker — a far worse trade than a
-//     duplicated banner in the rare concurrent case. iox.AtomicWrite keeps the
-//     record itself well-formed under that race.
+//     duplicated banner in the rare concurrent case.
+//
+//     The record write inherits that: state.SaveLastRun goes through
+//     iox.AtomicWrite, whose temp file has a FIXED sibling name, so concurrent
+//     writers share one inode and can tear the file — the same property that
+//     disqualifies AtomicWrite for the ensureStateGitignore call this function
+//     makes one line earlier (see TestEnsureStateGitignoreDoesNotUseATruncatingWrite,
+//     which bans it there by name). Do NOT read this as "AtomicWrite is safe here". It is
+//     TOLERATED here and not there because the two failures are not
+//     comparable: a torn .gitignore destroys rules the user wrote and cannot
+//     get back, while a torn last-run.json is a UX marker that LoadLastRun
+//     reads as ErrCorruptLastRun, i.e. "this machine has shown nothing" — so
+//     it self-repairs on the next run at the cost of one duplicate banner.
+//     That is the whole reason the corrupt-record path is forgiving. If a
+//     future field ever makes this record authoritative for anything, it needs
+//     a unique temp name (os.CreateTemp in the parent) or the lock.
 func maybePrintUpgradeNotice(cmd *cobra.Command) {
 	// A build with no version stamped is a local `go build` or a test binary.
 	// Showing (and recording) a notice there would fire in every test run and

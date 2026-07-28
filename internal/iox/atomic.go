@@ -28,6 +28,18 @@ var ErrSymlinkDest = errors.New("destination is a symlink")
 // content (rename did not run) or the new content (rename ran). Never
 // partial.
 //
+// ATOMIC AGAINST A CRASH, NOT AGAINST A CONCURRENT WRITER. The temp file's
+// name is FIXED (dest + ".agentsync.tmp"), so two processes writing the same
+// dest share one temp inode: B's O_TRUNC can land inside A's write window, and
+// A then renames a short or empty file into place. Callers get atomicity from
+// the global lock (internal/cli/lock.go), which is why almost every writer in
+// the tool holds it. The exception is state.SaveLastRun on the deliberately
+// lock-free upgrade-notice path, where a torn record is a self-repairing UX
+// marker rather than data loss — see internal/cli/upgrade_notice.go. Anything
+// else that needs to write dest without the lock must NOT reach for this:
+// append (cf. ensureStateGitignore, whose read-modify-write lost user data
+// under exactly this race) or take the lock.
+//
 // If dest is an existing symlink, AtomicWrite refuses unless
 // AGENTSYNC_ALLOW_SYMLINK_DEST=1. Replacing the symlink with a regular file
 // via rename would silently break a chezmoi/Stow setup where the user's
