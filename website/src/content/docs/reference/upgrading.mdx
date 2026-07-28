@@ -44,7 +44,7 @@ rather than working quietly for a while. Scripts and CI pipelines need updating.
 | `agentsync plugin install` | `agentsync plugin add` |
 | `agentsync secrets …` | `agentsync secret …` |
 | `agentsync explain <plugin>` | `agentsync plugin explain <plugin>` |
-| `agentsync update` | `agentsync plugin outdated` *(deprecated alias kept for one minor)* |
+| `agentsync update` | `agentsync plugin outdated` |
 | `~/.agentsync/agents/` | `~/.agentsync/subagents/` *(run `agentsync migrate subagents`)* |
 
 ### The canonical subagent directory moved: `agents/` → `subagents/`
@@ -130,13 +130,18 @@ the daily loop vanished at the one step that writes. `apply`, `status`, `diff`,
 | `agentsync explain <plugin>` | `agentsync plugin explain <plugin>` |
 | `agentsync explain --list` | `agentsync plugin list` |
 
-- **`update` still works for one more minor**, forwarding with a warning that
-  names the replacement — including `--apply`, `--auto-safe`, `--scope`, and
-  `--project`, so an existing cron line keeps working. Move it over anyway.
-- **`explain` has no alias.** The top-level name now answers a *different*
-  question — see below — so `agentsync explain <plugin-id>` fails from this
-  release. This is the one change that can break a script silently, which is
-  most of why the upgrade notice exists.
+- **`update` was removed, with no alias.** A draft of this release kept a
+  deprecated forwarding alias for one minor, since `update` is the spelling most
+  likely to sit in a cron line. It was cut before shipping: it would have been
+  the *only* alias in a release whose point is that the renames are hard, and
+  "no aliases except this one" is a worse rule to remember than "no aliases".
+  A cron line calling `agentsync update` now fails as an unknown command — which
+  is louder, and more useful, than a warning printed to a stderr the scheduler
+  throws away.
+- **`explain` has no alias either**, and it is the one change that can break a
+  script *silently*: the top-level name still exists but now answers a
+  *different* question (see below), so `agentsync explain <plugin-id>` fails
+  from this release. That is most of why the upgrade notice exists.
 - **`plugin upgrade <id>` now re-applies.** It used to re-fetch and leave your
   agents stale until the next `apply`; both it and `--all` now finish by
   re-applying, so one verb has one ending state.

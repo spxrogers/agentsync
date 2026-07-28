@@ -63,7 +63,7 @@ var upgradeNotices = []upgradeNotice{
 			"the canonical subagent directory moved: agents/ → subagents/ — run `agentsync migrate subagents` (per tree)",
 			"`agentsync verify` is now `agentsync check` (no alias) — doctor checks the MACHINE, check checks the CONFIG",
 			"`agentsync plugin install` is now `agentsync plugin add`, and `agentsync secrets` is now `agentsync secret` (no aliases)",
-			"`agentsync update` is deprecated — use `agentsync plugin outdated` / `agentsync plugin upgrade --all`",
+			"`agentsync update` was REMOVED (no alias) — use `agentsync plugin outdated` / `agentsync plugin upgrade --all`",
 			"`agentsync explain <plugin>` moved to `agentsync plugin explain <plugin>` (no alias; the old name now explains a FILE)",
 		},
 		Path: "/reference/upgrading/",
