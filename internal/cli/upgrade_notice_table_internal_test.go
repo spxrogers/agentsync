@@ -208,8 +208,8 @@ const requiredAliasClause = "(no alias"
 // "explaining a FILE remains available under the old name" — the likeliest
 // reword of the one row whose old name genuinely does still resolve.
 //
-// Be honest about what that trade costs, because an earlier version of this
-// comment was not. The structural rules do NOT cover the tail: lineRetires
+// Be honest about what that trade costs. The structural rules do NOT cover the
+// tail: lineRetires
 // stops reading at the last replacement, so anything appended after it is seen
 // by this list and nothing else. Removing an entry therefore widens a real gap
 // rather than merely trimming a redundant one. It is still the right trade — a
@@ -261,6 +261,15 @@ func lineRetires(line string, r retirement) bool {
 		return false
 	}
 	oldEnd := oldAt + len("agentsync "+r.Old)
+
+	// A row with no replacements has nothing to locate, and the span logic
+	// below indexes spans[0] unconditionally — so this returned a panic that
+	// killed the whole package rather than a verdict. The well-formedness guard
+	// rejects such a row first, but a crash is not a failure report, and an
+	// empty Replacements is the mutation this file is designed around.
+	if len(r.Replacements) == 0 {
+		return false
+	}
 
 	// Locate every replacement AFTER the old spelling, on a word boundary.
 	//
@@ -464,6 +473,11 @@ func TestRetiringSpellings(t *testing.T) {
 
 		// A bare "agentsync " with nothing after it names no command.
 		{"empty spelling", "`agentsync ` is now `agentsync check`", nil},
+		// A capitalized spelling must still be recognised as replacing itself.
+		// Without folding, this yields ["Status"] — a bogus retirement of a
+		// live command, which is exactly what the self-replacement rule exists
+		// to prevent, and it was the one line added in round 14 with no row.
+		{"capitalized self-replacement", "`agentsync Status` is now `agentsync status --scope project`", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -564,7 +578,17 @@ func retiringSpellings(line string) []string {
 // left `agentsync status` is now `agentsync status --scope project“ parsing as
 // a retirement of `status` — a live command, whose failure then steers the
 // author into a bogus table row that breaks the pinned set and the resurrection
-// guard. A command is not retired by gaining a flag.
+// guard.
+//
+// The rule is BROADER than "gaining a flag": it rejects any replacement that
+// extends the old spelling, so a genuine `agentsync mcp` → `agentsync mcp list`
+// retirement would extract nothing. That gap is accepted, and the obvious
+// narrowing was measured and does not work — matching `spelling+" -"` to catch
+// only the flag form lets `agentsync status` is now `agentsync status` — same
+// thing through, because the trailing prose means the two are not string-equal.
+// If a release ever does retire a bare command for its own subcommand, this is
+// the line to revisit; the symptom is a banner clause going unclaimed, which
+// TestEveryRetiringNoticeLineHasATableRow reports rather than swallows.
 func retiringSpellingAt(rest string) (string, bool) {
 	words := strings.Fields(rest)
 	if len(words) > maxSpellingWords {
@@ -592,8 +616,8 @@ func retiringSpellingAt(rest string) (string, bool) {
 				continue // names no replacement: not a retirement
 			}
 			repl = strings.TrimPrefix(repl, "agentsync ")
-			// `norm` is lowercased and `spelling` is not, so compare in one
-			// case: otherwise a capitalized spelling slips past this check.
+			// `norm` is lowercased and `spelling` is not, so fold before
+			// comparing: a capitalized spelling otherwise slips past.
 			lowSpelling := strings.ToLower(spelling)
 			if repl == lowSpelling || strings.HasPrefix(repl, lowSpelling+" ") {
 				continue // the "replacement" extends the old name: not a retirement
