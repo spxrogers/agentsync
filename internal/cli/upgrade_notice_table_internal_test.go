@@ -77,43 +77,96 @@ func TestEveryNoticeHasAnUpgradingDocsSection(t *testing.T) {
 // whose scripts just broke, and whose worst possible failure is telling them
 // their command still works for a while.
 //
-// Two directions, both load-bearing:
+// The assertion is on the OUTCOME, not on wording. A first attempt paired
+// "the line mentions the old name" with "no line says `deprecat`", and three
+// reviewers independently broke it in one try — "`agentsync update` still
+// works; an alias is kept for one more minor" satisfies both, and so does
+// naming a replacement that does not exist. A blocklist of bad phrasings is
+// unbounded ("legacy", "sunset", "will be removed in 0.12", "no action needed
+// yet"); requiring the line to say what to run INSTEAD is not, and it rules
+// out the whole class, since a line promising continuity has no reason to
+// name a replacement.
 //
-//   - Every retired top-level spelling must be NAMED somewhere in the notice.
-//     A retirement the banner omits is one a user discovers as an unexplained
-//     "unknown command" — exactly what the banner exists to prevent. The list
-//     is retiredCommands (command_surface_internal_test.go), shared so a
-//     future retirement cannot be added to one and forgotten in the other.
-//   - No action line may describe anything as deprecated. This release has no
-//     deprecations and no aliases: everything listed is a hard break. "Is
-//     deprecated" tells a reader their cron line has a grace period it does
-//     not have, which is worse than saying nothing.
+// Three directions, all load-bearing:
+//
+//   - Every retirement must be NAMED by some action line. One the banner omits
+//     is one the user meets as an unexplained "unknown command" — exactly what
+//     the banner exists to prevent.
+//   - The line that names it must also name EVERY replacement. "What broke"
+//     without "what to run instead" is half a notice, and it is the half that
+//     leaves the user stuck.
+//   - No action line may call anything deprecated. Kept as cheap
+//     defense-in-depth on the single phrasing that actually shipped; the
+//     replacement requirement above is what carries the weight.
+//
+// Matching goes through containsInvocation for the same reason the prose scan
+// does: `agentsync secret` is a strict prefix of `agentsync secrets`, and
+// "agentsync updates the cache" would otherwise satisfy the naming check
+// vacuously.
 func TestUpgradeNoticeNamesEveryRetiredCommand(t *testing.T) {
-	if len(upgradeNotices) == 0 || len(retiredCommands) == 0 {
-		t.Fatal("no notices or no retired commands; this guard would vacuously pass")
+	if len(upgradeNotices) == 0 || len(retirements) == 0 {
+		t.Fatal("no notices or no retirements; this guard would vacuously pass")
 	}
 	var lines []string
 	for _, n := range upgradeNotices {
 		lines = append(lines, n.Actions...)
 	}
-	all := strings.Join(lines, "\n")
 
-	for old, replacement := range retiredCommands {
-		if !strings.Contains(all, "agentsync "+old) {
+	for _, r := range retirements {
+		var naming []string
+		for _, line := range lines {
+			if containsInvocation(line, "agentsync "+r.Old) {
+				naming = append(naming, line)
+			}
+		}
+		if len(naming) == 0 {
 			t.Errorf("the upgrade notice never mentions `agentsync %s`, which was retired in favor of "+
-				"`%s`. A user whose script calls it gets an unexplained \"unknown command\" — the notice "+
-				"is the only channel that reaches every install path, so an omission here is silent.",
-				old, replacement)
+				"`%s`. A user whose script calls it gets no explanation — the notice is the only channel "+
+				"that reaches every install path, so an omission here is silent.", r.Old, r.replacements())
+			continue
+		}
+		if !anyLineNamesAll(naming, r.New) {
+			t.Errorf("the upgrade notice mentions `agentsync %s` but no single line tells the user to run "+
+				"%s instead. A notice that says what broke without saying what replaces it leaves the "+
+				"reader exactly as stuck as no notice at all.\n    lines naming it: %s",
+				r.Old, r.replacements(), strings.Join(naming, "\n                     "))
 		}
 	}
-	for _, line := range lines {
+
+	// Headlines are scanned too, not just actions: the headline is the most
+	// prominent line in the banner, so "these commands are deprecated" there
+	// would be read first and checked last.
+	scanned := lines
+	for _, n := range upgradeNotices {
+		scanned = append(scanned, n.Headline)
+	}
+	for _, line := range scanned {
 		if strings.Contains(strings.ToLower(line), "deprecat") {
-			t.Errorf("an upgrade-notice action line calls something deprecated:\n    %s\n"+
+			t.Errorf("an upgrade-notice line calls something deprecated:\n    %s\n"+
 				"Nothing in this release is deprecated — the renames are hard and alias-free. Saying "+
 				"otherwise promises a grace period that does not exist, to the exact audience whose "+
 				"automation already broke.", line)
 		}
 	}
+}
+
+// anyLineNamesAll reports whether at least one line names every replacement.
+// It requires them on ONE line rather than across the set: a reader follows the
+// bullet about their broken command, not a union of all of them.
+func anyLineNamesAll(lines, replacements []string) bool {
+	for _, line := range lines {
+		all := true
+		for _, rep := range replacements {
+			if !containsInvocation(line, "agentsync "+rep) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return true
+		}
+	}
+	return false
 }
 
 // TestNoCommandIsNamedCompletion guards the one soft spot in the notice's

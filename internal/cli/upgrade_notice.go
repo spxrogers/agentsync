@@ -48,6 +48,11 @@ type upgradeNotice struct {
 // APPEND ONLY; never renumber or rename an ID — the ID is the key recorded in
 // .state/last-run.json, so a rename re-shows the notice to every user who
 // already dismissed it, and a duplicate makes the second entry unreachable.
+// Never DELETE an entry either: TestUpgradeNoticeNamesEveryRetiredCommand
+// requires every retirement to be named somewhere in this table, so removing
+// an old notice fails that guard — and the cheapest-looking fix, dropping the
+// retirement from the shared `retirements` table, silently un-guards the
+// resurrection check too. Old notices cost one struct literal; leave them.
 // TestUpgradeNoticeTableIsWellFormed enforces the shape.
 //
 // Every entry here needs a matching section in
