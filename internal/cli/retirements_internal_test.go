@@ -70,19 +70,40 @@ func (r retirement) topLevel() bool { return !strings.Contains(r.Old, " ") }
 // replacementPhrase renders Replacements for a failure message.
 func (r retirement) replacementPhrase() string { return strings.Join(r.Replacements, " / ") }
 
+// flagRef is a flag named by a replacement invocation. Shorthands resolve
+// through a different cobra lookup, so which one it is has to survive parsing.
+type flagRef struct {
+	name      string
+	shorthand bool
+}
+
+func (f flagRef) String() string {
+	if f.shorthand {
+		return "-" + f.name
+	}
+	return "--" + f.name
+}
+
 // splitInvocation separates a replacement into its command path and its flags.
 //
 // It stops collecting path words at the FIRST flag: everything after one is
 // flag-land, so `check --scope project` is the command `check` with a flag,
 // not a nonexistent `check project` subcommand. Placeholders (`<plugin>`,
 // `[id]`) are dropped from the path — they stand for user input, not commands.
-func splitInvocation(invocation string) (path, flags []string) {
+func splitInvocation(invocation string) (path []string, flags []flagRef) {
 	inFlags := false
 	for _, w := range strings.Fields(invocation) {
 		switch {
+		case w == "--" || w == "-":
+			inFlags = true
 		case strings.HasPrefix(w, "-"):
 			inFlags = true
-			flags = append(flags, strings.TrimLeft(w, "-"))
+			// `--scope=user` names the flag `scope`; the value is not part of it.
+			name := strings.TrimLeft(w, "-")
+			if eq := strings.Index(name, "="); eq >= 0 {
+				name = name[:eq]
+			}
+			flags = append(flags, flagRef{name: name, shorthand: !strings.HasPrefix(w, "--")})
 		case inFlags:
 			// A flag's value, not a subcommand.
 		case strings.HasPrefix(w, "<"), strings.HasPrefix(w, "["):
@@ -111,23 +132,31 @@ func splitInvocation(invocation string) (path, flags []string) {
 // LATER release means adding a row here, which is exactly the moment to also
 // add its banner line.
 func TestRetirementsTableIsPinned(t *testing.T) {
+	// Old -> Replacements, not Old alone. Pinning only the spellings left the
+	// replacements free to be subtracted: dropping `plugin upgrade --all` from
+	// the `update` row (and from the banner line it backs) kept the whole
+	// package green, because nothing requires a line to list every replacement
+	// it names. That silently disabled the flag validation below — the one
+	// guard this table gained in the commit that added it — and let the banner
+	// stop naming half of what replaced `agentsync update`.
 	want := []string{
-		"explain <plugin>",
-		"plugin install",
-		"secrets",
-		"update",
-		"verify",
+		"explain <plugin> => plugin explain",
+		"plugin install => plugin add",
+		"secrets => secret",
+		"update => plugin outdated / plugin upgrade --all",
+		"verify => check",
 	}
 	var got []string
 	for _, r := range retirements {
-		got = append(got, r.Old)
+		got = append(got, r.Old+" => "+r.replacementPhrase())
 	}
 	sort.Strings(got)
 	if strings.Join(got, " | ") != strings.Join(want, " | ") {
 		t.Fatalf("the retirements table changed.\n  have: %s\n  want: %s\n\n"+
-			"This table is the oracle for three guards, so a row silently leaving it un-guards that "+
-			"spelling everywhere at once. If the change is deliberate, update this list — and if you "+
-			"ADDED a retirement, add its line to upgradeNotices too, or the banner will never mention it.",
+			"This table is the oracle for three guards, so a row — or a single replacement — silently "+
+			"leaving it un-guards that spelling everywhere at once. If the change is deliberate, update "+
+			"this list, and if you ADDED a retirement, add its line to upgradeNotices too or the banner "+
+			"will never mention it.",
 			strings.Join(got, " | "), strings.Join(want, " | "))
 	}
 }
@@ -189,8 +218,8 @@ func TestRetirementsTableIsWellFormed(t *testing.T) {
 			// is useless advice if --all stops existing, and stripping flags
 			// before resolving would hide that.
 			for _, f := range flags {
-				if cmd.Flags().Lookup(f) == nil && cmd.InheritedFlags().Lookup(f) == nil {
-					t.Errorf("retirement %q points at `agentsync %s`, but `%s` has no --%s flag.\n"+
+				if !flagExists(cmd, f) {
+					t.Errorf("retirement %q points at `agentsync %s`, but `%s` has no %s flag.\n"+
 						"The banner would hand an already-broken user a command that errors on its flags.",
 						r.Old, rep, cmd.CommandPath(), f)
 				}
@@ -209,6 +238,16 @@ func TestRetirementsTableIsWellFormed(t *testing.T) {
 				map[bool]string{true: "DOES resolve", false: "does NOT resolve"}[resolves])
 		}
 	}
+}
+
+// flagExists reports whether cmd accepts f, on its own set or inherited from
+// the root's persistent flags. Shorthands live in a separate index.
+func flagExists(cmd *cobra.Command, f flagRef) bool {
+	if f.shorthand {
+		return cmd.Flags().ShorthandLookup(f.name) != nil ||
+			cmd.InheritedFlags().ShorthandLookup(f.name) != nil
+	}
+	return cmd.Flags().Lookup(f.name) != nil || cmd.InheritedFlags().Lookup(f.name) != nil
 }
 
 // resolveCommand resolves a command path in the tree. cobra's Find returns the
