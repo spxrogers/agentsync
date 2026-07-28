@@ -494,4 +494,4 @@ rollback history, reached only from `cli`) is likewise a leaf. `drift`, `git`,
 `iox`, `jsonkeys`, `paths`, `log`, and `untrusted` depend on nothing internal —
 they're the foundation; `ui` (presentation) builds only on `untrusted`. See the
 rendered dependency graph in
-[architecture §10](architecture.md#10-package-layering).
+[architecture §11](architecture.md#11-package-layering).

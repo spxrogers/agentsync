@@ -778,7 +778,94 @@ manifest SHAs, bound component paths to the plugin cache, and reject
 
 ---
 
-## 10. Package layering
+## 10. The first-run upgrade notice
+
+A breaking rename is only half-shipped if the user never learns about it, and
+agentsync has **no usable post-install hook on any channel it ships through**:
+`go install` has none at all, a Homebrew *cask*'s `caveats` print only at
+install time, Scoop has nothing, and only deb/rpm have real scripts. So a
+hook-based message would reach a minority and silently miss everyone else. The
+binary is the only thing that reliably reaches an upgrading user, which makes
+this the single channel for anything a user must act on — and a banner that
+misfires is worse than none.
+
+**Where it runs.** `maybePrintUpgradeNotice` is wired into the root command's
+`PersistentPreRunE` (`internal/cli/upgrade_notice.go`), so every subcommand
+inherits it. Cobra's hook is a plain field, so it shares ONE closure with
+`enforceScopeStance` (which runs last and owns the returned error, since it is
+the half that can *refuse* the command) rather than taking a second assignment:
+a second `cmd.PersistentPreRunE =` silently DISCARDS the first — it did exactly
+that to the scope enforcement once, with CI green throughout.
+`TestRootDeclaresExactlyOnePersistentPreRun` fails the build on a second
+assignment, and because cobra runs only the *closest* hook in the chain,
+`TestNoSubcommandOverridesPersistentPreRun` guards the same hazard one level
+down.
+
+**The record.** `.state/last-run.json` (`internal/state/lastrun.go`), a
+**separate file from `targets.json`** on purpose:
+
+- a read-only `status` must be able to record that it showed the notice, and
+  `targets.json` is written only by the *mutating* commands — a user whose daily
+  loop never applies would otherwise see the banner forever;
+- a UX marker has no business gating on, or bumping, the drift state's
+  `SchemaVersion`.
+
+`.state/` is gitignored, so the record never travels with a dotfiles repo.
+
+**Keyed by ID, never by version comparison.** Each notice carries a stable `ID`
+recorded in `NoticesSeen []string`; the show/skip decision is a pure string
+membership test (`rec.Seen(n.ID)`). That is what lets a user who jumps several
+releases see each notice they missed, and stops a pre-release or non-semver
+build silently dropping one. The table is therefore **append-only: never rename,
+renumber, or delete an entry.** A rename re-shows the notice to everyone who
+already dismissed it; a duplicate makes the second unreachable; a deletion
+orphans a retirement that other guards read. `Since` and the notice body are
+free to change at any time — only the ID is frozen once published.
+
+**Invariants, each test-pinned:**
+
+1. **stderr, always** — `status --json` / `diff --json` / `explain --json` pipe
+   their payload on stdout, and a banner there corrupts what a caller parses.
+2. **Never on a fresh install.** Nothing can have broken for a user with no
+   config. The trigger is a regular `agentsync.toml`, not the home directory:
+   a project-scope user's home is created by central state, not by `init`.
+   Writing the record when the home is absent also *materializes* it, so the
+   user's first `agentsync init` would refuse with "already contains files" —
+   hence `init` seeds the record itself (`seedUpgradeNoticeRecord`), and a
+   machine set up today is never later told about a rename that predates it.
+3. **Silent for an unversioned (`dev`) build**, which keeps it out of local
+   `go build`s and the entire test/BDD/e2e suite.
+4. **Silent for shell completion.** Cobra runs the root pre-run hook for its
+   hidden `__complete` request too, and completion scripts discard stderr — so
+   one TAB would otherwise print the banner into `/dev/null` and record it seen.
+5. **Best-effort throughout, and it takes no lock.** Every read/write failure
+   degrades to "say nothing" or "show again later"; it can never fail a user's
+   command. A corrupt or truncated record reads as "nothing shown here" —
+   printed, then repaired — because an unparseable record carries no
+   information, and treating it as fatal permanently suppressed the one message
+   the user needed.
+6. **Opting out does not record.** `AGENTSYNC_NO_UPGRADE_NOTICE=1` suppresses
+   without marking seen, so unsetting it later still surfaces an unseen notice.
+
+**One consequence worth knowing.** Being lock-free makes the notice path the
+only read-modify-write in the tool that can run concurrently with itself, and it
+calls `ensureStateGitignore`. That write is `O_APPEND` for exactly this reason —
+`iox.AtomicWrite` does NOT make it safe (a fixed sibling temp name means
+concurrent writers share one inode) and additionally refuses symlinked
+destinations, which would silently leave chezmoi/Stow users with `.state/`
+unignored. A structural guard pins the append and forbids whole-file writers
+there.
+
+**The banner's content is pinned too**, not just its plumbing: every retired
+command must be named, before its replacements, joined by a sanctioned break
+phrase, carrying an alias-free assertion and no continuity claim. The shared
+`retirements` table is the oracle for that check, for the resurrection guard,
+and for the stale-prose scan — so a retirement cannot be added to one and
+forgotten in the others.
+
+---
+
+## 11. Package layering
 
 ```mermaid
 flowchart TD
