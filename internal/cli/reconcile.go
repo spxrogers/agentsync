@@ -47,6 +47,10 @@ type reconcileItem struct {
 	srcText string
 	dstText string
 	hasText bool
+	// pluginOwner is the plugin id providing this component, empty for a
+	// hand-authored one. Write-back is refused for a plugin-provided component:
+	// see writeBackFileItem.
+	pluginOwner string
 }
 
 // errDestDroppedServer signals that the destination no longer contains the MCP
@@ -155,7 +159,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 
 	// Collect all items in order, then append orphaned whole-file dests
 	// (owned in state, no longer rendered) for interactive delete/keep.
-	items := collectItems(plan, reg, s, sc, projectRoot, userHome)
+	items := collectItems(plan, reg, s, sc, projectRoot, userHome, pluginProvidedSourceIDs(c))
 	items = append(items, collectOrphanFileItems(plan, reg, s, sc, projectRoot, userHome)...)
 
 	w := p.Out
@@ -438,9 +442,46 @@ func b2i(b bool) int {
 	return 0
 }
 
+// pluginProvidedSourceIDs maps each canonical SourceID a plugin provides to the
+// providing plugin's id, for the projected canonical c. Skills contribute one
+// entry per file in the directory (SKILL.md plus every bundled resource), since
+// each renders its own op with its own SourceID.
+//
+// It is reconcile's counterpart to import's pluginProvided(): the same "don't
+// capture agentsync's own output back into the canonical source" rule, keyed the
+// way each caller can match it. Reconcile works from the PROJECTED canonical, so
+// provenance is already on the components and no re-projection is needed; import
+// works from the agent's NATIVE ingest, which carries no provenance at all, so it
+// has to project separately and match by component name.
+func pluginProvidedSourceIDs(c source.Canonical) map[string]string {
+	out := map[string]string{}
+	for _, sk := range c.Skills {
+		if sk.Plugin == "" {
+			continue
+		}
+		out[filepath.ToSlash(filepath.Join("skills", sk.Name, "SKILL.md"))] = sk.Plugin
+		for _, f := range sk.Files {
+			out[filepath.ToSlash(filepath.Join("skills", sk.Name, f.Path))] = sk.Plugin
+		}
+	}
+	for _, sa := range c.Subagents {
+		if sa.Plugin != "" {
+			out[filepath.ToSlash(source.SubagentSourceID(sa.Name))] = sa.Plugin
+		}
+	}
+	for _, cm := range c.Commands {
+		if cm.Plugin != "" {
+			out[filepath.ToSlash(filepath.Join("commands", cm.Name+".md"))] = cm.Plugin
+		}
+	}
+	return out
+}
+
 // collectItems builds the flat reconcile list from a rendered plan + state.
 // userHome (the user's $HOME) is the HomeRelative base for state-key lookups.
-func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, userHome string) []reconcileItem {
+// pluginOwners (pluginProvidedSourceIDs) tags each item whose component comes
+// from a plugin, so write-back can refuse it.
+func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, userHome string, pluginOwners map[string]string) []reconcileItem {
 	var items []reconcileItem
 	for _, name := range reg.Names() {
 		res, ok := plan.PerAgent[name]
@@ -500,6 +541,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 					srcText:     string(op.Content),
 					dstText:     string(dstBytes),
 					hasText:     true,
+					pluginOwner: pluginOwners[filepath.ToSlash(op.SourceID)],
 				})
 			}
 		}
@@ -959,6 +1001,20 @@ func writeBackFileItem(home string, it reconcileItem) error {
 	srcID := it.op.SourceID
 	if srcID == "" {
 		return fmt.Errorf("write-back for %s requires a single source-of-record; the rendering op has no SourceID (this happens for ad-hoc paths) — use [o]verride or [i]gnore", it.op.Path)
+	}
+	// A plugin-provided component has no canonical file of its own: it is
+	// projected from the plugin cache on every load. Writing the destination back
+	// would MINT one under ~/.agentsync/ with the component's (namespaced) name,
+	// and the next load would then hold two components of that name — the captured
+	// copy and the plugin's own projection — rendering to one destination path,
+	// which apply refuses. [o]verride restores the plugin's version; the edit
+	// belongs upstream in the plugin.
+	if it.pluginOwner != "" {
+		return fmt.Errorf("write-back for %s is unsafe: this component is projected from the plugin %q, "+
+			"so it has no canonical file to write into. Capturing it would create one that collides with "+
+			"the plugin's own on the next apply. Use [o]verride to restore the plugin's version, change it "+
+			"upstream, or run `agentsync plugin disable %s` to stop projecting it",
+			it.op.Path, it.pluginOwner, it.pluginOwner)
 	}
 	if strings.HasSuffix(srcID, "(multiple)") {
 		return fmt.Errorf("write-back for %s is unsafe: the dest is the concatenation of multiple source fragments. Persisting the whole dest into one of them would strand the others. Edit the source fragments under %s/ directly, then apply", it.op.Path, home)

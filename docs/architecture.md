@@ -613,6 +613,28 @@ on `hooks/<event>.toml`. A pure deletion carries no content to re-reference, so
 the funnel's secret guarantees are not in play; anything that writes *content*
 back still must go through `capture.Capture`.)
 
+**Plugin-provided components are never captured.** A component projected from an
+installed plugin has no canonical file of its own — it is re-derived from the
+plugin cache on every load — so writing a destination back for one would *mint* a
+canonical file under its (namespaced) name. The next load would then hold two
+components of that name, the captured copy and the plugin's own projection,
+rendering to one destination path, which apply refuses. Both dest→source entry
+points refuse:
+
+- **`import`** skips a plugin-provided component with a warning naming the
+  plugin, and errors outright if the user named one explicitly. An adapter's
+  `Ingest` reads the agent's native config, where a file agentsync rendered from
+  a plugin is indistinguishable from a hand-written one — so import projects the
+  plugins separately (`pluginProvided`) and matches by component name, which is
+  exact now that plugin components are namespaced.
+- **`reconcile`'s `[w]rite-back`** refuses the item and points at `[o]verride`.
+  It works from the PROJECTED canonical, so provenance is already on the
+  components (`pluginProvidedSourceIDs`) and no re-projection is needed.
+
+The edit belongs upstream in the plugin, or the plugin can be disabled. This is
+the capture-side complement to
+[plugin component namespacing](#plugin-component-namespacing).
+
 Re-reference matches by value, so it cannot distinguish a *moved or rotated*
 secret from a deliberate non-secret edit. As a **fail-closed backstop**,
 `capture.Capture` re-scans the about-to-be-written model

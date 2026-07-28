@@ -27,6 +27,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   - A single adapter rendering two divergent ops for one path was reported as
     "different content than an earlier agent", sending the user looking for a
     second agent that did not exist. That case now names its real cause.
+- **`import` and `reconcile` no longer capture plugin-provided components back
+  into the canonical source.** A plugin's component has no canonical file of its
+  own — it is re-derived from the plugin cache on every load — so capturing one
+  minted a canonical copy that then collided with the plugin's own projection,
+  breaking the next `apply`. An adapter's `Ingest` cannot tell a file agentsync
+  rendered from a plugin apart from a hand-written one, so `agentsync apply &&
+  agentsync import claude:subagent` reproduced this with any installed plugin.
+  `import` now skips such components with a warning naming the plugin (and errors
+  if you name one explicitly); reconcile's `[w]rite-back` refuses the item and
+  points at `[o]verride`. Components you hand-wrote into an agent's native config
+  are still captured normally.
 
 ### Changed
 

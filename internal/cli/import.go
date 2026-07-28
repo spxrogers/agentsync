@@ -283,6 +283,19 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 		return fmt.Errorf("ingest %s: %w", agentName, err)
 	}
 
+	// Ingest cannot tell a file agentsync rendered from an installed plugin apart
+	// from one the user hand-wrote, so compute the set apply projects and skip it
+	// below. A failure here is not fatal: import then behaves as it did before
+	// (capturing plugin components as if hand-authored), so warn and continue
+	// rather than refuse an import the user may need.
+	if pp, ppErr := pluginProvided(loaderFsForState(), agentsyncHome, projectRoot, sc); ppErr != nil {
+		io.warnf("could not determine which components your plugins provide (%v); "+
+			"a plugin-provided component captured now would collide with the plugin's own "+
+			"on the next apply — remove it from %s if that happens", ppErr, srcHome)
+	} else {
+		io.pluginProvided = pp
+	}
+
 	// Three selector depths, narrowing from broad to specific:
 	//   <agent>                     -> every importable component
 	//   <agent>:<component>         -> every entry of that component
@@ -847,6 +860,12 @@ type importIO struct {
 	// or single-component import, where the indented item lines stand alone.
 	section      string
 	sectionShown bool
+	// pluginProvided is per-RUN context rather than IO, carried here because
+	// this struct is already threaded to every importer: "<kind>/<name>" → the
+	// plugin id providing it, for every component apply projects from an
+	// installed plugin. See pluginProvided() for why import must skip those.
+	// Empty (a projection failure, or no plugins) disables the filter.
+	pluginProvided map[string]string
 }
 
 // item prints one "imported X" / "would import X" line, prefixed with a glyph
@@ -1128,12 +1147,116 @@ func idsFromWritten(written []string) []string {
 	return out
 }
 
+// pluginProvided maps "<kind>/<name>" to the plugin id that provides that
+// component, for every component apply projects from an installed plugin at this
+// scope. It is what keeps `import` from capturing agentsync's OWN output back
+// into the canonical source.
+//
+// The problem it solves: an adapter's Ingest reads the agent's native config and
+// cannot tell a file agentsync rendered from a plugin apart from one the user
+// hand-wrote — they are the same kind of file in the same directory. So
+// `agentsync apply && agentsync import claude:subagent` used to copy every
+// plugin-provided subagent into ~/.agentsync/subagents/ as if the user had
+// authored it. The next load then had TWO components with that name (the
+// captured copy and the plugin's own projection) rendering to one destination
+// path, which apply refuses.
+//
+// Matching is by effective name, which is exact rather than heuristic now that
+// plugin components are namespaced: a hand-authored component can only shadow a
+// plugin-provided one by being named `<plugin>-<name>` on purpose.
+//
+// It mirrors apply's projection so the skipped set is exactly the rendered set:
+// lenient (an unrelated strict plugin conflict must not abort an import), honours
+// the project tree's `disabled = true` plugin markers, and at project scope
+// unions BOTH homes' projections. A projection failure yields nil — import then
+// behaves as it did before, which is the pre-existing bug rather than a new one,
+// so the caller warns instead of failing the run.
+func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot string, sc adapter.Scope) (map[string]string, error) {
+	pluginCacheRoot := filepath.Join(agentsyncHome, ".state", "cache", "plugins")
+	var disabled []string
+	projHome := ""
+	if sc == adapter.ScopeProject && projectRoot != "" {
+		projHome = project.Home(projectRoot)
+		d, err := projectDisabledPlugins(fs, projHome)
+		if err != nil {
+			return nil, fmt.Errorf("read project plugin disables: %w", err)
+		}
+		disabled = d
+	}
+	out := map[string]string{}
+	collect := func(c source.Canonical) {
+		for _, sk := range c.Skills {
+			if sk.Plugin != "" {
+				out["skill/"+sk.Name] = sk.Plugin
+			}
+		}
+		for _, sa := range c.Subagents {
+			if sa.Plugin != "" {
+				out["subagent/"+sa.Name] = sa.Plugin
+			}
+		}
+		for _, cmd := range c.Commands {
+			if cmd.Plugin != "" {
+				out["command/"+cmd.Name] = cmd.Plugin
+			}
+		}
+	}
+	c, err := marketplace.LoadProjectedLenient(fs, agentsyncHome, pluginCacheRoot, disabled)
+	if err != nil {
+		return nil, fmt.Errorf("project user plugins: %w", err)
+	}
+	collect(c)
+	if projHome != "" {
+		pc, perr := marketplace.LoadProjectedLenient(fs, projHome, pluginCacheRoot, disabled)
+		if perr != nil {
+			return nil, fmt.Errorf("project %s plugins: %w", projHome, perr)
+		}
+		collect(pc)
+	}
+	return out, nil
+}
+
+// skipPluginProvided partitions native components into the ones to capture and
+// the ones a plugin already provides. It returns the survivors; skipped items are
+// reported through io so the omission is never silent (a native file that
+// vanishes from an import with no explanation reads as a bug).
+//
+// A NAMED import of a plugin-provided component is an error, not a silent
+// no-op: the user asked for that exact component by name and deserves to be told
+// why it cannot be captured, and what to do instead.
+func skipPluginProvided[T any](io *importIO, kind, name string, items []T, nameOf func(T) string) ([]T, error) {
+	if len(io.pluginProvided) == 0 {
+		return items, nil
+	}
+	out := make([]T, 0, len(items))
+	for _, it := range items {
+		plugin, provided := io.pluginProvided[kind+"/"+nameOf(it)]
+		if !provided {
+			out = append(out, it)
+			continue
+		}
+		if name != "" {
+			return nil, fmt.Errorf("%s %q is provided by the plugin %q, not hand-authored — importing it "+
+				"would create a canonical copy that collides with the plugin's own on the next apply; "+
+				"change it upstream, or run `agentsync plugin disable %s` to stop projecting it",
+				kind, nameOf(it), plugin, plugin)
+		}
+		io.warnf("skipping %s %q: it is projected from the plugin %q, so agentsync already manages it "+
+			"(capturing it would collide with the plugin's own on the next apply)", kind, nameOf(it), plugin)
+	}
+	return out, nil
+}
+
 func importSkill(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
 	var matched []source.Skill
 	for _, sk := range c.Skills {
 		if name == "" || sk.Name == name {
 			matched = append(matched, sk)
 		}
+	}
+	matched, err := skipPluginProvided(io, "skill", name, matched, func(sk source.Skill) string { return sk.Name })
+	if err != nil {
+		return nil, err
 	}
 	if len(matched) == 0 {
 		if name != "" {
@@ -1176,6 +1299,10 @@ func importSubagent(io *importIO, home string, c source.Canonical, name string) 
 			matched = append(matched, sa)
 		}
 	}
+	matched, err := skipPluginProvided(io, "subagent", name, matched, func(sa source.Subagent) string { return sa.Name })
+	if err != nil {
+		return nil, err
+	}
 	if len(matched) == 0 {
 		if name != "" {
 			return nil, fmt.Errorf("subagent %q not found in native config", name)
@@ -1209,6 +1336,10 @@ func importCommand(io *importIO, home string, c source.Canonical, name string) (
 		if name == "" || cm.Name == name {
 			matched = append(matched, cm)
 		}
+	}
+	matched, err := skipPluginProvided(io, "command", name, matched, func(cm source.Command) string { return cm.Name })
+	if err != nil {
+		return nil, err
 	}
 	if len(matched) == 0 {
 		if name != "" {

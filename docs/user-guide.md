@@ -177,6 +177,19 @@ LSP, memory, **and plugins**) in one pass. A bulk import that finds nothing for 
 component reports it and exits cleanly rather than erroring. Add `--dry-run` to
 list the source files an import would write without touching `~/.agentsync/`.
 
+**Import never re-captures a plugin's own components.** Once you have applied,
+a plugin's subagents, skills, and commands are sitting in the agent's native
+config as ordinary files — and the agent's config gives no hint which ones
+agentsync put there. Importing them would create canonical copies that collide
+with the plugin's own on the next apply, so `import` skips them and says which
+plugin provides each. Naming one explicitly
+(`agentsync import claude:subagent:feature-dev-code-reviewer`) is an error rather
+than a silent no-op. Components you wrote into the native config yourself are
+still captured normally. To change a plugin's component, change it upstream, or
+run `agentsync plugin disable <id>` to stop projecting it. `reconcile` refuses
+`[w]rite-back` on one for the same reason — use `[o]verride` to restore the
+plugin's version.
+
 **Plugins are a special case.** The `plugin` component (Claude and Codex) reads
 the agent's installed plugins and their marketplaces and re-fetches each one into
 the agentsync cache, pinning a manifest SHA — the same artifacts `marketplace

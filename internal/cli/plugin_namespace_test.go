@@ -178,3 +178,154 @@ func TestApply_HandAuthoredComponentKeepsBareName(t *testing.T) {
 		t.Fatalf("the plugin's subagent should still render, namespaced: %v", err)
 	}
 }
+
+// TestImport_SkipsPluginProvidedComponents closes the loop between `apply` and
+// `import`. An adapter's Ingest reads the agent's native config and cannot tell a
+// file agentsync rendered from a plugin apart from one the user hand-wrote — they
+// are the same kind of file in the same directory. So `apply` then `import`
+// copied every plugin-provided component into ~/.agentsync/ as if the user had
+// authored it, and the next load held TWO components of that name (the captured
+// copy and the plugin's own projection) rendering to one destination path, which
+// apply refuses.
+//
+// The end-to-end oracle is that apply still works afterwards: capturing a
+// plugin's output must not brick the next run.
+func TestImport_SkipsPluginProvidedComponents(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeCollidingMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
+
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	// Re-import every text component. The plugin's own output is now sitting in
+	// the native config, and must not be captured back.
+	for _, component := range []string{"subagent", "skill", "command"} {
+		if out, err := runCLI(t, env, "import", "claude:"+component); err != nil {
+			t.Fatalf("import claude:%s: %v\n%s", component, err, out)
+		}
+	}
+
+	for _, rel := range []string{
+		filepath.Join("subagents", "feature-dev-code-reviewer.md"),
+		filepath.Join("skills", "feature-dev-code-review", "SKILL.md"),
+		filepath.Join("commands", "feature-dev-review.md"),
+	} {
+		if _, err := os.Stat(filepath.Join(tmp, ".agentsync", rel)); err == nil {
+			t.Errorf("import captured the plugin-provided component %s into the canonical source; "+
+				"it would collide with the plugin's own projection on the next apply", rel)
+		}
+	}
+
+	// The real proof: the next apply still works. Before the fix it failed with
+	// two components resolving to one destination path.
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply after import must still succeed: %v\n%s", err, out)
+	}
+}
+
+// TestImport_NamedPluginComponentIsAnError pins that a NAMED import of a
+// plugin-provided component says why rather than silently importing nothing. The
+// user asked for that exact component; "no output" would read as a bug.
+func TestImport_NamedPluginComponentIsAnError(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeCollidingMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
+
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	out, err := runCLI(t, env, "import", "claude:subagent:feature-dev-code-reviewer")
+	if err == nil {
+		t.Fatalf("importing a plugin-provided component by name must error; got:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "feature-dev") {
+		t.Errorf("the error should name the providing plugin; got: %v", err)
+	}
+}
+
+// TestImport_StillCapturesHandAuthoredAlongsidePlugins is the other half: the
+// filter must be surgical. A component the user hand-wrote into the native
+// config is still captured even while a plugin's components are being skipped —
+// otherwise the fix would silently break ordinary import for anyone with a
+// plugin installed.
+func TestImport_StillCapturesHandAuthoredAlongsidePlugins(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeCollidingMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
+
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	// A subagent the user wrote straight into the agent's native config.
+	mine := filepath.Join(tmp, ".claude", "agents", "my-own.md")
+	if err := os.WriteFile(mine, []byte("---\nname: my-own\n---\nMine.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runCLI(t, env, "import", "claude:subagent"); err != nil {
+		t.Fatalf("import claude:subagent: %v\n%s", err, out)
+	}
+	captured := filepath.Join(tmp, ".agentsync", "subagents", "my-own.md")
+	data, err := os.ReadFile(captured)
+	if err != nil {
+		t.Fatalf("a hand-authored native subagent must still be captured: %v", err)
+	}
+	if !strings.Contains(string(data), "Mine.") {
+		t.Fatalf("captured the wrong content:\n%s", data)
+	}
+}
+
+// TestReconcile_WriteBackRefusesPluginProvidedComponent is the sibling of the
+// import filter, on the other dest→source path. A plugin-provided component has
+// no canonical file of its own — it is projected from the plugin cache on every
+// load — so capturing a hand-edit of one would MINT a canonical file with the
+// component's namespaced name, and the next load would hold two components of
+// that name rendering to one destination path.
+//
+// The oracle is again the next apply: reconcile must not leave the tree in a
+// state that apply refuses.
+func TestReconcile_WriteBackRefusesPluginProvidedComponent(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeCollidingMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
+
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	// Hand-edit the plugin's rendered subagent, so reconcile sees drift.
+	dest := filepath.Join(tmp, ".claude", "agents", "feature-dev-code-reviewer.md")
+	if err := os.WriteFile(dest,
+		[]byte("---\nname: feature-dev-code-reviewer\n---\nHAND EDITED\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// --auto-writeback must refuse this item rather than mint a canonical copy.
+	out, _ := runCLI(t, env, "reconcile", "--auto-writeback")
+	if !strings.Contains(out, "feature-dev") {
+		t.Errorf("reconcile should explain that the component comes from a plugin; got:\n%s", out)
+	}
+	captured := filepath.Join(tmp, ".agentsync", "subagents", "feature-dev-code-reviewer.md")
+	if _, err := os.Stat(captured); err == nil {
+		t.Fatal("write-back minted a canonical copy of a plugin-provided component; " +
+			"it collides with the plugin's own projection on the next apply")
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply after reconcile must still succeed: %v\n%s", err, out)
+	}
+}
