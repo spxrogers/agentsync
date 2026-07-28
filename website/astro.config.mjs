@@ -158,6 +158,7 @@ export default defineConfig({
 						{ label: 'CLI commands', slug: 'reference/cli' },
 						{ label: 'Configuration & layout', slug: 'reference/configuration' },
 						{ label: 'Environment variables', slug: 'reference/environment' },
+						{ label: 'Upgrading', slug: 'reference/upgrading' },
 					],
 				},
 				{

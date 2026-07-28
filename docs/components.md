@@ -382,10 +382,16 @@ Pure 3-way classifier — no IO.
 
 ### `internal/state`
 Persists last-applied hashes and plugin/marketplace pins to
-`.state/targets.json`; schema-versioned with migrators.
+`.state/targets.json`; schema-versioned with migrators. Also owns the
+per-machine run record `.state/last-run.json`, which backs the one-time
+first-run-after-upgrade notice — a SEPARATE file on purpose: it must be
+writable by read-only commands and must never gate on (or bump) the drift
+state's `SchemaVersion`.
 - **Key:** `SchemaVersion`; `Targets` (`Files`, `Keys`, `Marketplaces`,
-  `Plugins`); `FileEntry`; `KeyEntry`; `Load`/`Save`; `migrate`.
-- **Depends on:** iox. **Files:** `schema.go`, `store.go`, `migrate.go`.
+  `Plugins`); `FileEntry`; `KeyEntry`; `Load`/`Save`; `migrate`;
+  `LastRun`/`LoadLastRun`/`SaveLastRun`.
+- **Depends on:** iox. **Files:** `schema.go`, `store.go`, `migrate.go`,
+  `lastrun.go`.
 
 ### `internal/marketplace`
 Models the Claude marketplace/plugin format, fetches sources, and projects plugin

@@ -43,7 +43,27 @@ func NewRoot() *cobra.Command {
 	cmd.PersistentFlags().String("scope", "", "user | project (default: user; prompts when run inside a project tree)")
 	cmd.PersistentFlags().String("project", "", "explicit path to project root (implies --scope project)")
 
+	// EXACTLY ONE PersistentPreRunE, composing every root-level pre-run concern.
+	//
+	// PersistentPreRunE is a plain field, so a second assignment in this
+	// function silently DISCARDS the first — nothing fails to compile and no
+	// test breaks, the dropped hook just quietly stops running. Wiring the
+	// upgrade notice as its own assignment did exactly that to F6's scope
+	// enforcement, and CI stayed green. Add new pre-run work INSIDE this
+	// closure; TestRootDeclaresExactlyOnePersistentPreRun fails the build on a
+	// second assignment, and cobra runs only the CLOSEST hook in the chain, so
+	// TestNoSubcommandOverridesPersistentPreRun guards the same hazard one level
+	// down.
 	cmd.PersistentPreRunE = func(c *cobra.Command, _ []string) error {
+		// The first-run-after-upgrade notice is the ONLY hook that reaches every
+		// installation channel — `go install` has no post-install step, a
+		// Homebrew cask's caveats print at install time only, and Scoop has
+		// nothing — so the binary tells the user itself, once per machine, on
+		// stderr. It is best-effort and returns nothing: a UX marker must never
+		// fail a user's command.
+		maybePrintUpgradeNotice(c)
+		// Scope stance is the gate that can REFUSE the command, so it runs last
+		// and owns the returned error (#200 F6).
 		return enforceScopeStance(c)
 	}
 

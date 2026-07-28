@@ -18,6 +18,7 @@ the rest are escape hatches you'll rarely need.
 | `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations (e.g. chezmoi-managed files). |
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://` / `git://` plugin & marketplace sources. |
 | `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `check` validate reference *shape* only, skipping resolution (CI without an age key). |
+| `AGENTSYNC_NO_UPGRADE_NOTICE=1` | Never show the one-time [upgrade notice](/reference/upgrading/). |
 
 ## All overrides
 
@@ -32,6 +33,7 @@ the rest are escape hatches you'll rarely need.
 | `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Skip `${secret:…}` resolution in `check`; reference *shape* (well-formed `${secret:…}`/`${env:…}`) is still validated (CI without an age key). |
 | `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` | Skip the 0600 mode check on the age identity file (ACL'd NFS). |
 | `AGENTSYNC_MAX_TARBALL_MB=<N>` | Override the per-tarball decompressed-bytes cap (default 512; 0 disables). |
+| `AGENTSYNC_NO_UPGRADE_NOTICE=1` | Suppress the one-time first-run-after-upgrade notice (see [Upgrading](/reference/upgrading/)). Nothing is printed and nothing is recorded, so unsetting it later still surfaces an unseen notice. |
 | `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |
 
 <Aside type="caution" title="The ALLOW_* flags loosen a safety default">

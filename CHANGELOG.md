@@ -163,6 +163,29 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **A one-time upgrade notice, printed by the CLI itself.** agentsync ships
+  through channels with no usable post-install hook — `go install` has none at
+  all, a Homebrew cask's caveats print only at install time, Scoop has nothing,
+  and only deb/rpm have real scripts — so the binary is the only thing that
+  reliably reaches an upgrading user. The first time you run a release carrying
+  a notice you have not seen, it prints what changed, the exact command to run,
+  and a link to <https://agentsync.cc/reference/upgrading/>.
+  - **Once per machine**, recorded in `~/.agentsync/.state/last-run.json` (a
+    separate file from `targets.json` on purpose: a read-only `status` must be
+    able to record that it showed the notice, and a UX marker has no business
+    gating on the drift state's `SchemaVersion`). `.state/` is gitignored, so
+    the record never travels with a dotfiles repo.
+  - **On stderr, always** — `status --json` / `diff --json` / `explain --json`
+    pipe their payload on stdout and must stay clean.
+  - **Never on a fresh install**: nothing can have broken under a user with no
+    config, so `init` seeds the record as already-seen. It is also silent for
+    an unversioned (`dev`) build, which keeps it out of local builds and the
+    whole test suite.
+  - **Best-effort**: a corrupt, missing, or unwritable record only means the
+    notice shows again later. It can never fail a command.
+  - Opt out permanently with `AGENTSYNC_NO_UPGRADE_NOTICE=1`.
+
+
 - **`agentsync explain <path>[#<pointer>]` — provenance for a destination
   file.** `diff` answers "what changed"; this answers "where did this come
   from", which is exactly the question a *converged* file (where `diff` is
@@ -209,6 +232,88 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   explicitly marked not-wired rather than reading as shipped.
 
 ### Fixed
+
+- **The upgrade notice no longer describes a removed command as deprecated.**
+  After the top-level `update` was cut outright, the banner's action line still
+  read "`agentsync update` is deprecated". Every guard stayed green: the notice
+  source is exempt from the stale-renamed-command scan (naming old spellings is
+  its job), and that exemption is whole-file, so it can catch a *missing*
+  mention but never a *wrong* one. Telling a user their cron line has a grace
+  period it does not have is the worst thing this banner can say, to the exact
+  audience it exists for. `TestUpgradeNoticeNamesEveryRetiredCommand` now pins
+  both directions — every retired top-level spelling must be named, and no
+  action line may call anything deprecated.
+
+- **Shell completion no longer consumes the upgrade notice.** Cobra runs the
+  root pre-run hook for its hidden `__complete` request too, and the generated
+  bash/zsh scripts invoke it with stderr discarded — so a single TAB after
+  `agentsync ` printed the banner into `/dev/null`, recorded it as seen, and the
+  user's next real command said nothing. Anyone with completions installed
+  would have hit that before ever seeing the notice, which is the one outcome
+  the feature exists to prevent. Completion requests now return before the
+  notice is considered.
+
+- **The upgrade notice no longer fires at a brand-new project-scope user.** It
+  treated "the user home exists but has no run record" as an upgrade — but a
+  project-scope user never runs `agentsync init` at user scope, and
+  `~/.agentsync/` gets materialized anyway the first time any mutating command
+  takes the global lock or records central state. A 0.11.0-native user was
+  therefore told to run `agentsync migrate subagents` against a tree that never
+  had an `agents/` directory, and that `verify` is now `check` having never
+  seen `verify`. The trigger is now `agentsync.toml` — written by `init`, never
+  by the state path — and a home without one is passed over without recording
+  anything, so a machine that later gains a user config (a dotfiles restore, or
+  `agentsync init` run afterwards) still hears about the changes rather than
+  being silenced forever. A
+  project-scope-only user upgrading from an older release still gets the
+  retired layout reported per tree by the fail-closed load gate, which names
+  the same command.
+
+- **`ensureStateGitignore` appends instead of rewriting.** The upgrade notice
+  calls it from a deliberately lock-free path — the only write in the tool that
+  can run concurrently with itself — and it was a read-modify-write with
+  `os.WriteFile(O_TRUNC)`, so a reader landing inside another writer's truncate
+  window wrote back its short read. Measured under concurrent first runs: a
+  4000-line `~/.agentsync/.gitignore` collapsed to a single line, the user's own
+  rules gone. `iox.AtomicWrite` does **not** fix this — it uses a fixed sibling
+  temp name, so N concurrent writers share one temp inode and the same collapse
+  reproduces. The rule is now appended with `O_APPEND`, which additionally
+  restores two behaviors an atomic rewrite had broken: it writes **through** a
+  symlinked `.gitignore` (chezmoi / GNU Stow manage dotfiles that way, and
+  `iox.AtomicWrite` refuses a symlinked destination outright — silently leaving
+  `.state/` unignored for exactly those users), and it preserves the file's
+  existing mode rather than chmod-ing it to 0644. It also no longer appends a
+  duplicate rule to a home that already ignores `.state/` in an equivalent
+  spelling.
+
+- **The first-run-after-upgrade notice no longer silently disables the
+  `--scope` / `--project` refusal.** Wiring the notice assigned the root
+  command's `PersistentPreRunE` a SECOND time, and cobra's hook is a plain
+  field — so the assignment discarded the one calling `enforceScopeStance`, and
+  every scope-unaware command went back to accepting the flags and ignoring
+  them (exactly the bug #200 F6 shipped to kill). Nothing failed: the three
+  scope tests all read annotations, so none of them ever executed the hook. The
+  root now composes both concerns in one closure, and two guards cover the
+  shape — `TestRootDeclaresExactlyOnePersistentPreRun` (a second assignment
+  fails the build) and a behavioral table asserting scope-unaware commands
+  really do refuse.
+
+- **A corrupt run record no longer suppresses the upgrade notice forever.** Any
+  parse failure was treated like an I/O error: the notice was skipped and the
+  file was never rewritten, so one truncated or empty `last-run.json` — the
+  classic crash-mid-write or full-disk artifact — meant the user *never* learned
+  their canonical layout had moved. That directly contradicted the documented
+  contract. A record that cannot be parsed carries no information, so it is now
+  read as "this machine has shown nothing": the notice prints and the record is
+  repaired. `state.LoadLastRun` distinguishes `ErrCorruptLastRun` from a real
+  I/O error and always returns a usable record.
+
+- **The run record is gitignored on the path that creates it.** The notice is a
+  second place that can create `.state/` (`init` is the other) and it fires
+  precisely for pre-existing homes — which may predate the `.gitignore`
+  scaffolding — so in a dotfiles repo one `git add -A` committed one machine's
+  run marker and carried it to every other machine, silently suppressing the
+  notice there.
 
 - **`agentsync explain` no longer prints a resolved secret through an adapter
   skip reason.** `explain` renders from the secret-RESOLVED canonical (it must,

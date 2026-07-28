@@ -1,5 +1,6 @@
-// Package state persists agentsync's last-applied hashes and marketplace/plugin
-// pinning to ~/.agentsync/.state/targets.json.
+// Package state persists agentsync's own bookkeeping under ~/.agentsync/.state/:
+// the last-applied hashes and marketplace/plugin pinning in targets.json, and
+// the per-machine run record in last-run.json (see lastrun.go).
 package state
 
 import "time"

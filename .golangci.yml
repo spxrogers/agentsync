@@ -103,6 +103,12 @@ linters:
       - path: '(^|/)internal/state/store\.go$'
         linters: [forbidigo]
         text: 'iox\.AtomicWrite is reserved'
+      # state/lastrun.go writes .state/last-run.json (agentsync's own per-machine
+      # run record for the upgrade notice) — same non-destination category as
+      # store.go, never a native agent file.
+      - path: '(^|/)internal/state/lastrun\.go$'
+        linters: [forbidigo]
+        text: 'iox\.AtomicWrite is reserved'
       # secrets/age.go writes secrets.age under ~/.agentsync/ via the
       # atomic path so a Ctrl-C during re-encrypt can't truncate the file.
       # Same canonical-source category, not a native destination.

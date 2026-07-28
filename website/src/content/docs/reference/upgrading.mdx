@@ -1,0 +1,165 @@
+---
+title: Upgrading
+description: What changed between agentsync releases, and the exact command to run. This is the page the CLI's first-run-after-upgrade notice links to.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+This page lists every change that needs you to *do* something after an upgrade,
+newest first. It is what the CLI's one-time upgrade notice links to.
+
+<Aside type="note" title="How the notice works">
+	agentsync ships through channels with no usable post-install hook — `go
+	install` has none at all, a Homebrew cask's caveats print only at install
+	time, Scoop has nothing — so the **binary tells you itself**, on stderr, the
+	first time you run a version carrying a notice you haven't seen.
+
+	It is shown **once per machine** and recorded in
+	`~/.agentsync/.state/last-run.json` (gitignored, so it never travels with a
+	dotfiles repo). A brand-new install never sees it — nothing can have broken
+	under a user who has no config yet. Silence it permanently with
+	`AGENTSYNC_NO_UPGRADE_NOTICE=1`.
+
+	Each notice is keyed by a stable **id**, never by comparing versions, so
+	jumping several releases still shows every notice you missed. A record that
+	is missing or unreadable just means the notice shows again later — it is
+	never a reason to fail your command.
+
+	*Maintainers: every section on this page pairs with an entry in
+	`upgradeNotices` (`internal/cli/upgrade_notice.go`). Add both, and never
+	rename a shipped id.*
+</Aside>
+
+## 0.11.0
+
+The v1.x CLI surface was locked in this release, so several names moved. All of
+them are **hard renames with no aliases** — the old spellings fail, loudly,
+rather than working quietly for a while. Scripts and CI pipelines need updating.
+
+| Old | New |
+|---|---|
+| `agentsync verify` | `agentsync check` |
+| `agentsync plugin install` | `agentsync plugin add` |
+| `agentsync secrets …` | `agentsync secret …` |
+| `agentsync explain <plugin>` | `agentsync plugin explain <plugin>` |
+| `agentsync update` | `agentsync plugin outdated` |
+| `~/.agentsync/agents/` | `~/.agentsync/subagents/` *(run `agentsync migrate subagents`)* |
+
+### The canonical subagent directory moved: `agents/` → `subagents/`
+
+The canonical tree carried the `[agents]` **harness registry** (in
+`agentsync.toml`) and the **subagent** files one directory apart — the same word
+naming two different types. Only the subagent side moved.
+
+```bash
+agentsync migrate subagents                        # your ~/.agentsync tree
+agentsync migrate subagents --project ~/code/repo  # a project's committed tree
+```
+
+Run it once per tree. It moves the files **and** rewrites that tree's recorded
+`source_id` values in one step. If a file exists under both `agents/` and
+`subagents/` it refuses and lists the collisions — nothing is ever overwritten.
+After a user-scope move, commit the rename: `~/.agentsync` is usually a dotfiles
+repo.
+
+Until you migrate, **every command that loads the source refuses**, naming this
+command, and `doctor` reports it as a failing check. That is deliberate: an
+unmigrated tree loads with *zero* subagents, and one `apply` would then delete
+every subagent it had already rendered.
+
+**Nothing else named `agents` changed.** The `[agents]` table, `--agents` on
+`status`/`diff`/`mcp add`, the `agents` field on MCP/LSP servers, the `agents`
+array in `status --json`, and the `agentsync agent` command group are all
+exactly as they were. Rendered *destination* paths are untouched too — every
+harness spells its own directory `agents/`, so the mapping is now deliberately
+asymmetric (`subagents/reviewer.md` → `~/.claude/agents/reviewer.md`).
+
+### `verify` is now `check`
+
+`verify` and `doctor` overlapped with no stated boundary. They now split along
+the axis they actually differ on: **`doctor` validates your machine** (PATH,
+home/state writability, adapter detection, secrets backend, destination git
+state); **`check` validates your config** (schema lint plus every
+`${secret:…}`/`${env:…}` reference, scope-aware). Reach for `doctor` when
+something is *set up* wrong and `check` when something is *written* wrong.
+
+`AGENTSYNC_ALLOW_OFFLINE_VERIFY` keeps its name — it names the behavior, not the
+command.
+
+### The noun groups share one verb set
+
+`plugin install` became `plugin add` (every other group creates with `add`, and
+"install" wrongly suggested installing into the agent), and the `secrets` group
+became singular `secret`. Both are hard renames.
+
+Two gaps closed at the same time: **`mcp enable` / `mcp disable`** (the
+`enabled` field already existed and the loader already read it — only a
+hand-edit could flip it), and **`secret list` / `secret remove`** (previously
+`secret edit`, which decrypts the whole vault into `$EDITOR`, was the only way
+to see or delete a key). `secret list` prints **keys only**.
+
+### Every component you can author, you can now list
+
+`skill`, `subagent`, `command`, `hook`, and `lsp` each gained `list` (and `ls`).
+There is no `add` for them on purpose — unlike an MCP server, none is
+flag-authorable.
+
+### `--scope` / `--project` are root flags
+
+Declared once, inherited everywhere. `mcp add … --scope project` now actually
+writes the project tree (it used to silently write the user tree), and a command
+that *cannot* honor scope — `doctor`, `revert`, `version`, and the `plugin` /
+`marketplace` / `secret` groups — refuses the flag with the reason instead of
+ignoring it.
+
+### `--agents` works on `apply` now
+
+`apply` had no `--agents` while `status` / `diff` did, so the filter you use in
+the daily loop vanished at the one step that writes. `apply`, `status`, `diff`,
+`reconcile`, and `revert` all take it now, with identical parsing.
+
+### Plugin lifecycle verbs moved under `plugin`
+
+| Before | After |
+|---|---|
+| `agentsync update` | `agentsync plugin outdated` |
+| `agentsync update --apply` | `agentsync plugin upgrade --all` |
+| `agentsync update --apply --auto-safe` | `agentsync plugin upgrade --all --lossless` |
+| `agentsync explain <plugin>` | `agentsync plugin explain <plugin>` |
+| `agentsync explain --list` | `agentsync plugin list` |
+
+- **`update` was removed, with no alias.** A draft of this release kept a
+  deprecated forwarding alias for one minor, since `update` is the spelling most
+  likely to sit in a cron line. It was cut before shipping: it would have been
+  the *only* alias in a release whose point is that the renames are hard, and
+  "no aliases except this one" is a worse rule to remember than "no aliases".
+  A cron line calling `agentsync update` now fails as an unknown command, and
+  "louder" here means something specific: what a scheduler acts on is the **exit
+  status**, not the text. A deprecation warning would have gone to the same
+  discarded stderr as everything else, leaving the job green while doing nothing;
+  a non-zero exit is the one signal cron, systemd, and CI all actually surface.
+- **`explain` has no alias either**, and it is the one change that can break a
+  script *silently*: the top-level name still exists but now answers a
+  *different* question (see below), so `agentsync explain <plugin-id>` fails
+  from this release. That is most of why the upgrade notice exists.
+- **`plugin upgrade <id>` now re-applies.** It used to re-fetch and leave your
+  agents stale until the next `apply`; both it and `--all` now finish by
+  re-applying, so one verb has one ending state.
+- **`--auto-safe` became `--lossless`** on the plugin side only, because the
+  name meant two unrelated things. `reconcile --auto-safe` is unchanged.
+
+### New: `agentsync explain <path>`
+
+The freed name answers "where did this file come from?" — which canonical file,
+which plugin, what the adapter changed on the way, and whether it has drifted.
+
+```bash
+agentsync explain ~/.claude/agents/reviewer.md
+agentsync explain ~/.claude.json#/mcpServers/github
+```
+
+It prints metadata only — never file content — so unlike `diff` it still answers
+with a locked secrets vault. Full details in
+[the CLI reference](/reference/cli/#explain-pathpointer).
