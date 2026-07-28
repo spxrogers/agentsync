@@ -143,6 +143,13 @@ func TestSecretListRemove(t *testing.T) {
 
 // TestRenamedGroupsHaveNoAliases pins the ratified alias policy: these are hard
 // renames, so the old spellings must be gone rather than quietly working.
+//
+// This list is NOT derived from the shared `retirements` table, and cannot be:
+// that table is unexported and this file is package cli_test. So a retirement
+// added there gets structural coverage automatically (TestRetiredCommandsAreGone
+// reads the cobra tree) but NOT a row here. Do not read this as the behavioral
+// half of the table — it is a spot check that the structural guards agree with
+// what the binary actually does when you type the old spelling.
 func TestRenamedGroupsHaveNoAliases(t *testing.T) {
 	_, env := componentFixture(t)
 

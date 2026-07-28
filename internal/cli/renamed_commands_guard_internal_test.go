@@ -35,18 +35,14 @@ func TestNoStaleRenamedCommandReferences(t *testing.T) {
 	// not handing the user a broken command, and scanning for it would flag the
 	// legitimate `explain <path>` prose this release added.
 	//
-	// Matched on a WORD boundary (see containsInvocation): `update` and
-	// `install` are ordinary English words, so a bare substring test would flag
-	// prose like "agentsync updates the native config" and hand the next author
-	// a bogus failure whose cheapest fix is to add their file to `exempt` —
-	// permanently un-guarding it.
+	// Matching is word-boundary aware; see containsInvocation for why.
 	renamed := map[string]string{}
 	for _, r := range retirements {
 		if !r.FailsAsUnknown {
 			continue
 		}
 		var to []string
-		for _, n := range r.New {
+		for _, n := range r.Replacements {
 			to = append(to, "agentsync "+n)
 		}
 		renamed["agentsync "+r.Old] = strings.Join(to, " / ")
@@ -159,21 +155,32 @@ func containsInvocation(line, old string) bool {
 		if end == len(line) || !isWordByte(line[end]) {
 			return true
 		}
-		i = end
+		// Advance one past the START of this occurrence, not past its end: a
+		// boundary-satisfying match can begin INSIDE the one just rejected when
+		// the needle overlaps itself. No current key does (they all begin
+		// "agentsync "), but the correctness of this loop should not rest on
+		// that. containsInvocation("aaa", "aa") is the minimal case.
+		i += j + 1
 	}
 }
 
-// isWordByte reports whether b continues a command word. ONLY ASCII letters
-// count, which is deliberately over-inclusive at the edges: `agentsync verify
-// --json`, `agentsync verify`, and `agentsync verify.` are all matched as the
-// command, and so are `agentsync verify-ish`, `agentsync verify2`, and a
-// non-ASCII continuation like `agentsync verifyé`. The class exists to
-// separate a command from its ordinary-English inflections (`updates`,
-// `verifies`, `installs`), which are always letter-continued; a hyphen or
-// digit after a command name is far more likely to be a real invocation than
-// prose, so flagging those is the safer bias.
+// isWordByte reports whether b continues a command word: ASCII letters, digits,
+// hyphen, and underscore — the characters a command or flag name is spelled
+// from.
+//
+// It has to do two jobs. Ending the word at a non-word byte is what separates
+// `agentsync update --apply` (an invocation) from `agentsync updates the native
+// config` (prose) — the false-positive class this matcher exists to prevent.
+// Including the hyphen is what stops a longer FLAG from satisfying a shorter
+// one: without it, `agentsync plugin upgrade --all-agents` would count as
+// naming `agentsync plugin upgrade --all`, which the notice guard relies on.
+//
+// A non-ASCII continuation (`agentsync verifyé`) reads as a boundary and is
+// therefore matched. That is the safe direction — a false positive is a
+// reviewer conversation, a false negative is a broken command left in a doc.
 func isWordByte(b byte) bool {
-	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') ||
+		(b >= '0' && b <= '9') || b == '-' || b == '_'
 }
 
 // TestContainsInvocation exercises the matcher directly.
@@ -184,8 +191,7 @@ func isWordByte(b byte) bool {
 // TestNoStaleRenamedCommandReferences catches a TOTAL failure, but it is a
 // per-file OR across every key: break the match for one key only (the newest
 // one, always the least protected) and the surviving keys keep the exempt files
-// hit, so the suite stays green while that retirement goes unguarded. That was
-// demonstrated, not theorized.
+// hit, so the suite stays green while that retirement goes unguarded..
 func TestContainsInvocation(t *testing.T) {
 	cases := []struct {
 		name string
@@ -216,8 +222,22 @@ func TestContainsInvocation(t *testing.T) {
 		{"real then prose", "run agentsync update, since agentsync updates things", "agentsync update", true},
 
 		{"absent", "nothing to see here", "agentsync update", false},
-		// Documented deliberate calls: a hyphen/digit/underscore ends the word.
-		{"hyphenated", "agentsync verify-ish", "agentsync verify", true},
+
+		// A command word continues through digits, hyphens and underscores, so
+		// none of these is the retired command.
+		{"hyphenated", "agentsync verify-ish", "agentsync verify", false},
+		{"digit suffix", "agentsync update2", "agentsync update", false},
+		{"underscore suffix", "agentsync update_all", "agentsync update", false},
+		// The reason the hyphen is in the class: a longer flag must not satisfy
+		// a shorter one, which the upgrade-notice guard depends on.
+		{"longer flag", "run `agentsync plugin upgrade --all-agents`", "agentsync plugin upgrade --all", false},
+		{"exact flag", "run `agentsync plugin upgrade --all`", "agentsync plugin upgrade --all", true},
+		// A needle carrying a placeholder, as the `explain <plugin>` row does.
+		{"bracket needle", "`agentsync explain <plugin>` moved", "agentsync explain <plugin>", true},
+		// Self-overlapping needle: the boundary-satisfying match starts inside
+		// the rejected one. No real key overlaps itself; the loop must still
+		// find it.
+		{"self-overlapping needle", "aaa", "aa", true},
 
 		// A typo'd table entry must fail, not hang. Without the guard clause
 		// this case spins forever and the whole package times out.
@@ -296,13 +316,27 @@ func walkRepoLooseFiles(root string, fn func(rel, src string)) error {
 	return nil
 }
 
+// generatedWebsiteDocs are rendered from docs/*.md by website/scripts/sync-docs.mjs
+// at build time and gitignored. The list mirrors website/.gitignore.
+var generatedWebsiteDocs = map[string]bool{
+	"website/src/content/docs/concepts/index.md":              true,
+	"website/src/content/docs/internals/architecture.md":      true,
+	"website/src/content/docs/internals/components.md":        true,
+	"website/src/content/docs/reference/capability-matrix.md": true,
+	"website/src/content/docs/comparison/index.md":            true,
+}
+
 // walkRepoDocs visits the user-facing prose: docs/*.md, the authored website
-// pages, test/ (its README and the .feature files, whose assertions are
-// behavior locks that can go green on a stale string), and the root
-// README/CHANGELOG/SECURITY/CONTRIBUTING. The generated website copies under
-// website/src/content/docs/{concepts,architecture,components,reference/capability-matrix}
-// are excluded — they are produced from docs/*.md at build time and are
-// gitignored, so flagging them would report the same line twice.
+// pages, the repo's own .agentsync/skills/, test/ (its README and the .feature
+// files, whose assertions are behavior locks that can go green on a stale
+// string), and the root README/CHANGELOG/SECURITY/CONTRIBUTING.
+//
+// The generated website copies are skipped by exact path (generatedWebsiteDocs).
+// They are rendered from docs/*.md at build time and gitignored, so a stale
+// line in one is really a stale line in docs/ — reporting both sends the reader
+// to fix the build output. An earlier version of this comment claimed they were
+// excluded when the walk only skipped by DIRECTORY name, so every one of them
+// was in fact scanned and double-reported.
 func walkRepoDocs(root string, fn func(rel, src string)) error {
 	var walk func(dir string) error
 	walk = func(dir string) error {
@@ -336,16 +370,20 @@ func walkRepoDocs(root string, fn func(rel, src string)) error {
 				!strings.HasSuffix(name, ".feature") {
 				continue
 			}
+			rel, _ := filepath.Rel(root, p)
+			slash := filepath.ToSlash(rel)
+			if generatedWebsiteDocs[slash] {
+				continue
+			}
 			data, err := os.ReadFile(p)
 			if err != nil {
 				return err
 			}
-			rel, _ := filepath.Rel(root, p)
-			fn(filepath.ToSlash(rel), string(data))
+			fn(slash, string(data))
 		}
 		return nil
 	}
-	for _, sub := range []string{"docs", "website/src/content/docs", "test"} {
+	for _, sub := range []string{"docs", "website/src/content/docs", "test", ".agentsync/skills"} {
 		if err := walk(filepath.Join(root, filepath.FromSlash(sub))); err != nil {
 			return err
 		}

@@ -55,10 +55,8 @@ func TestTopLevelCommandSurfaceIsPinned(t *testing.T) {
 // TestRetiredCommandsAreGone is the negative half: the hard renames must not
 // resurrect, as a command OR as an alias, at ANY depth.
 //
-// It does not replace TestRenamedGroupsHaveNoAliases (component_verbs_test.go),
-// which invokes the old spellings and requires them to fail — that test does
-// catch an alias resurrection, since an alias would make the invocation
-// succeed. An earlier version of this comment claimed otherwise; it was wrong.
+// It complements TestRenamedGroupsHaveNoAliases (component_verbs_test.go),
+// which invokes the old spellings and requires them to fail.
 //
 // What this adds is structural rather than behavioral: no fixture, no process,
 // and it reads the alias list directly, so it still fires for a command that
@@ -79,7 +77,7 @@ func TestTopLevelCommandSurfaceIsPinned(t *testing.T) {
 func TestRetiredCommandsAreGone(t *testing.T) {
 	gone := map[string]retirement{}
 	for _, r := range retirements {
-		if r.TopLevel {
+		if r.topLevel() {
 			gone[r.Old] = r
 		}
 	}
@@ -94,7 +92,7 @@ func TestRetiredCommandsAreGone(t *testing.T) {
 			if r, isGone := gone[n]; isGone {
 				t.Errorf("`%s` is reachable again as `agentsync %s` (a name or an alias) — it was retired "+
 					"with no alias by explicit decision, replaced by `%s`, so resurrecting it silently "+
-					"changes the contract", n, path, r.replacements())
+					"changes the contract", n, path, r.replacementPhrase())
 			}
 		}
 	})

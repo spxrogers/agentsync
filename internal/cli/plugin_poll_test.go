@@ -300,9 +300,11 @@ func TestPluginPoll_UpgradeAllLossless(t *testing.T) {
 	//
 	// This is the command-level replacement for an engine-level guard that
 	// pollPluginsRun used to carry (and that only the retired top-level `update`
-	// could reach). Assert the REASON, not just a non-zero exit: a bare
-	// `err != nil` here would also pass if `--lossless` stopped being a flag at
-	// all, which is the regression this arm exists to catch.
+	// could reach). The error it asserts is `upgrade`'s generic "needs an id or
+	// --all" — `--lossless` plays no part in producing it. That is still worth
+	// pinning: a bare `err != nil` would also pass if `--lossless` stopped being
+	// a flag at all (cobra would say "unknown flag"), which is the regression
+	// this arm exists to catch.
 	_, err := runCLI(t, env, "plugin", "upgrade", "--lossless")
 	if err == nil {
 		t.Fatal("--lossless without --all or an id should error")

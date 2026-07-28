@@ -1,61 +1,165 @@
 package cli
 
-import "strings"
+import (
+	"strings"
+	"testing"
+
+	"github.com/spf13/cobra"
+)
 
 // retirement describes one hard rename or removal shipped in v0.11.0 (#200
 // F2/F4/F8). Every one is alias-free by explicit decision: the old spelling
 // does not keep working.
 //
-// This table is the single oracle for THREE guards that would otherwise each
-// carry their own copy of the list, and drift apart the first time a retirement
+// This table is the single oracle for three guards that would otherwise each
+// carry their own copy of the list and drift apart the first time a retirement
 // is added to one and forgotten in the others:
 //
 //   - TestRetiredCommandsAreGone (command_surface_internal_test.go) — the old
-//     spelling must not resurrect in the cobra tree, as a name or an alias.
-//     Reads the TopLevel rows, since only those were command names.
+//     spelling must not resurrect in the cobra tree. Reads the top-level rows.
 //   - TestNoStaleRenamedCommandReferences (renamed_commands_guard_internal_test.go)
-//     — no doc, comment, or hint may still tell a user to run the old spelling.
-//     Reads the FailsAsUnknown rows: those are the ones that now error, so a
-//     stale hint hands the user a broken command.
+//     — no doc or hint may still tell a user to run the old spelling. Reads the
+//     FailsAsUnknown rows, since only those hand the user a broken command.
 //   - TestUpgradeNoticeNamesEveryRetiredCommand (upgrade_notice_table_internal_test.go,
 //     added by the stacked upgrade-notice branch) — the first-run banner must
-//     name every retirement AND its replacement. Reads every row.
+//     name every retirement and its replacement. Reads every row.
 //
-// The canonical `agents/` → `subagents/` directory move is deliberately absent:
-// it is not a command retirement, and the banner's line for it is pinned
-// separately by TestUpgradeNotice_ShownOnceOnUpgrade, which greps the rendered
-// output for `migrate subagents`.
+// The canonical `agents/` → `subagents/` move is absent: it is not a command
+// retirement, and the banner's line for it is pinned by
+// TestUpgradeNotice_ShownOnceOnUpgrade, which greps for `migrate subagents`.
+//
+// TestRetirementsTableIsWellFormed keeps the table honest. Without it the table
+// is self-certifying, and a one-row edit is silent rather than loud: dropping a
+// flag removes that row from two guards with the whole suite still green, which
+// was demonstrated, not assumed.
 type retirement struct {
 	// Old is the retired invocation WITHOUT the "agentsync " prefix, spelled
 	// as a user would type it.
 	Old string
-	// New lists the replacement invocation(s), also without the prefix. All of
-	// them must appear on the banner line that names Old — a retirement whose
-	// notice says what broke but not what to run instead is half a notice.
-	New []string
-	// TopLevel marks a retirement that WAS a top-level cobra command name, so
-	// the resurrection guard has something to look for. `plugin install` and
-	// `explain <plugin>` are not: they were nested, and `explain` still exists.
-	TopLevel bool
-	// FailsAsUnknown marks a retirement whose old spelling now exits non-zero
-	// as an unknown command. `explain <plugin>` is the one that does NOT — the
-	// name still resolves and now answers a different question, which is why it
-	// is the only rename in this release that can break a script silently.
+	// Replacements lists what to run instead, also without the prefix. The
+	// banner line naming Old must name all of them.
+	Replacements []string
+	// FailsAsUnknown records that the old spelling now exits non-zero as an
+	// unknown command. `explain <plugin>` is the one that does NOT: the name
+	// still resolves and answers a different question, which is why it is the
+	// only rename in this release that can break a script silently. Asserted
+	// against the live command tree rather than trusted.
 	FailsAsUnknown bool
 }
 
 var retirements = []retirement{
-	{Old: "verify", New: []string{"check"}, TopLevel: true, FailsAsUnknown: true},
-	{Old: "secrets", New: []string{"secret"}, TopLevel: true, FailsAsUnknown: true},
+	{Old: "verify", Replacements: []string{"check"}, FailsAsUnknown: true},
+	{Old: "secrets", Replacements: []string{"secret"}, FailsAsUnknown: true},
 	{
 		Old:            "update",
-		New:            []string{"plugin outdated", "plugin upgrade --all"},
-		TopLevel:       true,
+		Replacements:   []string{"plugin outdated", "plugin upgrade --all"},
 		FailsAsUnknown: true,
 	},
-	{Old: "plugin install", New: []string{"plugin add"}, FailsAsUnknown: true},
-	{Old: "explain <plugin>", New: []string{"plugin explain"}},
+	{Old: "plugin install", Replacements: []string{"plugin add"}, FailsAsUnknown: true},
+	{Old: "explain <plugin>", Replacements: []string{"plugin explain"}},
 }
 
-// replacements renders r.New as a human phrase for a failure message.
-func (r retirement) replacements() string { return strings.Join(r.New, " / ") }
+// topLevel reports whether Old was a bare top-level command NAME, which is what
+// the resurrection guard can look for in the cobra tree. It is derived, not
+// declared: a retirement is top-level exactly when its old spelling is a single
+// word, and a hand-set boolean here was proven to silently drop a row from two
+// guards when cleared.
+func (r retirement) topLevel() bool { return !strings.Contains(r.Old, " ") }
+
+// replacementPhrase renders Replacements for a failure message.
+func (r retirement) replacementPhrase() string { return strings.Join(r.Replacements, " / ") }
+
+// commandWords returns the replacement's command path with flags and
+// placeholders stripped, for resolving it against the cobra tree.
+func commandWords(invocation string) []string {
+	var words []string
+	for _, w := range strings.Fields(invocation) {
+		if strings.HasPrefix(w, "-") || strings.HasPrefix(w, "<") || strings.HasPrefix(w, "[") {
+			continue
+		}
+		words = append(words, w)
+	}
+	return words
+}
+
+// TestRetirementsTableIsWellFormed is the guard on the guards' own oracle.
+//
+// Three tests read this table and nothing read the table itself, which made it
+// self-certifying: every consumer had a vacuity check, but each fires only on
+// TOTAL emptiness. The realistic mutation is one row, and it was silent —
+// clearing a row's flags removed `secrets` from both the resurrection guard and
+// the prose scan with the entire package still green. Worse, a Replacements
+// entry naming a command that does not exist would satisfy all three guards
+// while the banner sent users somewhere that errors.
+//
+// So: every row is checked for shape, its derived top-level bit for
+// self-consistency, its FailsAsUnknown claim against the live cobra tree, and
+// every replacement for actually resolving to a real command today.
+func TestRetirementsTableIsWellFormed(t *testing.T) {
+	if len(retirements) == 0 {
+		t.Fatal("the retirements table is empty; three guards would vacuously pass")
+	}
+	root := NewRoot()
+	seen := map[string]bool{}
+
+	for _, r := range retirements {
+		switch {
+		case r.Old == "":
+			t.Errorf("a retirement has an empty Old; it would match nothing in any guard")
+			continue
+		case seen[r.Old]:
+			t.Errorf("duplicate retirement %q — the derived maps collapse it silently", r.Old)
+		}
+		seen[r.Old] = true
+
+		// An empty Replacements is the dangerous shape: `anyLineNamesAll`'s
+		// inner loop never runs, so it returns true on the first line and the
+		// notice guard's whole "says what to run instead" half disappears for
+		// this row.
+		if len(r.Replacements) == 0 {
+			t.Errorf("retirement %q lists no Replacements — the notice guard's "+
+				"names-the-replacement assertion silently passes for it", r.Old)
+		}
+		for _, rep := range r.Replacements {
+			if rep == "" {
+				t.Errorf("retirement %q has an empty replacement", r.Old)
+				continue
+			}
+			words := commandWords(rep)
+			if len(words) == 0 {
+				t.Errorf("retirement %q replacement %q names no command", r.Old, rep)
+				continue
+			}
+			if !allWordsResolve(root, words) {
+				t.Errorf("retirement %q points at `agentsync %s`, which does not resolve to a command.\n"+
+					"The banner would send an already-broken user to a second broken command.", r.Old, rep)
+			}
+		}
+
+		// FailsAsUnknown is a claim about the world, so check it against the
+		// world: walk Old down the tree and see whether every word resolves.
+		resolves := allWordsResolve(root, commandWords(r.Old))
+		if r.FailsAsUnknown == resolves {
+			t.Errorf("retirement %q declares FailsAsUnknown=%v, but `agentsync %s` %s in the command tree.\n"+
+				"That flag decides whether the prose scan guards this spelling, so a wrong value "+
+				"silently un-guards every doc that still names it.",
+				r.Old, r.FailsAsUnknown, r.Old,
+				map[bool]string{true: "DOES resolve", false: "does NOT resolve"}[resolves])
+		}
+
+		if got, want := r.topLevel(), !strings.Contains(r.Old, " "); got != want {
+			t.Errorf("retirement %q: topLevel() disagrees with its own derivation", r.Old)
+		}
+	}
+}
+
+// allWordsResolve reports whether every word of a command path resolves in the
+// tree. cobra's Find returns the deepest match plus the leftover args rather
+// than an error for an unknown SUBcommand, so the leftovers are what matter.
+func allWordsResolve(root *cobra.Command, words []string) bool {
+	if len(words) == 0 {
+		return false
+	}
+	cmd, rest, err := root.Find(words)
+	return err == nil && cmd != nil && len(rest) == 0
+}

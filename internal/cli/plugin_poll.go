@@ -27,8 +27,9 @@ type pollOpts struct {
 	// doApply upgrades every pending bump and re-applies to the agents.
 	doApply bool
 	// lossless drops bumps whose candidate version would introduce a new
-	// adapter Skip for an enabled agent. Only ever set with doApply: it filters
-	// which bumps are applied, and the commands reject it standalone.
+	// adapter Skip for an enabled agent. Only ever set together with doApply:
+	// `plugin outdated` does not define the flag, and `plugin upgrade` reaches
+	// this engine only under --all, which always applies.
 	lossless bool
 }
 
