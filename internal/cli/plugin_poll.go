@@ -21,74 +21,8 @@ import (
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
-// newUpdateCmd is the DEPRECATED top-level `update`, kept for one minor as an
-// alias after the plugin lifecycle verbs consolidated under `plugin` (#200 F2).
-//
-// It keeps its FULL old flag surface and forwards, because the invocation most
-// worth protecting is the cron line `agentsync update --apply`: an alias that
-// only mapped bare `update` → `plugin outdated` would die on an unknown flag,
-// failing its own purpose. `explain` deliberately got no such alias — it is
-// interactive, `update` is not.
-func newUpdateCmd() *cobra.Command {
-	var (
-		apply    bool
-		autoSafe bool
-	)
-	cmd := &cobra.Command{
-		Use:   "update",
-		Short: "(deprecated) use `plugin outdated` / `plugin upgrade --all`",
-		Long: `update is DEPRECATED and will be removed in a future minor. It now forwards
-to the consolidated plugin lifecycle verbs:
-
-  agentsync update                 → agentsync plugin outdated
-  agentsync update --apply         → agentsync plugin upgrade --all
-  agentsync update --apply --auto-safe
-                                   → agentsync plugin upgrade --all --lossless
-
---scope / --project pass through, so an existing cron line keeps working.
-
-One difference worth knowing when you move over: the replacements do not all
-take scope. "plugin upgrade" is scope-aware, but "plugin outdated" (like the
-rest of the plugin group) is not — plugins and marketplaces are user-scope — so
-it refuses --scope / --project rather than ignoring them. This shim still
-accepts them on both paths for compatibility; drop them from a poll-only
-invocation when you migrate it.`,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			warnUpdateDeprecated(cmd, apply, autoSafe)
-			home := paths.AgentsyncHome(paths.OSEnv{})
-			return withGlobalLock(home, func() error {
-				return pollPluginsRun(cmd, pollOpts{
-					doApply:      apply,
-					lossless:     autoSafe,
-					losslessFlag: "--auto-safe",
-				})
-			})
-		},
-	}
-	cmd.Flags().BoolVar(&apply, "apply", false, "upgrade plugins and apply to agents after polling")
-	cmd.Flags().BoolVar(&autoSafe, "auto-safe", false, "only bump plugins with non-lossy translation (requires --apply)")
-	markScopeAware(cmd)
-	return cmd
-}
-
-// warnUpdateDeprecated names the exact replacement for the flags actually
-// given, on STDERR so a piped stdout stays clean.
-func warnUpdateDeprecated(cmd *cobra.Command, apply, autoSafe bool) {
-	replacement := "agentsync plugin outdated"
-	switch {
-	case apply && autoSafe:
-		replacement = "agentsync plugin upgrade --all --lossless"
-	case apply:
-		replacement = "agentsync plugin upgrade --all"
-	}
-	fmt.Fprintf(cmd.ErrOrStderr(),
-		"warning: `agentsync update` is deprecated and will be removed in a future minor; use `%s`\n",
-		replacement)
-}
-
 // pollOpts configures the shared marketplace-poll engine behind `plugin
-// outdated`, `plugin upgrade --all`, and the deprecated `update` alias.
+// outdated` and `plugin upgrade --all`.
 type pollOpts struct {
 	// doApply upgrades every pending bump and re-applies to the agents.
 	doApply bool

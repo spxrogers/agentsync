@@ -27,7 +27,7 @@ func TestTopLevelCommandSurfaceIsPinned(t *testing.T) {
 		"agent", "apply", "check", "command", "diff", "doctor", "explain",
 		"hook", "import", "init", "lsp", "marketplace", "mcp", "migrate",
 		"plugin", "reconcile", "revert", "secret", "skill", "status",
-		"subagent", "update", "version",
+		"subagent", "version",
 	}
 
 	var got []string
@@ -67,6 +67,7 @@ func TestRenamedTopLevelCommandsAreGone(t *testing.T) {
 	gone := map[string]string{
 		"verify":  "check",
 		"secrets": "secret",
+		"update":  "plugin outdated / plugin upgrade --all",
 	}
 	for _, c := range NewRoot().Commands() {
 		names := append([]string{c.Name()}, c.Aliases...)

@@ -131,6 +131,9 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   | `agentsync explain <plugin>` | `agentsync plugin explain <plugin>` |
   | `agentsync explain --list` | dropped — use `agentsync plugin list` |
 
+  **No aliases. None of the old spellings resolve** — each fails as an unknown
+  command, so a stale cron line or CI step breaks loudly rather than drifting.
+
   - **`plugin upgrade` now re-applies, in BOTH forms.** `--all` carries over
     `update --apply`'s complete re-apply (scope resolution, secret
     substitution, plan/apply, state recording), so it is behavior-identical to
@@ -146,14 +149,15 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
     suggests, and its help says so: it re-fetches every marketplace (network)
     and writes each one's fetch timestamp + head SHA to state, plus the
     manifest-SHA tamper check.
-  - **`update` survives one minor as a deprecated alias with its FULL old flag
-    surface** — `--apply`, `--auto-safe`, `--scope`, `--project` all still
-    parse and forward, each with a warning naming the replacement on stderr.
-    An alias that rejected `--apply` would break the very cron lines it exists
-    to protect.
-  - **`explain` gets NO alias.** The asymmetry with `update` is deliberate:
-    `update` is the command most likely to live in cron, `explain` is
-    interactive. `agentsync explain <plugin-id>` fails from this release.
+  - **`update` is removed outright — the deprecated forwarding alias was cut
+    before release.** An earlier draft of this change kept it for one minor,
+    on the reasoning that `update` is the spelling most likely to sit in a cron
+    line. That was reversed deliberately: it would have been the *only* alias
+    in a release whose entire point is that the renames are hard, and "no
+    aliases except this one" is a worse contract to remember than "no aliases".
+    Pre-1.0 is exactly when to take that break. A cron line calling `agentsync
+    update` now fails as an unknown command, which is the loud, one-time
+    failure — not a warning on stderr that a scheduler discards.
 
 ### Added
 

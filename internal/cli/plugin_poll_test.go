@@ -32,7 +32,7 @@ func TestUpdate_ApplyRecordsFreshManifestSHA(t *testing.T) {
 	// Publish 1.0.1 in place — plugin.json content changes, so its SHA does too.
 	_ = makeVersionedMarketplace(t, base, "1.0.1")
 
-	out, err := runCLI(t, env, "update", "--apply")
+	out, err := runCLI(t, env, "plugin", "upgrade", "--all")
 	if err != nil {
 		t.Fatalf("update --apply bricked the plugin (stale manifest SHA): %v\n%s", err, out)
 	}
@@ -76,7 +76,7 @@ func TestUpdate_ApplyProjectScope_RequiresDeclaredAgents(t *testing.T) {
 	// A project tree with NO declared agents.
 	mustRun(t, env, "init", "--scope", "project", "--project", proj)
 
-	_, err := runCLI(t, env, "update", "--apply", "--project", proj)
+	_, err := runCLI(t, env, "plugin", "upgrade", "--all", "--project", proj)
 	if err == nil {
 		t.Fatal("update --apply --project against an undeclared project must error")
 	}
@@ -132,7 +132,7 @@ func TestUpdate_ApplyBumpFailureLeavesCacheConsistent(t *testing.T) {
 	_ = makeVersionedMarketplace(t, base, "2.0.0")
 
 	// The bump fails to write its TOML, but that must NOT brick the re-apply.
-	if out, err := runCLI(t, env, "update", "--apply"); err != nil {
+	if out, err := runCLI(t, env, "plugin", "upgrade", "--all"); err != nil {
 		t.Fatalf("update --apply bricked by a half-applied bump (cache/TOML inconsistent): %v\n%s", err, out)
 	}
 }
@@ -184,7 +184,7 @@ func TestUpdate_ApplyPartialFailureRescuesState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := runCLI(t, env, "update", "--apply"); err == nil {
+	if _, err := runCLI(t, env, "plugin", "upgrade", "--all"); err == nil {
 		t.Fatal("expected update --apply to fail when the skills dir is blocked")
 	}
 
@@ -230,7 +230,7 @@ func TestUpdate_DetectsManifestSHADrift(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "update")
+	out, err := runCLI(t, env, "plugin", "outdated")
 	if err != nil {
 		t.Fatalf("update: %v\n%s", err, out)
 	}
@@ -295,13 +295,14 @@ func TestUpdate_AutoSafe(t *testing.T) {
 	// Publish 2.0.0: lossyp gains an opencode-skipped LSP server; cleanp stays MCP-only.
 	_ = makeAutoSafeMarketplace(t, base, "2.0.0")
 
-	// (a) --auto-safe without --apply must error.
-	if _, err := runCLI(t, env, "update", "--auto-safe"); err == nil {
-		t.Fatal("--auto-safe without --apply should error")
+	// (a) --lossless without --all must error (the shape `--auto-safe` without
+	// `--apply` used to have on the retired `update` alias).
+	if _, err := runCLI(t, env, "plugin", "upgrade", "--lossless"); err == nil {
+		t.Fatal("--lossless without --all or an id should error")
 	}
 
 	// (b) --auto-safe --apply applies the clean bump, skips the lossy one.
-	out, err := runCLI(t, env, "update", "--auto-safe", "--apply")
+	out, err := runCLI(t, env, "plugin", "upgrade", "--all", "--lossless")
 	if err != nil {
 		t.Fatalf("update --auto-safe --apply: %v\n%s", err, out)
 	}
@@ -344,7 +345,7 @@ func TestUpdate_NoMarketplaces(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "update")
+	out, err := runCLI(t, env, "plugin", "outdated")
 	if err != nil {
 		t.Fatalf("update: %v\n%s", err, out)
 	}
@@ -375,7 +376,7 @@ func TestUpdate_FetchesMarketplaceAndReportsUpToDate(t *testing.T) {
 
 	// Run update — plugin is already at the version listed in the marketplace
 	// (both are "1.0.0"), so no bump should be pending.
-	out, err := runCLI(t, env, "update")
+	out, err := runCLI(t, env, "plugin", "outdated")
 	if err != nil {
 		t.Fatalf("update: %v\n%s", err, out)
 	}
@@ -417,7 +418,7 @@ agents = ["*"]
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "update")
+	out, err := runCLI(t, env, "plugin", "outdated")
 	if err != nil {
 		t.Fatalf("update with pending bump: %v\n%s", err, out)
 	}
@@ -443,7 +444,7 @@ func TestUpdate_DryRunNoBump(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "update")
+	out, err := runCLI(t, env, "plugin", "outdated")
 	if err != nil {
 		t.Fatalf("update dry run: %v\n%s", err, out)
 	}
@@ -470,7 +471,7 @@ func TestUpdate_SanitizesUntrustedBumpVersion(t *testing.T) {
 	// Publish a non-semver candidate carrying control bytes -> a pending bump.
 	hostile := "9.9" + string(rune(0x1b)) + "[31m" + string(rune(0x0d))
 	_ = makeVersionedMarketplace(t, base, hostile)
-	out, err := runCLI(t, env, "update")
+	out, err := runCLI(t, env, "plugin", "outdated")
 	if err != nil {
 		t.Fatalf("update: %v\n%s", err, out)
 	}

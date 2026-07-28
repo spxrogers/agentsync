@@ -160,7 +160,7 @@ before writing it down.
 
 The registered command tree (`internal/cli/root.go`): `init`, `agent`, `migrate`,
 `apply`, `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
-`mcp`, `plugin`, `marketplace`, `update` (deprecated), `secret`, `explain`,
+`mcp`, `plugin`, `marketplace`, `secret`, `explain`,
 `version`, plus the read-only component groups `skill`, `subagent`, `command`,
 `hook`, `lsp` (each `list`/`ls` only).
 

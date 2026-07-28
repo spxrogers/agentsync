@@ -22,11 +22,11 @@ agentsync plugin upgrade atlassian           # re-fetch one plugin, then re-appl
 Both `upgrade` forms end in a re-apply, so an upgrade reaches your agents in one
 command instead of leaving them stale until the next `apply`.
 
-<Aside type="caution" title="`update` is deprecated">
-	Top-level `agentsync update` still works for one minor as a forwarding alias —
-	bare `update` → `plugin outdated`, `--apply` → `plugin upgrade --all`,
-	`--apply --auto-safe` → `plugin upgrade --all --lossless` (`--scope`/`--project`
-	pass through) — and warns with the replacement. Move your cron lines over.
+<Aside type="caution" title="The top-level `update` command is gone">
+	It was removed outright in v0.11.0, with **no alias** — a cron line still
+	calling it fails as an unknown command. Move it over: bare `update` →
+	`plugin outdated`, `--apply` → `plugin upgrade --all`, `--apply --auto-safe` →
+	`plugin upgrade --all --lossless`.
 </Aside>
 
 `plugin outdated` is **not** a pure read, despite the `npm outdated` prior: it

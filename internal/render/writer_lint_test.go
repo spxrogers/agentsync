@@ -37,7 +37,7 @@ func TestNoDirectAtomicWriteOutsideAllowedFiles(t *testing.T) {
 		"internal/cli/agent.go":            true,
 		"internal/cli/gitbackup_config.go": true, // writes agentsync.toml (canonical source)
 		"internal/cli/reconcile.go":        true,
-		"internal/cli/update.go":           true,
+		"internal/cli/plugin_poll.go":      true,
 		"internal/adapter/testwriter.go":   true,
 	}
 
@@ -94,7 +94,7 @@ func TestNoDirectAtomicWriteOutsideAllowedFiles(t *testing.T) {
 // The allowlist here is PER-FILE, so it is coarser than the .golangci.yml os.*
 // fence for the internal/cli files, where the lint exclusions are line-scoped
 // `//nolint:forbidigo // <reason>` comments at each call site (only
-// internal/cli/update.go keeps a whole-file lint exclude); the whole-dir lint
+// internal/cli/plugin_poll.go keeps a whole-file lint exclude); the whole-dir lint
 // excludes (internal/iox, internal/git, internal/marketplace) are conversely
 // coarser than this list. Keep BOTH in sync when adding a legitimate
 // non-destination os.* site: a new site in an already-listed CLI file still
@@ -122,7 +122,7 @@ func TestNoDirectDestructiveOSCallsOutsideAllowedFiles(t *testing.T) {
 		"internal/cli/secrets.go":                true, // vault rollback + cleartext temp cleanup
 		"internal/cli/marketplace.go":            true, // canonical source + marketplace cache
 		"internal/cli/plugin.go":                 true, // canonical source + plugin cache
-		"internal/cli/update.go":                 true, // marketplace/plugin cache scratch + swap-in rename
+		"internal/cli/plugin_poll.go":            true, // marketplace/plugin cache scratch + swap-in rename
 		"internal/cli/mcp.go":                    true, // removes mcp/<id>.toml (canonical source)
 		"internal/cli/doctor.go":                 true, // ~/.agentsync writability probe
 		"internal/cli/reconcile.go":              true, // canonical-source write-back + the backed-up native orphan removal

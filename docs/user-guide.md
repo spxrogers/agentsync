@@ -690,11 +690,9 @@ SHA). Nor is it the *only* networked command — `plugin add`, `plugin
 upgrade`, `marketplace add`, `import <agent>:plugin`, and `init <git-url>` all
 fetch. It is simply the one the daily loop runs.
 
-> **Deprecated:** top-level `agentsync update` still works for one minor as a
-> forwarding alias — bare `update` → `plugin outdated`, `--apply` → `plugin
-> upgrade --all`, `--apply --auto-safe` → `plugin upgrade --all --lossless`
-> (`--scope`/`--project` pass through) — printing a warning that names the
-> replacement. Move your cron lines over.
+> **Removed:** the top-level `update` command is gone, with no alias. Move your
+> cron lines over: bare `update` → `plugin outdated`, `--apply` → `plugin upgrade
+> --all`, `--apply --auto-safe` → `plugin upgrade --all --lossless`.
 
 Want nightly refreshes? agentsync ships no daemon — wire
 `agentsync plugin upgrade --all --lossless` into your own cron / launchd /
@@ -806,7 +804,6 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
 | `plugin add\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` / `outdated` / `explain` | Manage plugins (the lifecycle subcommands all accept the same `id[@marketplace]` ref `add` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). `outdated` **(network)** polls the marketplaces and reports pending bumps — it also writes each marketplace's fetch timestamp + head SHA to state. `upgrade` **(network)** re-fetches one plugin, or with `--all` every plugin with a pending bump, and **re-applies** in both cases; `--lossless` skips an upgrade that would introduce a new translation loss, reporting it. `explain` shows per-agent translation coverage. | `outdated` · `upgrade [<id>] --all --lossless --scope --project` · `explain [<id>...] --all --json` |
 | `secret set\|get\|list\|remove <key>` / `secret edit` | Manage age-encrypted secrets (`list` prints KEYS only; `edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
-| `update` | **(deprecated)** Forwards to `plugin outdated` / `plugin upgrade --all [--lossless]` with a warning; removed in a future minor. | `--apply --auto-safe --scope --project` |
 | `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. A delete-only run (a component removed from source) reports `removed: N key(s), M file(s)` — key-removals and file-deletes counted distinctly — and a mixed run `applied: X ops, removed: …`, rather than mislabeling itself `up to date`/`applied: 0 ops`; `--dry-run` previews the same removal counts. | `--agents --dry-run --scope --project --no-git-backup` |
 | `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. `--to` must name one of the dir's own checkpoints (the current one or an ancestor) — anything else is refused. A dir under which a foreign git repo has appeared (or that isn't an agentsync-managed backup) is an **error** when you name the agent, and a **skip with a warning** under `--all` — strictness follows the invocation; there is no `--strict` flag. | `--agents --to --all --dry-run` |
 | `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. Skill directories collapse to one summary row by default (`--verbose` expands them). `--exit-code` makes it a CI gate: exit `2` when any drift is detected, `0` when clean. | `--agents --verbose --scope --project --json --exit-code` |
@@ -819,7 +816,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 Global: `--scope user|project` and `--project <path>` are **root flags**, declared
 once and accepted by every command that operates on a scoped source tree (`init`,
 `agent`, `mcp`, `apply`, `check`, `status`, `diff`, `reconcile`, `import`,
-`explain`, `migrate`, `update`, `plugin upgrade`, and the component `list`s). A
+`explain`, `migrate`, `plugin upgrade`, and the component `list`s). A
 command that *cannot*
 honor them — `doctor`, `revert`, `version`, and the `plugin` / `marketplace` /
 `secret` groups, all of which act on per-machine state — **refuses them with the

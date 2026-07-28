@@ -9,7 +9,7 @@ import (
 )
 
 // TestNoStaleRenamedCommandReferences pins the user-facing text against the
-// HARD renames shipped in #200 (F2/F4/F8).
+// HARD renames and removals shipped in #200 (F2/F4/F8).
 //
 // These renames have no aliases by explicit decision, so a hint that still says
 // "run `agentsync secrets set …`" is not merely stale — it hands the user a
@@ -29,6 +29,7 @@ func TestNoStaleRenamedCommandReferences(t *testing.T) {
 		"agentsync secrets ":       "agentsync secret …",
 		"agentsync verify":         "agentsync check",
 		"agentsync plugin install": "agentsync plugin add",
+		"agentsync update":         "agentsync plugin outdated / agentsync plugin upgrade --all",
 	}
 
 	// Files that exist precisely to say "the old spelling is gone", so naming it

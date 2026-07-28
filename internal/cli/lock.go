@@ -138,7 +138,7 @@ func releaseHeld(lockPath string) {
 // lockedRun wraps a cobra RunE so the command body executes under the global
 // lock. Used by the agent/plugin mutators that do a read-modify-write of
 // agentsync.toml or plugins/<id>.toml: without serialization, two concurrent
-// runs (or one racing a locked `apply`/`update`) lose an update — AtomicWrite
+// runs (or one racing a locked `apply`/`plugin upgrade`) lose an update — AtomicWrite
 // prevents a torn file but not a stale-read overwrite.
 //
 // The wrapped function MAY acquire the global lock itself: withGlobalLock is

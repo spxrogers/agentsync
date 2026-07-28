@@ -264,8 +264,8 @@ func installPluginInto(home, id, mpName string) (pluginTOMLSpec, error) {
 // ---- outdated ---------------------------------------------------------------
 
 // newPluginOutdatedCmd polls the registered marketplaces and reports pending
-// version bumps. It is `agentsync update`'s read side, moved under the noun it
-// operates on (#200 F2).
+// version bumps. It is the read side of the retired top-level `update` command,
+// moved under the noun it operates on (#200 F2).
 func newPluginOutdatedCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "outdated",

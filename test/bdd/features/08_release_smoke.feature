@@ -31,7 +31,6 @@ Feature: Release smoke
     And the output contains "secret"
     And the output contains "import"
     And the output contains "migrate"
-    And the output contains "update"
 
   Scenario: full v1.0 lifecycle on a fresh box
     Given a clean agentsync home

@@ -46,9 +46,10 @@ is the only package that depends on nearly all the others.
 - **Key:** `NewRoot() *cobra.Command`, `Execute() error`, `Version`/`Commit`/`Date`.
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,
   `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
-  `mcp {add,remove,list}`,
-  `plugin {install,outdated,upgrade,enable,disable,remove,list,explain}`,
-  `marketplace {add,remove,list}`, `update` (deprecated alias), `secret {edit,get,set,list,remove}`,
+  `mcp {add,remove,list,enable,disable}`,
+  `plugin {add,outdated,upgrade,enable,disable,remove,list,explain}`,
+  `marketplace {add,remove,list}`, `secret {edit,get,set,list,remove}`,
+  `{skill,subagent,command,hook,lsp} list`,
   `migrate subagents`, `explain <path>`,
   `version`.
 - **Depends on:** adapter, source, state, secrets, paths, render, marketplace,

@@ -2,7 +2,7 @@
 
 > One source of truth for every AI coding agent on your machine. Define your MCP servers, memory, skills, subagents, commands, and plugins once, run `agentsync apply`, and they land — correctly translated — in Claude Code, OpenCode, Codex, and more.
 
-agentsync is a single-machine Go CLI. You keep a canonical config (small TOML + markdown, committable to a dotfiles repo); `agentsync apply` renders it into each agent's native config. It is bidirectional: native edits are detected as drift and merged back into the source via `reconcile`/`import` — nothing is overwritten behind your back. Secrets are referenced as `${secret:...}` / `${env:...}` and resolved at apply time from an age-encrypted vault, so cleartext never reaches your committable source. `apply` is offline and deterministic (renders from a local cache); only `update` reaches the network.
+agentsync is a single-machine Go CLI. You keep a canonical config (small TOML + markdown, committable to a dotfiles repo); `agentsync apply` renders it into each agent's native config. It is bidirectional: native edits are detected as drift and merged back into the source via `reconcile`/`import` — nothing is overwritten behind your back. Secrets are referenced as `${secret:...}` / `${env:...}` and resolved at apply time from an age-encrypted vault, so cleartext never reaches your committable source. `apply` is offline and deterministic (renders from a local cache); only the fetching commands (`plugin outdated`, `plugin upgrade`, `plugin add`, `marketplace add`, `import <agent>:plugin`, `init <git-url>`) reach the network.
 
 ## Getting started
 
@@ -21,7 +21,7 @@ agentsync is a single-machine Go CLI. You keep a canonical config (small TOML + 
 - [Marketplaces & plugins](https://agentsync.cc/guides/plugins/): Install plugins and project their components across agents.
 - [Secrets](https://agentsync.cc/guides/secrets/): Reference credentials safely via an age-encrypted vault that never leaks cleartext.
 - [Project-local config](https://agentsync.cc/guides/projects/): Per-project overlays scoped to a repo's `.agentsync/` tree.
-- [Updating from the network](https://agentsync.cc/guides/updating/): How `update` refreshes the local cache.
+- [Updating from the network](https://agentsync.cc/guides/updating/): How `plugin outdated` / `plugin upgrade` refresh the local cache.
 - [Cross-machine sync](https://agentsync.cc/guides/cross-machine/): Carry one canonical config across machines via dotfiles.
 
 ## Recipes
@@ -34,7 +34,7 @@ agentsync is a single-machine Go CLI. You keep a canonical config (small TOML + 
 
 ## Reference
 
-- [CLI commands](https://agentsync.cc/reference/cli/): Full command reference (init, agent, apply, status, diff, reconcile, import, doctor, verify, mcp, plugin, marketplace, update, secrets, explain).
+- [CLI commands](https://agentsync.cc/reference/cli/): Full command reference (init, agent, apply, status, diff, reconcile, import, doctor, check, mcp, plugin, marketplace, secret, explain, migrate, revert, version, and the skill/subagent/command/hook/lsp list groups).
 - [Configuration & layout](https://agentsync.cc/reference/configuration/): The canonical schema and the `~/.agentsync/` directory layout.
 - [Environment variables](https://agentsync.cc/reference/environment/): Variables that influence agentsync's behavior.
 - [Agent capability matrix](https://agentsync.cc/reference/capability-matrix/): Exactly what each agent supports per component — and what's lossy (◐) or skipped (✗).

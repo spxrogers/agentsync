@@ -33,14 +33,14 @@ func TestReapplyLoadsStateAfterSourceReload(t *testing.T) {
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	src, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "update.go"))
+	src, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "plugin_poll.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	body := funcBody(string(src), "func reapplyAfterPluginChange(")
 	if body == "" {
-		t.Fatal("reapplyAfterPluginChange not found in update.go — update this guard")
+		t.Fatal("reapplyAfterPluginChange not found in plugin_poll.go — update this guard")
 	}
 
 	reload := strings.Index(body, "loadProjectedForScope(")

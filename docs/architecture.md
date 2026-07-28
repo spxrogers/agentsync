@@ -761,8 +761,8 @@ supported harness uses a `__`-prefixed native config key.
 Every networked path lives in `internal/marketplace`'s fetchers, and every one
 of them writes only to `.state/cache/`. The commands that reach the network are
 `plugin outdated`, `plugin upgrade`, `plugin add`, `marketplace add`,
-`import <agent>:plugin`, and `init <git-url>` (plus the deprecated `update`
-alias). They clone or fetch marketplaces (`go-git`, with a `git` shell-out
+`import <agent>:plugin`, and `init <git-url>`.
+They clone or fetch marketplaces (`go-git`, with a `git` shell-out
 fallback for sparse clones) and npm tarballs (registry HTTP, no `npm` binary
 required). Everything else — including `apply` — reads only from that cache,
 which keeps `apply` fast, offline, and reproducible in CI.

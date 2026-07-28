@@ -31,8 +31,10 @@ refuses to write if a credential would persist. See the
 
 ## Why is there no background daemon?
 
-So that `apply` is fast, offline, and reproducible. `update` is the only command
-that touches the network; everything else reads a local cache. If you want
+So that `apply` is fast, offline, and reproducible. Only the fetching commands
+touch the network — `plugin outdated`, `plugin upgrade`, `plugin add`,
+`marketplace add`, `import <agent>:plugin`, and `init <git-url>`; everything
+else, `apply` included, reads a local cache. If you want
 scheduled refreshes, wire `agentsync plugin upgrade --all --lossless` into cron,
 launchd, or systemd yourself. See [Updating from the network](/guides/updating/).
 

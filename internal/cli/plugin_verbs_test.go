@@ -183,59 +183,32 @@ func TestPluginUpgrade_Lossless(t *testing.T) {
 	}
 }
 
-// TestUpdateAlias_ForwardsFullFlagSurface is the deprecation contract: the cron
-// line most worth protecting is `agentsync update --apply`, so the alias must
-// keep accepting every old flag and forward, warning as it goes.
-func TestUpdateAlias_ForwardsFullFlagSurface(t *testing.T) {
+// TestUpdateIsGone pins the ratified alias policy for the LAST command that had
+// one. `update` originally kept a deprecated forwarding alias for a minor,
+// because the invocation most worth protecting is the cron line `agentsync
+// update --apply`. That exception was dropped: this is a pre-1.0 CLI, and "no
+// aliases except one" is a worse contract to carry than "no aliases" — the
+// whole point of #200 F2/F4/F8 shipping as hard renames.
+//
+// It must fail like every other retired spelling, on every flag shape a cron
+// line could carry, so nobody's automation silently keeps working against a
+// command that is on its way out.
+func TestUpdateIsGone(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
-	base := t.TempDir()
-
 	mustRun(t, env, "init")
-	mustRun(t, env, "agent", "add", "claude")
-	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
-	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
-	mustRun(t, env, "apply")
-	_ = makeVersionedMarketplace(t, base, "1.0.1")
 
-	// Bare `update` → plugin outdated. The warning goes to STDERR so a piped
-	// stdout is unaffected.
-	stdout, stderr, err := runCLISplit(t, env, "update")
-	if err != nil {
-		t.Fatalf("update: %v\n%s\n%s", err, stdout, stderr)
-	}
-	if !strings.Contains(stderr, "deprecated") || !strings.Contains(stderr, "plugin outdated") {
-		t.Fatalf("bare `update` must warn and name `plugin outdated`; stderr:\n%s", stderr)
-	}
-	if strings.Contains(stdout, "deprecated") {
-		t.Fatalf("the deprecation warning must not land on stdout:\n%s", stdout)
-	}
-
-	// `update --apply` → plugin upgrade --all, and actually upgrades.
-	stdout, stderr, err = runCLISplit(t, env, "update", "--apply")
-	if err != nil {
-		t.Fatalf("update --apply: %v\n%s\n%s", err, stdout, stderr)
-	}
-	if !strings.Contains(stderr, "plugin upgrade --all") {
-		t.Fatalf("`update --apply` must name `plugin upgrade --all`; stderr:\n%s", stderr)
-	}
-	demoTOML, _ := readFileString(t, filepath.Join(tmp, ".agentsync", "plugins", "demo.toml"))
-	if !strings.Contains(demoTOML, "1.0.1") {
-		t.Fatalf("`update --apply` alias did not upgrade:\n%s", demoTOML)
-	}
-
-	// `update --apply --auto-safe` → plugin upgrade --all --lossless.
-	_, stderr, err = runCLISplit(t, env, "update", "--apply", "--auto-safe")
-	if err != nil {
-		t.Fatalf("update --apply --auto-safe: %v\n%s", err, stderr)
-	}
-	if !strings.Contains(stderr, "plugin upgrade --all --lossless") {
-		t.Fatalf("`update --apply --auto-safe` must name the --lossless form; stderr:\n%s", stderr)
-	}
-	// --scope/--project still parse on the alias.
-	if _, _, err := runCLISplit(t, env, "update", "--scope", "user"); err != nil {
-		t.Fatalf("`update --scope user` must still parse: %v", err)
+	for _, args := range [][]string{
+		{"update"},
+		{"update", "--apply"},
+		{"update", "--apply", "--auto-safe"},
+		{"update", "--scope", "user"},
+	} {
+		out, err := runCLI(t, env, args...)
+		if err == nil {
+			t.Errorf("`agentsync %s` still resolves — `update` is a hard removal, not a deprecation:\n%s",
+				strings.Join(args, " "), out)
+		}
 	}
 }
 

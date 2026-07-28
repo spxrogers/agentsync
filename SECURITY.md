@@ -68,7 +68,7 @@ can resolve secrets into native config files. Areas of particular interest:
   cosmetic limitation (documented on `ui.Pad`), not a spoofing vector. The
   invariant — not a fixed list of commands — is that any terminal rendering of
   such metadata is sanitized at the print boundary (today that spans `explain`,
-  `apply`, `plugin`, `marketplace`, `update`, `status`, and `doctor`).
+  `apply`, `plugin`, `marketplace`, `status`, and `doctor`).
   `explain --json` keeps ids raw (a machine contract where the consumer owns
   escaping). This invariant is enforced by **type**, not by per-site convention:
   the plugin/marketplace id, version, name, and report-row fields — and the

@@ -407,14 +407,14 @@ agentsync secrets {edit,get,set}
 
 # Marketplaces & plugins (source-mutating)
 agentsync marketplace {add,remove,list}
-agentsync plugin {install,upgrade,enable,disable,remove,list,outdated,explain}
+agentsync plugin {add,upgrade,enable,disable,remove,list,outdated,explain}
 
 # Network. NOT a single command: `plugin outdated`, `plugin upgrade`,
-# `plugin install`, `marketplace add`, `import <agent>:plugin`, and
+# `plugin add`, `marketplace add`, `import <agent>:plugin`, and
 # `init <git-url>` all fetch. `apply` never does — it renders from cache.
 agentsync plugin outdated
 agentsync plugin upgrade [<id>] [--all] [--lossless] [--scope …] [--project …]
-agentsync update ...                  # DEPRECATED alias, forwards to the above
+# (the top-level `update` this spec originally described was REMOVED, no alias)
 
 # Apply & drift (destination-mutating)
 agentsync apply [--scope user|project] [--project <path>] [--dry-run]
