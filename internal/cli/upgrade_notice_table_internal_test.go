@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -205,10 +206,16 @@ const requiredAliasClause = "(no alias"
 // rejected "the upgrading page lists both spellings", "keep working" rejected
 // "rename it in CI to keep working", and "remains available" rejected
 // "explaining a FILE remains available under the old name" — the likeliest
-// reword of the one row whose old name genuinely does still resolve. A
-// false FAILURE on an honest line costs more than a false pass here, because
-// the structural rules already carry the load and a guard that rejects the
-// truth is one people delete.
+// reword of the one row whose old name genuinely does still resolve.
+//
+// Be honest about what that trade costs, because an earlier version of this
+// comment was not. The structural rules do NOT cover the tail: lineRetires
+// stops reading at the last replacement, so anything appended after it is seen
+// by this list and nothing else. Removing an entry therefore widens a real gap
+// rather than merely trimming a redundant one. It is still the right trade — a
+// false FAILURE lands on an author who wrote the truth, and a guard that
+// rejects the truth is one people delete — but do not remove entries believing
+// something else will catch them.
 var continuityClaims = []string{
 	"deprecat", "still work", "an alias for", "alias is kept", "kept as an alias",
 	"no action needed", "grace period", "will be removed", "for one minor",
@@ -444,7 +451,12 @@ func TestRetiringSpellings(t *testing.T) {
 		// make a real retiring clause extract nothing — silence is the failure
 		// mode this parser's own guard cannot distinguish from correctness.
 		{"colon after backtick", "`agentsync verify`: is now `agentsync check` (no alias)", []string{"verify"}},
-		{"bold markup", "**`agentsync verify`** is now `agentsync check` (no alias)", []string{"verify"}},
+		{"bold markup outside the quotes", "**`agentsync verify`** is now `agentsync check` (no alias)", []string{"verify"}},
+		// Markup INSIDE the quoted invocation is the case that actually reaches
+		// trimSpellingPunct: with right-edge-only trimming this yields
+		// "**verify" and the whole table still passed, so the helper's own
+		// comment described a fix nothing pinned.
+		{"bold markup inside the quotes", "`agentsync **verify**` is now `agentsync check` (no alias)", []string{"verify"}},
 
 		// The word bound must cover more than today's longest spelling: too
 		// short and a future retirement extracts nothing, silently.
@@ -456,8 +468,11 @@ func TestRetiringSpellings(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := retiringSpellings(tc.line)
-			if strings.Join(got, "|") != strings.Join(tc.want, "|") {
-				t.Errorf("retiringSpellings() = %q, want %q\n    %s", got, tc.want, tc.line)
+			// DeepEqual, not a joined string: `nil` and `[""]` join to the
+			// same thing, so the empty-spelling guard could be deleted with
+			// this test still green.
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("retiringSpellings() = %#v, want %#v\n    %s", got, tc.want, tc.line)
 			}
 		})
 	}
@@ -577,8 +592,11 @@ func retiringSpellingAt(rest string) (string, bool) {
 				continue // names no replacement: not a retirement
 			}
 			repl = strings.TrimPrefix(repl, "agentsync ")
-			if repl == spelling || strings.HasPrefix(repl, spelling+" ") {
-				continue // replaced by itself: a flag, not a retirement
+			// `norm` is lowercased and `spelling` is not, so compare in one
+			// case: otherwise a capitalized spelling slips past this check.
+			lowSpelling := strings.ToLower(spelling)
+			if repl == lowSpelling || strings.HasPrefix(repl, lowSpelling+" ") {
+				continue // the "replacement" extends the old name: not a retirement
 			}
 			return spelling, true
 		}
