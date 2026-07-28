@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -125,6 +126,81 @@ func splitInvocation(invocation string) (path []string, flags []flagRef) {
 		}
 	}
 	return path, flags
+}
+
+// TestSplitInvocationAndFlagExists covers the replacement lexer directly.
+//
+// It was argued twice that this helper needed no table, on the grounds that its
+// failure mode is a false FAILURE on a correct row rather than a silent pass.
+// That was wrong on two branches, and both were found the hard way: a
+// multi-character shorthand PANICKED the whole package (a crash is not a false
+// failure), and once the panic was guarded it silently PASSED by falling
+// through to the long-flag lookup. Inverting isFlagToken or dropping either
+// guard left the package green — no table row exercises these shapes, because
+// every real replacement is well-formed.
+func TestSplitInvocationAndFlagExists(t *testing.T) {
+	t.Run("lexing", func(t *testing.T) {
+		cases := []struct {
+			name      string
+			in        string
+			wantPath  []string
+			wantFlags []string
+		}{
+			{"bare command", "check", []string{"check"}, nil},
+			{"nested command", "plugin add", []string{"plugin", "add"}, nil},
+			{"long flag", "plugin upgrade --all", []string{"plugin", "upgrade"}, []string{"--all"}},
+			{"flag with attached value", "check --scope=user", []string{"check"}, []string{"--scope"}},
+			{"flag with separate value", "check --scope user", []string{"check"}, []string{"--scope"}},
+			// A NEGATIVE value is not a flag name. Lexing `-1` as a flag both
+			// invented a phantom `--1` and, at two digits, fed the panic below.
+			{"negative value", "check --depth -1", []string{"check"}, []string{"--depth"}},
+			{"shorthand", "status -v", []string{"status"}, []string{"-v"}},
+			{"bare double dash", "check -- extra", []string{"check"}, nil},
+			{"placeholder dropped", "plugin explain <plugin>", []string{"plugin", "explain"}, nil},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				path, flags := splitInvocation(tc.in)
+				var got []string
+				for _, f := range flags {
+					got = append(got, f.String())
+				}
+				if !reflect.DeepEqual(path, tc.wantPath) || !reflect.DeepEqual(got, tc.wantFlags) {
+					t.Errorf("splitInvocation(%q) = path %#v flags %#v, want path %#v flags %#v",
+						tc.in, path, got, tc.wantPath, tc.wantFlags)
+				}
+			})
+		}
+	})
+
+	t.Run("flag existence", func(t *testing.T) {
+		root := NewRoot()
+		upgrade, ok := resolveCommand(root, []string{"plugin", "upgrade"})
+		if !ok {
+			t.Fatal("`plugin upgrade` no longer resolves; this test would prove nothing")
+		}
+		cases := []struct {
+			name string
+			flag flagRef
+			want bool
+		}{
+			{"real long flag", flagRef{name: "all"}, true},
+			{"inherited root flag", flagRef{name: "scope"}, true},
+			{"nonexistent long flag", flagRef{name: "totally-fake"}, false},
+			// `-all` is not `--all` written short: pflag reads it as the cluster
+			// -a -l -l. Accepting it because a long `--all` exists certified an
+			// invocation that fails at runtime.
+			{"multi-char shorthand with a long twin", flagRef{name: "all", shorthand: true}, false},
+			{"multi-char shorthand, no twin", flagRef{name: "nonexistent", shorthand: true}, false},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				if got := flagExists(upgrade, tc.flag); got != tc.want {
+					t.Errorf("flagExists(%s) = %v, want %v", tc.flag, got, tc.want)
+				}
+			})
+		}
+	})
 }
 
 // TestRetirementsTableIsPinned is the completeness half.
@@ -255,12 +331,20 @@ func TestRetirementsTableIsWellFormed(t *testing.T) {
 // flagExists reports whether cmd accepts f, on its own set or inherited from
 // the root's persistent flags. Shorthands live in a separate index.
 func flagExists(cmd *cobra.Command, f flagRef) bool {
-	// pflag PANICS in ShorthandLookup for a name longer than one character, so
-	// a single-dash long form — `-all`, the exact table typo this guard exists
-	// to catch — would take down the whole test binary instead of reporting.
-	// Anything but a true one-character shorthand falls through to the normal
-	// lookup, which misses and produces the diagnosis.
-	if f.shorthand && len(f.name) == 1 {
+	// A single dash introduces a SHORTHAND, which pflag defines as exactly one
+	// character: `-all` is not "the --all flag written short", it lexes as the
+	// cluster -a -l -l and fails at runtime. So a multi-character shorthand is
+	// invalid regardless of whether a long flag happens to share its name —
+	// and falling through to the long lookup certified `-all` as valid, which
+	// is the exact typo shape this validation exists to catch.
+	//
+	// The length test also keeps pflag from PANICKING: ShorthandLookup aborts
+	// on a name longer than one character, which took down the whole test
+	// binary rather than reporting the problem.
+	if f.shorthand {
+		if len(f.name) != 1 {
+			return false
+		}
 		return cmd.Flags().ShorthandLookup(f.name) != nil ||
 			cmd.InheritedFlags().ShorthandLookup(f.name) != nil
 	}
