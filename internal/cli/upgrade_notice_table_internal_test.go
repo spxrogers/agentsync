@@ -175,16 +175,25 @@ var sanctionedJoiners = []string{"/", ",", "and", ", and"}
 
 // continuityClaims are phrasings that promise the old spelling still works.
 //
-// This is the one blocklist here, and it is deliberately narrow. The rules in
-// lineRetires constrain the text BETWEEN the names; three reviewers showed that
-// the same false promise simply relocates to the head or tail of the line
-// ("No action needed yet: …", "… — the old spelling still works until 0.12.0",
-// "… but an alias is kept for one more minor"). A blocklist cannot be complete,
-// which is why it is paired with requireAliasFree below rather than relied on.
+// This is the one blocklist here, and it does NOT compose with the required
+// "(no alias" clause into completeness — an earlier version of this comment
+// claimed it did, and a reviewer produced five survivors in one pass
+// ("supported through 0.12", "keeps working for now", "is not yet removed",
+// "remains available", "the legacy spelling is accepted"). Those are named
+// below, and the next reviewer will find more: the set of ways to promise
+// continuity in English is open, so no substring list closes it.
+//
+// What the rules around it DO close is the structural half — a line that omits
+// the alias-free parenthetical, names its replacement backwards, joins two
+// replacements with a negation, or connects them with unsanctioned wording all
+// fail regardless of vocabulary. This list is a cheap net over the phrasings
+// that have actually been attempted, not a proof.
 var continuityClaims = []string{
 	"deprecat", "still work", "an alias for", "alias is kept", "kept as an alias",
 	"no action needed", "grace period", "will be removed", "for one minor",
-	"one more minor", "until 0.",
+	"one more minor", "until 0.", "supported through", "keeps working",
+	"keep working", "not yet removed", "remains available", "legacy spelling",
+	"both spellings",
 }
 
 // anyLineRetires reports whether some line states the retirement.
@@ -209,10 +218,14 @@ func lineRetires(line string, r retirement) bool {
 			return false
 		}
 	}
-	// Every retiring line asserts the absence of an alias. It is the single
-	// clause that directly contradicts "still works" / "an alias is kept", and
-	// all four shipped action lines already carry it.
-	if !strings.Contains(lower, "no alias") {
+	// Every retiring line asserts the absence of an alias, in the parenthesized
+	// form all four shipped lines use: "(no alias)", "(no aliases)",
+	// "(no alias; …)". Requiring the parenthetical rather than the bare words
+	// is what stops the assertion being satisfied incidentally — "there is no
+	// alias policy yet, so the old name is accepted" and "no aliases were
+	// harmed; both spellings run" both contain "no alias" and both promise the
+	// opposite of what this clause is supposed to mean.
+	if !strings.Contains(lower, "(no alias") {
 		return false
 	}
 
@@ -223,32 +236,40 @@ func lineRetires(line string, r retirement) bool {
 	oldEnd := oldAt + len("agentsync "+r.Old)
 
 	// Locate every replacement AFTER the old spelling, on a word boundary.
-	at := make([]int, 0, len(r.Replacements))
+	//
+	// Each span carries its OWN end. Sorting bare positions while indexing the
+	// lengths in declaration order desynchronizes the two the moment a line
+	// names the replacements in a different order than the table lists them —
+	// which rejected a perfectly good reword and blamed the break phrase for it.
+	spans := make([]span, 0, len(r.Replacements))
 	for _, rep := range r.Replacements {
 		i := indexInvocation(line, "agentsync "+rep, oldEnd)
 		if i < 0 {
 			return false
 		}
-		at = append(at, i)
+		spans = append(spans, span{at: i, end: i + len("agentsync "+rep)})
 	}
-	sort.Ints(at)
+	sort.Slice(spans, func(a, b int) bool { return spans[a].at < spans[b].at })
 
-	if !isSanctioned(normalizeConnector(line[oldEnd:at[0]]), sanctionedBreakPhrases) {
+	if !isSanctioned(normalizeConnector(line[oldEnd:spans[0].at]), sanctionedBreakPhrases) {
 		return false
 	}
 	// Consecutive replacements must be joined plainly, not by a clause that
 	// negates or qualifies the one that follows.
-	for k := 1; k < len(at); k++ {
-		prevEnd := at[k-1] + len("agentsync "+r.Replacements[k-1])
-		if prevEnd > at[k] {
-			return false
+	for k := 1; k < len(spans); k++ {
+		if spans[k-1].end > spans[k].at {
+			return false // overlapping matches; nothing sane to measure
 		}
-		if !isSanctioned(normalizeConnector(line[prevEnd:at[k]]), sanctionedJoiners) {
+		if !isSanctioned(normalizeConnector(line[spans[k-1].end:spans[k].at]), sanctionedJoiners) {
 			return false
 		}
 	}
 	return true
 }
+
+// span is one replacement's location on a line: where it starts and where it
+// ends. Both travel together through the sort.
+type span struct{ at, end int }
 
 func isSanctioned(s string, allowed []string) bool {
 	for _, a := range allowed {
@@ -341,11 +362,55 @@ func TestLineRetires(t *testing.T) {
 		{"unsanctioned connector", "`agentsync verify` has been superseded by `agentsync check` (no alias)", ver, false},
 		// Only one replacement named.
 		{"partial replacements", "`agentsync update` was REMOVED (no alias) — use `agentsync plugin outdated`", upd, false},
+		// Replacements named in a different order than the table declares them.
+		// A legitimate reword: it must PASS. Sorting positions while indexing
+		// lengths in declaration order rejected it, and blamed the break phrase.
+		{"replacements reordered", "`agentsync update` was REMOVED (no alias) — use `agentsync plugin upgrade --all` / `agentsync plugin outdated`", upd, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := lineRetires(tc.line, tc.r); got != tc.want {
 				t.Errorf("lineRetires() = %v, want %v for:\n    %s", got, tc.want, tc.line)
+			}
+		})
+	}
+}
+
+// TestRetiringSpellings gives the banner-prose parser the table every other
+// helper here earned, and for the same reason: it is the only input to
+// TestEveryRetiringNoticeLineHasATableRow, whose passing state is "found
+// nothing unclaimed" — so a parser that extracted nothing at all would look
+// identical to a correct one, below even the claimed == 0 floor.
+func TestRetiringSpellings(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want []string
+	}{
+		// The shipped forms, including the line that retires TWO spellings.
+		{"is-now form", "`agentsync verify` is now `agentsync check` (no alias) — doctor checks the MACHINE", []string{"verify"}},
+		{"two on one line", "`agentsync plugin install` is now `agentsync plugin add`, and `agentsync secrets` is now `agentsync secret` (no aliases)", []string{"plugin install", "secrets"}},
+		{"removed-use form", "`agentsync update` was REMOVED (no alias) — use `agentsync plugin outdated` / `agentsync plugin upgrade --all`", []string{"update"}},
+		{"moved-to form", "`agentsync explain <plugin>` moved to `agentsync plugin explain <plugin>` (no alias; the old name now explains a FILE)", []string{"explain <plugin>"}},
+
+		// The trap: an ordinary sentence about a LIVE command. Reading this as
+		// a retirement demanded a bogus table row for `status`, which would then
+		// break the pinned set and the resurrection guard.
+		{"live command, no replacement", "`agentsync status` is now scope-aware (no alias needed) — it reads the project tree", nil},
+		{"live command, apply", "`agentsync apply` is now atomic per agent", nil},
+
+		// A retiring clause with the old spelling unquoted must still parse:
+		// requiring a backtick made a real retirement extract nothing, silently.
+		{"unquoted old spelling", "agentsync foo is now `agentsync bar` (no alias)", []string{"foo"}},
+
+		{"no invocation at all", "the canonical subagent directory moved: agents/ → subagents/", nil},
+		{"unsanctioned phrasing", "`agentsync verify` has been superseded by `agentsync check`", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := retiringSpellings(tc.line)
+			if strings.Join(got, "|") != strings.Join(tc.want, "|") {
+				t.Errorf("retiringSpellings() = %q, want %q\n    %s", got, tc.want, tc.line)
 			}
 		})
 	}
@@ -394,11 +459,27 @@ func TestEveryRetiringNoticeLineHasATableRow(t *testing.T) {
 	}
 }
 
-// retiringSpellings extracts the old spellings a notice line retires: every
-// `agentsync <words>` that is immediately followed by a sanctioned break phrase.
+// retiringSpellings extracts the old spellings a notice line retires: an
+// `agentsync <words>` followed by a sanctioned break phrase AND then by another
+// `agentsync` invocation.
+//
+// That last requirement is the whole difference between a guard and a trap. An
+// earlier version accepted spelling + phrase alone, so an ordinary future line
+// like "`agentsync status` is now scope-aware (no alias needed)" was read as
+// retiring `status` — and the failure told the author that spelling was
+// "un-guarded everywhere", steering them to add a bogus row that would then
+// break the pinned set AND the resurrection guard, since `status` still
+// resolves. A retirement says what replaces it; a sentence that names no
+// replacement is not one.
+//
+// The spelling is found by trying successively longer word prefixes rather than
+// by hunting a closing backtick, so a bare (unquoted) old spelling parses the
+// same way lineRetires reads it. Requiring a backtick made a real retiring
+// clause extract nothing at all, which is silent — the failure mode this guard
+// exists to prevent.
 func retiringSpellings(line string) []string {
-	var out []string
 	const prefix = "agentsync "
+	var out []string
 	for i := 0; ; {
 		j := strings.Index(line[i:], prefix)
 		if j < 0 {
@@ -406,23 +487,44 @@ func retiringSpellings(line string) []string {
 		}
 		at := i + j
 		rest := line[at+len(prefix):]
-		// The spelling runs to the closing backtick that quotes it.
-		end := strings.Index(rest, "`")
-		if end <= 0 {
-			i = at + len(prefix)
-			continue
-		}
-		spelling := rest[:end]
-		after := rest[end+1:]
-		for _, phrase := range sanctionedBreakPhrases {
-			if normalizeConnector(after) == phrase ||
-				strings.HasPrefix(normalizeConnector(after), phrase+" ") {
-				out = append(out, spelling)
-				break
-			}
+		if sp, ok := retiringSpellingAt(rest); ok {
+			out = append(out, sp)
 		}
 		i = at + len(prefix)
 	}
+}
+
+// retiringSpellingAt reads one candidate spelling out of the text following an
+// "agentsync " prefix, returning it only if a sanctioned break phrase and then
+// another invocation follow.
+func retiringSpellingAt(rest string) (string, bool) {
+	// maxSpellingWords bounds the search: the longest retired spelling is two
+	// words plus a placeholder ("explain <plugin>", "plugin install").
+	const maxSpellingWords = 3
+	words := strings.Fields(rest)
+	if len(words) > maxSpellingWords {
+		words = words[:maxSpellingWords]
+	}
+	for n := 1; n <= len(words); n++ {
+		spelling := strings.TrimRight(strings.Join(words[:n], " "), "`,.;:")
+		idx := strings.Index(rest, spelling)
+		if idx < 0 {
+			continue
+		}
+		after := strings.TrimLeft(rest[idx+len(spelling):], "` ")
+		norm := normalizeConnector(after)
+		for _, phrase := range sanctionedBreakPhrases {
+			if norm != phrase && !strings.HasPrefix(norm, phrase+" ") {
+				continue
+			}
+			// A retirement names what replaces it. Without this, any "is now"
+			// sentence about a live command reads as a retirement.
+			if strings.HasPrefix(strings.TrimPrefix(norm, phrase), " agentsync ") {
+				return spelling, true
+			}
+		}
+	}
+	return "", false
 }
 
 // TestNoCommandIsNamedCompletion guards the one soft spot in the notice's
