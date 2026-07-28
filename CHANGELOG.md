@@ -216,6 +216,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Documentation
 
+- **`plugin upgrade`'s one-line help now names `apply` instead of saying
+  "re-apply".** Both `upgrade` forms genuinely run the full apply pipeline
+  (`render.Plan` + `render.Apply`, honoring `--scope`/`--project`) — but in the
+  `agentsync plugin` command list, "and re-apply" read as loose jargon rather
+  than as "runs `agentsync apply`", so the one behavior a reader most needs to
+  know about the command — that it writes to your agents' native config, not
+  just to the plugin cache — was the one the summary buried. Reworded to "and
+  run apply" (and matched in the website CLI reference table). Behavior is
+  unchanged.
+
 - **The upgrade notice's `iox.AtomicWrite` claim was the opposite of the
   truth.** `upgrade_notice.go` stated that "iox.AtomicWrite keeps the record
   itself well-formed under that race", and `docs/architecture.md` §10 repeated

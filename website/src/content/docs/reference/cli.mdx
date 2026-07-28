@@ -28,7 +28,7 @@ import { Aside } from '@astrojs/starlight/components';
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
 | `plugin add\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` / `outdated` / `explain` | Manage plugins (the lifecycle subcommands all accept the same `id[@marketplace]` ref `add` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). | `add <id[@marketplace]>` |
 | `secret set\|get\|list\|remove <key>` / `secret edit` | Manage age-encrypted secrets (`list` prints KEYS only; `edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
-| `plugin outdated` / `plugin upgrade [<id>]` | **(network)** Poll marketplaces and report pending bumps / re-fetch a plugin (or `--all` pending bumps) and re-apply. | `upgrade --all --lossless --scope --project` |
+| `plugin outdated` / `plugin upgrade [<id>]` | **(network)** Poll marketplaces and report pending bumps / re-fetch a plugin (or `--all` pending bumps) and run `apply`. | `upgrade --all --lossless --scope --project` |
 | `apply` | Render source → write agent configs (offline). Git-versions each destination dir (opt-out). | `--agents --dry-run --scope --project --no-git-backup` |
 | `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (local-only git history). | `--agents --to --all --dry-run` |
 | `status` | Summarize drift / pending across agents (skill dirs collapse by default). `--exit-code` → exit `2` on any drift, `0` when clean (CI gate). | `--agents --verbose --json --exit-code --scope --project` |
