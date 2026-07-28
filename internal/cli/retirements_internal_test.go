@@ -84,6 +84,18 @@ func (f flagRef) String() string {
 	return "--" + f.name
 }
 
+// isFlagToken distinguishes a flag from a negative value: `--all` and `-v` are
+// flags, `-1` (as in `--depth -1`) is the previous flag's argument. A flag name
+// starts with a letter.
+func isFlagToken(w string) bool {
+	name := strings.TrimLeft(w, "-")
+	if name == "" {
+		return false
+	}
+	c := name[0]
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
 // splitInvocation separates a replacement into its command path and its flags.
 //
 // It stops collecting path words at the FIRST flag: everything after one is
@@ -96,7 +108,7 @@ func splitInvocation(invocation string) (path []string, flags []flagRef) {
 		switch {
 		case w == "--" || w == "-":
 			inFlags = true
-		case strings.HasPrefix(w, "-"):
+		case strings.HasPrefix(w, "-") && isFlagToken(w):
 			inFlags = true
 			// `--scope=user` names the flag `scope`; the value is not part of it.
 			name := strings.TrimLeft(w, "-")
@@ -243,7 +255,12 @@ func TestRetirementsTableIsWellFormed(t *testing.T) {
 // flagExists reports whether cmd accepts f, on its own set or inherited from
 // the root's persistent flags. Shorthands live in a separate index.
 func flagExists(cmd *cobra.Command, f flagRef) bool {
-	if f.shorthand {
+	// pflag PANICS in ShorthandLookup for a name longer than one character, so
+	// a single-dash long form — `-all`, the exact table typo this guard exists
+	// to catch — would take down the whole test binary instead of reporting.
+	// Anything but a true one-character shorthand falls through to the normal
+	// lookup, which misses and produces the diagnosis.
+	if f.shorthand && len(f.name) == 1 {
 		return cmd.Flags().ShorthandLookup(f.name) != nil ||
 			cmd.InheritedFlags().ShorthandLookup(f.name) != nil
 	}
