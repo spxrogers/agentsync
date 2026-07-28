@@ -23,19 +23,20 @@ import (
 
 // pollOpts configures the shared marketplace-poll engine behind `plugin
 // outdated` and `plugin upgrade --all`.
+//
+// There is deliberately no "which flag to blame" field. The retired top-level
+// `update` spelled these `--apply`/`--auto-safe` and could reach the engine
+// with lossless set but doApply clear, so the error naming the offending flag
+// had to be parameterized. Its two surviving callers cannot: `plugin outdated`
+// passes the zero value, and `plugin upgrade --all` always sets doApply, while
+// `--lossless` without `--all` is rejected by the command before it gets here.
 type pollOpts struct {
 	// doApply upgrades every pending bump and re-applies to the agents.
 	doApply bool
 	// lossless drops bumps whose candidate version would introduce a new
-	// adapter Skip for an enabled agent.
+	// adapter Skip for an enabled agent. Only meaningful with doApply — it
+	// filters which bumps are applied, and nothing is applied without it.
 	lossless bool
-	// losslessFlag is the flag NAME to blame in the "requires --all" error, so
-	// the deprecated alias reports `--auto-safe` and `plugin upgrade` reports
-	// `--lossless`.
-	losslessFlag string
-	// applyFlag is the flag NAME the lossless filter requires (`--apply` on the
-	// deprecated alias, `--all` on `plugin upgrade`).
-	applyFlag string
 }
 
 // pollPluginsRun re-fetches every registered marketplace, records the fresh
@@ -47,17 +48,7 @@ type pollOpts struct {
 // cache, and the fetch timestamps + SHAs land in the state file. `plugin
 // outdated`'s help owns that, because the `npm outdated` prior reads as pure.
 func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
-	doApply, autoSafe := o.doApply, o.lossless
-	if autoSafe && !doApply {
-		applyFlag, losslessFlag := o.applyFlag, o.losslessFlag
-		if applyFlag == "" {
-			applyFlag = "--apply"
-		}
-		if losslessFlag == "" {
-			losslessFlag = "--lossless"
-		}
-		return fmt.Errorf("%s requires %s (it only filters which bumps are applied)", losslessFlag, applyFlag)
-	}
+	doApply, lossless := o.doApply, o.lossless
 	p, err := newPrinter(cmd)
 	if err != nil {
 		return err
@@ -146,14 +137,14 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 	// Compute pending bumps.
 	bumps := marketplace.ComputePendingBumps(st, c.Marketplaces, c.Plugins, fetched, c.Config.Updates.DefaultMode)
 
-	// --lossless (historically --auto-safe): drop bumps whose candidate version
+	// --lossless: drop bumps whose candidate version
 	// would introduce a new translation loss (an adapter Skip) for any enabled
 	// agent. Each bump is evaluated by projecting the plugin's installed vs
 	// candidate manifest and diffing the skip identities a render emits;
 	// comparing both under identical conditions makes any render quirk cancel, so
 	// the delta is exactly the bump's effect. An excluded bump is REPORTED, never
 	// silently dropped. Evaluation failures are treated as lossy (conservative).
-	if autoSafe {
+	if lossless {
 		safe, lossy := filterSafeBumps(home, bumps, fetched, c.Config, userHome, cmd.OutOrStdout())
 		for _, b := range lossy {
 			fmt.Fprintf(cmd.OutOrStdout(),
@@ -453,9 +444,9 @@ func swapDir(src, dst string) error {
 }
 
 // filterSafeBumps partitions bumps into those whose candidate version adds no
-// new translation losses (safe) and those that do (lossy), for `update
-// --auto-safe`. An evaluation error is conservatively treated as lossy so a
-// fetch/parse failure can never cause a lossy bump to slip through.
+// new translation losses (safe) and those that do (lossy), for `plugin upgrade
+// --all --lossless`. An evaluation error is conservatively treated as lossy so
+// a fetch/parse failure can never cause a lossy bump to slip through.
 func filterSafeBumps(home string, bumps []marketplace.Bump, fetched map[string]map[string]marketplace.PluginEntry, cfg source.Config, userHome string, warn io.Writer) (safe, lossy []marketplace.Bump) {
 	reg := registryFactory()
 	var agents []string
@@ -467,7 +458,7 @@ func filterSafeBumps(home string, bumps []marketplace.Bump, fetched map[string]m
 	for _, b := range bumps {
 		isLossy, err := bumpIsLossy(home, b, fetched, cfg, reg, agents, userHome)
 		if err != nil {
-			fmt.Fprintf(warn, "warning: auto-safe: cannot evaluate %s (%v); excluding to be safe\n", b.ID, err)
+			fmt.Fprintf(warn, "warning: lossless: cannot evaluate %s (%v); excluding to be safe\n", b.ID, err)
 			lossy = append(lossy, b)
 			continue
 		}

@@ -7,11 +7,11 @@ import (
 )
 
 // The acceptance suite for the plugin lifecycle verb consolidation (#200 F2):
-// `update` → `plugin outdated` / `plugin upgrade --all [--lossless]`, with the
-// deprecated top-level `update` kept for one minor as a forwarding alias.
+// the retired top-level `update` → `plugin outdated` / `plugin upgrade --all
+// [--lossless]`, with NO forwarding alias (see TestUpdateIsGone below).
 
-// TestPluginOutdated_ReportsPendingBumps is `update`'s read side under its new
-// name: it polls, reports the bump, and does NOT touch the pin.
+// TestPluginOutdated_ReportsPendingBumps is the retired `update`'s read side
+// under its new name: it polls, reports the bump, and does NOT touch the pin.
 func TestPluginOutdated_ReportsPendingBumps(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
@@ -137,14 +137,14 @@ func TestPluginUpgrade_Lossless(t *testing.T) {
 	mustRun(t, env, "agent", "add", "claude")
 	mustRun(t, env, "agent", "add", "opencode")
 
-	mpDir := makeAutoSafeMarketplace(t, base, "1.0.0")
+	mpDir := makeLosslessMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
 	mustRun(t, env, "plugin", "add", "cleanp@as-mp")
 	mustRun(t, env, "plugin", "add", "lossyp@as-mp")
 	mustRun(t, env, "apply")
 
 	// 2.0.0: lossyp gains an opencode-skipped LSP server; cleanp stays MCP-only.
-	_ = makeAutoSafeMarketplace(t, base, "2.0.0")
+	_ = makeLosslessMarketplace(t, base, "2.0.0")
 
 	// --lossless without --all is meaningless: it only filters which bumps apply.
 	if _, err := runCLI(t, env, "plugin", "outdated", "--lossless"); err == nil {
@@ -193,6 +193,13 @@ func TestPluginUpgrade_Lossless(t *testing.T) {
 // It must fail like every other retired spelling, on every flag shape a cron
 // line could carry, so nobody's automation silently keeps working against a
 // command that is on its way out.
+//
+// The assertion is on the "unknown command" MESSAGE, not merely on a non-zero
+// exit. Three of the four shapes below carry flags, and a resurrected `update`
+// could reject them for reasons of its own — an unknown `--auto-safe`, a scope
+// refusal, a missing arg — leaving the test green while the command resolves
+// perfectly well. Only the bare shape is load-bearing under an err != nil
+// assertion, and a resurrection as `update <id>` (ExactArgs(1)) passes all four.
 func TestUpdateIsGone(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
@@ -205,9 +212,13 @@ func TestUpdateIsGone(t *testing.T) {
 		{"update", "--scope", "user"},
 	} {
 		out, err := runCLI(t, env, args...)
-		if err == nil {
+		switch {
+		case err == nil:
 			t.Errorf("`agentsync %s` still resolves — `update` is a hard removal, not a deprecation:\n%s",
 				strings.Join(args, " "), out)
+		case !strings.Contains(err.Error(), "unknown command"):
+			t.Errorf("`agentsync %s` failed, but NOT as an unknown command — so this says nothing about "+
+				"whether `update` was retired. Got: %v", strings.Join(args, " "), err)
 		}
 	}
 }

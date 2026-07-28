@@ -24,9 +24,13 @@ import (
 func TestNoStaleRenamedCommandReferences(t *testing.T) {
 	repoRoot := repoRootFromCaller(t)
 
-	// old invocation -> what to write instead.
+	// old invocation -> what to write instead. Matched on a WORD boundary (see
+	// containsInvocation): `update` and `install` are ordinary English words, so
+	// a bare substring test would flag prose like "agentsync updates the native
+	// config" and hand the next author a bogus failure whose cheapest fix is to
+	// add their file to `exempt` — permanently un-guarding it.
 	renamed := map[string]string{
-		"agentsync secrets ":       "agentsync secret …",
+		"agentsync secrets":        "agentsync secret …",
 		"agentsync verify":         "agentsync check",
 		"agentsync plugin install": "agentsync plugin add",
 		"agentsync update":         "agentsync plugin outdated / agentsync plugin upgrade --all",
@@ -54,7 +58,7 @@ func TestNoStaleRenamedCommandReferences(t *testing.T) {
 		hitHere := false
 		for _, line := range strings.Split(src, "\n") {
 			for old := range renamed {
-				if strings.Contains(line, old) {
+				if containsInvocation(line, old) {
 					hitHere = true
 					if !exempt[rel] {
 						hits = append(hits, hit{rel, old, strings.TrimSpace(line)})
@@ -77,6 +81,13 @@ func TestNoStaleRenamedCommandReferences(t *testing.T) {
 	if err := walkRepoDocs(repoRoot, scan); err != nil {
 		t.Fatalf("walk docs: %v", err)
 	}
+	// …AND the config/data files that carry user-facing command lists but are
+	// neither Go nor markdown. Three of them (context7.json, llms.txt, the
+	// .golangci.yml comment) held stale spellings that this guard structurally
+	// could not see, and had to be found by hand.
+	if err := walkRepoLooseFiles(repoRoot, scan); err != nil {
+		t.Fatalf("walk loose files: %v", err)
+	}
 
 	for _, h := range hits {
 		t.Errorf("%s references the hard-renamed `%s` — there is NO alias, so this hint errors as an "+
@@ -98,6 +109,78 @@ func TestNoStaleRenamedCommandReferences(t *testing.T) {
 		t.Errorf("%s is exempted from the renamed-command check but no longer mentions any "+
 			"renamed command — drop it from the exempt map", rel)
 	}
+}
+
+// containsInvocation reports whether line names the retired invocation `old` as
+// a COMMAND rather than incidentally as prose.
+//
+// The match is anchored on a word boundary at the end. Every key ends in a verb
+// that is also an ordinary English word — `update`, `install`, `verify`,
+// `secrets` — so a plain strings.Contains flags "agentsync updates the native
+// config in place" as if it were a stale command reference. That failure is
+// worse than a miss: it lands on an author who did nothing wrong, and the
+// cheapest way out is to add the file to `exempt`, which un-guards it forever.
+//
+// Only the trailing edge needs anchoring. The leading "agentsync " prefix is
+// already a boundary in practice, and requiring one before it would miss the
+// common case of the invocation being backtick-quoted in markdown.
+func containsInvocation(line, old string) bool {
+	for i := 0; ; {
+		j := strings.Index(line[i:], old)
+		if j < 0 {
+			return false
+		}
+		end := i + j + len(old)
+		if end == len(line) || !isWordByte(line[end]) {
+			return true
+		}
+		i = end
+	}
+}
+
+// isWordByte reports whether b continues a command word. Only ASCII letters
+// count: `agentsync verify-ish` is prose, but `agentsync verify --json`,
+// `agentsync verify`, and `agentsync verify.` are all the command.
+func isWordByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+// walkRepoLooseFiles visits the handful of non-Go, non-markdown files that
+// carry user-facing command lists: the LLM-facing summaries, the lint config's
+// prose comments, and the CI workflows. Each is named explicitly rather than
+// globbed by extension — a blanket *.json/*.yml sweep would pull in lockfiles,
+// generated output, and vendored config, none of which describe the CLI.
+//
+// A named file that does not exist is skipped, not an error: entries may name
+// files a later change adds.
+func walkRepoLooseFiles(root string, fn func(rel, src string)) error {
+	rels := []string{
+		"context7.json",
+		"website/public/llms.txt",
+		".golangci.yml",
+		"justfile",
+	}
+	wf := filepath.Join(root, ".github", "workflows")
+	if entries, err := os.ReadDir(wf); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() && (strings.HasSuffix(e.Name(), ".yml") || strings.HasSuffix(e.Name(), ".yaml")) {
+				rels = append(rels, filepath.ToSlash(filepath.Join(".github", "workflows", e.Name())))
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	for _, rel := range rels {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		fn(rel, string(data))
+	}
+	return nil
 }
 
 // walkRepoDocs visits the user-facing prose: docs/*.md, the authored website

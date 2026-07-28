@@ -127,7 +127,7 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   |---|---|
   | `agentsync update` | `agentsync plugin outdated` |
   | `agentsync update --apply` | `agentsync plugin upgrade --all` |
-  | `agentsync update --auto-safe` | `agentsync plugin upgrade --lossless` |
+  | `agentsync update --apply --auto-safe` | `agentsync plugin upgrade --all --lossless` |
   | `agentsync explain <plugin>` | `agentsync plugin explain <plugin>` |
   | `agentsync explain --list` | dropped — use `agentsync plugin list` |
 
@@ -144,7 +144,9 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
     meant two unrelated things: `reconcile --auto-safe` is about drift classes
     that can't lose work, while the plugin one is about a candidate version
     introducing no new adapter skip. `reconcile --auto-safe` is unchanged. A
-    bump excluded as lossy is reported, never silently dropped.
+    bump excluded as lossy is reported, never silently dropped — and that
+    report now says `warning: lossless:` rather than the old `warning:
+    auto-safe:`, which named a flag the user could no longer pass.
   - **`plugin outdated` is not read-only**, whatever the `npm outdated` prior
     suggests, and its help says so: it re-fetches every marketplace (network)
     and writes each one's fetch timestamp + head SHA to state, plus the

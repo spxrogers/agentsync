@@ -81,9 +81,24 @@ This intentionally differs from the spec text on both points:
   gives the operator a clear, scriptable decision. Revisit only if real usage
   shows the error is too blunt.
 - **Read-only commands degrade, they don't hard-fail.** The conflict is fatal
-  for the *mutating* commands (`apply`, `reconcile`, `import`, `plugin
-  upgrade`) — they
-  must never act on ambiguity. The *diagnostic* commands (`status`, `diff`,
-  `explain`) resolve it leniently (entry-wins) and log a warning, so they still
-  show state rather than refusing to run on the very conflict you ran them to
-  understand. Implemented via `marketplace.LoadProjectedLenient`.
+  for the *mutating* commands (`apply`, `reconcile`, `import`, `plugin upgrade`)
+  — they must never act on ambiguity. The *diagnostic* commands (`status`,
+  `diff`, `explain`) resolve it leniently (entry-wins) and log a warning, so
+  they still show state rather than refusing to run on the very conflict you ran
+  them to understand. Implemented via `marketplace.LoadProjectedLenient`.
+
+## Amendments
+
+- **2026-07-28 — command spellings only, policy unchanged.** #200 renamed
+  `plugin install` → `plugin add` and removed the top-level `update` command
+  (its polling half is now `plugin outdated`, its applying half `plugin upgrade
+  --all`). This record was rewritten in place to name the current spellings.
+  Nothing about the decision changed.
+
+  Editing a dated record is deliberate here, and the opposite of how
+  `docs/superpowers/{specs,plans}` are treated — those are *superseded* design
+  documents, so correcting them would falsify the archive, and the stale-command
+  guard skips them for exactly that reason. This ADR is different: the policy it
+  states is **still in force** (`LoadProjectedLenient` is live code), so a
+  reader takes it as current, and a live policy enumerating commands that no
+  longer exist misleads. Amend rather than freeze.

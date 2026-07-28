@@ -379,7 +379,7 @@ func TestLoadProjected_CrossPluginIdenticalMCPOK(t *testing.T) {
 // TestLoadProjected_LegacyPinVerifiesUnderPriorScheme proves a pre-tree-hash
 // pin (a bare sha256 hex over plugin.json) still VERIFIES under the prior scheme
 // rather than being refused — refusing it bricked existing installs whose only
-// remediation (`agentsync update`) does not re-pin a non-bumping plugin. An
+// remediation (`agentsync plugin outdated`) does not re-pin a non-bumping plugin. An
 // untampered plugin.json passes; a changed plugin.json is a real mismatch.
 func TestLoadProjected_LegacyPinVerifiesUnderPriorScheme(t *testing.T) {
 	pluginJSON := `{"name":"old","mcpServers":{"a":{"command":"x"}}}`

@@ -4,6 +4,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 // TestTopLevelCommandSurfaceIsPinned locks the v1.x top-level command set.
@@ -50,8 +52,22 @@ func TestTopLevelCommandSurfaceIsPinned(t *testing.T) {
 	}
 }
 
-// TestRenamedTopLevelCommandsAreGone is the negative half: the hard renames must
-// not resurrect, as a command OR as an alias.
+// retiredCommands maps a retired top-level spelling to what replaces it. These
+// were HARD renames/removals with no aliases, by explicit decision.
+//
+// It is a package-level var, not a local, because two guards read it: the
+// resurrection check below, and TestUpgradeNoticeNamesEveryRetiredCommand,
+// which requires the first-run upgrade banner to actually tell users about
+// each one. A retirement the banner never mentions is the failure mode that
+// feature exists to prevent.
+var retiredCommands = map[string]string{
+	"verify":  "check",
+	"secrets": "secret",
+	"update":  "plugin outdated / plugin upgrade --all",
+}
+
+// TestRetiredCommandsAreGone is the negative half: the hard renames must not
+// resurrect, as a command OR as an alias, at ANY depth.
 //
 // It does not replace TestRenamedGroupsHaveNoAliases (component_verbs_test.go),
 // which invokes the old spellings and requires them to fail — that test does
@@ -61,22 +77,25 @@ func TestTopLevelCommandSurfaceIsPinned(t *testing.T) {
 // What this adds is structural rather than behavioral: no fixture, no process,
 // and it reads the alias list directly, so it still fires for a command that
 // would exit non-zero for some unrelated reason (bad args, missing home) and
-// thus look "gone" to an invocation test. Nested renames — `plugin install`,
-// `explain <plugin>` — are covered by those invocation tests, not here.
-func TestRenamedTopLevelCommandsAreGone(t *testing.T) {
-	gone := map[string]string{
-		"verify":  "check",
-		"secrets": "secret",
-		"update":  "plugin outdated / plugin upgrade --all",
-	}
-	for _, c := range NewRoot().Commands() {
-		names := append([]string{c.Name()}, c.Aliases...)
-		for _, n := range names {
-			if to, isGone := gone[n]; isGone {
-				t.Errorf("`%s` is reachable again (as a name or alias) — it was HARD renamed to `%s` "+
-					"with no alias by explicit decision, so resurrecting it silently changes the contract",
-					n, to)
+// thus look "gone" to an invocation test.
+//
+// It walks the WHOLE tree, not just the top level. An earlier version iterated
+// `NewRoot().Commands()` and was proven blind: adding `Aliases: []string{"update"}`
+// to `plugin upgrade` left the entire suite green, resurrecting `agentsync
+// plugin update` — a spelling nobody decided to ship.
+func TestRetiredCommandsAreGone(t *testing.T) {
+	checked := 0
+	walkCommands(NewRoot(), func(path string, c *cobra.Command) {
+		checked++
+		for _, n := range append([]string{c.Name()}, c.Aliases...) {
+			if to, isGone := retiredCommands[n]; isGone {
+				t.Errorf("`%s` is reachable again as `agentsync %s` (a name or an alias) — it was retired "+
+					"with no alias by explicit decision, replaced by `%s`, so resurrecting it silently "+
+					"changes the contract", n, path, to)
 			}
 		}
+	})
+	if checked == 0 {
+		t.Fatal("walked zero commands — this guard would vacuously pass")
 	}
 }

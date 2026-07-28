@@ -329,12 +329,7 @@ when running inside a project.`,
 			case !all && len(args) == 0:
 				return fmt.Errorf("upgrade needs a plugin id, or --all to upgrade every plugin with a pending bump")
 			case all:
-				return pollPluginsRun(cmd, pollOpts{
-					doApply:      true,
-					lossless:     lossless,
-					losslessFlag: "--lossless",
-					applyFlag:    "--all",
-				})
+				return pollPluginsRun(cmd, pollOpts{doApply: true, lossless: lossless})
 			}
 			return pluginUpgradeRun(cmd, args, lossless)
 		}),

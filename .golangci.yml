@@ -159,9 +159,9 @@ linters:
       # temp/probe file — plus ONE genuine NATIVE-destination exception:
       # reconcile.go's interactive orphan removal (os.Remove of a native dest
       # file), which is safe only because render.BackupFile runs first; its
-      # nolint says so. Only update.go keeps a whole-file exclude: its six os.*
-      # sites are all marketplace/plugin-cache scratch (temp fetch dirs + the
-      # swap-in rename), never a native destination.
+      # nolint says so. Only plugin_poll.go keeps a whole-file exclude: its six
+      # os.* sites are all marketplace/plugin-cache scratch (temp fetch dirs +
+      # the swap-in rename), never a native destination.
       - path: '(^|/)internal/cli/plugin_poll\.go$'
         linters: [forbidigo]
         text: 'direct os\.\* is reserved'
