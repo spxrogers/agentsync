@@ -477,10 +477,10 @@ skipped — and the report tells you exactly which:
   → claude    ✓ full        1 mcp · 5 commands · 3 subagents · 1 lsp
   → codex     ◐ partial     1 mcp · 5 commands · 3 subagents · 1 lsp  (3 reduced · 1 dropped)
       → codex couldn't fully translate — reduced = rendered without some fields; dropped = not emitted:
-        • subagent ai-architect   reduced  Codex agents are TOML with no per-agent tools allowlist; dropped tools, color
-        • subagent deploy-expert  reduced  Codex agents are TOML with no per-agent tools allowlist; dropped tools, color
-        • subagent perf-optimizer reduced  Codex agents are TOML with no per-agent tools allowlist; dropped tools, color
-        • lsp atlassian-lsp       dropped  Codex has no LSP configuration concept
+        • subagent atlassian-ai-architect   reduced  Codex agents are TOML with no per-agent tools allowlist; dropped tools, color
+        • subagent atlassian-deploy-expert  reduced  Codex agents are TOML with no per-agent tools allowlist; dropped tools, color
+        • subagent atlassian-perf-optimizer reduced  Codex agents are TOML with no per-agent tools allowlist; dropped tools, color
+        • lsp atlassian-lsp                 dropped  Codex has no LSP configuration concept
 ```
 
 Each row's count tail lists every component kind the plugin hosts for that agent
@@ -518,6 +518,33 @@ agentsync plugin explain atlassian@anthropic --json            # machine-readabl
 
 (`agentsync plugin list` prints the installed ids. The top-level `explain` name
 answers a different question — see [Where did this file come from?](#where-did-this-file-come-from).)
+
+#### Plugin components are namespaced by their plugin
+
+A plugin's **subagents, skills, and slash commands** render under
+`<plugin>-<name>`, which is why the report above reads `atlassian-ai-architect`
+rather than `ai-architect`:
+
+| Plugin | Ships | Lands at | You invoke |
+|---|---|---|---|
+| `atlassian` | `agents/ai-architect.md` | `~/.claude/agents/atlassian-ai-architect.md` | `@agent-atlassian-ai-architect` |
+| `atlassian` | `commands/jira.md` | `~/.claude/commands/atlassian-jira.md` | `/atlassian-jira` |
+
+Every agent reads its components from one flat directory, so without this two
+plugins shipping a same-named component would write two files at one path. That
+is not hypothetical: `feature-dev` and `pr-review-toolkit` — both stock official
+plugins — each ship `agents/code-reviewer.md`, and before namespacing that made
+`agentsync apply` fail with no way out, since neither file is yours to rename.
+Claude Code reaches the same end natively, addressing a plugin's agent as
+`plugin:agent`; agentsync uses a hyphen because a colon is not legal in a
+subagent `name` (or in a filename on Windows).
+
+**Components you write yourself are never renamed.** Anything in your own
+`~/.agentsync/subagents/`, `skills/`, or `commands/` keeps the name you gave it,
+even when an installed plugin ships one by the same name — a plugin can never
+take your name. MCP and LSP servers keep their ids too: two sources claiming one
+server id is refused rather than renamed apart, because repointing a trusted
+server's endpoint is a hijack, not a naming clash.
 
 Control fan-out per plugin with `agents = [...]` in the plugin's TOML file. (A
 per-component `[plugin.overrides.<agent>]` table was specced but is **not wired

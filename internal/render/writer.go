@@ -248,19 +248,24 @@ func (w *Writer) Write(op adapter.FileOp, finalBytes []byte) error {
 
 // Delete satisfies adapter.DestWriter. Idempotent on missing files.
 //
-// Skill-orphan deletes (op.SourceID under "skills/", synthesized by Apply when a
-// skill or bundled file is removed from source) get two extra guarantees: a dest
-// that drifted from what agentsync last wrote is backed up before removal (the
-// never-destroy-unsynced-content invariant the write path enforces), and empty
-// skill directories left behind are pruned up to — but never including — the
-// agent's skills root. Other delete callers (agent disable --purge, reconcile
-// orphan removal) pass an empty SourceID and keep the plain idempotent remove.
+// Orphan deletes (op.SourceID under a reclaimed prefix — see
+// IsOrphanReclaimable — synthesized by Apply when a component is removed from or
+// renamed in the source) get a dest that drifted from what agentsync last wrote
+// backed up before removal, honouring the never-destroy-unsynced-content
+// invariant the write path enforces. Other delete callers (agent disable
+// --purge, reconcile orphan removal) pass an empty SourceID and keep the plain
+// idempotent remove.
+//
+// Empty-directory pruning is additionally applied to SKILLS only: a skill is a
+// directory, so reclaiming one must not leave the husk behind. Subagents and
+// commands are flat files in a directory the agent always owns, so there is
+// nothing to prune — and walking up from one would target that shared directory.
 func (w *Writer) Delete(op adapter.FileOp) error {
 	if w.dryRun {
 		return nil
 	}
-	skillOrphan := strings.HasPrefix(op.SourceID, "skills/")
-	if skillOrphan {
+	orphan := IsOrphanReclaimable(op.SourceID)
+	if orphan {
 		if err := w.backupOrphanIfDrifted(op); err != nil {
 			return err
 		}
@@ -268,13 +273,13 @@ func (w *Writer) Delete(op adapter.FileOp) error {
 	if err := os.Remove(op.Path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("delete %s: %w", op.Path, err)
 	}
-	if skillOrphan {
+	if orphan && strings.HasPrefix(op.SourceID, "skills/") {
 		pruneEmptySkillDirs(op.Path, op.SourceID)
 	}
 	return nil
 }
 
-// backupOrphanIfDrifted copies a soon-to-be-deleted skill file to the backup
+// backupOrphanIfDrifted copies a soon-to-be-deleted component file to the backup
 // root iff its on-disk content is not exactly what agentsync last wrote (i.e.
 // the user hand-edited it). A file matching our last-applied hash is our own
 // output and is removed without a backup; anything else is preserved first so an

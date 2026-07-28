@@ -34,6 +34,49 @@ newest first. It is what the CLI's one-time upgrade notice links to.
 
 ## 0.11.0
 
+### Plugin-provided components are namespaced by their plugin
+
+A subagent, skill, or slash command that comes from an installed plugin now
+renders under `<plugin>-<name>`. `feature-dev`'s `code-reviewer` becomes
+`feature-dev-code-reviewer`; its `code-review` skill becomes
+`feature-dev-code-review`.
+
+This is what makes two plugins shipping the same component name work. Before,
+`feature-dev` and `pr-review-toolkit` — both stock official plugins, both
+shipping `agents/code-reviewer.md` — made `agentsync status` and `agentsync
+apply` exit 1, and there was no way to resolve it: both files live in the
+marketplace-managed plugin cache, so you could not rename either one.
+
+| Before | After |
+|---|---|
+| `~/.claude/agents/code-reviewer.md` *(collision — apply failed)* | `~/.claude/agents/feature-dev-code-reviewer.md` and `~/.claude/agents/pr-review-toolkit-code-reviewer.md` |
+| `/review` | `/feature-dev-review` |
+| `@agent-code-reviewer` | `@agent-feature-dev-code-reviewer` |
+
+**What you need to do:** invoke plugin-provided agents and commands by their new
+names. If you have scripts, hooks, or `--agent` flags naming a plugin
+component, update them.
+
+**Components you wrote yourself are not renamed.** Only components projected
+from a plugin are namespaced — anything in your own `~/.agentsync/` tree keeps
+the name you gave it, and a plugin can never take that name from you.
+
+**The old files are cleaned up for you.** The next `agentsync apply` removes the
+un-namespaced destination files agentsync previously wrote, so you are not left
+with duplicate agents. A file you hand-edited since the last apply is backed up
+under `~/.agentsync/.state/backups/` before removal, never silently discarded.
+
+<Aside type="tip" title="Why a hyphen and not a colon">
+	Claude Code addresses a plugin's agent as `plugin:agent`, but that is a
+	*scoped identifier* it derives from the plugin directory — not something
+	written into the file. Claude Code documents a subagent's `name` as a "Unique
+	identifier using lowercase letters and hyphens", so a colon is not a legal
+	`name` value (and would be an illegal filename on Windows). A hyphen is valid
+	for both Claude Code and Codex, whose `name` field is the agent's identity.
+</Aside>
+
+### The v1.x CLI surface
+
 The v1.x CLI surface was locked in this release, so several names moved. All of
 them are **hard renames with no aliases** — the old spellings fail, loudly,
 rather than working quietly for a while. Scripts and CI pipelines need updating.

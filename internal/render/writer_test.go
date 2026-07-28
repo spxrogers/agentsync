@@ -468,6 +468,44 @@ func TestRenderApply_SharedWriteDivergence(t *testing.T) {
 	})
 }
 
+// TestRenderApply_IntraAgentDivergenceMessage pins that the shared-write guard
+// tells the truth about WHO collided.
+//
+// The `seen` map is deliberately not reset per agent — that is what lets the
+// guard catch two agents rendering one shared path differently. But it means the
+// guard also fires when a SINGLE agent emits two divergent ops for one path,
+// which is exactly what two same-named canonical components produce (issue
+// #211: two plugins each shipping agents/code-reviewer.md made Claude render two
+// ops at ~/.claude/agents/code-reviewer.md). That case was reported as
+// "different content than an earlier agent", sending the user looking for a
+// second agent that did not exist.
+func TestRenderApply_IntraAgentDivergenceMessage(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, ".claude", "agents", "code-reviewer.md")
+	_ = os.MkdirAll(filepath.Dir(dest), 0o755)
+	reg := adapter.NewRegistry()
+	_ = reg.Register(&fakeJSONApply{name: "claude"})
+
+	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+		"claude": {Ops: []adapter.FileOp{
+			{Action: "write", Path: dest, Content: []byte("from plugin A"), Mode: 0o644, SourceID: "subagents/code-reviewer.md"},
+			{Action: "write", Path: dest, Content: []byte("from plugin B"), Mode: 0o644, SourceID: "subagents/code-reviewer.md"},
+		}},
+	}}
+	_, _, _, err := render.Apply(plan, reg, state.New(), home, tmp, adapter.ScopeUser, "")
+	if err == nil {
+		t.Fatal("one agent rendering two divergent ops for a path must fail loud")
+	}
+	if strings.Contains(err.Error(), "earlier agent") {
+		t.Fatalf("an intra-agent collision must not be blamed on a second agent; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "two canonical components") {
+		t.Fatalf("the message should point at the real cause; got: %v", err)
+	}
+}
+
 // TestPreviewApply_SharedWriteDivergence ensures `apply --dry-run`'s preview
 // fails loud on divergent shared-path content, matching Apply — so the dry-run
 // can't show a clean preview that the real apply then aborts on.

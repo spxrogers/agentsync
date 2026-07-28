@@ -401,7 +401,10 @@ manifests into canonical components.
   (one installed plugin in isolation — lets `explain <id>` attribute coverage to
   the named plugin rather than the flattened union); `Fetcher` (interface) with
   `GitFetcher`/`NPMFetcher`/`RelativeFetcher`; `LoadProjected`/
-  `LoadProjectedLenient`/`LoadProjectedExcluding`.
+  `LoadProjectedLenient`/`LoadProjectedExcluding`; `namespaceProjected` (renames
+  each plugin-provided subagent/skill/command to `<plugin>-<name>` and stamps its
+  provenance, so two plugins shipping one name cannot collide at a destination
+  path — see architecture.md § Plugin component namespacing).
 - **Depends on:** source, log.
 - **Files:** `manifest.go`, `treehash.go` (the `tree:v1:` content hash),
   `projection.go`, `loadprojected.go`, `fetcher.go`, `fetch_git.go`,

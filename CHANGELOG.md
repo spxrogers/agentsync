@@ -9,8 +9,50 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two plugins shipping a same-named component no longer break `status` and
+  `apply`.** `feature-dev` and `pr-review-toolkit` — both stock official Claude
+  plugins — each ship `agents/code-reviewer.md`, which made both commands exit 1
+  with `codex subagents "code-reviewer" and "code-reviewer" resolve to the same
+  agent name`. Every remedy the error named was one the user structurally could
+  not perform: both files live under the marketplace-managed plugin cache, which
+  is overwritten on the next update. The Claude adapter failed the same way for
+  the same reason, tripping the apply pipeline's shared-path divergence guard.
+  ([#211](https://github.com/spxrogers/agentsync/issues/211))
+  - The collision error itself printed two file *stems*, and colliding
+    components almost always share a stem — so it rendered as the same string
+    twice, with no plugin origin. It now names each side's providing plugin (or
+    the canonical file, for a hand-authored component).
+  - A single adapter rendering two divergent ops for one path was reported as
+    "different content than an earlier agent", sending the user looking for a
+    second agent that did not exist. That case now names its real cause.
+
 ### Changed
 
+- **BREAKING (plugins): plugin-provided subagents, skills, and slash commands are
+  namespaced by their plugin.** A component projected from a plugin now renders as
+  `<plugin>-<name>` — `feature-dev`'s `code-reviewer` becomes
+  `feature-dev-code-reviewer` at `~/.claude/agents/feature-dev-code-reviewer.md`,
+  its `code-review` skill becomes `feature-dev-code-review`, and its `/review`
+  command becomes `/feature-dev-review`. The frontmatter `name` key follows the
+  rename when present (an absent one stays absent). This is what lets two plugins
+  ship one component name; it is also what Claude Code does natively, addressing
+  a plugin's agent as `plugin:agent` — agentsync uses a hyphen because Claude Code
+  documents a subagent `name` as a "Unique identifier using lowercase letters and
+  hyphens". **Invoke plugin agents and commands by their new names.** Components
+  you hand-author in `~/.agentsync/` are **not** renamed — a plugin can never take
+  a name you chose. MCP and LSP servers are unchanged: a same-id divergence across
+  sources is still refused rather than renamed apart, because it can be a silent
+  endpoint hijack. A one-time upgrade notice points at the docs.
+  ([#211](https://github.com/spxrogers/agentsync/issues/211))
+- **`apply` now reclaims orphaned subagents and commands, not just skills.** A
+  subagent or slash command removed from — or renamed in — the canonical source
+  previously left its destination file behind until an interactive `reconcile`;
+  `apply` now deletes it, backing up a destination you hand-edited since the last
+  apply before removal, exactly as it already did for skills. This is what keeps
+  the namespacing rename from leaving a stale un-namespaced file beside the new
+  one, which Claude Code would still load.
 - **BREAKING (canonical layout): the subagent directory is now `subagents/`,
   not `agents/`.** The canonical tree carried both the `[agents]` harness
   registry (`agentsync.toml`) and the subagent files one directory apart — the

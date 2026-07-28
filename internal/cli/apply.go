@@ -168,7 +168,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun, noGitBackup bool, agentsC
 		// reports in its headline, so a delete-only run no longer previews as
 		// "Plan: 0 ops … 0 to write" and then surprises with "removed: …" on the
 		// real run. Dry-run never prunes state, so the state entries
-		// SkillOrphanDeletes reads are still intact here.
+		// OrphanDeletes reads are still intact here.
 		if removedKeys, removedFiles, _ := removalCounts(plan, s, userHome, sc, projectRoot); removedKeys+removedFiles > 0 {
 			fmt.Fprintf(w, "%s %s (the real apply will remove these)\n",
 				p.Bold("Removals:"), removedLabel(removedKeys, removedFiles))
@@ -217,7 +217,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun, noGitBackup bool, agentsC
 	}
 
 	// Count convergence-time removals NOW, before PruneStaleState drops the
-	// state entries SkillOrphanDeletes reads — so the summary can report
+	// state entries OrphanDeletes reads — so the summary can report
 	// "removed: N key(s)/file(s)" instead of mislabeling a delete-only run as
 	// "up to date" / "applied: 0 ops".
 	removedKeys, removedFiles, appliedOps := removalCounts(plan, s, userHome, sc, projectRoot)
@@ -394,9 +394,10 @@ func planSyncCounts(plan render.RenderPlan, wouldChange map[string]bool) (toWrit
 // report them instead of mislabeling a delete-only run "up to date" / "applied: 0
 // ops":
 //
-//   - removedFiles: whole skill-file deletes (a skill, or a bundled file, removed
-//     from source), surfaced by render.SkillOrphanDeletes and deduped across
-//     agents that share a skills dir; and
+//   - removedFiles: whole-file component deletes (a skill, a bundled file within
+//     one, a subagent, or a command removed from — or renamed in — source),
+//     surfaced by render.OrphanDeletes and deduped across agents that share a
+//     destination dir; and
 //   - removedKeys: orphan-cleanup key removals — an emptied merge section renders
 //     as a "{}" key-merge op carrying the owned pointers to drop
 //     (render.orphanCleanupOps), so each such op removes len(OwnedKeys) keys
@@ -407,14 +408,14 @@ func planSyncCounts(plan render.RenderPlan, wouldChange map[string]bool) (toWrit
 // appliedOps is plan.Total() with the pure "{}" removal ops subtracted, so a
 // mixed run reports the removal under "removed:" and does not also count it as an
 // applied write. MUST be called BEFORE PruneStaleState, which drops the state
-// entries SkillOrphanDeletes reads. (Dry-run never prunes, so it can call this
+// entries OrphanDeletes reads. (Dry-run never prunes, so it can call this
 // at any point.)
 func removalCounts(plan render.RenderPlan, s *state.Targets, userHome string, sc adapter.Scope, projectRoot string) (removedKeys, removedFiles, appliedOps int) {
 	appliedOps = plan.Total()
-	skillDeletes := map[string]bool{}
+	fileDeletes := map[string]bool{}
 	for name, res := range plan.PerAgent {
-		for _, del := range render.SkillOrphanDeletes(s, userHome, name, sc, projectRoot, res.Ops) {
-			skillDeletes[del.Path] = true
+		for _, del := range render.OrphanDeletes(s, userHome, name, sc, projectRoot, res.Ops) {
+			fileDeletes[del.Path] = true
 		}
 		for _, op := range res.Ops {
 			// An orphan-cleanup op is a key-merge op whose rendered content is the
@@ -428,7 +429,7 @@ func removalCounts(plan render.RenderPlan, s *state.Targets, userHome string, sc
 			}
 		}
 	}
-	removedFiles = len(skillDeletes)
+	removedFiles = len(fileDeletes)
 	if appliedOps < 0 {
 		appliedOps = 0
 	}
@@ -459,7 +460,7 @@ func removedLabel(keys, files int) string {
 // git-backed apply's deletions unrecoverable. It is a superset of the eventual
 // `written` set (a planned op may turn out already-in-sync), which is exactly
 // right for deciding which roots to baseline. MUST be called before
-// render.PruneStaleState, which drops the state entries SkillOrphanDeletes
+// render.PruneStaleState, which drops the state entries OrphanDeletes
 // reads.
 func baselinePaths(plan render.RenderPlan, s *state.Targets, userHome string, sc adapter.Scope, projectRoot string) map[string]bool {
 	out := map[string]bool{}
@@ -467,7 +468,7 @@ func baselinePaths(plan render.RenderPlan, s *state.Targets, userHome string, sc
 		for _, op := range res.Ops {
 			out[op.Path] = true
 		}
-		for _, del := range render.SkillOrphanDeletes(s, userHome, name, sc, projectRoot, res.Ops) {
+		for _, del := range render.OrphanDeletes(s, userHome, name, sc, projectRoot, res.Ops) {
 			out[del.Path] = true
 		}
 	}

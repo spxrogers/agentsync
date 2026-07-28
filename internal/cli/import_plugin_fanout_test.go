@@ -61,8 +61,9 @@ func TestImport_PluginComponentsFanOutToOpenCode(t *testing.T) {
 		t.Fatalf("apply: %v\n%s", err, out)
 	}
 
-	// The skill landed at the shared .claude/skills path OpenCode reads natively.
-	skill := filepath.Join(tmp, ".claude", "skills", "greeter", "SKILL.md")
+	// The skill landed at the shared .claude/skills path OpenCode reads natively,
+	// under its plugin-namespaced name (issue #211).
+	skill := filepath.Join(tmp, ".claude", "skills", "toolkit-greeter", "SKILL.md")
 	data, err := os.ReadFile(skill)
 	if err != nil {
 		t.Fatalf("plugin skill did not project to the shared skills path: %v", err)

@@ -187,6 +187,15 @@ for discovery, `apply` never re-emits it. See
 [architecture.md § PluginIngester (read-only)](architecture.md#pluginingester-read-only)
 for the full rationale.
 
+**Plugin components are namespaced by their plugin.** Because apply flattens
+every enabled plugin's components into one destination directory, two plugins
+shipping a same-named component would render two files at one path — so a
+plugin-provided subagent, skill, or command renders as `<plugin>-<name>`:
+`feature-dev`'s `code-reviewer` lands as `feature-dev-code-reviewer`. Components
+you hand-author in `~/.agentsync/` are never renamed, so a plugin can never take
+a name you chose. See
+[architecture.md § Plugin component namespacing](architecture.md#plugin-component-namespacing).
+
 ### Translation report & coverage
 Every `apply` and `plugin explain` ends with a report showing, per plugin per agent,
 what landed (`check` only schema-lints the source and validates secrets — it

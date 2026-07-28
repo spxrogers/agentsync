@@ -315,6 +315,58 @@ read-only-on-import, components-only-on-apply rule above:
 
 See the capability matrix for source links.
 
+### Plugin component namespacing
+
+`LoadProjected` flattens every enabled plugin's components into one canonical
+model, and adapters derive each destination path from the component's `Name`. So
+two plugins shipping a same-named component render two files at one path — a
+real, stock case: `feature-dev` and `pr-review-toolkit` (both official Claude
+plugins) each ship `agents/code-reviewer.md`. Apply refused, correctly, since
+silently keeping one is data loss. But both files live under the
+marketplace-managed plugin cache, so the remedy the error named — "rename one" —
+was one the user structurally could not perform (issue #211).
+
+**A plugin-provided subagent, skill, or command is therefore renamed to
+`<plugin>-<name>` at projection**, in `marketplace.namespaceProjected`, which
+also stamps `Plugin` (the providing plugin's id) and `BaseName` (the upstream
+name) onto the component. Three consequences worth knowing:
+
+- **It is not an adapter concern, structurally.** Provenance is dropped when
+  `loadProjected` appends each plugin's components into flat slices, so by the
+  time an adapter can *detect* a collision, the information needed to *resolve*
+  it is gone. Rewriting `Name` (rather than teaching each adapter an "effective
+  name") is also what keeps every render site correct with no adapter change.
+- **The frontmatter `name` key is rewritten in step, when present.** Renaming
+  only the file would leave the components colliding anyway: Codex's `name` *is*
+  the agent's identity and the Codex adapter prefers it over the file stem, and
+  Claude's Agent Skills require the frontmatter `name` to match the skill
+  directory. An absent `name` stays absent, so this never invents an identity the
+  upstream artifact did not declare.
+- **Hand-authored components are never renamed**, so a plugin can never take a
+  name the user chose. `Plugin`/`BaseName` are empty for them.
+
+The separator is a hyphen because Claude Code documents a subagent `name` as a
+"Unique identifier using lowercase letters and hyphens" — its familiar
+`plugin:agent` form is a *scoped identifier* Claude Code derives from the plugin
+directory, never a `name` value, and `:` is rejected by
+`source.ValidateComponentID` (it becomes a filename, and a colon is illegal on
+Windows). A plugin id comes from a marketplace, outside agentsync's trust
+boundary, so every derived name is re-validated through that same write-boundary
+sanitizer before it can reach a path or a diagnostic.
+
+MCP and LSP servers are deliberately **not** namespaced. They are id-keyed and
+already covered by `checkProjectedConflicts`, whose hard failure on a same-id
+divergence is a security property: two sources claiming one server id can be a
+silent endpoint hijack, which is a case to refuse rather than to rename apart.
+Hooks have no name key at all.
+
+The rename happens once, on the first apply after upgrading, so `apply` reclaims
+the pre-rename destination files it previously wrote — see
+[§7 Safety primitives](#7-safety-primitives). Without that, a stale
+`~/.claude/agents/code-reviewer.md` would sit beside the two namespaced files and
+Claude Code would load it, leaving the user with *more* duplicate agents than
+before.
+
 ### WarnEmitter (optional)
 
 A second optional extension lets callers redirect the warnings an adapter's
@@ -612,14 +664,24 @@ auto-resolves only the cases that can't lose work (`converged`, `pending`).
 **Orphan reclamation on `apply`.** `apply` itself reclaims two kinds of orphan so
 a removed component doesn't linger in the destination: emptied key-merge sections
 (an MCP/hook/LSP section whose source went empty — cleaned via a synthesized
-empty-merge op) and **skill files** (a whole skill, or one bundled
-`scripts/`/`references/`/`assets/` file, removed from `~/.agentsync/skills/`). A
-skill is a directory under the Agent Skills spec, so removal must reclaim the
-whole tree; the writer deletes each orphaned file, **backs up an `orphan-drifted`
-dest first** (a hand-edit is never destroyed un-preserved), and prunes the
-now-empty directories up to — never including — the agent's skills root. Other
-replace-strategy orphans (subagents, commands) are still surfaced for the
-interactive `reconcile` loop rather than auto-deleted.
+empty-merge op) and **whole-file components** whose `source_id` is under
+`skills/`, `subagents/`, or `commands/` — a whole skill, one bundled
+`scripts/`/`references/`/`assets/` file within one, a subagent, or a slash
+command that the source no longer renders. In every case the writer deletes the
+orphaned file and **backs up an `orphan-drifted` dest first** (a hand-edit is
+never destroyed un-preserved). Empty-directory pruning applies to **skills
+only** — a skill is a directory under the Agent Skills spec, so removal must
+reclaim the whole tree, pruned up to but never including the agent's skills root;
+subagents and commands are flat files in a directory the agent always owns.
+
+Subagents and commands joined skills here because [plugin component
+namespacing](#plugin-component-namespacing) renames every plugin-provided
+component exactly once, on the first apply after upgrading. Without reclamation
+the pre-rename file would linger, and Claude Code reads *every* file in its
+agents directory — its docs are explicit that two same-`name` definitions in one
+directory mean it loads only one, "chosen by filesystem read order rather than a
+documented precedence". The same convergence argument covers an ordinary removal
+from the canonical source, which previously lingered until a `reconcile`.
 
 **Granularity.** Structured files (JSON/JSONC/TOML) are tracked per **JSON
 pointer**, so agentsync can own `$.mcpServers.github` inside `~/.claude.json`

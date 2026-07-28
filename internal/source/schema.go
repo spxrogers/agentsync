@@ -147,10 +147,15 @@ type MCPServerSpec struct {
 // nested files. Files captures everything in the directory other than SKILL.md
 // so apply/import/reconcile are not lossy for those resources.
 type Skill struct {
-	Name        string         `toml:"-"` // dirname
+	Name        string         `toml:"-"` // dirname (namespaced when Plugin is set)
 	Frontmatter map[string]any `toml:"-"` // YAML frontmatter parsed
 	Body        string         `toml:"-"` // markdown body
 	Files       []SkillFile    `toml:"-"` // bundled files other than SKILL.md
+
+	// Plugin / BaseName carry plugin provenance; see NamespacedComponentName
+	// (provenance.go) for what they mean and why they are never serialized.
+	Plugin   string `toml:"-"`
+	BaseName string `toml:"-"`
 }
 
 // SkillFile is one bundled resource inside a skill directory (e.g.
@@ -225,17 +230,27 @@ type MarketplaceSpec struct {
 // Subagent mirrors subagents/<name>.md (frontmatter + body).
 // Subagents in Claude live at ~/.claude/agents/<name>.md.
 type Subagent struct {
-	Name        string         // filename without .md extension
+	Name        string         // filename without .md extension (namespaced when Plugin is set)
 	Frontmatter map[string]any // YAML frontmatter (description, tools, model, color, etc.)
 	Body        string         // markdown body
+
+	// Plugin / BaseName carry plugin provenance; see NamespacedComponentName
+	// (provenance.go) for what they mean and why they are never serialized.
+	Plugin   string
+	BaseName string
 }
 
 // Command mirrors commands/<name>.md (frontmatter + body).
 // Slash commands in Claude live at ~/.claude/commands/<name>.md.
 type Command struct {
-	Name        string         // filename without .md extension
+	Name        string         // filename without .md extension (namespaced when Plugin is set)
 	Frontmatter map[string]any // YAML frontmatter
 	Body        string         // markdown body
+
+	// Plugin / BaseName carry plugin provenance; see NamespacedComponentName
+	// (provenance.go) for what they mean and why they are never serialized.
+	Plugin   string
+	BaseName string
 }
 
 // Hook represents a single hook entry for an event.

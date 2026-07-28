@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -85,8 +86,9 @@ func TestUpgradeNotice_ShownOnceOnUpgrade(t *testing.T) {
 	if rec.Version != "0.11.0" {
 		t.Errorf("recorded version = %q, want 0.11.0", rec.Version)
 	}
-	if len(rec.NoticesSeen) != 1 || rec.NoticesSeen[0] != "0.11.0-cli-surface" {
-		t.Fatalf("recorded notice ids = %v, want exactly [0.11.0-cli-surface]", rec.NoticesSeen)
+	wantIDs := []string{"0.11.0-cli-surface", "0.11.0-plugin-component-namespacing"}
+	if !slices.Equal(rec.NoticesSeen, wantIDs) {
+		t.Fatalf("recorded notice ids = %v, want exactly %v", rec.NoticesSeen, wantIDs)
 	}
 
 	// Second run: silent.

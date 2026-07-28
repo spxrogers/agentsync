@@ -164,7 +164,96 @@ func projectOnePlugin(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugi
 	if perr != nil {
 		return ProjectionResult{}, false, fmt.Errorf("project plugin %s: %w", id, perr)
 	}
+	if err := namespaceProjected(&proj, id); err != nil {
+		return ProjectionResult{}, false, fmt.Errorf("project plugin %s: %w", id, err)
+	}
 	return proj, true, nil
+}
+
+// namespaceProjected rewrites one plugin's name-keyed components to their
+// namespaced form and stamps their provenance.
+//
+// This is THE fix for cross-plugin name collisions, and it lives here rather
+// than in an adapter for a structural reason: the flattening load appends every
+// plugin's components into one set of flat slices, dropping the origin plugin.
+// By the time any adapter can detect that two components claim one name, the one
+// piece of information needed to resolve it is already gone.
+//
+// Rewriting `Name` — rather than teaching each adapter an "effective name" —
+// is what makes this a small change. `Name` is what every adapter derives its
+// destination path and identity from, so all render sites become correct with no
+// adapter change at all.
+//
+// The frontmatter `name` key is rewritten in step, WHEN PRESENT, because
+// renaming only the struct field would leave the components still colliding:
+// the Codex adapter prefers frontmatter `name` over the file stem when deriving
+// the agent identity (Codex's `name` IS the identity), and Claude's Agent Skills
+// require the frontmatter `name` to match the skill directory. It is left absent
+// when it was absent, so this never invents an identity the upstream artifact
+// did not declare, and a deliberately-divergent name still survives Render →
+// Ingest (issue #144).
+//
+// Ordering matters: this runs AFTER projectWithFuncs' resolveConflicts, whose
+// intra-plugin dedup compares whole components with reflect.DeepEqual. Stamping
+// provenance first would make two otherwise-identical duplicates continue to
+// compare equal (both get the same stamp) but needlessly couples the two steps;
+// keeping the rename last also means the conflict policy still reports the
+// upstream names the user would recognise.
+//
+// Hooks, MCP servers, and LSP servers are deliberately NOT namespaced: hooks
+// have no name key at all, and MCP/LSP are id-keyed with an existing
+// cross-source guard (checkProjectedConflicts) whose hard failure is a
+// deliberate security property — a same-id server from two sources can be a
+// silent endpoint hijack, which is a case to refuse, not to rename apart.
+func namespaceProjected(pr *ProjectionResult, plugin string) error {
+	if plugin == "" {
+		return nil
+	}
+	for i := range pr.Skills {
+		if err := source.ValidateNamespacedComponentName("skill", plugin, pr.Skills[i].Name); err != nil {
+			return err
+		}
+		pr.Skills[i].Plugin = plugin
+		pr.Skills[i].BaseName = pr.Skills[i].Name
+		pr.Skills[i].Name = source.NamespacedComponentName(plugin, pr.Skills[i].Name)
+		pr.Skills[i].Frontmatter = renameFrontmatter(pr.Skills[i].Frontmatter, pr.Skills[i].Name)
+	}
+	for i := range pr.Subagents {
+		if err := source.ValidateNamespacedComponentName("subagent", plugin, pr.Subagents[i].Name); err != nil {
+			return err
+		}
+		pr.Subagents[i].Plugin = plugin
+		pr.Subagents[i].BaseName = pr.Subagents[i].Name
+		pr.Subagents[i].Name = source.NamespacedComponentName(plugin, pr.Subagents[i].Name)
+		pr.Subagents[i].Frontmatter = renameFrontmatter(pr.Subagents[i].Frontmatter, pr.Subagents[i].Name)
+	}
+	for i := range pr.Commands {
+		if err := source.ValidateNamespacedComponentName("command", plugin, pr.Commands[i].Name); err != nil {
+			return err
+		}
+		pr.Commands[i].Plugin = plugin
+		pr.Commands[i].BaseName = pr.Commands[i].Name
+		pr.Commands[i].Name = source.NamespacedComponentName(plugin, pr.Commands[i].Name)
+		pr.Commands[i].Frontmatter = renameFrontmatter(pr.Commands[i].Frontmatter, pr.Commands[i].Name)
+	}
+	return nil
+}
+
+// renameFrontmatter returns fm with its `name` key set to the namespaced name,
+// but ONLY if the key is already present — an absent name is left absent (see
+// namespaceProjected). The map is copied rather than mutated in place: the
+// projection's frontmatter maps can be shared with the caller's parsed
+// artifact, and a rename must not reach back into it.
+func renameFrontmatter(fm map[string]any, name string) map[string]any {
+	if _, ok := fm["name"]; !ok {
+		return fm
+	}
+	out := make(map[string]any, len(fm))
+	for k, v := range fm {
+		out[k] = v
+	}
+	out["name"] = name
+	return out
 }
 
 // aferoReadDirEntries lists dir through the injected fs and adapts the result to
