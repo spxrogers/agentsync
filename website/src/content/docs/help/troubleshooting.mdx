@@ -29,13 +29,13 @@ expected, non-destructive, and self-heals after that single apply.
 Confirm the key exists in the decrypted vault:
 
 ```bash
-agentsync secrets get foo
+agentsync secret get foo
 ```
 
 age library errors (missing identity, wrong recipient, bad permissions) surface
 here too.
 
-### `update` can't fetch a marketplace
+### `plugin outdated` can't fetch a marketplace
 Sanity-check the URL:
 
 ```bash
@@ -77,7 +77,7 @@ unrelated sections survive. Deferred to a later release.
 Override for internal mirrors only:
 
 ```bash
-AGENTSYNC_ALLOW_INSECURE_URLS=1 agentsync update
+AGENTSYNC_ALLOW_INSECURE_URLS=1 agentsync plugin outdated
 ```
 
 ### Symlinked destinations

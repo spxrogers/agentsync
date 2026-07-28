@@ -143,10 +143,7 @@ func getJSONPointer(m map[string]any, ptr string) (any, bool) {
 // Selector grammar: <agent>[:<component>[:<name>]]
 // e.g. claude (full config), claude:mcp (all servers), claude:mcp:github (one).
 func newImportCmd() *cobra.Command {
-	var (
-		dryRun                 bool
-		scopeFlag, projectFlag string
-	)
+	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "import <agent>[:<component>[:<name>]]",
 		Args:  cobra.ExactArgs(1),
@@ -156,13 +153,20 @@ into ~/.agentsync/ as the canonical source of truth.
 
 Selector grammar: <agent>[:<component>[:<name>]]
   agent     - registered agent name (see "agentsync agent list")
-  component - mcp | skill | agent | command | hook | lsp | memory | plugin
+  component - mcp | skill | subagent | command | hook | lsp | memory | plugin
+              ("agent" is accepted as a legacy alias for "subagent")
   name      - item name (server id, skill/subagent/command name, hook event,
               or plugin name)
 
 Dropping the name imports every entry of that component; dropping the
 component too imports the agent's full native config in one pass. Use
 --dry-run to preview which source files would be written, without writing.
+
+Reach for import when agentsync does NOT manage the config yet — it is how
+existing native config becomes canonical source in the first place. Its sibling
+is 'agentsync reconcile', which handles a file agentsync ALREADY manages that
+has since drifted, asking per item whether to adopt the edit or re-impose the
+source. Rule of thumb: import adopts, reconcile resolves.
 
 The plugin component captures the agent's installed plugins + their
 marketplaces (Claude and Codex): it re-fetches each marketplace and plugin
@@ -179,7 +183,7 @@ Examples:
   agentsync import claude:mcp:github      # a single MCP server
   agentsync import claude:plugin          # every installed plugin + marketplace
   agentsync import claude --dry-run       # preview without writing
-  agentsync import opencode:agent:reviewer`,
+  agentsync import opencode:subagent:reviewer`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// import mutates ~/.agentsync/ AND .state/targets.json. It
 			// must hold the global lock so a concurrent apply on the
@@ -188,27 +192,33 @@ Examples:
 			// neither, so it is read-only and skips the lock — matching
 			// `apply --dry-run`.
 			if dryRun {
-				return importRun(cmd, args, true, scopeFlag, projectFlag)
+				return importRun(cmd, args, true)
 			}
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			return withGlobalLock(home, func() error {
-				return importRun(cmd, args, false, scopeFlag, projectFlag)
+				return importRun(cmd, args, false)
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview which source files would be written, without writing")
-	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	markScopeAware(cmd)
 	return cmd
 }
 
-func importRun(cmd *cobra.Command, args []string, dryRun bool, scopeFlag, projectFlag string) error {
+func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	sel := args[0]
 	agentName, component, name, err := parseSelector(sel)
 	if err != nil {
 		return err
 	}
-	sc, projectRoot, err := resolveScope(cmd, scopeFlag, projectFlag, noInputFlag(cmd))
+	sc, projectRoot, err := resolveScope(cmd, noInputFlag(cmd))
 	if err != nil {
+		return err
+	}
+	// import both loads the canonical (capture, state seeding) and writes to it,
+	// so the retired-layout gate applies here too — offered as a guided move
+	// when interactive, and fail-closed through source.Load otherwise.
+	if err := ensureSubagentLayout(cmd, paths.AgentsyncHome(paths.OSEnv{}), sc, projectRoot); err != nil {
 		return err
 	}
 
@@ -807,11 +817,11 @@ func parseSelector(sel string) (agentName, component, name string, err error) {
 
 // importComponentOrder lists the importable components in the order a
 // full-agent import walks them (and the order they appear in the summary).
-// "subagent" is an accepted alias for "agent" in selectors but is not listed
-// here to avoid importing subagents twice. "plugin" walks last because it
+// "agent" is still accepted as a legacy alias for "subagent" in selectors but
+// is not listed here — the walker must not import subagents twice. "plugin" walks last because it
 // re-fetches from the network (see importPlugins), so the offline components
 // are captured first even if a plugin fetch later fails.
-var importComponentOrder = []string{"mcp", "lsp", "skill", "agent", "command", "hook", "memory", "plugin"}
+var importComponentOrder = []string{"mcp", "lsp", "skill", "subagent", "command", "hook", "memory", "plugin"}
 
 // importVerb is the past/conditional verb used in per-item and summary lines so
 // a --dry-run preview reads "would import …" instead of "imported …".
@@ -915,14 +925,14 @@ func (i *importIO) infof(format string, args ...any) {
 // a full-agent walk. Plural / two-word forms make the header scan as a heading,
 // not as a tag.
 var sectionLabel = map[string]string{
-	"mcp":     "mcp servers",
-	"lsp":     "lsp servers",
-	"skill":   "skills",
-	"agent":   "subagents",
-	"command": "commands",
-	"hook":    "hooks",
-	"memory":  "memory",
-	"plugin":  "plugins",
+	"mcp":      "mcp servers",
+	"lsp":      "lsp servers",
+	"skill":    "skills",
+	"subagent": "subagents",
+	"command":  "commands",
+	"hook":     "hooks",
+	"memory":   "memory",
+	"plugin":   "plugins",
 }
 
 // importedSet records which component identities an import actually captured,
@@ -952,7 +962,7 @@ func (s *importedSet) add(component string, ids []string) {
 		s.LSP = append(s.LSP, ids...)
 	case "skill":
 		s.Skills = append(s.Skills, ids...)
-	case "agent", "subagent":
+	case "subagent", "agent":
 		s.Subagents = append(s.Subagents, ids...)
 	case "command":
 		s.Commands = append(s.Commands, ids...)
@@ -978,7 +988,7 @@ func importComponent(io *importIO, home string, a adapter.Adapter, agentName str
 		return importMCP(io, home, c, name)
 	case "skill":
 		return importSkill(io, home, c, name)
-	case "agent", "subagent":
+	case "subagent", "agent":
 		return importSubagent(io, home, c, name)
 	case "command":
 		return importCommand(io, home, c, name)
@@ -1001,7 +1011,7 @@ func importComponent(io *importIO, home string, a adapter.Adapter, agentName str
 		}
 		return importPlugins(io, home, agentName, a, name)
 	default:
-		return nil, fmt.Errorf("unknown component %q; valid: mcp, skill, agent, command, hook, lsp, memory, plugin", component)
+		return nil, fmt.Errorf("unknown component %q; valid: mcp, skill, subagent, command, hook, lsp, memory, plugin", component)
 	}
 }
 
@@ -1184,7 +1194,10 @@ func importSubagent(io *importIO, home string, c source.Canonical, name string) 
 				return names, fmt.Errorf("write subagent %s: %w", sa.Name, err)
 			}
 		}
-		io.item(fmt.Sprintf("agents/%s.md", sa.Name), "")
+		// Report the path actually written. source.WriteSubagent targets
+		// subagents/ (#200 F1); reporting the retired agents/ spelling sent the
+		// user to a directory the import did not create.
+		io.item(source.SubagentSourceID(sa.Name), "")
 		names = append(names, sa.Name)
 	}
 	return names, nil

@@ -21,7 +21,7 @@ import (
 )
 
 func newDoctorCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "diagnose first-run readiness: environment, schema, secrets, adapters",
 		Args:  cobra.NoArgs,
@@ -42,6 +42,7 @@ func newDoctorCmd() *cobra.Command {
 			fails := 0
 			fails += checkHomeDir(p, home)
 			fails += checkStateDir(p, home)
+			fails += checkSubagentLayout(p, home)
 			c, schemaOK := checkSchema(p, home)
 			if !schemaOK {
 				fails++
@@ -114,6 +115,9 @@ func newDoctorCmd() *cobra.Command {
 			return nil
 		},
 	}
+	markScopeUnaware(cmd, "doctor reports on THIS MACHINE (paths, adapters, the secrets backend), which is not scoped; "+
+		"to validate a project tree's config run `agentsync check --scope project`")
+	return cmd
 }
 
 // okCheck / failCheck / warnCheck render one readiness line. The label carries
@@ -193,11 +197,40 @@ func checkStateDir(p *ui.Printer, home string) int {
 	return 0
 }
 
+// checkSubagentLayout reports a pending agents/ → subagents/ migration as a
+// failing check with the fix. doctor is the ONE command that surfaces the
+// condition instead of dying at load: every other source-loading command is
+// fail-closed through source.Load (see source.CheckSubagentLayout), which is
+// why the checks below use source.LoadTolerant.
+//
+// User scope only, as doctor stands: doctor has no --scope/--project, so a
+// project tree's pending migration is surfaced by the loading-command gate
+// (`apply`/`status --scope project` hit it naturally).
+func checkSubagentLayout(p *ui.Printer, home string) int {
+	files, err := source.LegacySubagentFiles(afero.NewOsFs(), home)
+	if err != nil {
+		failCheck(p, "subagents  ", fmt.Sprintf("unreadable: %s", untrusted.Wrap(err.Error())))
+		return 1
+	}
+	if len(files) == 0 {
+		return 0
+	}
+	failCheck(p, "subagents  ", fmt.Sprintf(
+		"%d file(s) still in the retired %s directory — run `agentsync migrate subagents` to move them to %s",
+		len(files), filepath.Join(home, source.LegacySubagentsDir), filepath.Join(home, source.SubagentsDir),
+	))
+	return 1
+}
+
 // checkSchema validates agentsync.toml. Returns the parsed Canonical plus a
 // success flag so the secrets checks can reuse it (the reference-resolution
 // check needs the whole canonical, not just [secrets]).
+//
+// Tolerant load: a pending subagent-directory migration is already reported by
+// checkSubagentLayout above, and reporting it a second time as "schema invalid"
+// would bury the real fix.
 func checkSchema(p *ui.Printer, home string) (source.Canonical, bool) {
-	c, err := source.Load(afero.NewOsFs(), home)
+	c, err := source.LoadTolerant(afero.NewOsFs(), home)
 	if err != nil {
 		// A strict-decode error embeds the raw offending config source line
 		// (go-toml's StrictMissingError.String()), which can carry ESC/bidi bytes
@@ -256,7 +289,9 @@ func checkSecretReferences(p *ui.Printer, c source.Canonical, home string) int {
 // enabled set) so a fresh user with Claude plugins but no agentsync config still
 // sees the nudge.
 func checkPlugins(p *ui.Printer, home string) {
-	c, err := source.Load(afero.NewOsFs(), home)
+	// Tolerant for the same reason checkSchema is: doctor reports a pending
+	// subagent migration once, in its own check, rather than dying at load.
+	c, err := source.LoadTolerant(afero.NewOsFs(), home)
 	if err != nil {
 		fmt.Fprintln(p.Out, "  skipped (source not loadable)")
 		return
@@ -394,7 +429,7 @@ func checkSecrets(p *ui.Printer, cfg source.SecretsConfig, home string) int {
 	agePath := secrets.ResolveAgeFile(cfg, home, userHome)
 	ageDisp := untrusted.Wrap(agePath)
 	if _, err := os.Stat(agePath); err != nil {
-		warnCheck(p, "age file   ", fmt.Sprintf("%s — not yet created (run `agentsync secrets edit` to author)", ageDisp))
+		warnCheck(p, "age file   ", fmt.Sprintf("%s — not yet created (run `agentsync secret edit` to author)", ageDisp))
 	} else {
 		okCheck(p, "age file   ", ageDisp.String())
 	}

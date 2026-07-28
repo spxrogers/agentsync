@@ -164,6 +164,7 @@ agentsync import claude                 # the agent's full native config
 agentsync import claude:mcp             # every MCP server
 agentsync import claude:mcp:github      # a single MCP server
 agentsync import claude:plugin          # every installed plugin + marketplace
+agentsync import opencode:subagent:reviewer
 agentsync import opencode:mcp:linear
 
 # Now it's in ~/.agentsync/ — apply to fan it out to your other agents.
@@ -179,7 +180,7 @@ list the source files an import would write without touching `~/.agentsync/`.
 **Plugins are a special case.** The `plugin` component (Claude and Codex) reads
 the agent's installed plugins and their marketplaces and re-fetches each one into
 the agentsync cache, pinning a manifest SHA — the same artifacts `marketplace
-add` + `plugin install` produce. Because it re-fetches, a real plugin import (not
+add` + `plugin add` produce. Because it re-fetches, a real plugin import (not
 `--dry-run`) needs network access. A plugin's marketplace is resolved from
 agentsync's own registered marketplaces first, then the agent's native config. A
 plugin whose marketplace is registered in neither — for example a plugin from
@@ -278,8 +279,10 @@ Any **untracked files** you dropped into the dir (and gitignored files) are **le
 untouched** — revert only rewinds the files agentsync itself versions, so your own
 scratch files are never deleted. `revert --dry-run` notes when such files are
 present. And if you later clone your own git repo *inside* a managed dir (e.g.
-`~/.claude/skills/.git`), revert **skips that dir** with a warning (or errors under
-`--strict`) rather than hard-reset over your repo's checked-out files. It moves only the *destination*, so afterwards it reminds you to
+`~/.claude/skills/.git`), revert refuses to hard-reset over your repo's checked-out
+files: naming an agent (`agentsync revert claude`) **errors**, while `--all`
+**skips that dir** with a warning and carries on with the rest. (Strictness follows
+the invocation — there is no `--strict` flag.) It moves only the *destination*, so afterwards it reminds you to
 **reconcile** (or fix the canonical source) before the next `apply` re-renders over
 it.
 
@@ -332,7 +335,8 @@ first-class. Layout:
 ├── agentsync.toml            # agents, update defaults, secrets backend, [memory] banner, [destination_directory_git_backup]
 ├── mcp/<server>.toml         # one MCP server per file
 ├── lsp/<server>.toml         # one LSP server per file
-├── agents/<name>.md          # one subagent per file
+├── subagents/<name>.md       # one subagent per file (NOT `agents/` — that
+│                             #   word names the harness registry in agentsync.toml)
 ├── commands/<name>.md        # one slash command per file
 ├── hooks/<event>.toml        # one hook per file
 ├── marketplaces/<name>.toml  # one marketplace per file (its `head_sha`/`name`
@@ -348,7 +352,7 @@ first-class. Layout:
 
 A **project source tree** at a repo's `<root>/.agentsync/` has the *same*
 on-disk layout (created by `agentsync init --scope project`) — `agentsync.toml`
-plus `mcp/`, `lsp/`, `agents/`, `commands/`, `hooks/`, `memory/` (with
+plus `mcp/`, `lsp/`, `subagents/`, `commands/`, `hooks/`, `memory/` (with
 `fragments/`), `skills/`, `plugins/`, and `secrets/`. The one difference: it has
 **no `.state/`** — apply records state centrally under `~/.agentsync/.state/`,
 keyed by project root. Commit the `.agentsync/` tree to the repo to share project
@@ -458,10 +462,10 @@ and every enabled agent gets the components it understands:
 
 ```bash
 agentsync marketplace add github:anthropics/claude-plugins-official
-agentsync plugin install atlassian@anthropic
+agentsync plugin add atlassian@anthropic
 
-agentsync update           # fetch from the network (refresh + re-pin plugins)
-agentsync apply            # render from cache → all agents
+agentsync plugin outdated  # fetch from the network (refresh cache, show bumps)
+agentsync plugin upgrade --all   # re-pin every pending bump and re-apply
 ```
 
 A plugin is a bag of components (MCP servers, skills, subagents, commands, hooks,
@@ -506,12 +510,14 @@ component string. `component` is the plain component kind (`subagent`, `command`
 Inspect any plugin's coverage without applying:
 
 ```bash
-agentsync explain atlassian@anthropic                   # one plugin
-agentsync explain atlassian@anthropic superpowers@obra  # space-separated
-agentsync explain --all                                 # every installed plugin
-agentsync explain --list                                # just the ids (skip rendering)
-agentsync explain atlassian@anthropic --json            # machine-readable
+agentsync plugin explain atlassian@anthropic                   # one plugin
+agentsync plugin explain atlassian@anthropic superpowers@obra  # space-separated
+agentsync plugin explain --all                                 # every installed plugin
+agentsync plugin explain atlassian@anthropic --json            # machine-readable
 ```
+
+(`agentsync plugin list` prints the installed ids. The top-level `explain` name
+answers a different question — see [Where did this file come from?](#where-did-this-file-come-from).)
 
 Control fan-out per plugin with `agents = [...]` in the plugin's TOML file. (A
 per-component `[plugin.overrides.<agent>]` table was specced but is **not wired
@@ -552,13 +558,13 @@ identity_file = "${env:HOME}/.config/agentsync/age.key"
 Store the value in the age-encrypted vault — three ways:
 
 ```bash
-agentsync secrets set github.token --stdin    # from stdin (best for scripts / 1Password CLI)
-agentsync secrets set github.token            # interactive prompt, echo off
-agentsync secrets edit                        # open the whole vault in $EDITOR
-agentsync secrets get github.token            # read one back (to verify)
+agentsync secret set github.token --stdin    # from stdin (best for scripts / 1Password CLI)
+agentsync secret set github.token            # interactive prompt, echo off
+agentsync secret edit                        # open the whole vault in $EDITOR
+agentsync secret get github.token            # read one back (to verify)
 ```
 
-`secrets set` refuses an **empty or whitespace-only** value by default (a
+`secret set` refuses an **empty or whitespace-only** value by default (a
 fat-fingered paste or an empty `pbpaste`/`1password` pipe would otherwise store a
 silently-broken secret that resolves to `""` at apply time); pass `--allow-empty`
 to store an empty value deliberately.
@@ -587,7 +593,7 @@ agentsync init --project ~/code/myrepo
 ```
 
 That writes `<root>/.agentsync/agentsync.toml` plus `mcp/`, `lsp/`, `skills/`,
-`agents/`, `commands/`, `hooks/`, `memory/`, `plugins/`, and `secrets/` — the
+`subagents/`, `commands/`, `hooks/`, `memory/`, `plugins/`, and `secrets/` — the
 same files as the user tree, minus `.state/` (apply records state centrally under
 `~/.agentsync/.state/`, keyed by project root). Author the project's config in
 this tree:
@@ -632,7 +638,7 @@ project memory is appended after user memory. The project's `[agents]` table is
 **authoritative** — project scope renders only to the agents the project itself
 declares, never your user-scope agents. A project that declares none is a hard
 error on every scope-aware render path — `apply`/`status`/`diff`/`reconcile`/
-`update --apply`/`verify` (run `agentsync agent add <name> --scope project` to
+`plugin upgrade --all`/`check` (run `agentsync agent add <name> --scope project` to
 fix); `import --scope project` still works before any agents are declared, so
 you can bootstrap the tree from native config first.
 
@@ -663,20 +669,75 @@ at `agentsync init --scope project` — it never silently falls back to user sco
 
 ## Updating from the network
 
-`update` is the **only** command that touches the network. It polls
-marketplaces, refreshes the local cache, and recomputes version pins — without
+`plugin outdated` is the polling verb of the daily loop: it re-fetches every
+registered marketplace into the local cache and recomputes version pins, without
 touching any agent config. `apply` then renders from that cache, so it's always
 fast, offline, and reproducible.
 
 ```bash
-agentsync update                  # refresh cache + show pending plugin bumps
-agentsync update --apply          # refresh, then apply
-agentsync update --apply --auto-safe   # same, auto-resolving only safe changes
+agentsync plugin outdated                      # refresh cache + show pending bumps
+agentsync plugin upgrade --all                 # re-pin every pending bump, then re-apply
+agentsync plugin upgrade --all --lossless      # same, skipping bumps that would lose translation
+agentsync plugin upgrade atlassian             # re-fetch one plugin, then re-apply
 ```
 
+Both `upgrade` forms end in a re-apply, so an upgrade lands in your agents in one
+command rather than leaving them stale until the next `apply`.
+
+`plugin outdated` is not a pure read despite the `npm outdated` prior: it uses
+the network and it writes state (each marketplace's fetch timestamp and head
+SHA). Nor is it the *only* networked command — `plugin add`, `plugin
+upgrade`, `marketplace add`, `import <agent>:plugin`, and `init <git-url>` all
+fetch. It is simply the one the daily loop runs.
+
+> **Removed:** the top-level `update` command is gone, with no alias. Move your
+> cron lines over: bare `update` → `plugin outdated`, `--apply` → `plugin upgrade
+> --all`, `--apply --auto-safe` → `plugin upgrade --all --lossless`.
+
 Want nightly refreshes? agentsync ships no daemon — wire
-`agentsync update --apply --auto-safe` into your own cron / launchd / systemd /
-Task Scheduler.
+`agentsync plugin upgrade --all --lossless` into your own cron / launchd /
+systemd / Task Scheduler.
+
+---
+
+## Where did this file come from?
+
+`diff` answers "what changed". `explain <path>` answers the other question — the
+one a merged file like `~/.claude/settings.json` makes hard:
+
+```bash
+agentsync explain ~/.claude/agents/reviewer.md          # a whole file
+agentsync explain ~/.claude.json#/mcpServers/github     # one merged key
+agentsync explain ~/.claude.json --pointer /mcpServers/github   # same, unambiguous
+agentsync explain ~/.claude.json --json                 # machine-readable
+```
+
+For each item it reports the **source of record** (`mcp/github.toml`,
+`subagents/reviewer.md`, `memory/AGENTS.md` *plus its fragments*), the **plugin
+origin** if the component came from a projection, the **adapter transform**
+(what was reduced or dropped en route), the **ownership** — `managed`,
+`untracked` (rendered, not applied yet), or `foreign` (yours; preserved by the
+key merge) — the **drift class** in the classifier's own vocabulary, and which
+`${secret:…}`/`${env:…}` references resolved there.
+
+Three things worth knowing:
+
+- **It prints metadata only.** No key values, no drift snippets, no file
+  content. That is what lets it answer with a **locked secrets vault**, where
+  `diff` has to fail closed rather than print cleartext it can't redact. Want
+  the content? That's `agentsync diff <path>`.
+- **It re-renders live**, like `diff` — so it is honest about an unapplied
+  source tree instead of narrating the last apply.
+- **One path can have several owners.** Agents share destinations (the breadth
+  tier shares `~/.agents/skills/`), so output is grouped per owning agent, and
+  two agents rendering *different* content to one path is reported as its own
+  answer.
+
+An unmanaged or typo'd path is reported distinctly from a clean one (with the
+nearest managed path suggested), exactly as `diff [<path>]` does.
+
+For per-plugin translation coverage — "what can each agent do with this plugin"
+— use [`agentsync plugin explain`](#multi-agent-fan-out) instead.
 
 ---
 
@@ -735,29 +796,42 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 |---|---|---|
 | `init [<git-url>]` | Create `~/.agentsync/` (user scope); optionally clone a bootstrap repo. `--scope project` scaffolds a project tree at `<cwd>/.agentsync/` instead; `--project <path>` targets `<path>/.agentsync/` (implies project scope). A git-URL clone is user-scope only. | `--scope --project` |
 | `doctor` | Diagnose setup: PATH, home/state writability, config schema, secrets backend, destination-git-backup mode + per-dir repo status; flags natively-installed plugins missing from source. | |
-| `verify` | Validate config and surface every unresolved `${secret:}`/`${env:}` ref. `--scope project`/`--project <path>` schema-lints the project tree and validates its references against the inherited user secrets backend. | `--scope --project` |
+| `check` | Validate the **config**: schema lint plus every `${secret:}`/`${env:}` reference resolved. `--scope project`/`--project <path>` lints the project tree against the inherited user secrets backend. Its sibling is `doctor`, which validates the **machine**. (Renamed from `verify` — see [Upgrading](#command-reference).) | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or with `--scope project`/`--project <path>` the project tree's own `[agents]` declaration (which project scope renders from; never inherited). At project scope `disable --purge` touches only that project's rendered files. | `disable --purge --scope --project` |
-| `mcp add\|remove\|list <name>` | Manage MCP servers. `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site, e.g. `--header "Authorization: Bearer ${secret:TOKEN}"`. | `--type --command --args --url --env --agents --header` |
+| `skill\|subagent\|command\|hook\|lsp list` | List that component in the canonical source. Read-only by design: unlike an MCP server, none of these is flag-authorable — a skill is a *directory*, a subagent is a markdown file — so you author them on disk or capture them with `import`. | `--scope --project` |
+| `migrate subagents` | One-shot move of the retired canonical `agents/` directory to `subagents/`, rewriting that tree's recorded `source_id` values. Run once per tree (`--scope project` / `--project <path>` for a project tree). Refuses, listing the names, if a file exists under both directories. | `--scope --project` |
+| `mcp add\|remove\|list\|enable\|disable <name>` | Manage MCP servers. `enable`/`disable` flip the server's `enabled` bit — keeping the definition but stopping the render (`remove` deletes it). `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site, e.g. `--header "Authorization: Bearer ${secret:TOKEN}"`. | `--type --command --args --url --env --agents --header` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
-| `plugin install\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). | `install <id[@marketplace]>` |
-| `secrets set\|get <key>` / `secrets edit` | Manage age-encrypted secrets (`edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
-| `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
-| `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. A delete-only run (a component removed from source) reports `removed: N key(s), M file(s)` — key-removals and file-deletes counted distinctly — and a mixed run `applied: X ops, removed: …`, rather than mislabeling itself `up to date`/`applied: 0 ops`; `--dry-run` previews the same removal counts. | `--dry-run --scope --project --no-git-backup` |
-| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. `--to` must name one of the dir's own checkpoints (the current one or an ancestor) — anything else is refused. Skips (or, with `--strict`, errors on) a dir under which a foreign git repo has appeared. | `--to --all --dry-run` |
+| `plugin add\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` / `outdated` / `explain` | Manage plugins (the lifecycle subcommands all accept the same `id[@marketplace]` ref `add` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). `outdated` **(network)** polls the marketplaces and reports pending bumps — it also writes each marketplace's fetch timestamp + head SHA to state. `upgrade` **(network)** re-fetches one plugin, or with `--all` every plugin with a pending bump, and **re-applies** in both cases; `--lossless` skips an upgrade that would introduce a new translation loss, reporting it. `explain` shows per-agent translation coverage. | `outdated` · `upgrade [<id>] --all --lossless --scope --project` · `explain [<id>...] --all --json` |
+| `secret set\|get\|list\|remove <key>` / `secret edit` | Manage age-encrypted secrets (`list` prints KEYS only; `edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
+| `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. A delete-only run (a component removed from source) reports `removed: N key(s), M file(s)` — key-removals and file-deletes counted distinctly — and a mixed run `applied: X ops, removed: …`, rather than mislabeling itself `up to date`/`applied: 0 ops`; `--dry-run` previews the same removal counts. | `--agents --dry-run --scope --project --no-git-backup` |
+| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. `--to` must name one of the dir's own checkpoints (the current one or an ancestor) — anything else is refused. A dir under which a foreign git repo has appeared (or that isn't an agentsync-managed backup) is an **error** when you name the agent, and a **skip with a warning** under `--all` — strictness follows the invocation; there is no `--strict` flag. | `--agents --to --all --dry-run` |
 | `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. Skill directories collapse to one summary row by default (`--verbose` expands them). `--exit-code` makes it a CI gate: exit `2` when any drift is detected, `0` when clean. | `--agents --verbose --scope --project --json --exit-code` |
 | `diff [<path>]` | Show pending/drift changes; secrets redacted. `<path>` is a filesystem path; an unmanaged/typo'd path is reported distinctly from a clean one. `--agents` narrows to an agent allowlist (like `status`); `--exit-code` exits `2` when any hunk exists, `0` when clean. | `--agents --scope --project --json --exit-code` |
-| `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
+| `reconcile` | Interactively merge drift back into source. | `--agents --auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. Includes `plugin` (Claude), which re-fetches installed plugins + marketplaces **(network)**. `--scope project` reads the agent's *native project-scope* config (e.g. `<root>/.claude/`) and captures it into the project tree `<root>/.agentsync/`, seeding central state with the project scope + root. Plugin import is user-scope only. | `--dry-run --scope --project` |
-| `explain [<plugin>...]` | Show per-agent translation coverage for one or more plugins. | `--all --list --json` |
+| `explain <path>[#<pointer>]` | Show what produced a destination file (or one merged key): source of record, plugin origin, adapter transform, ownership, drift class, and any `${secret:…}` references. **Metadata only** — never destination content, so it answers even when the secrets vault is locked (where `diff` must fail closed). `--pointer` is the unambiguous alternative to an in-argument `#`. Project scope is inferred when the path lies inside a project tree. | `--pointer --scope --project --json` |
 | `version` | Print version information (alias for `--version`). | |
 
-Global: `-v/--verbose` for verbose logging on any command (in `status` it also
+Global: `--scope user|project` and `--project <path>` are **root flags**, declared
+once and accepted by every command that operates on a scoped source tree (`init`,
+`agent`, `mcp`, `apply`, `check`, `status`, `diff`, `reconcile`, `import`,
+`explain`, `migrate`, `plugin upgrade`, and the component `list`s). A
+command that *cannot*
+honor them — `doctor`, `revert`, `version`, and the `plugin` / `marketplace` /
+`secret` groups, all of which act on per-machine state — **refuses them with the
+reason** rather than accepting and ignoring them.
+
+`-v/--verbose` for verbose logging on any command (in `status` it also
 expands each collapsed skill directory back to one row per bundled file).
 `--color=auto|always|never` controls whether output is styled with ANSI color
 and bold (default `auto` — on for a TTY, off when piped/redirected; honors
-`NO_COLOR`). `status --agents <list>` and `diff --agents <list>` scope the report
-to a comma-separated agent allowlist (`*` = all enabled, matching `mcp add
---agents`; an empty or unknown value is rejected identically by both). `status
+`NO_COLOR`). `--agents <list>` is the **one** way to say which agents a command
+acts on: `apply`, `status`, `diff`, `reconcile`, and `revert` all take it, with
+identical parsing and the same `*` = all-enabled convention (an empty or unknown
+value is rejected identically by all five). On `revert` it is a spelling of the
+positional form, so `--agents`, a positional agent, and `--all` stay mutually
+exclusive. Every `list` accepts `ls`, and every `remove` accepts `rm`. `status
 --json` and `diff [<path>] --json` emit
 the structured report instead of the formatted one, suitable for CI gates and
 dashboards (`status --json` is never collapsed — it carries every tracked file;
@@ -780,13 +854,14 @@ and the complete environment-variable table. The ones you'll reach for most:
 | `AGENTSYNC_HOME` | Override the `~/.agentsync/` location. |
 | `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations (e.g. chezmoi-managed files). |
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://`/`git://` plugin/marketplace sources. |
-| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `verify` validate reference *shape* only, skipping resolution (CI without an age key). |
+| `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `check` validate reference *shape* only, skipping resolution (CI without an age key). |
+| `AGENTSYNC_NO_UPGRADE_NOTICE=1` | Never show the one-time first-run-after-upgrade notice. |
 
 Quick hits:
 
-- **`${secret:foo}` not resolving?** `agentsync secrets get foo` to confirm the
+- **`${secret:foo}` not resolving?** `agentsync secret get foo` to confirm the
   key exists in the decrypted vault.
-- **`update` can't fetch a marketplace?** Sanity-check the URL with
+- **`plugin outdated` can't fetch a marketplace?** Sanity-check the URL with
   `git ls-remote`.
 - **First apply backed up a pile of files?** Expected on a populated machine —
   they're in `.state/backups/<ts>/`, nothing was lost.

@@ -7,15 +7,15 @@ import (
 	"testing"
 )
 
-// TestUpdate_ApplyRecordsFreshManifestSHA is the regression for the
-// update-bricks-plugins bug. computeBump never set Bump.ManifestSHA, and
+// TestPluginPoll_UpgradeAllRecordsFreshManifestSHA is the regression for the
+// upgrade-bricks-plugins bug. computeBump never set Bump.ManifestSHA, and
 // applyPluginBump only refreshed the recorded SHA for git fetchers (and even
 // then to result.HeadSHA, a git commit SHA — not the sha256(plugin.json)
 // that verifyPluginManifestSHA compares). So after a track-mode re-fetch the
 // stale pre-bump SHA stayed in plugins/<id>.toml and the immediate re-apply
 // hard-failed "manifest SHA mismatch". applyPluginBump must recompute the
 // manifest SHA from the freshly-fetched cache, exactly like install.
-func TestUpdate_ApplyRecordsFreshManifestSHA(t *testing.T) {
+func TestPluginPoll_UpgradeAllRecordsFreshManifestSHA(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	base := t.TempDir()
@@ -26,15 +26,15 @@ func TestUpdate_ApplyRecordsFreshManifestSHA(t *testing.T) {
 	// Install demo@1.0.0 (records version + sha256(plugin.json@1.0.0)).
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 	mustRun(t, env, "apply")
 
 	// Publish 1.0.1 in place — plugin.json content changes, so its SHA does too.
 	_ = makeVersionedMarketplace(t, base, "1.0.1")
 
-	out, err := runCLI(t, env, "update", "--apply")
+	out, err := runCLI(t, env, "plugin", "upgrade", "--all")
 	if err != nil {
-		t.Fatalf("update --apply bricked the plugin (stale manifest SHA): %v\n%s", err, out)
+		t.Fatalf("plugin upgrade --all bricked the plugin (stale manifest SHA): %v\n%s", err, out)
 	}
 
 	demoTOML, rerr := readFileString(t, filepath.Join(tmp, ".agentsync", "plugins", "demo.toml"))
@@ -48,16 +48,16 @@ func TestUpdate_ApplyRecordsFreshManifestSHA(t *testing.T) {
 	// The recorded SHA must match the new plugin.json, so a follow-up apply
 	// doesn't fail verifyPluginManifestSHA.
 	if out2, err2 := runCLI(t, env, "apply"); err2 != nil {
-		t.Fatalf("apply after update --apply failed (stale SHA recorded?): %v\n%s", err2, out2)
+		t.Fatalf("apply after plugin upgrade --all failed (stale SHA recorded?): %v\n%s", err2, out2)
 	}
 }
 
-// TestUpdate_ApplyProjectScope_RequiresDeclaredAgents pins the #183 guard on
-// update's re-apply path: `update --apply --project <root>` reloads the source
+// TestPluginPoll_UpgradeAllProjectScope_RequiresDeclaredAgents pins the #183 guard on
+// the poll engine's re-apply path: `plugin upgrade --all --project <root>` reloads the source
 // via loadProjectedForScope once a bump lands, so a project that declares no
 // agents must fail there with the same actionable error apply gives — never
 // silently re-render with inherited user-scope agents.
-func TestUpdate_ApplyProjectScope_RequiresDeclaredAgents(t *testing.T) {
+func TestPluginPoll_UpgradeAllProjectScope_RequiresDeclaredAgents(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	base := t.TempDir()
@@ -69,31 +69,31 @@ func TestUpdate_ApplyProjectScope_RequiresDeclaredAgents(t *testing.T) {
 	// A pending bump so the re-apply (and therefore the reload) actually runs.
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 	mustRun(t, env, "apply")
 	_ = makeVersionedMarketplace(t, base, "1.0.1")
 
 	// A project tree with NO declared agents.
 	mustRun(t, env, "init", "--scope", "project", "--project", proj)
 
-	_, err := runCLI(t, env, "update", "--apply", "--project", proj)
+	_, err := runCLI(t, env, "plugin", "upgrade", "--all", "--project", proj)
 	if err == nil {
-		t.Fatal("update --apply --project against an undeclared project must error")
+		t.Fatal("plugin upgrade --all --project against an undeclared project must error")
 	}
 	if !strings.Contains(err.Error(), "declares no agents") {
 		t.Fatalf("error should say the project declares no agents; got: %v", err)
 	}
 }
 
-// TestUpdate_ApplyBumpFailureLeavesCacheConsistent is the regression for the
+// TestPluginPoll_UpgradeAllBumpFailureLeavesCacheConsistent is the regression for the
 // applyPluginBump fetch-then-write window. It overwrote the LIVE plugin cache
 // before writing plugins/<id>.toml, so a TOML-write failure left the cache new
 // but the recorded version+SHA old. The immediate re-apply's LoadProjected then
-// hard-failed manifest-SHA verification — bricking the WHOLE update, so other
+// hard-failed manifest-SHA verification — bricking the WHOLE poll, so other
 // successfully-bumped plugins never reached the agents. A bump must be
 // all-or-nothing: on a write failure the live cache stays untouched and the
 // re-apply still proceeds.
-func TestUpdate_ApplyBumpFailureLeavesCacheConsistent(t *testing.T) {
+func TestPluginPoll_UpgradeAllBumpFailureLeavesCacheConsistent(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	base := t.TempDir()
@@ -104,7 +104,7 @@ func TestUpdate_ApplyBumpFailureLeavesCacheConsistent(t *testing.T) {
 	// Install demo@1.0.0 (records version + sha256(plugin.json@1.0.0)).
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 	mustRun(t, env, "apply")
 
 	// Turn plugins/demo.toml into a symlink: applyPluginBump can READ it
@@ -132,18 +132,18 @@ func TestUpdate_ApplyBumpFailureLeavesCacheConsistent(t *testing.T) {
 	_ = makeVersionedMarketplace(t, base, "2.0.0")
 
 	// The bump fails to write its TOML, but that must NOT brick the re-apply.
-	if out, err := runCLI(t, env, "update", "--apply"); err != nil {
-		t.Fatalf("update --apply bricked by a half-applied bump (cache/TOML inconsistent): %v\n%s", err, out)
+	if out, err := runCLI(t, env, "plugin", "upgrade", "--all"); err != nil {
+		t.Fatalf("plugin upgrade --all bricked by a half-applied bump (cache/TOML inconsistent): %v\n%s", err, out)
 	}
 }
 
-// TestUpdate_ApplyPartialFailureRescuesState is the regression for the
-// update --apply mirror discarding render.Apply's `written` set and skipping
+// TestPluginPoll_UpgradeAllPartialFailureRescuesState is the regression for the
+// the upgrade-all mirror discarding render.Apply's `written` set and skipping
 // the best-effort state save that the real `apply` performs on a mid-pipeline
 // error. When the post-bump re-apply fails after some files already landed,
 // those files must be recorded so the next apply doesn't reclassify them as
 // foreign collisions and needlessly back them up.
-func TestUpdate_ApplyPartialFailureRescuesState(t *testing.T) {
+func TestPluginPoll_UpgradeAllPartialFailureRescuesState(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	mustRun(t, env, "init")
@@ -184,8 +184,8 @@ func TestUpdate_ApplyPartialFailureRescuesState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := runCLI(t, env, "update", "--apply"); err == nil {
-		t.Fatal("expected update --apply to fail when the skills dir is blocked")
+	if _, err := runCLI(t, env, "plugin", "upgrade", "--all"); err == nil {
+		t.Fatal("expected plugin upgrade --all to fail when the skills dir is blocked")
 	}
 
 	st, err := readFileString(t, filepath.Join(home, ".state", "targets.json"))
@@ -193,17 +193,17 @@ func TestUpdate_ApplyPartialFailureRescuesState(t *testing.T) {
 		t.Fatalf("read state: %v", err)
 	}
 	if !strings.Contains(st, "/.claude.json") || !strings.Contains(st, "mcpServers") {
-		t.Fatalf("update --apply partial-failure rescue did not record landed .claude.json keys:\n%s", st)
+		t.Fatalf("plugin upgrade --all partial-failure rescue did not record landed .claude.json keys:\n%s", st)
 	}
 }
 
-// TestUpdate_DetectsManifestSHADrift is the regression for dead SHA-drift
+// TestPluginPoll_DetectsManifestSHADrift is the regression for dead SHA-drift
 // detection. computeFreshPluginSHAs read each plugin's OWN installed cache —
 // byte-identical to what produced the recorded SHA at install — so
 // DetectSHADrift always returned empty and a plugin re-uploaded at the SAME
 // version with tampered content was never flagged. The fresh SHA must come
 // from a re-fetch of the upstream source, not the installed cache.
-func TestUpdate_DetectsManifestSHADrift(t *testing.T) {
+func TestPluginPoll_DetectsManifestSHADrift(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	base := t.TempDir()
@@ -213,7 +213,7 @@ func TestUpdate_DetectsManifestSHADrift(t *testing.T) {
 
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 
 	// Re-upload the SAME version 1.0.0 with DIFFERENT plugin.json content
 	// (a tampered re-publish) by rewriting the marketplace fixture in place.
@@ -230,20 +230,20 @@ func TestUpdate_DetectsManifestSHADrift(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "update")
+	out, err := runCLI(t, env, "plugin", "outdated")
 	if err != nil {
-		t.Fatalf("update: %v\n%s", err, out)
+		t.Fatalf("plugin outdated: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "manifest-sha-mismatch") || !strings.Contains(out, "demo") {
 		t.Fatalf("expected manifest-sha-mismatch warning for re-uploaded demo; got:\n%s", out)
 	}
 }
 
-// makeAutoSafeMarketplace writes a marketplace with two track-mode plugins at
+// makeLosslessMarketplace writes a marketplace with two track-mode plugins at
 // the given version. "cleanp" only ever ships an MCP server (both claude and
 // opencode translate it). "lossyp" ships an MCP server, and at 2.0.0 ALSO ships
 // an LSP server — which opencode skips — so bumping lossyp 1.0.0→2.0.0 is lossy.
-func makeAutoSafeMarketplace(t *testing.T, dir, version string) string {
+func makeLosslessMarketplace(t *testing.T, dir, version string) string {
 	t.Helper()
 	mpDir := filepath.Join(dir, "fixture-autosafe-mp")
 	mpcp := filepath.Join(mpDir, ".claude-plugin")
@@ -274,11 +274,11 @@ func makeAutoSafeMarketplace(t *testing.T, dir, version string) string {
 	return mpDir
 }
 
-// TestUpdate_AutoSafe is the regression for the --auto-safe flag being a silent
-// no-op (its value was discarded). It must (a) error without --apply, and
+// TestPluginPoll_UpgradeAllLossless is the regression for the --lossless flag being a silent
+// no-op (its value was discarded). It must (a) error without --all, and
 // (b) apply a non-lossy bump while skipping a lossy one (a bump that introduces
 // a new translation Skip for an enabled agent).
-func TestUpdate_AutoSafe(t *testing.T) {
+func TestPluginPoll_UpgradeAllLossless(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	base := t.TempDir()
@@ -286,24 +286,37 @@ func TestUpdate_AutoSafe(t *testing.T) {
 	mustRun(t, env, "agent", "add", "claude")
 	mustRun(t, env, "agent", "add", "opencode")
 
-	mpDir := makeAutoSafeMarketplace(t, base, "1.0.0")
+	mpDir := makeLosslessMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "cleanp@as-mp")
-	mustRun(t, env, "plugin", "install", "lossyp@as-mp")
+	mustRun(t, env, "plugin", "add", "cleanp@as-mp")
+	mustRun(t, env, "plugin", "add", "lossyp@as-mp")
 	mustRun(t, env, "apply")
 
 	// Publish 2.0.0: lossyp gains an opencode-skipped LSP server; cleanp stays MCP-only.
-	_ = makeAutoSafeMarketplace(t, base, "2.0.0")
+	_ = makeLosslessMarketplace(t, base, "2.0.0")
 
-	// (a) --auto-safe without --apply must error.
-	if _, err := runCLI(t, env, "update", "--auto-safe"); err == nil {
-		t.Fatal("--auto-safe without --apply should error")
+	// (a) --lossless without --all (and without an id) must error: it filters
+	// which bumps are applied, so on its own it selects nothing.
+	//
+	// This is the command-level replacement for an engine-level guard that
+	// pollPluginsRun used to carry (and that only the retired top-level `update`
+	// could reach). The error it asserts is `upgrade`'s generic "needs an id or
+	// --all" — `--lossless` plays no part in producing it. That is still worth
+	// pinning: a bare `err != nil` would also pass if `--lossless` stopped being
+	// a flag at all (cobra would say "unknown flag"), which is the regression
+	// this arm exists to catch.
+	_, err := runCLI(t, env, "plugin", "upgrade", "--lossless")
+	if err == nil {
+		t.Fatal("--lossless without --all or an id should error")
+	}
+	if !strings.Contains(err.Error(), "--all") {
+		t.Fatalf("the refusal should point the user at --all; got: %v", err)
 	}
 
-	// (b) --auto-safe --apply applies the clean bump, skips the lossy one.
-	out, err := runCLI(t, env, "update", "--auto-safe", "--apply")
-	if err != nil {
-		t.Fatalf("update --auto-safe --apply: %v\n%s", err, out)
+	// (b) --all --lossless applies the clean bump, skips the lossy one.
+	out, err2 := runCLI(t, env, "plugin", "upgrade", "--all", "--lossless")
+	if err2 != nil {
+		t.Fatalf("plugin upgrade --all --lossless: %v\n%s", err2, out)
 	}
 	home := filepath.Join(tmp, ".agentsync")
 	cleanTOML, _ := readFileString(t, filepath.Join(home, "plugins", "cleanp.toml"))
@@ -315,7 +328,7 @@ func TestUpdate_AutoSafe(t *testing.T) {
 		t.Errorf("lossy bump should have been skipped; lossyp.toml:\n%s", lossyTOML)
 	}
 	if !strings.Contains(out, "skipping lossy bump lossyp") {
-		t.Errorf("expected auto-safe to report skipping lossyp; got:\n%s", out)
+		t.Errorf("expected --lossless to report skipping lossyp; got:\n%s", out)
 	}
 	// Drift detection must NOT false-positive on the pending bumps (version changed).
 	if strings.Contains(out, "manifest-sha-mismatch") {
@@ -334,9 +347,9 @@ func writeFileString(t *testing.T, path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
-// TestUpdate_NoMarketplaces verifies that update with no registered marketplaces
+// TestPluginPoll_NoMarketplaces verifies that `plugin outdated` with no registered marketplaces
 // reports all plugins up to date without error.
-func TestUpdate_NoMarketplaces(t *testing.T) {
+func TestPluginPoll_NoMarketplaces(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 
@@ -344,18 +357,18 @@ func TestUpdate_NoMarketplaces(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "update")
+	out, err := runCLI(t, env, "plugin", "outdated")
 	if err != nil {
-		t.Fatalf("update: %v\n%s", err, out)
+		t.Fatalf("plugin outdated: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "up to date") {
 		t.Errorf("expected up-to-date message, got: %s", out)
 	}
 }
 
-// TestUpdate_FetchesMarketplaceAndReportsUpToDate checks that update fetches
+// TestPluginPoll_FetchesMarketplaceAndReportsUpToDate checks that `plugin outdated` fetches
 // a local marketplace and reports up-to-date when the plugin version matches.
-func TestUpdate_FetchesMarketplaceAndReportsUpToDate(t *testing.T) {
+func TestPluginPoll_FetchesMarketplaceAndReportsUpToDate(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 
@@ -369,15 +382,15 @@ func TestUpdate_FetchesMarketplaceAndReportsUpToDate(t *testing.T) {
 	}
 
 	// Install a plugin.
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
-	// Run update — plugin is already at the version listed in the marketplace
+	// Run `plugin outdated` — plugin is already at the version listed in the marketplace
 	// (both are "1.0.0"), so no bump should be pending.
-	out, err := runCLI(t, env, "update")
+	out, err := runCLI(t, env, "plugin", "outdated")
 	if err != nil {
-		t.Fatalf("update: %v\n%s", err, out)
+		t.Fatalf("plugin outdated: %v\n%s", err, out)
 	}
 	// Should mention marketplace was fetched.
 	if !strings.Contains(out, "fetched marketplace") && !strings.Contains(out, "up to date") {
@@ -385,10 +398,10 @@ func TestUpdate_FetchesMarketplaceAndReportsUpToDate(t *testing.T) {
 	}
 }
 
-// TestUpdate_PendingBump verifies that update reports a bump when the marketplace
+// TestPluginPoll_PendingBump verifies that `plugin outdated` reports a bump when the marketplace
 // has a newer version than what is installed. We directly write the demo.toml
 // with an older version and a versioned marketplace fixture to simulate this.
-func TestUpdate_PendingBump(t *testing.T) {
+func TestPluginPoll_PendingBump(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 
@@ -417,9 +430,9 @@ agents = ["*"]
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "update")
+	out, err := runCLI(t, env, "plugin", "outdated")
 	if err != nil {
-		t.Fatalf("update with pending bump: %v\n%s", err, out)
+		t.Fatalf("plugin outdated with pending bump: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "pending bumps") {
 		t.Errorf("expected 'pending bumps' in output, got: %s", out)
@@ -429,8 +442,8 @@ agents = ["*"]
 	}
 }
 
-// TestUpdate_DryRunNoBump verifies update (no --apply) does NOT modify plugin files.
-func TestUpdate_DryRunNoBump(t *testing.T) {
+// TestPluginPoll_OutdatedDoesNotBump verifies `plugin outdated` does NOT modify plugin files.
+func TestPluginPoll_OutdatedDoesNotBump(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 
@@ -443,21 +456,21 @@ func TestUpdate_DryRunNoBump(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "update")
+	out, err := runCLI(t, env, "plugin", "outdated")
 	if err != nil {
-		t.Fatalf("update dry run: %v\n%s", err, out)
+		t.Fatalf("plugin outdated: %v\n%s", err, out)
 	}
 	// Should NOT say "applied"
 	if strings.Contains(out, "applied:") {
-		t.Errorf("dry-run update should not apply, got: %s", out)
+		t.Errorf("`plugin outdated` must not apply, got: %s", out)
 	}
 }
 
-// TestUpdate_SanitizesUntrustedBumpVersion proves the `update` pending-bumps
+// TestPluginPoll_SanitizesUntrustedBumpVersion proves the pending-bumps
 // list strips terminal control bytes from the fetched candidate version. A
 // non-semver candidate triggers track-latest (any change bumps), so the hostile
 // version reaches the bump line and must be defanged before printing.
-func TestUpdate_SanitizesUntrustedBumpVersion(t *testing.T) {
+func TestPluginPoll_SanitizesUntrustedBumpVersion(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	base := t.TempDir()
@@ -465,17 +478,17 @@ func TestUpdate_SanitizesUntrustedBumpVersion(t *testing.T) {
 	mustRun(t, env, "agent", "add", "claude")
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 	mustRun(t, env, "apply")
 	// Publish a non-semver candidate carrying control bytes -> a pending bump.
 	hostile := "9.9" + string(rune(0x1b)) + "[31m" + string(rune(0x0d))
 	_ = makeVersionedMarketplace(t, base, hostile)
-	out, err := runCLI(t, env, "update")
+	out, err := runCLI(t, env, "plugin", "outdated")
 	if err != nil {
-		t.Fatalf("update: %v\n%s", err, out)
+		t.Fatalf("plugin outdated: %v\n%s", err, out)
 	}
 	if strings.ContainsRune(out, rune(0x1b)) || strings.ContainsRune(out, rune(0x0d)) {
-		t.Errorf("control byte from fetched bump version leaked into update output: %q", out)
+		t.Errorf("control byte from fetched bump version leaked into the pending-bumps output: %q", out)
 	}
 	if !strings.Contains(out, "pending bumps") {
 		t.Errorf("expected a pending bump to be listed; got:\n%s", out)

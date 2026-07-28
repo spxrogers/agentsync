@@ -45,9 +45,12 @@ Wires every cobra subcommand into the root tree and dispatches to handlers; this
 is the only package that depends on nearly all the others.
 - **Key:** `NewRoot() *cobra.Command`, `Execute() error`, `Version`/`Commit`/`Date`.
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,
-  `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `verify`,
-  `mcp {add,remove,list}`, `plugin {install,upgrade,enable,disable,remove,list}`,
-  `marketplace {add,remove,list}`, `update`, `secrets {edit,get,set}`, `explain`,
+  `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
+  `mcp {add,remove,list,enable,disable}`,
+  `plugin {add,outdated,upgrade,enable,disable,remove,list,explain}`,
+  `marketplace {add,remove,list}`, `secret {edit,get,set,list,remove}`,
+  `{skill,subagent,command,hook,lsp} list`,
+  `migrate subagents`, `explain <path>`,
   `version`.
 - **Depends on:** adapter, source, state, secrets, paths, render, marketplace,
   project, drift, git, ui, log.
@@ -78,11 +81,12 @@ cleartext back to `${secret:…}` for write-back; masks resolved values for disp
 The `Resolved` wrapper type is the load-bearing leak guard.
 - **Key:** `Resolver` (interface); `Resolved` (resolved-model wrapper);
   `SubstituteCanonical` (→ `Resolved`); `ReReferenceCanonical`; `CollectResolved`;
-  `UnresolvedSecretRefs`; `MaskResolved`; `AgeBackend`/`EnvBackend`/`NopResolver`;
+  `UnresolvedSecretRefs`; `SecretRefsByComponent` (per-component REFERENCES, for
+  `explain`); `MaskResolved`; `AgeBackend`/`EnvBackend`/`NopResolver`;
   `SelectBackend`; and the single field list `walkSecretFields` (in `walk.go`).
 - **Depends on:** source, iox.
 - **Files:** `secrets.go`, `age.go`, `resolved.go`, `substitute.go`,
-  `rereference.go`, `mask.go`, `walk.go`, `secretpaths.go`, `leakscan.go`
+  `rereference.go`, `mask.go`, `refs.go`, `walk.go`, `secretpaths.go`, `leakscan.go`
   (the `ResidualSecretCleartext` backstop), `runtime.go`.
 
 ### `internal/project`

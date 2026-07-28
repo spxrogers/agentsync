@@ -20,20 +20,23 @@ import { Aside } from '@astrojs/starlight/components';
 |---|---|---|
 | `init [<git-url>]` | Create `~/.agentsync/`; optionally clone a bootstrap repo. `--scope project` / `--project <path>` scaffolds a project tree instead. | `--scope --project` |
 | `doctor` | Diagnose setup: PATH, home/state writability, schema, secrets backend, destination-git-backup mode + per-dir repo status. | |
-| `verify` | Validate config; surface unresolved `${secret:}` / `${env:}` refs. `--scope project` / `--project <path>` lints the project tree instead. | `--scope --project` |
+| `check` | Validate the **config**: schema lint + unresolved `${secret:}` / `${env:}` refs. `--scope project` / `--project <path>` lints the project tree instead. (Renamed from `verify`.) | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or a project tree's own `[agents]` declaration with `--scope project` / `--project <path>`. | `disable --purge --scope --project` |
-| `mcp add\|remove\|list <name>` | Manage MCP servers. `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site. | `--type --command --args --url --env --agents --header` |
+| `skill\|subagent\|command\|hook\|lsp list` | List that component in the canonical source (read-side only — none of these is flag-authorable). | `--scope --project` |
+| `migrate subagents` | One-shot move of the retired canonical `agents/` directory to `subagents/` (rewrites that tree's recorded `source_id` values). | `--scope --project` |
+| `mcp add\|remove\|list\|enable\|disable <name>` | Manage MCP servers. `enable`/`disable` flip the `enabled` bit (keep the definition, stop rendering). `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site. | `--type --command --args --url --env --agents --header` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
-| `plugin install\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` | Manage plugins (the lifecycle subcommands all accept the `id[@marketplace]` ref `install` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). | `install <id[@marketplace]>` |
-| `secrets set\|get <key>` / `secrets edit` | Manage age-encrypted secrets (`edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
-| `update` | **(network)** Refresh marketplace cache + pins. | `--apply --auto-safe --scope --project` |
-| `apply` | Render source → write agent configs (offline). Git-versions each destination dir (opt-out). | `--dry-run --scope --project --no-git-backup` |
-| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (local-only git history). | `--to --all --dry-run` |
+| `plugin add\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` / `outdated` / `explain` | Manage plugins (the lifecycle subcommands all accept the same `id[@marketplace]` ref `add` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). | `add <id[@marketplace]>` |
+| `secret set\|get\|list\|remove <key>` / `secret edit` | Manage age-encrypted secrets (`list` prints KEYS only; `edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
+| `plugin outdated` / `plugin upgrade [<id>]` | **(network)** Poll marketplaces and report pending bumps / re-fetch a plugin (or `--all` pending bumps) and re-apply. | `upgrade --all --lossless --scope --project` |
+| `apply` | Render source → write agent configs (offline). Git-versions each destination dir (opt-out). | `--agents --dry-run --scope --project --no-git-backup` |
+| `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (local-only git history). | `--agents --to --all --dry-run` |
 | `status` | Summarize drift / pending across agents (skill dirs collapse by default). `--exit-code` → exit `2` on any drift, `0` when clean (CI gate). | `--agents --verbose --json --exit-code --scope --project` |
 | `diff [<path>]` | Show pending / drift changes; secrets redacted. `--exit-code` → exit `2` on any hunk, `0` when clean. | `--agents --json --exit-code --scope --project` |
-| `reconcile` | Interactively merge drift back into source. | `--auto-writeback --auto-override --auto-safe --scope --project` |
+| `reconcile` | Interactively merge drift back into source. | `--agents --auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source. `--scope project` captures the agent's native project-scope config into the project tree. | `--dry-run --scope --project` |
-| `explain [<plugin>...]` | Show per-agent translation coverage for one or more plugins. | `--all --list --json` |
+| `plugin explain [<plugin>...]` | Show per-agent translation coverage for one or more plugins. | `--all --json` |
+| `explain <path>[#<pointer>]` | Show what produced a destination file (or one merged key). Metadata only — never file content. | `--pointer --scope --project --json` |
 | `version` | Print version information (alias for `--version`). | |
 
 ---
@@ -46,12 +49,35 @@ to clone an existing bootstrap config instead of starting empty (user scope only
 
 `--scope project` scaffolds a **project source tree** at `<cwd>/.agentsync/`
 instead — the same on-disk layout as the user tree (`agentsync.toml` plus `mcp/`,
-`lsp/`, `skills/`, `agents/`, `commands/`, `hooks/`, `memory/` with `fragments/`,
+`lsp/`, `skills/`, `subagents/`, `commands/`, `hooks/`, `memory/` with `fragments/`,
 `plugins/`, `secrets/`), but **no `.state/`** (apply records state centrally under
 `~/.agentsync/.state/`, keyed by project root). `--project <path>` targets
 `<path>/.agentsync/` and implies project scope; `--scope user` together with
 `--project` is an error. Commit the `.agentsync/` tree to share project agent
 config with collaborators. Full guide: [Project-local config](/guides/projects/).
+
+### `migrate subagents`
+A one-shot migration for a retired canonical layout. agentsync used to spell the
+canonical subagent directory `agents/`, one directory away from the `[agents]`
+harness registry in `agentsync.toml` — the same word naming two different types.
+The subagent side moved to `subagents/`; the harness side did **not** (`[agents]`,
+`--agents`, and the `agent` command group are unchanged).
+
+Until a tree is migrated, every command that loads the source refuses with a
+distinguishable error naming this command, and `doctor` reports it as a failing
+check. That refusal is deliberate: an unmigrated tree loads with **zero**
+subagents, and one `apply` would then delete every subagent it had already
+rendered.
+
+```bash
+agentsync migrate subagents                     # the user tree
+agentsync migrate subagents --project ~/code/x  # a project's committed tree
+```
+
+Interactively, the refusal offers to run the move for you. The move never
+overwrites: if a file exists under both `agents/` and `subagents/`, it refuses
+with the colliding names and moves nothing. After a user-scope move, commit the
+rename — `~/.agentsync` is usually a dotfiles repo.
 
 ### `doctor`
 A health check: verifies your `PATH`, that home and state directories are
@@ -65,9 +91,15 @@ candidate dir that contains a nested git repo below it is flagged as a warning,
 since `apply` refuses to init a repo inside a repo and skips git backup there.
 Run it first when something feels off.
 
-### `verify`
-Validates the canonical config and surfaces **every** unresolved `${secret:…}` /
-`${env:…}` reference. Ideal for CI — see
+### `check`
+Validates your **config** — the sibling of `doctor`, which validates your
+**machine**. Reach for `doctor` when something is set up wrong, and `check` when
+something is written wrong. (This command was named `verify` before v0.11.0;
+folding it into `doctor --config` was considered and declined, because `check` is
+scope-aware and `doctor` is not.)
+
+It schema-lints the canonical source and surfaces **every** unresolved
+`${secret:…}` / `${env:…}` reference. Ideal for CI — see
 [Verify config in CI](/recipes/ci-verification/). Pair with
 `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` on runners without an age key: offline mode
 validates reference **shape** (a malformed `${secret:}` still fails) but skips
@@ -124,8 +156,17 @@ agentsync mcp add github --command npx --args "-y,@modelcontextprotocol/server-g
 agentsync mcp add linear --type http --url https://mcp.linear.app/sse \
   --header "Authorization: Bearer ${secret:LINEAR_TOKEN}"
 agentsync mcp list
+agentsync mcp enable github
+agentsync mcp disable github
 agentsync mcp remove github
 ```
+
+`enable` / `disable` flip the server's `enabled` bit: the definition stays in
+the canonical source, but a disabled server stops rendering to every agent (the
+next `apply` removes what it had written). That is the difference from `remove`,
+which deletes `mcp/<id>.toml` outright. The `enabled` field and the loader that
+reads it both predate these verbs — until #200 F4 the only way to flip it was to
+hand-edit the TOML.
 
 Flags: `--type` (`stdio`|`http`|`sse`), `--command`, `--args`, `--url`, `--env`,
 `--agents`, `--header`. `--header "Name: Value"` is repeatable and **http/sse
@@ -141,21 +182,31 @@ Manage plugin registries and the plugins drawn from them. Full guide:
 
 ```bash
 agentsync marketplace add github:anthropics/claude-plugins-official
-agentsync plugin install atlassian@anthropic
+agentsync plugin add atlassian@anthropic
 agentsync plugin list
 ```
 
-### `secrets`
+### `secret`
 Manage the age-encrypted vault. Full guide: [Secrets](/guides/secrets/).
 
 ```bash
-agentsync secrets set github.token --stdin
-agentsync secrets get github.token
-agentsync secrets edit
+agentsync secret set github.token --stdin
+agentsync secret get github.token
+agentsync secret list
+agentsync secret remove github.token
+agentsync secret edit
 ```
 
-`secrets set` refuses an empty (or whitespace-only) value by default; pass
+`secret set` refuses an empty (or whitespace-only) value by default; pass
 `--allow-empty` to store one deliberately.
+
+`secret list` prints **keys only, never values**, which is what lets it exist
+alongside `secret edit` — `edit` decrypts the whole vault into `$EDITOR`, and
+before `list`/`remove` it was the only way to see or delete a key.
+
+`secret get` writes the raw value to stdout for piping. When stdout is a
+terminal it prints a caution first, since a bare `secret get` puts a live
+credential in your scrollback.
 
 ---
 
@@ -294,22 +345,35 @@ project` errors, and a bulk `import claude:plugin --scope project` silently skip
 (plugins are a user-scope concept across the harnesses). Full guide:
 [Already have configs?](/getting-started/existing-configs/).
 
-### `update`
-**The main networked verb.** Refreshes the marketplace cache and recomputes
-version pins, then optionally applies. (`import`'s `plugin` component also reaches
-the network, to re-fetch the plugins it captures.) Full guide:
+### `plugin outdated`
+**(network, writes state)** Re-fetches every registered marketplace into the
+local cache, recomputes version pins, and prints the pending bumps — without
+touching any agent config. Despite the `npm outdated` prior it is not a pure
+read: it uses the network and it records each marketplace's fetch timestamp +
+head SHA in `.state/targets.json`. It also re-checks every installed plugin's
+manifest SHA and warns on a same-version re-upload. Full guide:
 [Updating from the network](/guides/updating/).
 
+### `plugin upgrade [<id>] --all --lossless`
+**(network)** Re-fetches a plugin, updates its recorded version + manifest sha,
+and **re-applies** so the upgrade reaches your agents in the same command.
+`--all` first polls every marketplace (like `plugin outdated`), then upgrades
+every plugin with a pending bump and re-applies once. `--lossless` only upgrades
+when the candidate version introduces no *new* translation loss (an adapter
+skip) for an enabled agent — an excluded upgrade is reported, never silently
+dropped. `--scope`/`--project` resolve exactly as `apply` does.
+
 ```bash
-agentsync update
-agentsync update --apply --auto-safe
+agentsync plugin outdated
+agentsync plugin upgrade --all --lossless
+agentsync plugin upgrade atlassian
 ```
 
-### `explain [<plugin>...]`
+### `plugin explain [<plugin>...]`
 Prints per-agent translation coverage for one or more installed plugins, without
-applying. Pass space-separated plugin ids to explain just those, `--all` to
-explain every installed plugin, or `--list` to print just the set of installed
-ids (a quick reminder of what you can pass). A `◐ partial` row's trailing note is
+applying. Pass space-separated plugin ids to explain just those, or `--all` to
+explain every installed plugin (`agentsync plugin list` prints the ids). A
+`◐ partial` row's trailing note is
 split by kind — `(N reduced · M dropped)` — so it never reads as "N whole
 components discarded": a **reduced** part still rendered, just without some fields
 the agent has no home for, while a **dropped** part had no native target and was
@@ -317,15 +381,52 @@ not emitted. Each part is itemized beneath a framing header, tagged `reduced` or
 `dropped` with its reason, so the tally is never a dead end. Add `--json` for
 machine-readable output (rows for plugin/agent coverage — each with a
 `skipDetails` array of `{component, name, reason, kind}`, where `kind` is
-`"reduced"` or `"dropped"` and `component` is the plain kind — or a `plugins`
-array under `--list`).
+`"reduced"` or `"dropped"` and `component` is the plain kind).
 
 ```bash
-agentsync explain atlassian@anthropic
-agentsync explain atlassian@anthropic superpowers@obra
-agentsync explain --all
-agentsync explain --list
+agentsync plugin explain atlassian@anthropic
+agentsync plugin explain atlassian@anthropic superpowers@obra
+agentsync plugin explain --all
 ```
+
+### `explain <path>[#<pointer>]`
+Answers "why does this file look like this?" for a destination an agent reads.
+`diff` tells you what changed; `explain` tells you where it came from — which is
+exactly what you need on a *converged* file, where `diff` is empty.
+
+```bash
+agentsync explain ~/.claude/agents/reviewer.md
+agentsync explain ~/.claude.json#/mcpServers/github
+agentsync explain ~/.claude.json --pointer /mcpServers/github
+agentsync explain ~/.claude.json --json
+```
+
+Per item it reports the **source of record** (`mcp/github.toml`,
+`subagents/reviewer.md`, `memory/AGENTS.md` **plus its fragments**), the
+**plugin origin** when the component came from a projection, the **adapter
+transform** (what was reduced or dropped en route), the **ownership**
+(`managed` / `untracked` / `foreign`), the **drift class** in the classifier's
+own vocabulary, and which `${secret:…}` / `${env:…}` references resolved there.
+
+<Aside type="note" title="Metadata only — and that's the point">
+	explain never prints destination content: no key values, no drift snippets.
+	With nothing to redact it works even when your secrets vault is **locked**,
+	where `diff` must fail closed rather than print cleartext it cannot mask. The
+	only secret-adjacent output is the *fact* that a reference resolved at a
+	location. For the content itself, use `diff <path>`.
+</Aside>
+
+The argument splits on the **last** `#`; `--pointer` is the unambiguous escape
+hatch and wins over an in-argument `#`. Paths are symlink-resolved before
+matching, project scope is inferred when the path lies inside a project tree,
+and an unmanaged or typo'd path is reported distinctly (with the nearest managed
+path suggested) — mirroring `diff [<path>]`.
+
+One path can have several owners (the breadth tier shares `~/.agents/skills/`),
+so output is grouped **per owning agent**, and two agents rendering *different*
+content to one path is surfaced as its own answer rather than an error.
+
+For per-plugin translation coverage, see [`plugin explain`](#plugin-explain-plugin).
 
 ---
 
@@ -333,12 +434,13 @@ agentsync explain --list
 
 | Flag | Applies to | Effect |
 |---|---|---|
-| `--scope user\|project` | init, verify, import, apply, status, diff, reconcile, update | Force the config scope. |
-| `--project <path>` | init, verify, import, apply, status, diff, reconcile, update | Target / apply a specific project's tree. |
+| `--scope user\|project` | **root flag** — every scope-aware command (init, check, import, apply, status, diff, reconcile, explain, migrate, agent, mcp, plugin upgrade, the component `list`s) | Force the config scope. Commands that act on per-machine state (doctor, revert, version, the plugin / marketplace / secret groups) **refuse it with a reason** instead of ignoring it. |
+| `--project <path>` | **root flag** — same set as `--scope` | Target a specific project's tree (implies `--scope project`). |
 | `--dry-run` | apply, import | Preview without writing. |
-| `--auto-safe` | reconcile, update | Auto-resolve only no-risk changes. |
-| `--json` | status, diff, explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). `explain --list --json` emits a `plugins` array; `explain` with ids/`--all` emits the translation `rows`. |
-| `--agents <list>` | status, diff | Scope the report to a comma-separated agent allowlist (`*` = all enabled; matches `mcp add --agents`; an empty or unknown value is rejected identically by both). |
+| `--auto-safe` | reconcile | Auto-resolve only no-risk drift classes. (The plugin-side flag of the same name became `plugin upgrade --lossless` — they meant two unrelated things.) |
+| `ls` / `rm` | every `list` / `remove` subcommand | Aliases. |
+| `--json` | status, diff, explain, plugin explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). `plugin explain --json` emits the translation `rows`; `explain <path> --json` emits the provenance envelope (and still emits it, with `"unmanaged": true`, on a path nothing renders). |
+| `--agents <list>` | apply, status, diff, reconcile, revert | The single "which agents" selector, with identical parsing everywhere (`*` = all enabled; an empty or unknown value is rejected identically by all five). On `revert` it is a spelling of the positional form — `--agents`, a positional agent, and `--all` stay mutually exclusive. |
 | `--exit-code` | status, diff | Exit `2` when drift (status) / any hunk (diff) exists, `0` when clean — for CI gates. Distinct from the generic error exit `1`; prints no extra error line. Default (unset) always exits `0`. |
 | `--header "Name: Value"` | mcp add | Repeatable; http/sse only. Sets a request header (secret refs allowed). |
 | `--color auto\|always\|never` | all | Control ANSI color + bold. Default `auto` (on for a TTY, off when piped/redirected; honors `NO_COLOR`). |

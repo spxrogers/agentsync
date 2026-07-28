@@ -424,8 +424,8 @@ func verifyPluginManifestSHA(fs afero.Fs, pluginCacheDir, expected, id string) e
 	// Legacy bare-hex pin (pre-tree-hash): verify under the PRIOR scheme
 	// (sha256 over plugin.json only) so existing installs keep working — they
 	// were never body-pinned, and refusing them would brick a plugin whose only
-	// offered remediation (`agentsync update`) does not re-pin a non-bumping
-	// plugin. Re-installing or `agentsync plugin upgrade <id>` rewrites the pin
+	// offered remediation (`agentsync plugin outdated`) does not re-pin a
+	// non-bumping plugin. Re-installing or `agentsync plugin upgrade <id>` rewrites the pin
 	// as a tree hash, which DOES cover the bodies going forward.
 	data, err := afero.ReadFile(fs, filepath.Join(pluginCacheDir, ".claude-plugin", "plugin.json"))
 	if err != nil {

@@ -1,30 +1,45 @@
 ---
 title: Updating from the network
-description: update is the networked verb of the daily loop — it refreshes the marketplace cache and version pins without touching agent config. apply then renders offline.
+description: plugin outdated is the polling verb of the daily loop — it refreshes the marketplace cache and version pins without touching agent config. plugin upgrade --all re-pins and re-applies; plain apply renders offline.
 sidebar:
   order: 7
 ---
 
 import { Aside, LinkCard } from '@astrojs/starlight/components';
 
-`update` is the command that touches the network in the daily loop. It polls
-marketplaces, refreshes the local cache, and recomputes version pins — without
-touching any agent config. (The one other networked path is setup-time:
-`import`'s `plugin` component re-fetches the plugins it captures from an agent's
-native config.) `apply` then renders from that cache, so it's always fast, offline,
-and reproducible.
+`plugin outdated` is the polling verb of the daily loop. It re-fetches every
+registered marketplace into the local cache and recomputes version pins — without
+touching any agent config. `apply` then renders from that cache, so it's always
+fast, offline, and reproducible.
 
 ```bash
-agentsync update                       # refresh cache + show pending plugin bumps
-agentsync update --apply               # refresh, then apply
-agentsync update --apply --auto-safe   # same, auto-resolving only safe changes
+agentsync plugin outdated                    # refresh cache + show pending bumps
+agentsync plugin upgrade --all               # re-pin every pending bump, then re-apply
+agentsync plugin upgrade --all --lossless    # same, skipping bumps that would lose translation
+agentsync plugin upgrade atlassian           # re-fetch one plugin, then re-apply
 ```
+
+Both `upgrade` forms end in a re-apply, so an upgrade reaches your agents in one
+command instead of leaving them stale until the next `apply`.
+
+<Aside type="caution" title="The top-level `update` command is gone">
+	It was removed outright in v0.11.0, with **no alias** — a cron line still
+	calling it fails as an unknown command. Move it over: bare `update` →
+	`plugin outdated`, `--apply` → `plugin upgrade --all`, `--apply --auto-safe` →
+	`plugin upgrade --all --lossless`.
+</Aside>
+
+`plugin outdated` is **not** a pure read, despite the `npm outdated` prior: it
+uses the network and writes state (each marketplace's fetch timestamp and head
+SHA). It is also not the *only* networked command — `plugin add`, `plugin
+upgrade`, `marketplace add`, `import <agent>:plugin`, and `init <git-url>` all
+fetch. It is simply the one the daily loop runs.
 
 ## Why the split matters
 
 ```mermaid
 flowchart LR
-    NET["marketplaces<br/>+ npm registry"] -->|update (network)| CACHE[".state/cache/"]
+    NET["marketplaces<br/>+ npm registry"] -->|plugin outdated (network)| CACHE[".state/cache/"]
     CACHE -->|apply (offline)| AGENTS["agent configs"]
 ```
 
@@ -33,8 +48,8 @@ Separating "fetch" from "render" means:
 - **`apply` is deterministic** — same cache in, same config out, no surprise
   network changes mid-apply.
 - **`apply` works offline** — on a plane, in a locked-down CI runner, anywhere.
-- **Upgrades are intentional** — you see pending plugin bumps from `update` before
-  they take effect.
+- **Upgrades are intentional** — you see pending plugin bumps from `plugin
+  outdated` before they take effect.
 
 <Aside type="note" title="Manifest-SHA pinning">
 	Every plugin records a content hash over its entire cache tree. A re-uploaded
@@ -48,7 +63,7 @@ agentsync ships **no daemon**. Want nightly refreshes? Wire the one-liner into
 your own scheduler:
 
 ```bash
-agentsync update --apply --auto-safe
+agentsync plugin upgrade --all --lossless
 ```
 
 | Platform | Mechanism |

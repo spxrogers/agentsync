@@ -7,14 +7,14 @@ import (
 	"testing"
 )
 
-// TestVerify_UninitializedHomeErrors is the regression for verify printing a
+// TestCheck_UninitializedHomeErrors is the regression for check printing a
 // false "ok" (exit 0) when run before `init` — source.Load tolerates a
 // missing home, so the user got a green light on a non-existent config.
-func TestVerify_HalfInitMissingToml(t *testing.T) {
+func TestCheck_HalfInitMissingToml(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	// Scaffold component dirs/files but NO agentsync.toml (the half-init an
-	// authoring command leaves when run before `init`). verify must flag it
+	// authoring command leaves when run before `init`). check must flag it
 	// rather than report a false "ok: schema valid".
 	mcp := filepath.Join(tmp, ".agentsync", "mcp", "x.toml")
 	if err := os.MkdirAll(filepath.Dir(mcp), 0o755); err != nil {
@@ -23,43 +23,43 @@ func TestVerify_HalfInitMissingToml(t *testing.T) {
 	if err := os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"y\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := runCLI(t, env, "verify")
+	_, err := runCLI(t, env, "check")
 	if err == nil {
-		t.Fatal("verify on a home missing agentsync.toml must error")
+		t.Fatal("check on a home missing agentsync.toml must error")
 	}
 	if !strings.Contains(err.Error(), "agentsync.toml") || !strings.Contains(err.Error(), "init") {
 		t.Fatalf("error should name agentsync.toml + point at init; got: %v", err)
 	}
 }
 
-func TestVerify_UninitializedHomeErrors(t *testing.T) {
+func TestCheck_UninitializedHomeErrors(t *testing.T) {
 	tmp := t.TempDir()
 	// Note: no `init` — the agentsync home does not exist.
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
-	out, err := runCLI(t, env, "verify")
+	out, err := runCLI(t, env, "check")
 	if err == nil {
-		t.Fatalf("verify on uninitialized home should error; got ok:\n%s", out)
+		t.Fatalf("check on uninitialized home should error; got ok:\n%s", out)
 	}
 	if !strings.Contains(err.Error(), "init") {
 		t.Fatalf("error should point at `init`; got: %v", err)
 	}
 }
 
-func TestVerify_Empty(t *testing.T) {
+func TestCheck_Empty(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	_, _ = runCLI(t, env, "init")
 
-	out, err := runCLI(t, env, "verify")
+	out, err := runCLI(t, env, "check")
 	if err != nil {
-		t.Fatalf("verify on empty home: %v", err)
+		t.Fatalf("check on empty home: %v", err)
 	}
 	if !strings.Contains(out, "ok") {
-		t.Fatalf("verify output missing 'ok': %s", out)
+		t.Fatalf("check output missing 'ok': %s", out)
 	}
 }
 
-func TestVerify_BadTOML(t *testing.T) {
+func TestCheck_BadTOML(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	_, _ = runCLI(t, env, "init")
@@ -68,15 +68,15 @@ func TestVerify_BadTOML(t *testing.T) {
 	_ = os.MkdirAll(filepath.Dir(badPath), 0o755)
 	_ = os.WriteFile(badPath, []byte("[server\nmissing-bracket"), 0o644)
 
-	_, err := runCLI(t, env, "verify")
+	_, err := runCLI(t, env, "check")
 	if err == nil {
-		t.Fatal("verify should fail on malformed TOML")
+		t.Fatal("check should fail on malformed TOML")
 	}
 }
 
-// TestVerify_AgeMissingRecipient asserts verify catches a half-configured
+// TestCheck_AgeMissingRecipient asserts check catches a half-configured
 // [secrets] block (backend = age but no recipient).
-func TestVerify_AgeMissingRecipient(t *testing.T) {
+func TestCheck_AgeMissingRecipient(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp}
 	_, _ = runCLI(t, env, "init")
@@ -91,18 +91,18 @@ identity_file = "` + identity + `"
 `
 	_ = os.WriteFile(cfgPath, []byte(body), 0o644)
 
-	out, err := runCLI(t, env, "verify")
+	out, err := runCLI(t, env, "check")
 	if err == nil {
-		t.Fatalf("verify should fail when recipient is missing; got:\n%s", out)
+		t.Fatalf("check should fail when recipient is missing; got:\n%s", out)
 	}
 	if !strings.Contains(err.Error(), "recipient") {
-		t.Fatalf("verify should name the missing field; got err=%q out=%s", err, out)
+		t.Fatalf("check should name the missing field; got err=%q out=%s", err, out)
 	}
 }
 
-// TestVerify_AgeIdentityPerms asserts verify rejects a world-readable
+// TestCheck_AgeIdentityPerms asserts check rejects a world-readable
 // identity file.
-func TestVerify_AgeIdentityPerms(t *testing.T) {
+func TestCheck_AgeIdentityPerms(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp}
 	_, _ = runCLI(t, env, "init")
@@ -118,13 +118,13 @@ identity_file = "` + identity + `"
 `
 	_ = os.WriteFile(cfgPath, []byte(body), 0o644)
 
-	out, err := runCLI(t, env, "verify")
+	out, err := runCLI(t, env, "check")
 	if err == nil {
-		t.Fatalf("verify should fail on 0644 identity; got:\n%s", out)
+		t.Fatalf("check should fail on 0644 identity; got:\n%s", out)
 	}
 }
 
-func TestVerify_UnknownAgent(t *testing.T) {
+func TestCheck_UnknownAgent(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	_, _ = runCLI(t, env, "init")
@@ -135,28 +135,28 @@ func TestVerify_UnknownAgent(t *testing.T) {
 	body = append(body, []byte("\n[agents]\nbogus = { enabled = true }\n")...)
 	_ = os.WriteFile(cfg, body, 0o644)
 
-	_, err := runCLI(t, env, "verify")
+	_, err := runCLI(t, env, "check")
 	if err == nil {
-		t.Fatal("verify should reject unknown agent name")
+		t.Fatal("check should reject unknown agent name")
 	}
 }
 
-// TestVerify_HelpListsScopeFlags is the acceptance check that `verify --help`
+// TestCheck_HelpListsScopeFlags is the acceptance check that `check --help`
 // now documents --scope and --project, matching status/diff.
-func TestVerify_HelpListsScopeFlags(t *testing.T) {
-	out, _ := runCLI(t, nil, "verify", "--help")
+func TestCheck_HelpListsScopeFlags(t *testing.T) {
+	out, _ := runCLI(t, nil, "check", "--help")
 	for _, flag := range []string{"--scope", "--project"} {
 		if !strings.Contains(out, flag) {
-			t.Fatalf("verify --help missing %q. Got:\n%s", flag, out)
+			t.Fatalf("check --help missing %q. Got:\n%s", flag, out)
 		}
 	}
 }
 
-// TestVerify_ProjectScope_OK schema-lints a project .agentsync/ tree and
+// TestCheck_ProjectScope_OK schema-lints a project .agentsync/ tree and
 // resolves its references via --project (which implies project scope). The
 // project MCP server carries an ${env:} reference so the secret-resolution pass
 // is exercised, not just the schema decode.
-func TestVerify_ProjectScope_OK(t *testing.T) {
+func TestCheck_ProjectScope_OK(t *testing.T) {
 	tmpHome := t.TempDir()
 	proj := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome, "PROJ_TOKEN": "s3cr3t"}
@@ -176,18 +176,18 @@ func TestVerify_ProjectScope_OK(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "verify", "--project", proj)
+	out, err := runCLI(t, env, "check", "--project", proj)
 	if err != nil {
-		t.Fatalf("verify --project: %v\n%s", err, out)
+		t.Fatalf("check --project: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "ok") {
-		t.Fatalf("verify --project output missing 'ok': %s", out)
+		t.Fatalf("check --project output missing 'ok': %s", out)
 	}
 }
 
-// TestVerify_ProjectScope_BadTOML asserts schema-linting reaches the project
-// tree: a malformed file under <proj>/.agentsync/ fails verify at project scope.
-func TestVerify_ProjectScope_BadTOML(t *testing.T) {
+// TestCheck_ProjectScope_BadTOML asserts schema-linting reaches the project
+// tree: a malformed file under <proj>/.agentsync/ fails check at project scope.
+func TestCheck_ProjectScope_BadTOML(t *testing.T) {
 	tmpHome := t.TempDir()
 	proj := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
@@ -203,16 +203,16 @@ func TestVerify_ProjectScope_BadTOML(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := runCLI(t, env, "verify", "--scope", "project", "--project", proj); err == nil {
-		t.Fatal("verify --scope project should fail on malformed project TOML")
+	if _, err := runCLI(t, env, "check", "--scope", "project", "--project", proj); err == nil {
+		t.Fatal("check --scope project should fail on malformed project TOML")
 	}
 }
 
-// TestVerify_ProjectScope_HalfInit asserts the half-init guard adapts to the
+// TestCheck_ProjectScope_HalfInit asserts the half-init guard adapts to the
 // project case: a <proj>/.agentsync/ directory with no agentsync.toml (so
 // source.Load tolerates it and would otherwise report a false "ok") is rejected
 // with a message naming agentsync.toml and the project init command.
-func TestVerify_ProjectScope_HalfInit(t *testing.T) {
+func TestCheck_ProjectScope_HalfInit(t *testing.T) {
 	tmpHome := t.TempDir()
 	proj := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
@@ -226,19 +226,19 @@ func TestVerify_ProjectScope_HalfInit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := runCLI(t, env, "verify", "--project", proj)
+	_, err := runCLI(t, env, "check", "--project", proj)
 	if err == nil {
-		t.Fatal("verify on a half-initialized project tree must error")
+		t.Fatal("check on a half-initialized project tree must error")
 	}
 	if !strings.Contains(err.Error(), "agentsync.toml") || !strings.Contains(err.Error(), "init") {
 		t.Fatalf("error should name agentsync.toml + point at init; got: %v", err)
 	}
 }
 
-// TestVerify_ProjectScope_NoTree asserts verify surfaces the shared
+// TestCheck_ProjectScope_NoTree asserts check surfaces the shared
 // scope-resolution error when --project points at a path with no .agentsync/
 // tree, rather than silently degrading to user scope.
-func TestVerify_ProjectScope_NoTree(t *testing.T) {
+func TestCheck_ProjectScope_NoTree(t *testing.T) {
 	tmpHome := t.TempDir()
 	proj := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
@@ -246,20 +246,20 @@ func TestVerify_ProjectScope_NoTree(t *testing.T) {
 	if _, err := runCLI(t, env, "init"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := runCLI(t, env, "verify", "--project", proj)
+	_, err := runCLI(t, env, "check", "--project", proj)
 	if err == nil {
-		t.Fatal("verify --project with no .agentsync/ tree should error")
+		t.Fatal("check --project with no .agentsync/ tree should error")
 	}
 	if !strings.Contains(err.Error(), ".agentsync") {
 		t.Fatalf("error should mention the missing .agentsync/ tree; got: %v", err)
 	}
 }
 
-// TestVerify_OfflineMode pins that AGENTSYNC_ALLOW_OFFLINE_VERIFY=1 (the CI path)
+// TestCheck_OfflineMode pins that AGENTSYNC_ALLOW_OFFLINE_VERIFY=1 (the CI path)
 // validates reference SHAPE but not resolvability (issue #171): a malformed
 // ${secret:} is rejected offline, a well-formed-but-unresolvable ref passes offline,
 // and the online path still fails to resolve it.
-func TestVerify_OfflineMode(t *testing.T) {
+func TestCheck_OfflineMode(t *testing.T) {
 	writeMCP := func(t *testing.T, tmp, body string) {
 		t.Helper()
 		p := filepath.Join(tmp, ".agentsync", "mcp", "x.toml")
@@ -276,9 +276,9 @@ func TestVerify_OfflineMode(t *testing.T) {
 		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
 		_, _ = runCLI(t, env, "init")
 		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:}\"\n")
-		_, err := runCLI(t, env, "verify")
+		_, err := runCLI(t, env, "check")
 		if err == nil {
-			t.Fatal("offline verify must reject a malformed ${secret:} reference")
+			t.Fatal("offline check must reject a malformed ${secret:} reference")
 		}
 		if !strings.Contains(err.Error(), "malformed") {
 			t.Fatalf("error should name the malformed ref; got: %v", err)
@@ -287,16 +287,16 @@ func TestVerify_OfflineMode(t *testing.T) {
 
 	// The shape check must run ONLINE too: the strict resolver passes a
 	// malformed token through as literal text, so before the check ran in both
-	// modes a green local `verify` ("all references resolve") contradicted a
-	// red offline CI verify on the same config.
+	// modes a green local `check` ("all references resolve") contradicted a
+	// red offline CI check on the same config.
 	t.Run("online-rejects-malformed-ref", func(t *testing.T) {
 		tmp := t.TempDir()
 		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 		_, _ = runCLI(t, env, "init")
 		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:}\"\n")
-		_, err := runCLI(t, env, "verify")
+		_, err := runCLI(t, env, "check")
 		if err == nil {
-			t.Fatal("online verify must reject a malformed ${secret:} reference (offline CI does)")
+			t.Fatal("online check must reject a malformed ${secret:} reference (offline CI does)")
 		}
 		if !strings.Contains(err.Error(), "malformed") {
 			t.Fatalf("error should name the malformed ref; got: %v", err)
@@ -311,7 +311,7 @@ func TestVerify_OfflineMode(t *testing.T) {
 	// bytes, so the offline error must sanitize the candidate on display —
 	// otherwise a crafted config injects terminal escapes into the CI log
 	// (issue #171 / the #93 escape-injection class). MalformedSecretRefs returns
-	// []untrusted.Text and verify joins via untrusted.Join to close this.
+	// []untrusted.Text and check joins via untrusted.Join to close this.
 	t.Run("offline-malformed-ref-is-sanitized", func(t *testing.T) {
 		tmp := t.TempDir()
 		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
@@ -319,12 +319,12 @@ func TestVerify_OfflineMode(t *testing.T) {
 		// TOML  decodes to a raw ESC byte inside the Command field; the key
 		// after the colon is illegal, so it is flagged malformed and displayed.
 		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:\\u001b[2K\\u001b[31mHACKED}\"\n")
-		_, err := runCLI(t, env, "verify")
+		_, err := runCLI(t, env, "check")
 		if err == nil {
-			t.Fatal("offline verify must reject the malformed ref")
+			t.Fatal("offline check must reject the malformed ref")
 		}
 		if strings.ContainsRune(err.Error(), 0x1b) {
-			t.Fatalf("offline verify error must not carry a raw ESC byte (escape injection); got: %q", err.Error())
+			t.Fatalf("offline check error must not carry a raw ESC byte (escape injection); got: %q", err.Error())
 		}
 		if !strings.Contains(err.Error(), "malformed") || !strings.Contains(err.Error(), "HACKED") {
 			t.Fatalf("error should still name the (sanitized) malformed ref; got: %q", err.Error())
@@ -340,9 +340,9 @@ func TestVerify_OfflineMode(t *testing.T) {
 		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
 		_, _ = runCLI(t, env, "init")
 		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:${env:FOO}}\"\n")
-		_, err := runCLI(t, env, "verify")
+		_, err := runCLI(t, env, "check")
 		if err == nil {
-			t.Fatal("offline verify must reject a nested/partial ${secret:${env:…}} reference")
+			t.Fatal("offline check must reject a nested/partial ${secret:${env:…}} reference")
 		}
 		if !strings.Contains(err.Error(), "malformed") {
 			t.Fatalf("error should name the malformed ref; got: %v", err)
@@ -354,9 +354,9 @@ func TestVerify_OfflineMode(t *testing.T) {
 		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "AGENTSYNC_ALLOW_OFFLINE_VERIFY": "1"}
 		_, _ = runCLI(t, env, "init")
 		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:some.key}\"\n")
-		out, err := runCLI(t, env, "verify")
+		out, err := runCLI(t, env, "check")
 		if err != nil {
-			t.Fatalf("offline verify must NOT resolve a well-formed ref: %v\n%s", err, out)
+			t.Fatalf("offline check must NOT resolve a well-formed ref: %v\n%s", err, out)
 		}
 		if !strings.Contains(out, "resolvability not checked") {
 			t.Fatalf("offline ok line should note resolvability is not checked; got: %s", out)
@@ -368,46 +368,46 @@ func TestVerify_OfflineMode(t *testing.T) {
 		env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp} // online: no offline flag
 		_, _ = runCLI(t, env, "init")
 		writeMCP(t, tmp, "[server]\ntype=\"stdio\"\ncommand=\"${secret:some.key}\"\n")
-		_, err := runCLI(t, env, "verify")
+		_, err := runCLI(t, env, "check")
 		if err == nil {
-			t.Fatal("online verify must fail to resolve ${secret:some.key}")
+			t.Fatal("online check must fail to resolve ${secret:some.key}")
 		}
 	})
 }
 
-// TestVerify_SanitizesHostileAgentKey pins that verify's agent-validation error
+// TestCheck_SanitizesHostileAgentKey pins that check's agent-validation error
 // escapes a config-derived [agents.<name>] key: a TOML quoted key can carry raw
 // ESC bytes, and the wrap must use %q (not %s) so a shared config cannot inject
-// terminal escapes on plain `agentsync verify` (issue #93/#171 class).
-func TestVerify_SanitizesHostileAgentKey(t *testing.T) {
+// terminal escapes on plain `agentsync check` (issue #93/#171 class).
+func TestCheck_SanitizesHostileAgentKey(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp}
 	_, _ = runCLI(t, env, "init")
 	cfgPath := filepath.Join(tmp, ".agentsync", "agentsync.toml")
 	// The quoted key decodes to a map key holding a raw ESC; the agent is
-	// unknown, so validateAgent fails and verify wraps the key in its error.
+	// unknown, so validateAgent fails and check wraps the key in its error.
 	body := "[agents.\"cla\\u001b[2K\\u001b[31mHACKED\"]\n"
 	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := runCLI(t, env, "verify")
+	_, err := runCLI(t, env, "check")
 	if err == nil {
-		t.Fatal("verify must reject an unknown agent")
+		t.Fatal("check must reject an unknown agent")
 	}
 	if strings.ContainsRune(err.Error(), 0x1b) {
-		t.Fatalf("verify error must not carry a raw ESC byte from the agent key; got: %q", err.Error())
+		t.Fatalf("check error must not carry a raw ESC byte from the agent key; got: %q", err.Error())
 	}
 	if !strings.Contains(err.Error(), "HACKED") {
 		t.Fatalf("error should still name the (escaped) agent key; got: %q", err.Error())
 	}
 }
 
-// TestVerify_SanitizesHostileSecretPath pins that verify's verifySecrets escapes a
+// TestCheck_SanitizesHostileSecretPath pins that check's verifySecrets escapes a
 // config-derived [secrets].identity_file path (the twin of doctor's checkSecrets):
 // a shareable dotfiles config with an ESC-laden, non-existent path must not inject
-// terminal escapes into `verify`'s error on the default (non-offline) path
+// terminal escapes into `check`'s error on the default (non-offline) path
 // (issue #93/#171 class).
-func TestVerify_SanitizesHostileSecretPath(t *testing.T) {
+func TestCheck_SanitizesHostileSecretPath(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp}
 	_, _ = runCLI(t, env, "init")
@@ -420,12 +420,12 @@ func TestVerify_SanitizesHostileSecretPath(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := runCLI(t, env, "verify")
+	_, err := runCLI(t, env, "check")
 	if err == nil {
-		t.Fatal("verify must fail on a non-existent identity_file")
+		t.Fatal("check must fail on a non-existent identity_file")
 	}
 	if strings.ContainsRune(err.Error(), 0x1b) {
-		t.Fatalf("verify error must not carry a raw ESC byte from a config-derived path; got: %q", err.Error())
+		t.Fatalf("check error must not carry a raw ESC byte from a config-derived path; got: %q", err.Error())
 	}
 	if !strings.Contains(err.Error(), "HACKED") {
 		t.Fatalf("error should still name the (sanitized) path; got: %q", err.Error())

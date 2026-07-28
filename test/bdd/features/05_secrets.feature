@@ -8,16 +8,16 @@ Feature: age-encrypted secrets
     And I have added agent "claude"
     And I configure age secrets
 
-  Scenario: secrets get round-trips an encrypted value
+  Scenario: secret get round-trips an encrypted value
     Given I encrypt secret "github.token" = "ghp_bdd_xyz"
-    When I run "agentsync secrets get github.token"
+    When I run "agentsync secret get github.token"
     Then the command succeeds
     And the output contains "ghp_bdd_xyz"
 
-  Scenario: secrets set followed by secrets get
-    When I run "agentsync secrets set openai.key=sk-bdd-test"
+  Scenario: secret set followed by secret get
+    When I run "agentsync secret set openai.key=sk-bdd-test"
     Then the command succeeds
-    When I run "agentsync secrets get openai.key"
+    When I run "agentsync secret get openai.key"
     Then the command succeeds
     And the output contains "sk-bdd-test"
 

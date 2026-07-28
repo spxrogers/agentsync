@@ -20,7 +20,7 @@ func TestExplain_PluginNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := runCLI(t, env, "explain", "nonexistent@mp")
+	_, err := runCLI(t, env, "plugin", "explain", "nonexistent@mp")
 	if err == nil {
 		t.Fatal("expected error for unknown plugin; got nil")
 	}
@@ -43,11 +43,11 @@ func TestExplain_TextOutput(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "explain", "demo@test-mp")
+	out, err := runCLI(t, env, "plugin", "explain", "demo@test-mp")
 	if err != nil {
 		t.Fatalf("explain: %v\n%s", err, out)
 	}
@@ -75,11 +75,11 @@ func TestExplain_JSONOutput(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "explain", "demo@test-mp", "--json")
+	out, err := runCLI(t, env, "plugin", "explain", "demo@test-mp", "--json")
 	if err != nil {
 		t.Fatalf("explain --json: %v\n%s", err, out)
 	}
@@ -123,11 +123,11 @@ func TestExplain_JSONAgentOrderDeterministic(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "explain", "demo@test-mp", "--json")
+	out, err := runCLI(t, env, "plugin", "explain", "demo@test-mp", "--json")
 	if err != nil {
 		t.Fatalf("explain --json: %v\n%s", err, out)
 	}
@@ -150,81 +150,22 @@ func TestExplain_JSONAgentOrderDeterministic(t *testing.T) {
 	}
 }
 
-// TestExplain_NoArgsRequiresSomething rejects a bare `explain` invocation with
-// neither plugin ids nor --list/--all so the user gets a pointer to the new
-// flags rather than a confusing usage error.
+// TestExplain_NoArgsRequiresSomething rejects a bare `plugin explain`
+// invocation with neither plugin ids nor --all so the user gets a pointer to
+// the flag (and to `plugin list`) rather than a confusing usage error.
 func TestExplain_NoArgsRequiresSomething(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	if _, err := runCLI(t, env, "init"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := runCLI(t, env, "explain")
+	_, err := runCLI(t, env, "plugin", "explain")
 	if err == nil {
 		t.Fatal("expected error for bare explain; got nil")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "--all") || !strings.Contains(msg, "--list") {
-		t.Errorf("error should point at --all and --list; got: %s", msg)
-	}
-}
-
-// TestExplain_List prints installed plugin ids (and stays empty when none are
-// installed, with an install hint).
-func TestExplain_List(t *testing.T) {
-	tmp := t.TempDir()
-	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
-	fixture := setupExplainFixture(t, tmp)
-
-	if _, err := runCLI(t, env, "init"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Empty case: list works even with zero plugins; hints at install.
-	out, err := runCLI(t, env, "explain", "--list")
-	if err != nil {
-		t.Fatalf("--list (empty): %v\n%s", err, out)
-	}
-	if !strings.Contains(out, "no plugins installed") {
-		t.Errorf("empty list should hint at install; got:\n%s", out)
-	}
-
-	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
-		t.Fatal(err)
-	}
-
-	out, err = runCLI(t, env, "explain", "--list")
-	if err != nil {
-		t.Fatalf("--list: %v\n%s", err, out)
-	}
-	if !strings.Contains(out, "demo@test-mp") {
-		t.Errorf("--list missing plugin id; got:\n%s", out)
-	}
-	if !strings.Contains(out, "Installed plugins") {
-		t.Errorf("--list missing header; got:\n%s", out)
-	}
-
-	// --list --json emits a `plugins` array.
-	out, err = runCLI(t, env, "explain", "--list", "--json")
-	if err != nil {
-		t.Fatalf("--list --json: %v\n%s", err, out)
-	}
-	var parsed struct {
-		Plugins []struct {
-			ID string `json:"id"`
-		} `json:"plugins"`
-	}
-	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
-		t.Fatalf("--list --json not valid JSON: %v\n%s", err, out)
-	}
-	if len(parsed.Plugins) != 1 || parsed.Plugins[0].ID != "demo@test-mp" {
-		t.Errorf("--list --json plugins = %+v; want one demo@test-mp", parsed.Plugins)
+	if !strings.Contains(msg, "--all") || !strings.Contains(msg, "plugin list") {
+		t.Errorf("error should point at --all and `plugin list`; got: %s", msg)
 	}
 }
 
@@ -245,13 +186,13 @@ func TestExplain_MultipleArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"alpha@multi-mp", "beta@multi-mp"} {
-		if _, err := runCLI(t, env, "plugin", "install", id); err != nil {
+		if _, err := runCLI(t, env, "plugin", "add", id); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// Note args order: beta first, then alpha — multi-arg explain must honor it.
-	out, err := runCLI(t, env, "explain", "beta@multi-mp", "alpha@multi-mp", "--json")
+	out, err := runCLI(t, env, "plugin", "explain", "beta@multi-mp", "alpha@multi-mp", "--json")
 	if err != nil {
 		t.Fatalf("multi-arg --json: %v\n%s", err, out)
 	}
@@ -298,12 +239,12 @@ func TestExplain_All(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"alpha@multi-mp", "beta@multi-mp"} {
-		if _, err := runCLI(t, env, "plugin", "install", id); err != nil {
+		if _, err := runCLI(t, env, "plugin", "add", id); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	out, err := runCLI(t, env, "explain", "--all", "--json")
+	out, err := runCLI(t, env, "plugin", "explain", "--all", "--json")
 	if err != nil {
 		t.Fatalf("--all: %v\n%s", err, out)
 	}
@@ -334,7 +275,7 @@ func TestExplain_MultipleArgsMissingAggregated(t *testing.T) {
 	if _, err := runCLI(t, env, "init"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := runCLI(t, env, "explain", "nope1", "nope2")
+	_, err := runCLI(t, env, "plugin", "explain", "nope1", "nope2")
 	if err == nil {
 		t.Fatal("expected error for two missing plugins; got nil")
 	}
@@ -356,9 +297,7 @@ func TestExplain_FlagConflicts(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"list+all", []string{"explain", "--list", "--all"}, "mutually exclusive"},
-		{"list+id", []string{"explain", "--list", "foo"}, "--list does not take"},
-		{"all+id", []string{"explain", "--all", "foo"}, "--all does not take"},
+		{"all+id", []string{"plugin", "explain", "--all", "foo"}, "--all does not take"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -393,11 +332,11 @@ func TestExplain_ListsSkips(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "skipdemo@skip-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "skipdemo@skip-mp"); err != nil {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "explain", "skipdemo@skip-mp")
+	out, err := runCLI(t, env, "plugin", "explain", "skipdemo@skip-mp")
 	if err != nil {
 		t.Fatalf("explain: %v\n%s", err, out)
 	}
@@ -419,7 +358,7 @@ func TestExplain_ListsSkips(t *testing.T) {
 	}
 
 	// JSON carries the same detail under skipDetails.
-	outJSON, err := runCLI(t, env, "explain", "skipdemo@skip-mp", "--json")
+	outJSON, err := runCLI(t, env, "plugin", "explain", "skipdemo@skip-mp", "--json")
 	if err != nil {
 		t.Fatalf("explain --json: %v\n%s", err, outJSON)
 	}
@@ -479,14 +418,14 @@ func TestExplain_ScopesToNamedPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"clean@cross-mp", "noisy@cross-mp"} {
-		if _, err := runCLI(t, env, "plugin", "install", id); err != nil {
+		if _, err := runCLI(t, env, "plugin", "add", id); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// Explaining the clean plugin must not inherit any of the noisy plugin's
 	// skips (its LSP nor its subagent — the two leak shapes from the bug report).
-	out, err := runCLI(t, env, "explain", "clean@cross-mp")
+	out, err := runCLI(t, env, "plugin", "explain", "clean@cross-mp")
 	if err != nil {
 		t.Fatalf("explain clean: %v\n%s", err, out)
 	}
@@ -500,7 +439,7 @@ func TestExplain_ScopesToNamedPlugin(t *testing.T) {
 	}
 
 	// JSON: clean's rows must carry exactly one MCP, full coverage, and zero skips.
-	outJSON, err := runCLI(t, env, "explain", "clean@cross-mp", "--json")
+	outJSON, err := runCLI(t, env, "plugin", "explain", "clean@cross-mp", "--json")
 	if err != nil {
 		t.Fatalf("explain clean --json: %v\n%s", err, outJSON)
 	}
@@ -539,7 +478,7 @@ func TestExplain_ScopesToNamedPlugin(t *testing.T) {
 	// Inverse: the noisy plugin still surfaces ITS OWN skips (both the lsp and the
 	// subagent), so the scoping narrows attribution rather than hiding skips
 	// wholesale.
-	outNoisy, err := runCLI(t, env, "explain", "noisy@cross-mp")
+	outNoisy, err := runCLI(t, env, "plugin", "explain", "noisy@cross-mp")
 	if err != nil {
 		t.Fatalf("explain noisy: %v\n%s", err, outNoisy)
 	}
@@ -578,12 +517,12 @@ func TestExplain_AllAttributesPerRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"clean@cross-mp", "noisy@cross-mp"} {
-		if _, err := runCLI(t, env, "plugin", "install", id); err != nil {
+		if _, err := runCLI(t, env, "plugin", "add", id); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	out, err := runCLI(t, env, "explain", "--all", "--json")
+	out, err := runCLI(t, env, "plugin", "explain", "--all", "--json")
 	if err != nil {
 		t.Fatalf("explain --all --json: %v\n%s", err, out)
 	}
@@ -641,14 +580,14 @@ func TestExplain_DisabledPluginRendersMarker(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runCLI(t, env, "plugin", "disable", "demo"); err != nil {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "explain", "demo@test-mp")
+	out, err := runCLI(t, env, "plugin", "explain", "demo@test-mp")
 	if err != nil {
 		t.Fatalf("explain disabled: %v\n%s", err, out)
 	}
@@ -679,11 +618,11 @@ func TestExplain_DescribesAllComponentKinds(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "lsponly@lsp-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "lsponly@lsp-mp"); err != nil {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "explain", "lsponly@lsp-mp")
+	out, err := runCLI(t, env, "plugin", "explain", "lsponly@lsp-mp")
 	if err != nil {
 		t.Fatalf("explain: %v\n%s", err, out)
 	}
@@ -697,7 +636,7 @@ func TestExplain_DescribesAllComponentKinds(t *testing.T) {
 	}
 
 	// JSON carries every per-row count, with the LSP populated on both rows.
-	outJSON, err := runCLI(t, env, "explain", "lsponly@lsp-mp", "--json")
+	outJSON, err := runCLI(t, env, "plugin", "explain", "lsponly@lsp-mp", "--json")
 	if err != nil {
 		t.Fatalf("explain --json: %v\n%s", err, outJSON)
 	}

@@ -424,7 +424,7 @@ func TestIntegration_Project_UndeclaredAgentsError(t *testing.T) {
 		{"status", "--project", projectDir},
 		{"diff", "--project", projectDir},
 		{"reconcile", "--project", projectDir, "--auto-safe"},
-		{"verify", "--project", projectDir},
+		{"check", "--project", projectDir},
 	} {
 		out, err := runCLI(t, env, args...)
 		if err == nil {

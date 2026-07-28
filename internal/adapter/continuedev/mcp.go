@@ -70,22 +70,27 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, []ad
 		// carries a url (the user chose stdio; the url is unused). Both report
 		// the dropped url via the same reduced Skip, with wording matching how
 		// the transport was chosen.
+		//
+		// The reason names the FIELD, never its value: Render runs on the
+		// secret-RESOLVED canonical, and `url` is secret-bearing
+		// (secrets.walkSecretFields), so interpolating it here would print a
+		// vault secret in cleartext through `explain` (which emits skip reasons
+		// as metadata) and the apply translation report. See the doc comment on
+		// adapter.Skip.Reason and TestSkipReasonsNeverCarrySecretValues.
 		switch {
 		case m.Server.Type == "" && m.Server.Command != "" && m.Server.URL != "":
 			skips = append(skips, adapter.Skip{
 				Component: "mcp",
 				Name:      m.ID,
-				Reason: fmt.Sprintf("server declares both a command and a url with no explicit type; a Continue block is single-transport, so it renders as stdio (command wins) and the url %q is dropped — set type to \"http\" or \"sse\" to render it as a remote server instead",
-					m.Server.URL),
-				Kind: adapter.SkipReduced,
+				Reason:    "server declares both a command and a url with no explicit type; a Continue block is single-transport, so it renders as stdio (command wins) and the url is dropped — set type to \"http\" or \"sse\" to render it as a remote server instead",
+				Kind:      adapter.SkipReduced,
 			})
 		case m.Server.Type == "stdio" && m.Server.URL != "":
 			skips = append(skips, adapter.Skip{
 				Component: "mcp",
 				Name:      m.ID,
-				Reason: fmt.Sprintf("server is explicitly typed stdio but also carries a url; a Continue block is single-transport, so the url %q is unused and dropped — set type to \"http\" or \"sse\" to render it as a remote server instead",
-					m.Server.URL),
-				Kind: adapter.SkipReduced,
+				Reason:    "server is explicitly typed stdio but also carries a url; a Continue block is single-transport, so the url is unused and dropped — set type to \"http\" or \"sse\" to render it as a remote server instead",
+				Kind:      adapter.SkipReduced,
 			})
 		}
 		version, schema := blockHeader(m.Server.Extra)

@@ -38,12 +38,21 @@ func NewRoot() *cobra.Command {
 	cmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose logging (in `status`, also expands collapsed skill directories)")
 	cmd.PersistentFlags().StringVar(&colorFlag, "color", "auto", "colorize output: auto | always | never")
 	cmd.PersistentFlags().Bool("no-input", false, "never prompt; fail instead when a choice is required (for headless/non-interactive use)")
+	// Scope is declared ONCE and inherited (#200 F6). A command that cannot
+	// honor it refuses rather than silently ignoring it — see scope_flags.go.
+	cmd.PersistentFlags().String("scope", "", "user | project (default: user; prompts when run inside a project tree)")
+	cmd.PersistentFlags().String("project", "", "explicit path to project root (implies --scope project)")
+
+	cmd.PersistentPreRunE = func(c *cobra.Command, _ []string) error {
+		return enforceScopeStance(c)
+	}
 
 	cmd.AddCommand(
 		newInitCmd(),
 		newAgentCmd(),
+		newMigrateCmd(),
 		newDoctorCmd(),
-		newVerifyCmd(),
+		newCheckCmd(),
 		newApplyCmd(),
 		newRevertCmd(),
 		newStatusCmd(),
@@ -52,12 +61,14 @@ func NewRoot() *cobra.Command {
 		newMCPCmd(),
 		newPluginCmd(),
 		newMarketplaceCmd(),
-		newUpdateCmd(),
 		newSecretsCmd(),
 		newExplainCmd(),
 		newImportCmd(),
 		newVersionCmd(),
 	)
+	// #200 F5: every peer component gets the READ side, so `mcp` is no longer the
+	// only component you can ask about.
+	cmd.AddCommand(newComponentListCmds()...)
 	return cmd
 }
 

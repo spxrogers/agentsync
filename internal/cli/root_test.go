@@ -160,7 +160,7 @@ func TestRoot_VersionCommandHelp(t *testing.T) {
 
 func TestRoot_HelpListsSubcommands(t *testing.T) {
 	out, _ := runCLI(t, nil, "--help")
-	for _, sub := range []string{"init", "agent", "doctor", "verify", "apply"} {
+	for _, sub := range []string{"init", "agent", "doctor", "check", "apply"} {
 		if !strings.Contains(out, sub) {
 			t.Fatalf("--help missing subcommand %q. Got: %s", sub, out)
 		}

@@ -33,11 +33,9 @@ type diffModel struct {
 
 func newDiffCmd() *cobra.Command {
 	var (
-		scopeFlag   string
-		projectFlag string
-		jsonOut     bool
-		exitCode    bool
-		agentsCSV   string
+		jsonOut   bool
+		exitCode  bool
+		agentsCSV string
 	)
 	cmd := &cobra.Command{
 		Use:   "diff [<path>]",
@@ -63,7 +61,7 @@ func newDiffCmd() *cobra.Command {
 			// plugin-derived MCP server / skill / command and silently
 			// disagrees with what apply will write.
 			userHome := paths.HomeDir(paths.OSEnv{})
-			c, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, scopeFlag, projectFlag, true)
+			c, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, true)
 			if err != nil {
 				return err
 			}
@@ -86,19 +84,9 @@ func newDiffCmd() *cobra.Command {
 			// `status --agents` exactly (same split/star/validation and the same
 			// empty-rejection message) so the two read-only commands stay
 			// symmetric.
-			selected := enabledAgents
-			if cmd.Flags().Changed("agents") {
-				names := splitAgents(agentsCSV)
-				if len(names) == 0 {
-					return fmt.Errorf(`--agents cannot be empty; pass "*" for all enabled agents or name one or more`)
-				}
-				if !containsStar(names) {
-					sel, serr := resolveAgentFilter(names, enabled)
-					if serr != nil {
-						return serr
-					}
-					selected = sel
-				}
+			selected, aerr := selectAgents(cmd, enabledAgents, enabled, agentsCSV)
+			if aerr != nil {
+				return aerr
 			}
 			if len(selected) == 0 {
 				if jsonOut {
@@ -251,10 +239,10 @@ func newDiffCmd() *cobra.Command {
 			return nil
 		},
 	}
-	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	markScopeAware(cmd)
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the formatted diff")
 	cmd.Flags().BoolVar(&exitCode, "exit-code", false, fmt.Sprintf("exit %d if any diff hunk exists (0 when clean); for CI gates", exitCodeDrift))
-	cmd.Flags().StringVar(&agentsCSV, "agents", "", `limit the diff to a comma-separated agent allowlist ("*" = all enabled; default: all enabled)`)
+	addAgentsFlag(cmd, &agentsCSV, "diff")
 	return cmd
 }
 

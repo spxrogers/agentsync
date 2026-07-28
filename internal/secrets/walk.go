@@ -29,7 +29,8 @@ type secretFieldLoc struct {
 //   - Project (recursive overlay)
 //
 // Every secret operation — SubstituteCanonical, CollectResolved,
-// UnresolvedSecretRefs, ReReferenceCanonical — is a thin caller of this walker,
+// UnresolvedSecretRefs, SecretRefsByComponent, ReReferenceCanonical — is a thin
+// caller of this walker,
 // so a field added to source.MCPServerSpec / Hook / LSPServerSpec is picked up
 // by all of them automatically. Add new secret-bearing fields HERE and nowhere
 // else. The reflect-based guard in walk_test.go fails if a new string-shaped

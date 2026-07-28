@@ -30,7 +30,9 @@ resolved at apply time from an age-encrypted vault.
 - [`docs/superpowers/specs/2026-05-04-agentsync-design.md`](docs/superpowers/specs/2026-05-04-agentsync-design.md)
   — the authoritative v1.0 design. Note: a few items in its §"CLI surface" were
   aspirational and not wired in v1.0 (`apply --strict/--force/--agent` flags, an
-  `agentsync skill` command) — trust the code over the spec on the CLI surface.
+  `agentsync skill` command) — trust the code over the spec on the CLI
+  surface. Note the last of those has since SHIPPED: F5 added `skill list`
+  alongside `subagent`/`command`/`hook`/`lsp list`.
 
 ## This repo is agentsync-managed — change `.agentsync/`, not the rendered files
 
@@ -163,9 +165,19 @@ before writing it down.
   project overlay, atomic IO + lock, JSON-pointer merge, path resolution,
   logging, test container guard.
 
-The registered command tree (`internal/cli/root.go`): `init`, `agent`, `apply`,
-`revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `verify`, `mcp`,
-`plugin`, `marketplace`, `update`, `secrets`, `explain`, `version`.
+The registered command tree (`internal/cli/root.go`): `init`, `agent`, `migrate`,
+`apply`, `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
+`mcp`, `plugin`, `marketplace`, `secret`, `explain`,
+`version`, plus the read-only component groups `skill`, `subagent`, `command`,
+`hook`, `lsp` (each `list`/`ls` only).
+
+`--scope` / `--project` are persistent ROOT flags. Every command must declare a
+stance — `markScopeAware` or `markScopeUnaware(reason)` — and an unaware command
+REFUSES the flags naming the reason rather than ignoring them
+(`internal/cli/scope_flags.go`). Adding a command without a stance fails
+`TestEveryCommandDeclaresScopeStance`. Group parents must be wrapped in
+`strictGroup` so an unknown subcommand errors instead of printing help and
+exiting 0.
 
 ## Secret-handling invariants (read before touching secrets / capture / source writers)
 
@@ -178,11 +190,11 @@ The architecture below makes that hard to do by accident. Do not weaken it.
 **1. One field list.** Every secret-bearing canonical field is enumerated in
 exactly one place: `walkSecretFields` in `internal/secrets/walk.go` (MCP/LSP
 `Command,URL,Args,Env,Headers`; Hook `Command`; recursive `Project`).
-`SubstituteCanonical`, `CollectResolved`, `UnresolvedSecretRefs`, and
-`ReReferenceCanonical` all delegate to it. **Add a new secret-bearing field ONLY
-there** — every operation then picks it up automatically. `TestNewSecretFieldGuard`
-(reflect-based) fails if a string-shaped field is added to those structs without
-being classified.
+`SubstituteCanonical`, `CollectResolved`, `UnresolvedSecretRefs`,
+`SecretRefsByComponent`, and `ReReferenceCanonical` all delegate to it. **Add a
+new secret-bearing field ONLY there** — every operation then picks it up
+automatically. `TestNewSecretFieldGuard` (reflect-based) fails if a
+string-shaped field is added to those structs without being classified.
 
 > **Deliberate exception — `MCPServerSpec.Extra` / `LSPServerSpec.Extra`.** These
 > `map[string]any` passthrough maps hold unmodeled native fields verbatim and are

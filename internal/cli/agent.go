@@ -103,67 +103,57 @@ func newAgentCmd() *cobra.Command {
 		newAgentEnableCmd(),
 		newAgentDisableCmd(),
 	)
+	strictGroup(cmd)
+	markScopeAware(cmd) // the group's subcommands all honor scope
 	return cmd
 }
 
 func newAgentAddCmd() *cobra.Command {
-	var scopeFlag, projectFlag string
 	cmd := &cobra.Command{
 		Use:   "add <name>",
 		Short: "register an agent (any supported agent; see `agent list --all`)",
 		Args:  cobra.ExactArgs(1),
-		RunE: lockedRun(func(cmd *cobra.Command, args []string) error {
-			return agentAddRun(cmd, args, scopeFlag, projectFlag)
-		}),
+		RunE:  lockedRun(agentAddRun),
 	}
-	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	markScopeAware(cmd)
 	return cmd
 }
 
 func newAgentRemoveCmd() *cobra.Command {
-	var scopeFlag, projectFlag string
 	cmd := &cobra.Command{
-		Use:   "remove <name>",
-		Short: "unregister an agent",
-		Args:  cobra.ExactArgs(1),
-		RunE: lockedRun(func(cmd *cobra.Command, args []string) error {
-			return agentRemoveRun(cmd, args, scopeFlag, projectFlag)
-		}),
+		Use:     "remove <name>",
+		Aliases: []string{"rm"},
+		Short:   "unregister an agent",
+		Args:    cobra.ExactArgs(1),
+		RunE:    lockedRun(agentRemoveRun),
 	}
-	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	markScopeAware(cmd)
 	return cmd
 }
 
 func newAgentEnableCmd() *cobra.Command {
-	var scopeFlag, projectFlag string
 	cmd := &cobra.Command{
 		Use:   "enable <name>",
 		Args:  cobra.ExactArgs(1),
 		Short: "enable a registered agent",
-		RunE: lockedRun(func(cmd *cobra.Command, args []string) error {
-			return agentEnableRun(cmd, args, scopeFlag, projectFlag)
-		}),
+		RunE:  lockedRun(agentEnableRun),
 	}
-	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	markScopeAware(cmd)
 	return cmd
 }
 
 func newAgentDisableCmd() *cobra.Command {
-	var (
-		purge       bool
-		scopeFlag   string
-		projectFlag string
-	)
+	var purge bool
 	cmd := &cobra.Command{
 		Use:   "disable <name>",
 		Args:  cobra.ExactArgs(1),
 		Short: "disable a registered agent (optionally purging its destination files)",
 		RunE: lockedRun(func(cmd *cobra.Command, args []string) error {
-			return agentDisableRun(cmd, args, purge, scopeFlag, projectFlag)
+			return agentDisableRun(cmd, args, purge)
 		}),
 	}
 	cmd.Flags().BoolVar(&purge, "purge", false, "remove agent destination files that agentsync owns")
-	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	markScopeAware(cmd)
 	return cmd
 }
 
@@ -182,14 +172,19 @@ func validateAgent(name string) error {
 	return fmt.Errorf("unknown agent %q; valid: %s", name, validAgentsList())
 }
 
-// agentScopeHome resolves the effective scope for an agent command and the
-// agentsync home whose agentsync.toml it edits: ~/.agentsync at user scope, the
-// <root>/.agentsync project tree at project scope. Scope resolution is shared
-// with apply/status/diff (resolveScope), so the same explicit-opt-in rules hold:
-// --project implies project scope, --scope project walks up from cwd, and a bare
-// invocation inside a project tree prompts (or fails closed when non-interactive).
-func agentScopeHome(cmd *cobra.Command, scopeFlag, projectFlag string) (home string, sc adapter.Scope, projectRoot string, err error) {
-	sc, projectRoot, err = resolveScope(cmd, scopeFlag, projectFlag, noInputFlag(cmd))
+// scopedSourceHome resolves the effective scope for a command that authors or
+// reads canonical components, and the agentsync home it operates in:
+// ~/.agentsync at user scope, the <root>/.agentsync project tree at project
+// scope. Scope resolution is shared with apply/status/diff (resolveScope), so
+// the same explicit-opt-in rules hold: --project implies project scope, --scope
+// project walks up from cwd, and a bare invocation inside a project tree prompts
+// (or fails closed when non-interactive).
+//
+// It is the single entry point for every scope-aware authoring command — the
+// `agent` group, `mcp`, and the component `list`s — so none of them can drift
+// into resolving scope its own way.
+func scopedSourceHome(cmd *cobra.Command) (home string, sc adapter.Scope, projectRoot string, err error) {
+	sc, projectRoot, err = resolveScope(cmd, noInputFlag(cmd))
 	if err != nil {
 		return "", sc, projectRoot, err
 	}
@@ -382,7 +377,7 @@ func agentsTablesEqual(got, want map[string]map[string]any) bool {
 	return true
 }
 
-func agentAddRun(cmd *cobra.Command, args []string, scopeFlag, projectFlag string) error {
+func agentAddRun(cmd *cobra.Command, args []string) error {
 	name := args[0]
 	if err := validateAgent(name); err != nil {
 		return err
@@ -391,7 +386,7 @@ func agentAddRun(cmd *cobra.Command, args []string, scopeFlag, projectFlag strin
 		return fmt.Errorf("agent %q has no implemented adapter yet; "+
 			"set AGENTSYNC_ALLOW_UNIMPLEMENTED=1 to register anyway and accept a no-op apply", name)
 	}
-	home, sc, _, err := agentScopeHome(cmd, scopeFlag, projectFlag)
+	home, sc, _, err := scopedSourceHome(cmd)
 	if err != nil {
 		return err
 	}
@@ -432,9 +427,9 @@ func agentAddRun(cmd *cobra.Command, args []string, scopeFlag, projectFlag strin
 	return nil
 }
 
-func agentRemoveRun(cmd *cobra.Command, args []string, scopeFlag, projectFlag string) error {
+func agentRemoveRun(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	home, sc, _, err := agentScopeHome(cmd, scopeFlag, projectFlag)
+	home, sc, _, err := scopedSourceHome(cmd)
 	if err != nil {
 		return err
 	}
@@ -455,21 +450,18 @@ func agentRemoveRun(cmd *cobra.Command, args []string, scopeFlag, projectFlag st
 }
 
 func newAgentListCmd() *cobra.Command {
-	var (
-		all         bool
-		scopeFlag   string
-		projectFlag string
-	)
+	var all bool
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "list registered agents (--all to list every supported agent)",
-		Args:  cobra.NoArgs,
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "list registered agents (--all to list every supported agent)",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return agentListRun(cmd, all, scopeFlag, projectFlag)
+			return agentListRun(cmd, all)
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "list every agent agentsync supports, marking which are registered")
-	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	markScopeAware(cmd)
 	return cmd
 }
 
@@ -486,8 +478,8 @@ func agentEntrySuffix(v map[string]any) string {
 	return fmt.Sprintf("enabled=%t", enabled)
 }
 
-func agentListRun(cmd *cobra.Command, all bool, scopeFlag, projectFlag string) error {
-	home, sc, _, err := agentScopeHome(cmd, scopeFlag, projectFlag)
+func agentListRun(cmd *cobra.Command, all bool) error {
+	home, sc, _, err := scopedSourceHome(cmd)
 	if err != nil {
 		return err
 	}
@@ -539,9 +531,9 @@ func agentRegisterHint(name string, sc adapter.Scope) string {
 	return fmt.Sprintf("use 'agentsync agent add %s' first", name)
 }
 
-func agentEnableRun(cmd *cobra.Command, args []string, scopeFlag, projectFlag string) error {
+func agentEnableRun(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	home, sc, _, err := agentScopeHome(cmd, scopeFlag, projectFlag)
+	home, sc, _, err := scopedSourceHome(cmd)
 	if err != nil {
 		return err
 	}
@@ -562,9 +554,9 @@ func agentEnableRun(cmd *cobra.Command, args []string, scopeFlag, projectFlag st
 	return nil
 }
 
-func agentDisableRun(cmd *cobra.Command, args []string, purge bool, scopeFlag, projectFlag string) error {
+func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 	name := args[0]
-	cfgHome, sc, projectRoot, err := agentScopeHome(cmd, scopeFlag, projectFlag)
+	cfgHome, sc, projectRoot, err := scopedSourceHome(cmd)
 	if err != nil {
 		return err
 	}

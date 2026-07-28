@@ -222,7 +222,7 @@ type MarketplaceSpec struct {
 	DefaultUpdateMode string `toml:"default_update_mode,omitempty"`
 }
 
-// Subagent mirrors agents/<name>.md (frontmatter + body).
+// Subagent mirrors subagents/<name>.md (frontmatter + body).
 // Subagents in Claude live at ~/.claude/agents/<name>.md.
 type Subagent struct {
 	Name        string         // filename without .md extension

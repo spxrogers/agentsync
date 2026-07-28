@@ -27,7 +27,7 @@ The product is **personal-first, OSS-shareable**: built well enough to share, no
 | Secrets | env + age-encrypted file. `${secret:foo.bar}` resolution at apply-time. | User wants single-artifact `~/.agentsync/` (chezmoi dream). age is pure-Go, file-format-stable, cross-platform, integrates naturally with chezmoi if used. |
 | Project marker | `.agentsync.toml` at repo root. Walk-up resolution from cwd. | User: "directory paths aren't durable across machines or clones; a directory should declare itself." |
 | Cross-machine sync | Delegated to chezmoi or whichever dotfile manager. agentsync stays single-machine. | User confirmed; out of scope. |
-| Daemon | None. `agentsync update` polls on demand. Recurring runs delegated to user's cron/launchd/systemd. | User: scheduled refresh is "nice and fluffy but not critical path." |
+| Daemon | None. `agentsync plugin outdated` polls on demand. Recurring runs delegated to user's cron/launchd/systemd. | User: scheduled refresh is "nice and fluffy but not critical path." |
 | Language | Go. Single static binary. | Both prior plans agreed; age library is Go-native; TOML AST round-trip via `pelletier/go-toml/v2` is mature. |
 | Distribution | Brew (macOS), scoop + chocolatey (Windows), apt/yum/AUR (Linux). No `go install`, no npm, no curl-bash. | User explicit. |
 
@@ -92,7 +92,13 @@ Adding an agent = adding `internal/adapter/<name>/` implementing this interface.
 ├── memory/
 │   ├── AGENTS.md              # canonical memory; rendered per agent
 │   └── fragments/*.md         # @-importable from above
-├── skills/<name>/SKILL.md     # standalone skills (outside plugins)
+├── skills/<name>/             # a skill is a DIRECTORY: SKILL.md + bundled
+│                              #   scripts/, references/, assets/, nested files
+├── subagents/<name>.md        # one subagent per file (NOT `agents/` — that word
+│                              #   names the harness registry in agentsync.toml)
+├── commands/<name>.md         # one slash command per file
+├── hooks/<event>.toml         # one hook event per file
+├── lsp/<server>.toml          # one LSP server per file
 ├── secrets/secrets.age        # age-encrypted; agentsync secrets {edit,get,set}
 ├── ignore.toml                # paths to suppress from drift reporting
 └── .state/                    # gitignored
@@ -226,7 +232,7 @@ This variable appears in hook commands and MCP server configs (e.g. `command = "
 ### Version resolution
 
 - `version` set (in marketplace entry or `plugin.json`) → pinned.
-- `version` omitted → every git commit is a new "version." `agentsync update` surfaces this with a warning so unintended drift is visible: `plugin foo: version unpinned; tracking commit a1b2c3 → d4e5f6`.
+- `version` omitted → every git commit is a new "version." `agentsync plugin outdated` surfaces this with a warning so unintended drift is visible: `plugin foo: version unpinned; tracking commit a1b2c3 → d4e5f6`.
 
 ### `~/.claude/plugins/cache/` is jointly-owned
 
@@ -272,13 +278,17 @@ plugin: atlassian@anthropic
   cursor    ◐ partial (1 mcp; 5 commands → .cursor/rules/*.mdc)
 ```
 
-Same data structured via `agentsync explain <plugin> --json`.
+Same data structured via `agentsync plugin explain <plugin> --json`.
 
 ### Escape hatches
 
-- `agents = [...]` allowlist on plugin entry → fan out only to those.
+- `agents = [...]` allowlist on plugin entry → fan out only to those. **Shipped.**
 - `[plugin.overrides.<agent>] component = "skip"` → per-component override.
-- `--strict` flag on `apply` → turns ◐/✗ into hard errors so silent drops are impossible.
+  **Not wired in v1.0** — the projector does not consult the table; use the
+  `agents` allowlist.
+- `--strict` flag on `apply` → turns ◐/✗ into hard errors so silent drops are
+  impossible. **Not wired in v1.0** — `apply` registers no `--strict`.
+  The nearest shipped gates are `status --exit-code` / `diff --exit-code`.
 
 ### Cursor rule constraint (v1.2)
 
@@ -330,19 +340,24 @@ Bulk hotkeys: `W` write-back-all, `O` override-all, `S` skip-all-remaining. Non-
 
 ## Update flow
 
-Network-aware split — `update` is the only verb that hits the network:
+Network-aware split — `apply` is the verb that never hits the network. (The
+spec's original "`update` is the only verb that hits the network" was false from
+v1.0: `plugin install`, `marketplace add`, `import <agent>:plugin`, and `init
+<git-url>` all fetch too.)
 
 ```
-agentsync update              # poll all marketplaces, refresh cache, recompute pins
-                             # prints pending bumps; does NOT touch agent configs
+agentsync plugin outdated     # poll all marketplaces, refresh cache, recompute pins
+                              # prints pending bumps; does NOT touch agent configs
+                              # (it DOES write state: fetch timestamps + head SHAs)
 agentsync apply               # local-only: cache → render → write, with translation report
-agentsync update --apply      # convenience: update then apply, prompts on lossy translation
-agentsync update --apply --auto    # same with --auto-safe semantics
+agentsync plugin upgrade --all             # poll, re-pin every pending bump, re-apply
+agentsync plugin upgrade --all --lossless  # same, skipping bumps that add a new skip
+agentsync plugin upgrade <id>              # re-fetch one plugin, then re-apply
 ```
 
 `apply` always uses cached marketplace content — keeps tests reproducible and `apply` runs offline. Per-plugin update mode (`pinned` | `track` | `manual`) overrides marketplace default. `manifest_sha` pin detects re-uploaded versions.
 
-Recurring runs (e.g. nightly refresh) are delegated: user wires their own cron / launchd / systemd / Task Scheduler entry calling `agentsync update --apply --auto`. agentsync ships no scheduler.
+Recurring runs (e.g. nightly refresh) are delegated: user wires their own cron / launchd / systemd / Task Scheduler entry calling `agentsync plugin upgrade --all --lossless`. agentsync ships no scheduler.
 
 ---
 
@@ -356,40 +371,66 @@ Recurring runs (e.g. nightly refresh) are delegated: user wires their own cron /
 
 ## CLI surface
 
+> **This section is a DATED RECORD, not a live reference. It is stale, and
+> deliberately not maintained.** It was written pre-implementation and last
+> corrected before the v1.x CLI lock-in, so it still spells `verify` (now
+> `check`), `secrets` (now `secret`), and `plugin install` (now `plugin add`),
+> and it lists `agentsync skill` among entries that "were never wired" — a
+> `skill list` command has since shipped, alongside `subagent`/`command`/
+> `hook`/`lsp list`. Other entries here genuinely were never wired: `mcp set`,
+> `apply --strict/--force/--agent`, `--scope all`, `--project <slug>`, and
+> "update is the only network-touching command".
+>
+> Trust `agentsync --help` and [`docs/user-guide.md`](../../user-guide.md) as
+> the authority. An earlier version of this banner claimed the block was "kept
+> in sync" with them; it was not, and asserting it made a stale block read as
+> current. Rewriting the archive to match each release would falsify the
+> record — so it is labelled instead, and the stale-command guard skips
+> `docs/superpowers/` for that reason.
+
 ```
 # Bootstrap & inspect
-agentsync init [<git-url>]
+agentsync init [<git-url>] [--scope project] [--project <path>]
 agentsync doctor
-agentsync verify
+agentsync verify [--scope user|project] [--project <path>]
+agentsync migrate subagents [--scope user|project] [--project <path>]
 
 # Agent registry
 agentsync agent {add,remove,list,enable,disable}
 
 # Canonical primitives (source-mutating)
-agentsync mcp {add,set,remove,list,enable,disable}
-agentsync skill {add,remove,list}
+agentsync mcp {add,remove,list}       # `add` overwrites, so it IS `set`
 agentsync secrets {edit,get,set}
+# NOTE: there is no `agentsync skill` command. A skill is a DIRECTORY
+# (SKILL.md + scripts/ + references/ + assets/), not flag-authorable; author
+# it under ~/.agentsync/skills/<name>/ or capture it with `import`.
 
 # Marketplaces & plugins (source-mutating)
 agentsync marketplace {add,remove,list}
-agentsync plugin {install,upgrade,enable,disable,remove,list}
+agentsync plugin {add,upgrade,enable,disable,remove,list,outdated,explain}
 
-# Network (only network-touching command)
-agentsync update [--apply [--auto|--auto-safe]]
+# Network. NOT a single command: `plugin outdated`, `plugin upgrade`,
+# `plugin add`, `marketplace add`, `import <agent>:plugin`, and
+# `init <git-url>` all fetch. `apply` never does — it renders from cache.
+agentsync plugin outdated
+agentsync plugin upgrade [<id>] [--all] [--lossless] [--scope …] [--project …]
+# (the top-level `update` this spec originally described was REMOVED, no alias)
 
 # Apply & drift (destination-mutating)
-agentsync apply [--scope user|project|all] [--project <slug>] [--agent X]
-               [--dry-run] [--strict] [--force]
-agentsync status [--agent X]
-agentsync diff [--agent X] [<path>]
+agentsync apply [--scope user|project] [--project <path>] [--dry-run]
+                [--no-git-backup]
+agentsync revert <agent> [--to <ref>] [--all] [--dry-run]
+agentsync status [--agents <list>] [--scope …] [--project …] [--json] [--exit-code]
+agentsync diff [<path>] [--agents <list>] [--scope …] [--project …] [--json] [--exit-code]
 agentsync reconcile [--auto-writeback|--auto-override|--auto-safe]
 agentsync import <selector>          # capture native edits into source
 
-# Per-plugin transparency
-agentsync explain <plugin> [--json]
+# Transparency
+agentsync plugin explain <plugin>... [--all] [--json]   # per-plugin coverage
+agentsync explain <path>[#<pointer>] [--pointer …] [--json]  # dest provenance
 ```
 
-**Selector grammar** for `import` (and future per-item commands): `<agent>[:<component>[:<name>]]` — e.g. `claude:mcp:github`, `opencode:agent:reviewer`. Dropping the name imports every entry of that component; dropping the component too imports the agent's full native config in one pass.
+**Selector grammar** for `import` (and future per-item commands): `<agent>[:<component>[:<name>]]` — e.g. `claude:mcp:github`, `opencode:subagent:reviewer` (`agent` is accepted as a legacy alias for `subagent`). Dropping the name imports every entry of that component; dropping the component too imports the agent's full native config in one pass.
 
 ---
 

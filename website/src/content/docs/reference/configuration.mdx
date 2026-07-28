@@ -21,7 +21,7 @@ parse these files *are* the canonical model.
     - **github.toml** one MCP server per file
   - lsp/
     - **gopls.toml** one LSP server per file
-  - agents/
+  - subagents/
     - **reviewer.md** one subagent per file
   - commands/
     - **review.md** one slash command per file
@@ -65,7 +65,7 @@ scope   = "user"   # display-only; the file an entry lives in is the scope of re
 [agents.opencode]
 enabled = true
 
-# Plugin update defaults (used by `agentsync update`).
+# Plugin update defaults (used by `agentsync plugin outdated` / `plugin upgrade`).
 [updates]
 default_mode     = "track"   # pinned | track | manual — a plugin's own `update`
                              # wins; this is the fallback. Only "track" plugins are
@@ -87,7 +87,8 @@ banner = true   # default; set false to omit the managed-file banner from
                 # rendered memory files (CLAUDE.md, AGENTS.md, …)
 ```
 
-`[updates]` sets the default plugin-update policy for `agentsync update`.
+`[updates]` sets the default plugin-update policy for `agentsync plugin outdated` /
+`agentsync plugin upgrade --all`.
 `default_mode` is `pinned` (never auto-bump), `track` (auto-bump to the latest
 marketplace version), or `manual` (bump only on explicit action); a plugin's own
 `update` key overrides it, and an unset `default_mode` behaves as `track`.
@@ -107,9 +108,9 @@ source) and is on unless you set `banner = false`. See the
 [memory guide](/guides/memory/#the-managed-file-banner).
 
 <Aside type="note">
-	Use the CLI (`agentsync agent add`, `agentsync secrets set`, …) and let it write
+	Use the CLI (`agentsync agent add`, `agentsync secret set`, …) and let it write
 	these files, or hand-edit them — agentsync re-reads the files either way. The
-	exact key set is validated by `agentsync verify` and surfaced by
+	exact key set is validated by `agentsync check` and surfaced by
 	`agentsync doctor`.
 </Aside>
 
@@ -119,7 +120,7 @@ source) and is on unless you set `banner = false`. See the
 | --- | --- |
 | `mcp/<name>.toml` | one MCP server ([guide](/guides/mcp-servers/)) |
 | `lsp/<name>.toml` | one LSP server |
-| `agents/<name>.md` | one subagent |
+| `subagents/<name>.md` | one subagent (the directory is `subagents/`, not `agents/` — `agents` names the harness registry in `agentsync.toml`) |
 | `commands/<name>.md` | one slash command |
 | `hooks/<event>.toml` | one hook |
 | `marketplaces/<name>.toml` | one marketplace ([guide](/guides/plugins/)) |

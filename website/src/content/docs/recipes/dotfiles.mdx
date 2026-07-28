@@ -14,11 +14,11 @@ without ever committing a cleartext secret or your private key.
 
 1. **Make sure secrets are referenced, not embedded.** Scan your source for
    anything that looks like a raw credential and convert it to a `${secret:…}`
-   reference (see [Secrets](/guides/secrets/)). `verify` will flag unresolved
+   reference (see [Secrets](/guides/secrets/)). `check` will flag unresolved
    references:
 
    ```bash
-   agentsync verify
+   agentsync check
    ```
 
 2. **Add the directory to chezmoi:**

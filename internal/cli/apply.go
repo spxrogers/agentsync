@@ -25,9 +25,8 @@ import (
 func newApplyCmd() *cobra.Command {
 	var (
 		dryRun      bool
-		scopeFlag   string
-		projectFlag string
 		noGitBackup bool
+		agentsCSV   string
 	)
 	cmd := &cobra.Command{
 		Use:   "apply",
@@ -40,26 +39,18 @@ func newApplyCmd() *cobra.Command {
 			// concurrent `status` / `diff` / other dry-runs behind a long
 			// real apply.
 			if dryRun {
-				return applyRun(cmd, home, dryRun, scopeFlag, projectFlag, noGitBackup)
+				return applyRun(cmd, home, dryRun, noGitBackup, agentsCSV)
 			}
 			return withGlobalLock(home, func() error {
-				return applyRun(cmd, home, dryRun, scopeFlag, projectFlag, noGitBackup)
+				return applyRun(cmd, home, dryRun, noGitBackup, agentsCSV)
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "compute plan without writing destinations")
-	addScopeFlags(cmd, &scopeFlag, &projectFlag)
+	markScopeAware(cmd)
 	cmd.Flags().BoolVar(&noGitBackup, "no-git-backup", false, "skip destination git versioning/checkpoint for this run (CI/scripting); does not modify agentsync.toml")
+	addAgentsFlag(cmd, &agentsCSV, "apply")
 	return cmd
-}
-
-// addScopeFlags registers the standard --scope/--project pair every
-// scope-aware command shares (apply, status, diff, reconcile, verify, import,
-// and the agent subcommands). init and update register their own variants with
-// scope-specific help text.
-func addScopeFlags(cmd *cobra.Command, scopeFlag, projectFlag *string) {
-	cmd.Flags().StringVar(scopeFlag, "scope", "", "user | project (default: user; prompts when run inside a project tree)")
-	cmd.Flags().StringVar(projectFlag, "project", "", "explicit path to project root (implies --scope project)")
 }
 
 // noAgentsEnabledHint is the shared "nothing is enabled" notice for read-only
@@ -76,12 +67,12 @@ func noAgentsEnabledHint(sc adapter.Scope, projectRoot string) string {
 
 // applyRun is the lock-protected body of the apply command. It is split
 // out from newApplyCmd so the lock acquisition lives in one obvious place.
-func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFlag string, noGitBackup bool) error {
+func applyRun(cmd *cobra.Command, home string, dryRun, noGitBackup bool, agentsCSV string) error {
 	p, err := newPrinter(cmd)
 	if err != nil {
 		return err
 	}
-	c, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, scopeFlag, projectFlag, false)
+	c, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, false)
 	if err != nil {
 		return err
 	}
@@ -106,10 +97,22 @@ func applyRun(cmd *cobra.Command, home string, dryRun bool, scopeFlag, projectFl
 	}
 
 	agents := []string{}
+	enabled := map[string]bool{}
 	for name, ag := range c.Config.Agents {
 		if ag.Enabled {
 			agents = append(agents, name)
+			enabled[name] = true
 		}
+	}
+	// --agents narrows the apply to a validated allowlist, with the SAME parsing
+	// status/diff use (#200 F10). Applied after the enabled set is built, so an
+	// unknown or disabled name is rejected rather than silently rendering nothing.
+	if len(agents) > 0 {
+		sel, aerr := selectAgents(cmd, agents, enabled, agentsCSV)
+		if aerr != nil {
+			return aerr
+		}
+		agents = sel
 	}
 	if len(agents) == 0 {
 		// Without this hint, `apply` prints "applied: 0 ops" and a
@@ -519,9 +522,22 @@ func saveBestEffortState(s *state.Targets, statePath string, plan render.RenderP
 // is resolved entry-wins with a warning rather than a hard error, so status/diff
 // still show state. Mutating callers pass false so a conflict aborts before any
 // write.
-func loadProjectedForScope(cmd *cobra.Command, fs afero.Fs, home, scopeFlag, projectFlag string, lenient bool) (source.Canonical, adapter.Scope, string, error) {
-	sc, projectRoot, err := resolveScope(cmd, scopeFlag, projectFlag, noInputFlag(cmd))
+func loadProjectedForScope(cmd *cobra.Command, fs afero.Fs, home string, lenient bool) (source.Canonical, adapter.Scope, string, error) {
+	scopeFlag, projectFlag := scopeFlagValues(cmd)
+	return loadProjectedForScopeFlags(cmd, fs, home, scopeFlag, projectFlag, lenient)
+}
+
+// loadProjectedForScopeFlags is loadProjectedForScope over explicit flag
+// values — see resolveScopeFlags for the one caller that needs it.
+func loadProjectedForScopeFlags(cmd *cobra.Command, fs afero.Fs, home, scopeFlag, projectFlag string, lenient bool) (source.Canonical, adapter.Scope, string, error) {
+	sc, projectRoot, err := resolveScopeFlags(cmd, scopeFlag, projectFlag, noInputFlag(cmd))
 	if err != nil {
+		return source.Canonical{}, sc, projectRoot, err
+	}
+	// Offer the retired-layout migration before loading. source.Load is already
+	// fail-closed on an unmigrated agents/ tree; running the check here first
+	// turns that refusal into a guided move for the commands users hit daily.
+	if err := ensureSubagentLayout(cmd, home, sc, projectRoot); err != nil {
 		return source.Canonical{}, sc, projectRoot, err
 	}
 	pluginCacheRoot := filepath.Join(home, ".state", "cache", "plugins")
@@ -608,7 +624,15 @@ func projectDisabledPlugins(fs afero.Fs, projHome string) ([]string, error) {
 // For every command except init's own scaffolding, project scope requires the
 // <root>/.agentsync/ tree to already exist; resolveScope returns an actionable
 // error pointing at `agentsync init --scope project` otherwise.
-func resolveScope(cmd *cobra.Command, scopeFlag, projectFlag string, noInput bool) (adapter.Scope, string, error) {
+func resolveScope(cmd *cobra.Command, noInput bool) (adapter.Scope, string, error) {
+	scopeFlag, projectFlag := scopeFlagValues(cmd)
+	return resolveScopeFlags(cmd, scopeFlag, projectFlag, noInput)
+}
+
+// resolveScopeFlags is resolveScope over EXPLICIT flag values, for the one
+// caller that supplies its own: `explain <path>` infers project scope from the
+// destination path when the user named neither flag.
+func resolveScopeFlags(cmd *cobra.Command, scopeFlag, projectFlag string, noInput bool) (adapter.Scope, string, error) {
 	switch {
 	case projectFlag != "":
 		// Explicit --project implies project scope, so --scope user alongside it

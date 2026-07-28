@@ -46,7 +46,7 @@ func TestDiff_IncludesPluginProjection(t *testing.T) {
 	mustRun(t, env, "init")
 	mustRun(t, env, "agent", "add", "claude")
 	mustRun(t, env, "marketplace", "add", fixture)
-	mustRun(t, env, "plugin", "install", "demo@test-mp")
+	mustRun(t, env, "plugin", "add", "demo@test-mp")
 
 	// diff is run BEFORE apply: the plugin-projected demo-mcp server is in
 	// the source plan but not yet on disk, so it must show as a pending change.
@@ -68,7 +68,7 @@ func TestStatus_IncludesPluginProjection(t *testing.T) {
 	mustRun(t, env, "init")
 	mustRun(t, env, "agent", "add", "claude")
 	mustRun(t, env, "marketplace", "add", fixture)
-	mustRun(t, env, "plugin", "install", "demo@test-mp")
+	mustRun(t, env, "plugin", "add", "demo@test-mp")
 
 	out, err := runCLI(t, env, "status")
 	if err != nil {
@@ -92,7 +92,7 @@ func TestProjectTree_DisablesPluginProjection(t *testing.T) {
 	mustRun(t, env, "init")
 	mustRun(t, env, "agent", "add", "claude")
 	mustRun(t, env, "marketplace", "add", fixture)
-	mustRun(t, env, "plugin", "install", "demo@test-mp")
+	mustRun(t, env, "plugin", "add", "demo@test-mp")
 
 	// A project tree that disables the demo plugin.
 	proj := filepath.Join(tmp, "proj")

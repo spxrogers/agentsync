@@ -16,12 +16,12 @@ The features map 1:1 to the design spec's "north stars":
 
 | Feature file                          | North star locked                                        |
 | ------------------------------------- | -------------------------------------------------------- |
-| `01_bootstrap.feature`                | `init` / `doctor` / `verify` / `--version`               |
+| `01_bootstrap.feature`                | `init` / `doctor` / `check` / `--version`               |
 | `02_agents.feature`                   | agent registry CRUD + `disable --purge`                  |
 | `03_mcp_fanout.feature`               | one MCP file fans out to every enabled agent             |
 | `04_drift.feature`                    | 3-way drift classifier + reconcile + diff                |
 | `05_secrets.feature`                  | `${secret:foo.bar}` resolved at apply, never in source   |
-| `06_marketplace_plugins.feature`      | local marketplace + plugin install + cross-agent fanout  |
+| `06_marketplace_plugins.feature`      | local marketplace + plugin add + cross-agent fanout  |
 | `07_safety.feature`                   | `AGENTSYNC_TARGET_ROOT` redirect, apply.lock concurrency |
 | `08_release_smoke.feature`            | top-level CLI surface + lifecycle smoke                  |
 

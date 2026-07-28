@@ -22,12 +22,16 @@ func newMarketplaceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "marketplace",
 		Short: "manage plugin marketplaces",
+		Args:  cobra.NoArgs,
 	}
 	cmd.AddCommand(
 		newMarketplaceAddCmd(),
 		newMarketplaceRemoveCmd(),
 		newMarketplaceListCmd(),
 	)
+	strictGroup(cmd)
+	markGroupScopeUnaware(cmd, "marketplaces are registered per machine — marketplaces/*.toml and the fetch cache "+
+		"live under ~/.agentsync, and a project tree pins plugins rather than registering sources")
 	return cmd
 }
 
@@ -172,9 +176,10 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string) (m
 
 func newMarketplaceRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "remove <name>",
-		Short: "remove a marketplace and its cached files",
-		Args:  cobra.ExactArgs(1),
+		Use:     "remove <name>",
+		Aliases: []string{"rm"},
+		Short:   "remove a marketplace and its cached files",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			return withGlobalLock(home, func() error { return marketplaceRemoveRun(cmd, args) })
@@ -226,10 +231,11 @@ func marketplaceRemoveRun(cmd *cobra.Command, args []string) error {
 
 func newMarketplaceListCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "list registered marketplaces",
-		Args:  cobra.NoArgs,
-		RunE:  marketplaceListRun,
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "list registered marketplaces",
+		Args:    cobra.NoArgs,
+		RunE:    marketplaceListRun,
 	}
 }
 

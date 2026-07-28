@@ -423,7 +423,7 @@ func TestPlugin_InstallFromLocalMarketplace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "plugin", "install", "demo@test-mp")
+	out, err := runCLI(t, env, "plugin", "add", "demo@test-mp")
 	if err != nil {
 		t.Fatalf("plugin install: %v\n%s", err, out)
 	}
@@ -458,7 +458,7 @@ func TestPlugin_InstallSanitizesUntrustedVersion(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
 		t.Fatal(err)
 	}
-	out, err := runCLI(t, env, "plugin", "install", "demo@test-mp-v")
+	out, err := runCLI(t, env, "plugin", "add", "demo@test-mp-v")
 	if err != nil {
 		t.Fatalf("plugin install: %v\n%s", err, out)
 	}
@@ -515,7 +515,7 @@ func TestPlugin_HookReachesApply(t *testing.T) {
 	mustRun(t, env, "agent", "add", "claude")
 	mpDir := makeHookMarketplace(t, t.TempDir())
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "hookp@hook-mp")
+	mustRun(t, env, "plugin", "add", "hookp@hook-mp")
 	mustRun(t, env, "apply")
 
 	data, err := os.ReadFile(filepath.Join(tmp, ".claude", "settings.json"))
@@ -538,7 +538,7 @@ func TestPlugin_EntryOverrideReachesApply(t *testing.T) {
 	mustRun(t, env, "agent", "add", "claude")
 	mpDir := makeLocalMarketplace(t, t.TempDir())
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "inline-plugin@test-mp")
+	mustRun(t, env, "plugin", "add", "inline-plugin@test-mp")
 	mustRun(t, env, "apply")
 
 	data, err := os.ReadFile(filepath.Join(tmp, ".claude.json"))
@@ -569,7 +569,7 @@ func TestPlugin_NonStrictInstallThenApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	// inline-plugin is strict:false and its source (./plugins/demo) has a plugin.json.
-	if _, err := runCLI(t, env, "plugin", "install", "inline-plugin@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "inline-plugin@test-mp"); err != nil {
 		t.Fatalf("plugin install (non-strict): %v", err)
 	}
 	if out, err := runCLI(t, env, "apply"); err != nil {
@@ -588,7 +588,7 @@ func TestPlugin_List(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -627,7 +627,7 @@ func TestPlugin_EnableDisable(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -677,7 +677,7 @@ func TestPlugin_DisableEnablePreservesAgentsAllowlist(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -743,7 +743,7 @@ func TestPlugin_ReinstallOverCorruptTOMLRefuses(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 	pluginPath := filepath.Join(tmp, ".agentsync", "plugins", "demo.toml")
@@ -756,7 +756,7 @@ func TestPlugin_ReinstallOverCorruptTOMLRefuses(t *testing.T) {
 
 	// Re-install must REFUSE, not silently overwrite the unreadable lifecycle file with
 	// default agents=["*"]/update=track/disabled=false.
-	out, err := runCLI(t, env, "plugin", "install", "demo@test-mp")
+	out, err := runCLI(t, env, "plugin", "add", "demo@test-mp")
 	if err == nil {
 		t.Fatalf("re-install over a corrupt plugins/demo.toml should fail; got success:\n%s", out)
 	}
@@ -781,7 +781,7 @@ func TestPlugin_ReinstallOverEmptyTOMLUsesDefaults(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 	pluginPath := filepath.Join(tmp, ".agentsync", "plugins", "demo.toml")
@@ -792,7 +792,7 @@ func TestPlugin_ReinstallOverEmptyTOMLUsesDefaults(t *testing.T) {
 	}
 
 	// Re-install SUCCEEDS (empty is not "corrupt") and falls through to the defaults.
-	if out, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if out, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatalf("re-install over a semantically-empty toml should succeed, got: %v\n%s", err, out)
 	}
 	got := readPluginTOMLFixture(t, pluginPath)
@@ -815,7 +815,7 @@ func TestPlugin_ReinstallPreservesAgentsUpdateDisabled(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -840,7 +840,7 @@ agents = ["claude"]
 disabled = true
 `)
 
-	out, err := runCLI(t, env, "plugin", "install", "demo@test-mp")
+	out, err := runCLI(t, env, "plugin", "add", "demo@test-mp")
 	if err != nil {
 		t.Fatalf("plugin re-install: %v\n%s", err, out)
 	}
@@ -900,7 +900,7 @@ func TestPlugin_FirstInstallDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runCLI(t, env, "plugin", "install", "demo@test-mp")
+	out, err := runCLI(t, env, "plugin", "add", "demo@test-mp")
 	if err != nil {
 		t.Fatalf("plugin install: %v\n%s", err, out)
 	}
@@ -971,7 +971,7 @@ func TestPlugin_DisableSuppressesProjectionAtApply(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1004,7 +1004,7 @@ func TestPlugin_Remove(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1040,7 +1040,7 @@ func TestPlugin_Upgrade(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1069,7 +1069,7 @@ func TestPlugin_GitMarketplace(t *testing.T) {
 	}
 
 	// After add, install the plugin from it.
-	out, err = runCLI(t, env, "plugin", "install", "git-plugin@git-mp")
+	out, err = runCLI(t, env, "plugin", "add", "git-plugin@git-mp")
 	if err != nil {
 		t.Fatalf("plugin install from git marketplace: %v\n%s", err, out)
 	}
@@ -1134,7 +1134,7 @@ func TestPlugin_ListSanitizesUntrustedVersion(t *testing.T) {
 	ver := "1.0" + string(rune(0x1b)) + "[31m" + string(rune(0x0d))
 	mpDir := makeVersionedMarketplace(t, t.TempDir(), ver)
 	mustRun(t, env, "marketplace", "add", mpDir)
-	mustRun(t, env, "plugin", "install", "demo@test-mp-v")
+	mustRun(t, env, "plugin", "add", "demo@test-mp-v")
 	out, err := runCLI(t, env, "plugin", "list")
 	if err != nil {
 		t.Fatalf("plugin list: %v\n%s", err, out)
@@ -1161,7 +1161,7 @@ func TestPlugin_SubcommandsAcceptMarketplaceRef(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if out, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatalf("install: %v\n%s", err, out)
 	}
 
@@ -1226,7 +1226,7 @@ func TestPlugin_SubcommandsRejectMismatchedMarketplaceRef(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if out, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatalf("install: %v\n%s", err, out)
 	}
 
@@ -1300,7 +1300,7 @@ func TestPlugin_BareIDInstallSentinelQualifierHonest(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Bare-id install: records the "default" sentinel, not test-mp.
-	if out, err := runCLI(t, env, "plugin", "install", "demo"); err != nil {
+	if out, err := runCLI(t, env, "plugin", "add", "demo"); err != nil {
 		t.Fatalf("bare-id install: %v\n%s", err, out)
 	}
 
@@ -1340,7 +1340,7 @@ func TestPlugin_UpgradeAfterBareIDInstall(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := runCLI(t, env, "plugin", "install", "demo"); err != nil {
+	if out, err := runCLI(t, env, "plugin", "add", "demo"); err != nil {
 		t.Fatalf("bare-id install: %v\n%s", err, out)
 	}
 	if out, err := runCLI(t, env, "plugin", "upgrade", "demo"); err != nil {

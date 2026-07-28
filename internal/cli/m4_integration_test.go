@@ -64,7 +64,7 @@ func TestIntegration_M4_PluginFanoutClaudeAndOpenCode(t *testing.T) {
 	}
 
 	// Plugin install.
-	out, err = runCLI(t, env, "plugin", "install", "demo@test-mp")
+	out, err = runCLI(t, env, "plugin", "add", "demo@test-mp")
 	if err != nil {
 		t.Fatalf("plugin install: %v\n%s", err, out)
 	}
@@ -137,7 +137,7 @@ func TestIntegration_M4_SHAPinning(t *testing.T) {
 	if _, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runCLI(t, env, "plugin", "install", "demo@test-mp"); err != nil {
+	if _, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -162,12 +162,12 @@ func TestIntegration_M4_SHAPinning(t *testing.T) {
 		t.Fatalf("re-upload plugin.json in the marketplace fixture: %v", err)
 	}
 
-	// update should detect SHA drift and emit a warning.
-	out, err := runCLI(t, env, "update")
+	// `plugin outdated` should detect SHA drift and emit a warning.
+	out, err := runCLI(t, env, "plugin", "outdated")
 	if err != nil {
-		t.Fatalf("update: %v\n%s", err, out)
+		t.Fatalf("plugin outdated: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "manifest-sha-mismatch") {
-		t.Errorf("update should warn about SHA mismatch after re-upload; got: %s", out)
+		t.Errorf("plugin outdated should warn about SHA mismatch after re-upload; got: %s", out)
 	}
 }

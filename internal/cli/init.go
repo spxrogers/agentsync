@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/project"
+	"github.com/spxrogers/agentsync/internal/source"
 )
 
 const initialAgentsyncTOML = `# agentsync source-of-truth config
@@ -52,7 +53,6 @@ default_interval = "24h"
 `
 
 func newInitCmd() *cobra.Command {
-	var scopeFlag, projectFlag string
 	cmd := &cobra.Command{
 		Use:   "init [<git-url>]",
 		Short: "scaffold ~/.agentsync/ (user) or <repo>/.agentsync/ (project)",
@@ -74,6 +74,7 @@ The destination must not exist or be empty; init refuses to overwrite a
 populated home so a careless re-run on a working install does not nuke it.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			scopeFlag, projectFlag := scopeFlagValues(cmd)
 			projectMode, projectRoot, err := initProjectRoot(scopeFlag, projectFlag)
 			if err != nil {
 				return err
@@ -95,8 +96,7 @@ populated home so a careless re-run on a working install does not nuke it.`,
 			return scaffoldHome(cmd, home)
 		},
 	}
-	cmd.Flags().StringVar(&scopeFlag, "scope", "", "user | project (default: user)")
-	cmd.Flags().StringVar(&projectFlag, "project", "", "explicit path to project root (implies --scope project)")
+	markScopeAware(cmd)
 	return cmd
 }
 
@@ -151,7 +151,7 @@ func scaffoldHome(cmd *cobra.Command, home string) error {
 	subs := []string{
 		"mcp", "marketplaces", "plugins",
 		"memory", "memory/fragments",
-		"skills", "agents", "commands", "hooks", "lsp",
+		"skills", source.SubagentsDir, "commands", "hooks", "lsp",
 		".state",
 	}
 	for _, sub := range subs {
@@ -190,7 +190,7 @@ const initialProjectAgentsyncTOML = `# agentsync project-scope config
 # share project-scoped agent config with collaborators.
 #
 # Author project components by adding files under this tree (mcp/<id>.toml,
-# skills/<name>/SKILL.md, agents/<name>.md, commands/<name>.md, hooks/<event>.toml,
+# skills/<name>/SKILL.md, subagents/<name>.md, commands/<name>.md, hooks/<event>.toml,
 # lsp/<id>.toml, memory/AGENTS.md) or capture existing native config with
 # 'agentsync import <agent> --scope project'.
 #
@@ -217,7 +217,7 @@ func scaffoldProjectHome(cmd *cobra.Command, root string) error {
 		return err
 	}
 	subs := []string{
-		"mcp", "lsp", "skills", "agents", "commands", "hooks",
+		"mcp", "lsp", "skills", source.SubagentsDir, "commands", "hooks",
 		"memory", "memory/fragments",
 	}
 	for _, sub := range subs {

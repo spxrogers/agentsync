@@ -192,10 +192,11 @@ func TestEmitSkipDetails_SanitizesUntrustedName(t *testing.T) {
 	}
 }
 
-// TestEmitPluginHeader_SanitizesUntrusted and TestRunExplainList_SanitizesUntrusted
-// guard the other two Sanitize call sites (the plugin header id+version, and the
-// `--list` text rows): both render fetched-marketplace metadata, so a refactor
-// that dropped the Sanitize wrap there must fail a test, not slip through.
+// TestEmitPluginHeader_SanitizesUntrusted guards the plugin header's Sanitize
+// call site (id + version): it renders fetched-marketplace metadata, so a
+// refactor that dropped the Sanitize wrap there must fail a test, not slip
+// through. (The `--list` rows this used to also cover are gone — `explain
+// --list` was dropped in #200 F2 as a duplicate of `plugin list`.)
 func TestEmitPluginHeader_SanitizesUntrusted(t *testing.T) {
 	var buf bytes.Buffer
 	pl := source.Plugin{Plugin: source.PluginSpec{ID: untrustedControl, Version: "1.0\r0"}}
@@ -209,25 +210,6 @@ func TestEmitPluginHeader_SanitizesUntrusted(t *testing.T) {
 	}
 	if !strings.Contains(out, "v1.00") { // "1.0\r0" with the CR stripped
 		t.Errorf("emitPluginHeader: sanitized version not rendered: %q", out)
-	}
-}
-
-func TestRunExplainList_SanitizesUntrusted(t *testing.T) {
-	var buf bytes.Buffer
-	p := ui.New(&buf, &buf, ui.ColorNever)
-	c := source.Canonical{Plugins: []source.Plugin{{
-		Plugin: source.PluginSpec{ID: untrustedControl, Version: "9\r9"},
-	}}}
-	if err := runExplainList(p, c, false); err != nil {
-		t.Fatalf("runExplainList: %v", err)
-	}
-	out := buf.String()
-	assertNoTerminalControl(t, "runExplainList", out)
-	if !strings.Contains(out, untrustedControlSanitized) {
-		t.Errorf("runExplainList: sanitized id not rendered: %q", out)
-	}
-	if !strings.Contains(out, "v99") { // "9\r9" with the CR stripped
-		t.Errorf("runExplainList: sanitized version not rendered: %q", out)
 	}
 }
 
@@ -280,7 +262,7 @@ func TestEmitSkipDetails_ColumnsAlignUnderColor(t *testing.T) {
 	offsets := make([]int, len(lines))
 	for i, line := range lines {
 		plain := stripANSI(line)
-		reason := skips[i].Reason
+		reason := skips[i].Reason.String()
 		idx := strings.Index(plain, reason)
 		if idx < 0 {
 			t.Fatalf("line %d missing reason %q after stripping ANSI: %q", i, reason, plain)

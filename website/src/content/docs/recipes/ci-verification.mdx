@@ -1,6 +1,6 @@
 ---
 title: Verify config in CI
-description: Run agentsync verify in a pipeline to catch invalid config and unresolved secret references before they reach a machine.
+description: Run agentsync check in a pipeline to catch invalid config and unresolved secret references before they reach a machine.
 sidebar:
   order: 3
 ---
@@ -10,11 +10,11 @@ import { Steps, Aside } from '@astrojs/starlight/components';
 **Goal:** fail a pipeline when your committed `~/.agentsync/` config is invalid or
 references a secret that doesn't exist — before it ever reaches a real machine.
 
-`verify` validates the config and surfaces every unresolved `${secret:…}` /
+`check` validates the config and surfaces every unresolved `${secret:…}` /
 `${env:…}` reference.
 
 ```bash
-agentsync verify
+agentsync check
 ```
 
 ## In CI without an age key
@@ -26,7 +26,7 @@ does **not** check that a well-formed reference actually resolves, which needs a
 run without the flag:
 
 ```bash
-AGENTSYNC_ALLOW_OFFLINE_VERIFY=1 agentsync verify
+AGENTSYNC_ALLOW_OFFLINE_VERIFY=1 agentsync check
 ```
 
 This still catches schema errors and malformed references — it just doesn't prove
@@ -34,11 +34,11 @@ the vault contains each key.
 
 ## A GitHub Actions example
 
-```yaml title=".github/workflows/agentsync-verify.yml"
-name: agentsync verify
+```yaml title=".github/workflows/agentsync-check.yml"
+name: agentsync check
 on: [push, pull_request]
 jobs:
-  verify:
+  check:
     runs-on: ubuntu-latest
     env:
       AGENTSYNC_HOME: ${{ github.workspace }}/.agentsync
@@ -49,17 +49,17 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go install github.com/spxrogers/agentsync/cmd/agentsync@latest
-      - run: agentsync verify
+      - run: agentsync check
 ```
 
 <Aside type="tip" title="Point AGENTSYNC_HOME at the repo">
 	If your dotfiles repo *is* `~/.agentsync/`, set `AGENTSYNC_HOME` to the checked-
-	out path so `verify` reads the committed config rather than a non-existent home
+	out path so `check` reads the committed config rather than a non-existent home
 	directory on the runner.
 </Aside>
 
-<Aside type="note" title="apply is for machines, verify is for CI">
+<Aside type="note" title="apply is for machines, check is for CI">
 	Don't `apply` in CI — it writes agent config to the runner's home directory,
-	which is throwaway. `verify` is the read-only, machine-independent check that
+	which is throwaway. `check` is the read-only, machine-independent validator that
 	belongs in a pipeline.
 </Aside>

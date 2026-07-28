@@ -20,8 +20,8 @@ func TestAgentAdd_AcquiresGlobalLock(t *testing.T) {
 }
 
 // TestPluginDisable_AcquiresGlobalLock is the regression for plugin mutators
-// (install/upgrade/enable/disable/remove) racing `update`'s locked rewrite of
-// the same plugins/<id>.toml.
+// (add/upgrade/enable/disable/remove) racing `plugin upgrade --all`'s locked
+// rewrite of the same plugins/<id>.toml.
 func TestPluginDisable_AcquiresGlobalLock(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}

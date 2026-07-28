@@ -9,7 +9,265 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (canonical layout): the subagent directory is now `subagents/`,
+  not `agents/`.** The canonical tree carried both the `[agents]` harness
+  registry (`agentsync.toml`) and the subagent files one directory apart — the
+  same word naming two different types. Only the **subagent** side moved. The
+  harness side is entirely unchanged: the `[agents]` TOML table, `--agents` on
+  `status`/`diff`/`mcp add`, `MCPServerSpec.Agents` / `LSPServerSpec.Agents`,
+  `statusModel.Agents` in `--json`, and the `agent` command group are all
+  exactly as before, so no `--json` consumer and no `agentsync.toml` key
+  breaks. What does change on disk: `~/.agentsync/agents/*.md` (and a project
+  tree's `<root>/.agentsync/agents/*.md`) move to `subagents/`, and the
+  `source_id` values recorded in `.state/targets.json` for subagents change
+  spelling with them. Rendered **destination** paths are untouched — every
+  harness still spells its own directory `agents/` (`~/.claude/agents/`,
+  `.cursor/agents/`, …), so the mapping is now deliberately asymmetric
+  (`subagents/reviewer.md` → `~/.claude/agents/reviewer.md`).
+  - **Migration: `agentsync migrate subagents`** (new command; add `--scope
+    project` / `--project <path>` for a project tree). It moves the files and
+    rewrites that tree's recorded `source_id` values in one step. Until a tree
+    is migrated, **every command that loads the source refuses** with a
+    distinguishable error naming the command, and `doctor` reports it as a
+    failing check with the fix. The refusal is deliberate rather than
+    permissive: an unmigrated tree loads with zero subagents, and a single
+    `apply` would then disown — and delete — every subagent already rendered.
+    Interactively the refusal offers to run the move; under `--no-input` (or
+    with no TTY) it hard-errors and names the command. A name present under
+    *both* directories refuses the whole migration, listing the collisions —
+    nothing is ever overwritten.
+- **`import` spells the subagent selector component `subagent`.** `agentsync
+  import opencode:subagent:reviewer` is the canonical form; `agent` stays
+  accepted as an alias, so existing invocations keep working.
+- **BREAKING (CLI): the noun groups share one verb set (#200 F4).**
+  - **`agentsync plugin install` is now `agentsync plugin add`** — every other
+    group creates with `add`, and `install` additionally read as "install it
+    into the agent", which is not what happens: agentsync registers and pins
+    the plugin, then fans its *components* out at apply. **No alias.**
+  - **`agentsync secrets` is now `agentsync secret`**, singular like every
+    other noun group. **No alias.**
+  - **New `mcp enable` / `mcp disable`.** `MCPServerSpec.enabled` already
+    existed and was already read by the loader, but the only way to flip it was
+    hand-editing the TOML — while `plugin` had had enable/disable all along.
+    `disable` keeps the definition and stops the render; `remove` deletes it.
+  - **New `secret list` and `secret remove`.** The vault was
+    write-and-read-one-key-at-a-time: answering "what's in here?" or deleting a
+    key meant `secret edit`, which decrypts the whole vault into `$EDITOR`.
+    `secret list` prints **keys only**, never values.
+- **A noun group now REJECTS an unknown subcommand** instead of printing help
+  and exiting 0. Cobra returns `ErrHelp` for a non-runnable parent before it
+  validates args, so `agentsync plugin install x` silently succeeded — which
+  would have made every hard rename in this release look like it still worked.
+
+- **Every peer component now has a read side (#200 F5).** `mcp` was the only
+  one of the eight with a management group, so "what skills do I have?" had no
+  answer short of `ls ~/.agentsync/skills`. `skill`, `subagent`, `command`,
+  `hook`, and `lsp` each gain `list` (and `ls`), scope-aware like the rest.
+  There is deliberately **no `add`**: unlike an MCP server none of these is
+  flag-authorable — a skill is a *directory*, a subagent a markdown file — so
+  you author them on disk or capture them with `import`.
+
+- **`--agents` is now the one "which agents" selector (#200 F10).** There were
+  four grammars for the same question, and the sharpest edge was that **`apply`
+  had none at all** — the daily loop is status → diff → reconcile → apply, so
+  the filter you used in the first three silently did not exist in the fourth.
+  `apply`, `status`, `diff`, `reconcile`, and `revert` now all take `--agents`,
+  routed through one parser so the split, the `*` convention, and the rejection
+  messages cannot drift. On `revert` it is a spelling of the positional form,
+  and `--agents` / a positional agent / `--all` stay mutually exclusive.
+- **`ls` and `rm` aliases (#200 F11)** on every `list` and `remove` subcommand.
+- **`secret get` now cautions when it prints to a terminal (#200 F11).** `set`
+  prompts with echo off and steers scripts to `--stdin`; `get` had no
+  counterpart hygiene. The value still goes to stdout undecorated — command
+  substitution keeps working — but when stdout is a TTY a stderr note points
+  out that it has just entered scrollback. Piped and redirected uses stay
+  silent.
+- **`import` and `reconcile` now cross-reference each other in `--help`
+  (#200 F9).** The boundary was correct but unnamed: import adopts config
+  agentsync does not manage yet, reconcile resolves a managed file that has
+  drifted.
+
+- **BREAKING (CLI): `agentsync verify` is now `agentsync check` (#200 F8).**
+  `verify` and `doctor` overlapped without a stated boundary. They are now
+  split along the axis they actually differ on: **`doctor` validates your
+  MACHINE** (PATH, home/state writability, adapter detection, secrets backend,
+  destination git state), **`check` validates your CONFIG** (schema lint plus
+  every `${secret:…}`/`${env:…}` reference, scope-aware). Reach for `doctor`
+  when something is set up wrong and `check` when something is written wrong.
+  Folding it into `doctor --config` was the other option on the table and was
+  declined: `check` is scope-aware and `doctor` is not, so a project-scope
+  config lint has no business inside a machine readiness report. **There is no
+  `verify` alias** — update CI pipelines (`AGENTSYNC_ALLOW_OFFLINE_VERIFY=1`
+  keeps its name, since it names the behavior rather than the command).
+
+- **`--scope` / `--project` are now root flags (#200 F6).** They were declared
+  by seven of seventeen commands and silently ignored by the rest — so
+  `agentsync mcp add … --scope project` looked accepted and wrote to the user
+  tree anyway, even though project-scope `mcp/*.toml` is a documented part of
+  the project layout. They are now declared once on the root and inherited
+  everywhere.
+  - **`mcp add` / `remove` / `list` are scope-aware**, closing that gap: they
+    author and read the project tree's `mcp/*.toml` when scoped to a project.
+  - **A command that cannot honor scope refuses it, with the reason** —
+    `doctor`, `revert`, `version`, and the `plugin` / `marketplace` / `secret`
+    groups all act on per-machine state. Inheriting the flags everywhere would
+    otherwise have moved the silent-ignore bug rather than fixed it, so every
+    command now declares a stance and `TestEveryCommandDeclaresScopeStance`
+    fails the build for one that doesn't.
+
+- **BREAKING (CLI): the plugin lifecycle verbs consolidated under `plugin`.**
+  Two general-purpose top-level names were held by plugin-scoped operations,
+  and `update` additionally collided with its own sibling `plugin upgrade`
+  while reading — per the `brew`/`apt`/`npm`/`rustup` priors — as "update the
+  tool itself".
+
+  | Before | After |
+  |---|---|
+  | `agentsync update` | `agentsync plugin outdated` |
+  | `agentsync update --apply` | `agentsync plugin upgrade --all` |
+  | `agentsync update --apply --auto-safe` | `agentsync plugin upgrade --all --lossless` |
+  | `agentsync explain <plugin>` | `agentsync plugin explain <plugin>` |
+  | `agentsync explain --list` | dropped — use `agentsync plugin list` |
+
+  **No aliases. None of the old spellings resolve** — each fails as an unknown
+  command, so a stale cron line or CI step breaks loudly rather than drifting.
+
+  - **`plugin upgrade` now re-applies, in BOTH forms.** `--all` carries over
+    `update --apply`'s complete re-apply (scope resolution, secret
+    substitution, plan/apply, state recording), so it is behavior-identical to
+    what `update --apply` did. The single-id `plugin upgrade <id>` gains that
+    same re-apply — a **behavior change**: it used to re-fetch and leave your
+    agents stale until the next `apply`. One verb, one ending state.
+  - **`--auto-safe` became `--lossless` on the plugin side**, because the name
+    meant two unrelated things: `reconcile --auto-safe` is about drift classes
+    that can't lose work, while the plugin one is about a candidate version
+    introducing no new adapter skip. `reconcile --auto-safe` is unchanged. A
+    bump excluded as lossy is reported, never silently dropped — and that
+    report now says `warning: lossless:` rather than the old `warning:
+    auto-safe:`, which named a flag the user could no longer pass.
+  - **`plugin outdated` is not read-only**, whatever the `npm outdated` prior
+    suggests, and its help says so: it re-fetches every marketplace (network)
+    and writes each one's fetch timestamp + head SHA to state, plus the
+    manifest-SHA tamper check.
+  - **`update` is removed outright — the deprecated forwarding alias was cut
+    before release.** An earlier draft of this change kept it for one minor,
+    on the reasoning that `update` is the spelling most likely to sit in a cron
+    line. That was reversed deliberately: it would have been the *only* alias
+    in a release whose entire point is that the renames are hard, and "no
+    aliases except this one" is a worse contract to remember than "no aliases".
+    Pre-1.0 is exactly when to take that break. A cron line calling `agentsync
+    update` now fails as an unknown command, which is the loud, one-time
+    failure — not a warning on stderr that a scheduler discards.
+
+### Added
+
+- **`agentsync explain <path>[#<pointer>]` — provenance for a destination
+  file.** `diff` answers "what changed"; this answers "where did this come
+  from", which is exactly the question a *converged* file (where `diff` is
+  empty) leaves you with — and the one a merged `~/.claude/settings.json`, part
+  agentsync's and part yours, makes genuinely hard. Per item it reports the
+  source of record, the plugin origin when the component came from a
+  projection, the adapter transform (what was reduced or dropped en route), the
+  ownership (`managed` / `untracked` / `foreign`), the drift class in the
+  classifier's own vocabulary, and which `${secret:…}`/`${env:…}` references
+  resolved there. `--json` emits the same data as a structured envelope.
+  - **Metadata only — it never prints destination content.** No key values, no
+    drift snippets. With nothing to redact it answers even when the secrets
+    vault is locked, where `diff` must fail closed rather than print cleartext
+    it cannot mask. The only secret-adjacent output is the *fact* that a
+    reference resolved at a location.
+  - **Per-key provenance is real, not the coarse recorded value.**
+    `state.KeyEntry.SourceID` inherits the op-level id, which for every MCP/hook
+    key-merge op is a `"<kind>/* (multiple)"` sentinel — the state file does not
+    say which `mcp/<id>.toml` produced `/mcpServers/github`. explain derives it
+    from the pointer shape instead.
+  - Memory decomposes to `memory/AGENTS.md` **plus its fragments** (the
+    SourceID alone names only `AGENTS.md`, which would under-report exactly the
+    provenance this command promises). Paths are symlink-resolved before
+    matching, project scope is inferred when the path lies inside a project
+    tree, output is grouped per owning agent (agents share destinations), and
+    an unmanaged or typo'd path is reported distinctly — with the nearest
+    managed path suggested — mirroring `diff [<path>]`.
+
+### Documentation
+
+- **`revert --strict` was documented but never existed.** `revert` registers
+  only `--to`, `--all`, and `--dry-run`; strictness follows the invocation
+  (naming an agent is strict, `--all` skips-with-a-warning). The user guide's
+  prose and command table now describe the shipped behavior instead of a flag.
+- **The v1.0 design spec's §"CLI surface" and §"Source repo layout" were
+  written pre-implementation and carried more fiction than the standing
+  "trust the code" warning covered.** Corrected in place: `agentsync skill
+  {add,remove,list}` and `mcp set` were never implemented (a skill is a
+  *directory*, and `mcp add` already overwrites); `apply --strict`/`--force`/
+  `--agent`, `--scope all`, and a slug-valued `--project` were never wired;
+  the layout block never listed `subagents/`, `commands/`, `hooks/`, or
+  `lsp/`; and "`update` is the only network-touching command" was false from
+  v1.0. The `[plugin.overrides.<agent>]` table and `apply --strict` are now
+  explicitly marked not-wired rather than reading as shipped.
+
 ### Fixed
+
+- **`agentsync explain` no longer prints a resolved secret through an adapter
+  skip reason.** `explain` renders from the secret-RESOLVED canonical (it must,
+  to hash the same bytes `apply` writes), and the Continue adapter interpolated
+  `%q` of an MCP server's `url` — a secret-bearing field — into a reduced-skip
+  reason. Those reasons are emitted as *metadata*, in both the text output and
+  `--json`, so `agentsync explain ~/.continue/mcpServers/<id>.yaml` printed the
+  live URL two lines above the literal text "(reference only; never the
+  value)". Skip reasons now name the offending FIELD and never its value —
+  `Component`+`Name` already identify the item. `adapter.Skip.Reason` documents
+  the rule and `TestSkipReasonsNeverCarrySecretValues` plants a canary in every
+  secret-bearing field and renders it through every registered adapter.
+  (`apply`'s translation report carried the same reason, so it is fixed there
+  too; `status`/`diff`/`check` render templated and were never affected.)
+
+- **`agentsync subagent list` refuses an unmigrated tree instead of reporting
+  zero.** The new component listings load tolerantly so a pending subagent
+  migration does not stop you listing skills — but `LoadTolerant` does not read
+  the legacy `agents/` directory, so the *subagent* listing printed "(no
+  subagents; author one by …)" to a user who had a dozen. That is the exact
+  silent-zero reading the fail-closed `source.Load` gate exists to prevent, and
+  it is worst of all in a listing, since that is the command a user runs to
+  check whether the upgrade ate their subagents. The subagent lister now gates
+  on `CheckSubagentLayout`; the other four stay tolerant on purpose.
+
+- **The subagent migration takes the global lock on every path.** `migrate
+  subagents` locked correctly, but the same mutation is reachable through the
+  interactive offer from `apply`/`import` — including `apply --dry-run`, which
+  is deliberately lock-free because it "touches neither destinations nor
+  state", and the read-only `status`/`diff`/`explain` paths. Those callers ran
+  an `os.Rename` loop plus a read-modify-write of `.state/targets.json`
+  unlocked. The lock now lives inside `runSubagentMigration`, covering every
+  caller by construction.
+
+- **`agentsync import <agent>:subagent` reports the path it actually wrote.**
+  It printed `agents/<name>.md` while `source.WriteSubagent` wrote
+  `subagents/<name>.md`, sending the user to a directory the import did not
+  create. (The test that covered it asserted a substring of the correct path,
+  so it passed either way — now pinned exactly.)
+
+- **Hints no longer name hard-renamed commands.** Five user-facing messages
+  still said `agentsync secrets …` — in the vault-write failure path, doctor's
+  missing-age-file warning, and both capture leak-backstop refusals — which,
+  with no alias, hands the user an unknown command at the moment they are
+  already stuck. `TestNoStaleRenamedCommandReferences` now fails the build on a
+  new one.
+
+- **Unmigrated-layout and collision errors sanitize the filenames they echo.**
+  Both take basenames off disk in what is routinely a *cloned* dotfiles repo
+  and printed them raw to a terminal; the interactive prompt for the same
+  condition already sanitized.
+
+- **Renamed hook events now invert to their canonical source file.**
+  `itemSourceFile` mapped a NATIVE key-merge pointer segment straight to
+  `hooks/<segment>.toml`, which for a renaming agent (gemini `BeforeTool`,
+  cursor `preToolUse`) is not the canonical event — a documented latent bug,
+  inert only because hook write-back is refused. `explain <path>#/hooks/…` is
+  the feature that made it live, so the mapping now translates through
+  `adapter.HookEventNamer`, and reconcile's write-back shares the fixed helper.
 
 - **`RelativeFetcher` (local-directory marketplaces) closes two symlink escapes
   of the marketplace-root containment check.** Containment was purely textual,
