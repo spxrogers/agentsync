@@ -209,7 +209,8 @@ func migrateSubagentTree(userAgentsyncHome, srcHome string, sc adapter.Scope, pr
 				"move %s → %s: %w. %d of %d file(s) were already moved and are correctly placed in %s; "+
 					"the rest remain in %s. Nothing was lost or overwritten — fix the cause and re-run "+
 					"`agentsync migrate subagents`, which resumes with the files still left behind",
-				from, to, err, i, len(names), newDir, legacyDir)
+				from, to, err, i, len(names), newDir, legacyDir,
+			)
 		}
 	}
 	// Drop the legacy directory once the move emptied it. A failure here is
