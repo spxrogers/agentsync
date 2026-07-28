@@ -12,11 +12,8 @@ import (
 // .state/last-run.json: renaming one re-shows its notice to every user who
 // already dismissed it, and duplicating one makes the second unreachable.
 //
-// This is an INTERNAL test on purpose. The first version reached the unexported
-// table through a hand-maintained `UpgradeNoticeView` copy in export_test.go —
-// which is the model-vs-artifact hazard CLAUDE.md names outright: a sixth field
-// added to upgradeNotice would be silently invisible to its own guard. Reading
-// the real struct removes the parallel model and the seam with it.
+// It is an INTERNAL test so it reads the real struct: a parallel view type in
+// export_test.go would hide a newly-added field from its own guard.
 func TestUpgradeNoticeTableIsWellFormed(t *testing.T) {
 	if len(upgradeNotices) == 0 {
 		t.Fatal("no notices defined; this guard would vacuously pass")
@@ -64,45 +61,44 @@ func TestEveryNoticeHasAnUpgradingDocsSection(t *testing.T) {
 	}
 }
 
-// TestUpgradeNoticeNamesEveryRetiredCommand pins the notice's actual CONTENT —
-// the one thing this feature exists to get right, and the one thing nothing
-// checked.
+// TestUpgradeNoticeNamesEveryRetiredCommand pins what the banner SAYS.
 //
-// The bug that motivated it shipped: after the top-level `update` command was
-// removed outright, the action line still read "`agentsync update` is
-// deprecated". Every guard stayed green. `upgrade_notice.go` is exempt from
-// TestNoStaleRenamedCommandReferences — it names old spellings for a living —
-// and that exemption is whole-file, so it can catch a MISSING mention but never
-// a WRONG one. A human caught it, on a banner whose entire audience is people
-// whose scripts just broke, and whose worst possible failure is telling them
-// their command still works for a while.
+// The motivating bug shipped: after the top-level `update` was removed, the
+// action line still read "`agentsync update` is deprecated". Every guard stayed
+// green, because `upgrade_notice.go` is exempt from the stale-command scan (it
+// names old spellings for a living) and that exemption is whole-file — it can
+// catch a MISSING mention, never a WRONG one.
 //
-// The assertion is on the OUTCOME, not on wording. A first attempt paired
-// "the line mentions the old name" with "no line says `deprecat`", and three
-// reviewers independently broke it in one try — "`agentsync update` still
-// works; an alias is kept for one more minor" satisfies both, and so does
-// naming a replacement that does not exist. A blocklist of bad phrasings is
-// unbounded ("legacy", "sunset", "will be removed in 0.12", "no action needed
-// yet"); requiring the line to say what to run INSTEAD is not, and it rules
-// out the whole class, since a line promising continuity has no reason to
-// name a replacement.
+// Two later attempts to pin it were each defeated on the first try, so the
+// shape below is chosen for what survived rather than for elegance:
 //
-// Three directions, all load-bearing:
+//   - "no line says `deprecat`" fell to "still works; an alias is kept for one
+//     more minor", and to a line naming a replacement that does not exist.
+//   - "the line must also name the replacement" fell to "`agentsync update`
+//     still works: it is now an alias for `agentsync plugin outdated` …", which
+//     names both by construction, and to a REVERSED line — "`agentsync check`
+//     … now spelled `agentsync verify`" — because an unordered co-occurrence
+//     test reads a backwards sentence as a correct one.
 //
-//   - Every retirement must be NAMED by some action line. One the banner omits
-//     is one the user meets as an unexplained "unknown command" — exactly what
-//     the banner exists to prevent.
-//   - The line that names it must also name EVERY replacement. "What broke"
-//     without "what to run instead" is half a notice, and it is the half that
-//     leaves the user stuck.
-//   - No action line may call anything deprecated. Kept as cheap
-//     defense-in-depth on the single phrasing that actually shipped; the
-//     replacement requirement above is what carries the weight.
+// So the assertion is on the RELATIONSHIP between the two names, not on their
+// presence and not on which words the line avoids:
 //
-// Matching goes through containsInvocation for the same reason the prose scan
-// does: `agentsync secret` is a strict prefix of `agentsync secrets`, and
-// "agentsync updates the cache" would otherwise satisfy the naming check
-// vacuously.
+//  1. Some action line names the retirement.
+//  2. On that line the old spelling comes BEFORE its replacements — the
+//     direction of the sentence is the claim it makes.
+//  3. The connector between them — the text that carries the actual meaning —
+//     must be one of a small ALLOWLIST of break phrases.
+//
+// Rule 3 is the load-bearing one, and it is an allowlist for the reason a
+// blocklist kept failing: "legacy", "sunset", "no action needed yet", "is now
+// an alias for" is an open set, while the ways agentsync is willing to say
+// "this is gone" is a closed one we control. A new phrasing fails this test,
+// and adding it here is a deliberate act a reviewer sees.
+//
+// It is still a structural approximation of a semantic contract. It cannot
+// judge a sentence that is well-formed and false. What it does guarantee is
+// that every retirement is named, points forward at a real replacement, and
+// says so in wording someone signed off on.
 func TestUpgradeNoticeNamesEveryRetiredCommand(t *testing.T) {
 	if len(upgradeNotices) == 0 || len(retirements) == 0 {
 		t.Fatal("no notices or no retirements; this guard would vacuously pass")
@@ -122,20 +118,24 @@ func TestUpgradeNoticeNamesEveryRetiredCommand(t *testing.T) {
 		if len(naming) == 0 {
 			t.Errorf("the upgrade notice never mentions `agentsync %s`, which was retired in favor of "+
 				"`%s`. A user whose script calls it gets no explanation — the notice is the only channel "+
-				"that reaches every install path, so an omission here is silent.", r.Old, r.replacements())
+				"that reaches every install path, so an omission here is silent.", r.Old, r.replacementPhrase())
 			continue
 		}
-		if !anyLineNamesAll(naming, r.New) {
-			t.Errorf("the upgrade notice mentions `agentsync %s` but no single line tells the user to run "+
-				"%s instead. A notice that says what broke without saying what replaces it leaves the "+
-				"reader exactly as stuck as no notice at all.\n    lines naming it: %s",
-				r.Old, r.replacements(), strings.Join(naming, "\n                     "))
+		if !anyLineRetires(naming, r) {
+			t.Errorf("no upgrade-notice line retires `agentsync %s` in favor of %s.\n"+
+				"The line must name the old spelling FIRST, then every replacement, joined by one of the "+
+				"sanctioned break phrases %v. A line that merely mentions both — or mentions them "+
+				"backwards, or calls the old one an alias that still works — reads to a user as a grace "+
+				"period they do not have.\n    lines naming it:\n      %s",
+				r.Old, r.replacementPhrase(), sanctionedBreakPhrases,
+				strings.Join(naming, "\n      "))
 		}
 	}
 
-	// Headlines are scanned too, not just actions: the headline is the most
-	// prominent line in the banner, so "these commands are deprecated" there
-	// would be read first and checked last.
+	// Headlines are scanned too: the headline is the most prominent line in the
+	// banner, so "these commands are deprecated" there would be read first and
+	// checked last. Cheap defense-in-depth on the one phrasing that shipped;
+	// the rules above are what carry the weight.
 	scanned := lines
 	for _, n := range upgradeNotices {
 		scanned = append(scanned, n.Headline)
@@ -150,23 +150,80 @@ func TestUpgradeNoticeNamesEveryRetiredCommand(t *testing.T) {
 	}
 }
 
-// anyLineNamesAll reports whether at least one line names every replacement.
-// It requires them on ONE line rather than across the set: a reader follows the
-// bullet about their broken command, not a union of all of them.
-func anyLineNamesAll(lines, replacements []string) bool {
+// sanctionedBreakPhrases is the closed set of ways the banner may say "this
+// spelling is gone". The connector between the old name and its replacement
+// must be exactly one of these, after normalization.
+//
+// Keep it short. Every entry is a promise about tone as well as meaning, and
+// the test exists precisely so that inventing a new one is a decision rather
+// than a slip.
+var sanctionedBreakPhrases = []string{
+	"is now",
+	"moved to",
+	"was removed (no alias) — use",
+}
+
+// anyLineRetires reports whether some line states the retirement: the old
+// spelling, then a sanctioned break phrase, then every replacement.
+func anyLineRetires(lines []string, r retirement) bool {
 	for _, line := range lines {
-		all := true
-		for _, rep := range replacements {
-			if !containsInvocation(line, "agentsync "+rep) {
-				all = false
-				break
-			}
-		}
-		if all {
+		if lineRetires(line, r) {
 			return true
 		}
 	}
 	return false
+}
+
+// lineRetires checks one line. It finds where the old spelling ends and where
+// the earliest replacement begins, requires that order, and requires the text
+// between them to be a sanctioned break phrase.
+func lineRetires(line string, r retirement) bool {
+	oldAt := strings.Index(line, "agentsync "+r.Old)
+	if oldAt < 0 {
+		return false
+	}
+	oldEnd := oldAt + len("agentsync "+r.Old)
+
+	first := -1
+	for _, rep := range r.Replacements {
+		// Every replacement must be named, and named AFTER the old spelling.
+		at := indexAfter(line, "agentsync "+rep, oldEnd)
+		if at < 0 || !containsInvocation(line[oldEnd:], "agentsync "+rep) {
+			return false
+		}
+		if first < 0 || at < first {
+			first = at
+		}
+	}
+	if first < 0 {
+		return false
+	}
+	connector := normalizeConnector(line[oldEnd:first])
+	for _, ok := range sanctionedBreakPhrases {
+		if connector == ok {
+			return true
+		}
+	}
+	return false
+}
+
+// indexAfter finds needle at or after off, returning an absolute index.
+func indexAfter(s, needle string, off int) int {
+	if off > len(s) {
+		return -1
+	}
+	i := strings.Index(s[off:], needle)
+	if i < 0 {
+		return -1
+	}
+	return off + i
+}
+
+// normalizeConnector reduces the text between an old spelling and its
+// replacement to comparable form: markdown backticks dropped, whitespace
+// collapsed, case folded.
+func normalizeConnector(s string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.ReplaceAll(s, "`", "")), " "))
 }
 
 // TestNoCommandIsNamedCompletion guards the one soft spot in the notice's
