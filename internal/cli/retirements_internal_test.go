@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"sort"
 	"strings"
 	"testing"
 
@@ -69,17 +70,66 @@ func (r retirement) topLevel() bool { return !strings.Contains(r.Old, " ") }
 // replacementPhrase renders Replacements for a failure message.
 func (r retirement) replacementPhrase() string { return strings.Join(r.Replacements, " / ") }
 
-// commandWords returns the replacement's command path with flags and
-// placeholders stripped, for resolving it against the cobra tree.
-func commandWords(invocation string) []string {
-	var words []string
+// splitInvocation separates a replacement into its command path and its flags.
+//
+// It stops collecting path words at the FIRST flag: everything after one is
+// flag-land, so `check --scope project` is the command `check` with a flag,
+// not a nonexistent `check project` subcommand. Placeholders (`<plugin>`,
+// `[id]`) are dropped from the path — they stand for user input, not commands.
+func splitInvocation(invocation string) (path, flags []string) {
+	inFlags := false
 	for _, w := range strings.Fields(invocation) {
-		if strings.HasPrefix(w, "-") || strings.HasPrefix(w, "<") || strings.HasPrefix(w, "[") {
-			continue
+		switch {
+		case strings.HasPrefix(w, "-"):
+			inFlags = true
+			flags = append(flags, strings.TrimLeft(w, "-"))
+		case inFlags:
+			// A flag's value, not a subcommand.
+		case strings.HasPrefix(w, "<"), strings.HasPrefix(w, "["):
+			// A placeholder for user input.
+		default:
+			path = append(path, w)
 		}
-		words = append(words, w)
 	}
-	return words
+	return path, flags
+}
+
+// TestRetirementsTableIsPinned is the completeness half.
+//
+// TestRetirementsTableIsWellFormed validates every row that is PRESENT. It says
+// nothing about a row that is absent, and deletion is the easier mutation —
+// a merge conflict resolved the wrong way, or someone "de-duplicating"
+// `secret`/`secrets`. Three reviewers independently deleted this table's
+// `secrets` row and watched the whole package stay green: that spelling then
+// vanished from the resurrection guard, the prose scan, AND the upgrade banner
+// at once, with nothing outside the table anchoring it.
+//
+// A pinned set is the same answer TestTopLevelCommandSurfaceIsPinned gives for
+// commands, for the same reason: this is a shipped, immutable fact about
+// v0.11.0, so changing it must be a deliberate edit a reviewer sees rather than
+// a silent consequence of touching something nearby. Retiring a command in a
+// LATER release means adding a row here, which is exactly the moment to also
+// add its banner line.
+func TestRetirementsTableIsPinned(t *testing.T) {
+	want := []string{
+		"explain <plugin>",
+		"plugin install",
+		"secrets",
+		"update",
+		"verify",
+	}
+	var got []string
+	for _, r := range retirements {
+		got = append(got, r.Old)
+	}
+	sort.Strings(got)
+	if strings.Join(got, " | ") != strings.Join(want, " | ") {
+		t.Fatalf("the retirements table changed.\n  have: %s\n  want: %s\n\n"+
+			"This table is the oracle for three guards, so a row silently leaving it un-guards that "+
+			"spelling everywhere at once. If the change is deliberate, update this list — and if you "+
+			"ADDED a retirement, add its line to upgradeNotices too, or the banner will never mention it.",
+			strings.Join(got, " | "), strings.Join(want, " | "))
+	}
 }
 
 // TestRetirementsTableIsWellFormed is the guard on the guards' own oracle.
@@ -112,10 +162,9 @@ func TestRetirementsTableIsWellFormed(t *testing.T) {
 		}
 		seen[r.Old] = true
 
-		// An empty Replacements is the dangerous shape: `anyLineNamesAll`'s
-		// inner loop never runs, so it returns true on the first line and the
-		// notice guard's whole "says what to run instead" half disappears for
-		// this row.
+		// An empty Replacements leaves the notice guard with nothing to require,
+		// so its "says what to run instead" half would have no content to check
+		// for this row.
 		if len(r.Replacements) == 0 {
 			t.Errorf("retirement %q lists no Replacements — the notice guard's "+
 				"names-the-replacement assertion silently passes for it", r.Old)
@@ -125,20 +174,33 @@ func TestRetirementsTableIsWellFormed(t *testing.T) {
 				t.Errorf("retirement %q has an empty replacement", r.Old)
 				continue
 			}
-			words := commandWords(rep)
-			if len(words) == 0 {
+			path, flags := splitInvocation(rep)
+			if len(path) == 0 {
 				t.Errorf("retirement %q replacement %q names no command", r.Old, rep)
 				continue
 			}
-			if !allWordsResolve(root, words) {
+			cmd, ok := resolveCommand(root, path)
+			if !ok {
 				t.Errorf("retirement %q points at `agentsync %s`, which does not resolve to a command.\n"+
 					"The banner would send an already-broken user to a second broken command.", r.Old, rep)
+				continue
+			}
+			// The flags matter as much as the command: `plugin upgrade --all`
+			// is useless advice if --all stops existing, and stripping flags
+			// before resolving would hide that.
+			for _, f := range flags {
+				if cmd.Flags().Lookup(f) == nil && cmd.InheritedFlags().Lookup(f) == nil {
+					t.Errorf("retirement %q points at `agentsync %s`, but `%s` has no --%s flag.\n"+
+						"The banner would hand an already-broken user a command that errors on its flags.",
+						r.Old, rep, cmd.CommandPath(), f)
+				}
 			}
 		}
 
 		// FailsAsUnknown is a claim about the world, so check it against the
 		// world: walk Old down the tree and see whether every word resolves.
-		resolves := allWordsResolve(root, commandWords(r.Old))
+		oldPath, _ := splitInvocation(r.Old)
+		_, resolves := resolveCommand(root, oldPath)
 		if r.FailsAsUnknown == resolves {
 			t.Errorf("retirement %q declares FailsAsUnknown=%v, but `agentsync %s` %s in the command tree.\n"+
 				"That flag decides whether the prose scan guards this spelling, so a wrong value "+
@@ -146,20 +208,19 @@ func TestRetirementsTableIsWellFormed(t *testing.T) {
 				r.Old, r.FailsAsUnknown, r.Old,
 				map[bool]string{true: "DOES resolve", false: "does NOT resolve"}[resolves])
 		}
-
-		if got, want := r.topLevel(), !strings.Contains(r.Old, " "); got != want {
-			t.Errorf("retirement %q: topLevel() disagrees with its own derivation", r.Old)
-		}
 	}
 }
 
-// allWordsResolve reports whether every word of a command path resolves in the
-// tree. cobra's Find returns the deepest match plus the leftover args rather
-// than an error for an unknown SUBcommand, so the leftovers are what matter.
-func allWordsResolve(root *cobra.Command, words []string) bool {
-	if len(words) == 0 {
-		return false
+// resolveCommand resolves a command path in the tree. cobra's Find returns the
+// deepest match plus the leftover args rather than an error for an unknown
+// SUBcommand, so the leftovers are what decide it.
+func resolveCommand(root *cobra.Command, path []string) (*cobra.Command, bool) {
+	if len(path) == 0 {
+		return nil, false
 	}
-	cmd, rest, err := root.Find(words)
-	return err == nil && cmd != nil && len(rest) == 0
+	cmd, rest, err := root.Find(path)
+	if err != nil || cmd == nil || len(rest) > 0 {
+		return nil, false
+	}
+	return cmd, true
 }

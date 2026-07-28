@@ -164,9 +164,8 @@ func containsInvocation(line, old string) bool {
 	}
 }
 
-// isWordByte reports whether b continues a command word: ASCII letters, digits,
-// hyphen, and underscore — the characters a command or flag name is spelled
-// from.
+// isWordByte reports whether b continues a command word: ASCII letters, digits
+// and hyphen — the characters a command or flag name is spelled from.
 //
 // It has to do two jobs. Ending the word at a non-word byte is what separates
 // `agentsync update --apply` (an invocation) from `agentsync updates the native
@@ -175,12 +174,17 @@ func containsInvocation(line, old string) bool {
 // one: without it, `agentsync plugin upgrade --all-agents` would count as
 // naming `agentsync plugin upgrade --all`, which the notice guard relies on.
 //
+// Underscore is deliberately NOT in the class, though it is a legal identifier
+// byte: markdown writes emphasis as _agentsync update_, and this repo uses that
+// form, so including it made a real stale reference invisible. `update_all` is
+// not a command anyone writes; _agentsync update_ is a sentence someone does.
+//
 // A non-ASCII continuation (`agentsync verifyé`) reads as a boundary and is
 // therefore matched. That is the safe direction — a false positive is a
 // reviewer conversation, a false negative is a broken command left in a doc.
 func isWordByte(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') ||
-		(b >= '0' && b <= '9') || b == '-' || b == '_'
+		(b >= '0' && b <= '9') || b == '-'
 }
 
 // TestContainsInvocation exercises the matcher directly.
@@ -227,7 +231,8 @@ func TestContainsInvocation(t *testing.T) {
 		// none of these is the retired command.
 		{"hyphenated", "agentsync verify-ish", "agentsync verify", false},
 		{"digit suffix", "agentsync update2", "agentsync update", false},
-		{"underscore suffix", "agentsync update_all", "agentsync update", false},
+		// Markdown emphasis must still be caught: underscore is not a word byte.
+		{"markdown italics", "see _agentsync update_ for the nightly refresh", "agentsync update", true},
 		// The reason the hyphen is in the class: a longer flag must not satisfy
 		// a shorter one, which the upgrade-notice guard depends on.
 		{"longer flag", "run `agentsync plugin upgrade --all-agents`", "agentsync plugin upgrade --all", false},
@@ -334,9 +339,7 @@ var generatedWebsiteDocs = map[string]bool{
 // The generated website copies are skipped by exact path (generatedWebsiteDocs).
 // They are rendered from docs/*.md at build time and gitignored, so a stale
 // line in one is really a stale line in docs/ — reporting both sends the reader
-// to fix the build output. An earlier version of this comment claimed they were
-// excluded when the walk only skipped by DIRECTORY name, so every one of them
-// was in fact scanned and double-reported.
+// to fix the build output..
 func walkRepoDocs(root string, fn func(rel, src string)) error {
 	var walk func(dir string) error
 	walk = func(dir string) error {
