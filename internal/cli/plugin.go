@@ -305,7 +305,7 @@ func newPluginUpgradeCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "upgrade [<id>]",
-		Short: "(network) re-fetch a plugin (or every pending bump) and run apply",
+		Short: "(network, mutates) re-fetch a plugin (or every pending bump) and run apply",
 		Long: `upgrade re-fetches a plugin, updates its recorded version + manifest sha,
 and re-applies the result to your agents so the upgrade lands in the same
 command.
