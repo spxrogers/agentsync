@@ -2,7 +2,6 @@ package cli_test
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -14,89 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spxrogers/agentsync/internal/cli"
 	"github.com/spxrogers/agentsync/internal/ui"
 )
-
-// ---------------------------------------------------------------------------
-// The terminal error line (#211)
-// ---------------------------------------------------------------------------
-
-// The exact failure from the issue: `agentsync status` exits 1 and the last
-// thing printed is the error. It used to be a flat, unlabeled, uncolored
-// `agentsync: render codex: …` sitting directly below a WARN — nothing marked
-// it as the failure. It must now carry the ERROR label.
-func TestReportError_CarriesTheErrorLabel(t *testing.T) {
-	var buf bytes.Buffer
-	code := cli.ReportErrorTo(&buf, ui.ColorNever, errors.New(
-		`render codex: codex subagents "code-reviewer" and "code-reviewer" resolve to the same agent name`,
-	))
-
-	if code != 1 {
-		t.Fatalf("ReportErrorTo exit code = %d, want 1", code)
-	}
-	got := buf.String()
-	if !strings.HasPrefix(got, "✗ ERROR  ") {
-		t.Fatalf("terminal error must lead with the ERROR label; got: %q", got)
-	}
-	if strings.Contains(got, "agentsync:") {
-		t.Fatalf("the redundant program prefix should be gone; got: %q", got)
-	}
-	if !strings.Contains(got, "resolve to the same agent name") {
-		t.Fatalf("the error message body was lost; got: %q", got)
-	}
-}
-
-// With color on, the label is red — the second signal (after the glyph and the
-// word) that separates a failure from the warning above it.
-func TestReportError_ColorsTheLabel(t *testing.T) {
-	var buf bytes.Buffer
-	cli.ReportErrorTo(&buf, ui.ColorAlways, errors.New("boom"))
-	if !strings.Contains(buf.String(), "\x1b[31m") {
-		t.Fatalf("colored terminal error is missing red: %q", buf.String())
-	}
-}
-
-// The quiet exit-code sentinel (`status --exit-code`, `diff --exit-code`)
-// carries its own code and an empty message: it must map to that code and print
-// NOTHING, so a CI gate gets a stable non-zero exit with no spurious line.
-func TestReportError_QuietSentinelPrintsNothing(t *testing.T) {
-	var buf bytes.Buffer
-	code := cli.ReportErrorTo(&buf, ui.ColorNever, quietExit(3))
-	if code != 3 {
-		t.Fatalf("exit code = %d, want the sentinel's 3", code)
-	}
-	if buf.Len() != 0 {
-		t.Fatalf("quiet sentinel must print nothing; got: %q", buf.String())
-	}
-}
-
-func TestReportError_NilIsZeroAndSilent(t *testing.T) {
-	var buf bytes.Buffer
-	if code := cli.ReportErrorTo(&buf, ui.ColorNever, nil); code != 0 || buf.Len() != 0 {
-		t.Fatalf("nil error: code=%d out=%q, want 0 and empty", code, buf.String())
-	}
-}
-
-// quietExitErr mirrors the shape of the status/diff sentinel: an error whose
-// message is empty and which reports its own process exit code.
-type quietExitErr int
-
-func (q quietExitErr) Error() string { return "" }
-func (q quietExitErr) ExitCode() int { return int(q) }
-
-func quietExit(code int) error { return quietExitErr(code) }
-
-// The sentinel must be found through a wrapper too — commands wrap errors on
-// the way up, and a `%w`-wrapped sentinel that stopped being recognized would
-// turn a clean CI gate into a spurious ERROR line.
-func TestReportError_QuietSentinelThroughWrapper(t *testing.T) {
-	var buf bytes.Buffer
-	code := cli.ReportErrorTo(&buf, ui.ColorNever, fmt.Errorf("status: %w", quietExit(2)))
-	if code != 2 || buf.Len() != 0 {
-		t.Fatalf("wrapped sentinel: code=%d out=%q, want 2 and empty", code, buf.String())
-	}
-}
 
 // ---------------------------------------------------------------------------
 // The guard: no new ad-hoc diagnostic prefixes
@@ -294,6 +212,14 @@ func TestSweptDirsCoverTheEmitters(t *testing.T) {
 	for dir, covered := range must {
 		if !covered {
 			t.Errorf("%s dropped out of sweptDirs — that reopens the hole this guard exists to close", dir)
+		}
+	}
+	// A floor of 0 would make the per-directory check vacuous, so an entry could be
+	// neutered (rather than removed) without tripping the membership pin above.
+	for _, sd := range sweptDirs {
+		if sd.minFiles < 1 {
+			t.Errorf("sweptDirs entry %q has minFiles=%d; a floor below 1 cannot detect a "+
+				"moved or renamed directory", sd.dir, sd.minFiles)
 		}
 	}
 }

@@ -1137,9 +1137,13 @@ vacuous, and passing green proves neither is absent.**
 
 1. *Wrong files.* The sweep first globbed `*.go` relative to the working
    directory — but `internal/cli`'s `TestMain` chdirs to a scratch dir, so it
-   matched nothing. It now resolves the repo root from `runtime.Caller`, requires
-   every swept directory to be non-empty, and asserts a floor on the total file
-   count.
+   matched nothing. It now resolves the repo root from `runtime.Caller` and holds a
+   PER-DIRECTORY file-count floor. Per-directory matters: an aggregate floor cannot
+   defend this list, because `internal/cli` has ~31 non-test files and
+   `cmd/agentsync` has one — deleting the `cmd/agentsync` entry left 31 files and
+   cleared any total-count floor, silently reopening the hole below.
+   `TestSweptDirsCoverTheEmitters` pins the directory set itself, since a floor
+   catches a directory going empty but not an entry being removed.
 2. *Wrong matcher.* Even after that, it compared literals for *equality*, so it
    passed with the verbatim #211 emitter —
    `fmt.Fprintln(os.Stderr, "agentsync:", err)` — restored to `main()`: that file

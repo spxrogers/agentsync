@@ -229,7 +229,7 @@ func TestWarnPathsAreByteIdentical(t *testing.T) {
 // always/never force both the same way. Only a real terminal-plus-redirect gets
 // here, which is the case that shipped the bug.
 func splitStreamPrinter(out, errw io.Writer) *Printer {
-	return &Printer{Out: out, Err: errw, color: true, colorErr: false, mode: ColorAuto}
+	return &Printer{Out: out, Err: errw, color: true, colorErr: false}
 }
 
 // The bug this pins: color was resolved once from Out and reused for Err, so
@@ -377,73 +377,108 @@ func TestLevelOutOfRangeIsNamedHonestly(t *testing.T) {
 	}
 }
 
-// fdProbe is a writer that reports an Fd (so isTerminal's type assertion
-// succeeds) and records that it was asked. The fd is deliberately invalid, so
-// term.IsTerminal says "not a terminal" — what is being observed is WHICH streams
-// New probes, not the answer.
-type fdProbe struct {
-	io.Writer
-	probed *int
+// withTerminalCheck overrides the TTY probe for the duration of a test, so the two
+// streams can be made to answer DIFFERENTLY — the only way to observe a per-stream
+// color decision, since two in-memory buffers never diverge under `auto`.
+func withTerminalCheck(t *testing.T, fn func(io.Writer) bool) {
+	t.Helper()
+	prev := terminalCheck
+	terminalCheck = fn
+	t.Cleanup(func() { terminalCheck = prev })
 }
 
-func (f fdProbe) Fd() uintptr {
-	*f.probed++
-	// ^uintptr(0) → int(-1): never a valid descriptor, so IsTerminal is false
-	// without touching any real file.
-	return ^uintptr(0)
-}
-
-// New must resolve the color decision ONCE PER STREAM.
+// New must resolve the color decision once PER STREAM, and assign each result to
+// the RIGHT field.
 //
-// This is the assertion that was missing: the split-stream tests above build a
-// Printer as a struct literal, because two in-memory buffers cannot produce
-// divergent `auto` decisions (isTerminal is false for both). So they verify that a
-// divergence is HONORED, but not that New ever computes one — and with only those,
-// changing `colorErr: resolveColor(err, mode)` to resolve from `out` again broke
-// nothing. Verified by making that exact edit.
-//
-// Observing the probe count is the way in: one probe per stream means each stream's
-// TTY-ness was asked about independently.
-func TestNewResolvesColorPerStream(t *testing.T) {
-	// NO_COLOR disables color for ANY value, including empty, and it short-circuits
-	// before the isTerminal probe this test observes — so it must be genuinely
-	// ABSENT, not empty. t.Setenv registers the restore; Unsetenv does the removal.
+// An earlier version of this test counted Fd() probes, which was not enough: it
+// caught "resolved once and reused", but a SWAP —
+// `color: resolveColor(err), colorErr: resolveColor(out)` — probes each stream
+// exactly once and passed. That swap reproduces the original bug exactly (ANSI
+// into a redirected stderr), so the test was blind to the very thing it existed to
+// prevent. Forcing the two streams to answer differently is what closes it.
+func TestNewResolvesColorPerStreamAndDoesNotSwapThem(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	if err := os.Unsetenv("NO_COLOR"); err != nil {
 		t.Fatal(err)
 	}
+	var out, errb bytes.Buffer
+	// Only Out is a "terminal": the redirected-stderr case that shipped the bug.
+	withTerminalCheck(t, func(w io.Writer) bool { return w == io.Writer(&out) })
 
-	var outProbes, errProbes int
-	out := fdProbe{Writer: &bytes.Buffer{}, probed: &outProbes}
-	errw := fdProbe{Writer: &bytes.Buffer{}, probed: &errProbes}
+	p := New(&out, &errb, ColorAuto)
 
-	_ = New(out, errw, ColorAuto)
-
-	if outProbes != 1 {
-		t.Errorf("Out was probed %d times, want exactly 1", outProbes)
+	if !p.color {
+		t.Error("Out is a terminal but p.color is false — the streams are swapped or Out was not probed")
 	}
-	if errProbes != 1 {
-		t.Errorf("Err was probed %d times, want exactly 1 — a single decision reused "+
-			"across both streams is the bug this guards", errProbes)
+	if p.colorErr {
+		t.Error("Err is redirected but p.colorErr is true — the streams are swapped, or one decision was reused for both")
+	}
+
+	// And the mirror case, so neither field can be hardcoded.
+	withTerminalCheck(t, func(w io.Writer) bool { return w == io.Writer(&errb) })
+	q := New(&out, &errb, ColorAuto)
+	if q.color {
+		t.Error("Out is redirected but q.color is true")
+	}
+	if !q.colorErr {
+		t.Error("Err is a terminal but q.colorErr is false")
 	}
 }
 
 // The forced modes must NOT probe either stream: --color=always/never is the
-// user's explicit override, and consulting the terminal would be wrong (and, for
-// a closed descriptor, potentially a syscall on a stale fd).
+// user's explicit override, and consulting the terminal would be wrong (and, for a
+// closed descriptor, a syscall on a stale fd).
 func TestForcedColorModesDoNotProbeTheStreams(t *testing.T) {
 	for _, mode := range []ColorMode{ColorAlways, ColorNever} {
-		var outProbes, errProbes int
-		out := fdProbe{Writer: &bytes.Buffer{}, probed: &outProbes}
-		errw := fdProbe{Writer: &bytes.Buffer{}, probed: &errProbes}
+		probed := 0
+		withTerminalCheck(t, func(io.Writer) bool { probed++; return true })
 
-		p := New(out, errw, mode)
-		if outProbes != 0 || errProbes != 0 {
-			t.Errorf("mode %v probed the streams (out=%d err=%d); a forced mode must not", mode, outProbes, errProbes)
+		p := New(&bytes.Buffer{}, &bytes.Buffer{}, mode)
+		if probed != 0 {
+			t.Errorf("mode %v probed the streams %d time(s); a forced mode must not", mode, probed)
 		}
-		// And both streams agree, since the override applies to everything.
 		if p.color != p.colorErr {
 			t.Errorf("mode %v produced divergent decisions (out=%v err=%v)", mode, p.color, p.colorErr)
 		}
+	}
+}
+
+// uncomparableWriter holds a func, making it uncomparable at VALUE level.
+type uncomparableWriter struct{ fn func() }
+
+func (uncomparableWriter) Write(b []byte) (int, error) { return len(b), nil }
+
+// embeddingWriter is statically comparable — reflect.Type.Comparable() reports
+// true, because an interface-typed field's comparability is only knowable from the
+// value it holds. That is precisely why the type-level guard did not work.
+type embeddingWriter struct{ io.Writer }
+
+// sameWriter must not panic on an uncomparable dynamic type. The first version of
+// this guard used reflect.Type.Comparable() and DID panic on the case below —
+// while the CLI was reporting an error, the worst possible moment.
+func TestSameWriterSurvivesUncomparableWriters(t *testing.T) {
+	cases := []struct {
+		name string
+		w    io.Writer
+	}{
+		{"directly uncomparable", uncomparableWriter{fn: func() {}}},
+		{"uncomparable behind a statically-comparable wrapper", embeddingWriter{Writer: uncomparableWriter{fn: func() {}}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Passing the same value as both arguments is the worst case: the type
+			// check matches, so only the comparability check stands between this and
+			// a runtime panic.
+			if sameWriter(tc.w, tc.w) {
+				t.Error("an uncomparable writer must report 'not the same' rather than being compared")
+			}
+			// And through the real call path: a Printer whose streams are that
+			// writer, emitting a diagnostic.
+			p := New(tc.w, tc.w, ColorNever)
+			p.Fdiagf(tc.w, LevelError, "must not panic")
+			p.Fsuccessf(tc.w, EmojiSuccess, "must not panic")
+			w := NewWarnWriter(tc.w, p)
+			fmt.Fprintf(w, "warning: %s\n", "must not panic")
+		})
 	}
 }

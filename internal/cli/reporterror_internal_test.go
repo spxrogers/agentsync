@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -89,10 +90,10 @@ func TestPersistentPreRunInstallsDespiteInvalidColor(t *testing.T) {
 
 func TestReportErrorToHonorsColorMode(t *testing.T) {
 	var colored, plain bytes.Buffer
-	if code := ReportErrorTo(&colored, ui.ColorAlways, errors.New("boom")); code != 1 {
+	if code := reportErrorTo(&colored, ui.ColorAlways, errors.New("boom")); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
-	if code := ReportErrorTo(&plain, ui.ColorNever, errors.New("boom")); code != 1 {
+	if code := reportErrorTo(&plain, ui.ColorNever, errors.New("boom")); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
 	if !strings.Contains(colored.String(), "\x1b[") {
@@ -112,7 +113,7 @@ func TestReportErrorToHonorsColorMode(t *testing.T) {
 // \x1b introduces an arbitrary escape sequence.
 func TestReportErrorSanitizesTheErrorChain(t *testing.T) {
 	var buf bytes.Buffer
-	ReportErrorTo(&buf, ui.ColorNever, errors.New("render codex: subagent \"a\rb\x1b]0;pwned\x07\" is bad"))
+	reportErrorTo(&buf, ui.ColorNever, errors.New("render codex: subagent \"a\rb\x1b]0;pwned\x07\" is bad"))
 
 	got := buf.String()
 	for _, bad := range []string{"\r", "\x1b]", "\x07"} {
@@ -133,7 +134,7 @@ func TestReportErrorSanitizesTheErrorChain(t *testing.T) {
 // message-column indentation.
 func TestReportErrorKeepsMultiLineStructure(t *testing.T) {
 	var buf bytes.Buffer
-	ReportErrorTo(&buf, ui.ColorNever, errors.New("first line\nsecond line"))
+	reportErrorTo(&buf, ui.ColorNever, errors.New("first line\nsecond line"))
 	got := buf.String()
 	if !strings.Contains(got, "first line\n") || !strings.Contains(got, "second line") {
 		t.Fatalf("multi-line error was collapsed: %q", got)
@@ -147,3 +148,60 @@ func TestReportErrorKeepsMultiLineStructure(t *testing.T) {
 // pre-run installs. Deliberately not a *slog.Logger built here: the point is to
 // observe whatever handler the root command left installed.
 func slogWarnForTest(msg string) { slog.Warn(msg) }
+
+// The exact failure from #211: `agentsync status` exits 1 and the last thing
+// printed is the error. It used to be a flat, unlabeled, uncolored
+// `agentsync: render codex: …` sitting directly below a WARN, with nothing marking
+// it as the failure.
+func TestReportErrorCarriesTheErrorLabel(t *testing.T) {
+	var buf bytes.Buffer
+	code := reportErrorTo(&buf, ui.ColorNever, errors.New(
+		`render codex: codex subagents "code-reviewer" and "code-reviewer" resolve to the same agent name`,
+	))
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	got := buf.String()
+	if !strings.HasPrefix(got, "✗ ERROR  ") {
+		t.Fatalf("terminal error must lead with the ERROR label; got: %q", got)
+	}
+	if strings.Contains(got, "agentsync:") {
+		t.Fatalf("the redundant program prefix should be gone; got: %q", got)
+	}
+	if !strings.Contains(got, "resolve to the same agent name") {
+		t.Fatalf("the error message body was lost; got: %q", got)
+	}
+}
+
+// The quiet exit-code sentinel (`status --exit-code`, `diff --exit-code`) carries
+// its own code and an empty message: it must map to that code and print NOTHING,
+// so a CI gate gets a stable non-zero exit with no spurious diagnostic line. It
+// must be found through a `%w` wrapper too, since commands wrap on the way up.
+func TestReportErrorQuietSentinel(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"direct", quietExitErr(3), 3},
+		{"wrapped", fmt.Errorf("status: %w", quietExitErr(2)), 2},
+		{"nil", nil, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if code := reportErrorTo(&buf, ui.ColorNever, tc.err); code != tc.want {
+				t.Fatalf("exit code = %d, want %d", code, tc.want)
+			}
+			if buf.Len() != 0 {
+				t.Fatalf("must print nothing; got: %q", buf.String())
+			}
+		})
+	}
+}
+
+// quietExitErr mirrors the status/diff sentinel: an empty message plus its own
+// process exit code.
+type quietExitErr int
+
+func (q quietExitErr) Error() string { return "" }
+func (q quietExitErr) ExitCode() int { return int(q) }

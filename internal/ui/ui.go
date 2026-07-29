@@ -120,7 +120,6 @@ type Printer struct {
 	// the common path for ~170 emission sites and for SlogHandler.
 	color    bool
 	colorErr bool
-	mode     ColorMode
 }
 
 // New builds a Printer bound to out/err, resolving whether to emit color from
@@ -132,7 +131,6 @@ func New(out, err io.Writer, mode ColorMode) *Printer {
 		Err:      err,
 		color:    resolveColor(out, mode),
 		colorErr: resolveColor(err, mode),
-		mode:     mode,
 	}
 }
 
@@ -164,27 +162,35 @@ func (p *Printer) withColor(color bool) *Printer {
 	if p.color == color {
 		return p
 	}
-	return &Printer{Out: p.Out, Err: p.Err, color: color, colorErr: p.colorErr, mode: p.mode}
+	return &Printer{Out: p.Out, Err: p.Err, color: color, colorErr: p.colorErr}
 }
 
 // sameWriter reports whether two io.Writer values are the same writer.
 //
 // It does NOT just use `a == b`. Comparing interface values panics at runtime
 // when the dynamic type is not comparable (a struct containing a slice, map, or
-// func) — and this runs on every diagnostic line, so a panic here would take
-// down the CLI while it was trying to report an error, which is the worst
-// possible place for one. No writer in this repo is uncomparable today; the
-// guard costs one reflect.TypeOf and removes the hazard permanently.
+// func) — and this runs on every diagnostic line, so a panic here would take down
+// the CLI while it was trying to report an error, which is the worst possible
+// place for one.
+//
+// reflect.VALUE.Comparable(), not reflect.TYPE.Comparable(). The distinction is
+// the whole correctness of this function and it is easy to get backwards — the
+// first version of this guard used the type-level check and still panicked. A
+// struct with an `io.Writer` FIELD is statically comparable (Type.Comparable()
+// reports true), because comparability of an interface-typed field is only
+// decidable from the value it holds at runtime. So `struct{ io.Writer }` wrapping
+// a func-holding writer sails past the type check and panics on `==`.
+// Value.Comparable() inspects the actual dynamic contents and answers correctly.
 //
 // Two values of different dynamic types can never be equal, so a type mismatch
-// short-circuits. An uncomparable matching type reports "not the same writer",
-// which degrades to the caller's documented fallback rather than crashing.
+// short-circuits first. An uncomparable value reports "not the same writer",
+// degrading to the caller's documented fallback rather than crashing.
 func sameWriter(a, b io.Writer) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	ta, tb := reflect.TypeOf(a), reflect.TypeOf(b)
-	if ta != tb || !ta.Comparable() {
+	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	if va.Type() != vb.Type() || !va.Comparable() || !vb.Comparable() {
 		return false
 	}
 	return a == b
@@ -209,9 +215,21 @@ func resolveColor(out io.Writer, mode ColorMode) bool {
 		if _, ok := os.LookupEnv("NO_COLOR"); ok {
 			return false
 		}
-		return isTerminal(out)
+		return terminalCheck(out)
 	}
 }
+
+// terminalCheck is the TTY probe resolveColor uses, indirected through a variable
+// so a test can make the two streams answer DIFFERENTLY.
+//
+// That capability is not a convenience — it is the only way to test the invariant
+// this package got wrong once already. Two in-memory buffers can never diverge
+// under `auto` (isTerminal is false for both), and the forced modes force both the
+// same way. So a test that cannot override this cannot distinguish "resolved per
+// stream" from "resolved once and reused", nor from the two assignments being
+// SWAPPED — and the swap reproduces the original bug exactly (ANSI into a
+// redirected stderr) while probing each stream exactly once.
+var terminalCheck = isTerminal
 
 // isTerminal reports whether w is backed by a terminal. A *bytes.Buffer / pipe
 // (tests, redirects) has no Fd and is therefore plain — which is exactly what
@@ -330,9 +348,9 @@ func (s *WarnWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Flush emits any buffered partial line (no trailing \n) as-is. Call at end of
-// command if you've routed a writer that may not always end in \n; the import
-// path does always terminate, so this is defensive.
+// Flush drains any buffered partial line, TERMINATING it. Call at end of command
+// if you've routed a writer that may not always end in \n; every emitter today
+// does terminate its lines, so this is defensive.
 func (s *WarnWriter) Flush() {
 	if len(s.buf) == 0 {
 		return

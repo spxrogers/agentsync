@@ -520,13 +520,24 @@ line, which must not interleave) and returns write errors rather than swallowing
 them. The `slog.Warn` / `WarnWriter` / `p.Warnf` triple being byte-identical is
 pinned by `TestWarnPathsAreByteIdentical`.
 
-**Who sanitizes.** `SlogHandler.Handle` and `cli.ReportError` sanitize their own
-input, because neither has a call site that could: a log record and a wrapped
-error chain are both assembled elsewhere. Everywhere else the **caller** applies
-`ui.Sanitize` at the display boundary, as the rest of this codebase does — the
-`Diagf`/`Detailf`/`Successf` family deliberately does not, so a caller can pass
-pre-styled text (the upgrade-notice banner composes `p.Bold`/`p.Yellow` fragments
-into a `Warnf`) without having its own escape codes stripped.
+**Who sanitizes.** `SlogHandler.Handle` and `cli.Execute`'s terminal error line
+sanitize their own input, because neither has a call site that could: a log record
+and a wrapped error chain are both assembled elsewhere. Everywhere else the
+**caller** applies `ui.Sanitize` at the display boundary, as the rest of this
+codebase does — the `Diagf`/`Detailf`/`Successf` family deliberately does not, so a
+caller can pass pre-styled text (the upgrade-notice banner composes
+`p.Bold`/`p.Yellow` fragments into a `Warnf`) without having its own escape codes
+stripped.
+
+`WarnWriter` sits between those two cases and is worth naming explicitly, because
+it looks like the first and behaves like the second: its input comes from the
+adapter and capture packages, which *cannot* call `ui.Sanitize` (they must not
+import `ui` — that constraint is the reason the `warning: ` sentinel exists). It
+does not sanitize. What holds today is that every adapter emitter interpolates
+untrusted values with `%q`, which escapes control bytes — a real mitigation, but an
+incidental one. A new emitter that used `%s` for a config-derived value would open
+a hole, so **an emitter writing into a `WarnWriter` must use `%q` for anything
+config-derived.**
 - **Key:** `Printer` (`New`, `Color`, `Section`, colour helpers; color is resolved
   per stream, and the diagnostic writers style for the stream they target);
   `Level` + `Label`; `Errorf`/`Warnf`/`Infof`/`Diagf`/`Fdiagf`;

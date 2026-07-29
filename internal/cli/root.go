@@ -78,11 +78,12 @@ func NewRoot() *cobra.Command {
 		//
 		// Bound to Err: this printer styles diagnostics, and ui resolves `auto`
 		// per stream.
-		// Install's restore closure is deliberately dropped: a real process
-		// installs once and exits. A TEST binary runs many NewRoot().Execute()
-		// cycles, each leaving slog.Default() bound to a finished test's buffer —
-		// aslog.Detach is the seam for that, called via t.Cleanup from the CLI
-		// test harness (see detachSlog in testhelper_test.go).
+		//
+		// Nothing here undoes the install, by design: a real process installs once
+		// and exits. A TEST binary runs many NewRoot().Execute() cycles, each
+		// leaving slog.Default() bound to a finished test's buffer — aslog.Detach is
+		// the seam for that, called via t.Cleanup from the CLI test harness (see
+		// detachSlog in testhelper_test.go).
 		ew := c.ErrOrStderr()
 		aslog.Install(ew, printerOn(c, ew), verbose)
 		// The first-run-after-upgrade notice is the ONLY hook that reaches every
@@ -134,19 +135,27 @@ func NewRoot() *cobra.Command {
 // persistent flag directly.
 //
 // That collapsed three symbols — the package var, `Printer.ColorMode`, and the
-// `ReportError` wrapper — into this function with NO behavior change, including
-// the fallback: ParseColorMode already yields ColorAuto for an unparseable value,
-// exactly as the zero-valued package var did.
+// `ReportError` wrapper — into this function with NO behavior change.
+//
+// Two details make that equivalence exact. Cobra shares one `*pflag.Flag` between
+// root and subcommands, so `colorModeOf(root)` sees a value parsed on a
+// SUBCOMMAND's line (`agentsync version --color=never` reads the same as
+// `agentsync --color=never version`). And when cobra fails BEFORE parsing flags —
+// an unknown subcommand, a malformed flag — the value is unset and this yields
+// `ColorAuto`; that is precisely what the old package var did too, since its
+// writer (the pre-run) never ran in those cases. `mode, _` discards
+// ParseColorMode's error for the same reason: it returns ColorAuto alongside it.
 func Execute() int {
 	root := NewRoot()
 	err := root.Execute()
 	mode, _ := colorModeOf(root)
-	return ReportErrorTo(os.Stderr, mode, err)
+	return reportErrorTo(os.Stderr, mode, err)
 }
 
-// ReportErrorTo renders err as the CLI's terminal diagnostic on w and returns the
-// process exit code. Exported, with its writer and color mode explicit, so a test
-// can exercise the formatting directly.
+// reportErrorTo renders err as the CLI's terminal diagnostic on w and returns the
+// process exit code. Its writer and color mode are explicit so a test can exercise
+// the formatting directly; unexported because Execute is the only production
+// caller and the tests that drive it live in this package.
 //
 // The error a command returns is the LAST thing a user reads, and #211 showed
 // what it cost to leave it unlabeled: a fatal `agentsync: render codex: …` sat
@@ -154,7 +163,7 @@ func Execute() int {
 // glyph, no level, no color — marking it as the failure. Printing it through the
 // same vocabulary as every other diagnostic is the fix. The `agentsync:` program
 // prefix goes away with it: the ERROR label already says which stream this is.
-func ReportErrorTo(w io.Writer, mode ui.ColorMode, err error) int {
+func reportErrorTo(w io.Writer, mode ui.ColorMode, err error) int {
 	if err == nil {
 		return 0
 	}
