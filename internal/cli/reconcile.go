@@ -49,7 +49,8 @@ type reconcileItem struct {
 	hasText bool
 	// pluginOwner is the plugin id providing this component, empty for a
 	// hand-authored one. Write-back is refused for a plugin-provided component:
-	// see writeBackFileItem.
+	// see writeBackItem. Set for both shapes — whole-file items via the
+	// component SourceID, key-level MCP/LSP items via pluginOwnerForPointer.
 	pluginOwner string
 }
 
@@ -159,7 +160,15 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 
 	// Collect all items in order, then append orphaned whole-file dests
 	// (owned in state, no longer rendered) for interactive delete/keep.
-	items := collectItems(plan, reg, s, sc, projectRoot, userHome, pluginProvidedSourceIDs(c))
+	// Provenance must come from the SAME canonical the plan rendered from: at
+	// project scope every adapter renders the project-only overlay (`renderC =
+	// *c.Project`), so tagging items from the merged canonical would let a
+	// user-scope plugin claim a project component that merely shares its name.
+	ownerSrc := c
+	if sc == adapter.ScopeProject && c.Project != nil {
+		ownerSrc = *c.Project
+	}
+	items := collectItems(plan, reg, s, sc, projectRoot, userHome, pluginProvidedSourceIDs(ownerSrc))
 	items = append(items, collectOrphanFileItems(plan, reg, s, sc, projectRoot, userHome)...)
 
 	w := p.Out
@@ -455,6 +464,20 @@ func b2i(b bool) int {
 // has to project separately and match by component name.
 func pluginProvidedSourceIDs(c source.Canonical) map[string]string {
 	out := map[string]string{}
+	// MCP/LSP servers are key-level items, not whole files: their render op
+	// carries the section-wide SourceID "mcp/* (multiple)", so they cannot be
+	// matched by SourceID at all. They are keyed here by "<kind>/<id>", which
+	// pluginOwnerForPointer resolves from the item's JSON pointer.
+	for _, s := range c.MCPServers {
+		if s.Plugin != "" {
+			out["mcp/"+s.ID] = s.Plugin
+		}
+	}
+	for _, s := range c.LSPServers {
+		if s.Plugin != "" {
+			out["lsp/"+s.ID] = s.Plugin
+		}
+	}
 	for _, sk := range c.Skills {
 		if sk.Plugin == "" {
 			continue
@@ -475,6 +498,29 @@ func pluginProvidedSourceIDs(c source.Canonical) map[string]string {
 		}
 	}
 	return out
+}
+
+// pluginOwnerForPointer resolves the plugin owning the MCP/LSP server a
+// key-level item points at, or "" for a hand-declared server or a pointer that
+// names no server (a hook section, a foreign key). Pointer shapes vary per agent
+// — /mcpServers/<id> (claude, cursor, gemini, …), /mcp/<id> (opencode),
+// /mcp_servers/<id> (codex), /lspServers/<id> — so the top-level key is what
+// says which kind is being addressed.
+func pluginOwnerForPointer(ptr string, owners map[string]string) string {
+	parts := strings.SplitN(strings.TrimPrefix(ptr, "/"), "/", 3)
+	if len(parts) < 2 {
+		return ""
+	}
+	var kind string
+	switch parts[0] {
+	case "mcpServers", "mcp", "mcp_servers":
+		kind = "mcp"
+	case "lspServers", "lsp", "lsp_servers":
+		kind = "lsp"
+	default:
+		return ""
+	}
+	return owners[kind+"/"+parts[1]]
 }
 
 // collectItems builds the flat reconcile list from a rendered plan + state.
@@ -517,6 +563,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 						srcText:     marshalPretty(getPointerValue(ours, ptr)),
 						dstText:     marshalPretty(getPointerValue(final, ptr)),
 						hasText:     true,
+						pluginOwner: pluginOwnerForPointer(ptr, pluginOwners),
 					})
 				}
 			} else {
@@ -889,6 +936,29 @@ func canonicalHookEvents(c source.Canonical) []string {
 }
 
 func writeBackItem(cmd *cobra.Command, home string, it reconcileItem) error {
+	// A plugin-provided component has no canonical file of its own: it is
+	// re-derived from the plugin cache on every load. Writing the destination
+	// back would MINT one under ~/.agentsync/, and the next load would hold two
+	// definitions — the captured copy and the plugin's own projection. For a
+	// name-keyed component that is two writes to one destination path; for an
+	// MCP/LSP server it is a same-id divergence the moment the plugin updates,
+	// which checkProjectedConflicts then refuses. Either way the user is stuck.
+	//
+	// The check sits at the dispatch waist so BOTH shapes are covered — the
+	// whole-file path (skills/subagents/commands) and the key-merge path
+	// (MCP/LSP servers) — rather than being duplicated in each and drifting.
+	// [o]verride restores the plugin's version; the edit belongs upstream.
+	if it.pluginOwner != "" {
+		what := it.op.Path
+		if it.ptr != "" {
+			what = fmt.Sprintf("%s (%s)", it.op.Path, ui.Sanitize(it.ptr))
+		}
+		return fmt.Errorf("write-back for %s is unsafe: this component is projected from the plugin %q, "+
+			"so it has no canonical file to write into. Capturing it would create one that collides with "+
+			"the plugin's own on the next apply. Use [o]verride to restore the plugin's version, change it "+
+			"upstream, or run `agentsync plugin disable %s` to stop projecting it",
+			what, it.pluginOwner, it.pluginOwner)
+	}
 	if it.ptr != "" {
 		return writeBackKeyItem(cmd, home, it)
 	}
@@ -1001,20 +1071,6 @@ func writeBackFileItem(home string, it reconcileItem) error {
 	srcID := it.op.SourceID
 	if srcID == "" {
 		return fmt.Errorf("write-back for %s requires a single source-of-record; the rendering op has no SourceID (this happens for ad-hoc paths) — use [o]verride or [i]gnore", it.op.Path)
-	}
-	// A plugin-provided component has no canonical file of its own: it is
-	// projected from the plugin cache on every load. Writing the destination back
-	// would MINT one under ~/.agentsync/ with the component's (namespaced) name,
-	// and the next load would then hold two components of that name — the captured
-	// copy and the plugin's own projection — rendering to one destination path,
-	// which apply refuses. [o]verride restores the plugin's version; the edit
-	// belongs upstream in the plugin.
-	if it.pluginOwner != "" {
-		return fmt.Errorf("write-back for %s is unsafe: this component is projected from the plugin %q, "+
-			"so it has no canonical file to write into. Capturing it would create one that collides with "+
-			"the plugin's own on the next apply. Use [o]verride to restore the plugin's version, change it "+
-			"upstream, or run `agentsync plugin disable %s` to stop projecting it",
-			it.op.Path, it.pluginOwner, it.pluginOwner)
 	}
 	if strings.HasSuffix(srcID, "(multiple)") {
 		return fmt.Errorf("write-back for %s is unsafe: the dest is the concatenation of multiple source fragments. Persisting the whole dest into one of them would strand the others. Edit the source fragments under %s/ directly, then apply", it.op.Path, home)

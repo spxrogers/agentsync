@@ -159,11 +159,11 @@ func OrphanFiles(s *state.Targets, userHome, agent string, scope adapter.Scope, 
 // not the empty-directory pruning that skills get; see Writer.Delete.
 var orphanReclaimedPrefixes = []string{"skills/", "subagents/", "commands/"}
 
-// IsOrphanReclaimable reports whether a state SourceID names a component whose
+// isOrphanReclaimable reports whether a state SourceID names a component whose
 // destination file `apply` reclaims. It is the single predicate behind both the
 // delete synthesis here and the writer's backup/prune behavior, so the two can
 // never disagree about what counts as an orphan.
-func IsOrphanReclaimable(sourceID string) bool {
+func isOrphanReclaimable(sourceID string) bool {
 	for _, p := range orphanReclaimedPrefixes {
 		if strings.HasPrefix(sourceID, p) {
 			return true
@@ -212,7 +212,7 @@ func orphanDeletes(s *state.Targets, userHome, agent string, scope adapter.Scope
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
-		if !IsOrphanReclaimable(entry.SourceID) {
+		if !isOrphanReclaimable(entry.SourceID) {
 			continue
 		}
 		path := strings.TrimPrefix(key, prefix)

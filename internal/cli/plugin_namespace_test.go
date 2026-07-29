@@ -204,9 +204,19 @@ func TestImport_SkipsPluginProvidedComponents(t *testing.T) {
 
 	// Re-import every text component. The plugin's own output is now sitting in
 	// the native config, and must not be captured back.
+	//
+	// Assert the SKIP is announced, not merely that a file is absent: if ingest
+	// simply stopped seeing the namespaced files, the absence checks below would
+	// be equally green while the filter did nothing. The warning is the positive
+	// control that the filter is what suppressed them.
 	for _, component := range []string{"subagent", "skill", "command"} {
-		if out, err := runCLI(t, env, "import", "claude:"+component); err != nil {
+		out, err := runCLI(t, env, "import", "claude:"+component)
+		if err != nil {
 			t.Fatalf("import claude:%s: %v\n%s", component, err, out)
+		}
+		if !strings.Contains(out, "it is projected from the plugin") {
+			t.Errorf("import claude:%s must announce the skip, not silently omit it; got:\n%s",
+				component, out)
 		}
 	}
 
@@ -316,9 +326,13 @@ func TestReconcile_WriteBackRefusesPluginProvidedComponent(t *testing.T) {
 	}
 
 	// --auto-writeback must refuse this item rather than mint a canonical copy.
+	// Assert the REFUSAL text, not just the plugin name: reconcile echoes the
+	// item label (.claude/agents/feature-dev-code-reviewer.md) on every outcome,
+	// including a successful write-back, so matching "feature-dev" alone would
+	// pass even if the refusal never fired.
 	out, _ := runCLI(t, env, "reconcile", "--auto-writeback")
-	if !strings.Contains(out, "feature-dev") {
-		t.Errorf("reconcile should explain that the component comes from a plugin; got:\n%s", out)
+	if !strings.Contains(out, "projected from the plugin") {
+		t.Errorf("reconcile must refuse write-back with its own reason; got:\n%s", out)
 	}
 	captured := filepath.Join(tmp, ".agentsync", "subagents", "feature-dev-code-reviewer.md")
 	if _, err := os.Stat(captured); err == nil {
@@ -327,5 +341,229 @@ func TestReconcile_WriteBackRefusesPluginProvidedComponent(t *testing.T) {
 	}
 	if out, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("apply after reconcile must still succeed: %v\n%s", err, out)
+	}
+}
+
+// TestApply_NamespacingMigrationReclaimsPreRenameFiles covers the case every
+// existing user actually hits: the ONE-TIME rename on the first apply after
+// upgrading.
+//
+// It differs materially from a plain removal (which apply_orphan_rename_test.go
+// covers). Here the plan still renders ops into the same directory, so the
+// orphan pass must exclude the freshly-rendered namespaced paths while still
+// reclaiming the bare pre-rename one. Get that wrong in either direction and you
+// either delete the new file or leave the old one — and Claude Code reads every
+// file in its agents directory, so a leftover is a duplicate agent, not a
+// harmless artifact.
+//
+// The pre-rename state is simulated by applying a hand-authored component under
+// the bare name, then handing the same component to a plugin.
+func TestApply_NamespacingMigrationReclaimsPreRenameFiles(t *testing.T) {
+	tmp, env := importTestEnv(t)
+
+	// 1. Pre-upgrade world: the component exists under its BARE name, applied
+	//    and recorded in state exactly as a pre-namespacing apply left it.
+	bare := filepath.Join(tmp, ".agentsync", "subagents", "code-reviewer.md")
+	if err := os.WriteFile(bare, []byte("---\nname: code-reviewer\n---\nReview the feature branch.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("pre-rename apply: %v\n%s", err, out)
+	}
+	dest := filepath.Join(tmp, ".claude", "agents", "code-reviewer.md")
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("pre-rename apply did not write the bare name: %v", err)
+	}
+
+	// 2. Upgrade: the component now comes from a plugin, so it renders namespaced.
+	if err := os.Remove(bare); err != nil {
+		t.Fatal(err)
+	}
+	mpDir := makeCollidingMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("post-rename apply: %v\n%s", err, out)
+	}
+
+	if _, err := os.Stat(dest); err == nil {
+		t.Fatal("the pre-rename destination file was not reclaimed; it would load as a duplicate agent")
+	}
+	renamed := filepath.Join(tmp, ".claude", "agents", "feature-dev-code-reviewer.md")
+	if _, err := os.Stat(renamed); err != nil {
+		t.Fatalf("the namespaced destination must exist after the rename: %v", err)
+	}
+}
+
+// TestReconcile_WriteBackRefusesPluginSkillBundledFile pins the bundled-file
+// half of the SourceID mapping. A skill is a DIRECTORY: pluginProvidedSourceIDs
+// registers one entry per bundled file (scripts/, references/, assets/), not
+// just SKILL.md. Only covering SKILL.md would leave a hand-edited script
+// capturable — minting a canonical skill directory that collides with the
+// plugin's own.
+func TestReconcile_WriteBackRefusesPluginSkillBundledFile(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeBundledSkillMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("bundle-mp", mpDir, "bundler"))
+
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	script := filepath.Join(tmp, ".claude", "skills", "bundler-deploy", "scripts", "run.sh")
+	if _, err := os.Stat(script); err != nil {
+		t.Fatalf("the plugin's bundled file must render under the namespaced skill: %v", err)
+	}
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho HAND EDITED\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _ := runCLI(t, env, "reconcile", "--auto-writeback")
+	if !strings.Contains(out, "projected from the plugin") {
+		t.Errorf("write-back of a plugin skill's bundled file must be refused; got:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, ".agentsync", "skills", "bundler-deploy")); err == nil {
+		t.Fatal("write-back minted a canonical copy of a plugin-provided skill directory")
+	}
+}
+
+// makeBundledSkillMarketplace builds a marketplace with one plugin whose skill
+// carries a bundled script, so the skill-is-a-directory paths are exercised.
+func makeBundledSkillMarketplace(t *testing.T, dir string) string {
+	t.Helper()
+	mpDir := filepath.Join(dir, "bundle-marketplace")
+	write := func(rel, body string, mode os.FileMode) {
+		t.Helper()
+		p := filepath.Join(mpDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".claude-plugin/marketplace.json", `{
+		"name": "bundle-mp",
+		"owner": {"name": "tester"},
+		"plugins": [{"name": "bundler", "source": "./plugins/bundler"}]
+	}`, 0o644)
+	write("plugins/bundler/.claude-plugin/plugin.json", `{"name":"bundler","version":"1.0.0"}`, 0o644)
+	write("plugins/bundler/skills/deploy/SKILL.md",
+		"---\nname: deploy\ndescription: ship it\n---\nSteps.\n", 0o644)
+	write("plugins/bundler/skills/deploy/scripts/run.sh", "#!/bin/sh\necho original\n", 0o755)
+	return mpDir
+}
+
+// TestProjectScope_PluginNamespacingAndImportFilter covers project scope, which
+// the rest of this file's user-scope tests leave untested.
+//
+// Two distinct properties are at stake, and both come from the same rule: the
+// skip set must be exactly the RENDERED set. At project scope every adapter
+// renders from the project-only overlay (`renderC = *c.Project`), never the user
+// canonical — so a project plugin's components are namespaced and refused, while
+// a USER-scope plugin contributes nothing to the project destination and must
+// not shadow a project component that merely shares its derived name.
+func TestProjectScope_PluginNamespacingAndImportFilter(t *testing.T) {
+	tmpHome := t.TempDir()
+	proj := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "init", "--scope", "project", "--project", proj); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude", "--scope", "project", "--project", proj); err != nil {
+		t.Fatal(err)
+	}
+
+	// Install the plugin at USER scope — `import claude:plugin` is user-scope
+	// only, since a plugin is a user-scope concept across every supported
+	// harness — then commit its plugins/<id>.toml into the PROJECT tree. That is
+	// how a project tree actually declares a plugin: the pin travels with the
+	// repo while the fetched cache stays under the user home.
+	mpDir := makeCollidingMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmpHome, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("user plugin import: %v\n%s", err, out)
+	}
+	pin, err := os.ReadFile(filepath.Join(tmpHome, ".agentsync", "plugins", "feature-dev.toml"))
+	if err != nil {
+		t.Fatalf("the user-scope plugin pin should exist: %v", err)
+	}
+	projPlugins := filepath.Join(proj, ".agentsync", "plugins")
+	if err := os.MkdirAll(projPlugins, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projPlugins, "feature-dev.toml"), pin, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply", "--scope", "project", "--project", proj); err != nil {
+		t.Fatalf("project apply: %v\n%s", err, out)
+	}
+
+	// Namespacing applies at project scope too.
+	renamed := filepath.Join(proj, ".claude", "agents", "feature-dev-code-reviewer.md")
+	if _, err := os.Stat(renamed); err != nil {
+		t.Fatalf("a project-scope plugin's subagent must render namespaced: %v", err)
+	}
+
+	// A hand-authored PROJECT component is still captured — the filter must not
+	// over-refuse just because a plugin is installed at this scope.
+	mine := filepath.Join(proj, ".claude", "agents", "project-only.md")
+	if err := os.WriteFile(mine, []byte("---\nname: project-only\n---\nMine.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude:subagent", "--scope", "project", "--project", proj); err != nil {
+		t.Fatalf("project subagent import: %v\n%s", err, out)
+	}
+	captured := filepath.Join(proj, ".agentsync", "subagents", "project-only.md")
+	if _, err := os.Stat(captured); err != nil {
+		t.Fatalf("a hand-authored project subagent must still be captured: %v", err)
+	}
+	// ...and the plugin's own is not.
+	if _, err := os.Stat(filepath.Join(proj, ".agentsync", "subagents", "feature-dev-code-reviewer.md")); err == nil {
+		t.Fatal("import captured a project-scope plugin's subagent into the project source tree")
+	}
+
+	// The project tree must still apply cleanly after the import.
+	if out, err := runCLI(t, env, "apply", "--scope", "project", "--project", proj); err != nil {
+		t.Fatalf("project apply after import: %v\n%s", err, out)
+	}
+}
+
+// TestImport_DryRunSkipsPluginProvidedComponents pins that the preview tells the
+// same story as the real run. A dry-run that listed plugin components as
+// "would import" would be worse than useless — it would advertise a capture the
+// real import refuses.
+func TestImport_DryRunSkipsPluginProvidedComponents(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeCollidingMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
+
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	out, err := runCLI(t, env, "import", "claude:subagent", "--dry-run")
+	if err != nil {
+		t.Fatalf("import --dry-run: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "would import subagents/feature-dev-code-reviewer.md") {
+		t.Errorf("dry-run must not advertise a capture the real import refuses; got:\n%s", out)
+	}
+	if !strings.Contains(out, "it is projected from the plugin") {
+		t.Errorf("dry-run must report the skip like the real run; got:\n%s", out)
 	}
 }

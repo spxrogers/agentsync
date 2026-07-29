@@ -164,9 +164,7 @@ func projectOnePlugin(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugi
 	if perr != nil {
 		return ProjectionResult{}, false, fmt.Errorf("project plugin %s: %w", id, perr)
 	}
-	if err := namespaceProjected(&proj, id); err != nil {
-		return ProjectionResult{}, false, fmt.Errorf("project plugin %s: %w", id, err)
-	}
+	namespaceProjected(&proj, id)
 	return proj, true, nil
 }
 
@@ -200,43 +198,44 @@ func projectOnePlugin(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugi
 // keeping the rename last also means the conflict policy still reports the
 // upstream names the user would recognise.
 //
-// Hooks, MCP servers, and LSP servers are deliberately NOT namespaced: hooks
-// have no name key at all, and MCP/LSP are id-keyed with an existing
-// cross-source guard (checkProjectedConflicts) whose hard failure is a
-// deliberate security property — a same-id server from two sources can be a
-// silent endpoint hijack, which is a case to refuse, not to rename apart.
-func namespaceProjected(pr *ProjectionResult, plugin string) error {
+// Hooks, MCP servers, and LSP servers are deliberately NOT renamed: hooks have
+// no name key at all, and MCP/LSP are id-keyed with an existing cross-source
+// guard (checkProjectedConflicts) whose hard failure is a deliberate security
+// property — a same-id server from two sources can be a silent endpoint hijack,
+// which is a case to refuse, not to rename apart.
+//
+// MCP and LSP servers ARE still stamped with provenance, though. They are not
+// renamed, but the dest→source paths still need to know a plugin owns them so
+// import/reconcile refuse to capture one into the canonical source (which would
+// mint a copy that diverges from the plugin's own on its next update).
+func namespaceProjected(pr *ProjectionResult, plugin string) {
 	if plugin == "" {
-		return nil
+		return
+	}
+	for i := range pr.MCPServers {
+		pr.MCPServers[i].Plugin = plugin
+	}
+	for i := range pr.LSPServers {
+		pr.LSPServers[i].Plugin = plugin
 	}
 	for i := range pr.Skills {
-		if err := source.ValidateNamespacedComponentName("skill", plugin, pr.Skills[i].Name); err != nil {
-			return err
-		}
 		pr.Skills[i].Plugin = plugin
 		pr.Skills[i].BaseName = pr.Skills[i].Name
 		pr.Skills[i].Name = source.NamespacedComponentName(plugin, pr.Skills[i].Name)
 		pr.Skills[i].Frontmatter = renameFrontmatter(pr.Skills[i].Frontmatter, pr.Skills[i].Name)
 	}
 	for i := range pr.Subagents {
-		if err := source.ValidateNamespacedComponentName("subagent", plugin, pr.Subagents[i].Name); err != nil {
-			return err
-		}
 		pr.Subagents[i].Plugin = plugin
 		pr.Subagents[i].BaseName = pr.Subagents[i].Name
 		pr.Subagents[i].Name = source.NamespacedComponentName(plugin, pr.Subagents[i].Name)
 		pr.Subagents[i].Frontmatter = renameFrontmatter(pr.Subagents[i].Frontmatter, pr.Subagents[i].Name)
 	}
 	for i := range pr.Commands {
-		if err := source.ValidateNamespacedComponentName("command", plugin, pr.Commands[i].Name); err != nil {
-			return err
-		}
 		pr.Commands[i].Plugin = plugin
 		pr.Commands[i].BaseName = pr.Commands[i].Name
 		pr.Commands[i].Name = source.NamespacedComponentName(plugin, pr.Commands[i].Name)
 		pr.Commands[i].Frontmatter = renameFrontmatter(pr.Commands[i].Frontmatter, pr.Commands[i].Name)
 	}
-	return nil
 }
 
 // renameFrontmatter returns fm with its `name` key set to the namespaced name,
@@ -300,7 +299,102 @@ func checkProjectedConflicts(c *source.Canonical, lenient bool) error {
 		}
 		slog.Warn("lsp server provided by multiple sources with different content; render keeps the last", "id", id)
 	}
+	// Name-keyed text components. Namespacing makes a same-name collision rare,
+	// but it cannot make the mapping injective: plugin "a" shipping "b-c" and
+	// plugin "a-b" shipping "c" both derive "a-b-c", and a user who hand-authors
+	// "feature-dev-code-reviewer" collides with what plugin "feature-dev" derives
+	// for its "code-reviewer". Without this guard those cases reach the render
+	// pipeline, where two DIVERGENT components abort the run with a message that
+	// can name neither origin (a FileOp carries no provenance) — and two
+	// IDENTICAL ones are silently deduped by the shared-path dedup, dropping a
+	// component with no report at all. That silent drop is the bug this guard
+	// exists to prevent; the loud one it merely makes actionable.
+	//
+	// Identical duplicates stay harmless (render dedups them to one byte-identical
+	// write), exactly as for MCP/LSP above.
+	if name, ok := firstDivergentByKey(c.Skills, func(s source.Skill) string { return s.Name },
+		sameSkillRender); ok {
+		if err := nameCollisionError("skill", name, c.Skills, func(s source.Skill) (string, string, string) {
+			return s.Name, s.Plugin, s.BaseName
+		}, lenient); err != nil {
+			return err
+		}
+	}
+	if name, ok := "", false; ok {
+		_ = name
+	} else if name, ok := firstDivergentByKey(c.Subagents, func(s source.Subagent) string { return s.Name },
+		func(a, b source.Subagent) bool { return sameTextRender(a.Frontmatter, a.Body, b.Frontmatter, b.Body) }); ok {
+		if err := nameCollisionError("subagent", name, c.Subagents, func(s source.Subagent) (string, string, string) {
+			return s.Name, s.Plugin, s.BaseName
+		}, lenient); err != nil {
+			return err
+		}
+	}
+	if name, ok := firstDivergentByKey(c.Commands, func(cm source.Command) string { return cm.Name },
+		func(a, b source.Command) bool { return sameTextRender(a.Frontmatter, a.Body, b.Frontmatter, b.Body) }); ok {
+		if err := nameCollisionError("command", name, c.Commands, func(cm source.Command) (string, string, string) {
+			return cm.Name, cm.Plugin, cm.BaseName
+		}, lenient); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// sameTextRender compares the two things a text component renders: its
+// frontmatter and its body. Provenance (Plugin/BaseName) is deliberately
+// excluded — it never reaches a destination file, so two sources differing only
+// on it render identically and are not a collision.
+func sameTextRender(afm map[string]any, abody string, bfm map[string]any, bbody string) bool {
+	if abody != bbody {
+		return false
+	}
+	if len(afm) == 0 && len(bfm) == 0 {
+		return true
+	}
+	return reflect.DeepEqual(afm, bfm)
+}
+
+// sameSkillRender extends sameTextRender with the bundled files, because a skill
+// is a DIRECTORY: two skills with an identical SKILL.md but different scripts/
+// still render different trees.
+func sameSkillRender(a, b source.Skill) bool {
+	if !sameTextRender(a.Frontmatter, a.Body, b.Frontmatter, b.Body) {
+		return false
+	}
+	if len(a.Files) == 0 && len(b.Files) == 0 {
+		return true
+	}
+	return reflect.DeepEqual(a.Files, b.Files)
+}
+
+// nameCollisionError reports a same-name divergence between two name-keyed
+// components, naming each side's ORIGIN — which is the whole point, since the
+// colliding pair shares the one thing a bare message would print (the name). It
+// is fatal for the mutating loads and a warning for the lenient read-only ones,
+// matching the MCP/LSP policy directly above.
+func nameCollisionError[T any](kind, name string, items []T, originOf func(T) (itemName, plugin, base string), lenient bool) error {
+	var origins []string
+	for _, it := range items {
+		n, plugin, base := originOf(it)
+		if n != name {
+			continue
+		}
+		if plugin != "" {
+			origins = append(origins, fmt.Sprintf("plugin %q (as %q)", plugin, base))
+			continue
+		}
+		origins = append(origins, fmt.Sprintf("your own %s/%s", kind, name))
+	}
+	if lenient {
+		slog.Warn("component provided by multiple sources with different content; render keeps the last",
+			"kind", kind, "name", name, "from", strings.Join(origins, " and "))
+		return nil
+	}
+	return fmt.Errorf("%s %q is provided by more than one source with different content — %s. "+
+		"Plugin components are namespaced by their plugin, so this is a genuine clash of the derived "+
+		"names: rename your own copy, or run `agentsync plugin disable <id>` for one of the plugins",
+		kind, name, strings.Join(origins, " and "))
 }
 
 // firstDivergentByKey returns the first key shared by two items the sameRender

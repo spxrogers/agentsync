@@ -120,6 +120,16 @@ type SecretsConfig struct {
 type MCPServer struct {
 	ID     string        `toml:"-"` // filename minus .toml
 	Server MCPServerSpec `toml:"server"`
+	// Plugin is the id of the plugin providing this server, empty when the user
+	// declared it in mcp/<id>.toml. Unlike a skill/subagent/command, an MCP
+	// server's ID is NOT namespaced — two sources claiming one id can be a silent
+	// endpoint hijack, which checkProjectedConflicts refuses rather than renames
+	// apart. Provenance is carried only so the dest→source paths (import,
+	// reconcile write-back) can refuse to capture a server the plugin owns. It is
+	// derived state, never serialized, and never secret-bearing — see
+	// NamespacedComponentName (provenance.go) and walkerCovered
+	// (internal/secrets/walk_test.go).
+	Plugin string `toml:"-"`
 }
 
 type MCPServerSpec struct {
@@ -272,6 +282,9 @@ type Hook struct {
 type LSPServer struct {
 	ID   string
 	Spec LSPServerSpec
+	// Plugin mirrors MCPServer.Plugin — provenance only, never namespaced, never
+	// serialized, never secret-bearing. See MCPServer.Plugin.
+	Plugin string `toml:"-"`
 }
 
 // LSPServerSpec holds the server configuration for an LSP server.

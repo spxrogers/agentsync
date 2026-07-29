@@ -1,7 +1,5 @@
 package source
 
-import "fmt"
-
 // ComponentNamespaceSeparator joins a plugin id to a component name.
 //
 // It is a HYPHEN, and that is forced rather than chosen. Claude Code documents a
@@ -37,10 +35,26 @@ const ComponentNamespaceSeparator = "-"
 // # The provenance fields
 //
 // A namespaced component records `Plugin` (the providing plugin's filesystem
-// id) and `BaseName` (the pre-namespace name) so a report, `plugin explain`, or
-// a collision error can say where it came from and what it was called upstream.
-// Both are empty for a hand-authored component loaded from ~/.agentsync/, which
-// is NEVER renamed — a plugin can therefore never take a name the user chose.
+// id) and `BaseName` (the pre-namespace name). `Plugin` drives real behaviour:
+// the dest→source paths refuse to capture a plugin-owned component, and the
+// collision guards name the providing plugin. `BaseName` exists ONLY so those
+// diagnostics can also say what the component was called upstream — it is
+// never matched on, and nothing derives a path from it. Both are empty for a
+// hand-authored component loaded from ~/.agentsync/, which is never renamed.
+//
+// A hand-authored component is never renamed, but note the converse is NOT a
+// guarantee that a plugin can never occupy a name the user chose: the derived
+// name is not injective. A user's own `feature-dev-code-reviewer` collides with
+// what plugin `feature-dev` derives for its `code-reviewer`, and plugin `a`
+// shipping `b-c` collides with plugin `a-b` shipping `c`. Those residual cases
+// are caught by marketplace.checkProjectedConflicts, which reports both origins
+// rather than letting one silently win.
+//
+// INVARIANT: when Plugin is non-empty, Name == NamespacedComponentName(Plugin,
+// BaseName). Everything downstream reads Name as the effective identity while
+// diagnostics read the other two, so a component whose three fields disagree
+// would report an origin that does not match what it rendered. Pinned by
+// TestProvenanceInvariant (internal/marketplace).
 //
 // Neither field is ever serialized. Skills, subagents, and commands are
 // FILE-backed components whose canonical form is a file on disk, and a projected
@@ -59,18 +73,28 @@ func NamespacedComponentName(plugin, base string) string {
 	return plugin + ComponentNamespaceSeparator + base
 }
 
-// ValidateNamespacedComponentName checks that a derived name is writable and
-// safe to display, reusing the SAME rules ValidateComponentID enforces at the
-// canonical write boundary (no path separator, no "..", no ':', no control or
-// deceptive formatting rune). A plugin id originates from a marketplace, so it
-// is outside agentsync's trust boundary: without this, a hostile id could derive
-// a component name that escapes its destination directory or smuggles a
-// terminal escape into a diagnostic. The error names both halves so the user can
-// tell which one is at fault.
-func ValidateNamespacedComponentName(kind, plugin, base string) error {
-	name := NamespacedComponentName(plugin, base)
-	if err := ValidateComponentID(kind, name); err != nil {
-		return fmt.Errorf("plugin %q provides %s %q: %w", plugin, kind, base, err)
-	}
-	return nil
-}
+// NOTE ON VALIDATION — deliberately absent here.
+//
+// An earlier revision validated the DERIVED name against ValidateComponentID at
+// projection time and returned an error. That was wrong twice over:
+//
+//   - It was a SECOND, stricter rune set than the projection's own
+//     validateProjectedName (which permits ':' and control runes), so a plugin
+//     whose component name contained one projected fine before and hard-failed
+//     after — a regression, not a guard.
+//   - loadProjected propagates a projection error regardless of `lenient`, so
+//     that failure aborted the whole load for the read-only commands
+//     (status/diff/explain) whose entire design is to degrade and SHOW state
+//     rather than refuse.
+//
+// The check was also redundant: render.Plan already runs ValidateComponentID
+// over every component id at the single dispatch waist, before any id is joined
+// into a destination path, and source.Write*/capture guard the write boundary.
+// Adding a copy here bought nothing and could only drift from those. Namespacing
+// prepends a prefix; it cannot make a valid name invalid unless the plugin id
+// itself is malformed, and projectOnePlugin already rejects a plugin id with a
+// path separator or traversal component before any of this runs.
+//
+// Diagnostics that interpolate a derived name use %q, which escapes control and
+// bidi runes, so an unvalidated name cannot smuggle a terminal escape through an
+// error or warning either.

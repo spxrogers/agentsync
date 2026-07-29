@@ -1,6 +1,7 @@
 package marketplace
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/source"
@@ -17,9 +18,7 @@ func TestNamespaceProjected(t *testing.T) {
 			Subagents: []source.Subagent{{Name: "code-reviewer", Frontmatter: map[string]any{"name": "code-reviewer"}}},
 			Commands:  []source.Command{{Name: "review", Frontmatter: map[string]any{"description": "d"}}},
 		}
-		if err := namespaceProjected(&pr, "feature-dev"); err != nil {
-			t.Fatalf("namespaceProjected: %v", err)
-		}
+		namespaceProjected(&pr, "feature-dev")
 		for _, tc := range []struct{ got, want, field string }{
 			{pr.Skills[0].Name, "feature-dev-code-review", "skill Name"},
 			{pr.Skills[0].BaseName, "code-review", "skill BaseName"},
@@ -45,9 +44,7 @@ func TestNamespaceProjected(t *testing.T) {
 		pr := ProjectionResult{Subagents: []source.Subagent{
 			{Name: "reviewer", Frontmatter: map[string]any{"name": "reviewer", "model": "opus"}},
 		}}
-		if err := namespaceProjected(&pr, "pkg"); err != nil {
-			t.Fatalf("namespaceProjected: %v", err)
-		}
+		namespaceProjected(&pr, "pkg")
 		if got := pr.Subagents[0].Frontmatter["name"]; got != "pkg-reviewer" {
 			t.Errorf("frontmatter name = %v, want pkg-reviewer", got)
 		}
@@ -63,9 +60,7 @@ func TestNamespaceProjected(t *testing.T) {
 		pr := ProjectionResult{Subagents: []source.Subagent{
 			{Name: "reviewer", Frontmatter: map[string]any{"description": "d"}},
 		}}
-		if err := namespaceProjected(&pr, "pkg"); err != nil {
-			t.Fatalf("namespaceProjected: %v", err)
-		}
+		namespaceProjected(&pr, "pkg")
 		if _, ok := pr.Subagents[0].Frontmatter["name"]; ok {
 			t.Errorf("namespacing must not invent a frontmatter name; got %v", pr.Subagents[0].Frontmatter)
 		}
@@ -76,9 +71,7 @@ func TestNamespaceProjected(t *testing.T) {
 	t.Run("does not mutate the caller's frontmatter map", func(t *testing.T) {
 		fm := map[string]any{"name": "reviewer"}
 		pr := ProjectionResult{Subagents: []source.Subagent{{Name: "reviewer", Frontmatter: fm}}}
-		if err := namespaceProjected(&pr, "pkg"); err != nil {
-			t.Fatalf("namespaceProjected: %v", err)
-		}
+		namespaceProjected(&pr, "pkg")
 		if fm["name"] != "reviewer" {
 			t.Errorf("the caller's map was mutated in place; got %v", fm)
 		}
@@ -93,22 +86,34 @@ func TestNamespaceProjected(t *testing.T) {
 			MCPServers: []source.MCPServer{{ID: "srv"}},
 			LSPServers: []source.LSPServer{{ID: "gopls"}},
 		}
-		if err := namespaceProjected(&pr, "pkg"); err != nil {
-			t.Fatalf("namespaceProjected: %v", err)
-		}
+		namespaceProjected(&pr, "pkg")
 		if pr.MCPServers[0].ID != "srv" || pr.LSPServers[0].ID != "gopls" {
 			t.Errorf("id-keyed components must not be namespaced: %+v %+v", pr.MCPServers, pr.LSPServers)
 		}
 	})
 
-	// A plugin id originates from a marketplace, outside agentsync's trust
-	// boundary. A derived name that would escape its destination directory or
-	// smuggle a terminal escape into a diagnostic is refused, not written.
-	t.Run("refuses a derived name the write boundary would reject", func(t *testing.T) {
-		for _, plugin := range []string{"../evil", "a:b", "esc\x1b[31m"} {
+	// Namespacing itself NEVER fails. An earlier revision validated the derived
+	// name here and returned an error, which was a regression: the projection's
+	// own validateProjectedName permits ':' and control runes, so a plugin that
+	// projected fine before started hard-failing — and loadProjected propagates a
+	// projection error regardless of `lenient`, taking down the read-only
+	// commands whose whole design is to degrade and show state.
+	//
+	// The safety property is unchanged because it lives downstream at the single
+	// dispatch waist: render.Plan runs source.ValidateComponentID over every
+	// component id before any of them is joined into a destination path. This
+	// pins BOTH halves — namespacing does not fail, and the derived name is still
+	// caught by the validator that matters.
+	t.Run("hostile plugin ids namespace without error and are caught downstream", func(t *testing.T) {
+		for _, plugin := range []string{"a:b", "esc\x1b[31m"} {
 			pr := ProjectionResult{Subagents: []source.Subagent{{Name: "reviewer"}}}
-			if err := namespaceProjected(&pr, plugin); err == nil {
-				t.Errorf("plugin id %q should not derive a writable component name", plugin)
+			namespaceProjected(&pr, plugin)
+			got := pr.Subagents[0].Name
+			if got != plugin+"-reviewer" {
+				t.Errorf("plugin %q: derived name = %q", plugin, got)
+			}
+			if err := source.ValidateComponentID("subagent", got); err == nil {
+				t.Errorf("render.Plan's validator must still reject the derived name %q", got)
 			}
 		}
 	})
@@ -117,11 +122,173 @@ func TestNamespaceProjected(t *testing.T) {
 	// flow through the same code path untouched.
 	t.Run("empty plugin is a no-op", func(t *testing.T) {
 		pr := ProjectionResult{Subagents: []source.Subagent{{Name: "reviewer"}}}
-		if err := namespaceProjected(&pr, ""); err != nil {
-			t.Fatalf("namespaceProjected: %v", err)
-		}
+		namespaceProjected(&pr, "")
 		if pr.Subagents[0].Name != "reviewer" || pr.Subagents[0].Plugin != "" {
 			t.Errorf("an empty plugin id must change nothing; got %+v", pr.Subagents[0])
 		}
 	})
+}
+
+// TestCheckProjectedConflicts_NameKeyedComponents covers the guard that closes
+// the residual namespacing cannot: the derived-name mapping is not injective.
+//
+// Plugin "a" shipping "b-c" and plugin "a-b" shipping "c" both derive "a-b-c",
+// and a user who hand-authors "feature-dev-code-reviewer" collides with what
+// plugin "feature-dev" derives. Without this guard those reach the render
+// pipeline, where DIVERGENT content aborts with a message that can name neither
+// origin, and IDENTICAL content is silently deduped — dropping a component with
+// no report at all.
+func TestCheckProjectedConflicts_NameKeyedComponents(t *testing.T) {
+	sub := func(name, plugin, base, body string) source.Subagent {
+		return source.Subagent{Name: name, Plugin: plugin, BaseName: base, Body: body}
+	}
+
+	t.Run("divergent cross-plugin derived names are fatal and name both origins", func(t *testing.T) {
+		c := source.Canonical{Subagents: []source.Subagent{
+			sub("a-b-c", "a", "b-c", "from a"),
+			sub("a-b-c", "a-b", "c", "from a-b"),
+		}}
+		err := checkProjectedConflicts(&c, false)
+		if err == nil {
+			t.Fatal("two plugins deriving one name with different content must be fatal")
+		}
+		for _, want := range []string{`plugin "a"`, `plugin "a-b"`, `as "b-c"`, `as "c"`} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error must carry %s so the user can tell the sides apart; got: %v", want, err)
+			}
+		}
+	})
+
+	// This is the case that contradicted provenance.go's claim that "a plugin can
+	// never take a name the user chose" — it can, via the derived name.
+	t.Run("a plugin colliding with a hand-authored name names the user's file", func(t *testing.T) {
+		c := source.Canonical{Subagents: []source.Subagent{
+			sub("feature-dev-code-reviewer", "", "", "mine"),
+			sub("feature-dev-code-reviewer", "feature-dev", "code-reviewer", "theirs"),
+		}}
+		err := checkProjectedConflicts(&c, false)
+		if err == nil {
+			t.Fatal("a plugin's derived name colliding with a hand-authored one must be fatal")
+		}
+		if !strings.Contains(err.Error(), "your own subagent/feature-dev-code-reviewer") {
+			t.Errorf("error must point at the user's own file; got: %v", err)
+		}
+	})
+
+	// Identical content is harmless: render dedups it to one byte-identical
+	// write, exactly as for MCP/LSP. Erroring here would fail a no-op.
+	t.Run("identical duplicates pass", func(t *testing.T) {
+		c := source.Canonical{Subagents: []source.Subagent{
+			sub("a-b-c", "a", "b-c", "same"),
+			sub("a-b-c", "a-b", "c", "same"),
+		}}
+		if err := checkProjectedConflicts(&c, false); err != nil {
+			t.Fatalf("identical duplicates render identically and must pass; got: %v", err)
+		}
+	})
+
+	// The read-only commands (status/diff/explain) exist to SHOW a problem; they
+	// must not refuse to run on one.
+	t.Run("lenient degrades to a warning", func(t *testing.T) {
+		c := source.Canonical{Subagents: []source.Subagent{
+			sub("a-b-c", "a", "b-c", "from a"),
+			sub("a-b-c", "a-b", "c", "from a-b"),
+		}}
+		if err := checkProjectedConflicts(&c, true); err != nil {
+			t.Fatalf("lenient must warn, not fail; got: %v", err)
+		}
+	})
+
+	// A skill is a DIRECTORY: an identical SKILL.md with different bundled files
+	// still renders a different tree, so it is a divergence.
+	t.Run("skills compare bundled files too", func(t *testing.T) {
+		mk := func(plugin, base string, files []source.SkillFile) source.Skill {
+			return source.Skill{Name: "p-s", Plugin: plugin, BaseName: base, Body: "same", Files: files}
+		}
+		c := source.Canonical{Skills: []source.Skill{
+			mk("p", "s", []source.SkillFile{{Path: "scripts/run.sh", Content: []byte("A"), Mode: 0o755}}),
+			mk("p-s", "", []source.SkillFile{{Path: "scripts/run.sh", Content: []byte("B"), Mode: 0o755}}),
+		}}
+		if err := checkProjectedConflicts(&c, false); err == nil {
+			t.Fatal("skills differing only in a bundled file must be a divergence")
+		}
+	})
+
+	t.Run("commands are covered", func(t *testing.T) {
+		c := source.Canonical{Commands: []source.Command{
+			{Name: "a-b", Plugin: "a", BaseName: "b", Body: "x"},
+			{Name: "a-b", Body: "y"},
+		}}
+		if err := checkProjectedConflicts(&c, false); err == nil {
+			t.Fatal("commands share the failure class and must be guarded")
+		}
+	})
+
+	// Provenance never reaches a destination file, so two sources differing ONLY
+	// on it render identically and are not a collision.
+	t.Run("provenance alone is not a divergence", func(t *testing.T) {
+		c := source.Canonical{Subagents: []source.Subagent{
+			sub("a-b-c", "a", "b-c", "same"),
+			sub("a-b-c", "", "", "same"),
+		}}
+		if err := checkProjectedConflicts(&c, false); err != nil {
+			t.Fatalf("differing only on provenance must not be a collision; got: %v", err)
+		}
+	})
+}
+
+// TestProvenanceInvariant pins the relationship the three fields must hold:
+// when Plugin is set, Name IS the namespaced form of BaseName. Everything
+// downstream reads Name as the effective identity (destination paths, collision
+// keys) while diagnostics read Plugin/BaseName, so a component whose fields
+// disagree would report an origin that does not match what it rendered.
+//
+// It is asserted reflectively over whatever namespaceProjected produces rather
+// than against a hand-written expectation, so a future component kind added to
+// the rename loop is covered without anyone remembering to extend this test.
+func TestProvenanceInvariant(t *testing.T) {
+	pr := ProjectionResult{
+		Skills:    []source.Skill{{Name: "s"}, {Name: "with-hyphen"}},
+		Subagents: []source.Subagent{{Name: "a"}, {Name: "b-c"}},
+		Commands:  []source.Command{{Name: "cmd"}},
+	}
+	const plugin = "my-plugin"
+	namespaceProjected(&pr, plugin)
+
+	check := func(kind, name, gotPlugin, base string) {
+		t.Helper()
+		if gotPlugin != plugin {
+			t.Errorf("%s %q: Plugin = %q, want %q", kind, name, gotPlugin, plugin)
+			return
+		}
+		if want := source.NamespacedComponentName(gotPlugin, base); name != want {
+			t.Errorf("%s: Name = %q but NamespacedComponentName(%q, %q) = %q — "+
+				"a component's reported origin must match the name it renders as",
+				kind, name, gotPlugin, base, want)
+		}
+	}
+	for _, s := range pr.Skills {
+		check("skill", s.Name, s.Plugin, s.BaseName)
+	}
+	for _, s := range pr.Subagents {
+		check("subagent", s.Name, s.Plugin, s.BaseName)
+	}
+	for _, c := range pr.Commands {
+		check("command", c.Name, c.Plugin, c.BaseName)
+	}
+
+	// MCP/LSP are stamped but deliberately NOT renamed: their ids are the
+	// security-relevant key a same-id divergence is refused on, never renamed
+	// apart. The invariant above must not be read as applying to them.
+	pr2 := ProjectionResult{
+		MCPServers: []source.MCPServer{{ID: "srv"}},
+		LSPServers: []source.LSPServer{{ID: "gopls"}},
+	}
+	namespaceProjected(&pr2, plugin)
+	if pr2.MCPServers[0].ID != "srv" || pr2.MCPServers[0].Plugin != plugin {
+		t.Errorf("mcp server must be stamped but not renamed; got %+v", pr2.MCPServers[0])
+	}
+	if pr2.LSPServers[0].ID != "gopls" || pr2.LSPServers[0].Plugin != plugin {
+		t.Errorf("lsp server must be stamped but not renamed; got %+v", pr2.LSPServers[0])
+	}
 }

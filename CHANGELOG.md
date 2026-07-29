@@ -36,8 +36,23 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   agentsync import claude:subagent` reproduced this with any installed plugin.
   `import` now skips such components with a warning naming the plugin (and errors
   if you name one explicitly); reconcile's `[w]rite-back` refuses the item and
-  points at `[o]verride`. Components you hand-wrote into an agent's native config
-  are still captured normally.
+  points at `[o]verride`. This covers MCP and LSP servers too — they are not
+  namespaced, but capturing one still mints a canonical copy that diverges from
+  the plugin's the moment it updates. Components you hand-wrote into an agent's
+  native config are still captured normally.
+- **A residual name collision is now reported instead of silently dropping a
+  component.** Namespacing makes the common case work, but the derived name is
+  not injective: plugin `a` shipping `b-c` and plugin `a-b` shipping `c` both
+  derive `a-b-c`, and a hand-authored `feature-dev-code-reviewer` collides with
+  what plugin `feature-dev` derives. Those reached the render pipeline, where
+  divergent content aborted with a message naming neither origin and **identical
+  content was silently deduped**. `checkProjectedConflicts` now guards name-keyed
+  components exactly as it guards MCP/LSP server ids, naming each side's
+  providing plugin (or your own canonical file).
+- **`apply` refuses to reclaim an orphaned destination it cannot read first.** A
+  pre-delete read failing with anything other than "already gone" (`EACCES`,
+  `EIO`, `EISDIR`) previously fell through to the delete, destroying a
+  hand-edited file with no backup. Convergence is never worth data loss.
 
 ### Changed
 

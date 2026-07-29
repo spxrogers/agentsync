@@ -40,9 +40,17 @@ var walkerCovered = map[string]map[string]bool{
 	},
 	"MCPServer": {
 		"ID": false, // filename identifier, never a secret
+		// Plugin is derived provenance stamped at projection (the id of the
+		// plugin that supplied this server). It never round-trips through a
+		// native config, is never serialized to the canonical source, and holds
+		// a plugin's filesystem id — a marketplace-derived name, not a
+		// credential. It exists so import/reconcile can refuse to capture a
+		// plugin-owned server; nothing resolves or re-references it.
+		"Plugin": false,
 	},
 	"LSPServer": {
-		"ID": false, // filename identifier, never a secret
+		"ID":     false, // filename identifier, never a secret
+		"Plugin": false, // derived provenance; see MCPServer.Plugin above
 	},
 }
 

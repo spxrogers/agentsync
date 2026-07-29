@@ -177,10 +177,11 @@ LSP, memory, **and plugins**) in one pass. A bulk import that finds nothing for 
 component reports it and exits cleanly rather than erroring. Add `--dry-run` to
 list the source files an import would write without touching `~/.agentsync/`.
 
-**Import never re-captures a plugin's own components.** Once you have applied,
-a plugin's subagents, skills, and commands are sitting in the agent's native
-config as ordinary files — and the agent's config gives no hint which ones
-agentsync put there. Importing them would create canonical copies that collide
+**Import never re-captures a plugin's own components** — subagents, skills,
+commands, MCP servers, and LSP servers alike. Once you have applied, a plugin's
+components are sitting in the agent's native config indistinguishable from ones
+you wrote yourself — the agent's config gives no hint which ones agentsync put
+there. Importing them would create canonical copies that collide
 with the plugin's own on the next apply, so `import` skips them and says which
 plugin provides each. Naming one explicitly
 (`agentsync import claude:subagent:feature-dev-code-reviewer`) is an error rather

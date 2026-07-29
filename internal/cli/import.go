@@ -289,9 +289,7 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// (capturing plugin components as if hand-authored), so warn and continue
 	// rather than refuse an import the user may need.
 	if pp, ppErr := pluginProvided(loaderFsForState(), agentsyncHome, projectRoot, sc); ppErr != nil {
-		io.warnf("could not determine which components your plugins provide (%v); "+
-			"a plugin-provided component captured now would collide with the plugin's own "+
-			"on the next apply — remove it from %s if that happens", ppErr, srcHome)
+		io.pluginProvidedErr = ppErr
 	} else {
 		io.pluginProvided = pp
 	}
@@ -864,8 +862,15 @@ type importIO struct {
 	// this struct is already threaded to every importer: "<kind>/<name>" → the
 	// plugin id providing it, for every component apply projects from an
 	// installed plugin. See pluginProvided() for why import must skip those.
-	// Empty (a projection failure, or no plugins) disables the filter.
-	pluginProvided map[string]string
+	//
+	// pluginProvidedErr is set when that projection FAILED. The filter then fails
+	// CLOSED: every component capture refuses, rather than silently proceeding
+	// with an empty skip set. Failing open would be the worse bug — the filter
+	// exists to stop import poisoning the canonical source, and the projection is
+	// fed by plugin data, so an attacker-influenced projection failure would be a
+	// way to switch the defence off.
+	pluginProvided    map[string]string
+	pluginProvidedErr error
 }
 
 // item prints one "imported X" / "would import X" line, prefixed with a glyph
@@ -1107,6 +1112,10 @@ func importMCP(io *importIO, home string, c source.Canonical, name string) ([]st
 			matched = append(matched, m)
 		}
 	}
+	matched, err := skipPluginProvided(io, "mcp", name, matched, func(m source.MCPServer) string { return m.ID })
+	if err != nil {
+		return nil, err
+	}
 	if len(matched) == 0 {
 		if name != "" {
 			return nil, fmt.Errorf("mcp server %q not found in native config", name)
@@ -1200,19 +1209,36 @@ func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot string, sc adapter.S
 				out["command/"+cmd.Name] = cmd.Plugin
 			}
 		}
+		// MCP/LSP servers are not namespaced (a same-id divergence is refused, not
+		// renamed apart — see namespaceProjected), but they ARE plugin-owned, and
+		// capturing one still mints a canonical copy that diverges from the
+		// plugin's own on its next update.
+		for _, m := range c.MCPServers {
+			if m.Plugin != "" {
+				out["mcp/"+m.ID] = m.Plugin
+			}
+		}
+		for _, l := range c.LSPServers {
+			if l.Plugin != "" {
+				out["lsp/"+l.ID] = l.Plugin
+			}
+		}
 	}
-	c, err := marketplace.LoadProjectedLenient(fs, agentsyncHome, pluginCacheRoot, disabled)
+	// Scope parity with render is what makes "the skipped set is exactly the
+	// rendered set" true. At PROJECT scope every adapter renders from the
+	// project-only overlay (`renderC = *c.Project`), never the user canonical, so
+	// a user-scope plugin contributes nothing to the project destination and must
+	// not shadow a project component that happens to share its derived name.
+	// Collecting only the relevant home keeps over-refusal off the table.
+	home := agentsyncHome
+	if projHome != "" {
+		home = projHome
+	}
+	c, err := marketplace.LoadProjectedLenient(fs, home, pluginCacheRoot, disabled)
 	if err != nil {
-		return nil, fmt.Errorf("project user plugins: %w", err)
+		return nil, fmt.Errorf("project plugins from %s: %w", home, err)
 	}
 	collect(c)
-	if projHome != "" {
-		pc, perr := marketplace.LoadProjectedLenient(fs, projHome, pluginCacheRoot, disabled)
-		if perr != nil {
-			return nil, fmt.Errorf("project %s plugins: %w", projHome, perr)
-		}
-		collect(pc)
-	}
 	return out, nil
 }
 
@@ -1225,6 +1251,19 @@ func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot string, sc adapter.S
 // no-op: the user asked for that exact component by name and deserves to be told
 // why it cannot be captured, and what to do instead.
 func skipPluginProvided[T any](io *importIO, kind, name string, items []T, nameOf func(T) string) ([]T, error) {
+	// Nothing matched → nothing to wrongly capture, so an unusable filter is
+	// harmless here. Checking this FIRST keeps a broken plugin cache from
+	// refusing an import that would not have touched a plugin component anyway.
+	if len(items) == 0 {
+		return items, nil
+	}
+	if io.pluginProvidedErr != nil {
+		return nil, fmt.Errorf("cannot safely import %ss: agentsync could not determine which "+
+			"components your installed plugins provide (%w). Capturing a plugin-provided component "+
+			"would create a canonical copy that collides with the plugin's own on the next apply, so "+
+			"this import is refused rather than risk it. Fix the plugin cache (`agentsync doctor`, "+
+			"`agentsync plugin upgrade --all`) and retry", kind, io.pluginProvidedErr)
+	}
 	if len(io.pluginProvided) == 0 {
 		return items, nil
 	}
@@ -1431,6 +1470,10 @@ func importLSP(io *importIO, home string, c source.Canonical, name string) ([]st
 		if name == "" || ls.ID == name {
 			matched = append(matched, ls)
 		}
+	}
+	matched, err := skipPluginProvided(io, "lsp", name, matched, func(ls source.LSPServer) string { return ls.ID })
+	if err != nil {
+		return nil, err
 	}
 	if len(matched) == 0 {
 		if name != "" {

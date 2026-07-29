@@ -249,7 +249,7 @@ func (w *Writer) Write(op adapter.FileOp, finalBytes []byte) error {
 // Delete satisfies adapter.DestWriter. Idempotent on missing files.
 //
 // Orphan deletes (op.SourceID under a reclaimed prefix — see
-// IsOrphanReclaimable — synthesized by Apply when a component is removed from or
+// isOrphanReclaimable — synthesized by Apply when a component is removed from or
 // renamed in the source) get a dest that drifted from what agentsync last wrote
 // backed up before removal, honouring the never-destroy-unsynced-content
 // invariant the write path enforces. Other delete callers (agent disable
@@ -264,7 +264,7 @@ func (w *Writer) Delete(op adapter.FileOp) error {
 	if w.dryRun {
 		return nil
 	}
-	orphan := IsOrphanReclaimable(op.SourceID)
+	orphan := isOrphanReclaimable(op.SourceID)
 	if orphan {
 		if err := w.backupOrphanIfDrifted(op); err != nil {
 			return err
@@ -287,7 +287,16 @@ func (w *Writer) Delete(op adapter.FileOp) error {
 func (w *Writer) backupOrphanIfDrifted(op adapter.FileOp) error {
 	existing, err := os.ReadFile(op.Path)
 	if err != nil {
-		return nil // already gone (or unreadable): nothing to preserve
+		if os.IsNotExist(err) {
+			return nil // already gone: nothing to preserve
+		}
+		// Any OTHER read failure (EACCES, EIO, EISDIR) means we cannot tell
+		// whether this destination holds an unsynced user edit — and the caller
+		// deletes immediately after. Treating that as "nothing to preserve" would
+		// destroy a drifted file with no backup, which is exactly what the
+		// never-destroy-unsynced-content invariant forbids. Refuse the delete
+		// instead; a reclaim is convergence, never worth data loss.
+		return fmt.Errorf("cannot verify %s before reclaiming it (a hand-edit could be lost): %w", op.Path, err)
 	}
 	stateKey := fmt.Sprintf("%s:%s:%s:%s", w.agent, w.scope.String(),
 		paths.HomeRelative(w.userHome, w.project), paths.HomeRelative(w.userHome, op.Path))

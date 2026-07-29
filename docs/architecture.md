@@ -354,11 +354,33 @@ Windows). A plugin id comes from a marketplace, outside agentsync's trust
 boundary, so every derived name is re-validated through that same write-boundary
 sanitizer before it can reach a path or a diagnostic.
 
-MCP and LSP servers are deliberately **not** namespaced. They are id-keyed and
+MCP and LSP servers are deliberately **not** renamed. They are id-keyed and
 already covered by `checkProjectedConflicts`, whose hard failure on a same-id
 divergence is a security property: two sources claiming one server id can be a
 silent endpoint hijack, which is a case to refuse rather than to rename apart.
+They ARE stamped with provenance, so the capture paths can still refuse them.
 Hooks have no name key at all.
+
+**The derived name is not injective, so the collision guard stays.** Plugin `a`
+shipping `b-c` and plugin `a-b` shipping `c` both derive `a-b-c`, and a user who
+hand-authors `feature-dev-code-reviewer` collides with what plugin `feature-dev`
+derives. `checkProjectedConflicts` therefore guards name-keyed components exactly
+as it guards MCP/LSP ids — fatal for the mutating loads, a warning for the lenient
+read-only ones — and its message names each side's origin (the providing plugin,
+or the user's own canonical file). Without it those cases reach the render
+pipeline, where divergent content aborts with a message that can name neither
+origin (a `FileOp` carries no provenance) and **identical content is silently
+deduped**, dropping a component with no report at all. The silent drop is the
+reason the guard exists; the loud one it merely makes actionable.
+
+Namespacing itself never fails. An earlier revision validated the derived name at
+projection and returned an error — a regression, because the projection's own
+`validateProjectedName` permits `:` and control runes, and because `loadProjected`
+propagates a projection error regardless of `lenient`, taking down the read-only
+commands whose whole design is to degrade and show state. The name safety lives
+downstream at the single dispatch waist, where `render.Plan` runs
+`ValidateComponentID` over every component id before any of them is joined into a
+destination path.
 
 The rename happens once, on the first apply after upgrading, so `apply` reclaims
 the pre-rename destination files it previously wrote — see
@@ -626,10 +648,27 @@ points refuse:
   `Ingest` reads the agent's native config, where a file agentsync rendered from
   a plugin is indistinguishable from a hand-written one — so import projects the
   plugins separately (`pluginProvided`) and matches by component name, which is
-  exact now that plugin components are namespaced.
+  exact now that plugin components are namespaced. If that projection FAILS the
+  filter fails **closed** (the import refuses) rather than proceeding with an
+  empty skip set: the filter exists to stop import poisoning the canonical
+  source, and it is fed by plugin data, so a fail-open would be a way to switch
+  the defence off.
 - **`reconcile`'s `[w]rite-back`** refuses the item and points at `[o]verride`.
   It works from the PROJECTED canonical, so provenance is already on the
-  components (`pluginProvidedSourceIDs`) and no re-projection is needed.
+  components (`pluginProvidedSourceIDs`) and no re-projection is needed. The
+  check sits at `writeBackItem`, the dispatch waist, so it covers both shapes:
+  whole-file components matched by SourceID, and key-level MCP/LSP servers
+  matched from the item's JSON pointer.
+
+This covers **MCP and LSP servers too**, which are not namespaced but are still
+plugin-owned: capturing one mints a canonical copy that renders identically today
+and diverges the moment the plugin updates, at which point `checkProjectedConflicts`
+refuses every load. `MCPServer.Plugin` / `LSPServer.Plugin` carry that provenance
+(derived state, never serialized, classified non-secret in `walkerCovered`).
+
+Both lookups are scoped to the canonical the render actually uses: at project
+scope that is the project-only overlay, so a user-scope plugin never shadows a
+project component that merely shares its name.
 
 The edit belongs upstream in the plugin, or the plugin can be disabled. This is
 the capture-side complement to
@@ -691,7 +730,10 @@ empty-merge op) and **whole-file components** whose `source_id` is under
 `scripts/`/`references/`/`assets/` file within one, a subagent, or a slash
 command that the source no longer renders. In every case the writer deletes the
 orphaned file and **backs up an `orphan-drifted` dest first** (a hand-edit is
-never destroyed un-preserved). Empty-directory pruning applies to **skills
+never destroyed un-preserved). If that pre-delete read fails for any reason other
+than "already gone" — `EACCES`, `EIO`, `EISDIR` — the reclaim is **refused**
+rather than performed blind: agentsync cannot tell whether the destination held
+an unsynced edit, and convergence is never worth data loss. Empty-directory pruning applies to **skills
 only** — a skill is a directory under the Agent Skills spec, so removal must
 reclaim the whole tree, pruned up to but never including the agent's skills root;
 subagents and commands are flat files in a directory the agent always owns.
