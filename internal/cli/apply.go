@@ -420,7 +420,7 @@ func removalCounts(plan render.RenderPlan, s *state.Targets, userHome string, sc
 			// entry is kept so the next run retries — so counting it here would
 			// print "removed: N" on every run alongside the warning saying it was
 			// not removed.
-			if render.OrphanDeleteWillProceed(del.Path) {
+			if render.OrphanDeleteWillProceed(del) {
 				fileDeletes[del.Path] = true
 			}
 		}

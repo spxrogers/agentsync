@@ -390,8 +390,17 @@ func nameCollisionError[T any](kind, name string, items []T, originOf func(T) (i
 		origins = append(origins, fmt.Sprintf("your own canonical %s %q", kind, name))
 	}
 	if lenient {
-		slog.Warn("component provided by multiple sources with different content; render keeps the last",
-			"kind", kind, "name", name, "from", strings.Join(origins, " and "))
+		// name is projection-derived (a plugin id joined to an upstream component
+		// name) and reaches this log BEFORE render.Plan's ValidateComponentID, so
+		// sanitize it here rather than relying on that waist. The origins are
+		// already %q-quoted by nameCollisionError's callers below.
+		// NOT "render keeps the last" — that is true for MCP/LSP (an id-keyed map,
+		// last write wins) but false here: two name-keyed components rendering to
+		// one destination path make the apply pipeline abort. Lenient callers are
+		// read-only, so they still SHOW state; the next mutating command fails.
+		slog.Warn("component provided by multiple sources with different content; "+
+			"apply will refuse until one is renamed or its plugin disabled",
+			"kind", kind, "name", untrusted.Sanitize(name), "from", strings.Join(origins, " and "))
 		return nil
 	}
 	return fmt.Errorf("%s %q is provided by more than one source with different content — %s. "+

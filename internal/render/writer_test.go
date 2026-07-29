@@ -760,3 +760,54 @@ func TestApply_UnreadableOrphanIsSkippedNotDeleted(t *testing.T) {
 		t.Fatal("once the destination is readable again, the retry must reclaim it")
 	}
 }
+
+// TestOrphanDeleteWillProceed pins the predicate the apply summary counts with.
+// It must answer the same question Delete does, or a permanently-unreadable
+// orphan is reported "removed: N" on every run — on the same run that warns it
+// was skipped, and forever, because the state entry is deliberately kept so the
+// delete is retried.
+func TestOrphanDeleteWillProceed(t *testing.T) {
+	tmp := t.TempDir()
+	op := func(name, sourceID string) adapter.FileOp {
+		return adapter.FileOp{Action: "delete", Path: filepath.Join(tmp, name), SourceID: sourceID}
+	}
+
+	readable := filepath.Join(tmp, "readable.md")
+	if err := os.WriteFile(readable, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.Join(tmp, "empty.md")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A directory at a file path: the root-safe way to make a destination
+	// unreadable (chmod does not stop root, which is how CI runs).
+	if err := os.MkdirAll(filepath.Join(tmp, "isdir.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(tmp, "no-such-target"), filepath.Join(tmp, "dangling.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		op   adapter.FileOp
+		want bool
+	}{
+		{"readable regular file", op("readable.md", "subagents/readable.md"), true},
+		{"empty but readable", op("empty.md", "subagents/empty.md"), true},
+		{"absent destination converges away", op("gone.md", "subagents/gone.md"), true},
+		// Delete's ReadFile fails EISDIR here, so it skips — the count must agree.
+		{"directory at the path", op("isdir.md", "subagents/isdir.md"), false},
+		// Delete's ReadFile gets ENOENT and removes the link, so this proceeds.
+		{"dangling symlink", op("dangling.md", "subagents/dangling.md"), true},
+		// Not an orphan delete at all.
+		{"non-reclaimable SourceID", op("readable.md", "memory/AGENTS.md"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := render.OrphanDeleteWillProceed(tc.op); got != tc.want {
+				t.Errorf("OrphanDeleteWillProceed(%s) = %v, want %v", tc.op.SourceID, got, tc.want)
+			}
+		})
+	}
+}

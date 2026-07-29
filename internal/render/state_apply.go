@@ -194,7 +194,23 @@ func OrphanFiles(s *state.Targets, userHome, agent string, scope adapter.Scope, 
 //
 // Both are flat single files, so they need the backup-if-drifted guarantee but
 // not the empty-directory pruning that skills get; see Writer.Delete.
-var orphanReclaimedPrefixes = []string{"skills/", "subagents/", "commands/"}
+//
+// "agents/" is the RETIRED spelling of the subagent SourceID, and it is listed
+// deliberately. The canonical directory rename (agents/ → subagents/) ships in
+// the same release as namespacing, so an upgrading user's state still holds
+// "agents/<name>.md" entries — and the only rewriter, migrate's
+// rewriteSubagentStateIDs, runs solely from migrateSubagentTree, which returns
+// early when <home>/agents/ holds no files. A user whose subagents come ONLY
+// from plugins has no such directory, so their state is never rewritten.
+//
+// That is exactly the reported scenario (#211: two plugins, no hand-authored
+// subagents). Without this prefix their pre-rename ~/.claude/agents/
+// code-reviewer.md would be unreclaimable AND lose its state entry — left
+// forever beside the two namespaced files, which is MORE duplicates than before
+// and the direct opposite of what the upgrade notice promises. No live SourceID
+// uses this prefix ("subagents/" does not match it), so listing it costs nothing
+// and can be dropped once the retired spelling is out of circulation.
+var orphanReclaimedPrefixes = []string{"skills/", "subagents/", "commands/", "agents/"}
 
 // isOrphanReclaimable reports whether a state SourceID names a component whose
 // destination file `apply` reclaims. It is the single predicate behind both the

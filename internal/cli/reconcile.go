@@ -233,7 +233,15 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 				continue
 			}
 			fmt.Fprintf(w, "\n%s  (orphan — source no longer produces this file)\n", ui.Sanitize(it.op.Path))
-			fmt.Fprintf(w, "  [r]emove (backs up first)  [k]eep  [q]uit\n  > ")
+			// [k]eep is honest only for the kinds `apply` does NOT auto-reclaim.
+			// Skills, subagents, and commands are reclaimed on the next apply
+			// (render.orphanReclaimedPrefixes), so "keep" there means "keep until
+			// then" — say so rather than imply it is permanent.
+			if render.OrphanDeleteWillProceed(it.op) {
+				fmt.Fprintf(w, "  [r]emove (backs up first)  [k]eep (until the next apply reclaims it)  [q]uit\n  > ")
+			} else {
+				fmt.Fprintf(w, "  [r]emove (backs up first)  [k]eep  [q]uit\n  > ")
+			}
 		orphanPrompt:
 			for {
 				ch, readErr := readChar(br)

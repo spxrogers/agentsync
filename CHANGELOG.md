@@ -71,10 +71,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   hyphens". **Invoke plugin agents and commands by their new names.** Components
   you hand-author in `~/.agentsync/` are **not** renamed. (That is not the same
   as "a plugin can never take your name": derived names are not injective, so a
-  plugin's derived name can land on one of yours. agentsync reports that clash
-  naming both sides rather than letting either win silently.) MCP and LSP servers are unchanged: a same-id divergence across
-  sources is still refused rather than renamed apart, because it can be a silent
-  endpoint hijack. A one-time upgrade notice points at the docs.
+  plugin's derived name can land on one of yours. agentsync reports that clash,
+  naming both sides, rather than letting either win silently.) MCP and LSP
+  servers are unchanged: a same-id divergence across sources is still refused
+  rather than renamed apart, because it can be a silent endpoint hijack. A
+  one-time upgrade notice points at the docs.
   ([#211](https://github.com/spxrogers/agentsync/issues/211))
 - **`apply` now reclaims orphaned subagents and commands, not just skills.** A
   subagent or slash command removed from — or renamed in — the canonical source

@@ -268,3 +268,84 @@ func TestPruneStaleState_ReclaimableOrphanRetention(t *testing.T) {
 			"a non-reclaimable entry must prune as before")
 	}
 }
+
+// TestPruneStaleState_DanglingSymlinkIsKept is the discriminating case for the
+// guard's PREDICATE, which the test above cannot reach: a present file and an
+// absent one are kept/pruned identically under Stat and Lstat, so neither
+// separates the correct check from the two wrong ones review found.
+//
+// A dangling symlink does. os.Stat follows it and reports ENOENT — so both
+// `Stat() == nil` (the round-3 bug) and `!errors.Is(Stat_err, ErrNotExist)` (the
+// round-4 near-miss) prune the entry and strand the link forever. os.Lstat sees
+// the link itself, so the entry is kept, the delete is retried, and Delete's
+// os.Remove clears it.
+func TestPruneStaleState_DanglingSymlinkIsKept(t *testing.T) {
+	testenv.RequireContainer(t)
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, ".claude", "agents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "dangling.md")
+	if err := os.Symlink(filepath.Join(tmp, "nonexistent-target"), link); err != nil {
+		t.Fatal(err)
+	}
+
+	prefix := fmt.Sprintf("claude:user:%s:", paths.HomeRelative(tmp, ""))
+	st := state.New()
+	key := prefix + paths.HomeRelative(tmp, link)
+	st.Files[key] = state.FileEntry{SHA256: "old", SourceID: "subagents/dangling.md"}
+
+	render.PruneStaleState(st, tmp, "claude", adapter.ScopeUser, "", nil)
+
+	if _, ok := st.Files[key]; !ok {
+		t.Error("a dangling symlink is still a destination agentsync owns and can remove; " +
+			"pruning its entry strands it forever (the guard must Lstat, not Stat)")
+	}
+}
+
+// TestPruneStaleState_RetiredSubagentSourceIDIsReclaimable pins the prefix that
+// makes the #211 upgrade actually work for the users it targets.
+//
+// The canonical directory rename (agents/ → subagents/) ships in the same release
+// as namespacing, so an upgrading user's state still holds "agents/<name>.md"
+// SourceIDs — and the only rewriter runs from `migrate subagents`, which returns
+// early when <home>/agents/ is empty. A user whose subagents come ONLY from
+// plugins has no such directory, which is exactly the reported scenario. Without
+// the retired prefix their pre-rename destination file is unreclaimable AND loses
+// its state entry: left forever beside the namespaced ones, which is MORE
+// duplicate agents than before and the opposite of what the upgrade notice says.
+func TestPruneStaleState_RetiredSubagentSourceIDIsReclaimable(t *testing.T) {
+	testenv.RequireContainer(t)
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, ".claude", "agents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(dir, "code-reviewer.md")
+	if err := os.WriteFile(legacy, []byte("pre-rename"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prefix := fmt.Sprintf("claude:user:%s:", paths.HomeRelative(tmp, ""))
+	st := state.New()
+	key := prefix + paths.HomeRelative(tmp, legacy)
+	// The RETIRED spelling, as a pre-upgrade state file carries it.
+	st.Files[key] = state.FileEntry{SHA256: "old", SourceID: "agents/code-reviewer.md"}
+
+	render.PruneStaleState(st, tmp, "claude", adapter.ScopeUser, "", nil)
+	if _, ok := st.Files[key]; !ok {
+		t.Fatal("a pre-rename subagent entry must stay owned so its destination is reclaimed")
+	}
+
+	deletes := render.OrphanDeletes(st, tmp, "claude", adapter.ScopeUser, "", nil)
+	var found bool
+	for _, d := range deletes {
+		if d.Path == legacy {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("apply must synthesize a delete for the pre-rename destination; got %v", deletes)
+	}
+}

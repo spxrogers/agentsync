@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -301,7 +303,7 @@ func (w *Writer) Delete(op adapter.FileOp) error {
 	return nil
 }
 
-// OrphanDeleteWillProceed reports whether Apply will actually reclaim an
+// OrphanDeleteWillProceed reports whether Apply will actually reclaim this
 // orphaned destination, rather than skip it.
 //
 // Delete skips (with a warning) any orphan it cannot READ first — it cannot rule
@@ -309,20 +311,60 @@ func (w *Writer) Delete(op adapter.FileOp) error {
 // never-destroy-unsynced-content invariant. A caller counting removals for the
 // apply summary has to ask the same question: a permanently-unreadable orphan
 // would otherwise be reported "removed: 1 file(s)" on EVERY run, on the same run
-// that warns it was skipped — two lines that contradict each other. (It reports
-// every run rather than once because the state entry is now deliberately kept so
-// the delete is retried; see PruneStaleState.)
+// that warns it was skipped — two lines that contradict each other. (Every run
+// rather than once, because the state entry is now deliberately kept so the
+// delete is retried; see PruneStaleState.)
 //
-// This is an advisory pre-check for reporting only. Delete's own read is
-// authoritative — the two can disagree if the destination changes in between,
-// which costs a wrong count in a summary line and nothing else. Both use
-// os.ReadFile so they answer the same question about the same thing.
+// # Why a shared predicate rather than a Writer accessor
 //
-// An absent destination proceeds: there is nothing to preserve, the remove is a
+// The obvious alternative — have Delete record what it skipped and expose a
+// SkippedDeletes() accessor, the natural parallel to Unchanged()/WouldChange() —
+// does not work here, and not for cost reasons. removalCounts has TWO callers:
+// the `apply --dry-run` preview and the real apply. Delete returns immediately
+// on dryRun, before any read, so the accessor would be empty in preview: the
+// preview would keep over-counting the exact file the real run under-counts. A
+// preview that disagrees with the apply it previews is the one failure the
+// shared-dryRun design of applyPlan exists to prevent. A pure predicate is the
+// only shape both callers can share.
+//
+// Delete's own read stays authoritative; this can disagree with it if the
+// destination changes in between, or if a read fails only PAST the first byte —
+// either costs a wrong number in a summary line and nothing else. A bare Stat
+// would not do: it answers a different question (a directory stats fine but
+// cannot be read), which is why this opens and reads.
+//
+// A non-reclaimable op is not an orphan delete at all and reports false. An
+// absent destination proceeds: there is nothing to preserve, the remove is a
 // no-op, and the entry converges away.
-func OrphanDeleteWillProceed(path string) bool {
-	_, err := os.ReadFile(path)
-	return err == nil || os.IsNotExist(err)
+func OrphanDeleteWillProceed(op adapter.FileOp) bool {
+	if !isOrphanReclaimable(op.SourceID) {
+		return false
+	}
+	// Short-circuit the shapes whose read cannot succeed anyway — a directory,
+	// FIFO, device, or socket. This introduces no divergence from Delete (its
+	// ReadFile fails on every one of them too) and keeps `apply --dry-run`, which
+	// is advertised as read-only, from BLOCKING on an open of a FIFO someone left
+	// at a destination path. Symlinks deliberately fall through, so a dangling one
+	// answers the same way for both (ENOENT → proceeds).
+	if fi, err := os.Lstat(op.Path); err == nil && !fi.Mode().IsRegular() && fi.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	f, err := os.Open(op.Path)
+	if err != nil {
+		// Absent proceeds: nothing to preserve, the remove is a no-op, and the
+		// entry converges away. Anything else (EACCES, ENOTDIR) is the skip.
+		return os.IsNotExist(err)
+	}
+	defer func() { _ = f.Close() }()
+	// One byte is enough to separate "readable" from EACCES/EIO at offset 0
+	// without buffering a large bundled skill asset twice per apply (Delete reads
+	// the whole file again immediately after). io.EOF means an empty but readable
+	// file, which Delete handles fine.
+	var probe [1]byte
+	if _, rerr := f.Read(probe[:]); rerr != nil && !errors.Is(rerr, io.EOF) {
+		return false
+	}
+	return true
 }
 
 // backupOrphanIfDrifted copies a soon-to-be-deleted component file to the backup

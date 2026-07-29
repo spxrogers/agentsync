@@ -814,9 +814,11 @@ func TestReconcile_HookWriteBackIsRefused(t *testing.T) {
 	}
 
 	out, _ := runCLI(t, env, "reconcile", "--auto-writeback")
-	if !strings.Contains(out, "not implemented") {
-		t.Errorf("hook write-back must be refused as unimplemented — the hook-provenance "+
-			"lookup relies on it; got:\n%s", out)
+	// Match the POINTER too: a bare "not implemented" could drift onto some
+	// other item's refusal and this test would stop proving anything about hooks.
+	if !strings.Contains(out, "not implemented") || !strings.Contains(out, "/hooks/") {
+		t.Errorf("hook write-back must be refused as unimplemented, naming the hook pointer — "+
+			"the hook-provenance lookup relies on it; got:\n%s", out)
 	}
 }
 
