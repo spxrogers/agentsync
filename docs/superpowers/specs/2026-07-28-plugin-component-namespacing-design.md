@@ -263,7 +263,11 @@ the upgrade notice promises.
 **Also broadened during review:** the capture refusal covers MCP servers, LSP
 servers, and hooks (hooks per *handler*, since one canonical `hooks/<event>.toml`
 holds handlers from many sources), not just the three name-keyed kinds; and the
-"Known adjacent gap" below was closed rather than deferred. A component the USER
+"Known adjacent gap" below was closed rather than deferred. A HOOK HANDLER the USER
 also declares is never treated as plugin-provided, even when a plugin ships an
 identical one — without that check, `import` dropped the user's own hook handler
-and `WriteHooks`' whole-file replace erased it from the canonical source.
+and `WriteHooks`' whole-file replace erased it from the canonical source. The
+override is **hooks-only**, deliberately: every other writer is
+one-file-per-component, so a refusal deletes nothing, whereas capturing a component
+the plugin also provides would make the two diverge and wedge every later mutating
+load in `checkProjectedConflicts`. See architecture.md § 5.

@@ -51,6 +51,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   content was silently deduped**. `checkProjectedConflicts` now guards name-keyed
   components exactly as it guards MCP/LSP server ids, naming each side's
   providing plugin (or your own canonical file).
+- **`status`, `apply`, and `reconcile` no longer hang on a non-regular
+  destination.** A FIFO left at a path agentsync manages made `os.ReadFile`
+  BLOCK forever rather than fail — wedging `status` (an advertised read-only
+  command), `apply --dry-run`, and reconcile's orphan listing. Every
+  destination read now shares one shape guard, so none of them can disagree
+  about what is safe to read.
+- **`reconcile --auto-writeback` no longer exits non-zero forever** on a
+  plugin-provided item. That refusal is structural, not a transient failure, so
+  counting it as one broke `reconcile && deploy` until the plugin was disabled;
+  it is now skipped with a reason, like a foreign collision.
 - **`apply` refuses to reclaim an orphaned destination it cannot read first.** A
   pre-delete read failing with anything other than "already gone" (`EACCES`,
   `EIO`, `EISDIR`) previously fell through to the delete, destroying a
