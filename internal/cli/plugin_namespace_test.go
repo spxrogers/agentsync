@@ -332,9 +332,16 @@ func TestReconcile_WriteBackRefusesPluginProvidedComponent(t *testing.T) {
 	// item label (.claude/agents/feature-dev-code-reviewer.md) on every outcome,
 	// including a successful write-back, so matching "feature-dev" alone would
 	// pass even if the refusal never fired.
-	out, _ := runCLI(t, env, "reconcile", "--auto-writeback")
-	if !strings.Contains(out, "projected from the plugin") {
-		t.Errorf("reconcile must refuse write-back with its own reason; got:\n%s", out)
+	// --auto-writeback must SKIP it, not fail: the refusal is structural and
+	// permanent, so counting it as a write-back failure would make every future
+	// run exit non-zero and break `reconcile && deploy` until the plugin is
+	// disabled. (The foreign-collision case ten lines up sets this precedent.)
+	out, err := runCLI(t, env, "reconcile", "--auto-writeback")
+	if err != nil {
+		t.Fatalf("a structural refusal must not fail the run: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "provided by plugin") {
+		t.Errorf("reconcile must say why it skipped the item; got:\n%s", out)
 	}
 	captured := filepath.Join(tmp, ".agentsync", "subagents", "feature-dev-code-reviewer.md")
 	if _, err := os.Stat(captured); err == nil {
@@ -425,7 +432,7 @@ func TestReconcile_WriteBackRefusesPluginSkillBundledFile(t *testing.T) {
 	}
 
 	out, _ := runCLI(t, env, "reconcile", "--auto-writeback")
-	if !strings.Contains(out, "projected from the plugin") {
+	if !strings.Contains(out, "provided by plugin") {
 		t.Errorf("write-back of a plugin skill's bundled file must be refused; got:\n%s", out)
 	}
 	if _, err := os.Stat(filepath.Join(tmp, ".agentsync", "skills", "bundler-deploy")); err == nil {
@@ -1031,5 +1038,55 @@ func TestApply_ReclaimsRetiredSubagentSourceID(t *testing.T) {
 	if _, err := os.Stat(dest); err == nil {
 		t.Fatal("a destination recorded under the RETIRED agents/ SourceID must still be " +
 			"reclaimed — that is the pre-rename leftover the upgrade notice promises to remove")
+	}
+}
+
+// TestImport_CoDeclaredMCPServerStaysRefused pins the OTHER half of the
+// co-declaration rule, and it is the opposite of the hook case on purpose.
+//
+// Skipping an MCP server deletes nothing — WriteMCP writes one file per server,
+// so a refused capture just declines to update. Letting the user's claim win
+// there would be actively worse: import would capture the DRIFTED native content
+// into mcp/<id>.toml, the user's copy and the plugin's projection would then
+// diverge, and every later mutating load would hard-fail in
+// checkProjectedConflicts — a permanent wedge in place of a refusal that costs
+// nothing.
+//
+// So: hooks override (skipping deletes), everything else refuses (skipping is
+// free). The asymmetry is the contract.
+func TestImport_CoDeclaredMCPServerStaysRefused(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeServerMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("srv-mp", mpDir, "srv"))
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	// The user declares the SAME server id, byte-identical to the plugin's, so
+	// checkProjectedConflicts is happy and both coexist in the projection.
+	mcpDir := filepath.Join(tmp, ".agentsync", "mcp")
+	if err := os.MkdirAll(mcpDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mcpDir, "pluginapi.toml"),
+		[]byte("[server]\ncommand = \"plugin-server\"\nargs = [\"--serve\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	// Naming it explicitly must still be refused: capturing is what creates the
+	// divergence that wedges every later load.
+	out, err := runCLI(t, env, "import", "claude:mcp:pluginapi")
+	if err == nil {
+		t.Fatalf("a co-declared MCP server must still be refused; got:\n%s", out)
+	}
+
+	// And the tree must still be usable — the whole point of refusing.
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply must still succeed after the refusal: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "status"); err != nil {
+		t.Fatalf("status must still succeed after the refusal: %v\n%s", err, out)
 	}
 }

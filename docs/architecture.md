@@ -696,6 +696,17 @@ Both lookups are scoped to the canonical the render actually uses: at project
 scope that is the project-only overlay, so a user-scope plugin never shadows a
 project component that merely shares its name.
 
+**One exception, and it is asymmetric on purpose.** A component the user ALSO
+declares is not treated as plugin-provided — but only for **hooks**, because
+`source.WriteHooks` replaces the whole `hooks/<event>.toml`, so a handler import
+declines to capture is *erased* from the canonical source. Everywhere else
+(`WriteMCP`, `WriteSkill`, …) writes one file per component, so a refusal deletes
+nothing — and letting the user's claim win there would be worse: import would
+capture the drifted native content, the user's copy and the plugin's projection
+would diverge, and every later mutating load would hard-fail in
+`checkProjectedConflicts`. The override exists to prevent a DELETION, not to
+decide ownership.
+
 The edit belongs upstream in the plugin, or the plugin can be disabled. This is
 the capture-side complement to
 [plugin component namespacing](#plugin-component-namespacing).

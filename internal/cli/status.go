@@ -755,6 +755,15 @@ func hashFile(path string) string {
 		// "this is a symlink now."
 		return "symlink-not-regular-file"
 	}
+	// A FIFO, device, or socket at a destination path would make os.ReadFile
+	// BLOCK forever rather than fail — wedging `status`, which is advertised as
+	// read-only, and reconcile's orphan listing. Neither has a content hash worth
+	// computing, so answer the same "not a regular file" sentinel the symlink
+	// case uses. Shares render's predicate so the destination-read guards cannot
+	// disagree about what is safe to read.
+	if !render.IsRegularOrAbsent(path) {
+		return "symlink-not-regular-file"
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""

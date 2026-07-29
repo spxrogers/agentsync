@@ -297,11 +297,25 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 				// file. Writing it back would overwrite the curated source
 				// with foreign content — the worst data-loss path. Refuse to
 				// do that non-interactively; leave it for an explicit choice.
-				if it.cls == drift.ForeignCollision {
+				switch {
+				case it.cls == drift.ForeignCollision:
 					fmt.Fprintf(w, "skipped (foreign-collision, would overwrite source): %s — resolve interactively\n", itemLabelDisp(it))
 					autoSkipped++
 					action = 's'
-				} else {
+				case it.pluginOwner != "":
+					// A plugin-provided component cannot be written back at all —
+					// it has no canonical file of its own. That refusal is
+					// STRUCTURAL and permanent, not a transient failure, so
+					// letting it count as a write-back FAILURE would make
+					// `reconcile --auto-writeback` exit non-zero on every run
+					// forever, breaking any `reconcile && deploy` until the user
+					// disables the plugin. Skip it like a foreign collision — the
+					// same "cannot be resolved non-interactively" shape.
+					fmt.Fprintf(w, "skipped (provided by plugin %q, no canonical file to write into): %s — use [o]verride, or change it upstream\n",
+						ui.Sanitize(it.pluginOwner), itemLabelDisp(it))
+					autoSkipped++
+					action = 's'
+				default:
 					action = 'w'
 				}
 			case autoOR:
@@ -479,17 +493,17 @@ func b2i(b bool) int {
 // has to project separately and match by component name.
 func pluginProvidedSourceIDs(c source.Canonical) map[string]string {
 	out := map[string]string{}
-	// A key the USER also declares is never plugin-provided, even when a plugin
-	// ships an identical component — see pluginProvided (internal/cli/import.go)
-	// for why this is a data-loss guard rather than a nicety.
-	mine := map[string]bool{}
+	// No co-declaration override here, deliberately. Import needs one for HOOKS,
+	// because source.WriteHooks replaces the whole event file and skipping a
+	// handler the user also declares would ERASE it (see pluginProvided,
+	// internal/cli/import.go). This map registers no hook keys at all — hook
+	// write-back is unimplemented — and for every other kind the override would
+	// be harmful rather than absent: capturing a component the plugin also
+	// provides makes the two DIVERGE, and every later mutating load then fails in
+	// checkProjectedConflicts. Refusing the write-back costs nothing by
+	// comparison, so a plugin-provided key stays the plugin's.
 	claim := func(key, plugin string) {
-		if plugin == "" {
-			mine[key] = true
-			delete(out, key)
-			return
-		}
-		if !mine[key] {
+		if plugin != "" {
 			out[key] = plugin
 		}
 	}

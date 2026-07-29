@@ -365,6 +365,11 @@ func OrphanDeleteWillProceed(op adapter.FileOp) bool {
 	return true
 }
 
+// IsRegularOrAbsent is the exported view of isRegularOrAbsent, for the sibling
+// destination reads outside this package (internal/cli's hashFile). They face
+// the identical hazard and must not answer it differently.
+func IsRegularOrAbsent(path string) bool { return isRegularOrAbsent(path) }
+
 // isRegularOrAbsent reports whether a destination is a regular file, or is not
 // there at all. Anything else — a directory, FIFO, device, socket — is a shape
 // whose content agentsync cannot meaningfully read or preserve.
@@ -651,6 +656,13 @@ func backupPathFor(src, backupRoot string) string {
 // delete) that must preserve a file before a destructive action so no choice
 // loses content. Returns ("", nil) when path is missing.
 func BackupFile(home, path string) (string, error) {
+	// Same shape guard as the apply-side reads: os.ReadFile BLOCKS forever on a
+	// FIFO rather than failing, and this runs from reconcile's interactive orphan
+	// delete. A non-regular destination has no content to preserve anyway, so
+	// report "nothing backed up" rather than hang.
+	if !isRegularOrAbsent(path) {
+		return "", fmt.Errorf("refusing to back up %s: not a regular file", path)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

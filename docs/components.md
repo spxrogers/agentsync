@@ -351,8 +351,13 @@ noop-registered agent unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`.
 
 ### `internal/render`
 Orchestrates apply: canonical + registry → per-agent `FileOp`s/`Skip`s, runs
-collision detection and backups, records state, synthesizes cleanup ops for
-orphaned owned keys, and builds the translation report. `Plan` also validates
+collision detection and backups, records state, and builds the translation
+report. It reclaims two kinds of orphan: emptied key-merge sections (synthesized
+cleanup ops for orphaned owned keys) and **whole-file components** whose
+`source_id` is under `skills/`, `subagents/`, `commands/`, or the retired
+`agents/` spelling — a destination whose source no longer renders it is deleted,
+backing up a hand-edit first, and SKIPPED (with the state entry kept, so the next
+apply retries) when it cannot be read. `Plan` also validates
 every component id that becomes a destination filename — subagent/command/skill
 `Name` plus MCP/LSP server ids (a per-server-file adapter like continuedev joins
 the id into a path) — against `source.ValidateComponentID` before any adapter
@@ -361,8 +366,14 @@ symmetric with the dest→source write boundary (see architecture §7).
 - **Key:** `Plan`; `Apply`; `PreviewApply` (dry-run: collision preview +
   synced/would-change verdict); `Writer`
   (`NewWriter`/`NewPreviewWriter`); `TranslationReport` (`PrintText`/`PrintJSON`);
-  `BuildReport`; `RecordOpsState`; `OrphanFiles`; `PruneStaleState`;
-  `BackupFile`/`PruneBackups`; `CollisionReport`.
+  `BuildReport`; `RecordOpsState`; `PruneStaleState`;
+  `BackupFile`/`PruneBackups`; `CollisionReport`; and the orphan-reclamation
+  trio — `OrphanFiles` (what state owns but the plan no longer renders),
+  `OrphanDeletes` (the deletes apply will perform), `OrphanIsReclaimable` (is
+  this component KIND reclaimed at all — drives reconcile's prompt wording) and
+  `OrphanDeleteWillProceed` (will THIS destination actually be removed on this
+  run — keeps the apply summary from counting a skipped delete). `IsRegularOrAbsent`
+  is shared with `internal/cli`'s destination reads so a FIFO cannot block them.
 - **Depends on:** adapter, secrets, source, state, paths, iox, drift.
 - **Files:** `pipeline.go`, `writer.go`, `state_apply.go`, `report.go`.
 
