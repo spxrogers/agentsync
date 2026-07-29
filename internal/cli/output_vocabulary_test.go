@@ -28,7 +28,8 @@ import (
 func TestReportError_CarriesTheErrorLabel(t *testing.T) {
 	var buf bytes.Buffer
 	code := cli.ReportErrorTo(&buf, ui.ColorNever, errors.New(
-		`render codex: codex subagents "code-reviewer" and "code-reviewer" resolve to the same agent name`))
+		`render codex: codex subagents "code-reviewer" and "code-reviewer" resolve to the same agent name`,
+	))
 
 	if code != 1 {
 		t.Fatalf("ReportErrorTo exit code = %d, want 1", code)
