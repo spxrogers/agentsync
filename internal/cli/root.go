@@ -84,8 +84,7 @@ func NewRoot() *cobra.Command {
 		// leaving slog.Default() bound to a finished test's buffer — aslog.Detach is
 		// the seam for that, called via t.Cleanup from the CLI test harness (see
 		// detachSlog in testhelper_test.go).
-		ew := c.ErrOrStderr()
-		aslog.Install(ew, printerOn(c, ew), verbose)
+		installDiagnosticLogger(c, verbose)
 		// The first-run-after-upgrade notice is the ONLY hook that reaches every
 		// installation channel — `go install` has no post-install step, a
 		// Homebrew cask's caveats print at install time only, and Scoop has
@@ -145,11 +144,19 @@ func NewRoot() *cobra.Command {
 // `ColorAuto`; that is precisely what the old package var did too, since its
 // writer (the pre-run) never ran in those cases. `mode, _` discards
 // ParseColorMode's error for the same reason: it returns ColorAuto alongside it.
-func Execute() int {
-	root := NewRoot()
+func Execute() int { return executeRoot(NewRoot(), os.Stderr) }
+
+// executeRoot is Execute with the root command and the diagnostic stream injected.
+//
+// It exists so a test can drive the REAL wiring. When Execute inlined this, the
+// only way to test it was to duplicate its four lines in the test file — and a
+// duplicate proves nothing: replacing colorModeOf(root) with a hardcoded mode in
+// production left every test green, because the tests were exercising their own
+// copy. Verified by mutation.
+func executeRoot(root *cobra.Command, errStream io.Writer) int {
 	err := root.Execute()
 	mode, _ := colorModeOf(root)
-	return reportErrorTo(os.Stderr, mode, err)
+	return reportErrorTo(errStream, mode, err)
 }
 
 // reportErrorTo renders err as the CLI's terminal diagnostic on w and returns the
@@ -214,6 +221,21 @@ func newPrinter(cmd *cobra.Command) (*ui.Printer, error) {
 		return nil, err
 	}
 	return ui.New(cmd.OutOrStdout(), cmd.ErrOrStderr(), mode), nil
+}
+
+// installDiagnosticLogger makes the slog default write to cmd's stderr, styled for
+// that same stream.
+//
+// One function, one writer, deliberately: the call site previously passed the
+// writer AND a printer built from a writer, so the two could disagree — and an
+// Out-bound printer means a library warning takes stdout's TTY-ness while writing
+// to stderr, the leak class this PR has now fixed at four separate sites. Deriving
+// both from one expression makes the mismatch unrepresentable rather than merely
+// untested (it resisted testing: two in-memory buffers cannot diverge under
+// `auto`).
+func installDiagnosticLogger(cmd *cobra.Command, verbose bool) {
+	ew := cmd.ErrOrStderr()
+	aslog.Install(ew, printerOn(cmd, ew), verbose)
 }
 
 // colorModeOf reads the inherited --color flag off cmd.

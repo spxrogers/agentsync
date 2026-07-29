@@ -618,3 +618,69 @@ func TestStripSGRLeavesEverythingElseAlone(t *testing.T) {
 		}
 	}
 }
+
+// Color() reports the OUT decision, and that is load-bearing rather than
+// incidental: diff.go hands a writer to a third-party colorizer and gates it on
+// this, so reporting the Err decision here would put ANSI into a redirected stdout.
+// Nothing pinned which stream it reports.
+func TestColorReportsTheOutStream(t *testing.T) {
+	var out, errb bytes.Buffer
+	withTerminalCheck(t, func(w io.Writer) bool { return w == io.Writer(&out) })
+	if p := New(&out, &errb, ColorAuto); !p.Color() {
+		t.Error("Out is a terminal, so Color() must be true")
+	}
+	// Mirror: a terminal Err with a redirected Out must NOT report colour.
+	withTerminalCheck(t, func(w io.Writer) bool { return w == io.Writer(&errb) })
+	if p := New(&out, &errb, ColorAuto); p.Color() {
+		t.Error("Out is redirected, so Color() must be false even though Err is a terminal")
+	}
+}
+
+// The spinner writes to p.Err, so it must take the Err decision. This was fixed in
+// round 3 and had no test at all — the fix could be reverted silently.
+func TestSpinnerTakesTheErrStreamDecision(t *testing.T) {
+	var out, errb bytes.Buffer
+	// Err is the terminal here; Out is not. If the spinner took the Out decision it
+	// would render plain on a colour-capable stderr.
+	withTerminalCheck(t, func(w io.Writer) bool { return w == io.Writer(&errb) })
+	p := New(&out, &errb, ColorAuto)
+	if s := p.Spinner("working"); !s.color {
+		t.Fatal("the spinner writes to Err; with a terminal Err it must use colour")
+	}
+	withTerminalCheck(t, func(w io.Writer) bool { return w == io.Writer(&out) })
+	if s := New(&out, &errb, ColorAuto).Spinner("working"); s.color {
+		t.Fatal("with a redirected Err the spinner must be plain, regardless of Out")
+	}
+}
+
+// NO_COLOR (https://no-color.org) disables colour for ANY value, including empty,
+// and it must short-circuit before the terminal probe. A documented external
+// contract with zero coverage until now.
+func TestNoColorDisablesColourEvenOnATerminal(t *testing.T) {
+	var buf bytes.Buffer
+	withTerminalCheck(t, func(io.Writer) bool { return true }) // pretend both are TTYs
+	for _, val := range []string{"", "1", "anything"} {
+		t.Run("NO_COLOR="+val, func(t *testing.T) {
+			t.Setenv("NO_COLOR", val)
+			p := New(&buf, &buf, ColorAuto)
+			if p.Color() || p.colorErr {
+				t.Fatalf("NO_COLOR=%q must disable colour on both streams", val)
+			}
+		})
+	}
+	// And --color=always still overrides NO_COLOR: an explicit flag beats the env.
+	t.Setenv("NO_COLOR", "1")
+	if !New(&buf, &buf, ColorAlways).Color() {
+		t.Fatal("--color=always must override NO_COLOR")
+	}
+}
+
+func TestSameWriterHandlesNilWriters(t *testing.T) {
+	var buf bytes.Buffer
+	if !sameWriter(nil, nil) {
+		t.Error("two nil writers are the same writer")
+	}
+	if sameWriter(nil, &buf) || sameWriter(&buf, nil) {
+		t.Error("a nil writer is not the same as a real one")
+	}
+}

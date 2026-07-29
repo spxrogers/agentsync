@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -205,3 +206,101 @@ type quietExitErr int
 
 func (q quietExitErr) Error() string { return "" }
 func (q quietExitErr) ExitCode() int { return int(q) }
+
+// executeWith drives the PRODUCTION seam (executeRoot), not a copy of it. An
+// earlier version of this helper duplicated Execute's body, which is why mutating
+// the real Execute went undetected.
+func executeWith(w io.Writer, args ...string) int {
+	root := NewRoot()
+	root.SetOut(io.Discard)
+	root.SetErr(w)
+	root.SetArgs(args)
+	return executeRoot(root, w)
+}
+
+// The parsed --color value must reach the terminal ERROR line. Nothing connected
+// those two ends: replacing colorModeOf(root) with a constant passed every test.
+func TestExecuteWiresTheColorFlagToTheErrorLine(t *testing.T) {
+	for _, tc := range []struct {
+		flag     string
+		wantANSI bool
+	}{
+		{"--color=always", true},
+		{"--color=never", false},
+	} {
+		t.Run(tc.flag, func(t *testing.T) {
+			detachAfter(t)
+			var buf bytes.Buffer
+			// `mcp remove nope` fails predictably with a plain error.
+			code := executeWith(&buf, "mcp", "remove", "nope", tc.flag)
+			if code != 1 {
+				t.Fatalf("exit code = %d, want 1; output=%q", code, buf.String())
+			}
+			if !strings.Contains(buf.String(), "✗ ERROR") {
+				t.Fatalf("no labeled error line: %q", buf.String())
+			}
+			if gotANSI := strings.Contains(buf.String(), "\x1b["); gotANSI != tc.wantANSI {
+				t.Fatalf("%s: ANSI present = %v, want %v (output=%q)", tc.flag, gotANSI, tc.wantANSI, buf.String())
+			}
+		})
+	}
+}
+
+// The slog handler must be installed with a printer bound to STDERR, so a library
+// warning takes the stderr colour decision. Installing an Out-bound printer would
+// put ANSI into a redirected stderr — the same leak class as the label, the
+// pre-styled body, and the handler's own styling.
+func TestInstalledHandlerIsBoundToStderr(t *testing.T) {
+	detachAfter(t)
+	var out, errb bytes.Buffer
+	root := NewRoot()
+	root.SetOut(&out)
+	root.SetErr(&errb)
+	// --color=always makes the decision observable in a buffer (no TTY in tests).
+	root.SetArgs([]string{"version", "--color=always"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	before := errb.Len()
+	slogWarnForTest("stream-check")
+	emitted := errb.String()[before:]
+	if !strings.Contains(emitted, "stream-check") {
+		t.Fatalf("the installed handler did not write to the command's stderr: %q", emitted)
+	}
+	if strings.Contains(out.String(), "stream-check") {
+		t.Fatalf("a library warning reached stdout: %q", out.String())
+	}
+}
+
+// --verbose must lower the slog threshold to Debug. log.New's level mapping was
+// pinned; the CLI WIRING that passes `verbose` into it was not, so passing a
+// hardcoded false broke nothing.
+func TestVerboseLowersTheSlogThreshold(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		args      []string
+		wantDebug bool
+	}{
+		{"without --verbose", []string{"version"}, false},
+		{"with --verbose", []string{"version", "--verbose"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			detachAfter(t)
+			var buf bytes.Buffer
+			root := NewRoot()
+			root.SetOut(io.Discard)
+			root.SetErr(&buf)
+			root.SetArgs(tc.args)
+			if err := root.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			before := buf.Len()
+			slog.Debug("debug-probe")
+			got := strings.Contains(buf.String()[before:], "debug-probe")
+			if got != tc.wantDebug {
+				t.Fatalf("%v: DEBUG emitted = %v, want %v (output=%q)",
+					tc.args, got, tc.wantDebug, buf.String()[before:])
+			}
+		})
+	}
+}

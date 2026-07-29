@@ -295,3 +295,95 @@ func TestSlogHandlerMutexIsLoadBearing(t *testing.T) {
 		t.Fatalf("got %d labeled records, want %d", n, 8*25)
 	}
 }
+
+// The handler sanitizes the record MESSAGE as well as the attributes, and until now
+// only the attribute half was asserted — so deleting `Sanitize(r.Message)` broke
+// nothing. A log message is as attacker-influenced as an attribute: marketplace
+// projection interpolates config-derived names straight into it.
+func TestSlogHandlerSanitizesTheMessageNotJustAttrs(t *testing.T) {
+	buf, lg := handlerBuf(t, slog.LevelInfo)
+	lg.Warn("skill a\rb\x1b]0;pwned\x07 is odd") // NO attrs: only the message can carry this
+
+	got := buf.String()
+	for _, bad := range []string{"\r", "\x1b]", "\x07"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("control byte %q survived in the MESSAGE: %q", bad, got)
+		}
+	}
+	if !strings.Contains(got, "is odd") {
+		t.Fatalf("message was blanked rather than sanitized: %q", got)
+	}
+}
+
+// The handler must style for the stream it writes to, not for the Printer's Out
+// decision. This is the same leak class as the label and the pre-styled body — the
+// third site — and it was the only one with no test.
+func TestSlogHandlerStylesForItsOwnStream(t *testing.T) {
+	var out, errb bytes.Buffer
+	withTerminalCheck(t, func(w io.Writer) bool { return w == io.Writer(&out) })
+	p := New(&out, &errb, ColorAuto) // Out is a "terminal", Err is redirected
+
+	slog.New(NewSlogHandler(&errb, p, slog.LevelInfo)).Warn("to a redirected stderr")
+	if got := errb.String(); strings.Contains(got, "\x1b[") {
+		t.Fatalf("the slog handler leaked ANSI into a plain stream: %q", got)
+	}
+}
+
+// clone must COPY the attr/group backing arrays. Sharing them lets one derived
+// handler's append overwrite a sibling's tail — silent corruption that no race
+// detector reports, because it is not a race, just aliasing.
+func TestSlogHandlerCloneDoesNotAliasSiblings(t *testing.T) {
+	var buf bytes.Buffer
+	p := New(&buf, &buf, ColorNever)
+	// Give the parent spare capacity, which is what makes append() alias.
+	base := slog.New(NewSlogHandler(&buf, p, slog.LevelInfo)).
+		With("a", "1", "b", "2", "c", "3")
+
+	childA := base.With("only", "A")
+	_ = base.With("only", "B") // would clobber A's tail if the array were shared
+
+	buf.Reset()
+	childA.Info("x")
+	if got := buf.String(); !strings.Contains(got, "only=A") || strings.Contains(got, "only=B") {
+		t.Fatalf("sibling handlers alias their attr storage: %q", got)
+	}
+}
+
+// renderAttr must resolve a LogValuer before inspecting the kind, or a lazily
+// computed value renders as its wrapper type instead of its content.
+func TestSlogHandlerResolvesLogValuer(t *testing.T) {
+	buf, lg := handlerBuf(t, slog.LevelInfo)
+	lg.Info("msg", "lazy", lazyValue{})
+	if got := buf.String(); !strings.Contains(got, "lazy=resolved") {
+		t.Fatalf("LogValuer was not resolved: %q", got)
+	}
+}
+
+type lazyValue struct{}
+
+func (lazyValue) LogValue() slog.Value { return slog.StringValue("resolved") }
+
+// An empty group is elided key-and-all. The existing table row for this is VACUOUS:
+// slog itself drops an empty group inside Record.Add, so the handler never sees one
+// when the attr arrives through a *slog.Logger. Reach Handle directly.
+func TestSlogHandlerElidesEmptyGroupReachingHandleDirectly(t *testing.T) {
+	var buf bytes.Buffer
+	p := New(&buf, &buf, ColorNever)
+	h := NewSlogHandler(&buf, p, slog.LevelInfo)
+
+	// WithAttrs, not Record.AddAttrs: slog elides an empty group inside AddAttrs
+	// too, so a record built that way never reaches renderAttr and the assertion
+	// below would be vacuous. This was the actual bug in the first version of this
+	// test — it passed while renderAttr emitted "g=[]".
+	withEmpty := h.WithAttrs([]slog.Attr{{Key: "g", Value: slog.GroupValue()}})
+	r := slog.NewRecord(time.Time{}, slog.LevelInfo, "msg", 0)
+	if err := withEmpty.Handle(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(buf.String(), "\n"); n != 1 {
+		t.Fatalf("an empty group must produce no attribute line; got %q", buf.String())
+	}
+	if strings.Contains(buf.String(), "g=") {
+		t.Fatalf("empty group leaked a key: %q", buf.String())
+	}
+}
