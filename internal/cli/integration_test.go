@@ -3,6 +3,8 @@ package cli_test
 import (
 	"strings"
 	"testing"
+
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 func TestIntegration_M0Lifecycle(t *testing.T) {
@@ -19,7 +21,7 @@ func TestIntegration_M0Lifecycle(t *testing.T) {
 		{args: []string{"agent", "add", "claude"}, wantSubs: []string{"added agent: claude"}},
 		{args: []string{"agent", "add", "opencode"}, wantSubs: []string{"added agent: opencode"}},
 		{args: []string{"agent", "list"}, wantSubs: []string{"claude", "opencode"}},
-		{args: []string{"check"}, wantSubs: []string{"ok"}},
+		{args: []string{"check"}, wantSubs: []string{ui.EmojiSuccess, "schema valid"}},
 		{args: []string{"apply", "--dry-run"}, wantSubs: []string{"Plan", "claude", "opencode"}},
 		{args: []string{"agent", "remove", "claude"}, wantSubs: []string{"removed agent: claude"}},
 	}

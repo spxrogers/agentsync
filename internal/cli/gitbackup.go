@@ -49,10 +49,11 @@ type gitBackupSession struct {
 }
 
 // gitPermWarn returns the callback EnsureDirSecure reports through — a loosened
-// .git-history warning to stderr with the existing agentsync yellow prefix.
+// .git-history permission warning, emitted as a WARN diagnostic on stderr like
+// every other warning in the CLI.
 func (s *gitBackupSession) gitPermWarn() func(string) {
 	return func(msg string) {
-		fmt.Fprintf(s.p.Err, "%s %s\n", s.p.Yellow("agentsync:"), msg)
+		s.p.Warnf("%s", msg)
 	}
 }
 
@@ -96,8 +97,7 @@ func (s *gitBackupSession) resolveBackupRepo(root string, st agit.State, hasWrit
 		// The user already source-controls this dir — stay out of their way.
 		if hasWrites && !s.handled[root] {
 			s.handled[root] = true
-			fmt.Fprintf(s.p.Err, "%s %s is under your own source control; skipping agentsync git backup.\n",
-				s.p.Faint(ui.GlyphInfo), root)
+			s.p.Infof("%s is under your own source control; skipping agentsync git backup.", root)
 		}
 		return nil, nil
 	case agit.StateAgentsyncOwned:
@@ -155,7 +155,7 @@ func (s *gitBackupSession) baseline(planned map[string]bool) {
 		}
 		st, err := agit.Detect(root)
 		if err != nil {
-			fmt.Fprintf(s.p.Err, "%s git baseline: %v\n", s.p.Yellow("agentsync:"), err)
+			s.p.Warnf("git baseline: %v", err)
 			continue
 		}
 		repo, err := s.resolveBackupRepo(root, st, true)
@@ -218,8 +218,7 @@ func (s *gitBackupSession) baseline(planned map[string]bool) {
 			continue
 		}
 		if h != "" {
-			fmt.Fprintf(s.p.Err, "%s %s\n", s.p.Faint(ui.GlyphInfo),
-				s.p.Faint(fmt.Sprintf("git backup: pre-apply baseline of %s", root)))
+			s.p.Infof("git backup: pre-apply baseline of %s", root)
 			s.cautionCleartextOnce()
 		}
 	}
@@ -239,8 +238,7 @@ func (s *gitBackupSession) cautionCleartextOnce() {
 		return
 	}
 	s.warnedCleartext = true
-	fmt.Fprintf(s.p.Err, "%s that baseline is kept in the local-only history and, like the files it versions, may contain secrets in cleartext.\n",
-		s.p.Faint(ui.GlyphInfo))
+	s.p.Infof("that baseline is kept in the local-only history and, like the files it versions, may contain secrets in cleartext.")
 }
 
 // warnFirstApplyUnrevertible tells the user, loudly, that a pre-apply baseline could
@@ -248,12 +246,10 @@ func (s *gitBackupSession) cautionCleartextOnce() {
 // documented failure policy of the baseline pass (it warns but never aborts apply).
 func (s *gitBackupSession) warnFirstApplyUnrevertible(root string, err error) {
 	if err != nil {
-		fmt.Fprintf(s.p.Err, "%s could not take a pre-apply baseline of %s (%v); the first apply to it will not be revertible.\n",
-			s.p.Yellow("agentsync:"), root, err)
+		s.p.Warnf("could not take a pre-apply baseline of %s (%v); the first apply to it will not be revertible.", root, err)
 		return
 	}
-	fmt.Fprintf(s.p.Err, "%s could not take a pre-apply baseline of %s; the first apply to it will not be revertible.\n",
-		s.p.Yellow("agentsync:"), root)
+	s.p.Warnf("could not take a pre-apply baseline of %s; the first apply to it will not be revertible.", root)
 }
 
 // checkpoint records the POST-APPLY checkpoint for each version root that received
@@ -276,12 +272,12 @@ func (s *gitBackupSession) checkpoint(written map[string]bool) error {
 
 		st, err := agit.Detect(root)
 		if err != nil {
-			fmt.Fprintf(s.p.Err, "%s git backup: %v\n", s.p.Yellow("agentsync:"), err)
+			s.p.Warnf("git backup: %v", err)
 			continue
 		}
 		repo, err := s.resolveBackupRepo(root, st, len(rels) > 0)
 		if err != nil {
-			fmt.Fprintf(s.p.Err, "%s git backup for %s: %v\n", s.p.Yellow("agentsync:"), root, err)
+			s.p.Warnf("git backup for %s: %v", root, err)
 			continue
 		}
 		if repo == nil {
@@ -314,7 +310,7 @@ func (s *gitBackupSession) checkpoint(written map[string]bool) error {
 		// anyway (CommitStaged returns "" on a clean index), so nothing is lost.
 		deleted, err := repo.StageTrackedDeletions()
 		if err != nil {
-			fmt.Fprintf(s.p.Err, "%s git backup for %s: %v\n", s.p.Yellow("agentsync:"), root, err)
+			s.p.Warnf("git backup for %s: %v", root, err)
 			continue
 		}
 		if len(rels) == 0 && len(deleted) == 0 {
@@ -327,19 +323,18 @@ func (s *gitBackupSession) checkpoint(written map[string]bool) error {
 		toStage = append(toStage, rels...)
 		toStage = append(toStage, agit.NoticeFile)
 		if err := repo.Stage(toStage); err != nil {
-			fmt.Fprintf(s.p.Err, "%s git backup for %s: %v\n", s.p.Yellow("agentsync:"), root, err)
+			s.p.Warnf("git backup for %s: %v", root, err)
 			continue
 		}
 		staged := dedupeSorted(append(toStage, deleted...))
 		msg := checkpointMessage(root, staged)
 		h, err := repo.CommitStaged(msg, s.id)
 		if err != nil {
-			fmt.Fprintf(s.p.Err, "%s git backup for %s: %v\n", s.p.Yellow("agentsync:"), root, err)
+			s.p.Warnf("git backup for %s: %v", root, err)
 			continue
 		}
 		if h != "" {
-			fmt.Fprintf(s.p.Err, "%s %s\n", s.p.Faint(ui.GlyphInfo),
-				s.p.Faint(fmt.Sprintf("git backup: checkpointed %s", root)))
+			s.p.Infof("git backup: checkpointed %s", root)
 		}
 	}
 	return nil
@@ -526,11 +521,10 @@ func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mo
 			// cleartext caution clause, gated by warnedCleartext (shared with the
 			// baseline-snapshot caution) so the warning doesn't repeat per dir.
 			if *warnedCleartext {
-				fmt.Fprintf(p.Err, "%s started a %s git backup of %s.\n",
-					p.Faint(ui.GlyphInfo), p.Bold("local-only"), dir)
+				p.Infof("started a %s git backup of %s.", p.Bold("local-only"), dir)
 			} else {
-				fmt.Fprintf(p.Err, "%s started a %s git backup of %s; like the files it versions, its history may contain secrets in cleartext (it is never pushed).\n",
-					p.Faint(ui.GlyphInfo), p.Bold("local-only"), dir)
+				p.Infof("started a %s git backup of %s; like the files it versions, its history may contain secrets in cleartext (it is never pushed).",
+					p.Bold("local-only"), dir)
 				*warnedCleartext = true
 			}
 		}
@@ -549,25 +543,24 @@ func ensureUntrackedRepo(cmd *cobra.Command, p *ui.Printer, dir, home string, mo
 				// warned why), yet the user said "yes" — surface that the global
 				// switch is flipping on regardless, so the persisted mode=on below
 				// is not a silent change.
-				fmt.Fprintf(p.Err, "%s this directory was skipped, but auto-backup is now enabled for future directories and applies.\n",
-					p.Faint(ui.GlyphInfo))
+				p.Infof("this directory was skipped, but auto-backup is now enabled for future directories and applies.")
 			}
 			if perr := setDestinationGitBackupMode(home, source.GitBackupModeOn); perr != nil {
-				fmt.Fprintf(p.Err, "%s could not persist git-backup mode: %v\n", p.Yellow("agentsync:"), perr)
+				p.Warnf("could not persist git-backup mode: %v", perr)
 			}
 			*mode = source.GitBackupModeOn
 			return repo, nil
 		case promptNever:
 			if perr := setDestinationGitBackupMode(home, source.GitBackupModeOff); perr != nil {
-				fmt.Fprintf(p.Err, "%s could not persist git-backup mode: %v\n", p.Yellow("agentsync:"), perr)
+				p.Warnf("could not persist git-backup mode: %v", perr)
 			}
 			*mode = source.GitBackupModeOff
-			fmt.Fprintf(p.Err, "%s destination git backup disabled; re-enable later by setting mode in agentsync.toml.\n", p.Faint(ui.GlyphInfo))
+			p.Infof("destination git backup disabled; re-enable later by setting mode in agentsync.toml.")
 			return nil, nil
 		case promptUnavailable:
 			if !*hintedUnavailable {
-				fmt.Fprintf(p.Err, "%s destination git backup is available — run `agentsync apply` interactively to enable it, "+
-					"or set [destination_directory_git_backup] mode = \"on\" in agentsync.toml.\n", p.Faint(ui.GlyphInfo))
+				p.Infof("destination git backup is available — run `agentsync apply` interactively to enable it, " +
+					"or set [destination_directory_git_backup] mode = \"on\" in agentsync.toml.")
 				*hintedUnavailable = true
 			}
 			return nil, nil
@@ -598,9 +591,8 @@ func initGuarded(p *ui.Printer, dir string) (*agit.Repo, error) {
 		return nil, err
 	}
 	if nested {
-		fmt.Fprintf(p.Err, "%s %s contains a nested git repository; skipping agentsync git backup here "+
-			"to avoid a repo inside a repo (remove the inner .git or reconcile to merge).\n",
-			p.Yellow("agentsync:"), dir)
+		p.Warnf("%s contains a nested git repository; skipping agentsync git backup here "+
+			"to avoid a repo inside a repo (remove the inner .git or reconcile to merge).", dir)
 		return nil, nil
 	}
 	return agit.Init(dir)
@@ -618,10 +610,9 @@ func warnNestedForeignRepoOnCommit(p *ui.Printer, root string) {
 	if err != nil || !nested {
 		return
 	}
-	fmt.Fprintf(p.Err, "%s a nested git repository now lives below the agentsync-owned dir %s; "+
+	p.Warnf("a nested git repository now lives below the agentsync-owned dir %s; "+
 		"`agentsync revert` of this root will refuse as a precaution until the inner repo is "+
-		"removed or reconciled.\n",
-		p.Yellow("agentsync:"), root)
+		"removed or reconciled.", root)
 }
 
 // managedRelsUnder returns the slash-relative paths of every written file that

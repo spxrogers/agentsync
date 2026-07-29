@@ -662,9 +662,8 @@ func renderStatusLegend(p *ui.Printer, summary map[string]int) {
 // the report shows.
 func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry, s *state.Targets, enabled, selected []string) {
 	for _, a := range orphanedStateAgents(s, enabled) {
-		fmt.Fprintf(p.Err, "%s agent %q is not enabled but still owns tracked files/keys in state; its "+
-			"native config is orphaned. Run `agentsync agent disable %q --purge` to remove what agentsync wrote.\n",
-			p.Yellow("warning:"), a, a)
+		p.Warnf("agent %q is not enabled but still owns tracked files/keys in state; its "+
+			"native config is orphaned. Run `agentsync agent disable %q --purge` to remove what agentsync wrote.", a, a)
 	}
 	// Nudge: plugins installed natively in an enabled agent but not yet declared
 	// in source. agentsync treats them as foreign-managed (never drift), so this
@@ -679,9 +678,9 @@ func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry
 		// can influence them); they are untrusted.Text and sanitize on display by
 		// construction (untrusted.Join renders each via its String()), so no manual
 		// ui.Sanitize is needed here. The agent `name` is a trusted registry id.
-		fmt.Fprintf(p.Err, "%s %d plugin(s) installed in %s are not in your source (%s); "+
-			"run `agentsync import %s:plugin` to manage them.\n",
-			p.Cyan("note:"), len(missing), name, untrusted.Join(missing, ", "), name)
+		p.Infof("%d plugin(s) installed in %s are not in your source (%s); "+
+			"run `agentsync import %s:plugin` to manage them.",
+			len(missing), name, untrusted.Join(missing, ", "), name)
 	}
 }
 

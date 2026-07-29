@@ -107,11 +107,15 @@ func newDoctorCmd() *cobra.Command {
 
 			fmt.Fprintln(p.Out, "")
 			if fails > 0 {
+				// The summary is part of doctor's REPORT (stdout, where the
+				// per-check lines went), so it keeps the report's ✗ rather than
+				// becoming a stderr ERROR diagnostic. The returned error is what
+				// reaches the terminal ERROR line, one level up.
 				fmt.Fprintf(p.Out, "%s %s\n", p.Red(ui.GlyphErr),
 					p.Red(fmt.Sprintf("%d issue(s) detected — fix before running `agentsync apply`", fails)))
 				return fmt.Errorf("doctor: %d issue(s) detected", fails)
 			}
-			fmt.Fprintf(p.Out, "%s %s\n", p.Green(ui.GlyphOK), p.Green("all checks passed"))
+			p.Successf(ui.EmojiSuccess, "all checks passed")
 			return nil
 		},
 	}

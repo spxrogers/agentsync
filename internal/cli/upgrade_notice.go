@@ -282,18 +282,18 @@ func hasUserConfig(home string) bool {
 func printUpgradeNotices(p *ui.Printer, notices []upgradeNotice) {
 	w := p.Err
 	fmt.Fprintln(w, "")
-	fmt.Fprintf(w, "%s %s\n",
-		p.Yellow(ui.GlyphWarn+" agentsync "+Version+":"),
-		p.Bold("you upgraded across a change that needs your attention"))
+	// The banner leads with the shared WARN label — it IS a warning about this
+	// run — and hangs its body off the label's message column via Detailf, so
+	// it reads as one block rather than as a second, competing layout language.
+	p.Warnf("agentsync %s: %s", Version, p.Bold("you upgraded across a change that needs your attention"))
 	for _, n := range notices {
-		fmt.Fprintf(w, "  %s %s %s\n",
-			p.Yellow(ui.GlyphArrow), p.Bold("since "+n.Since+" —"), n.Headline)
+		p.Detailf("%s %s %s", p.Yellow(ui.GlyphArrow), p.Bold("since "+n.Since+" —"), n.Headline)
 		for _, a := range n.Actions {
-			fmt.Fprintf(w, "      %s %s\n", p.Faint(ui.GlyphInfo), a)
+			p.Detailf("    %s %s", p.Faint(ui.GlyphInfo), a)
 		}
-		fmt.Fprintf(w, "      %s %s\n", p.Faint("read more:"), p.Cyan(docsBaseURL+n.Path))
+		p.Detailf("    %s %s", p.Faint("read more:"), p.Cyan(docsBaseURL+n.Path))
 	}
-	fmt.Fprintf(w, "  %s\n", p.Faint("(shown once; silence it with "+NoUpgradeNoticeEnv+"=1)"))
+	p.Detailf("%s", p.Faint("(shown once; silence it with "+NoUpgradeNoticeEnv+"=1)"))
 	fmt.Fprintln(w, "")
 }
 

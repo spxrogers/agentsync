@@ -120,19 +120,15 @@ func runSubagentMigration(p *ui.Printer, userAgentsyncHome string, sc adapter.Sc
 	legacyDir := filepath.Join(srcHome, source.LegacySubagentsDir)
 	newDir := filepath.Join(srcHome, source.SubagentsDir)
 	if len(moved) == 0 {
-		fmt.Fprintf(p.Out, "%s %s\n", p.Green(ui.GlyphOK),
-			fmt.Sprintf("nothing to migrate — %s holds no subagent files", legacyDir))
+		p.Successf(ui.EmojiSuccess, "nothing to migrate — %s holds no subagent files", legacyDir)
 		return nil
 	}
-	fmt.Fprintf(p.Out, "%s %s\n", p.Green(ui.GlyphOK),
-		fmt.Sprintf("moved %d subagent file(s) from %s to %s", len(moved), legacyDir, newDir))
+	p.Successf(ui.EmojiSuccess, "moved %d subagent file(s) from %s to %s", len(moved), legacyDir, newDir)
 	for _, name := range moved {
 		fmt.Fprintf(p.Out, "  %s %s\n", p.Faint(ui.GlyphArrow), ui.Sanitize(name))
 	}
 	if sc != adapter.ScopeProject {
-		fmt.Fprintf(p.Out, "\n%s\n", p.Faint(
-			"note: ~/.agentsync is often a committed dotfiles repo — commit the rename so other machines pick it up.",
-		))
+		p.Infof("~/.agentsync is often a committed dotfiles repo — commit the rename so other machines pick it up.")
 	}
 	return nil
 }
@@ -362,9 +358,9 @@ func promptSubagentMigration(cmd *cobra.Command, p *ui.Printer, pending *source.
 	// The prompt goes to STDERR: it can fire before a `status --json` /
 	// `diff --json` payload, and stdout is that payload's channel.
 	w := cmd.ErrOrStderr()
-	fmt.Fprintf(w, "%s agentsync now reads subagents from %s, not %s.\n",
-		ui.GlyphInfo, filepath.Join(pending.Home, source.SubagentsDir), filepath.Join(pending.Home, source.LegacySubagentsDir))
-	fmt.Fprintf(w, "  %d file(s) are still in the old directory: %s\n", len(pending.Files), ui.Sanitize(strings.Join(pending.Files, ", ")))
+	p.Fdiagf(w, ui.LevelInfo, "agentsync now reads subagents from %s, not %s.",
+		filepath.Join(pending.Home, source.SubagentsDir), filepath.Join(pending.Home, source.LegacySubagentsDir))
+	p.Fdetailf(w, "%d file(s) are still in the old directory: %s", len(pending.Files), ui.Sanitize(strings.Join(pending.Files, ", ")))
 	return promptConfirmYes(w, cmd.InOrStdin(), "  Move them now (and update recorded state)? [y/N]: ")
 }
 

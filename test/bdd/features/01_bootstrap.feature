@@ -26,7 +26,7 @@ Feature: Bootstrap and inspect commands
     And I have run "agentsync init"
     When I run "agentsync check"
     Then the command succeeds
-    And the output contains "ok"
+    And the output contains "schema valid"
 
   Scenario: doctor inspects the environment
     Given a clean agentsync home

@@ -1,10 +1,25 @@
 // Package ui centralizes agentsync's terminal presentation: semantic color, a
-// curated glyph vocabulary, and small layout primitives (sections, status
-// lines, aligned labels). It is the single place that decides whether to emit
-// ANSI, so every command renders through a *Printer and the color/glyph/spacing
-// language stays consistent across `status`, `diff`, `doctor`, and `apply`.
+// curated glyph vocabulary, a labeled diagnostic vocabulary, and small layout
+// primitives (sections, status lines, aligned labels). It is the single place
+// that decides whether to emit ANSI, so every command renders through a
+// *Printer and the color/glyph/spacing language stays consistent across
+// `status`, `diff`, `doctor`, and `apply`.
 //
-// Two independent axes:
+// Output splits into two kinds, and the distinction is the organizing rule of
+// this package:
+//
+//   - A DIAGNOSTIC is a notice *about* the run — an error, a warning, an
+//     informational aside. Every one carries a level label (`✗ ERROR`,
+//     `⚠ WARN`, `ℹ INFO`) and goes to stderr. See diag.go for the vocabulary
+//     and slog.go for the handler that gives library-side slog calls the same
+//     shape.
+//   - RESULT output is what the command was asked to produce — a status table,
+//     a diff, a `--json` payload, a list, or the one-line outcome of a mutating
+//     command. It carries no level label. Its success line instead leads with a
+//     curated emoji (`✅ added agent: claude`), because labeling an outcome
+//     "INFO" is noise that dilutes the labels that matter.
+//
+// Two independent axes govern how any of it is styled:
 //
 //   - Color is TTY-gated. `--color=always|never` forces it; `auto` (the
 //     default) enables color only when the output is a terminal and NO_COLOR
@@ -86,13 +101,22 @@ type Printer struct {
 	Out   io.Writer
 	Err   io.Writer
 	color bool
+	mode  ColorMode
 }
 
 // New builds a Printer bound to out/err, resolving whether to emit color from
 // mode, the NO_COLOR environment variable, and whether out is a terminal.
 func New(out, err io.Writer, mode ColorMode) *Printer {
-	return &Printer{Out: out, Err: err, color: resolveColor(out, mode)}
+	return &Printer{Out: out, Err: err, color: resolveColor(out, mode), mode: mode}
 }
+
+// ColorMode returns the requested mode this Printer was built with — NOT the
+// resolved boolean (that is Color). The distinction matters for a caller that
+// must rebuild a Printer against different writers and honor the same user
+// intent: `auto` has to be re-resolved against the NEW writer's TTY-ness, so
+// carrying the resolved bool across would be wrong. ReportError does exactly
+// this, rebuilding against os.Stderr after cobra has returned.
+func (p *Printer) ColorMode() ColorMode { return p.mode }
 
 // Color reports whether this Printer emits ANSI. Commands that hand a writer to
 // a third-party renderer (e.g. the diff library's own colorizer) consult this
@@ -181,15 +205,21 @@ func Pad(s string, width int) string {
 // calculation, so a stripped rune never throws off column alignment.
 func Sanitize(s string) string { return untrusted.Sanitize(s) }
 
-// WarnWriter wraps a destination writer and styles "warning: " line prefixes
-// as a bold-yellow "⚠️ warning:" so every warning — whether emitted by the
-// CLI itself, by an adapter's Ingest, or by capture's re-reference path —
-// reads consistently. Lines that do not start with the literal "warning: "
-// prefix (e.g. pre-styled ANSI lines, indented continuation lines, or
-// "agentsync:" notes) pass through verbatim. The writer is line-buffered so a
+// WarnWriter wraps a destination writer and rewrites "warning: " line prefixes
+// into the shared WARN diagnostic label (see diag.go) so every warning —
+// whether emitted by the CLI itself, by an adapter's Ingest, or by capture's
+// re-reference path — is byte-identical to a p.Warnf and to a slog.Warn from
+// the render pipeline. Lines that do not start with the literal "warning: "
+// prefix (e.g. pre-styled ANSI lines, indented continuation lines, or already-
+// labeled diagnostics) pass through verbatim. The writer is line-buffered so a
 // callers' partial Write is held until a newline arrives — fmt.Fprintf in
 // practice always finishes a line per call, but buffering keeps a chunked
 // writer correct.
+//
+// The "warning: " sentinel stays the emitter-side contract because the adapter
+// packages must not depend on ui: an adapter writes a plain prefixed line into
+// an io.Writer it was handed, and the styling happens here, at the one place
+// that knows whether this terminal gets color.
 //
 // Not safe for concurrent use: the line-assembly buffer is unsynchronized.
 // One *WarnWriter per command invocation is the intended pattern.
@@ -200,9 +230,9 @@ type WarnWriter struct {
 }
 
 // NewWarnWriter returns a *WarnWriter that flushes styled lines to w using p.
-// p's color decision is honored: with color off, the prefix becomes a plain
-// "⚠️ warning:" (the glyph is content, not decoration — same rule as the
-// curated glyph vocabulary above).
+// p's color decision is honored: with color off, the prefix degrades to a plain
+// "⚠ WARN" (the glyph and the level word are content, not decoration — same
+// rule as the curated glyph vocabulary above).
 func NewWarnWriter(w io.Writer, p *Printer) *WarnWriter {
 	return &WarnWriter{w: w, p: p}
 }
@@ -234,11 +264,6 @@ func (s *WarnWriter) Flush() {
 		s.buf = nil
 	}
 }
-
-// GlyphWarnEmoji is the colourful warning sign (with VS16) used as the warning
-// label prefix. Wider than one column in some terminals, which is fine — the
-// warning lines are not part of any padded layout.
-const GlyphWarnEmoji = "⚠️"
 
 // stderrSetter is the structural shape of adapter.WarnEmitter. Duplicated
 // here so ui doesn't depend on the adapter package; each concrete adapter's
@@ -333,8 +358,7 @@ func (s *WarnWriter) emit(line []byte) {
 		return
 	}
 	rest := line[len(warnLinePrefix):]
-	label := s.p.Yellow(s.p.Bold(GlyphWarnEmoji + " warning:"))
-	fmt.Fprintf(s.w, "%s %s", label, rest)
+	fmt.Fprintf(s.w, "%s  %s", LevelWarn.Label(s.p), rest)
 }
 
 func spaces(n int) string {

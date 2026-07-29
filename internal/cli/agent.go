@@ -395,7 +395,7 @@ func agentAddRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if _, ok := agents[name]; ok {
-		fmt.Fprintf(cmd.OutOrStdout(), "agent %s already registered\n", name)
+		success(cmd, ui.EmojiSuccess, "agent %s already registered", name)
 		return nil
 	}
 	entry := map[string]any{"enabled": true}
@@ -408,7 +408,7 @@ func agentAddRun(cmd *cobra.Command, args []string) error {
 	if err := writeAgents(p, raw, agents); err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "added agent: %s\n", name)
+	success(cmd, ui.EmojiSuccess, "added agent: %s", name)
 
 	// Warn (don't fail) if the agent's binary is not on PATH. The user
 	// may be authoring config on machine A to apply on machine B, so we
@@ -417,10 +417,10 @@ func agentAddRun(cmd *cobra.Command, args []string) error {
 	// anything?" later.
 	if bin := agentBinary(name); bin != "" {
 		if _, err := exec.LookPath(bin); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(),
-				"warning: %s binary not found on PATH; "+
+			diag(cmd, ui.LevelWarn,
+				"%s binary not found on PATH; "+
 					"agentsync will still write config to its destination dirs "+
-					"but %s itself must be installed to read it\n",
+					"but %s itself must be installed to read it",
 				bin, name)
 		}
 	}
@@ -438,14 +438,14 @@ func agentRemoveRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if _, ok := agents[name]; !ok {
-		fmt.Fprintf(cmd.OutOrStdout(), "agent %s not registered\n", name)
+		diag(cmd, ui.LevelInfo, "agent %s not registered", name)
 		return nil
 	}
 	delete(agents, name)
 	if err := writeAgents(p, raw, agents); err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "removed agent: %s\n", name)
+	success(cmd, ui.EmojiRemoved, "removed agent: %s", name)
 	return nil
 }
 
@@ -550,7 +550,7 @@ func agentEnableRun(cmd *cobra.Command, args []string) error {
 	if err := writeAgents(p, raw, agents); err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "enabled agent: %s\n", name)
+	success(cmd, ui.EmojiSuccess, "enabled agent: %s", name)
 	return nil
 }
 
@@ -587,7 +587,7 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 	if err := writeAgents(p, raw, agents); err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "disabled agent: %s\n", name)
+	success(cmd, ui.EmojiSuccess, "disabled agent: %s", name)
 
 	if !purge {
 		return nil
@@ -779,7 +779,7 @@ func purgeAgentDests(cmd *cobra.Command, name, home string, sc adapter.Scope, pr
 		return fmt.Errorf("save state: %w", err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "purged agent %s: deleted %d file(s), pruned owned keys from %d shared file(s)\n", name, deletedFiles, prunedFiles)
+	success(cmd, ui.EmojiRemoved, "purged agent %s: deleted %d file(s), pruned owned keys from %d shared file(s)", name, deletedFiles, prunedFiles)
 	if sharedKept > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "  kept %d shared path(s) still owned by another agent\n", sharedKept)
 	}

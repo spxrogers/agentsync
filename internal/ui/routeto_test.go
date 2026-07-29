@@ -130,9 +130,9 @@ func TestWarnWriter_Flush(t *testing.T) {
 		w.Flush()
 		got := dest.String()
 		// Color is off (ColorNever), so the styled prefix is the bare
-		// glyph + "warning:" — emit's HasPrefix("warning: ") still
+		// glyph + level word — emit's HasPrefix("warning: ") still
 		// triggers the prefix rewrite even without a trailing newline.
-		const wantPrefix = GlyphWarnEmoji + " warning:"
+		wantPrefix := LevelWarn.Label(p)
 		if !strings.HasPrefix(got, wantPrefix) {
 			t.Fatalf("Flush should style the partial warning prefix; got: %q", got)
 		}

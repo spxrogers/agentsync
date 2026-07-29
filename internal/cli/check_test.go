@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 // TestCheck_UninitializedHomeErrors is the regression for check printing a
@@ -54,8 +56,8 @@ func TestCheck_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check on empty home: %v", err)
 	}
-	if !strings.Contains(out, "ok") {
-		t.Fatalf("check output missing 'ok': %s", out)
+	if !strings.Contains(out, ui.EmojiSuccess) || !strings.Contains(out, "schema valid") {
+		t.Fatalf("check output missing the success line: %s", out)
 	}
 }
 
@@ -180,8 +182,8 @@ func TestCheck_ProjectScope_OK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check --project: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "ok") {
-		t.Fatalf("check --project output missing 'ok': %s", out)
+	if !strings.Contains(out, ui.EmojiSuccess) || !strings.Contains(out, "schema valid") {
+		t.Fatalf("check --project output missing the success line: %s", out)
 	}
 }
 

@@ -9,6 +9,41 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Changed
+
+- **Every diagnostic across the CLI now carries a severity label, and success
+  lines lead with an emoji.** The formatting of `agentsync`'s output was the
+  reason a correct, deliberate fatal error read as a broken tool: it printed as
+  a flat, uncolored, unlabeled `agentsync: render codex: …` sitting directly
+  beneath a `2026/07/28 15:03:45 WARN …` line from a different subsystem, with
+  nothing marking which was the failure.
+  ([#211](https://github.com/spxrogers/agentsync/issues/211#issuecomment-5108532310))
+  - Diagnostics — anything that is a notice *about* the run — render as
+    `✗ ERROR` / `⚠ WARN` / `ℹ INFO` / `• DEBUG` on **stderr**, with message text
+    starting at a fixed column so stacked lines align and detail lines hang
+    under their label. The glyph and the level word are content, not decoration:
+    piped, redirected, under `NO_COLOR`, or `--color never`, severity still
+    reaches the log file. With color on, the label is bold red / yellow / cyan.
+  - The terminal error line is one of them. `agentsync: <err>` is now
+    `✗ ERROR  <err>`; the redundant program prefix is gone. The quiet
+    `--exit-code` sentinel still prints nothing and keeps its own exit code.
+  - Library-side `slog` calls (`internal/render`, `internal/marketplace`) render
+    identically. No slog handler had ever been installed, so those warnings fell
+    through to the standard library's default and printed with a wall-clock
+    timestamp in a shape nothing else in the CLI used. The timestamp is gone.
+  - Success outcomes carry **no** level word — an `INFO` on `added agent: claude`
+    is noise that dilutes the labels that matter — and instead lead with an emoji
+    chosen by what happened: `🎉 applied: 12 ops`, `✅ added agent: claude`,
+    `🧹 removed mcp server: github`, `📥 imported 4 skills…`, `🔙 reverted…`,
+    `✨ …initialized`. Command *results* (a `--json` payload, a `status` table, a
+    `diff`, a `list`) are unchanged and unlabeled.
+  - Several warnings that had been printing to **stdout** — `plugin outdated` /
+    `plugin upgrade --all`'s marketplace re-fetch, SHA-drift, and lossless-bump
+    diagnostics — moved to stderr, where they no longer interleave with the
+    command's own output.
+  - Scripts that grep agentsync's human-readable output for `warning:`, `note:`,
+    `agentsync:`, or `ok:` need updating; `--json` payloads are unaffected.
+
 ### Fixed
 
 - **Two plugins shipping a same-named component no longer break `status` and

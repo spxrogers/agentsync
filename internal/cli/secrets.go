@@ -359,7 +359,7 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("re-encrypt: %w", err)
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), "secrets saved")
+	success(cmd, ui.EmojiSuccess, "secrets saved")
 	return nil
 }
 
@@ -392,8 +392,8 @@ func secretsGet(cmd *cobra.Command, args []string) error {
 	// stderr. Piped and redirected uses stay silent.
 	fmt.Fprintln(cmd.OutOrStdout(), s)
 	if stdoutIsTerminal(cmd) {
-		fmt.Fprintf(cmd.ErrOrStderr(),
-			"agentsync: that value is now in your terminal scrollback; pipe it (`agentsync secret get %s | …`) to keep it out.\n",
+		diag(cmd, ui.LevelWarn,
+			"that value is now in your terminal scrollback; pipe it (`agentsync secret get %s | …`) to keep it out.",
 			ui.Sanitize(args[0]))
 	}
 	return nil
@@ -448,7 +448,7 @@ func secretsSet(cmd *cobra.Command, arg string, useStdin, allowEmpty bool) error
 	if err := encryptMap(m, cfg, home); err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "secret %q set\n", key)
+	success(cmd, ui.EmojiSuccess, "secret %q set", key)
 	return nil
 }
 
@@ -486,10 +486,10 @@ func resolveSecretKeyValue(cmd *cobra.Command, arg string, useStdin bool) (strin
 			return "", "", fmt.Errorf("set argument has empty key (expected <key>=<value>)")
 		}
 		value := arg[idx+1:]
-		fmt.Fprintln(cmd.ErrOrStderr(),
-			"agentsync: warning: passing the value on argv exposes it to ps(1), shell history, and process auditing.")
-		fmt.Fprintln(cmd.ErrOrStderr(),
-			"  Use `agentsync secret set <key> --stdin` or omit the value to be prompted.")
+		ew := cmd.ErrOrStderr()
+		ep := printerOn(cmd, ew)
+		ep.Fdiagf(ew, ui.LevelWarn, "passing the value on argv exposes it to ps(1), shell history, and process auditing.")
+		ep.Fdetailf(ew, "Use `agentsync secret set <key> --stdin` or omit the value to be prompted.")
 		return key, value, nil
 	}
 
@@ -610,7 +610,7 @@ func secretsRemove(cmd *cobra.Command, key string) error {
 	if err := encryptMap(m, cfg, home); err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "secret %q removed\n", key)
+	success(cmd, ui.EmojiRemoved, "secret %q removed", key)
 	return nil
 }
 

@@ -374,7 +374,7 @@ func TestReconcile_WriteBackUnsupportedReturnsError(t *testing.T) {
 	// Press w (write-back this item, single).
 	out, err := runCLIWithStdin(t, env, "w\n", "reconcile")
 	// Should NOT silently print success for the hook write-back.
-	if strings.Contains(out, "write-back: ") && !strings.Contains(out, "write-back error") {
+	if strings.Contains(out, "write-back: ") && !strings.Contains(out, "ERROR") {
 		t.Fatalf("hook write-back must surface an error, not silent success; got:\n%s", out)
 	}
 	// And it must exit non-zero — a failed write-back did not persist the edit.

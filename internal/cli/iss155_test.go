@@ -318,11 +318,11 @@ func TestCLIStreams_JSONStdoutMessagesStderr(t *testing.T) {
 	if jerr := json.Unmarshal([]byte(stdout), &model); jerr != nil {
 		t.Fatalf("stdout is not clean JSON: %v\nstdout:\n%s", jerr, stdout)
 	}
-	if strings.Contains(stdout, "warning") {
+	if strings.Contains(stdout, "WARN") {
 		t.Fatalf("a warning leaked into the --json stdout payload:\n%s", stdout)
 	}
-	if !strings.Contains(stderr, "warning") {
-		t.Fatalf("expected the orphaned-agent warning on stderr; got:\n%s", stderr)
+	if !strings.Contains(stderr, "WARN") {
+		t.Fatalf("expected the orphaned-agent WARN diagnostic on stderr; got:\n%s", stderr)
 	}
 }
 

@@ -88,7 +88,7 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "added marketplace %s (sha=%s)\n",
+	success(cmd, ui.EmojiSuccess, "added marketplace %s (sha=%s)",
 		ui.Sanitize(mpName), truncate(headSHA, 12))
 	return nil
 }
@@ -223,7 +223,7 @@ func marketplaceRemoveRun(cmd *cobra.Command, args []string) error {
 		_ = state.Save(statePath, st)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "removed marketplace %s\n", name)
+	success(cmd, ui.EmojiRemoved, "removed marketplace %s", name)
 	return nil
 }
 

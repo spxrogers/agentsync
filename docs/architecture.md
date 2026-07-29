@@ -1050,7 +1050,67 @@ forgotten in the others.
 
 ---
 
-## 11. Package layering
+## 11. Output — one diagnostic vocabulary
+
+Everything agentsync prints is one of two things, and `internal/ui` is the only
+place that decides how either looks.
+
+| | What it is | Stream | Rendering |
+| --- | --- | --- | --- |
+| **Diagnostic** | a notice *about* the run | stderr | `✗ ERROR` / `⚠ WARN` / `ℹ INFO` / `• DEBUG`; message at column 9 |
+| **Result** | what the command was asked to produce | stdout | no level label; a success outcome leads with a curated emoji |
+
+**Why this is an architectural concern and not styling.** Issue #211 reported a
+correct, deliberate fatal error that read as a broken tool, and the formatting
+was the reason: `agentsync: render codex: …` printed flush-left, uncolored and
+unlabeled, directly beneath a `2026/07/28 15:03:45 WARN …` line from a different
+subsystem. Nothing distinguished the fatal from the advisory. The cause was
+three unrelated renderings coexisting —
+
+1. commands hand-rolled their own prefixes (`p.Yellow("agentsync:")`,
+   `p.Cyan("note:")`, `p.Yellow("warning:")`, a bare `•`);
+2. library packages called `slog.Warn`, and **no handler was ever installed**, so
+   those fell through to the stdlib default and printed with a wall-clock
+   timestamp in a shape nothing else used;
+3. `main` printed the terminal error itself, bypassing `ui` entirely.
+
+All three now converge. `ui.Level` owns the label; `ui.SlogHandler` renders slog
+records through it and `internal/log` installs it as the process default from the
+root `PersistentPreRunE`; `cli.ReportError` prints the terminal error as an
+`ERROR` diagnostic. A `slog.Warn` from `internal/marketplace`, an adapter's
+`warning: ` line through `ui.WarnWriter`, and a command's `p.Warnf` produce
+byte-identical output.
+
+**Three load-bearing rules.**
+
+- *The glyph and the level word are content, not decoration.* Color is a second
+  signal only. Piped, redirected, under `NO_COLOR`, or `--color never`, severity
+  still reaches a log file — which is where CI reads it.
+- *Diagnostics never touch stdout.* That is what keeps `status --json` a clean
+  payload while its warnings still reach the user, and it is asserted end-to-end.
+- *Success carries no level word.* An `INFO` on `added agent: claude` is noise
+  that trains the eye to skip labels; the emoji says both "this worked" and
+  "this is the outcome line". Chosen by what happened, not by which command ran.
+
+**The emitter-side sentinel.** Adapters and `internal/capture` must not depend on
+`ui` (they are below it in the layering), so they emit the plain `warning: ` line
+prefix into an `io.Writer` they were handed, and `ui.WarnWriter` rewrites it into
+the WARN label at the one point that knows whether this terminal gets color. That
+split is a contract between two packages that share no types — rename it on one
+side and warnings silently stop being labeled, with nothing failing to compile —
+so both halves are pinned by `TestWarnSentinelStaysWiredToTheWarnLabel`.
+
+**The regression fence.** A hand-rolled prefix compiles, reads like "just a
+`Fprintf`" in review, and breaks no test — the exact failure class that needs a
+mechanical guard. `TestNoAdHocDiagnosticPrefixes` parses every non-test source in
+`internal/cli` and fails on a reintroduced `"agentsync:"` / `"warning:"` /
+`"note:"` string literal. It is deliberately narrow: a broader list would also
+flag legitimate field labels inside a report body, where no level belongs
+(`explain` prints `scope: user` as a data row, not as a notice).
+
+---
+
+## 12. Package layering
 
 ```mermaid
 flowchart TD
@@ -1080,10 +1140,10 @@ flowchart TD
 ```
 
 `internal/drift`, `internal/git`, `internal/iox`, `internal/jsonkeys`,
-`internal/paths`, `internal/log`, and `internal/untrusted` have no internal
+`internal/paths`, and `internal/untrusted` have no internal
 dependencies — they're the leaves (`internal/git` is reached only from `cli` —
 `internal/cli/gitbackup.go`, `doctor.go`, and `revert.go`); `internal/ui` builds
-only on `internal/untrusted`.
+only on `internal/untrusted`, and `internal/log` only on `internal/ui`.
 See the [component map](components.md) for what each package contains.
 
 **Documented layering exception (`opencode → state`).** Adapters otherwise depend
