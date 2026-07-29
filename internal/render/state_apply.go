@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"sort"
 	"strings"
@@ -28,6 +30,12 @@ import (
 // normalize op.Path to its HOME-relative form so state-key lookups match
 // keys written by RecordOpsState. It must NOT be the agentsync home — dest
 // files live under $HOME, not under ~/.agentsync.
+//
+// One exception to the pure ops-vs-state comparison, and the reason this touches
+// the FILESYSTEM: a reclaimable destination that is STILL ON DISK keeps its entry
+// even when the plan no longer renders it. apply skips (rather than performs) an
+// orphan delete it cannot read first, and pruning the entry would make that skip
+// permanent and silent — see the comment at the check itself.
 func PruneStaleState(s *state.Targets, userHome, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) {
 	if s == nil {
 		return
@@ -87,7 +95,16 @@ func PruneStaleState(s *state.Targets, userHome, agent string, scope adapter.Sco
 		// it, and the next apply retries and re-warns. A delete that succeeded
 		// leaves nothing behind, so this is a no-op for the normal path.
 		if isOrphanReclaimable(entry.SourceID) {
-			if _, err := os.Stat(paths.FromHomeRelative(userHome, path)); err == nil {
+			// Keep unless the destination is PROVABLY absent. `err == nil` would be
+			// the wrong polarity: the archetypal reason Delete skips is that the
+			// destination cannot be read, and the archetypal cause of that —
+			// EACCES on the parent directory — also makes Stat fail. Treating a
+			// stat error as "gone" would prune exactly the entries this exists to
+			// preserve, in exactly the case it exists for.
+			// Lstat, not Stat: a DANGLING SYMLINK is a destination that is still
+			// there (os.Remove can clear it) but that Stat reports as absent,
+			// which would prune the entry and strand the link forever.
+			if _, err := os.Lstat(paths.FromHomeRelative(userHome, path)); !errors.Is(err, fs.ErrNotExist) {
 				continue
 			}
 		}

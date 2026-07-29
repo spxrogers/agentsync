@@ -532,6 +532,12 @@ func pluginProvidedSourceIDs(c source.Canonical) map[string]string {
 // "mcp/* (multiple)", "hooks/* (multiple)" — so the kind is already unambiguous
 // at the call site.
 //
+// The lsp branch is likewise unreachable TODAY — no adapter renders LSP servers
+// in v1 (every one reports them as a Skip), so no op carries an "lsp/" SourceID
+// and the lsp keys pluginProvidedSourceIDs registers are never looked up. It is
+// kept because it is symmetric, free, and correct the day an adapter does render
+// them; without it, that adapter would ship with the refusal silently absent.
+//
 // Hooks resolve to "" by construction: hook write-back is not implemented
 // (writeBackKeyItem errors for every non-MCP pointer), so pluginProvidedSourceIDs
 // registers no hook keys for this lookup to find. Import is where plugin hooks

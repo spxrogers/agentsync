@@ -69,8 +69,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   a plugin's agent as `plugin:agent` — agentsync uses a hyphen because Claude Code
   documents a subagent `name` as a "Unique identifier using lowercase letters and
   hyphens". **Invoke plugin agents and commands by their new names.** Components
-  you hand-author in `~/.agentsync/` are **not** renamed — a plugin can never take
-  a name you chose. MCP and LSP servers are unchanged: a same-id divergence across
+  you hand-author in `~/.agentsync/` are **not** renamed. (That is not the same
+  as "a plugin can never take your name": derived names are not injective, so a
+  plugin's derived name can land on one of yours. agentsync reports that clash
+  naming both sides rather than letting either win silently.) MCP and LSP servers are unchanged: a same-id divergence across
   sources is still refused rather than renamed apart, because it can be a silent
   endpoint hijack. A one-time upgrade notice points at the docs.
   ([#211](https://github.com/spxrogers/agentsync/issues/211))

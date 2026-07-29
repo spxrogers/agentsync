@@ -1290,6 +1290,11 @@ func hookDisplay(h source.Hook) string {
 // A NAMED import of a plugin-provided component is an error, not a silent
 // no-op: the user asked for that exact component by name and deserves to be told
 // why it cannot be captured, and what to do instead.
+//
+// nameOf yields the map key. displayOf, when non-nil, yields what the user sees;
+// it exists because a hook's key is an opaque length-prefixed signature rather
+// than a name anyone could act on. Pass nil wherever the key IS the display name,
+// which is every kind except hooks.
 func skipPluginProvided[T any](io *importIO, kind, name string, items []T, nameOf func(T) string, displayOf func(T) string) ([]T, error) {
 	// Nothing matched → nothing to wrongly capture, so an unusable filter is
 	// harmless here. Checking this FIRST keeps a broken plugin cache from

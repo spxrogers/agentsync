@@ -280,8 +280,14 @@ func (w *Writer) Delete(op adapter.FileOp) error {
 			// permissions mishap) wedge every other agent's writes with no way
 			// past it, and a lingering orphan is not data loss. The warning is
 			// how the user learns to clean it up.
+			// Note for skills specifically: reclamation is per FILE, so skipping
+			// one file of a skill directory can leave a partial tree (scripts/
+			// without SKILL.md). That converges — the state entry is kept, so the
+			// next apply retries this file — and the alternative, deleting a file
+			// we cannot read, is the one outcome that is not recoverable.
 			slog.Warn("skipped reclaiming an orphaned destination: it could not be read, "+
-				"so agentsync cannot rule out an unsynced edit; remove it by hand once you have checked it",
+				"so agentsync cannot rule out an unsynced edit; it will be retried on the "+
+				"next apply — remove it by hand once you have checked it",
 				"path", op.Path, "agent", w.agent)
 			return nil
 		}
@@ -293,6 +299,30 @@ func (w *Writer) Delete(op adapter.FileOp) error {
 		pruneEmptySkillDirs(op.Path, op.SourceID)
 	}
 	return nil
+}
+
+// OrphanDeleteWillProceed reports whether Apply will actually reclaim an
+// orphaned destination, rather than skip it.
+//
+// Delete skips (with a warning) any orphan it cannot READ first — it cannot rule
+// out an unsynced hand-edit, and deleting blind would break the
+// never-destroy-unsynced-content invariant. A caller counting removals for the
+// apply summary has to ask the same question: a permanently-unreadable orphan
+// would otherwise be reported "removed: 1 file(s)" on EVERY run, on the same run
+// that warns it was skipped — two lines that contradict each other. (It reports
+// every run rather than once because the state entry is now deliberately kept so
+// the delete is retried; see PruneStaleState.)
+//
+// This is an advisory pre-check for reporting only. Delete's own read is
+// authoritative — the two can disagree if the destination changes in between,
+// which costs a wrong count in a summary line and nothing else. Both use
+// os.ReadFile so they answer the same question about the same thing.
+//
+// An absent destination proceeds: there is nothing to preserve, the remove is a
+// no-op, and the entry converges away.
+func OrphanDeleteWillProceed(path string) bool {
+	_, err := os.ReadFile(path)
+	return err == nil || os.IsNotExist(err)
 }
 
 // backupOrphanIfDrifted copies a soon-to-be-deleted component file to the backup

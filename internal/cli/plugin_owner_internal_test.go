@@ -1,6 +1,10 @@
 package cli
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/spxrogers/agentsync/internal/source"
+)
 
 // TestPluginOwnerForKeyItem is the direct unit test for the key-item provenance
 // lookup. The e2e import tests exercise a different code path (import matches by
@@ -33,9 +37,13 @@ func TestPluginOwnerForKeyItem(t *testing.T) {
 		{"generic tier: vscode", "mcp/* (multiple)", "/servers/github", "gh-plugin"},
 		{"generic tier: amp (dotted root)", "mcp/* (multiple)", "/amp.mcpServers/github", "gh-plugin"},
 
-		// Continue renders one file per server, so its op is a whole-file replace
-		// with a per-server SourceID rather than a section-wide one.
-		{"continue per-server SourceID", "mcp/github.toml", "/mcpServers/github", "gh-plugin"},
+		// NOTE: Continue's per-server SourceID ("mcp/<id>.toml") is deliberately
+		// NOT exercised here. Its op is MergeStrategy "replace", so it is a
+		// WHOLE-FILE item that never reaches this function — collectItems looks
+		// it up by SourceID instead. Asserting it here would test a shape that
+		// cannot occur; the real path is covered by
+		// TestPluginProvidedSourceIDs_RegistersBothServerKeyForms and the
+		// Continue e2e in plugin_namespace_test.go.
 
 		{"lsp kind", "lsp/* (multiple)", "/lspServers/gopls", "lsp-plugin"},
 
@@ -83,6 +91,39 @@ func TestUnescapeJSONPointer(t *testing.T) {
 	} {
 		if got := unescapeJSONPointer(tc.in); got != tc.want {
 			t.Errorf("unescapeJSONPointer(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestPluginProvidedSourceIDs_RegistersBothServerKeyForms pins the dual keying
+// that the key-item table above deliberately does not cover.
+//
+// Most adapters fold every MCP server into one config file, so their op carries
+// the section-wide SourceID "mcp/* (multiple)" and only the JSON pointer names
+// the server — that is the "<kind>/<id>" key. Continue instead renders ONE FILE
+// PER SERVER with the per-server SourceID "mcp/<id>.toml", making it a whole-file
+// item that collectItems looks up by SourceID directly. Keying only the bare form
+// left that path unguarded: a plugin-provided server on Continue could still be
+// captured.
+func TestPluginProvidedSourceIDs_RegistersBothServerKeyForms(t *testing.T) {
+	c := source.Canonical{
+		MCPServers: []source.MCPServer{
+			{ID: "pluginapi", Plugin: "srv"},
+			{ID: "mine"}, // hand-declared: must not appear under either form
+		},
+		LSPServers: []source.LSPServer{{ID: "gopls", Plugin: "srv"}},
+	}
+	got := pluginProvidedSourceIDs(c)
+
+	for _, key := range []string{"mcp/pluginapi", "mcp/pluginapi.toml", "lsp/gopls", "lsp/gopls.toml"} {
+		if got[key] != "srv" {
+			t.Errorf("key %q = %q, want %q — both the key-merge and whole-file "+
+				"lookup shapes must resolve a plugin-owned server", key, got[key], "srv")
+		}
+	}
+	for _, key := range []string{"mcp/mine", "mcp/mine.toml"} {
+		if _, present := got[key]; present {
+			t.Errorf("a hand-declared server must not be registered as plugin-owned; got key %q", key)
 		}
 	}
 }

@@ -757,9 +757,14 @@ empty-merge op) and **whole-file components** whose `source_id` is under
 command that the source no longer renders. In every case the writer deletes the
 orphaned file and **backs up an `orphan-drifted` dest first** (a hand-edit is
 never destroyed un-preserved). If that pre-delete read fails for any reason other
-than "already gone" — `EACCES`, `EIO`, `EISDIR` — the reclaim is **refused**
-rather than performed blind: agentsync cannot tell whether the destination held
-an unsynced edit, and convergence is never worth data loss. Empty-directory pruning applies to **skills
+than "already gone" — `EACCES`, `EIO`, `EISDIR` — that one delete is **skipped**
+with a warning rather than performed blind: agentsync cannot tell whether the
+destination held an unsynced edit, and convergence is never worth data loss. The
+run itself continues, because a lingering orphan is not data loss while a failed
+apply would wedge every other agent's writes. A skipped delete is **retried**:
+`PruneStaleState` keeps the state entry for a reclaimable destination that is
+still on disk, so the next apply tries again and warns again rather than
+forgetting the file forever. Empty-directory pruning applies to **skills
 only** — a skill is a directory under the Agent Skills spec, so removal must
 reclaim the whole tree, pruned up to but never including the agent's skills root;
 subagents and commands are flat files in a directory the agent always owns.

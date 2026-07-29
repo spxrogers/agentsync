@@ -59,7 +59,12 @@ component, update them.
 
 **Components you wrote yourself are not renamed.** Only components projected
 from a plugin are namespaced — anything in your own `~/.agentsync/` tree keeps
-the name you gave it, and a plugin can never take that name from you.
+the name you gave it.
+
+In the rare case where a plugin's *derived* name lands on one of yours — you
+wrote `feature-dev-code-reviewer` and the `feature-dev` plugin ships
+`code-reviewer` — agentsync tells you, naming both sides, instead of picking a
+winner. Rename your copy or disable the plugin to resolve it.
 
 **The old files are cleaned up for you.** The next `agentsync apply` removes the
 un-namespaced destination files agentsync previously wrote, so you are not left

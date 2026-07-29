@@ -2,6 +2,7 @@ package render_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,8 +10,10 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	_ "github.com/spxrogers/agentsync/internal/adapter/noop"
+	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
 func TestRecordState_FilesAndKeys(t *testing.T) {
@@ -208,5 +211,60 @@ func TestRecordState_SkipsDeleteOps(t *testing.T) {
 	}
 	if len(s.Files) != 0 || len(s.Keys) != 0 {
 		t.Fatal("delete ops should not create state entries")
+	}
+}
+
+// TestPruneStaleState_ReclaimableOrphanRetention pins both directions of the
+// keep-guard added for the skipped-delete retry.
+//
+// KEEP when the destination survives: apply skips (rather than performs) an
+// orphan delete it cannot read, and pruning the entry would make that skip
+// permanent and silent — orphanDeletes could never synthesize the delete again
+// and the warning would never repeat.
+//
+// PRUNE when it is provably gone: otherwise every successfully-reclaimed file
+// would leak an entry forever and targets.json would grow without bound.
+func TestPruneStaleState_ReclaimableOrphanRetention(t *testing.T) {
+	testenv.RequireContainer(t)
+	tmp := t.TempDir()
+
+	present := filepath.Join(tmp, ".claude", "agents", "still-here.md")
+	if err := os.MkdirAll(filepath.Dir(present), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(present, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(tmp, ".claude", "agents", "reclaimed.md")
+	// A reclaimable SourceID whose file is gone, plus one that is NOT
+	// reclaimable — the exemption must not widen to every component kind.
+	notReclaimable := filepath.Join(tmp, ".claude", "settings.json")
+	if err := os.WriteFile(notReclaimable, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prefix := fmt.Sprintf("claude:user:%s:", paths.HomeRelative(tmp, ""))
+	st := state.New()
+	for path, srcID := range map[string]string{
+		present:        "subagents/still-here.md",
+		gone:           "subagents/reclaimed.md",
+		notReclaimable: "memory/AGENTS.md",
+	} {
+		st.Files[prefix+paths.HomeRelative(tmp, path)] = state.FileEntry{SHA256: "old", SourceID: srcID}
+	}
+
+	// No ops at all: every entry is "no longer rendered".
+	render.PruneStaleState(st, tmp, "claude", adapter.ScopeUser, "", nil)
+
+	if _, ok := st.Files[prefix+paths.HomeRelative(tmp, present)]; !ok {
+		t.Error("a reclaimable destination that is still on disk must keep its entry, " +
+			"so a skipped delete is retried rather than forgotten")
+	}
+	if _, ok := st.Files[prefix+paths.HomeRelative(tmp, gone)]; ok {
+		t.Error("a reclaimable destination that is gone must still be pruned")
+	}
+	if _, ok := st.Files[prefix+paths.HomeRelative(tmp, notReclaimable)]; ok {
+		t.Error("the exemption must apply only to reclaimable SourceIDs; " +
+			"a non-reclaimable entry must prune as before")
 	}
 }

@@ -142,8 +142,10 @@ func TestApply_CrossPluginCollisionsNamespaceApart(t *testing.T) {
 // TestApply_HandAuthoredComponentKeepsBareName pins the other half of the
 // contract: namespacing applies to PLUGIN-provided components only. A component
 // the user wrote in ~/.agentsync/ keeps the bare name they chose, even when an
-// installed plugin ships one by the same name — a plugin can never take a name
-// out from under the user, and an upgrade never renames their own files.
+// installed plugin ships one by the same name, and an upgrade never renames
+// their own files. (A plugin's DERIVED name can still land on one of theirs —
+// the mapping is not injective — which checkProjectedConflicts reports rather
+// than resolving silently; see TestCheckProjectedConflicts_NameKeyedComponents.)
 func TestApply_HandAuthoredComponentKeepsBareName(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	mpDir := makeCollidingMarketplace(t, t.TempDir())
@@ -776,5 +778,111 @@ func TestImport_FailsClosedWhenPluginProjectionFails(t *testing.T) {
 	// Nothing may have been captured.
 	if _, serr := os.Stat(filepath.Join(tmp, ".agentsync", "subagents", "feature-dev-code-reviewer.md")); serr == nil {
 		t.Fatal("a failed projection must not let a plugin component be captured")
+	}
+}
+
+// TestReconcile_HookWriteBackIsRefused pins the OTHER half of the argument that
+// reconcile needs no hook-provenance case: hook key-level write-back is not
+// implemented at all, so a plugin hook cannot be captured through it.
+//
+// That reasoning is load-bearing — pluginProvidedSourceIDs deliberately registers
+// no hook keys because of it — and it was previously unenforced. If someone
+// implements hook write-back without also registering those keys, this fails
+// loudly instead of silently permitting the capture.
+func TestReconcile_HookWriteBackIsRefused(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	hooksSrc := filepath.Join(tmp, ".agentsync", "hooks")
+	if err := os.MkdirAll(hooksSrc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooksSrc, "PreToolUse.toml"),
+		[]byte("[[hook]]\nmatcher = \"Bash\"\ntype = \"command\"\ncommand = \"guard\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	// Drift the rendered hook so reconcile has something to act on.
+	settings := filepath.Join(tmp, ".claude", "settings.json")
+	data, err := os.ReadFile(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte(strings.Replace(string(data), "guard", "EDITED", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _ := runCLI(t, env, "reconcile", "--auto-writeback")
+	if !strings.Contains(out, "not implemented") {
+		t.Errorf("hook write-back must be refused as unimplemented — the hook-provenance "+
+			"lookup relies on it; got:\n%s", out)
+	}
+}
+
+// TestImport_HookFilterKeysOnFullContent pins that the handler filter joins on
+// the WHOLE handler, not just event+matcher. A plugin and the user contributing
+// to the same event with the same matcher is the case that separates a correct
+// content signature from a coarser key — under event+matcher alone the user's
+// handler would be attributed to the plugin and silently dropped.
+func TestImport_HookFilterKeysOnFullContent(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeServerMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("srv-mp", mpDir, "srv"))
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	// SAME event AND SAME matcher as the plugin's handler (PreToolUse / Bash),
+	// differing only in the command.
+	hooksSrc := filepath.Join(tmp, ".agentsync", "hooks")
+	if err := os.MkdirAll(hooksSrc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooksSrc, "PreToolUse.toml"),
+		[]byte("[[hook]]\nmatcher = \"Bash\"\ntype = \"command\"\ncommand = \"my-own-guard\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	if err := os.Remove(filepath.Join(hooksSrc, "PreToolUse.toml")); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runCLI(t, env, "import", "claude:hook"); err != nil {
+		t.Fatalf("import claude:hook: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(filepath.Join(hooksSrc, "PreToolUse.toml"))
+	if err != nil {
+		t.Fatalf("the user's handler must survive even when it shares the plugin's matcher: %v", err)
+	}
+	if !strings.Contains(string(data), "my-own-guard") {
+		t.Fatalf("a same-event same-matcher handler was dropped:\n%s", data)
+	}
+	if strings.Contains(string(data), "plugin-guard") {
+		t.Fatalf("the plugin's handler must still be skipped:\n%s", data)
+	}
+}
+
+// TestImport_NamedHookEventAllPluginProvided covers the distinct branch where a
+// NAMED hook import matches only plugin-provided handlers: it errors, rather than
+// reporting a successful import of nothing.
+func TestImport_NamedHookEventAllPluginProvided(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeServerMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("srv-mp", mpDir, "srv"))
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	out, err := runCLI(t, env, "import", "claude:hook:PreToolUse")
+	if err == nil {
+		t.Fatalf("a named import whose every handler is plugin-provided must error; got:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "provided by an installed plugin") {
+		t.Errorf("the error should say why nothing was captured; got: %v", err)
 	}
 }

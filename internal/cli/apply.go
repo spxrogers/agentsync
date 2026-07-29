@@ -415,7 +415,14 @@ func removalCounts(plan render.RenderPlan, s *state.Targets, userHome string, sc
 	fileDeletes := map[string]bool{}
 	for name, res := range plan.PerAgent {
 		for _, del := range render.OrphanDeletes(s, userHome, name, sc, projectRoot, res.Ops) {
-			fileDeletes[del.Path] = true
+			// Count only what apply will actually remove. An orphan whose
+			// destination cannot be read is SKIPPED with a warning, and its state
+			// entry is kept so the next run retries — so counting it here would
+			// print "removed: N" on every run alongside the warning saying it was
+			// not removed.
+			if render.OrphanDeleteWillProceed(del.Path) {
+				fileDeletes[del.Path] = true
+			}
 		}
 		for _, op := range res.Ops {
 			// An orphan-cleanup op is a key-merge op whose rendered content is the
