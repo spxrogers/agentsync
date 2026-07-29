@@ -658,8 +658,11 @@ func backupPathFor(src, backupRoot string) string {
 func BackupFile(home, path string) (string, error) {
 	// Same shape guard as the apply-side reads: os.ReadFile BLOCKS forever on a
 	// FIFO rather than failing, and this runs from reconcile's interactive orphan
-	// delete. A non-regular destination has no content to preserve anyway, so
-	// report "nothing backed up" rather than hang.
+	// delete. Returning an ERROR (not the ("", nil) "nothing to back up" answer
+	// the missing-file case gives) is deliberate: the caller removes the file
+	// only if the backup succeeded, so erroring here refuses the removal too.
+	// A non-regular destination is one agentsync cannot preserve, and refusing
+	// to delete what it cannot preserve is the same rule the apply path follows.
 	if !isRegularOrAbsent(path) {
 		return "", fmt.Errorf("refusing to back up %s: not a regular file", path)
 	}

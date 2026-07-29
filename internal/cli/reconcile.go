@@ -719,11 +719,13 @@ func collectOrphanFileItems(plan render.RenderPlan, reg *adapter.Registry, s *st
 			hdest := hashFile(orphan)
 			items = append(items, reconcileItem{
 				agentName: name,
-				// SourceID matters: every SourceID-keyed decision downstream — the
-				// reclaimable-kind check behind this item's prompt wording, and
-				// Writer.Delete's backup/prune behaviour if it is ever executed —
-				// silently degrades to "unknown kind" without it.
-				op:          adapter.FileOp{Action: "delete", Path: orphan, SourceID: entry.SourceID, Mode: entry.Mode},
+				// SourceID matters: the reclaimable-KIND check behind this item's
+				// prompt wording is SourceID-keyed and silently degrades to
+				// "unknown kind" without it — which is exactly how that branch
+				// once shipped dead. Mode is deliberately NOT carried: this path
+				// removes via render.BackupFile + os.Remove, never Writer.Delete,
+				// so nothing reads it and setting it would only imply otherwise.
+				op:          adapter.FileOp{Action: "delete", Path: orphan, SourceID: entry.SourceID},
 				cls:         drift.Classify("", happlied, hdest),
 				happlied:    happlied,
 				hdest:       hdest,

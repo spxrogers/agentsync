@@ -1352,10 +1352,11 @@ func skipPluginProvided[T any](io *importIO, kind, name string, items []T, nameO
 			display = displayOf(it)
 		}
 		if name != "" {
-			return nil, fmt.Errorf("%s %q is provided by the plugin %q, not hand-authored — importing it "+
-				"would create a canonical copy that collides with the plugin's own on the next apply; "+
-				"change it upstream, or run `agentsync plugin disable %q` to stop projecting it",
-				kind, display, plugin, plugin)
+			return nil, fmt.Errorf("%s %q is provided by the plugin %q — importing it would create a "+
+				"canonical copy that DIVERGES from the plugin's the moment it updates, and every load "+
+				"after that would refuse. Change it upstream, edit your own copy under ~/.agentsync/ "+
+				"directly if you already have one, or run `agentsync plugin disable %q` to stop "+
+				"projecting it", kind, display, plugin, plugin)
 		}
 		io.warnf("skipping %s %q: it is projected from the plugin %q, so agentsync already manages it "+
 			"(capturing it would collide with the plugin's own on the next apply)", kind, display, plugin)
