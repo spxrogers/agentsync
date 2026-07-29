@@ -120,6 +120,16 @@ type SecretsConfig struct {
 type MCPServer struct {
 	ID     string        `toml:"-"` // filename minus .toml
 	Server MCPServerSpec `toml:"server"`
+	// Plugin is the id of the plugin providing this server, empty when the user
+	// declared it in mcp/<id>.toml. Unlike a skill/subagent/command, an MCP
+	// server's ID is NOT namespaced — two sources claiming one id can be a silent
+	// endpoint hijack, which checkProjectedConflicts refuses rather than renames
+	// apart. Provenance is carried only so the dest→source paths (import,
+	// reconcile write-back) can refuse to capture a server the plugin owns. It is
+	// derived state, never serialized, and never secret-bearing — see
+	// NamespacedComponentName (provenance.go) and walkerCovered
+	// (internal/secrets/walk_test.go).
+	Plugin string `toml:"-"`
 }
 
 type MCPServerSpec struct {
@@ -147,10 +157,15 @@ type MCPServerSpec struct {
 // nested files. Files captures everything in the directory other than SKILL.md
 // so apply/import/reconcile are not lossy for those resources.
 type Skill struct {
-	Name        string         `toml:"-"` // dirname
+	Name        string         `toml:"-"` // dirname (namespaced when Plugin is set)
 	Frontmatter map[string]any `toml:"-"` // YAML frontmatter parsed
 	Body        string         `toml:"-"` // markdown body
 	Files       []SkillFile    `toml:"-"` // bundled files other than SKILL.md
+
+	// Plugin / BaseName carry plugin provenance; see NamespacedComponentName
+	// (provenance.go) for what they mean and why they are never serialized.
+	Plugin   string `toml:"-"`
+	BaseName string `toml:"-"`
 }
 
 // SkillFile is one bundled resource inside a skill directory (e.g.
@@ -225,17 +240,27 @@ type MarketplaceSpec struct {
 // Subagent mirrors subagents/<name>.md (frontmatter + body).
 // Subagents in Claude live at ~/.claude/agents/<name>.md.
 type Subagent struct {
-	Name        string         // filename without .md extension
+	Name        string         // filename without .md extension (namespaced when Plugin is set)
 	Frontmatter map[string]any // YAML frontmatter (description, tools, model, color, etc.)
 	Body        string         // markdown body
+
+	// Plugin / BaseName carry plugin provenance; see NamespacedComponentName
+	// (provenance.go) for what they mean and why they are never serialized.
+	Plugin   string
+	BaseName string
 }
 
 // Command mirrors commands/<name>.md (frontmatter + body).
 // Slash commands in Claude live at ~/.claude/commands/<name>.md.
 type Command struct {
-	Name        string         // filename without .md extension
+	Name        string         // filename without .md extension (namespaced when Plugin is set)
 	Frontmatter map[string]any // YAML frontmatter
 	Body        string         // markdown body
+
+	// Plugin / BaseName carry plugin provenance; see NamespacedComponentName
+	// (provenance.go) for what they mean and why they are never serialized.
+	Plugin   string
+	BaseName string
 }
 
 // Hook represents a single hook entry for an event.
@@ -251,12 +276,23 @@ type Hook struct {
 	Matcher string         // glob/regex string
 	Type    string         // "command"
 	Command string         // shell command
+	// Plugin is the id of the plugin providing this handler, empty when the user
+	// declared it in hooks/<event>.toml. Hooks are neither namespaced nor
+	// id-keyed — a canonical hooks/<event>.toml holds MANY handlers from many
+	// sources — so provenance is carried per HANDLER, which is the granularity
+	// import must filter at: refusing a whole event would drop the user's own
+	// handlers alongside the plugin's. Never serialized (WriteHooks emits an
+	// explicit hookEntryOut), never secret-bearing — see MCPServer.Plugin.
+	Plugin string
 }
 
 // LSPServer mirrors lsp/<id>.toml.
 type LSPServer struct {
 	ID   string
 	Spec LSPServerSpec
+	// Plugin mirrors MCPServer.Plugin — provenance only, never namespaced, never
+	// serialized, never secret-bearing. See MCPServer.Plugin.
+	Plugin string `toml:"-"`
 }
 
 // LSPServerSpec holds the server configuration for an LSP server.

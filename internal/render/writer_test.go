@@ -2,12 +2,14 @@ package render_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -468,6 +470,44 @@ func TestRenderApply_SharedWriteDivergence(t *testing.T) {
 	})
 }
 
+// TestRenderApply_IntraAgentDivergenceMessage pins that the shared-write guard
+// tells the truth about WHO collided.
+//
+// The `seen` map is deliberately not reset per agent — that is what lets the
+// guard catch two agents rendering one shared path differently. But it means the
+// guard also fires when a SINGLE agent emits two divergent ops for one path,
+// which is exactly what two same-named canonical components produce (issue
+// #211: two plugins each shipping agents/code-reviewer.md made Claude render two
+// ops at ~/.claude/agents/code-reviewer.md). That case was reported as
+// "different content than an earlier agent", sending the user looking for a
+// second agent that did not exist.
+func TestRenderApply_IntraAgentDivergenceMessage(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+	dest := filepath.Join(tmp, ".claude", "agents", "code-reviewer.md")
+	_ = os.MkdirAll(filepath.Dir(dest), 0o755)
+	reg := adapter.NewRegistry()
+	_ = reg.Register(&fakeJSONApply{name: "claude"})
+
+	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+		"claude": {Ops: []adapter.FileOp{
+			{Action: "write", Path: dest, Content: []byte("from plugin A"), Mode: 0o644, SourceID: "subagents/code-reviewer.md"},
+			{Action: "write", Path: dest, Content: []byte("from plugin B"), Mode: 0o644, SourceID: "subagents/code-reviewer.md"},
+		}},
+	}}
+	_, _, _, err := render.Apply(plan, reg, state.New(), home, tmp, adapter.ScopeUser, "")
+	if err == nil {
+		t.Fatal("one agent rendering two divergent ops for a path must fail loud")
+	}
+	if strings.Contains(err.Error(), "earlier agent") {
+		t.Fatalf("an intra-agent collision must not be blamed on a second agent; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "two canonical components") {
+		t.Fatalf("the message should point at the real cause; got: %v", err)
+	}
+}
+
 // TestPreviewApply_SharedWriteDivergence ensures `apply --dry-run`'s preview
 // fails loud on divergent shared-path content, matching Apply — so the dry-run
 // can't show a clean preview that the real apply then aborts on.
@@ -648,4 +688,133 @@ func TestWriter_JSONCFallbackBacksUpWholeFile(t *testing.T) {
 	if !strings.Contains(string(got), "old") {
 		t.Fatalf("JSONC-fallback backup missing original content: %s", got)
 	}
+}
+
+// TestApply_UnreadableOrphanIsSkippedNotDeleted pins the two-sided contract on
+// reclaiming a destination agentsync cannot read.
+//
+// Refusing the DELETE is required: without reading the file, agentsync cannot
+// rule out an unsynced hand-edit, and deleting it would break the
+// never-destroy-unsynced-content invariant. Refusing the RUN is not: a lingering
+// orphan is not data loss, and failing would let one unreadable destination (a
+// stray directory at the path, a permissions mishap) wedge every other agent's
+// writes with no flag to get past it. So: skip that one delete, keep going.
+//
+// A directory at the destination path yields EISDIR from os.ReadFile without
+// needing to manipulate permissions, which would not work as root in CI.
+func TestApply_UnreadableOrphanIsSkippedNotDeleted(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+
+	// The "orphan": owned in state, no longer rendered, and unreadable.
+	orphan := filepath.Join(tmp, ".claude", "agents", "gone.md")
+	_ = os.MkdirAll(orphan, 0o755) // a DIRECTORY at the file path → EISDIR
+	// A second, ordinary op that must still be applied.
+	live := filepath.Join(tmp, ".claude", "agents", "live.md")
+
+	st := state.New()
+	st.Files[fmt.Sprintf("claude:user:%s:%s", paths.HomeRelative(tmp, ""), paths.HomeRelative(tmp, orphan))] = state.FileEntry{SHA256: "stale", SourceID: "subagents/gone.md", Mode: 0o644}
+
+	reg := adapter.NewRegistry()
+	_ = reg.Register(&fakeJSONApply{name: "claude"})
+	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+		"claude": {Ops: []adapter.FileOp{
+			{Action: "write", Path: live, Content: []byte("live"), Mode: 0o644, SourceID: "subagents/live.md"},
+		}},
+	}}
+
+	if _, _, _, err := render.Apply(plan, reg, st, home, tmp, adapter.ScopeUser, ""); err != nil {
+		t.Fatalf("an unreadable orphan must not fail the whole apply: %v", err)
+	}
+	if _, err := os.Stat(orphan); err != nil {
+		t.Fatalf("the unreadable orphan must NOT be deleted (it could hold an unsynced edit): %v", err)
+	}
+	if data, err := os.ReadFile(live); err != nil || string(data) != "live" {
+		t.Fatalf("the rest of the apply must still land; got %q err=%v", data, err)
+	}
+
+	// The skip must be RETRIED, not forgotten. PruneStaleState drops the state
+	// entry for anything the plan no longer renders, and delete ops are never in
+	// its rendered set — so without the still-on-disk exemption the entry would
+	// vanish here, orphanDeletes could never synthesize the delete again, and the
+	// one warning would never repeat. The stale file would live forever, which is
+	// the leftover-duplicate failure reclamation exists to prevent.
+	stateKey := fmt.Sprintf("claude:user:%s:%s", paths.HomeRelative(tmp, ""), paths.HomeRelative(tmp, orphan))
+	render.PruneStaleState(st, tmp, "claude", adapter.ScopeUser, "", plan.PerAgent["claude"].Ops)
+	if _, stillOwned := st.Files[stateKey]; !stillOwned {
+		t.Fatal("a skipped orphan must keep its state entry so the next apply retries and re-warns")
+	}
+
+	// And once the obstruction is gone, the retry converges: the delete happens.
+	if err := os.Remove(orphan); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(orphan, []byte("now readable"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := render.Apply(plan, reg, st, home, tmp, adapter.ScopeUser, ""); err != nil {
+		t.Fatalf("retry apply: %v", err)
+	}
+	if _, err := os.Stat(orphan); err == nil {
+		t.Fatal("once the destination is readable again, the retry must reclaim it")
+	}
+}
+
+// TestOrphanDeleteWillProceed pins the predicate the apply summary counts with.
+// It must answer the same question Delete does, or a permanently-unreadable
+// orphan is reported "removed: N" on every run — on the same run that warns it
+// was skipped, and forever, because the state entry is deliberately kept so the
+// delete is retried.
+func TestOrphanDeleteWillProceed(t *testing.T) {
+	tmp := t.TempDir()
+	op := func(name, sourceID string) adapter.FileOp {
+		return adapter.FileOp{Action: "delete", Path: filepath.Join(tmp, name), SourceID: sourceID}
+	}
+
+	readable := filepath.Join(tmp, "readable.md")
+	if err := os.WriteFile(readable, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.Join(tmp, "empty.md")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A directory at a file path: the root-safe way to make a destination
+	// unreadable (chmod does not stop root, which is how CI runs).
+	if err := os.MkdirAll(filepath.Join(tmp, "isdir.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(tmp, "no-such-target"), filepath.Join(tmp, "dangling.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		op   adapter.FileOp
+		want bool
+	}{
+		{"readable regular file", op("readable.md", "subagents/readable.md"), true},
+		{"empty but readable", op("empty.md", "subagents/empty.md"), true},
+		{"absent destination converges away", op("gone.md", "subagents/gone.md"), true},
+		// Delete's ReadFile fails EISDIR here, so it skips — the count must agree.
+		{"directory at the path", op("isdir.md", "subagents/isdir.md"), false},
+		// Delete's ReadFile gets ENOENT and removes the link, so this proceeds.
+		{"dangling symlink", op("dangling.md", "subagents/dangling.md"), true},
+		// Not an orphan delete at all.
+		{"non-reclaimable SourceID", op("readable.md", "memory/AGENTS.md"), false},
+		// A path THROUGH a regular file: Stat fails ENOTDIR, which is neither
+		// "regular" nor "absent", so the shape guard rejects it before any open.
+		{"path through a file", op(filepath.Join("readable.md", "child.md"), "subagents/child.md"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := render.OrphanDeleteWillProceed(tc.op); got != tc.want {
+				t.Errorf("OrphanDeleteWillProceed(%s) = %v, want %v", tc.op.SourceID, got, tc.want)
+			}
+		})
+	}
+
+	// The non-regular short-circuit is exercised by TestOrphanDeleteWillProceed_FIFO
+	// in writer_fifo_unix_test.go — syscall.Mkfifo does not exist on Windows, so it
+	// lives behind a build tag rather than breaking `go test ./...` there.
 }

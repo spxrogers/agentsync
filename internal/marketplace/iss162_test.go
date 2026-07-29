@@ -42,7 +42,10 @@ func TestLoadProjected_TamperGuardAndBodiesUseSameFs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadProjected: %v", err)
 	}
-	if len(c.Skills) != 1 || c.Skills[0].Name != "s" {
+	// Name is the NAMESPACED form: a plugin-provided component is renamed
+	// "<plugin>-<name>" at projection (issue #211), with BaseName keeping the
+	// upstream name.
+	if len(c.Skills) != 1 || c.Skills[0].Name != "p-s" || c.Skills[0].BaseName != "s" {
 		t.Fatalf("skill not projected from the injected fs (bodies read via os.* instead?): %+v", c.Skills)
 	}
 	if !strings.Contains(c.Skills[0].Body, "memfs-only body") {

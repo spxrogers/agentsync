@@ -43,13 +43,28 @@ var codexAgentKnownKeys = map[string]bool{"name": true, "description": true, "mo
 // agent's identity, two subagents with distinct file stems that resolve to the
 // same effective `name` would write two TOMLs claiming one identity; that
 // collision is reported as an error rather than emitted silently.
+//
+// The common cause of that collision used to be two plugins each shipping a
+// same-named agent — for which the error's "rename one" was advice the user
+// structurally could NOT take, since both files live under the
+// marketplace-managed plugin cache (issue #211). Plugin-provided components are
+// now namespaced by their plugin at projection time
+// (marketplace.namespaceProjected), so that case no longer reaches here. What
+// remains is genuinely user-resolvable — two hand-authored canonical subagents,
+// or the pathological overlap of plugin "a" shipping "b-c" against plugin "a-b"
+// shipping "c" — so the error stays, and names each side's origin so the user
+// can tell which files to edit.
 func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp, []adapter.Skip, error) {
 	var ops []adapter.FileOp
 	var skips []adapter.Skip
 	// seenNames maps each effective Codex agent name already rendered to the
-	// canonical name (file stem) that first produced it, so a later subagent
-	// resolving to the same effective name is caught as a collision.
-	seenNames := map[string]string{}
+	// subagent that first produced it, so a later subagent resolving to the same
+	// effective name is caught as a collision. The whole subagent is kept (not
+	// just its stem) because the error must name each side's ORIGIN: colliding
+	// subagents almost always SHARE a file stem, so printing the two stems
+	// rendered as the same string twice — structurally uninformative precisely
+	// when it fired.
+	seenNames := map[string]source.Subagent{}
 	for _, s := range c.Subagents {
 		// Codex treats the `name` field as the source of truth; prefer the
 		// frontmatter name when present, falling back to the filename-derived
@@ -64,11 +79,11 @@ func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp
 		// "capture it or acknowledge it, never drop it silently" invariant.
 		if first, ok := seenNames[name]; ok {
 			return nil, nil, fmt.Errorf(
-				"codex subagents %q and %q resolve to the same agent name %q; rename one or set distinct frontmatter names",
-				first, s.Name, name,
+				"codex subagents %s and %s both resolve to the agent name %q; rename one or set distinct frontmatter names",
+				subagentOrigin(first), subagentOrigin(s), name,
 			)
 		}
-		seenNames[name] = s.Name
+		seenNames[name] = s
 		af := codexAgentFile{
 			Name:                  name,
 			Description:           fmString(s.Frontmatter, "description"),
@@ -98,6 +113,18 @@ func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp
 		})
 	}
 	return ops, skips, nil
+}
+
+// subagentOrigin identifies one side of a name collision by where it came from,
+// which is the only thing that distinguishes the two sides when — as is almost
+// always the case — they share a file stem. A plugin-provided subagent names its
+// plugin and its upstream name; a hand-authored one names the canonical file the
+// user can actually edit.
+func subagentOrigin(s source.Subagent) string {
+	if s.Plugin != "" {
+		return fmt.Sprintf("%q (from plugin %q, as %q)", s.Name, s.Plugin, s.BaseName)
+	}
+	return fmt.Sprintf("%q (%s)", s.Name, source.SubagentSourceID(s.Name))
 }
 
 // fmString returns the string value at key in a frontmatter map, or "".

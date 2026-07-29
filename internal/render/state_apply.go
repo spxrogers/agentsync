@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"sort"
 	"strings"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
@@ -28,6 +31,12 @@ import (
 // normalize op.Path to its HOME-relative form so state-key lookups match
 // keys written by RecordOpsState. It must NOT be the agentsync home — dest
 // files live under $HOME, not under ~/.agentsync.
+//
+// One exception to the pure ops-vs-state comparison, and the reason this touches
+// the FILESYSTEM: a reclaimable destination that is STILL ON DISK keeps its entry
+// even when the plan no longer renders it. apply skips (rather than performs) an
+// orphan delete it cannot read first, and pruning the entry would make that skip
+// permanent and silent — see the comment at the check itself.
 func PruneStaleState(s *state.Targets, userHome, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) {
 	if s == nil {
 		return
@@ -64,14 +73,43 @@ func PruneStaleState(s *state.Targets, userHome, agent string, scope adapter.Sco
 		}
 	}
 
-	for key := range s.Files {
+	for key, entry := range s.Files {
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
 		path := strings.TrimPrefix(key, prefix)
-		if _, ok := currentFiles[path]; !ok {
-			delete(s.Files, key)
+		if _, ok := currentFiles[path]; ok {
+			continue
 		}
+		// Keep tracking a reclaimable destination that is STILL ON DISK.
+		//
+		// apply skips (rather than performs) an orphan delete when it cannot read
+		// the destination first — it cannot rule out an unsynced hand-edit, and
+		// deleting blind would break the never-destroy-unsynced-content
+		// invariant. Pruning the entry anyway would make that skip permanent and
+		// silent: with no state entry, orphanDeletes can never synthesize the
+		// delete again, `status` stops reporting the file, and the one warning
+		// never repeats. The stale file would then live forever — re-creating
+		// exactly the leftover-duplicate failure reclamation exists to prevent.
+		//
+		// So: if the file agentsync owned is still there, agentsync keeps owning
+		// it, and the next apply retries and re-warns. A delete that succeeded
+		// leaves nothing behind, so this is a no-op for the normal path.
+		if isOrphanReclaimable(entry.SourceID) {
+			// Keep unless the destination is PROVABLY absent. `err == nil` would be
+			// the wrong polarity: the archetypal reason Delete skips is that the
+			// destination cannot be read, and the archetypal cause of that —
+			// EACCES on the parent directory — also makes Stat fail. Treating a
+			// stat error as "gone" would prune exactly the entries this exists to
+			// preserve, in exactly the case it exists for.
+			// Lstat, not Stat: a DANGLING SYMLINK is a destination that is still
+			// there (os.Remove can clear it) but that Stat reports as absent,
+			// which would prune the entry and strand the link forever.
+			if _, err := os.Lstat(paths.FromHomeRelative(userHome, path)); !errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+		}
+		delete(s.Files, key)
 	}
 	for key := range s.Keys {
 		if !strings.HasPrefix(key, prefix) {
@@ -138,29 +176,95 @@ func OrphanFiles(s *state.Targets, userHome, agent string, scope adapter.Scope, 
 	return out
 }
 
-// SkillOrphanDeletes is the exported view of skillOrphanDeletes: the delete
-// FileOps `apply` will perform to reclaim skill files removed from the source
-// for agent+scope+project against ops. The CLI reads it (before Apply mutates
+// orphanReclaimedPrefixes are the canonical SourceID prefixes whose destination
+// files `apply` reclaims when the source stops rendering them.
+//
+// Skills were the original member: the Agent Skills spec treats a skill as a
+// whole DIRECTORY, so removing one must reclaim the whole tree rather than leave
+// a half-skill behind.
+//
+// Subagents and commands joined them for issue #211. Plugin-provided components
+// are now namespaced by their plugin, which RENAMES every one of them exactly
+// once, on the first apply after upgrading. Without reclamation the pre-rename
+// destination file would linger — and Claude Code reads every file in its agents
+// directory, so a stale ~/.claude/agents/code-reviewer.md sitting beside the two
+// new namespaced files would leave the user with MORE duplicate agents than
+// before, not fewer. The same convergence argument applies to an ordinary
+// removal from the canonical source, which previously left the dest file forever
+// (or until a reconcile).
+//
+// Both are flat single files, so they need the backup-if-drifted guarantee but
+// not the empty-directory pruning that skills get; see Writer.Delete.
+//
+// "agents/" is the RETIRED spelling of the subagent SourceID, and it is listed
+// deliberately. The canonical directory rename (agents/ → subagents/) ships in
+// the same release as namespacing, so an upgrading user's state still holds
+// "agents/<name>.md" entries — and the only rewriter, migrate's
+// rewriteSubagentStateIDs, runs solely from migrateSubagentTree, which returns
+// early when <home>/agents/ holds no files. A user whose subagents come ONLY
+// from plugins has no such directory, so their state is never rewritten.
+//
+// That is exactly the reported scenario (#211: two plugins, no hand-authored
+// subagents). Without this prefix their pre-rename ~/.claude/agents/
+// code-reviewer.md would be unreclaimable AND lose its state entry — left
+// forever beside the two namespaced files, which is MORE duplicates than before
+// and the direct opposite of what the upgrade notice promises. No live SourceID
+// uses this prefix ("subagents/" does not match it), so listing it costs nothing
+// and can be dropped once the retired spelling is out of circulation.
+// The retired entry is spelled via source.LegacySubagentsDir rather than a
+// literal, so the deprecation has ONE owner: when that constant goes, the
+// compiler points here.
+var orphanReclaimedPrefixes = []string{
+	"skills/",
+	source.SubagentsDir + "/",
+	"commands/",
+	source.LegacySubagentsDir + "/",
+}
+
+// OrphanIsReclaimable reports whether `apply` reclaims the destination of a
+// component with this SourceID when the source stops rendering it.
+//
+// It asks only about the KIND. Callers that need to know whether a PARTICULAR
+// destination will actually be removed on this run (it may be skipped as
+// unreadable) want OrphanDeleteWillProceed instead. The CLI uses this one to
+// word reconcile's orphan prompt, which is a statement about what apply does to
+// this class of component — true regardless of whether today's attempt succeeds.
+func OrphanIsReclaimable(sourceID string) bool { return isOrphanReclaimable(sourceID) }
+
+// isOrphanReclaimable reports whether a state SourceID names a component whose
+// destination file `apply` reclaims. It is the single predicate behind both the
+// delete synthesis here and the writer's backup/prune behavior, so the two can
+// never disagree about what counts as an orphan.
+func isOrphanReclaimable(sourceID string) bool {
+	for _, p := range orphanReclaimedPrefixes {
+		if strings.HasPrefix(sourceID, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// OrphanDeletes is the exported view of orphanDeletes: the delete FileOps
+// `apply` will perform to reclaim component files removed from the source for
+// agent+scope+project against ops. The CLI reads it (before Apply mutates
 // state) purely to COUNT deletions for the apply summary headline — a pure-delete
 // run must not report "up to date" / "applied: 0 ops". It never writes anything;
 // Apply remains the sole executor (and dedups these across agents itself).
-func SkillOrphanDeletes(s *state.Targets, userHome, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) []adapter.FileOp {
-	return skillOrphanDeletes(s, userHome, agent, scope, project, ops)
+func OrphanDeletes(s *state.Targets, userHome, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) []adapter.FileOp {
+	return orphanDeletes(s, userHome, agent, scope, project, ops)
 }
 
-// skillOrphanDeletes returns delete FileOps for skill files this agent owns in
-// state — entries whose SourceID is under "skills/" — that the current plan no
-// longer renders. It is how `apply` converges a destination when a whole skill,
-// or a single bundled file within one, is removed from the canonical source:
-// the leftover dest file is removed instead of lingering forever.
+// orphanDeletes returns delete FileOps for files this agent owns in state —
+// entries whose SourceID is under one of orphanReclaimedPrefixes — that the
+// current plan no longer renders. It is how `apply` converges a destination when
+// a component (a whole skill, a single bundled file within one, a subagent, a
+// command) is removed from or renamed in the canonical source: the leftover dest
+// file is removed instead of lingering forever.
 //
-// Scoped deliberately to skills (the Agent Skills spec treats a skill as a whole
-// directory, so removal must reclaim the whole tree). Other replace-strategy
-// components (subagents/commands) keep their established reconcile-driven
-// cleanup. Each op carries the state SourceID + Mode so the writer can back up a
-// drifted dest before deleting and bound empty-directory pruning to the skills
-// root. Sorted deepest-path-first so a directory empties out before it is pruned.
-func skillOrphanDeletes(s *state.Targets, userHome, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) []adapter.FileOp {
+// Each op carries the state SourceID + Mode so the writer can back up a drifted
+// dest before deleting and bound empty-directory pruning to the skills root.
+// Sorted deepest-path-first so a directory empties out before it is pruned.
+func orphanDeletes(s *state.Targets, userHome, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) []adapter.FileOp {
 	if s == nil {
 		return nil
 	}
@@ -180,7 +284,7 @@ func skillOrphanDeletes(s *state.Targets, userHome, agent string, scope adapter.
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
-		if !strings.HasPrefix(entry.SourceID, "skills/") {
+		if !isOrphanReclaimable(entry.SourceID) {
 			continue
 		}
 		path := strings.TrimPrefix(key, prefix)

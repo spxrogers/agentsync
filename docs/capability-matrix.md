@@ -66,6 +66,15 @@ agentsync and the agent's plugin manager, and double-install with the agent's
 own per-plugin install dir. See
 [architecture.md § PluginIngester (read-only)](architecture.md#pluginingester-read-only).
 
+Those native paths are flat, so a plugin's **subagents, skills, and commands are
+namespaced by their plugin**: `feature-dev`'s `code-reviewer` lands as
+`~/.claude/agents/feature-dev-code-reviewer.md`. Without it, two plugins shipping
+one component name would render two files at one path. Components you
+hand-author in `~/.agentsync/` are never renamed. MCP and LSP servers keep their
+ids — a same-id divergence across sources is refused rather than renamed apart,
+because it can be a silent endpoint hijack. See
+[architecture.md § Plugin component namespacing](architecture.md#plugin-component-namespacing).
+
 ---
 
 ## Component × agent

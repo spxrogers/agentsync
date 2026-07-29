@@ -47,6 +47,11 @@ type reconcileItem struct {
 	srcText string
 	dstText string
 	hasText bool
+	// pluginOwner is the plugin id providing this component, empty for a
+	// hand-authored one. Write-back is refused for a plugin-provided component:
+	// see writeBackItem. Set for both shapes — whole-file items via the
+	// component SourceID, key-level MCP/LSP items via pluginOwnerForKeyItem.
+	pluginOwner string
 }
 
 // errDestDroppedServer signals that the destination no longer contains the MCP
@@ -155,7 +160,15 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 
 	// Collect all items in order, then append orphaned whole-file dests
 	// (owned in state, no longer rendered) for interactive delete/keep.
-	items := collectItems(plan, reg, s, sc, projectRoot, userHome)
+	// Provenance must come from the SAME canonical the plan rendered from: at
+	// project scope every adapter renders the project-only overlay (`renderC =
+	// *c.Project`), so tagging items from the merged canonical would let a
+	// user-scope plugin claim a project component that merely shares its name.
+	ownerSrc := c
+	if sc == adapter.ScopeProject && c.Project != nil {
+		ownerSrc = *c.Project
+	}
+	items := collectItems(plan, reg, s, sc, projectRoot, userHome, pluginProvidedSourceIDs(ownerSrc))
 	items = append(items, collectOrphanFileItems(plan, reg, s, sc, projectRoot, userHome)...)
 
 	w := p.Out
@@ -220,7 +233,22 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 				continue
 			}
 			fmt.Fprintf(w, "\n%s  (orphan — source no longer produces this file)\n", ui.Sanitize(it.op.Path))
-			fmt.Fprintf(w, "  [r]emove (backs up first)  [k]eep  [q]uit\n  > ")
+			// [k]eep is honest only for the kinds `apply` does NOT auto-reclaim.
+			// Skills, subagents, and commands are reclaimed on the next apply, so
+			// "keep" there means "keep until then" — say so rather than imply it
+			// is permanent.
+			//
+			// This asks the KIND question (OrphanIsReclaimable), not the
+			// readability one (OrphanDeleteWillProceed): a reclaimable orphan that
+			// happens to be unreadable right now is retried on every subsequent
+			// apply, so "until the next apply reclaims it" is still the truth for
+			// it. Using the readability predicate here would print the permanent
+			// wording for exactly the file apply keeps coming back to.
+			if render.OrphanIsReclaimable(it.op.SourceID) {
+				fmt.Fprintf(w, "  [r]emove (backs up first)  [k]eep (until the next apply reclaims it)  [q]uit\n  > ")
+			} else {
+				fmt.Fprintf(w, "  [r]emove (backs up first)  [k]eep  [q]uit\n  > ")
+			}
 		orphanPrompt:
 			for {
 				ch, readErr := readChar(br)
@@ -269,11 +297,25 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 				// file. Writing it back would overwrite the curated source
 				// with foreign content — the worst data-loss path. Refuse to
 				// do that non-interactively; leave it for an explicit choice.
-				if it.cls == drift.ForeignCollision {
+				switch {
+				case it.cls == drift.ForeignCollision:
 					fmt.Fprintf(w, "skipped (foreign-collision, would overwrite source): %s — resolve interactively\n", itemLabelDisp(it))
 					autoSkipped++
 					action = 's'
-				} else {
+				case it.pluginOwner != "":
+					// A plugin-provided component cannot be written back at all —
+					// it has no canonical file of its own. That refusal is
+					// STRUCTURAL and permanent, not a transient failure, so
+					// letting it count as a write-back FAILURE would make
+					// `reconcile --auto-writeback` exit non-zero on every run
+					// forever, breaking any `reconcile && deploy` until the user
+					// disables the plugin. Skip it like a foreign collision — the
+					// same "cannot be resolved non-interactively" shape.
+					fmt.Fprintf(w, "skipped (provided by plugin %q, no canonical file to write into): %s — use [o]verride, or change it upstream\n",
+						ui.Sanitize(it.pluginOwner), itemLabelDisp(it))
+					autoSkipped++
+					action = 's'
+				default:
 					action = 'w'
 				}
 			case autoOR:
@@ -438,9 +480,134 @@ func b2i(b bool) int {
 	return 0
 }
 
+// pluginProvidedSourceIDs maps each canonical SourceID a plugin provides to the
+// providing plugin's id, for the projected canonical c. Skills contribute one
+// entry per file in the directory (SKILL.md plus every bundled resource), since
+// each renders its own op with its own SourceID.
+//
+// It is reconcile's counterpart to import's pluginProvided(): the same "don't
+// capture agentsync's own output back into the canonical source" rule, keyed the
+// way each caller can match it. Reconcile works from the PROJECTED canonical, so
+// provenance is already on the components and no re-projection is needed; import
+// works from the agent's NATIVE ingest, which carries no provenance at all, so it
+// has to project separately and match by component name.
+func pluginProvidedSourceIDs(c source.Canonical) map[string]string {
+	out := map[string]string{}
+	// No co-declaration override here, deliberately. Import needs one for HOOKS,
+	// because source.WriteHooks replaces the whole event file and skipping a
+	// handler the user also declares would ERASE it (see pluginProvided,
+	// internal/cli/import.go). This map registers no hook keys at all — hook
+	// write-back is unimplemented — and for every other kind the override would
+	// be harmful rather than absent: capturing a component the plugin also
+	// provides makes the two DIVERGE, and every later mutating load then fails in
+	// checkProjectedConflicts. Refusing the write-back costs nothing by
+	// comparison, so a plugin-provided key stays the plugin's.
+	claim := func(key, plugin string) {
+		if plugin != "" {
+			out[key] = plugin
+		}
+	}
+	// MCP/LSP servers are keyed under BOTH forms, because the two adapters
+	// families render them differently:
+	//
+	//   "<kind>/<id>"       — the key-merge shape (most adapters fold every
+	//                         server into one config file, so the op carries the
+	//                         section-wide SourceID "mcp/* (multiple)" and only
+	//                         the item's JSON pointer identifies the server).
+	//                         Resolved by pluginOwnerForKeyItem.
+	//   "<kind>/<id>.toml"  — the whole-file shape. Continue renders ONE FILE PER
+	//                         SERVER (.continue/mcpServers/<id>.yaml) with the
+	//                         canonical SourceID "mcp/<id>.toml", so its items go
+	//                         through the SourceID lookup like a subagent would.
+	//                         Keying only the bare form left that path unguarded.
+	for _, s := range c.MCPServers {
+		claim("mcp/"+s.ID, s.Plugin)
+		claim(filepath.ToSlash(filepath.Join("mcp", s.ID+".toml")), s.Plugin)
+	}
+	for _, s := range c.LSPServers {
+		claim("lsp/"+s.ID, s.Plugin)
+		claim(filepath.ToSlash(filepath.Join("lsp", s.ID+".toml")), s.Plugin)
+	}
+	for _, sk := range c.Skills {
+		claim(filepath.ToSlash(filepath.Join("skills", sk.Name, "SKILL.md")), sk.Plugin)
+		for _, f := range sk.Files {
+			claim(filepath.ToSlash(filepath.Join("skills", sk.Name, f.Path)), sk.Plugin)
+		}
+	}
+	for _, sa := range c.Subagents {
+		claim(filepath.ToSlash(source.SubagentSourceID(sa.Name)), sa.Plugin)
+	}
+	for _, cm := range c.Commands {
+		claim(filepath.ToSlash(filepath.Join("commands", cm.Name+".md")), cm.Plugin)
+	}
+	return out
+}
+
+// pluginOwnerForKeyItem resolves the plugin owning the MCP/LSP server a
+// key-level item points at, or "" for a hand-declared one.
+//
+// The component KIND comes from the op's SourceID, not from the pointer's root
+// key, for two independent reasons:
+//
+//   - Root keys are per-agent DATA, not a fixed set. Alongside /mcpServers
+//     (claude, cursor, gemini, …), /mcp (opencode) and /mcp_servers (codex), the
+//     generic tier carries `RootKey` in a table that grows with every agent added
+//     (/context_servers, /servers, /amp.mcpServers). A hand-maintained allowlist
+//     silently drops the refusal for each one someone forgets to add.
+//   - Guessing the kind by probing the id against both maps is WRONG, not merely
+//     imprecise. A plugin shipping an LSP server whose id is a common MCP name
+//     ("github", "postgres") would make an /mcpServers/github pointer resolve to
+//     that plugin, refusing write-back of the user's OWN hand-declared MCP server
+//     and blaming a plugin that does not own it. Over-refusal here IS the harm.
+//
+// Every key-merge op carries a section-wide SourceID naming its kind —
+// "mcp/* (multiple)", "hooks/* (multiple)" — so the kind is already unambiguous
+// at the call site.
+//
+// The lsp branch is likewise unreachable TODAY — no adapter renders LSP servers
+// in v1 (every one reports them as a Skip), so no op carries an "lsp/" SourceID
+// and the lsp keys pluginProvidedSourceIDs registers are never looked up. It is
+// kept because it is symmetric, free, and correct the day an adapter does render
+// them; without it, that adapter would ship with the refusal silently absent.
+//
+// Hooks resolve to "" by construction: hook write-back is not implemented
+// (writeBackKeyItem errors for every non-MCP pointer), so pluginProvidedSourceIDs
+// registers no hook keys for this lookup to find. Import is where plugin hooks
+// are filtered, at handler granularity. Should hook write-back ever be
+// implemented, this returns "" rather than silently permitting the capture — the
+// empty map is the thing to fix, and it is one place.
+//
+// Pointer segments are JSON-pointer encoded, so ~1/~0 are decoded first
+// (RFC 6901 §3) — an id containing '/' would otherwise never match.
+func pluginOwnerForKeyItem(sourceID, ptr string, owners map[string]string) string {
+	var kind string
+	switch {
+	case strings.HasPrefix(sourceID, "mcp/"):
+		kind = "mcp"
+	case strings.HasPrefix(sourceID, "lsp/"):
+		kind = "lsp"
+	default:
+		return "" // hooks, or a shape with no per-entry provenance
+	}
+	parts := strings.SplitN(strings.TrimPrefix(ptr, "/"), "/", 3)
+	if len(parts) < 2 {
+		return ""
+	}
+	return owners[kind+"/"+unescapeJSONPointer(parts[1])]
+}
+
+// unescapeJSONPointer decodes one JSON-pointer reference token (RFC 6901 §3):
+// "~1" is '/' and "~0" is '~'. Order matters — ~0 must be decoded last, or
+// "~01" would wrongly become "/" instead of "~1".
+func unescapeJSONPointer(tok string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(tok, "~1", "/"), "~0", "~")
+}
+
 // collectItems builds the flat reconcile list from a rendered plan + state.
 // userHome (the user's $HOME) is the HomeRelative base for state-key lookups.
-func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, userHome string) []reconcileItem {
+// pluginOwners (pluginProvidedSourceIDs) tags each item whose component comes
+// from a plugin, so write-back can refuse it.
+func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, userHome string, pluginOwners map[string]string) []reconcileItem {
 	var items []reconcileItem
 	for _, name := range reg.Names() {
 		res, ok := plan.PerAgent[name]
@@ -476,6 +643,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 						srcText:     marshalPretty(getPointerValue(ours, ptr)),
 						dstText:     marshalPretty(getPointerValue(final, ptr)),
 						hasText:     true,
+						pluginOwner: pluginOwnerForKeyItem(op.SourceID, ptr, pluginOwners),
 					})
 				}
 			} else {
@@ -500,6 +668,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 					srcText:     string(op.Content),
 					dstText:     string(dstBytes),
 					hasText:     true,
+					pluginOwner: pluginOwners[filepath.ToSlash(op.SourceID)],
 				})
 			}
 		}
@@ -545,11 +714,18 @@ func collectOrphanFileItems(plan render.RenderPlan, reg *adapter.Registry, s *st
 				continue
 			}
 			seen[orphan] = true
-			happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, orphan)].SHA256
+			entry := s.Files[stateFileKey(userHome, name, sc, projectRoot, orphan)]
+			happlied := entry.SHA256
 			hdest := hashFile(orphan)
 			items = append(items, reconcileItem{
-				agentName:   name,
-				op:          adapter.FileOp{Action: "delete", Path: orphan},
+				agentName: name,
+				// SourceID matters: the reclaimable-KIND check behind this item's
+				// prompt wording is SourceID-keyed and silently degrades to
+				// "unknown kind" without it — which is exactly how that branch
+				// once shipped dead. Mode is deliberately NOT carried: this path
+				// removes via render.BackupFile + os.Remove, never Writer.Delete,
+				// so nothing reads it and setting it would only imply otherwise.
+				op:          adapter.FileOp{Action: "delete", Path: orphan, SourceID: entry.SourceID},
 				cls:         drift.Classify("", happlied, hdest),
 				happlied:    happlied,
 				hdest:       hdest,
@@ -847,6 +1023,29 @@ func canonicalHookEvents(c source.Canonical) []string {
 }
 
 func writeBackItem(cmd *cobra.Command, home string, it reconcileItem) error {
+	// A plugin-provided component has no canonical file of its own: it is
+	// re-derived from the plugin cache on every load. Writing the destination
+	// back would MINT one under ~/.agentsync/, and the next load would hold two
+	// definitions — the captured copy and the plugin's own projection. For a
+	// name-keyed component that is two writes to one destination path; for an
+	// MCP/LSP server it is a same-id divergence the moment the plugin updates,
+	// which checkProjectedConflicts then refuses. Either way the user is stuck.
+	//
+	// The check sits at the dispatch waist so BOTH shapes are covered — the
+	// whole-file path (skills/subagents/commands) and the key-merge path
+	// (MCP/LSP servers) — rather than being duplicated in each and drifting.
+	// [o]verride restores the plugin's version; the edit belongs upstream.
+	if it.pluginOwner != "" {
+		what := it.op.Path
+		if it.ptr != "" {
+			what = fmt.Sprintf("%s (%s)", it.op.Path, ui.Sanitize(it.ptr))
+		}
+		return fmt.Errorf("write-back for %s is unsafe: this component is projected from the plugin %q, "+
+			"so it has no canonical file to write into. Capturing it would create one that collides with "+
+			"the plugin's own on the next apply. Use [o]verride to restore the plugin's version, change it "+
+			"upstream, or run `agentsync plugin disable %q` to stop projecting it",
+			what, it.pluginOwner, it.pluginOwner)
+	}
 	if it.ptr != "" {
 		return writeBackKeyItem(cmd, home, it)
 	}

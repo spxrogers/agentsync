@@ -177,6 +177,21 @@ LSP, memory, **and plugins**) in one pass. A bulk import that finds nothing for 
 component reports it and exits cleanly rather than erroring. Add `--dry-run` to
 list the source files an import would write without touching `~/.agentsync/`.
 
+**Import never re-captures a plugin's own components** — subagents, skills,
+commands, MCP servers, LSP servers, and hooks alike (hooks per *handler*, so a
+plugin hooking an event you also hook never costs you your own handler). Once you have applied, a plugin's
+components are sitting in the agent's native config indistinguishable from ones
+you wrote yourself — the agent's config gives no hint which ones agentsync put
+there. Importing them would create canonical copies that collide
+with the plugin's own on the next apply, so `import` skips them and says which
+plugin provides each. Naming one explicitly
+(`agentsync import claude:subagent:feature-dev-code-reviewer`) is an error rather
+than a silent no-op. Components you wrote into the native config yourself are
+still captured normally. To change a plugin's component, change it upstream, or
+run `agentsync plugin disable <id>` to stop projecting it. `reconcile` refuses
+`[w]rite-back` on one for the same reason — use `[o]verride` to restore the
+plugin's version.
+
 **Plugins are a special case.** The `plugin` component (Claude and Codex) reads
 the agent's installed plugins and their marketplaces and re-fetches each one into
 the agentsync cache, pinning a manifest SHA — the same artifacts `marketplace
@@ -477,10 +492,10 @@ skipped — and the report tells you exactly which:
   → claude    ✓ full        1 mcp · 5 commands · 3 subagents · 1 lsp
   → codex     ◐ partial     1 mcp · 5 commands · 3 subagents · 1 lsp  (3 reduced · 1 dropped)
       → codex couldn't fully translate — reduced = rendered without some fields; dropped = not emitted:
-        • subagent ai-architect   reduced  Codex agents are TOML with no per-agent tools allowlist; dropped tools, color
-        • subagent deploy-expert  reduced  Codex agents are TOML with no per-agent tools allowlist; dropped tools, color
-        • subagent perf-optimizer reduced  Codex agents are TOML with no per-agent tools allowlist; dropped tools, color
-        • lsp atlassian-lsp       dropped  Codex has no LSP configuration concept
+        • subagent atlassian-ai-architect   reduced  Codex agents are TOML with no per-agent tools allowlist; dropped tools, color
+        • subagent atlassian-deploy-expert  reduced  Codex agents are TOML with no per-agent tools allowlist; dropped tools, color
+        • subagent atlassian-perf-optimizer reduced  Codex agents are TOML with no per-agent tools allowlist; dropped tools, color
+        • lsp atlassian-lsp                 dropped  Codex has no LSP configuration concept
 ```
 
 Each row's count tail lists every component kind the plugin hosts for that agent
@@ -518,6 +533,35 @@ agentsync plugin explain atlassian@anthropic --json            # machine-readabl
 
 (`agentsync plugin list` prints the installed ids. The top-level `explain` name
 answers a different question — see [Where did this file come from?](#where-did-this-file-come-from).)
+
+#### Plugin components are namespaced by their plugin
+
+A plugin's **subagents, skills, and slash commands** render under
+`<plugin>-<name>`, which is why the report above reads `atlassian-ai-architect`
+rather than `ai-architect`:
+
+| Plugin | Ships | Lands at | You invoke |
+|---|---|---|---|
+| `atlassian` | `agents/ai-architect.md` | `~/.claude/agents/atlassian-ai-architect.md` | `@agent-atlassian-ai-architect` |
+| `atlassian` | `commands/jira.md` | `~/.claude/commands/atlassian-jira.md` | `/atlassian-jira` |
+
+Every agent reads its components from one flat directory, so without this two
+plugins shipping a same-named component would write two files at one path. That
+is not hypothetical: `feature-dev` and `pr-review-toolkit` — both stock official
+plugins — each ship `agents/code-reviewer.md`, and before namespacing that made
+`agentsync apply` fail with no way out, since neither file is yours to rename.
+Claude Code reaches the same end natively, addressing a plugin's agent as
+`plugin:agent`; agentsync uses a hyphen because a colon is not legal in a
+subagent `name` (or in a filename on Windows).
+
+**Components you write yourself are never renamed.** Anything in your own
+`~/.agentsync/subagents/`, `skills/`, or `commands/` keeps the name you gave it,
+even when an installed plugin ships one by the same name. In the rare case where
+a plugin's *derived* name lands on one of yours (`feature-dev` shipping
+`code-reviewer` versus your own `feature-dev-code-reviewer`), agentsync says so
+and names both sides rather than picking a winner. MCP and LSP servers keep their ids too: two sources claiming one
+server id is refused rather than renamed apart, because repointing a trusted
+server's endpoint is a hijack, not a naming clash.
 
 Control fan-out per plugin with `agents = [...]` in the plugin's TOML file. (A
 per-component `[plugin.overrides.<agent>]` table was specced but is **not wired

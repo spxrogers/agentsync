@@ -9,8 +9,91 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two plugins shipping a same-named component no longer break `status` and
+  `apply`.** `feature-dev` and `pr-review-toolkit` — both stock official Claude
+  plugins — each ship `agents/code-reviewer.md`, which made both commands exit 1
+  with `codex subagents "code-reviewer" and "code-reviewer" resolve to the same
+  agent name`. Every remedy the error named was one the user structurally could
+  not perform: both files live under the marketplace-managed plugin cache, which
+  is overwritten on the next update. The Claude adapter failed the same way for
+  the same reason, tripping the apply pipeline's shared-path divergence guard.
+  ([#211](https://github.com/spxrogers/agentsync/issues/211))
+  - The collision error itself printed two file *stems*, and colliding
+    components almost always share a stem — so it rendered as the same string
+    twice, with no plugin origin. It now names each side's providing plugin (or
+    the canonical file, for a hand-authored component).
+  - A single adapter rendering two divergent ops for one path was reported as
+    "different content than an earlier agent", sending the user looking for a
+    second agent that did not exist. That case now names its real cause.
+- **`import` and `reconcile` no longer capture plugin-provided components back
+  into the canonical source.** A plugin's component has no canonical file of its
+  own — it is re-derived from the plugin cache on every load — so capturing one
+  minted a canonical copy that then collided with the plugin's own projection,
+  breaking the next `apply`. An adapter's `Ingest` cannot tell a file agentsync
+  rendered from a plugin apart from a hand-written one, so `agentsync apply &&
+  agentsync import claude:subagent` reproduced this with any installed plugin.
+  `import` now skips such components with a warning naming the plugin (and errors
+  if you name one explicitly); reconcile's `[w]rite-back` refuses the item and
+  points at `[o]verride`. This covers MCP servers, LSP servers, and hooks too —
+  they are not namespaced, but capturing one still mints a canonical copy that
+  diverges from the plugin's the moment it updates. Hooks are filtered per
+  *handler*, so a plugin contributing to an event you also hook never costs you
+  your own handler. Components you hand-wrote into an agent's native config are
+  still captured normally.
+- **A residual name collision is now reported instead of silently dropping a
+  component.** Namespacing makes the common case work, but the derived name is
+  not injective: plugin `a` shipping `b-c` and plugin `a-b` shipping `c` both
+  derive `a-b-c`, and a hand-authored `feature-dev-code-reviewer` collides with
+  what plugin `feature-dev` derives. Those reached the render pipeline, where
+  divergent content aborted with a message naming neither origin and **identical
+  content was silently deduped**. `checkProjectedConflicts` now guards name-keyed
+  components exactly as it guards MCP/LSP server ids, naming each side's
+  providing plugin (or your own canonical file).
+- **`status`, `apply`, and `reconcile` no longer hang on a non-regular
+  destination.** A FIFO left at a path agentsync manages made `os.ReadFile`
+  BLOCK forever rather than fail — wedging `status` (an advertised read-only
+  command), `apply --dry-run`, and reconcile's orphan listing. Every
+  destination read now shares one shape guard, so none of them can disagree
+  about what is safe to read.
+- **`reconcile --auto-writeback` no longer exits non-zero forever** on a
+  plugin-provided item. That refusal is structural, not a transient failure, so
+  counting it as one broke `reconcile && deploy` until the plugin was disabled;
+  it is now skipped with a reason, like a foreign collision.
+- **`apply` refuses to reclaim an orphaned destination it cannot read first.** A
+  pre-delete read failing with anything other than "already gone" (`EACCES`,
+  `EIO`, `EISDIR`) previously fell through to the delete, destroying a
+  hand-edited file with no backup. Convergence is never worth data loss.
+
 ### Changed
 
+- **BREAKING (plugins): plugin-provided subagents, skills, and slash commands are
+  namespaced by their plugin.** A component projected from a plugin now renders as
+  `<plugin>-<name>` — `feature-dev`'s `code-reviewer` becomes
+  `feature-dev-code-reviewer` at `~/.claude/agents/feature-dev-code-reviewer.md`,
+  its `code-review` skill becomes `feature-dev-code-review`, and its `/review`
+  command becomes `/feature-dev-review`. The frontmatter `name` key follows the
+  rename when present (an absent one stays absent). This is what lets two plugins
+  ship one component name; it is also what Claude Code does natively, addressing
+  a plugin's agent as `plugin:agent` — agentsync uses a hyphen because Claude Code
+  documents a subagent `name` as a "Unique identifier using lowercase letters and
+  hyphens". **Invoke plugin agents and commands by their new names.** Components
+  you hand-author in `~/.agentsync/` are **not** renamed. (That is not the same
+  as "a plugin can never take your name": derived names are not injective, so a
+  plugin's derived name can land on one of yours. agentsync reports that clash,
+  naming both sides, rather than letting either win silently.) MCP and LSP
+  servers are unchanged: a same-id divergence across sources is still refused
+  rather than renamed apart, because it can be a silent endpoint hijack. A
+  one-time upgrade notice points at the docs.
+  ([#211](https://github.com/spxrogers/agentsync/issues/211))
+- **`apply` now reclaims orphaned subagents and commands, not just skills.** A
+  subagent or slash command removed from — or renamed in — the canonical source
+  previously left its destination file behind until an interactive `reconcile`;
+  `apply` now deletes it, backing up a destination you hand-edited since the last
+  apply before removal, exactly as it already did for skills. This is what keeps
+  the namespacing rename from leaving a stale un-namespaced file beside the new
+  one, which Claude Code would still load.
 - **BREAKING (canonical layout): the subagent directory is now `subagents/`,
   not `agents/`.** The canonical tree carried both the `[agents]` harness
   registry (`agentsync.toml`) and the subagent files one directory apart — the

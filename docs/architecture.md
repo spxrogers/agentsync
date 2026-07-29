@@ -315,6 +315,83 @@ read-only-on-import, components-only-on-apply rule above:
 
 See the capability matrix for source links.
 
+### Plugin component namespacing
+
+`LoadProjected` flattens every enabled plugin's components into one canonical
+model, and adapters derive each destination path from the component's `Name`. So
+two plugins shipping a same-named component render two files at one path — a
+real, stock case: `feature-dev` and `pr-review-toolkit` (both official Claude
+plugins) each ship `agents/code-reviewer.md`. Apply refused, correctly, since
+silently keeping one is data loss. But both files live under the
+marketplace-managed plugin cache, so the remedy the error named — "rename one" —
+was one the user structurally could not perform (issue #211).
+
+**A plugin-provided subagent, skill, or command is therefore renamed to
+`<plugin>-<name>` at projection**, in `marketplace.namespaceProjected`, which
+also stamps `Plugin` (the providing plugin's id) and `BaseName` (the upstream
+name) onto the component. Three consequences worth knowing:
+
+- **It is not an adapter concern, structurally.** Provenance is dropped when
+  `loadProjected` appends each plugin's components into flat slices, so by the
+  time an adapter can *detect* a collision, the information needed to *resolve*
+  it is gone. Rewriting `Name` (rather than teaching each adapter an "effective
+  name") is also what keeps every render site correct with no adapter change.
+- **The frontmatter `name` key is rewritten in step, when present.** Renaming
+  only the file would leave the components colliding anyway: Codex's `name` *is*
+  the agent's identity and the Codex adapter prefers it over the file stem, and
+  Claude's Agent Skills require the frontmatter `name` to match the skill
+  directory. An absent `name` stays absent, so this never invents an identity the
+  upstream artifact did not declare.
+- **Hand-authored components are never renamed.** `Plugin`/`BaseName` are empty
+  for them. Note this is not the same as "a plugin can never take your name": the
+  derived name is not injective, so a plugin CAN land on a name you chose. That
+  residual is caught and reported by `checkProjectedConflicts` (below), never
+  silently resolved in the plugin's favour.
+
+The separator is a hyphen because Claude Code documents a subagent `name` as a
+"Unique identifier using lowercase letters and hyphens" — its familiar
+`plugin:agent` form is a *scoped identifier* Claude Code derives from the plugin
+directory, never a `name` value, and `:` is rejected by
+`source.ValidateComponentID` (it becomes a filename, and a colon is illegal on
+Windows). A plugin id comes from a marketplace, outside agentsync's trust
+boundary, so every derived name is re-validated through that same write-boundary
+sanitizer before it can reach a path or a diagnostic.
+
+MCP and LSP servers are deliberately **not** renamed. They are id-keyed and
+already covered by `checkProjectedConflicts`, whose hard failure on a same-id
+divergence is a security property: two sources claiming one server id can be a
+silent endpoint hijack, which is a case to refuse rather than to rename apart.
+They ARE stamped with provenance, so the capture paths can still refuse them.
+Hooks have no name key at all.
+
+**The derived name is not injective, so the collision guard stays.** Plugin `a`
+shipping `b-c` and plugin `a-b` shipping `c` both derive `a-b-c`, and a user who
+hand-authors `feature-dev-code-reviewer` collides with what plugin `feature-dev`
+derives. `checkProjectedConflicts` therefore guards name-keyed components exactly
+as it guards MCP/LSP ids — fatal for the mutating loads, a warning for the lenient
+read-only ones — and its message names each side's origin (the providing plugin,
+or the user's own canonical file). Without it those cases reach the render
+pipeline, where divergent content aborts with a message that can name neither
+origin (a `FileOp` carries no provenance) and **identical content is silently
+deduped**, dropping a component with no report at all. The silent drop is the
+reason the guard exists; the loud one it merely makes actionable.
+
+Namespacing itself never fails. An earlier revision validated the derived name at
+projection and returned an error — a regression, because the projection's own
+`validateProjectedName` permits `:` and control runes, and because `loadProjected`
+propagates a projection error regardless of `lenient`, taking down the read-only
+commands whose whole design is to degrade and show state. The name safety lives
+downstream at the single dispatch waist, where `render.Plan` runs
+`ValidateComponentID` over every component id before any of them is joined into a
+destination path.
+
+The rename happens once, on the first apply after upgrading, so `apply` reclaims
+the pre-rename destination files it previously wrote — see
+[§7 Safety primitives](#7-safety-primitives). Without that, a stale
+`~/.claude/agents/code-reviewer.md` would sit beside the two namespaced files and
+Claude Code would load it, leaving the user with *more* duplicate agents than
+before.
+
 ### WarnEmitter (optional)
 
 A second optional extension lets callers redirect the warnings an adapter's
@@ -561,6 +638,79 @@ on `hooks/<event>.toml`. A pure deletion carries no content to re-reference, so
 the funnel's secret guarantees are not in play; anything that writes *content*
 back still must go through `capture.Capture`.)
 
+**Plugin-provided components are never captured.** A component projected from an
+installed plugin has no canonical file of its own — it is re-derived from the
+plugin cache on every load — so writing a destination back for one would *mint* a
+canonical file under its (namespaced) name. The next load would then hold two
+components of that name, the captured copy and the plugin's own projection,
+rendering to one destination path, which apply refuses. Both dest→source entry
+points refuse:
+
+- **`import`** skips a plugin-provided component with a warning naming the
+  plugin, and errors outright if the user named one explicitly. An adapter's
+  `Ingest` reads the agent's native config, where a file agentsync rendered from
+  a plugin is indistinguishable from a hand-written one — so import projects the
+  plugins separately (`pluginProvided`) and matches by component name, which is
+  exact now that plugin components are namespaced. If that projection FAILS the
+  filter fails **closed** (the import refuses) rather than proceeding with an
+  empty skip set: the filter exists to stop import poisoning the canonical
+  source, and it is fed by plugin data, so a fail-open would be a way to switch
+  the defence off.
+- **`reconcile`'s `[w]rite-back`** refuses the item and points at `[o]verride`.
+  It works from the PROJECTED canonical, so provenance is already on the
+  components (`pluginProvidedSourceIDs`) and no re-projection is needed. The
+  check sits at `writeBackItem`, the dispatch waist, so it covers both shapes:
+  whole-file components matched by SourceID, and key-level MCP/LSP servers
+  matched from the item's JSON pointer.
+
+This covers **MCP servers, LSP servers, and hooks too** — plugin-owned but not
+namespaced. Capturing an MCP/LSP server mints a canonical copy that renders
+identically today and diverges the moment the plugin updates, at which point
+`checkProjectedConflicts` refuses every load. `MCPServer.Plugin` /
+`LSPServer.Plugin` / `Hook.Plugin` carry that provenance (derived state, never
+serialized, each classified non-secret in `walkerCovered`).
+
+**Hooks are filtered per HANDLER, not per event.** A canonical
+`hooks/<event>.toml` holds many handlers from many sources, so refusing a whole
+event because a plugin contributed one would silently drop the user's own. The
+join key is a content signature (event + matcher + type + command), which is what
+lets import match a plugin's projected handler against the agent's native ingest —
+the ingest carries no provenance at all. Reconcile resolves hooks to no owner by
+construction: key-level write-back is implemented for MCP servers only and
+already errors for every other pointer shape, so no hook keys are registered for
+it to find. The lookup still returns "" explicitly rather than falling through,
+so implementing hook write-back later cannot silently permit the capture.
+
+The key-item lookup takes the component KIND from the op's SourceID, never from
+the pointer's root key. Root keys are per-agent data (`generic.MCPTarget.RootKey`
+grows with every agent added: `/context_servers`, `/servers`, `/amp.mcpServers`),
+so a hand-maintained allowlist silently drops the refusal for each one someone
+forgets. Probing the id against both kinds instead would be worse than imprecise:
+a plugin shipping an LSP server named `github` would make an `/mcpServers/github`
+pointer resolve to it, refusing write-back of the user's own MCP server and
+blaming a plugin that does not own it. Continue is the one adapter that renders MCP as a
+**whole-file** op (one file per server), so servers are registered under both the
+bare `mcp/<id>` key and the `mcp/<id>.toml` SourceID form.
+
+Both lookups are scoped to the canonical the render actually uses: at project
+scope that is the project-only overlay, so a user-scope plugin never shadows a
+project component that merely shares its name.
+
+**One exception, and it is asymmetric on purpose.** A component the user ALSO
+declares is not treated as plugin-provided — but only for **hooks**, because
+`source.WriteHooks` replaces the whole `hooks/<event>.toml`, so a handler import
+declines to capture is *erased* from the canonical source. Everywhere else
+(`WriteMCP`, `WriteSkill`, …) writes one file per component, so a refusal deletes
+nothing — and letting the user's claim win there would be worse: import would
+capture the drifted native content, the user's copy and the plugin's projection
+would diverge, and every later mutating load would hard-fail in
+`checkProjectedConflicts`. The override exists to prevent a DELETION, not to
+decide ownership.
+
+The edit belongs upstream in the plugin, or the plugin can be disabled. This is
+the capture-side complement to
+[plugin component namespacing](#plugin-component-namespacing).
+
 Re-reference matches by value, so it cannot distinguish a *moved or rotated*
 secret from a deliberate non-secret edit. As a **fail-closed backstop**,
 `capture.Capture` re-scans the about-to-be-written model
@@ -612,14 +762,38 @@ auto-resolves only the cases that can't lose work (`converged`, `pending`).
 **Orphan reclamation on `apply`.** `apply` itself reclaims two kinds of orphan so
 a removed component doesn't linger in the destination: emptied key-merge sections
 (an MCP/hook/LSP section whose source went empty — cleaned via a synthesized
-empty-merge op) and **skill files** (a whole skill, or one bundled
-`scripts/`/`references/`/`assets/` file, removed from `~/.agentsync/skills/`). A
-skill is a directory under the Agent Skills spec, so removal must reclaim the
-whole tree; the writer deletes each orphaned file, **backs up an `orphan-drifted`
-dest first** (a hand-edit is never destroyed un-preserved), and prunes the
-now-empty directories up to — never including — the agent's skills root. Other
-replace-strategy orphans (subagents, commands) are still surfaced for the
-interactive `reconcile` loop rather than auto-deleted.
+empty-merge op) and **whole-file components** whose `source_id` is under
+`skills/`, `subagents/`, `commands/`, or the RETIRED `agents/` spelling — a whole
+skill, one bundled `scripts/`/`references/`/`assets/` file within one, a
+subagent, or a slash command that the source no longer renders. The retired
+prefix is listed because the canonical `agents/` → `subagents/` rename ships in
+the same release as namespacing: an upgrading user's state still holds the old
+spelling, and the only rewriter runs from `migrate subagents`, which no-ops for a
+user whose subagents come only from plugins. Without it their pre-rename
+destination would never be reclaimed — the exact leftover this exists to remove. In every case the writer deletes the
+orphaned file and **backs up an `orphan-drifted` dest first** (a hand-edit is
+never destroyed un-preserved). If that pre-delete read fails for any reason other
+than "already gone" — `EACCES`, `EIO`, `EISDIR`, or a non-regular shape like a
+FIFO whose read would BLOCK rather than fail — that one delete is **skipped**
+with a warning rather than performed blind: agentsync cannot tell whether the
+destination held an unsynced edit, and convergence is never worth data loss. The
+run itself continues, because a lingering orphan is not data loss while a failed
+apply would wedge every other agent's writes. A skipped delete is **retried**:
+`PruneStaleState` keeps the state entry for a reclaimable destination that is
+still on disk, so the next apply tries again and warns again rather than
+forgetting the file forever. Empty-directory pruning applies to **skills
+only** — a skill is a directory under the Agent Skills spec, so removal must
+reclaim the whole tree, pruned up to but never including the agent's skills root;
+subagents and commands are flat files in a directory the agent always owns.
+
+Subagents and commands joined skills here because [plugin component
+namespacing](#plugin-component-namespacing) renames every plugin-provided
+component exactly once, on the first apply after upgrading. Without reclamation
+the pre-rename file would linger, and Claude Code reads *every* file in its
+agents directory — its docs are explicit that two same-`name` definitions in one
+directory mean it loads only one, "chosen by filesystem read order rather than a
+documented precedence". The same convergence argument covers an ordinary removal
+from the canonical source, which previously lingered until a `reconcile`.
 
 **Granularity.** Structured files (JSON/JSONC/TOML) are tracked per **JSON
 pointer**, so agentsync can own `$.mcpServers.github` inside `~/.claude.json`

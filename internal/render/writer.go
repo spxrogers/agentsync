@@ -5,7 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -248,56 +251,191 @@ func (w *Writer) Write(op adapter.FileOp, finalBytes []byte) error {
 
 // Delete satisfies adapter.DestWriter. Idempotent on missing files.
 //
-// Skill-orphan deletes (op.SourceID under "skills/", synthesized by Apply when a
-// skill or bundled file is removed from source) get two extra guarantees: a dest
-// that drifted from what agentsync last wrote is backed up before removal (the
-// never-destroy-unsynced-content invariant the write path enforces), and empty
-// skill directories left behind are pruned up to — but never including — the
-// agent's skills root. Other delete callers (agent disable --purge, reconcile
-// orphan removal) pass an empty SourceID and keep the plain idempotent remove.
+// Orphan deletes (op.SourceID under a reclaimed prefix — see
+// isOrphanReclaimable — synthesized by Apply when a component is removed from or
+// renamed in the source) get a dest that drifted from what agentsync last wrote
+// backed up before removal, honouring the never-destroy-unsynced-content
+// invariant the write path enforces. Other delete callers (agent disable
+// --purge, reconcile orphan removal) pass an empty SourceID and keep the plain
+// idempotent remove.
+//
+// Empty-directory pruning is additionally applied to SKILLS only: a skill is a
+// directory, so reclaiming one must not leave the husk behind. Subagents and
+// commands are flat files in a directory the agent always owns, so there is
+// nothing to prune — and walking up from one would target that shared directory.
 func (w *Writer) Delete(op adapter.FileOp) error {
 	if w.dryRun {
 		return nil
 	}
-	skillOrphan := strings.HasPrefix(op.SourceID, "skills/")
-	if skillOrphan {
-		if err := w.backupOrphanIfDrifted(op); err != nil {
+	orphan := isOrphanReclaimable(op.SourceID)
+	if orphan {
+		safeToDelete, err := w.backupOrphanIfDrifted(op)
+		if err != nil {
 			return err
+		}
+		if !safeToDelete {
+			// The destination could not be read, so we cannot tell whether it
+			// holds an unsynced hand-edit. SKIP this one delete rather than
+			// perform it blind — but do NOT fail the run. Refusing the delete is
+			// what protects the data; refusing the whole apply would let a single
+			// unreadable destination (a stray directory at the path, a
+			// permissions mishap) wedge every other agent's writes with no way
+			// past it, and a lingering orphan is not data loss. The warning is
+			// how the user learns to clean it up.
+			// Note for skills specifically: reclamation is per FILE, so skipping
+			// one file of a skill directory can leave a partial tree (scripts/
+			// without SKILL.md). That converges — the state entry is kept, so the
+			// next apply retries this file — and the alternative, deleting a file
+			// we cannot read, is the one outcome that is not recoverable.
+			slog.Warn("skipped reclaiming an orphaned destination: it could not be read, "+
+				"so agentsync cannot rule out an unsynced edit; it will be retried on the "+
+				"next apply — remove it by hand once you have checked it",
+				"path", op.Path, "agent", w.agent)
+			return nil
 		}
 	}
 	if err := os.Remove(op.Path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("delete %s: %w", op.Path, err)
 	}
-	if skillOrphan {
+	if orphan && strings.HasPrefix(op.SourceID, "skills/") {
 		pruneEmptySkillDirs(op.Path, op.SourceID)
 	}
 	return nil
 }
 
-// backupOrphanIfDrifted copies a soon-to-be-deleted skill file to the backup
-// root iff its on-disk content is not exactly what agentsync last wrote (i.e.
-// the user hand-edited it). A file matching our last-applied hash is our own
-// output and is removed without a backup; anything else is preserved first so an
-// orphan delete can never silently destroy an unsynced edit.
-func (w *Writer) backupOrphanIfDrifted(op adapter.FileOp) error {
+// OrphanDeleteWillProceed reports whether Apply will actually reclaim this
+// orphaned destination, rather than skip it.
+//
+// Delete skips (with a warning) any orphan it cannot READ first — it cannot rule
+// out an unsynced hand-edit, and deleting blind would break the
+// never-destroy-unsynced-content invariant. A caller counting removals for the
+// apply summary has to ask the same question: a permanently-unreadable orphan
+// would otherwise be reported "removed: 1 file(s)" on EVERY run, on the same run
+// that warns it was skipped — two lines that contradict each other. (Every run
+// rather than once, because the state entry is now deliberately kept so the
+// delete is retried; see PruneStaleState.)
+//
+// # Why a shared predicate rather than a Writer accessor
+//
+// The obvious alternative — have Delete record what it skipped and expose a
+// SkippedDeletes() accessor, the natural parallel to Unchanged()/WouldChange() —
+// does not work here, and not for cost reasons. removalCounts has TWO callers:
+// the `apply --dry-run` preview and the real apply. Delete returns immediately
+// on dryRun, before any read, so the accessor would be empty in preview: the
+// preview would keep over-counting the exact file the real run under-counts. A
+// preview that disagrees with the apply it previews is the one failure the
+// shared-dryRun design of applyPlan exists to prevent. A pure predicate is the
+// only shape both callers can share.
+//
+// Delete's own read stays authoritative; this can disagree with it if the
+// destination changes in between, or if a read fails only PAST the first byte —
+// either costs a wrong number in a summary line and nothing else. A bare Stat
+// would not do: it answers a different question (a directory stats fine but
+// cannot be read), which is why this opens and reads.
+//
+// A non-reclaimable op is not an orphan delete at all and reports false. An
+// absent destination proceeds: there is nothing to preserve, the remove is a
+// no-op, and the entry converges away.
+func OrphanDeleteWillProceed(op adapter.FileOp) bool {
+	if !isOrphanReclaimable(op.SourceID) {
+		return false
+	}
+	if !isRegularOrAbsent(op.Path) {
+		return false
+	}
+	f, err := os.Open(op.Path)
+	if err != nil {
+		// Absent proceeds: nothing to preserve, the remove is a no-op, and the
+		// entry converges away. The IsNotExist test is deliberately kept rather
+		// than a bare `return true`: isRegularOrAbsent above already rejects every
+		// other shape, so ENOENT is the only error reachable HERE today — but that
+		// is a property of the guard above, not of this line, and the two should
+		// not have to be read together to stay correct.
+		return os.IsNotExist(err)
+	}
+	defer func() { _ = f.Close() }()
+	// One byte is enough to separate "readable" from EACCES/EIO at offset 0
+	// without buffering a large bundled skill asset twice per apply (Delete reads
+	// the whole file again immediately after). io.EOF means an empty but readable
+	// file, which Delete handles fine.
+	var probe [1]byte
+	if _, rerr := f.Read(probe[:]); rerr != nil && !errors.Is(rerr, io.EOF) {
+		return false
+	}
+	return true
+}
+
+// IsRegularOrAbsent is the exported view of isRegularOrAbsent, for the sibling
+// destination reads outside this package (internal/cli's hashFile). They face
+// the identical hazard and must not answer it differently.
+func IsRegularOrAbsent(path string) bool { return isRegularOrAbsent(path) }
+
+// isRegularOrAbsent reports whether a destination is a regular file, or is not
+// there at all. Anything else — a directory, FIFO, device, socket — is a shape
+// whose content agentsync cannot meaningfully read or preserve.
+//
+// It uses Stat, which FOLLOWS symlinks, so a symlink pointing at a FIFO is
+// caught as well as a bare one. That matters because os.Open on a FIFO with no
+// writer BLOCKS rather than failing: without this, `apply --dry-run` (advertised
+// as read-only) and the real apply's pre-delete read would both hang forever on
+// a FIFO left at a destination path. A dangling symlink reports absent, which is
+// the right answer — the link is removable and carries nothing to preserve.
+func isRegularOrAbsent(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	return fi.Mode().IsRegular()
+}
+
+// backupOrphanIfDrifted copies a soon-to-be-deleted component file to the backup
+// root iff its on-disk content is not exactly what agentsync last wrote (i.e. the
+// user hand-edited it). A file matching our last-applied hash is our own output
+// and is removed without a backup; anything else is preserved first, so an orphan
+// delete can never silently destroy an unsynced edit.
+//
+// safeToDelete tells the caller whether it may now remove the file. It is false
+// in exactly one case: the destination could not be READ, so no claim about its
+// contents can be made and the delete must be skipped (skipped, not failed — see
+// Delete). An error is returned only when the file WAS readable and drifted but
+// the backup could not be written, which genuinely must stop the run.
+func (w *Writer) backupOrphanIfDrifted(op adapter.FileOp) (safeToDelete bool, err error) {
+	// Same shape guard as OrphanDeleteWillProceed, for the same reason: the
+	// os.ReadFile below would BLOCK forever on a FIFO rather than fail. Reporting
+	// "not safe to delete" is the correct answer for every non-regular shape.
+	if !isRegularOrAbsent(op.Path) {
+		return false, nil
+	}
 	existing, err := os.ReadFile(op.Path)
 	if err != nil {
-		return nil // already gone (or unreadable): nothing to preserve
+		if os.IsNotExist(err) {
+			return true, nil // already gone: nothing to preserve, safe to proceed
+		}
+		// Any OTHER read failure (EACCES, EIO, EISDIR) means we cannot tell
+		// whether this destination holds an unsynced user edit — and the caller
+		// deletes immediately after. Treating that as "nothing to preserve" would
+		// destroy a drifted file with no backup, which is exactly what the
+		// never-destroy-unsynced-content invariant forbids. Report "not
+		// preserved" so the caller skips the delete; the read error itself is not
+		// returned, because it is not a reason to fail the run (see Delete).
+		return false, nil
 	}
 	stateKey := fmt.Sprintf("%s:%s:%s:%s", w.agent, w.scope.String(),
 		paths.HomeRelative(w.userHome, w.project), paths.HomeRelative(w.userHome, op.Path))
 	if entry, owned := w.state.Files[stateKey]; owned {
 		sum := sha256.Sum256(existing)
 		if hex.EncodeToString(sum[:]) == entry.SHA256 {
-			return nil // unchanged since our last apply — safe to delete
+			return true, nil // unchanged since our last apply — safe to delete
 		}
 	}
-	dest, err := w.backup(op.Path, existing)
-	if err != nil {
-		return err
+	dest, berr := w.backup(op.Path, existing)
+	if berr != nil {
+		// A backup we cannot write IS a reason to fail: proceeding would delete
+		// a known-drifted file with nothing preserved.
+		return false, berr
 	}
 	w.reports = append(w.reports, CollisionReport{Agent: w.agent, Path: op.Path, BackupTo: dest})
-	return nil
+	return true, nil
 }
 
 // pruneEmptySkillDirs removes now-empty directories left after deleting a skill
@@ -518,6 +656,16 @@ func backupPathFor(src, backupRoot string) string {
 // delete) that must preserve a file before a destructive action so no choice
 // loses content. Returns ("", nil) when path is missing.
 func BackupFile(home, path string) (string, error) {
+	// Same shape guard as the apply-side reads: os.ReadFile BLOCKS forever on a
+	// FIFO rather than failing, and this runs from reconcile's interactive orphan
+	// delete. Returning an ERROR (not the ("", nil) "nothing to back up" answer
+	// the missing-file case gives) is deliberate: the caller removes the file
+	// only if the backup succeeded, so erroring here refuses the removal too.
+	// A non-regular destination is one agentsync cannot preserve, and refusing
+	// to delete what it cannot preserve is the same rule the apply path follows.
+	if !isRegularOrAbsent(path) {
+		return "", fmt.Errorf("refusing to back up %s: not a regular file", path)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

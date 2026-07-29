@@ -197,13 +197,24 @@ func dedupHooks(hooks []source.Hook) []source.Hook {
 	if len(hooks) < 2 {
 		return hooks
 	}
-	seen := make(map[source.Hook]bool, len(hooks))
+	// Key on CONTENT, not the whole struct: provenance (Plugin) is derived state
+	// that never reaches a destination, so two byte-identical handlers must still
+	// collapse to one regardless of which plugin they came from. (Today
+	// namespaceProjected stamps provenance after this runs, so every hook here
+	// shares one value — keying explicitly keeps that ordering from becoming
+	// load-bearing.)
+	type hookContent struct{ event, matcher, typ, command string }
+	key := func(h source.Hook) hookContent {
+		return hookContent{h.Event.Unverified(), h.Matcher, h.Type, h.Command}
+	}
+	seen := make(map[hookContent]bool, len(hooks))
 	out := make([]source.Hook, 0, len(hooks))
 	for _, h := range hooks {
-		if seen[h] {
+		k := key(h)
+		if seen[k] {
 			continue
 		}
-		seen[h] = true
+		seen[k] = true
 		out = append(out, h)
 	}
 	return out

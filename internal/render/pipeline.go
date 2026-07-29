@@ -432,8 +432,17 @@ func applyPlan(
 		return nil, written, unchanged, wouldChange, fmt.Errorf("render.Apply: nil state")
 	}
 
+	// seen is NOT reset per agent — that is deliberate, since the guard below
+	// exists to catch two agents rendering one shared path differently. But it
+	// means the guard also fires when a SINGLE agent emits two divergent ops for
+	// one path (two canonical components resolving to the same destination), so
+	// seenBy records which agent produced each path and the message distinguishes
+	// the two cases. Before #211 an intra-agent collision was reported as
+	// "different content than an earlier agent", sending the user looking for a
+	// second agent that did not exist.
 	seen := map[string][]byte{}
-	deletedSkillOrphans := map[string]struct{}{}
+	seenBy := map[string]string{}
+	deletedOrphans := map[string]struct{}{}
 	for _, name := range reg.Names() {
 		res, ok := p.PerAgent[name]
 		if !ok {
@@ -483,15 +492,24 @@ func applyPlan(
 					// dropping one agent's bytes would be data loss — so fail
 					// loud rather than pick a winner.
 					if !bytes.Equal(prev, op.Content) {
+						if seenBy[op.Path] == name {
+							return reports, written, unchanged, wouldChange, fmt.Errorf(
+								"agent %q renders two different contents for the same path %s; "+
+									"refusing to silently drop one — two canonical components resolve "+
+									"to one destination file, so rename one of them",
+								name, op.Path,
+							)
+						}
 						return reports, written, unchanged, wouldChange, fmt.Errorf(
-							"agent %q renders different content than an earlier agent for the same path %s; "+
+							"agent %q renders different content than agent %q for the same path %s; "+
 								"refusing to silently drop one (shared paths must render identical bytes)",
-							name, op.Path,
+							name, seenBy[op.Path], op.Path,
 						)
 					}
 					continue
 				}
 				seen[op.Path] = op.Content
+				seenBy[op.Path] = name
 			}
 			deduped = append(deduped, op)
 		}
@@ -499,11 +517,11 @@ func applyPlan(
 		// this agent owns in state but the source no longer renders. Deduped by
 		// path across agents that share a skills dir (claude + opencode →
 		// .claude/skills/), since the first agent's writer already removed it.
-		for _, del := range skillOrphanDeletes(st, userHome, name, scope, project, res.Ops) {
-			if _, done := deletedSkillOrphans[del.Path]; done {
+		for _, del := range orphanDeletes(st, userHome, name, scope, project, res.Ops) {
+			if _, done := deletedOrphans[del.Path]; done {
 				continue
 			}
-			deletedSkillOrphans[del.Path] = struct{}{}
+			deletedOrphans[del.Path] = struct{}{}
 			deduped = append(deduped, del)
 		}
 		var w *Writer

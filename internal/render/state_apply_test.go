@@ -2,6 +2,7 @@ package render_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,8 +10,11 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	_ "github.com/spxrogers/agentsync/internal/adapter/noop"
+	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
 func TestRecordState_FilesAndKeys(t *testing.T) {
@@ -208,5 +212,166 @@ func TestRecordState_SkipsDeleteOps(t *testing.T) {
 	}
 	if len(s.Files) != 0 || len(s.Keys) != 0 {
 		t.Fatal("delete ops should not create state entries")
+	}
+}
+
+// TestPruneStaleState_ReclaimableOrphanRetention pins both directions of the
+// keep-guard added for the skipped-delete retry.
+//
+// KEEP when the destination survives: apply skips (rather than performs) an
+// orphan delete it cannot read, and pruning the entry would make that skip
+// permanent and silent — orphanDeletes could never synthesize the delete again
+// and the warning would never repeat.
+//
+// PRUNE when it is provably gone: otherwise every successfully-reclaimed file
+// would leak an entry forever and targets.json would grow without bound.
+func TestPruneStaleState_ReclaimableOrphanRetention(t *testing.T) {
+	testenv.RequireContainer(t)
+	tmp := t.TempDir()
+
+	present := filepath.Join(tmp, ".claude", "agents", "still-here.md")
+	if err := os.MkdirAll(filepath.Dir(present), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(present, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(tmp, ".claude", "agents", "reclaimed.md")
+	// A reclaimable SourceID whose file is gone, plus one that is NOT
+	// reclaimable — the exemption must not widen to every component kind.
+	notReclaimable := filepath.Join(tmp, ".claude", "settings.json")
+	if err := os.WriteFile(notReclaimable, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prefix := fmt.Sprintf("claude:user:%s:", paths.HomeRelative(tmp, ""))
+	st := state.New()
+	for path, srcID := range map[string]string{
+		present:        "subagents/still-here.md",
+		gone:           "subagents/reclaimed.md",
+		notReclaimable: "memory/AGENTS.md",
+	} {
+		st.Files[prefix+paths.HomeRelative(tmp, path)] = state.FileEntry{SHA256: "old", SourceID: srcID}
+	}
+
+	// No ops at all: every entry is "no longer rendered".
+	render.PruneStaleState(st, tmp, "claude", adapter.ScopeUser, "", nil)
+
+	if _, ok := st.Files[prefix+paths.HomeRelative(tmp, present)]; !ok {
+		t.Error("a reclaimable destination that is still on disk must keep its entry, " +
+			"so a skipped delete is retried rather than forgotten")
+	}
+	if _, ok := st.Files[prefix+paths.HomeRelative(tmp, gone)]; ok {
+		t.Error("a reclaimable destination that is gone must still be pruned")
+	}
+	if _, ok := st.Files[prefix+paths.HomeRelative(tmp, notReclaimable)]; ok {
+		t.Error("the exemption must apply only to reclaimable SourceIDs; " +
+			"a non-reclaimable entry must prune as before")
+	}
+}
+
+// TestPruneStaleState_DanglingSymlinkIsKept is the discriminating case for the
+// guard's PREDICATE, which the test above cannot reach: a present file and an
+// absent one are kept/pruned identically under Stat and Lstat, so neither
+// separates the correct check from the two wrong ones review found.
+//
+// A dangling symlink does. os.Stat follows it and reports ENOENT — so both
+// `Stat() == nil` (the round-3 bug) and `!errors.Is(Stat_err, ErrNotExist)` (the
+// round-4 near-miss) prune the entry and strand the link forever. os.Lstat sees
+// the link itself, so the entry is kept, the delete is retried, and Delete's
+// os.Remove clears it.
+func TestPruneStaleState_DanglingSymlinkIsKept(t *testing.T) {
+	testenv.RequireContainer(t)
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, ".claude", "agents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "dangling.md")
+	if err := os.Symlink(filepath.Join(tmp, "nonexistent-target"), link); err != nil {
+		t.Fatal(err)
+	}
+
+	prefix := fmt.Sprintf("claude:user:%s:", paths.HomeRelative(tmp, ""))
+	st := state.New()
+	key := prefix + paths.HomeRelative(tmp, link)
+	st.Files[key] = state.FileEntry{SHA256: "old", SourceID: "subagents/dangling.md"}
+
+	render.PruneStaleState(st, tmp, "claude", adapter.ScopeUser, "", nil)
+
+	if _, ok := st.Files[key]; !ok {
+		t.Error("a dangling symlink is still a destination agentsync owns and can remove; " +
+			"pruning its entry strands it forever (the guard must Lstat, not Stat)")
+	}
+}
+
+// TestPruneStaleState_RetiredSubagentSourceIDIsReclaimable pins the prefix that
+// makes the #211 upgrade actually work for the users it targets.
+//
+// The canonical directory rename (agents/ → subagents/) ships in the same release
+// as namespacing, so an upgrading user's state still holds "agents/<name>.md"
+// SourceIDs — and the only rewriter runs from `migrate subagents`, which returns
+// early when <home>/agents/ is empty. A user whose subagents come ONLY from
+// plugins has no such directory, which is exactly the reported scenario. Without
+// the retired prefix their pre-rename destination file is unreclaimable AND loses
+// its state entry: left forever beside the namespaced ones, which is MORE
+// duplicate agents than before and the opposite of what the upgrade notice says.
+func TestPruneStaleState_RetiredSubagentSourceIDIsReclaimable(t *testing.T) {
+	testenv.RequireContainer(t)
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, ".claude", "agents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(dir, "code-reviewer.md")
+	if err := os.WriteFile(legacy, []byte("pre-rename"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prefix := fmt.Sprintf("claude:user:%s:", paths.HomeRelative(tmp, ""))
+	st := state.New()
+	key := prefix + paths.HomeRelative(tmp, legacy)
+	// The RETIRED spelling, as a pre-upgrade state file carries it.
+	st.Files[key] = state.FileEntry{SHA256: "old", SourceID: "agents/code-reviewer.md"}
+
+	render.PruneStaleState(st, tmp, "claude", adapter.ScopeUser, "", nil)
+	if _, ok := st.Files[key]; !ok {
+		t.Fatal("a pre-rename subagent entry must stay owned so its destination is reclaimed")
+	}
+
+	deletes := render.OrphanDeletes(st, tmp, "claude", adapter.ScopeUser, "", nil)
+	var found bool
+	for _, d := range deletes {
+		if d.Path == legacy {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("apply must synthesize a delete for the pre-rename destination; got %v", deletes)
+	}
+}
+
+// TestOrphanReclaimedPrefixes_RetiredAliasDoesNotOverMatch guards the one hazard
+// of carrying a retired identifier in a live prefix list: if "agents/" ever
+// becomes a LIVE SourceID prefix again, the alias silently starts matching it.
+//
+// It is asserted against the real producer — source.SubagentSourceID — rather
+// than a literal, so it tracks the constant instead of a copy of it.
+func TestOrphanReclaimedPrefixes_RetiredAliasDoesNotOverMatch(t *testing.T) {
+	live := source.SubagentSourceID("reviewer")
+	if strings.HasPrefix(filepath.ToSlash(live), source.LegacySubagentsDir+"/") {
+		t.Fatalf("the live subagent SourceID (%q) now starts with the RETIRED prefix %q — "+
+			"the alias in orphanReclaimedPrefixes would over-match every live subagent; "+
+			"drop it or re-scope it", live, source.LegacySubagentsDir+"/")
+	}
+	// And the retired spelling is still recognised, which is the point of it.
+	if !render.OrphanIsReclaimable(source.LegacySubagentsDir + "/reviewer.md") {
+		t.Error("the retired agents/ spelling must stay reclaimable until it is out of circulation")
+	}
+	if !render.OrphanIsReclaimable(live) {
+		t.Errorf("the live spelling %q must be reclaimable", live)
+	}
+	if render.OrphanIsReclaimable("memory/AGENTS.md") {
+		t.Error("a non-component SourceID must not be reclaimable")
 	}
 }

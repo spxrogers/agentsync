@@ -73,6 +73,18 @@ var upgradeNotices = []upgradeNotice{
 		},
 		Path: "/reference/upgrading/",
 	},
+	{
+		ID:       "0.11.0-plugin-component-namespacing",
+		Since:    "0.11.0",
+		Headline: "plugin-provided subagents, skills, and commands are now namespaced by their plugin",
+		Actions: []string{
+			"a plugin's component renders as <plugin>-<name>: feature-dev's code-reviewer is now feature-dev-code-reviewer",
+			"invoke plugin agents and commands by the new name (@agent-feature-dev-code-reviewer, /feature-dev-review)",
+			"your own ~/.agentsync/ components are NOT renamed; a derived name that clashes with one is reported, not silently resolved",
+			"the next `agentsync apply` removes the old un-namespaced files it wrote; a file you hand-edited is backed up first",
+		},
+		Path: "/reference/upgrading/",
+	},
 }
 
 // maybePrintUpgradeNotice shows, at most once per machine, the notices a user

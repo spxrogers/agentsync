@@ -487,8 +487,9 @@ func TestExplain_ScopesToNamedPlugin(t *testing.T) {
 	}
 	// The reviewer subagent renders but loses its tools/color frontmatter, so it
 	// surfaces as a "reduced" subagent skip (the label is humanized — no internal
-	// "-frontmatter" suffix leaks to the user).
-	if !strings.Contains(outNoisy, "subagent reviewer") || !strings.Contains(outNoisy, "reduced") {
+	// "-frontmatter" suffix leaks to the user). It reports under its
+	// plugin-namespaced name, since that is the name it renders as (issue #211).
+	if !strings.Contains(outNoisy, "subagent noisy-reviewer") || !strings.Contains(outNoisy, "reduced") {
 		t.Errorf("explain noisy@cross-mp should surface its own reduced subagent skip; got:\n%s", outNoisy)
 	}
 	if strings.Contains(outNoisy, "subagent-frontmatter") {
