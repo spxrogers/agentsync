@@ -199,15 +199,17 @@ func projectOnePlugin(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugi
 // upstream names the user would recognise.
 //
 // Hooks, MCP servers, and LSP servers are deliberately NOT renamed: hooks have
-// no name key at all, and MCP/LSP are id-keyed with an existing cross-source
+// no name key at all (a canonical hooks/<event>.toml holds many handlers from
+// many sources), and MCP/LSP are id-keyed with an existing cross-source
 // guard (checkProjectedConflicts) whose hard failure is a deliberate security
 // property — a same-id server from two sources can be a silent endpoint hijack,
 // which is a case to refuse, not to rename apart.
 //
-// MCP and LSP servers ARE still stamped with provenance, though. They are not
-// renamed, but the dest→source paths still need to know a plugin owns them so
-// import/reconcile refuse to capture one into the canonical source (which would
-// mint a copy that diverges from the plugin's own on its next update).
+// All three ARE still stamped with provenance, though. They are not renamed, but
+// the dest→source paths still need to know a plugin owns them so import/reconcile
+// refuse to capture one into the canonical source (which would mint a copy that
+// diverges from the plugin's own on its next update). Hooks are stamped per
+// HANDLER, the granularity import has to filter at.
 func namespaceProjected(pr *ProjectionResult, plugin string) {
 	if plugin == "" {
 		return
@@ -217,6 +219,9 @@ func namespaceProjected(pr *ProjectionResult, plugin string) {
 	}
 	for i := range pr.LSPServers {
 		pr.LSPServers[i].Plugin = plugin
+	}
+	for i := range pr.Hooks {
+		pr.Hooks[i].Plugin = plugin
 	}
 	for i := range pr.Skills {
 		pr.Skills[i].Plugin = plugin
@@ -320,9 +325,7 @@ func checkProjectedConflicts(c *source.Canonical, lenient bool) error {
 			return err
 		}
 	}
-	if name, ok := "", false; ok {
-		_ = name
-	} else if name, ok := firstDivergentByKey(c.Subagents, func(s source.Subagent) string { return s.Name },
+	if name, ok := firstDivergentByKey(c.Subagents, func(s source.Subagent) string { return s.Name },
 		func(a, b source.Subagent) bool { return sameTextRender(a.Frontmatter, a.Body, b.Frontmatter, b.Body) }); ok {
 		if err := nameCollisionError("subagent", name, c.Subagents, func(s source.Subagent) (string, string, string) {
 			return s.Name, s.Plugin, s.BaseName
@@ -384,7 +387,7 @@ func nameCollisionError[T any](kind, name string, items []T, originOf func(T) (i
 			origins = append(origins, fmt.Sprintf("plugin %q (as %q)", plugin, base))
 			continue
 		}
-		origins = append(origins, fmt.Sprintf("your own %s/%s", kind, name))
+		origins = append(origins, fmt.Sprintf("your own canonical %s %q", kind, name))
 	}
 	if lenient {
 		slog.Warn("component provided by multiple sources with different content; render keeps the last",

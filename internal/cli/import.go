@@ -285,9 +285,11 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 
 	// Ingest cannot tell a file agentsync rendered from an installed plugin apart
 	// from one the user hand-wrote, so compute the set apply projects and skip it
-	// below. A failure here is not fatal: import then behaves as it did before
-	// (capturing plugin components as if hand-authored), so warn and continue
-	// rather than refuse an import the user may need.
+	// below. A failure here is recorded, not swallowed: skipPluginProvided then
+	// refuses any component capture (fail CLOSED). Proceeding with an empty skip
+	// set would silently disable the defence — and since the projection is fed by
+	// plugin data, an upstream roll or a tampered cache could trigger it on
+	// demand.
 	if pp, ppErr := pluginProvided(loaderFsForState(), agentsyncHome, projectRoot, sc); ppErr != nil {
 		io.pluginProvidedErr = ppErr
 	} else {
@@ -1176,10 +1178,10 @@ func idsFromWritten(written []string) []string {
 //
 // It mirrors apply's projection so the skipped set is exactly the rendered set:
 // lenient (an unrelated strict plugin conflict must not abort an import), honours
-// the project tree's `disabled = true` plugin markers, and at project scope
-// unions BOTH homes' projections. A projection failure yields nil — import then
-// behaves as it did before, which is the pre-existing bug rather than a new one,
-// so the caller warns instead of failing the run.
+// the project tree's `disabled = true` plugin markers, and reads the home whose
+// components the render at this scope actually uses. A projection failure is
+// returned, and the caller records it so every component capture then refuses —
+// see skipPluginProvided.
 func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot string, sc adapter.Scope) (map[string]string, error) {
 	pluginCacheRoot := filepath.Join(agentsyncHome, ".state", "cache", "plugins")
 	var disabled []string
@@ -1223,6 +1225,16 @@ func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot string, sc adapter.S
 				out["lsp/"+l.ID] = l.Plugin
 			}
 		}
+		// Hooks are keyed by CONTENT, not by event. A canonical hooks/<event>.toml
+		// holds many handlers from many sources, so refusing a whole event would
+		// drop the user's own handlers alongside the plugin's. The native ingest
+		// carries no provenance, so the signature is what identifies a handler as
+		// the plugin's.
+		for _, h := range c.Hooks {
+			if h.Plugin != "" {
+				out["hook/"+hookSignature(h)] = h.Plugin
+			}
+		}
 	}
 	// Scope parity with render is what makes "the skipped set is exactly the
 	// rendered set" true. At PROJECT scope every adapter renders from the
@@ -1240,6 +1252,17 @@ func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot string, sc adapter.S
 	}
 	collect(c)
 	return out, nil
+}
+
+// hookSignature identifies one hook HANDLER by everything that reaches a
+// destination: its event, matcher, type, and command. It is the join key between
+// a plugin's projected hooks (which carry provenance) and the agent's native
+// ingest (which does not), so import can drop exactly the handlers a plugin
+// contributed and keep the ones the user wrote. The separator is a NUL, which
+// cannot appear in any of the parts, so distinct handlers can never collide into
+// one signature.
+func hookSignature(h source.Hook) string {
+	return strings.Join([]string{h.Event.Unverified(), h.Matcher, h.Type, h.Command}, "\x00")
 }
 
 // skipPluginProvided partitions native components into the ones to capture and
@@ -1269,19 +1292,24 @@ func skipPluginProvided[T any](io *importIO, kind, name string, items []T, nameO
 	}
 	out := make([]T, 0, len(items))
 	for _, it := range items {
-		plugin, provided := io.pluginProvided[kind+"/"+nameOf(it)]
+		key := nameOf(it)
+		plugin, provided := io.pluginProvided[kind+"/"+key]
 		if !provided {
 			out = append(out, it)
 			continue
 		}
+		// A hook's key is a NUL-joined content signature (hookSignature); render
+		// it with spaces so the message reads as the handler it names rather than
+		// as escape sequences. Every other kind's key is already its display name.
+		display := strings.ReplaceAll(key, "\x00", " ")
 		if name != "" {
 			return nil, fmt.Errorf("%s %q is provided by the plugin %q, not hand-authored — importing it "+
 				"would create a canonical copy that collides with the plugin's own on the next apply; "+
 				"change it upstream, or run `agentsync plugin disable %s` to stop projecting it",
-				kind, nameOf(it), plugin, plugin)
+				kind, display, plugin, plugin)
 		}
 		io.warnf("skipping %s %q: it is projected from the plugin %q, so agentsync already manages it "+
-			"(capturing it would collide with the plugin's own on the next apply)", kind, nameOf(it), plugin)
+			"(capturing it would collide with the plugin's own on the next apply)", kind, display, plugin)
 	}
 	return out, nil
 }
@@ -1429,6 +1457,21 @@ func importHook(io *importIO, home string, c source.Canonical, name string) ([]s
 			matched = append(matched, h)
 		}
 	}
+	// Filter at HANDLER granularity, not per event: one event's canonical file
+	// holds handlers from many sources, so refusing the whole event because a
+	// plugin contributed one handler would silently drop the user's own. A named
+	// import errors only when EVERY handler for that event is plugin-provided —
+	// otherwise the user's handlers are captured and the plugin's are skipped.
+	kept, err := skipPluginProvided(io, "hook", "", matched, hookSignature)
+	if err != nil {
+		return nil, err
+	}
+	if name != "" && len(matched) > 0 && len(kept) == 0 {
+		return nil, fmt.Errorf("every handler for hook event %q is provided by an installed plugin, "+
+			"so there is nothing of your own to capture; change it upstream, or run "+
+			"`agentsync plugin disable <id>` to stop projecting it", name)
+	}
+	matched = kept
 	if len(matched) == 0 {
 		if name != "" {
 			return nil, fmt.Errorf("hook event %q not found in native config", name)

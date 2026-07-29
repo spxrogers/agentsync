@@ -276,6 +276,14 @@ type Hook struct {
 	Matcher string         // glob/regex string
 	Type    string         // "command"
 	Command string         // shell command
+	// Plugin is the id of the plugin providing this handler, empty when the user
+	// declared it in hooks/<event>.toml. Hooks are neither namespaced nor
+	// id-keyed — a canonical hooks/<event>.toml holds MANY handlers from many
+	// sources — so provenance is carried per HANDLER, which is the granularity
+	// import must filter at: refusing a whole event would drop the user's own
+	// handlers alongside the plugin's. Never serialized (WriteHooks emits an
+	// explicit hookEntryOut), never secret-bearing — see MCPServer.Plugin.
+	Plugin string
 }
 
 // LSPServer mirrors lsp/<id>.toml.

@@ -178,7 +178,8 @@ component reports it and exits cleanly rather than erroring. Add `--dry-run` to
 list the source files an import would write without touching `~/.agentsync/`.
 
 **Import never re-captures a plugin's own components** — subagents, skills,
-commands, MCP servers, and LSP servers alike. Once you have applied, a plugin's
+commands, MCP servers, LSP servers, and hooks alike (hooks per *handler*, so a
+plugin hooking an event you also hook never costs you your own handler). Once you have applied, a plugin's
 components are sitting in the agent's native config indistinguishable from ones
 you wrote yourself — the agent's config gives no hint which ones agentsync put
 there. Importing them would create canonical copies that collide

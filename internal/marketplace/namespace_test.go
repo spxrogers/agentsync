@@ -1,6 +1,9 @@
 package marketplace
 
 import (
+	"bytes"
+	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -170,7 +173,7 @@ func TestCheckProjectedConflicts_NameKeyedComponents(t *testing.T) {
 		if err == nil {
 			t.Fatal("a plugin's derived name colliding with a hand-authored one must be fatal")
 		}
-		if !strings.Contains(err.Error(), "your own subagent/feature-dev-code-reviewer") {
+		if !strings.Contains(err.Error(), `your own canonical subagent "feature-dev-code-reviewer"`) {
 			t.Errorf("error must point at the user's own file; got: %v", err)
 		}
 	})
@@ -190,12 +193,28 @@ func TestCheckProjectedConflicts_NameKeyedComponents(t *testing.T) {
 	// The read-only commands (status/diff/explain) exist to SHOW a problem; they
 	// must not refuse to run on one.
 	t.Run("lenient degrades to a warning", func(t *testing.T) {
+		// Assert the WARNING, not just the absence of an error: "returned nil"
+		// is equally true of a guard that did nothing at all, which is exactly
+		// the regression this subtest is meant to catch.
+		var buf bytes.Buffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+		t.Cleanup(func() { slog.SetDefault(prev) })
+
 		c := source.Canonical{Subagents: []source.Subagent{
 			sub("a-b-c", "a", "b-c", "from a"),
 			sub("a-b-c", "a-b", "c", "from a-b"),
 		}}
 		if err := checkProjectedConflicts(&c, true); err != nil {
 			t.Fatalf("lenient must warn, not fail; got: %v", err)
+		}
+		got := buf.String()
+		// slog's TextHandler escapes the quotes inside the attribute value, so
+		// match the escaped form the warning actually carries.
+		for _, want := range []string{"a-b-c", `plugin \"a\"`, `plugin \"a-b\"`, `(as \"b-c\")`, `(as \"c\")`} {
+			if !strings.Contains(got, want) {
+				t.Errorf("the lenient warning must still name %s; got:\n%s", want, got)
+			}
 		}
 	})
 
@@ -243,9 +262,10 @@ func TestCheckProjectedConflicts_NameKeyedComponents(t *testing.T) {
 // keys) while diagnostics read Plugin/BaseName, so a component whose fields
 // disagree would report an origin that does not match what it rendered.
 //
-// It is asserted reflectively over whatever namespaceProjected produces rather
-// than against a hand-written expectation, so a future component kind added to
-// the rename loop is covered without anyone remembering to extend this test.
+// It walks ProjectionResult by REFLECTION rather than naming each component
+// slice, so a future component kind added to the rename loop is covered without
+// anyone remembering to extend this test — any struct field named Plugin/
+// BaseName/Name is checked wherever it appears.
 func TestProvenanceInvariant(t *testing.T) {
 	pr := ProjectionResult{
 		Skills:    []source.Skill{{Name: "s"}, {Name: "with-hyphen"}},
@@ -255,26 +275,40 @@ func TestProvenanceInvariant(t *testing.T) {
 	const plugin = "my-plugin"
 	namespaceProjected(&pr, plugin)
 
-	check := func(kind, name, gotPlugin, base string) {
-		t.Helper()
-		if gotPlugin != plugin {
-			t.Errorf("%s %q: Plugin = %q, want %q", kind, name, gotPlugin, plugin)
-			return
+	// Reflect over every slice on ProjectionResult, and over every element that
+	// carries all three fields. A component kind with no BaseName (MCP/LSP/hooks
+	// — stamped but never renamed) is skipped by the field check itself, so the
+	// invariant applies exactly where it is meant to.
+	v := reflect.ValueOf(pr)
+	checked := 0
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+		if field.Kind() != reflect.Slice {
+			continue
 		}
-		if want := source.NamespacedComponentName(gotPlugin, base); name != want {
-			t.Errorf("%s: Name = %q but NamespacedComponentName(%q, %q) = %q — "+
-				"a component's reported origin must match the name it renders as",
-				kind, name, gotPlugin, base, want)
+		kind := v.Type().Field(i).Name
+		for j := 0; j < field.Len(); j++ {
+			el := field.Index(j)
+			nameF, pluginF, baseF := el.FieldByName("Name"), el.FieldByName("Plugin"), el.FieldByName("BaseName")
+			if !nameF.IsValid() || !pluginF.IsValid() || !baseF.IsValid() {
+				continue // not a renamed kind
+			}
+			checked++
+			name, gotPlugin, base := nameF.String(), pluginF.String(), baseF.String()
+			if gotPlugin != plugin {
+				t.Errorf("%s[%d] %q: Plugin = %q, want %q", kind, j, name, gotPlugin, plugin)
+				continue
+			}
+			if want := source.NamespacedComponentName(gotPlugin, base); name != want {
+				t.Errorf("%s[%d]: Name = %q but NamespacedComponentName(%q, %q) = %q — "+
+					"a component's reported origin must match the name it renders as",
+					kind, j, name, gotPlugin, base, want)
+			}
 		}
 	}
-	for _, s := range pr.Skills {
-		check("skill", s.Name, s.Plugin, s.BaseName)
-	}
-	for _, s := range pr.Subagents {
-		check("subagent", s.Name, s.Plugin, s.BaseName)
-	}
-	for _, c := range pr.Commands {
-		check("command", c.Name, c.Plugin, c.BaseName)
+	if checked != 5 {
+		t.Fatalf("expected to check 5 renamed components, checked %d — "+
+			"the reflection walk is not seeing what the fixture provides", checked)
 	}
 
 	// MCP/LSP are stamped but deliberately NOT renamed: their ids are the

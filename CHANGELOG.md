@@ -36,10 +36,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   agentsync import claude:subagent` reproduced this with any installed plugin.
   `import` now skips such components with a warning naming the plugin (and errors
   if you name one explicitly); reconcile's `[w]rite-back` refuses the item and
-  points at `[o]verride`. This covers MCP and LSP servers too — they are not
-  namespaced, but capturing one still mints a canonical copy that diverges from
-  the plugin's the moment it updates. Components you hand-wrote into an agent's
-  native config are still captured normally.
+  points at `[o]verride`. This covers MCP servers, LSP servers, and hooks too —
+  they are not namespaced, but capturing one still mints a canonical copy that
+  diverges from the plugin's the moment it updates. Hooks are filtered per
+  *handler*, so a plugin contributing to an event you also hook never costs you
+  your own handler. Components you hand-wrote into an agent's native config are
+  still captured normally.
 - **A residual name collision is now reported instead of silently dropping a
   component.** Namespacing makes the common case work, but the derived name is
   not injective: plugin `a` shipping `b-c` and plugin `a-b` shipping `c` both

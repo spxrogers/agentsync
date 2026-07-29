@@ -540,6 +540,62 @@ func TestProjectScope_PluginNamespacingAndImportFilter(t *testing.T) {
 	}
 }
 
+// TestProjectScope_UserPluginDoesNotShadowProjectComponent is the test that can
+// actually FAIL on the scope fix, which the sibling above cannot: it copies the
+// plugin pin into the project tree, so the old user-union logic and the new
+// project-only logic produce an identical skip set.
+//
+// Here the plugin exists at USER scope ONLY. It therefore contributes nothing to
+// the project destination, and a project component that happens to share its
+// derived name must still be captured. Under the old union the user plugin's
+// entry would appear in the project skip set and silently swallow it.
+func TestProjectScope_UserPluginDoesNotShadowProjectComponent(t *testing.T) {
+	tmpHome := t.TempDir()
+	proj := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+
+	for _, args := range [][]string{
+		{"init"},
+		{"agent", "add", "claude"},
+		{"init", "--scope", "project", "--project", proj},
+		{"agent", "add", "claude", "--scope", "project", "--project", proj},
+	} {
+		if out, err := runCLI(t, env, args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Plugin installed at USER scope only — the project tree gets no pin.
+	mpDir := makeCollidingMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmpHome, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("user plugin import: %v\n%s", err, out)
+	}
+
+	// A PROJECT-scope native subagent named exactly what the user-scope plugin
+	// derives. It is the user's own file at this scope and must be captured.
+	agentsDir := filepath.Join(proj, ".claude", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "feature-dev-code-reviewer.md"),
+		[]byte("---\nname: feature-dev-code-reviewer\n---\nProject's own.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runCLI(t, env, "import", "claude:subagent", "--scope", "project", "--project", proj); err != nil {
+		t.Fatalf("project subagent import: %v\n%s", err, out)
+	}
+	captured := filepath.Join(proj, ".agentsync", "subagents", "feature-dev-code-reviewer.md")
+	data, err := os.ReadFile(captured)
+	if err != nil {
+		t.Fatalf("a user-scope plugin must not shadow a project component sharing its derived name: %v", err)
+	}
+	if !strings.Contains(string(data), "Project's own.") {
+		t.Fatalf("captured the wrong content:\n%s", data)
+	}
+}
+
 // TestImport_DryRunSkipsPluginProvidedComponents pins that the preview tells the
 // same story as the real run. A dry-run that listed plugin components as
 // "would import" would be worse than useless — it would advertise a capture the
@@ -565,5 +621,154 @@ func TestImport_DryRunSkipsPluginProvidedComponents(t *testing.T) {
 	}
 	if !strings.Contains(out, "it is projected from the plugin") {
 		t.Errorf("dry-run must report the skip like the real run; got:\n%s", out)
+	}
+}
+
+// makeServerMarketplace builds a marketplace whose plugin ships an MCP server
+// and a hook — the two component kinds that are plugin-owned but NOT namespaced,
+// so the capture refusal has to recognise them by id/content rather than by name.
+func makeServerMarketplace(t *testing.T, dir string) string {
+	t.Helper()
+	mpDir := filepath.Join(dir, "server-marketplace")
+	write := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(mpDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".claude-plugin/marketplace.json", `{
+		"name": "srv-mp",
+		"owner": {"name": "tester"},
+		"plugins": [{"name": "srv", "source": "./plugins/srv"}]
+	}`)
+	write("plugins/srv/.claude-plugin/plugin.json", `{
+		"name": "srv",
+		"version": "1.0.0",
+		"mcpServers": {"pluginapi": {"command": "plugin-server", "args": ["--serve"]}},
+		"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "plugin-guard"}]}]}
+	}`)
+	return mpDir
+}
+
+// TestImport_SkipsPluginProvidedMCPServer covers the component kind that is
+// plugin-owned but NOT namespaced. An MCP server keeps its id (a same-id
+// divergence across sources is a possible endpoint hijack, refused rather than
+// renamed apart), so the refusal must recognise it by id — and capturing one
+// still mints a canonical mcp/<id>.toml that renders identically today and
+// diverges the moment the plugin updates, at which point every load hard-fails.
+func TestImport_SkipsPluginProvidedMCPServer(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeServerMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("srv-mp", mpDir, "srv"))
+
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	out, err := runCLI(t, env, "import", "claude:mcp")
+	if err != nil {
+		t.Fatalf("import claude:mcp: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "it is projected from the plugin") {
+		t.Errorf("import must announce the skipped plugin MCP server; got:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, ".agentsync", "mcp", "pluginapi.toml")); err == nil {
+		t.Fatal("import captured a plugin-provided MCP server into the canonical source")
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply after import must still succeed: %v\n%s", err, out)
+	}
+}
+
+// TestImport_SkipsPluginHooksButKeepsYourOwn pins that hooks are filtered at
+// HANDLER granularity. A canonical hooks/<event>.toml holds handlers from many
+// sources, so refusing the whole event because a plugin contributed one would
+// silently drop the user's own — an over-refusal that loses real config.
+func TestImport_SkipsPluginHooksButKeepsYourOwn(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeServerMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("srv-mp", mpDir, "srv"))
+
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	// A hand-written handler on the SAME event the plugin contributes to.
+	hooksSrc := filepath.Join(tmp, ".agentsync", "hooks")
+	if err := os.MkdirAll(hooksSrc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooksSrc, "PreToolUse.toml"),
+		[]byte("[[hook]]\nmatcher = \"Edit\"\ntype = \"command\"\ncommand = \"my-own-guard\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	// Remove the canonical copy so import has to re-capture from native config.
+	if err := os.Remove(filepath.Join(hooksSrc, "PreToolUse.toml")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude:hook"); err != nil {
+		t.Fatalf("import claude:hook: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(filepath.Join(hooksSrc, "PreToolUse.toml"))
+	if err != nil {
+		t.Fatalf("the user's own handler must still be captured: %v", err)
+	}
+	if !strings.Contains(string(data), "my-own-guard") {
+		t.Fatalf("the user's own handler was dropped:\n%s", data)
+	}
+	if strings.Contains(string(data), "plugin-guard") {
+		t.Fatalf("the plugin's handler must not be captured:\n%s", data)
+	}
+}
+
+// TestImport_FailsClosedWhenPluginProjectionFails pins the fail-CLOSED contract.
+//
+// The skip filter is what stops import capturing agentsync's own output back
+// into the canonical source. It is computed from plugin data, so a plugin the
+// user does not control can make that computation fail — an upstream roll
+// changes the tree hash and the manifest-SHA pin no longer verifies. If a
+// failure left the filter empty, that would be a way to switch the defence off
+// on demand, so the import refuses instead.
+func TestImport_FailsClosedWhenPluginProjectionFails(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeCollidingMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
+
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	// Tamper the cached plugin tree so the pinned manifest SHA no longer
+	// verifies — the projection now fails for a reason outside the user's
+	// control, which is exactly the trigger the guard must survive.
+	cached := filepath.Join(tmp, ".agentsync", ".state", "cache", "plugins",
+		"feature-dev", "agents", "code-reviewer.md")
+	if err := os.WriteFile(cached, []byte("---\nname: code-reviewer\n---\nTAMPERED.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "import", "claude:subagent")
+	if err == nil {
+		t.Fatalf("import must refuse when it cannot determine what the plugins provide; got:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "cannot safely import") {
+		t.Errorf("the refusal should explain itself; got: %v", err)
+	}
+	// Nothing may have been captured.
+	if _, serr := os.Stat(filepath.Join(tmp, ".agentsync", "subagents", "feature-dev-code-reviewer.md")); serr == nil {
+		t.Fatal("a failed projection must not let a plugin component be captured")
 	}
 }

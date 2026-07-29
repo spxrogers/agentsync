@@ -2,12 +2,14 @@ package render_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -685,5 +687,50 @@ func TestWriter_JSONCFallbackBacksUpWholeFile(t *testing.T) {
 	got, _ := os.ReadFile(reports[0].BackupTo)
 	if !strings.Contains(string(got), "old") {
 		t.Fatalf("JSONC-fallback backup missing original content: %s", got)
+	}
+}
+
+// TestApply_UnreadableOrphanIsSkippedNotDeleted pins the two-sided contract on
+// reclaiming a destination agentsync cannot read.
+//
+// Refusing the DELETE is required: without reading the file, agentsync cannot
+// rule out an unsynced hand-edit, and deleting it would break the
+// never-destroy-unsynced-content invariant. Refusing the RUN is not: a lingering
+// orphan is not data loss, and failing would let one unreadable destination (a
+// stray directory at the path, a permissions mishap) wedge every other agent's
+// writes with no flag to get past it. So: skip that one delete, keep going.
+//
+// A directory at the destination path yields EISDIR from os.ReadFile without
+// needing to manipulate permissions, which would not work as root in CI.
+func TestApply_UnreadableOrphanIsSkippedNotDeleted(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	_ = os.MkdirAll(home, 0o755)
+
+	// The "orphan": owned in state, no longer rendered, and unreadable.
+	orphan := filepath.Join(tmp, ".claude", "agents", "gone.md")
+	_ = os.MkdirAll(orphan, 0o755) // a DIRECTORY at the file path → EISDIR
+	// A second, ordinary op that must still be applied.
+	live := filepath.Join(tmp, ".claude", "agents", "live.md")
+
+	st := state.New()
+	st.Files[fmt.Sprintf("claude:user:%s:%s", paths.HomeRelative(tmp, ""), paths.HomeRelative(tmp, orphan))] = state.FileEntry{SHA256: "stale", SourceID: "subagents/gone.md", Mode: 0o644}
+
+	reg := adapter.NewRegistry()
+	_ = reg.Register(&fakeJSONApply{name: "claude"})
+	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+		"claude": {Ops: []adapter.FileOp{
+			{Action: "write", Path: live, Content: []byte("live"), Mode: 0o644, SourceID: "subagents/live.md"},
+		}},
+	}}
+
+	if _, _, _, err := render.Apply(plan, reg, st, home, tmp, adapter.ScopeUser, ""); err != nil {
+		t.Fatalf("an unreadable orphan must not fail the whole apply: %v", err)
+	}
+	if _, err := os.Stat(orphan); err != nil {
+		t.Fatalf("the unreadable orphan must NOT be deleted (it could hold an unsynced edit): %v", err)
+	}
+	if data, err := os.ReadFile(live); err != nil || string(data) != "live" {
+		t.Fatalf("the rest of the apply must still land; got %q err=%v", data, err)
 	}
 }

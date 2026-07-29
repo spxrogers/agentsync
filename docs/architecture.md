@@ -660,11 +660,29 @@ points refuse:
   whole-file components matched by SourceID, and key-level MCP/LSP servers
   matched from the item's JSON pointer.
 
-This covers **MCP and LSP servers too**, which are not namespaced but are still
-plugin-owned: capturing one mints a canonical copy that renders identically today
-and diverges the moment the plugin updates, at which point `checkProjectedConflicts`
-refuses every load. `MCPServer.Plugin` / `LSPServer.Plugin` carry that provenance
-(derived state, never serialized, classified non-secret in `walkerCovered`).
+This covers **MCP servers, LSP servers, and hooks too** — plugin-owned but not
+namespaced. Capturing an MCP/LSP server mints a canonical copy that renders
+identically today and diverges the moment the plugin updates, at which point
+`checkProjectedConflicts` refuses every load. `MCPServer.Plugin` /
+`LSPServer.Plugin` / `Hook.Plugin` carry that provenance (derived state, never
+serialized, each classified non-secret in `walkerCovered`).
+
+**Hooks are filtered per HANDLER, not per event.** A canonical
+`hooks/<event>.toml` holds many handlers from many sources, so refusing a whole
+event because a plugin contributed one would silently drop the user's own. The
+join key is a content signature (event + matcher + type + command), which is what
+lets import match a plugin's projected handler against the agent's native ingest —
+the ingest carries no provenance at all. Reconcile needs no hook case: key-level
+write-back is implemented for MCP servers only and already errors for every other
+pointer shape.
+
+The pointer lookup does **not** switch on the native root key. Those keys are
+per-agent data (`generic.MCPTarget.RootKey` grows with every agent added:
+`/context_servers`, `/servers`, `/amp.mcpServers`), so a hand-maintained allowlist
+would silently drop the refusal for each one someone forgets. It matches on the
+component id instead. Continue is the one adapter that renders MCP as a
+**whole-file** op (one file per server), so servers are registered under both the
+bare `mcp/<id>` key and the `mcp/<id>.toml` SourceID form.
 
 Both lookups are scoped to the canonical the render actually uses: at project
 scope that is the project-only overlay, so a user-scope plugin never shadows a

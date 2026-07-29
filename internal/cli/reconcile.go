@@ -464,18 +464,29 @@ func b2i(b bool) int {
 // has to project separately and match by component name.
 func pluginProvidedSourceIDs(c source.Canonical) map[string]string {
 	out := map[string]string{}
-	// MCP/LSP servers are key-level items, not whole files: their render op
-	// carries the section-wide SourceID "mcp/* (multiple)", so they cannot be
-	// matched by SourceID at all. They are keyed here by "<kind>/<id>", which
-	// pluginOwnerForPointer resolves from the item's JSON pointer.
+	// MCP/LSP servers are keyed under BOTH forms, because the two adapters
+	// families render them differently:
+	//
+	//   "<kind>/<id>"       — the key-merge shape (most adapters fold every
+	//                         server into one config file, so the op carries the
+	//                         section-wide SourceID "mcp/* (multiple)" and only
+	//                         the item's JSON pointer identifies the server).
+	//                         Resolved by pluginOwnerForPointer.
+	//   "<kind>/<id>.toml"  — the whole-file shape. Continue renders ONE FILE PER
+	//                         SERVER (.continue/mcpServers/<id>.yaml) with the
+	//                         canonical SourceID "mcp/<id>.toml", so its items go
+	//                         through the SourceID lookup like a subagent would.
+	//                         Keying only the bare form left that path unguarded.
 	for _, s := range c.MCPServers {
 		if s.Plugin != "" {
 			out["mcp/"+s.ID] = s.Plugin
+			out[filepath.ToSlash(filepath.Join("mcp", s.ID+".toml"))] = s.Plugin
 		}
 	}
 	for _, s := range c.LSPServers {
 		if s.Plugin != "" {
 			out["lsp/"+s.ID] = s.Plugin
+			out[filepath.ToSlash(filepath.Join("lsp", s.ID+".toml"))] = s.Plugin
 		}
 	}
 	for _, sk := range c.Skills {
@@ -500,27 +511,43 @@ func pluginProvidedSourceIDs(c source.Canonical) map[string]string {
 	return out
 }
 
-// pluginOwnerForPointer resolves the plugin owning the MCP/LSP server a
-// key-level item points at, or "" for a hand-declared server or a pointer that
-// names no server (a hook section, a foreign key). Pointer shapes vary per agent
-// — /mcpServers/<id> (claude, cursor, gemini, …), /mcp/<id> (opencode),
-// /mcp_servers/<id> (codex), /lspServers/<id> — so the top-level key is what
-// says which kind is being addressed.
+// pluginOwnerForPointer resolves the plugin owning the component a key-level
+// item points at, or "" for a hand-declared one.
+//
+// It deliberately does NOT switch on the pointer's root key. Those keys are
+// per-agent DATA, not a fixed set: alongside /mcpServers (claude, cursor,
+// gemini, …), /mcp (opencode), and /mcp_servers (codex), the generic tier
+// carries `RootKey` in a table that grows with every agent added —
+// /context_servers (Zed), /servers (VS Code), /amp.mcpServers (Amp). A
+// hand-maintained allowlist silently drops the refusal for every key someone
+// forgets to add, which is exactly the failure this guard exists to prevent.
+//
+// So it identifies the component by its ID — the pointer's second segment — and
+// probes it against each kind. A false positive would need a plugin to provide a
+// server whose id equals an unrelated section's key, and would only ever
+// over-refuse (the safe direction). Segments are JSON-pointer encoded, so ~1/~0
+// are decoded first (RFC 6901 §3) — an id containing '/' would otherwise never
+// match.
 func pluginOwnerForPointer(ptr string, owners map[string]string) string {
 	parts := strings.SplitN(strings.TrimPrefix(ptr, "/"), "/", 3)
 	if len(parts) < 2 {
 		return ""
 	}
-	var kind string
-	switch parts[0] {
-	case "mcpServers", "mcp", "mcp_servers":
-		kind = "mcp"
-	case "lspServers", "lsp", "lsp_servers":
-		kind = "lsp"
-	default:
-		return ""
+	root, id := unescapeJSONPointer(parts[0]), unescapeJSONPointer(parts[1])
+	if root == "hooks" {
+		return owners["hook/"+id]
 	}
-	return owners[kind+"/"+parts[1]]
+	if p := owners["mcp/"+id]; p != "" {
+		return p
+	}
+	return owners["lsp/"+id]
+}
+
+// unescapeJSONPointer decodes one JSON-pointer reference token (RFC 6901 §3):
+// "~1" is '/' and "~0" is '~'. Order matters — ~0 must be decoded last, or
+// "~01" would wrongly become "/" instead of "~1".
+func unescapeJSONPointer(tok string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(tok, "~1", "/"), "~0", "~")
 }
 
 // collectItems builds the flat reconcile list from a rendered plan + state.

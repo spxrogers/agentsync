@@ -1,7 +1,9 @@
 # Namespace plugin-provided components by plugin — Design Spec
 
 **Date:** 2026-07-28
-**Status:** Approved in brainstorming.
+**Status:** Approved in brainstorming; amended after a four-lens adversarial
+review — see [Amendments](#amendments-after-review) for the two design points
+this document originally got wrong.
 **Issue:** [#211 — Cross-plugin subagent name collisions are unresolvable — the codex error names a remedy the user cannot perform](https://github.com/spxrogers/agentsync/issues/211)
 
 ---
@@ -147,7 +149,7 @@ message meant to identify the conflict is informative precisely when it fires.
 
 ### 6. Orphan reclamation extended to subagents and commands
 
-`skillOrphanDeletes` (`internal/render/state_apply.go:183`) reclaims only
+`skillOrphanDeletes` (now `orphanDeletes`, `internal/render/state_apply.go`) reclaims only
 `skills/` SourceIDs. `PruneStaleState` drops the state entry for a destination
 that stopped being rendered but does not delete the file.
 
@@ -210,3 +212,37 @@ own change. Filed separately.
 `docs/concepts.md`, `docs/architecture.md`, `docs/capability-matrix.md`,
 `docs/components.md`, `CHANGELOG.md`, and
 `website/src/content/docs/reference/upgrading.mdx`.
+
+---
+
+## Amendments after review
+
+Two things in the design above were changed during review. They are recorded here
+rather than edited away, because both were wrong for reasons worth keeping.
+
+**§2 said the derived name is validated with `source.ValidateComponentID` at
+projection. That validation was removed.** It was a *second*, stricter rune set
+than the projection's own `validateProjectedName` (which permits `:` and control
+runes), so a plugin that projected fine before started hard-failing — and
+`loadProjected` propagates a projection error regardless of `lenient`, taking
+down `status`/`diff`/`explain`, whose entire design is to degrade and show state.
+It was also redundant: `render.Plan` already runs `ValidateComponentID` over every
+component id at the single dispatch waist, before any id is joined into a
+destination path. The lesson is the codebase's own: one guard at one waist beats
+two that can drift.
+
+**§5 said the residual collision keeps its detector in the codex adapter. It
+moved to `checkProjectedConflicts`.** The codex check only fires for codex; every
+other agent fell through to the render pipeline, whose message can name neither
+origin (a `FileOp` carries no provenance) — and where two colliding components
+with *identical* bytes were silently deduped, dropping one with no report at all.
+That silent drop is the real bug; the loud one was merely unactionable.
+`checkProjectedConflicts` is where the codebase already guards cross-source id
+collisions for MCP/LSP, it runs with provenance in hand, and it has the
+strict-vs-lenient split this needs. Codex keeps its narrower frontmatter-vs-stem
+check as a backstop.
+
+**Also broadened during review:** the capture refusal covers MCP servers, LSP
+servers, and hooks (hooks per *handler*, since one canonical `hooks/<event>.toml`
+holds handlers from many sources), not just the three name-keyed kinds; and the
+"Known adjacent gap" below was closed rather than deferred.

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -266,8 +267,23 @@ func (w *Writer) Delete(op adapter.FileOp) error {
 	}
 	orphan := isOrphanReclaimable(op.SourceID)
 	if orphan {
-		if err := w.backupOrphanIfDrifted(op); err != nil {
+		preserved, err := w.backupOrphanIfDrifted(op)
+		if err != nil {
 			return err
+		}
+		if !preserved {
+			// The destination could not be read, so we cannot tell whether it
+			// holds an unsynced hand-edit. SKIP this one delete rather than
+			// perform it blind — but do NOT fail the run. Refusing the delete is
+			// what protects the data; refusing the whole apply would let a single
+			// unreadable destination (a stray directory at the path, a
+			// permissions mishap) wedge every other agent's writes with no way
+			// past it, and a lingering orphan is not data loss. The warning is
+			// how the user learns to clean it up.
+			slog.Warn("skipped reclaiming an orphaned destination: it could not be read, "+
+				"so agentsync cannot rule out an unsynced edit; remove it by hand once you have checked it",
+				"path", op.Path, "agent", w.agent)
+			return nil
 		}
 	}
 	if err := os.Remove(op.Path); err != nil && !os.IsNotExist(err) {
@@ -280,38 +296,48 @@ func (w *Writer) Delete(op adapter.FileOp) error {
 }
 
 // backupOrphanIfDrifted copies a soon-to-be-deleted component file to the backup
-// root iff its on-disk content is not exactly what agentsync last wrote (i.e.
+// root iff its on-disk content is not exactly what agentsync last wrote.
+// preserved reports whether the caller may now safely delete: false means the
+// destination could not be READ, so no claim about its contents can be made and
+// the delete must be skipped (not failed — see Delete). An error is returned only
+// when the file WAS readable and drifted but the backup could not be written,
+// which genuinely must stop the run.
+//
+// The original contract (i.e.
 // the user hand-edited it). A file matching our last-applied hash is our own
 // output and is removed without a backup; anything else is preserved first so an
 // orphan delete can never silently destroy an unsynced edit.
-func (w *Writer) backupOrphanIfDrifted(op adapter.FileOp) error {
+func (w *Writer) backupOrphanIfDrifted(op adapter.FileOp) (preserved bool, err error) {
 	existing, err := os.ReadFile(op.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil // already gone: nothing to preserve
+			return true, nil // already gone: nothing to preserve, safe to proceed
 		}
 		// Any OTHER read failure (EACCES, EIO, EISDIR) means we cannot tell
 		// whether this destination holds an unsynced user edit — and the caller
 		// deletes immediately after. Treating that as "nothing to preserve" would
 		// destroy a drifted file with no backup, which is exactly what the
-		// never-destroy-unsynced-content invariant forbids. Refuse the delete
-		// instead; a reclaim is convergence, never worth data loss.
-		return fmt.Errorf("cannot verify %s before reclaiming it (a hand-edit could be lost): %w", op.Path, err)
+		// never-destroy-unsynced-content invariant forbids. Report "not
+		// preserved" so the caller skips the delete; the read error itself is not
+		// returned, because it is not a reason to fail the run (see Delete).
+		return false, nil
 	}
 	stateKey := fmt.Sprintf("%s:%s:%s:%s", w.agent, w.scope.String(),
 		paths.HomeRelative(w.userHome, w.project), paths.HomeRelative(w.userHome, op.Path))
 	if entry, owned := w.state.Files[stateKey]; owned {
 		sum := sha256.Sum256(existing)
 		if hex.EncodeToString(sum[:]) == entry.SHA256 {
-			return nil // unchanged since our last apply — safe to delete
+			return true, nil // unchanged since our last apply — safe to delete
 		}
 	}
-	dest, err := w.backup(op.Path, existing)
-	if err != nil {
-		return err
+	dest, berr := w.backup(op.Path, existing)
+	if berr != nil {
+		// A backup we cannot write IS a reason to fail: proceeding would delete
+		// a known-drifted file with nothing preserved.
+		return false, berr
 	}
 	w.reports = append(w.reports, CollisionReport{Agent: w.agent, Path: op.Path, BackupTo: dest})
-	return nil
+	return true, nil
 }
 
 // pruneEmptySkillDirs removes now-empty directories left after deleting a skill

@@ -29,6 +29,7 @@ var walkerCovered = map[string]map[string]bool{
 		"Event":   false, // event name (e.g. PreToolUse)
 		"Matcher": false, // glob/regex, not a credential
 		"Type":    false, // always "command"
+		"Plugin":  false, // derived provenance; see MCPServer.Plugin below
 	},
 	"LSPServerSpec": {
 		"Command": true,
