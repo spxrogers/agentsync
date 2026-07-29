@@ -462,8 +462,11 @@ label and go to **stderr**:
 ⚠ WARN   plugin component frontmatter is not strict YAML; parsed leniently
          path=~/.agentsync/.state/cache/plugins/pr-review-toolkit/agents/silent-failure-hunter.md
 ℹ INFO   scope: project (~/dev/app)
-• DEBUG  (only with --verbose)
 ```
+
+A fourth level, `• DEBUG`, exists in the vocabulary and is what `--verbose` unlocks,
+but nothing in agentsync currently logs at that level — so you will not see one
+today. It is the level a future library-side diagnostic would use.
 
 The label is a glyph plus the level word, padded so message text always starts
 at the same column; wrapped detail lines hang under it. When color is on the
@@ -480,10 +483,10 @@ all results, which is why a warning never lands in the middle of one. A success
 outcome leads with an emoji chosen by what happened:
 
 ```
-🎉 applied: 12 ops across 3 agents
+🎉 applied: 12 ops
 ✅ added agent: claude
 🧹 removed mcp server: github
-📥 imported 4 skills, 2 commands from claude
+📥 imported 6 items from claude
 🔙 reverted ~/.claude to checkpoint a1b2c3d
 ✨ agentsync home initialized at ~/.agentsync
 ```

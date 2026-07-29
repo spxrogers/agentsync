@@ -27,8 +27,8 @@ func detachAfter(t *testing.T) {
 // var (written in PersistentPreRunE, read from main) be deleted entirely.
 //
 // This pins that mechanism. It calls colorModeOf on the executed root exactly as
-// Execute does; Execute itself is then a four-line shim over this plus the
-// already-tested ReportErrorTo, and writes to the real os.Stderr, which is why it
+// Execute does; Execute itself is then a thin shim over this plus the
+// already-tested reportErrorTo, and writes to the real os.Stderr, which is why it
 // is not driven directly here.
 func TestColorModeIsReadableFromAnExecutedRoot(t *testing.T) {
 	tests := []struct {

@@ -482,3 +482,87 @@ func TestSameWriterSurvivesUncomparableWriters(t *testing.T) {
 		})
 	}
 }
+
+// Each level's COLOUR is part of the vocabulary, not an implementation detail: red
+// vs yellow is the fastest signal distinguishing a failure from a warning, which is
+// the entire complaint behind #211.
+//
+// Previously only WARN's yellow was asserted anywhere. A test that checked ERROR
+// was red got deleted as "subsumed" by one asserting merely that SOME ANSI was
+// emitted — so recolouring ERROR to green passed the whole suite. Pin all four.
+func TestEachLevelHasItsOwnColour(t *testing.T) {
+	tests := []struct {
+		level Level
+		code  string
+		name  string
+	}{
+		{LevelError, codeRed, "red"},
+		{LevelWarn, codeYellow, "yellow"},
+		{LevelInfo, codeCyan, "cyan"},
+		{LevelDebug, codeFaint, "faint"},
+	}
+	seen := map[string]Level{}
+	for _, tc := range tests {
+		t.Run(tc.level.String(), func(t *testing.T) {
+			var buf bytes.Buffer
+			New(&buf, &buf, ColorAlways).Diagf(tc.level, "msg")
+			if got := buf.String(); !strings.Contains(got, tc.code) {
+				t.Fatalf("%v should be %s (%q); got %q", tc.level, tc.name, tc.code, got)
+			}
+		})
+		// No two levels may share a colour — that would defeat the point.
+		if prev, dup := seen[tc.code]; dup {
+			t.Errorf("%v and %v share colour %s", prev, tc.level, tc.name)
+		}
+		seen[tc.code] = tc.level
+	}
+}
+
+// WarnWriter's input comes from the adapter and capture packages, which cannot
+// call ui.Sanitize (they must not import ui — the reason the "warning: " sentinel
+// exists). So ui must sanitize here or nothing does.
+//
+// This replaced a *documented convention* that every emitter use %q, which was
+// already violated at the moment it was written down.
+func TestWarnWriterSanitizesAdapterText(t *testing.T) {
+	var dest bytes.Buffer
+	p := New(&dest, &dest, ColorNever)
+	w := NewWarnWriter(&dest, p)
+
+	// A hostile native-config id: an OSC title-set sequence and a CR that would
+	// rewind over the label.
+	fmt.Fprintf(w, "warning: MCP server %s is odd\n", "srv\x1b]0;pwned\x07\rFORGED")
+
+	got := dest.String()
+	for _, bad := range []string{"\x1b]", "\x07", "\r"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("control byte %q reached the terminal: %q", bad, got)
+		}
+	}
+	if !strings.HasPrefix(got, "⚠ WARN") {
+		t.Fatalf("label lost: %q", got)
+	}
+	// Sanitized, not blanked: the readable part survives.
+	if !strings.Contains(got, "FORGED") || !strings.Contains(got, "srv") {
+		t.Fatalf("body was blanked rather than sanitized: %q", got)
+	}
+	// Exactly one line — a CR/LF in adapter text must not forge a second diagnostic.
+	if n := strings.Count(got, "\n"); n != 1 {
+		t.Fatalf("want exactly 1 line, got %d: %q", n, got)
+	}
+}
+
+// The passthrough branch must stay verbatim: it carries our OWN already-styled
+// lines (importIO's INFO notes), whose ANSI sanitizing would strip.
+func TestWarnWriterPassthroughKeepsOurOwnStyling(t *testing.T) {
+	var dest bytes.Buffer
+	p := New(&dest, &dest, ColorAlways)
+	w := NewWarnWriter(&dest, p)
+
+	styled := LevelInfo.Label(p) + "  a pre-styled note\n"
+	_, _ = w.Write([]byte(styled))
+
+	if got := dest.String(); got != styled {
+		t.Fatalf("a pre-styled passthrough line was altered:\ngot:  %q\nwant: %q", got, styled)
+	}
+}

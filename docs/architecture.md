@@ -1077,7 +1077,7 @@ three unrelated renderings coexisting —
 All three now converge. `ui.Level` owns the label; `ui.SlogHandler` renders slog
 records through it and `internal/log` installs it as the process default from the
 root `PersistentPreRunE`; `cli.Execute` returns the process exit code and prints the
-terminal error as an `ERROR` diagnostic through `ReportErrorTo` — owning the whole
+terminal error as an `ERROR` diagnostic — owning the whole
 invocation is what lets it read the resolved `--color` flag off the still-in-scope
 root command instead of carrying it across the `main` boundary in package state. A `slog.Warn` from `internal/marketplace`, an adapter's
 `warning: ` line through `ui.WarnWriter`, and a command's `p.Warnf` produce

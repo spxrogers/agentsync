@@ -14,8 +14,9 @@ import (
 	"github.com/spxrogers/agentsync/internal/ui"
 )
 
-// exitCodeOf mirrors main()'s error→exit-code mapping: 0 for nil, the ExitCoder
-// code for the quiet --exit-code sentinel, else 1 for a generic error.
+// exitCodeOf mirrors the error→exit-code mapping that cli.Execute applies (via
+// reportErrorTo): 0 for nil, the ExitCoder code for the quiet --exit-code
+// sentinel, else 1 for a generic error. main() no longer maps anything itself.
 func exitCodeOf(err error) int {
 	if err == nil {
 		return 0

@@ -40,6 +40,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"strings"
 
 	"golang.org/x/term"
 
@@ -461,11 +462,35 @@ func (s *WarnWriter) emit(line []byte) {
 		return
 	}
 	rest := line[len(warnLinePrefix):]
+	// Sanitize the BODY. This writer's input comes from the adapter and capture
+	// packages, which cannot call ui.Sanitize themselves — they must not import ui,
+	// which is the whole reason the "warning: " sentinel exists — so if ui does not
+	// sanitize here, nothing in the pipeline does.
+	//
+	// This used to rely on every emitter interpolating untrusted values with %q.
+	// That convention was ALREADY violated when it was written down
+	// (internal/adapter/continuedev/ingest.go quoted a native-config id twice with
+	// %q and once with %s on the same line), which is the argument for a backstop
+	// over a documented requirement. %q at the emitters remains good practice —
+	// it keeps the value legible — but it is no longer load-bearing.
+	//
+	// Only the labeled branch is sanitized; the passthrough branch above must stay
+	// verbatim because it carries OUR OWN already-styled lines (importIO's INFO
+	// notes), whose ANSI this would otherwise strip.
+	//
+	// Sanitize drops newlines rather than escaping them, which is right here: a
+	// control byte in adapter text must not be able to forge what looks like a
+	// second, separate diagnostic line.
+	//
 	// styleForDiag, not s.p directly: this writer is constructed over p.Err, and
 	// taking the Out decision meant `agentsync import 2>err.log` from a terminal
 	// wrote ANSI into the file — the exact leak the per-stream split exists to
 	// close, and the one that made this path diverge from p.Warnf.
-	fmt.Fprintf(s.w, "%s  %s", LevelWarn.Label(s.p.styleForDiag(s.w)), rest)
+	body, nl := string(rest), ""
+	if strings.HasSuffix(body, "\n") {
+		body, nl = strings.TrimSuffix(body, "\n"), "\n"
+	}
+	fmt.Fprintf(s.w, "%s  %s%s", LevelWarn.Label(s.p.styleForDiag(s.w)), Sanitize(body), nl)
 }
 
 func spaces(n int) string {

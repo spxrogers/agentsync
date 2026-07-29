@@ -261,3 +261,37 @@ func TestSlogHandlerReportsWriteErrors(t *testing.T) {
 type failingWriter struct{ err error }
 
 func (f failingWriter) Write([]byte) (int, error) { return 0, f.err }
+
+// TestSlogHandlerMutexIsLoadBearing is the companion to the test above, and exists
+// because that one CANNOT detect a missing lock: its writeRecorder takes its own
+// mutex, so `-race` sees a properly synchronized writer no matter what the handler
+// does. Deleting h.mu.Lock()/Unlock() left it green.
+//
+// This one writes into a bare *bytes.Buffer shared across goroutines with NO
+// external synchronization, so the handler's own lock is the only thing making the
+// writes safe. Under `-race` (which CI runs), removing that lock is a reported data
+// race here.
+func TestSlogHandlerMutexIsLoadBearing(t *testing.T) {
+	var unsynchronized bytes.Buffer // deliberately NOT guarded by the test
+	p := New(io.Discard, io.Discard, ColorNever)
+	lg := slog.New(NewSlogHandler(&unsynchronized, p, slog.LevelInfo))
+
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			sub := lg.With("g", g)
+			for i := 0; i < 25; i++ {
+				sub.Warn("racy record", "i", i)
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	// Every record still landed intact — the lock serializes whole records, so no
+	// write is torn even though the buffer itself is unguarded.
+	if n := strings.Count(unsynchronized.String(), "⚠ WARN"); n != 8*25 {
+		t.Fatalf("got %d labeled records, want %d", n, 8*25)
+	}
+}

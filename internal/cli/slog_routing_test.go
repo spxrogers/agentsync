@@ -181,3 +181,60 @@ func mustJSON(t *testing.T, v any) string {
 	}
 	return string(b)
 }
+
+// TestSuccessAndDiagUseTheRightStreams pins the PR's HEADLINE rule at the helper
+// that carries it for ~25 call sites across agent/check/init/mcp/plugin/secrets:
+// `success` writes a RESULT to stdout, `diag` writes a DIAGNOSTIC to stderr.
+//
+// It was previously unpinned in the worst possible way — swapping BOTH helpers'
+// streams simultaneously left `go test ./internal/cli/...` completely green.
+// `runCLI` merges stdout and stderr into one buffer, so no test built on it can
+// see a stream swap; only `runCLISplit` can, and none asserted on these helpers.
+//
+// The fixture is a real command pair rather than a synthetic one: `agent add
+// claude` succeeds (a ✅ result), and `agent add codex` additionally warns that the
+// codex binary is not on PATH (a WARN diagnostic) — so one invocation exercises
+// both helpers and both streams.
+func TestSuccessAndDiagUseTheRightStreams(t *testing.T) {
+	testenv.RequireContainer(t)
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp, "NO_COLOR": "1"}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, err := runCLISplit(t, env, "agent", "add", "claude")
+	if err != nil {
+		t.Fatalf("agent add claude: %v\nstderr:\n%s", err, stderr)
+	}
+	// The success RESULT belongs on stdout, with its emoji and no level label.
+	if !strings.Contains(stdout, ui.EmojiSuccess+" added agent: claude") {
+		t.Errorf("success line missing from stdout: %q", stdout)
+	}
+	if strings.Contains(stderr, "added agent") {
+		t.Errorf("success line leaked onto stderr: %q", stderr)
+	}
+	for _, word := range []string{"INFO", "WARN", "ERROR", "DEBUG"} {
+		if strings.Contains(stdout, word) {
+			t.Errorf("a %s level label appeared on stdout: %q", word, stdout)
+		}
+	}
+
+	// codex is genuinely absent from PATH in the test container, so `agent add`
+	// emits a WARN through `diag` — which belongs on stderr.
+	stdout2, stderr2, err := runCLISplit(t, env, "agent", "add", "codex")
+	if err != nil {
+		t.Fatalf("agent add codex: %v\nstderr:\n%s", err, stderr2)
+	}
+	warnLabel := ui.LevelWarn.Label(ui.New(io.Discard, io.Discard, ui.ColorNever))
+	if !strings.Contains(stderr2, warnLabel) {
+		t.Fatalf("the diag WARN is not on stderr (is `diag` writing to stdout?): stderr=%q stdout=%q", stderr2, stdout2)
+	}
+	if strings.Contains(stdout2, warnLabel) || strings.Contains(stdout2, "not found on PATH") {
+		t.Errorf("a diagnostic leaked onto stdout: %q", stdout2)
+	}
+	// And the success half of the same invocation still went to stdout.
+	if !strings.Contains(stdout2, ui.EmojiSuccess+" added agent: codex") {
+		t.Errorf("success line missing from stdout: %q", stdout2)
+	}
+}

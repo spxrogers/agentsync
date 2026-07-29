@@ -72,7 +72,7 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				// original (now-foreign) block, and Continue would load both.
 				// Capture it, but tell the user about the duplicate hazard.
 				if id != fallbackID || len(servers) > 1 {
-					fmt.Fprintf(warn, "warning: MCP server %q in block %q: apply renders one %s.yaml per server; remove the original block after import to avoid duplicate definitions\n", id, e.Name(), id)
+					fmt.Fprintf(warn, "warning: MCP server %q in block %q: apply renders one %q.yaml per server; remove the original block after import to avoid duplicate definitions\n", id, e.Name(), id)
 				}
 				spec := IngestMCPSpec(srv)
 				applyBlockHeader(&spec, blockVersion, blockSchema)

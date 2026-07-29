@@ -44,7 +44,7 @@ The binary's `main`. Injects `Version`/`Commit`/`Date` via `-ldflags` and calls
 Wires every cobra subcommand into the root tree and dispatches to handlers; this
 is the only package that depends on nearly all the others.
 - **Key:** `NewRoot() *cobra.Command`, `Execute() int` (returns the process exit
-  code; owns the terminal `✗ ERROR` line via `ReportErrorTo`), `Version`/`Commit`/`Date`.
+  code and owns the terminal `✗ ERROR` line), `Version`/`Commit`/`Date`.
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,
   `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
   `mcp {add,remove,list,enable,disable}`,
@@ -529,15 +529,25 @@ caller can pass pre-styled text (the upgrade-notice banner composes
 `p.Bold`/`p.Yellow` fragments into a `Warnf`) without having its own escape codes
 stripped.
 
-`WarnWriter` sits between those two cases and is worth naming explicitly, because
-it looks like the first and behaves like the second: its input comes from the
-adapter and capture packages, which *cannot* call `ui.Sanitize` (they must not
-import `ui` — that constraint is the reason the `warning: ` sentinel exists). It
-does not sanitize. What holds today is that every adapter emitter interpolates
-untrusted values with `%q`, which escapes control bytes — a real mitigation, but an
-incidental one. A new emitter that used `%s` for a config-derived value would open
-a hole, so **an emitter writing into a `WarnWriter` must use `%q` for anything
-config-derived.**
+`WarnWriter` is the third self-sanitizing site, for the same reason as the other
+two: its input comes from the adapter and capture packages, which *cannot* call
+`ui.Sanitize` (they must not import `ui` — that constraint is the reason the
+`warning: ` sentinel exists), so if `ui` does not sanitize, nothing does. It
+sanitizes the message **body** only; the passthrough branch stays verbatim because
+that branch carries agentsync's own already-styled lines, whose ANSI sanitizing
+would strip.
+
+This was briefly documented the other way round — as a *requirement* that every
+emitter interpolate untrusted values with `%q`. That was the wrong disposition, and
+demonstrably so: the convention was **already violated when it was written down**
+(`internal/adapter/continuedev/ingest.go` quoted a native-config MCP id with `%q`
+twice and `%s` once on the same line). A rule that every future emitter must
+remember is not a control; the backstop is. `%q` at the emitters is still good
+practice for legibility, but it is no longer load-bearing.
+
+Note that `%s` on an `untrusted.Text` value — which is how plugin and marketplace
+identity fields are typed — was never a hole: `Text.String()` sanitizes by
+construction. The gap was only ever plain `string` values read out of native config.
 - **Key:** `Printer` (`New`, `Color`, `Section`, colour helpers; color is resolved
   per stream, and the diagnostic writers style for the stream they target);
   `Level` + `Label`; `Errorf`/`Warnf`/`Infof`/`Diagf`/`Fdiagf`;
