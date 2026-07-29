@@ -556,8 +556,10 @@ subagent `name` (or in a filename on Windows).
 
 **Components you write yourself are never renamed.** Anything in your own
 `~/.agentsync/subagents/`, `skills/`, or `commands/` keeps the name you gave it,
-even when an installed plugin ships one by the same name — a plugin can never
-take your name. MCP and LSP servers keep their ids too: two sources claiming one
+even when an installed plugin ships one by the same name. In the rare case where
+a plugin's *derived* name lands on one of yours (`feature-dev` shipping
+`code-reviewer` versus your own `feature-dev-code-reviewer`), agentsync says so
+and names both sides rather than picking a winner. MCP and LSP servers keep their ids too: two sources claiming one
 server id is refused rather than renamed apart, because repointing a trusted
 server's endpoint is a hijack, not a naming clash.
 

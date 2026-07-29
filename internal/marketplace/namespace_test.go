@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
 // TestNamespaceProjected covers the projection-time rename that resolves
@@ -306,6 +307,29 @@ func TestProvenanceInvariant(t *testing.T) {
 			}
 		}
 	}
+	// Guard the guard: a renamed KIND that the fixture leaves empty would
+	// contribute zero checks and quietly satisfy a bare count. Assert that every
+	// slice whose element type carries BaseName — i.e. every renamed kind, present
+	// and future — was actually populated and walked.
+	renamedKinds := 0
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+		if field.Kind() != reflect.Slice {
+			continue
+		}
+		if _, ok := field.Type().Elem().FieldByName("BaseName"); !ok {
+			continue
+		}
+		renamedKinds++
+		if field.Len() == 0 {
+			t.Errorf("%s is a renamed kind but the fixture leaves it empty — "+
+				"this test would pass without ever checking it", v.Type().Field(i).Name)
+		}
+	}
+	if renamedKinds != 3 {
+		t.Fatalf("expected 3 renamed kinds (skills, subagents, commands), found %d — "+
+			"a kind was added or removed and this test needs its fixture extended", renamedKinds)
+	}
 	if checked != 5 {
 		t.Fatalf("expected to check 5 renamed components, checked %d — "+
 			"the reflection walk is not seeing what the fixture provides", checked)
@@ -317,6 +341,7 @@ func TestProvenanceInvariant(t *testing.T) {
 	pr2 := ProjectionResult{
 		MCPServers: []source.MCPServer{{ID: "srv"}},
 		LSPServers: []source.LSPServer{{ID: "gopls"}},
+		Hooks:      []source.Hook{{Event: untrusted.Wrap("PreToolUse"), Matcher: "Bash", Type: "command", Command: "guard"}},
 	}
 	namespaceProjected(&pr2, plugin)
 	if pr2.MCPServers[0].ID != "srv" || pr2.MCPServers[0].Plugin != plugin {
@@ -324,5 +349,39 @@ func TestProvenanceInvariant(t *testing.T) {
 	}
 	if pr2.LSPServers[0].ID != "gopls" || pr2.LSPServers[0].Plugin != plugin {
 		t.Errorf("lsp server must be stamped but not renamed; got %+v", pr2.LSPServers[0])
+	}
+	h := pr2.Hooks[0]
+	if h.Event.Unverified() != "PreToolUse" || h.Matcher != "Bash" || h.Command != "guard" {
+		t.Errorf("a hook must not be rewritten by namespacing; got %+v", h)
+	}
+	if h.Plugin != plugin {
+		t.Errorf("a hook must still be stamped so import can filter it per handler; got %+v", h)
+	}
+}
+
+// TestDedupHooks_KeysOnContentNotProvenance pins the rekey. dedupHooks used to
+// key on the whole source.Hook struct; adding a Plugin field would then have made
+// two byte-identical handlers from different plugins survive as duplicates,
+// rendering the same hook twice.
+//
+// Today namespaceProjected stamps provenance AFTER this runs, so every hook here
+// shares one value and the bug could not fire — which is exactly why it is worth
+// pinning: the ordering is not something a future change should have to know.
+func TestDedupHooks_KeysOnContentNotProvenance(t *testing.T) {
+	mk := func(plugin string) source.Hook {
+		return source.Hook{
+			Event: untrusted.Wrap("PreToolUse"), Matcher: "Bash",
+			Type: "command", Command: "guard", Plugin: plugin,
+		}
+	}
+	got := dedupHooks([]source.Hook{mk("a"), mk("b"), mk("a")})
+	if len(got) != 1 {
+		t.Fatalf("identical handlers must collapse regardless of provenance; got %d: %+v", len(got), got)
+	}
+	// Genuinely different handlers still survive.
+	other := mk("a")
+	other.Command = "different"
+	if got := dedupHooks([]source.Hook{mk("a"), other}); len(got) != 2 {
+		t.Fatalf("distinct handlers must not be collapsed; got %d: %+v", len(got), got)
 	}
 }

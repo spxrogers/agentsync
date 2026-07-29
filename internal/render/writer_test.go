@@ -733,4 +733,30 @@ func TestApply_UnreadableOrphanIsSkippedNotDeleted(t *testing.T) {
 	if data, err := os.ReadFile(live); err != nil || string(data) != "live" {
 		t.Fatalf("the rest of the apply must still land; got %q err=%v", data, err)
 	}
+
+	// The skip must be RETRIED, not forgotten. PruneStaleState drops the state
+	// entry for anything the plan no longer renders, and delete ops are never in
+	// its rendered set — so without the still-on-disk exemption the entry would
+	// vanish here, orphanDeletes could never synthesize the delete again, and the
+	// one warning would never repeat. The stale file would live forever, which is
+	// the leftover-duplicate failure reclamation exists to prevent.
+	stateKey := fmt.Sprintf("claude:user:%s:%s", paths.HomeRelative(tmp, ""), paths.HomeRelative(tmp, orphan))
+	render.PruneStaleState(st, tmp, "claude", adapter.ScopeUser, "", plan.PerAgent["claude"].Ops)
+	if _, stillOwned := st.Files[stateKey]; !stillOwned {
+		t.Fatal("a skipped orphan must keep its state entry so the next apply retries and re-warns")
+	}
+
+	// And once the obstruction is gone, the retry converges: the delete happens.
+	if err := os.Remove(orphan); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(orphan, []byte("now readable"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := render.Apply(plan, reg, st, home, tmp, adapter.ScopeUser, ""); err != nil {
+		t.Fatalf("retry apply: %v", err)
+	}
+	if _, err := os.Stat(orphan); err == nil {
+		t.Fatal("once the destination is readable again, the retry must reclaim it")
+	}
 }

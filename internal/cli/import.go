@@ -1114,7 +1114,7 @@ func importMCP(io *importIO, home string, c source.Canonical, name string) ([]st
 			matched = append(matched, m)
 		}
 	}
-	matched, err := skipPluginProvided(io, "mcp", name, matched, func(m source.MCPServer) string { return m.ID })
+	matched, err := skipPluginProvided(io, "mcp", name, matched, func(m source.MCPServer) string { return m.ID }, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1258,11 +1258,28 @@ func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot string, sc adapter.S
 // destination: its event, matcher, type, and command. It is the join key between
 // a plugin's projected hooks (which carry provenance) and the agent's native
 // ingest (which does not), so import can drop exactly the handlers a plugin
-// contributed and keep the ones the user wrote. The separator is a NUL, which
-// cannot appear in any of the parts, so distinct handlers can never collide into
-// one signature.
+// contributed and keep the ones the user wrote.
+//
+// Parts are LENGTH-PREFIXED rather than joined by a separator. A separator-based
+// signature has to assume the separator cannot occur inside a part, and that
+// assumption does not hold here: a plugin's hooks come from JSON, where "\u0000"
+// is a legal string escape, and Command is carried through verbatim. Under a bare
+// separator, a plugin could therefore craft a handler whose signature equals a
+// user's — and the user's own handler would be silently dropped from import.
+// Length prefixes make the encoding injective for ANY byte content, so that
+// collision is impossible rather than merely unlikely.
 func hookSignature(h source.Hook) string {
-	return strings.Join([]string{h.Event.Unverified(), h.Matcher, h.Type, h.Command}, "\x00")
+	var b strings.Builder
+	for _, part := range []string{h.Event.Unverified(), h.Matcher, h.Type, h.Command} {
+		fmt.Fprintf(&b, "%d:%s", len(part), part)
+	}
+	return b.String()
+}
+
+// hookDisplay renders a handler for a user-facing message: the opaque
+// length-prefixed hookSignature is a join key, not something anyone can act on.
+func hookDisplay(h source.Hook) string {
+	return fmt.Sprintf("%s %s %s", h.Event.Unverified(), h.Matcher, h.Command)
 }
 
 // skipPluginProvided partitions native components into the ones to capture and
@@ -1273,7 +1290,7 @@ func hookSignature(h source.Hook) string {
 // A NAMED import of a plugin-provided component is an error, not a silent
 // no-op: the user asked for that exact component by name and deserves to be told
 // why it cannot be captured, and what to do instead.
-func skipPluginProvided[T any](io *importIO, kind, name string, items []T, nameOf func(T) string) ([]T, error) {
+func skipPluginProvided[T any](io *importIO, kind, name string, items []T, nameOf func(T) string, displayOf func(T) string) ([]T, error) {
 	// Nothing matched → nothing to wrongly capture, so an unusable filter is
 	// harmless here. Checking this FIRST keeps a broken plugin cache from
 	// refusing an import that would not have touched a plugin component anyway.
@@ -1298,14 +1315,17 @@ func skipPluginProvided[T any](io *importIO, kind, name string, items []T, nameO
 			out = append(out, it)
 			continue
 		}
-		// A hook's key is a NUL-joined content signature (hookSignature); render
-		// it with spaces so the message reads as the handler it names rather than
-		// as escape sequences. Every other kind's key is already its display name.
-		display := strings.ReplaceAll(key, "\x00", " ")
+		// For most kinds the key IS the display name. A hook's key is an opaque
+		// length-prefixed signature (hookSignature), so displayOf supplies
+		// something a user can act on instead.
+		display := key
+		if displayOf != nil {
+			display = displayOf(it)
+		}
 		if name != "" {
 			return nil, fmt.Errorf("%s %q is provided by the plugin %q, not hand-authored — importing it "+
 				"would create a canonical copy that collides with the plugin's own on the next apply; "+
-				"change it upstream, or run `agentsync plugin disable %s` to stop projecting it",
+				"change it upstream, or run `agentsync plugin disable %q` to stop projecting it",
 				kind, display, plugin, plugin)
 		}
 		io.warnf("skipping %s %q: it is projected from the plugin %q, so agentsync already manages it "+
@@ -1321,7 +1341,7 @@ func importSkill(io *importIO, home string, c source.Canonical, name string) ([]
 			matched = append(matched, sk)
 		}
 	}
-	matched, err := skipPluginProvided(io, "skill", name, matched, func(sk source.Skill) string { return sk.Name })
+	matched, err := skipPluginProvided(io, "skill", name, matched, func(sk source.Skill) string { return sk.Name }, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1366,7 +1386,7 @@ func importSubagent(io *importIO, home string, c source.Canonical, name string) 
 			matched = append(matched, sa)
 		}
 	}
-	matched, err := skipPluginProvided(io, "subagent", name, matched, func(sa source.Subagent) string { return sa.Name })
+	matched, err := skipPluginProvided(io, "subagent", name, matched, func(sa source.Subagent) string { return sa.Name }, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1404,7 +1424,7 @@ func importCommand(io *importIO, home string, c source.Canonical, name string) (
 			matched = append(matched, cm)
 		}
 	}
-	matched, err := skipPluginProvided(io, "command", name, matched, func(cm source.Command) string { return cm.Name })
+	matched, err := skipPluginProvided(io, "command", name, matched, func(cm source.Command) string { return cm.Name }, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1462,7 +1482,7 @@ func importHook(io *importIO, home string, c source.Canonical, name string) ([]s
 	// plugin contributed one handler would silently drop the user's own. A named
 	// import errors only when EVERY handler for that event is plugin-provided —
 	// otherwise the user's handlers are captured and the plugin's are skipped.
-	kept, err := skipPluginProvided(io, "hook", "", matched, hookSignature)
+	kept, err := skipPluginProvided(io, "hook", "", matched, hookSignature, hookDisplay)
 	if err != nil {
 		return nil, err
 	}
@@ -1514,7 +1534,7 @@ func importLSP(io *importIO, home string, c source.Canonical, name string) ([]st
 			matched = append(matched, ls)
 		}
 	}
-	matched, err := skipPluginProvided(io, "lsp", name, matched, func(ls source.LSPServer) string { return ls.ID })
+	matched, err := skipPluginProvided(io, "lsp", name, matched, func(ls source.LSPServer) string { return ls.ID }, nil)
 	if err != nil {
 		return nil, err
 	}

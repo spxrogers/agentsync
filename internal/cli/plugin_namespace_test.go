@@ -767,6 +767,12 @@ func TestImport_FailsClosedWhenPluginProjectionFails(t *testing.T) {
 	if !strings.Contains(err.Error(), "cannot safely import") {
 		t.Errorf("the refusal should explain itself; got: %v", err)
 	}
+	// Assert the WRAPPED cause too, so an incidental failure (a missing file, a
+	// parse error elsewhere) cannot satisfy this test in place of the tamper the
+	// fixture actually induces.
+	if !strings.Contains(err.Error(), "manifest SHA mismatch") {
+		t.Errorf("the refusal must be caused by the induced tamper; got: %v", err)
+	}
 	// Nothing may have been captured.
 	if _, serr := os.Stat(filepath.Join(tmp, ".agentsync", "subagents", "feature-dev-code-reviewer.md")); serr == nil {
 		t.Fatal("a failed projection must not let a plugin component be captured")

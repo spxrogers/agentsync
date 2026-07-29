@@ -64,14 +64,34 @@ func PruneStaleState(s *state.Targets, userHome, agent string, scope adapter.Sco
 		}
 	}
 
-	for key := range s.Files {
+	for key, entry := range s.Files {
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
 		path := strings.TrimPrefix(key, prefix)
-		if _, ok := currentFiles[path]; !ok {
-			delete(s.Files, key)
+		if _, ok := currentFiles[path]; ok {
+			continue
 		}
+		// Keep tracking a reclaimable destination that is STILL ON DISK.
+		//
+		// apply skips (rather than performs) an orphan delete when it cannot read
+		// the destination first — it cannot rule out an unsynced hand-edit, and
+		// deleting blind would break the never-destroy-unsynced-content
+		// invariant. Pruning the entry anyway would make that skip permanent and
+		// silent: with no state entry, orphanDeletes can never synthesize the
+		// delete again, `status` stops reporting the file, and the one warning
+		// never repeats. The stale file would then live forever — re-creating
+		// exactly the leftover-duplicate failure reclamation exists to prevent.
+		//
+		// So: if the file agentsync owned is still there, agentsync keeps owning
+		// it, and the next apply retries and re-warns. A delete that succeeded
+		// leaves nothing behind, so this is a no-op for the normal path.
+		if isOrphanReclaimable(entry.SourceID) {
+			if _, err := os.Stat(paths.FromHomeRelative(userHome, path)); err == nil {
+				continue
+			}
+		}
+		delete(s.Files, key)
 	}
 	for key := range s.Keys {
 		if !strings.HasPrefix(key, prefix) {

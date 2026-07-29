@@ -73,28 +73,12 @@ func NamespacedComponentName(plugin, base string) string {
 	return plugin + ComponentNamespaceSeparator + base
 }
 
-// NOTE ON VALIDATION — deliberately absent here.
-//
-// An earlier revision validated the DERIVED name against ValidateComponentID at
-// projection time and returned an error. That was wrong twice over:
-//
-//   - It was a SECOND, stricter rune set than the projection's own
-//     validateProjectedName (which permits ':' and control runes), so a plugin
-//     whose component name contained one projected fine before and hard-failed
-//     after — a regression, not a guard.
-//   - loadProjected propagates a projection error regardless of `lenient`, so
-//     that failure aborted the whole load for the read-only commands
-//     (status/diff/explain) whose entire design is to degrade and SHOW state
-//     rather than refuse.
-//
-// The check was also redundant: render.Plan already runs ValidateComponentID
-// over every component id at the single dispatch waist, before any id is joined
-// into a destination path, and source.Write*/capture guard the write boundary.
-// Adding a copy here bought nothing and could only drift from those. Namespacing
-// prepends a prefix; it cannot make a valid name invalid unless the plugin id
-// itself is malformed, and projectOnePlugin already rejects a plugin id with a
-// path separator or traversal component before any of this runs.
-//
-// Diagnostics that interpolate a derived name use %q, which escapes control and
-// bidi runes, so an unvalidated name cannot smuggle a terminal escape through an
-// error or warning either.
+// Namespacing performs NO validation of the derived name, deliberately. An
+// earlier revision did, and it was a regression: the check used a stricter rune
+// set than the projection's own validateProjectedName, and loadProjected
+// propagates a projection error regardless of `lenient`, so it took down the
+// read-only commands whose whole design is to degrade and show state. The name
+// safety lives downstream at the single dispatch waist, where render.Plan runs
+// ValidateComponentID over every component id before any of them is joined into
+// a destination path. See the "Amendments after review" section of
+// docs/superpowers/specs/2026-07-28-plugin-component-namespacing-design.md.

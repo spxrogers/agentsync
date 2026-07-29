@@ -50,7 +50,7 @@ type reconcileItem struct {
 	// pluginOwner is the plugin id providing this component, empty for a
 	// hand-authored one. Write-back is refused for a plugin-provided component:
 	// see writeBackItem. Set for both shapes — whole-file items via the
-	// component SourceID, key-level MCP/LSP items via pluginOwnerForPointer.
+	// component SourceID, key-level MCP/LSP items via pluginOwnerForKeyItem.
 	pluginOwner string
 }
 
@@ -471,7 +471,7 @@ func pluginProvidedSourceIDs(c source.Canonical) map[string]string {
 	//                         server into one config file, so the op carries the
 	//                         section-wide SourceID "mcp/* (multiple)" and only
 	//                         the item's JSON pointer identifies the server).
-	//                         Resolved by pluginOwnerForPointer.
+	//                         Resolved by pluginOwnerForKeyItem.
 	//   "<kind>/<id>.toml"  — the whole-file shape. Continue renders ONE FILE PER
 	//                         SERVER (.continue/mcpServers/<id>.yaml) with the
 	//                         canonical SourceID "mcp/<id>.toml", so its items go
@@ -511,36 +511,51 @@ func pluginProvidedSourceIDs(c source.Canonical) map[string]string {
 	return out
 }
 
-// pluginOwnerForPointer resolves the plugin owning the component a key-level
-// item points at, or "" for a hand-declared one.
+// pluginOwnerForKeyItem resolves the plugin owning the MCP/LSP server a
+// key-level item points at, or "" for a hand-declared one.
 //
-// It deliberately does NOT switch on the pointer's root key. Those keys are
-// per-agent DATA, not a fixed set: alongside /mcpServers (claude, cursor,
-// gemini, …), /mcp (opencode), and /mcp_servers (codex), the generic tier
-// carries `RootKey` in a table that grows with every agent added —
-// /context_servers (Zed), /servers (VS Code), /amp.mcpServers (Amp). A
-// hand-maintained allowlist silently drops the refusal for every key someone
-// forgets to add, which is exactly the failure this guard exists to prevent.
+// The component KIND comes from the op's SourceID, not from the pointer's root
+// key, for two independent reasons:
 //
-// So it identifies the component by its ID — the pointer's second segment — and
-// probes it against each kind. A false positive would need a plugin to provide a
-// server whose id equals an unrelated section's key, and would only ever
-// over-refuse (the safe direction). Segments are JSON-pointer encoded, so ~1/~0
-// are decoded first (RFC 6901 §3) — an id containing '/' would otherwise never
-// match.
-func pluginOwnerForPointer(ptr string, owners map[string]string) string {
+//   - Root keys are per-agent DATA, not a fixed set. Alongside /mcpServers
+//     (claude, cursor, gemini, …), /mcp (opencode) and /mcp_servers (codex), the
+//     generic tier carries `RootKey` in a table that grows with every agent added
+//     (/context_servers, /servers, /amp.mcpServers). A hand-maintained allowlist
+//     silently drops the refusal for each one someone forgets to add.
+//   - Guessing the kind by probing the id against both maps is WRONG, not merely
+//     imprecise. A plugin shipping an LSP server whose id is a common MCP name
+//     ("github", "postgres") would make an /mcpServers/github pointer resolve to
+//     that plugin, refusing write-back of the user's OWN hand-declared MCP server
+//     and blaming a plugin that does not own it. Over-refusal here IS the harm.
+//
+// Every key-merge op carries a section-wide SourceID naming its kind —
+// "mcp/* (multiple)", "hooks/* (multiple)" — so the kind is already unambiguous
+// at the call site.
+//
+// Hooks resolve to "" by construction: hook write-back is not implemented
+// (writeBackKeyItem errors for every non-MCP pointer), so pluginProvidedSourceIDs
+// registers no hook keys for this lookup to find. Import is where plugin hooks
+// are filtered, at handler granularity. Should hook write-back ever be
+// implemented, this returns "" rather than silently permitting the capture — the
+// empty map is the thing to fix, and it is one place.
+//
+// Pointer segments are JSON-pointer encoded, so ~1/~0 are decoded first
+// (RFC 6901 §3) — an id containing '/' would otherwise never match.
+func pluginOwnerForKeyItem(sourceID, ptr string, owners map[string]string) string {
+	var kind string
+	switch {
+	case strings.HasPrefix(sourceID, "mcp/"):
+		kind = "mcp"
+	case strings.HasPrefix(sourceID, "lsp/"):
+		kind = "lsp"
+	default:
+		return "" // hooks, or a shape with no per-entry provenance
+	}
 	parts := strings.SplitN(strings.TrimPrefix(ptr, "/"), "/", 3)
 	if len(parts) < 2 {
 		return ""
 	}
-	root, id := unescapeJSONPointer(parts[0]), unescapeJSONPointer(parts[1])
-	if root == "hooks" {
-		return owners["hook/"+id]
-	}
-	if p := owners["mcp/"+id]; p != "" {
-		return p
-	}
-	return owners["lsp/"+id]
+	return owners[kind+"/"+unescapeJSONPointer(parts[1])]
 }
 
 // unescapeJSONPointer decodes one JSON-pointer reference token (RFC 6901 §3):
@@ -590,7 +605,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 						srcText:     marshalPretty(getPointerValue(ours, ptr)),
 						dstText:     marshalPretty(getPointerValue(final, ptr)),
 						hasText:     true,
-						pluginOwner: pluginOwnerForPointer(ptr, pluginOwners),
+						pluginOwner: pluginOwnerForKeyItem(op.SourceID, ptr, pluginOwners),
 					})
 				}
 			} else {
@@ -983,7 +998,7 @@ func writeBackItem(cmd *cobra.Command, home string, it reconcileItem) error {
 		return fmt.Errorf("write-back for %s is unsafe: this component is projected from the plugin %q, "+
 			"so it has no canonical file to write into. Capturing it would create one that collides with "+
 			"the plugin's own on the next apply. Use [o]verride to restore the plugin's version, change it "+
-			"upstream, or run `agentsync plugin disable %s` to stop projecting it",
+			"upstream, or run `agentsync plugin disable %q` to stop projecting it",
 			what, it.pluginOwner, it.pluginOwner)
 	}
 	if it.ptr != "" {

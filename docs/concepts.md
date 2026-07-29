@@ -192,8 +192,9 @@ every enabled plugin's components into one destination directory, two plugins
 shipping a same-named component would render two files at one path — so a
 plugin-provided subagent, skill, or command renders as `<plugin>-<name>`:
 `feature-dev`'s `code-reviewer` lands as `feature-dev-code-reviewer`. Components
-you hand-author in `~/.agentsync/` are never renamed, so a plugin can never take
-a name you chose. See
+you hand-author in `~/.agentsync/` are never renamed. A plugin's derived name can
+still land on one of yours (the mapping is not injective); agentsync reports that
+clash naming both sides rather than letting either win silently. See
 [architecture.md § Plugin component namespacing](architecture.md#plugin-component-namespacing).
 
 ### Translation report & coverage

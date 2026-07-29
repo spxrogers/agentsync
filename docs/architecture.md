@@ -342,8 +342,11 @@ name) onto the component. Three consequences worth knowing:
   Claude's Agent Skills require the frontmatter `name` to match the skill
   directory. An absent `name` stays absent, so this never invents an identity the
   upstream artifact did not declare.
-- **Hand-authored components are never renamed**, so a plugin can never take a
-  name the user chose. `Plugin`/`BaseName` are empty for them.
+- **Hand-authored components are never renamed.** `Plugin`/`BaseName` are empty
+  for them. Note this is not the same as "a plugin can never take your name": the
+  derived name is not injective, so a plugin CAN land on a name you chose. That
+  residual is caught and reported by `checkProjectedConflicts` (below), never
+  silently resolved in the plugin's favour.
 
 The separator is a hyphen because Claude Code documents a subagent `name` as a
 "Unique identifier using lowercase letters and hyphens" — its familiar
@@ -672,15 +675,20 @@ serialized, each classified non-secret in `walkerCovered`).
 event because a plugin contributed one would silently drop the user's own. The
 join key is a content signature (event + matcher + type + command), which is what
 lets import match a plugin's projected handler against the agent's native ingest —
-the ingest carries no provenance at all. Reconcile needs no hook case: key-level
-write-back is implemented for MCP servers only and already errors for every other
-pointer shape.
+the ingest carries no provenance at all. Reconcile resolves hooks to no owner by
+construction: key-level write-back is implemented for MCP servers only and
+already errors for every other pointer shape, so no hook keys are registered for
+it to find. The lookup still returns "" explicitly rather than falling through,
+so implementing hook write-back later cannot silently permit the capture.
 
-The pointer lookup does **not** switch on the native root key. Those keys are
-per-agent data (`generic.MCPTarget.RootKey` grows with every agent added:
-`/context_servers`, `/servers`, `/amp.mcpServers`), so a hand-maintained allowlist
-would silently drop the refusal for each one someone forgets. It matches on the
-component id instead. Continue is the one adapter that renders MCP as a
+The key-item lookup takes the component KIND from the op's SourceID, never from
+the pointer's root key. Root keys are per-agent data (`generic.MCPTarget.RootKey`
+grows with every agent added: `/context_servers`, `/servers`, `/amp.mcpServers`),
+so a hand-maintained allowlist silently drops the refusal for each one someone
+forgets. Probing the id against both kinds instead would be worse than imprecise:
+a plugin shipping an LSP server named `github` would make an `/mcpServers/github`
+pointer resolve to it, refusing write-back of the user's own MCP server and
+blaming a plugin that does not own it. Continue is the one adapter that renders MCP as a
 **whole-file** op (one file per server), so servers are registered under both the
 bare `mcp/<id>` key and the `mcp/<id>.toml` SourceID form.
 

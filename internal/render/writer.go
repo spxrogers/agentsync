@@ -267,11 +267,11 @@ func (w *Writer) Delete(op adapter.FileOp) error {
 	}
 	orphan := isOrphanReclaimable(op.SourceID)
 	if orphan {
-		preserved, err := w.backupOrphanIfDrifted(op)
+		safeToDelete, err := w.backupOrphanIfDrifted(op)
 		if err != nil {
 			return err
 		}
-		if !preserved {
+		if !safeToDelete {
 			// The destination could not be read, so we cannot tell whether it
 			// holds an unsynced hand-edit. SKIP this one delete rather than
 			// perform it blind — but do NOT fail the run. Refusing the delete is
@@ -296,18 +296,17 @@ func (w *Writer) Delete(op adapter.FileOp) error {
 }
 
 // backupOrphanIfDrifted copies a soon-to-be-deleted component file to the backup
-// root iff its on-disk content is not exactly what agentsync last wrote.
-// preserved reports whether the caller may now safely delete: false means the
-// destination could not be READ, so no claim about its contents can be made and
-// the delete must be skipped (not failed — see Delete). An error is returned only
-// when the file WAS readable and drifted but the backup could not be written,
-// which genuinely must stop the run.
+// root iff its on-disk content is not exactly what agentsync last wrote (i.e. the
+// user hand-edited it). A file matching our last-applied hash is our own output
+// and is removed without a backup; anything else is preserved first, so an orphan
+// delete can never silently destroy an unsynced edit.
 //
-// The original contract (i.e.
-// the user hand-edited it). A file matching our last-applied hash is our own
-// output and is removed without a backup; anything else is preserved first so an
-// orphan delete can never silently destroy an unsynced edit.
-func (w *Writer) backupOrphanIfDrifted(op adapter.FileOp) (preserved bool, err error) {
+// safeToDelete tells the caller whether it may now remove the file. It is false
+// in exactly one case: the destination could not be READ, so no claim about its
+// contents can be made and the delete must be skipped (skipped, not failed — see
+// Delete). An error is returned only when the file WAS readable and drifted but
+// the backup could not be written, which genuinely must stop the run.
+func (w *Writer) backupOrphanIfDrifted(op adapter.FileOp) (safeToDelete bool, err error) {
 	existing, err := os.ReadFile(op.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
