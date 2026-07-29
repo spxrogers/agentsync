@@ -566,3 +566,55 @@ func TestWarnWriterPassthroughKeepsOurOwnStyling(t *testing.T) {
 		t.Fatalf("a pre-styled passthrough line was altered:\ngot:  %q\nwant: %q", got, styled)
 	}
 }
+
+// A caller may pre-style the text it hands a diagnostic writer (the upgrade-notice
+// banner composes p.Bold/p.Yellow fragments). Those helpers resolve colour from the
+// OUT decision, because a style helper cannot know which stream its result will be
+// written to — so on a split-stream printer they embed ANSI into a body bound for a
+// plain stream. The per-stream fix originally covered only the LABEL, leaving
+// `apply 2>err.log` from a terminal still leaking escapes into the file.
+func TestPreStyledBodyIsStrippedOnAPlainStream(t *testing.T) {
+	var out, errb bytes.Buffer
+	p := splitStreamPrinter(&out, &errb) // color=true (Out), colorErr=false (Err)
+
+	// The real gitbackup call shape: a bolded fragment inside an INFO on stderr.
+	p.Infof("started a %s git backup of %s.", p.Bold("local-only"), "/x/.claude")
+	if got := errb.String(); strings.Contains(got, "\x1b[") {
+		t.Fatalf("pre-styled body leaked ANSI onto the plain Err stream: %q", got)
+	}
+	if !strings.Contains(errb.String(), "local-only") {
+		t.Fatalf("stripping removed the text, not just the escapes: %q", errb.String())
+	}
+
+	// Detailf too — the upgrade banner's body lines go through it.
+	errb.Reset()
+	p.Detailf("%s %s", p.Yellow(GlyphArrow), p.Bold("since 0.11.0 —"))
+	if got := errb.String(); strings.Contains(got, "\x1b[") {
+		t.Fatalf("pre-styled detail line leaked ANSI: %q", got)
+	}
+
+	// And the mirror: a colour-capable stream KEEPS the caller's styling.
+	out.Reset()
+	p.Fdiagf(&out, LevelInfo, "kept %s", p.Bold("bold"))
+	if !strings.Contains(out.String(), "\x1b[1m") {
+		t.Fatalf("a colour-capable stream must keep pre-styled text: %q", out.String())
+	}
+}
+
+func TestStripSGRLeavesEverythingElseAlone(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"plain", "plain"},
+		{"\x1b[1mbold\x1b[0m", "bold"},
+		{"a\nb", "a\nb"},                                 // newlines survive
+		{"\x1b[1ma\n\x1b[31mb\x1b[0m", "a\nb"},           // across lines
+		{"\x1b[38;5;200mfancy\x1b[0m", "fancy"},          // multi-param
+		{"\x1b[1m", ""},                                  // trailing sequence
+		{"tail\x1b[", "tail"},                            // unterminated: dropped
+		{"\x1b]0;title\x07keep", "\x1b]0;title\x07keep"}, // OSC is not CSI; Sanitize's job
+	}
+	for _, tc := range tests {
+		if got := stripSGR(tc.in); got != tc.want {
+			t.Errorf("stripSGR(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

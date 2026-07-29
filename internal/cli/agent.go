@@ -438,7 +438,13 @@ func agentRemoveRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if _, ok := agents[name]; !ok {
-		diag(cmd, ui.LevelInfo, "agent %s not registered", name)
+		// A RESULT, not a diagnostic — and on the same stream as `add`'s
+		// already-registered line, which is its exact mirror. Both are the
+		// idempotent no-op case: the desired state already holds, the command
+		// succeeded, and nothing about the run needs flagging. Splitting the two
+		// across stdout and stderr (as this briefly did) means a script that reads
+		// one has to read the other from somewhere else.
+		success(cmd, ui.EmojiSuccess, "agent %s not registered; nothing to remove", name)
 		return nil
 	}
 	delete(agents, name)

@@ -458,8 +458,8 @@ visible at a glance.
 label and go to **stderr**:
 
 ```
-✗ ERROR  render codex: codex subagents "code-reviewer" and "code-reviewer" resolve to the same agent name
-⚠ WARN   plugin component frontmatter is not strict YAML; parsed leniently
+✗ ERROR  render codex: codex subagents feature-dev/code-reviewer and pr-review-toolkit/code-reviewer both resolve to the agent name "code-reviewer"; rename one or set distinct frontmatter names
+⚠ WARN   plugin component frontmatter is not strict YAML; parsed leniently (consider quoting values containing ': ')
          path=~/.agentsync/.state/cache/plugins/pr-review-toolkit/agents/silent-failure-hunter.md
 ℹ INFO   scope: project (~/dev/app)
 ```
@@ -470,7 +470,7 @@ today. It is the level a future library-side diagnostic would use.
 
 The label is a glyph plus the level word, padded so message text always starts
 at the same column; wrapped detail lines hang under it. When color is on the
-label is bold red / yellow / cyan / faint. With color off — piped, redirected,
+label is bold red, bold yellow, or bold cyan; `DEBUG` is faint rather than bold. With color off — piped, redirected,
 `NO_COLOR`, or `--color never` — the glyph and the word carry the whole signal,
 so the level survives into a log file or a CI transcript.
 

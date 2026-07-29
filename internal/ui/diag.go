@@ -168,7 +168,8 @@ func (p *Printer) Diagf(l Level, format string, args ...any) {
 // so a multi-line diagnostic reads as one block rather than one labeled line
 // followed by orphaned text at column 0.
 func (p *Printer) Fdiagf(w io.Writer, l Level, format string, args ...any) {
-	fmt.Fprintf(w, "%s  %s\n", l.Label(p.styleForDiag(w)), indentContinuation(fmt.Sprintf(format, args...)))
+	style := p.styleForDiag(w)
+	fmt.Fprintf(w, "%s  %s\n", l.Label(style), p.bodyFor(style, fmt.Sprintf(format, args...)))
 }
 
 // Detailf writes an unlabeled continuation line to Err, indented to the message
@@ -181,7 +182,7 @@ func (p *Printer) Detailf(format string, args ...any) {
 
 // Fdetailf is Detailf against an explicit writer.
 func (p *Printer) Fdetailf(w io.Writer, format string, args ...any) {
-	fmt.Fprintf(w, "%s%s\n", diagIndent, indentContinuation(fmt.Sprintf(format, args...)))
+	fmt.Fprintf(w, "%s%s\n", diagIndent, p.bodyFor(p.styleForDiag(w), fmt.Sprintf(format, args...)))
 }
 
 // Successf writes a success line to Out: the emoji, then the message, green
@@ -196,8 +197,12 @@ func (p *Printer) Fsuccessf(w io.Writer, emoji, format string, args ...any) {
 	// No indentContinuation here, deliberately: a success line is a single
 	// outcome, and there is no label column for a continuation to hang under.
 	// A multi-line success message is a call-site bug, not something to lay out.
+	style := p.styleForResult(w)
 	msg := fmt.Sprintf(format, args...)
-	fmt.Fprintf(w, "%s %s\n", emoji, p.styleForResult(w).Green(msg))
+	if !style.color {
+		msg = stripSGR(msg)
+	}
+	fmt.Fprintf(w, "%s %s\n", emoji, style.Green(msg))
 }
 
 // indentContinuation aligns every line after the first to the message column.

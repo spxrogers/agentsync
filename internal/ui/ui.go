@@ -507,3 +507,58 @@ func spaces(n int) string {
 	}
 	return string(out)
 }
+
+// stripSGR removes ANSI CSI escape sequences from s, leaving everything else —
+// including newlines — untouched.
+//
+// It exists because a caller may legitimately pre-style the text it hands a
+// diagnostic writer: the upgrade-notice banner composes p.Bold/p.Yellow/p.Cyan
+// fragments, and gitbackup bolds "local-only". Those helpers resolve color from
+// p.color — the OUT decision — because a style helper cannot know which stream its
+// result will be written to. So `agentsync apply 2>err.log` from a terminal produced
+// a correctly-plain LABEL followed by a body still carrying \x1b[1m: the per-stream
+// fix covered the label and missed the body, leaving the package doc's "color never
+// leaks into a redirect" false for exactly the case it names.
+//
+// Rather than require six call sites — and every future one — to remember which
+// stream they target, the diagnostic writers strip SGR from the body when the
+// target stream renders without color. If color is off for that stream, ANY escape
+// in the body is unwanted by definition, so this cannot discard something a caller
+// wanted. Newlines survive because indentContinuation still needs them.
+//
+// Sanitize would also remove these sequences, but it strips newlines too, and the
+// diagnostic writers deliberately do not sanitize — see the "who sanitizes" note in
+// docs/components.md.
+func stripSGR(s string) string {
+	if !strings.Contains(s, "\x1b") {
+		return s // overwhelmingly the common case; no allocation
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		// CSI: ESC '[' <params> <final byte in @..~>
+		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) && (s[j] < '@' || s[j] > '~') {
+				j++
+			}
+			if j < len(s) {
+				i = j + 1 // skip the final byte too
+				continue
+			}
+			break // unterminated: drop the remainder rather than emit a bare ESC
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}
+
+// bodyFor prepares a caller-supplied message for the stream w: SGR is stripped when
+// that stream renders without color, then continuation lines are aligned.
+func (p *Printer) bodyFor(style *Printer, msg string) string {
+	if !style.color {
+		msg = stripSGR(msg)
+	}
+	return indentContinuation(msg)
+}

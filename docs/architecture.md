@@ -1081,7 +1081,11 @@ terminal error as an `ERROR` diagnostic — owning the whole
 invocation is what lets it read the resolved `--color` flag off the still-in-scope
 root command instead of carrying it across the `main` boundary in package state. A `slog.Warn` from `internal/marketplace`, an adapter's
 `warning: ` line through `ui.WarnWriter`, and a command's `p.Warnf` produce
-byte-identical output.
+byte-identical output — for a sanitize-clean, single-line message, which is what a
+real diagnostic is. The three paths deliberately differ on hostile input:
+`SlogHandler` and `WarnWriter` sanitize, because their inputs are assembled by
+packages that cannot, while `Diagf` does not, because its callers may hand it
+pre-styled text. `TestWarnPathsAreByteIdentical` pins the clean case.
 
 **Three load-bearing rules.**
 
@@ -1191,7 +1195,7 @@ flowchart TD
     INFRA["internal/iox · paths · jsonkeys · untrusted"]
 
     CLI --> REN & CAP & AD & SRC & SEC & MKT & PRJ & DRF & ST & GIT & UI & LOG
-    REN --> AD & SEC & SRC & ST & DRF & UI & INFRA
+    REN --> AD & SEC & SRC & ST & UI & INFRA
     CAP --> SRC & SEC & INFRA
     AD --> SRC & SEC & INFRA
     AD -. "opencode ingest ownership only (issue #148)" .-> ST

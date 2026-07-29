@@ -238,3 +238,48 @@ func TestSuccessAndDiagUseTheRightStreams(t *testing.T) {
 		t.Errorf("success line missing from stdout: %q", stdout2)
 	}
 }
+
+// The two idempotent no-op paths are exact mirrors — `agent add` on an
+// already-registered agent and `agent remove` on an unregistered one — and both are
+// RESULTS: the desired state already holds and the command succeeded. They must
+// therefore land on the same stream.
+//
+// They did not. One was a `success` on stdout and the other a `diag` INFO on
+// stderr, in the same file, so a script reading one outcome had to read its mirror
+// from the other stream. Nothing caught it because runCLI merges the two.
+func TestIdempotentNoOpsAreResultsOnStdout(t *testing.T) {
+	testenv.RequireContainer(t)
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp, "NO_COLOR": "1"}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"add an already-registered agent", []string{"agent", "add", "claude"}, "already registered"},
+		{"remove an unregistered agent", []string{"agent", "remove", "opencode"}, "not registered"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, stderr, err := runCLISplit(t, env, tc.args...)
+			if err != nil {
+				t.Fatalf("%v: %v\nstderr:\n%s", tc.args, err, stderr)
+			}
+			if !strings.Contains(stdout, tc.want) {
+				t.Errorf("the no-op outcome belongs on stdout; stdout=%q stderr=%q", stdout, stderr)
+			}
+			if strings.Contains(stderr, tc.want) {
+				t.Errorf("the no-op outcome leaked onto stderr: %q", stderr)
+			}
+			if !strings.Contains(stdout, ui.EmojiSuccess) {
+				t.Errorf("an idempotent no-op is a success outcome; got: %q", stdout)
+			}
+		})
+	}
+}

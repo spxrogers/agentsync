@@ -120,7 +120,7 @@ var bannedPrefixes = []bannedPrefix{
 var exemptLiterals = map[string]string{
 	// A panic value, not a printed diagnostic: it names the program because it
 	// surfaces through Go's own panic output, which carries no agentsync framing.
-	// It can never reach ReportError (a panic does not return an error), so it
+	// It can never reach reportErrorTo (a panic does not return an error), so it
 	// cannot produce a doubled "✗ ERROR  agentsync: …" line.
 	"agentsync: adapter registry wiring bug: %w": "internal panic value, never a printed diagnostic",
 }

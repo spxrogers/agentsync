@@ -19,7 +19,7 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   nothing marking which was the failure.
   ([#211](https://github.com/spxrogers/agentsync/issues/211#issuecomment-5108532310))
   - Diagnostics — anything that is a notice *about* the run — render as
-    `✗ ERROR` / `⚠ WARN` / `ℹ INFO` / `• DEBUG` on **stderr**, with message text
+    `✗ ERROR` / `⚠ WARN` / `ℹ INFO` on **stderr**, with message text
     starting at a fixed column so stacked lines align and detail lines hang
     under their label. The glyph and the level word are content, not decoration:
     piped, redirected, under `NO_COLOR`, or `--color never`, severity still
@@ -34,7 +34,7 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   - Success outcomes carry **no** level word — an `INFO` on `added agent: claude`
     is noise that dilutes the labels that matter — and instead lead with an emoji
     chosen by what happened: `🎉 applied: 12 ops`, `✅ added agent: claude`,
-    `🧹 removed mcp server: github`, `📥 imported 4 skills…`, `🔙 reverted…`,
+    `🧹 removed mcp server: github`, `📥 imported 4 items from claude`, `🔙 reverted…`,
     `✨ …initialized`. Command *results* (a `--json` payload, a `status` table, a
     `diff`, a `list`) are unchanged and unlabeled.
   - Several warnings that had been printing to **stdout** — `plugin outdated` /
