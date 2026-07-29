@@ -340,19 +340,17 @@ func OrphanDeleteWillProceed(op adapter.FileOp) bool {
 	if !isOrphanReclaimable(op.SourceID) {
 		return false
 	}
-	// Short-circuit the shapes whose read cannot succeed anyway — a directory,
-	// FIFO, device, or socket. This introduces no divergence from Delete (its
-	// ReadFile fails on every one of them too) and keeps `apply --dry-run`, which
-	// is advertised as read-only, from BLOCKING on an open of a FIFO someone left
-	// at a destination path. Symlinks deliberately fall through, so a dangling one
-	// answers the same way for both (ENOENT → proceeds).
-	if fi, err := os.Lstat(op.Path); err == nil && !fi.Mode().IsRegular() && fi.Mode()&os.ModeSymlink == 0 {
+	if !isRegularOrAbsent(op.Path) {
 		return false
 	}
 	f, err := os.Open(op.Path)
 	if err != nil {
 		// Absent proceeds: nothing to preserve, the remove is a no-op, and the
-		// entry converges away. Anything else (EACCES, ENOTDIR) is the skip.
+		// entry converges away. The IsNotExist test is deliberately kept rather
+		// than a bare `return true`: isRegularOrAbsent above already rejects every
+		// other shape, so ENOENT is the only error reachable HERE today — but that
+		// is a property of the guard above, not of this line, and the two should
+		// not have to be read together to stay correct.
 		return os.IsNotExist(err)
 	}
 	defer func() { _ = f.Close() }()
@@ -367,6 +365,24 @@ func OrphanDeleteWillProceed(op adapter.FileOp) bool {
 	return true
 }
 
+// isRegularOrAbsent reports whether a destination is a regular file, or is not
+// there at all. Anything else — a directory, FIFO, device, socket — is a shape
+// whose content agentsync cannot meaningfully read or preserve.
+//
+// It uses Stat, which FOLLOWS symlinks, so a symlink pointing at a FIFO is
+// caught as well as a bare one. That matters because os.Open on a FIFO with no
+// writer BLOCKS rather than failing: without this, `apply --dry-run` (advertised
+// as read-only) and the real apply's pre-delete read would both hang forever on
+// a FIFO left at a destination path. A dangling symlink reports absent, which is
+// the right answer — the link is removable and carries nothing to preserve.
+func isRegularOrAbsent(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	return fi.Mode().IsRegular()
+}
+
 // backupOrphanIfDrifted copies a soon-to-be-deleted component file to the backup
 // root iff its on-disk content is not exactly what agentsync last wrote (i.e. the
 // user hand-edited it). A file matching our last-applied hash is our own output
@@ -379,6 +395,12 @@ func OrphanDeleteWillProceed(op adapter.FileOp) bool {
 // Delete). An error is returned only when the file WAS readable and drifted but
 // the backup could not be written, which genuinely must stop the run.
 func (w *Writer) backupOrphanIfDrifted(op adapter.FileOp) (safeToDelete bool, err error) {
+	// Same shape guard as OrphanDeleteWillProceed, for the same reason: the
+	// os.ReadFile below would BLOCK forever on a FIFO rather than fail. Reporting
+	// "not safe to delete" is the correct answer for every non-regular shape.
+	if !isRegularOrAbsent(op.Path) {
+		return false, nil
+	}
 	existing, err := os.ReadFile(op.Path)
 	if err != nil {
 		if os.IsNotExist(err) {

@@ -888,3 +888,148 @@ func TestImport_NamedHookEventAllPluginProvided(t *testing.T) {
 		t.Errorf("the error should say why nothing was captured; got: %v", err)
 	}
 }
+
+// TestReconcile_OrphanPromptSaysAutoReclaimKindsAreTemporary pins the prompt
+// wording — and exists because the branch shipped DEAD once already.
+//
+// reconcile's orphan items are built by collectOrphanFileItems, which originally
+// synthesized a FileOp with no SourceID. The wording branch asks a
+// SourceID-keyed question, so it silently answered "not reclaimable" for every
+// orphan and the conditional text could never print. Nothing caught it because
+// no test looked at the prompt.
+//
+// [k]eep is a promise about what happens next. For a subagent, skill, or command
+// the next apply reclaims it, so an unqualified "[k]eep" is a lie.
+func TestReconcile_OrphanPromptSaysAutoReclaimKindsAreTemporary(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+
+	src := filepath.Join(tmp, ".agentsync", "subagents", "reviewer.md")
+	if err := os.WriteFile(src, []byte("---\nname: reviewer\n---\nreview\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	// Remove it from source but leave the destination: an orphan reconcile will
+	// prompt about. (Answer [k]eep so the run does not delete it.)
+	if err := os.Remove(src); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _ := runCLIWithStdin(t, env, "k\n", "reconcile")
+	if !strings.Contains(out, "until the next apply reclaims it") {
+		t.Errorf("a subagent orphan is auto-reclaimed by the next apply, so [k]eep must say "+
+			"it is temporary; got:\n%s", out)
+	}
+}
+
+// TestImport_PluginIdenticalHookDoesNotEraseYourOwn is the data-loss regression.
+//
+// The projected canonical holds the user's handler AND the plugin's, and hooks
+// are keyed by CONTENT — so a plugin shipping a byte-identical handler made the
+// key resolve to the plugin. importHook then dropped the user's handler, and
+// source.WriteHooks REPLACES the whole hooks/<event>.toml, erasing a line the
+// user wrote from a tree that is usually a committed dotfiles repo — while
+// reporting "agentsync already manages it" about it.
+//
+// A plugin author who copies a popular hook gets this for free.
+func TestImport_PluginIdenticalHookDoesNotEraseYourOwn(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeServerMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("srv-mp", mpDir, "srv"))
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+
+	// The user's own handler, BYTE-IDENTICAL to what the plugin ships
+	// (PreToolUse / Bash / plugin-guard), plus a second one that is theirs alone
+	// so the event survives and WriteHooks actually rewrites the file.
+	hooksSrc := filepath.Join(tmp, ".agentsync", "hooks")
+	if err := os.MkdirAll(hooksSrc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hookFile := filepath.Join(hooksSrc, "PreToolUse.toml")
+	if err := os.WriteFile(hookFile, []byte(
+		"[[hook]]\nmatcher = \"Bash\"\ntype = \"command\"\ncommand = \"plugin-guard\"\n"+
+			"[[hook]]\nmatcher = \"Edit\"\ntype = \"command\"\ncommand = \"only-mine\"\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+
+	// The canonical file STAYS. That is the whole point: source.WriteHooks
+	// replaces hooks/<event>.toml wholesale, so anything import decides not to
+	// capture is deleted from a file the user already had.
+	if out, err := runCLI(t, env, "import", "claude:hook"); err != nil {
+		t.Fatalf("import claude:hook: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(hookFile)
+	if err != nil {
+		t.Fatalf("the event must still be captured: %v", err)
+	}
+	if !strings.Contains(string(data), "plugin-guard") {
+		t.Fatalf("a handler the user ALSO declares must not be treated as the plugin's "+
+			"and dropped — that erases their own line from the canonical source:\n%s", data)
+	}
+	if !strings.Contains(string(data), "only-mine") {
+		t.Fatalf("the user's other handler must survive too:\n%s", data)
+	}
+}
+
+// TestApply_ReclaimsRetiredSubagentSourceID is the end-to-end half of the
+// retired-prefix fix: the unit test proves the delete is SYNTHESIZED, this proves
+// a real apply actually REMOVES the file — which is what the upgrade notice,
+// CHANGELOG, and upgrading.mdx all promise an upgrading user.
+//
+// The state is seeded with the pre-rename "agents/<name>.md" SourceID by hand,
+// because that is exactly the state an upgrading user has and no current code
+// path produces it any more.
+func TestApply_ReclaimsRetiredSubagentSourceID(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+
+	src := filepath.Join(tmp, ".agentsync", "subagents", "code-reviewer.md")
+	if err := os.WriteFile(src, []byte("---\nname: code-reviewer\n---\nreview\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	dest := filepath.Join(tmp, ".claude", "agents", "code-reviewer.md")
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("apply did not write the subagent: %v", err)
+	}
+
+	// Rewrite the recorded SourceID to the RETIRED spelling, as a pre-upgrade
+	// state file carries it, then remove the component from source.
+	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritten := strings.ReplaceAll(string(data), "subagents/code-reviewer.md", "agents/code-reviewer.md")
+	if rewritten == string(data) {
+		t.Fatal("expected a subagents/ source_id in state to rewrite; the fixture no longer matches")
+	}
+	if err := os.WriteFile(statePath, []byte(rewritten), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(src); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply 2: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(dest); err == nil {
+		t.Fatal("a destination recorded under the RETIRED agents/ SourceID must still be " +
+			"reclaimed — that is the pre-rename leftover the upgrade notice promises to remove")
+	}
+}

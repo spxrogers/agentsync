@@ -1194,36 +1194,53 @@ func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot string, sc adapter.S
 		}
 		disabled = d
 	}
+	// A component the USER also declares must never be registered as
+	// plugin-provided, even when a plugin ships a byte-identical one.
+	//
+	// This is a data-loss guard, not a nicety. Hooks are the sharp case: the
+	// projected canonical holds the user's handler AND the plugin's, keyed by
+	// content, with no cross-source dedup. Without this check the key resolves to
+	// the plugin, importHook drops the handler, and source.WriteHooks REPLACES
+	// the whole hooks/<event>.toml — erasing the user's own hand-authored handler
+	// from a tree that is usually a committed dotfiles repo, while reporting
+	// "agentsync already manages it" about a line they wrote themselves.
+	//
+	// For MCP/LSP the same collision is a false DENIAL rather than a deletion
+	// (`import claude:mcp:foo` would refuse the user's own mcp/foo.toml), and for
+	// the namespaced kinds it needs a hand-authored component named exactly
+	// `<plugin>-<name>`. All three are the same mistake, so all three are guarded
+	// by construction here rather than per-kind at the use sites.
 	out := map[string]string{}
+	mine := map[string]bool{}
+	claim := func(key, plugin string) {
+		if plugin == "" {
+			mine[key] = true
+			delete(out, key)
+			return
+		}
+		if !mine[key] {
+			out[key] = plugin
+		}
+	}
 	collect := func(c source.Canonical) {
 		for _, sk := range c.Skills {
-			if sk.Plugin != "" {
-				out["skill/"+sk.Name] = sk.Plugin
-			}
+			claim("skill/"+sk.Name, sk.Plugin)
 		}
 		for _, sa := range c.Subagents {
-			if sa.Plugin != "" {
-				out["subagent/"+sa.Name] = sa.Plugin
-			}
+			claim("subagent/"+sa.Name, sa.Plugin)
 		}
 		for _, cmd := range c.Commands {
-			if cmd.Plugin != "" {
-				out["command/"+cmd.Name] = cmd.Plugin
-			}
+			claim("command/"+cmd.Name, cmd.Plugin)
 		}
 		// MCP/LSP servers are not namespaced (a same-id divergence is refused, not
 		// renamed apart — see namespaceProjected), but they ARE plugin-owned, and
 		// capturing one still mints a canonical copy that diverges from the
 		// plugin's own on its next update.
 		for _, m := range c.MCPServers {
-			if m.Plugin != "" {
-				out["mcp/"+m.ID] = m.Plugin
-			}
+			claim("mcp/"+m.ID, m.Plugin)
 		}
 		for _, l := range c.LSPServers {
-			if l.Plugin != "" {
-				out["lsp/"+l.ID] = l.Plugin
-			}
+			claim("lsp/"+l.ID, l.Plugin)
 		}
 		// Hooks are keyed by CONTENT, not by event. A canonical hooks/<event>.toml
 		// holds many handlers from many sources, so refusing a whole event would
@@ -1231,9 +1248,7 @@ func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot string, sc adapter.S
 		// carries no provenance, so the signature is what identifies a handler as
 		// the plugin's.
 		for _, h := range c.Hooks {
-			if h.Plugin != "" {
-				out["hook/"+hookSignature(h)] = h.Plugin
-			}
+			claim("hook/"+hookSignature(h), h.Plugin)
 		}
 	}
 	// Scope parity with render is what makes "the skipped set is exactly the

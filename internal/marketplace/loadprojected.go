@@ -393,7 +393,7 @@ func nameCollisionError[T any](kind, name string, items []T, originOf func(T) (i
 		// name is projection-derived (a plugin id joined to an upstream component
 		// name) and reaches this log BEFORE render.Plan's ValidateComponentID, so
 		// sanitize it here rather than relying on that waist. The origins are
-		// already %q-quoted by nameCollisionError's callers below.
+		// already %q-quoted where this function builds them, just above.
 		// NOT "render keeps the last" — that is true for MCP/LSP (an id-keyed map,
 		// last write wins) but false here: two name-keyed components rendering to
 		// one destination path make the apply pipeline abort. Lenient callers are

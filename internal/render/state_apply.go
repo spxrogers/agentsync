@@ -14,6 +14,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
 
@@ -210,7 +211,25 @@ func OrphanFiles(s *state.Targets, userHome, agent string, scope adapter.Scope, 
 // and the direct opposite of what the upgrade notice promises. No live SourceID
 // uses this prefix ("subagents/" does not match it), so listing it costs nothing
 // and can be dropped once the retired spelling is out of circulation.
-var orphanReclaimedPrefixes = []string{"skills/", "subagents/", "commands/", "agents/"}
+// The retired entry is spelled via source.LegacySubagentsDir rather than a
+// literal, so the deprecation has ONE owner: when that constant goes, the
+// compiler points here.
+var orphanReclaimedPrefixes = []string{
+	"skills/",
+	source.SubagentsDir + "/",
+	"commands/",
+	source.LegacySubagentsDir + "/",
+}
+
+// OrphanIsReclaimable reports whether `apply` reclaims the destination of a
+// component with this SourceID when the source stops rendering it.
+//
+// It asks only about the KIND. Callers that need to know whether a PARTICULAR
+// destination will actually be removed on this run (it may be skipped as
+// unreadable) want OrphanDeleteWillProceed instead. The CLI uses this one to
+// word reconcile's orphan prompt, which is a statement about what apply does to
+// this class of component — true regardless of whether today's attempt succeeds.
+func OrphanIsReclaimable(sourceID string) bool { return isOrphanReclaimable(sourceID) }
 
 // isOrphanReclaimable reports whether a state SourceID names a component whose
 // destination file `apply` reclaims. It is the single predicate behind both the

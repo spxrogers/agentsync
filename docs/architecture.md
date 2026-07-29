@@ -752,12 +752,18 @@ auto-resolves only the cases that can't lose work (`converged`, `pending`).
 a removed component doesn't linger in the destination: emptied key-merge sections
 (an MCP/hook/LSP section whose source went empty — cleaned via a synthesized
 empty-merge op) and **whole-file components** whose `source_id` is under
-`skills/`, `subagents/`, or `commands/` — a whole skill, one bundled
-`scripts/`/`references/`/`assets/` file within one, a subagent, or a slash
-command that the source no longer renders. In every case the writer deletes the
+`skills/`, `subagents/`, `commands/`, or the RETIRED `agents/` spelling — a whole
+skill, one bundled `scripts/`/`references/`/`assets/` file within one, a
+subagent, or a slash command that the source no longer renders. The retired
+prefix is listed because the canonical `agents/` → `subagents/` rename ships in
+the same release as namespacing: an upgrading user's state still holds the old
+spelling, and the only rewriter runs from `migrate subagents`, which no-ops for a
+user whose subagents come only from plugins. Without it their pre-rename
+destination would never be reclaimed — the exact leftover this exists to remove. In every case the writer deletes the
 orphaned file and **backs up an `orphan-drifted` dest first** (a hand-edit is
 never destroyed un-preserved). If that pre-delete read fails for any reason other
-than "already gone" — `EACCES`, `EIO`, `EISDIR` — that one delete is **skipped**
+than "already gone" — `EACCES`, `EIO`, `EISDIR`, or a non-regular shape like a
+FIFO whose read would BLOCK rather than fail — that one delete is **skipped**
 with a warning rather than performed blind: agentsync cannot tell whether the
 destination held an unsynced edit, and convergence is never worth data loss. The
 run itself continues, because a lingering orphan is not data loss while a failed

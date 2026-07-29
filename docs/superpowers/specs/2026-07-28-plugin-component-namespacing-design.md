@@ -242,7 +242,28 @@ collisions for MCP/LSP, it runs with provenance in hand, and it has the
 strict-vs-lenient split this needs. Codex keeps its narrower frontmatter-vs-stem
 check as a backstop.
 
+**§3 (Schema) is now incomplete.** It says only `Subagent`, `Skill`, and
+`Command` gain provenance, and that no field joins the structs
+`TestNewSecretFieldGuard` covers. Both changed: `MCPServer`, `LSPServer`, and
+`Hook` each carry a `Plugin` field too — they are never RENAMED (an id collision
+can be an endpoint hijack, refused rather than renamed apart; a hook has no name
+key at all), but the dest→source paths still need to know a plugin owns them. The
+guard did fire, and all three are classified `false` in `walkerCovered`
+(`internal/secrets/walk_test.go`), which is the mechanism working as designed
+rather than an exemption.
+
+**§6 (Orphan reclamation) is now incomplete.** Reclamation covers the RETIRED
+`agents/` SourceID spelling as well as `subagents/` and `commands/`. The
+canonical directory rename ships in this same release, so an upgrading user's
+state still holds the old spelling, and the only rewriter no-ops for a user whose
+subagents come only from plugins — which is the reported scenario. Without it
+their pre-rename destination is never reclaimed, which is the opposite of what
+the upgrade notice promises.
+
 **Also broadened during review:** the capture refusal covers MCP servers, LSP
 servers, and hooks (hooks per *handler*, since one canonical `hooks/<event>.toml`
 holds handlers from many sources), not just the three name-keyed kinds; and the
-"Known adjacent gap" below was closed rather than deferred.
+"Known adjacent gap" below was closed rather than deferred. A component the USER
+also declares is never treated as plugin-provided, even when a plugin ships an
+identical one — without that check, `import` dropped the user's own hook handler
+and `WriteHooks`' whole-file replace erased it from the canonical source.

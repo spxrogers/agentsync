@@ -12,6 +12,7 @@ import (
 	_ "github.com/spxrogers/agentsync/internal/adapter/noop"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 	"github.com/spxrogers/agentsync/internal/testenv"
 )
@@ -347,5 +348,30 @@ func TestPruneStaleState_RetiredSubagentSourceIDIsReclaimable(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("apply must synthesize a delete for the pre-rename destination; got %v", deletes)
+	}
+}
+
+// TestOrphanReclaimedPrefixes_RetiredAliasDoesNotOverMatch guards the one hazard
+// of carrying a retired identifier in a live prefix list: if "agents/" ever
+// becomes a LIVE SourceID prefix again, the alias silently starts matching it.
+//
+// It is asserted against the real producer — source.SubagentSourceID — rather
+// than a literal, so it tracks the constant instead of a copy of it.
+func TestOrphanReclaimedPrefixes_RetiredAliasDoesNotOverMatch(t *testing.T) {
+	live := source.SubagentSourceID("reviewer")
+	if strings.HasPrefix(filepath.ToSlash(live), source.LegacySubagentsDir+"/") {
+		t.Fatalf("the live subagent SourceID (%q) now starts with the RETIRED prefix %q — "+
+			"the alias in orphanReclaimedPrefixes would over-match every live subagent; "+
+			"drop it or re-scope it", live, source.LegacySubagentsDir+"/")
+	}
+	// And the retired spelling is still recognised, which is the point of it.
+	if !render.OrphanIsReclaimable(source.LegacySubagentsDir + "/reviewer.md") {
+		t.Error("the retired agents/ spelling must stay reclaimable until it is out of circulation")
+	}
+	if !render.OrphanIsReclaimable(live) {
+		t.Errorf("the live spelling %q must be reclaimable", live)
+	}
+	if render.OrphanIsReclaimable("memory/AGENTS.md") {
+		t.Error("a non-component SourceID must not be reclaimable")
 	}
 }

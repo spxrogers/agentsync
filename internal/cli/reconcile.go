@@ -234,10 +234,17 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 			}
 			fmt.Fprintf(w, "\n%s  (orphan — source no longer produces this file)\n", ui.Sanitize(it.op.Path))
 			// [k]eep is honest only for the kinds `apply` does NOT auto-reclaim.
-			// Skills, subagents, and commands are reclaimed on the next apply
-			// (render.orphanReclaimedPrefixes), so "keep" there means "keep until
-			// then" — say so rather than imply it is permanent.
-			if render.OrphanDeleteWillProceed(it.op) {
+			// Skills, subagents, and commands are reclaimed on the next apply, so
+			// "keep" there means "keep until then" — say so rather than imply it
+			// is permanent.
+			//
+			// This asks the KIND question (OrphanIsReclaimable), not the
+			// readability one (OrphanDeleteWillProceed): a reclaimable orphan that
+			// happens to be unreadable right now is retried on every subsequent
+			// apply, so "until the next apply reclaims it" is still the truth for
+			// it. Using the readability predicate here would print the permanent
+			// wording for exactly the file apply keeps coming back to.
+			if render.OrphanIsReclaimable(it.op.SourceID) {
 				fmt.Fprintf(w, "  [r]emove (backs up first)  [k]eep (until the next apply reclaims it)  [q]uit\n  > ")
 			} else {
 				fmt.Fprintf(w, "  [r]emove (backs up first)  [k]eep  [q]uit\n  > ")
@@ -472,6 +479,20 @@ func b2i(b bool) int {
 // has to project separately and match by component name.
 func pluginProvidedSourceIDs(c source.Canonical) map[string]string {
 	out := map[string]string{}
+	// A key the USER also declares is never plugin-provided, even when a plugin
+	// ships an identical component — see pluginProvided (internal/cli/import.go)
+	// for why this is a data-loss guard rather than a nicety.
+	mine := map[string]bool{}
+	claim := func(key, plugin string) {
+		if plugin == "" {
+			mine[key] = true
+			delete(out, key)
+			return
+		}
+		if !mine[key] {
+			out[key] = plugin
+		}
+	}
 	// MCP/LSP servers are keyed under BOTH forms, because the two adapters
 	// families render them differently:
 	//
@@ -486,35 +507,24 @@ func pluginProvidedSourceIDs(c source.Canonical) map[string]string {
 	//                         through the SourceID lookup like a subagent would.
 	//                         Keying only the bare form left that path unguarded.
 	for _, s := range c.MCPServers {
-		if s.Plugin != "" {
-			out["mcp/"+s.ID] = s.Plugin
-			out[filepath.ToSlash(filepath.Join("mcp", s.ID+".toml"))] = s.Plugin
-		}
+		claim("mcp/"+s.ID, s.Plugin)
+		claim(filepath.ToSlash(filepath.Join("mcp", s.ID+".toml")), s.Plugin)
 	}
 	for _, s := range c.LSPServers {
-		if s.Plugin != "" {
-			out["lsp/"+s.ID] = s.Plugin
-			out[filepath.ToSlash(filepath.Join("lsp", s.ID+".toml"))] = s.Plugin
-		}
+		claim("lsp/"+s.ID, s.Plugin)
+		claim(filepath.ToSlash(filepath.Join("lsp", s.ID+".toml")), s.Plugin)
 	}
 	for _, sk := range c.Skills {
-		if sk.Plugin == "" {
-			continue
-		}
-		out[filepath.ToSlash(filepath.Join("skills", sk.Name, "SKILL.md"))] = sk.Plugin
+		claim(filepath.ToSlash(filepath.Join("skills", sk.Name, "SKILL.md")), sk.Plugin)
 		for _, f := range sk.Files {
-			out[filepath.ToSlash(filepath.Join("skills", sk.Name, f.Path))] = sk.Plugin
+			claim(filepath.ToSlash(filepath.Join("skills", sk.Name, f.Path)), sk.Plugin)
 		}
 	}
 	for _, sa := range c.Subagents {
-		if sa.Plugin != "" {
-			out[filepath.ToSlash(source.SubagentSourceID(sa.Name))] = sa.Plugin
-		}
+		claim(filepath.ToSlash(source.SubagentSourceID(sa.Name)), sa.Plugin)
 	}
 	for _, cm := range c.Commands {
-		if cm.Plugin != "" {
-			out[filepath.ToSlash(filepath.Join("commands", cm.Name+".md"))] = cm.Plugin
-		}
+		claim(filepath.ToSlash(filepath.Join("commands", cm.Name+".md")), cm.Plugin)
 	}
 	return out
 }
@@ -690,11 +700,16 @@ func collectOrphanFileItems(plan render.RenderPlan, reg *adapter.Registry, s *st
 				continue
 			}
 			seen[orphan] = true
-			happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, orphan)].SHA256
+			entry := s.Files[stateFileKey(userHome, name, sc, projectRoot, orphan)]
+			happlied := entry.SHA256
 			hdest := hashFile(orphan)
 			items = append(items, reconcileItem{
-				agentName:   name,
-				op:          adapter.FileOp{Action: "delete", Path: orphan},
+				agentName: name,
+				// SourceID matters: every SourceID-keyed decision downstream — the
+				// reclaimable-kind check behind this item's prompt wording, and
+				// Writer.Delete's backup/prune behaviour if it is ever executed —
+				// silently degrades to "unknown kind" without it.
+				op:          adapter.FileOp{Action: "delete", Path: orphan, SourceID: entry.SourceID, Mode: entry.Mode},
 				cls:         drift.Classify("", happlied, hdest),
 				happlied:    happlied,
 				hdest:       hdest,
