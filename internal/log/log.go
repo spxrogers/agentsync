@@ -34,11 +34,29 @@ func New(w io.Writer, p *ui.Printer, verbose bool) *slog.Logger {
 }
 
 // Install makes New's logger the process-wide slog default and returns a
-// function that restores the previous default. The restore exists for tests,
-// which must not leak a handler bound to a finished test's buffer into the next
-// test; the CLI itself installs once per process and never restores.
+// function that restores the previous default. The CLI itself installs once per
+// process and never restores; the restore exists for callers that must not leak
+// a handler past the lifetime of the writer it holds.
 func Install(w io.Writer, p *ui.Printer, verbose bool) func() {
 	prev := slog.Default()
 	slog.SetDefault(New(w, p, verbose))
 	return func() { slog.SetDefault(prev) }
+}
+
+// Detach restores the process default to a handler that discards everything.
+//
+// This exists for TEST BINARIES. A real `agentsync` process installs once in the
+// root command's PersistentPreRunE and exits, so the handler's writer outlives
+// it. A test binary runs many Execute() cycles, and each one leaves
+// slog.Default() bound to that invocation's stderr buffer — typically a
+// *bytes.Buffer owned by a test that has already finished. A library slog.Warn
+// reached later then writes into a dead buffer: silent today, and a data race
+// the moment a test in that package adopts t.Parallel.
+//
+// Discarding rather than restoring the ORIGINAL default is deliberate: the
+// stdlib default prints timestamped lines to stderr, so restoring it would spray
+// exactly the output shape this package exists to replace across `go test`
+// output. A test that wants to observe records installs its own handler.
+func Detach() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 }

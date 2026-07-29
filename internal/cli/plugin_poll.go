@@ -53,7 +53,15 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 	// wrote the raw sentinel to STDOUT, which both skipped the styling and put a
 	// diagnostic in the middle of the command's own output.
 	warnW := ui.NewWarnWriter(p.Err, p)
-	defer warnW.Flush()
+	// Flush drains any partial line the line-buffering writer still holds. It runs
+	// on the error return path too, and a partial line carries no trailing
+	// newline — so main's terminal ✗ ERROR line would otherwise be appended to it
+	// on the same row. Terminate it here; Flush itself is a no-op when the buffer
+	// is empty, which is the normal case (every emitter ends with \n).
+	defer func() {
+		warnW.Flush()
+		warnW.EndLine()
+	}()
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	userHome := paths.HomeDir(paths.OSEnv{})
 	statePath := filepath.Join(home, ".state", "targets.json")

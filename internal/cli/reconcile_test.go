@@ -1,10 +1,13 @@
 package cli_test
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 // TestReconcile_OrphanFile is the regression/feature test for the maintainer
@@ -374,8 +377,12 @@ func TestReconcile_WriteBackUnsupportedReturnsError(t *testing.T) {
 	// Press w (write-back this item, single).
 	out, err := runCLIWithStdin(t, env, "w\n", "reconcile")
 	// Should NOT silently print success for the hook write-back.
-	if strings.Contains(out, "write-back: ") && !strings.Contains(out, "ERROR") {
-		t.Fatalf("hook write-back must surface an error, not silent success; got:\n%s", out)
+	// Tie the label to THIS message: a bare Contains(out, "ERROR") would be
+	// satisfied by any unrelated ERROR elsewhere in the transcript, so a genuine
+	// silent-success regression could hide behind one.
+	wantErr := ui.LevelError.Label(ui.New(io.Discard, io.Discard, ui.ColorNever)) + "  write-back:"
+	if strings.Contains(out, "write-back: ") && !strings.Contains(out, wantErr) {
+		t.Fatalf("hook write-back must surface a labeled write-back error, not silent success; got:\n%s", out)
 	}
 	// And it must exit non-zero — a failed write-back did not persist the edit.
 	if err == nil {

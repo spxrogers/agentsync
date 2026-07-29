@@ -67,8 +67,19 @@ const (
 	GlyphPartial = "◐" // partial coverage (mirrors the capability matrix)
 	GlyphErr     = "✗" // failure / drift / missing
 	GlyphWarn    = "⚠" // warning / needs attention
-	GlyphInfo    = "•" // neutral bullet
+	GlyphInfo    = "•" // neutral bullet, inside a report body
 	GlyphArrow   = "→" // transition / "see"
+
+	// The two glyphs below belong to the DIAGNOSTIC label vocabulary in diag.go
+	// rather than to report layout, but they live here so the whole curated set
+	// is visible in one place.
+	//
+	// GlyphBullet is the same rune as GlyphInfo and that is deliberate: a faint
+	// bullet is the right mark for a DEBUG label and for a list item alike. They
+	// are named separately so a future change to one cannot silently move the
+	// other — the failure mode a shared constant invites.
+	GlyphNote   = "ℹ" // INFO label
+	GlyphBullet = "•" // DEBUG label
 )
 
 // ColorMode is the resolved value of the global --color flag.
@@ -96,18 +107,52 @@ func ParseColorMode(s string) (ColorMode, error) {
 }
 
 // Printer renders styled output to a pair of writers. Construct one per command
-// invocation via New; the color decision is frozen at construction.
+// invocation via New; the color decisions are frozen at construction.
 type Printer struct {
-	Out   io.Writer
-	Err   io.Writer
-	color bool
-	mode  ColorMode
+	Out io.Writer
+	Err io.Writer
+	// color and colorErr are resolved SEPARATELY, one per stream. `auto` asks
+	// whether the destination is a terminal, and Out and Err are different
+	// destinations: `agentsync apply 2>err.log` run from a terminal has a TTY
+	// stdout and a file stderr. Deciding once off Out and reusing it for Err
+	// wrote ANSI into that file — precisely what the package doc promises never
+	// happens. Every diagnostic goes to Err, so this is not a corner case; it is
+	// the common path for ~170 emission sites and for SlogHandler.
+	color    bool
+	colorErr bool
+	mode     ColorMode
 }
 
 // New builds a Printer bound to out/err, resolving whether to emit color from
-// mode, the NO_COLOR environment variable, and whether out is a terminal.
+// mode, the NO_COLOR environment variable, and whether each writer is a
+// terminal. The two streams are resolved independently — see the struct doc.
 func New(out, err io.Writer, mode ColorMode) *Printer {
-	return &Printer{Out: out, Err: err, color: resolveColor(out, mode), mode: mode}
+	return &Printer{
+		Out:      out,
+		Err:      err,
+		color:    resolveColor(out, mode),
+		colorErr: resolveColor(err, mode),
+		mode:     mode,
+	}
+}
+
+// styleFor returns a view of p whose color decision matches the stream w. Used
+// by the diagnostic writers, which take an explicit io.Writer and must not
+// inherit the wrong stream's TTY-ness.
+//
+// Interface comparison is exact (dynamic type + value), so this recognizes
+// p.Out/p.Err and nothing else. An UNRECOGNIZED writer falls back to the Err
+// decision: every caller passing a third writer today is emitting a diagnostic,
+// and Err is the conservative choice for one (a diagnostic reaching an unknown
+// sink is more likely redirected than interactive).
+func (p *Printer) styleFor(w io.Writer) *Printer {
+	// Out is the only stream whose decision differs from the diagnostic default,
+	// so it is the only case worth naming. Everything else — Err and any
+	// unrecognized writer — takes the Err decision.
+	if w == p.Out || p.color == p.colorErr {
+		return p // already the right decision, or the two streams agree
+	}
+	return &Printer{Out: p.Out, Err: p.Err, color: p.colorErr, colorErr: p.colorErr, mode: p.mode}
 }
 
 // ColorMode returns the requested mode this Printer was built with — NOT the
@@ -118,10 +163,15 @@ func New(out, err io.Writer, mode ColorMode) *Printer {
 // this, rebuilding against os.Stderr after cobra has returned.
 func (p *Printer) ColorMode() ColorMode { return p.mode }
 
-// Color reports whether this Printer emits ANSI. Commands that hand a writer to
-// a third-party renderer (e.g. the diff library's own colorizer) consult this
-// to gate that output through the same decision.
+// Color reports whether this Printer emits ANSI on Out. Commands that hand a
+// writer to a third-party renderer (e.g. the diff library's own colorizer)
+// consult this to gate that output through the same decision — and every such
+// caller today renders to Out, which is why this reports the Out decision.
 func (p *Printer) Color() bool { return p.color }
+
+// ColorErr reports whether this Printer emits ANSI on Err — the stream every
+// diagnostic uses. Distinct from Color; see the Printer struct doc.
+func (p *Printer) ColorErr() bool { return p.colorErr }
 
 func resolveColor(out io.Writer, mode ColorMode) bool {
 	switch mode {
@@ -227,6 +277,9 @@ type WarnWriter struct {
 	w   io.Writer
 	p   *Printer
 	buf []byte
+	// partial records that the last emit wrote a line with no trailing newline
+	// (only Flush can do that), so EndLine knows whether to terminate it.
+	partial bool
 }
 
 // NewWarnWriter returns a *WarnWriter that flushes styled lines to w using p.
@@ -262,6 +315,7 @@ func (s *WarnWriter) Flush() {
 	if len(s.buf) > 0 {
 		s.emit(s.buf)
 		s.buf = nil
+		s.partial = true
 	}
 }
 
@@ -374,4 +428,19 @@ func spaces(n int) string {
 		out[i] = ' '
 	}
 	return string(out)
+}
+
+// EndLine terminates a partial line if one was just flushed, so a subsequent
+// writer to the same stream starts at column 0.
+//
+// Flush drains whatever incomplete line the buffer held, by definition without a
+// trailing newline — and the next thing written to that stream may come from a
+// different layer entirely (main's terminal ✗ ERROR line, say), which would then
+// render on the same row as the fragment. Pairing Flush with EndLine keeps the
+// two visually separate. A no-op unless the last emitted byte was a partial line.
+func (s *WarnWriter) EndLine() {
+	if s.partial {
+		fmt.Fprintln(s.w)
+		s.partial = false
+	}
 }

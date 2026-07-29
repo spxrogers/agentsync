@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 )
 
 // SlogHandler renders slog records through the diagnostic vocabulary in diag.go,
@@ -36,6 +37,18 @@ type SlogHandler struct {
 	p     *Printer
 	w     io.Writer
 	level slog.Leveler
+	// mu serializes writes to w. slog.Handler implementations are expected to be
+	// safe for concurrent use — the stdlib's own handlers lock their writer — and
+	// callers reasonably assume a *slog.Logger can be shared across goroutines.
+	// A record here renders as a label line plus an optional attribute line, so
+	// without the lock two concurrent records could interleave and split an
+	// attribute line away from the diagnostic it belongs to.
+	//
+	// SHARED by derivation: clone() copies the pointer, so every handler derived
+	// via WithAttrs/WithGroup locks the SAME mutex as its parent. That is required
+	// for correctness — they all write to the same w, and a per-clone mutex would
+	// serialize nothing.
+	mu *sync.Mutex
 	// attrs are the accumulated WithAttrs attributes, already prefixed with any
 	// enclosing group path. Held pre-rendered as key=value strings: the handler
 	// only ever formats them, never inspects them.
@@ -48,7 +61,7 @@ type SlogHandler struct {
 // above level. Pass p.Err as w for the normal case; the writer is explicit so a
 // caller can tee logs somewhere else without restyling them.
 func NewSlogHandler(w io.Writer, p *Printer, level slog.Leveler) *SlogHandler {
-	return &SlogHandler{p: p, w: w, level: level}
+	return &SlogHandler{p: p, w: w, level: level, mu: new(sync.Mutex)}
 }
 
 // Enabled implements slog.Handler.
@@ -85,6 +98,7 @@ func (h *SlogHandler) clone() *SlogHandler {
 		p:     h.p,
 		w:     h.w,
 		level: h.level,
+		mu:    h.mu, // deliberately shared — see the field doc
 		// Copy rather than share the backing array: two handlers derived from
 		// the same parent must not have one's append clobber the other's tail.
 		attrs:  append([]string(nil), h.attrs...),
@@ -108,12 +122,29 @@ func (h *SlogHandler) Handle(_ context.Context, r slog.Record) error {
 
 	// Sanitize: slog messages and attributes routinely carry filesystem paths
 	// and error strings harvested from third-party agent config, which is
-	// untrusted text headed for a terminal (#93/#171).
-	fmt.Fprintf(h.w, "%s  %s\n", levelOf(r.Level).Label(h.p), Sanitize(r.Message))
+	// untrusted text headed for a terminal (#93/#171). Note Sanitize STRIPS
+	// newlines rather than escaping them, so a multi-line slog message collapses
+	// to one line — acceptable here because a log record's Message is a single
+	// line by convention, and the alternative (indenting attacker-chosen line
+	// breaks into the message column) would let a crafted message forge what
+	// looks like a second, separate diagnostic.
+	style := h.p.styleFor(h.w)
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s  %s\n", levelOf(r.Level).Label(style), Sanitize(r.Message))
 	if len(attrs) > 0 {
-		fmt.Fprintf(h.w, "%s%s\n", DiagIndent, h.p.Faint(Sanitize(strings.Join(attrs, " "))))
+		fmt.Fprintf(&b, "%s%s\n", diagIndent, style.Faint(Sanitize(strings.Join(attrs, " "))))
 	}
-	return nil
+
+	// ONE Write under the lock: the label line and its attribute line are a
+	// single logical diagnostic and must not be split by a concurrent record.
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	// Return the write error rather than swallowing it. slog's own Logger
+	// discards what Handle returns, so this changes nothing for a live CLI — but
+	// a handler that reports "success" after a failed write is a lie that makes
+	// a tee'd or piped sink impossible to debug, and a test can assert on it.
+	_, err := io.WriteString(h.w, b.String())
+	return err
 }
 
 // levelOf maps a slog.Level onto the CLI's four-level vocabulary. slog levels

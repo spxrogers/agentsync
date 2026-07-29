@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -101,38 +102,83 @@ func TestReportError_QuietSentinelThroughWrapper(t *testing.T) {
 // The guard: no new ad-hoc diagnostic prefixes
 // ---------------------------------------------------------------------------
 
-// packageSourceDir returns the directory holding this package's sources.
+// sweptDirs are the source directories the ad-hoc-prefix sweep covers, relative
+// to the repo root.
 //
-// It CANNOT be derived from the working directory: this package's TestMain
-// chdirs into a scratch dir so filesystem-touching tests never run against the
-// repo, so a `filepath.Glob("*.go")` here matches nothing and any sweep built on
-// it passes vacuously — which is exactly how this guard was first written, and
-// exactly the failure a source sweep must never have. runtime.Caller pins the
-// path at compile time instead.
-func packageSourceDir(t *testing.T) string {
+// `cmd/agentsync` is in the list because that is where the #211 regression
+// ACTUALLY lived: the offending line was `fmt.Fprintln(os.Stderr, "agentsync:",
+// err)` in main(), not in internal/cli. A sweep scoped to this package alone
+// passed green with that exact line restored — verified by reintroducing it.
+var sweptDirs = []string{"internal/cli", "cmd/agentsync"}
+
+// repoRoot locates the repository root from this test file's compiled-in path.
+//
+// It CANNOT be derived from the working directory: this package's TestMain chdirs
+// into a scratch dir so filesystem-touching tests never run against the repo, so
+// `filepath.Glob("*.go")` here matches nothing and any sweep built on it passes
+// vacuously — which is exactly how this guard was first written. runtime.Caller
+// pins the path at compile time instead.
+func repoRoot(t *testing.T) string {
 	t.Helper()
 	_, self, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller could not locate this test file")
 	}
-	return filepath.Dir(self)
+	// <root>/internal/cli/output_vocabulary_test.go
+	return filepath.Dir(filepath.Dir(filepath.Dir(self)))
 }
 
-// bannedPrefixes are the diagnostic prefixes this package used to hand-roll,
+// bannedPrefixes are the diagnostic prefixes this codebase used to hand-roll,
 // each of which produced a notice that looked different from every other one.
 // They are now all expressed through the ui vocabulary.
 //
-// Deliberately narrow — only prefixes whose ONLY plausible use is labeling a
-// diagnostic. A broader list (e.g. "scope:", "ok:") would also flag legitimate
-// field labels inside a report body, where no level belongs: `explain` prints
-// `  scope: user` as a data row, not as a notice about the run.
-var bannedPrefixes = []struct {
-	literal string
-	instead string
-}{
-	{`"agentsync:"`, "p.Warnf / p.Errorf — the level label replaces the program prefix"},
-	{`"warning:"`, "p.Warnf (or the bare \"warning: \" sentinel into a ui.WarnWriter)"},
-	{`"note:"`, "p.Infof"},
+// Two matching modes, because the three prefixes are not alike:
+//
+//   - `labelOnly: false` (agentsync:, note:) — these are never legitimate in
+//     output, in ANY form. Matched as a PREFIX of the unquoted literal, because
+//     the original #211 emitter and its likely reintroductions are
+//     `"agentsync:"`, `"agentsync: %v\n"`, and `"agentsync: "` — an equality
+//     check catches only the first, which is how the first version of this guard
+//     passed with the regression restored.
+//   - `labelOnly: true` (warning:) — the bare `warning: ` sentinel HEADING A
+//     FULL MESSAGE is a deliberate contract: the adapter and capture packages
+//     must not import ui, so they emit that plain prefix into an io.Writer and
+//     ui.WarnWriter rewrites it into the WARN label. Those must stay legal. What
+//     must not is `warning:` used as a standalone styled label token, e.g. the
+//     old `p.Yellow("warning:")`. So ban only the bare-token forms.
+//
+// Deliberately narrow in WHICH prefixes are listed: a broader set (e.g. "scope:",
+// "ok:") would also flag legitimate field labels inside a report body, where no
+// level belongs — `explain` prints `  scope: user` as a data row, not a notice.
+type bannedPrefix struct {
+	prefix    string
+	labelOnly bool
+	instead   string
+}
+
+// banned reports whether the unquoted literal val trips this rule.
+func (b bannedPrefix) banned(val string) bool {
+	if b.labelOnly {
+		return val == b.prefix || val == b.prefix+" "
+	}
+	return strings.HasPrefix(val, b.prefix)
+}
+
+var bannedPrefixes = []bannedPrefix{
+	{prefix: "agentsync:", instead: "p.Warnf / p.Errorf — the level label replaces the program prefix"},
+	{prefix: "note:", instead: "p.Infof"},
+	{prefix: "warning:", labelOnly: true, instead: "p.Warnf, or the \"warning: <message>\" sentinel into a ui.WarnWriter"},
+}
+
+// exemptLiterals are specific literals that match a banned prefix but are not
+// terminal diagnostics. Keyed by the unquoted literal so adding one is an
+// explicit, reviewable decision rather than a loosened pattern.
+var exemptLiterals = map[string]string{
+	// A panic value, not a printed diagnostic: it names the program because it
+	// surfaces through Go's own panic output, which carries no agentsync framing.
+	// It can never reach ReportError (a panic does not return an error), so it
+	// cannot produce a doubled "✗ ERROR  agentsync: …" line.
+	"agentsync: adapter registry wiring bug: %w": "internal panic value, never a printed diagnostic",
 }
 
 // TestNoAdHocDiagnosticPrefixes is the regression fence for #211's follow-up:
@@ -141,45 +187,62 @@ var bannedPrefixes = []struct {
 // hand-rolled prefix compiles, passes review as "just a Fprintf", and breaks
 // nothing — exactly the failure class that needs a mechanical guard.
 //
-// Scoped to string LITERALS in this package's non-test sources, so a comment
-// discussing the old format (several do, for history) never trips it.
+// Scoped to string LITERALS in non-test sources, so a comment discussing the old
+// format (several do, for history) never trips it.
 func TestNoAdHocDiagnosticPrefixes(t *testing.T) {
+	root := repoRoot(t)
 	fset := token.NewFileSet()
-	files, err := filepath.Glob(filepath.Join(packageSourceDir(t), "*.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(files) == 0 {
-		t.Fatal("no sources found — the sweep would pass vacuously")
-	}
-	for _, path := range files {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
-		src, err := os.ReadFile(path)
+	swept := 0
+	for _, dir := range sweptDirs {
+		files, err := filepath.Glob(filepath.Join(root, dir, "*.go"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		f, err := parser.ParseFile(fset, path, src, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
+		if len(files) == 0 {
+			t.Fatalf("no sources found under %s — the sweep would pass vacuously", dir)
 		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
+		for _, path := range files {
+			if strings.HasSuffix(path, "_test.go") {
+				continue
 			}
-			for _, b := range bannedPrefixes {
-				// Exact-literal match: `"warning: %s"` inside a WarnWriter-bound
-				// Fprintf is the documented emitter contract and must stay legal,
-				// while a bare `p.Yellow("warning:")` prefix must not.
-				if lit.Value == b.literal {
-					t.Errorf("%s: ad-hoc diagnostic prefix %s — use %s instead",
-						fset.Position(lit.Pos()), b.literal, b.instead)
+			swept++
+			src, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, err := parser.ParseFile(fset, path, src, 0)
+			if err != nil {
+				t.Fatalf("parse %s: %v", path, err)
+			}
+			ast.Inspect(f, func(n ast.Node) bool {
+				lit, ok := n.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					return true
 				}
-			}
-			return true
-		})
+				// Unquote so both interpreted ("…") and raw (`…`) literals are
+				// compared as the text the terminal would actually receive.
+				val, uerr := strconv.Unquote(lit.Value)
+				if uerr != nil {
+					return true
+				}
+				if why, ok := exemptLiterals[val]; ok {
+					_ = why // documented exemption; see exemptLiterals
+					return true
+				}
+				for _, b := range bannedPrefixes {
+					if b.banned(val) {
+						t.Errorf("%s: ad-hoc diagnostic prefix %q — use %s instead",
+							fset.Position(lit.Pos()), val, b.instead)
+					}
+				}
+				return true
+			})
+		}
+	}
+	// A sweep that silently stops finding files is the failure mode this whole
+	// test exists to avoid, twice over now. Pin a floor.
+	if swept < 25 {
+		t.Fatalf("swept only %d source files; the sweep has lost its targets", swept)
 	}
 }
 

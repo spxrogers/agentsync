@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -69,10 +70,27 @@ func NewRoot() *cobra.Command {
 		// This also records the resolved color decision for ReportError, which
 		// runs in main() after cobra has returned and has no *cobra.Command to
 		// read the flag off.
-		if p, err := newPrinter(c); err == nil {
-			resolvedColorMode = p.ColorMode()
-			aslog.Install(c.ErrOrStderr(), p, verbose)
-		}
+		//
+		// printerOn, NOT newPrinter: an invalid --color must not skip the
+		// installation. Gating this on `err == nil` meant a bad --color value left
+		// NO handler installed, so library warnings fell back to the stdlib
+		// timestamped line — reproducing the exact #211 shape this function exists
+		// to prevent, in the one case where the user already made a mistake and
+		// most needs a legible diagnostic. printerOn degrades a bad value to
+		// `auto`; the value is still validated and reported by the command's own
+		// newPrinter call.
+		//
+		// Bound to Err: this printer styles diagnostics, and ui resolves `auto`
+		// per stream.
+		ew := c.ErrOrStderr()
+		p := printerOn(c, ew)
+		resolvedColorMode = p.ColorMode()
+		// The restore closure is deliberately discarded HERE and reinstated by
+		// tests: a real process installs once and exits, but a test binary runs
+		// many NewRoot().Execute() cycles, each leaving slog.Default() bound to a
+		// finished test's buffer. ResetSlogForTest is the seam for that; see its
+		// doc.
+		aslog.Install(ew, p, verbose)
 		// The first-run-after-upgrade notice is the ONLY hook that reaches every
 		// installation channel — `go install` has no post-install step, a
 		// Homebrew cask's caveats print at install time only, and Scoop has
@@ -152,10 +170,33 @@ func ReportErrorTo(w io.Writer, mode ui.ColorMode, err error) int {
 	if errors.As(err, &ec) {
 		return ec.ExitCode()
 	}
-	// Bind the printer's Out to w as well: resolveColor reads TTY-ness off Out,
-	// and this diagnostic's stream is w.
-	ui.New(w, w, mode).Errorf("%s", err)
+	// Bind BOTH streams to w: this diagnostic's destination is w, and ui resolves
+	// `auto` per stream.
+	//
+	// sanitizeLines, not raw err.Error(): an error chain routinely carries
+	// third-party agent-config text (a plugin id, a native subagent name, a
+	// filesystem path), and no single call site can pre-sanitize a wrapped chain
+	// assembled on the way up. Left raw, a bare \r in that text rewinds the
+	// cursor over the "✗ ERROR" label and lets crafted config forge a "✅" line —
+	// the terminal-spoofing class #93/#171 exist for. Sanitizing per line keeps a
+	// legitimately multi-line error readable while stripping the control bytes.
+	ui.New(w, w, mode).Errorf("%s", sanitizeLines(err.Error()))
 	return 1
+}
+
+// sanitizeLines applies ui.Sanitize to each line and rejoins with "\n".
+//
+// ui.Sanitize STRIPS newlines (it does not escape them), so sanitizing a
+// multi-line string wholesale would concatenate the lines with no separator and
+// defeat the message-column indentation Fdiagf applies. Splitting first keeps
+// the structure the author intended while still removing every control byte an
+// attacker could smuggle in.
+func sanitizeLines(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, ln := range lines {
+		lines[i] = ui.Sanitize(ln)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // newPrinter builds the presentation Printer for a command invocation, reading
@@ -193,11 +234,17 @@ func colorModeOf(cmd *cobra.Command) (ui.ColorMode, error) {
 // An unparseable --color degrades to auto rather than erroring. The commands
 // that call this are mid-flow and have no good way to surface a flag error; the
 // value is validated (and reported) by newPrinter on the command's own path.
+// ParseColorMode already returns ColorAuto alongside its error, so the error is
+// discarded rather than branched on.
+//
+// This builds a Printer per call, which reads against Printer's "construct one
+// per command invocation" guidance. That guidance is about not re-deciding color
+// INCONSISTENTLY within one command, and this cannot: the mode comes from the
+// same flag and is re-resolved against the same writer every time, so every call
+// yields the same decision. The cost is one TTY probe per line, on output paths
+// that already syscall.
 func printerOn(cmd *cobra.Command, w io.Writer) *ui.Printer {
-	mode, err := colorModeOf(cmd)
-	if err != nil {
-		mode = ui.ColorAuto
-	}
+	mode, _ := colorModeOf(cmd)
 	return ui.New(w, w, mode)
 }
 

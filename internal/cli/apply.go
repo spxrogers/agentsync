@@ -302,6 +302,9 @@ func applyRun(cmd *cobra.Command, home string, dryRun, noGitBackup bool, agentsC
 	//   - a genuine clean re-apply (every dest already held our exact bytes,
 	//     nothing removed) → "up to date" (unchanged detection preserved).
 	//   - normal writes → "applied: N ops".
+	//   - a zero-op plan (no agent renders anything yet) → a plain ✅, not 🎉:
+	//     celebrating an apply that did nothing reads as a tool that does not
+	//     know what it did.
 	switch {
 	case removed > 0 && appliedOps == 0:
 		p.Fsuccessf(w, ui.EmojiRemoved, "removed: %s", removedLabel(removedKeys, removedFiles))

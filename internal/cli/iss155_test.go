@@ -3,12 +3,15 @@ package cli_test
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/cli"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 // exitCodeOf mirrors main()'s error→exit-code mapping: 0 for nil, the ExitCoder
@@ -321,7 +324,13 @@ func TestCLIStreams_JSONStdoutMessagesStderr(t *testing.T) {
 	if strings.Contains(stdout, "WARN") {
 		t.Fatalf("a warning leaked into the --json stdout payload:\n%s", stdout)
 	}
-	if !strings.Contains(stderr, "WARN") {
+	// Same-line: pin the WARN label to the orphaned-agent message specifically,
+	// so an unrelated warning elsewhere on stderr cannot satisfy this.
+	orphanWarn := regexp.MustCompile(
+		regexp.QuoteMeta(ui.LevelWarn.Label(ui.New(io.Discard, io.Discard, ui.ColorNever))) +
+			`[^\n\r]*is not enabled but still owns tracked files`,
+	)
+	if !orphanWarn.MatchString(stderr) {
 		t.Fatalf("expected the orphaned-agent WARN diagnostic on stderr; got:\n%s", stderr)
 	}
 }

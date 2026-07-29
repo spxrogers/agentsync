@@ -26,7 +26,7 @@ func TestSlogHandlerRendersAsDiagnostic(t *testing.T) {
 		"path", "/home/me/.agentsync/.state/cache/plugins/x/agents/y.md")
 
 	want := "⚠ WARN   plugin component frontmatter is not strict YAML; parsed leniently\n" +
-		DiagIndent + "path=/home/me/.agentsync/.state/cache/plugins/x/agents/y.md\n"
+		diagIndent + "path=/home/me/.agentsync/.state/cache/plugins/x/agents/y.md\n"
 	if got := buf.String(); got != want {
 		t.Fatalf("slog warning render:\ngot:  %q\nwant: %q", got, want)
 	}

@@ -1086,8 +1086,21 @@ byte-identical output.
 - *The glyph and the level word are content, not decoration.* Color is a second
   signal only. Piped, redirected, under `NO_COLOR`, or `--color never`, severity
   still reaches a log file — which is where CI reads it.
-- *Diagnostics never touch stdout.* That is what keeps `status --json` a clean
-  payload while its warnings still reach the user, and it is asserted end-to-end.
+- *A command's machine-readable stdout is never polluted by a diagnostic.* This
+  is the guarantee that matters and the one that is asserted end-to-end
+  (`TestSlogWarningNeverEntersAJSONPayload` drives a real `status --json` with a
+  library `slog.Warn` in flight, parses the payload, and rejects any level word
+  in it). `Errorf`/`Warnf`/`Infof` all write to stderr, so this holds by
+  construction for every command.
+
+  It is **not** the same as "no diagnostic is ever written to stdout", and that
+  stronger claim would be false: `reconcile`'s interactive loop deliberately
+  routes its labeled write-back failures through `Fdiagf` onto `p.Out`, the same
+  stream as the prompt they answer. Splitting a keystroke-driven conversation
+  across two streams would break the transcript for the sake of a rule that buys
+  nothing there — `reconcile` is interactive and emits no machine-readable
+  payload. `Fdiagf` exists for exactly that case, which is why it takes an
+  explicit writer while `Diagf` does not.
 - *Success carries no level word.* An `INFO` on `added agent: claude` is noise
   that trains the eye to skip labels; the emoji says both "this worked" and
   "this is the outcome line". Chosen by what happened, not by which command ran.
@@ -1102,11 +1115,43 @@ so both halves are pinned by `TestWarnSentinelStaysWiredToTheWarnLabel`.
 
 **The regression fence.** A hand-rolled prefix compiles, reads like "just a
 `Fprintf`" in review, and breaks no test — the exact failure class that needs a
-mechanical guard. `TestNoAdHocDiagnosticPrefixes` parses every non-test source in
-`internal/cli` and fails on a reintroduced `"agentsync:"` / `"warning:"` /
-`"note:"` string literal. It is deliberately narrow: a broader list would also
-flag legitimate field labels inside a report body, where no level belongs
-(`explain` prints `scope: user` as a data row, not as a notice).
+mechanical guard. `TestNoAdHocDiagnosticPrefixes` parses the non-test sources of
+**both `internal/cli` and `cmd/agentsync`** and fails on a reintroduced
+`"agentsync:"` / `"note:"` prefix, or a bare `"warning:"` label token.
+
+Both halves of that scoping were learned the hard way, and the lesson generalizes
+past this one test: **a source-sweeping guard has two independent ways to be
+vacuous, and passing green proves neither is absent.**
+
+1. *Wrong files.* The sweep first globbed `*.go` relative to the working
+   directory — but `internal/cli`'s `TestMain` chdirs to a scratch dir, so it
+   matched nothing. It now resolves the repo root from `runtime.Caller`, requires
+   every swept directory to be non-empty, and asserts a floor on the total file
+   count.
+2. *Wrong matcher.* Even after that, it compared literals for *equality*, so it
+   passed with the verbatim #211 emitter —
+   `fmt.Fprintln(os.Stderr, "agentsync:", err)` — restored to `main()`: that file
+   sat outside the swept set, and `"agentsync: %v\n"` would have slipped past the
+   matcher regardless. It now `strconv.Unquote`s each literal (so a raw backtick
+   string is compared as the text a terminal would receive) and matches by prefix.
+
+`"warning:"` is matched differently from the other two, deliberately: the
+`warning: <message>` sentinel is a *contract* with the packages that cannot import
+`ui`, so only the bare label forms are banned. The one legitimate `agentsync:`
+literal — a `panic` value in `registry_internal.go`, which surfaces through Go's
+own panic output rather than as a diagnostic line — is an explicit, commented
+entry in an exemption map rather than a loosened pattern.
+
+Beyond that, the guard stays deliberately narrow in *which* prefixes it lists: a
+broader set (e.g. `scope:`, `ok:`) would also flag legitimate field labels inside
+a report body, where no level belongs — `explain` prints `scope: user` as a data
+row, not as a notice.
+
+**Test isolation.** The installation is process-global, so `internal/log` exposes
+`Detach()` and the CLI test harness calls it via `t.Cleanup` on every invocation.
+Without it, each `runCLI` leaves `slog.Default()` bound to a finished test's
+`bytes.Buffer` — invisible today, and a data race the moment a test there adopts
+`t.Parallel`.
 
 ---
 
@@ -1125,10 +1170,12 @@ flowchart TD
     DRF["internal/drift — 3-way classifier (pure)"]
     ST["internal/state — targets.json"]
     GIT["internal/git — local-only go-git wrapper (no push surface)"]
-    INFRA["internal/iox · paths · jsonkeys · log · untrusted · ui"]
+    UI["internal/ui — presentation: color · glyphs · diagnostics"]
+    LOG["internal/log — slog wiring (installs ui.SlogHandler)"]
+    INFRA["internal/iox · paths · jsonkeys · untrusted"]
 
-    CLI --> REN & CAP & AD & SRC & SEC & MKT & PRJ & DRF & ST & GIT
-    REN --> AD & SEC & SRC & ST & DRF & INFRA
+    CLI --> REN & CAP & AD & SRC & SEC & MKT & PRJ & DRF & ST & GIT & UI & LOG
+    REN --> AD & SEC & SRC & ST & DRF & UI & INFRA
     CAP --> SRC & SEC & INFRA
     AD --> SRC & SEC & INFRA
     AD -. "opencode ingest ownership only (issue #148)" .-> ST
@@ -1137,7 +1184,18 @@ flowchart TD
     SRC --> INFRA
     SEC --> SRC & INFRA
     ST --> INFRA
+    LOG --> UI
+    UI --> INFRA
 ```
+
+`internal/ui` is drawn as its own node rather than folded into `INFRA` because
+the distinction is load-bearing, not cosmetic: **`internal/adapter` and
+`internal/capture` must not depend on `ui`**, and an `AD --> INFRA` edge into a
+node containing `ui` asserted exactly the dependency §11 forbids. That constraint
+is why an adapter emits the plain `warning: ` sentinel into an `io.Writer` it was
+handed instead of formatting a label itself. `internal/render` *does* depend on
+`ui` (its translation report renders through a `*Printer`), and `internal/log`
+depends on it too — so `log` is no longer a leaf.
 
 `internal/drift`, `internal/git`, `internal/iox`, `internal/jsonkeys`,
 `internal/paths`, and `internal/untrusted` have no internal

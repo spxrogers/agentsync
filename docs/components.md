@@ -512,7 +512,19 @@ installed as the process-wide default by the root command, so a `slog.Warn` from
 `internal/render` or `internal/marketplace` is byte-identical to a command's own
 `p.Warnf`. Record timestamps are dropped: these are user-facing CLI diagnostics,
 not a log stream anyone greps by time.
-- **Key:** `Printer` (`New`, `Color`, `ColorMode`, `Section`, colour helpers);
+`Handle` locks its writer (a record is a label line plus an optional attribute
+line, which must not interleave) and returns write errors rather than swallowing
+them. The `slog.Warn` / `WarnWriter` / `p.Warnf` triple being byte-identical is
+pinned by `TestWarnPathsAreByteIdentical`.
+
+**Who sanitizes.** `SlogHandler.Handle` and `cli.ReportError` sanitize their own
+input, because neither has a call site that could: a log record and a wrapped
+error chain are both assembled elsewhere. Everywhere else the **caller** applies
+`ui.Sanitize` at the display boundary, as the rest of this codebase does — the
+`Diagf`/`Detailf`/`Successf` family deliberately does not, so a caller can pass
+pre-styled text (the upgrade-notice banner composes `p.Bold`/`p.Yellow` fragments
+into a `Warnf`) without having its own escape codes stripped.
+- **Key:** `Printer` (`New`, `Color`, `ColorErr`, `ColorMode`, `Section`, colour helpers);
   `Level` + `Label`; `Errorf`/`Warnf`/`Infof`/`Diagf`/`Fdiagf`;
   `Detailf`/`Fdetailf`; `Successf`/`Fsuccessf` + the `Emoji*` vocabulary;
   `SlogHandler`/`NewSlogHandler`; the package-level `Pad` helper;

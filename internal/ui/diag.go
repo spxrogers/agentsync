@@ -18,12 +18,19 @@ import (
 // gives it two.
 type Level int
 
+// LevelDebug is deliberately the ZERO VALUE: a `var l Level` or a `Diagf(0, …)`
+// then renders as the least-severe level rather than silently claiming ERROR.
 const (
 	LevelDebug Level = iota
 	LevelInfo
 	LevelWarn
 	LevelError
 )
+
+// valid reports whether l is one of the four defined levels. Out-of-range values
+// are rendered as DEBUG (see glyph/word), so this exists to let String() stay
+// honest about a value it cannot name.
+func (l Level) valid() bool { return l >= LevelDebug && l <= LevelError }
 
 // Rendered label geometry. Each label is `<glyph> <WORD padded to 5>`, giving a
 // constant 7-column label followed by a 2-column gutter — so message text always
@@ -33,20 +40,17 @@ const (
 // natural width; the padding costs nothing and makes the column explicit.
 const (
 	levelWordWidth = 5
-	// DiagIndent is the blank prefix that aligns a continuation line under the
-	// message column of a labeled diagnostic. Callers emitting a follow-up
-	// detail line should use Detailf rather than hand-indenting with this, but
-	// it is exported for layout code that composes its own lines.
-	DiagIndent = "         " // 7 (label) + 2 (gutter)
+	// diagIndent is the blank prefix that aligns a continuation line under the
+	// message column of a labeled diagnostic. Unexported on purpose: Detailf /
+	// Fdetailf are the seam for a continuation line, and an exported string of
+	// literal spaces invites callers to hand-indent and drift out of alignment
+	// when the label geometry changes.
+	diagIndent = "         " // 7 (label) + 2 (gutter)
 )
 
-// GlyphNote is the informational label glyph. Distinct from GlyphInfo ("•"),
-// which stays the neutral list bullet used inside `doctor`/`status` bodies —
-// the two must not be conflated: one prefixes a diagnostic, the other is a
-// layout mark inside report output.
-const GlyphNote = "ℹ"
-
-// glyph returns the label glyph for a level.
+// glyph returns the label glyph for a level. The glyphs themselves are declared
+// with the rest of the curated vocabulary in ui.go; see GlyphBullet's doc there
+// for why DEBUG's mark is named separately from the report-body bullet.
 func (l Level) glyph() string {
 	switch l {
 	case LevelError:
@@ -56,7 +60,7 @@ func (l Level) glyph() string {
 	case LevelInfo:
 		return GlyphNote
 	default:
-		return GlyphInfo
+		return GlyphBullet
 	}
 }
 
@@ -76,15 +80,26 @@ func (l Level) word() string {
 
 // String implements fmt.Stringer with the rendered level word, so a Level can be
 // dropped into a message or a test failure without a switch.
-func (l Level) String() string { return l.word() }
+//
+// An out-of-range value reports itself as such rather than as "DEBUG". word()
+// has to pick SOME label to render, and picks the least-severe one; String is
+// where a test failure or a log line gets to say "this value has no name",
+// which is the difference between a confusing diagnostic and a silent lie.
+func (l Level) String() string {
+	if !l.valid() {
+		return fmt.Sprintf("Level(%d)", int(l))
+	}
+	return l.word()
+}
 
 // colorize applies the level's semantic color via p. Color is bold so the label
 // separates from the message even on a busy screen; with color off the glyph and
 // the word carry the whole signal, which is why the glyph is unconditional.
 //
-// The bold+color codes are emitted as ONE sequence rather than nested
-// p.Bold(p.Red(…)) calls, which would emit two SGR opens and two resets around
-// every label.
+// The bold+color codes are emitted through ONE wrap call rather than nested
+// p.Bold(p.Red(…)) calls. That still opens two SGR sequences (\x1b[1m\x1b[31m)
+// — SGR has no single bold-and-red parameter — but it emits ONE reset instead of
+// two, which is what nesting was actually costing.
 func (l Level) colorize(p *Printer, s string) string {
 	switch l {
 	case LevelError:
@@ -153,7 +168,7 @@ func (p *Printer) Diagf(l Level, format string, args ...any) {
 // so a multi-line diagnostic reads as one block rather than one labeled line
 // followed by orphaned text at column 0.
 func (p *Printer) Fdiagf(w io.Writer, l Level, format string, args ...any) {
-	fmt.Fprintf(w, "%s  %s\n", l.Label(p), indentContinuation(fmt.Sprintf(format, args...)))
+	fmt.Fprintf(w, "%s  %s\n", l.Label(p.styleFor(w)), indentContinuation(fmt.Sprintf(format, args...)))
 }
 
 // Detailf writes an unlabeled continuation line to Err, indented to the message
@@ -166,7 +181,7 @@ func (p *Printer) Detailf(format string, args ...any) {
 
 // Fdetailf is Detailf against an explicit writer.
 func (p *Printer) Fdetailf(w io.Writer, format string, args ...any) {
-	fmt.Fprintf(w, "%s%s\n", DiagIndent, indentContinuation(fmt.Sprintf(format, args...)))
+	fmt.Fprintf(w, "%s%s\n", diagIndent, indentContinuation(fmt.Sprintf(format, args...)))
 }
 
 // Successf writes a success line to Out: the emoji, then the message, green
@@ -178,8 +193,11 @@ func (p *Printer) Successf(emoji, format string, args ...any) {
 // Fsuccessf is Successf against an explicit writer, for commands that stream
 // their result into a caller-supplied buffer.
 func (p *Printer) Fsuccessf(w io.Writer, emoji, format string, args ...any) {
+	// No indentContinuation here, deliberately: a success line is a single
+	// outcome, and there is no label column for a continuation to hang under.
+	// A multi-line success message is a call-site bug, not something to lay out.
 	msg := fmt.Sprintf(format, args...)
-	fmt.Fprintf(w, "%s %s\n", emoji, p.Green(msg))
+	fmt.Fprintf(w, "%s %s\n", emoji, p.styleFor(w).Green(msg))
 }
 
 // indentContinuation aligns every line after the first to the message column.
@@ -193,7 +211,7 @@ func indentContinuation(s string) string {
 		if lines[i] == "" {
 			continue
 		}
-		lines[i] = DiagIndent + lines[i]
+		lines[i] = diagIndent + lines[i]
 	}
 	return strings.Join(lines, "\n")
 }

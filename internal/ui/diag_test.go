@@ -2,8 +2,12 @@ package ui
 
 import (
 	"bytes"
+	"context"
+	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The label column is the whole point of the vocabulary: message text must
@@ -31,15 +35,15 @@ func TestDiagLabelsShareOneMessageColumn(t *testing.T) {
 			if got := buf.String(); got != tc.want+"\n" {
 				t.Fatalf("Diagf(%v) = %q, want %q", tc.level, got, tc.want+"\n")
 			}
-			// The message must begin exactly where DiagIndent ends, so a
+			// The message must begin exactly where diagIndent ends, so a
 			// Detailf continuation hangs under it. Count RUNES, not bytes:
 			// the glyphs are multi-byte and the terminal column is a rune
 			// count (each glyph in the vocabulary is one display cell).
 			line := strings.TrimSuffix(buf.String(), "\n")
 			col := len([]rune(line)) - len([]rune("msg"))
-			if col != len([]rune(DiagIndent)) {
-				t.Fatalf("%v message starts at column %d, want %d (DiagIndent width)",
-					tc.level, col, len([]rune(DiagIndent)))
+			if col != len([]rune(diagIndent)) {
+				t.Fatalf("%v message starts at column %d, want %d (diagIndent width)",
+					tc.level, col, len([]rune(diagIndent)))
 			}
 		})
 	}
@@ -57,8 +61,8 @@ func TestDiagContinuationAlignment(t *testing.T) {
 	p.Detailf("third line")
 
 	want := "⚠ WARN   first line\n" +
-		DiagIndent + "second line\n" +
-		DiagIndent + "third line\n"
+		diagIndent + "second line\n" +
+		diagIndent + "third line\n"
 	if got := buf.String(); got != want {
 		t.Fatalf("continuation alignment:\ngot:  %q\nwant: %q", got, want)
 	}
@@ -70,7 +74,7 @@ func TestDiagContinuationAlignment(t *testing.T) {
 func TestDiagBlankContinuationLineNotPadded(t *testing.T) {
 	var buf bytes.Buffer
 	New(&buf, &buf, ColorNever).Infof("a\n\nb")
-	if got := buf.String(); got != "ℹ INFO   a\n\n"+DiagIndent+"b\n" {
+	if got := buf.String(); got != "ℹ INFO   a\n\n"+diagIndent+"b\n" {
 		t.Fatalf("blank continuation line was padded: %q", got)
 	}
 }
@@ -128,8 +132,14 @@ func TestSuccessCarriesNoLevelWord(t *testing.T) {
 // mistake is invisible in source review.
 func TestSuccessEmojiHaveNoVariationSelector(t *testing.T) {
 	for _, emoji := range []string{EmojiSuccess, EmojiApplied, EmojiRemoved, EmojiImported, EmojiReverted, EmojiInit} {
-		if strings.ContainsRune(emoji, '️') || strings.ContainsRune(emoji, '︎') {
+		if strings.ContainsRune(emoji, '\ufe0f') || strings.ContainsRune(emoji, '\ufe0e') {
 			t.Errorf("emoji %q carries a variation selector; pick a default-presentation rune instead", emoji)
+		}
+		// The doc says "a single default-emoji-presentation rune". Assert the
+		// single-rune half too: a ZWJ sequence or a keycap carries no variation
+		// selector yet still renders at an unpredictable width.
+		if n := len([]rune(emoji)); n != 1 {
+			t.Errorf("emoji %q is %d runes; the vocabulary is single-rune by contract", emoji, n)
 		}
 	}
 }
@@ -168,4 +178,42 @@ func stripANSI(s string) string {
 		i++
 	}
 	return b.String()
+}
+
+// The package doc and docs/architecture.md §11 both claim that a library-side
+// slog.Warn, an adapter's "warning: " sentinel through a WarnWriter, and a
+// command's own p.Warnf are indistinguishable. That is the whole premise of the
+// change — "one vocabulary" — and it was previously only IMPLIED by three
+// separate hardcoded expectations in three separate tests, any one of which
+// could drift without the others noticing.
+//
+// Assert the triple directly, for one message, byte-for-byte.
+func TestWarnPathsAreByteIdentical(t *testing.T) {
+	const msg = "plugin component frontmatter is not strict YAML"
+
+	// Path 1: a command's own p.Warnf.
+	var direct bytes.Buffer
+	New(&direct, &direct, ColorNever).Warnf("%s", msg)
+
+	// Path 2: the emitter-side sentinel through a WarnWriter (adapter / capture,
+	// which cannot import this package).
+	var sentinel bytes.Buffer
+	sp := New(&sentinel, &sentinel, ColorNever)
+	ww := NewWarnWriter(&sentinel, sp)
+	fmt.Fprintf(ww, "warning: %s\n", msg)
+
+	// Path 3: a library slog.Warn through the installed handler.
+	var viaSlog bytes.Buffer
+	lp := New(&viaSlog, &viaSlog, ColorNever)
+	_ = slog.New(NewSlogHandler(&viaSlog, lp, slog.LevelInfo)).Handler().
+		Handle(context.Background(), slog.NewRecord(time.Time{}, slog.LevelWarn, msg, 0))
+
+	if direct.String() != sentinel.String() {
+		t.Errorf("p.Warnf and the \"warning: \" sentinel diverge:\n  Warnf:    %q\n  sentinel: %q",
+			direct.String(), sentinel.String())
+	}
+	if direct.String() != viaSlog.String() {
+		t.Errorf("p.Warnf and slog.Warn diverge:\n  Warnf: %q\n  slog:  %q",
+			direct.String(), viaSlog.String())
+	}
 }
