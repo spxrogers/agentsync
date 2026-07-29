@@ -103,13 +103,39 @@ func TestReportError_QuietSentinelThroughWrapper(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // sweptDirs are the source directories the ad-hoc-prefix sweep covers, relative
-// to the repo root.
+// to the repo root, each with the minimum number of non-test files it must
+// contain.
 //
-// `cmd/agentsync` is in the list because that is where the #211 regression
-// ACTUALLY lived: the offending line was `fmt.Fprintln(os.Stderr, "agentsync:",
-// err)` in main(), not in internal/cli. A sweep scoped to this package alone
-// passed green with that exact line restored — verified by reintroducing it.
-var sweptDirs = []string{"internal/cli", "cmd/agentsync"}
+// `cmd/agentsync` is here because that is where the #211 regression ACTUALLY
+// lived: the offending line was `fmt.Fprintln(os.Stderr, "agentsync:", err)` in
+// main(), not in internal/cli. A sweep scoped to this package alone passed green
+// with that exact line restored — verified by reintroducing it.
+//
+// The floors are PER DIRECTORY, and TestSweptDirsCoverTheEmitters pins the set
+// itself, because a single aggregate floor does not protect this list. With 31
+// files in internal/cli and 1 in cmd/agentsync, deleting the cmd/agentsync entry
+// left 31 — comfortably over any aggregate floor — so the round-1 hole could be
+// reopened without failing anything. A one-file directory cannot be defended by
+// counting everything.
+//
+// DELIBERATELY OUT OF SCOPE, so a future reader does not read these as misses:
+//
+//   - `internal/testenv` prints three `agentsync: …` lines to os.Stderr
+//     (container.go), but it is a TestMain host-refusal guard that never runs in
+//     the shipped binary and exits before any CLI output exists. Naming the
+//     program there is right, exactly as it is for a panic value.
+//   - `internal/source` defines `agentsync:fragment` and `agentsync:managed` as
+//     RESERVED marker tokens written into memory files. They are file content, not
+//     terminal output, and a prefix match would flag them — which is the argument
+//     for scoping this sweep to the packages that actually emit diagnostics rather
+//     than widening it repo-wide.
+var sweptDirs = []struct {
+	dir      string
+	minFiles int
+}{
+	{dir: "internal/cli", minFiles: 25},
+	{dir: "cmd/agentsync", minFiles: 1},
+}
 
 // repoRoot locates the repository root from this test file's compiled-in path.
 //
@@ -192,20 +218,25 @@ var exemptLiterals = map[string]string{
 func TestNoAdHocDiagnosticPrefixes(t *testing.T) {
 	root := repoRoot(t)
 	fset := token.NewFileSet()
-	swept := 0
-	for _, dir := range sweptDirs {
-		files, err := filepath.Glob(filepath.Join(root, dir, "*.go"))
+	for _, sd := range sweptDirs {
+		files, err := filepath.Glob(filepath.Join(root, sd.dir, "*.go"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(files) == 0 {
-			t.Fatalf("no sources found under %s — the sweep would pass vacuously", dir)
+		var nonTest int
+		for _, p := range files {
+			if !strings.HasSuffix(p, "_test.go") {
+				nonTest++
+			}
+		}
+		if nonTest < sd.minFiles {
+			t.Fatalf("swept only %d non-test file(s) under %s, want >= %d — the sweep has lost its targets there",
+				nonTest, sd.dir, sd.minFiles)
 		}
 		for _, path := range files {
 			if strings.HasSuffix(path, "_test.go") {
 				continue
 			}
-			swept++
 			src, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
@@ -239,10 +270,31 @@ func TestNoAdHocDiagnosticPrefixes(t *testing.T) {
 			})
 		}
 	}
-	// A sweep that silently stops finding files is the failure mode this whole
-	// test exists to avoid, twice over now. Pin a floor.
-	if swept < 25 {
-		t.Fatalf("swept only %d source files; the sweep has lost its targets", swept)
+}
+
+// TestSweptDirsCoverTheEmitters pins the sweep's SCOPE, separately from its
+// matcher.
+//
+// The per-directory floors catch a directory going empty; they cannot catch an
+// entry being deleted outright, which is precisely how the round-1 hole existed in
+// the first place (`cmd/agentsync` absent). Pin the set so removing a directory is
+// a test failure and not a silent narrowing.
+func TestSweptDirsCoverTheEmitters(t *testing.T) {
+	must := map[string]bool{
+		// Where the CLI's diagnostics are emitted from. `cmd/agentsync` is
+		// non-negotiable: it held the original #211 line.
+		"internal/cli":  false,
+		"cmd/agentsync": false,
+	}
+	for _, sd := range sweptDirs {
+		if _, ok := must[sd.dir]; ok {
+			must[sd.dir] = true
+		}
+	}
+	for dir, covered := range must {
+		if !covered {
+			t.Errorf("%s dropped out of sweptDirs — that reopens the hole this guard exists to close", dir)
+		}
 	}
 }
 

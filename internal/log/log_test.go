@@ -43,13 +43,13 @@ func TestNew_VerboseLevel(t *testing.T) {
 }
 
 // Install must make the logger the process default — that is the whole reason
-// the package exists — and its restore must put the previous default back so a
-// test never leaks a handler bound to its own finished buffer.
-func TestInstall_SetsAndRestoresDefault(t *testing.T) {
+// the package exists — and Detach must unbind it, so a test never leaks a handler
+// pointed at its own finished buffer.
+func TestInstallThenDetach(t *testing.T) {
 	var buf bytes.Buffer
 	before := slog.Default()
 
-	restore := aslog.Install(&buf, plainPrinter(&buf), false)
+	aslog.Install(&buf, plainPrinter(&buf), false)
 	slog.Warn("library-side warning", "path", "/tmp/x")
 	if got := buf.String(); !strings.Contains(got, "⚠ WARN   library-side warning") {
 		t.Fatalf("slog.Warn did not route through the installed handler, got: %q", got)
@@ -60,8 +60,23 @@ func TestInstall_SetsAndRestoresDefault(t *testing.T) {
 		t.Fatalf("expected the line to start with the level label, got: %q", buf.String())
 	}
 
-	restore()
-	if slog.Default() != before {
-		t.Fatal("restore did not put the previous default logger back")
+	// Detach is the undo, and it must make the default INERT rather than restore
+	// the previous one: the previous default is the stdlib handler, which prints
+	// timestamped lines to stderr — exactly the shape this package replaces — so
+	// restoring it would spray those across `go test` output.
+	aslog.Detach()
+	if slog.Default() == before {
+		t.Fatal("Detach restored the previous default; it should install a discarding one")
+	}
+	buf.Reset()
+	slog.Warn("after detach")
+	if buf.Len() != 0 {
+		t.Fatalf("Detach left the old handler wired to the buffer: %q", buf.String())
+	}
+	// And nothing reaches the process stderr either — a discarding handler, not a
+	// re-pointed one. Observable only as "the buffer stayed empty", above; this
+	// asserts the handler is at least installed and callable.
+	if slog.Default() == nil {
+		t.Fatal("Detach left a nil default logger")
 	}
 }

@@ -67,10 +67,6 @@ func NewRoot() *cobra.Command {
 		// looked nothing like the rest of the CLI (#211). Routing them here is
 		// what makes a library warning and a command's own p.Warnf identical.
 		//
-		// This also records the resolved color decision for ReportError, which
-		// runs in main() after cobra has returned and has no *cobra.Command to
-		// read the flag off.
-		//
 		// printerOn, NOT newPrinter: an invalid --color must not skip the
 		// installation. Gating this on `err == nil` meant a bad --color value left
 		// NO handler installed, so library warnings fell back to the stdlib
@@ -82,15 +78,13 @@ func NewRoot() *cobra.Command {
 		//
 		// Bound to Err: this printer styles diagnostics, and ui resolves `auto`
 		// per stream.
+		// Install's restore closure is deliberately dropped: a real process
+		// installs once and exits. A TEST binary runs many NewRoot().Execute()
+		// cycles, each leaving slog.Default() bound to a finished test's buffer —
+		// aslog.Detach is the seam for that, called via t.Cleanup from the CLI
+		// test harness (see detachSlog in testhelper_test.go).
 		ew := c.ErrOrStderr()
-		p := printerOn(c, ew)
-		resolvedColorMode = p.ColorMode()
-		// The restore closure is deliberately discarded HERE and reinstated by
-		// tests: a real process installs once and exits, but a test binary runs
-		// many NewRoot().Execute() cycles, each leaving slog.Default() bound to a
-		// finished test's buffer. ResetSlogForTest is the seam for that; see its
-		// doc.
-		aslog.Install(ew, p, verbose)
+		aslog.Install(ew, printerOn(c, ew), verbose)
 		// The first-run-after-upgrade notice is the ONLY hook that reaches every
 		// installation channel — `go install` has no post-install step, a
 		// Homebrew cask's caveats print at install time only, and Scoop has
@@ -128,36 +122,38 @@ func NewRoot() *cobra.Command {
 	return cmd
 }
 
-// Execute is the main.go entry point.
-func Execute() error { return NewRoot().Execute() }
-
-// resolvedColorMode carries the --color decision from the root PersistentPreRunE
-// out to ReportError, which runs in main() after cobra has returned and so has
-// no *cobra.Command to read the flag from. It stays ColorAuto when the pre-run
-// never got that far (an unparseable flag, an unknown subcommand), which is the
-// right fallback: auto re-resolves against stderr's TTY-ness at print time.
+// Execute builds and runs the command tree and returns the PROCESS EXIT CODE.
+// main.go is the only caller: `os.Exit(cli.Execute())`.
 //
-// Package-scoped process state, which the rest of this package deliberately
-// avoids. It is safe here because it is written exactly once per process, on
-// the single-threaded path before any subcommand runs, and read exactly once
-// after every subcommand has returned. A test that needs isolation should
-// assert through ReportErrorTo, which takes its mode explicitly.
-var resolvedColorMode = ui.ColorAuto
+// Owning the whole invocation — build, run, report, exit code — is what lets the
+// terminal error line be styled correctly with no package-level state. An earlier
+// shape had Execute return an error, main call a `ReportError` wrapper, and a
+// package var carry the resolved `--color` decision across that boundary, because
+// main had no `*cobra.Command` to read the flag from. It does not need one: `root`
+// is still in scope here after Execute returns, so colorModeOf reads the parsed
+// persistent flag directly.
+//
+// That collapsed three symbols — the package var, `Printer.ColorMode`, and the
+// `ReportError` wrapper — into this function with NO behavior change, including
+// the fallback: ParseColorMode already yields ColorAuto for an unparseable value,
+// exactly as the zero-valued package var did.
+func Execute() int {
+	root := NewRoot()
+	err := root.Execute()
+	mode, _ := colorModeOf(root)
+	return ReportErrorTo(os.Stderr, mode, err)
+}
 
-// ReportError prints err as the CLI's terminal diagnostic and returns the
-// process exit code. main() is the only caller.
+// ReportErrorTo renders err as the CLI's terminal diagnostic on w and returns the
+// process exit code. Exported, with its writer and color mode explicit, so a test
+// can exercise the formatting directly.
 //
 // The error a command returns is the LAST thing a user reads, and #211 showed
 // what it cost to leave it unlabeled: a fatal `agentsync: render codex: …` sat
-// flush against the left margin directly below a WARN line, with nothing —
-// no glyph, no level, no color — marking it as the failure. Printing it through
-// the same vocabulary as every other diagnostic is the fix. The `agentsync:`
-// program prefix goes away with it: the ERROR label already says which stream
-// this is, and the prefix only made the line longer.
-func ReportError(err error) int { return ReportErrorTo(os.Stderr, resolvedColorMode, err) }
-
-// ReportErrorTo is ReportError against an explicit writer and color mode, so a
-// test can exercise the formatting without touching process state.
+// flush against the left margin directly below a WARN line, with nothing — no
+// glyph, no level, no color — marking it as the failure. Printing it through the
+// same vocabulary as every other diagnostic is the fix. The `agentsync:` program
+// prefix goes away with it: the ERROR label already says which stream this is.
 func ReportErrorTo(w io.Writer, mode ui.ColorMode, err error) int {
 	if err == nil {
 		return 0

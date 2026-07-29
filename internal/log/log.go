@@ -33,14 +33,15 @@ func New(w io.Writer, p *ui.Printer, verbose bool) *slog.Logger {
 	return slog.New(ui.NewSlogHandler(w, p, level))
 }
 
-// Install makes New's logger the process-wide slog default and returns a
-// function that restores the previous default. The CLI itself installs once per
-// process and never restores; the restore exists for callers that must not leak
-// a handler past the lifetime of the writer it holds.
-func Install(w io.Writer, p *ui.Printer, verbose bool) func() {
-	prev := slog.Default()
+// Install makes New's logger the process-wide slog default.
+//
+// It returns nothing. It briefly returned a restore closure "for tests", but
+// restoring the PREVIOUS default is the wrong undo: that default is the stdlib
+// handler, which prints timestamped lines to stderr — exactly the output shape
+// this package exists to replace — so restoring it would spray those lines across
+// `go test` output. Detach is the correct undo, and the closure went unused.
+func Install(w io.Writer, p *ui.Printer, verbose bool) {
 	slog.SetDefault(New(w, p, verbose))
-	return func() { slog.SetDefault(prev) }
 }
 
 // Detach restores the process default to a handler that discards everything.

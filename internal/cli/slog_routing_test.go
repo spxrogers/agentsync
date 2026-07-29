@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spxrogers/agentsync/internal/testenv"
 	"github.com/spxrogers/agentsync/internal/ui"
 )
 
@@ -34,6 +35,7 @@ import (
 // agentsync diagnostic. It fails if the installation is removed, if the handler
 // stops labeling, or if the timestamp comes back.
 func TestSlogWarningRoutesThroughTheDiagnosticVocabulary(t *testing.T) {
+	testenv.RequireContainer(t)
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp, "NO_COLOR": "1"}
 
@@ -113,6 +115,7 @@ func TestSlogWarningRoutesThroughTheDiagnosticVocabulary(t *testing.T) {
 // payload, and a library warning printing into it would corrupt what a caller is
 // piping. docs/architecture.md §11 states this; this is the assertion behind it.
 func TestSlogWarningNeverEntersAJSONPayload(t *testing.T) {
+	testenv.RequireContainer(t)
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp, "NO_COLOR": "1"}
 	if _, err := runCLI(t, env, "init"); err != nil {

@@ -43,7 +43,8 @@ The binary's `main`. Injects `Version`/`Commit`/`Date` via `-ldflags` and calls
 ### `internal/cli`
 Wires every cobra subcommand into the root tree and dispatches to handlers; this
 is the only package that depends on nearly all the others.
-- **Key:** `NewRoot() *cobra.Command`, `Execute() error`, `Version`/`Commit`/`Date`.
+- **Key:** `NewRoot() *cobra.Command`, `Execute() int` (returns the process exit
+  code; owns the terminal `✗ ERROR` line via `ReportErrorTo`), `Version`/`Commit`/`Date`.
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,
   `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
   `mcp {add,remove,list,enable,disable}`,
@@ -469,8 +470,10 @@ slog setup. Builds a logger over `ui.SlogHandler` and installs it as the
 process-wide default from the root command's `PersistentPreRunE`, which is what
 routes library-side `slog` calls (`internal/render`, `internal/marketplace`) into
 the CLI's diagnostic vocabulary instead of the stdlib default's timestamped
-lines. **Key:** `New(w, p, verbose) *slog.Logger`; `Install(w, p, verbose) func()`
-(returns a restore, for tests). **Depends on:** ui. **Files:** `log.go`.
+lines. **Key:** `New(w, p, verbose) *slog.Logger`; `Install(w, p, verbose)`;
+`Detach()` (unbinds the process default to a discarding handler — the seam test
+binaries need, since each `Execute()` otherwise leaves `slog.Default()` pointed at
+a finished test's buffer). **Depends on:** ui. **Files:** `log.go`.
 
 ### `internal/untrusted`
 The display trust boundary for fetched/native metadata. Owns `Sanitize` (strip
@@ -524,7 +527,8 @@ error chain are both assembled elsewhere. Everywhere else the **caller** applies
 `Diagf`/`Detailf`/`Successf` family deliberately does not, so a caller can pass
 pre-styled text (the upgrade-notice banner composes `p.Bold`/`p.Yellow` fragments
 into a `Warnf`) without having its own escape codes stripped.
-- **Key:** `Printer` (`New`, `Color`, `ColorErr`, `ColorMode`, `Section`, colour helpers);
+- **Key:** `Printer` (`New`, `Color`, `Section`, colour helpers; color is resolved
+  per stream, and the diagnostic writers style for the stream they target);
   `Level` + `Label`; `Errorf`/`Warnf`/`Infof`/`Diagf`/`Fdiagf`;
   `Detailf`/`Fdetailf`; `Successf`/`Fsuccessf` + the `Emoji*` vocabulary;
   `SlogHandler`/`NewSlogHandler`; the package-level `Pad` helper;

@@ -3,9 +3,13 @@ package ui
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func handlerBuf(t *testing.T, level slog.Leveler) (*bytes.Buffer, *slog.Logger) {
@@ -174,3 +178,86 @@ func TestSlogHandlerSanitizesUntrustedText(t *testing.T) {
 		t.Fatalf("message body was lost, not just neutralized: %q", got)
 	}
 }
+
+// SlogHandler must be safe for concurrent use: slog.Handler implementations are
+// contractually expected to be, callers reasonably share a *slog.Logger across
+// goroutines, and the stdlib's own handlers lock their writer.
+//
+// Nothing exercised the mutex before this, so `-race` never saw the handler at
+// all. Two things are asserted: no race (under -race), and no INTERLEAVING — a
+// record renders as a label line plus an optional attribute line, and those two
+// must stay adjacent or an attribute gets orphaned under someone else's warning.
+func TestSlogHandlerIsConcurrencySafe(t *testing.T) {
+	var mu sync.Mutex
+	var lines []string
+	// A writer that records each Write as one unit, so an interleaved pair of
+	// records would show up as a torn entry.
+	rec := writeRecorder{mu: &mu, lines: &lines}
+
+	p := New(io.Discard, io.Discard, ColorNever)
+	lg := slog.New(NewSlogHandler(rec, p, slog.LevelInfo))
+
+	const goroutines, each = 8, 25
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			// Derive per goroutine too, exercising the shared mutex through clone().
+			sub := lg.With("g", g)
+			for i := 0; i < each; i++ {
+				sub.Warn("concurrent record", "i", i)
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	if len(lines) != goroutines*each {
+		t.Fatalf("got %d writes, want %d", len(lines), goroutines*each)
+	}
+	// Every write must be a complete record: the label line, then exactly one
+	// indented attribute line, and nothing else.
+	for _, ln := range lines {
+		parts := strings.SplitAfter(ln, "\n")
+		if len(parts) != 3 || parts[2] != "" {
+			t.Fatalf("record was not written as one whole unit: %q", ln)
+		}
+		if !strings.HasPrefix(parts[0], "⚠ WARN") {
+			t.Fatalf("record does not start with its label: %q", ln)
+		}
+		if !strings.HasPrefix(parts[1], diagIndent) {
+			t.Fatalf("attribute line is not in the message column: %q", ln)
+		}
+	}
+}
+
+// writeRecorder captures each Write call as a discrete entry.
+type writeRecorder struct {
+	mu    *sync.Mutex
+	lines *[]string
+}
+
+func (w writeRecorder) Write(b []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	*w.lines = append(*w.lines, string(b))
+	return len(b), nil
+}
+
+// Handle must report a write failure rather than swallowing it. slog's Logger
+// discards the return, so this changes nothing for a live CLI — but a handler
+// that claims success after a failed write makes a tee'd sink undebuggable.
+func TestSlogHandlerReportsWriteErrors(t *testing.T) {
+	want := errors.New("disk on fire")
+	p := New(io.Discard, io.Discard, ColorNever)
+	h := NewSlogHandler(failingWriter{err: want}, p, slog.LevelInfo)
+
+	err := h.Handle(context.Background(), slog.NewRecord(time.Time{}, slog.LevelWarn, "msg", 0))
+	if !errors.Is(err, want) {
+		t.Fatalf("Handle returned %v, want %v", err, want)
+	}
+}
+
+type failingWriter struct{ err error }
+
+func (f failingWriter) Write([]byte) (int, error) { return 0, f.err }

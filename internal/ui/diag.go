@@ -168,7 +168,7 @@ func (p *Printer) Diagf(l Level, format string, args ...any) {
 // so a multi-line diagnostic reads as one block rather than one labeled line
 // followed by orphaned text at column 0.
 func (p *Printer) Fdiagf(w io.Writer, l Level, format string, args ...any) {
-	fmt.Fprintf(w, "%s  %s\n", l.Label(p.styleFor(w)), indentContinuation(fmt.Sprintf(format, args...)))
+	fmt.Fprintf(w, "%s  %s\n", l.Label(p.styleForDiag(w)), indentContinuation(fmt.Sprintf(format, args...)))
 }
 
 // Detailf writes an unlabeled continuation line to Err, indented to the message
@@ -197,7 +197,7 @@ func (p *Printer) Fsuccessf(w io.Writer, emoji, format string, args ...any) {
 	// outcome, and there is no label column for a continuation to hang under.
 	// A multi-line success message is a call-site bug, not something to lay out.
 	msg := fmt.Sprintf(format, args...)
-	fmt.Fprintf(w, "%s %s\n", emoji, p.styleFor(w).Green(msg))
+	fmt.Fprintf(w, "%s %s\n", emoji, p.styleForResult(w).Green(msg))
 }
 
 // indentContinuation aligns every line after the first to the message column.

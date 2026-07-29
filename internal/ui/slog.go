@@ -128,7 +128,7 @@ func (h *SlogHandler) Handle(_ context.Context, r slog.Record) error {
 	// line by convention, and the alternative (indenting attacker-chosen line
 	// breaks into the message column) would let a crafted message forge what
 	// looks like a second, separate diagnostic.
-	style := h.p.styleFor(h.w)
+	style := h.p.styleForDiag(h.w)
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s  %s\n", levelOf(r.Level).Label(style), Sanitize(r.Message))
 	if len(attrs) > 0 {

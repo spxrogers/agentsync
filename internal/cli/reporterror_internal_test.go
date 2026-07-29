@@ -3,21 +3,33 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
+	aslog "github.com/spxrogers/agentsync/internal/log"
 	"github.com/spxrogers/agentsync/internal/ui"
 )
 
-// resolvedColorMode is written in the root PersistentPreRunE and read by
-// ReportError in main(), after cobra has returned. Nothing else observes it, so
-// deleting the assignment previously failed no test — verified by removing it and
-// running the whole suite green.
+// detachAfter unbinds the process-wide slog default once this test is done.
 //
-// These tests close that hole from both ends: the assignment must happen, and it
-// must reach ReportError's rendering. An internal test because the variable is
-// package-private on purpose.
-func TestPersistentPreRunRecordsColorMode(t *testing.T) {
+// The cli_test package gets this from runCLI's helper; an INTERNAL test calling
+// NewRoot().Execute() directly cannot see that helper, and every such call leaves
+// slog.Default() bound to a buffer this test is about to drop.
+func detachAfter(t *testing.T) {
+	t.Helper()
+	t.Cleanup(aslog.Detach)
+}
+
+// Execute() reads the resolved --color decision off the root command AFTER cobra
+// has parsed and run it, which is what let a package-level `resolvedColorMode`
+// var (written in PersistentPreRunE, read from main) be deleted entirely.
+//
+// This pins that mechanism. It calls colorModeOf on the executed root exactly as
+// Execute does; Execute itself is then a four-line shim over this plus the
+// already-tested ReportErrorTo, and writes to the real os.Stderr, which is why it
+// is not driven directly here.
+func TestColorModeIsReadableFromAnExecutedRoot(t *testing.T) {
 	tests := []struct {
 		flag string
 		want ui.ColorMode
@@ -25,68 +37,64 @@ func TestPersistentPreRunRecordsColorMode(t *testing.T) {
 		{"--color=never", ui.ColorNever},
 		{"--color=always", ui.ColorAlways},
 		{"--color=auto", ui.ColorAuto},
+		// An unparseable value must degrade to auto, NOT error out of the report
+		// path: ParseColorMode returns ColorAuto alongside its error, which is what
+		// makes Execute's `mode, _ := colorModeOf(root)` safe.
+		{"--color=banana", ui.ColorAuto},
 	}
 	for _, tc := range tests {
 		t.Run(tc.flag, func(t *testing.T) {
-			// Poison it first, so a test that passes only because the zero value
-			// happens to equal `want` cannot pass for the wrong reason.
-			resolvedColorMode = ui.ColorMode(-1)
-			t.Cleanup(func() { resolvedColorMode = ui.ColorAuto })
-
+			detachAfter(t)
 			var buf bytes.Buffer
 			root := NewRoot()
 			root.SetOut(&buf)
 			root.SetErr(&buf)
 			root.SetArgs([]string{"version", tc.flag})
-			if err := root.Execute(); err != nil {
-				t.Fatalf("version %s: %v", tc.flag, err)
-			}
-			if resolvedColorMode != tc.want {
-				t.Fatalf("resolvedColorMode = %v after %s, want %v", resolvedColorMode, tc.flag, tc.want)
+			_ = root.Execute()
+
+			got, _ := colorModeOf(root)
+			if got != tc.want {
+				t.Fatalf("colorModeOf(root) = %v after %s, want %v", got, tc.flag, tc.want)
 			}
 		})
 	}
 }
 
-// An invalid --color must NOT skip the slog installation or lose the recorded
-// mode: gating that on `err == nil` meant a bad flag value left the process with
-// no handler, so library warnings fell back to the stdlib timestamped line —
-// reproducing the exact #211 shape in the one case where the user has already
-// made a mistake and most needs a legible diagnostic.
-func TestPersistentPreRunSurvivesInvalidColor(t *testing.T) {
-	resolvedColorMode = ui.ColorMode(-1)
-	t.Cleanup(func() { resolvedColorMode = ui.ColorAuto })
-
+// An invalid --color must not prevent the slog handler from being installed.
+// Gating installation on newPrinter's error meant a bad value left NO handler, so
+// library warnings fell back to the stdlib timestamped line — reproducing the
+// exact #211 shape in the one case where the user has already made a mistake and
+// most needs a legible diagnostic.
+func TestPersistentPreRunInstallsDespiteInvalidColor(t *testing.T) {
+	detachAfter(t)
 	var buf bytes.Buffer
 	root := NewRoot()
 	root.SetOut(&buf)
 	root.SetErr(&buf)
 	root.SetArgs([]string{"version", "--color=banana"})
-	// `version` does not build a Printer, so it does not surface the bad value;
-	// what matters here is that the pre-run still ran to completion.
 	_ = root.Execute()
 
-	if resolvedColorMode != ui.ColorAuto {
-		t.Fatalf("an invalid --color must degrade to auto, got %v", resolvedColorMode)
+	// The installed handler writes to the root's stderr. Emitting through the
+	// process default must therefore land in our buffer — if the pre-run skipped
+	// installation, this goes to the real os.Stderr instead and the buffer is bare.
+	before := buf.Len()
+	slogWarnForTest("installed-check")
+	if !strings.Contains(buf.String()[before:], "installed-check") {
+		t.Fatalf("no slog handler installed after an invalid --color; got: %q", buf.String()[before:])
+	}
+	if !strings.Contains(buf.String()[before:], "WARN") {
+		t.Fatalf("the installed handler is not labeling: %q", buf.String()[before:])
 	}
 }
 
-// ReportError must honor the mode the pre-run recorded — the end of the chain
-// that makes `--color=never` actually reach the terminal error line.
-func TestReportErrorHonorsRecordedColorMode(t *testing.T) {
-	orig := resolvedColorMode
-	t.Cleanup(func() { resolvedColorMode = orig })
-
+func TestReportErrorToHonorsColorMode(t *testing.T) {
 	var colored, plain bytes.Buffer
-	resolvedColorMode = ui.ColorAlways
-	if code := reportErrorToStream(&colored, errors.New("boom")); code != 1 {
+	if code := ReportErrorTo(&colored, ui.ColorAlways, errors.New("boom")); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
-	resolvedColorMode = ui.ColorNever
-	if code := reportErrorToStream(&plain, errors.New("boom")); code != 1 {
+	if code := ReportErrorTo(&plain, ui.ColorNever, errors.New("boom")); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
-
 	if !strings.Contains(colored.String(), "\x1b[") {
 		t.Fatalf("ColorAlways produced no ANSI: %q", colored.String())
 	}
@@ -101,7 +109,7 @@ func TestReportErrorHonorsRecordedColorMode(t *testing.T) {
 // The terminal error is the last thing a failing run prints, and an error chain
 // routinely carries third-party agent-config text. A bare \r in it rewinds the
 // cursor over the "✗ ERROR" label, letting crafted config forge a success line;
-// a \x1b introduces an arbitrary escape sequence.
+// \x1b introduces an arbitrary escape sequence.
 func TestReportErrorSanitizesTheErrorChain(t *testing.T) {
 	var buf bytes.Buffer
 	ReportErrorTo(&buf, ui.ColorNever, errors.New("render codex: subagent \"a\rb\x1b]0;pwned\x07\" is bad"))
@@ -135,8 +143,7 @@ func TestReportErrorKeepsMultiLineStructure(t *testing.T) {
 	}
 }
 
-// reportErrorToStream is ReportError with an injectable writer, exercising the
-// same resolvedColorMode read that main() relies on.
-func reportErrorToStream(w *bytes.Buffer, err error) int {
-	return ReportErrorTo(w, resolvedColorMode, err)
-}
+// slogWarnForTest emits through the PROCESS DEFAULT logger, which is what the
+// pre-run installs. Deliberately not a *slog.Logger built here: the point is to
+// observe whatever handler the root command left installed.
+func slogWarnForTest(msg string) { slog.Warn(msg) }

@@ -136,42 +136,67 @@ func New(out, err io.Writer, mode ColorMode) *Printer {
 	}
 }
 
-// styleFor returns a view of p whose color decision matches the stream w. Used
-// by the diagnostic writers, which take an explicit io.Writer and must not
-// inherit the wrong stream's TTY-ness.
-//
-// Interface comparison is exact (dynamic type + value), so this recognizes
-// p.Out/p.Err and nothing else. An UNRECOGNIZED writer falls back to the Err
-// decision: every caller passing a third writer today is emitting a diagnostic,
-// and Err is the conservative choice for one (a diagnostic reaching an unknown
-// sink is more likely redirected than interactive).
-func (p *Printer) styleFor(w io.Writer) *Printer {
-	// Out is the only stream whose decision differs from the diagnostic default,
-	// so it is the only case worth naming. Everything else — Err and any
-	// unrecognized writer — takes the Err decision.
-	if w == p.Out || p.color == p.colorErr {
-		return p // already the right decision, or the two streams agree
+// styleForDiag returns a view of p whose color decision matches the stream w, for
+// DIAGNOSTIC output. An unrecognized writer takes the Err decision: a diagnostic
+// reaching an unknown sink is more likely redirected than interactive.
+func (p *Printer) styleForDiag(w io.Writer) *Printer {
+	if sameWriter(w, p.Out) {
+		return p.withColor(p.color)
 	}
-	return &Printer{Out: p.Out, Err: p.Err, color: p.colorErr, colorErr: p.colorErr, mode: p.mode}
+	return p.withColor(p.colorErr)
 }
 
-// ColorMode returns the requested mode this Printer was built with — NOT the
-// resolved boolean (that is Color). The distinction matters for a caller that
-// must rebuild a Printer against different writers and honor the same user
-// intent: `auto` has to be re-resolved against the NEW writer's TTY-ness, so
-// carrying the resolved bool across would be wrong. ReportError does exactly
-// this, rebuilding against os.Stderr after cobra has returned.
-func (p *Printer) ColorMode() ColorMode { return p.mode }
+// styleForResult returns a view of p whose color decision matches the stream w,
+// for RESULT output (a success line). The fallback is the mirror image of
+// styleForDiag's: an unrecognized writer takes the OUT decision, because a
+// result line's natural home is stdout — Fsuccessf's doc invites a
+// caller-supplied buffer, and giving that stderr's TTY-ness would be backwards.
+func (p *Printer) styleForResult(w io.Writer) *Printer {
+	if sameWriter(w, p.Err) {
+		return p.withColor(p.colorErr)
+	}
+	return p.withColor(p.color)
+}
 
-// Color reports whether this Printer emits ANSI on Out. Commands that hand a
-// writer to a third-party renderer (e.g. the diff library's own colorizer)
-// consult this to gate that output through the same decision — and every such
-// caller today renders to Out, which is why this reports the Out decision.
+// withColor returns p when the requested decision already matches (the common
+// case, and it avoids an allocation per output line), otherwise a shallow copy.
+func (p *Printer) withColor(color bool) *Printer {
+	if p.color == color {
+		return p
+	}
+	return &Printer{Out: p.Out, Err: p.Err, color: color, colorErr: p.colorErr, mode: p.mode}
+}
+
+// sameWriter reports whether two io.Writer values are the same writer.
+//
+// It does NOT just use `a == b`. Comparing interface values panics at runtime
+// when the dynamic type is not comparable (a struct containing a slice, map, or
+// func) — and this runs on every diagnostic line, so a panic here would take
+// down the CLI while it was trying to report an error, which is the worst
+// possible place for one. No writer in this repo is uncomparable today; the
+// guard costs one reflect.TypeOf and removes the hazard permanently.
+//
+// Two values of different dynamic types can never be equal, so a type mismatch
+// short-circuits. An uncomparable matching type reports "not the same writer",
+// which degrades to the caller's documented fallback rather than crashing.
+func sameWriter(a, b io.Writer) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	ta, tb := reflect.TypeOf(a), reflect.TypeOf(b)
+	if ta != tb || !ta.Comparable() {
+		return false
+	}
+	return a == b
+}
+
+// Color reports whether this Printer emits ANSI ON OUT. Every diagnostic goes to
+// Err, whose decision is resolved separately (see the struct doc) and reached
+// internally via styleForDiag — so this is deliberately NOT "does this Printer
+// use color". Commands that hand a writer to a third-party renderer (e.g. the
+// diff library's own colorizer) consult this to gate that output through the same
+// decision, and every such caller renders to Out.
 func (p *Printer) Color() bool { return p.color }
-
-// ColorErr reports whether this Printer emits ANSI on Err — the stream every
-// diagnostic uses. Distinct from Color; see the Printer struct doc.
-func (p *Printer) ColorErr() bool { return p.colorErr }
 
 func resolveColor(out io.Writer, mode ColorMode) bool {
 	switch mode {
@@ -277,9 +302,6 @@ type WarnWriter struct {
 	w   io.Writer
 	p   *Printer
 	buf []byte
-	// partial records that the last emit wrote a line with no trailing newline
-	// (only Flush can do that), so EndLine knows whether to terminate it.
-	partial bool
 }
 
 // NewWarnWriter returns a *WarnWriter that flushes styled lines to w using p.
@@ -312,11 +334,20 @@ func (s *WarnWriter) Write(p []byte) (int, error) {
 // command if you've routed a writer that may not always end in \n; the import
 // path does always terminate, so this is defensive.
 func (s *WarnWriter) Flush() {
-	if len(s.buf) > 0 {
-		s.emit(s.buf)
-		s.buf = nil
-		s.partial = true
+	if len(s.buf) == 0 {
+		return
 	}
+	// Terminate the line here rather than leaving it to the caller. A buffered
+	// partial line has no trailing newline by definition, so whatever writes to
+	// this stream next — main's terminal ✗ ERROR line, typically — would render on
+	// the same row. This was briefly a separate EndLine() method the caller had to
+	// pair with Flush; one of the two call sites promptly forgot to, which is the
+	// argument against a two-call protocol when the primitive can just be correct.
+	if s.buf[len(s.buf)-1] != '\n' {
+		s.buf = append(s.buf, '\n')
+	}
+	s.emit(s.buf)
+	s.buf = nil
 }
 
 // stderrSetter is the structural shape of adapter.WarnEmitter. Duplicated
@@ -412,7 +443,11 @@ func (s *WarnWriter) emit(line []byte) {
 		return
 	}
 	rest := line[len(warnLinePrefix):]
-	fmt.Fprintf(s.w, "%s  %s", LevelWarn.Label(s.p), rest)
+	// styleForDiag, not s.p directly: this writer is constructed over p.Err, and
+	// taking the Out decision meant `agentsync import 2>err.log` from a terminal
+	// wrote ANSI into the file — the exact leak the per-stream split exists to
+	// close, and the one that made this path diverge from p.Warnf.
+	fmt.Fprintf(s.w, "%s  %s", LevelWarn.Label(s.p.styleForDiag(s.w)), rest)
 }
 
 func spaces(n int) string {
@@ -428,19 +463,4 @@ func spaces(n int) string {
 		out[i] = ' '
 	}
 	return string(out)
-}
-
-// EndLine terminates a partial line if one was just flushed, so a subsequent
-// writer to the same stream starts at column 0.
-//
-// Flush drains whatever incomplete line the buffer held, by definition without a
-// trailing newline — and the next thing written to that stream may come from a
-// different layer entirely (main's terminal ✗ ERROR line, say), which would then
-// render on the same row as the fragment. Pairing Flush with EndLine keeps the
-// two visually separate. A no-op unless the last emitted byte was a partial line.
-func (s *WarnWriter) EndLine() {
-	if s.partial {
-		fmt.Fprintln(s.w)
-		s.partial = false
-	}
 }

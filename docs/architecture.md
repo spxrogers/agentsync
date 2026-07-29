@@ -1076,8 +1076,10 @@ three unrelated renderings coexisting —
 
 All three now converge. `ui.Level` owns the label; `ui.SlogHandler` renders slog
 records through it and `internal/log` installs it as the process default from the
-root `PersistentPreRunE`; `cli.ReportError` prints the terminal error as an
-`ERROR` diagnostic. A `slog.Warn` from `internal/marketplace`, an adapter's
+root `PersistentPreRunE`; `cli.Execute` returns the process exit code and prints the
+terminal error as an `ERROR` diagnostic through `ReportErrorTo` — owning the whole
+invocation is what lets it read the resolved `--color` flag off the still-in-scope
+root command instead of carrying it across the `main` boundary in package state. A `slog.Warn` from `internal/marketplace`, an adapter's
 `warning: ` line through `ui.WarnWriter`, and a command's `p.Warnf` produce
 byte-identical output.
 
@@ -1086,6 +1088,16 @@ byte-identical output.
 - *The glyph and the level word are content, not decoration.* Color is a second
   signal only. Piped, redirected, under `NO_COLOR`, or `--color never`, severity
   still reaches a log file — which is where CI reads it.
+- *Color is resolved PER STREAM, not per Printer.* `auto` asks whether the
+  destination is a terminal, and stdout and stderr are different destinations:
+  `agentsync apply 2>err.log` from a terminal has a TTY stdout and a file stderr.
+  One decision taken off `Out` and reused for `Err` wrote ANSI into that file —
+  the exact leak this rule forbids — and since every diagnostic goes to `Err`,
+  that was the common path, not a corner case. `ui.Printer` therefore holds two
+  decisions, and the writers that take an explicit `io.Writer` style for the
+  stream they actually target. The two fallbacks for an unrecognized writer are
+  deliberately opposite: a diagnostic takes the `Err` decision, a success line
+  takes `Out`'s.
 - *A command's machine-readable stdout is never polluted by a diagnostic.* This
   is the guarantee that matters and the one that is asserted end-to-end
   (`TestSlogWarningNeverEntersAJSONPayload` drives a real `status --json` with a
