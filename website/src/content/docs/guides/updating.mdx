@@ -39,8 +39,8 @@ fetch. It is simply the one the daily loop runs.
 
 ```mermaid
 flowchart LR
-    NET["marketplaces<br/>+ npm registry"] -->|plugin outdated (network)| CACHE[".state/cache/"]
-    CACHE -->|apply (offline)| AGENTS["agent configs"]
+    NET["marketplaces<br/>+ npm registry"] -->|"plugin outdated (network)"| CACHE[".state/cache/"]
+    CACHE -->|"apply (offline)"| AGENTS["agent configs"]
 ```
 
 Separating "fetch" from "render" means:
