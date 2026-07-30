@@ -244,7 +244,7 @@ func TestSecretsSet_LegacyArgWarns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("legacy set: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "warning") || !strings.Contains(out, "--stdin") {
+	if !strings.Contains(out, "WARN") || !strings.Contains(out, "--stdin") {
 		t.Fatalf("legacy form did not warn about argv exposure; got:\n%s", out)
 	}
 }

@@ -135,7 +135,7 @@ func mcpAddRun(cmd *cobra.Command, home, id, serverType, command, argsCSV, url, 
 	if err := source.WriteMCP(home, id, source.MCPServer{Server: spec}); err != nil {
 		return fmt.Errorf("write %s: %w", dest, err)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "added mcp server: %s -> %s\n", id, dest)
+	success(cmd, ui.EmojiSuccess, "added mcp server: %s -> %s", id, dest)
 	return nil
 }
 
@@ -162,7 +162,7 @@ func newMCPRemoveCmd() *cobra.Command {
 					}
 					return fmt.Errorf("remove %s: %w", p, err)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "removed mcp server: %s\n", id)
+				success(cmd, ui.EmojiRemoved, "removed mcp server: %s", id)
 				return nil
 			})
 		},
@@ -380,7 +380,7 @@ func newMCPToggleCmd(enable bool) *cobra.Command {
 				if werr := source.WriteMCP(home, id, m); werr != nil {
 					return werr
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%s mcp server: %s\n", past, id)
+				success(cmd, ui.EmojiSuccess, "%s mcp server: %s", past, id)
 				return nil
 			})
 		},

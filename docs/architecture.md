@@ -1050,7 +1050,127 @@ forgotten in the others.
 
 ---
 
-## 11. Package layering
+## 11. Output — one diagnostic vocabulary
+
+Everything agentsync prints is one of two things, and `internal/ui` is the only
+place that decides how either looks.
+
+| | What it is | Stream | Rendering |
+| --- | --- | --- | --- |
+| **Diagnostic** | a notice *about* the run | stderr | `✗ ERROR` / `⚠ WARN` / `ℹ INFO` / `• DEBUG`; message at column 9 |
+| **Result** | what the command was asked to produce | stdout | no level label; a success outcome leads with a curated emoji |
+
+**Why this is an architectural concern and not styling.** Issue #211 reported a
+correct, deliberate fatal error that read as a broken tool, and the formatting
+was the reason: `agentsync: render codex: …` printed flush-left, uncolored and
+unlabeled, directly beneath a `2026/07/28 15:03:45 WARN …` line from a different
+subsystem. Nothing distinguished the fatal from the advisory. The cause was
+three unrelated renderings coexisting —
+
+1. commands hand-rolled their own prefixes (`p.Yellow("agentsync:")`,
+   `p.Cyan("note:")`, `p.Yellow("warning:")`, a bare `•`);
+2. library packages called `slog.Warn`, and **no handler was ever installed**, so
+   those fell through to the stdlib default and printed with a wall-clock
+   timestamp in a shape nothing else used;
+3. `main` printed the terminal error itself, bypassing `ui` entirely.
+
+All three now converge. `ui.Level` owns the label; `ui.SlogHandler` renders slog
+records through it and `internal/log` installs it as the process default from the
+root `PersistentPreRunE`; `cli.Execute` returns the process exit code and prints the
+terminal error as an `ERROR` diagnostic — owning the whole
+invocation is what lets it read the resolved `--color` flag off the still-in-scope
+root command instead of carrying it across the `main` boundary in package state. A `slog.Warn` from `internal/marketplace`, an adapter's
+`warning: ` line through `ui.WarnWriter`, and a command's `p.Warnf` produce
+byte-identical output — for a sanitize-clean, single-line message, which is what a
+real diagnostic is. The three paths deliberately differ on hostile input:
+`SlogHandler` and `WarnWriter` sanitize, because their inputs are assembled by
+packages that cannot, while `Diagf` does not, because its callers may hand it
+pre-styled text. `TestWarnPathsAreByteIdentical` pins the clean case.
+
+**Three load-bearing rules.**
+
+- *The glyph and the level word are content, not decoration.* Color is a second
+  signal only. Piped, redirected, under `NO_COLOR`, or `--color never`, severity
+  still reaches a log file — which is where CI reads it.
+- *Color is resolved PER STREAM, not per Printer.* `auto` asks whether the
+  destination is a terminal, and stdout and stderr are different destinations:
+  `agentsync apply 2>err.log` from a terminal has a TTY stdout and a file stderr.
+  One decision taken off `Out` and reused for `Err` wrote ANSI into that file —
+  the exact leak this rule forbids — and since every diagnostic goes to `Err`,
+  that was the common path, not a corner case. `ui.Printer` therefore holds two
+  decisions, and the writers that take an explicit `io.Writer` style for the
+  stream they actually target. The two fallbacks for an unrecognized writer are
+  deliberately opposite: a diagnostic takes the `Err` decision, a success line
+  takes `Out`'s.
+- *A command's machine-readable stdout is never polluted by a diagnostic.* This
+  is the guarantee that matters and the one that is asserted end-to-end
+  (`TestSlogWarningNeverEntersAJSONPayload` drives a real `status --json` with a
+  library `slog.Warn` in flight, parses the payload, and rejects any level word
+  in it). `Errorf`/`Warnf`/`Infof` all write to stderr, so this holds by
+  construction for every command.
+
+  It is **not** the same as "no diagnostic is ever written to stdout", and that
+  stronger claim would be false: `reconcile`'s interactive loop deliberately
+  routes its labeled write-back failures through `Fdiagf` onto `p.Out`, the same
+  stream as the prompt they answer. Splitting a keystroke-driven conversation
+  across two streams would break the transcript for the sake of a rule that buys
+  nothing there — `reconcile` is interactive and emits no machine-readable
+  payload. `Fdiagf` exists for exactly that case, which is why it takes an
+  explicit writer while `Diagf` does not.
+- *Success carries no level word.* An `INFO` on `added agent: claude` is noise
+  that trains the eye to skip labels; the emoji says both "this worked" and
+  "this is the outcome line". Chosen by what happened, not by which command ran.
+
+**The emitter-side sentinel.** Adapters and `internal/capture` must not depend on
+`ui` (they are below it in the layering), so they emit the plain `warning: ` line
+prefix into an `io.Writer` they were handed, and `ui.WarnWriter` rewrites it into
+the WARN label at the one point that knows whether this terminal gets color. That
+split is a contract between two packages that share no types — rename it on one
+side and warnings silently stop being labeled, with nothing failing to compile —
+so both halves are pinned by `TestWarnSentinelStaysWiredToTheWarnLabel`.
+
+**The regression fence.** A hand-rolled prefix compiles, reads like "just a
+`Fprintf`" in review, and breaks no test — the exact failure class that needs a
+mechanical guard. `TestNoAdHocDiagnosticPrefixes` parses the non-test sources of
+**both `internal/cli` and `cmd/agentsync`** and fails on a reintroduced
+`"agentsync:"` / `"note:"` prefix, or a bare `"warning:"` label token.
+
+Both halves of that scoping are load-bearing, and generalize past this test: **a
+source sweep has two independent ways to be vacuous, and green proves neither is
+absent.**
+
+1. *Wrong files.* The sweep first globbed `*.go` relative to the working directory,
+   but `internal/cli`'s `TestMain` chdirs to a scratch dir, so it matched nothing.
+   It now resolves the repo root from `runtime.Caller` and holds a **per-directory**
+   file-count floor — aggregate floors cannot defend a one-file entry, since
+   dropping `cmd/agentsync` still left ~31 files from `internal/cli`.
+   `TestSweptDirsCoverTheEmitters` pins the directory set, because a floor catches a
+   directory going empty but not an entry being deleted.
+2. *Wrong matcher.* It then compared literals for *equality*, so the verbatim #211
+   emitter (`fmt.Fprintln(os.Stderr, "agentsync:", err)`) passed once restored to
+   `main()`, and `"agentsync: %v\n"` would have slipped regardless. It now
+   `strconv.Unquote`s each literal — so a raw backtick string is compared as the
+   text a terminal receives — and matches by prefix.
+
+`"warning:"` is matched differently on purpose: the `warning: <message>` sentinel
+is a contract with the packages that cannot import `ui`, so only the bare label
+forms are banned. The one legitimate `agentsync:` literal — a `panic` value in
+`registry_internal.go`, which surfaces through Go's own panic output — is a
+commented entry in an exemption map, not a loosened pattern.
+
+The prefix list stays narrow: a broader one (`scope:`, `ok:`) would flag legitimate
+field labels in a report body, where no level belongs — `explain` prints
+`scope: user` as a data row, not a notice.
+
+**Test isolation.** The installation is process-global, so `internal/log` exposes
+`Detach()` and the CLI test harness calls it via `t.Cleanup` on every invocation.
+Without it, each `runCLI` leaves `slog.Default()` bound to a finished test's
+`bytes.Buffer` — invisible today, and a data race the moment a test there adopts
+`t.Parallel`.
+
+---
+
+## 12. Package layering
 
 ```mermaid
 flowchart TD
@@ -1065,10 +1185,12 @@ flowchart TD
     DRF["internal/drift — 3-way classifier (pure)"]
     ST["internal/state — targets.json"]
     GIT["internal/git — local-only go-git wrapper (no push surface)"]
-    INFRA["internal/iox · paths · jsonkeys · log · untrusted · ui"]
+    UI["internal/ui — presentation: color · glyphs · diagnostics"]
+    LOG["internal/log — slog wiring (installs ui.SlogHandler)"]
+    INFRA["internal/iox · paths · jsonkeys · untrusted"]
 
-    CLI --> REN & CAP & AD & SRC & SEC & MKT & PRJ & DRF & ST & GIT
-    REN --> AD & SEC & SRC & ST & DRF & INFRA
+    CLI --> REN & CAP & AD & SRC & SEC & MKT & PRJ & DRF & ST & GIT & UI & LOG
+    REN --> AD & SEC & SRC & ST & UI & INFRA
     CAP --> SRC & SEC & INFRA
     AD --> SRC & SEC & INFRA
     AD -. "opencode ingest ownership only (issue #148)" .-> ST
@@ -1077,13 +1199,24 @@ flowchart TD
     SRC --> INFRA
     SEC --> SRC & INFRA
     ST --> INFRA
+    LOG --> UI
+    UI --> INFRA
 ```
 
+`internal/ui` is drawn as its own node rather than folded into `INFRA` because
+the distinction is load-bearing, not cosmetic: **`internal/adapter` and
+`internal/capture` must not depend on `ui`**, and an `AD --> INFRA` edge into a
+node containing `ui` asserted exactly the dependency §11 forbids. That constraint
+is why an adapter emits the plain `warning: ` sentinel into an `io.Writer` it was
+handed instead of formatting a label itself. `internal/render` *does* depend on
+`ui` (its translation report renders through a `*Printer`), and `internal/log`
+depends on it too — so `log` is no longer a leaf.
+
 `internal/drift`, `internal/git`, `internal/iox`, `internal/jsonkeys`,
-`internal/paths`, `internal/log`, and `internal/untrusted` have no internal
+`internal/paths`, and `internal/untrusted` have no internal
 dependencies — they're the leaves (`internal/git` is reached only from `cli` —
 `internal/cli/gitbackup.go`, `doctor.go`, and `revert.go`); `internal/ui` builds
-only on `internal/untrusted`.
+only on `internal/untrusted`, and `internal/log` only on `internal/ui`.
 See the [component map](components.md) for what each package contains.
 
 **Documented layering exception (`opencode → state`).** Adapters otherwise depend

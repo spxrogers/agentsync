@@ -260,14 +260,14 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 					fmt.Fprintf(w, "%c\n", ch)
 					bk, berr := render.BackupFile(home, it.op.Path)
 					if berr != nil {
-						fmt.Fprintf(w, "  backup failed, NOT removing: %s\n", ui.Sanitize(berr.Error()))
+						p.Fdiagf(w, ui.LevelError, "backup failed, NOT removing: %s", ui.Sanitize(berr.Error()))
 						break orphanPrompt
 					}
 					if bk != "" {
 						fmt.Fprintf(w, "  backup: %s\n", ui.Sanitize(bk))
 					}
 					if rmErr := os.Remove(it.op.Path); rmErr != nil && !os.IsNotExist(rmErr) { //nolint:forbidigo // the one NATIVE-destination delete outside DestWriter: interactive orphan removal, safe only because render.BackupFile succeeded just above
-						fmt.Fprintf(w, "  remove failed: %s\n", ui.Sanitize(rmErr.Error()))
+						p.Fdiagf(w, ui.LevelError, "remove failed: %s", ui.Sanitize(rmErr.Error()))
 						break orphanPrompt
 					}
 					pruneStateFilesForPath(s, userHome, it.op.Path)
@@ -398,7 +398,7 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 		switch action {
 		case 'w':
 			// write-back: persist destination value into the canonical source.
-			if attemptWriteBack(cmd, w, home, it, canonicalHookEvents(c), writtenSources) {
+			if attemptWriteBack(cmd, p, w, home, it, canonicalHookEvents(c), writtenSources) {
 				writeBackFailed++
 			}
 		case 'o':
@@ -846,7 +846,7 @@ func readChar(r *bufio.Reader) (byte, error) {
 // file and this write changes it, revert to the first write and report a
 // conflict (counted as a failure → non-zero exit) for the user to resolve.
 // Returns true on failure/conflict.
-func attemptWriteBack(cmd *cobra.Command, w io.Writer, home string, it reconcileItem, hookEvents []string, writtenSources map[string][]byte) bool {
+func attemptWriteBack(cmd *cobra.Command, p *ui.Printer, w io.Writer, home string, it reconcileItem, hookEvents []string, writtenSources map[string][]byte) bool {
 	srcFile := itemSourceFile(home, it, hookEvents)
 	var prior []byte
 	priorWritten := false
@@ -859,10 +859,10 @@ func attemptWriteBack(cmd *cobra.Command, w io.Writer, home string, it reconcile
 		// chose [w]rite-back to persist that. A pure deletion carries no secret, so
 		// remove the canonical mcp/<id>.toml directly (the same os.Remove primitive
 		// `mcp remove` uses) rather than routing an empty spec through capture.
-		return removeDroppedSource(w, home, it, srcFile, prior, priorWritten, writtenSources)
+		return removeDroppedSource(p, w, home, it, srcFile, prior, priorWritten, writtenSources)
 	}
 	if werr != nil {
-		fmt.Fprintf(w, "  write-back error: %s\n", ui.Sanitize(werr.Error()))
+		p.Fdiagf(w, ui.LevelError, "write-back: %s", ui.Sanitize(werr.Error()))
 		return true
 	}
 	if srcFile != "" {
@@ -891,26 +891,26 @@ func attemptWriteBack(cmd *cobra.Command, w io.Writer, home string, it reconcile
 // (nil bytes) in writtenSources so a LATER content write-back to the same file
 // this run is likewise flagged rather than silently resurrecting it. Returns true
 // on failure/conflict.
-func removeDroppedSource(w io.Writer, home string, it reconcileItem, srcFile string, prior []byte, priorWritten bool, writtenSources map[string][]byte) bool {
+func removeDroppedSource(p *ui.Printer, w io.Writer, home string, it reconcileItem, srcFile string, prior []byte, priorWritten bool, writtenSources map[string][]byte) bool {
 	if srcFile == "" {
-		fmt.Fprintf(w, "  write-back error: %s — cannot locate the canonical source file to delete\n", itemLabelDisp(it))
+		p.Fdiagf(w, ui.LevelError, "write-back: %s — cannot locate the canonical source file to delete", itemLabelDisp(it))
 		return true
 	}
 	// Defense-in-depth: srcFile derives from a native-config-supplied server id;
 	// never let a traversal segment escape ~/.agentsync into an arbitrary unlink.
 	if !withinDir(home, srcFile) {
-		fmt.Fprintf(w, "  write-back error: %s — refusing to delete outside the source tree\n", itemLabelDisp(it))
+		p.Fdiagf(w, ui.LevelError, "write-back: %s — refusing to delete outside the source tree", itemLabelDisp(it))
 		return true
 	}
 	if priorWritten && len(prior) > 0 {
 		rel, _ := filepath.Rel(home, srcFile)
-		fmt.Fprintf(w, "  conflict: %s — another agent wrote this source (%s) this run, so it is still in use; "+
-			"not deleting it. Make the agents agree (remove it from every native config), then re-run.\n",
+		p.Fdiagf(w, ui.LevelError, "conflict: %s — another agent wrote this source (%s) this run, so it is still in use; "+
+			"not deleting it. Make the agents agree (remove it from every native config), then re-run.",
 			itemLabelDisp(it), ui.Sanitize(rel))
 		return true
 	}
 	if rmErr := os.Remove(srcFile); rmErr != nil && !os.IsNotExist(rmErr) { //nolint:forbidigo // removes a canonical source file under ~/.agentsync (withinDir-guarded above), not a native destination
-		fmt.Fprintf(w, "  write-back error: remove %s: %s\n", itemLabelDisp(it), ui.Sanitize(rmErr.Error()))
+		p.Fdiagf(w, ui.LevelError, "write-back: remove %s: %s", itemLabelDisp(it), ui.Sanitize(rmErr.Error()))
 		return true
 	}
 	writtenSources[srcFile] = nil // deletion sentinel for a later same-file write

@@ -12,6 +12,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 const initialAgentsyncTOML = `# agentsync source-of-truth config
@@ -173,7 +174,7 @@ func scaffoldHome(cmd *cobra.Command, home string) error {
 	// "home exists, no record" as an unambiguous upgrade.
 	seedUpgradeNoticeRecord(home)
 	w := cmd.OutOrStdout()
-	fmt.Fprintln(w, "agentsync home initialized at", home)
+	success(cmd, ui.EmojiInit, "agentsync home initialized at %s", home)
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Next steps:")
 	fmt.Fprintln(w, "  1. agentsync agent add claude        # register an agent")
@@ -236,12 +237,12 @@ func scaffoldProjectHome(cmd *cobra.Command, root string) error {
 		return fmt.Errorf("write agentsync.toml: %w", err)
 	}
 	w := cmd.OutOrStdout()
-	fmt.Fprintln(w, "agentsync project source initialized at", home)
+	success(cmd, ui.EmojiInit, "agentsync project source initialized at %s", home)
 	// A stray retired single-file marker would be silently ignored now; nudge
 	// the user to fold its settings into the new tree and delete it.
 	if fi, err := os.Stat(filepath.Join(root, project.LegacyMarkerFile)); err == nil && !fi.IsDir() {
-		fmt.Fprintf(cmd.ErrOrStderr(),
-			"agentsync: a legacy %s is present at %s; it is no longer read — move its settings into %s/ and delete it.\n",
+		diag(cmd, ui.LevelWarn,
+			"a legacy %s is present at %s; it is no longer read — move its settings into %s/ and delete it.",
 			project.LegacyMarkerFile, root, project.DirName)
 	}
 	fmt.Fprintln(w, "")
@@ -264,8 +265,7 @@ func cloneSourceRepo(cmd *cobra.Command, home, rawURL string) error {
 	if err := validateCloneURL(rawURL); err != nil {
 		return err
 	}
-	w := cmd.OutOrStdout()
-	fmt.Fprintf(w, "cloning %s into %s ...\n", rawURL, home)
+	diag(cmd, ui.LevelInfo, "cloning %s into %s ...", rawURL, home)
 	if _, err := git.PlainClone(home, false, &git.CloneOptions{URL: rawURL, Depth: 1}); err != nil {
 		return fmt.Errorf("clone %s: %w", rawURL, err)
 	}
@@ -280,7 +280,7 @@ func cloneSourceRepo(cmd *cobra.Command, home, rawURL string) error {
 	// about changes that predate it — and so the notice path can read
 	// "home exists, no record" as an unambiguous upgrade.
 	seedUpgradeNoticeRecord(home)
-	fmt.Fprintln(w, "cloned. Run `agentsync apply --dry-run` to preview against this machine.")
+	success(cmd, ui.EmojiInit, "cloned. Run `agentsync apply --dry-run` to preview against this machine.")
 	return nil
 }
 

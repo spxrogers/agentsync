@@ -228,8 +228,7 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 		}
 		if st == agit.StateAgentsyncOwned {
 			// Folded into a parent agentsync repo — managed, but reverted via the parent.
-			fmt.Fprintf(p.Err, "%s %s is versioned as part of a parent directory; revert that to roll it back.\n",
-				p.Faint(ui.GlyphInfo), root)
+			p.Infof("%s is versioned as part of a parent directory; revert that to roll it back.", root)
 			return true, nil
 		}
 		if strict {
@@ -260,8 +259,8 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 			return true, fmt.Errorf("%s contains a nested git repository; refusing to revert "+
 				"as a precaution — remove or reconcile the inner repo first", root)
 		}
-		fmt.Fprintf(p.Err, "%s a nested git repository now lives below %s; skipping revert "+
-			"as a precaution — remove or reconcile the inner repo first.\n", p.Yellow(ui.GlyphWarn+" note:"), root)
+		p.Warnf("a nested git repository now lives below %s; skipping revert "+
+			"as a precaution — remove or reconcile the inner repo first.", root)
 		return true, nil
 	}
 
@@ -272,7 +271,7 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 			return true, herr
 		}
 		if !multi {
-			fmt.Fprintf(p.Err, "%s %s: only one checkpoint — skipping\n", p.Faint(ui.GlyphInfo), root)
+			p.Infof("%s: only one checkpoint — skipping", root)
 			return true, nil
 		}
 		target = "HEAD~1"
@@ -308,9 +307,9 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 		// mid-restore failure's restoreFailureHint also names the snapshot,
 		// which is redundancy in the safe direction, not a contradiction.
 		if snap != "" {
-			fmt.Fprintf(p.Err, "%s the revert did not complete, but it had already preserved uncommitted changes in %s as snapshot %s; "+
-				"that snapshot is kept in the local-only history and, like the files it versions, may contain secrets in cleartext.\n",
-				p.Faint(ui.GlyphInfo), root, agit.Short(snap))
+			p.Infof("the revert did not complete, but it had already preserved uncommitted changes in %s as snapshot %s; "+
+				"that snapshot is kept in the local-only history and, like the files it versions, may contain secrets in cleartext.",
+				root, agit.Short(snap))
 		}
 		return true, err
 	}
@@ -320,17 +319,16 @@ func revertRoot(p *ui.Printer, root, toRef string, dryRun bool, id agit.Identity
 		// The snapshot commits the dest files verbatim; like everything in this
 		// local-only history they may hold secrets resolved to cleartext. Caution the
 		// user rather than silently persist a freshly-typed secret (issue #126).
-		fmt.Fprintf(p.Err, "%s that snapshot is kept in the local-only history and, like the files it versions, may contain secrets in cleartext.\n",
-			p.Faint(ui.GlyphInfo))
+		p.Infof("that snapshot is kept in the local-only history and, like the files it versions, may contain secrets in cleartext.")
 	}
 	if h == "" {
 		fmt.Fprintf(p.Out, "%s %s already matches %s; nothing to revert.\n", p.Faint(ui.GlyphInfo), root, agit.Short(targetHash))
 		return true, nil
 	}
-	fmt.Fprintf(p.Out, "%s reverted %s to checkpoint %s\n", p.Green(ui.GlyphOK), root, agit.Short(targetHash))
+	p.Successf(ui.EmojiReverted, "reverted %s to checkpoint %s", root, agit.Short(targetHash))
 	if len(sharedWith) > 0 {
-		fmt.Fprintf(p.Err, "%s %s is shared with %s — this also rolled back their files in it.\n",
-			p.Yellow(ui.GlyphWarn+" note:"), root, strings.Join(sharedWith, ", "))
+		p.Warnf("%s is shared with %s — this also rolled back their files in it.",
+			root, strings.Join(sharedWith, ", "))
 	}
 	printOutOfSyncNotice(p, root)
 	return true, nil
@@ -376,7 +374,7 @@ func previewRevert(p *ui.Printer, repo *agit.Repo, root, target string) error {
 	// drop the note — the preview would otherwise imply "no untracked files here".
 	untracked, uerr := repo.UntrackedPaths()
 	if uerr != nil {
-		fmt.Fprintf(p.Err, "%s could not enumerate untracked files in %s: %v\n", p.Yellow("agentsync:"), root, uerr)
+		p.Warnf("could not enumerate untracked files in %s: %v", root, uerr)
 	}
 	if len(untracked) > 0 {
 		fmt.Fprintf(p.Out, "  (%d untracked file(s) in this dir are left untouched)\n", len(untracked))
@@ -420,8 +418,7 @@ func cleanAll(dirs []string) []string {
 
 // printOutOfSyncNotice warns that the destination now diverges from canonical.
 func printOutOfSyncNotice(p *ui.Printer, dir string) {
-	fmt.Fprintf(p.Err, "%s the destination directory %s is now out of sync with the agentsync configuration.\n",
-		p.Yellow(ui.GlyphWarn+" note:"), dir)
-	fmt.Fprintf(p.Err, "  Reconcile as needed (`agentsync reconcile` / `agentsync import`) before your next "+
-		"`agentsync apply` to avoid re-losing these changes.\n")
+	p.Warnf("the destination directory %s is now out of sync with the agentsync configuration.", dir)
+	p.Detailf("Reconcile as needed (`agentsync reconcile` / `agentsync import`) before your next " +
+		"`agentsync apply` to avoid re-losing these changes.")
 }

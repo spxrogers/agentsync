@@ -94,6 +94,9 @@ func TestRoot_VersionInjection(t *testing.T) {
 // whitespace/newline divergence between the two version render paths.
 func renderRaw(t *testing.T, args ...string) []byte {
 	t.Helper()
+	// Bypassing runCLI also bypasses its slog detach, and the root installs a
+	// handler bound to the buffer below — which this function is about to drop.
+	detachSlog(t)
 	var buf bytes.Buffer
 	root := cli.NewRoot()
 	root.SetOut(&buf)

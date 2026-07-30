@@ -44,7 +44,7 @@ func (p *Printer) Spinner(label string) *Spinner {
 		w:       p.Err,
 		label:   label,
 		animate: isTerminal(p.Err),
-		color:   p.color,
+		color:   p.colorErr, // the spinner writes to p.Err; use that stream's decision
 		stopCh:  make(chan struct{}),
 		doneCh:  make(chan struct{}),
 	}

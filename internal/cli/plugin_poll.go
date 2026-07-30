@@ -19,6 +19,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 // pollOpts configures the shared marketplace-poll engine behind `plugin
@@ -46,6 +47,17 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 	if err != nil {
 		return err
 	}
+	// The two helpers below take a plain io.Writer for their warnings and emit
+	// the bare "warning: " sentinel. Route it through a WarnWriter on STDERR so
+	// they pick up the same ⚠ WARN label as everything else — they previously
+	// wrote the raw sentinel to STDOUT, which both skipped the styling and put a
+	// diagnostic in the middle of the command's own output.
+	warnW := ui.NewWarnWriter(p.Err, p)
+	// Flush drains (and terminates) any partial line the writer still holds. It
+	// runs on the error return path too, where an unterminated fragment would put
+	// main's terminal ✗ ERROR line on the same row. A no-op in the normal case,
+	// since every emitter ends with \n.
+	defer warnW.Flush()
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	userHome := paths.HomeDir(paths.OSEnv{})
 	statePath := filepath.Join(home, ".state", "targets.json")
@@ -74,7 +86,7 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 
 		src, perr := parseMarketplaceSource(mp.Marketplace.URL)
 		if perr != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "warning: marketplace %s has unparseable URL %q: %v\n", mpName, mp.Marketplace.URL, perr)
+			p.Warnf("marketplace %s has unparseable URL %q: %v", mpName, mp.Marketplace.URL, perr)
 			continue
 		}
 		if mp.Marketplace.Ref != "" {
@@ -86,7 +98,7 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 		result, err := fetcher.Fetch(src, cacheDir)
 		stopSpin()
 		if err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "warning: re-fetch marketplace %s failed: %v\n", mpName, err)
+			p.Warnf("re-fetch marketplace %s failed: %v", mpName, err)
 			continue
 		}
 
@@ -110,20 +122,19 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 			}
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "fetched marketplace %s (sha=%s)\n",
+		p.Successf(ui.EmojiSuccess, "fetched marketplace %s (sha=%s)",
 			mpName, truncate(result.HeadSHA, 12))
 	}
 
 	// Compute fresh manifest SHAs for installed plugins (for SHA drift detection).
 	stopSpin := p.Spin("checking plugin manifests")
-	freshSHAs := computeFreshPluginSHAs(home, c.Plugins, fetched, cmd.OutOrStdout())
+	freshSHAs := computeFreshPluginSHAs(home, c.Plugins, fetched, warnW)
 	stopSpin()
 
 	// Detect re-uploaded (same version, different SHA) plugins.
 	shaWarnings := marketplace.DetectSHADrift(c.Plugins, freshSHAs)
 	for _, w := range shaWarnings {
-		fmt.Fprintf(cmd.OutOrStdout(),
-			"warning: manifest-sha-mismatch plugin=%s version=%s recorded=%s fetched=%s (re-uploaded?)\n",
+		p.Warnf("manifest-sha-mismatch plugin=%s version=%s recorded=%s fetched=%s (re-uploaded?)",
 			w.ID, w.Version, truncate(w.RecordedSHA, 12), truncate(w.FetchedSHA, 12))
 	}
 
@@ -138,17 +149,16 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 	// the delta is exactly the bump's effect. An excluded bump is REPORTED, never
 	// silently dropped. Evaluation failures are treated as lossy (conservative).
 	if o.lossless {
-		safe, lossy := filterSafeBumps(home, bumps, fetched, c.Config, userHome, cmd.OutOrStdout())
+		safe, lossy := filterSafeBumps(home, bumps, fetched, c.Config, userHome, warnW)
 		for _, b := range lossy {
-			fmt.Fprintf(cmd.OutOrStdout(),
-				"lossless: skipping lossy bump %s %s → %s (candidate version drops translation for an agent)\n",
+			p.Infof("lossless: skipping lossy bump %s %s → %s (candidate version drops translation for an agent)",
 				b.ID, b.From, b.To)
 		}
 		bumps = safe
 	}
 
 	if len(bumps) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "all plugins are up to date")
+		p.Successf(ui.EmojiSuccess, "all plugins are up to date")
 	} else {
 		fmt.Fprintf(cmd.OutOrStdout(), "\npending bumps (%d):\n", len(bumps))
 		for _, b := range bumps {
@@ -172,10 +182,9 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 	// Upgrade each plugin with a pending bump.
 	for _, b := range bumps {
 		if err := applyPluginBump(home, b, fetched); err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "warning: upgrade %s failed: %v\n", b.ID, err)
+			p.Warnf("upgrade %s failed: %v", b.ID, err)
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "upgraded %s %s → %s\n",
-				b.ID, b.From, b.To)
+			p.Successf(ui.EmojiSuccess, "upgraded %s %s → %s", b.ID, b.From, b.To)
 		}
 	}
 
@@ -241,9 +250,10 @@ func reapplyAfterPluginChange(cmd *cobra.Command, home, userHome, statePath stri
 	}
 	if len(collisions) > 0 {
 		ew := cmd.ErrOrStderr()
-		fmt.Fprintf(ew, "agentsync: plugin upgrade backed up %d pre-existing target(s):\n", len(collisions))
+		ep := printerOn(cmd, ew)
+		ep.Warnf("plugin upgrade backed up %d pre-existing target(s):", len(collisions))
 		for _, r := range collisions {
-			fmt.Fprintf(ew, "  %s\n", r.String())
+			ep.Fdetailf(ew, "%s", r.String())
 		}
 	}
 	for name, res := range plan.PerAgent {
@@ -257,7 +267,7 @@ func reapplyAfterPluginChange(cmd *cobra.Command, home, userHome, statePath stri
 	if err := state.Save(statePath, st); err != nil {
 		return err
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), "applied:", plan.Total(), "ops")
+	printerOn(cmd, cmd.OutOrStdout()).Successf(ui.EmojiApplied, "applied: %d ops", plan.Total())
 	return nil
 }
 

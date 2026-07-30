@@ -117,7 +117,7 @@ func pluginAddRun(cmd *cobra.Command, args []string) error {
 	// %s sanitizes it by construction — a control sequence in the version string
 	// cannot smuggle terminal escapes into the status line. (id is the user's own
 	// argument and sha is hex, so neither needs it.)
-	fmt.Fprintf(cmd.OutOrStdout(), "installed plugin %s (version=%s sha=%s)",
+	msg := fmt.Sprintf("installed plugin %s (version=%s sha=%s)",
 		id, spec.Version, truncate(spec.ManifestSHA, 12))
 	// When a re-install PRESERVED user-authored lifecycle fields that differ from
 	// the first-install defaults, surface it instead of reporting an unqualified
@@ -126,9 +126,9 @@ func pluginAddRun(cmd *cobra.Command, args []string) error {
 	// config; route them through ui.Sanitize so a hand-edited control byte cannot
 	// smuggle terminal escapes into the status line, mirroring the Version guard.
 	if kept := keptLifecycleSummary(spec); kept != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), " (kept %s)", kept)
+		msg += fmt.Sprintf(" (kept %s)", kept)
 	}
-	fmt.Fprintln(cmd.OutOrStdout())
+	success(cmd, ui.EmojiSuccess, "%s", msg)
 	return nil
 }
 
@@ -401,8 +401,8 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string, lossless bool) error {
 		case lerr != nil:
 			return fmt.Errorf("--lossless: cannot evaluate %s (%w); refusing the upgrade to be safe", id, lerr)
 		case isLossy:
-			fmt.Fprintf(cmd.OutOrStdout(),
-				"lossless: skipping lossy upgrade %s (candidate version drops translation for an agent)\n", id)
+			diag(cmd, ui.LevelInfo,
+				"lossless: skipping lossy upgrade %s (candidate version drops translation for an agent)", id)
 			return nil
 		}
 	}
@@ -444,7 +444,7 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string, lossless bool) error {
 		return err
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "upgraded plugin %s (sha=%s)\n",
+	success(cmd, ui.EmojiSuccess, "upgraded plugin %s (sha=%s)",
 		id, truncate(manifestSHA, 12))
 
 	// Re-apply so the upgraded plugin's components reach the agents now. Same
@@ -500,7 +500,7 @@ func pluginEnableRun(cmd *cobra.Command, args []string) error {
 	if err := iox.AtomicWrite(pluginPath, data, 0o644); err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "enabled plugin %s\n", id)
+	success(cmd, ui.EmojiSuccess, "enabled plugin %s", id)
 	return nil
 }
 
@@ -546,7 +546,7 @@ func pluginDisableRun(cmd *cobra.Command, args []string) error {
 	if err := iox.AtomicWrite(pluginPath, data, 0o644); err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "disabled plugin %s\n", id)
+	success(cmd, ui.EmojiSuccess, "disabled plugin %s", id)
 	return nil
 }
 
@@ -599,7 +599,7 @@ func pluginRemoveRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("remove cache %s: %w", cacheDir, err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "removed plugin %s\n", id)
+	success(cmd, ui.EmojiRemoved, "removed plugin %s", id)
 	return nil
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/ui"
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
@@ -134,9 +135,9 @@ wrong, and check when something is written wrong.`,
 				}
 			}
 			if offline {
-				fmt.Fprintln(cmd.OutOrStdout(), "ok: schema valid; reference shapes valid (offline — resolvability not checked)")
+				success(cmd, ui.EmojiSuccess, "schema valid; reference shapes valid (offline — resolvability not checked)")
 			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "ok: schema valid; all references resolve")
+				success(cmd, ui.EmojiSuccess, "schema valid; all references resolve")
 			}
 			return nil
 		},

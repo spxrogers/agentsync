@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,7 +15,7 @@ import (
 // warning-styling plumbing: a real adapter's Ingest warning — physically
 // emitted into the adapter's configured Stderr from inside
 // internal/adapter/<name>/ingest.go — must come out of the captured CLI
-// buffer with the bold-yellow "⚠️ warning:" prefix the user sees on every
+// buffer with the "⚠ WARN" label the user sees on every
 // other warning, NOT as plain "warning: …", and NOT only as a styled
 // "warning:" that the CLI itself could have emitted.
 //
@@ -32,7 +33,7 @@ import (
 // in each adapter package.
 //
 // **Which assertion is load-bearing?** The same-line regex below
-// (styled "⚠️ warning:" prefix appearing on the same line as a
+// (the "⚠ WARN" label appearing on the same line as a
 // lenient-YAML-specific token). Reasoning:
 //
 //   - A plain `"warning: …"` substring is not a sufficient negative: if
@@ -49,10 +50,10 @@ import (
 //     was both received AND styled — neither a CLI-only styled warning
 //     nor a routing-bypassed adapter warning matches the regex.
 func TestImport_StyledAdapterWarnings(t *testing.T) {
-	// Built once: the same-line regex requires the bold-yellow "⚠️ warning:"
-	// prefix (verbatim — the user-visible bytes) followed by anything up to
-	// the lenient-YAML phrase the adapter emits. ANSI byte order is not
-	// pinned, just the presence and the same-line locality.
+	// Built once: the same-line regex requires the shared "⚠ WARN" label
+	// (verbatim — the user-visible bytes) followed by anything up to the
+	// lenient-YAML phrase the adapter emits. ANSI byte order is not pinned,
+	// just the presence and the same-line locality.
 	//
 	// `[^\n\r]*` rather than `[^\n]*`: rejects both newline AND carriage-
 	// return between the prefix and the phrase. SGR bytes don't contain
@@ -61,8 +62,12 @@ func TestImport_StyledAdapterWarnings(t *testing.T) {
 	// negated class, a `\r` between the prefix and the phrase would let
 	// the regex match across what the terminal would render as separate
 	// lines.
+	// The runCLI harness captures into buffers, so color resolves off; build
+	// the expected label through the same code path the CLI uses rather than
+	// hardcoding bytes that rot when the vocabulary changes.
+	plainLabel := ui.LevelWarn.Label(ui.New(io.Discard, io.Discard, ui.ColorNever))
 	styledAdapterWarn := regexp.MustCompile(
-		regexp.QuoteMeta(ui.GlyphWarnEmoji+" warning:") +
+		regexp.QuoteMeta(plainLabel) +
 			`[^\n\r]*frontmatter is not strict YAML`,
 	)
 

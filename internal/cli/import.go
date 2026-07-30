@@ -227,10 +227,10 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 		return perr
 	}
 	// Wrap stderr once so every "warning: …" line — ours, the adapter's
-	// Ingest, capture's re-reference, etc. — picks up the same bold-yellow
-	// "⚠️ warning:" styling. Lines that don't start with "warning: " pass
-	// through unchanged, so indented continuations and "agentsync:" notes
-	// look the same as before.
+	// Ingest, capture's re-reference, etc. — picks up the same "⚠ WARN" label.
+	// Lines that don't start with "warning: " pass through unchanged, which is
+	// what lets already-labeled diagnostics (INFO notes, aligned continuation
+	// lines) reach the terminal untouched.
 	warnW := ui.NewWarnWriter(p.Err, p)
 	io := &importIO{p: p, out: p.Out, err: warnW, dryRun: dryRun}
 
@@ -242,7 +242,7 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	srcHome := agentsyncHome
 	if sc == adapter.ScopeProject {
 		srcHome = project.Home(projectRoot)
-		fmt.Fprintf(p.Err, "%s project (%s)\n", p.Faint("scope:"), projectRoot)
+		p.Infof("scope: project (%s)", projectRoot)
 	}
 	reg := registryFactory()
 	a := reg.Lookup(agentName)
@@ -376,9 +376,9 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 		for _, w := range warnings {
 			// w is <op.Path>#<pointer> harvested from the native config; the
 			// pointer can hold control bytes, so sanitize on display (#93/#171).
-			fmt.Fprintf(io.err, "  %s\n", ui.Sanitize(w))
+			io.detailf("%s", ui.Sanitize(w))
 		}
-		fmt.Fprintln(io.err, "  agentsync will leave them alone on apply (it only writes keys it owns). Import an item by name if you want agentsync to manage it.")
+		io.detailf("agentsync will leave them alone on apply (it only writes keys it owns). Import an item by name if you want agentsync to manage it.")
 	}
 	// Surface a partial-import error after seeding so the command still exits
 	// non-zero, but the components that were written are now owned.
@@ -905,21 +905,18 @@ func (i *importIO) flushSection() {
 	i.sectionShown = true
 }
 
-// warn emits a "warning: …" line. Styling (bold-yellow "⚠️ warning:") is
-// applied by the ui.WarnWriter wrapping i.err — emitting the plain prefix
-// here means adapter Ingest, capture, and importIO all share one styling
-// point, and no caller has to know about it. msg should not include a
-// trailing newline; warn appends one.
+// warn emits a "warning: …" line. The WARN label is applied by the
+// ui.WarnWriter wrapping i.err — emitting the plain sentinel here means adapter
+// Ingest, capture, and importIO all share one styling point, and no caller has
+// to know about it. msg should not include a trailing newline; warn appends one.
 func (i *importIO) warn(msg string) {
 	fmt.Fprintf(i.err, "warning: %s\n", msg)
 }
 
-// note prints a cyan "note:" prefix followed by msg, for informational lines
-// that aren't problems — matches the styling status.go uses for the same
-// "this is FYI, not a warning" tier. msg should not include a trailing
-// newline; note appends one.
+// note emits an INFO diagnostic — the "this is FYI, not a problem" tier. msg
+// should not include a trailing newline; note appends one.
 func (i *importIO) note(msg string) {
-	fmt.Fprintf(i.err, "%s %s\n", i.p.Cyan("note:"), msg)
+	i.p.Fdiagf(i.err, ui.LevelInfo, "%s", msg)
 }
 
 // warnf is warn + fmt.Sprintf for the common "%v / %q" formatting.
@@ -927,18 +924,25 @@ func (i *importIO) warnf(format string, args ...any) {
 	i.warn(fmt.Sprintf(format, args...))
 }
 
-// note prints a yellow "agentsync:" prefix (matching apply.go) for diagnostics
-// that aren't warnings about user data but about how agentsync is proceeding.
-func (i *importIO) notef(format string, args ...any) {
-	fmt.Fprintf(i.err, "%s ", i.p.Yellow("agentsync:"))
-	fmt.Fprintf(i.err, format, args...)
-	if !strings.HasSuffix(format, "\n") {
-		fmt.Fprintln(i.err)
-	}
+// detailf emits a continuation line under the diagnostic above it, aligned to
+// the message column — the enumerated items under a note, say.
+func (i *importIO) detailf(format string, args ...any) {
+	i.p.Fdetailf(i.err, format, args...)
 }
 
-// info prints a faint informational line on stdout — for "nothing to do"
-// outcomes the user still wants confirmed, like "no importable items found".
+// notef emits an INFO diagnostic about how agentsync is proceeding, as opposed
+// to warn's "something about your data needs attention".
+//
+// Both tiers exist deliberately: an import that silently changes course (seeding
+// state, retiring a stale hook) is worth saying out loud, but saying it at WARN
+// would train the user to ignore the label that actually means "look at this".
+func (i *importIO) notef(format string, args ...any) {
+	i.p.Fdiagf(i.err, ui.LevelInfo, format, args...)
+}
+
+// infof prints an informational RESULT line on stdout — a "nothing to do"
+// outcome the user still wants confirmed, like "no importable items found".
+// Unlabeled by design: it is the command's answer, not a diagnostic about it.
 func (i *importIO) infof(format string, args ...any) {
 	fmt.Fprintf(i.out, "%s ", i.p.Faint(ui.GlyphInfo))
 	fmt.Fprintf(i.out, format, args...)
@@ -1086,13 +1090,15 @@ func importAllComponents(io *importIO, home string, a adapter.Adapter, agentName
 		noun = "item"
 	}
 	verb := importVerb(io.dryRun)
-	glyph := io.p.Green(ui.GlyphOK)
-	if io.dryRun {
-		glyph = io.p.Cyan(ui.GlyphArrow)
-	}
 	fmt.Fprintln(io.out, "")
-	fmt.Fprintf(io.out, "%s %s\n", glyph,
-		io.p.Bold(fmt.Sprintf("%s %d %s from %s", verb, total, noun, agentName)))
+	if io.dryRun {
+		// A dry run imported nothing — the emoji vocabulary is for outcomes
+		// that actually happened, so a preview keeps the neutral arrow.
+		fmt.Fprintf(io.out, "%s %s\n", io.p.Cyan(ui.GlyphArrow),
+			io.p.Bold(fmt.Sprintf("%s %d %s from %s", verb, total, noun, agentName)))
+	} else {
+		io.p.Fsuccessf(io.out, ui.EmojiImported, "%s %d %s from %s", verb, total, noun, agentName)
+	}
 	var parts []string
 	for _, comp := range importComponentOrder {
 		if counts[comp] > 0 {

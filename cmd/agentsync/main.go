@@ -1,8 +1,6 @@
 package main
 
 import (
-	"errors"
-	"fmt"
 	"os"
 
 	"github.com/spxrogers/agentsync/internal/cli"
@@ -19,16 +17,9 @@ func main() {
 	cli.Commit = commit
 	cli.Date = date
 
-	if err := cli.Execute(); err != nil {
-		// A quiet exit-code sentinel (status/diff --exit-code) carries its own
-		// process exit code and an empty message: map it to that code and print
-		// nothing, so a CI gate gets a stable non-zero exit with no spurious
-		// "agentsync:" line. Every other error exits 1 with its message.
-		var ec cli.ExitCoder
-		if errors.As(err, &ec) {
-			os.Exit(ec.ExitCode())
-		}
-		fmt.Fprintln(os.Stderr, "agentsync:", err)
-		os.Exit(1)
-	}
+	// cli.Execute owns the whole invocation and returns the exit code: the quiet
+	// exit-code sentinel (status/diff --exit-code), the ✗ ERROR label, and the
+	// --color resolution all live there, where the flag was parsed and where
+	// ExitCoder is defined. main stays a three-line shim on purpose.
+	os.Exit(cli.Execute())
 }

@@ -130,9 +130,9 @@ func TestWarnWriter_Flush(t *testing.T) {
 		w.Flush()
 		got := dest.String()
 		// Color is off (ColorNever), so the styled prefix is the bare
-		// glyph + "warning:" — emit's HasPrefix("warning: ") still
+		// glyph + level word — emit's HasPrefix("warning: ") still
 		// triggers the prefix rewrite even without a trailing newline.
-		const wantPrefix = GlyphWarnEmoji + " warning:"
+		wantPrefix := LevelWarn.Label(p)
 		if !strings.HasPrefix(got, wantPrefix) {
 			t.Fatalf("Flush should style the partial warning prefix; got: %q", got)
 		}
@@ -141,13 +141,25 @@ func TestWarnWriter_Flush(t *testing.T) {
 		}
 	})
 
-	t.Run("partial non-warning line drains verbatim", func(t *testing.T) {
+	t.Run("partial non-warning line drains unlabeled, and terminated", func(t *testing.T) {
 		dest.Reset()
 		w2 := NewWarnWriter(&dest, p)
 		_, _ = w2.Write([]byte("note: agentsync did things"))
 		w2.Flush()
-		if got := dest.String(); got != "note: agentsync did things" {
-			t.Fatalf("non-warning partial line should drain verbatim; got: %q", got)
+		got := dest.String()
+		// The contract being pinned is that a line without the "warning: "
+		// sentinel is passed through UNLABELED — its content is untouched.
+		if got != "note: agentsync did things\n" {
+			t.Fatalf("non-warning partial line should drain with its content intact; got: %q", got)
+		}
+		// Flush DOES add the missing line terminator, and that is deliberate: a
+		// drained fragment has no trailing newline by definition, so whatever
+		// writes to this stream next — main's terminal ✗ ERROR line — would render
+		// on the same row. The hazard is identical for labeled and passthrough
+		// lines, so Flush terminates both rather than leaving the caller to
+		// remember which case needs it.
+		if !strings.HasSuffix(got, "\n") {
+			t.Fatalf("Flush must terminate the fragment it drains; got: %q", got)
 		}
 	})
 

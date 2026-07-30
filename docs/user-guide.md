@@ -870,7 +870,15 @@ reason** rather than accepting and ignoring them.
 expands each collapsed skill directory back to one row per bundled file).
 `--color=auto|always|never` controls whether output is styled with ANSI color
 and bold (default `auto` — on for a TTY, off when piped/redirected; honors
-`NO_COLOR`). `--agents <list>` is the **one** way to say which agents a command
+`NO_COLOR`). Color is a *second* signal, never the only one: every diagnostic
+also carries a level label — `✗ ERROR`, `⚠ WARN`, `ℹ INFO` (and a reserved
+`• DEBUG`, which nothing emits today) — on
+**stderr**, so severity survives being piped into a file or a CI log. Command
+*results* (a `--json` payload, a `status` table, a `diff`, a `list`) go to
+stdout with no label, and a success outcome leads with an emoji instead —
+`🎉 applied: 12 ops`, `✅ added agent: claude`, `🧹 removed mcp server: github`,
+`📥 imported 4 items from claude`, `🔙 reverted…`, `✨ …initialized`. That split is why a
+warning never lands in the middle of `status --json`. `--agents <list>` is the **one** way to say which agents a command
 acts on: `apply`, `status`, `diff`, `reconcile`, and `revert` all take it, with
 identical parsing and the same `*` = all-enabled convention (an empty or unknown
 value is rejected identically by all five). On `revert` it is a spelling of the

@@ -80,9 +80,9 @@ func applyRun(cmd *cobra.Command, home string, dryRun, noGitBackup bool, agentsC
 	// Announce the effective scope so a project-scoped apply is never silent
 	// about writing to a repo tree instead of the user's machine-wide config.
 	if sc == adapter.ScopeProject {
-		fmt.Fprintf(p.Err, "%s project (%s)\n", p.Faint("scope:"), projectRoot)
+		p.Infof("scope: project (%s)", projectRoot)
 	} else {
-		fmt.Fprintf(p.Err, "%s user\n", p.Faint("scope:"))
+		p.Infof("scope: user")
 	}
 
 	// Resolve ${secret:...} and ${env:...} references before rendering. The
@@ -121,13 +121,11 @@ func applyRun(cmd *cobra.Command, home string, dryRun, noGitBackup bool, agentsC
 		// project tree's [agents] table resolving to nothing enabled, so
 		// point there instead of at `agent add`.
 		if sc == adapter.ScopeProject {
-			fmt.Fprintf(p.Err,
-				"%s no agents are enabled at project scope (%s); nothing to apply.\n"+
-					"  Check the [agents] table in %s.\n", p.Yellow("agentsync:"), projectRoot, project.Home(projectRoot))
+			p.Warnf("no agents are enabled at project scope (%s); nothing to apply.", projectRoot)
+			p.Detailf("Check the [agents] table in %s.", project.Home(projectRoot))
 		} else {
-			fmt.Fprintf(p.Err,
-				"%s no agents are enabled in agentsync.toml; nothing to apply.\n"+
-					"  Run `agentsync agent add claude` (or opencode) to register an agent.\n", p.Yellow("agentsync:"))
+			p.Warnf("no agents are enabled in agentsync.toml; nothing to apply.")
+			p.Detailf("Run `agentsync agent add claude` (or opencode) to register an agent.")
 		}
 		return nil
 	}
@@ -235,10 +233,9 @@ func applyRun(cmd *cobra.Command, home string, dryRun, noGitBackup bool, agentsC
 
 	collisions, written, unchanged, applyErr := render.Apply(plan, reg, s, home, userHome, sc, projectRoot)
 	if len(collisions) > 0 {
-		fmt.Fprintf(p.Err, "%s backed up %d pre-existing target(s) before overwriting:\n",
-			p.Yellow("agentsync:"), len(collisions))
+		p.Warnf("backed up %d pre-existing target(s) before overwriting:", len(collisions))
 		for _, r := range collisions {
-			fmt.Fprintf(p.Err, "  %s\n", r.String())
+			p.Detailf("%s", r.String())
 		}
 	}
 
@@ -294,7 +291,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun, noGitBackup bool, agentsC
 	// is the SAME session that took the pre-apply baseline above, so a fresh dir it
 	// inited is committed into here without a second prompt.
 	if err := gb.checkpoint(written); err != nil {
-		fmt.Fprintf(p.Err, "%s destination git backup: %v\n", p.Yellow("agentsync:"), err)
+		p.Warnf("destination git backup: %v", err)
 	}
 
 	w := p.Out
@@ -305,15 +302,24 @@ func applyRun(cmd *cobra.Command, home string, dryRun, noGitBackup bool, agentsC
 	//   - a genuine clean re-apply (every dest already held our exact bytes,
 	//     nothing removed) → "up to date" (unchanged detection preserved).
 	//   - normal writes → "applied: N ops".
+	//   - a zero-op plan (no agent renders anything yet) → a plain ✅, not 🎉:
+	//     celebrating an apply that did nothing reads as a tool that does not
+	//     know what it did.
 	switch {
 	case removed > 0 && appliedOps == 0:
-		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green("removed: "+removedLabel(removedKeys, removedFiles)))
+		p.Fsuccessf(w, ui.EmojiRemoved, "removed: %s", removedLabel(removedKeys, removedFiles))
 	case removed > 0:
-		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green(fmt.Sprintf("applied: %d ops, removed: %s", appliedOps, removedLabel(removedKeys, removedFiles))))
+		p.Fsuccessf(w, ui.EmojiApplied, "applied: %d ops, removed: %s", appliedOps, removedLabel(removedKeys, removedFiles))
 	case len(written) > 0 && len(unchanged) == len(written):
-		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green(fmt.Sprintf("up to date: %d ops, no changes", plan.Total())))
+		// Nothing changed, so this is not a celebration — a plain ✅ says
+		// "checked, all good" without implying work was done.
+		p.Fsuccessf(w, ui.EmojiSuccess, "up to date: %d ops, no changes", plan.Total())
+	case plan.Total() == 0:
+		// Nothing to do at all (no agents render anything yet). Celebrating a
+		// zero-op apply reads as a tool that doesn't know what it did.
+		p.Fsuccessf(w, ui.EmojiSuccess, "applied: 0 ops")
 	default:
-		fmt.Fprintf(w, "%s %s\n", p.Green(ui.GlyphOK), p.Green(fmt.Sprintf("applied: %d ops", plan.Total())))
+		p.Fsuccessf(w, ui.EmojiApplied, "applied: %d ops", plan.Total())
 	}
 	report := render.BuildReport(reportCanonical(c, sc), plan, agents)
 	if len(report.Rows) > 0 {
@@ -749,10 +755,11 @@ func promptScopeChoice(cmd *cobra.Command, projectRoot, userHome string) (adapte
 	// prompt to stdout would corrupt the machine-readable output a caller is
 	// piping. stdin is still read from InOrStdin so the keystroke reaches us.
 	w := cmd.ErrOrStderr()
+	p := printerOn(cmd, w)
 	r := bufio.NewReader(cmd.InOrStdin())
-	fmt.Fprintf(w, "ℹ this repo has a .agentsync/ project tree.\n")
-	fmt.Fprintf(w, "  [1] project scope (%s)\n", projectRoot)
-	fmt.Fprintf(w, "  [2] user scope (%s)\n", userHome)
+	p.Fdiagf(w, ui.LevelInfo, "this repo has a .agentsync/ project tree.")
+	p.Fdetailf(w, "[1] project scope (%s)", projectRoot)
+	p.Fdetailf(w, "[2] user scope (%s)", userHome)
 	for attempts := 0; attempts < 5; attempts++ {
 		fmt.Fprintf(w, "run `agentsync %s` at which scope? [1/2]: ", cmd.Name())
 		line, err := r.ReadString('\n')
@@ -766,7 +773,7 @@ func promptScopeChoice(cmd *cobra.Command, projectRoot, userHome string) (adapte
 			// EOF / closed stdin with no valid choice — don't loop forever.
 			return adapter.ScopeUser, "", fmt.Errorf("no scope selected (input closed); pass --scope user|project")
 		}
-		fmt.Fprintf(w, "  please enter 1 (project) or 2 (user).\n")
+		p.Fdetailf(w, "please enter 1 (project) or 2 (user).")
 	}
 	return adapter.ScopeUser, "", fmt.Errorf("no valid scope selected after 5 attempts; pass --scope user|project")
 }

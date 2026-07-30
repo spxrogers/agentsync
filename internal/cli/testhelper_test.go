@@ -7,7 +7,23 @@ import (
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/cli"
+	aslog "github.com/spxrogers/agentsync/internal/log"
 )
+
+// detachSlog unbinds the process-wide slog default from THIS invocation's
+// buffers once the test using them is done.
+//
+// The root command installs a slog handler bound to its stderr, and a real
+// process exits with it installed. A test binary does not: without this, every
+// runCLI leaves slog.Default() writing into a *bytes.Buffer owned by a test that
+// has already returned, so a later library slog.Warn writes into a dead buffer —
+// invisible today, and a data race the moment any test here adopts t.Parallel.
+// t.Cleanup rather than a defer so the detach happens after the CALLER's
+// assertions, not when the helper returns.
+func detachSlog(t *testing.T) {
+	t.Helper()
+	t.Cleanup(aslog.Detach)
+}
 
 // runCLI runs the CLI with given args, returns stdout+stderr combined and
 // the resulting error. Sets AGENTSYNC_TARGET_ROOT to the supplied tmp via env.
@@ -22,6 +38,7 @@ func runCLI(t *testing.T, env map[string]string, args ...string) (string, error)
 // test must know WHICH stream a message landed on.
 func runCLIWithStdin(t *testing.T, env map[string]string, stdinContent string, args ...string) (string, error) {
 	t.Helper()
+	detachSlog(t)
 	var buf bytes.Buffer
 	root := cli.NewRoot()
 	root.SetOut(&buf)
@@ -63,6 +80,7 @@ func runCLISplit(t *testing.T, env map[string]string, args ...string) (string, s
 // runCLIWithStdinSplit is runCLISplit with stdin supplied.
 func runCLIWithStdinSplit(t *testing.T, env map[string]string, stdinContent string, args ...string) (string, string, error) {
 	t.Helper()
+	detachSlog(t)
 	var outBuf, errBuf bytes.Buffer
 	root := cli.NewRoot()
 	root.SetOut(&outBuf)

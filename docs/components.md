@@ -27,8 +27,8 @@ internal/
 ├── iox/              # atomic write + file lock
 ├── jsonkeys/         # per-key JSON-pointer merge (preserve foreign keys)
 ├── paths/            # AGENTSYNC_HOME / TARGET_ROOT / HOME resolution
-├── ui/               # presentation: Printer · color · glyphs · WarnWriter
-├── log/              # slog setup
+├── ui/               # presentation: Printer · color · glyphs · diagnostics · WarnWriter
+├── log/              # slog setup (installs ui.SlogHandler as the default)
 └── testenv/          # hermetic-container test guard
 ```
 
@@ -43,7 +43,8 @@ The binary's `main`. Injects `Version`/`Commit`/`Date` via `-ldflags` and calls
 ### `internal/cli`
 Wires every cobra subcommand into the root tree and dispatches to handlers; this
 is the only package that depends on nearly all the others.
-- **Key:** `NewRoot() *cobra.Command`, `Execute() error`, `Version`/`Commit`/`Date`.
+- **Key:** `NewRoot() *cobra.Command`, `Execute() int` (returns the process exit
+  code and owns the terminal `✗ ERROR` line), `Version`/`Commit`/`Date`.
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,
   `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
   `mcp {add,remove,list,enable,disable}`,
@@ -465,7 +466,14 @@ absolute and `${HOME}`-relative forms for portable state.
 - **Files:** `paths.go`.
 
 ### `internal/log`
-slog setup. **Key:** `New(w, verbose) *slog.Logger`. **Files:** `log.go`.
+slog setup. Builds a logger over `ui.SlogHandler` and installs it as the
+process-wide default from the root command's `PersistentPreRunE`, which is what
+routes library-side `slog` calls (`internal/render`, `internal/marketplace`) into
+the CLI's diagnostic vocabulary instead of the stdlib default's timestamped
+lines. **Key:** `New(w, p, verbose) *slog.Logger`; `Install(w, p, verbose)`;
+`Detach()` (unbinds the process default to a discarding handler — the seam test
+binaries need, since each `Execute()` otherwise leaves `slog.Default()` pointed at
+a finished test's buffer). **Depends on:** ui. **Files:** `log.go`.
 
 ### `internal/untrusted`
 The display trust boundary for fetched/native metadata. Owns `Sanitize` (strip
@@ -480,15 +488,78 @@ here. See [architecture §7](architecture.md#7-safety-primitives) and `SECURITY.
 ### `internal/ui`
 The presentation layer — every command renders styled output through a `*Printer`
 so color, glyph, and spacing decisions live in one place. Owns the curated glyph
-vocabulary (`✓`/`◐`/`✗`/`⚠`/`•`/`→`), the `--color` mode resolution, and a
-`WarnWriter` that restyles `warning:` line prefixes. `Sanitize` delegates to
+vocabulary (`✓`/`◐`/`✗`/`⚠`/`•`/`→`), the `--color` mode resolution, the
+**diagnostic vocabulary** (below), and a `WarnWriter` that rewrites the
+`warning: ` emitter sentinel into the shared WARN label. `Sanitize` delegates to
 `internal/untrusted`, so untrusted metadata printed through `ui` is stripped of
 terminal-control and deceptive-format runes by construction.
-- **Key:** `Printer` (`New`, `Color`, `Section`, colour helpers); the
-  package-level `Pad` helper; `ColorMode`/`ParseColorMode`; the `Glyph*`
-  vocabulary; `WarnWriter` (`NewWarnWriter`, `RouteTo`, `Flush`); `Sanitize`.
+
+**Diagnostics vs results.** Output splits in two, and every `ui` API belongs to
+one side:
+
+| | What it is | Stream | Rendering |
+| --- | --- | --- | --- |
+| **Diagnostic** | a notice *about* the run | stderr | `✗ ERROR` / `⚠ WARN` / `ℹ INFO` / `• DEBUG`, message at column 9 |
+| **Result** | what the command was asked to produce | stdout | no level label; a success outcome leads with a curated emoji |
+
+The level label is `<glyph> <WORD padded to 5>` plus a two-column gutter, so
+messages start at the same column for every level and `Detailf` continuation
+lines hang under them. Success lines carry **no** level word — an `INFO` on
+`added agent: claude` is noise that dilutes the labels that matter — and instead
+use `EmojiSuccess ✅` / `EmojiApplied 🎉` / `EmojiRemoved 🧹` / `EmojiImported 📥`
+/ `EmojiReverted 🔙` / `EmojiInit ✨`, chosen by what happened rather than by
+which command ran.
+
+`SlogHandler` renders `log/slog` records through the same vocabulary and is
+installed as the process-wide default by the root command, so a `slog.Warn` from
+`internal/render` or `internal/marketplace` is byte-identical to a command's own
+`p.Warnf`. Record timestamps are dropped: these are user-facing CLI diagnostics,
+not a log stream anyone greps by time.
+`Handle` locks its writer (a record is a label line plus an optional attribute
+line, which must not interleave) and returns write errors rather than swallowing
+them. The `slog.Warn` / `WarnWriter` / `p.Warnf` triple being byte-identical is
+pinned by `TestWarnPathsAreByteIdentical`.
+
+**Who sanitizes.** `SlogHandler.Handle` and `reportErrorTo`'s terminal error line
+(via `sanitizeLines`) sanitize their own input, because neither has a call site that
+could: a log record and a wrapped error chain are both assembled elsewhere. Everywhere else the
+**caller** applies `ui.Sanitize` at the display boundary, as the rest of this
+codebase does — the `Diagf`/`Detailf`/`Successf` family deliberately does not, so a
+caller can pass pre-styled text (the upgrade-notice banner composes
+`p.Bold`/`p.Yellow` fragments into a `Warnf`) without having its own escape codes
+stripped.
+
+`WarnWriter` is the third self-sanitizing site, for the same reason as the other
+two: its input comes from the adapter and capture packages, which *cannot* call
+`ui.Sanitize` (they must not import `ui` — that constraint is the reason the
+`warning: ` sentinel exists), so if `ui` does not sanitize, nothing does. It
+sanitizes the message **body** only; the passthrough branch stays verbatim because
+that branch carries agentsync's own already-styled lines, whose ANSI sanitizing
+would strip.
+
+That backstop does not replace `%q` at the emitters, and its bound is worth stating
+exactly, because the asymmetry above is easy to over-read. `WarnWriter.Write` splits
+on `\n` *before* `emit` runs, so a sanitized body never contains an interior
+newline. An emitter that interpolates a raw newline into a `warning: ` line puts
+lines 2..n through the **passthrough** branch — unlabeled and unsanitized — so for
+the newline case `%q` (which escapes it) is still the control. Nearly every emitter
+already uses `%q` for the untrusted identifier; the residual is the handful of
+`%v`-of-error sites, where a multi-line wrapped error could carry native-config text
+into the passthrough branch. Pre-existing; not introduced by the diagnostic
+vocabulary, and not closed by it.
+
+Note that `%s` on an `untrusted.Text` value — which is how plugin and marketplace
+identity fields are typed — was never a hole: `Text.String()` sanitizes by
+construction. The gap was only ever plain `string` values read out of native config.
+- **Key:** `Printer` (`New`, `Color`, `Section`, colour helpers; color is resolved
+  per stream, and the diagnostic writers style for the stream they target);
+  `Level` + `Label`; `Errorf`/`Warnf`/`Infof`/`Diagf`/`Fdiagf`;
+  `Detailf`/`Fdetailf`; `Successf`/`Fsuccessf` + the `Emoji*` vocabulary;
+  `SlogHandler`/`NewSlogHandler`; the package-level `Pad` helper;
+  `ColorMode`/`ParseColorMode`; the `Glyph*` vocabulary; `WarnWriter`
+  (`NewWarnWriter`, `RouteTo`, `Flush`); `Sanitize`.
 - **Depends on:** untrusted.
-- **Files:** `ui.go`, `spinner.go`.
+- **Files:** `ui.go`, `diag.go`, `slog.go`, `spinner.go`.
 
 ### `internal/testenv`
 Guards FS-touching tests so they only run in the hermetic container.
@@ -505,7 +576,8 @@ Guards FS-touching tests so they only run in the hermetic container.
 packages (`iox`, `jsonkeys`, `paths`, and — for the canonical plugin/marketplace
 identity fields typed `untrusted.Text` — `untrusted`). `git` (destination
 rollback history, reached only from `cli`) is likewise a leaf. `drift`, `git`,
-`iox`, `jsonkeys`, `paths`, `log`, and `untrusted` depend on nothing internal —
-they're the foundation; `ui` (presentation) builds only on `untrusted`. See the
+`iox`, `jsonkeys`, `paths`, and `untrusted` depend on nothing internal —
+they're the foundation; `ui` (presentation) builds only on `untrusted`, and
+`log` only on `ui` (it wires `ui.SlogHandler` in as the slog default). See the
 rendered dependency graph in
-[architecture §11](architecture.md#11-package-layering).
+[architecture §12](architecture.md#12-package-layering).

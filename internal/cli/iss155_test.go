@@ -3,16 +3,20 @@ package cli_test
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/cli"
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
-// exitCodeOf mirrors main()'s error→exit-code mapping: 0 for nil, the ExitCoder
-// code for the quiet --exit-code sentinel, else 1 for a generic error.
+// exitCodeOf mirrors the error→exit-code mapping that cli.Execute applies (via
+// reportErrorTo): 0 for nil, the ExitCoder code for the quiet --exit-code
+// sentinel, else 1 for a generic error. main() no longer maps anything itself.
 func exitCodeOf(err error) int {
 	if err == nil {
 		return 0
@@ -318,11 +322,17 @@ func TestCLIStreams_JSONStdoutMessagesStderr(t *testing.T) {
 	if jerr := json.Unmarshal([]byte(stdout), &model); jerr != nil {
 		t.Fatalf("stdout is not clean JSON: %v\nstdout:\n%s", jerr, stdout)
 	}
-	if strings.Contains(stdout, "warning") {
+	if strings.Contains(stdout, "WARN") {
 		t.Fatalf("a warning leaked into the --json stdout payload:\n%s", stdout)
 	}
-	if !strings.Contains(stderr, "warning") {
-		t.Fatalf("expected the orphaned-agent warning on stderr; got:\n%s", stderr)
+	// Same-line: pin the WARN label to the orphaned-agent message specifically,
+	// so an unrelated warning elsewhere on stderr cannot satisfy this.
+	orphanWarn := regexp.MustCompile(
+		regexp.QuoteMeta(ui.LevelWarn.Label(ui.New(io.Discard, io.Discard, ui.ColorNever))) +
+			`[^\n\r]*is not enabled but still owns tracked files`,
+	)
+	if !orphanWarn.MatchString(stderr) {
+		t.Fatalf("expected the orphaned-agent WARN diagnostic on stderr; got:\n%s", stderr)
 	}
 }
 

@@ -55,6 +55,7 @@ test-fast:
     go test -race -count=1 \
         -skip 'TestReadFileOptional|TestReadDirOptional' \
         ./internal/log/... \
+        ./internal/ui/... \
         ./internal/jsonkeys/... \
         ./internal/drift/... \
         ./internal/paths/... \
