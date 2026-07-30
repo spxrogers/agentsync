@@ -71,7 +71,8 @@ func NewRoot() *cobra.Command {
 		// validated by the command's own newPrinter call.
 		//
 		// Nothing here undoes the install, by design; aslog.Detach is the seam for
-		// test binaries, which need it for the reason its doc gives.
+		// test binaries, which need it for the reason its doc gives. This package
+		// calls it via t.Cleanup — see detachSlog in testhelper_test.go.
 		installDiagnosticLogger(c, verbose)
 		// The first-run-after-upgrade notice is the ONLY hook that reaches every
 		// installation channel — `go install` has no post-install step, a

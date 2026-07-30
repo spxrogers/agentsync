@@ -520,8 +520,9 @@ func TestEachLevelHasItsOwnColour(t *testing.T) {
 // call ui.Sanitize (they must not import ui — the reason the "warning: " sentinel
 // exists). So ui must sanitize here or nothing does.
 //
-// This replaced a *documented convention* that every emitter use %q, which was
-// already violated at the moment it was written down.
+// This replaced a *documented convention* that every emitter use %q: a rule each
+// future emitter must remember is weaker than a chokepoint, and %q was never a
+// control for the %v-of-error sites at all.
 func TestWarnWriterSanitizesAdapterText(t *testing.T) {
 	var dest bytes.Buffer
 	p := New(&dest, &dest, ColorNever)

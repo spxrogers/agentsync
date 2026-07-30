@@ -455,9 +455,9 @@ func (s *WarnWriter) emit(line []byte) {
 	// which is the whole reason the "warning: " sentinel exists — so if ui does not
 	// sanitize here, nothing in the pipeline does.
 	//
-	// It is a backstop, not a replacement for %q at the emitters: that convention
-	// was already violated when it was written down, so it cannot be the only
-	// control. See "Who sanitizes" in docs/components.md.
+	// It is a backstop, not a replacement for %q at the emitters. A convention every
+	// future emitter has to remember is weaker than a chokepoint, and %q does not
+	// cover the %v-of-error sites at all. See "Who sanitizes" in docs/components.md.
 	//
 	// Only the labeled branch is sanitized. The passthrough branch above stays
 	// verbatim because it carries OUR OWN already-styled lines (importIO's INFO
