@@ -231,38 +231,35 @@ scoops:
 # own arch filter selects amd64/386 and excludes arm64 — so the windows/arm64
 # build is intentionally absent from the package.
 #
-# TEMPORARILY DISABLED — the agentsync package is still in Chocolatey's community
-# moderation queue, so `choco push` returns 403 and fails the whole release job
-# (it sank the v0.10.0 publish after every other channel had shipped). The block
-# below is preserved verbatim; uncomment it once the package passes community
-# review. Tracked in issue #188. The workflow-side gating (release.yml's
-# CHOCOLATEY_API_KEY detect step + Mono choco CLI setup) stays in place, so
-# re-enabling is exactly this uncomment.
+# RE-ENABLED (issue #188) — the agentsync package passed Chocolatey's community
+# moderation review, so `choco push` no longer 403s. It sank the tail of the
+# v0.10.0 publish after every other channel had shipped, which is why the block
+# was commented out for one release; it now runs like every other pipe.
 # --------------------------------------------------------------------------
-# chocolateys:
-#   - name: agentsync
-#     ids: [default]
-#     title: agentsync
-#     authors: spxrogers
-#     owners: spxrogers
-#     summary: Centrally manage AI coding-agent configurations.
-#     description: |
-#       agentsync centrally manages AI coding-agent configurations from one
-#       canonical source and renders them into each agent's native config.
-#     project_url: https://github.com/spxrogers/agentsync
-#     project_source_url: https://github.com/spxrogers/agentsync
-#     package_source_url: https://github.com/spxrogers/agentsync
-#     docs_url: https://agentsync.cc/
-#     bug_tracker_url: https://github.com/spxrogers/agentsync/issues
-#     license_url: https://github.com/spxrogers/agentsync/blob/main/LICENSE
-#     require_license_acceptance: false
-#     copyright: 2026 spxrogers
-#     tags: "agentsync cli ai coding agents configuration claude codex cursor dotfiles"
-#     release_notes: "https://github.com/spxrogers/agentsync/releases/tag/{{ .Tag }}"
-#     url_template: "https://github.com/spxrogers/agentsync/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
-#     api_key: "{{ .Env.CHOCOLATEY_API_KEY }}"
-#     source_repo: "https://push.chocolatey.org/"
-#     goamd64: v1
+chocolateys:
+  - name: agentsync
+    ids: [default]
+    title: agentsync
+    authors: spxrogers
+    owners: spxrogers
+    summary: Centrally manage AI coding-agent configurations.
+    description: |
+      agentsync centrally manages AI coding-agent configurations from one
+      canonical source and renders them into each agent's native config.
+    project_url: https://github.com/spxrogers/agentsync
+    project_source_url: https://github.com/spxrogers/agentsync
+    package_source_url: https://github.com/spxrogers/agentsync
+    docs_url: https://agentsync.cc/
+    bug_tracker_url: https://github.com/spxrogers/agentsync/issues
+    license_url: https://github.com/spxrogers/agentsync/blob/main/LICENSE
+    require_license_acceptance: false
+    copyright: 2026 spxrogers
+    tags: "agentsync cli ai coding agents configuration claude codex cursor dotfiles"
+    release_notes: "https://github.com/spxrogers/agentsync/releases/tag/{{ .Tag }}"
+    url_template: "https://github.com/spxrogers/agentsync/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    api_key: "{{ .Env.CHOCOLATEY_API_KEY }}"
+    source_repo: "https://push.chocolatey.org/"
+    goamd64: v1
 
 # --------------------------------------------------------------------------
 # AUR (Arch) — deliberately NOT enabled yet. Uncomment once its companion repo /

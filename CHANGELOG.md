@@ -1592,13 +1592,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   effect; the overlay is dropped and the merge comment made honest, rather than
   silently accepting an inert value.
 
-- **Chocolatey publishing is temporarily paused (issue #188).** The `chocolateys`
-  block in `.goreleaser.yaml` is commented out while the `agentsync` package
-  waits in Chocolatey's community moderation queue — `choco push` returns 403
-  until it clears review, and that failure sank the tail of the v0.10.0 publish
-  after every other channel had shipped. Homebrew, Scoop, deb/rpm, and the
-  GitHub Release archives are unaffected. The block will be re-enabled verbatim
-  once the package is approved.
+- **Chocolatey publishing is re-enabled (issue #188).** The `agentsync` package
+  passed Chocolatey's community moderation review, so the `chocolateys` block in
+  `.goreleaser.yaml` — commented out for one release after `choco push` 403'd
+  against the moderation queue and sank the tail of the v0.10.0 publish — is
+  uncommented again. The next release is the first to publish to
+  `push.chocolatey.org`.
 - **BREAKING: project scope now requires the project to declare its own agents
   (issue #183).** A project tree's `[agents]` table in
   `<root>/.agentsync/agentsync.toml` is now **authoritative**: project-scope
