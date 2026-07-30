@@ -230,11 +230,6 @@ scoops:
 # NOTE: the chocolatey pipe packages the Windows amd64 binary only — goreleaser's
 # own arch filter selects amd64/386 and excludes arm64 — so the windows/arm64
 # build is intentionally absent from the package.
-#
-# RE-ENABLED (issue #188) — the agentsync package passed Chocolatey's community
-# moderation review, so `choco push` no longer 403s. It sank the tail of the
-# v0.10.0 publish after every other channel had shipped, which is why the block
-# was commented out for one release; it now runs like every other pipe.
 # --------------------------------------------------------------------------
 chocolateys:
   - name: agentsync
