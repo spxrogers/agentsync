@@ -373,8 +373,7 @@ func TestSlogHandlerElidesEmptyGroupReachingHandleDirectly(t *testing.T) {
 
 	// WithAttrs, not Record.AddAttrs: slog elides an empty group inside AddAttrs
 	// too, so a record built that way never reaches renderAttr and the assertion
-	// below would be vacuous. This was the actual bug in the first version of this
-	// test — it passed while renderAttr emitted "g=[]".
+	// below is vacuous. Do not "simplify" this back.
 	withEmpty := h.WithAttrs([]slog.Attr{{Key: "g", Value: slog.GroupValue()}})
 	r := slog.NewRecord(time.Time{}, slog.LevelInfo, "msg", 0)
 	if err := withEmpty.Handle(context.Background(), r); err != nil {

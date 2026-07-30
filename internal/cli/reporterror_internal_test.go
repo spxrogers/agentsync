@@ -207,9 +207,8 @@ type quietExitErr int
 func (q quietExitErr) Error() string { return "" }
 func (q quietExitErr) ExitCode() int { return int(q) }
 
-// executeWith drives the PRODUCTION seam (executeRoot), not a copy of it. An
-// earlier version of this helper duplicated Execute's body, which is why mutating
-// the real Execute went undetected.
+// executeWith drives the PRODUCTION seam (executeRoot). It must not duplicate
+// Execute's body: a copy leaves a mutation of the real Execute undetected.
 func executeWith(w io.Writer, args ...string) int {
 	root := NewRoot()
 	root.SetOut(io.Discard)

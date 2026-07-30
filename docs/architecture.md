@@ -1135,37 +1135,32 @@ mechanical guard. `TestNoAdHocDiagnosticPrefixes` parses the non-test sources of
 **both `internal/cli` and `cmd/agentsync`** and fails on a reintroduced
 `"agentsync:"` / `"note:"` prefix, or a bare `"warning:"` label token.
 
-Both halves of that scoping were learned the hard way, and the lesson generalizes
-past this one test: **a source-sweeping guard has two independent ways to be
-vacuous, and passing green proves neither is absent.**
+Both halves of that scoping are load-bearing, and generalize past this test: **a
+source sweep has two independent ways to be vacuous, and green proves neither is
+absent.**
 
-1. *Wrong files.* The sweep first globbed `*.go` relative to the working
-   directory — but `internal/cli`'s `TestMain` chdirs to a scratch dir, so it
-   matched nothing. It now resolves the repo root from `runtime.Caller` and holds a
-   PER-DIRECTORY file-count floor. Per-directory matters: an aggregate floor cannot
-   defend this list, because `internal/cli` has ~31 non-test files and
-   `cmd/agentsync` has one — deleting the `cmd/agentsync` entry left 31 files and
-   cleared any total-count floor, silently reopening the hole below.
-   `TestSweptDirsCoverTheEmitters` pins the directory set itself, since a floor
-   catches a directory going empty but not an entry being removed.
-2. *Wrong matcher.* Even after that, it compared literals for *equality*, so it
-   passed with the verbatim #211 emitter —
-   `fmt.Fprintln(os.Stderr, "agentsync:", err)` — restored to `main()`: that file
-   sat outside the swept set, and `"agentsync: %v\n"` would have slipped past the
-   matcher regardless. It now `strconv.Unquote`s each literal (so a raw backtick
-   string is compared as the text a terminal would receive) and matches by prefix.
+1. *Wrong files.* The sweep first globbed `*.go` relative to the working directory,
+   but `internal/cli`'s `TestMain` chdirs to a scratch dir, so it matched nothing.
+   It now resolves the repo root from `runtime.Caller` and holds a **per-directory**
+   file-count floor — aggregate floors cannot defend a one-file entry, since
+   dropping `cmd/agentsync` still left ~31 files from `internal/cli`.
+   `TestSweptDirsCoverTheEmitters` pins the directory set, because a floor catches a
+   directory going empty but not an entry being deleted.
+2. *Wrong matcher.* It then compared literals for *equality*, so the verbatim #211
+   emitter (`fmt.Fprintln(os.Stderr, "agentsync:", err)`) passed once restored to
+   `main()`, and `"agentsync: %v\n"` would have slipped regardless. It now
+   `strconv.Unquote`s each literal — so a raw backtick string is compared as the
+   text a terminal receives — and matches by prefix.
 
-`"warning:"` is matched differently from the other two, deliberately: the
-`warning: <message>` sentinel is a *contract* with the packages that cannot import
-`ui`, so only the bare label forms are banned. The one legitimate `agentsync:`
-literal — a `panic` value in `registry_internal.go`, which surfaces through Go's
-own panic output rather than as a diagnostic line — is an explicit, commented
-entry in an exemption map rather than a loosened pattern.
+`"warning:"` is matched differently on purpose: the `warning: <message>` sentinel
+is a contract with the packages that cannot import `ui`, so only the bare label
+forms are banned. The one legitimate `agentsync:` literal — a `panic` value in
+`registry_internal.go`, which surfaces through Go's own panic output — is a
+commented entry in an exemption map, not a loosened pattern.
 
-Beyond that, the guard stays deliberately narrow in *which* prefixes it lists: a
-broader set (e.g. `scope:`, `ok:`) would also flag legitimate field labels inside
-a report body, where no level belongs — `explain` prints `scope: user` as a data
-row, not as a notice.
+The prefix list stays narrow: a broader one (`scope:`, `ok:`) would flag legitimate
+field labels in a report body, where no level belongs — `explain` prints
+`scope: user` as a data row, not a notice.
 
 **Test isolation.** The installation is process-global, so `internal/log` exposes
 `Detach()` and the CLI test harness calls it via `t.Cleanup` on every invocation.

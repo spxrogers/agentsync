@@ -390,12 +390,10 @@ func withTerminalCheck(t *testing.T, fn func(io.Writer) bool) {
 // New must resolve the color decision once PER STREAM, and assign each result to
 // the RIGHT field.
 //
-// An earlier version of this test counted Fd() probes, which was not enough: it
-// caught "resolved once and reused", but a SWAP —
-// `color: resolveColor(err), colorErr: resolveColor(out)` — probes each stream
-// exactly once and passed. That swap reproduces the original bug exactly (ANSI
-// into a redirected stderr), so the test was blind to the very thing it existed to
-// prevent. Forcing the two streams to answer differently is what closes it.
+// Counting Fd() probes is NOT enough: it catches "resolved once and reused", but a
+// swap (`color: resolveColor(err), colorErr: resolveColor(out)`) probes each stream
+// exactly once — and that swap reproduces the original bug, ANSI into a redirected
+// stderr. Forcing the two streams to answer differently is what closes it.
 func TestNewResolvesColorPerStreamAndDoesNotSwapThem(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	if err := os.Unsetenv("NO_COLOR"); err != nil {

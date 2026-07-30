@@ -12,17 +12,10 @@ import (
 // SlogHandler renders slog records through the diagnostic vocabulary in diag.go,
 // so a library-side slog.Warn is indistinguishable from a command's p.Warnf.
 //
-// Before this existed, agentsync had two unrelated warning renderings. Commands
-// emitted a styled line via WarnWriter, while the render and marketplace
-// pipelines called slog.Warn — which, with no handler ever installed, fell
-// through to slog's default and printed through the standard log package:
-//
-//	2026/07/28 15:03:45 WARN plugin component frontmatter is not strict YAML …
-//
-// A wall-clock timestamp no user asked for, no color, no glyph, and a shape
-// nothing else in the CLI used. #211 caught the real cost: that line sat
-// directly above an unlabeled fatal error, and the two were indistinguishable
-// at a glance. Routing slog here collapses them onto one vocabulary.
+// Without it, the render and marketplace pipelines' slog.Warn calls fall through
+// to slog's default and print through the standard log package —
+// `2026/07/28 15:03:45 WARN …`, a shape nothing else in the CLI uses. See diag.go
+// for why that mattered.
 //
 // Records render as the level label, the message, then any attributes on a
 // continuation line indented to the message column:

@@ -60,24 +60,15 @@ func NewRoot() *cobra.Command {
 	// TestNoSubcommandOverridesPersistentPreRun guards the same hazard one level
 	// down.
 	cmd.PersistentPreRunE = func(c *cobra.Command, _ []string) error {
-		// Install the process-wide slog default FIRST, before anything can log.
-		// Library packages (internal/render, internal/marketplace) emit their
-		// diagnostics through slog; with no handler installed those fell through
-		// to the stdlib default and printed timestamped, unstyled lines that
-		// looked nothing like the rest of the CLI (#211). Routing them here is
-		// what makes a library warning and a command's own p.Warnf identical.
+		// Install the process-wide slog default FIRST, before anything can log:
+		// this is what makes a library warning (internal/render,
+		// internal/marketplace) and a command's own p.Warnf identical (#211).
 		//
-		// printerOn, NOT newPrinter: an invalid --color must not skip the
-		// installation. Gating this on `err == nil` meant a bad --color value left
-		// NO handler installed, so library warnings fell back to the stdlib
-		// timestamped line — reproducing the exact #211 shape this function exists
-		// to prevent, in the one case where the user already made a mistake and
-		// most needs a legible diagnostic. printerOn degrades a bad value to
-		// `auto`; the value is still validated and reported by the command's own
-		// newPrinter call.
-		//
-		// Bound to Err: this printer styles diagnostics, and ui resolves `auto`
-		// per stream.
+		// printerOn, NOT newPrinter — an invalid --color must not SKIP the install.
+		// Gating on `err == nil` left a bad value with no handler at all, so
+		// library warnings reverted to the stdlib shape exactly when the user had
+		// already made a mistake. printerOn degrades to `auto`; the value is still
+		// validated by the command's own newPrinter call.
 		//
 		// Nothing here undoes the install, by design: a real process installs once
 		// and exits. A TEST binary runs many NewRoot().Execute() cycles, each
@@ -126,33 +117,19 @@ func NewRoot() *cobra.Command {
 // main.go is the only caller: `os.Exit(cli.Execute())`.
 //
 // Owning the whole invocation — build, run, report, exit code — is what lets the
-// terminal error line be styled correctly with no package-level state. An earlier
-// shape had Execute return an error, main call a `ReportError` wrapper, and a
-// package var carry the resolved `--color` decision across that boundary, because
-// main had no `*cobra.Command` to read the flag from. It does not need one: `root`
-// is still in scope here after Execute returns, so colorModeOf reads the parsed
-// persistent flag directly.
+// terminal error be styled with no package-level state: `root` is still in scope
+// after it returns, so colorModeOf reads the parsed `--color` flag directly rather
+// than a package var carrying it across the main boundary.
 //
-// That collapsed three symbols — the package var, `Printer.ColorMode`, and the
-// `ReportError` wrapper — into this function with NO behavior change.
-//
-// Two details make that equivalence exact. Cobra shares one `*pflag.Flag` between
-// root and subcommands, so `colorModeOf(root)` sees a value parsed on a
-// SUBCOMMAND's line (`agentsync version --color=never` reads the same as
-// `agentsync --color=never version`). And when cobra fails BEFORE parsing flags —
-// an unknown subcommand, a malformed flag — the value is unset and this yields
-// `ColorAuto`; that is precisely what the old package var did too, since its
-// writer (the pre-run) never ran in those cases. `mode, _` discards
-// ParseColorMode's error for the same reason: it returns ColorAuto alongside it.
+// Two cobra details make that safe. One `*pflag.Flag` is shared between root and
+// subcommands, so `colorModeOf(root)` sees a value parsed on a SUBCOMMAND's line.
+// And when cobra fails before parsing flags (unknown subcommand, malformed flag)
+// the value is unset and this yields ColorAuto — which is also why `mode, _`
+// discards ParseColorMode's error: it returns ColorAuto alongside it.
 func Execute() int { return executeRoot(NewRoot(), os.Stderr) }
 
-// executeRoot is Execute with the root command and the diagnostic stream injected.
-//
-// It exists so a test can drive the REAL wiring. When Execute inlined this, the
-// only way to test it was to duplicate its four lines in the test file — and a
-// duplicate proves nothing: replacing colorModeOf(root) with a hardcoded mode in
-// production left every test green, because the tests were exercising their own
-// copy. Verified by mutation.
+// executeRoot is Execute with the root command and diagnostic stream injected, so
+// a test can drive the real wiring rather than a copy of it.
 func executeRoot(root *cobra.Command, errStream io.Writer) int {
 	err := root.Execute()
 	mode, _ := colorModeOf(root)
@@ -160,16 +137,13 @@ func executeRoot(root *cobra.Command, errStream io.Writer) int {
 }
 
 // reportErrorTo renders err as the CLI's terminal diagnostic on w and returns the
-// process exit code. Its writer and color mode are explicit so a test can exercise
-// the formatting directly; unexported because Execute is the only production
-// caller and the tests that drive it live in this package.
+// process exit code. Writer and color mode are explicit so a test can exercise the
+// formatting directly.
 //
-// The error a command returns is the LAST thing a user reads, and #211 showed
-// what it cost to leave it unlabeled: a fatal `agentsync: render codex: …` sat
-// flush against the left margin directly below a WARN line, with nothing — no
-// glyph, no level, no color — marking it as the failure. Printing it through the
-// same vocabulary as every other diagnostic is the fix. The `agentsync:` program
-// prefix goes away with it: the ERROR label already says which stream this is.
+// The error a command returns is the LAST thing a user reads, and #211 was
+// reported because it printed unlabeled — flush left, directly below a WARN, with
+// no glyph, level, or color marking it as the failure. The `agentsync:` program
+// prefix is gone with the fix: the ERROR label already says which stream this is.
 func reportErrorTo(w io.Writer, mode ui.ColorMode, err error) int {
 	if err == nil {
 		return 0
@@ -226,13 +200,11 @@ func newPrinter(cmd *cobra.Command) (*ui.Printer, error) {
 // installDiagnosticLogger makes the slog default write to cmd's stderr, styled for
 // that same stream.
 //
-// One function, one writer, deliberately: the call site previously passed the
-// writer AND a printer built from a writer, so the two could disagree — and an
-// Out-bound printer means a library warning takes stdout's TTY-ness while writing
-// to stderr, the leak class this PR has now fixed at four separate sites. Deriving
-// both from one expression makes the mismatch unrepresentable rather than merely
-// untested (it resisted testing: two in-memory buffers cannot diverge under
-// `auto`).
+// One writer, one expression, deliberately: passing the writer AND a separately
+// built printer lets the two disagree, and an Out-bound printer means a library
+// warning takes stdout's TTY-ness while writing to stderr. Deriving both from `ew`
+// makes that unrepresentable — which matters because it also resists testing (two
+// in-memory buffers cannot diverge under `auto`).
 func installDiagnosticLogger(cmd *cobra.Command, verbose bool) {
 	ew := cmd.ErrOrStderr()
 	aslog.Install(ew, printerOn(cmd, ew), verbose)
@@ -258,18 +230,14 @@ func colorModeOf(cmd *cobra.Command) (ui.ColorMode, error) {
 // against Out's TTY-ness, so a printer bound to stdout would make the color
 // decision for the wrong stream.
 //
-// An unparseable --color degrades to auto rather than erroring. The commands
-// that call this are mid-flow and have no good way to surface a flag error; the
-// value is validated (and reported) by newPrinter on the command's own path.
-// ParseColorMode already returns ColorAuto alongside its error, so the error is
-// discarded rather than branched on.
+// An unparseable --color degrades to auto rather than erroring: callers are
+// mid-flow with no good way to surface a flag error, and the value is validated by
+// newPrinter on the command's own path. (ParseColorMode returns ColorAuto with its
+// error, so nothing branches on it.)
 //
-// This builds a Printer per call, which reads against Printer's "construct one
-// per command invocation" guidance. That guidance is about not re-deciding color
-// INCONSISTENTLY within one command, and this cannot: the mode comes from the
-// same flag and is re-resolved against the same writer every time, so every call
-// yields the same decision. The cost is one TTY probe per line, on output paths
-// that already syscall.
+// This builds a Printer per call. Printer's "one per invocation" guidance is about
+// not re-deciding color inconsistently within a command, which this cannot: same
+// flag, same writer, same answer every time.
 func printerOn(cmd *cobra.Command, w io.Writer) *ui.Printer {
 	mode, _ := colorModeOf(cmd)
 	return ui.New(w, w, mode)

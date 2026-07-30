@@ -168,24 +168,19 @@ func (p *Printer) withColor(color bool) *Printer {
 
 // sameWriter reports whether two io.Writer values are the same writer.
 //
-// It does NOT just use `a == b`. Comparing interface values panics at runtime
-// when the dynamic type is not comparable (a struct containing a slice, map, or
-// func) — and this runs on every diagnostic line, so a panic here would take down
-// the CLI while it was trying to report an error, which is the worst possible
-// place for one.
+// Not a bare `a == b`: comparing interface values panics when the dynamic type is
+// uncomparable (a struct holding a slice, map, or func), and this runs on every
+// diagnostic line — the worst place for a panic is while reporting an error.
 //
-// reflect.VALUE.Comparable(), not reflect.TYPE.Comparable(). The distinction is
-// the whole correctness of this function and it is easy to get backwards — the
-// first version of this guard used the type-level check and still panicked. A
-// struct with an `io.Writer` FIELD is statically comparable (Type.Comparable()
-// reports true), because comparability of an interface-typed field is only
-// decidable from the value it holds at runtime. So `struct{ io.Writer }` wrapping
-// a func-holding writer sails past the type check and panics on `==`.
-// Value.Comparable() inspects the actual dynamic contents and answers correctly.
+// reflect.VALUE.Comparable(), NOT reflect.TYPE.Comparable() — easy to get
+// backwards, and the whole correctness of this function. `struct{ io.Writer }` is
+// statically comparable (an interface field's comparability is only decidable from
+// what it holds), so a type-level check lets a func-holding writer through and
+// panics on `==`. The value-level check inspects the actual contents.
 //
-// Two values of different dynamic types can never be equal, so a type mismatch
-// short-circuits first. An uncomparable value reports "not the same writer",
-// degrading to the caller's documented fallback rather than crashing.
+// Different dynamic types can never be equal, so a type mismatch short-circuits.
+// An uncomparable value reports "not the same writer", degrading to the caller's
+// documented fallback rather than crashing.
 func sameWriter(a, b io.Writer) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -356,12 +351,10 @@ func (s *WarnWriter) Flush() {
 	if len(s.buf) == 0 {
 		return
 	}
-	// Terminate the line here rather than leaving it to the caller. A buffered
-	// partial line has no trailing newline by definition, so whatever writes to
-	// this stream next — main's terminal ✗ ERROR line, typically — would render on
-	// the same row. This was briefly a separate EndLine() method the caller had to
-	// pair with Flush; one of the two call sites promptly forgot to, which is the
-	// argument against a two-call protocol when the primitive can just be correct.
+	// Terminate here rather than leaving it to the caller. A buffered partial line
+	// has no trailing newline by definition, so whatever writes to this stream next
+	// — main's terminal ✗ ERROR line, typically — lands on the same row. Making the
+	// primitive correct beats a two-call protocol callers must remember.
 	if s.buf[len(s.buf)-1] != '\n' {
 		s.buf = append(s.buf, '\n')
 	}
@@ -511,24 +504,18 @@ func spaces(n int) string {
 // stripSGR removes ANSI CSI escape sequences from s, leaving everything else —
 // including newlines — untouched.
 //
-// It exists because a caller may legitimately pre-style the text it hands a
-// diagnostic writer: the upgrade-notice banner composes p.Bold/p.Yellow/p.Cyan
-// fragments, and gitbackup bolds "local-only". Those helpers resolve color from
-// p.color — the OUT decision — because a style helper cannot know which stream its
-// result will be written to. So `agentsync apply 2>err.log` from a terminal produced
-// a correctly-plain LABEL followed by a body still carrying \x1b[1m: the per-stream
-// fix covered the label and missed the body, leaving the package doc's "color never
-// leaks into a redirect" false for exactly the case it names.
+// Callers legitimately pre-style the text they hand a diagnostic writer (the
+// upgrade-notice banner composes p.Bold/p.Yellow fragments; gitbackup bolds
+// "local-only"). Those helpers resolve color from p.color — the OUT decision —
+// because a style helper cannot know which stream its result reaches. So
+// `apply 2>err.log` from a terminal gave a plain LABEL followed by a body still
+// carrying \x1b[1m.
 //
-// Rather than require six call sites — and every future one — to remember which
-// stream they target, the diagnostic writers strip SGR from the body when the
-// target stream renders without color. If color is off for that stream, ANY escape
-// in the body is unwanted by definition, so this cannot discard something a caller
-// wanted. Newlines survive because indentContinuation still needs them.
-//
-// Sanitize would also remove these sequences, but it strips newlines too, and the
-// diagnostic writers deliberately do not sanitize — see the "who sanitizes" note in
-// docs/components.md.
+// The diagnostic writers therefore strip SGR from the body when the target stream
+// renders plain, instead of asking every call site to know its own stream. If color
+// is off there, ANY escape in the body is unwanted, so nothing a caller wanted is
+// lost. Newlines survive because indentContinuation needs them — which is also why
+// this is not just Sanitize, whose stripping of newlines would defeat that.
 func stripSGR(s string) string {
 	if !strings.Contains(s, "\x1b") {
 		return s // overwhelmingly the common case; no allocation

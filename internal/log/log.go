@@ -1,15 +1,10 @@
 // Package log centralizes slog setup. The root cobra command installs the
-// process-wide default logger in its PersistentPreRunE (see internal/cli/root.go),
-// which is what makes a slog.Warn from deep inside internal/render or
-// internal/marketplace render as an agentsync diagnostic rather than as a
-// stdlib log line.
+// process-wide default logger in its PersistentPreRunE (internal/cli/root.go),
+// which is what makes a slog.Warn from internal/render or internal/marketplace
+// render as an agentsync diagnostic instead of a timestamped stdlib log line.
 //
-// That wiring is the point of this package. It previously returned a JSON
-// handler that nothing ever installed, so every library-side slog call fell
-// through to slog's default handler and printed via the standard log package —
-// timestamped, uncolored, and shaped like nothing else the CLI emitted. #211
-// showed what that cost: a `2026/07/28 15:03:45 WARN …` line sitting directly
-// above an unlabeled fatal error, with nothing to tell the two apart.
+// That wiring IS this package. Without it, library-side slog falls through to
+// slog's default handler — the shape #211 was reported against.
 package log
 
 import (
@@ -20,11 +15,11 @@ import (
 )
 
 // New returns a slog.Logger that renders through p's diagnostic vocabulary,
-// writing to w. If verbose is true the level is Debug; otherwise Info.
+// writing to w. Debug level when verbose, otherwise Info.
 //
-// Level here gates only slog-sourced diagnostics. It is not a global quiet
-// switch: a command's own result output and its direct p.Warnf calls are not
-// slog records and are unaffected.
+// This level gates only slog-sourced diagnostics. It is not a global quiet
+// switch: a command's own output and its direct p.Warnf calls are not slog
+// records and are unaffected.
 func New(w io.Writer, p *ui.Printer, verbose bool) *slog.Logger {
 	level := slog.LevelInfo
 	if verbose {
@@ -33,31 +28,22 @@ func New(w io.Writer, p *ui.Printer, verbose bool) *slog.Logger {
 	return slog.New(ui.NewSlogHandler(w, p, level))
 }
 
-// Install makes New's logger the process-wide slog default.
-//
-// It returns nothing. It briefly returned a restore closure "for tests", but
-// restoring the PREVIOUS default is the wrong undo: that default is the stdlib
-// handler, which prints timestamped lines to stderr — exactly the output shape
-// this package exists to replace — so restoring it would spray those lines across
-// `go test` output. Detach is the correct undo, and the closure went unused.
+// Install makes New's logger the process-wide slog default. Detach is the undo.
 func Install(w io.Writer, p *ui.Printer, verbose bool) {
 	slog.SetDefault(New(w, p, verbose))
 }
 
-// Detach restores the process default to a handler that discards everything.
+// Detach points the process default at a discarding handler.
 //
-// This exists for TEST BINARIES. A real `agentsync` process installs once in the
-// root command's PersistentPreRunE and exits, so the handler's writer outlives
-// it. A test binary runs many Execute() cycles, and each one leaves
-// slog.Default() bound to that invocation's stderr buffer — typically a
-// *bytes.Buffer owned by a test that has already finished. A library slog.Warn
-// reached later then writes into a dead buffer: silent today, and a data race
-// the moment a test in that package adopts t.Parallel.
+// For TEST BINARIES. A real process installs once and exits, so the handler's
+// writer outlives it. A test binary runs many Execute() cycles, each leaving
+// slog.Default() bound to that invocation's stderr — usually a *bytes.Buffer
+// owned by a test that has already finished. A later library slog.Warn then
+// writes into a dead buffer: silent today, a data race under t.Parallel.
 //
-// Discarding rather than restoring the ORIGINAL default is deliberate: the
-// stdlib default prints timestamped lines to stderr, so restoring it would spray
-// exactly the output shape this package exists to replace across `go test`
-// output. A test that wants to observe records installs its own handler.
+// Discarding, not restoring the original: the original is the stdlib handler,
+// whose timestamped stderr lines are the shape this package replaces. A test
+// that wants to observe records installs its own handler.
 func Detach() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
