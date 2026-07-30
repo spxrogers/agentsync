@@ -46,6 +46,15 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`test-release`'s hermetic gate no longer fails the release pipeline when a
+  hosted CI runner ships a broken rootless podman/crun pairing.** A GitHub
+  Actions Ubuntu runner-image update introduced a crun regression (`unknown
+  version specified`) that aborted `scripts/test-in-container.sh`'s image build
+  before a single test ran — on a commit whose only diff was to release
+  packaging docs, unrelated to the test image. `podman build` failing (as
+  opposed to podman being absent) now falls back to docker, which every
+  GitHub-hosted Ubuntu runner ships, instead of failing the gate on infra
+  neither our Containerfile nor our code caused.
 - **Two plugins shipping a same-named component no longer break `status` and
   `apply`.** `feature-dev` and `pr-review-toolkit` — both stock official Claude
   plugins — each ship `agents/code-reviewer.md`, which made both commands exit 1

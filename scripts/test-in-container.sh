@@ -40,17 +40,36 @@ fi
 
 # rootless podman needs the host UID/GID baked in to keep mounted files
 # writable; docker we leave alone.
-BUILD_ARGS=()
-if [[ "$ENGINE" == "podman" ]]; then
-    BUILD_ARGS+=(--build-arg "UID=$(id -u)" --build-arg "GID=$(id -g)")
-fi
+build_image() {
+    local engine="$1"
+    local build_args=()
+    if [[ "$engine" == "podman" ]]; then
+        build_args+=(--build-arg "UID=$(id -u)" --build-arg "GID=$(id -g)")
+    fi
+    "$engine" build \
+        "${build_args[@]}" \
+        -f "$ROOT/test/container/Containerfile" \
+        -t "$IMAGE_NAME" \
+        "$ROOT"
+}
 
 echo "==> building test image with $ENGINE"
-"$ENGINE" build \
-    "${BUILD_ARGS[@]}" \
-    -f "$ROOT/test/container/Containerfile" \
-    -t "$IMAGE_NAME" \
-    "$ROOT"
+if ! build_image "$ENGINE"; then
+    # A podman *build* failure (as opposed to podman being absent) is usually
+    # the host's rootless podman/crun toolchain, not our Containerfile — seen
+    # on CI when a hosted-runner image update ships a broken podman/crun
+    # pairing (e.g. crun erroring "unknown version specified" on a plain
+    # groupadd/useradd RUN step). Docker ships on every GH-hosted Ubuntu
+    # runner, so fall back to it rather than failing release-gate CI on an
+    # infra regression neither engine choice nor our image caused.
+    if [[ "$ENGINE" == "podman" ]] && command -v docker >/dev/null 2>&1; then
+        echo "==> podman build failed; falling back to docker" >&2
+        ENGINE="docker"
+        build_image "$ENGINE"
+    else
+        exit 1
+    fi
+fi
 
 # ----- run -----------------------------------------------------------------
 
