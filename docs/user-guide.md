@@ -87,11 +87,9 @@ brew install agentsync
 ```bash
 scoop bucket add spxrogers https://github.com/spxrogers/scoop-bucket
 scoop install agentsync
+# or:
+choco install agentsync
 ```
-
-(Chocolatey — `choco install agentsync` — is pending the community moderation
-queue and not yet installable; publishing is paused until it clears review, see
-[issue #188](https://github.com/spxrogers/agentsync/issues/188).)
 
 **Linux** — `.deb`/`.rpm` on the [Releases page](https://github.com/spxrogers/agentsync/releases).
 (AUR packaging is wired but not published yet — [issue #13](https://github.com/spxrogers/agentsync/issues/13).)
