@@ -457,7 +457,11 @@ func (s *WarnWriter) emit(line []byte) {
 	//
 	// It is a backstop, not a replacement for %q at the emitters. A convention every
 	// future emitter has to remember is weaker than a chokepoint, and %q does not
-	// cover the %v-of-error sites at all. See "Who sanitizes" in docs/components.md.
+	// cover the %v-of-error sites at all — claude/ingest.go:88 quotes e.Name() with
+	// %q and then prints %v of an error whose *fs.PathError re-embeds that same
+	// ReadDir name RAW (the hazard untrusted.go:37 names, handled by hand in
+	// secrets/age.go, cli/doctor.go and cli/check.go). This line is what catches it
+	// here. See "Who sanitizes" in docs/components.md.
 	//
 	// Only the labeled branch is sanitized. The passthrough branch above stays
 	// verbatim because it carries OUR OWN already-styled lines (importIO's INFO
