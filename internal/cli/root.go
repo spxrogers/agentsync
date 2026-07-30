@@ -70,11 +70,8 @@ func NewRoot() *cobra.Command {
 		// already made a mistake. printerOn degrades to `auto`; the value is still
 		// validated by the command's own newPrinter call.
 		//
-		// Nothing here undoes the install, by design: a real process installs once
-		// and exits. A TEST binary runs many NewRoot().Execute() cycles, each
-		// leaving slog.Default() bound to a finished test's buffer — aslog.Detach is
-		// the seam for that, called via t.Cleanup from the CLI test harness (see
-		// detachSlog in testhelper_test.go).
+		// Nothing here undoes the install, by design; aslog.Detach is the seam for
+		// test binaries, which need it for the reason its doc gives.
 		installDiagnosticLogger(c, verbose)
 		// The first-run-after-upgrade notice is the ONLY hook that reaches every
 		// installation channel — `go install` has no post-install step, a
@@ -140,10 +137,9 @@ func executeRoot(root *cobra.Command, errStream io.Writer) int {
 // process exit code. Writer and color mode are explicit so a test can exercise the
 // formatting directly.
 //
-// The error a command returns is the LAST thing a user reads, and #211 was
-// reported because it printed unlabeled — flush left, directly below a WARN, with
-// no glyph, level, or color marking it as the failure. The `agentsync:` program
-// prefix is gone with the fix: the ERROR label already says which stream this is.
+// This is the line #211 was reported against (see ui/diag.go): the last thing a
+// user reads, printed unlabeled below a WARN. The `agentsync:` program prefix is
+// gone with the fix — the ERROR label already says which stream this is.
 func reportErrorTo(w io.Writer, mode ui.ColorMode, err error) int {
 	if err == nil {
 		return 0
@@ -235,9 +231,9 @@ func colorModeOf(cmd *cobra.Command) (ui.ColorMode, error) {
 // newPrinter on the command's own path. (ParseColorMode returns ColorAuto with its
 // error, so nothing branches on it.)
 //
-// This builds a Printer per call. Printer's "one per invocation" guidance is about
-// not re-deciding color inconsistently within a command, which this cannot: same
-// flag, same writer, same answer every time.
+// Building a Printer per call is fine: Printer's "one per invocation" guidance is
+// against re-deciding color inconsistently, and this cannot — same flag, same
+// writer, same answer.
 func printerOn(cmd *cobra.Command, w io.Writer) *ui.Printer {
 	mode, _ := colorModeOf(cmd)
 	return ui.New(w, w, mode)

@@ -216,15 +216,10 @@ func resolveColor(out io.Writer, mode ColorMode) bool {
 }
 
 // terminalCheck is the TTY probe resolveColor uses, indirected through a variable
-// so a test can make the two streams answer DIFFERENTLY.
-//
-// That capability is not a convenience — it is the only way to test the invariant
-// this package got wrong once already. Two in-memory buffers can never diverge
-// under `auto` (isTerminal is false for both), and the forced modes force both the
-// same way. So a test that cannot override this cannot distinguish "resolved per
-// stream" from "resolved once and reused", nor from the two assignments being
-// SWAPPED — and the swap reproduces the original bug exactly (ANSI into a
-// redirected stderr) while probing each stream exactly once.
+// so a test can make the two streams answer DIFFERENTLY. Nothing else can: two
+// in-memory buffers never diverge under `auto`, and the forced modes force both the
+// same way. See TestNewResolvesColorPerStreamAndDoesNotSwapThem for what that
+// buys, including why counting probes is not enough.
 var terminalCheck = isTerminal
 
 // isTerminal reports whether w is backed by a terminal. A *bytes.Buffer / pipe
@@ -468,14 +463,12 @@ func (s *WarnWriter) emit(line []byte) {
 	// verbatim because it carries OUR OWN already-styled lines (importIO's INFO
 	// notes), whose ANSI this would otherwise strip.
 	//
-	// That asymmetry bounds what this backstop covers, and the bound is easy to
-	// overstate — so, precisely: Write splits on '\n' BEFORE calling emit, so the
-	// body here never holds an interior newline, and Sanitize's newline-stripping
-	// cannot fire. An emitter that interpolates a raw newline lands lines 2..n in
-	// the passthrough branch instead — unlabeled and unsanitized. %q at the
-	// emitters is what keeps a newline out (it escapes one), so for THAT case it is
-	// still load-bearing. Pre-existing and tracked separately; do not read this
-	// Sanitize as covering it.
+	// That asymmetry bounds the backstop, and the bound is easy to overstate: Write
+	// splits on '\n' BEFORE emit, so this body never holds an interior newline and
+	// Sanitize's newline-stripping cannot fire. An emitter interpolating a raw
+	// newline lands lines 2..n in the passthrough branch — unlabeled, unsanitized —
+	// which is why %q at the emitters is still load-bearing for THAT case.
+	// Pre-existing; do not read this Sanitize as covering it.
 	//
 	// styleForDiag, not s.p directly: this writer is constructed over p.Err, so
 	// taking the Out decision wrote ANSI into `agentsync import 2>err.log`.

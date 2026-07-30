@@ -79,12 +79,9 @@ func (l Level) word() string {
 }
 
 // String implements fmt.Stringer with the rendered level word, so a Level can be
-// dropped into a message or a test failure without a switch.
-//
-// An out-of-range value reports itself as such rather than as "DEBUG". word()
-// has to pick SOME label to render, and picks the least-severe one; String is
-// where a test failure or a log line gets to say "this value has no name",
-// which is the difference between a confusing diagnostic and a silent lie.
+// dropped into a message or a test failure without a switch. An out-of-range value
+// names itself rather than borrowing word()'s least-severe fallback: a failure
+// reading Level(9) beats one reading DEBUG.
 func (l Level) String() string {
 	if !l.valid() {
 		return fmt.Sprintf("Level(%d)", int(l))
