@@ -520,9 +520,9 @@ line, which must not interleave) and returns write errors rather than swallowing
 them. The `slog.Warn` / `WarnWriter` / `p.Warnf` triple being byte-identical is
 pinned by `TestWarnPathsAreByteIdentical`.
 
-**Who sanitizes.** `SlogHandler.Handle` and `cli.Execute`'s terminal error line
-sanitize their own input, because neither has a call site that could: a log record
-and a wrapped error chain are both assembled elsewhere. Everywhere else the
+**Who sanitizes.** `SlogHandler.Handle` and `reportErrorTo`'s terminal error line
+(via `sanitizeLines`) sanitize their own input, because neither has a call site that
+could: a log record and a wrapped error chain are both assembled elsewhere. Everywhere else the
 **caller** applies `ui.Sanitize` at the display boundary, as the rest of this
 codebase does — the `Diagf`/`Detailf`/`Successf` family deliberately does not, so a
 caller can pass pre-styled text (the upgrade-notice banner composes
@@ -537,13 +537,16 @@ sanitizes the message **body** only; the passthrough branch stays verbatim becau
 that branch carries agentsync's own already-styled lines, whose ANSI sanitizing
 would strip.
 
-This was briefly documented the other way round — as a *requirement* that every
-emitter interpolate untrusted values with `%q`. That was the wrong disposition, and
-demonstrably so: the convention was **already violated when it was written down**
-(`internal/adapter/continuedev/ingest.go` quoted a native-config MCP id with `%q`
-twice and `%s` once on the same line). A rule that every future emitter must
-remember is not a control; the backstop is. `%q` at the emitters is still good
-practice for legibility, but it is no longer load-bearing.
+That backstop does not replace `%q` at the emitters, and its bound is worth stating
+exactly, because the asymmetry above is easy to over-read. `WarnWriter.Write` splits
+on `\n` *before* `emit` runs, so a sanitized body never contains an interior
+newline. An emitter that interpolates a raw newline into a `warning: ` line puts
+lines 2..n through the **passthrough** branch — unlabeled and unsanitized — so for
+the newline case `%q` (which escapes it) is still the control. Nearly every emitter
+already uses `%q` for the untrusted identifier; the residual is the handful of
+`%v`-of-error sites, where a multi-line wrapped error could carry native-config text
+into the passthrough branch. Pre-existing; not introduced by the diagnostic
+vocabulary, and not closed by it.
 
 Note that `%s` on an `untrusted.Text` value — which is how plugin and marketplace
 identity fields are typed — was never a hole: `Text.String()` sanitizes by

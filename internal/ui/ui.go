@@ -460,25 +460,25 @@ func (s *WarnWriter) emit(line []byte) {
 	// which is the whole reason the "warning: " sentinel exists — so if ui does not
 	// sanitize here, nothing in the pipeline does.
 	//
-	// This used to rely on every emitter interpolating untrusted values with %q.
-	// That convention was ALREADY violated when it was written down
-	// (internal/adapter/continuedev/ingest.go quoted a native-config id twice with
-	// %q and once with %s on the same line), which is the argument for a backstop
-	// over a documented requirement. %q at the emitters remains good practice —
-	// it keeps the value legible — but it is no longer load-bearing.
+	// It is a backstop, not a replacement for %q at the emitters: that convention
+	// was already violated when it was written down, so it cannot be the only
+	// control. See "Who sanitizes" in docs/components.md.
 	//
-	// Only the labeled branch is sanitized; the passthrough branch above must stay
+	// Only the labeled branch is sanitized. The passthrough branch above stays
 	// verbatim because it carries OUR OWN already-styled lines (importIO's INFO
 	// notes), whose ANSI this would otherwise strip.
 	//
-	// Sanitize drops newlines rather than escaping them, which is right here: a
-	// control byte in adapter text must not be able to forge what looks like a
-	// second, separate diagnostic line.
+	// That asymmetry bounds what this backstop covers, and the bound is easy to
+	// overstate — so, precisely: Write splits on '\n' BEFORE calling emit, so the
+	// body here never holds an interior newline, and Sanitize's newline-stripping
+	// cannot fire. An emitter that interpolates a raw newline lands lines 2..n in
+	// the passthrough branch instead — unlabeled and unsanitized. %q at the
+	// emitters is what keeps a newline out (it escapes one), so for THAT case it is
+	// still load-bearing. Pre-existing and tracked separately; do not read this
+	// Sanitize as covering it.
 	//
-	// styleForDiag, not s.p directly: this writer is constructed over p.Err, and
-	// taking the Out decision meant `agentsync import 2>err.log` from a terminal
-	// wrote ANSI into the file — the exact leak the per-stream split exists to
-	// close, and the one that made this path diverge from p.Warnf.
+	// styleForDiag, not s.p directly: this writer is constructed over p.Err, so
+	// taking the Out decision wrote ANSI into `agentsync import 2>err.log`.
 	body, nl := string(rest), ""
 	if strings.HasSuffix(body, "\n") {
 		body, nl = strings.TrimSuffix(body, "\n"), "\n"
@@ -515,7 +515,9 @@ func spaces(n int) string {
 // renders plain, instead of asking every call site to know its own stream. If color
 // is off there, ANY escape in the body is unwanted, so nothing a caller wanted is
 // lost. Newlines survive because indentContinuation needs them — which is also why
-// this is not just Sanitize, whose stripping of newlines would defeat that.
+// this is not just Sanitize, whose stripping of newlines would defeat that. The
+// diagnostic writers deliberately do not sanitize at all: see the "Who sanitizes"
+// note in docs/components.md for which sites do and why.
 func stripSGR(s string) string {
 	if !strings.Contains(s, "\x1b") {
 		return s // overwhelmingly the common case; no allocation

@@ -599,6 +599,41 @@ func TestPreStyledBodyIsStrippedOnAPlainStream(t *testing.T) {
 	}
 }
 
+// The RESULT half of the per-stream split, which the DIAGNOSTIC tests above do not
+// reach. Both of its pieces were unpinned: deleting styleForResult's `sameWriter(w,
+// p.Err)` branch, or Fsuccessf's `if !style.color { stripSGR }`, left the whole
+// suite green — nothing routes a result line to Err on a split-stream printer, so
+// the two survivors of this PR's ANSI-leak class had no test between them.
+//
+// A success line on Err is unusual but legitimate: a command whose stdout carries a
+// --json payload puts its outcome on stderr, and that is precisely the shape where
+// Out is a terminal and Err is redirected.
+func TestSuccessLineOnThePlainErrStreamIsStripped(t *testing.T) {
+	var out, errb bytes.Buffer
+	p := splitStreamPrinter(&out, &errb) // color=true (Out), colorErr=false (Err)
+
+	// styleForResult must recognize Err and take ITS decision (plain), and the
+	// pre-styled fragment must then lose its escapes — the Fsuccessf analogue of
+	// TestPreStyledBodyIsStrippedOnAPlainStream.
+	p.Fsuccessf(&errb, EmojiApplied, "applied %s", p.Bold("3 ops"))
+	if got := errb.String(); strings.Contains(got, "\x1b[") {
+		t.Fatalf("a success line leaked ANSI onto the plain Err stream: %q", got)
+	}
+	if !strings.Contains(errb.String(), "3 ops") {
+		t.Fatalf("stripping removed the text, not just the escapes: %q", errb.String())
+	}
+	if !strings.Contains(errb.String(), EmojiApplied) {
+		t.Fatalf("the success emoji is content, not decoration; it must survive: %q", errb.String())
+	}
+
+	// The mirror, so neither assertion above can pass by blanket-stripping: the
+	// colour-capable Out stream keeps the caller's styling.
+	p.Fsuccessf(&out, EmojiApplied, "applied %s", p.Bold("3 ops"))
+	if !strings.Contains(out.String(), "\x1b[1m") {
+		t.Fatalf("a colour-capable stream must keep a pre-styled success body: %q", out.String())
+	}
+}
+
 func TestStripSGRLeavesEverythingElseAlone(t *testing.T) {
 	tests := []struct{ in, want string }{
 		{"plain", "plain"},
