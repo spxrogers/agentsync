@@ -23,16 +23,61 @@ Loop logic:
 
 ```
 for round in 1..N:                          # N defaults to 5
-  launch 4 agents IN PARALLEL: correctness, adversarial, api-design, test-rigor
-  wait for all 4 to report
+  launch 4 READ-ONLY agents IN PARALLEL: correctness, adversarial, api-design, test-rigor
+  wait for all 4 to report                  # they report; they never edit
   synthesize findings (convergent vs single-reviewer; rank by severity)
   if every reviewer says "CLEAN — ship it":
     stop                                    # convergence reached
-  fix every actionable finding              # disputed findings → user mandate decides
+  audit each finding yourself               # reviewers are wrong sometimes
+  fix every accepted finding                # MAIN SESSION ONLY — see below
   commit + push
 end
 report final status
 ```
+
+## The single-writer rule — non-negotiable
+
+**The four reviewers are READ-ONLY. The main session is the only process that
+edits the worktree.** Reviewers produce reports; the main session audits them,
+decides what to accept, and makes every change itself.
+
+This is not a style preference. Four agents editing one worktree in parallel
+corrupts it, and the failure modes are quiet:
+
+- A reviewer leaves a probe file behind (`zz_probe_test.go`), and the package
+  stops compiling for everyone — including the next round's reviewers, who then
+  report a "build failure" that is really litter.
+- A reviewer break-verifies by mutating a source file and doesn't restore it. The
+  mutation is now indistinguishable from the main session's in-flight work. In one
+  real run a reviewer's stream-swap sat in `root.go` long enough that it was nearly
+  committed; it was caught only because a test written minutes later happened to
+  fail on it.
+- A reviewer notices *another* reviewer's litter and helpfully runs
+  `git checkout -- <file>` to clean up. That silently discarded the main session's
+  uncommitted fix to the same file, which surfaced later as an unexplained build
+  break.
+
+Note the shape of the last two: the tree was wrong, and nothing said so. You find
+out from a build failure, a mystery test result, or not at all.
+
+So:
+
+- **Every brief must end with an explicit read-only instruction** (see Step 1).
+- **Break-verification is the MAIN SESSION's job**, not a reviewer's. It mutates
+  source, so only the single writer may do it. A reviewer that wants a mutation
+  measured says so in its report; you run it.
+- **A reviewer that genuinely must measure a mutation** does it in a throwaway
+  clone outside the worktree (`git clone . /tmp/…`), never in place — and says
+  which in its report.
+- **Before every commit, confirm the tree holds only your own changes.**
+  `git status --porcelain` plus a skim of `git diff` beats trusting four agents to
+  have cleaned up. If something appeared that you did not write, find out what it
+  is before committing — do not `git checkout` it reflexively either, since it may
+  be your own uncommitted work.
+
+Reviewers are still free to *run* things: builds, tests, `go vet`, `git log`,
+`grep`. Read-only means no writes to tracked files and no new files in the
+worktree.
 
 ## When to use
 
@@ -90,10 +135,40 @@ with:
 7. **The self-termination signal**: if they have nothing real,
    they must say `CLEAN — ship it` so convergence is
    programmatically detectable.
+8. **The read-only instruction** (see below). Every brief, every
+   round — the lens templates that follow omit it only because it
+   is identical for all four.
 
 Use the **general-purpose** subagent type. Code review needs
 reading whole files and reasoning across them; `Explore`-style
 agents read excerpts and miss content past their read window.
+
+### The read-only clause — append to every brief
+
+Paste this verbatim at the end of each of the four briefs:
+
+> **CRITICAL — you are READ-ONLY. Change nothing in the worktree.**
+> Do not edit, create, or delete any file, and do not run
+> `git checkout` / `git restore` / `git stash` — the main session
+> has uncommitted work in this tree, and reverting a file you did
+> not write destroys it.
+>
+> You may freely READ and RUN: `git log`/`show`/`diff`, `grep`,
+> builds, tests, `go vet`. If a finding needs a mutation measured
+> (delete this line, invert that check — does any test fail?),
+> either describe the mutation precisely in your report so the main
+> session can run it, or measure it in a throwaway clone outside
+> this worktree (`git clone . /tmp/probe-$$`) and say that you did.
+>
+> Before finishing, run `git status --porcelain` and confirm it is
+> empty. State that in your report. If it is NOT empty, do not
+> "fix" it — say exactly what you saw; it is probably the main
+> session's in-flight work.
+
+Two reasons this is a paste-in clause rather than a summary:
+`general-purpose` agents have write tools and will use them to be
+helpful, and a reviewer that reports "tree clean" gives the main
+session a cheap cross-check that costs one line.
 
 ### Lens 1 — Correctness
 
@@ -269,9 +344,29 @@ When all four reports are in, build the punch-list:
    from that lens. Programmatically check for the substring to
    detect convergence.
 
-## Step 3: fix
+5. **Audit each finding before accepting it.** Reviewers are
+   confidently wrong often enough that this is a real step, not a
+   formality. Verify the claim against the code yourself — a
+   `grep`, a `go list -deps`, a two-line probe. In practice this
+   catches two kinds of error: a claim that is simply false (a
+   reviewer flagged `%s` interpolations as unsanitized when the
+   values were a self-sanitizing type), and two reviewers reaching
+   opposite conclusions where one is *factually* right rather than
+   merely more cautious (one said a deleted test was subsumed by
+   its replacement; the other showed it was not, by recolouring the
+   thing and watching the suite stay green). Verified facts beat
+   reviewer confidence, and beat vote counts.
 
-Apply every finding in the synthesized punch-list. For each fix:
+   Say so when you overrule a reviewer, and — if the loop
+   continues — tell that lens next round that you did, so it can
+   push back if you were the one who got it wrong.
+
+## Step 3: fix — the main session, and only the main session
+
+Apply every accepted finding yourself. Reviewers do not edit (see
+the single-writer rule); this step is where all changes happen.
+
+For each fix:
 
 - Make it the smallest correct change. Don't snowball.
 - **Break-verify** non-trivial fixes: temporarily induce the bug
@@ -279,6 +374,23 @@ Apply every finding in the synthesized punch-list. For each fix:
   relevant test fails CLEANLY (the failure message points at the
   right thing), then restore. This catches "test passes for the
   wrong reason" before the next review round does.
+
+  Because break-verification mutates source, it belongs to the
+  single writer. Back the file up first (`cp f /tmp/f.bak`),
+  restore from that backup rather than from git — `git checkout`
+  would also wipe your other uncommitted edits to that file — and
+  confirm `git diff` is back to your intended change before moving
+  on. A mutation left in place is the single worst thing you can do
+  to this loop: the next round's reviewers will report it as a
+  finding, and you may commit it.
+
+  Two failure modes worth naming, both observed:
+  *the mutation didn't apply* (a `sed`/`replace` that silently
+  matched nothing, so "no test failed" meant nothing was tested),
+  and *the test under test was a copy* (a helper duplicating the
+  production function's body, so mutating production changed
+  nothing). Assert the mutation landed, and make sure the test
+  calls the real thing.
 - Update docs (CHANGELOG, architecture, prompts) in the SAME
   commit. The reviewers WILL flag drift.
 - Commit with a clear message naming which round's findings the
@@ -286,10 +398,17 @@ Apply every finding in the synthesized punch-list. For each fix:
 
 ## Step 4: repeat (until convergence or budget)
 
-Push. Launch the next round's four agents. Each one's brief
-carries forward the running summary of what previous rounds found
-and what this round's commit just fixed — fresh agents need that
-context to avoid re-flagging closed items.
+Confirm the tree is clean (`git status --porcelain` empty), then
+push. Launch the next round's four agents. Each one's brief carries
+forward the running summary of what previous rounds found and what
+this round's commit just fixed — fresh agents need that context to
+avoid re-flagging closed items.
+
+Pin the round's commit SHA in every brief and tell them to review
+**that** commit. Reviewers start at different times and a long
+round can overlap your next edits; naming the SHA means all four
+judge the same tree, and a report referencing a line you have since
+moved is immediately recognizable as stale rather than confusing.
 
 ## Step 5: terminate
 
@@ -307,6 +426,33 @@ recommendation. Don't silently merge with open issues.
 
 Hard-won observations from the loop that this skill captures:
 
+- **Reviewers report; one process writes.** The most expensive
+  problem in a real run was not a missed defect — it was four
+  agents editing one worktree. Litter left behind, mutations not
+  restored, and one reviewer "helpfully" `git checkout`-ing a file
+  the main session had uncommitted work in. Every symptom was
+  quiet: a build break with no obvious cause, or a mutation that
+  almost got committed. Isolated worktrees per reviewer would also
+  solve it, but read-only reviewers are simpler and lose nothing —
+  a review's output is a report, not a diff.
+- **The recurring defect has one shape: behavior whose deletion
+  breaks no test.** Across five rounds of one PR, every round's
+  real finding was that — the installation of a handler, a
+  per-stream decision, a mutex, a colour. Each was found by luck,
+  by a reviewer happening to try that mutation. If a loop keeps
+  surfacing this, stop reading and start *sweeping*: mechanically
+  mutate every behavior the change introduces and record
+  CAUGHT/UNPINNED per item. One sweep found 13 gaps that four
+  rounds of careful reading had missed. Consider spending a lens on
+  it from round 1.
+- **The second recurring defect is stale prose.** Comments and docs
+  describing code the same commit moved: a comment citing a symbol
+  that never shipped, a doc asserting the mechanism a fix had just
+  replaced, sample output the code cannot produce. Nine instances
+  in one PR. After any rename or deletion, grep for the old name
+  *and* for claims about the old behavior — including in files you
+  did not touch this round. Fixing the website and leaving the
+  CHANGELOG is the characteristic version of this.
 - **Four lenses, not three.** Correctness alone misses the design
   smell, adversarial alone misses the design rationale, API
   design alone misses the test coverage gap, test rigor alone
