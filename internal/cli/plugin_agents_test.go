@@ -603,3 +603,60 @@ func TestPluginExplain_ReportsDeferralRatherThanFailure(t *testing.T) {
 		t.Errorf("--json should expose notTargeted + the native coverage value; got:\n%s", jsonOut)
 	}
 }
+
+// TestProjectScope_NativeAgentsIsHonoured pins the deferral at PROJECT scope.
+// Project scope renders from the project-only overlay rather than the merged
+// canonical, so it reaches the filter by a different path than the user-scope
+// tests above — and a pin committed into a repo carries its `native_agents` with
+// it, which is the intended behavior: committing the pin commits the statement
+// that this agent serves the plugin natively.
+func TestProjectScope_NativeAgentsIsHonoured(t *testing.T) {
+	tmpHome := t.TempDir()
+	proj := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+
+	for _, args := range [][]string{
+		{"init"},
+		{"agent", "add", "claude"},
+		{"init", "--scope", "project", "--project", proj},
+		{"agent", "add", "claude", "--scope", "project", "--project", proj},
+	} {
+		if out, err := runCLI(t, env, args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Acquire the plugin at user scope, then commit its pin into the project.
+	mpDir := makeFanOutMarketplace(t, t.TempDir())
+	if out, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatalf("marketplace add: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "plugin", "add", "toolkit"); err != nil {
+		t.Fatalf("plugin add: %v\n%s", err, out)
+	}
+	pin := mustReadFile(t, filepath.Join(tmpHome, ".agentsync", "plugins", "toolkit.toml"))
+	projPlugins := filepath.Join(proj, ".agentsync", "plugins")
+	if err := os.MkdirAll(projPlugins, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projPin := filepath.Join(projPlugins, "toolkit.toml")
+	if err := os.WriteFile(projPin, []byte(pin), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Positive control: with no deferral the project apply projects to claude.
+	if out, err := runCLI(t, env, "apply", "--scope", "project", "--project", proj); err != nil {
+		t.Fatalf("project apply: %v\n%s", err, out)
+	}
+	projected := filepath.Join(proj, ".claude", "agents", "toolkit-reviewer.md")
+	mustExist(t, "project-scope plugin subagent", projected)
+
+	// Now record the deferral in the PROJECT pin and re-apply.
+	if err := os.WriteFile(projPin, []byte(pin+"\nnative_agents = ['claude']\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "apply", "--scope", "project", "--project", proj); err != nil {
+		t.Fatalf("project apply after deferring: %v\n%s", err, out)
+	}
+	mustNotExist(t, "project-scope plugin subagent", projected)
+}
