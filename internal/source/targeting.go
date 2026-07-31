@@ -5,21 +5,16 @@ package source
 // (PluginTargetsAgent — the `agents` allowlist and the `native_agents` deferral)
 // is dropped. Hand-authored components always survive.
 //
-// This is the ONE implementation of "what does this agent get". Two callers need
-// it, and they must never disagree:
+// This is the ONE implementation of "what does this agent get", and it has
+// exactly ONE caller: render.Plan, via secrets.Resolved.ForAgent, narrowing the
+// model before the adapter renders it. That is the enforcement point.
 //
-//   - render.Plan, via secrets.Resolved.ForAgent, narrows the model before the
-//     adapter renders it — the enforcement point.
-//   - import's pluginProvided narrows the projection before deciding which
-//     native components it must refuse to capture.
-//
-// The second is not an optimization, it is correctness. That filter exists
-// because an adapter's Ingest cannot tell a file agentsync rendered from a
-// plugin apart from one the user hand-wrote, so import refuses to capture a
-// component apply projects. If it used the UNfiltered projection it would refuse
-// components this agent never receives — a plugin deferred to Claude's own
-// plugin manager would block the user from importing their own same-named file
-// out of Claude. The refusal set has to be exactly the render set, per agent.
+// import's capture-refusal filter (pluginProvided) deliberately does NOT use it.
+// Symmetry is tempting — refuse exactly what you render — but the destination
+// can still hold agentsync's own un-reclaimed output from before a deferral was
+// recorded, and a narrowed refusal set would capture that back into the
+// canonical source as if the user had written it. See the note at that call
+// site; the asymmetry is load-bearing, not an oversight.
 //
 // The result SHARES component values with c (the filter rebuilds slices, it does
 // not deep-copy), so callers must treat both as read-only — which every caller

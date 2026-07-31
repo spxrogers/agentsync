@@ -24,7 +24,13 @@ type PluginRow struct {
 	// marshals RAW to JSON (the --json machine contract owns its own escaping).
 	Plugin untrusted.Text `json:"plugin"`
 	Agent  string         `json:"agent"`
-	// Coverage is "full", "partial", or "none".
+	// Coverage is one of: "full", "partial", "none" (the adapter rendered this
+	// plugin for this agent, with that much of it landing), "disabled" (the
+	// plugin is off for this scope), "not-targeted" (its `agents` allowlist
+	// excludes this agent), or "native" (its `native_agents` list defers to this
+	// agent's own plugin manager). The last three are paired with the Disabled /
+	// NotTargeted booleans below, which are what code should branch on — the
+	// string is for display and for the --json contract.
 	Coverage string `json:"coverage"`
 	// MCP, Commands, Skills, Subagents, Hooks, and LSP count the components the
 	// plugin (or whole model) hosts that target this agent — the inventory, so
@@ -57,7 +63,7 @@ type PluginRow struct {
 	Disabled bool `json:"disabled,omitempty"`
 	// NotTargeted is true when this plugin contributes nothing to THIS row's
 	// agent: either its `agents` allowlist excludes the agent (Coverage
-	// "not targeted") or its `native_agents` deferral list names the agent,
+	// "not-targeted") or its `native_agents` deferral list names the agent,
 	// which serves the plugin from its own plugin manager (Coverage "native").
 	// Unlike Disabled (global to the plugin, one row), both are per-agent — the
 	// row exists so a plugin narrowed away from an agent reads as a deliberate
@@ -110,6 +116,16 @@ func skipDetails(skips []adapter.Skip) []SkipDetail {
 type TranslationReport struct {
 	Rows []PluginRow `json:"rows"`
 }
+
+// Coverage values that are not a render outcome: the plugin contributed nothing
+// to this agent by CONFIGURATION, not because the adapter could not translate
+// it. They are constants so the producer (BuildReport) and the consumer
+// (printText) cannot drift on a string literal — the bug that shipped the
+// hyphen-less "not targeted" in one place and matched "native" in another.
+const (
+	coverageNotTargeted = "not-targeted"
+	coverageNative      = "native"
+)
 
 // coverageMark converts a Coverage string to its display symbol.
 func coverageMark(cov string) string {
@@ -200,7 +216,7 @@ func (r TranslationReport) printText(w io.Writer, p *ui.Printer) {
 			}
 			if row.NotTargeted {
 				note := "(not targeted by this plugin's `agents` allowlist)"
-				if row.Coverage == "native" {
+				if row.Coverage == coverageNative {
 					note = "(served natively by this agent — listed in `native_agents`)"
 				}
 				if p != nil {
@@ -311,15 +327,15 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 			// components were filtered out of (secrets.Resolved.ForAgent), so its
 			// ops/skips say nothing about this plugin — emit the targeting marker
 			// instead of counts the plugin did not contribute to.
-			if !source.PluginTargetsAgent(plug.ID.Unverified(), plug.Plugin.Agents, plug.Plugin.NativeAgents, agName) {
+			if !source.PluginTargetsAgent(plug.ID.Unverified(), plug.Plugin.Agents, plug.Plugin.DeferredAgents(), agName) {
 				// Name WHICH gate excluded the agent. The two mean different
 				// things to the reader — a narrowed allowlist is a choice they
 				// made, a deferral says the agent installs this plugin itself —
 				// and the remedies differ (widen `agents` vs. uninstall the
 				// native copy and drop the `native_agents` entry).
-				coverage := "native"
+				coverage := coverageNative
 				if !source.AgentTargeted(plug.Plugin.Agents, agName) {
-					coverage = "not targeted"
+					coverage = coverageNotTargeted
 				}
 				report.Rows = append(report.Rows, PluginRow{
 					Plugin:      label,

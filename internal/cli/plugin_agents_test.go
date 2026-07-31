@@ -76,6 +76,27 @@ func mustNotExist(t *testing.T, label, path string) {
 	}
 }
 
+// mustNotMention asserts a shared destination file does not carry needle. A
+// MISSING file satisfies it — for a component rendered into a shared JSON file
+// (an MCP server in .claude.json, a hook in settings.json) "the file was never
+// created" and "the file exists without this key" are the same outcome — but the
+// check is explicit about that rather than skipping silently when the file is
+// absent, which would make the assertion vacuous exactly when the render path
+// changed.
+func mustNotMention(t *testing.T, label, path, needle string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return // nothing was written here at all
+		}
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if strings.Contains(string(data), needle) {
+		t.Errorf("%s must not be projected to this agent; %s contains %q:\n%s", label, path, needle, data)
+	}
+}
+
 // mustReadFile is readFileString's fatal-on-error sibling: these tests always
 // treat a missing file as a test failure, never as a condition to branch on.
 func mustReadFile(t *testing.T, path string) string {
@@ -141,16 +162,13 @@ func TestImportApply_NativePluginIsNotDuplicated(t *testing.T) {
 	}
 	// The MCP server and the hook are the two that misbehave rather than merely
 	// clutter — a doubly-registered server id, and a handler that fires twice.
-	if data, err := os.ReadFile(filepath.Join(tmp, ".claude.json")); err == nil {
-		if strings.Contains(string(data), "toolkit-srv") {
-			t.Errorf("the plugin's MCP server must not be projected to claude:\n%s", data)
-		}
-	}
-	if data, err := os.ReadFile(filepath.Join(tmp, ".claude", "settings.json")); err == nil {
-		if strings.Contains(string(data), "toolkit-guard") {
-			t.Errorf("the plugin's hook must not be projected to claude (it would fire twice):\n%s", data)
-		}
-	}
+	// Both live inside shared JSON files, so "absent" means either the file does
+	// not exist or it does not mention the component; mustNotMention states that
+	// rather than leaving it to an `err == nil` conditional that silently skips
+	// the assertion when the file happens not to exist.
+	mustNotMention(t, "the plugin's MCP server", filepath.Join(tmp, ".claude.json"), "toolkit-srv")
+	mustNotMention(t, "the plugin's hook (it would fire twice)",
+		filepath.Join(tmp, ".claude", "settings.json"), "toolkit-guard")
 
 	// Codex does not have the plugin natively, so it gets the full fan-out —
 	// which is the entire point of importing the plugin in the first place.
@@ -351,5 +369,172 @@ func TestStatus_WarnsWhenAgentAlsoInstallsThePluginItself(t *testing.T) {
 	}
 	if strings.Contains(out, "projected there by agentsync") {
 		t.Errorf("recording the deferral should clear the warning; got:\n%s", out)
+	}
+}
+
+// TestImport_RefusesLeftoverProjectedFilesAfterDeferral is the regression for the
+// window between recording a deferral and the apply that reclaims the files.
+//
+// import's capture-refusal filter is deliberately NOT narrowed to the agent's
+// own render set. Narrowing it reads as correct — a plugin that projects nothing
+// here provides nothing here — and is wrong: for as long as the reclaiming apply
+// has not run, the destination still holds agentsync's OWN rendered output, and a
+// narrowed filter captures that back into ~/.agentsync as if the user had
+// written it. Those copies then diverge from the plugin's on its next update,
+// permanently, with no signal.
+//
+// The oracle is the canonical source: nothing plugin-provided may appear there.
+func TestImport_RefusesLeftoverProjectedFilesAfterDeferral(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeFanOutMarketplace(t, t.TempDir())
+	if out, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatalf("marketplace add: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "plugin", "add", "toolkit"); err != nil {
+		t.Fatalf("plugin add: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	// Positive control: the files really are on disk, so the refusal below is
+	// about a real capture opportunity rather than an empty directory.
+	for label, path := range claudeToolkitPaths(tmp) {
+		mustExist(t, label, path)
+	}
+
+	// Record the deferral (what `import claude:plugin` does) and do NOT apply —
+	// this is the window.
+	tomlPath := filepath.Join(tmp, ".agentsync", "plugins", "toolkit.toml")
+	deferred := mustReadFile(t, tomlPath) + "\nnative_agents = ['claude']\n"
+	if err := os.WriteFile(tomlPath, []byte(deferred), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, component := range []string{"subagent", "skill", "command"} {
+		out, err := runCLI(t, env, "import", "claude:"+component)
+		if err != nil {
+			t.Fatalf("import claude:%s: %v\n%s", component, err, out)
+		}
+		if !strings.Contains(out, "it is projected from the plugin") {
+			t.Errorf("import claude:%s must still refuse the plugin's own output; got:\n%s", component, out)
+		}
+	}
+	for _, rel := range []string{
+		filepath.Join("subagents", "toolkit-reviewer.md"),
+		filepath.Join("skills", "toolkit-audit", "SKILL.md"),
+		filepath.Join("commands", "toolkit-scan.md"),
+	} {
+		if _, err := os.Stat(filepath.Join(tmp, ".agentsync", rel)); err == nil {
+			t.Errorf("import captured agentsync's own projected output as hand-authored: %s", rel)
+		}
+	}
+}
+
+// TestImport_DoesNotReAddADeferralAfterAdoption pins the adoption path end to
+// end. Adopting a plugin means uninstalling it inside the agent and dropping the
+// `native_agents` entry; the next import must not quietly put it back, which
+// would stop projecting to an agent the user deliberately took over — and under
+// a non-TTY stdin it would do so without even asking.
+func TestImport_DoesNotReAddADeferralAfterAdoption(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeFanOutMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("fanout-mp", mpDir, "toolkit"))
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	tomlPath := filepath.Join(tmp, ".agentsync", "plugins", "toolkit.toml")
+	if !strings.Contains(mustReadFile(t, tomlPath), "native_agents = ['claude']") {
+		t.Fatalf("setup: the first import should have recorded the deferral:\n%s", mustReadFile(t, tomlPath))
+	}
+
+	// Adopt: uninstall the plugin inside Claude, and drop the deferral.
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("fanout-mp", mpDir))
+	adopted := strings.ReplaceAll(mustReadFile(t, tomlPath), "native_agents = ['claude']\n", "")
+	if err := os.WriteFile(tomlPath, []byte(adopted), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A re-import must not resurrect it: Claude no longer installs the plugin,
+	// so there is nothing to defer to.
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("re-import: %v\n%s", err, out)
+	}
+	if got := mustReadFile(t, tomlPath); strings.Contains(got, "native_agents") {
+		t.Errorf("a re-import re-added a deferral the user adopted away:\n%s", got)
+	}
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	for label, path := range claudeToolkitPaths(tmp) {
+		mustExist(t, label, path)
+	}
+}
+
+// TestImport_PreservesAnExplicitlyEmptyDeferral pins the "defer to nobody, stop
+// asking" escape hatch across a full import cycle. `native_agents = []` is the
+// user saying they want the plugin projected everywhere INCLUDING agents that
+// install it themselves — a duplicate they chose. A re-import must preserve
+// that: before the field became a pointer, `omitempty` erased the empty list on
+// the rewrite and the next import silently re-seeded the deferral instead.
+func TestImport_PreservesAnExplicitlyEmptyDeferral(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeFanOutMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("fanout-mp", mpDir, "toolkit"))
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+	tomlPath := filepath.Join(tmp, ".agentsync", "plugins", "toolkit.toml")
+	emptied := strings.ReplaceAll(mustReadFile(t, tomlPath),
+		"native_agents = ['claude']", "native_agents = []")
+	if err := os.WriteFile(tomlPath, []byte(emptied), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Claude still installs the plugin, so a re-import has every reason to
+	// re-seed — and must not, because the empty list is a recorded decision.
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("re-import: %v\n%s", err, out)
+	}
+	got := mustReadFile(t, tomlPath)
+	if !strings.Contains(got, "native_agents = []") {
+		t.Fatalf("the explicit 'defer to nobody' decision did not survive a re-import:\n%s", got)
+	}
+	// And it means what it says: apply projects to claude despite the native copy.
+	if out, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	for label, path := range claudeToolkitPaths(tmp) {
+		mustExist(t, label, path)
+	}
+}
+
+// TestDoctor_WarnsWhenAgentAlsoInstallsThePluginItself mirrors the status test on
+// the other command that reads native state. Both surfaces matter: `doctor` is
+// where a user looks when something is wrong with the machine, and it was the
+// half whose warning no test covered.
+func TestDoctor_WarnsWhenAgentAlsoInstallsThePluginItself(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeFanOutMarketplace(t, t.TempDir())
+	if out, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatalf("marketplace add: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "plugin", "add", "toolkit"); err != nil {
+		t.Fatalf("plugin add: %v\n%s", err, out)
+	}
+	out, err := runCLI(t, env, "doctor")
+	if err != nil {
+		t.Fatalf("doctor: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "also projected by agentsync") {
+		t.Errorf("doctor must not warn before the plugin is installed natively; got:\n%s", out)
+	}
+
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("fanout-mp", mpDir, "toolkit"))
+	out, err = runCLI(t, env, "doctor")
+	if err != nil {
+		t.Fatalf("doctor: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "also projected by agentsync") || !strings.Contains(out, "native_agents") {
+		t.Errorf("doctor should report the duplicate and name the remedy; got:\n%s", out)
 	}
 }

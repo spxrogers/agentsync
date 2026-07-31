@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/testenv"
 	"github.com/spxrogers/agentsync/internal/ui"
@@ -155,6 +156,208 @@ func TestPluginNativeAgentsUnset(t *testing.T) {
 			}
 			if got := pluginNativeAgentsUnset(home, "toolkit"); got != tc.want {
 				t.Errorf("pluginNativeAgentsUnset = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// stubNativeAgentsPrompter replaces the deferral prompt for one test and returns
+// a restore closure, mirroring stubPrompter in gitbackup_test.go. It also
+// records whether the prompt was reached at all — several behaviors below are
+// about NOT asking, and "returned the right value" cannot distinguish "asked and
+// accepted" from "never asked".
+func stubNativeAgentsPrompter(t *testing.T, reply []string, asked *bool) {
+	t.Helper()
+	prev := nativeAgentsPrompter
+	nativeAgentsPrompter = func(*importIO, string, []string) []string {
+		*asked = true
+		return reply
+	}
+	t.Cleanup(func() { nativeAgentsPrompter = prev })
+}
+
+// writePluginTOMLFixture writes plugins/<id>.toml under home. Empty content
+// writes no file at all (the "first install" state).
+func writePluginTOMLFixture(t *testing.T, home, id, content string) {
+	t.Helper()
+	if content == "" {
+		return
+	}
+	dir := filepath.Join(home, "plugins")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, id+".toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestResolveNativeAgents covers the whole decision `import` makes per plugin —
+// including the branches that must NOT ask. Each case asserts BOTH the returned
+// value and whether the prompt was reached; without the second, "did not ask"
+// and "asked and got the same answer back" are indistinguishable, which is
+// exactly the gap that let the prompt-gate behavior go unpinned.
+func TestResolveNativeAgents(t *testing.T) {
+	testenv.RequireContainer(t)
+	candidates := []string{"claude"}
+	cases := []struct {
+		name      string
+		existing  string // plugins/toolkit.toml content; "" = no file
+		dryRun    bool
+		reply     []string // what the stubbed prompt answers
+		wantAsked bool
+		want      []string
+	}{
+		{
+			name:  "first install, accepted — records the deferral",
+			reply: candidates, wantAsked: true, want: candidates,
+		},
+		{
+			name:  "first install, declined — records nothing, so a later import re-asks",
+			reply: nil, wantAsked: true, want: nil,
+		},
+		{
+			name:     "already recorded — the answer would be discarded, so do not ask",
+			existing: "[plugin]\nid = \"toolkit@mp\"\nnative_agents = [\"claude\"]\n",
+			reply:    nil, wantAsked: false, want: candidates,
+		},
+		{
+			name:     "explicitly empty — a decision already made; do not re-litigate it",
+			existing: "[plugin]\nid = \"toolkit@mp\"\nnative_agents = []\n",
+			reply:    nil, wantAsked: false, want: candidates,
+		},
+		{
+			name:     "upgraded from before the key existed — ask",
+			existing: "[plugin]\nid = \"toolkit@mp\"\nagents = [\"*\"]\n",
+			reply:    candidates, wantAsked: true, want: candidates,
+		},
+		{
+			name:   "dry run never asks — it has its own preview line",
+			dryRun: true, reply: nil, wantAsked: false, want: candidates,
+		},
+		{
+			name:  "no candidates — nothing to defer, nothing to ask",
+			reply: nil, wantAsked: false, want: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			writePluginTOMLFixture(t, home, "toolkit", tc.existing)
+			io, _ := newPromptIO(t, "")
+			io.dryRun = tc.dryRun
+			var asked bool
+			stubNativeAgentsPrompter(t, tc.reply, &asked)
+
+			in := candidates
+			if tc.name == "no candidates — nothing to defer, nothing to ask" {
+				in = nil
+			}
+			got := resolveNativeAgents(io, home, "toolkit", in)
+
+			if asked != tc.wantAsked {
+				t.Errorf("prompt asked = %v, want %v", asked, tc.wantAsked)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("got %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestResolveNativeAgents_DeclineWarns pins that declining is never silent. The
+// decline branch returns nil, which on its own is indistinguishable from "there
+// was nothing to defer" — the warning is what tells the user they now own a
+// duplicate and must disable the plugin inside the agent themselves.
+func TestResolveNativeAgents_DeclineWarns(t *testing.T) {
+	testenv.RequireContainer(t)
+	io, out := newPromptIO(t, "")
+	var asked bool
+	stubNativeAgentsPrompter(t, nil, &asked)
+
+	if got := resolveNativeAgents(io, t.TempDir(), "toolkit", []string{"claude"}); got != nil {
+		t.Fatalf("declining must record no deferral; got %v", got)
+	}
+	if !strings.Contains(out.String(), "DUPLICATE") || !strings.Contains(out.String(), "Disable or uninstall") {
+		t.Errorf("declining must warn about the duplicate it creates; got:\n%s", out.String())
+	}
+}
+
+// TestWarnDuplicateOptOut_RemedyIsValidTOML pins the remedy line for the
+// MULTI-agent case. A naive `[%q]` over a comma-joined list rendered
+// `native_agents = ["claude, cursor"]` — valid TOML syntax naming one agent that
+// does not exist, so a user who pasted it would silently defer to nobody and
+// keep the duplicate the warning is about.
+func TestWarnDuplicateOptOut_RemedyIsValidTOML(t *testing.T) {
+	testenv.RequireContainer(t)
+	io, out := newPromptIO(t, "")
+	warnDuplicateOptOut(io, "toolkit", []string{"claude", "cursor"})
+	got := out.String()
+	if !strings.Contains(got, `native_agents = ["claude", "cursor"]`) {
+		t.Errorf("the remedy must be valid TOML naming both agents; got:\n%s", got)
+	}
+	if strings.Contains(got, `["claude, cursor"]`) {
+		t.Errorf("the remedy collapsed both agents into one bogus name; got:\n%s", got)
+	}
+}
+
+// TestPluginTOML_NativeAgentsRoundTrip is the durability pin for the three
+// on-disk states of `native_agents`. The field is a POINTER precisely because
+// `omitempty` drops an empty slice: before that fix, a user's explicit
+// `native_agents = []` ("defer to nobody, stop asking") survived being READ —
+// so the prompt correctly stayed quiet — and was then erased by the next write,
+// after which the following import re-seeded the deferral, silently and, under
+// --no-input, without asking.
+//
+// The oracle is a full write→read→write cycle, not a single decode: the bug was
+// invisible to a decode-only test.
+func TestPluginTOML_NativeAgentsRoundTrip(t *testing.T) {
+	testenv.RequireContainer(t)
+	empty := []string{}
+	populated := []string{"claude"}
+	cases := []struct {
+		name    string
+		in      *[]string
+		wantKey string // substring the re-marshalled TOML must contain
+		absent  bool   // or: the key must not appear at all
+	}{
+		{name: "absent stays absent", in: nil, absent: true},
+		{name: "explicitly empty survives", in: &empty, wantKey: "native_agents = []"},
+		{name: "populated survives", in: &populated, wantKey: "native_agents = ['claude']"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			first, err := toml.Marshal(pluginTOML{Plugin: pluginTOMLSpec{ID: "toolkit@mp", NativeAgents: tc.in}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded pluginTOML
+			if err := toml.Unmarshal(first, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			// The read side must preserve the absent/empty distinction, since it
+			// is what pluginNativeAgentsUnset branches on.
+			if (decoded.Plugin.NativeAgents == nil) != (tc.in == nil) {
+				t.Fatalf("absent/present distinction lost on read: got nil=%v, want nil=%v",
+					decoded.Plugin.NativeAgents == nil, tc.in == nil)
+			}
+			second, err := toml.Marshal(decoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.absent {
+				if strings.Contains(string(second), "native_agents") {
+					t.Fatalf("no key was set, but one was written:\n%s", second)
+				}
+				return
+			}
+			if !strings.Contains(string(second), tc.wantKey) {
+				t.Fatalf("rewrite lost the recorded decision; want %q, got:\n%s", tc.wantKey, second)
 			}
 		})
 	}

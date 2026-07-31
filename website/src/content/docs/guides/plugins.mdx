@@ -123,8 +123,11 @@ A component renders for an agent when `agents` targets it **and**
 	`plugin disable`/`enable` and re-running `plugin add` on an
 	already-registered plugin **preserve** its `agents` allowlist and
 	`native_agents` list (and its `update` mode and `disabled` state) — they never
-	silently re-broaden a narrowed plugin back to every agent, and a re-import
-	never re-adds an agent you deliberately adopted. Only
+	silently re-broaden a narrowed plugin back to every agent. Adopting a plugin
+	(uninstalling it in the agent, then dropping that agent from `native_agents`)
+	sticks, because the agent no longer reports the plugin as installed — and if
+	you drop the entry WITHOUT uninstalling it there, the next import asks again
+	rather than silently re-deferring. Only
 	`id`/`version`/`manifest_sha` are refreshed by a re-install (from the fresh
 	fetch); when a re-install keeps non-default targeting, the command says so
 	(e.g. `(kept agents=[claude], update=pinned)`).

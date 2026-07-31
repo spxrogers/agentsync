@@ -385,3 +385,69 @@ func TestDedupHooks_KeysOnContentNotProvenance(t *testing.T) {
 		t.Fatalf("distinct handlers must not be collapsed; got %d: %+v", len(got), got)
 	}
 }
+
+// TestNamespaceProjected_StampsTargetingOnEveryKind is the mechanical guard for
+// the two targeting lists. It is reflective ON PURPOSE: the stamp is six nearly
+// identical loops, and the failure mode of hand-written per-kind assertions is
+// that a kind quietly goes unasserted — LSP servers and hooks are the ones that
+// look least important and are therefore likeliest to be forgotten, and dropping
+// the LSP stamp broke no test before this existed.
+//
+// Every slice on ProjectionResult is populated, then every element of every
+// slice must carry both lists. A future component kind added to ProjectionResult
+// fails here until namespaceProjected stamps it too — which is the point: an
+// unstamped kind is projected to EVERY agent regardless of the plugin's
+// `agents` / `native_agents`, silently re-creating the duplicate they exist to
+// prevent, for that one kind.
+func TestNamespaceProjected_StampsTargetingOnEveryKind(t *testing.T) {
+	pr := ProjectionResult{
+		Skills:     []source.Skill{{Name: "s"}},
+		Subagents:  []source.Subagent{{Name: "a"}},
+		Commands:   []source.Command{{Name: "c"}},
+		MCPServers: []source.MCPServer{{ID: "m"}},
+		LSPServers: []source.LSPServer{{ID: "l"}},
+		Hooks:      []source.Hook{{Event: "PreToolUse", Command: "x"}},
+	}
+	const plugin = "my-plugin"
+	agents := []string{"codex"}
+	native := []string{"claude"}
+	namespaceProjected(&pr, plugin, agents, native)
+
+	v := reflect.ValueOf(pr)
+	stampedKinds := 0
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+		if field.Kind() != reflect.Slice {
+			continue
+		}
+		kind := v.Type().Field(i).Name
+		// Every element type on ProjectionResult must carry the targeting pair.
+		// Checking the TYPE (not just the values) is what makes a newly-added
+		// kind fail loudly here instead of silently skipping the assertions.
+		if _, ok := field.Type().Elem().FieldByName("PluginAgents"); !ok {
+			t.Errorf("%s elements carry no PluginAgents field — a projected kind that cannot "+
+				"hold its plugin's targeting renders to every agent unconditionally", kind)
+			continue
+		}
+		if field.Len() == 0 {
+			t.Errorf("%s is empty in the fixture — this test would pass without checking it", kind)
+			continue
+		}
+		stampedKinds++
+		for j := 0; j < field.Len(); j++ {
+			el := field.Index(j)
+			gotAgents := el.FieldByName("PluginAgents").Interface().([]string)
+			gotNative := el.FieldByName("PluginNativeAgents").Interface().([]string)
+			if len(gotAgents) != 1 || gotAgents[0] != "codex" {
+				t.Errorf("%s[%d]: PluginAgents = %v, want %v", kind, j, gotAgents, agents)
+			}
+			if len(gotNative) != 1 || gotNative[0] != "claude" {
+				t.Errorf("%s[%d]: PluginNativeAgents = %v, want %v", kind, j, gotNative, native)
+			}
+		}
+	}
+	if stampedKinds != 6 {
+		t.Fatalf("expected 6 projected kinds to be stamped, walked %d — a kind was added to "+
+			"ProjectionResult without being stamped, or the fixture stopped populating one", stampedKinds)
+	}
+}

@@ -164,7 +164,7 @@ func projectOnePlugin(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugi
 	if perr != nil {
 		return ProjectionResult{}, false, fmt.Errorf("project plugin %s: %w", id, perr)
 	}
-	namespaceProjected(&proj, id, pl.Plugin.Agents, pl.Plugin.NativeAgents)
+	namespaceProjected(&proj, id, pl.Plugin.Agents, pl.Plugin.DeferredAgents())
 	return proj, true, nil
 }
 

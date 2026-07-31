@@ -105,7 +105,7 @@ func duplicatedNativePlugins(c source.Canonical, reg *adapter.Registry, agents [
 			// The plugin id is non-empty by construction here (it keys a declared
 			// plugins/<id>.toml), so this asks the real question: does agentsync
 			// project this plugin to this agent?
-			if !source.PluginTargetsAgent(key, spec.Agents, spec.NativeAgents, name) {
+			if !source.PluginTargetsAgent(key, spec.Agents, spec.DeferredAgents(), name) {
 				continue
 			}
 			seen[key] = true

@@ -237,14 +237,35 @@ type PluginSpec struct {
 	//     default), inverting the user's intent.
 	//
 	// `import` populates it by probing each PluginIngester adapter; the user
-	// edits it (or runs `plugin adopt`) after uninstalling the native copy.
-	NativeAgents []string `toml:"native_agents,omitempty"`
+	// edits it by hand after uninstalling the native copy.
+	// It is a POINTER so the three on-disk states stay distinguishable, per the
+	// "models must stay faithful to their on-disk artifacts" rule: an ABSENT key
+	// (nil — never decided, so `import` asks), an EXPLICITLY EMPTY list
+	// (`native_agents = []` — decided, "defer to nobody", so `import` stops
+	// asking), and a populated list. A plain []string cannot express the middle
+	// state through a write: `omitempty` drops an empty slice, so the key
+	// vanished on the next rewrite and the decision was silently reverted.
+	// Read it through DeferredAgents, which is nil-safe.
+	NativeAgents *[]string `toml:"native_agents,omitempty"`
 	// Disabled, when true, suppresses the plugin's projection during
 	// marketplace.LoadProjected. `agentsync plugin disable <id>` sets this.
 	// Without honouring it there, the CLI's TOML write would be a no-op:
 	// projection would still surface the plugin's MCP servers / skills / etc.
 	// into the canonical model and apply would ship them.
 	Disabled bool `toml:"disabled,omitempty"`
+}
+
+// DeferredAgents returns the agents this plugin is NOT projected to because they
+// install it themselves. It flattens the absent/empty distinction that only the
+// on-disk representation needs: to every CONSUMER (the projection stamp, the
+// duplicate report, the translation report) "no key" and "empty list" mean the
+// same thing — defer to nobody. Only the `import` prompt gate reads the pointer
+// itself, to tell "never decided" from "decided: nobody".
+func (p PluginSpec) DeferredAgents() []string {
+	if p.NativeAgents == nil {
+		return nil
+	}
+	return *p.NativeAgents
 }
 
 // Marketplace mirrors marketplaces/<name>.toml.

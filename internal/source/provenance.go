@@ -139,6 +139,14 @@ func AgentTargeted(agents []string, agent string) bool {
 // A component with no Plugin (hand-authored) always targets every agent: both
 // gates are properties of plugin installation, and both fields are empty for
 // anything loaded from ~/.agentsync/.
+//
+// NOTE the asymmetry in how the two lists read a "*" entry. `agents` is an
+// ALLOWLIST, so AgentTargeted treats "*" as the documented wildcard. The
+// deferral list is a set of specific agents that install the plugin themselves,
+// matched EXACTLY — a literal "*" there names no real agent and defers to
+// nobody. That is deliberate: "every agent serves this natively" is not a
+// deferral, it is `disabled = true`, which the projection already honours and
+// which says what it means.
 func PluginTargetsAgent(plugin string, pluginAgents, pluginNativeAgents []string, agent string) bool {
 	if plugin == "" {
 		return true

@@ -658,3 +658,91 @@ func TestBuildReport_CountsHonorTargeting(t *testing.T) {
 		t.Errorf("codex counts = mcp %d lsp %d; want mcp 1 lsp 1", g.MCP, g.LSP)
 	}
 }
+
+// TestBuildReport_NotTargetedRows pins the two per-agent "contributed nothing"
+// outcomes. They matter because their row is built from a plan the plugin's
+// components were FILTERED OUT of — so the ordinary counting path would report
+// the whole model's totals under this plugin's name, telling the user a plugin
+// rendered components it did not. And the two are distinguished on purpose: a
+// narrowed allowlist is a choice the user made, while a deferral says the agent
+// installs the plugin itself, and the remedies differ.
+func TestBuildReport_NotTargetedRows(t *testing.T) {
+	claudeOnly := []string{"claude"}
+	cases := []struct {
+		name         string
+		spec         source.PluginSpec
+		agent        string
+		wantCoverage string
+		wantFlag     bool
+	}{
+		{
+			name:         "allowlist excludes this agent",
+			spec:         source.PluginSpec{ID: "toolkit@mp", Agents: []string{"codex"}},
+			agent:        "claude",
+			wantCoverage: "not-targeted",
+			wantFlag:     true,
+		},
+		{
+			name:         "deferral names this agent",
+			spec:         source.PluginSpec{ID: "toolkit@mp", Agents: []string{"*"}, NativeAgents: &claudeOnly},
+			agent:        "claude",
+			wantCoverage: "native",
+			wantFlag:     true,
+		},
+		{
+			name:         "targeted normally — an ordinary coverage row",
+			spec:         source.PluginSpec{ID: "toolkit@mp", Agents: []string{"*"}},
+			agent:        "claude",
+			wantCoverage: "full",
+			wantFlag:     false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := source.Canonical{
+				MCPServers: []source.MCPServer{{ID: "srv"}},
+				Plugins:    []source.Plugin{{ID: "toolkit", Plugin: tc.spec}},
+			}
+			plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+				tc.agent: {Ops: []adapter.FileOp{{Action: "write", Path: "/home/.claude.json"}}},
+			}}
+			report := render.BuildReport(c, plan, []string{tc.agent})
+			if len(report.Rows) != 1 {
+				t.Fatalf("expected 1 row, got %d", len(report.Rows))
+			}
+			row := report.Rows[0]
+			if row.Coverage != tc.wantCoverage {
+				t.Errorf("Coverage = %q, want %q", row.Coverage, tc.wantCoverage)
+			}
+			if row.NotTargeted != tc.wantFlag {
+				t.Errorf("NotTargeted = %v, want %v", row.NotTargeted, tc.wantFlag)
+			}
+			// A row for a plugin that contributed nothing must not carry counts
+			// borrowed from the rest of the model — that is the misreport this
+			// row exists to prevent.
+			if tc.wantFlag && row.MCP != 0 {
+				t.Errorf("a non-contributing row reported %d MCP servers; it rendered none", row.MCP)
+			}
+		})
+	}
+}
+
+// TestPrintText_NotTargetedRowsExplainThemselves pins the human output. The row
+// carries no coverage mark, so without a dedicated line it would print as a bare
+// agent name with an empty status — indistinguishable from a bug. Each variant
+// must say WHICH gate excluded the agent, because the remedies differ.
+func TestPrintText_NotTargetedRowsExplainThemselves(t *testing.T) {
+	report := render.TranslationReport{Rows: []render.PluginRow{
+		{Plugin: "toolkit@mp", Agent: "claude", Coverage: "native", NotTargeted: true},
+		{Plugin: "toolkit@mp", Agent: "codex", Coverage: "not-targeted", NotTargeted: true},
+	}}
+	var buf bytes.Buffer
+	report.PrintText(&buf)
+	got := buf.String()
+	if !strings.Contains(got, "served natively") || !strings.Contains(got, "native_agents") {
+		t.Errorf("the deferral row must name the deferral as the reason; got:\n%s", got)
+	}
+	if !strings.Contains(got, "`agents` allowlist") {
+		t.Errorf("the allowlist row must name the allowlist as the reason; got:\n%s", got)
+	}
+}

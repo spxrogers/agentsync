@@ -78,12 +78,20 @@ type pluginTOMLSpec struct {
 	ManifestSHA string         `toml:"manifest_sha,omitempty"`
 	Update      string         `toml:"update,omitempty"`
 	Agents      []string       `toml:"agents,omitempty"`
-	// NativeAgents mirrors source.PluginSpec.NativeAgents: agents whose own
-	// plugin manager already installs this plugin, so apply must not project
-	// its components there. Populated by `import` and preserved across
-	// re-installs like every other lifecycle field.
-	NativeAgents []string `toml:"native_agents,omitempty"`
-	Disabled     bool     `toml:"disabled,omitempty"`
+	// NativeAgents mirrors source.PluginSpec.NativeAgents — agents whose own
+	// plugin manager already installs this plugin, so apply must not project its
+	// components there. Populated by `import` and preserved across re-installs
+	// like every other lifecycle field.
+	//
+	// It is a POINTER for the same reason the canonical field is: `omitempty`
+	// drops an EMPTY slice, so a user's explicit `native_agents = []` ("defer to
+	// nobody, stop asking") vanished on the next rewrite and the decision was
+	// silently reverted — after which the next import re-seeded it, under
+	// --no-input without even asking. A nil pointer omits the key; a pointer to
+	// an empty slice writes `native_agents = []`. Pinned by
+	// TestPluginTOML_NativeAgentsRoundTrip.
+	NativeAgents *[]string `toml:"native_agents,omitempty"`
+	Disabled     bool      `toml:"disabled,omitempty"`
 }
 
 // ---- install ----------------------------------------------------------------
@@ -153,9 +161,12 @@ func keptLifecycleSummary(spec pluginTOMLSpec) string {
 		}
 		parts = append(parts, fmt.Sprintf("agents=[%s]", strings.Join(sanitized, ",")))
 	}
-	if len(spec.NativeAgents) > 0 {
-		sanitized := make([]string, len(spec.NativeAgents))
-		for i, a := range spec.NativeAgents {
+	if spec.NativeAgents != nil {
+		// A non-nil EMPTY list is reported too: "defer to nobody" is a deliberate
+		// decision the user recorded, and a re-install preserving it is exactly
+		// what this summary exists to surface.
+		sanitized := make([]string, len(*spec.NativeAgents))
+		for i, a := range *spec.NativeAgents {
 			sanitized[i] = ui.Sanitize(a)
 		}
 		parts = append(parts, fmt.Sprintf("native_agents=[%s]", strings.Join(sanitized, ",")))
@@ -247,7 +258,11 @@ func installPluginInto(home, id, mpName string, defaultNativeAgents []string) (p
 	// `import` still produce byte-identical canonical artifacts (see the doc
 	// comment above): Agents=["*"], Update="track", Disabled absent.
 	agents := []string{"*"}
-	nativeAgents := defaultNativeAgents
+	var nativeAgents *[]string
+	if defaultNativeAgents != nil {
+		seed := defaultNativeAgents
+		nativeAgents = &seed
+	}
 	update := "track"
 	disabled := false
 	switch existing, rerr := readPluginTOML(pluginPath); {

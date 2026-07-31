@@ -42,6 +42,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`native_agents = []` ("defer to nobody") now survives a rewrite.** The field
+  was a plain slice with `omitempty`, so an explicitly empty list decoded
+  correctly — the prompt stayed quiet — and was then erased by the next write,
+  after which the following import re-seeded the deferral, silently, and under
+  `--no-input` without asking. It is a pointer now, so all three on-disk states
+  (absent / empty / populated) round-trip.
 - **`agents` in `plugins/<id>.toml` now actually narrows a plugin's fan-out.**
   The key has been documented since v1.0 ("Control fan-out per plugin with
   `agents = [...]`") and was written, preserved across re-installs, and never
@@ -50,9 +56,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   plugin out to every enabled agent anyway. Both it and the new `native_agents`
   are enforced in ONE place — the render waist (`source.FilterForAgent` via
   `secrets.Resolved.ForAgent` in `render.Plan`) — so no adapter can forget one.
-  `import`'s capture-refusal filter uses the same function, so it no longer
-  refuses to capture a hand-authored component from an agent a plugin does not
-  project to.
+  `import`'s capture-refusal filter deliberately does NOT narrow the same way:
+  between recording a deferral and the apply that reclaims the files, the
+  destination still holds agentsync's own rendered output, and a narrowed filter
+  would capture that back into the canonical source as hand-authored. It refuses
+  anything any installed plugin provides — over-refusal fails loudly and names
+  the plugin, under-refusal fails silently and permanently.
 
 ### Changed
 

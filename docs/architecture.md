@@ -308,10 +308,15 @@ Two properties are load-bearing:
   `source.FilterForAgent`, reached via `secrets.Resolved.ForAgent` in
   `render.Plan` — never inside an adapter. Ten adapters × six component kinds is
   sixty places to forget, and each omission silently re-creates the duplicate
-  for one kind on one agent. `import`'s capture-refusal filter (`pluginProvided`)
-  calls the SAME function so its refusal set is exactly the render set per agent;
-  otherwise it would refuse to capture a hand-authored component from an agent
-  the plugin never projects to.
+  for one kind on one agent.
+- **The import-side refusal set is deliberately WIDER than the render set.**
+  `import` refuses to capture any component ANY installed plugin provides, not
+  just the ones this agent receives. Narrowing it to the render set would be
+  symmetric and wrong: between recording a deferral and the apply that reclaims
+  the files, the destination still holds agentsync's own rendered output, and a
+  narrowed filter would capture that into the canonical source as hand-authored.
+  Over-refusal fails loudly, naming the plugin; under-refusal silently mints a
+  canonical copy that diverges from the plugin's on its next update.
 
 The residual — a plugin installed natively AFTER it was declared in agentsync —
 is invisible to apply by construction. `status` and `doctor` do read native
