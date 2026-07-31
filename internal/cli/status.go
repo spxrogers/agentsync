@@ -688,7 +688,9 @@ func plural(n int, one, many string) string {
 // independently-worded copy for --legend and it drifted out of sync with this
 // one on its first day (drift/conflict: "apply blocks" here vs. "will be
 // overwritten" there — only the latter matches actual apply behavior, which
-// backs up and overwrites; see internal/render/writer.go).
+// overwrites with NO backup for drift/conflict specifically — the
+// destination is already state-owned, so Writer.maybeBackupFileOp's
+// foreign-collision backup path doesn't apply; see internal/render/writer.go).
 var classLegend = map[string]string{
 	"new":               "will be created",
 	"pending":           "will be updated to match source",
@@ -696,7 +698,7 @@ var classLegend = map[string]string{
 	"conflict":          "will be overwritten (use reconcile to merge the dest edit)",
 	"foreign-collision": "will be backed up and overwritten",
 	"orphan":            "will be deleted",
-	"orphan-drifted":    "will be deleted (a local edit will be lost)",
+	"orphan-drifted":    "will be backed up, then deleted (the local edit is still lost — recover it from the backup)",
 }
 
 // renderStatusLegend prints a brief glossary of the drift classes that

@@ -320,7 +320,7 @@ func TestRenderClassLegend(t *testing.T) {
 		{"new", "brand-new item", "will be created"},
 		{"foreign-collision", "agentsync never wrote", "will be backed up and overwritten"},
 		{"orphan", "removed from source and untouched", "will be deleted"},
-		{"orphan-drifted", "the destination was also edited", "a local edit will be lost"},
+		{"orphan-drifted", "the destination was also edited", "recover it from the backup"},
 	}
 	for _, tc := range tests {
 		line := findLine(t, tc.cls)
@@ -344,6 +344,15 @@ func TestRenderClassLegend(t *testing.T) {
 	orphanLine := findLine(t, "orphan")
 	if strings.Contains(orphanLine, "also edited") {
 		t.Errorf("orphan's line must not describe orphan-drifted's meaning; got:%s", orphanLine)
+	}
+	// "will be deleted" is a strict PREFIX of orphan-drifted's action text, so
+	// a mutation widening orphan's own action to orphan-drifted's full string
+	// would still satisfy the "will be deleted" containment check above and
+	// pass silently — this is the asymmetric half of the swap-guard that
+	// needs its own negative assertion (mutation-verified: without this check,
+	// orphan's action silently absorbing orphan-drifted's text goes uncaught).
+	if strings.Contains(orphanLine, "recover it from the backup") {
+		t.Errorf("orphan's line must not describe orphan-drifted's action (orphan gets no backup); got:%s", orphanLine)
 	}
 }
 
@@ -421,5 +430,18 @@ func TestClassTablesCoverAllDriftClasses(t *testing.T) {
 	// meant to protect, rather than only in some other test's output.
 	if visited != 9 {
 		t.Errorf("expected exactly 9 drift classes, visited %d — drift.Class and this test's assumptions have diverged", visited)
+	}
+	// containsString above only proves presence, not uniqueness — a class
+	// accidentally duplicated in classOrder/classSeverity would still "contain"
+	// every name exactly once each and pass, while printing that class twice in
+	// both `status`'s summary footer and `status --legend`.
+	for name, list := range map[string][]string{"classOrder": classOrder, "classSeverity": classSeverity} {
+		seen := map[string]bool{}
+		for _, cls := range list {
+			if seen[cls] {
+				t.Errorf("%s contains %q more than once", name, cls)
+			}
+			seen[cls] = true
+		}
 	}
 }

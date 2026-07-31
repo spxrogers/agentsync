@@ -764,7 +764,20 @@ already state-owned by definition, so the writer's per-file backup path
 (`Writer.maybeBackupFileOp`) skips them and overwrites directly — the hand
 edit is simply lost; `reconcile` is how you catch it first, and a user-scope
 apply's destination git-versioning (§4 above, default `prompt`, opt-out) is
-the after-the-fact recovery net when enabled.
+the after-the-fact recovery net when enabled — **absent entirely at project
+scope**, so a project-scope drift/conflict overwrite has no automatic
+recovery at all beyond your own source control of the destination.
+
+The same state-ownership check governs key-merge ops (`Writer.maybeBackupKeyOp`)
+per JSON pointer, not per file — a drifted/conflicted key you own is
+overwritten with no backup exactly like a whole-file drift/conflict. Two
+narrower exceptions exist there: an owned top-level section (`mcpServers`,
+`hooks`, …) holding a foreign scalar/array instead of an object — which can
+only mean something else wrote there, since agentsync never stores anything
+but an object at an owned key — backs the whole file up unconditionally,
+without consulting ownership; and any ONE unowned, differing pointer
+elsewhere in an otherwise-owned file triggers a whole-file backup that, as a
+side effect, also preserves your owned, drifted keys alongside it.
 
 `drift.SafeForAutoApply(class)` is what `reconcile --auto-safe` consults — it
 auto-resolves only the cases that can't lose work (`converged`, `pending`).

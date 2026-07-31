@@ -665,8 +665,9 @@ func TestStatus_LegendFlag(t *testing.T) {
 	// drift and conflict must read the SAME action a plain `status` run would
 	// show inline (classLegend, reused verbatim by renderClassLegend) — an
 	// earlier draft had --legend claim "apply blocks" for both, contradicting
-	// the inline legend's (correct) "will be overwritten", since apply always
-	// backs up and overwrites rather than refusing to run.
+	// the inline legend's (correct) "will be overwritten" — with no backup for
+	// either, since apply never refuses to run and the destination is already
+	// state-owned by the time it's classified drift/conflict.
 	if !strings.Contains(out, "will be overwritten (use reconcile to keep the dest edit)") {
 		t.Errorf("expected --legend's drift entry to match classLegend's action text; got:\n%s", out)
 	}

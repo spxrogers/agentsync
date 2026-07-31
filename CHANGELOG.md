@@ -74,6 +74,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `reconcile` is how you catch it first), while foreign-collision and
   orphan-drifted genuinely do get backed up first, since those are the cases
   where the destination holds content agentsync doesn't yet own.
+  `docs/architecture.md` also now spells out the two key-merge-op exceptions
+  (a foreign type-mismatch at an owned section, and one unowned differing
+  pointer) and names project scope explicitly as having no destination
+  git-versioning recovery net at all. The same "backs up and overwrites"
+  falsehood was also still live in `internal/cli/status.go`'s own doc comment
+  (which cited the writer as its authority while contradicting it) and a
+  matching test comment — both fixed to match.
 
 ### Fixed
 
