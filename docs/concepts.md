@@ -111,8 +111,8 @@ class, but the next `apply` doesn't touch the destination at all; it simply
 drops the stale bookkeeping. `status`/`diff`/`reconcile` are how you catch a
 drift/conflict/orphan-drifted item BEFORE the next `apply` acts on it; a
 user-scope apply's destination git-versioning (opt-out, default `prompt`) is
-the after-the-fact recovery net when enabled — see the [user
-guide](user-guide.md#rolling-back-a-bad-apply). It's absent entirely at
+the after-the-fact recovery net when enabled — see "Rolling back a bad
+apply" in the [user guide](user-guide.md). It's absent entirely at
 project scope, so a project-scope drift/conflict overwrite has no automatic
 recovery beyond your own source control of the destination.
 
