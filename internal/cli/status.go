@@ -105,7 +105,20 @@ func newStatusCmd() *cobra.Command {
 			}
 			// --legend is a standalone reference dump: no project/state/secrets
 			// to load, no scope to resolve. Handle it before any of that work.
+			// It must reject combination with any flag whose contract it would
+			// otherwise silently break — --json (a script expecting a parseable
+			// payload would get prose on stdout), --exit-code (would always see
+			// exit 0, masking real drift), and --agents (would look accepted but
+			// have no effect) — rather than accept-and-ignore them.
 			if legend {
+				switch {
+				case jsonOut:
+					return fmt.Errorf("--legend cannot be combined with --json")
+				case exitCode:
+					return fmt.Errorf("--legend cannot be combined with --exit-code")
+				case agentsCSV != "":
+					return fmt.Errorf("--legend cannot be combined with --agents")
+				}
 				renderClassLegend(p)
 				return nil
 			}
@@ -357,10 +370,18 @@ type skillGroup struct {
 // independently but landed on the same value, vs. clean = neither changed) is
 // bookkeeping that matters to the internal classifier and `status --json`, not
 // to someone scanning the report. `status --legend` still explains converged
-// on its own — see classLegendFull.
+// on its own — see classLegendFull. Compares against drift.Converged/drift.Clean's
+// own String() rather than string literals, so a rename of either constant
+// can't silently break the fold while every test stays green.
+//
+// explain_print.go's driftStyled deliberately does NOT apply this fold — it
+// reuses the classifier's vocabulary verbatim by design (see its doc comment)
+// — so the same item can read "clean" under `status` and "converged" under
+// `explain`. That's an accepted, documented divergence between the two
+// surfaces, not something this function should paper over.
 func displayClass(cls string) string {
-	if cls == "converged" {
-		return "clean"
+	if cls == drift.Converged.String() {
+		return drift.Clean.String()
 	}
 	return cls
 }
@@ -430,7 +451,7 @@ func renderStatusText(p *ui.Printer, model statusModel, verbose bool) {
 			collapsed, plural(collapsed, "directory", "directories"))))
 	}
 	fmt.Fprintln(p.Out, "")
-	fmt.Fprintln(p.Out, p.Faint("Use --legend to get a brief on each classification status."))
+	fmt.Fprintln(p.Out, p.Faint("Run `agentsync status --legend` for a brief on each classification status."))
 }
 
 // renderAgentItems prints one agent's tracked items. In verbose mode every item
@@ -646,8 +667,13 @@ func plural(n int, one, many string) string {
 // (displayClass), and "no action" for either would just be noise. The legend
 // itself is also skipped entirely when the summary contains nothing but
 // clean/converged items, so a fully-synced status report stays as terse as
-// today. For the full nine-class glossary (including clean/converged spelled
-// out), see classLegendFull and `status --legend`.
+// today. `status --legend` (renderClassLegend) reuses these SAME strings
+// verbatim for the classes covered here, so the two views can never disagree
+// about what apply does to a given class — an earlier draft kept a second,
+// independently-worded copy for --legend and it drifted out of sync with this
+// one on its first day (drift/conflict: "apply blocks" here vs. "will be
+// overwritten" there — only the latter matches actual apply behavior, which
+// backs up and overwrites; see internal/render/writer.go).
 var classLegend = map[string]string{
 	"new":               "will be created",
 	"pending":           "will be updated to match source",
@@ -689,34 +715,48 @@ func renderStatusLegend(p *ui.Printer, summary map[string]int) {
 	}
 }
 
-// classLegendFull is the complete nine-class glossary printed by
-// `status --legend`. Unlike classLegend (the action-only hint inline in a
-// normal `status` run, which folds converged into clean and omits both as
-// self-evident), this is the full reference: every class drift.Classify can
-// produce, each spelled out on its own — including clean and converged,
-// whose relationship is exactly what makes the dashboard's fold-in safe.
-// Mirrors the class table in docs/concepts.md; keep the two in sync.
-var classLegendFull = []struct{ class, meaning string }{
-	{"clean", "source, last-applied state, and destination all agree — apply does nothing"},
-	{"pending", "you changed the source since the last apply — apply writes the new source to the destination"},
-	{"drift", "the destination was edited outside agentsync — apply blocks and suggests `reconcile`"},
-	{"converged", "source and destination changed independently but landed on the same value — apply just refreshes state; a normal `status` run shows this as \"clean\", since there's nothing left to reconcile"},
-	{"conflict", "source and destination changed to different values — apply blocks and requires `reconcile`"},
-	{"new", "a brand-new item with nothing on disk yet — apply creates it"},
-	{"foreign-collision", "a pre-existing file agentsync never wrote — apply backs it up, then writes"},
-	{"orphan", "removed from source and untouched since — apply deletes it"},
-	{"orphan-drifted", "removed from source, but the destination was also edited — apply warns and asks for an explicit decision"},
+// classMeaning gives a one-line, plain statement of what each drift class
+// MEANS — not what apply does about it, which stays classLegend's job (reused
+// verbatim in renderClassLegend below) so the two can't say contradictory
+// things about the same class. Every one of the nine classes drift.Classify
+// can produce has an entry here; TestClassTablesCoverAllDriftClasses guards
+// that against a tenth class silently falling through unlisted. Mirrors the
+// class table in docs/concepts.md; keep the two in sync.
+var classMeaning = map[string]string{
+	"clean":             "source, last-applied state, and destination all agree",
+	"pending":           "you changed the source since the last apply",
+	"drift":             "the destination was edited outside agentsync",
+	"converged":         "source and destination changed independently but landed on the same value",
+	"conflict":          "source and destination changed to different values",
+	"new":               "a brand-new item with nothing on disk yet",
+	"foreign-collision": "a pre-existing file agentsync never wrote",
+	"orphan":            "removed from source and untouched since",
+	"orphan-drifted":    "removed from source, but the destination was also edited",
 }
 
 // renderClassLegend prints the full nine-class drift glossary for
 // `status --legend` — a standalone reference independent of any project's
-// current drift state, so it needs no plan/state/secrets loaded.
+// current drift state, so it needs no plan/state/secrets loaded. classOrder
+// already lists all nine classes, so it doubles as this table's row order;
+// the action half of each line comes straight from classLegend (clean and
+// converged, which classLegend omits as self-evident/folded, get their own
+// text here instead).
 func renderClassLegend(p *ui.Printer) {
 	fmt.Fprintln(p.Out, p.Bold("Drift classification statuses"))
-	for _, e := range classLegendFull {
-		glyph, color := styleClass(p, e.class)
-		label := ui.Pad(glyph+" "+e.class, 20)
-		fmt.Fprintf(p.Out, "  %s %s\n", color(label), p.Faint(e.meaning))
+	for _, cls := range classOrder {
+		var action string
+		switch cls {
+		case drift.Clean.String():
+			action = "apply does nothing"
+		case drift.Converged.String():
+			action = "apply just refreshes state silently — a normal `status` run shows this as \"clean\", since there's nothing left to reconcile"
+		default:
+			action = classLegend[cls]
+		}
+		msg := classMeaning[cls] + " — " + action
+		glyph, color := styleClass(p, cls)
+		label := ui.Pad(glyph+" "+cls, 20)
+		fmt.Fprintf(p.Out, "  %s %s\n", color(label), p.Faint(msg))
 	}
 }
 

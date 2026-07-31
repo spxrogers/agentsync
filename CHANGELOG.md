@@ -14,8 +14,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 - **`status --legend`** prints a standalone glossary explaining all nine drift
   classification statuses (`clean`, `pending`, `drift`, `converged`,
   `conflict`, `new`, `foreign-collision`, `orphan`, `orphan-drifted`) and exits
-  without running the drift scan. A normal `status` run now ends with a
-  one-line hint pointing at it.
+  without running the drift scan. A `status` run that renders the dashboard now
+  ends with a one-line hint pointing at it. `--legend` rejects combination with
+  `--json`, `--exit-code`, or `--agents` — each of which it would otherwise
+  silently ignore — rather than accepting and ignoring them.
 
 ### Changed
 

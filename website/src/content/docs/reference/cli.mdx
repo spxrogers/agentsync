@@ -312,8 +312,12 @@ classification, since a script may want it.
 `agentsync status --legend` prints a standalone glossary explaining all nine
 drift classification statuses — including `clean` and `converged` spelled out
 separately, since that's exactly the distinction the formatted view folds
-away — and exits without running the drift scan at all. A normal `status` run
-always ends with a one-line hint pointing at `--legend`.
+away — and exits without running the drift scan at all. It rejects being
+combined with `--json`, `--exit-code`, or `--agents` (all of which it would
+otherwise silently ignore) rather than accept-and-ignore them. Every run that
+renders the dashboard ends with a one-line hint pointing at `--legend`; the
+"no agents enabled" short-circuit prints nothing, since there's no report to
+explain.
 
 For a gate that should **fail the build** on drift, add `--exit-code`:
 `agentsync status --exit-code` exits `2` when any item is not clean/converged and
@@ -456,7 +460,7 @@ For per-plugin translation coverage, see [`plugin explain`](#plugin-explain-plug
 | `--json` | status, diff, explain, plugin explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). `plugin explain --json` emits the translation `rows`; `explain <path> --json` emits the provenance envelope (and still emits it, with `"unmanaged": true`, on a path nothing renders). |
 | `--agents <list>` | apply, status, diff, reconcile, revert | The single "which agents" selector, with identical parsing everywhere (`*` = all enabled; an empty or unknown value is rejected identically by all five). On `revert` it is a spelling of the positional form — `--agents`, a positional agent, and `--all` stay mutually exclusive. |
 | `--exit-code` | status, diff | Exit `2` when drift (status) / any hunk (diff) exists, `0` when clean — for CI gates. Distinct from the generic error exit `1`; prints no extra error line. Default (unset) always exits `0`. |
-| `--legend` | status | Print a standalone glossary of all nine drift classification statuses (including `clean`/`converged` spelled out separately) and exit, skipping the drift scan. A normal `status` run always hints at this flag. |
+| `--legend` | status | Print a standalone glossary of all nine drift classification statuses (including `clean`/`converged` spelled out separately) and exit, skipping the drift scan. Cannot be combined with `--json`, `--exit-code`, or `--agents` — each would otherwise be silently ignored, so it errors instead. A `status` run that renders the dashboard hints at this flag. |
 | `--header "Name: Value"` | mcp add | Repeatable; http/sse only. Sets a request header (secret refs allowed). |
 | `--color auto\|always\|never` | all | Control ANSI color + bold. Default `auto` (on for a TTY, off when piped/redirected; honors `NO_COLOR`). |
 | `-v`, `--verbose` | all | Verbose logging. In `status`, also expands each collapsed skill directory back to one row per bundled file. |

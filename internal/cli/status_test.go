@@ -625,4 +625,78 @@ func TestStatus_LegendFlag(t *testing.T) {
 	if !strings.Contains(out, "nothing left to reconcile") {
 		t.Errorf("expected the converged entry to explain the fold into clean; got:\n%s", out)
 	}
+	// drift and conflict must read the SAME action a plain `status` run would
+	// show inline (classLegend, reused verbatim by renderClassLegend) — an
+	// earlier draft had --legend claim "apply blocks" for both, contradicting
+	// the inline legend's (correct) "will be overwritten", since apply always
+	// backs up and overwrites rather than refusing to run.
+	if !strings.Contains(out, "will be overwritten (use reconcile to keep the dest edit)") {
+		t.Errorf("expected --legend's drift entry to match classLegend's action text; got:\n%s", out)
+	}
+	if !strings.Contains(out, "will be overwritten (use reconcile to merge the dest edit)") {
+		t.Errorf("expected --legend's conflict entry to match classLegend's action text; got:\n%s", out)
+	}
+}
+
+// TestStatus_LegendFlagNeedsNoProjectState proves --legend's early return
+// actually bypasses project/config loading, rather than merely tolerating an
+// uninitialized directory the way a normal `status` run also does (an
+// uninitialized dir isn't a strong enough control — plain `status` there
+// exits 0 too, with a friendly "no agents enabled" hint). A corrupt
+// agentsync.toml is: plain `status` fails to parse it and errors; `--legend`
+// must still print the glossary and exit 0, since it never reads the file.
+func TestStatus_LegendFlagNeedsNoProjectState(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	cfg := filepath.Join(tmp, ".agentsync", "agentsync.toml")
+	if err := os.WriteFile(cfg, []byte("this is not valid toml {{{"), 0o644); err != nil {
+		t.Fatalf("corrupt config: %v", err)
+	}
+
+	if out, err := runCLI(t, env, "status"); err == nil {
+		t.Fatalf("expected plain status to fail against a corrupt config; got exit 0:\n%s", out)
+	}
+
+	out, err := runCLI(t, env, "status", "--legend")
+	if err != nil {
+		t.Fatalf("status --legend must succeed even with a corrupt config: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "orphan-drifted") {
+		t.Errorf("expected the full glossary despite the corrupt config; got:\n%s", out)
+	}
+}
+
+// TestStatus_LegendRejectsConflictingFlags guards the fix for a bug all four
+// review-loop lenses independently found in round 1: --legend's early return
+// used to run BEFORE flag validation, so `--json`/`--exit-code`/`--agents`
+// were silently accepted and had no effect — `status --json --legend` printed
+// human prose to stdout despite --json's documented "structured payload"
+// contract, and `--agents bogus` didn't even trigger the usual unknown-agent
+// error. Each combination must now be a clear error instead.
+func TestStatus_LegendRejectsConflictingFlags(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"json", []string{"status", "--legend", "--json"}},
+		{"exit-code", []string{"status", "--legend", "--exit-code"}},
+		{"agents", []string{"status", "--legend", "--agents", "claude"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runCLI(t, env, tc.args...)
+			if err == nil {
+				t.Fatalf("expected %v to be rejected; got exit 0:\n%s", tc.args, out)
+			}
+			if !strings.Contains(err.Error(), "--legend") {
+				t.Errorf("expected the error to name --legend; got: %v", err)
+			}
+		})
+	}
 }

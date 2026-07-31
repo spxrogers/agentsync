@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spxrogers/agentsync/internal/drift"
 	"github.com/spxrogers/agentsync/internal/ui"
 )
 
@@ -200,6 +201,11 @@ func TestSkillSummary(t *testing.T) {
 			[]statusItem{{Path: skillMD.Path, Class: "converged"}, ref("a.md", "drift")},
 			"(SKILL.md + 1 file; 1 clean, 1 drift)",
 		},
+		{
+			"uniform converged reads identically to uniform clean",
+			[]statusItem{{Path: skillMD.Path, Class: "converged"}, ref("a.md", "converged")},
+			"(SKILL.md + 1 file)",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -281,6 +287,68 @@ func TestRenderClassLegend(t *testing.T) {
 	} {
 		if !strings.Contains(out, cls) {
 			t.Errorf("expected --legend to mention class %q; got:\n%s", cls, out)
+		}
+	}
+}
+
+// TestRenderStatusText_SkillGroupConvergedFoldsIntoClean is the collapsed-
+// skill-group counterpart to TestRenderStatusText_ConvergedFoldsIntoClean.
+// mostSevereClass ranks converged above clean (classSeverity), so a skill
+// directory whose most-severe member is converged is exactly the path where a
+// forgotten displayClass call would leak the raw word into the group's
+// headline — confirmed by mutation: reverting renderSkillGroup's
+// `displayClass(cls)` back to the bare `cls` it replaced leaves the rest of
+// this package's tests green.
+func TestRenderStatusText_SkillGroupConvergedFoldsIntoClean(t *testing.T) {
+	root := abs("u", ".claude", "skills", "greet")
+	model := statusModel{
+		Agents: []statusAgent{{
+			Agent: "claude",
+			Items: []statusItem{
+				{Path: filepath.Join(root, "SKILL.md"), Class: "converged"},
+				{Path: filepath.Join(root, "references", "notes.md"), Class: "clean"},
+			},
+		}},
+		Summary: map[string]int{"clean": 1, "converged": 1},
+	}
+	var buf bytes.Buffer
+	p := &ui.Printer{Out: &buf}
+	renderStatusText(p, model, false)
+	out := buf.String()
+	if strings.Contains(out, "converged") {
+		t.Errorf("collapsed skill-group headline must never print \"converged\"; got:\n%s", out)
+	}
+	if !strings.Contains(out, "clean") {
+		t.Errorf("expected the collapsed skill-group headline to read clean; got:\n%s", out)
+	}
+}
+
+// TestClassTablesCoverAllDriftClasses is a reflective guard over the hand-
+// maintained per-class tables in this file (classOrder, classSeverity,
+// classMeaning, and — for every class but clean/converged, which it
+// intentionally omits — classLegend). drift.Class is a closed nine-value
+// enum; nothing here would fail if a tenth value were added and silently
+// left out of one of these tables, so this test walks the enum itself
+// (Clean..OrphanDrifted) rather than trusting any of the tables' own key
+// sets, per the "models must stay faithful to their artifacts" rule in
+// CLAUDE.md.
+func TestClassTablesCoverAllDriftClasses(t *testing.T) {
+	for c := drift.Clean; c <= drift.OrphanDrifted; c++ {
+		name := c.String()
+		if !containsString(classOrder, name) {
+			t.Errorf("classOrder is missing drift class %q", name)
+		}
+		if !containsString(classSeverity, name) {
+			t.Errorf("classSeverity is missing drift class %q", name)
+		}
+		if _, ok := classMeaning[name]; !ok {
+			t.Errorf("classMeaning is missing drift class %q", name)
+		}
+		if name == "clean" || name == "converged" {
+			continue // classLegend deliberately omits these two
+		}
+		if _, ok := classLegend[name]; !ok {
+			t.Errorf("classLegend is missing drift class %q", name)
 		}
 	}
 }
