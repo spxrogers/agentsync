@@ -86,7 +86,9 @@ func TestAskDeferralAnswer_BoundedAgainstEndlessGarbage(t *testing.T) {
 		t.Fatalf("exhausting the attempt cap must land on the SAFE branch (defer); got %v", got)
 	}
 	// Five prompts, five re-asks — not one, and not forever.
-	if n := strings.Count(out.String(), "Let claude keep serving"); n != 5 {
+	// Count the ANSWER AFFORDANCE, not the question's wording — this test is
+	// about the loop being bounded, and rewording the prompt should not break it.
+	if n := strings.Count(out.String(), "[Y]es"); n != 5 {
 		t.Errorf("expected the documented 5-attempt cap, saw %d prompts", n)
 	}
 }

@@ -293,9 +293,10 @@ func (r TranslationReport) PrintJSON(w io.Writer) error {
 
 // BuildReport constructs a TranslationReport from the canonical model and a
 // RenderPlan: one row per plugin (c.Plugins) × agent. Each row carries the
-// per-agent component inventory (countMCPServers / countLSPServers honour
-// enabled+agent targeting; commands/skills/subagents/hooks are model totals) and
-// the skips from plan.PerAgent[agent].Skips.
+// per-agent component inventory (every kind honours the providing
+// plugin's `agents`/`native_agents` gates; MCP/LSP additionally honour each
+// server's own enabled+agents targeting) and the skips from
+// plan.PerAgent[agent].Skips.
 //
 // coverage = full when skips==0; otherwise partial when the adapter still
 // rendered something for the agent (plan ops non-empty), none when every hosted
@@ -309,7 +310,8 @@ func (r TranslationReport) PrintJSON(w io.Writer) error {
 // projected canonical is flattened with no origin tag. Attribution is therefore
 // the caller's choice of what model+plan to pass:
 //   - apply passes the whole flattened model, so every plugin row carries
-//     the same global counts/skips (the documented summary behavior).
+//     the same global counts/skips for the components that TARGET the agent
+//     (the documented summary behavior).
 //   - `explain <id>` re-projects ONE plugin in isolation
 //     (marketplace.ProjectInstalled) and passes a model+plan holding only that
 //     plugin's components, so its row reflects that plugin alone.

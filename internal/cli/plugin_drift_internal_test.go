@@ -124,6 +124,24 @@ func TestDuplicatedNativePlugins_IgnoresUndeclaredPlugins(t *testing.T) {
 	}
 }
 
+// TestNativePluginOwners_DedupesPerAgent pins the dedupe. One agent can report
+// the same plugin NAME from two marketplaces, and the result is written into
+// plugins/<id>.toml — usually a committed dotfiles repo — so a duplicated entry
+// (`native_agents = ["claude","claude"]`) would be committed and shown back to
+// the user on every subsequent install summary.
+func TestNativePluginOwners_DedupesPerAgent(t *testing.T) {
+	testenv.RequireContainer(t)
+	reg := adapter.NewRegistry()
+	// alsoNative repeats "toolkit", i.e. the same plugin name a second time from
+	// this one agent — what two marketplaces carrying the same name looks like.
+	if err := reg.Register(&fakeIngester{name: "claude", enabled: true, alsoNative: []string{"toolkit"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := nativePluginOwners(reg)["toolkit"]; len(got) != 1 {
+		t.Fatalf("owners = %v, want one entry per AGENT", got)
+	}
+}
+
 // TestNativePluginOwners_ProbesEveryIngester pins the breadth of the probe that
 // seeds `native_agents`. Restricting it to the agent being imported FROM passed
 // the entire suite: no fixture installs one plugin natively in two harnesses,

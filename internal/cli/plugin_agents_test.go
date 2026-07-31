@@ -727,4 +727,32 @@ func TestProjectScope_NativeAgentsIsHonoured(t *testing.T) {
 		t.Fatalf("project apply after deferring: %v\n%s", err, out)
 	}
 	mustNotExist(t, "project-scope plugin subagent", projected)
+
+	// The two pins now DIVERGE: the project defers to claude, the user pin does
+	// not. project.Merge never overlays Plugins, so a duplicate check reading the
+	// merged canonical sees the USER pin while the render above honoured the
+	// PROJECT one — warning about a duplicate this repo does not have. status at
+	// project scope must read what project scope renders from.
+	writeClaudeSettings(t, tmpHome, directoryMarketplaceSettings("fanout-mp", mpDir, "toolkit"))
+	out, err := runCLI(t, env, "status", "--scope", "project", "--project", proj)
+	if err != nil {
+		t.Fatalf("project status: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "projected there by agentsync") {
+		t.Errorf("project scope defers to claude, so status must not report a duplicate; got:\n%s", out)
+	}
+
+	// And the converse: drop the PROJECT deferral, and the duplicate is real
+	// again — proving the assertion above is about the pin, not about status
+	// having quietly stopped reporting.
+	if err := os.WriteFile(projPin, []byte(pin), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runCLI(t, env, "status", "--scope", "project", "--project", proj)
+	if err != nil {
+		t.Fatalf("project status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "projected there by agentsync") {
+		t.Errorf("with no project deferral the duplicate is real; status should say so; got:\n%s", out)
+	}
 }

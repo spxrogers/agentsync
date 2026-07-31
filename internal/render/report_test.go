@@ -711,6 +711,12 @@ func TestBuildReport_NotTargetedRows(t *testing.T) {
 				t.Fatalf("expected 1 row, got %d", len(report.Rows))
 			}
 			row := report.Rows[0]
+			// The row's own Agent field, not just the printed line: it is a
+			// --json field, and blanking it survived a mutation that the
+			// PrintText assertion could not see.
+			if row.Agent != tc.agent {
+				t.Errorf("Agent = %q, want %q", row.Agent, tc.agent)
+			}
 			if row.Coverage != tc.wantCoverage {
 				t.Errorf("Coverage = %q, want %q", row.Coverage, tc.wantCoverage)
 			}
