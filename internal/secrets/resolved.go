@@ -62,8 +62,12 @@ func (r Resolved) Canonical() source.Canonical { return r.c }
 // Hand-authored components (no Plugin stamp) always survive.
 //
 // It is the render-side entry to source.FilterForAgent, which holds the actual
-// rule (import's capture-refusal filter is the other caller — the two must agree
-// exactly). This wrapper exists for a fence reason and a design reason:
+// rule and has this as its ONLY caller. Note that import's capture-refusal
+// filter deliberately does NOT narrow the same way — its refusal set is wider
+// than the render set on purpose, because the destination can still hold
+// un-reclaimed output from before a deferral was recorded. Do not "restore
+// symmetry" between the two; see source.FilterForAgent. This wrapper exists for
+// a fence reason and a design reason:
 //
 //   - Fence: render.Plan cannot reach the underlying source.Canonical (the
 //     secrets.Resolved.Canonical forbidigo rule confines that to adapter Render),

@@ -537,4 +537,69 @@ func TestDoctor_WarnsWhenAgentAlsoInstallsThePluginItself(t *testing.T) {
 	if !strings.Contains(out, "also projected by agentsync") || !strings.Contains(out, "native_agents") {
 		t.Errorf("doctor should report the duplicate and name the remedy; got:\n%s", out)
 	}
+
+	// Recording the deferral resolves it. Without this phase the test would pass
+	// for a doctor that warned unconditionally once any plugin was declared.
+	tomlPath := filepath.Join(tmp, ".agentsync", "plugins", "toolkit.toml")
+	deferred := mustReadFile(t, tomlPath) + "\nnative_agents = ['claude']\n"
+	if err := os.WriteFile(tomlPath, []byte(deferred), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runCLI(t, env, "doctor")
+	if err != nil {
+		t.Fatalf("doctor: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "also projected by agentsync") {
+		t.Errorf("recording the deferral should clear doctor's warning; got:\n%s", out)
+	}
+}
+
+// TestPluginExplain_ReportsDeferralRatherThanFailure pins the OTHER renderer of
+// a translation-report row. `plugin explain` has its own emit path, and it fell
+// through to the generic failure mark: a plugin the user had deliberately
+// deferred printed as a red "✗ native  no components" — indistinguishable from
+// an adapter that could not translate anything, and precisely the "why did this
+// render nothing?" confusion the row exists to answer.
+//
+// The wording lives on render.PluginRow.TargetingNote so the two renderers
+// cannot drift; this test is the end-to-end proof that the explain path uses it.
+func TestPluginExplain_ReportsDeferralRatherThanFailure(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	if _, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatalf("agent add codex: %v", err)
+	}
+	mpDir := makeFanOutMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("fanout-mp", mpDir, "toolkit"))
+	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+		t.Fatalf("import claude:plugin: %v\n%s", err, out)
+	}
+
+	out, err := runCLI(t, env, "plugin", "explain", "toolkit")
+	if err != nil {
+		t.Fatalf("plugin explain: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "served natively") {
+		t.Errorf("explain should say WHY claude gets nothing; got:\n%s", out)
+	}
+	// The failure vocabulary must not appear for a deliberate deferral. "✗" is
+	// the adapter-could-not-translate mark; using it here is the bug.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "claude") && strings.Contains(line, "✗") {
+			t.Errorf("a deferred agent was reported as a failure: %q", line)
+		}
+	}
+	// Codex still receives the plugin, so its row is an ordinary coverage row —
+	// the positive control that explain did not simply stop reporting.
+	if !strings.Contains(out, "codex") {
+		t.Errorf("explain should still report the agents that DO receive the plugin; got:\n%s", out)
+	}
+
+	// The --json contract carries the machine-readable form of the same fact.
+	jsonOut, err := runCLI(t, env, "plugin", "explain", "toolkit", "--json")
+	if err != nil {
+		t.Fatalf("plugin explain --json: %v\n%s", err, jsonOut)
+	}
+	if !strings.Contains(jsonOut, `"notTargeted": true`) || !strings.Contains(jsonOut, `"coverage": "native"`) {
+		t.Errorf("--json should expose notTargeted + the native coverage value; got:\n%s", jsonOut)
+	}
 }

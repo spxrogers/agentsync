@@ -1988,10 +1988,15 @@ func dryRunNativeAgentsNote(home, plName string, candidates []string) string {
 		return ""
 	}
 	if !pluginNativeAgentsUnset(home, plName) {
-		if existing, err := readPluginTOML(filepath.Join(home, "plugins", plName+".toml")); err == nil {
-			return nativeAgentsSuffix(existing.Plugin.NativeAgents)
+		existing, err := readPluginTOML(filepath.Join(home, "plugins", plName+".toml"))
+		if err != nil {
+			// Unreadable but present: installPluginInto refuses this outright
+			// rather than resetting lifecycle fields, so the preview must say the
+			// real run will fail — not print a clean line for an import that is
+			// about to be skipped.
+			return " (existing plugins/" + plName + ".toml is unreadable — the real import will skip this plugin)"
 		}
-		return ""
+		return nativeAgentsSuffix(existing.Plugin.NativeAgents)
 	}
 	list := sanitizedList(candidates)
 	return fmt.Sprintf(" (%s %s this plugin natively — the real import will ask whether to defer to %s)",

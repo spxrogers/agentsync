@@ -275,6 +275,16 @@ func emitReportBody(w io.Writer, p *ui.Printer, r render.TranslationReport) {
 			// shows "(disabled)", so this row would just duplicate that.
 			continue
 		}
+		// A row that rendered nothing by CONFIGURATION is not a failure, and must
+		// not print like one: falling through to the generic mark rendered a
+		// deliberately deferred plugin as a red "✗ native  no components", which
+		// reads as the very "why did this render nothing?" confusion the row
+		// exists to answer. render owns the wording (PluginRow.TargetingNote) so
+		// this site and the translation report cannot drift.
+		if note := row.TargetingNote(); note != "" {
+			fmt.Fprintf(w, "  %s %s\n", p.Bold(ui.Pad(row.Agent, 10)), p.Faint(note))
+			continue
+		}
 		glyph, color := coverageGlyphAndColor(p, row.Coverage)
 		// Column order matches apply's translation report: agent name (bold
 		// padded), then the colored "<glyph> <coverage>" mark (padded plain
@@ -440,9 +450,9 @@ func skipLabel(s render.SkipDetail) string {
 // helper (matches the existing translation-report vocabulary).
 func coverageGlyphAndColor(p *ui.Printer, cov string) (string, func(string) string) {
 	switch cov {
-	case "full":
+	case render.CoverageFull:
 		return ui.GlyphOK, p.Green
-	case "partial":
+	case render.CoveragePartial:
 		return ui.GlyphPartial, p.Yellow
 	default:
 		return ui.GlyphErr, p.Red

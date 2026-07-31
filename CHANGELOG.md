@@ -42,6 +42,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`agentsync plugin explain` no longer reports a deferred plugin as a
+  failure.** It renders translation-report rows through its own path, which fell
+  through to the generic mark and printed a red `✗ native  no components` for a
+  plugin the user had deliberately deferred — indistinguishable from an adapter
+  that could translate nothing. The wording now lives on
+  `render.PluginRow.TargetingNote()`, and the `Coverage` vocabulary is exported,
+  so the two renderers cannot drift on a string literal.
 - **`native_agents = []` ("defer to nobody") now survives a rewrite.** The field
   was a plain slice with `omitempty`, so an explicitly empty list decoded
   correctly — the prompt stayed quiet — and was then erased by the next write,

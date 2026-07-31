@@ -201,12 +201,13 @@ func TestResolveNativeAgents(t *testing.T) {
 	testenv.RequireContainer(t)
 	candidates := []string{"claude"}
 	cases := []struct {
-		name      string
-		existing  string // plugins/toolkit.toml content; "" = no file
-		dryRun    bool
-		reply     []string // what the stubbed prompt answers
-		wantAsked bool
-		want      []string
+		name         string
+		existing     string // plugins/toolkit.toml content; "" = no file
+		noCandidates bool   // pass an empty candidate list rather than the default
+		dryRun       bool
+		reply        []string // what the stubbed prompt answers
+		wantAsked    bool
+		want         []string
 	}{
 		{
 			name:  "first install, accepted — records the deferral",
@@ -236,8 +237,9 @@ func TestResolveNativeAgents(t *testing.T) {
 			dryRun: true, reply: nil, wantAsked: false, want: candidates,
 		},
 		{
-			name:  "no candidates — nothing to defer, nothing to ask",
-			reply: nil, wantAsked: false, want: nil,
+			name:         "no candidates — nothing to defer, nothing to ask",
+			noCandidates: true,
+			reply:        nil, wantAsked: false, want: nil,
 		},
 	}
 	for _, tc := range cases {
@@ -250,7 +252,7 @@ func TestResolveNativeAgents(t *testing.T) {
 			stubNativeAgentsPrompter(t, tc.reply, &asked)
 
 			in := candidates
-			if tc.name == "no candidates — nothing to defer, nothing to ask" {
+			if tc.noCandidates {
 				in = nil
 			}
 			got := resolveNativeAgents(io, home, "toolkit", in)
@@ -358,6 +360,114 @@ func TestPluginTOML_NativeAgentsRoundTrip(t *testing.T) {
 			}
 			if !strings.Contains(string(second), tc.wantKey) {
 				t.Fatalf("rewrite lost the recorded decision; want %q, got:\n%s", tc.wantKey, second)
+			}
+		})
+	}
+}
+
+// TestNativeAgentsSuffix_SanitizesAndStaysQuiet pins both halves of the item-line
+// suffix. The values are read back from plugins/<id>.toml — a hand-editable file
+// in a synced dotfiles repo — and item() sanitizes only the path it is given,
+// appending this suffix verbatim, so an ESC pasted into that TOML would reach the
+// terminal. The quiet branches matter too: a non-nil EMPTY list is the same
+// OUTCOME as no deferral, and the item line reports outcomes.
+func TestNativeAgentsSuffix_SanitizesAndStaysQuiet(t *testing.T) {
+	testenv.RequireContainer(t)
+	empty := []string{}
+	hostile := []string{"claude\x1b[31m", "co\x1b]0;pwn\adex"}
+	populated := []string{"claude"}
+
+	if got := nativeAgentsSuffix(nil); got != "" {
+		t.Errorf("no deferral must print nothing; got %q", got)
+	}
+	if got := nativeAgentsSuffix(&empty); got != "" {
+		t.Errorf("an empty deferral defers to nobody — same outcome, same silence; got %q", got)
+	}
+	if got := nativeAgentsSuffix(&populated); !strings.Contains(got, "native_agents=[claude]") {
+		t.Errorf("a real deferral must name the agents; got %q", got)
+	}
+	got := nativeAgentsSuffix(&hostile)
+	if strings.ContainsAny(got, "\x1b\a") {
+		t.Errorf("a control byte from a hand-edited TOML reached the suffix: %q", got)
+	}
+}
+
+// TestKeptLifecycleSummary_Sanitizes covers the sibling display site. Both read
+// the same user-editable file, and the pair is exactly where "one site
+// remembered, the other forgot" happens.
+func TestKeptLifecycleSummary_Sanitizes(t *testing.T) {
+	testenv.RequireContainer(t)
+	hostile := []string{"claude\x1b[31m"}
+	got := keptLifecycleSummary(pluginTOMLSpec{
+		Agents:       []string{"codex\x1b[32m"},
+		NativeAgents: &hostile,
+		Update:       "track",
+	})
+	if strings.ContainsAny(got, "\x1b\a") {
+		t.Errorf("a control byte from a hand-edited TOML reached the install summary: %q", got)
+	}
+	if !strings.Contains(got, "native_agents=[") || !strings.Contains(got, "agents=[") {
+		t.Errorf("both preserved lists should still be reported; got %q", got)
+	}
+}
+
+// TestDryRunNativeAgentsNote covers the preview's three states. A dry run must
+// never ASSERT a deferral, because the real run asks and the user may decline —
+// advertising an outcome the real run will not produce is worse than saying
+// nothing. Equally it must not stay silent when the real run will not ask at all.
+func TestDryRunNativeAgentsNote(t *testing.T) {
+	testenv.RequireContainer(t)
+	cases := []struct {
+		name       string
+		existing   string
+		candidates []string
+		wantSubstr string // "" means the note must be empty
+		wantAbsent string
+	}{
+		{
+			name: "nothing to defer", candidates: nil, wantSubstr: "",
+		},
+		{
+			name:       "no key yet — the real run will ask, so say that, do not assert it",
+			candidates: []string{"claude"},
+			wantSubstr: "will ask",
+			wantAbsent: "native_agents=[claude]",
+		},
+		{
+			name:       "already recorded — the real run preserves it, so preview the real value",
+			existing:   "[plugin]\nid = \"toolkit@mp\"\nnative_agents = [\"claude\"]\n",
+			candidates: []string{"claude"},
+			wantSubstr: "native_agents=[claude]",
+		},
+		{
+			name:       "recorded as empty — defers to nobody, so nothing to report",
+			existing:   "[plugin]\nid = \"toolkit@mp\"\nnative_agents = []\n",
+			candidates: []string{"claude"},
+			wantSubstr: "",
+		},
+		{
+			name:       "unreadable — the real run refuses, so the preview must not look clean",
+			existing:   "[plugin\nid = broken",
+			candidates: []string{"claude"},
+			wantSubstr: "will skip this plugin",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			writePluginTOMLFixture(t, home, "toolkit", tc.existing)
+			got := dryRunNativeAgentsNote(home, "toolkit", tc.candidates)
+			if tc.wantSubstr == "" {
+				if got != "" {
+					t.Fatalf("expected no note, got %q", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.wantSubstr) {
+				t.Fatalf("note = %q, want it to contain %q", got, tc.wantSubstr)
+			}
+			if tc.wantAbsent != "" && strings.Contains(got, tc.wantAbsent) {
+				t.Errorf("the preview asserted an outcome the prompt may decline: %q", got)
 			}
 		})
 	}

@@ -155,21 +155,13 @@ func keptLifecycleSummary(spec pluginTOMLSpec) string {
 	var parts []string
 	defaultAgents := len(spec.Agents) == 1 && spec.Agents[0] == "*"
 	if !defaultAgents {
-		sanitized := make([]string, len(spec.Agents))
-		for i, a := range spec.Agents {
-			sanitized[i] = ui.Sanitize(a)
-		}
-		parts = append(parts, fmt.Sprintf("agents=[%s]", strings.Join(sanitized, ",")))
+		parts = append(parts, fmt.Sprintf("agents=[%s]", strings.Join(sanitizedList(spec.Agents), ",")))
 	}
 	if spec.NativeAgents != nil {
 		// A non-nil EMPTY list is reported too: "defer to nobody" is a deliberate
 		// decision the user recorded, and a re-install preserving it is exactly
 		// what this summary exists to surface.
-		sanitized := make([]string, len(*spec.NativeAgents))
-		for i, a := range *spec.NativeAgents {
-			sanitized[i] = ui.Sanitize(a)
-		}
-		parts = append(parts, fmt.Sprintf("native_agents=[%s]", strings.Join(sanitized, ",")))
+		parts = append(parts, fmt.Sprintf("native_agents=[%s]", strings.Join(sanitizedList(*spec.NativeAgents), ",")))
 	}
 	if spec.Update != "track" {
 		parts = append(parts, fmt.Sprintf("update=%s", ui.Sanitize(spec.Update)))

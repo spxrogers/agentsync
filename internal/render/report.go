@@ -71,6 +71,29 @@ type PluginRow struct {
 	NotTargeted bool `json:"notTargeted,omitempty"`
 }
 
+// TargetingNote explains, for a row that rendered nothing by configuration, WHY
+// — or returns "" for an ordinary coverage row.
+//
+// It lives on the row rather than at each print site because there are two print
+// sites in two packages (this package's translation report and
+// `internal/cli`'s `plugin explain`), and the second one silently fell through
+// to the generic "✗ <coverage>" red mark: a plugin the user had deliberately
+// deferred was reported in the same red as one the adapter could not translate.
+// A single accessor makes that class of drift a compile-time concern instead of
+// a matching-on-literals one.
+//
+// The two reasons are kept distinct because their remedies are: widen `agents`
+// versus uninstall the agent's own copy of the plugin.
+func (r PluginRow) TargetingNote() string {
+	if !r.NotTargeted {
+		return ""
+	}
+	if r.Coverage == CoverageNative {
+		return "(served natively by this agent — listed in `native_agents`)"
+	}
+	return "(not targeted by this plugin's `agents` allowlist)"
+}
+
 // SkipDetail names one component an adapter could not translate, with the
 // human reason it was skipped. It mirrors adapter.Skip but carries JSON tags
 // for the report's machine-readable surface.
@@ -117,22 +140,31 @@ type TranslationReport struct {
 	Rows []PluginRow `json:"rows"`
 }
 
-// Coverage values that are not a render outcome: the plugin contributed nothing
-// to this agent by CONFIGURATION, not because the adapter could not translate
-// it. They are constants so the producer (BuildReport) and the consumer
-// (printText) cannot drift on a string literal — the bug that shipped the
-// hyphen-less "not targeted" in one place and matched "native" in another.
+// The Coverage vocabulary. These are EXPORTED because they are the `--json`
+// contract and because `internal/cli` renders the same rows a second way
+// (`plugin explain`) — an unexported constant there means matching on a bare
+// literal, which is exactly how `plugin explain` came to print a red "✗ native"
+// for a plugin that was deliberately not targeted. One owner, no literals.
+//
+// The first three are render OUTCOMES (how much of what the plugin ships this
+// agent got). The last three mean the plugin contributed nothing here by
+// CONFIGURATION, not because the adapter could not translate it — pair them with
+// the Disabled / NotTargeted booleans, which are what code should branch on.
 const (
-	coverageNotTargeted = "not-targeted"
-	coverageNative      = "native"
+	CoverageFull        = "full"
+	CoveragePartial     = "partial"
+	CoverageNone        = "none"
+	CoverageDisabled    = "disabled"
+	CoverageNotTargeted = "not-targeted"
+	CoverageNative      = "native"
 )
 
 // coverageMark converts a Coverage string to its display symbol.
 func coverageMark(cov string) string {
 	switch cov {
-	case "full":
+	case CoverageFull:
 		return "✓ full  "
-	case "partial":
+	case CoveragePartial:
 		return "◐ partial"
 	default:
 		return "✗ none  "
@@ -214,11 +246,7 @@ func (r TranslationReport) printText(w io.Writer, p *ui.Printer) {
 				}
 				continue
 			}
-			if row.NotTargeted {
-				note := "(not targeted by this plugin's `agents` allowlist)"
-				if row.Coverage == coverageNative {
-					note = "(served natively by this agent — listed in `native_agents`)"
-				}
+			if note := row.TargetingNote(); note != "" {
 				if p != nil {
 					note = p.Faint(note)
 				}
@@ -241,9 +269,9 @@ func (r TranslationReport) printText(w io.Writer, p *ui.Printer) {
 // run doesn't shift the column that follows.
 func colorCoverage(p *ui.Printer, cov, mark string) string {
 	switch cov {
-	case "full":
+	case CoverageFull:
 		return p.Green(mark)
-	case "partial":
+	case CoveragePartial:
 		return p.Yellow(mark)
 	default:
 		return p.Red(mark)
@@ -313,7 +341,7 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 		if plug.Plugin.Disabled {
 			report.Rows = append(report.Rows, PluginRow{
 				Plugin:   label,
-				Coverage: "disabled",
+				Coverage: CoverageDisabled,
 				Disabled: true,
 			})
 			continue
@@ -333,9 +361,9 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 				// made, a deferral says the agent installs this plugin itself —
 				// and the remedies differ (widen `agents` vs. uninstall the
 				// native copy and drop the `native_agents` entry).
-				coverage := coverageNative
+				coverage := CoverageNative
 				if !source.AgentTargeted(plug.Plugin.Agents, agName) {
-					coverage = coverageNotTargeted
+					coverage = CoverageNotTargeted
 				}
 				report.Rows = append(report.Rows, PluginRow{
 					Plugin:      label,

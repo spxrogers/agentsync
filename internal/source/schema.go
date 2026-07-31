@@ -135,6 +135,17 @@ type MCPServer struct {
 	// PluginTargetsAgent (provenance.go) for why they are carried per COMPONENT
 	// rather than looked up from Canonical.Plugins, and why PluginAgents is
 	// separate from Server.Agents (the two compose as an intersection).
+	//
+	// Collapsing these (with Plugin/BaseName) into one PluginProvenance struct
+	// across all six component types was considered and deferred. The honest
+	// reason is churn: every read site would change, for no behavioural gain.
+	// There IS a secondary argument, but only for the structs the secret-field
+	// guard walks — MCPServer, LSPServer, Hook. TestNewSecretFieldGuard's
+	// isStringShaped returns false for a struct and the loop does not recurse,
+	// so a nested provenance struct's string fields would escape classification
+	// on exactly those three. It does NOT apply to Skill/Subagent/Command, which
+	// the guard does not walk at all. If this is ever collapsed, teach
+	// isStringShaped to recurse first.
 	PluginAgents       []string `toml:"-"`
 	PluginNativeAgents []string `toml:"-"`
 }
@@ -238,6 +249,12 @@ type PluginSpec struct {
 	//
 	// `import` populates it by probing each PluginIngester adapter; the user
 	// edits it by hand after uninstalling the native copy.
+	//
+	// Entries are NOT validated against the agent registry. A typo defers to
+	// nobody, and for an agent whose adapter implements PluginIngester (claude,
+	// codex) the symptom surfaces: the plugin still projects there, so
+	// status/doctor report it as installed-and-projected. For any other agent
+	// there is no such signal — a misspelled entry is simply inert.
 	// It is a POINTER so the three on-disk states stay distinguishable, per the
 	// "models must stay faithful to their on-disk artifacts" rule: an ABSENT key
 	// (nil — never decided, so `import` asks), an EXPLICITLY EMPTY list

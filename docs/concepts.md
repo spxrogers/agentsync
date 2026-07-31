@@ -221,6 +221,13 @@ does not project plugins or print a coverage report):
 - **◐ projected** — lossy but defensible translation, explicitly reported.
 - **✗ skipped** — no honest translation exists; logged so it's never silent.
 
+A row can also report that a plugin contributed nothing to an agent by
+*configuration* rather than by failed translation — `disabled` for a plugin
+turned off in this scope, `not-targeted` when its `agents` allowlist excludes the
+agent, and `native` when its `native_agents` list defers to that agent's own
+plugin manager. These are deliberate outcomes, so they are never rendered in the
+✗ failure vocabulary.
+
 ### Polling (the networked verb of the daily loop)
 `agentsync plugin outdated` is the command that touches the network in the daily
 loop: it polls marketplaces, refreshes the cache, and recomputes version pins.
