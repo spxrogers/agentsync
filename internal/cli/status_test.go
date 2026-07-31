@@ -580,6 +580,13 @@ func TestStatus_HintsAtLegendFlag(t *testing.T) {
 	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
 		t.Fatalf("agent add: %v", err)
 	}
+	// The hint is gated on there being a summary to explain (see
+	// TestStatus_HintSuppressedWithNoTrackedItems), so this run needs at
+	// least one tracked item — a bare `agent add` + `apply` with no
+	// components declared renders nothing at all ("(no tracked items)").
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
 	if _, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -598,6 +605,36 @@ func TestStatus_HintsAtLegendFlag(t *testing.T) {
 	}
 	if strings.Contains(jsonOut, "--legend") {
 		t.Errorf("--json must not include the human hint; got:\n%s", jsonOut)
+	}
+}
+
+// TestStatus_HintSuppressedWithNoTrackedItems is round 2's fix for a concrete
+// case the adversarial lens found: an enabled agent with nothing declared
+// yet renders "(no tracked items)", and an unconditional --legend hint would
+// point at classification words the report never showed. `agent add` with no
+// components (no memory, MCP, skills, …) declared is exactly that case.
+func TestStatus_HintSuppressedWithNoTrackedItems(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatalf("agent add: %v", err)
+	}
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "no tracked items") {
+		t.Fatalf("expected this scenario to render nothing tracked (test setup assumption broke); got:\n%s", out)
+	}
+	if strings.Contains(out, "--legend") {
+		t.Errorf("expected no --legend hint when nothing was tracked; got:\n%s", out)
 	}
 }
 

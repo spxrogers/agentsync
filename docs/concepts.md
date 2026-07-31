@@ -88,13 +88,19 @@ classifies the item into exactly one of nine cases:
 |---|---|---|
 | **clean** | all three agree | nothing |
 | **pending** | you changed the source | write the new source |
-| **drift** | the destination was edited | block; suggest `reconcile` |
+| **drift** | the destination was edited | overwrite it (back up first); `reconcile` is how you keep the edit instead |
 | **converged** | source and dest changed to the *same* value | refresh state silently |
-| **conflict** | source and dest changed to *different* values | block; require `reconcile` |
+| **conflict** | source and dest changed to *different* values | overwrite it (back up first); `reconcile` is how you merge the edit instead |
 | **new** | brand-new item, nothing on disk | create |
 | **foreign-collision** | a pre-existing file agentsync didn't write | back it up, then write |
 | **orphan** | removed from source, still on disk | delete |
-| **orphan-drifted** | removed from source, but the dest was also edited | warn; ask for explicit action |
+| **orphan-drifted** | removed from source, but the dest was also edited | delete (back up first) — the edit is lost unless you saw it in `status`/`reconcile` first |
+
+`apply` never blocks or prompts on any of these — it always finishes the run,
+backing up before it overwrites or deletes whenever a class above says an edit
+would otherwise be lost. `status`/`diff`/`reconcile` are how you catch a
+drift/conflict/orphan-drifted item BEFORE the next `apply` acts on it, not a
+gate `apply` itself enforces.
 
 Granularity is **per-key** for structured files (JSON/JSONC/TOML, tracked by
 JSON pointer) and **per-file** for everything else. Keys agentsync never wrote

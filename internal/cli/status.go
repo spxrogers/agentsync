@@ -79,7 +79,7 @@ func statusHasDrift(m statusModel) bool {
 		if n == 0 {
 			continue
 		}
-		if cls == "clean" || cls == "converged" {
+		if cls == drift.Clean.String() || cls == drift.Converged.String() {
 			continue
 		}
 		return true
@@ -109,7 +109,11 @@ func newStatusCmd() *cobra.Command {
 			// otherwise silently break — --json (a script expecting a parseable
 			// payload would get prose on stdout), --exit-code (would always see
 			// exit 0, masking real drift), and --agents (would look accepted but
-			// have no effect) — rather than accept-and-ignore them.
+			// have no effect) — rather than accept-and-ignore them. --scope/
+			// --project are deliberately left alone here: unlike the three
+			// above, they have no status-specific contract to silently break —
+			// the glossary is the same nine classes regardless of scope — so
+			// accepting and ignoring them is correct, not a footgun.
 			if legend {
 				switch {
 				case jsonOut:
@@ -370,9 +374,10 @@ type skillGroup struct {
 // independently but landed on the same value, vs. clean = neither changed) is
 // bookkeeping that matters to the internal classifier and `status --json`, not
 // to someone scanning the report. `status --legend` still explains converged
-// on its own — see classLegendFull. Compares against drift.Converged/drift.Clean's
-// own String() rather than string literals, so a rename of either constant
-// can't silently break the fold while every test stays green.
+// on its own — see classMeaning and renderClassLegend. Compares against
+// drift.Converged/drift.Clean's own String() rather than string literals, so
+// a rename of either constant can't silently break the fold while every test
+// stays green.
 //
 // explain_print.go's driftStyled deliberately does NOT apply this fold — it
 // reuses the classifier's vocabulary verbatim by design (see its doc comment)
@@ -391,7 +396,7 @@ func displayClass(cls string) string {
 // = an orphan needing a decision.
 func styleClass(p *ui.Printer, cls string) (glyph string, color func(string) string) {
 	switch cls {
-	case "clean", "converged":
+	case drift.Clean.String(), drift.Converged.String():
 		return ui.GlyphOK, p.Green
 	case "new", "pending":
 		return ui.GlyphArrow, p.Cyan
@@ -450,8 +455,14 @@ func renderStatusText(p *ui.Printer, model statusModel, verbose bool) {
 		fmt.Fprintln(p.Out, p.Faint(fmt.Sprintf("%d skill %s collapsed; pass --verbose to list every bundled file.",
 			collapsed, plural(collapsed, "directory", "directories"))))
 	}
-	fmt.Fprintln(p.Out, "")
-	fmt.Fprintln(p.Out, p.Faint("Run `agentsync status --legend` for a brief on each classification status."))
+	// Gated on there being a summary to explain — an enabled agent that
+	// renders nothing prints only "(no tracked items)" above, and a hint
+	// about classification words that never appeared would be pointing at
+	// nothing.
+	if len(segs) > 0 {
+		fmt.Fprintln(p.Out, "")
+		fmt.Fprintln(p.Out, p.Faint("Run `agentsync status --legend` for a brief on each classification status."))
+	}
 }
 
 // renderAgentItems prints one agent's tracked items. In verbose mode every item
@@ -749,7 +760,7 @@ func renderClassLegend(p *ui.Printer) {
 		case drift.Clean.String():
 			action = "apply does nothing"
 		case drift.Converged.String():
-			action = "apply just refreshes state silently — a normal `status` run shows this as \"clean\", since there's nothing left to reconcile"
+			action = "apply just refreshes state silently (a normal `status` run shows this as \"clean\", since there's nothing left to reconcile)"
 		default:
 			action = classLegend[cls]
 		}

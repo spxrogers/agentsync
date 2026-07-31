@@ -289,6 +289,22 @@ func TestRenderClassLegend(t *testing.T) {
 			t.Errorf("expected --legend to mention class %q; got:\n%s", cls, out)
 		}
 	}
+	// The class WORD alone survives a broken "meaning — action" composition
+	// (it's printed unconditionally as part of the row label), so pin the
+	// actual line content too: every class's classMeaning text must appear
+	// verbatim, and every class classLegend covers must reuse ITS action text
+	// verbatim — the exact coupling round 2 introduced to stop the inline
+	// legend and --legend from silently disagreeing again.
+	for cls, meaning := range classMeaning {
+		if !strings.Contains(out, meaning) {
+			t.Errorf("expected --legend's %q line to contain its meaning %q; got:\n%s", cls, meaning, out)
+		}
+	}
+	for cls, action := range classLegend {
+		if !strings.Contains(out, action) {
+			t.Errorf("expected --legend's %q line to reuse classLegend's action text %q verbatim; got:\n%s", cls, action, out)
+		}
+	}
 }
 
 // TestRenderStatusText_SkillGroupConvergedFoldsIntoClean is the collapsed-
@@ -326,14 +342,17 @@ func TestRenderStatusText_SkillGroupConvergedFoldsIntoClean(t *testing.T) {
 // TestClassTablesCoverAllDriftClasses is a reflective guard over the hand-
 // maintained per-class tables in this file (classOrder, classSeverity,
 // classMeaning, and — for every class but clean/converged, which it
-// intentionally omits — classLegend). drift.Class is a closed nine-value
-// enum; nothing here would fail if a tenth value were added and silently
-// left out of one of these tables, so this test walks the enum itself
-// (Clean..OrphanDrifted) rather than trusting any of the tables' own key
-// sets, per the "models must stay faithful to their artifacts" rule in
-// CLAUDE.md.
+// intentionally omits — classLegend). drift.Class is a closed enum whose
+// String() falls back to "unknown" past its last defined value (see
+// classifier.go); nothing here would fail if a tenth value were added and
+// silently left out of one of these tables, so this test walks the enum
+// itself by that "unknown" sentinel — NOT by drift.OrphanDrifted, which
+// would only catch a class inserted mid-list, not one appended after it
+// (the way a new class is actually added) — rather than trusting any of the
+// tables' own key sets, per the "models must stay faithful to their
+// artifacts" rule in CLAUDE.md.
 func TestClassTablesCoverAllDriftClasses(t *testing.T) {
-	for c := drift.Clean; c <= drift.OrphanDrifted; c++ {
+	for c := drift.Clean; c.String() != "unknown"; c++ {
 		name := c.String()
 		if !containsString(classOrder, name) {
 			t.Errorf("classOrder is missing drift class %q", name)

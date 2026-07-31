@@ -899,9 +899,10 @@ where neither changed), but both mean apply has nothing to do, so the
 dashboard folds them into one word and one tally. `status --json` keeps the
 real classification. `status --legend` prints a standalone glossary of all
 nine classification statuses (including `clean`/`converged` spelled out
-separately) and exits without running the drift scan; every run that renders
-the dashboard ends with a one-line hint pointing at it (the "no agents
-enabled" short-circuit prints nothing, since there's no report to explain).
+separately) and exits without running the drift scan; a run whose summary has
+anything to explain ends with a one-line hint pointing at it, suppressed
+whenever there's nothing tracked to explain (no agents enabled, or an enabled
+agent that renders nothing yet).
 
 ---
 
