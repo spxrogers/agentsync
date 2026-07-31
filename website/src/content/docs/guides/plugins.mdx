@@ -76,7 +76,7 @@ Two keys in a plugin's TOML decide which agents its components render to:
 [plugin]
 id            = "atlassian@anthropic"
 agents        = ["claude"]   # only fan this plugin out to Claude
-native_agents = []           # agents that install it themselves (see below)
+# native_agents = ["claude"] # OMIT unless an agent installs this itself (see below)
 ```
 
 `agents` is your allowlist — `["*"]`, or omitted, means every enabled agent. It

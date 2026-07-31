@@ -42,10 +42,15 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
-- **`apply`'s translation report no longer over-counts.** `countMCPServers` /
-  `countLSPServers` honoured each server's own `agents` list but not the
-  providing plugin's, so a deferred plugin's servers were counted under another
-  plugin's row for the same agent — reporting "2 mcp" to an agent that got one.
+- **`apply`'s translation report no longer over-counts.** Every per-agent count
+  honours the providing plugin's gates now; previously none did, so a deferred
+  plugin's components were counted under another plugin's row for the same agent
+  — a row could report more commands than its own mcp count reflected.
+- **`status --scope project` reads the project's plugin pin.** `project.Merge`
+  does not overlay `Plugins`, so the duplicate warning was reading the USER
+  pin's `native_agents` while a project-scope render honours the PROJECT one —
+  warning about a duplicate the repo does not have, and staying silent about one
+  it does.
 - **`doctor` no longer warns about agents agentsync does not render to.** It
   passes every registered adapter to the duplicate check (where `status` passes
   its enabled set), and the check itself did not verify the agent was enabled —

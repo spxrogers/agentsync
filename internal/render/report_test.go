@@ -727,10 +727,11 @@ func TestBuildReport_NotTargetedRows(t *testing.T) {
 	}
 }
 
-// TestBuildReport_CoverageOutcomes pins the three RENDER outcomes. Nothing
-// asserted "partial" or "none" anywhere, so the constants promoted for them were
-// unpinned: changing their values passed the whole suite. They are the --json
-// contract, so a silent value change is a silent contract break.
+// TestBuildReport_CoverageOutcomes pins the three RENDER outcomes together with
+// the MARK each prints. Other tests already assert the coverage strings; what
+// nothing covered was the printed vocabulary, so a constant's value could change
+// and only the JSON contract would notice. They are the --json contract too, so
+// a silent value change is a silent contract break.
 func TestBuildReport_CoverageOutcomes(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -786,6 +787,14 @@ func TestBuildReport_CountsHonourPluginTargeting(t *testing.T) {
 		LSPServers: []source.LSPServer{
 			{ID: "alpha-lsp", Plugin: "alpha", PluginAgents: []string{"*"}, PluginNativeAgents: claudeOnly},
 		},
+		// The text kinds and hooks have no per-component allowlist of their own,
+		// so the plugin gate is the ONLY thing that can exclude them — and it was
+		// missed for all four when MCP/LSP were fixed, leaving a row that
+		// reported more commands than its own mcp count reflected.
+		Commands:  []source.Command{{Name: "beta-c", Plugin: "beta", PluginAgents: []string{"*"}}, {Name: "alpha-c", Plugin: "alpha", PluginAgents: []string{"*"}, PluginNativeAgents: claudeOnly}},
+		Skills:    []source.Skill{{Name: "alpha-s", Plugin: "alpha", PluginAgents: []string{"*"}, PluginNativeAgents: claudeOnly}},
+		Subagents: []source.Subagent{{Name: "alpha-a", Plugin: "alpha", PluginAgents: []string{"*"}, PluginNativeAgents: claudeOnly}},
+		Hooks:     []source.Hook{{Event: "PreToolUse", Command: "alpha-h", Plugin: "alpha", PluginAgents: []string{"*"}, PluginNativeAgents: claudeOnly}},
 		Plugins: []source.Plugin{
 			{ID: "beta", Plugin: source.PluginSpec{ID: "beta@mp", Agents: []string{"*"}}},
 		},
@@ -802,6 +811,21 @@ func TestBuildReport_CountsHonourPluginTargeting(t *testing.T) {
 	}
 	if got := report.Rows[0].LSP; got != 0 {
 		t.Errorf("LSP count = %d, want 0 — the only LSP server belongs to the deferred plugin", got)
+	}
+	if got := report.Rows[0].Commands; got != 1 {
+		t.Errorf("Commands count = %d, want 1 — the deferred plugin's command must not be counted", got)
+	}
+	for _, tc := range []struct {
+		kind string
+		got  int
+	}{
+		{"Skills", report.Rows[0].Skills},
+		{"Subagents", report.Rows[0].Subagents},
+		{"Hooks", report.Rows[0].Hooks},
+	} {
+		if tc.got != 0 {
+			t.Errorf("%s count = %d, want 0 — every one belongs to the deferred plugin", tc.kind, tc.got)
+		}
 	}
 }
 
@@ -822,5 +846,13 @@ func TestPrintText_NotTargetedRowsExplainThemselves(t *testing.T) {
 	}
 	if !strings.Contains(got, "`agents` allowlist") {
 		t.Errorf("the allowlist row must name the allowlist as the reason; got:\n%s", got)
+	}
+	// The agent NAME must be on the line. Without this the row says "something
+	// was deferred" without saying for whom — and blanking Agent survived
+	// mutation because nothing here read it.
+	for _, agent := range []string{"claude", "codex"} {
+		if !strings.Contains(got, agent) {
+			t.Errorf("the row must name the agent it is about; %q missing from:\n%s", agent, got)
+		}
 	}
 }

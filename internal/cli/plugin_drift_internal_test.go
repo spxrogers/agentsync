@@ -17,14 +17,24 @@ type fakeIngester struct {
 	adapter.Adapter
 	name    string
 	enabled bool
+	// alsoNative are extra plugins this agent installs natively, used to reach
+	// the per-plugin gates: with only ONE plugin, an "undeclared" case exits at
+	// the len(declared)==0 short-circuit and never reaches them.
+	alsoNative []string
 }
 
 func (f *fakeIngester) Name() string { return f.name }
 
 func (f *fakeIngester) IngestPlugins(adapter.Scope, string) ([]adapter.NativeMarketplace, []adapter.NativePlugin, error) {
-	return nil, []adapter.NativePlugin{{
+	out := []adapter.NativePlugin{{
 		Name: untrusted.Wrap("toolkit"), MarketplaceID: "mp", Enabled: f.enabled,
-	}}, nil
+	}}
+	for _, extra := range f.alsoNative {
+		out = append(out, adapter.NativePlugin{
+			Name: untrusted.Wrap(extra), MarketplaceID: "mp", Enabled: true,
+		})
+	}
+	return nil, out, nil
 }
 
 // TestDuplicatedNativePlugins covers every gate deciding whether a plugin is
@@ -81,6 +91,36 @@ func TestDuplicatedNativePlugins(t *testing.T) {
 				t.Errorf("warned = %v, want %v (got %v)", warned, tc.wantWarn, got)
 			}
 		})
+	}
+}
+
+// TestDuplicatedNativePlugins_IgnoresUndeclaredPlugins reaches the per-plugin
+// "is this declared in agentsync?" gate, which the matrix above cannot: with a
+// single undeclared plugin the function short-circuits on an empty declared set
+// long before that gate, so removing it stayed green.
+//
+// A plugin agentsync does not manage is the UNDECLARED nudge's business ("you
+// could import this"), never this warning's — claiming agentsync duplicates a
+// plugin it has never heard of, and telling the user to uninstall it, is the
+// same false "uninstall this" advice the agent-enabled gate produced.
+func TestDuplicatedNativePlugins_IgnoresUndeclaredPlugins(t *testing.T) {
+	testenv.RequireContainer(t)
+	c := source.Canonical{
+		Config: source.Config{Agents: map[string]source.Agent{"claude": {Enabled: true}}},
+		Plugins: []source.Plugin{{
+			ID:     untrusted.Wrap("toolkit"),
+			Plugin: source.PluginSpec{ID: untrusted.Wrap("toolkit@mp"), Agents: []string{"*"}},
+		}},
+	}
+	reg := adapter.NewRegistry()
+	// claude installs the declared plugin AND a foreign one agentsync knows
+	// nothing about.
+	if err := reg.Register(&fakeIngester{name: "claude", enabled: true, alsoNative: []string{"foreign"}}); err != nil {
+		t.Fatal(err)
+	}
+	got := duplicatedNativePlugins(c, reg, []string{"claude"})["claude"]
+	if len(got) != 1 || got[0].Unverified() != "toolkit" {
+		t.Fatalf("only the DECLARED plugin duplicates; got %v", got)
 	}
 }
 

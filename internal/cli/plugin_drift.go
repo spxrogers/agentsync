@@ -29,9 +29,10 @@ import (
 // means "no plugins discovered", never a failed import.
 func nativePluginOwners(reg *adapter.Registry) map[string][]string {
 	out := map[string][]string{}
-	names := reg.Names()
-	sort.Strings(names)
-	for _, agentName := range names {
+	// reg.Names() is already sorted, so the owner lists this builds are stable
+	// without re-sorting — and stability matters: the list is written into
+	// plugins/<id>.toml, which is usually a committed dotfiles repo.
+	for _, agentName := range reg.Names() {
 		pi, ok := reg.Lookup(agentName).(adapter.PluginIngester)
 		if !ok {
 			continue
@@ -45,6 +46,9 @@ func nativePluginOwners(reg *adapter.Registry) map[string][]string {
 				continue
 			}
 			key := pl.Name.Unverified()
+			// Dedupe by AGENT: one agent can report the same plugin name from
+			// two marketplaces, and `native_agents = ["claude","claude"]` would
+			// be written into a committed file.
 			if !slices.Contains(out[key], agentName) {
 				out[key] = append(out[key], agentName)
 			}

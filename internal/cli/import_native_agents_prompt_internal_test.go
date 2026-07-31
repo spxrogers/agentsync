@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +48,46 @@ func TestPromptNativeAgentsDeferral_NonInteractiveDefersWithoutAsking(t *testing
 	}
 	if strings.Contains(out.String(), "[Y]es") {
 		t.Errorf("it must not print a prompt nobody can answer; got:\n%s", out.String())
+	}
+}
+
+// endlessReader answers every read with the same unrecognized line and NEVER
+// reaches EOF. It exists because every other fixture EOFs, and on EOF the loop
+// exits via `case ""` regardless — so deleting the attempt cap, or the EOF
+// guard, stayed green against all of them. Only a reader that never ends can
+// tell a bounded loop from an unbounded one.
+type endlessReader struct{ reads int }
+
+func (e *endlessReader) Read(p []byte) (int, error) {
+	e.reads++
+	if e.reads > 10_000 { // a runaway loop must fail the test, not hang the suite
+		return 0, io.ErrUnexpectedEOF
+	}
+	return copy(p, "what\n"), nil
+}
+
+// TestAskDeferralAnswer_BoundedAgainstEndlessGarbage pins the attempt cap and
+// the branch it lands on. An unbounded loop against a terminal that keeps
+// sending unparseable input would hang `import` with no way out, and landing on
+// the DECLINE branch would silently opt the user into the duplicate.
+func TestAskDeferralAnswer_BoundedAgainstEndlessGarbage(t *testing.T) {
+	testenv.RequireContainer(t)
+	var out bytes.Buffer
+	p := &ui.Printer{Out: &out, Err: &out}
+	cmd := &cobra.Command{}
+	r := &endlessReader{}
+	cmd.SetIn(r)
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	io := &importIO{p: p, out: &out, err: &out, cmd: cmd}
+
+	got := askDeferralAnswer(io, "toolkit", []string{"claude"})
+	if len(got) != 1 || got[0] != "claude" {
+		t.Fatalf("exhausting the attempt cap must land on the SAFE branch (defer); got %v", got)
+	}
+	// Five prompts, five re-asks — not one, and not forever.
+	if n := strings.Count(out.String(), "Let claude keep serving"); n != 5 {
+		t.Errorf("expected the documented 5-attempt cap, saw %d prompts", n)
 	}
 }
 

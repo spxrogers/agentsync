@@ -548,6 +548,17 @@ func entryIsLossy(home, id string, mpEntry marketplace.PluginEntry, mpCacheRoot 
 // lossiness decision faithful to what apply will actually render. Skips are
 // structural (independent of resolved secret values), so the templated render
 // is sufficient and no secrets backend is required.
+//
+// KNOWN GAP: the mini canonical is built from raw marketplace.Project output,
+// which is NOT stamped with plugin provenance (that happens in
+// namespaceProjected, on the loadprojected path). So every component here has an
+// empty Plugin, source.PluginTargetsAgent returns true, and render.Plan's
+// per-agent narrowing is a no-op — meaning this probe can report an upgrade as
+// lossy because of a skip on an agent the plugin's `agents` / `native_agents`
+// exclude. It is advisory only (it gates a warning, never a write), and closing
+// it means threading the plugin's two targeting lists down from entryIsLossy's
+// callers. Deliberately deferred; fix it there rather than by re-deriving the
+// gates here, which would be a second place they can drift.
 func projectedSkips(entry marketplace.PluginEntry, cacheDir string, cfg source.Config, reg *adapter.Registry, agents []string, userHome string) (map[string]bool, error) {
 	proj, err := marketplace.Project(entry, cacheDir)
 	if err != nil {

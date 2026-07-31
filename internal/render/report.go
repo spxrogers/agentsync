@@ -33,14 +33,20 @@ type PluginRow struct {
 	// string is for display and for the --json contract.
 	Coverage string `json:"coverage"`
 	// MCP, Commands, Skills, Subagents, Hooks, and LSP count the components the
-	// plugin (or whole model) hosts that target this agent — the inventory, so
+	// plugin (or whole model) hosts that TARGET this agent — the inventory, so
 	// the report is descriptive of everything the plugin ships, not just MCP +
-	// commands. MCP and LSP honour each server's `enabled`/`agents` targeting
-	// (a server scoped to other agents is not counted here); the markdown
-	// component kinds (commands/skills/subagents) and hooks have no per-agent
-	// allowlist, so their counts are the model's totals. These describe what is
-	// hosted, NOT what successfully rendered: a hosted component the adapter
-	// cannot translate is still counted here and reported under Skips below.
+	// commands.
+	//
+	// Every kind honours the providing plugin's `agents` / `native_agents`
+	// gates; MCP and LSP additionally honour each server's own `enabled`/`agents`
+	// targeting. The plugin gate matters because apply passes the WHOLE flattened
+	// model: without it a deferred plugin's components are counted under some
+	// OTHER plugin's row for the same agent, so a row could report more commands
+	// than its own mcp count reflected — inconsistent within a single row.
+	//
+	// These describe what is hosted, NOT what successfully rendered: a hosted
+	// component the adapter cannot translate is still counted here and reported
+	// under Skips below.
 	MCP       int `json:"mcp"`
 	Commands  int `json:"commands"`
 	Skills    int `json:"skills"`
@@ -385,14 +391,22 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 // plugin); res is that agent's render result.
 func reportRow(label untrusted.Text, agName string, c source.Canonical, res AgentResult) PluginRow {
 	row := PluginRow{
-		Plugin:      label,
-		Agent:       agName,
-		MCP:         countMCPServers(c, agName),
-		LSP:         countLSPServers(c, agName),
-		Commands:    len(c.Commands),
-		Skills:      len(c.Skills),
-		Subagents:   len(c.Subagents),
-		Hooks:       len(c.Hooks),
+		Plugin: label,
+		Agent:  agName,
+		MCP:    countMCPServers(c, agName),
+		LSP:    countLSPServers(c, agName),
+		Commands: countTargeted(c.Commands, agName, func(v source.Command) (string, []string, []string) {
+			return v.Plugin, v.PluginAgents, v.PluginNativeAgents
+		}),
+		Skills: countTargeted(c.Skills, agName, func(v source.Skill) (string, []string, []string) {
+			return v.Plugin, v.PluginAgents, v.PluginNativeAgents
+		}),
+		Subagents: countTargeted(c.Subagents, agName, func(v source.Subagent) (string, []string, []string) {
+			return v.Plugin, v.PluginAgents, v.PluginNativeAgents
+		}),
+		Hooks: countTargeted(c.Hooks, agName, func(v source.Hook) (string, []string, []string) {
+			return v.Plugin, v.PluginAgents, v.PluginNativeAgents
+		}),
 		Skips:       len(res.Skips),
 		SkipDetails: skipDetails(res.Skips),
 	}
@@ -414,6 +428,21 @@ func computeCoverage(row PluginRow, rendered bool) string {
 		return CoveragePartial
 	}
 	return CoverageNone
+}
+
+// countTargeted counts the components of one kind that this agent actually
+// receives, per the providing plugin's gates. The text kinds and hooks have no
+// per-component allowlist of their own, so the plugin gate is the only filter
+// they need — but they DO need it, for the same reason MCP and LSP do.
+func countTargeted[T any](items []T, agent string, provenance func(T) (string, []string, []string)) int {
+	n := 0
+	for _, it := range items {
+		plugin, agents, native := provenance(it)
+		if source.PluginTargetsAgent(plugin, agents, native, agent) {
+			n++
+		}
+	}
+	return n
 }
 
 // countMCPServers counts the canonical MCP servers that render for agent —
