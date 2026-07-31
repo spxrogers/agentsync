@@ -121,7 +121,12 @@ func ownershipStyled(p *ui.Printer, o string) string {
 }
 
 // driftStyled colors the classifier's own vocabulary — explain deliberately
-// reuses those names verbatim rather than inventing a second one.
+// reuses those names verbatim rather than inventing a second one. Unlike
+// `status`, which folds "converged" into "clean" for readability (see
+// displayClass in status.go), explain always prints the raw class — including
+// "converged" in cyan, not clean's green. That's an accepted, deliberate
+// divergence between the two surfaces (explain is metadata/provenance, not a
+// summary dashboard), not something to reconcile here.
 func driftStyled(p *ui.Printer, cls string) string {
 	switch cls {
 	case "clean":

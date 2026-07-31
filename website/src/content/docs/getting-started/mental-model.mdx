@@ -54,7 +54,8 @@ That's the whole tool. Everything else is detail.
 	agentsync records the hash of everything it writes. If a destination's hash no
 	longer matches what it last wrote, the file was edited outside agentsync — that's
 	**drift**. If your source's hash changed, that's a normal **pending** change. If
-	both changed, it's a **conflict**, and agentsync stops to ask you.
+	both changed, it's a **conflict** — `apply` overwrites the destination anyway
+	(never blocks, never prompts), so run `reconcile` first if you want to keep the edit.
 </Aside>
 
 ## See it end to end

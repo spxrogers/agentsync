@@ -748,13 +748,36 @@ key:
 |---|---|---|---|
 | = | = | **clean** | noop |
 | ≠ | = | **pending** | write `H_src` |
-| = | ≠ | **drift** | block; suggest reconcile |
+| = | ≠ | **drift** | overwrite `H_dest` — no backup, since the file is already state-owned (`reconcile` is how you keep the edit instead) |
 | ≠ | ≠, `H_dest = H_src` | **converged** | refresh state silently |
-| ≠ | ≠, all differ | **conflict** | block; require reconcile |
+| ≠ | ≠, all differ | **conflict** | overwrite `H_dest` — no backup, same reason (`reconcile` is how you merge the edit instead) |
 | `H_applied` nil, `H_dest` nil | — | **new** | create |
 | `H_applied` nil, `H_dest` ≠ nil | — | **foreign-collision** | back up dest, then write |
 | `H_src` nil, `H_applied` ≠ nil | `H_dest = H_applied` | **orphan** | delete |
-| `H_src` nil, `H_applied` ≠ nil | `H_dest ≠ H_applied` | **orphan-drifted** | warn |
+| `H_src` nil, `H_applied` ≠ nil | `H_dest ≠ H_applied` | **orphan-drifted** | back up dest, then delete |
+
+`apply` never blocks or prompts on any of these — it always finishes the run.
+Only `foreign-collision` and `orphan-drifted` get a per-file backup before the
+write/delete (see below): those are the two cases where the destination holds
+content agentsync doesn't already own in state. `drift` and `conflict` ARE
+already state-owned by definition, so the writer's per-file backup path
+(`Writer.maybeBackupFileOp`) skips them and overwrites directly — the hand
+edit is simply lost; `reconcile` is how you catch it first, and a user-scope
+apply's destination git-versioning (§4 above, default `prompt`, opt-out) is
+the after-the-fact recovery net when enabled — **absent entirely at project
+scope**, so a project-scope drift/conflict overwrite has no automatic
+recovery at all beyond your own source control of the destination.
+
+The same state-ownership check governs key-merge ops (`Writer.maybeBackupKeyOp`)
+per JSON pointer, not per file — a drifted/conflicted key you own is
+overwritten with no backup exactly like a whole-file drift/conflict. Two
+narrower exceptions exist there: an owned top-level section (`mcpServers`,
+`hooks`, …) holding a foreign scalar/array instead of an object — which can
+only mean something else wrote there, since agentsync never stores anything
+but an object at an owned key — backs the whole file up unconditionally,
+without consulting ownership; and any ONE unowned, differing pointer
+elsewhere in an otherwise-owned file triggers a whole-file backup that, as a
+side effect, also preserves your owned, drifted keys alongside it.
 
 `drift.SafeForAutoApply(class)` is what `reconcile --auto-safe` consults — it
 auto-resolves only the cases that can't lose work (`converged`, `pending`).
