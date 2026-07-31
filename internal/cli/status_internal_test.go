@@ -276,34 +276,74 @@ func TestRenderStatusText_ConvergedFoldsIntoClean(t *testing.T) {
 // TestRenderClassLegend covers `status --legend`: the standalone glossary must
 // list all nine drift classes, including clean and converged spelled out on
 // their own (unlike the inline per-run legend, which omits both).
+// TestRenderClassLegend pins --legend's output against a HARDCODED, literal
+// expectation per class — deliberately NOT read from classMeaning/classLegend
+// at test time. A round-2 version of this test compared the rendered line
+// against classMeaning[cls]/classLegend[cls] dynamically; that is a tautology
+// against the exact mutation it claims to guard (swap classLegend's "drift"
+// and "conflict" action strings, or classMeaning's "orphan"/"orphan-drifted"
+// meanings, in a throwaway clone): renderClassLegend reads the SAME map the
+// assertion reads, so both shift together and the swap is invisible. Verified
+// by mutation: the literal-oracle version below fails on that swap; the
+// dynamic-oracle version did not.
 func TestRenderClassLegend(t *testing.T) {
 	var buf bytes.Buffer
 	p := &ui.Printer{Out: &buf}
 	renderClassLegend(p)
 	out := buf.String()
-	for _, cls := range []string{
-		"clean", "pending", "drift", "converged", "conflict",
-		"new", "foreign-collision", "orphan", "orphan-drifted",
-	} {
-		if !strings.Contains(out, cls) {
-			t.Errorf("expected --legend to mention class %q; got:\n%s", cls, out)
+	lines := strings.Split(out, "\n")
+	// findLine returns the one line whose row label is this exact class (a
+	// prefix match on "<glyph> <cls>" after the leading indent, so "orphan"
+	// can't match "orphan-drifted"'s line by substring).
+	findLine := func(t *testing.T, cls string) string {
+		t.Helper()
+		for _, l := range lines {
+			trimmed := strings.TrimLeft(l, " ")
+			// The glyph is one rune; the class word starts right after it and
+			// a space, and is itself followed by whitespace padding.
+			if i := strings.IndexByte(trimmed, ' '); i >= 0 {
+				rest := strings.TrimLeft(trimmed[i+1:], " ")
+				if rest == cls || strings.HasPrefix(rest, cls+" ") {
+					return l
+				}
+			}
+		}
+		t.Fatalf("no --legend line found for class %q; got:\n%s", cls, out)
+		return ""
+	}
+	tests := []struct{ cls, meaning, action string }{
+		{"clean", "all agree", "apply does nothing"},
+		{"pending", "you changed the source", "will be updated to match source"},
+		{"drift", "the destination was edited", "will be overwritten (use reconcile to keep the dest edit)"},
+		{"converged", "landed on the same value", "nothing left to reconcile"},
+		{"conflict", "changed to different values", "will be overwritten (use reconcile to merge the dest edit)"},
+		{"new", "brand-new item", "will be created"},
+		{"foreign-collision", "agentsync never wrote", "will be backed up and overwritten"},
+		{"orphan", "removed from source and untouched", "will be deleted"},
+		{"orphan-drifted", "the destination was also edited", "a local edit will be lost"},
+	}
+	for _, tc := range tests {
+		line := findLine(t, tc.cls)
+		if !strings.Contains(line, tc.meaning) {
+			t.Errorf("expected %q's own line to contain %q; got:%s", tc.cls, tc.meaning, line)
+		}
+		if !strings.Contains(line, tc.action) {
+			t.Errorf("expected %q's own line to contain %q; got:%s", tc.cls, tc.action, line)
 		}
 	}
-	// The class WORD alone survives a broken "meaning — action" composition
-	// (it's printed unconditionally as part of the row label), so pin the
-	// actual line content too: every class's classMeaning text must appear
-	// verbatim, and every class classLegend covers must reuse ITS action text
-	// verbatim — the exact coupling round 2 introduced to stop the inline
-	// legend and --legend from silently disagreeing again.
-	for cls, meaning := range classMeaning {
-		if !strings.Contains(out, meaning) {
-			t.Errorf("expected --legend's %q line to contain its meaning %q; got:\n%s", cls, meaning, out)
-		}
+	// The two pairs most likely to get their text swapped by accident (they
+	// share almost identical wording otherwise) must not cross-contaminate.
+	driftLine := findLine(t, "drift")
+	if strings.Contains(driftLine, "merge the dest edit") {
+		t.Errorf("drift's line must say \"keep\", not \"merge\" (that's conflict's line); got:%s", driftLine)
 	}
-	for cls, action := range classLegend {
-		if !strings.Contains(out, action) {
-			t.Errorf("expected --legend's %q line to reuse classLegend's action text %q verbatim; got:\n%s", cls, action, out)
-		}
+	conflictLine := findLine(t, "conflict")
+	if strings.Contains(conflictLine, "keep the dest edit") {
+		t.Errorf("conflict's line must say \"merge\", not \"keep\" (that's drift's line); got:%s", conflictLine)
+	}
+	orphanLine := findLine(t, "orphan")
+	if strings.Contains(orphanLine, "also edited") {
+		t.Errorf("orphan's line must not describe orphan-drifted's meaning; got:%s", orphanLine)
 	}
 }
 
@@ -352,7 +392,9 @@ func TestRenderStatusText_SkillGroupConvergedFoldsIntoClean(t *testing.T) {
 // tables' own key sets, per the "models must stay faithful to their
 // artifacts" rule in CLAUDE.md.
 func TestClassTablesCoverAllDriftClasses(t *testing.T) {
+	visited := 0
 	for c := drift.Clean; c.String() != "unknown"; c++ {
+		visited++
 		name := c.String()
 		if !containsString(classOrder, name) {
 			t.Errorf("classOrder is missing drift class %q", name)
@@ -369,5 +411,15 @@ func TestClassTablesCoverAllDriftClasses(t *testing.T) {
 		if _, ok := classLegend[name]; !ok {
 			t.Errorf("classLegend is missing drift class %q", name)
 		}
+	}
+	// Belt-and-suspenders: the loop's own bound (c.String() != "unknown")
+	// stops silently if a class is ever appended WITHOUT a String() case —
+	// classifier.go's default already falls back to "unknown" for anything
+	// past OrphanDrifted, so that specific mistake surfaces loudly elsewhere
+	// (every class after it prints as "unknown"), but pinning the expected
+	// count here means a mismatch fails HERE too, next to the tables it's
+	// meant to protect, rather than only in some other test's output.
+	if visited != 9 {
+		t.Errorf("expected exactly 9 drift classes, visited %d — drift.Class and this test's assumptions have diverged", visited)
 	}
 }

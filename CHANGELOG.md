@@ -63,6 +63,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   - Scripts that grep agentsync's human-readable output for `warning:`, `note:`,
     `agentsync:`, or `ok:` need updating; `--json` payloads are unaffected.
 
+### Documentation
+
+- **Corrected the drift-classifier table in `docs/concepts.md` and
+  `docs/architecture.md`**, both of which claimed `apply` "blocks" on drift and
+  conflict (and "warns" on orphan-drifted) — it never does. `apply` always
+  finishes the run: a drift/conflict item is overwritten with **no** per-file
+  backup (the destination is already state-owned, so the writer's
+  foreign-collision backup path doesn't apply — the edit is simply lost,
+  `reconcile` is how you catch it first), while foreign-collision and
+  orphan-drifted genuinely do get backed up first, since those are the cases
+  where the destination holds content agentsync doesn't yet own.
+
 ### Fixed
 
 - **`test-release`'s hermetic gate no longer fails the release pipeline when a

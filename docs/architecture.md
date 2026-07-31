@@ -748,13 +748,23 @@ key:
 |---|---|---|---|
 | = | = | **clean** | noop |
 | ≠ | = | **pending** | write `H_src` |
-| = | ≠ | **drift** | block; suggest reconcile |
+| = | ≠ | **drift** | overwrite `H_dest` — no backup, since the file is already state-owned (`reconcile` is how you keep the edit instead) |
 | ≠ | ≠, `H_dest = H_src` | **converged** | refresh state silently |
-| ≠ | ≠, all differ | **conflict** | block; require reconcile |
+| ≠ | ≠, all differ | **conflict** | overwrite `H_dest` — no backup, same reason (`reconcile` is how you merge the edit instead) |
 | `H_applied` nil, `H_dest` nil | — | **new** | create |
 | `H_applied` nil, `H_dest` ≠ nil | — | **foreign-collision** | back up dest, then write |
 | `H_src` nil, `H_applied` ≠ nil | `H_dest = H_applied` | **orphan** | delete |
-| `H_src` nil, `H_applied` ≠ nil | `H_dest ≠ H_applied` | **orphan-drifted** | warn |
+| `H_src` nil, `H_applied` ≠ nil | `H_dest ≠ H_applied` | **orphan-drifted** | back up dest, then delete |
+
+`apply` never blocks or prompts on any of these — it always finishes the run.
+Only `foreign-collision` and `orphan-drifted` get a per-file backup before the
+write/delete (see below): those are the two cases where the destination holds
+content agentsync doesn't already own in state. `drift` and `conflict` ARE
+already state-owned by definition, so the writer's per-file backup path
+(`Writer.maybeBackupFileOp`) skips them and overwrites directly — the hand
+edit is simply lost; `reconcile` is how you catch it first, and a user-scope
+apply's destination git-versioning (§4 above, default `prompt`, opt-out) is
+the after-the-fact recovery net when enabled.
 
 `drift.SafeForAutoApply(class)` is what `reconcile --auto-safe` consults — it
 auto-resolves only the cases that can't lose work (`converged`, `pending`).

@@ -341,8 +341,11 @@ func buildStatusModel(plan render.RenderPlan, names []string, s *state.Targets, 
 	return model
 }
 
-// classOrder is the stable display order for the summary footer and groups the
-// drift classes by severity for coloring.
+// classOrder is the stable display order for the summary footer and
+// `status --legend` (coloring is styleClass's job, not this ordering's). It
+// is also, deliberately, an EXHAUSTIVE list of all nine drift classes —
+// renderClassLegend relies on that to enumerate every row, and
+// TestClassTablesCoverAllDriftClasses is what actually guards it.
 var classOrder = []string{
 	"clean", "converged", "new", "pending",
 	"drift", "conflict", "foreign-collision", "orphan", "orphan-drifted",
@@ -445,7 +448,12 @@ func renderStatusText(p *ui.Printer, model statusModel, verbose bool) {
 		_, color := styleClass(p, cls)
 		segs = append(segs, color(fmt.Sprintf("%d %s", n, cls)))
 	}
-	if len(segs) > 0 {
+	// hasSummary gates both the summary line itself and the trailing --legend
+	// hint below: an enabled agent that renders nothing prints only "(no
+	// tracked items)" above, and a hint about classification words that never
+	// appeared would be pointing at nothing.
+	hasSummary := len(segs) > 0
+	if hasSummary {
 		fmt.Fprintln(p.Out, "")
 		fmt.Fprintln(p.Out, strings.Join(segs, "  ·  "))
 	}
@@ -455,11 +463,7 @@ func renderStatusText(p *ui.Printer, model statusModel, verbose bool) {
 		fmt.Fprintln(p.Out, p.Faint(fmt.Sprintf("%d skill %s collapsed; pass --verbose to list every bundled file.",
 			collapsed, plural(collapsed, "directory", "directories"))))
 	}
-	// Gated on there being a summary to explain — an enabled agent that
-	// renders nothing prints only "(no tracked items)" above, and a hint
-	// about classification words that never appeared would be pointing at
-	// nothing.
-	if len(segs) > 0 {
+	if hasSummary {
 		fmt.Fprintln(p.Out, "")
 		fmt.Fprintln(p.Out, p.Faint("Run `agentsync status --legend` for a brief on each classification status."))
 	}
