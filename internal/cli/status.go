@@ -91,6 +91,7 @@ func newStatusCmd() *cobra.Command {
 	var (
 		jsonOut   bool
 		exitCode  bool
+		legend    bool
 		agentsCSV string
 	)
 	cmd := &cobra.Command{
@@ -101,6 +102,12 @@ func newStatusCmd() *cobra.Command {
 			p, err := newPrinter(cmd)
 			if err != nil {
 				return err
+			}
+			// --legend is a standalone reference dump: no project/state/secrets
+			// to load, no scope to resolve. Handle it before any of that work.
+			if legend {
+				renderClassLegend(p)
+				return nil
 			}
 			home := paths.AgentsyncHome(paths.OSEnv{})
 			// Load WITH the plugin cache so drift classification sees the
@@ -187,6 +194,7 @@ func newStatusCmd() *cobra.Command {
 	markScopeAware(cmd)
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit machine-readable JSON instead of the formatted report")
 	cmd.Flags().BoolVar(&exitCode, "exit-code", false, fmt.Sprintf("exit %d if any drift is detected (0 when clean); for CI gates", exitCodeDrift))
+	cmd.Flags().BoolVar(&legend, "legend", false, "print a glossary of every drift classification status and exit")
 	addAgentsFlag(cmd, &agentsCSV, "report")
 	return cmd
 }
@@ -343,6 +351,20 @@ type skillGroup struct {
 	Items []statusItem
 }
 
+// displayClass maps a drift class to what the formatted `status` dashboard
+// shows the user. "converged" folds into "clean": both mean apply has nothing
+// left to do, and the distinction (converged = source AND destination changed
+// independently but landed on the same value, vs. clean = neither changed) is
+// bookkeeping that matters to the internal classifier and `status --json`, not
+// to someone scanning the report. `status --legend` still explains converged
+// on its own — see classLegendFull.
+func displayClass(cls string) string {
+	if cls == "converged" {
+		return "clean"
+	}
+	return cls
+}
+
 // styleClass maps a drift class to its glyph and color. Green = synced, cyan =
 // a pending change apply will make, red = unexpected/destructive drift, yellow
 // = an orphan needing a decision.
@@ -381,9 +403,16 @@ func renderStatusText(p *ui.Printer, model statusModel, verbose bool) {
 
 	// Summary footer lists only non-zero classes, so the words "drift" /
 	// "conflict" / "pending" never appear when there is none of that state.
+	// converged folds into clean here too (displayClass): its count lands in
+	// displayTotals["clean"], and the raw "converged" bucket is left empty so
+	// the loop below skips it via the ordinary n == 0 guard.
+	displayTotals := map[string]int{}
+	for cls, n := range model.Summary {
+		displayTotals[displayClass(cls)] += n
+	}
 	var segs []string
 	for _, cls := range classOrder {
-		n := model.Summary[cls]
+		n := displayTotals[cls]
 		if n == 0 {
 			continue
 		}
@@ -400,6 +429,8 @@ func renderStatusText(p *ui.Printer, model statusModel, verbose bool) {
 		fmt.Fprintln(p.Out, p.Faint(fmt.Sprintf("%d skill %s collapsed; pass --verbose to list every bundled file.",
 			collapsed, plural(collapsed, "directory", "directories"))))
 	}
+	fmt.Fprintln(p.Out, "")
+	fmt.Fprintln(p.Out, p.Faint("Use --legend to get a brief on each classification status."))
 }
 
 // renderAgentItems prints one agent's tracked items. In verbose mode every item
@@ -470,8 +501,10 @@ func renderStatusItem(p *ui.Printer, it statusItem) {
 	disp = ui.Sanitize(disp)
 	glyph, color := styleClass(p, it.Class)
 	// Pad the plain "glyph class" to a fixed visible width BEFORE
-	// coloring so ANSI bytes never shift the path column.
-	label := ui.Pad(glyph+" "+it.Class, 20)
+	// coloring so ANSI bytes never shift the path column. The printed word
+	// is the display class (converged folds into clean); the color/glyph
+	// lookup uses the raw class, though the two currently share a style.
+	label := ui.Pad(glyph+" "+displayClass(it.Class), 20)
 	fmt.Fprintf(p.Out, "  %s %s\n", color(label), disp)
 }
 
@@ -481,7 +514,7 @@ func renderStatusItem(p *ui.Printer, it statusItem) {
 func renderSkillGroup(p *ui.Printer, g *skillGroup) {
 	cls := mostSevereClass(g.Items)
 	glyph, color := styleClass(p, cls)
-	label := ui.Pad(glyph+" "+cls, 20)
+	label := ui.Pad(glyph+" "+displayClass(cls), 20)
 	fmt.Fprintf(p.Out, "  %s %s  %s\n", color(label), ui.Sanitize(g.Root+string(filepath.Separator)), p.Faint(skillSummary(g.Items)))
 }
 
@@ -575,7 +608,9 @@ func skillSummary(items []statusItem) string {
 		if filepath.Base(it.Path) == "SKILL.md" {
 			hasSkillMD = true
 		}
-		counts[it.Class]++
+		// Bucket by display class so a skill mixing clean and converged
+		// files reads as one clean group, not a spurious breakdown.
+		counts[displayClass(it.Class)]++
 	}
 	var size string
 	if hasSkillMD {
@@ -606,12 +641,14 @@ func plural(n int, one, many string) string {
 
 // classLegend gives a one-line, action-focused explanation of what `apply`
 // will do for an item in each drift class. Phrased so each line reads as a
-// continuation of "apply will…". "clean" is intentionally omitted: the word
-// is self-evident and adding "no action" would just be noise; the legend
+// continuation of "apply will…". "clean" and "converged" are both
+// intentionally omitted: the dashboard already displays converged as clean
+// (displayClass), and "no action" for either would just be noise. The legend
 // itself is also skipped entirely when the summary contains nothing but
-// "clean" items, so a fully-synced status report stays as terse as today.
+// clean/converged items, so a fully-synced status report stays as terse as
+// today. For the full nine-class glossary (including clean/converged spelled
+// out), see classLegendFull and `status --legend`.
 var classLegend = map[string]string{
-	"converged":         "no action (source and dest now match)",
 	"new":               "will be created",
 	"pending":           "will be updated to match source",
 	"drift":             "will be overwritten (use reconcile to keep the dest edit)",
@@ -649,6 +686,37 @@ func renderStatusLegend(p *ui.Printer, summary map[string]int) {
 		glyph, color := styleClass(p, r.cls)
 		label := ui.Pad(glyph+" "+r.cls, 20)
 		fmt.Fprintf(p.Out, "  %s %s\n", color(label), p.Faint(r.msg))
+	}
+}
+
+// classLegendFull is the complete nine-class glossary printed by
+// `status --legend`. Unlike classLegend (the action-only hint inline in a
+// normal `status` run, which folds converged into clean and omits both as
+// self-evident), this is the full reference: every class drift.Classify can
+// produce, each spelled out on its own — including clean and converged,
+// whose relationship is exactly what makes the dashboard's fold-in safe.
+// Mirrors the class table in docs/concepts.md; keep the two in sync.
+var classLegendFull = []struct{ class, meaning string }{
+	{"clean", "source, last-applied state, and destination all agree — apply does nothing"},
+	{"pending", "you changed the source since the last apply — apply writes the new source to the destination"},
+	{"drift", "the destination was edited outside agentsync — apply blocks and suggests `reconcile`"},
+	{"converged", "source and destination changed independently but landed on the same value — apply just refreshes state; a normal `status` run shows this as \"clean\", since there's nothing left to reconcile"},
+	{"conflict", "source and destination changed to different values — apply blocks and requires `reconcile`"},
+	{"new", "a brand-new item with nothing on disk yet — apply creates it"},
+	{"foreign-collision", "a pre-existing file agentsync never wrote — apply backs it up, then writes"},
+	{"orphan", "removed from source and untouched since — apply deletes it"},
+	{"orphan-drifted", "removed from source, but the destination was also edited — apply warns and asks for an explicit decision"},
+}
+
+// renderClassLegend prints the full nine-class drift glossary for
+// `status --legend` — a standalone reference independent of any project's
+// current drift state, so it needs no plan/state/secrets loaded.
+func renderClassLegend(p *ui.Printer) {
+	fmt.Fprintln(p.Out, p.Bold("Drift classification statuses"))
+	for _, e := range classLegendFull {
+		glyph, color := styleClass(p, e.class)
+		label := ui.Pad(glyph+" "+e.class, 20)
+		fmt.Fprintf(p.Out, "  %s %s\n", color(label), p.Faint(e.meaning))
 	}
 }
 

@@ -848,7 +848,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `secret set\|get\|list\|remove <key>` / `secret edit` | Manage age-encrypted secrets (`list` prints KEYS only; `edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
 | `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. A delete-only run (a component removed from source) reports `removed: N key(s), M file(s)` — key-removals and file-deletes counted distinctly — and a mixed run `applied: X ops, removed: …`, rather than mislabeling itself `up to date`/`applied: 0 ops`; `--dry-run` previews the same removal counts. | `--agents --dry-run --scope --project --no-git-backup` |
 | `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. `--to` must name one of the dir's own checkpoints (the current one or an ancestor) — anything else is refused. A dir under which a foreign git repo has appeared (or that isn't an agentsync-managed backup) is an **error** when you name the agent, and a **skip with a warning** under `--all` — strictness follows the invocation; there is no `--strict` flag. | `--agents --to --all --dry-run` |
-| `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. Skill directories collapse to one summary row by default (`--verbose` expands them). `--exit-code` makes it a CI gate: exit `2` when any drift is detected, `0` when clean. | `--agents --verbose --scope --project --json --exit-code` |
+| `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. Skill directories collapse to one summary row by default (`--verbose` expands them). The formatted report shows `converged` items as `clean` (both mean apply has nothing to do); `--json` keeps the two distinct. `--legend` prints a standalone glossary of all nine drift classification statuses and exits. `--exit-code` makes it a CI gate: exit `2` when any drift is detected, `0` when clean. | `--agents --verbose --legend --scope --project --json --exit-code` |
 | `diff [<path>]` | Show pending/drift changes; secrets redacted. `<path>` is a filesystem path; an unmanaged/typo'd path is reported distinctly from a clean one. `--agents` narrows to an agent allowlist (like `status`); `--exit-code` exits `2` when any hunk exists, `0` when clean. | `--agents --scope --project --json --exit-code` |
 | `reconcile` | Interactively merge drift back into source. | `--agents --auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source; drop parts to import a whole component or the agent's full config. Includes `plugin` (Claude), which re-fetches installed plugins + marketplaces **(network)**. `--scope project` reads the agent's *native project-scope* config (e.g. `<root>/.claude/`) and captures it into the project tree `<root>/.agentsync/`, seeding central state with the project scope + root. Plugin import is user-scope only. | `--dry-run --scope --project` |
@@ -891,6 +891,16 @@ gate that should **fail the build** on drift, add `--exit-code`: `status
 clean (exit `2` is distinct from the generic error exit `1`, and prints no extra
 error line). Interactive prompts (e.g. the scope menu) always go to **stderr**,
 so a `--json` payload piped from stdout is never corrupted.
+
+The formatted `status` report shows a `converged` item as `clean` — the two are
+distinct in the internal drift classifier (converged means source *and*
+destination changed independently but landed on the same value, versus clean
+where neither changed), but both mean apply has nothing to do, so the
+dashboard folds them into one word and one tally. `status --json` keeps the
+real classification. `status --legend` prints a standalone glossary of all
+nine classification statuses (including `clean`/`converged` spelled out
+separately) and exits without running the drift scan; every formatted `status`
+run ends with a one-line hint pointing at it.
 
 ---
 

@@ -31,7 +31,7 @@ import { Aside } from '@astrojs/starlight/components';
 | `plugin outdated` / `plugin upgrade [<id>]` | **(network)** Poll marketplaces and report pending bumps / re-fetch a plugin (or `--all` pending bumps) and run `apply`. | `upgrade --all --lossless --scope --project` |
 | `apply` | Render source → write agent configs (offline). Git-versions each destination dir (opt-out). | `--agents --dry-run --scope --project --no-git-backup` |
 | `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (local-only git history). | `--agents --to --all --dry-run` |
-| `status` | Summarize drift / pending across agents (skill dirs collapse by default). `--exit-code` → exit `2` on any drift, `0` when clean (CI gate). | `--agents --verbose --json --exit-code --scope --project` |
+| `status` | Summarize drift / pending across agents (skill dirs collapse by default; `converged` displays as `clean`, `--json` keeps them distinct). `--legend` prints the nine-class glossary and exits. `--exit-code` → exit `2` on any drift, `0` when clean (CI gate). | `--agents --verbose --legend --json --exit-code --scope --project` |
 | `diff [<path>]` | Show pending / drift changes; secrets redacted. `--exit-code` → exit `2` on any hunk, `0` when clean. | `--agents --json --exit-code --scope --project` |
 | `reconcile` | Interactively merge drift back into source. | `--agents --auto-writeback --auto-override --auto-safe --scope --project` |
 | `import <agent>[:<component>[:<name>]]` | Capture native config into source. `--scope project` captures the agent's native project-scope config into the project tree. | `--dry-run --scope --project` |
@@ -301,6 +301,20 @@ still flow to stderr so the JSON payload stays clean. `--json` is **never
 collapsed** — it carries every tracked file regardless of the human view — and
 omits the legend (the class field is the machine contract).
 
+The formatted report shows a `converged` item as `clean`. The two are distinct
+in the internal drift classifier — converged means the source *and* the
+destination changed independently but landed on the same value, versus clean
+where neither changed — but both mean `apply` has nothing to do, so the
+dashboard folds them into one word and one tally rather than surfacing a
+distinction only the classifier cares about. `--json` keeps the real
+classification, since a script may want it.
+
+`agentsync status --legend` prints a standalone glossary explaining all nine
+drift classification statuses — including `clean` and `converged` spelled out
+separately, since that's exactly the distinction the formatted view folds
+away — and exits without running the drift scan at all. A normal `status` run
+always ends with a one-line hint pointing at `--legend`.
+
 For a gate that should **fail the build** on drift, add `--exit-code`:
 `agentsync status --exit-code` exits `2` when any item is not clean/converged and
 `0` when the tree is fully in sync (exit `2` is distinct from the generic error
@@ -442,6 +456,7 @@ For per-plugin translation coverage, see [`plugin explain`](#plugin-explain-plug
 | `--json` | status, diff, explain, plugin explain | Emit the structured payload to stdout (advisory diagnostics still go to stderr). `plugin explain --json` emits the translation `rows`; `explain <path> --json` emits the provenance envelope (and still emits it, with `"unmanaged": true`, on a path nothing renders). |
 | `--agents <list>` | apply, status, diff, reconcile, revert | The single "which agents" selector, with identical parsing everywhere (`*` = all enabled; an empty or unknown value is rejected identically by all five). On `revert` it is a spelling of the positional form — `--agents`, a positional agent, and `--all` stay mutually exclusive. |
 | `--exit-code` | status, diff | Exit `2` when drift (status) / any hunk (diff) exists, `0` when clean — for CI gates. Distinct from the generic error exit `1`; prints no extra error line. Default (unset) always exits `0`. |
+| `--legend` | status | Print a standalone glossary of all nine drift classification statuses (including `clean`/`converged` spelled out separately) and exit, skipping the drift scan. A normal `status` run always hints at this flag. |
 | `--header "Name: Value"` | mcp add | Repeatable; http/sse only. Sets a request header (secret refs allowed). |
 | `--color auto\|always\|never` | all | Control ANSI color + bold. Default `auto` (on for a TTY, off when piped/redirected; honors `NO_COLOR`). |
 | `-v`, `--verbose` | all | Verbose logging. In `status`, also expands each collapsed skill directory back to one row per bundled file. |

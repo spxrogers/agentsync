@@ -9,7 +9,23 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Added
+
+- **`status --legend`** prints a standalone glossary explaining all nine drift
+  classification statuses (`clean`, `pending`, `drift`, `converged`,
+  `conflict`, `new`, `foreign-collision`, `orphan`, `orphan-drifted`) and exits
+  without running the drift scan. A normal `status` run now ends with a
+  one-line hint pointing at it.
+
 ### Changed
+
+- **The formatted `status` report now shows `converged` items as `clean`.** The
+  two remain distinct in the internal drift classifier — converged means the
+  source *and* the destination changed independently but landed on the same
+  value, vs. clean where neither changed — but both mean `apply` has nothing
+  left to do, so the human-facing dashboard folds them into one word and one
+  tally instead of surfacing a distinction only the classifier needs.
+  `status --json` is unaffected and keeps the real classification for scripts.
 
 - **Every diagnostic across the CLI now carries a severity label, and success
   lines lead with an emoji.** The formatting of `agentsync`'s output was the

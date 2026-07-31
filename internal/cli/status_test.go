@@ -566,3 +566,63 @@ func TestStatus_LegendExplainsDriftClasses(t *testing.T) {
 		t.Errorf("--json must not include the legend; got:\n%s", jsonOut)
 	}
 }
+
+// TestStatus_HintsAtLegendFlag guards the discoverability nudge: a normal
+// `status` run must point users at `--legend` for a fuller explanation of
+// each classification word, and must not do so under --json (a machine
+// payload has no room for a human hint).
+func TestStatus_HintsAtLegendFlag(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatalf("agent add: %v", err)
+	}
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "--legend") {
+		t.Errorf("expected a hint pointing at --legend; got:\n%s", out)
+	}
+
+	jsonOut, err := runCLI(t, env, "status", "--json")
+	if err != nil {
+		t.Fatalf("status --json: %v\n%s", err, jsonOut)
+	}
+	if strings.Contains(jsonOut, "--legend") {
+		t.Errorf("--json must not include the human hint; got:\n%s", jsonOut)
+	}
+}
+
+// TestStatus_LegendFlag covers `status --legend`: it prints the full
+// nine-class glossary as a standalone reference (no project state needed) and
+// exits cleanly without running the drift scan.
+func TestStatus_LegendFlag(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+
+	out, err := runCLI(t, env, "status", "--legend")
+	if err != nil {
+		t.Fatalf("status --legend: %v\n%s", err, out)
+	}
+	for _, cls := range []string{
+		"clean", "pending", "drift", "converged", "conflict",
+		"new", "foreign-collision", "orphan", "orphan-drifted",
+	} {
+		if !strings.Contains(out, cls) {
+			t.Errorf("expected --legend to mention class %q; got:\n%s", cls, out)
+		}
+	}
+	// converged's own entry is the one place that still spells out how it
+	// differs from clean, since the formatted dashboard folds it away.
+	if !strings.Contains(out, "nothing left to reconcile") {
+		t.Errorf("expected the converged entry to explain the fold into clean; got:\n%s", out)
+	}
+}

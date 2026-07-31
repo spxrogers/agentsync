@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"bytes"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/spxrogers/agentsync/internal/ui"
 )
 
 // abs builds an absolute, OS-correct path from slash-separated segments so these
@@ -183,6 +187,19 @@ func TestSkillSummary(t *testing.T) {
 			[]statusItem{ref("a.md", "clean"), ref("b.md", "clean")},
 			"(2 files)",
 		},
+		{
+			// converged folds into clean (displayClass), so a skill mixing the two
+			// must read as uniformly clean — no breakdown, and never the word
+			// "converged" anywhere in the summary.
+			"converged folds into clean with no breakdown",
+			[]statusItem{{Path: skillMD.Path, Class: "converged"}, ref("a.md", "clean")},
+			"(SKILL.md + 1 file)",
+		},
+		{
+			"converged still counts toward the clean bucket in a real breakdown",
+			[]statusItem{{Path: skillMD.Path, Class: "converged"}, ref("a.md", "drift")},
+			"(SKILL.md + 1 file; 1 clean, 1 drift)",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -190,5 +207,80 @@ func TestSkillSummary(t *testing.T) {
 				t.Errorf("skillSummary = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestDisplayClass locks in the one fold the formatted dashboard applies:
+// converged reads as clean, everything else (including classes outside the
+// known nine, defensively) passes through unchanged.
+func TestDisplayClass(t *testing.T) {
+	tests := []struct{ cls, want string }{
+		{"clean", "clean"},
+		{"converged", "clean"},
+		{"pending", "pending"},
+		{"drift", "drift"},
+		{"conflict", "conflict"},
+		{"new", "new"},
+		{"foreign-collision", "foreign-collision"},
+		{"orphan", "orphan"},
+		{"orphan-drifted", "orphan-drifted"},
+		{"weird", "weird"},
+	}
+	for _, tc := range tests {
+		if got := displayClass(tc.cls); got != tc.want {
+			t.Errorf("displayClass(%q) = %q, want %q", tc.cls, got, tc.want)
+		}
+	}
+}
+
+// TestRenderStatusText_ConvergedFoldsIntoClean is the render-layer guard for
+// the UI decision: converged is a real, distinct internal classification
+// (see internal/drift), but the formatted `status` dashboard shows it as
+// clean — merged into the same summary count, the same per-item word, and
+// never named "converged" anywhere a human reads it. `status --json` (built
+// straight from statusModel, untouched by this rendering path) keeps the
+// distinction for machine consumers.
+func TestRenderStatusText_ConvergedFoldsIntoClean(t *testing.T) {
+	model := statusModel{
+		Agents: []statusAgent{{
+			Agent: "claude",
+			Items: []statusItem{
+				{Path: "/u/.claude/CLAUDE.md", Class: "clean"},
+				{Path: "/u/.claude/settings.json", Class: "converged"},
+			},
+		}},
+		Summary: map[string]int{"clean": 1, "converged": 1},
+	}
+	var buf bytes.Buffer
+	p := &ui.Printer{Out: &buf}
+	renderStatusText(p, model, false)
+	out := buf.String()
+	if strings.Contains(out, "converged") {
+		t.Errorf("formatted status must never print the word \"converged\"; got:\n%s", out)
+	}
+	if !strings.Contains(out, "2 clean") {
+		t.Errorf("expected the converged item folded into the clean tally (\"2 clean\"); got:\n%s", out)
+	}
+	if got := strings.Count(out, "clean"); got != 3 {
+		// One per item row (2) + one in the summary footer segment = 3.
+		t.Errorf("expected exactly 3 occurrences of \"clean\" (two item rows + one summary segment); got %d in:\n%s", got, out)
+	}
+}
+
+// TestRenderClassLegend covers `status --legend`: the standalone glossary must
+// list all nine drift classes, including clean and converged spelled out on
+// their own (unlike the inline per-run legend, which omits both).
+func TestRenderClassLegend(t *testing.T) {
+	var buf bytes.Buffer
+	p := &ui.Printer{Out: &buf}
+	renderClassLegend(p)
+	out := buf.String()
+	for _, cls := range []string{
+		"clean", "pending", "drift", "converged", "conflict",
+		"new", "foreign-collision", "orphan", "orphan-drifted",
+	} {
+		if !strings.Contains(out, cls) {
+			t.Errorf("expected --legend to mention class %q; got:\n%s", cls, out)
+		}
 	}
 }

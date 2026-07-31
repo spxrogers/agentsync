@@ -100,6 +100,12 @@ Granularity is **per-key** for structured files (JSON/JSONC/TOML, tracked by
 JSON pointer) and **per-file** for everything else. Keys agentsync never wrote
 are **foreign keys** — surfaced for awareness but never touched.
 
+`agentsync status`'s formatted dashboard displays a **converged** item as
+**clean** — both mean `apply` has nothing left to do, and the distinction
+above is bookkeeping the classifier and `status --json` need, not something a
+human scanning the report benefits from. `status --legend` prints this table
+(as a CLI reference); `status --json` always reports the real class.
+
 ### Reconcile
 The interactive merge UX for drift and conflicts. For each drifting item you
 choose `[w]rite-back` (adopt the dest edit into source), `[o]verride` (re-impose
