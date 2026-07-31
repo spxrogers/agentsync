@@ -34,6 +34,70 @@ newest first. It is what the CLI's one-time upgrade notice links to.
 
 ## 0.11.0
 
+### A plugin an agent installs itself is no longer projected into that agent
+
+If you ran `agentsync import claude` and then `agentsync apply` while a plugin
+was still enabled inside Claude Code, you ended up with two of everything that
+plugin ships. Claude kept serving its own copy from its install dir, and
+agentsync projected the same components into Claude's standalone paths. Because
+those components are namespaced, the two sets did not collide — they coexisted:
+
+| | Claude's own copy | agentsync's projection |
+|---|---|---|
+| skill | `/feature-dev:code-review` | `/feature-dev-code-review` |
+| subagent | `feature-dev:code-reviewer` | `@agent-feature-dev-code-reviewer` |
+| hook | runs | runs **again** |
+
+`apply` never writes plugin enablement back into an agent's config — that is a
+deliberate invariant, so agentsync never fights the agent's own `/plugin`
+UI — and it never removed it either. So the fix is not to project there.
+
+`plugins/<id>.toml` gains **`native_agents`**: the agents whose own plugin
+manager installs this plugin.
+
+```toml
+[plugin]
+id            = "feature-dev@claude-plugins-official"
+agents        = ["*"]        # your fan-out choice
+native_agents = ["claude"]   # claude installs this itself — don't project there
+```
+
+`agentsync import claude:plugin` now records `native_agents = ["claude"]` for
+what it finds and says so on the import line. Every other enabled agent still
+receives the full fan-out — that is the reason to import a plugin in the first
+place.
+
+**What you need to do.** Existing installs are unchanged until you act: your
+`plugins/*.toml` have no `native_agents`, so apply keeps projecting exactly as
+before. Either re-run `agentsync import <agent>:plugin` to record the deferral,
+or add the key by hand. `agentsync status` and `agentsync doctor` now warn when
+a plugin is installed in an agent *and* projected there, so you can see which
+ones are affected.
+
+**To hand a plugin over to agentsync completely**, uninstall it in the agent
+(`/plugin uninstall` in Claude Code) and remove that agent from `native_agents`.
+The next apply projects the components there.
+
+<Aside type="note" title="Why this is recorded rather than detected">
+	`apply` does not look at what your agents have installed. If it did, the same
+	`~/.agentsync/` would render differently on two machines and `agentsync diff`
+	would stop being reproducible — and agentsync's drift detection compares your
+	source against what it last wrote, on the assumption that the source does not
+	depend on the destination. `import` reads native state once and writes the
+	conclusion into your canonical source; every later apply reads only that.
+</Aside>
+
+### `agents` in `plugins/<id>.toml` now actually narrows fan-out
+
+The `agents` allowlist has been documented since v1.0 and was never read: a
+plugin with `agents = ["codex"]` still fanned out to every enabled agent. It now
+works, and it composes with `native_agents` — a plugin renders for an agent only
+if `agents` targets it and `native_agents` does not claim it.
+
+If you narrowed a plugin's allowlist expecting it to take effect, check it now:
+it will start being honoured on your next apply, and components that were
+previously written to the excluded agents are removed.
+
 ### Plugin-provided components are namespaced by their plugin
 
 A subagent, skill, or slash command that comes from an installed plugin now

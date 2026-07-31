@@ -302,11 +302,21 @@ func checkPlugins(p *ui.Printer, home string) {
 	}
 	reg := registryFactory()
 	undeclared := undeclaredNativePlugins(c, reg, reg.Names())
-	if len(undeclared) == 0 {
-		okCheck(p, "", "ok (no undeclared native plugins)")
+	// A plugin the agent installs itself that agentsync ALSO projects there
+	// duplicates every component it ships. apply cannot see this (its plan never
+	// reads the destination), so doctor is one of the two places it surfaces.
+	duplicated := duplicatedNativePlugins(c, reg, reg.Names())
+	if len(undeclared) == 0 && len(duplicated) == 0 {
+		okCheck(p, "", "ok (no undeclared or duplicated native plugins)")
 		return
 	}
 	for _, name := range reg.Names() {
+		if dupes := duplicated[name]; len(dupes) > 0 {
+			warnCheck(p, fmt.Sprintf("%-10s ", name), fmt.Sprintf(
+				"%d also projected by agentsync: %s — components land twice; uninstall them in %s "+
+					"or add %q to `native_agents`",
+				len(dupes), untrusted.Join(dupes, ", "), name, name))
+		}
 		missing := undeclared[name]
 		if len(missing) == 0 {
 			continue

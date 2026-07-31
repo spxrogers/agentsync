@@ -9,6 +9,45 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Added
+
+- **A plugin an agent installs itself is no longer projected into that agent,
+  so `import <agent>` + `apply` stops manufacturing duplicates.** `apply` never
+  writes plugin enablement back into an agent's config (the `PluginIngester`
+  read-only invariant) — but it never removed it either, so a plugin enabled in
+  Claude Code kept being served from Claude's own install dir while agentsync
+  ALSO projected its components into Claude's standalone paths. Namespacing
+  (`<plugin>-<name>`) meant the two sets coexisted rather than collided: two of
+  every skill, subagent and command, one MCP id registered from two sources, and
+  every hook handler firing twice.
+  - `plugins/<id>.toml` gains **`native_agents`** — the agents whose own plugin
+    manager installs this plugin. Their components are not projected there.
+    `import` seeds it from what it discovers (`import claude:plugin` records
+    `native_agents = ["claude"]`) and reports it on the import line; every other
+    enabled agent still receives the full fan-out.
+  - To hand a plugin over to agentsync completely, uninstall it in the agent and
+    drop that agent from `native_agents`; the next apply projects it there. The
+    decision lives entirely in canonical source — `apply` never probes the
+    destination, so the same `~/.agentsync/` renders identically on every
+    machine.
+  - `status` and `doctor` now warn when a plugin is installed natively in an
+    agent **and** projected there by agentsync — the case `apply` cannot see,
+    since its plan is a pure function of canonical state.
+
+### Fixed
+
+- **`agents` in `plugins/<id>.toml` now actually narrows a plugin's fan-out.**
+  The key has been documented since v1.0 ("Control fan-out per plugin with
+  `agents = [...]`") and was written, preserved across re-installs, and never
+  read: `projectOnePlugin` honoured only `disabled`, and nothing in the render
+  path consulted `PluginSpec.Agents`. A narrowed allowlist silently fanned the
+  plugin out to every enabled agent anyway. Both it and the new `native_agents`
+  are enforced in ONE place — the render waist (`source.FilterForAgent` via
+  `secrets.Resolved.ForAgent` in `render.Plan`) — so no adapter can forget one.
+  `import`'s capture-refusal filter uses the same function, so it no longer
+  refuses to capture a hand-authored component from an agent a plugin does not
+  project to.
+
 ### Changed
 
 - **Every diagnostic across the CLI now carries a severity label, and success

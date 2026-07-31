@@ -72,9 +72,14 @@ memory-fragment expansion.
   `WriteSubagent`, `WriteCommand`, `WriteHooks`, `WriteMemory`); `ReadMCP`/`ReadLSP`
   (carry source-only fields); `ExpandMemoryImports`; `RenderManagedMemory` /
   `StripManagedBanner` (inject / strip the managed-file banner — see
-  `docs/architecture.md`).
+  `docs/architecture.md`); `NamespacedComponentName` / `PluginTargetsAgent` /
+  `AgentTargeted` (plugin provenance + the `agents`/`native_agents` gates);
+  `FilterForAgent` (the ONE narrowing of a canonical to what one agent renders —
+  used by `render.Plan` via `secrets.Resolved.ForAgent` and by import's
+  capture-refusal filter, so the two can never disagree).
 - **Depends on:** iox, jsonkeys.
-- **Files:** `schema.go`, `loader.go`, `writer.go`, `memory.go`.
+- **Files:** `schema.go`, `loader.go`, `writer.go`, `memory.go`,
+  `provenance.go`, `targeting.go`.
 
 ### `internal/secrets`
 Resolves `${secret:dotted.key}` and `${env:NAME}` at apply time; re-references
@@ -84,7 +89,9 @@ The `Resolved` wrapper type is the load-bearing leak guard.
   `SubstituteCanonical` (→ `Resolved`); `ReReferenceCanonical`; `CollectResolved`;
   `UnresolvedSecretRefs`; `SecretRefsByComponent` (per-component REFERENCES, for
   `explain`); `MaskResolved`; `AgeBackend`/`EnvBackend`/`NopResolver`;
-  `SelectBackend`; and the single field list `walkSecretFields` (in `walk.go`).
+  `SelectBackend`; `Resolved.ForAgent` (per-agent narrowing at the render waist,
+  delegating to `source.FilterForAgent`); and the single field list
+  `walkSecretFields` (in `walk.go`).
 - **Depends on:** source, iox.
 - **Files:** `secrets.go`, `age.go`, `resolved.go`, `substitute.go`,
   `rereference.go`, `mask.go`, `refs.go`, `walk.go`, `secretpaths.go`, `leakscan.go`
@@ -415,8 +422,10 @@ manifests into canonical components.
   `GitFetcher`/`NPMFetcher`/`RelativeFetcher`; `LoadProjected`/
   `LoadProjectedLenient`/`LoadProjectedExcluding`; `namespaceProjected` (renames
   each plugin-provided subagent/skill/command to `<plugin>-<name>` and stamps its
-  provenance, so two plugins shipping one name cannot collide at a destination
-  path — see architecture.md § Plugin component namespacing).
+  provenance — including the providing plugin's `agents`/`native_agents`
+  targeting, which travels with the component because the flattened canonical
+  drops the association — so two plugins shipping one name cannot collide at a
+  destination path — see architecture.md § Plugin component namespacing).
 - **Depends on:** source, log.
 - **Files:** `manifest.go`, `treehash.go` (the `tree:v1:` content hash),
   `projection.go`, `loadprojected.go`, `fetcher.go`, `fetch_git.go`,

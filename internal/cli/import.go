@@ -290,7 +290,7 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// set would silently disable the defence — and since the projection is fed by
 	// plugin data, an upstream roll or a tampered cache could trigger it on
 	// demand.
-	if pp, ppErr := pluginProvided(loaderFsForState(), agentsyncHome, projectRoot, sc); ppErr != nil {
+	if pp, ppErr := pluginProvided(loaderFsForState(), agentsyncHome, projectRoot, agentName, sc); ppErr != nil {
 		io.pluginProvidedErr = ppErr
 	} else {
 		io.pluginProvided = pp
@@ -1184,11 +1184,13 @@ func idsFromWritten(written []string) []string {
 //
 // It mirrors apply's projection so the skipped set is exactly the rendered set:
 // lenient (an unrelated strict plugin conflict must not abort an import), honours
-// the project tree's `disabled = true` plugin markers, and reads the home whose
-// components the render at this scope actually uses. A projection failure is
-// returned, and the caller records it so every component capture then refuses —
-// see skipPluginProvided.
-func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot string, sc adapter.Scope) (map[string]string, error) {
+// the project tree's `disabled = true` plugin markers, reads the home whose
+// components the render at this scope actually uses, and narrows to agentName's
+// own render set (source.FilterForAgent) so a plugin that projects nothing to
+// this agent blocks nothing here. A projection failure is returned, and the
+// caller records it so every component capture then refuses — see
+// skipPluginProvided.
+func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot, agentName string, sc adapter.Scope) (map[string]string, error) {
 	pluginCacheRoot := filepath.Join(agentsyncHome, ".state", "cache", "plugins")
 	var disabled []string
 	projHome := ""
@@ -1280,7 +1282,13 @@ func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot string, sc adapter.S
 	if err != nil {
 		return nil, fmt.Errorf("project plugins from %s: %w", home, err)
 	}
-	collect(c)
+	// Narrow to what THIS agent actually receives, through the same filter
+	// render.Plan applies. A plugin whose `agents` allowlist excludes this agent,
+	// or whose `native_agents` defers to the agent's own plugin manager, projects
+	// NOTHING here — so it provides nothing here either, and a same-named file in
+	// this agent's native config is the user's own to capture. Refusing it would
+	// lock the user out of importing their own component.
+	collect(source.FilterForAgent(c, agentName))
 	return out, nil
 }
 
@@ -1703,6 +1711,20 @@ func importPlugins(io *importIO, home, agentName string, a adapter.Adapter, name
 		return nil, nil
 	}
 
+	// Which agents already serve each plugin from their OWN plugin manager. A
+	// plugin imported from an agent is, by definition, installed natively there
+	// — so without this every import would set up a duplicate on the very next
+	// apply: the agent keeps loading its own copy from its install dir while
+	// agentsync projects the same components into the agent's standalone paths.
+	// The seed records the deferral in plugins/<id>.toml (`native_agents`), so
+	// apply's decision stays a pure function of canonical state rather than of
+	// whatever the destination happens to look like at apply time.
+	//
+	// Probed ONCE for the whole import (each probe reads a native config) and
+	// across every PluginIngester, since a plugin can be installed natively in
+	// more than the agent being imported from.
+	owners := nativePluginOwners(registryFactory())
+
 	// Resolve (and, on a real run, fetch) each needed marketplace exactly once.
 	// The cached value is the agentsync marketplace name a plugin installs from;
 	// "" marks an unresolvable marketplace already warned about.
@@ -1780,19 +1802,40 @@ func importPlugins(io *importIO, home, agentName string, a adapter.Adapter, name
 		if !mpOK {
 			continue
 		}
+		native := owners[plName]
 		if io.dryRun {
-			io.item(fmt.Sprintf("plugins/%s.toml", plName), "")
+			io.item(fmt.Sprintf("plugins/%s.toml", plName), nativeAgentsSuffix(native))
 			ids = append(ids, plName)
 			continue
 		}
-		if _, ierr := installPluginInto(home, plName, mpName); ierr != nil {
+		spec, ierr := installPluginInto(home, plName, mpName, native)
+		if ierr != nil {
 			io.warnf("skipping plugin %q from %q: %v", pl.Name, mpName, ierr)
 			continue
 		}
-		io.item(fmt.Sprintf("plugins/%s.toml", plName), "")
+		// Report the deferral on the item line rather than silently: it changes
+		// what the next apply writes, and the user needs to know which agents
+		// keep serving the plugin themselves. spec.NativeAgents (not `native`)
+		// is what was actually written — a re-import over an existing TOML
+		// preserves the user's own list instead of re-seeding it.
+		io.item(fmt.Sprintf("plugins/%s.toml", plName), nativeAgentsSuffix(spec.NativeAgents))
 		ids = append(ids, plName)
 	}
 	return ids, nil
+}
+
+// nativeAgentsSuffix renders the item-line note naming the agents a plugin is
+// NOT projected to because they install it themselves. Empty for the ordinary
+// case (nothing deferred), so the line stays quiet when there is nothing to say.
+// Agent names come from agentsync's own registry, not from native config, so
+// they need no sanitizing — but item() sanitizes the whole path anyway and the
+// suffix is appended after it, so keep this to registry-derived values only.
+func nativeAgentsSuffix(native []string) string {
+	if len(native) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (native_agents=[%s] — %s %s this plugin natively, so apply will not project it there)",
+		strings.Join(native, ","), strings.Join(native, " and "), plural(len(native), "serves", "serve"))
 }
 
 // claudeSourceToAgentsync maps a native marketplace source (Claude's

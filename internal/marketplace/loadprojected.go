@@ -164,7 +164,7 @@ func projectOnePlugin(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugi
 	if perr != nil {
 		return ProjectionResult{}, false, fmt.Errorf("project plugin %s: %w", id, perr)
 	}
-	namespaceProjected(&proj, id)
+	namespaceProjected(&proj, id, pl.Plugin.Agents, pl.Plugin.NativeAgents)
 	return proj, true, nil
 }
 
@@ -210,33 +210,51 @@ func projectOnePlugin(fs afero.Fs, home, pluginCacheRoot string, pl source.Plugi
 // refuse to capture one into the canonical source (which would mint a copy that
 // diverges from the plugin's own on its next update). Hooks are stamped per
 // HANDLER, the granularity import has to filter at.
-func namespaceProjected(pr *ProjectionResult, plugin string) {
+//
+// agents and nativeAgents are the plugin's `agents` allowlist and
+// `native_agents` deferral list (PluginSpec), stamped onto EVERY projected
+// component — renamed or not. They travel with the component because the
+// flattened canonical drops the association otherwise; render.Plan is the one
+// place that reads them. See source.PluginTargetsAgent.
+func namespaceProjected(pr *ProjectionResult, plugin string, agents, nativeAgents []string) {
 	if plugin == "" {
 		return
 	}
 	for i := range pr.MCPServers {
 		pr.MCPServers[i].Plugin = plugin
+		pr.MCPServers[i].PluginAgents = agents
+		pr.MCPServers[i].PluginNativeAgents = nativeAgents
 	}
 	for i := range pr.LSPServers {
 		pr.LSPServers[i].Plugin = plugin
+		pr.LSPServers[i].PluginAgents = agents
+		pr.LSPServers[i].PluginNativeAgents = nativeAgents
 	}
 	for i := range pr.Hooks {
 		pr.Hooks[i].Plugin = plugin
+		pr.Hooks[i].PluginAgents = agents
+		pr.Hooks[i].PluginNativeAgents = nativeAgents
 	}
 	for i := range pr.Skills {
 		pr.Skills[i].Plugin = plugin
+		pr.Skills[i].PluginAgents = agents
+		pr.Skills[i].PluginNativeAgents = nativeAgents
 		pr.Skills[i].BaseName = pr.Skills[i].Name
 		pr.Skills[i].Name = source.NamespacedComponentName(plugin, pr.Skills[i].Name)
 		pr.Skills[i].Frontmatter = renameFrontmatter(pr.Skills[i].Frontmatter, pr.Skills[i].Name)
 	}
 	for i := range pr.Subagents {
 		pr.Subagents[i].Plugin = plugin
+		pr.Subagents[i].PluginAgents = agents
+		pr.Subagents[i].PluginNativeAgents = nativeAgents
 		pr.Subagents[i].BaseName = pr.Subagents[i].Name
 		pr.Subagents[i].Name = source.NamespacedComponentName(plugin, pr.Subagents[i].Name)
 		pr.Subagents[i].Frontmatter = renameFrontmatter(pr.Subagents[i].Frontmatter, pr.Subagents[i].Name)
 	}
 	for i := range pr.Commands {
 		pr.Commands[i].Plugin = plugin
+		pr.Commands[i].PluginAgents = agents
+		pr.Commands[i].PluginNativeAgents = nativeAgents
 		pr.Commands[i].BaseName = pr.Commands[i].Name
 		pr.Commands[i].Name = source.NamespacedComponentName(plugin, pr.Commands[i].Name)
 		pr.Commands[i].Frontmatter = renameFrontmatter(pr.Commands[i].Frontmatter, pr.Commands[i].Name)

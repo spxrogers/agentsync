@@ -54,6 +54,30 @@ func makeCollidingMarketplace(t *testing.T, dir string) string {
 	return mpDir
 }
 
+// installPluginsViaAgentsync registers a local marketplace and its plugins
+// through agentsync itself, rather than importing them out of an agent's native
+// config.
+//
+// The distinction matters since the `native_agents` deferral landed: a plugin
+// imported FROM an agent is recorded as served natively BY that agent, so apply
+// deliberately projects none of its components there (that projection was the
+// duplicate — Claude keeps loading its own copy from its install dir). These
+// tests are about NAMESPACING, and they observe it in Claude's destination, so
+// they need a plugin agentsync actually owns for Claude. Installing it directly
+// is the honest setup for that: no native copy exists, so nothing is deferred.
+// The deferral itself is covered end to end in plugin_agents_test.go.
+func installPluginsViaAgentsync(t *testing.T, env map[string]string, mpDir string, plugins ...string) {
+	t.Helper()
+	if out, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatalf("marketplace add: %v\n%s", err, out)
+	}
+	for _, p := range plugins {
+		if out, err := runCLI(t, env, "plugin", "add", p); err != nil {
+			t.Fatalf("plugin add %s: %v\n%s", p, err, out)
+		}
+	}
+}
+
 // TestApply_CrossPluginCollisionsNamespaceApart is the end-to-end regression for
 // issue #211: two installed plugins each shipping a same-named component made
 // `status` and `apply` exit 1, and every remedy the error named was one the user
@@ -75,13 +99,7 @@ func TestApply_CrossPluginCollisionsNamespaceApart(t *testing.T) {
 		t.Fatalf("agent add codex: %v", err)
 	}
 	mpDir := makeCollidingMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings(
-		"official-mp", mpDir, "feature-dev", "pr-review-toolkit",
-	))
-
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "feature-dev", "pr-review-toolkit")
 	// The pre-fix failure was here: `status` exited 1 with "codex subagents
 	// \"code-reviewer\" and \"code-reviewer\" resolve to the same agent name".
 	if out, err := runCLI(t, env, "status"); err != nil {
@@ -149,11 +167,7 @@ func TestApply_CrossPluginCollisionsNamespaceApart(t *testing.T) {
 func TestApply_HandAuthoredComponentKeepsBareName(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	mpDir := makeCollidingMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
-
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "feature-dev")
 	// A hand-authored subagent whose name matches what the plugin ships.
 	srcDir := filepath.Join(tmp, ".agentsync", "subagents")
 	if err := os.MkdirAll(srcDir, 0o755); err != nil {
@@ -195,11 +209,7 @@ func TestApply_HandAuthoredComponentKeepsBareName(t *testing.T) {
 func TestImport_SkipsPluginProvidedComponents(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	mpDir := makeCollidingMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
-
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "feature-dev")
 	if out, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("apply: %v\n%s", err, out)
 	}
@@ -244,13 +254,9 @@ func TestImport_SkipsPluginProvidedComponents(t *testing.T) {
 // plugin-provided component says why rather than silently importing nothing. The
 // user asked for that exact component; "no output" would read as a bug.
 func TestImport_NamedPluginComponentIsAnError(t *testing.T) {
-	tmp, env := importTestEnv(t)
+	_, env := importTestEnv(t)
 	mpDir := makeCollidingMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
-
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "feature-dev")
 	if out, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("apply: %v\n%s", err, out)
 	}
@@ -272,11 +278,7 @@ func TestImport_NamedPluginComponentIsAnError(t *testing.T) {
 func TestImport_StillCapturesHandAuthoredAlongsidePlugins(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	mpDir := makeCollidingMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
-
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "feature-dev")
 	if out, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("apply: %v\n%s", err, out)
 	}
@@ -311,11 +313,7 @@ func TestImport_StillCapturesHandAuthoredAlongsidePlugins(t *testing.T) {
 func TestReconcile_WriteBackRefusesPluginProvidedComponent(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	mpDir := makeCollidingMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
-
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "feature-dev")
 	if out, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("apply: %v\n%s", err, out)
 	}
@@ -389,10 +387,7 @@ func TestApply_NamespacingMigrationReclaimsPreRenameFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	mpDir := makeCollidingMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "feature-dev")
 	if out, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("post-rename apply: %v\n%s", err, out)
 	}
@@ -415,11 +410,7 @@ func TestApply_NamespacingMigrationReclaimsPreRenameFiles(t *testing.T) {
 func TestReconcile_WriteBackRefusesPluginSkillBundledFile(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	mpDir := makeBundledSkillMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("bundle-mp", mpDir, "bundler"))
-
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "bundler")
 	if out, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("apply: %v\n%s", err, out)
 	}
@@ -494,16 +485,17 @@ func TestProjectScope_PluginNamespacingAndImportFilter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Install the plugin at USER scope — `import claude:plugin` is user-scope
-	// only, since a plugin is a user-scope concept across every supported
-	// harness — then commit its plugins/<id>.toml into the PROJECT tree. That is
-	// how a project tree actually declares a plugin: the pin travels with the
-	// repo while the fetched cache stays under the user home.
+	// Install the plugin at USER scope — a plugin is a user-scope concept across
+	// every supported harness — then commit its plugins/<id>.toml into the
+	// PROJECT tree. That is how a project tree actually declares a plugin: the
+	// pin travels with the repo while the fetched cache stays under the user
+	// home. (Acquired through agentsync rather than imported out of Claude's
+	// native config, so no `native_agents` deferral is seeded — this test
+	// observes agentsync's own projection in Claude's project destination. Note
+	// the deferral WOULD travel with the pin, which is the intended behavior:
+	// committing a pin commits the statement that Claude serves it natively.)
 	mpDir := makeCollidingMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmpHome, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("user plugin import: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "feature-dev")
 	pin, err := os.ReadFile(filepath.Join(tmpHome, ".agentsync", "plugins", "feature-dev.toml"))
 	if err != nil {
 		t.Fatalf("the user-scope plugin pin should exist: %v", err)
@@ -610,13 +602,9 @@ func TestProjectScope_UserPluginDoesNotShadowProjectComponent(t *testing.T) {
 // "would import" would be worse than useless — it would advertise a capture the
 // real import refuses.
 func TestImport_DryRunSkipsPluginProvidedComponents(t *testing.T) {
-	tmp, env := importTestEnv(t)
+	_, env := importTestEnv(t)
 	mpDir := makeCollidingMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
-
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "feature-dev")
 	if out, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("apply: %v\n%s", err, out)
 	}
@@ -672,11 +660,7 @@ func makeServerMarketplace(t *testing.T, dir string) string {
 func TestImport_SkipsPluginProvidedMCPServer(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	mpDir := makeServerMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("srv-mp", mpDir, "srv"))
-
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "srv")
 	if out, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("apply: %v\n%s", err, out)
 	}
@@ -703,11 +687,7 @@ func TestImport_SkipsPluginProvidedMCPServer(t *testing.T) {
 func TestImport_SkipsPluginHooksButKeepsYourOwn(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	mpDir := makeServerMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("srv-mp", mpDir, "srv"))
-
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "srv")
 	// A hand-written handler on the SAME event the plugin contributes to.
 	hooksSrc := filepath.Join(tmp, ".agentsync", "hooks")
 	if err := os.MkdirAll(hooksSrc, 0o755); err != nil {
@@ -751,11 +731,7 @@ func TestImport_SkipsPluginHooksButKeepsYourOwn(t *testing.T) {
 func TestImport_FailsClosedWhenPluginProjectionFails(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	mpDir := makeCollidingMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("official-mp", mpDir, "feature-dev"))
-
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "feature-dev")
 	if out, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("apply: %v\n%s", err, out)
 	}
@@ -837,10 +813,7 @@ func TestReconcile_HookWriteBackIsRefused(t *testing.T) {
 func TestImport_HookFilterKeysOnFullContent(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	mpDir := makeServerMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("srv-mp", mpDir, "srv"))
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "srv")
 	// SAME event AND SAME matcher as the plugin's handler (PreToolUse / Bash),
 	// differing only in the command.
 	hooksSrc := filepath.Join(tmp, ".agentsync", "hooks")
@@ -877,12 +850,9 @@ func TestImport_HookFilterKeysOnFullContent(t *testing.T) {
 // NAMED hook import matches only plugin-provided handlers: it errors, rather than
 // reporting a successful import of nothing.
 func TestImport_NamedHookEventAllPluginProvided(t *testing.T) {
-	tmp, env := importTestEnv(t)
+	_, env := importTestEnv(t)
 	mpDir := makeServerMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("srv-mp", mpDir, "srv"))
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "srv")
 	if out, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("apply: %v\n%s", err, out)
 	}
@@ -946,10 +916,7 @@ func TestReconcile_OrphanPromptSaysAutoReclaimKindsAreTemporary(t *testing.T) {
 func TestImport_PluginIdenticalHookDoesNotEraseYourOwn(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	mpDir := makeServerMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("srv-mp", mpDir, "srv"))
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "srv")
 
 	// The user's own handler, BYTE-IDENTICAL to what the plugin ships
 	// (PreToolUse / Bash / plugin-guard), plus a second one that is theirs alone
@@ -1057,10 +1024,7 @@ func TestApply_ReclaimsRetiredSubagentSourceID(t *testing.T) {
 func TestImport_CoDeclaredMCPServerStaysRefused(t *testing.T) {
 	tmp, env := importTestEnv(t)
 	mpDir := makeServerMarketplace(t, t.TempDir())
-	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("srv-mp", mpDir, "srv"))
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
-		t.Fatalf("import claude:plugin: %v\n%s", err, out)
-	}
+	installPluginsViaAgentsync(t, env, mpDir, "srv")
 	// The user declares the SAME server id, byte-identical to the plugin's, so
 	// checkProjectedConflicts is happy and both coexist in the projection.
 	mcpDir := filepath.Join(tmp, ".agentsync", "mcp")

@@ -111,7 +111,16 @@ func Plan(r secrets.Resolved, reg *adapter.Registry, agents []string, scope adap
 		if a == nil {
 			return out, fmt.Errorf("adapter %q not registered", name)
 		}
-		ops, skips, err := a.Render(r, scope, project)
+		// Narrow the model to what this agent should receive before the adapter
+		// sees it: a plugin whose `agents` allowlist excludes this agent
+		// contributes nothing here. Enforced once, at the waist — see
+		// secrets.Resolved.ForAgent and source.PluginTargetsAgent for why no
+		// adapter participates. Components dropped this way leave no op, so a
+		// destination file written by an earlier apply is reclaimed by the normal
+		// orphan paths (orphanDeletes for file-backed kinds, orphanCleanupOps for
+		// the key-merge ones) rather than lingering as the duplicate the
+		// allowlist was set to remove.
+		ops, skips, err := a.Render(r.ForAgent(name), scope, project)
 		if err != nil {
 			return out, fmt.Errorf("render %s: %w", name, err)
 		}

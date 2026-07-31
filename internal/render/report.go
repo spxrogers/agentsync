@@ -55,6 +55,14 @@ type PluginRow struct {
 	// Disabled is true when the plugin is disabled for this scope (e.g. by a
 	// project marker's [plugins] disabled). Its components are not rendered.
 	Disabled bool `json:"disabled,omitempty"`
+	// NotTargeted is true when this plugin contributes nothing to THIS row's
+	// agent: either its `agents` allowlist excludes the agent (Coverage
+	// "not targeted") or its `native_agents` deferral list names the agent,
+	// which serves the plugin from its own plugin manager (Coverage "native").
+	// Unlike Disabled (global to the plugin, one row), both are per-agent — the
+	// row exists so a plugin narrowed away from an agent reads as a deliberate
+	// choice rather than as one that mysteriously rendered nothing.
+	NotTargeted bool `json:"notTargeted,omitempty"`
 }
 
 // SkipDetail names one component an adapter could not translate, with the
@@ -190,6 +198,17 @@ func (r TranslationReport) printText(w io.Writer, p *ui.Printer) {
 				}
 				continue
 			}
+			if row.NotTargeted {
+				note := "(not targeted by this plugin's `agents` allowlist)"
+				if row.Coverage == "native" {
+					note = "(served natively by this agent — listed in `native_agents`)"
+				}
+				if p != nil {
+					note = p.Faint(note)
+				}
+				fmt.Fprintf(w, "  %-10s %s\n", row.Agent, note)
+				continue
+			}
 			mark := coverageMark(row.Coverage)
 			tail := fmt.Sprintf("(%d mcp, %d commands)", row.MCP, row.Commands)
 			if p != nil {
@@ -288,6 +307,28 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 			if !ok {
 				continue
 			}
+			// The plan for this agent was rendered from a model this plugin's
+			// components were filtered out of (secrets.Resolved.ForAgent), so its
+			// ops/skips say nothing about this plugin — emit the targeting marker
+			// instead of counts the plugin did not contribute to.
+			if !source.PluginTargetsAgent(plug.ID.Unverified(), plug.Plugin.Agents, plug.Plugin.NativeAgents, agName) {
+				// Name WHICH gate excluded the agent. The two mean different
+				// things to the reader — a narrowed allowlist is a choice they
+				// made, a deferral says the agent installs this plugin itself —
+				// and the remedies differ (widen `agents` vs. uninstall the
+				// native copy and drop the `native_agents` entry).
+				coverage := "native"
+				if !source.AgentTargeted(plug.Plugin.Agents, agName) {
+					coverage = "not targeted"
+				}
+				report.Rows = append(report.Rows, PluginRow{
+					Plugin:      label,
+					Agent:       agName,
+					Coverage:    coverage,
+					NotTargeted: true,
+				})
+				continue
+			}
 			report.Rows = append(report.Rows, reportRow(label, agName, c, res))
 		}
 	}
@@ -367,15 +408,8 @@ func countLSPServers(c source.Canonical, agent string) int {
 }
 
 // targetsAgent reports whether an Agents allowlist includes agent. An empty
-// list or one containing "*" targets every agent.
+// list or one containing "*" targets every agent. It delegates to the exported
+// predicate so this package holds ONE spelling of the rule.
 func targetsAgent(agents []string, agent string) bool {
-	if len(agents) == 0 {
-		return true
-	}
-	for _, a := range agents {
-		if a == "*" || a == agent {
-			return true
-		}
-	}
-	return false
+	return source.AgentTargeted(agents, agent)
 }

@@ -682,6 +682,22 @@ func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry
 			"run `agentsync import %s:plugin` to manage them.",
 			len(missing), name, untrusted.Join(missing, ", "), name)
 	}
+	// Warn: the reverse case — a plugin the agent installs ITSELF that agentsync
+	// also projects there, so every component lands twice. apply never reads the
+	// destination (its plan is a pure function of canonical state), so this is
+	// the only place the collision can be noticed once the plugin is declared.
+	duplicated := duplicatedNativePlugins(c, reg, selected)
+	for _, name := range reg.Names() {
+		dupes := duplicated[name]
+		if len(dupes) == 0 {
+			continue
+		}
+		p.Warnf("%d plugin(s) are installed in %s AND projected there by agentsync (%s), "+
+			"so their skills/subagents/commands land twice and their hooks fire twice. "+
+			"Either uninstall them in %s, or add %q to `native_agents` in plugins/<id>.toml "+
+			"to let %s keep serving them itself.",
+			len(dupes), name, untrusted.Join(dupes, ", "), name, name, name)
+	}
 }
 
 // orphanedStateAgents returns, sorted, the agent names that appear as a state

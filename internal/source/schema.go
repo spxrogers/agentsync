@@ -130,6 +130,13 @@ type MCPServer struct {
 	// NamespacedComponentName (provenance.go) and walkerCovered
 	// (internal/secrets/walk_test.go).
 	Plugin string `toml:"-"`
+	// PluginAgents / PluginNativeAgents are the providing plugin's `agents`
+	// allowlist and `native_agents` deferral list, stamped at projection. See
+	// PluginTargetsAgent (provenance.go) for why they are carried per COMPONENT
+	// rather than looked up from Canonical.Plugins, and why PluginAgents is
+	// separate from Server.Agents (the two compose as an intersection).
+	PluginAgents       []string `toml:"-"`
+	PluginNativeAgents []string `toml:"-"`
 }
 
 type MCPServerSpec struct {
@@ -166,6 +173,10 @@ type Skill struct {
 	// (provenance.go) for what they mean and why they are never serialized.
 	Plugin   string `toml:"-"`
 	BaseName string `toml:"-"`
+	// PluginAgents / PluginNativeAgents carry the providing plugin's targeting;
+	// see PluginTargetsAgent (provenance.go). Never serialized.
+	PluginAgents       []string `toml:"-"`
+	PluginNativeAgents []string `toml:"-"`
 }
 
 // SkillFile is one bundled resource inside a skill directory (e.g.
@@ -204,6 +215,30 @@ type PluginSpec struct {
 	ManifestSHA string         `toml:"manifest_sha,omitempty"`
 	Update      string         `toml:"update,omitempty"` // pinned | track | manual
 	Agents      []string       `toml:"agents,omitempty"`
+	// NativeAgents lists agents whose OWN plugin manager already has this plugin
+	// installed, so agentsync must not project its components there — the agent
+	// serves them from its own install dir and a projection would duplicate
+	// every skill, subagent, and command, and double-fire every hook.
+	//
+	// It is a DEFERRAL record, not targeting, and that is why it is a separate
+	// key from Agents rather than a subtraction baked into it:
+	//
+	//   - Agents is the user's own fan-out choice ("only send this to codex").
+	//     NativeAgents is a statement about the world ("claude already has it").
+	//     Editing one should never silently rewrite the other.
+	//   - A subtraction would have to be materialized as a positive list, which
+	//     freezes the agent set: enable a new agent later and it would silently
+	//     NOT receive a plugin the user never excluded. With the deferral held
+	//     separately, Agents stays ["*"] and the new agent is covered.
+	//   - The degenerate case has an honest encoding. When every enabled agent
+	//     serves the plugin natively, this lists them all and Agents stays ["*"]
+	//     — where a positive allowlist would have to write `agents = []`, which
+	//     already means "every agent" (an empty allowlist is the documented
+	//     default), inverting the user's intent.
+	//
+	// `import` populates it by probing each PluginIngester adapter; the user
+	// edits it (or runs `plugin adopt`) after uninstalling the native copy.
+	NativeAgents []string `toml:"native_agents,omitempty"`
 	// Disabled, when true, suppresses the plugin's projection during
 	// marketplace.LoadProjected. `agentsync plugin disable <id>` sets this.
 	// Without honouring it there, the CLI's TOML write would be a no-op:
@@ -248,6 +283,10 @@ type Subagent struct {
 	// (provenance.go) for what they mean and why they are never serialized.
 	Plugin   string
 	BaseName string
+	// PluginAgents / PluginNativeAgents carry the providing plugin's targeting;
+	// see PluginTargetsAgent (provenance.go). Never serialized.
+	PluginAgents       []string
+	PluginNativeAgents []string
 }
 
 // Command mirrors commands/<name>.md (frontmatter + body).
@@ -261,6 +300,10 @@ type Command struct {
 	// (provenance.go) for what they mean and why they are never serialized.
 	Plugin   string
 	BaseName string
+	// PluginAgents / PluginNativeAgents carry the providing plugin's targeting;
+	// see PluginTargetsAgent (provenance.go). Never serialized.
+	PluginAgents       []string
+	PluginNativeAgents []string
 }
 
 // Hook represents a single hook entry for an event.
@@ -284,6 +327,11 @@ type Hook struct {
 	// handlers alongside the plugin's. Never serialized (WriteHooks emits an
 	// explicit hookEntryOut), never secret-bearing — see MCPServer.Plugin.
 	Plugin string
+	// PluginAgents / PluginNativeAgents carry the providing plugin's targeting,
+	// per HANDLER for the same reason Plugin is; see PluginTargetsAgent
+	// (provenance.go). Never serialized, never secret-bearing.
+	PluginAgents       []string
+	PluginNativeAgents []string
 }
 
 // LSPServer mirrors lsp/<id>.toml.
@@ -293,6 +341,10 @@ type LSPServer struct {
 	// Plugin mirrors MCPServer.Plugin — provenance only, never namespaced, never
 	// serialized, never secret-bearing. See MCPServer.Plugin.
 	Plugin string `toml:"-"`
+	// PluginAgents / PluginNativeAgents mirror MCPServer's; see
+	// PluginTargetsAgent (provenance.go).
+	PluginAgents       []string `toml:"-"`
+	PluginNativeAgents []string `toml:"-"`
 }
 
 // LSPServerSpec holds the server configuration for an LSP server.

@@ -71,6 +71,20 @@ write without touching `~/.agentsync/`.
 	add it with `agentsync marketplace add <source>` and re-import.
 </Aside>
 
+<Aside type="note" title="An imported plugin is not projected back into the agent it came from">
+	Importing a plugin out of Claude means Claude has it installed — and `apply`
+	deliberately never disables a plugin inside another tool's plugin manager. So
+	if agentsync also projected that plugin's components into Claude's standalone
+	paths, you would get two of every skill, subagent and command, and its hooks
+	would fire twice.
+
+	`import` therefore records `native_agents = ["claude"]` in
+	`plugins/<id>.toml` and tells you it did. Claude keeps serving the plugin
+	itself; **every other enabled agent gets the full fan-out**, which is the
+	reason to import it. To hand it over to agentsync completely, uninstall it in
+	Claude and remove that agent from `native_agents`.
+</Aside>
+
 <Aside type="caution" title="The first apply on a populated machine">
 	On a machine that already has native config, the **first** `apply` sees files it
 	didn't write and treats them as a `foreign-collision`: it **backs each one up**

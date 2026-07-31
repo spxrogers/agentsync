@@ -77,7 +77,7 @@ func TestDoctor_PluginsOKWhenNoneInstalled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doctor: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "no undeclared native plugins") {
+	if !strings.Contains(out, "no undeclared or duplicated native plugins") {
 		t.Fatalf("doctor should report a clean plugin state; got:\n%s", out)
 	}
 }

@@ -22,7 +22,7 @@ func TestNamespaceProjected(t *testing.T) {
 			Subagents: []source.Subagent{{Name: "code-reviewer", Frontmatter: map[string]any{"name": "code-reviewer"}}},
 			Commands:  []source.Command{{Name: "review", Frontmatter: map[string]any{"description": "d"}}},
 		}
-		namespaceProjected(&pr, "feature-dev")
+		namespaceProjected(&pr, "feature-dev", nil, nil)
 		for _, tc := range []struct{ got, want, field string }{
 			{pr.Skills[0].Name, "feature-dev-code-review", "skill Name"},
 			{pr.Skills[0].BaseName, "code-review", "skill BaseName"},
@@ -48,7 +48,7 @@ func TestNamespaceProjected(t *testing.T) {
 		pr := ProjectionResult{Subagents: []source.Subagent{
 			{Name: "reviewer", Frontmatter: map[string]any{"name": "reviewer", "model": "opus"}},
 		}}
-		namespaceProjected(&pr, "pkg")
+		namespaceProjected(&pr, "pkg", nil, nil)
 		if got := pr.Subagents[0].Frontmatter["name"]; got != "pkg-reviewer" {
 			t.Errorf("frontmatter name = %v, want pkg-reviewer", got)
 		}
@@ -64,7 +64,7 @@ func TestNamespaceProjected(t *testing.T) {
 		pr := ProjectionResult{Subagents: []source.Subagent{
 			{Name: "reviewer", Frontmatter: map[string]any{"description": "d"}},
 		}}
-		namespaceProjected(&pr, "pkg")
+		namespaceProjected(&pr, "pkg", nil, nil)
 		if _, ok := pr.Subagents[0].Frontmatter["name"]; ok {
 			t.Errorf("namespacing must not invent a frontmatter name; got %v", pr.Subagents[0].Frontmatter)
 		}
@@ -75,7 +75,7 @@ func TestNamespaceProjected(t *testing.T) {
 	t.Run("does not mutate the caller's frontmatter map", func(t *testing.T) {
 		fm := map[string]any{"name": "reviewer"}
 		pr := ProjectionResult{Subagents: []source.Subagent{{Name: "reviewer", Frontmatter: fm}}}
-		namespaceProjected(&pr, "pkg")
+		namespaceProjected(&pr, "pkg", nil, nil)
 		if fm["name"] != "reviewer" {
 			t.Errorf("the caller's map was mutated in place; got %v", fm)
 		}
@@ -90,7 +90,7 @@ func TestNamespaceProjected(t *testing.T) {
 			MCPServers: []source.MCPServer{{ID: "srv"}},
 			LSPServers: []source.LSPServer{{ID: "gopls"}},
 		}
-		namespaceProjected(&pr, "pkg")
+		namespaceProjected(&pr, "pkg", nil, nil)
 		if pr.MCPServers[0].ID != "srv" || pr.LSPServers[0].ID != "gopls" {
 			t.Errorf("id-keyed components must not be namespaced: %+v %+v", pr.MCPServers, pr.LSPServers)
 		}
@@ -111,7 +111,7 @@ func TestNamespaceProjected(t *testing.T) {
 	t.Run("hostile plugin ids namespace without error and are caught downstream", func(t *testing.T) {
 		for _, plugin := range []string{"a:b", "esc\x1b[31m"} {
 			pr := ProjectionResult{Subagents: []source.Subagent{{Name: "reviewer"}}}
-			namespaceProjected(&pr, plugin)
+			namespaceProjected(&pr, plugin, nil, nil)
 			got := pr.Subagents[0].Name
 			if got != plugin+"-reviewer" {
 				t.Errorf("plugin %q: derived name = %q", plugin, got)
@@ -126,7 +126,7 @@ func TestNamespaceProjected(t *testing.T) {
 	// flow through the same code path untouched.
 	t.Run("empty plugin is a no-op", func(t *testing.T) {
 		pr := ProjectionResult{Subagents: []source.Subagent{{Name: "reviewer"}}}
-		namespaceProjected(&pr, "")
+		namespaceProjected(&pr, "", nil, nil)
 		if pr.Subagents[0].Name != "reviewer" || pr.Subagents[0].Plugin != "" {
 			t.Errorf("an empty plugin id must change nothing; got %+v", pr.Subagents[0])
 		}
@@ -274,7 +274,7 @@ func TestProvenanceInvariant(t *testing.T) {
 		Commands:  []source.Command{{Name: "cmd"}},
 	}
 	const plugin = "my-plugin"
-	namespaceProjected(&pr, plugin)
+	namespaceProjected(&pr, plugin, nil, nil)
 
 	// Reflect over every slice on ProjectionResult, and over every element that
 	// carries all three fields. A component kind with no BaseName (MCP/LSP/hooks
@@ -343,7 +343,7 @@ func TestProvenanceInvariant(t *testing.T) {
 		LSPServers: []source.LSPServer{{ID: "gopls"}},
 		Hooks:      []source.Hook{{Event: untrusted.Wrap("PreToolUse"), Matcher: "Bash", Type: "command", Command: "guard"}},
 	}
-	namespaceProjected(&pr2, plugin)
+	namespaceProjected(&pr2, plugin, nil, nil)
 	if pr2.MCPServers[0].ID != "srv" || pr2.MCPServers[0].Plugin != plugin {
 		t.Errorf("mcp server must be stamped but not renamed; got %+v", pr2.MCPServers[0])
 	}
