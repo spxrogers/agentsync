@@ -22,9 +22,15 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   every hook handler firing twice.
   - `plugins/<id>.toml` gains **`native_agents`** — the agents whose own plugin
     manager installs this plugin. Their components are not projected there.
-    `import` seeds it from what it discovers (`import claude:plugin` records
-    `native_agents = ["claude"]`) and reports it on the import line; every other
-    enabled agent still receives the full fan-out.
+    `import` **asks** per plugin for what it discovers — *"Let claude keep
+    serving this plugin?"* — and records `native_agents = ["claude"]` when you
+    accept; every other enabled agent still receives the full fan-out.
+    Declining warns, explicitly, that agentsync will duplicate the plugin's
+    content in that harness and that you should disable it there. Under
+    `--no-input` or a non-TTY stdin the deferral is recorded without asking:
+    unlike this package's other prompts, the unattended fallback is the SAFE
+    branch, because a silent scripted import producing two of every component
+    is the worse outcome.
   - To hand a plugin over to agentsync completely, uninstall it in the agent and
     drop that agent from `native_agents`; the next apply projects it there. The
     decision lives entirely in canonical source — `apply` never probes the

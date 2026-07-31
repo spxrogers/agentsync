@@ -169,6 +169,24 @@ func keptLifecycleSummary(spec pluginTOMLSpec) string {
 	return strings.Join(parts, ", ")
 }
 
+// pluginNativeAgentsUnset reports whether a first install of id would actually
+// USE a caller-supplied `native_agents` default: true when plugins/<id>.toml is
+// absent, or present with no `native_agents` key. It lets `import` ask about the
+// deferral only when the answer can take effect — installPluginInto preserves an
+// existing list, so prompting for a plugin that already has one would discard
+// the reply and re-ask on every re-import.
+//
+// An unreadable file counts as SET (false): installPluginInto refuses that case
+// outright rather than resetting lifecycle fields, so there is nothing to ask
+// about.
+func pluginNativeAgentsUnset(home, id string) bool {
+	existing, err := readPluginTOML(filepath.Join(home, "plugins", id+".toml"))
+	if err != nil {
+		return errors.Is(err, os.ErrNotExist)
+	}
+	return existing.Plugin.NativeAgents == nil
+}
+
 // installPluginInto fetches plugin id from the named marketplace into the
 // plugin cache and writes plugins/<id>.toml, returning the written spec. mpName
 // may be empty (the marketplace is then searched for across all caches). It

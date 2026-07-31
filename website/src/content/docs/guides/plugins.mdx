@@ -95,12 +95,18 @@ agent here stops the projection for that agent only.
 A component renders for an agent when `agents` targets it **and**
 `native_agents` does not claim it.
 
-<Aside type="tip" title="`import` fills this in for you">
-	`agentsync import claude:plugin` records `native_agents = ["claude"]` — it
-	just discovered the plugin installed there — and says so on the import line.
-	Every other enabled agent still gets the full fan-out. To hand the plugin over
-	to agentsync completely, uninstall it in the agent and drop that agent from
-	the list.
+<Aside type="tip" title="`import` asks about this, per plugin">
+	`agentsync import claude:plugin` just discovered the plugin installed in
+	Claude, so it offers the deferral: *"Let claude keep serving this plugin?
+	[Y]es / [n]o, project it there too"*. Accepting records
+	`native_agents = ["claude"]`; every other enabled agent still gets the full
+	fan-out. Declining warns that agentsync will duplicate the plugin's content
+	there and that you should disable it inside Claude yourself. Under
+	`--no-input` or a non-TTY stdin the deferral is recorded without asking, so a
+	scripted import never silently produces two of everything.
+
+	To hand the plugin over to agentsync completely, uninstall it in the agent and
+	drop that agent from the list.
 
 	Because `apply` never inspects your agents' installed plugins (that is what
 	keeps a render reproducible from your dotfiles repo alone), a plugin you

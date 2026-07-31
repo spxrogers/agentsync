@@ -201,11 +201,13 @@ Claude's built-in `claude-plugins-official` (which doesn't appear in
 `extraKnownMarketplaces`) before you have registered it — is reported and
 skipped; register it with `agentsync marketplace add <source>` and re-import.
 
-An imported plugin is **not projected back into the agent it came from**. That
-agent has it installed, and apply never disables a plugin inside another tool's
-plugin manager — so projecting the same components there would duplicate every
-one of them. `import` records `native_agents = ["claude"]` and says so; every
-other enabled agent gets the full fan-out. See
+An imported plugin is **not projected back into the agent it came from** unless
+you ask for it. That agent has the plugin installed, and apply never disables a
+plugin inside another tool's plugin manager — so projecting the same components
+there would duplicate every one of them. `import` offers to record
+`native_agents = ["claude"]`; accepting is the default, and declining warns that
+you must disable the plugin inside Claude yourself. Either way every other
+enabled agent gets the full fan-out. See
 [Which agents a plugin fans out to](#which-agents-a-plugin-fans-out-to).
 
 **Importing a project's native config.** `import <agent> --scope project`
@@ -595,11 +597,41 @@ another tool's plugin manager (see [architecture.md § PluginIngester
 (read-only)](architecture.md#pluginingester-read-only)), so the only way to
 avoid the duplicate is not to project there.
 
-**`import` fills `native_agents` in for you.** Importing a plugin out of an
-agent means, by definition, that the agent has it installed — so
-`agentsync import claude:plugin` records `native_agents = ["claude"]` and says
-so on the import line. Claude keeps serving the plugin itself; every OTHER
-enabled agent gets the fan-out. That is the whole point of importing it.
+**`import` asks, per plugin.** Importing a plugin out of an agent means, by
+definition, that the agent has it installed, so `agentsync import claude:plugin`
+stops and offers the deferral:
+
+```
+ℹ INFO   claude already installs the plugin "feature-dev".
+         agentsync can leave those components to claude, or project its own copy alongside them.
+  Let claude keep serving this plugin? [Y]es / [n]o, project it there too:
+```
+
+Accepting records `native_agents = ["claude"]`. Claude keeps serving the plugin
+itself; every OTHER enabled agent still gets the fan-out — that is the whole
+point of importing it.
+
+Declining is a real choice, and agentsync says what it costs:
+
+```
+⚠ WARN   this will DUPLICATE the plugin "feature-dev"'s content in your claude
+         harness — every skill, subagent and command it ships will appear twice,
+         and its hooks will fire twice. Disable or uninstall "feature-dev" in
+         claude now that agentsync is managing it.
+```
+
+That is a working setup **only** if you then turn the plugin off inside Claude
+Code. Declining writes no key, so a later import asks again — and asks only if
+the duplicate still exists. Once you disable the plugin natively, the question
+stops being asked. To silence it while keeping the plugin enabled in both, write
+`native_agents = []` by hand: an explicitly empty list means "defer to nobody"
+and is preserved.
+
+You are only asked when the answer can take effect — never for a plugin whose
+`native_agents` you have already set, since a re-import preserves it. With
+`--no-input`, or when stdin is not a terminal, the deferral is recorded without
+asking and an INFO line says so: a scripted import must not silently produce two
+of everything.
 
 To hand a plugin over to agentsync completely, uninstall it in the agent
 (`/plugin uninstall` in Claude Code) and drop that agent from `native_agents`.

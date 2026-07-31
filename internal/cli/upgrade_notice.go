@@ -92,7 +92,7 @@ var upgradeNotices = []upgradeNotice{
 		Actions: []string{
 			"plugins/<id>.toml gains `native_agents` — agents whose own plugin manager installs the plugin, so apply skips them",
 			"`agents` in plugins/<id>.toml now actually narrows fan-out; it was documented but never read, so a narrowed list had no effect",
-			"EXISTING installs are unchanged until you act: re-run `agentsync import <agent>:plugin` to record the deferral, or add `native_agents` by hand",
+			"EXISTING installs are unchanged until you act: re-run `agentsync import <agent>:plugin` — it now ASKS per plugin — or add `native_agents` by hand",
 			"`status` / `doctor` now warn when a plugin is installed in an agent AND projected there — that pair is the duplicate",
 		},
 		Path: "/reference/upgrading/",

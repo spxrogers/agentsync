@@ -62,10 +62,23 @@ agents        = ["*"]        # your fan-out choice
 native_agents = ["claude"]   # claude installs this itself — don't project there
 ```
 
-`agentsync import claude:plugin` now records `native_agents = ["claude"]` for
-what it finds and says so on the import line. Every other enabled agent still
+`agentsync import claude:plugin` now **asks**, per plugin:
+
+```
+ℹ INFO   claude already installs the plugin "feature-dev".
+         agentsync can leave those components to claude, or project its own copy alongside them.
+  Let claude keep serving this plugin? [Y]es / [n]o, project it there too:
+```
+
+Accepting records `native_agents = ["claude"]`. Every other enabled agent still
 receives the full fan-out — that is the reason to import a plugin in the first
 place.
+
+Declining is allowed, and warns you what it means: agentsync will duplicate the
+plugin's content in that harness, so you should disable or uninstall the plugin
+there now that agentsync manages it. Under `--no-input` or a non-TTY stdin the
+deferral is recorded without asking, so a scripted import never silently
+produces two of everything.
 
 **What you need to do.** Existing installs are unchanged until you act: your
 `plugins/*.toml` have no `native_agents`, so apply keeps projecting exactly as

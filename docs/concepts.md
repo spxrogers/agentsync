@@ -194,10 +194,11 @@ agent's standalone paths would DUPLICATE every one of them (and double-fire its
 hooks). `plugins/<id>.toml` therefore carries two targeting keys: `agents`, your
 fan-out allowlist, and `native_agents`, the agents that serve the plugin
 themselves. A component renders for an agent only if `agents` targets it and
-`native_agents` does not claim it. `import` seeds `native_agents` with the agents
-it discovered the plugin installed in, so the import→apply round trip does not
-manufacture a duplicate; uninstalling the native copy and dropping the entry
-hands the plugin to agentsync. Both gates are enforced in ONE place — the render
+`native_agents` does not claim it. `import` offers `native_agents` per plugin for the
+agents it discovered the plugin installed in, so the import→apply round trip
+does not manufacture a duplicate by default; declining warns that it will, and
+uninstalling the native copy and dropping the entry hands the plugin to
+agentsync. Both gates are enforced in ONE place — the render
 waist (`source.FilterForAgent`, via `secrets.Resolved.ForAgent`) — never in an
 adapter. See the [user guide](user-guide.md).
 

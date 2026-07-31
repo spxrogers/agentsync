@@ -290,7 +290,7 @@ So the deferral is recorded in canonical source, per plugin:
 | key | meaning | who writes it |
 |---|---|---|
 | `agents` | the user's fan-out allowlist (`["*"]` / omitted = every enabled agent) | the user |
-| `native_agents` | agents whose OWN plugin manager installs this plugin, so apply must not project it there | `import` seeds it; the user edits it |
+| `native_agents` | agents whose OWN plugin manager installs this plugin, so apply must not project it there | `import` prompts per plugin (declining warns about the duplicate); the user edits it |
 
 A plugin component renders for an agent only if `agents` targets it **and**
 `native_agents` does not claim it (`source.PluginTargetsAgent`).

@@ -78,11 +78,20 @@ write without touching `~/.agentsync/`.
 	paths, you would get two of every skill, subagent and command, and its hooks
 	would fire twice.
 
-	`import` therefore records `native_agents = ["claude"]` in
-	`plugins/<id>.toml` and tells you it did. Claude keeps serving the plugin
-	itself; **every other enabled agent gets the full fan-out**, which is the
-	reason to import it. To hand it over to agentsync completely, uninstall it in
-	Claude and remove that agent from `native_agents`.
+	`import` therefore **asks**, per plugin: *"Let claude keep serving this
+	plugin? [Y]es / [n]o, project it there too"*. Accepting records
+	`native_agents = ["claude"]` in `plugins/<id>.toml`. Claude keeps serving the
+	plugin itself; **every other enabled agent gets the full fan-out**, which is
+	the reason to import it.
+
+	Declining warns you that agentsync will duplicate the plugin's content in
+	Claude, and that you should disable or uninstall it there now that agentsync
+	manages it. Under `--no-input`, or when stdin is not a terminal, the deferral
+	is recorded without asking — a scripted import must not silently produce two
+	of everything.
+
+	To hand a plugin over to agentsync completely, uninstall it in Claude and
+	remove that agent from `native_agents`.
 </Aside>
 
 <Aside type="caution" title="The first apply on a populated machine">
