@@ -38,7 +38,8 @@ The genius of the model is that **drift is just a hash comparison**:
   (`hash(destination) ≠ hash(last-applied)`). Something edited the native file.
 - **Source change** — you edited the canonical source
   (`hash(target) ≠ hash(last-applied)`). A normal pending change.
-- **Conflict** — *both* happened. agentsync stops and asks you to reconcile.
+- **Conflict** — *both* happened. `apply` overwrites the destination anyway
+  (no backup, no prompt — see below); `reconcile` is how you catch it first.
 
 ---
 
@@ -93,8 +94,8 @@ classifies the item into exactly one of nine cases:
 | **conflict** | source and dest changed to *different* values | overwrite it — no backup, same reason; `reconcile` is how you merge the edit instead |
 | **new** | brand-new item, nothing on disk | create |
 | **foreign-collision** | a pre-existing file agentsync didn't write | back it up, then write |
-| **orphan** | removed from source, still on disk | delete |
-| **orphan-drifted** | removed from source, but the dest was also edited | back it up, then delete |
+| **orphan** | removed from source, still on disk | delete, if `apply` still reclaims that kind of file |
+| **orphan-drifted** | removed from source, but the dest was also edited | back it up, then delete, if `apply` still reclaims that kind of file |
 
 `apply` never blocks or prompts on any of these — it always finishes the run.
 Only **foreign-collision** and **orphan-drifted** get a per-file backup before
@@ -102,7 +103,12 @@ the write/delete: those are the two cases where the destination holds content
 agentsync doesn't already own in state. **drift** and **conflict** ARE
 already state-owned by definition, so the writer's per-file backup path skips
 them and overwrites directly — the hand edit is simply lost, with no
-per-file copy of it kept. `status`/`diff`/`reconcile` are how you catch a
+per-file copy of it kept. **orphan**/**orphan-drifted** are hedged with "if
+`apply` still reclaims that kind of file": `apply` only reclaims a
+skill/subagent/command destination when its source stops rendering it — for
+every other kind (memory, MCP/hook/LSP entries), `status` still reports the
+class, but the next `apply` doesn't touch the destination at all; it simply
+drops the stale bookkeeping. `status`/`diff`/`reconcile` are how you catch a
 drift/conflict/orphan-drifted item BEFORE the next `apply` acts on it; a
 user-scope apply's destination git-versioning (opt-out, default `prompt`) is
 the after-the-fact recovery net when enabled — see the [user

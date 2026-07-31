@@ -320,15 +320,57 @@ func TestRenderClassLegend(t *testing.T) {
 		{"new", "brand-new item", "will be created"},
 		{"foreign-collision", "agentsync never wrote", "will be backed up and overwritten"},
 		{"orphan", "removed from source and untouched", "will be deleted"},
-		{"orphan-drifted", "the destination was also edited", "recover it from the backup"},
+		{"orphan-drifted", "the destination was also edited", "if apply still reclaims it"},
 	}
 	for _, tc := range tests {
 		line := findLine(t, tc.cls)
-		if !strings.Contains(line, tc.meaning) {
+		meaningIdx := strings.Index(line, tc.meaning)
+		actionIdx := strings.Index(line, tc.action)
+		if meaningIdx < 0 {
 			t.Errorf("expected %q's own line to contain %q; got:%s", tc.cls, tc.meaning, line)
 		}
-		if !strings.Contains(line, tc.action) {
+		if actionIdx < 0 {
 			t.Errorf("expected %q's own line to contain %q; got:%s", tc.cls, tc.action, line)
+		}
+		// A whole-line Contains check can't tell "meaning — action" from
+		// "action — meaning": both substrings are still present either way.
+		// Pin the ORDER too, or a swapped composition passes silently.
+		if meaningIdx >= 0 && actionIdx >= 0 && meaningIdx > actionIdx {
+			t.Errorf(`expected %q's line to read "meaning — action", not the reverse; got:%s`, tc.cls, line)
+		}
+	}
+	// The per-class checks above only prove each class's OWN line exists
+	// somewhere and contains the right substrings in the right order — they
+	// say nothing about the full row LIST: its length, its order, or whether
+	// an extra/junk row snuck in. Mutation-verified gaps this closes: iterating
+	// an unordered map instead of classOrder (rows print in random order every
+	// run — classOrder's own doc comment claims it "doubles as this table's
+	// row order", previously unverified by any test); a junk entry appended to
+	// classOrder (prints an extra row with an empty meaning/action, unnoticed
+	// since nothing asserts NO extra rows exist).
+	var gotRows []string
+	for _, l := range lines {
+		if !strings.HasPrefix(l, "  ") {
+			continue // the "Drift classification statuses" header, or a blank line
+		}
+		trimmed := strings.TrimLeft(l, " ")
+		i := strings.IndexByte(trimmed, ' ')
+		if i < 0 {
+			continue
+		}
+		rest := strings.TrimLeft(trimmed[i+1:], " ")
+		j := strings.IndexByte(rest, ' ')
+		if j < 0 {
+			continue
+		}
+		gotRows = append(gotRows, rest[:j])
+	}
+	if len(gotRows) != len(classOrder) {
+		t.Fatalf("expected exactly %d legend rows (one per classOrder entry), got %d: %v", len(classOrder), len(gotRows), gotRows)
+	}
+	for i, cls := range classOrder {
+		if gotRows[i] != cls {
+			t.Errorf("legend row %d = %q, want %q — row order must match classOrder", i, gotRows[i], cls)
 		}
 	}
 	// The two pairs most likely to get their text swapped by accident (they
@@ -351,7 +393,7 @@ func TestRenderClassLegend(t *testing.T) {
 	// pass silently — this is the asymmetric half of the swap-guard that
 	// needs its own negative assertion (mutation-verified: without this check,
 	// orphan's action silently absorbing orphan-drifted's text goes uncaught).
-	if strings.Contains(orphanLine, "recover it from the backup") {
+	if strings.Contains(orphanLine, "if apply still reclaims it") {
 		t.Errorf("orphan's line must not describe orphan-drifted's action (orphan gets no backup); got:%s", orphanLine)
 	}
 }
@@ -442,6 +484,18 @@ func TestClassTablesCoverAllDriftClasses(t *testing.T) {
 				t.Errorf("%s contains %q more than once", name, cls)
 			}
 			seen[cls] = true
+		}
+		// The loop above only proves the enum's 9 classes are all PRESENT in
+		// classOrder/classSeverity (⊇) and that none repeats — neither rules
+		// out an extra, never-classified entry alongside the real 9 (⊆). A
+		// junk entry appended to classOrder prints an extra row with an empty
+		// meaning/action in `status --legend` (renderClassLegend has no way to
+		// know it isn't real), and TestRenderClassLegend's own row-order check
+		// can't catch it either: it reads its expected row list from this SAME
+		// classOrder, so the two shift together — this length bound is the
+		// only place that pins classOrder to the CLOSED nine-class universe.
+		if len(list) != 9 {
+			t.Errorf("%s has %d entries, want exactly 9 (the closed drift.Class universe)", name, len(list))
 		}
 	}
 }

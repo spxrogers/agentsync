@@ -120,7 +120,13 @@ func newStatusCmd() *cobra.Command {
 					return fmt.Errorf("--legend cannot be combined with --json")
 				case exitCode:
 					return fmt.Errorf("--legend cannot be combined with --exit-code")
-				case agentsCSV != "":
+				case cmd.Flags().Changed("agents"):
+					// Changed(), not agentsCSV != "" — selectAgents treats an
+					// explicitly-empty `--agents ""` as an error too (a script
+					// bug, not "no agents"), and this rejection must match: a
+					// plain agentsCSV != "" check would let
+					// `--legend --agents ""` through silently, still ignoring
+					// the flag it names.
 					return fmt.Errorf("--legend cannot be combined with --agents")
 				}
 				renderClassLegend(p)
@@ -691,6 +697,14 @@ func plural(n int, one, many string) string {
 // overwrites with NO backup for drift/conflict specifically — the
 // destination is already state-owned, so Writer.maybeBackupFileOp's
 // foreign-collision backup path doesn't apply; see internal/render/writer.go).
+// orphan-drifted's line is deliberately hedged rather than promising a
+// backup outright: `apply` only reclaims (and therefore only backs up before
+// deleting) destinations whose SourceID is a skill/subagent/command — see
+// render.OrphanIsReclaimable. A drifted orphan OUTSIDE those kinds (e.g.
+// memory) is currently still classified orphan-drifted by status's
+// unfiltered render.OrphanFiles, but apply never touches its destination at
+// all — no backup, no delete, just a dropped state entry — a pre-existing
+// mismatch between classification and reclamation this PR doesn't fix.
 var classLegend = map[string]string{
 	"new":               "will be created",
 	"pending":           "will be updated to match source",
@@ -698,7 +712,7 @@ var classLegend = map[string]string{
 	"conflict":          "will be overwritten (use reconcile to merge the dest edit)",
 	"foreign-collision": "will be backed up and overwritten",
 	"orphan":            "will be deleted",
-	"orphan-drifted":    "will be backed up, then deleted (the local edit is still lost — recover it from the backup)",
+	"orphan-drifted":    "will be backed up, then deleted, if apply still reclaims it (the local edit is lost either way)",
 }
 
 // renderStatusLegend prints a brief glossary of the drift classes that

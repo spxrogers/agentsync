@@ -725,6 +725,11 @@ func TestStatus_LegendRejectsConflictingFlags(t *testing.T) {
 		{"json", []string{"status", "--legend", "--json"}},
 		{"exit-code", []string{"status", "--legend", "--exit-code"}},
 		{"agents", []string{"status", "--legend", "--agents", "claude"}},
+		// An explicitly-empty --agents must be rejected too, matching
+		// selectAgents' own Changed()-based check elsewhere — a plain
+		// `agentsCSV != ""` string check would miss this and let the flag
+		// through silently ignored.
+		{"agents empty", []string{"status", "--legend", "--agents", ""}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

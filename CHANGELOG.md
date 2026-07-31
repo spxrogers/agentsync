@@ -80,7 +80,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   git-versioning recovery net at all. The same "backs up and overwrites"
   falsehood was also still live in `internal/cli/status.go`'s own doc comment
   (which cited the writer as its authority while contradicting it) and a
-  matching test comment — both fixed to match.
+  matching test comment — both fixed to match. Two more recurrences of the
+  same "apply stops/asks you" claim turned up in `docs/concepts.md`'s own
+  prose bullet list (above the corrected table) and in the website's
+  hand-authored `getting-started/mental-model.mdx` (not covered by the
+  generated-contract-page sync) — both fixed. `orphan-drifted`'s CLI/docs
+  wording was also hedged: `apply` only reclaims (and only then backs up
+  before deleting) a skill/subagent/command destination — for every other
+  kind, `status` still classifies an orphan, but `apply` doesn't touch the
+  destination at all, a pre-existing classification/reclamation mismatch
+  this change doesn't otherwise fix.
 
 ### Fixed
 
