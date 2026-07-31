@@ -83,6 +83,57 @@ func mustNotExist(t *testing.T, label, path string) {
 // check is explicit about that rather than skipping silently when the file is
 // absent, which would make the assertion vacuous exactly when the render path
 // changed.
+// pinPath is the canonical pin for a plugin under an agentsync home.
+func pinPath(tmp, plugin string) string {
+	return filepath.Join(tmp, ".agentsync", "plugins", plugin+".toml")
+}
+
+// deferInPin records `native_agents = [<agents>]` in a plugin's pin — what the
+// user does by hand, and what `import` does for them. It APPENDS rather than
+// rewriting an existing key, so callers must not use it on a pin that already
+// has one; adoptInPin is the inverse.
+//
+// Both exist because the read-edit-write block was copy-pasted across eight
+// call sites, every one hard-coding go-toml's single-quote rendering. A change
+// in quoting style would have silently turned each `ReplaceAll` into a no-op —
+// failing safe, but leaving tests that assert nothing.
+func deferInPin(t *testing.T, tmp, plugin string, agents ...string) {
+	t.Helper()
+	quoted := make([]string, len(agents))
+	for i, a := range agents {
+		quoted[i] = "'" + a + "'"
+	}
+	body := mustReadFile(t, pinPath(tmp, plugin)) +
+		"\nnative_agents = [" + strings.Join(quoted, ", ") + "]\n"
+	if err := os.WriteFile(pinPath(tmp, plugin), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// adoptInPin removes the `native_agents` key from a plugin's pin — what a user
+// does after uninstalling the plugin inside the agent. It asserts the key was
+// actually there, so a quoting or formatting change cannot turn this into a
+// silent no-op that leaves the test asserting nothing.
+func adoptInPin(t *testing.T, tmp, plugin string) {
+	t.Helper()
+	before := mustReadFile(t, pinPath(tmp, plugin))
+	var kept []string
+	removed := false
+	for _, line := range strings.Split(before, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "native_agents") {
+			removed = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if !removed {
+		t.Fatalf("adoptInPin found no native_agents key to remove in:\n%s", before)
+	}
+	if err := os.WriteFile(pinPath(tmp, plugin), []byte(strings.Join(kept, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func mustNotMention(t *testing.T, label, path, needle string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -203,11 +254,7 @@ func TestApply_AdoptingANativePluginProjectsItAgain(t *testing.T) {
 
 	// The user uninstalls the plugin in Claude and adopts it into agentsync by
 	// dropping the deferral.
-	tomlPath := filepath.Join(tmp, ".agentsync", "plugins", "toolkit.toml")
-	adopted := strings.ReplaceAll(mustReadFile(t, tomlPath), "native_agents = ['claude']\n", "")
-	if err := os.WriteFile(tomlPath, []byte(adopted), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	adoptInPin(t, tmp, "toolkit")
 	if out, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("apply after adopting: %v\n%s", err, out)
 	}
@@ -243,17 +290,20 @@ func TestApply_DeferralReclaimsPreviouslyProjectedFiles(t *testing.T) {
 	}
 
 	// Now the user installs the plugin in Claude natively and records it.
-	tomlPath := filepath.Join(tmp, ".agentsync", "plugins", "toolkit.toml")
-	deferred := mustReadFile(t, tomlPath) + "\nnative_agents = ['claude']\n"
-	if err := os.WriteFile(tomlPath, []byte(deferred), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	deferInPin(t, tmp, "toolkit", "claude")
 	if out, err := runCLI(t, env, "apply"); err != nil {
 		t.Fatalf("apply after deferring: %v\n%s", err, out)
 	}
 	for label, path := range claudeToolkitPaths(tmp) {
 		mustNotExist(t, label, path)
 	}
+	// The key-merge kinds are reclaimed by a DIFFERENT path (orphanCleanupOps,
+	// not orphanDeletes), and pipeline.go claims both are handled. The fixture
+	// ships an MCP server and a hook precisely because those are the two that
+	// misbehave when duplicated, so assert them here rather than trusting the
+	// claim — per "point to the test that backs it".
+	mustNotMention(t, "the plugin's MCP server", filepath.Join(tmp, ".claude.json"), "toolkit-srv")
+	mustNotMention(t, "the plugin's hook", filepath.Join(tmp, ".claude", "settings.json"), "toolkit-guard")
 }
 
 // TestApply_PluginAgentsAllowlistNarrowsFanOut covers the OTHER gate — the
@@ -358,11 +408,7 @@ func TestStatus_WarnsWhenAgentAlsoInstallsThePluginItself(t *testing.T) {
 
 	// Recording the deferral resolves it — and the warning goes away without any
 	// change to Claude's own config.
-	tomlPath := filepath.Join(tmp, ".agentsync", "plugins", "toolkit.toml")
-	deferred := mustReadFile(t, tomlPath) + "\nnative_agents = ['claude']\n"
-	if err := os.WriteFile(tomlPath, []byte(deferred), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	deferInPin(t, tmp, "toolkit", "claude")
 	out, err = runCLI(t, env, "status")
 	if err != nil {
 		t.Fatalf("status: %v\n%s", err, out)
@@ -404,11 +450,7 @@ func TestImport_RefusesLeftoverProjectedFilesAfterDeferral(t *testing.T) {
 
 	// Record the deferral (what `import claude:plugin` does) and do NOT apply —
 	// this is the window.
-	tomlPath := filepath.Join(tmp, ".agentsync", "plugins", "toolkit.toml")
-	deferred := mustReadFile(t, tomlPath) + "\nnative_agents = ['claude']\n"
-	if err := os.WriteFile(tomlPath, []byte(deferred), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	deferInPin(t, tmp, "toolkit", "claude")
 
 	for _, component := range []string{"subagent", "skill", "command"} {
 		out, err := runCLI(t, env, "import", "claude:"+component)
@@ -427,6 +469,31 @@ func TestImport_RefusesLeftoverProjectedFilesAfterDeferral(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(tmp, ".agentsync", rel)); err == nil {
 			t.Errorf("import captured agentsync's own projected output as hand-authored: %s", rel)
 		}
+	}
+}
+
+// TestImport_DryRunPreviewsTheQuestionRatherThanTheAnswer pins the call site of
+// the preview note. Round 2 tested the note builder in isolation; replacing the
+// call with "" stayed green, so the wiring itself was unpinned — and a preview
+// that silently says nothing is exactly as wrong as one that over-promises.
+func TestImport_DryRunPreviewsTheQuestionRatherThanTheAnswer(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	mpDir := makeFanOutMarketplace(t, t.TempDir())
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("fanout-mp", mpDir, "toolkit"))
+
+	out, err := runCLI(t, env, "import", "claude:plugin", "--dry-run")
+	if err != nil {
+		t.Fatalf("import --dry-run: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "will ask") {
+		t.Errorf("the preview must say the real run asks; got:\n%s", out)
+	}
+	if strings.Contains(out, "native_agents=[claude]") {
+		t.Errorf("the preview asserted an outcome the user may decline; got:\n%s", out)
+	}
+	// A dry run writes nothing at all.
+	if _, err := os.Stat(pinPath(tmp, "toolkit")); err == nil {
+		t.Error("--dry-run wrote a plugin pin")
 	}
 }
 
@@ -449,10 +516,7 @@ func TestImport_DoesNotReAddADeferralAfterAdoption(t *testing.T) {
 
 	// Adopt: uninstall the plugin inside Claude, and drop the deferral.
 	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("fanout-mp", mpDir))
-	adopted := strings.ReplaceAll(mustReadFile(t, tomlPath), "native_agents = ['claude']\n", "")
-	if err := os.WriteFile(tomlPath, []byte(adopted), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	adoptInPin(t, tmp, "toolkit")
 
 	// A re-import must not resurrect it: Claude no longer installs the plugin,
 	// so there is nothing to defer to.
@@ -492,8 +556,16 @@ func TestImport_PreservesAnExplicitlyEmptyDeferral(t *testing.T) {
 
 	// Claude still installs the plugin, so a re-import has every reason to
 	// re-seed — and must not, because the empty list is a recorded decision.
-	if out, err := runCLI(t, env, "import", "claude:plugin"); err != nil {
+	out, err := runCLI(t, env, "import", "claude:plugin")
+	if err != nil {
 		t.Fatalf("re-import: %v\n%s", err, out)
+	}
+	// The item line reports what was WRITTEN, not what was a candidate. Reporting
+	// the candidates here would claim `native_agents=[claude]` for an import that
+	// deliberately wrote nothing of the sort — the same misreport class that made
+	// `plugin explain` call a deferred plugin a failure.
+	if strings.Contains(out, "native_agents=[claude]") {
+		t.Errorf("the item line claimed a deferral the import did not write; got:\n%s", out)
 	}
 	got := mustReadFile(t, tomlPath)
 	if !strings.Contains(got, "native_agents = []") {
@@ -540,11 +612,7 @@ func TestDoctor_WarnsWhenAgentAlsoInstallsThePluginItself(t *testing.T) {
 
 	// Recording the deferral resolves it. Without this phase the test would pass
 	// for a doctor that warned unconditionally once any plugin was declared.
-	tomlPath := filepath.Join(tmp, ".agentsync", "plugins", "toolkit.toml")
-	deferred := mustReadFile(t, tomlPath) + "\nnative_agents = ['claude']\n"
-	if err := os.WriteFile(tomlPath, []byte(deferred), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	deferInPin(t, tmp, "toolkit", "claude")
 	out, err = runCLI(t, env, "doctor")
 	if err != nil {
 		t.Fatalf("doctor: %v\n%s", err, out)

@@ -74,9 +74,12 @@ memory-fragment expansion.
   `StripManagedBanner` (inject / strip the managed-file banner — see
   `docs/architecture.md`); `NamespacedComponentName` / `PluginTargetsAgent` /
   `AgentTargeted` (plugin provenance + the `agents`/`native_agents` gates);
-  `FilterForAgent` (the ONE narrowing of a canonical to what one agent renders —
-  used by `render.Plan` via `secrets.Resolved.ForAgent` and by import's
-  capture-refusal filter, so the two can never disagree).
+  `FilterForAgent` (the ONE narrowing of a canonical to what one agent renders,
+  used by `render.Plan` via `secrets.Resolved.ForAgent` — its only caller.
+  import's capture-refusal filter deliberately does NOT narrow the same way; its
+  refusal set is WIDER than the render set, because the destination can still
+  hold un-reclaimed output from before a deferral was recorded. Do not restore
+  symmetry between them — see `docs/architecture.md`).
 - **Depends on:** iox, jsonkeys.
 - **Files:** `schema.go`, `loader.go`, `writer.go`, `memory.go`,
   `provenance.go`, `targeting.go`.

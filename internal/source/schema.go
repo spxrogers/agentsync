@@ -250,6 +250,8 @@ type PluginSpec struct {
 	// `import` populates it by probing each PluginIngester adapter; the user
 	// edits it by hand after uninstalling the native copy.
 	//
+	// # Unvalidated entries
+	//
 	// Entries are NOT validated against the agent registry. A typo defers to
 	// nobody, and for an agent whose adapter implements PluginIngester (claude,
 	// codex) the symptom surfaces: the plugin still projects there, so

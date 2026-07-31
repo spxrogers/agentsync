@@ -86,6 +86,15 @@ func duplicatedNativePlugins(c source.Canonical, reg *adapter.Registry, agents [
 	}
 	out := map[string][]untrusted.Text{}
 	for _, name := range agents {
+		// The claim this report makes is about agentsync's OWN projection, so an
+		// agent agentsync does not render to cannot be duplicating anything —
+		// however its native config looks. Checked HERE rather than left to the
+		// caller: `status` passes its selected set but `doctor` passes every
+		// registered adapter, and the difference produced a warning telling users
+		// to uninstall a plugin from an agent agentsync never touches.
+		if !c.Config.Agents[name].Enabled {
+			continue
+		}
 		pi, ok := reg.Lookup(name).(adapter.PluginIngester)
 		if !ok {
 			continue

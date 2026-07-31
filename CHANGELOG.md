@@ -42,6 +42,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`apply`'s translation report no longer over-counts.** `countMCPServers` /
+  `countLSPServers` honoured each server's own `agents` list but not the
+  providing plugin's, so a deferred plugin's servers were counted under another
+  plugin's row for the same agent — reporting "2 mcp" to an agent that got one.
+- **`doctor` no longer warns about agents agentsync does not render to.** It
+  passes every registered adapter to the duplicate check (where `status` passes
+  its enabled set), and the check itself did not verify the agent was enabled —
+  so a plugin natively installed in a disabled agent was reported as duplicated,
+  with a remedy that would have removed working functionality. The gate moved
+  into the check, where a caller cannot get it wrong.
 - **`agentsync plugin explain` no longer reports a deferred plugin as a
   failure.** It renders translation-report rows through its own path, which fell
   through to the generic mark and printed a red `✗ native  no components` for a

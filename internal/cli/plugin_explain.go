@@ -282,7 +282,10 @@ func emitReportBody(w io.Writer, p *ui.Printer, r render.TranslationReport) {
 		// exists to answer. render owns the wording (PluginRow.TargetingNote) so
 		// this site and the translation report cannot drift.
 		if note := row.TargetingNote(); note != "" {
-			fmt.Fprintf(w, "  %s %s\n", p.Bold(ui.Pad(row.Agent, 10)), p.Faint(note))
+			// Same leading arrow + column widths as an ordinary row, so a
+			// deferred agent lines up with its siblings instead of hanging two
+			// columns left.
+			fmt.Fprintf(w, "  %s %s  %s\n", p.Faint(ui.GlyphArrow), p.Bold(ui.Pad(row.Agent, 10)), p.Faint(note))
 			continue
 		}
 		glyph, color := coverageGlyphAndColor(p, row.Coverage)

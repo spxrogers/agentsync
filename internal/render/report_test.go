@@ -727,6 +727,84 @@ func TestBuildReport_NotTargetedRows(t *testing.T) {
 	}
 }
 
+// TestBuildReport_CoverageOutcomes pins the three RENDER outcomes. Nothing
+// asserted "partial" or "none" anywhere, so the constants promoted for them were
+// unpinned: changing their values passed the whole suite. They are the --json
+// contract, so a silent value change is a silent contract break.
+func TestBuildReport_CoverageOutcomes(t *testing.T) {
+	cases := []struct {
+		name     string
+		skips    []adapter.Skip
+		ops      []adapter.FileOp
+		want     string
+		wantMark string
+	}{
+		{name: "no skips", ops: []adapter.FileOp{{Action: "write", Path: "/x"}}, want: "full", wantMark: "✓ full"},
+		{
+			name:  "skipped something but still rendered",
+			skips: []adapter.Skip{{Component: "lsp", Name: "l", Reason: "no concept"}},
+			ops:   []adapter.FileOp{{Action: "write", Path: "/x"}},
+			want:  "partial", wantMark: "◐ partial",
+		},
+		{
+			name:  "skipped everything, rendered nothing",
+			skips: []adapter.Skip{{Component: "lsp", Name: "l", Reason: "no concept"}},
+			want:  "none", wantMark: "✗ none",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := source.Canonical{MCPServers: []source.MCPServer{{ID: "srv"}}}
+			plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+				"claude": {Ops: tc.ops, Skips: tc.skips},
+			}}
+			report := render.BuildReport(c, plan, []string{"claude"})
+			if got := report.Rows[0].Coverage; got != tc.want {
+				t.Errorf("Coverage = %q, want %q", got, tc.want)
+			}
+			var buf bytes.Buffer
+			report.PrintText(&buf)
+			if !strings.Contains(buf.String(), tc.wantMark) {
+				t.Errorf("printed report should carry %q; got:\n%s", tc.wantMark, buf.String())
+			}
+		})
+	}
+}
+
+// TestBuildReport_CountsHonourPluginTargeting pins that the per-agent inventory
+// respects the plugin gates. The counts are computed over the WHOLE model, so a
+// deferred plugin's MCP/LSP servers were attributed to whatever other plugin's
+// row happened to be printed for that agent — apply reporting "2 mcp" to an
+// agent that received one.
+func TestBuildReport_CountsHonourPluginTargeting(t *testing.T) {
+	claudeOnly := []string{"claude"}
+	c := source.Canonical{
+		MCPServers: []source.MCPServer{
+			{ID: "beta-srv", Plugin: "beta", PluginAgents: []string{"*"}},
+			{ID: "alpha-srv", Plugin: "alpha", PluginAgents: []string{"*"}, PluginNativeAgents: claudeOnly},
+		},
+		LSPServers: []source.LSPServer{
+			{ID: "alpha-lsp", Plugin: "alpha", PluginAgents: []string{"*"}, PluginNativeAgents: claudeOnly},
+		},
+		Plugins: []source.Plugin{
+			{ID: "beta", Plugin: source.PluginSpec{ID: "beta@mp", Agents: []string{"*"}}},
+		},
+	}
+	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+		"claude": {Ops: []adapter.FileOp{{Action: "write", Path: "/x"}}},
+	}}
+	report := render.BuildReport(c, plan, []string{"claude"})
+	if len(report.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(report.Rows))
+	}
+	if got := report.Rows[0].MCP; got != 1 {
+		t.Errorf("MCP count = %d, want 1 — the deferred plugin's server must not be counted here", got)
+	}
+	if got := report.Rows[0].LSP; got != 0 {
+		t.Errorf("LSP count = %d, want 0 — the only LSP server belongs to the deferred plugin", got)
+	}
+}
+
 // TestPrintText_NotTargetedRowsExplainThemselves pins the human output. The row
 // carries no coverage mark, so without a dedicated line it would print as a bare
 // agent name with an empty status — indistinguishable from a bug. Each variant

@@ -66,6 +66,16 @@ func TestPromptNativeAgentsDeferral_AnswerParsing(t *testing.T) {
 		{name: "explicit no opts into the duplicate", typed: "n\n", want: nil},
 		{name: "no spelled out", typed: "no\n", want: nil},
 		{name: "unrecognized then no", typed: "maybe\nn\n", want: nil},
+		// A line with no trailing newline reaches ReadString's err!=nil path with
+		// a non-empty line, which is the ONLY route to the EOF guard — the "\n"
+		// case above hits `case ""` first and never exercises it. Closed stdin
+		// must land on the safe branch (defer), never fall through to the
+		// duplicate.
+		{name: "unrecognized then EOF takes the safe default", typed: "maybe", want: []string{"claude"}},
+		{name: "bare EOF, no input at all", typed: "", want: []string{"claude"}},
+		// Exhausting the attempt cap must also land safe rather than loop or
+		// return the duplicate.
+		{name: "cap exhausted by repeated garbage", typed: strings.Repeat("what\n", 8), want: []string{"claude"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

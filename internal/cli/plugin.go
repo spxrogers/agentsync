@@ -195,7 +195,7 @@ func pluginNativeAgentsUnset(home, id string) bool {
 // may be empty (the marketplace is then searched for across all caches). It
 // does not print or acquire the global lock — callers do. Both `plugin install`
 // and `import` use it so the two produce byte-identical canonical artifacts.
-// defaultNativeAgents, when non-empty, seeds `native_agents` on a FIRST install
+// defaultNativeAgents, when non-nil, seeds `native_agents` on a FIRST install
 // (it is ignored when plugins/<id>.toml already exists — an existing file's
 // lifecycle fields always win, per #140). `import` passes the agents whose
 // native config already enables this plugin; `plugin add` passes nil.

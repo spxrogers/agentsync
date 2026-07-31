@@ -408,12 +408,12 @@ func reportRow(label untrusted.Text, agName string, c source.Canonical, res Agen
 // no LSP concept is counted in row.LSP yet renders nothing, so its row is "none").
 func computeCoverage(row PluginRow, rendered bool) string {
 	if row.Skips == 0 {
-		return "full"
+		return CoverageFull
 	}
 	if rendered {
-		return "partial"
+		return CoveragePartial
 	}
-	return "none"
+	return CoverageNone
 }
 
 // countMCPServers counts the canonical MCP servers that render for agent —
@@ -421,10 +421,18 @@ func computeCoverage(row PluginRow, rendered bool) string {
 // merge-json-keys ops, which is always 1 for claude's single .claude.json
 // merge regardless of how many servers it holds, and wrongly also counted
 // hooks/lspServers ops (same strategy) as MCP.
+//
+// It honours BOTH targeting gates. The server's own `agents` list was always
+// checked; the providing PLUGIN's `agents`/`native_agents` must be too, or a
+// deferred plugin's servers are counted under some OTHER plugin's row for the
+// same agent — apply reporting "2 mcp" for an agent that received one.
 func countMCPServers(c source.Canonical, agent string) int {
 	n := 0
 	for _, m := range c.MCPServers {
 		if m.Server.Enabled != nil && !*m.Server.Enabled {
+			continue
+		}
+		if !source.PluginTargetsAgent(m.Plugin, m.PluginAgents, m.PluginNativeAgents, agent) {
 			continue
 		}
 		if targetsAgent(m.Server.Agents, agent) {
@@ -442,6 +450,9 @@ func countLSPServers(c source.Canonical, agent string) int {
 	n := 0
 	for _, l := range c.LSPServers {
 		if l.Spec.Enabled != nil && !*l.Spec.Enabled {
+			continue
+		}
+		if !source.PluginTargetsAgent(l.Plugin, l.PluginAgents, l.PluginNativeAgents, agent) {
 			continue
 		}
 		if targetsAgent(l.Spec.Agents, agent) {
