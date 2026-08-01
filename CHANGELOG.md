@@ -11,6 +11,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Added
 
+- **`status --legend`** prints a standalone glossary explaining all nine drift
+  classification statuses (`clean`, `pending`, `drift`, `converged`,
+  `conflict`, `new`, `foreign-collision`, `orphan`, `orphan-drifted`) and exits
+  without running the drift scan. A `status` run whose summary has anything to
+  explain ends with a one-line hint pointing at it (suppressed when nothing
+  was tracked, same as the rest of the summary footer). `--legend` rejects
+  combination with `--json`, `--exit-code`, or `--agents` — each of which it
+  would otherwise silently ignore — rather than accepting and ignoring them.
 - **A plugin an agent installs itself is no longer projected into that agent,
   so `import <agent>` + `apply` stops manufacturing duplicates.** `apply` never
   writes plugin enablement back into an agent's config (the `PluginIngester`
@@ -87,6 +95,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
+- **The formatted `status` report now shows `converged` items as `clean`.** The
+  two remain distinct in the internal drift classifier — converged means the
+  source *and* the destination changed independently but landed on the same
+  value, vs. clean where neither changed — but both mean `apply` has nothing
+  left to do, so the human-facing dashboard folds them into one word and one
+  tally instead of surfacing a distinction only the classifier needs.
+  `status --json` is unaffected and keeps the real classification for scripts.
+
 - **Every diagnostic across the CLI now carries a severity label, and success
   lines lead with an emoji.** The formatting of `agentsync`'s output was the
   reason a correct, deliberate fatal error read as a broken tool: it printed as
@@ -119,6 +135,34 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
     command's own output.
   - Scripts that grep agentsync's human-readable output for `warning:`, `note:`,
     `agentsync:`, or `ok:` need updating; `--json` payloads are unaffected.
+
+### Documentation
+
+- **Corrected the drift-classifier table in `docs/concepts.md` and
+  `docs/architecture.md`**, both of which claimed `apply` "blocks" on drift and
+  conflict (and "warns" on orphan-drifted) — it never does. `apply` always
+  finishes the run: a drift/conflict item is overwritten with **no** per-file
+  backup (the destination is already state-owned, so the writer's
+  foreign-collision backup path doesn't apply — the edit is simply lost,
+  `reconcile` is how you catch it first), while foreign-collision and
+  orphan-drifted genuinely do get backed up first, since those are the cases
+  where the destination holds content agentsync doesn't yet own.
+  `docs/architecture.md` also now spells out the two key-merge-op exceptions
+  (a foreign type-mismatch at an owned section, and one unowned differing
+  pointer) and names project scope explicitly as having no destination
+  git-versioning recovery net at all. The same "backs up and overwrites"
+  falsehood was also still live in `internal/cli/status.go`'s own doc comment
+  (which cited the writer as its authority while contradicting it) and a
+  matching test comment — both fixed to match. Two more recurrences of the
+  same "apply stops/asks you" claim turned up in `docs/concepts.md`'s own
+  prose bullet list (above the corrected table) and in the website's
+  hand-authored `getting-started/mental-model.mdx` (not covered by the
+  generated-contract-page sync) — both fixed. `orphan-drifted`'s CLI/docs
+  wording was also hedged: `apply` only reclaims (and only then backs up
+  before deleting) a skill/subagent/command destination — for every other
+  kind, `status` still classifies an orphan, but `apply` doesn't touch the
+  destination at all, a pre-existing classification/reclamation mismatch
+  this change doesn't otherwise fix.
 
 ### Fixed
 

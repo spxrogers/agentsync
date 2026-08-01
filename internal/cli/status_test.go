@@ -566,3 +566,180 @@ func TestStatus_LegendExplainsDriftClasses(t *testing.T) {
 		t.Errorf("--json must not include the legend; got:\n%s", jsonOut)
 	}
 }
+
+// TestStatus_HintsAtLegendFlag guards the discoverability nudge: a normal
+// `status` run must point users at `--legend` for a fuller explanation of
+// each classification word, and must not do so under --json (a machine
+// payload has no room for a human hint).
+func TestStatus_HintsAtLegendFlag(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatalf("agent add: %v", err)
+	}
+	// The hint is gated on there being a summary to explain (see
+	// TestStatus_HintSuppressedWithNoTrackedItems), so this run needs at
+	// least one tracked item — a bare `agent add` + `apply` with no
+	// components declared renders nothing at all ("(no tracked items)").
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "--legend") {
+		t.Errorf("expected a hint pointing at --legend; got:\n%s", out)
+	}
+
+	jsonOut, err := runCLI(t, env, "status", "--json")
+	if err != nil {
+		t.Fatalf("status --json: %v\n%s", err, jsonOut)
+	}
+	if strings.Contains(jsonOut, "--legend") {
+		t.Errorf("--json must not include the human hint; got:\n%s", jsonOut)
+	}
+}
+
+// TestStatus_HintSuppressedWithNoTrackedItems is round 2's fix for a concrete
+// case the adversarial lens found: an enabled agent with nothing declared
+// yet renders "(no tracked items)", and an unconditional --legend hint would
+// point at classification words the report never showed. `agent add` with no
+// components (no memory, MCP, skills, …) declared is exactly that case.
+func TestStatus_HintSuppressedWithNoTrackedItems(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatalf("agent add: %v", err)
+	}
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "no tracked items") {
+		t.Fatalf("expected this scenario to render nothing tracked (test setup assumption broke); got:\n%s", out)
+	}
+	if strings.Contains(out, "--legend") {
+		t.Errorf("expected no --legend hint when nothing was tracked; got:\n%s", out)
+	}
+}
+
+// TestStatus_LegendFlag covers `status --legend`: it prints the full
+// nine-class glossary as a standalone reference (no project state needed) and
+// exits cleanly without running the drift scan.
+func TestStatus_LegendFlag(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+
+	out, err := runCLI(t, env, "status", "--legend")
+	if err != nil {
+		t.Fatalf("status --legend: %v\n%s", err, out)
+	}
+	for _, cls := range []string{
+		"clean", "pending", "drift", "converged", "conflict",
+		"new", "foreign-collision", "orphan", "orphan-drifted",
+	} {
+		if !strings.Contains(out, cls) {
+			t.Errorf("expected --legend to mention class %q; got:\n%s", cls, out)
+		}
+	}
+	// converged's own entry is the one place that still spells out how it
+	// differs from clean, since the formatted dashboard folds it away.
+	if !strings.Contains(out, "nothing left to reconcile") {
+		t.Errorf("expected the converged entry to explain the fold into clean; got:\n%s", out)
+	}
+	// drift and conflict must read the SAME action a plain `status` run would
+	// show inline (classLegend, reused verbatim by renderClassLegend) — an
+	// earlier draft had --legend claim "apply blocks" for both, contradicting
+	// the inline legend's (correct) "will be overwritten" — with no backup for
+	// either, since apply never refuses to run and the destination is already
+	// state-owned by the time it's classified drift/conflict.
+	if !strings.Contains(out, "will be overwritten (use reconcile to keep the dest edit)") {
+		t.Errorf("expected --legend's drift entry to match classLegend's action text; got:\n%s", out)
+	}
+	if !strings.Contains(out, "will be overwritten (use reconcile to merge the dest edit)") {
+		t.Errorf("expected --legend's conflict entry to match classLegend's action text; got:\n%s", out)
+	}
+}
+
+// TestStatus_LegendFlagNeedsNoProjectState proves --legend's early return
+// actually bypasses project/config loading, rather than merely tolerating an
+// uninitialized directory the way a normal `status` run also does (an
+// uninitialized dir isn't a strong enough control — plain `status` there
+// exits 0 too, with a friendly "no agents enabled" hint). A corrupt
+// agentsync.toml is: plain `status` fails to parse it and errors; `--legend`
+// must still print the glossary and exit 0, since it never reads the file.
+func TestStatus_LegendFlagNeedsNoProjectState(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	cfg := filepath.Join(tmp, ".agentsync", "agentsync.toml")
+	if err := os.WriteFile(cfg, []byte("this is not valid toml {{{"), 0o644); err != nil {
+		t.Fatalf("corrupt config: %v", err)
+	}
+
+	if out, err := runCLI(t, env, "status"); err == nil {
+		t.Fatalf("expected plain status to fail against a corrupt config; got exit 0:\n%s", out)
+	}
+
+	out, err := runCLI(t, env, "status", "--legend")
+	if err != nil {
+		t.Fatalf("status --legend must succeed even with a corrupt config: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "orphan-drifted") {
+		t.Errorf("expected the full glossary despite the corrupt config; got:\n%s", out)
+	}
+}
+
+// TestStatus_LegendRejectsConflictingFlags guards the fix for a bug all four
+// review-loop lenses independently found in round 1: --legend's early return
+// used to run BEFORE flag validation, so `--json`/`--exit-code`/`--agents`
+// were silently accepted and had no effect — `status --json --legend` printed
+// human prose to stdout despite --json's documented "structured payload"
+// contract, and `--agents bogus` didn't even trigger the usual unknown-agent
+// error. Each combination must now be a clear error instead.
+func TestStatus_LegendRejectsConflictingFlags(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"json", []string{"status", "--legend", "--json"}},
+		{"exit-code", []string{"status", "--legend", "--exit-code"}},
+		{"agents", []string{"status", "--legend", "--agents", "claude"}},
+		// An explicitly-empty --agents must be rejected too, matching
+		// selectAgents' own Changed()-based check elsewhere — a plain
+		// `agentsCSV != ""` string check would miss this and let the flag
+		// through silently ignored.
+		{"agents empty", []string{"status", "--legend", "--agents", ""}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runCLI(t, env, tc.args...)
+			if err == nil {
+				t.Fatalf("expected %v to be rejected; got exit 0:\n%s", tc.args, out)
+			}
+			if !strings.Contains(err.Error(), "--legend") {
+				t.Errorf("expected the error to name --legend; got: %v", err)
+			}
+		})
+	}
+}

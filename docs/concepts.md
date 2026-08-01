@@ -38,7 +38,8 @@ The genius of the model is that **drift is just a hash comparison**:
   (`hash(destination) ≠ hash(last-applied)`). Something edited the native file.
 - **Source change** — you edited the canonical source
   (`hash(target) ≠ hash(last-applied)`). A normal pending change.
-- **Conflict** — *both* happened. agentsync stops and asks you to reconcile.
+- **Conflict** — *both* happened. `apply` overwrites the destination anyway
+  (no backup, no prompt — see below); `reconcile` is how you catch it first.
 
 ---
 
@@ -88,13 +89,38 @@ classifies the item into exactly one of nine cases:
 |---|---|---|
 | **clean** | all three agree | nothing |
 | **pending** | you changed the source | write the new source |
-| **drift** | the destination was edited | block; suggest `reconcile` |
+| **drift** | the destination was edited | overwrite it — no backup, since agentsync already owns it; `reconcile` is how you keep the edit instead |
 | **converged** | source and dest changed to the *same* value | refresh state silently |
-| **conflict** | source and dest changed to *different* values | block; require `reconcile` |
+| **conflict** | source and dest changed to *different* values | overwrite it — no backup, same reason; `reconcile` is how you merge the edit instead |
 | **new** | brand-new item, nothing on disk | create |
 | **foreign-collision** | a pre-existing file agentsync didn't write | back it up, then write |
-| **orphan** | removed from source, still on disk | delete |
-| **orphan-drifted** | removed from source, but the dest was also edited | warn; ask for explicit action |
+| **orphan** | removed from source, still on disk | delete, if `apply` still reclaims that kind of file |
+| **orphan-drifted** | removed from source, but the dest was also edited | back it up, then delete, if `apply` still reclaims that kind of file |
+
+`apply` never blocks or prompts on any of these — it always finishes the run.
+Only **foreign-collision** and **orphan-drifted** get a per-file backup before
+the write/delete: those are the two cases where the destination holds content
+agentsync doesn't already own in state. **drift** and **conflict** ARE
+already state-owned by definition, so the writer's per-file backup path skips
+them and overwrites directly — the hand edit is simply lost, with no
+per-file copy of it kept. **orphan**/**orphan-drifted** are hedged with "if
+`apply` still reclaims that kind of file": `apply` only reclaims a
+skill/subagent/command destination when its source stops rendering it — for
+every other kind (memory, MCP/hook/LSP entries), `status` still reports the
+class, but the next `apply` doesn't touch the destination at all; it simply
+drops the stale bookkeeping. `status`/`diff`/`reconcile` are how you catch a
+drift/conflict/orphan-drifted item BEFORE the next `apply` acts on it; a
+user-scope apply's destination git-versioning (opt-out, default `prompt`) is
+the after-the-fact recovery net when enabled — see "Rolling back a bad
+apply" in the [user guide](user-guide.md). It's absent entirely at
+project scope, so a project-scope drift/conflict overwrite has no automatic
+recovery beyond your own source control of the destination.
+
+`agentsync status`'s formatted dashboard displays a **converged** item as
+**clean** — both mean `apply` has nothing left to do, and the distinction
+above is bookkeeping the classifier and `status --json` need, not something a
+human scanning the report benefits from. `status --legend` prints this table
+(as a CLI reference); `status --json` always reports the real class.
 
 Granularity is **per-key** for structured files (JSON/JSONC/TOML, tracked by
 JSON pointer) and **per-file** for everything else. Keys agentsync never wrote
