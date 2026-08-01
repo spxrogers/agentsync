@@ -35,8 +35,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 - **A `--lossless` run that excluded everything no longer reports success.**
   `plugin upgrade --all --lossless` ended with `all plugins are up to date`
   even when every pending bump had just been refused — contradicting the
-  refusals it had printed a line earlier. It now says how many bumps were
-  excluded instead.
+  refusals it had printed a line earlier. It now reports the exclusion instead,
+  on stdout with the result rather than among the diagnostics.
 - **`status --agents` says which agents its duplicate check skipped.** The
   installed-natively-AND-projected warning follows the selected set, which is
   correct — a narrowed report should not discuss agents it excluded — but it

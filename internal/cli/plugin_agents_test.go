@@ -883,6 +883,12 @@ func TestStatus_NarrowedDuplicateCheckSaysSo(t *testing.T) {
 	if !strings.Contains(out, "claude also installs plugins natively") {
 		t.Errorf("the note must name the unexamined agent, not just count it; got:\n%s", out)
 	}
+	// The SINGULAR verb. Its plural mirror is asserted on the two-agent run at
+	// the end of this test; pinning only one of the pair leaves the other free
+	// to regress, which is exactly what a sweep found after the first fix.
+	if !strings.Contains(out, "was not examined") {
+		t.Errorf("one unexamined agent takes the singular verb; got:\n%s", out)
+	}
 	// Silence-qualifying half: this run found nothing, and the lead clause must
 	// say so. Without it the sentence reads as if a duplicate had been reported.
 	if !strings.Contains(out, "no duplicate was reported above, but this check covered only") {

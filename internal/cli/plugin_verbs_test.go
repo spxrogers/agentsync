@@ -226,31 +226,44 @@ func TestLosslessCaveatReachesTheUser(t *testing.T) {
 	// It prints the caveat ONCE for the run, not once per bump. Counting is the
 	// assertion: a per-bump emission would still contain the substring, so
 	// `Contains` alone could not tell the two apart.
-	out, err := runCLI(t, env, "plugin", "upgrade", "--all", "--lossless")
+	// Streams are checked separately: the caveat is a continuation line hanging
+	// under a stderr diagnostic, so landing it on stdout would both detach it
+	// from its headline and pollute a redirected result — the same defect the
+	// all-excluded line had. Merged output cannot see either.
+	stdout, stderr, err := runCLISplit(t, env, "plugin", "upgrade", "--all", "--lossless")
 	if err != nil {
-		t.Fatalf("plugin upgrade --all --lossless: %v\n%s", err, out)
+		t.Fatalf("plugin upgrade --all --lossless: %v\n%s", err, stderr)
 	}
 	for _, id := range []string{"lossy1", "lossy2"} {
-		if !strings.Contains(out, "skipping lossy bump "+id) {
-			t.Fatalf("setup: the --all run should have excluded %s; got:\n%s", id, out)
+		if !strings.Contains(stderr, "skipping lossy bump "+id) {
+			t.Fatalf("setup: the --all run should have excluded %s; got:\n%s", id, stderr)
 		}
 	}
-	if n := strings.Count(out, "plugin explain"); n != 1 {
+	if n := strings.Count(stderr, "plugin explain"); n != 1 {
 		t.Errorf("the caveat is a property of the check, not of a bump: want exactly 1 emission "+
-			"across 2 lossy bumps, got %d:\n%s", n, out)
+			"across 2 lossy bumps, got %d:\n%s", n, stderr)
+	}
+	if strings.Contains(stdout, "plugin explain") {
+		t.Errorf("the caveat is a diagnostic and must not reach stdout; got:\n%s", stdout)
 	}
 
 	// The single-id refusal must carry it too: this is the path where a user
-	// sees one plugin blocked and has nothing to search for.
-	out, err = runCLI(t, env, "plugin", "upgrade", "lossy1", "--lossless")
+	// sees one plugin blocked and has nothing to search for. This is also the
+	// ONLY caller of the `detail()` helper, so it is what pins that helper's
+	// choice of stream.
+	stdout, stderr, err = runCLISplit(t, env, "plugin", "upgrade", "lossy1", "--lossless")
 	if err != nil {
-		t.Fatalf("plugin upgrade lossy1 --lossless: %v\n%s", err, out)
+		t.Fatalf("plugin upgrade lossy1 --lossless: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(out, "skipping lossy upgrade lossy1") {
-		t.Fatalf("setup: the single-id refusal should have fired; got:\n%s", out)
+	if !strings.Contains(stderr, "skipping lossy upgrade lossy1") {
+		t.Fatalf("setup: the single-id refusal should have fired; got:\n%s", stderr)
 	}
-	if !strings.Contains(out, "plugin explain") {
-		t.Errorf("the single-id --lossless refusal must carry the targeting caveat; got:\n%s", out)
+	if !strings.Contains(stderr, "plugin explain") {
+		t.Errorf("the single-id --lossless refusal must carry the targeting caveat; got:\n%s", stderr)
+	}
+	if strings.Contains(stdout, "plugin explain") {
+		t.Errorf("detail() writes a continuation under a stderr diagnostic; on stdout it "+
+			"detaches from its headline; got:\n%s", stdout)
 	}
 }
 
