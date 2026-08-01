@@ -315,7 +315,8 @@ func checkPlugins(p *ui.Printer, home string) {
 			warnCheck(p, fmt.Sprintf("%-10s ", name), fmt.Sprintf(
 				"%d also projected by agentsync: %s — components land twice; uninstall them in %s "+
 					"or add %q to `native_agents`",
-				len(dupes), untrusted.Join(dupes, ", "), name, name))
+				len(dupes), untrusted.Join(dupes, ", "), name, name,
+			))
 		}
 		missing := undeclared[name]
 		if len(missing) == 0 {
