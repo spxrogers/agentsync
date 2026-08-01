@@ -832,7 +832,8 @@ func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry
 	// one it does. reportCanonical is the existing answer to exactly this
 	// mismatch. (The undeclared nudge above is correctly unscoped: "is this
 	// declared anywhere in my source" is a question about the merged view.)
-	duplicated := duplicatedNativePlugins(reportCanonical(c, sc), reg, selected)
+	rc := reportCanonical(c, sc)
+	duplicated := duplicatedNativePlugins(rc, reg, selected)
 	warned := false
 	for _, name := range reg.Names() {
 		dupes := duplicated[name]
@@ -855,15 +856,54 @@ func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry
 	// Emitted whether or not a warning fired: "I checked 1 of 3 agents and found
 	// nothing" is the case most likely to be misread, and it is the case where
 	// the loop above prints nothing at all.
-	if narrowed := len(enabled) - len(selected); narrowed > 0 && len(c.Plugins) > 0 {
-		verb := "no duplicates found, but this"
+	//
+	// Both halves of the guard mirror the check itself rather than re-deriving
+	// it. `rc` is the same canonical duplicatedNativePlugins was given (see the
+	// scope comment above) and declaredPlugins applies the same !Disabled filter
+	// it early-returns on, so the note cannot claim a check that never ran. And
+	// only agents with a native plugin manager can duplicate anything, so an
+	// agent without one going unexamined is not a gap worth reporting — naming
+	// the agents beats a bare count, and lets the note fall silent when nothing
+	// examinable was narrowed away.
+	if unexamined := unexaminedPluginAgents(reg, enabled, selected); len(unexamined) > 0 && len(declaredPlugins(rc)) > 0 {
+		lead := "no duplicates found, but this"
 		if warned {
-			verb = "this"
+			lead = "this"
 		}
-		p.Infof("%s check covered only the %d agent(s) --agents selected; %d other enabled "+
-			"agent(s) were not examined for duplicate plugin projection.",
-			verb, len(selected), narrowed)
+		// Agent names are trusted registry ids (as in the warning above, where
+		// only the plugin names needed untrusted.Join).
+		p.Infof("%s check covered only the agent(s) --agents selected; %s also install plugins "+
+			"natively and were not examined for duplicate plugin projection.",
+			lead, strings.Join(unexamined, ", "))
 	}
+}
+
+// unexaminedPluginAgents returns the enabled agents a `--agents`-narrowed run
+// left out of the duplicate check AND that could actually have carried a
+// duplicate — i.e. those whose adapter implements adapter.PluginIngester, the
+// same capability duplicatedNativePlugins requires before it examines an agent.
+//
+// Filtering on it is what keeps the scoping note honest. An agent with no
+// native plugin concept can never duplicate a plugin, so counting it would
+// inflate the note into a warning about a risk that does not exist — and, worse,
+// would make the note fire on a narrowing that hid nothing.
+func unexaminedPluginAgents(reg *adapter.Registry, enabled, selected []string) []string {
+	sel := make(map[string]bool, len(selected))
+	for _, n := range selected {
+		sel[n] = true
+	}
+	var out []string
+	for _, n := range enabled {
+		if sel[n] {
+			continue
+		}
+		if _, ok := reg.Lookup(n).(adapter.PluginIngester); !ok {
+			continue
+		}
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // orphanedStateAgents returns, sorted, the agent names that appear as a state

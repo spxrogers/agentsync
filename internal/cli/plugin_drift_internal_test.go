@@ -175,10 +175,17 @@ func TestNativePluginOwners_ProbesEveryIngester(t *testing.T) {
 // search for. So the caveat has to name the gap (targeting is not honoured),
 // give a way to check (`plugin explain`), and give a way out (drop the flag).
 // A caveat missing any one of those is back to being a dead end.
+//
+// This half pins only what the const SAYS. That the const actually reaches the
+// user is TestLosslessCaveatReachesTheUser (package cli_test), which keys on
+// the `plugin explain` token required below — neither test is sufficient alone,
+// and dropping either reopens a gap a deletion sweep found in both.
 func TestLosslessTargetingCaveat(t *testing.T) {
 	for _, want := range []string{
-		"native_agents",  // the gap: targeting is not honoured
-		"agents",         // ...both keys, since either can exclude the agent
+		// Both keys, as one phrase. Asserting "agents" separately would be
+		// vacuous — it is a substring of "native_agents", so it passes on a
+		// caveat that never mentions the allowlist at all.
+		"`agents` / `native_agents`",
 		"plugin explain", // how to check whether the agent even receives it
 		"--lossless",     // how to proceed once you know
 	} {

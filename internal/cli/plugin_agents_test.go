@@ -803,4 +803,104 @@ func TestStatus_NarrowedDuplicateCheckSaysSo(t *testing.T) {
 	if !strings.Contains(out, "were not examined") {
 		t.Errorf("silence under --agents must say which agents went unchecked; got:\n%s", out)
 	}
+	// The note NAMES the unexamined agents rather than counting them: "claude"
+	// is the one that could have carried a duplicate, and it is the whole point
+	// of the sentence.
+	if !strings.Contains(out, "claude also install plugins natively") {
+		t.Errorf("the note must name the unexamined agent, not just count it; got:\n%s", out)
+	}
+	// Silence-qualifying half: this run found nothing, and the lead clause must
+	// say so. Without it the sentence reads as if a duplicate had been reported.
+	if !strings.Contains(out, "no duplicates found, but this check covered only") {
+		t.Errorf("a narrowed run that found nothing must lead with that; got:\n%s", out)
+	}
+
+	// Narrowed to the agent WITH the duplicate: the warning fires, so the note
+	// must NOT claim nothing was found — the other half of the `warned` switch.
+	// Pinning both halves is what makes inverting the condition a test failure.
+	out, err = runCLI(t, env, "status", "--agents", "claude")
+	if err != nil {
+		t.Fatalf("status --agents claude: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "projected there by agentsync") {
+		t.Fatalf("setup: narrowing to claude should still report the duplicate; got:\n%s", out)
+	}
+	if !strings.Contains(out, "were not examined") {
+		t.Errorf("a narrowed run must be qualified whether or not it warned; got:\n%s", out)
+	}
+	if strings.Contains(out, "no duplicates found") {
+		t.Errorf("a run that DID report a duplicate must not also say none was found; got:\n%s", out)
+	}
+}
+
+// TestStatus_ScopingNoteStaysSilentWhenNothingWasHidden pins the note's guard,
+// on the two conditions that make a narrowing harmless.
+//
+// The note qualifies duplicatedNativePlugins' silence, so it must fire on the
+// same conditions that check runs on. Round 1 of the review loop reproduced the
+// alternative in both directions: a note that blames the narrowing for a
+// silence the narrowing did not cause, and a note that stays quiet when the
+// narrowing really did hide a duplicate.
+//
+// Both subtests are chosen to FAIL against the predicate this replaced
+// (`len(c.Plugins) > 0` plus a bare `len(enabled)-len(selected)` count) — a
+// guard test that passes either way pins nothing.
+func TestStatus_ScopingNoteStaysSilentWhenNothingWasHidden(t *testing.T) {
+	t.Run("declared but disabled", func(t *testing.T) {
+		tmp, env := importTestEnv(t)
+		if _, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+			t.Fatalf("agent add codex: %v", err)
+		}
+		mpDir := makeFanOutMarketplace(t, t.TempDir())
+		if out, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+			t.Fatalf("marketplace add: %v\n%s", err, out)
+		}
+		if out, err := runCLI(t, env, "plugin", "add", "toolkit"); err != nil {
+			t.Fatalf("plugin add: %v\n%s", err, out)
+		}
+		// Disabled: still IN c.Plugins, but not effectively declared — so
+		// duplicatedNativePlugins returns having examined nothing.
+		if out, err := runCLI(t, env, "plugin", "disable", "toolkit"); err != nil {
+			t.Fatalf("plugin disable: %v\n%s", err, out)
+		}
+		writeClaudeSettings(t, tmp, directoryMarketplaceSettings("fanout-mp", mpDir, "toolkit"))
+
+		out, err := runCLI(t, env, "status", "--agents", "codex")
+		if err != nil {
+			t.Fatalf("status --agents codex: %v\n%s", err, out)
+		}
+		if strings.Contains(out, "were not examined") {
+			t.Errorf("a disabled plugin is not checked for duplication, so there is no "+
+				"narrowed check to qualify; got:\n%s", out)
+		}
+	})
+
+	t.Run("narrowed-away agent has no plugin manager", func(t *testing.T) {
+		tmp, env := importTestEnv(t)
+		// opencode has no native plugin concept, so narrowing it away cannot
+		// hide a duplicate — there is nothing to report.
+		if _, err := runCLI(t, env, "agent", "add", "opencode"); err != nil {
+			t.Fatalf("agent add opencode: %v", err)
+		}
+		mpDir := makeFanOutMarketplace(t, t.TempDir())
+		if out, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+			t.Fatalf("marketplace add: %v\n%s", err, out)
+		}
+		if out, err := runCLI(t, env, "plugin", "add", "toolkit"); err != nil {
+			t.Fatalf("plugin add: %v\n%s", err, out)
+		}
+		writeClaudeSettings(t, tmp, directoryMarketplaceSettings("fanout-mp", mpDir, "toolkit"))
+
+		out, err := runCLI(t, env, "status", "--agents", "claude")
+		if err != nil {
+			t.Fatalf("status --agents claude: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "projected there by agentsync") {
+			t.Fatalf("setup: claude should still report the duplicate; got:\n%s", out)
+		}
+		if strings.Contains(out, "were not examined") {
+			t.Errorf("opencode installs no plugins natively; narrowing it away hid nothing "+
+				"and must not be reported as a gap; got:\n%s", out)
+		}
+	})
 }

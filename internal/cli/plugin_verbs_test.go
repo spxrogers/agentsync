@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -181,6 +182,174 @@ func TestPluginUpgrade_Lossless(t *testing.T) {
 	if strings.Contains(lossyTOML, "2.0.0") {
 		t.Errorf("single-id --lossless upgraded a lossy plugin anyway:\n%s", lossyTOML)
 	}
+}
+
+// TestLosslessCaveatReachesTheUser is the OUTPUT half of the caveat contract.
+//
+// TestLosslessTargetingCaveat (internal package) pins what the const must SAY,
+// but it reads the const directly — so it stays green even if nothing ever
+// prints it. A deletion sweep proved that gap was real: removing the `detail()`
+// call in pluginUpgradeRun, removing the once-per-run `Detailf` in
+// pollPluginsRun, and gutting `detail()` itself ALL left the suite green. This
+// test closes it by asserting on what the commands actually write.
+//
+// It keys on "plugin explain", one of the tokens the internal test REQUIRES the
+// const to contain. That makes the pair load-bearing in both directions: drop
+// the const's pointer to `plugin explain` and the internal test fails; stop
+// emitting the const and this one does.
+func TestLosslessCaveatReachesTheUser(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	base := t.TempDir()
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	mustRun(t, env, "agent", "add", "opencode")
+
+	// TWO lossy plugins, deliberately. With one, "printed once per run" and
+	// "printed once per bump" produce byte-identical output, so the count
+	// assertion below would pass either way — a break-verification sweep caught
+	// exactly that against the shared single-lossy fixture.
+	mpDir := makeTwoLossyMarketplace(t, base, "1.0.0")
+	mustRun(t, env, "marketplace", "add", mpDir)
+	mustRun(t, env, "plugin", "add", "lossy1@as2-mp")
+	mustRun(t, env, "plugin", "add", "lossy2@as2-mp")
+	mustRun(t, env, "apply")
+	// 2.0.0: both gain an opencode-skipped LSP server, so both bumps are lossy.
+	_ = makeTwoLossyMarketplace(t, base, "2.0.0")
+
+	// The --all form runs FIRST, as in TestPluginUpgrade_Lossless: it is the path
+	// that re-fetches the marketplace, and the single-id form below compares
+	// against that refreshed cache. Reversed, the single-id run sees no candidate
+	// and upgrades happily, which makes the refusal — and this whole test —
+	// silently vacuous.
+	//
+	// It prints the caveat ONCE for the run, not once per bump. Counting is the
+	// assertion: a per-bump emission would still contain the substring, so
+	// `Contains` alone could not tell the two apart.
+	out, err := runCLI(t, env, "plugin", "upgrade", "--all", "--lossless")
+	if err != nil {
+		t.Fatalf("plugin upgrade --all --lossless: %v\n%s", err, out)
+	}
+	for _, id := range []string{"lossy1", "lossy2"} {
+		if !strings.Contains(out, "skipping lossy bump "+id) {
+			t.Fatalf("setup: the --all run should have excluded %s; got:\n%s", id, out)
+		}
+	}
+	if n := strings.Count(out, "plugin explain"); n != 1 {
+		t.Errorf("the caveat is a property of the check, not of a bump: want exactly 1 emission "+
+			"across 2 lossy bumps, got %d:\n%s", n, out)
+	}
+
+	// The single-id refusal must carry it too: this is the path where a user
+	// sees one plugin blocked and has nothing to search for.
+	out, err = runCLI(t, env, "plugin", "upgrade", "lossy1", "--lossless")
+	if err != nil {
+		t.Fatalf("plugin upgrade lossy1 --lossless: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "skipping lossy upgrade lossy1") {
+		t.Fatalf("setup: the single-id refusal should have fired; got:\n%s", out)
+	}
+	if !strings.Contains(out, "plugin explain") {
+		t.Errorf("the single-id --lossless refusal must carry the targeting caveat; got:\n%s", out)
+	}
+}
+
+// TestLossless_UnevaluableIsNotReportedAsLossy pins the partition itself.
+//
+// --lossless excludes a bump it cannot evaluate, which is right — a fetch or
+// parse failure must never let a lossy bump through. But an unevaluable bump
+// and a measured one have opposite explanations, and folding them together
+// announced "candidate version drops translation for an agent" about a bump
+// nothing had judged, then attached the targeting caveat to it. The caveat's
+// advice — the loss may fall on an agent this plugin is not projected to,
+// re-run without --lossless — is wrong for a bump that was never measured, and
+// following it would perform the upgrade the refusal existed to prevent.
+func TestLossless_UnevaluableIsNotReportedAsLossy(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	base := t.TempDir()
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	mustRun(t, env, "agent", "add", "opencode")
+
+	mpDir := makeTwoLossyMarketplace(t, base, "1.0.0")
+	mustRun(t, env, "marketplace", "add", mpDir)
+	mustRun(t, env, "plugin", "add", "lossy1@as2-mp")
+	mustRun(t, env, "plugin", "add", "lossy2@as2-mp")
+	mustRun(t, env, "apply")
+
+	// lossy1's 2.0.0 is genuinely lossy; lossy2's manifest is unparseable, so
+	// its bump can be seen but not judged.
+	_ = makeTwoLossyMarketplace(t, base, "2.0.0")
+	corrupt := filepath.Join(mpDir, "plugins", "lossy2", ".claude-plugin", "plugin.json")
+	if err := os.WriteFile(corrupt, []byte("{ not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "plugin", "upgrade", "--all", "--lossless")
+	if err != nil {
+		t.Fatalf("plugin upgrade --all --lossless: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "cannot evaluate lossy2") {
+		t.Fatalf("setup: lossy2's manifest should have failed evaluation; got:\n%s", out)
+	}
+	// The measured one keeps the measured wording; the unevaluable one must not
+	// borrow it.
+	if !strings.Contains(out, "skipping lossy bump lossy1") {
+		t.Errorf("the measured bump should still be reported as lossy; got:\n%s", out)
+	}
+	if strings.Contains(out, "skipping lossy bump lossy2") {
+		t.Errorf("an unevaluable bump was never judged lossy; it must not be announced as "+
+			"dropping translation; got:\n%s", out)
+	}
+	if !strings.Contains(out, "skipping bump lossy2") {
+		t.Errorf("an excluded bump must still be REPORTED, as what it actually is; got:\n%s", out)
+	}
+	// Neither bump was applied: excluding conservatively is unchanged.
+	home := filepath.Join(tmp, ".agentsync")
+	for _, id := range []string{"lossy1", "lossy2"} {
+		pinned, _ := readFileString(t, filepath.Join(home, "plugins", id+".toml"))
+		if strings.Contains(pinned, "2.0.0") {
+			t.Errorf("%s should not have been upgraded under --lossless:\n%s", id, pinned)
+		}
+	}
+}
+
+// makeTwoLossyMarketplace is makeLosslessMarketplace with TWO lossy plugins and
+// no clean one. It exists so a "printed once per run" assertion can be made by
+// COUNTING: against a single-lossy fixture, once-per-run and once-per-bump emit
+// the same bytes and the count cannot tell them apart.
+//
+// Both plugins ship an MCP server at every version and ALSO an LSP server at
+// 2.0.0 — which opencode skips — so both 1.0.0→2.0.0 bumps are lossy.
+func makeTwoLossyMarketplace(t *testing.T, dir, version string) string {
+	t.Helper()
+	mpDir := filepath.Join(dir, "fixture-twolossy-mp")
+	mpcp := filepath.Join(mpDir, ".claude-plugin")
+	if err := os.MkdirAll(mpcp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mpJSON := `{"name":"as2-mp","owner":{"name":"t"},"plugins":[` +
+		`{"name":"lossy1","source":"./plugins/lossy1","version":"` + version + `"},` +
+		`{"name":"lossy2","source":"./plugins/lossy2","version":"` + version + `"}]}`
+	if err := os.WriteFile(filepath.Join(mpcp, "marketplace.json"), []byte(mpJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"lossy1", "lossy2"} {
+		pluginJSON := `{"name":"` + name + `","version":"` + version + `","mcpServers":{"svc":{"command":"echo"}}}`
+		if version == "2.0.0" {
+			pluginJSON = `{"name":"` + name + `","version":"2.0.0","mcpServers":{"svc":{"command":"echo"}},` +
+				`"lspServers":{"gopls":{"command":"gopls"}}}`
+		}
+		d := filepath.Join(mpDir, "plugins", name, ".claude-plugin")
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "plugin.json"), []byte(pluginJSON), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return mpDir
 }
 
 // TestUpdateIsGone pins the ratified alias policy for the LAST command that had
