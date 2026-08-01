@@ -73,6 +73,95 @@ func NamespacedComponentName(plugin, base string) string {
 	return plugin + ComponentNamespaceSeparator + base
 }
 
+// AgentTargeted reports whether an `agents` allowlist includes the named agent.
+// An empty/nil list or one containing "*" targets every agent — the documented
+// default, so an omitted key means "all agents".
+//
+// This is the exported home for a predicate the adapters each keep a local copy
+// of (agentTargeted, for the per-server MCPServerSpec.Agents / LSPServerSpec.Agents
+// fields). New code outside an adapter uses this one.
+func AgentTargeted(agents []string, agent string) bool {
+	if len(agents) == 0 {
+		return true
+	}
+	for _, a := range agents {
+		if a == "*" || a == agent {
+			return true
+		}
+	}
+	return false
+}
+
+// PluginTargetsAgent reports whether a component provided by a plugin should be
+// rendered for the named agent. Two independent gates, both stamped onto each
+// projected component at projection time:
+//
+//   - the plugin's `agents` allowlist (PluginSpec.Agents → PluginAgents) — the
+//     user's own fan-out choice;
+//   - the plugin's `native_agents` deferral list (PluginSpec.NativeAgents →
+//     PluginNativeAgents) — agents whose own plugin manager already installs
+//     this plugin, where projecting would duplicate every component and
+//     double-fire every hook.
+//
+// A component renders only if the allowlist targets the agent AND the deferral
+// list does not claim it. See PluginSpec.NativeAgents for why the deferral is
+// its own key rather than a subtraction folded into the allowlist.
+//
+// # Why the allowlist is stamped per component rather than looked up
+//
+// The projected canonical is FLATTENED: loadProjected appends every enabled
+// plugin's components into one set of slices. A consumer holding a component
+// therefore cannot rejoin it to its Plugins entry without re-deriving the same
+// id the projection stamped — and that id is not the plugins/<id>.toml stem but
+// the name part of `<name>@<marketplace>`, with a fallback. Two derivations of
+// one id is exactly the drift this codebase avoids elsewhere, so the allowlist
+// travels WITH the component, stamped once at the same site that stamps Plugin.
+//
+// # Why it is separate from MCPServerSpec.Agents / LSPServerSpec.Agents
+//
+// Those are the SERVER's own targeting, declared by whoever wrote the server
+// (the user in mcp/<id>.toml, or the plugin in its .mcp.json). The plugin
+// allowlist is the PLUGIN's targeting, declared by the user in
+// plugins/<id>.toml. They compose as an intersection — a component renders for
+// an agent only if both target it — and keeping them apart means neither
+// silently rewrites the other's declared value. Text components (skill,
+// subagent, command) and hooks have no per-component allowlist at all, so for
+// them this is the only targeting there is.
+//
+// # Where it is enforced
+//
+// ONCE, at the single dispatch waist: render.Plan narrows the model per agent
+// (secrets.Resolved.ForAgent) before handing it to that agent's Render. No
+// adapter consults PluginAgents, and none should — an adapter that forgot would
+// silently re-introduce the duplicate this field exists to prevent, across every
+// component kind it renders. One waist beats ten adapters that can drift.
+//
+// A component with no Plugin (hand-authored) always targets every agent: both
+// gates are properties of plugin installation, and both fields are empty for
+// anything loaded from ~/.agentsync/.
+//
+// NOTE the asymmetry in how the two lists read a "*" entry. `agents` is an
+// ALLOWLIST, so AgentTargeted treats "*" as the documented wildcard. The
+// deferral list is a set of specific agents that install the plugin themselves,
+// matched EXACTLY — a literal "*" there names no real agent and defers to
+// nobody. That is deliberate: "every agent serves this natively" is not a
+// deferral, it is `disabled = true`, which the projection already honours and
+// which says what it means.
+func PluginTargetsAgent(plugin string, pluginAgents, pluginNativeAgents []string, agent string) bool {
+	if plugin == "" {
+		return true
+	}
+	if !AgentTargeted(pluginAgents, agent) {
+		return false
+	}
+	for _, native := range pluginNativeAgents {
+		if native == agent {
+			return false
+		}
+	}
+	return true
+}
+
 // Namespacing performs NO validation of the derived name, deliberately. An
 // earlier revision did, and it was a regression: the check used a stricter rune
 // set than the projection's own validateProjectedName, and loadProjected

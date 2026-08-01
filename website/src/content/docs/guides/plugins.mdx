@@ -70,30 +70,67 @@ agentsync plugin explain atlassian@anthropic --json
 
 ## Controlling per-plugin fan-out
 
-Limit a plugin to specific agents with an `agents = [...]` allowlist in its TOML
-file:
+Two keys in a plugin's TOML decide which agents its components render to:
 
 ```toml title="~/.agentsync/plugins/atlassian.toml"
-id     = "atlassian@anthropic"
-agents = ["claude"]   # only fan this plugin out to Claude
+[plugin]
+id            = "atlassian@anthropic"
+agents        = ["claude"]   # only fan this plugin out to Claude
+# native_agents = ["claude"] # OMIT unless an agent installs this itself (see below)
 ```
+
+`agents` is your allowlist — `["*"]`, or omitted, means every enabled agent. It
+is a deliberate, security-relevant choice: a plugin's MCP servers, hooks, and
+skills can carry `${secret:…}` credentials, so `agents = ["claude"]` keeps that
+blast radius scoped to Claude only.
+
+`native_agents` is different in kind — not a preference but a fact about your
+machine. An agent whose own plugin manager installs a plugin (you ran
+`/plugin install` in Claude Code) already serves its components. agentsync never
+disables a plugin inside another tool's plugin manager, so projecting the same
+components into that agent's standalone paths would simply duplicate them: two
+of every skill, subagent and command, and every hook firing twice. Listing the
+agent here stops the projection for that agent only.
+
+A component renders for an agent when `agents` targets it **and**
+`native_agents` does not claim it.
+
+<Aside type="tip" title="`import` asks about this, per plugin">
+	`agentsync import claude:plugin` just discovered the plugin installed in
+	Claude, so it offers the deferral: *"Let claude keep serving this plugin?
+	[Y]es / [n]o, project it there too"*. Accepting records
+	`native_agents = ["claude"]`; every other enabled agent still gets the full
+	fan-out. Declining warns that agentsync will duplicate the plugin's content
+	there and that you should disable it inside Claude yourself. Under
+	`--no-input` or a non-TTY stdin the deferral is recorded without asking, so a
+	scripted import never silently produces two of everything.
+
+	To hand the plugin over to agentsync completely, uninstall it in the agent and
+	drop that agent from the list.
+
+	Because `apply` never inspects your agents' installed plugins (that is what
+	keeps a render reproducible from your dotfiles repo alone), a plugin you
+	install natively *after* declaring it in agentsync goes unnoticed at apply
+	time — `agentsync status` and `agentsync doctor` report that pair instead.
+</Aside>
 
 <Aside type="caution" title="Per-component overrides are not wired in v1">
 	A per-component `[plugin.overrides.<agent>]` table was specced but the projector
-	**does not consult it** in v1 — use the `agents` allowlist instead.
+	**does not consult it** in v1 — use the keys above.
 </Aside>
 
-The allowlist is a deliberate, security-relevant choice: a plugin's MCP servers,
-hooks, and skills can carry `${secret:…}` credentials, so `agents = ["claude"]`
-keeps that blast radius scoped to Claude only.
-
-<Aside type="note" title="Lifecycle commands preserve your allowlist">
+<Aside type="note" title="Lifecycle commands preserve your targeting">
 	`plugin disable`/`enable` and re-running `plugin add` on an
-	already-registered plugin **preserve** its `agents` allowlist (and its `update`
-	mode and `disabled` state) — they never silently re-broaden a narrowed plugin
-	back to every agent. Only `id`/`version`/`manifest_sha` are refreshed by a
-	re-install (from the fresh fetch); when a re-install keeps non-default
-	targeting, the command says so (e.g. `(kept agents=[claude], update=pinned)`).
+	already-registered plugin **preserve** its `agents` allowlist and
+	`native_agents` list (and its `update` mode and `disabled` state) — they never
+	silently re-broaden a narrowed plugin back to every agent. Adopting a plugin
+	(uninstalling it in the agent, then dropping that agent from `native_agents`)
+	sticks, because the agent no longer reports the plugin as installed — and if
+	you drop the entry WITHOUT uninstalling it there, the next import asks again
+	rather than silently re-deferring. Only
+	`id`/`version`/`manifest_sha` are refreshed by a re-install (from the fresh
+	fetch); when a re-install keeps non-default targeting, the command says so
+	(e.g. `(kept agents=[claude], update=pinned)`).
 </Aside>
 
 ## Plugin lifecycle
@@ -108,7 +145,8 @@ agentsync plugin list
 ```
 
 `disable`/`enable` flip only the `disabled` bit and `install` refreshes only the
-fetched fields — so your `agents` allowlist survives the full lifecycle untouched.
+fetched fields — so your `agents` and `native_agents` targeting survives the
+full lifecycle untouched.
 
 <LinkCard
 	title="Agent capability matrix"

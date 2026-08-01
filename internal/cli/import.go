@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -232,7 +233,7 @@ func importRun(cmd *cobra.Command, args []string, dryRun bool) error {
 	// what lets already-labeled diagnostics (INFO notes, aligned continuation
 	// lines) reach the terminal untouched.
 	warnW := ui.NewWarnWriter(p.Err, p)
-	io := &importIO{p: p, out: p.Out, err: warnW, dryRun: dryRun}
+	io := &importIO{p: p, out: p.Out, err: warnW, dryRun: dryRun, cmd: cmd}
 
 	// agentsyncHome is the user-scope home: it owns the central state file and
 	// plugin cache, and the global lock, regardless of import scope. srcHome is
@@ -851,6 +852,13 @@ func importVerb(dryRun bool) string {
 // cyan → vocabulary `apply` and `status` use. The lazy `section` header keeps
 // component groups from showing a name with no rows under it.
 type importIO struct {
+	// cmd is the running command, carried for the one interactive decision
+	// import makes: whether to defer a plugin to an agent that installs it
+	// itself (see promptNativeAgentsDeferral). It supplies stdin, the inherited
+	// --no-input flag, and the TTY check — the same three inputs every other
+	// prompter in this package takes. Like pluginProvided below, this is per-RUN
+	// context living here because the struct is already threaded everywhere.
+	cmd    *cobra.Command
 	p      *ui.Printer
 	out    io.Writer
 	err    io.Writer
@@ -1182,12 +1190,12 @@ func idsFromWritten(written []string) []string {
 // plugin components are namespaced: a hand-authored component can only shadow a
 // plugin-provided one by being named `<plugin>-<name>` on purpose.
 //
-// It mirrors apply's projection so the skipped set is exactly the rendered set:
-// lenient (an unrelated strict plugin conflict must not abort an import), honours
-// the project tree's `disabled = true` plugin markers, and reads the home whose
-// components the render at this scope actually uses. A projection failure is
-// returned, and the caller records it so every component capture then refuses —
-// see skipPluginProvided.
+// It mirrors apply's projection: lenient (an unrelated strict plugin conflict
+// must not abort an import), honours the project tree's `disabled = true` plugin
+// markers, and reads the home whose components the render at this scope actually
+// uses. It is deliberately NOT narrowed per agent — see the note at the collect
+// call below. A projection failure is returned, and the caller records it so
+// every component capture then refuses — see skipPluginProvided.
 func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot string, sc adapter.Scope) (map[string]string, error) {
 	pluginCacheRoot := filepath.Join(agentsyncHome, ".state", "cache", "plugins")
 	var disabled []string
@@ -1280,6 +1288,25 @@ func pluginProvided(fs afero.Fs, agentsyncHome, projectRoot string, sc adapter.S
 	if err != nil {
 		return nil, fmt.Errorf("project plugins from %s: %w", home, err)
 	}
+	// DELIBERATELY NOT narrowed to this agent's render set (source.FilterForAgent).
+	//
+	// The narrowing looks right — a plugin that projects nothing here provides
+	// nothing here, so a same-named file must be the user's own — and it is
+	// wrong, because the destination can still hold agentsync's OWN un-reclaimed
+	// output. Sequence: a plugin projects to claude; the user records
+	// `native_agents = ["claude"]`; before the reclaiming apply runs, a second
+	// `import claude:subagent` sees the still-present rendered files, decides the
+	// plugin no longer provides them here, and captures agentsync's own output
+	// into ~/.agentsync as hand-authored components — permanent copies that
+	// diverge from the plugin's on its next update. The same window opens when a
+	// newly-honoured `agents` allowlist narrows a plugin away from an agent.
+	//
+	// So the refusal set stays the UNION over every installed plugin. The cost is
+	// over-refusal in a contrived case (the user hand-authors a component whose
+	// name exactly matches a plugin's NAMESPACED name — `toolkit-audit` — on an
+	// agent that plugin does not project to), and that case fails LOUDLY with an
+	// error naming the plugin, which the user can act on. Under-refusal fails
+	// silently and permanently. Prefer the loud one.
 	collect(c)
 	return out, nil
 }
@@ -1703,6 +1730,20 @@ func importPlugins(io *importIO, home, agentName string, a adapter.Adapter, name
 		return nil, nil
 	}
 
+	// Which agents already serve each plugin from their OWN plugin manager. A
+	// plugin imported from an agent is, by definition, installed natively there
+	// — so without this every import would set up a duplicate on the very next
+	// apply: the agent keeps loading its own copy from its install dir while
+	// agentsync projects the same components into the agent's standalone paths.
+	// The seed records the deferral in plugins/<id>.toml (`native_agents`), so
+	// apply's decision stays a pure function of canonical state rather than of
+	// whatever the destination happens to look like at apply time.
+	//
+	// Probed ONCE for the whole import (each probe reads a native config) and
+	// across every PluginIngester, since a plugin can be installed natively in
+	// more than the agent being imported from.
+	owners := nativePluginOwners(registryFactory())
+
 	// Resolve (and, on a real run, fetch) each needed marketplace exactly once.
 	// The cached value is the agentsync marketplace name a plugin installs from;
 	// "" marks an unresolvable marketplace already warned about.
@@ -1780,19 +1821,198 @@ func importPlugins(io *importIO, home, agentName string, a adapter.Adapter, name
 		if !mpOK {
 			continue
 		}
+		native := resolveNativeAgents(io, home, plName, owners[plName])
 		if io.dryRun {
-			io.item(fmt.Sprintf("plugins/%s.toml", plName), "")
+			io.item(fmt.Sprintf("plugins/%s.toml", plName), dryRunNativeAgentsNote(home, plName, native))
 			ids = append(ids, plName)
 			continue
 		}
-		if _, ierr := installPluginInto(home, plName, mpName); ierr != nil {
+		spec, ierr := installPluginInto(home, plName, mpName, native)
+		if ierr != nil {
 			io.warnf("skipping plugin %q from %q: %v", pl.Name, mpName, ierr)
 			continue
 		}
-		io.item(fmt.Sprintf("plugins/%s.toml", plName), "")
+		// Report the deferral on the item line rather than silently: it changes
+		// what the next apply writes, and the user needs to know which agents
+		// keep serving the plugin themselves. spec.NativeAgents (not `native`)
+		// is what was actually written — a re-import over an existing TOML
+		// preserves the user's own list instead of re-seeding it.
+		io.item(fmt.Sprintf("plugins/%s.toml", plName), nativeAgentsSuffix(spec.NativeAgents))
 		ids = append(ids, plName)
 	}
 	return ids, nil
+}
+
+// resolveNativeAgents decides what `native_agents` an import should seed for one
+// plugin: the agents that install it themselves, or nil to record nothing.
+//
+// It asks — but ONLY when the answer would be used. installPluginInto preserves
+// an existing `native_agents` (issue #140), so prompting for a plugin that
+// already has one would put a question whose reply is discarded, and re-asking
+// on every re-import would nag about a decision already recorded. A dry run
+// never asks either; it has its own preview line (dryRunNativeAgentsNote).
+//
+// Declining records NO key rather than an empty list, so a later import asks
+// again — and asks only if the duplicate still exists. Acting on the warning
+// (disabling the plugin inside the agent) removes that agent from
+// nativePluginOwners, so the question stops being asked on its own; ignoring it
+// leaves a duplicate worth raising again. A hand-written `native_agents = []`
+// is how a user says "defer to nobody, stop asking" — installPluginInto
+// preserves that, and it survives a rewrite because the field is a pointer.
+func resolveNativeAgents(io *importIO, home, plugin string, candidates []string) []string {
+	if len(candidates) == 0 || io.dryRun || !pluginNativeAgentsUnset(home, plugin) {
+		return candidates
+	}
+	chosen := nativeAgentsPrompter(io, plugin, candidates)
+	if len(chosen) == 0 {
+		warnDuplicateOptOut(io, plugin, candidates)
+		return nil
+	}
+	return chosen
+}
+
+// nativeAgentsPrompter is the interactive deferral offer, injectable so tests
+// can drive the accept/decline branches without a terminal.
+var nativeAgentsPrompter = promptNativeAgentsDeferral
+
+// promptNativeAgentsDeferral asks whether to leave a plugin to the agents that
+// install it themselves, and returns the agents to record in `native_agents`.
+// Returning nil means "project everywhere anyway" — the duplicate, chosen
+// deliberately — and the caller warns about what that implies.
+//
+// It fails SAFE rather than closed. With no TTY or under --no-input it records
+// the deferral without asking, because the alternative is a headless run
+// silently producing two of every component the plugin ships. The other
+// prompters in this package fail closed because their unattended fallback is
+// inaction; here inaction is the damaging outcome, so the fallback is the one
+// that changes nothing about the agent's own setup: agentsync simply does not
+// project on top of what the agent already serves. The choice is recorded in
+// plugins/<id>.toml either way, so a scripted import stays inspectable and
+// editable after the fact.
+//
+// candidates is non-empty and holds registry-derived agent names (never native
+// config strings), so it needs no sanitizing. plugin has already passed
+// source.ValidateComponentID, which rejects control and deceptive runes.
+func promptNativeAgentsDeferral(io *importIO, plugin string, candidates []string) []string {
+	list := strings.Join(candidates, ", ")
+	if io.cmd == nil || noInputFlag(io.cmd) || !stdinIsTerminal(io.cmd) {
+		io.infof("%s already installs %q; recording it in `native_agents` so apply does not "+
+			"project a second copy there. Edit plugins/%s.toml to change that.", list, plugin, plugin)
+		return candidates
+	}
+	return askDeferralAnswer(io, plugin, candidates)
+}
+
+// askDeferralAnswer is promptNativeAgentsDeferral's question loop, split from
+// the TTY/--no-input gate above so it can be driven in tests without a terminal.
+// An unrecognized line re-asks; a bare Enter takes the safe default (defer), and
+// so does EOF — a closed stdin must never spin or fall through to the duplicate.
+func askDeferralAnswer(io *importIO, plugin string, candidates []string) []string {
+	list := strings.Join(candidates, ", ")
+	// STDERR, like every other prompt in this package: import writes its item
+	// lines to stdout, and a caller reading those should not have to filter a
+	// question out of them.
+	w := io.cmd.ErrOrStderr()
+	io.p.Fdiagf(w, ui.LevelInfo, "%s already installs the plugin %q.", list, plugin)
+	io.p.Fdetailf(w, "agentsync can leave those components to %s, or project its own copy alongside them.", list)
+	r := bufio.NewReader(io.cmd.InOrStdin())
+	for attempts := 0; attempts < 5; attempts++ {
+		fmt.Fprintf(w, "  Let %s keep serving this plugin? [Y]es / [n]o, project it there too: ", list)
+		line, err := r.ReadString('\n')
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "", "y", "yes":
+			return candidates
+		case "n", "no":
+			return nil
+		}
+		if err != nil {
+			return candidates // EOF / closed stdin: take the safe branch, never loop
+		}
+		fmt.Fprintf(w, "  please enter y or n.\n")
+	}
+	return candidates
+}
+
+// warnDuplicateOptOut is the explicit consequence of declining the deferral. The
+// user has chosen to have agentsync project a plugin into an agent that already
+// installs it, which is a real, working configuration only if they then turn the
+// plugin off inside that agent — so say exactly that, at WARN, naming the agents.
+func warnDuplicateOptOut(io *importIO, plugin string, agents []string) {
+	sanitized := sanitizedList(agents)
+	list := strings.Join(sanitized, ", ")
+	// Render the remedy as VALID TOML. A naive `[%q]` over the comma-joined
+	// string produced `native_agents = ["claude, cursor"]` for two agents — a
+	// single bogus agent name that silently defers to nobody if pasted.
+	quoted := make([]string, len(sanitized))
+	for i, a := range sanitized {
+		quoted[i] = fmt.Sprintf("%q", a)
+	}
+	io.warnf("this will DUPLICATE the plugin %q's content in your %s harness — every skill, "+
+		"subagent and command it ships will appear twice, and its hooks will fire twice. "+
+		"Disable or uninstall %q in %s now that agentsync is managing it. "+
+		"(To defer to %s instead, set `native_agents = [%s]` in plugins/%s.toml.)",
+		plugin, list, plugin, list, list, strings.Join(quoted, ", "), plugin)
+}
+
+// nativeAgentsSuffix renders the item-line note naming the agents a plugin is
+// NOT projected to because they install it themselves. Empty for the ordinary
+// case (nothing deferred), so the line stays quiet when there is nothing to say.
+// A non-nil EMPTY list is also quiet: "defer to nobody" is the same outcome as
+// no deferral, and the item line reports outcomes.
+//
+// The values are SANITIZED even though the seed comes from agentsync's own
+// registry, because this renders what was actually WRITTEN — read back from
+// plugins/<id>.toml, which is a hand-editable file in a synced dotfiles repo.
+// item() sanitizes only the path it is given and appends this suffix verbatim,
+// so an ANSI/bidi sequence hand-pasted into that TOML would otherwise reach the
+// terminal. The sibling display site (keptLifecycleSummary) sanitizes the same
+// value for the same reason.
+func nativeAgentsSuffix(native *[]string) string {
+	if native == nil || len(*native) == 0 {
+		return ""
+	}
+	list := sanitizedList(*native)
+	return fmt.Sprintf(" (native_agents=[%s] — %s %s this plugin natively, so apply will not project it there)",
+		strings.Join(list, ","), strings.Join(list, " and "), plural(len(list), "serves", "serve"))
+}
+
+// dryRunNativeAgentsNote is the preview counterpart of nativeAgentsSuffix. It
+// must NOT assert a deferral, because a real run ASKS: printing
+// `native_agents=[claude]` would advertise an outcome the user may decline.
+//
+// It reports what the real run will actually do: preview the recorded value when
+// one already exists (the real run preserves it and does not ask), and otherwise
+// say that the question will be put.
+func dryRunNativeAgentsNote(home, plName string, candidates []string) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	if !pluginNativeAgentsUnset(home, plName) {
+		existing, err := readPluginTOML(filepath.Join(home, "plugins", plName+".toml"))
+		if err != nil {
+			// Unreadable but present: installPluginInto refuses this outright
+			// rather than resetting lifecycle fields, so the preview must say the
+			// real run will fail — not print a clean line for an import that is
+			// about to be skipped.
+			return " (existing plugins/" + plName + ".toml is unreadable — the real import will skip this plugin)"
+		}
+		return nativeAgentsSuffix(existing.Plugin.NativeAgents)
+	}
+	list := sanitizedList(candidates)
+	return fmt.Sprintf(" (%s %s this plugin natively — the real import will ask whether to defer to %s)",
+		strings.Join(list, " and "), plural(len(list), "installs", "install"),
+		plural(len(list), "it", "them"))
+}
+
+// sanitizedList strips terminal control/bidi sequences from every element of a
+// list destined for a diagnostic line. Agent names reaching a display site can
+// originate from a hand-edited plugins/<id>.toml, not only from the registry.
+func sanitizedList(in []string) []string {
+	out := make([]string, len(in))
+	for i, v := range in {
+		out[i] = ui.Sanitize(v)
+	}
+	return out
 }
 
 // claudeSourceToAgentsync maps a native marketplace source (Claude's

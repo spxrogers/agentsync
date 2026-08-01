@@ -130,6 +130,24 @@ type MCPServer struct {
 	// NamespacedComponentName (provenance.go) and walkerCovered
 	// (internal/secrets/walk_test.go).
 	Plugin string `toml:"-"`
+	// PluginAgents / PluginNativeAgents are the providing plugin's `agents`
+	// allowlist and `native_agents` deferral list, stamped at projection. See
+	// PluginTargetsAgent (provenance.go) for why they are carried per COMPONENT
+	// rather than looked up from Canonical.Plugins, and why PluginAgents is
+	// separate from Server.Agents (the two compose as an intersection).
+	//
+	// Collapsing these (with Plugin/BaseName) into one PluginProvenance struct
+	// across all six component types was considered and deferred. The honest
+	// reason is churn: every read site would change, for no behavioural gain.
+	// There IS a secondary argument, but only for the structs the secret-field
+	// guard walks — MCPServer, LSPServer, Hook. TestNewSecretFieldGuard's
+	// isStringShaped returns false for a struct and the loop does not recurse,
+	// so a nested provenance struct's string fields would escape classification
+	// on exactly those three. It does NOT apply to Skill/Subagent/Command, which
+	// the guard does not walk at all. If this is ever collapsed, teach
+	// isStringShaped to recurse first.
+	PluginAgents       []string `toml:"-"`
+	PluginNativeAgents []string `toml:"-"`
 }
 
 type MCPServerSpec struct {
@@ -166,6 +184,10 @@ type Skill struct {
 	// (provenance.go) for what they mean and why they are never serialized.
 	Plugin   string `toml:"-"`
 	BaseName string `toml:"-"`
+	// PluginAgents / PluginNativeAgents carry the providing plugin's targeting;
+	// see PluginTargetsAgent (provenance.go). Never serialized.
+	PluginAgents       []string `toml:"-"`
+	PluginNativeAgents []string `toml:"-"`
 }
 
 // SkillFile is one bundled resource inside a skill directory (e.g.
@@ -204,12 +226,65 @@ type PluginSpec struct {
 	ManifestSHA string         `toml:"manifest_sha,omitempty"`
 	Update      string         `toml:"update,omitempty"` // pinned | track | manual
 	Agents      []string       `toml:"agents,omitempty"`
+	// NativeAgents lists agents whose OWN plugin manager already has this plugin
+	// installed, so agentsync must not project its components there — the agent
+	// serves them from its own install dir and a projection would duplicate
+	// every skill, subagent, and command, and double-fire every hook.
+	//
+	// It is a DEFERRAL record, not targeting, and that is why it is a separate
+	// key from Agents rather than a subtraction baked into it:
+	//
+	//   - Agents is the user's own fan-out choice ("only send this to codex").
+	//     NativeAgents is a statement about the world ("claude already has it").
+	//     Editing one should never silently rewrite the other.
+	//   - A subtraction would have to be materialized as a positive list, which
+	//     freezes the agent set: enable a new agent later and it would silently
+	//     NOT receive a plugin the user never excluded. With the deferral held
+	//     separately, Agents stays ["*"] and the new agent is covered.
+	//   - The degenerate case has an honest encoding. When every enabled agent
+	//     serves the plugin natively, this lists them all and Agents stays ["*"]
+	//     — where a positive allowlist would have to write `agents = []`, which
+	//     already means "every agent" (an empty allowlist is the documented
+	//     default), inverting the user's intent.
+	//
+	// `import` populates it by probing each PluginIngester adapter; the user
+	// edits it by hand after uninstalling the native copy.
+	//
+	// # Unvalidated entries
+	//
+	// Entries are NOT validated against the agent registry. A typo defers to
+	// nobody, and for an agent whose adapter implements PluginIngester (claude,
+	// codex) the symptom surfaces: the plugin still projects there, so
+	// status/doctor report it as installed-and-projected. For any other agent
+	// there is no such signal — a misspelled entry is simply inert.
+	// It is a POINTER so the three on-disk states stay distinguishable, per the
+	// "models must stay faithful to their on-disk artifacts" rule: an ABSENT key
+	// (nil — never decided, so `import` asks), an EXPLICITLY EMPTY list
+	// (`native_agents = []` — decided, "defer to nobody", so `import` stops
+	// asking), and a populated list. A plain []string cannot express the middle
+	// state through a write: `omitempty` drops an empty slice, so the key
+	// vanished on the next rewrite and the decision was silently reverted.
+	// Read it through DeferredAgents, which is nil-safe.
+	NativeAgents *[]string `toml:"native_agents,omitempty"`
 	// Disabled, when true, suppresses the plugin's projection during
 	// marketplace.LoadProjected. `agentsync plugin disable <id>` sets this.
 	// Without honouring it there, the CLI's TOML write would be a no-op:
 	// projection would still surface the plugin's MCP servers / skills / etc.
 	// into the canonical model and apply would ship them.
 	Disabled bool `toml:"disabled,omitempty"`
+}
+
+// DeferredAgents returns the agents this plugin is NOT projected to because they
+// install it themselves. It flattens the absent/empty distinction that only the
+// on-disk representation needs: to every CONSUMER (the projection stamp, the
+// duplicate report, the translation report) "no key" and "empty list" mean the
+// same thing — defer to nobody. Only the `import` prompt gate reads the pointer
+// itself, to tell "never decided" from "decided: nobody".
+func (p PluginSpec) DeferredAgents() []string {
+	if p.NativeAgents == nil {
+		return nil
+	}
+	return *p.NativeAgents
 }
 
 // Marketplace mirrors marketplaces/<name>.toml.
@@ -248,6 +323,10 @@ type Subagent struct {
 	// (provenance.go) for what they mean and why they are never serialized.
 	Plugin   string
 	BaseName string
+	// PluginAgents / PluginNativeAgents carry the providing plugin's targeting;
+	// see PluginTargetsAgent (provenance.go). Never serialized.
+	PluginAgents       []string
+	PluginNativeAgents []string
 }
 
 // Command mirrors commands/<name>.md (frontmatter + body).
@@ -261,6 +340,10 @@ type Command struct {
 	// (provenance.go) for what they mean and why they are never serialized.
 	Plugin   string
 	BaseName string
+	// PluginAgents / PluginNativeAgents carry the providing plugin's targeting;
+	// see PluginTargetsAgent (provenance.go). Never serialized.
+	PluginAgents       []string
+	PluginNativeAgents []string
 }
 
 // Hook represents a single hook entry for an event.
@@ -284,6 +367,11 @@ type Hook struct {
 	// handlers alongside the plugin's. Never serialized (WriteHooks emits an
 	// explicit hookEntryOut), never secret-bearing — see MCPServer.Plugin.
 	Plugin string
+	// PluginAgents / PluginNativeAgents carry the providing plugin's targeting,
+	// per HANDLER for the same reason Plugin is; see PluginTargetsAgent
+	// (provenance.go). Never serialized, never secret-bearing.
+	PluginAgents       []string
+	PluginNativeAgents []string
 }
 
 // LSPServer mirrors lsp/<id>.toml.
@@ -293,6 +381,10 @@ type LSPServer struct {
 	// Plugin mirrors MCPServer.Plugin — provenance only, never namespaced, never
 	// serialized, never secret-bearing. See MCPServer.Plugin.
 	Plugin string `toml:"-"`
+	// PluginAgents / PluginNativeAgents mirror MCPServer's; see
+	// PluginTargetsAgent (provenance.go).
+	PluginAgents       []string `toml:"-"`
+	PluginNativeAgents []string `toml:"-"`
 }
 
 // LSPServerSpec holds the server configuration for an LSP server.

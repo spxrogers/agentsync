@@ -86,7 +86,7 @@ func TestUpgradeNotice_ShownOnceOnUpgrade(t *testing.T) {
 	if rec.Version != "0.11.0" {
 		t.Errorf("recorded version = %q, want 0.11.0", rec.Version)
 	}
-	wantIDs := []string{"0.11.0-cli-surface", "0.11.0-plugin-component-namespacing"}
+	wantIDs := []string{"0.11.0-cli-surface", "0.11.0-plugin-component-namespacing", "0.11.0-plugin-native-agents"}
 	if !slices.Equal(rec.NoticesSeen, wantIDs) {
 		t.Fatalf("recorded notice ids = %v, want exactly %v", rec.NoticesSeen, wantIDs)
 	}

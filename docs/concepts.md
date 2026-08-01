@@ -213,6 +213,21 @@ for discovery, `apply` never re-emits it. See
 [architecture.md § PluginIngester (read-only)](architecture.md#pluginingester-read-only)
 for the full rationale.
 
+**An agent that installs a plugin itself is not projected to.** Because apply
+never writes plugin enablement back, a plugin the agent's own manager installs
+stays installed there — so projecting that plugin's components into the same
+agent's standalone paths would DUPLICATE every one of them (and double-fire its
+hooks). `plugins/<id>.toml` therefore carries two targeting keys: `agents`, your
+fan-out allowlist, and `native_agents`, the agents that serve the plugin
+themselves. A component renders for an agent only if `agents` targets it and
+`native_agents` does not claim it. `import` offers `native_agents` per plugin for the
+agents it discovered the plugin installed in, so the import→apply round trip
+does not manufacture a duplicate by default; declining warns that it will, and
+uninstalling the native copy and dropping the entry hands the plugin to
+agentsync. Both gates are enforced in ONE place — the render
+waist (`source.FilterForAgent`, via `secrets.Resolved.ForAgent`) — never in an
+adapter. See the [user guide](user-guide.md).
+
 **Plugin components are namespaced by their plugin.** Because apply flattens
 every enabled plugin's components into one destination directory, two plugins
 shipping a same-named component would render two files at one path — so a
@@ -231,6 +246,13 @@ does not project plugins or print a coverage report):
 - **✓ native** — full fidelity; the agent has the concept directly.
 - **◐ projected** — lossy but defensible translation, explicitly reported.
 - **✗ skipped** — no honest translation exists; logged so it's never silent.
+
+A row can also report that a plugin contributed nothing to an agent by
+*configuration* rather than by failed translation — `disabled` for a plugin
+turned off in this scope, `not-targeted` when its `agents` allowlist excludes the
+agent, and `native` when its `native_agents` list defers to that agent's own
+plugin manager. These are deliberate outcomes, so they are never rendered in the
+✗ failure vocabulary.
 
 ### Polling (the networked verb of the daily loop)
 `agentsync plugin outdated` is the command that touches the network in the daily

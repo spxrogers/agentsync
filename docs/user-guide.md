@@ -201,6 +201,15 @@ Claude's built-in `claude-plugins-official` (which doesn't appear in
 `extraKnownMarketplaces`) before you have registered it — is reported and
 skipped; register it with `agentsync marketplace add <source>` and re-import.
 
+An imported plugin is **not projected back into the agent it came from** unless
+you ask for it. That agent has the plugin installed, and apply never disables a
+plugin inside another tool's plugin manager — so projecting the same components
+there would duplicate every one of them. `import` offers to record
+`native_agents = ["claude"]`; accepting is the default, and declining warns that
+you must disable the plugin inside Claude yourself. Either way every other
+enabled agent gets the full fan-out. See
+[Which agents a plugin fans out to](#which-agents-a-plugin-fans-out-to).
+
 **Importing a project's native config.** `import <agent> --scope project`
 (optionally `--project <path>`) reads the agent's *native project-scope* config
 (e.g. `<root>/.claude/`) and captures it into the project source tree
@@ -355,7 +364,8 @@ first-class. Layout:
 ├── marketplaces/<name>.toml  # one marketplace per file (its `head_sha`/`name`
 │                             #   keys are CLI fetch-cache metadata, regenerated on
 │                             #   fetch — not modeled in the canonical schema)
-├── plugins/<id>.toml         # one plugin enablement per file
+├── plugins/<id>.toml         # one plugin enablement per file (`agents` /
+│                             #   `native_agents` decide which agents it renders to)
 ├── memory/AGENTS.md          # canonical memory (+ fragments/*.md)
 ├── skills/<name>/            # a skill is a DIRECTORY: SKILL.md + bundled
 │   ├── SKILL.md              #   scripts/, references/, assets/, nested files —
@@ -561,9 +571,84 @@ and names both sides rather than picking a winner. MCP and LSP servers keep thei
 server id is refused rather than renamed apart, because repointing a trusted
 server's endpoint is a hijack, not a naming clash.
 
-Control fan-out per plugin with `agents = [...]` in the plugin's TOML file. (A
-per-component `[plugin.overrides.<agent>]` table was specced but is **not wired
-in v1** — the projector does not consult it; use the `agents` allowlist.)
+### Which agents a plugin fans out to
+
+Two keys in `plugins/<id>.toml` decide where a plugin's components render. They
+are enforced once, at the render waist, so every agent and every component kind
+obeys them identically:
+
+```toml
+[plugin]
+id            = "feature-dev@claude-plugins-official"
+agents        = ["*"]        # your fan-out choice: which agents may receive it
+native_agents = ["claude"]   # agents that install it THEMSELVES — do not project there
+```
+
+`agents` is the allowlist you control: `["*"]` (the default, and the same
+meaning as omitting the key) sends the plugin to every enabled agent, or name
+agents explicitly to narrow it.
+
+`native_agents` is a statement about the world rather than a preference. When an
+agent's own plugin manager already installs a plugin — you ran `/plugin install`
+in Claude Code — agentsync must not ALSO project that plugin's components into
+that agent's standalone paths, or you get two of every skill, subagent, and
+command, and every hook fires twice. agentsync never disables a plugin inside
+another tool's plugin manager (see [architecture.md § PluginIngester
+(read-only)](architecture.md#pluginingester-read-only)), so the only way to
+avoid the duplicate is not to project there.
+
+**`import` asks, per plugin.** Importing a plugin out of an agent means, by
+definition, that the agent has it installed, so `agentsync import claude:plugin`
+stops and offers the deferral:
+
+```
+ℹ INFO   claude already installs the plugin "feature-dev".
+         agentsync can leave those components to claude, or project its own copy alongside them.
+  Let claude keep serving this plugin? [Y]es / [n]o, project it there too:
+```
+
+Accepting records `native_agents = ["claude"]`. Claude keeps serving the plugin
+itself; every OTHER enabled agent still gets the fan-out — that is the whole
+point of importing it.
+
+Declining is a real choice, and agentsync says what it costs:
+
+```
+⚠ WARN   this will DUPLICATE the plugin "feature-dev"'s content in your claude
+         harness — every skill, subagent and command it ships will appear twice,
+         and its hooks will fire twice. Disable or uninstall "feature-dev" in
+         claude now that agentsync is managing it.
+```
+
+That is a working setup **only** if you then turn the plugin off inside Claude
+Code. Declining writes no key, so a later import asks again — and asks only if
+the duplicate still exists. Once you disable the plugin natively, the question
+stops being asked. To silence it while keeping the plugin enabled in both, write
+`native_agents = []` by hand: an explicitly empty list means "defer to nobody"
+and is preserved.
+
+You are only asked when the answer can take effect — never for a plugin whose
+`native_agents` you have already set, since a re-import preserves it. With
+`--no-input`, or when stdin is not a terminal, the deferral is recorded without
+asking and an INFO line says so: a scripted import must not silently produce two
+of everything.
+
+To hand a plugin over to agentsync completely, uninstall it in the agent
+(`/plugin uninstall` in Claude Code) and drop that agent from `native_agents`.
+The next apply projects the components there. Nothing about the agent's own
+config is touched either way — the deferral lives entirely in your canonical
+source, which is what keeps `apply` reproducible from a dotfiles repo alone
+rather than dependent on whatever the machine happens to have installed.
+
+Both keys survive re-installs and re-imports untouched (issue #140), so a
+narrowed allowlist or an adopted plugin is never silently reset.
+
+Because apply's plan never reads the destination, agentsync cannot notice a
+plugin you install natively AFTER declaring it. `status` and `doctor` do read
+it, and warn when a plugin is installed in an agent *and* projected there.
+
+(A per-component `[plugin.overrides.<agent>]` table was specced but is **not
+wired in v1** — the projector does not consult it; use the keys above.)
 
 ### Secrets
 

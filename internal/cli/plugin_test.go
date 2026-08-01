@@ -24,7 +24,11 @@ type pluginTOMLFixture struct {
 		ManifestSHA string   `toml:"manifest_sha"`
 		Update      string   `toml:"update"`
 		Agents      []string `toml:"agents"`
-		Disabled    bool     `toml:"disabled"`
+		// A POINTER, mirroring the production spec: this fixture exists to read
+		// the real artifact, so it must be able to tell "no key" from
+		// "native_agents = []" — the distinction the pointer exists for.
+		NativeAgents *[]string `toml:"native_agents"`
+		Disabled     bool      `toml:"disabled"`
 	} `toml:"plugin"`
 }
 
@@ -837,6 +841,7 @@ version = "0.0.0-stale"
 manifest_sha = "deadbeefstale"
 update = "manual"
 agents = ["claude"]
+native_agents = ["codex"]
 disabled = true
 `)
 
@@ -849,6 +854,16 @@ disabled = true
 	after := readPluginTOMLFixture(t, pluginPath)
 	if !equalStrings(after.Plugin.Agents, []string{"claude"}) {
 		t.Errorf("re-install reset the allowlist on disk: got agents=%v, want [claude]", after.Plugin.Agents)
+	}
+	// native_agents is preserved for the same reason as the allowlist, and its
+	// loss is worse: re-seeding it from what the AGENT currently installs would
+	// silently stop projecting a plugin to an agent the user had adopted. A
+	// POPULATED list needs its own assertion — an implementation that preserved
+	// only the empty list would satisfy every other check here.
+	if after.Plugin.NativeAgents == nil {
+		t.Errorf("re-install dropped native_agents entirely")
+	} else if !equalStrings(*after.Plugin.NativeAgents, []string{"codex"}) {
+		t.Errorf("re-install reset native_agents on disk: got %v, want [codex]", *after.Plugin.NativeAgents)
 	}
 	if after.Plugin.Update != "manual" {
 		t.Errorf("re-install reset update on disk: got %q, want manual", after.Plugin.Update)
@@ -874,6 +889,9 @@ disabled = true
 	}
 	if !strings.Contains(out, "agents=[claude]") {
 		t.Errorf("re-install output did not surface the kept allowlist: %q", out)
+	}
+	if !strings.Contains(out, "native_agents=[codex]") {
+		t.Errorf("re-install output did not surface the kept deferral: %q", out)
 	}
 	if !strings.Contains(out, "update=manual") {
 		t.Errorf("re-install output did not surface the kept update mode: %q", out)

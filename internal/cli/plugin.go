@@ -78,7 +78,20 @@ type pluginTOMLSpec struct {
 	ManifestSHA string         `toml:"manifest_sha,omitempty"`
 	Update      string         `toml:"update,omitempty"`
 	Agents      []string       `toml:"agents,omitempty"`
-	Disabled    bool           `toml:"disabled,omitempty"`
+	// NativeAgents mirrors source.PluginSpec.NativeAgents — agents whose own
+	// plugin manager already installs this plugin, so apply must not project its
+	// components there. Populated by `import` and preserved across re-installs
+	// like every other lifecycle field.
+	//
+	// It is a POINTER for the same reason the canonical field is: `omitempty`
+	// drops an EMPTY slice, so a user's explicit `native_agents = []` ("defer to
+	// nobody, stop asking") vanished on the next rewrite and the decision was
+	// silently reverted — after which the next import re-seeded it, under
+	// --no-input without even asking. A nil pointer omits the key; a pointer to
+	// an empty slice writes `native_agents = []`. Pinned by
+	// TestPluginTOML_NativeAgentsRoundTrip.
+	NativeAgents *[]string `toml:"native_agents,omitempty"`
+	Disabled     bool      `toml:"disabled,omitempty"`
 }
 
 // ---- install ----------------------------------------------------------------
@@ -109,7 +122,7 @@ func pluginAddRun(cmd *cobra.Command, args []string) error {
 	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 
-	spec, err := installPluginInto(home, id, mpName)
+	spec, err := installPluginInto(home, id, mpName, nil)
 	if err != nil {
 		return err
 	}
@@ -142,11 +155,13 @@ func keptLifecycleSummary(spec pluginTOMLSpec) string {
 	var parts []string
 	defaultAgents := len(spec.Agents) == 1 && spec.Agents[0] == "*"
 	if !defaultAgents {
-		sanitized := make([]string, len(spec.Agents))
-		for i, a := range spec.Agents {
-			sanitized[i] = ui.Sanitize(a)
-		}
-		parts = append(parts, fmt.Sprintf("agents=[%s]", strings.Join(sanitized, ",")))
+		parts = append(parts, fmt.Sprintf("agents=[%s]", strings.Join(sanitizedList(spec.Agents), ",")))
+	}
+	if spec.NativeAgents != nil {
+		// A non-nil EMPTY list is reported too: "defer to nobody" is a deliberate
+		// decision the user recorded, and a re-install preserving it is exactly
+		// what this summary exists to surface.
+		parts = append(parts, fmt.Sprintf("native_agents=[%s]", strings.Join(sanitizedList(*spec.NativeAgents), ",")))
 	}
 	if spec.Update != "track" {
 		parts = append(parts, fmt.Sprintf("update=%s", ui.Sanitize(spec.Update)))
@@ -157,12 +172,34 @@ func keptLifecycleSummary(spec pluginTOMLSpec) string {
 	return strings.Join(parts, ", ")
 }
 
+// pluginNativeAgentsUnset reports whether a first install of id would actually
+// USE a caller-supplied `native_agents` default: true when plugins/<id>.toml is
+// absent, or present with no `native_agents` key. It lets `import` ask about the
+// deferral only when the answer can take effect — installPluginInto preserves an
+// existing list, so prompting for a plugin that already has one would discard
+// the reply and re-ask on every re-import.
+//
+// An unreadable file counts as SET (false): installPluginInto refuses that case
+// outright rather than resetting lifecycle fields, so there is nothing to ask
+// about.
+func pluginNativeAgentsUnset(home, id string) bool {
+	existing, err := readPluginTOML(filepath.Join(home, "plugins", id+".toml"))
+	if err != nil {
+		return errors.Is(err, os.ErrNotExist)
+	}
+	return existing.Plugin.NativeAgents == nil
+}
+
 // installPluginInto fetches plugin id from the named marketplace into the
 // plugin cache and writes plugins/<id>.toml, returning the written spec. mpName
 // may be empty (the marketplace is then searched for across all caches). It
 // does not print or acquire the global lock — callers do. Both `plugin install`
 // and `import` use it so the two produce byte-identical canonical artifacts.
-func installPluginInto(home, id, mpName string) (pluginTOMLSpec, error) {
+// defaultNativeAgents, when non-nil, seeds `native_agents` on a FIRST install
+// (it is ignored when plugins/<id>.toml already exists — an existing file's
+// lifecycle fields always win, per #140). `import` passes the agents whose
+// native config already enables this plugin; `plugin add` passes nil.
+func installPluginInto(home, id, mpName string, defaultNativeAgents []string) (pluginTOMLSpec, error) {
 	// Resolve marketplace.json from the marketplace cache.
 	mpData, mpEntry, resolvedMP, err := resolveMarketplaceEntry(home, mpName, id)
 	if err != nil {
@@ -213,12 +250,27 @@ func installPluginInto(home, id, mpName string) (pluginTOMLSpec, error) {
 	// `import` still produce byte-identical canonical artifacts (see the doc
 	// comment above): Agents=["*"], Update="track", Disabled absent.
 	agents := []string{"*"}
+	var nativeAgents *[]string
+	if defaultNativeAgents != nil {
+		seed := defaultNativeAgents
+		nativeAgents = &seed
+	}
 	update := "track"
 	disabled := false
 	switch existing, rerr := readPluginTOML(pluginPath); {
 	case rerr == nil:
 		if len(existing.Plugin.Agents) > 0 {
 			agents = existing.Plugin.Agents
+		}
+		// An existing file's deferral list wins over the caller's default, for
+		// the same reason the allowlist does: a user who removed an agent from
+		// native_agents (having uninstalled the native copy) must not have it
+		// re-added by the next import, which would silently stop projecting to
+		// an agent they deliberately adopted. Re-seed only when the key is
+		// absent — a deliberately EMPTIED list is a decision, so it is
+		// preserved as-is (non-nil and empty reads as "defer to nobody").
+		if existing.Plugin.NativeAgents != nil {
+			nativeAgents = existing.Plugin.NativeAgents
 		}
 		if existing.Plugin.Update != "" {
 			update = existing.Plugin.Update
@@ -241,12 +293,13 @@ func installPluginInto(home, id, mpName string) (pluginTOMLSpec, error) {
 	spec := pluginTOMLSpec{
 		// id/marketplace are validated cache keys; wrap the composed id as Text to
 		// match the canonical model (the ManifestSHA below stays a plain string).
-		ID:          untrusted.Wrap(id + "@" + resolveMarketplaceName(mpName)),
-		Version:     mpEntry.Version,
-		ManifestSHA: manifestSHA,
-		Update:      update,
-		Agents:      agents,
-		Disabled:    disabled,
+		ID:           untrusted.Wrap(id + "@" + resolveMarketplaceName(mpName)),
+		Version:      mpEntry.Version,
+		ManifestSHA:  manifestSHA,
+		Update:       update,
+		Agents:       agents,
+		NativeAgents: nativeAgents,
+		Disabled:     disabled,
 	}
 	if result.Version != "" {
 		spec.Version = untrusted.Wrap(result.Version)

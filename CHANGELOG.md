@@ -19,6 +19,79 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   was tracked, same as the rest of the summary footer). `--legend` rejects
   combination with `--json`, `--exit-code`, or `--agents` — each of which it
   would otherwise silently ignore — rather than accepting and ignoring them.
+- **A plugin an agent installs itself is no longer projected into that agent,
+  so `import <agent>` + `apply` stops manufacturing duplicates.** `apply` never
+  writes plugin enablement back into an agent's config (the `PluginIngester`
+  read-only invariant) — but it never removed it either, so a plugin enabled in
+  Claude Code kept being served from Claude's own install dir while agentsync
+  ALSO projected its components into Claude's standalone paths. Namespacing
+  (`<plugin>-<name>`) meant the two sets coexisted rather than collided: two of
+  every skill, subagent and command, one MCP id registered from two sources, and
+  every hook handler firing twice.
+  - `plugins/<id>.toml` gains **`native_agents`** — the agents whose own plugin
+    manager installs this plugin. Their components are not projected there.
+    `import` **asks** per plugin for what it discovers — *"Let claude keep
+    serving this plugin?"* — and records `native_agents = ["claude"]` when you
+    accept; every other enabled agent still receives the full fan-out.
+    Declining warns, explicitly, that agentsync will duplicate the plugin's
+    content in that harness and that you should disable it there. Under
+    `--no-input` or a non-TTY stdin the deferral is recorded without asking:
+    unlike this package's other prompts, the unattended fallback is the SAFE
+    branch, because a silent scripted import producing two of every component
+    is the worse outcome.
+  - To hand a plugin over to agentsync completely, uninstall it in the agent and
+    drop that agent from `native_agents`; the next apply projects it there. The
+    decision lives entirely in canonical source — `apply` never probes the
+    destination, so the same `~/.agentsync/` renders identically on every
+    machine.
+  - `status` and `doctor` now warn when a plugin is installed natively in an
+    agent **and** projected there by agentsync — the case `apply` cannot see,
+    since its plan is a pure function of canonical state.
+
+### Fixed
+
+- **`apply`'s translation report no longer over-counts.** Every per-agent count
+  honours the providing plugin's gates now; previously none did, so a deferred
+  plugin's components were counted under another plugin's row for the same agent
+  — a row could report more commands than its own mcp count reflected.
+- **`status --scope project` reads the project's plugin pin.** `project.Merge`
+  does not overlay `Plugins`, so the duplicate warning was reading the USER
+  pin's `native_agents` while a project-scope render honours the PROJECT one —
+  warning about a duplicate the repo does not have, and staying silent about one
+  it does.
+- **`doctor` no longer warns about agents agentsync does not render to.** It
+  passes every registered adapter to the duplicate check (where `status` passes
+  its enabled set), and the check itself did not verify the agent was enabled —
+  so a plugin natively installed in a disabled agent was reported as duplicated,
+  with a remedy that would have removed working functionality. The gate moved
+  into the check, where a caller cannot get it wrong.
+- **`agentsync plugin explain` no longer reports a deferred plugin as a
+  failure.** It renders translation-report rows through its own path, which fell
+  through to the generic mark and printed a red `✗ native  no components` for a
+  plugin the user had deliberately deferred — indistinguishable from an adapter
+  that could translate nothing. The wording now lives on
+  `render.PluginRow.TargetingNote()`, and the `Coverage` vocabulary is exported,
+  so the two renderers cannot drift on a string literal.
+- **`native_agents = []` ("defer to nobody") now survives a rewrite.** The field
+  was a plain slice with `omitempty`, so an explicitly empty list decoded
+  correctly — the prompt stayed quiet — and was then erased by the next write,
+  after which the following import re-seeded the deferral, silently, and under
+  `--no-input` without asking. It is a pointer now, so all three on-disk states
+  (absent / empty / populated) round-trip.
+- **`agents` in `plugins/<id>.toml` now actually narrows a plugin's fan-out.**
+  The key has been documented since v1.0 ("Control fan-out per plugin with
+  `agents = [...]`") and was written, preserved across re-installs, and never
+  read: `projectOnePlugin` honoured only `disabled`, and nothing in the render
+  path consulted `PluginSpec.Agents`. A narrowed allowlist silently fanned the
+  plugin out to every enabled agent anyway. Both it and the new `native_agents`
+  are enforced in ONE place — the render waist (`source.FilterForAgent` via
+  `secrets.Resolved.ForAgent` in `render.Plan`) — so no adapter can forget one.
+  `import`'s capture-refusal filter deliberately does NOT narrow the same way:
+  between recording a deferral and the apply that reclaims the files, the
+  destination still holds agentsync's own rendered output, and a narrowed filter
+  would capture that back into the canonical source as hand-authored. It refuses
+  anything any installed plugin provides — over-refusal fails loudly and names
+  the plugin, under-refusal fails silently and permanently.
 
 ### Changed
 

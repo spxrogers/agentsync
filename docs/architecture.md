@@ -275,6 +275,54 @@ marketplace source and re-fetches it through the same code path as
 `plugins/<id>.toml` + `marketplaces/<name>.toml` pair with a pinned manifest
 SHA. From then on, the projection layer drives every apply.
 
+#### The other half of "no double-install": `native_agents`
+
+The bullet above explains why apply must not write `enabledPlugins` back. It
+does not, by itself, prevent the duplicate — because apply does not *remove* the
+native enablement either. A plugin the agent installed itself stays installed,
+and agentsync projecting the same plugin's components into that agent's
+standalone paths lands two of every skill, subagent and command, and fires every
+hook twice. Namespacing (`<plugin>-<name>`) keeps the two sets from colliding on
+one path, which is precisely why they coexist rather than overwrite.
+
+So the deferral is recorded in canonical source, per plugin:
+
+| key | meaning | who writes it |
+|---|---|---|
+| `agents` | the user's fan-out allowlist (`["*"]` / omitted = every enabled agent) | the user |
+| `native_agents` | agents whose OWN plugin manager installs this plugin, so apply must not project it there | `import` prompts per plugin (declining warns about the duplicate); the user edits it |
+
+A plugin component renders for an agent only if `agents` targets it **and**
+`native_agents` does not claim it (`source.PluginTargetsAgent`).
+
+Two properties are load-bearing:
+
+- **Declared, never inferred.** apply does NOT probe the destination to decide
+  what to render. If it did, the render would become a function of destination
+  state: the same `~/.agentsync/` would render differently on two machines,
+  `diff` would stop being reproducible, and — worse — the 3-way drift classifier
+  compares source / last-applied / destination on the assumption that the first
+  is independent of the third. `import` reads native state ONCE and writes the
+  conclusion into canonical source; every later apply reads only that.
+- **One enforcement point.** The filter runs at the render waist —
+  `source.FilterForAgent`, reached via `secrets.Resolved.ForAgent` in
+  `render.Plan` — never inside an adapter. Ten adapters × six component kinds is
+  sixty places to forget, and each omission silently re-creates the duplicate
+  for one kind on one agent.
+- **The import-side refusal set is deliberately WIDER than the render set.**
+  `import` refuses to capture any component ANY installed plugin provides, not
+  just the ones this agent receives. Narrowing it to the render set would be
+  symmetric and wrong: between recording a deferral and the apply that reclaims
+  the files, the destination still holds agentsync's own rendered output, and a
+  narrowed filter would capture that into the canonical source as hand-authored.
+  Over-refusal fails loudly, naming the plugin; under-refusal silently mints a
+  canonical copy that diverges from the plugin's on its next update.
+
+The residual — a plugin installed natively AFTER it was declared in agentsync —
+is invisible to apply by construction. `status` and `doctor` do read native
+state, and report a plugin that is both installed in an agent and projected to
+it (`duplicatedNativePlugins`), naming both remedies.
+
 #### Per-adapter
 
 The **Codex** adapter implements `IngestPlugins`; **Cursor** has a native plugin

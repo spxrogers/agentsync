@@ -30,6 +30,13 @@ var walkerCovered = map[string]map[string]bool{
 		"Matcher": false, // glob/regex, not a credential
 		"Type":    false, // always "command"
 		"Plugin":  false, // derived provenance; see MCPServer.Plugin below
+		// PluginAgents / PluginNativeAgents are the providing plugin's
+		// source-only targeting lists, stamped at projection alongside Plugin.
+		// Both hold agent NAMES (claude, codex, …) — never a credential — and
+		// like Plugin both are derived state that is never serialized back to
+		// the canonical source.
+		"PluginAgents":       false,
+		"PluginNativeAgents": false,
 	},
 	"LSPServerSpec": {
 		"Command": true,
@@ -48,10 +55,17 @@ var walkerCovered = map[string]map[string]bool{
 		// credential. It exists so import/reconcile can refuse to capture a
 		// plugin-owned server; nothing resolves or re-references it.
 		"Plugin": false,
+		// PluginAgents / PluginNativeAgents: source-only targeting lists stamped
+		// beside Plugin — agent names, never a credential, never serialized.
+		// See Hook above.
+		"PluginAgents":       false,
+		"PluginNativeAgents": false,
 	},
 	"LSPServer": {
-		"ID":     false, // filename identifier, never a secret
-		"Plugin": false, // derived provenance; see MCPServer.Plugin above
+		"ID":                 false, // filename identifier, never a secret
+		"Plugin":             false, // derived provenance; see MCPServer.Plugin above
+		"PluginAgents":       false, // targeting allowlist; see MCPServer above
+		"PluginNativeAgents": false, // deferral list; see MCPServer above
 	},
 }
 

@@ -165,11 +165,11 @@ func newStatusCmd() *cobra.Command {
 			}
 			if len(selected) == 0 {
 				if jsonOut {
-					emitStatusWarnings(p, c, reg, s, enabledAgents, selected)
+					emitStatusWarnings(p, c, reg, s, enabledAgents, selected, sc)
 					return emitJSON(p.Out, statusModel{Agents: []statusAgent{}, Summary: map[string]int{}})
 				}
 				fmt.Fprintln(p.Out, noAgentsEnabledHint(sc, projectRoot))
-				emitStatusWarnings(p, c, reg, s, enabledAgents, selected)
+				emitStatusWarnings(p, c, reg, s, enabledAgents, selected, sc)
 				return nil
 			}
 			// apply WRITES (and RecordOpsState HASHES) the secret-RESOLVED
@@ -196,13 +196,13 @@ func newStatusCmd() *cobra.Command {
 				// machine-readable payload cleanly parseable. The --json payload
 				// is never collapsed: it carries every tracked item so scripts
 				// see the same per-file model regardless of the human view.
-				emitStatusWarnings(p, c, reg, s, enabledAgents, selected)
+				emitStatusWarnings(p, c, reg, s, enabledAgents, selected, sc)
 				if err := emitJSON(p.Out, model); err != nil {
 					return err
 				}
 			} else {
 				renderStatusText(p, model, statusVerbose(cmd))
-				emitStatusWarnings(p, c, reg, s, enabledAgents, selected)
+				emitStatusWarnings(p, c, reg, s, enabledAgents, selected, sc)
 			}
 			// --exit-code turns status into a CI gate: a non-zero (documented,
 			// stable) exit when any item is not clean/converged, exit 0 when the
@@ -799,7 +799,7 @@ func renderClassLegend(p *ui.Printer) {
 // never mistakes a deselected-but-enabled agent for an orphan; the
 // undeclared-plugin nudge follows the selected set so it stays scoped to what
 // the report shows.
-func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry, s *state.Targets, enabled, selected []string) {
+func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry, s *state.Targets, enabled, selected []string, sc adapter.Scope) {
 	for _, a := range orphanedStateAgents(s, enabled) {
 		p.Warnf("agent %q is not enabled but still owns tracked files/keys in state; its "+
 			"native config is orphaned. Run `agentsync agent disable %q --purge` to remove what agentsync wrote.", a, a)
@@ -820,6 +820,29 @@ func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry
 		p.Infof("%d plugin(s) installed in %s are not in your source (%s); "+
 			"run `agentsync import %s:plugin` to manage them.",
 			len(missing), name, untrusted.Join(missing, ", "), name)
+	}
+	// Warn: the reverse case — a plugin the agent installs ITSELF that agentsync
+	// also projects there, so every component lands twice. apply never reads the
+	// destination (its plan is a pure function of canonical state), so this is
+	// the only place the collision can be noticed once the plugin is declared.
+	// SCOPED, unlike the nudge above. project.Merge does not overlay Plugins, so
+	// the merged canonical carries the USER pins while a project-scope render
+	// honours the PROJECT ones — reading the wrong pin's `native_agents` here
+	// warns about a duplicate the project does not have, and stays silent about
+	// one it does. reportCanonical is the existing answer to exactly this
+	// mismatch. (The undeclared nudge above is correctly unscoped: "is this
+	// declared anywhere in my source" is a question about the merged view.)
+	duplicated := duplicatedNativePlugins(reportCanonical(c, sc), reg, selected)
+	for _, name := range reg.Names() {
+		dupes := duplicated[name]
+		if len(dupes) == 0 {
+			continue
+		}
+		p.Warnf("%d plugin(s) are installed in %s AND projected there by agentsync (%s), "+
+			"so their skills/subagents/commands land twice and their hooks fire twice. "+
+			"Either uninstall them in %s, or add %q to `native_agents` in plugins/<id>.toml "+
+			"to let %s keep serving them itself.",
+			len(dupes), name, untrusted.Join(dupes, ", "), name, name, name)
 	}
 }
 

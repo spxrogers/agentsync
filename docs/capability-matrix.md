@@ -557,9 +557,14 @@ You control fan-out explicitly:
 
 - `agents = ["claude", "opencode"]` on an MCP server or plugin entry → fan out
   only to those agents.
+- `native_agents = ["claude"]` on a plugin entry → those agents install the
+  plugin through their OWN plugin manager, so agentsync does not project its
+  components there. Without it you get two of every skill, subagent and command
+  and every hook fires twice, because `apply` never disables a plugin inside
+  another tool's plugin manager. `import` offers to record this for you.
 
 (A per-component `[plugin.overrides.<agent>]` skip was specced but is **not
-wired in v1** — the projector does not consult it. Use the `agents` allowlist.)
+wired in v1** — the projector does not consult it. Use the keys above.)
 
 ---
 

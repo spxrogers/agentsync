@@ -402,6 +402,15 @@ machine-readable output (rows for plugin/agent coverage — each with a
 `skipDetails` array of `{component, name, reason, kind}`, where `kind` is
 `"reduced"` or `"dropped"` and `component` is the plain kind).
 
+A row's `coverage` is one of `"full"`, `"partial"`, `"none"` — how much of what
+the plugin ships this agent got — or one of three values meaning it contributed
+nothing here by CONFIGURATION rather than by failed translation: `"disabled"`
+(the plugin is off for this scope, paired with `disabled: true`),
+`"not-targeted"` (its `agents` allowlist excludes this agent) or `"native"`
+(its `native_agents` list defers to this agent's own plugin manager). The last
+two are paired with `notTargeted: true`; branch on the booleans rather than the
+strings.
+
 ```bash
 agentsync plugin explain atlassian@anthropic
 agentsync plugin explain atlassian@anthropic superpowers@obra

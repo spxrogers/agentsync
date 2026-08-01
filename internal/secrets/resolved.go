@@ -56,6 +56,39 @@ func ForRender(c source.Canonical) Resolved { return Resolved{c: c} }
 // stop — you almost certainly want capture.Capture instead.
 func (r Resolved) Canonical() source.Canonical { return r.c }
 
+// ForAgent returns a Resolved narrowed to what the named agent should render:
+// every component provided by a plugin whose `agents` allowlist excludes this
+// agent, or whose `native_agents` deferral list names it, is dropped.
+// Hand-authored components (no Plugin stamp) always survive.
+//
+// It is the render-side entry to source.FilterForAgent, which holds the actual
+// rule and has this as its ONLY caller. Note that import's capture-refusal
+// filter deliberately does NOT narrow the same way — its refusal set is wider
+// than the render set on purpose, because the destination can still hold
+// un-reclaimed output from before a deferral was recorded. Do not "restore
+// symmetry" between the two; see source.FilterForAgent. This wrapper exists for
+// a fence reason and a design reason:
+//
+//   - Fence: render.Plan cannot reach the underlying source.Canonical (the
+//     secrets.Resolved.Canonical forbidigo rule confines that to adapter Render),
+//     so the narrowing has to be a method on the wrapper. It reads the private
+//     canonical directly and returns another Resolved — no writable model is
+//     ever exposed, so this adds no laundering seam.
+//   - Design: doing it once at the dispatch waist means no adapter can forget.
+//     An allowlist honoured in ten adapters × six component kinds is sixty
+//     chances to silently render the duplicate the allowlist exists to prevent.
+//
+// It never touches secret material — targeting is a pure include/exclude over
+// already-resolved components — so a narrowed Resolved carries exactly the
+// substitutions its parent did.
+//
+// The result SHARES component values with the receiver (the filter rebuilds
+// slices, it does not deep-copy). That matches what Render already gets today:
+// adapters read the model and build their own output, they never mutate it.
+func (r Resolved) ForAgent(agent string) Resolved {
+	return Resolved{c: source.FilterForAgent(r.c, agent)}
+}
+
 // ComponentID is a (kind, name) pair for a component id an adapter joins into a
 // destination path. For a TEXT component (subagent/command/skill) the Name is the
 // canonical Name that becomes a destination filename stem at Render. For an MCP or

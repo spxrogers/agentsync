@@ -24,17 +24,29 @@ type PluginRow struct {
 	// marshals RAW to JSON (the --json machine contract owns its own escaping).
 	Plugin untrusted.Text `json:"plugin"`
 	Agent  string         `json:"agent"`
-	// Coverage is "full", "partial", or "none".
+	// Coverage is one of: "full", "partial", "none" (the adapter rendered this
+	// plugin for this agent, with that much of it landing), "disabled" (the
+	// plugin is off for this scope), "not-targeted" (its `agents` allowlist
+	// excludes this agent), or "native" (its `native_agents` list defers to this
+	// agent's own plugin manager). The last three are paired with the Disabled /
+	// NotTargeted booleans below, which are what code should branch on — the
+	// string is for display and for the --json contract.
 	Coverage string `json:"coverage"`
 	// MCP, Commands, Skills, Subagents, Hooks, and LSP count the components the
-	// plugin (or whole model) hosts that target this agent — the inventory, so
+	// plugin (or whole model) hosts that TARGET this agent — the inventory, so
 	// the report is descriptive of everything the plugin ships, not just MCP +
-	// commands. MCP and LSP honour each server's `enabled`/`agents` targeting
-	// (a server scoped to other agents is not counted here); the markdown
-	// component kinds (commands/skills/subagents) and hooks have no per-agent
-	// allowlist, so their counts are the model's totals. These describe what is
-	// hosted, NOT what successfully rendered: a hosted component the adapter
-	// cannot translate is still counted here and reported under Skips below.
+	// commands.
+	//
+	// Every kind honours the providing plugin's `agents` / `native_agents`
+	// gates; MCP and LSP additionally honour each server's own `enabled`/`agents`
+	// targeting. The plugin gate matters because apply passes the WHOLE flattened
+	// model: without it a deferred plugin's components are counted under some
+	// OTHER plugin's row for the same agent, so a row could report more commands
+	// than its own mcp count reflected — inconsistent within a single row.
+	//
+	// These describe what is hosted, NOT what successfully rendered: a hosted
+	// component the adapter cannot translate is still counted here and reported
+	// under Skips below.
 	MCP       int `json:"mcp"`
 	Commands  int `json:"commands"`
 	Skills    int `json:"skills"`
@@ -55,6 +67,37 @@ type PluginRow struct {
 	// Disabled is true when the plugin is disabled for this scope (e.g. by a
 	// project marker's [plugins] disabled). Its components are not rendered.
 	Disabled bool `json:"disabled,omitempty"`
+	// NotTargeted is true when this plugin contributes nothing to THIS row's
+	// agent: either its `agents` allowlist excludes the agent (Coverage
+	// "not-targeted") or its `native_agents` deferral list names the agent,
+	// which serves the plugin from its own plugin manager (Coverage "native").
+	// Unlike Disabled (global to the plugin, one row), both are per-agent — the
+	// row exists so a plugin narrowed away from an agent reads as a deliberate
+	// choice rather than as one that mysteriously rendered nothing.
+	NotTargeted bool `json:"notTargeted,omitempty"`
+}
+
+// TargetingNote explains, for a row that rendered nothing by configuration, WHY
+// — or returns "" for an ordinary coverage row.
+//
+// It lives on the row rather than at each print site because there are two print
+// sites in two packages (this package's translation report and
+// `internal/cli`'s `plugin explain`), and the second one silently fell through
+// to the generic "✗ <coverage>" red mark: a plugin the user had deliberately
+// deferred was reported in the same red as one the adapter could not translate.
+// A single accessor makes that class of drift a compile-time concern instead of
+// a matching-on-literals one.
+//
+// The two reasons are kept distinct because their remedies are: widen `agents`
+// versus uninstall the agent's own copy of the plugin.
+func (r PluginRow) TargetingNote() string {
+	if !r.NotTargeted {
+		return ""
+	}
+	if r.Coverage == CoverageNative {
+		return "(served natively by this agent — listed in `native_agents`)"
+	}
+	return "(not targeted by this plugin's `agents` allowlist)"
 }
 
 // SkipDetail names one component an adapter could not translate, with the
@@ -103,12 +146,31 @@ type TranslationReport struct {
 	Rows []PluginRow `json:"rows"`
 }
 
+// The Coverage vocabulary. These are EXPORTED because they are the `--json`
+// contract and because `internal/cli` renders the same rows a second way
+// (`plugin explain`) — an unexported constant there means matching on a bare
+// literal, which is exactly how `plugin explain` came to print a red "✗ native"
+// for a plugin that was deliberately not targeted. One owner, no literals.
+//
+// The first three are render OUTCOMES (how much of what the plugin ships this
+// agent got). The last three mean the plugin contributed nothing here by
+// CONFIGURATION, not because the adapter could not translate it — pair them with
+// the Disabled / NotTargeted booleans, which are what code should branch on.
+const (
+	CoverageFull        = "full"
+	CoveragePartial     = "partial"
+	CoverageNone        = "none"
+	CoverageDisabled    = "disabled"
+	CoverageNotTargeted = "not-targeted"
+	CoverageNative      = "native"
+)
+
 // coverageMark converts a Coverage string to its display symbol.
 func coverageMark(cov string) string {
 	switch cov {
-	case "full":
+	case CoverageFull:
 		return "✓ full  "
-	case "partial":
+	case CoveragePartial:
 		return "◐ partial"
 	default:
 		return "✗ none  "
@@ -190,6 +252,13 @@ func (r TranslationReport) printText(w io.Writer, p *ui.Printer) {
 				}
 				continue
 			}
+			if note := row.TargetingNote(); note != "" {
+				if p != nil {
+					note = p.Faint(note)
+				}
+				fmt.Fprintf(w, "  %-10s %s\n", row.Agent, note)
+				continue
+			}
 			mark := coverageMark(row.Coverage)
 			tail := fmt.Sprintf("(%d mcp, %d commands)", row.MCP, row.Commands)
 			if p != nil {
@@ -206,9 +275,9 @@ func (r TranslationReport) printText(w io.Writer, p *ui.Printer) {
 // run doesn't shift the column that follows.
 func colorCoverage(p *ui.Printer, cov, mark string) string {
 	switch cov {
-	case "full":
+	case CoverageFull:
 		return p.Green(mark)
-	case "partial":
+	case CoveragePartial:
 		return p.Yellow(mark)
 	default:
 		return p.Red(mark)
@@ -224,9 +293,10 @@ func (r TranslationReport) PrintJSON(w io.Writer) error {
 
 // BuildReport constructs a TranslationReport from the canonical model and a
 // RenderPlan: one row per plugin (c.Plugins) × agent. Each row carries the
-// per-agent component inventory (countMCPServers / countLSPServers honour
-// enabled+agent targeting; commands/skills/subagents/hooks are model totals) and
-// the skips from plan.PerAgent[agent].Skips.
+// per-agent component inventory (every kind honours the providing
+// plugin's `agents`/`native_agents` gates; MCP/LSP additionally honour each
+// server's own enabled+agents targeting) and the skips from
+// plan.PerAgent[agent].Skips.
 //
 // coverage = full when skips==0; otherwise partial when the adapter still
 // rendered something for the agent (plan ops non-empty), none when every hosted
@@ -240,7 +310,8 @@ func (r TranslationReport) PrintJSON(w io.Writer) error {
 // projected canonical is flattened with no origin tag. Attribution is therefore
 // the caller's choice of what model+plan to pass:
 //   - apply passes the whole flattened model, so every plugin row carries
-//     the same global counts/skips (the documented summary behavior).
+//     the same global counts/skips for the components that TARGET the agent
+//     (the documented summary behavior).
 //   - `explain <id>` re-projects ONE plugin in isolation
 //     (marketplace.ProjectInstalled) and passes a model+plan holding only that
 //     plugin's components, so its row reflects that plugin alone.
@@ -278,7 +349,7 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 		if plug.Plugin.Disabled {
 			report.Rows = append(report.Rows, PluginRow{
 				Plugin:   label,
-				Coverage: "disabled",
+				Coverage: CoverageDisabled,
 				Disabled: true,
 			})
 			continue
@@ -286,6 +357,28 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 		for _, agName := range agents {
 			res, ok := plan.PerAgent[agName]
 			if !ok {
+				continue
+			}
+			// The plan for this agent was rendered from a model this plugin's
+			// components were filtered out of (secrets.Resolved.ForAgent), so its
+			// ops/skips say nothing about this plugin — emit the targeting marker
+			// instead of counts the plugin did not contribute to.
+			if !source.PluginTargetsAgent(plug.ID.Unverified(), plug.Plugin.Agents, plug.Plugin.DeferredAgents(), agName) {
+				// Name WHICH gate excluded the agent. The two mean different
+				// things to the reader — a narrowed allowlist is a choice they
+				// made, a deferral says the agent installs this plugin itself —
+				// and the remedies differ (widen `agents` vs. uninstall the
+				// native copy and drop the `native_agents` entry).
+				coverage := CoverageNative
+				if !source.AgentTargeted(plug.Plugin.Agents, agName) {
+					coverage = CoverageNotTargeted
+				}
+				report.Rows = append(report.Rows, PluginRow{
+					Plugin:      label,
+					Agent:       agName,
+					Coverage:    coverage,
+					NotTargeted: true,
+				})
 				continue
 			}
 			report.Rows = append(report.Rows, reportRow(label, agName, c, res))
@@ -300,14 +393,22 @@ func BuildReport(c source.Canonical, plan RenderPlan, agents []string) Translati
 // plugin); res is that agent's render result.
 func reportRow(label untrusted.Text, agName string, c source.Canonical, res AgentResult) PluginRow {
 	row := PluginRow{
-		Plugin:      label,
-		Agent:       agName,
-		MCP:         countMCPServers(c, agName),
-		LSP:         countLSPServers(c, agName),
-		Commands:    len(c.Commands),
-		Skills:      len(c.Skills),
-		Subagents:   len(c.Subagents),
-		Hooks:       len(c.Hooks),
+		Plugin: label,
+		Agent:  agName,
+		MCP:    countMCPServers(c, agName),
+		LSP:    countLSPServers(c, agName),
+		Commands: countTargeted(c.Commands, agName, func(v source.Command) (string, []string, []string) {
+			return v.Plugin, v.PluginAgents, v.PluginNativeAgents
+		}),
+		Skills: countTargeted(c.Skills, agName, func(v source.Skill) (string, []string, []string) {
+			return v.Plugin, v.PluginAgents, v.PluginNativeAgents
+		}),
+		Subagents: countTargeted(c.Subagents, agName, func(v source.Subagent) (string, []string, []string) {
+			return v.Plugin, v.PluginAgents, v.PluginNativeAgents
+		}),
+		Hooks: countTargeted(c.Hooks, agName, func(v source.Hook) (string, []string, []string) {
+			return v.Plugin, v.PluginAgents, v.PluginNativeAgents
+		}),
 		Skips:       len(res.Skips),
 		SkipDetails: skipDetails(res.Skips),
 	}
@@ -323,12 +424,27 @@ func reportRow(label untrusted.Text, agName string, c source.Canonical, res Agen
 // no LSP concept is counted in row.LSP yet renders nothing, so its row is "none").
 func computeCoverage(row PluginRow, rendered bool) string {
 	if row.Skips == 0 {
-		return "full"
+		return CoverageFull
 	}
 	if rendered {
-		return "partial"
+		return CoveragePartial
 	}
-	return "none"
+	return CoverageNone
+}
+
+// countTargeted counts the components of one kind that this agent actually
+// receives, per the providing plugin's gates. The text kinds and hooks have no
+// per-component allowlist of their own, so the plugin gate is the only filter
+// they need — but they DO need it, for the same reason MCP and LSP do.
+func countTargeted[T any](items []T, agent string, provenance func(T) (string, []string, []string)) int {
+	n := 0
+	for _, it := range items {
+		plugin, agents, native := provenance(it)
+		if source.PluginTargetsAgent(plugin, agents, native, agent) {
+			n++
+		}
+	}
+	return n
 }
 
 // countMCPServers counts the canonical MCP servers that render for agent —
@@ -336,10 +452,18 @@ func computeCoverage(row PluginRow, rendered bool) string {
 // merge-json-keys ops, which is always 1 for claude's single .claude.json
 // merge regardless of how many servers it holds, and wrongly also counted
 // hooks/lspServers ops (same strategy) as MCP.
+//
+// It honours BOTH targeting gates. The server's own `agents` list was always
+// checked; the providing PLUGIN's `agents`/`native_agents` must be too, or a
+// deferred plugin's servers are counted under some OTHER plugin's row for the
+// same agent — apply reporting "2 mcp" for an agent that received one.
 func countMCPServers(c source.Canonical, agent string) int {
 	n := 0
 	for _, m := range c.MCPServers {
 		if m.Server.Enabled != nil && !*m.Server.Enabled {
+			continue
+		}
+		if !source.PluginTargetsAgent(m.Plugin, m.PluginAgents, m.PluginNativeAgents, agent) {
 			continue
 		}
 		if targetsAgent(m.Server.Agents, agent) {
@@ -359,6 +483,9 @@ func countLSPServers(c source.Canonical, agent string) int {
 		if l.Spec.Enabled != nil && !*l.Spec.Enabled {
 			continue
 		}
+		if !source.PluginTargetsAgent(l.Plugin, l.PluginAgents, l.PluginNativeAgents, agent) {
+			continue
+		}
 		if targetsAgent(l.Spec.Agents, agent) {
 			n++
 		}
@@ -367,15 +494,8 @@ func countLSPServers(c source.Canonical, agent string) int {
 }
 
 // targetsAgent reports whether an Agents allowlist includes agent. An empty
-// list or one containing "*" targets every agent.
+// list or one containing "*" targets every agent. It delegates to the exported
+// predicate so this package holds ONE spelling of the rule.
 func targetsAgent(agents []string, agent string) bool {
-	if len(agents) == 0 {
-		return true
-	}
-	for _, a := range agents {
-		if a == "*" || a == agent {
-			return true
-		}
-	}
-	return false
+	return source.AgentTargeted(agents, agent)
 }
