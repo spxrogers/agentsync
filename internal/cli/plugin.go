@@ -456,6 +456,7 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string, lossless bool) error {
 		case isLossy:
 			diag(cmd, ui.LevelInfo,
 				"lossless: skipping lossy upgrade %s (candidate version drops translation for an agent)", id)
+			detail(cmd, "%s", losslessTargetingCaveat)
 			return nil
 		}
 	}

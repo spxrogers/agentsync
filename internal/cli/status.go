@@ -833,16 +833,36 @@ func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry
 	// mismatch. (The undeclared nudge above is correctly unscoped: "is this
 	// declared anywhere in my source" is a question about the merged view.)
 	duplicated := duplicatedNativePlugins(reportCanonical(c, sc), reg, selected)
+	warned := false
 	for _, name := range reg.Names() {
 		dupes := duplicated[name]
 		if len(dupes) == 0 {
 			continue
 		}
+		warned = true
 		p.Warnf("%d plugin(s) are installed in %s AND projected there by agentsync (%s), "+
 			"so their skills/subagents/commands land twice and their hooks fire twice. "+
 			"Either uninstall them in %s, or add %q to `native_agents` in plugins/<id>.toml "+
 			"to let %s keep serving them itself.",
 			len(dupes), name, untrusted.Join(dupes, ", "), name, name, name)
+	}
+	// Following `selected` is correct — a narrowed report should not talk about
+	// agents it excluded, exactly as the undeclared nudge above does not. But
+	// silence then carries two meanings: "no duplicates" and "duplicates on an
+	// agent you narrowed away". Say which, so an absent warning is never read as
+	// a clean bill of health for agents this run never looked at.
+	//
+	// Emitted whether or not a warning fired: "I checked 1 of 3 agents and found
+	// nothing" is the case most likely to be misread, and it is the case where
+	// the loop above prints nothing at all.
+	if narrowed := len(enabled) - len(selected); narrowed > 0 && len(c.Plugins) > 0 {
+		verb := "no duplicates found, but this"
+		if warned {
+			verb = "this"
+		}
+		p.Infof("%s check covered only the %d agent(s) --agents selected; %d other enabled "+
+			"agent(s) were not examined for duplicate plugin projection.",
+			verb, len(selected), narrowed)
 	}
 }
 

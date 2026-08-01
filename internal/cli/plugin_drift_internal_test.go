@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -163,5 +164,31 @@ func TestNativePluginOwners_ProbesEveryIngester(t *testing.T) {
 	got := nativePluginOwners(reg)["toolkit"]
 	if len(got) != 2 || got[0] != "claude" || got[1] != "codex" {
 		t.Fatalf("owners = %v, want both harnesses that install it natively [claude codex]", got)
+	}
+}
+
+// TestLosslessTargetingCaveat pins the wording of the `--lossless` caveat.
+//
+// It is the whole point of the change: the refusal itself was already correct
+// and already safe, but undiagnosable — a user saw an upgrade blocked over an
+// agent they knew did not receive the plugin, with nothing in the message to
+// search for. So the caveat has to name the gap (targeting is not honoured),
+// give a way to check (`plugin explain`), and give a way out (drop the flag).
+// A caveat missing any one of those is back to being a dead end.
+func TestLosslessTargetingCaveat(t *testing.T) {
+	for _, want := range []string{
+		"native_agents",  // the gap: targeting is not honoured
+		"agents",         // ...both keys, since either can exclude the agent
+		"plugin explain", // how to check whether the agent even receives it
+		"--lossless",     // how to proceed once you know
+	} {
+		if !strings.Contains(losslessTargetingCaveat, want) {
+			t.Errorf("the caveat must mention %q; got:\n%s", want, losslessTargetingCaveat)
+		}
+	}
+	// It must not read as a bug report about the plugin: the refusal is safe,
+	// and the user's upgrade may be perfectly fine.
+	if strings.Contains(strings.ToLower(losslessTargetingCaveat), "error") {
+		t.Errorf("the caveat qualifies a safe refusal; it should not read as an error:\n%s", losslessTargetingCaveat)
 	}
 }

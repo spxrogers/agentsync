@@ -9,6 +9,26 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Changed
+
+- **`--lossless` now says what its check did not consider.** The lossiness probe
+  renders every enabled agent from a canonical carrying no plugin provenance, so
+  it does not honour a plugin's `agents` / `native_agents`: a skip on an agent
+  the plugin is not projected to still refuses the upgrade. The refusal is safe
+  (it declines rather than performs) but was undiagnosable — an upgrade blocked
+  over an agent the user knows does not receive the plugin, with nothing to
+  search for. Both `plugin upgrade --lossless` and `plugin outdated --lossless`
+  now name the gap, point at `plugin explain <id>` to check, and say to re-run
+  without the flag if the affected agent does not receive the plugin. The
+  underlying gap is unchanged.
+- **`status --agents` says which agents its duplicate check skipped.** The
+  installed-natively-AND-projected warning follows the selected set, which is
+  correct — a narrowed report should not discuss agents it excluded — but it
+  made silence ambiguous between "no duplicates" and "duplicates on an agent you
+  narrowed away". A narrowed run now reports how many enabled agents went
+  unexamined, whether or not a duplicate was found.
+
+
 ### Added
 
 - **`status --legend`** prints a standalone glossary explaining all nine drift

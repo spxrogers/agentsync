@@ -756,3 +756,51 @@ func TestProjectScope_NativeAgentsIsHonoured(t *testing.T) {
 		t.Errorf("with no project deferral the duplicate is real; status should say so; got:\n%s", out)
 	}
 }
+
+// TestStatus_NarrowedDuplicateCheckSaysSo pins the `--agents` scoping note.
+//
+// Following the selected set is correct — a narrowed report should not talk
+// about agents it excluded — but it makes SILENCE ambiguous: "no duplicates"
+// and "duplicates on an agent you narrowed away" look identical. The note is
+// what separates them, and it matters most in the case where the warning loop
+// prints nothing at all.
+func TestStatus_NarrowedDuplicateCheckSaysSo(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	if _, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatalf("agent add codex: %v", err)
+	}
+	mpDir := makeFanOutMarketplace(t, t.TempDir())
+	if out, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatalf("marketplace add: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "plugin", "add", "toolkit"); err != nil {
+		t.Fatalf("plugin add: %v\n%s", err, out)
+	}
+	// The duplicate is on CLAUDE; the narrowed run below looks only at codex.
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("fanout-mp", mpDir, "toolkit"))
+
+	// Unnarrowed: the warning fires and there is nothing to qualify.
+	out, err := runCLI(t, env, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "projected there by agentsync") {
+		t.Fatalf("setup: the unnarrowed run should report the duplicate; got:\n%s", out)
+	}
+	if strings.Contains(out, "were not examined") {
+		t.Errorf("an unnarrowed run examined every agent; it must not claim otherwise:\n%s", out)
+	}
+
+	// Narrowed to the agent WITHOUT the duplicate: the warning correctly does
+	// not fire, and that silence must be qualified rather than read as clean.
+	out, err = runCLI(t, env, "status", "--agents", "codex")
+	if err != nil {
+		t.Fatalf("status --agents codex: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "projected there by agentsync") {
+		t.Errorf("a narrowed report must not talk about the agent it excluded; got:\n%s", out)
+	}
+	if !strings.Contains(out, "were not examined") {
+		t.Errorf("silence under --agents must say which agents went unchecked; got:\n%s", out)
+	}
+}

@@ -256,6 +256,14 @@ func diag(cmd *cobra.Command, level ui.Level, format string, args ...any) {
 	printerOn(cmd, w).Fdiagf(w, level, format, args...)
 }
 
+// detail writes an unlabeled continuation line under the preceding diag(),
+// hanging at the same column as its message. Use it for the "why / what now"
+// half of a diagnostic, so the headline stays one scannable line.
+func detail(cmd *cobra.Command, format string, args ...any) {
+	w := cmd.ErrOrStderr()
+	printerOn(cmd, w).Fdetailf(w, format, args...)
+}
+
 // emitJSON writes v as indented JSON to w. Used by the --json output modes,
 // which print only the structured payload to stdout (diagnostics go to stderr)
 // so the result is cleanly parseable.

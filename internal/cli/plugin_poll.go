@@ -154,6 +154,12 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 			p.Infof("lossless: skipping lossy bump %s %s → %s (candidate version drops translation for an agent)",
 				b.ID, b.From, b.To)
 		}
+		// Printed ONCE for the whole run rather than per bump: the caveat is a
+		// property of the check, not of any one bump, and repeating it per line
+		// would bury the bumps it is meant to qualify.
+		if len(lossy) > 0 {
+			p.Detailf("%s", losslessTargetingCaveat)
+		}
 		bumps = safe
 	}
 
@@ -540,6 +546,26 @@ func entryIsLossy(home, id string, mpEntry marketplace.PluginEntry, mpCacheRoot 
 	}
 	return false, nil
 }
+
+// losslessTargetingCaveat qualifies every `--lossless` refusal.
+//
+// The lossiness probe renders the plugin for every ENABLED agent, from a
+// canonical that carries no plugin provenance (see the KNOWN GAP on
+// projectedSkips), so `render.Plan`'s per-agent narrowing does not run: a skip
+// on an agent this plugin's `agents` / `native_agents` exclude still counts as
+// loss and still refuses the upgrade. That refusal is safe — it declines rather
+// than performs — but on its own it is undiagnosable, because the user sees an
+// upgrade blocked over an agent they know does not receive this plugin, with
+// nothing in the message to search for.
+//
+// Naming the caveat is deliberately NOT a fix. The fix is to stamp provenance
+// on the probe's canonical, which means threading the plugin's targeting lists
+// down through entryIsLossy's callers; until then the honest thing is to say
+// what the check did and did not consider.
+const losslessTargetingCaveat = "this check renders every ENABLED agent and does not honour the plugin's " +
+	"`agents` / `native_agents` targeting, so the loss may fall on an agent this plugin is not " +
+	"projected to. Check `agentsync plugin explain <id>`; if the affected agent is not listed as " +
+	"receiving it, the upgrade is safe for you — re-run without --lossless."
 
 // projectedSkips projects a plugin via marketplace.Project — the SAME single
 // projector apply now uses (marketplace.LoadProjected) — and returns the set of
