@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -884,7 +885,7 @@ func TestStatus_NarrowedDuplicateCheckSaysSo(t *testing.T) {
 	}
 	// Silence-qualifying half: this run found nothing, and the lead clause must
 	// say so. Without it the sentence reads as if a duplicate had been reported.
-	if !strings.Contains(out, "no duplicates found, but this check covered only") {
+	if !strings.Contains(out, "no duplicate was reported above, but this check covered only") {
 		t.Errorf("a narrowed run that found nothing must lead with that; got:\n%s", out)
 	}
 
@@ -901,25 +902,63 @@ func TestStatus_NarrowedDuplicateCheckSaysSo(t *testing.T) {
 	if !strings.Contains(out, "not examined for duplicate plugin projection") {
 		t.Errorf("a narrowed run must be qualified whether or not it warned; got:\n%s", out)
 	}
-	if strings.Contains(out, "no duplicates found") {
+	if strings.Contains(out, "no duplicate was reported") {
 		t.Errorf("a run that DID report a duplicate must not also say none was found; got:\n%s", out)
 	}
 
-	// Two ingester agents narrowed away at once: the names are listed in a
-	// DETERMINISTIC order. `enabled` comes from a map, so without the sort this
-	// line reorders between runs — the kind of churn that makes CLI output
-	// untestable and diffs noisy. One unexamined agent cannot catch it.
+	// Two ingester agents narrowed away at once, to pin the PLURAL inflection
+	// end-to-end. Ordering is pinned deterministically by
+	// TestUnexaminedPluginAgents instead of by repeating this run and hoping map
+	// iteration varies — it does not vary enough to be a test.
 	if _, err := runCLI(t, env, "agent", "add", "opencode"); err != nil {
 		t.Fatalf("agent add opencode: %v", err)
 	}
-	for i := range 8 {
-		out, err = runCLI(t, env, "status", "--agents", "opencode")
-		if err != nil {
-			t.Fatalf("status --agents opencode (run %d): %v\n%s", i, err, out)
-		}
-		if !strings.Contains(out, "claude, codex also install plugins natively") {
-			t.Fatalf("unexamined agents must be listed sorted and stably (run %d); got:\n%s", i, out)
-		}
+	out, err = runCLI(t, env, "status", "--agents", "opencode")
+	if err != nil {
+		t.Fatalf("status --agents opencode: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "claude, codex also install plugins natively") {
+		t.Errorf("both unexamined ingester agents must be named; got:\n%s", out)
+	}
+	// The verbs must agree with the count. Asserting only the number-invariant
+	// tail (which sits AFTER the verb) leaves both inflections unpinned.
+	if !strings.Contains(out, "were not examined") {
+		t.Errorf("two unexamined agents take the plural verb; got:\n%s", out)
+	}
+}
+
+// TestStatus_JSONStaysParseableWhenNarrowed pins stdout purity for the note.
+//
+// emitStatusWarnings runs on the --json path too, so a diagnostic accidentally
+// written to Out instead of Err corrupts the payload for every scripted
+// consumer. Nothing else asserts this for the scoping note, and the failure is
+// silent: the human-readable run looks identical.
+func TestStatus_JSONStaysParseableWhenNarrowed(t *testing.T) {
+	tmp, env := importTestEnv(t)
+	if _, err := runCLI(t, env, "agent", "add", "codex"); err != nil {
+		t.Fatalf("agent add codex: %v", err)
+	}
+	mpDir := makeFanOutMarketplace(t, t.TempDir())
+	if out, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatalf("marketplace add: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "plugin", "add", "toolkit"); err != nil {
+		t.Fatalf("plugin add: %v\n%s", err, out)
+	}
+	writeClaudeSettings(t, tmp, directoryMarketplaceSettings("fanout-mp", mpDir, "toolkit"))
+
+	stdout, stderr, err := runCLISplit(t, env, "status", "--json", "--agents", "codex")
+	if err != nil {
+		t.Fatalf("status --json --agents codex: %v\n%s", err, stderr)
+	}
+	// Setup guard: the note must actually be firing, or stdout staying clean
+	// proves nothing.
+	if !strings.Contains(stderr, "not examined for duplicate plugin projection") {
+		t.Fatalf("setup: the narrowed note should have fired on stderr; got:\n%s", stderr)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("--json stdout must be parseable; got %v for:\n%s", err, stdout)
 	}
 }
 

@@ -187,8 +187,18 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 		// "up to date" is only true if nothing was held back. Announcing refusals
 		// and then reporting success contradicts them — and undoes the point of
 		// saying why the upgrade was declined in the first place.
+		//
+		// Written to Out, not via Infof: this is the command's terminal RESULT,
+		// the sibling of the "up to date" line below and of the pending-bumps
+		// list, not a diagnostic about it (see the Infof doc in internal/ui).
+		// Plain rather than Successf because the emoji vocabulary has no glyph
+		// for "held back", and ✅ would restate the contradiction this replaces.
 		if excluded > 0 {
-			p.Infof("no upgrades applied: --lossless excluded all %d pending bump(s), reported above", excluded)
+			what := fmt.Sprintf("all %d pending bumps", excluded)
+			if excluded == 1 {
+				what = "the only pending bump"
+			}
+			fmt.Fprintf(p.Out, "no upgrades applied: --lossless excluded %s\n", what)
 		} else {
 			p.Successf(ui.EmojiSuccess, "all plugins are up to date")
 		}

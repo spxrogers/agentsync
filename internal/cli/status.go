@@ -866,7 +866,13 @@ func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry
 	// the agents beats a bare count, and lets the note fall silent when nothing
 	// examinable was narrowed away.
 	if unexamined := unexaminedPluginAgents(reg, enabled, selected); len(unexamined) > 0 && len(declaredPlugins(rc)) > 0 {
-		lead := "no duplicates found, but this"
+		// "reported above" rather than "found": duplicatedNativePlugins skips an
+		// agent whose IngestPlugins probe errors, so an absent warning means
+		// nothing was REPORTED, which is not the same as nothing being there.
+		// Before this note the distinction did not surface — the failure mode was
+		// silence — but an affirmative sentence would turn that silence into a
+		// claim, which is the exact defect this note exists to remove.
+		lead := "no duplicate was reported above, but this"
 		if warned {
 			lead = "this"
 		}

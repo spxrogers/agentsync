@@ -374,8 +374,54 @@ func TestLossless_UnevaluableOnlyRunCarriesNoCaveat(t *testing.T) {
 	if strings.Contains(out, "all plugins are up to date") {
 		t.Errorf("every bump was excluded; reporting success contradicts the refusals; got:\n%s", out)
 	}
-	if !strings.Contains(out, "excluded all 2 pending bump(s)") {
+	if !strings.Contains(out, "excluded all 2 pending bumps") {
 		t.Errorf("an all-excluded run must say so; got:\n%s", out)
+	}
+}
+
+// TestLossless_AllExcludedRunReportsOnStdout pins the terminal outcome of a run
+// that applied nothing: which STREAM it lands on, and its singular inflection.
+//
+// Both were unpinned by the tests above because runCLI merges stdout and
+// stderr, and because every other fixture excludes two bumps at once. The
+// stream matters: internal/ui states that an informational line which is part
+// of the RESULT is not a diagnostic and belongs on Out — the "up to date" line
+// this one replaces is a Successf on Out, so routing its sibling to Err would
+// split one command's two terminal outcomes across two streams and leave
+// `plugin upgrade --all --lossless > log` recording only one of them.
+func TestLossless_AllExcludedRunReportsOnStdout(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	base := t.TempDir()
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	mustRun(t, env, "agent", "add", "opencode")
+
+	// ONLY the lossy plugin, so exactly one bump exists and it is excluded.
+	mpDir := makeLosslessMarketplace(t, base, "1.0.0")
+	mustRun(t, env, "marketplace", "add", mpDir)
+	mustRun(t, env, "plugin", "add", "lossyp@as-mp")
+	mustRun(t, env, "apply")
+	_ = makeLosslessMarketplace(t, base, "2.0.0")
+
+	stdout, stderr, err := runCLISplit(t, env, "plugin", "upgrade", "--all", "--lossless")
+	if err != nil {
+		t.Fatalf("plugin upgrade --all --lossless: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stderr, "skipping lossy bump lossyp") {
+		t.Fatalf("setup: the only bump should have been excluded; stderr:\n%s", stderr)
+	}
+	// One excluded bump reads as one, not as "all 1".
+	if !strings.Contains(stdout, "excluded the only pending bump") {
+		t.Errorf("a single exclusion must read naturally; stdout:\n%s", stdout)
+	}
+	if strings.Contains(stderr, "no upgrades applied") {
+		t.Errorf("the terminal outcome is the command's result and belongs on stdout, "+
+			"not among the diagnostics; stderr:\n%s", stderr)
+	}
+	// And it must never be the contradictory success line.
+	if strings.Contains(stdout, "all plugins are up to date") || strings.Contains(stderr, "all plugins are up to date") {
+		t.Errorf("every bump was refused; claiming success contradicts that:\n%s\n%s", stdout, stderr)
 	}
 }
 
