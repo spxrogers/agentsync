@@ -2,11 +2,14 @@
 description: 'Multi-round adversarial code review loop — four specialized agents (correctness,
   adversarial, API design, test rigor) run in parallel against a PR, repeated until
   all four return `CLEAN — ship it` or a budgeted number of rounds (default 5) is
-  exhausted. Use when the user wants a thorough review of a substantive PR — new interfaces,
-  contract changes, load-bearing refactors — and has signalled they want both correctness
-  AND polish. Heavy: up to 5 rounds × 4 agents = 20 sub-invocations, so not for tiny
-  bug fixes, WIP sketches, or doc-only PRs. Invoke explicitly; do not auto-trigger
-  from a generic "review this" request unless the user names the high-bar mandate.'
+  exhausted — whichever comes first, with two ask-first soft stops in between (a NIT-only
+  round; severity declining two rounds straight) so the loop pauses to check in on
+  diminishing returns instead of always running to the cap. Use when the user wants
+  a thorough review of a substantive PR — new interfaces, contract changes, load-bearing
+  refactors — and has signalled they want both correctness AND polish. Heavy: up to
+  5 rounds × 4 agents = 20 sub-invocations, so not for tiny bug fixes, WIP sketches,
+  or doc-only PRs. Invoke explicitly; do not auto-trigger from a generic "review this"
+  request unless the user names the high-bar mandate.'
 disable-model-invocation: true
 name: review-loop
 ---
@@ -27,7 +30,11 @@ for round in 1..N:                          # N defaults to 5
   wait for all 4 to report                  # they report; they never edit
   synthesize findings (convergent vs single-reviewer; rank by severity)
   if every reviewer says "CLEAN — ship it":
-    stop                                    # convergence reached
+    stop                                    # full convergence
+  if every finding this round is NIT severity (no BLOCKER/ISSUE anywhere):
+    ask the user: stop here, or spend one more round?   # see Step 5
+  if severity has trended down for 2 rounds straight and neither stop
+     condition above has fired: ask the user ONCE — stop, or continue to budget?
   audit each finding yourself               # reviewers are wrong sometimes
   fix every accepted finding                # MAIN SESSION ONLY — see below
   commit + push
@@ -412,15 +419,51 @@ moved is immediately recognizable as stale rather than confusing.
 
 ## Step 5: terminate
 
-Stop when EITHER:
+Full convergence and budget exhaustion are the two HARD stops — the
+loop never needs permission for either:
 
 - **All four reviewers in the most recent round emit
-  `CLEAN — ship it`**, OR
-- **The configured round budget is exhausted** (default: 5).
+  `CLEAN — ship it`.** Stop immediately.
+- **The configured round budget is exhausted.** Stop, and if
+  unresolved findings remain, report the residual to the user with a
+  clear ship-it / one-more-round / defer recommendation. Don't
+  silently merge with open issues.
 
-If the budget is exhausted with unresolved findings, report the
-residual to the user with a clear ship-it / one-more-round / defer
-recommendation. Don't silently merge with open issues.
+Between those two extremes sits the failure mode a real run exposed:
+a small PR (a CLI flag and some doc wording) burned the full 5-round
+budget because nothing between "unanimous CLEAN" and "budget
+exhausted" was ever a reason to pause and ask. Every round after the
+first found *something* — but each round's findings were smaller than
+the last, well past the point where continuing served the PR rather
+than the loop's own momentum. Two SOFT stops close that gap. Both are
+**ask, don't assume** — the loop surfaces the signal and lets the user
+decide; it never stops on its own here, and it never silently
+continues either:
+
+- **A NIT-only round.** If every finding across all four lenses this
+  round is NIT severity — no BLOCKER, no ISSUE, anywhere — that is
+  real signal distinct from unanimous CLEAN (a lens can still name a
+  NIT and be functionally done). Report the round as normal, then ask
+  explicitly: *"Only NITs this round — stop here, or spend one more
+  round?"* Fix the NITs if the user says stop; otherwise continue as
+  usual into the next round.
+- **A declining-severity trend, once.** Track each round's worst
+  finding (BLOCKER > ISSUE > NIT > CLEAN) across all four lenses. The
+  first time that worst-severity has strictly decreased for two
+  rounds running (e.g. BLOCKER → ISSUE → NIT, or ISSUE → NIT → NIT)
+  and neither hard stop nor the NIT-only check above has already
+  fired, ask the user once: *"Findings have been getting smaller for
+  two rounds — keep going to the budget, or call it here?"* This fires
+  **at most once per loop run** — asking every round would just be a
+  slower version of the problem it's meant to fix. Whatever the user
+  answers, don't ask again this run; either stop now, or run the rest
+  of the budget without re-litigating it.
+
+Both soft stops are explicitly proportionate to what the user asked
+for: if the mandate was "make it bulletproof" or "fix everything,"
+say so when asking — the user may well want the full budget even off
+a NIT-only round. If the mandate was never stated (a bare "run the
+review loop"), the soft-stop question doubles as the moment to get it.
 
 ## Lessons from the field
 
@@ -474,6 +517,20 @@ Hard-won observations from the loop that this skill captures:
   a minority of one is convergence. Four SHIP-IT is unanimity.
   Either terminates the loop; the difference is whether you act
   on the dissent before merging.
+- **"When to use" is a real gate, not a suggestion — and once
+  running, nothing between the two hard stops used to be a reason to
+  pause.** A `status --legend` CLI-flag PR — a handful of files, no new
+  interfaces, exactly the "doc-only / small" shape this skill's own
+  "When to use" section says to skip — was run through the loop anyway
+  on explicit request and burned the full 5-round budget. Round 1
+  earned its keep (all four lenses independently caught a real flag-
+  validation bug). Every round after that found something, but each
+  round's findings were smaller than the last — round 4 and 5 were
+  down to wording nits and a test hardening — while the loop kept
+  auto-continuing because nothing short of unanimous CLEAN or the cap
+  itself ever prompted a pause. The two soft stops in Step 5 (a
+  NIT-only round; severity declining for two rounds straight) exist
+  because of this run.
 - **The user's mandate is load-bearing.** "Fix everything" and
   "ship it" point at opposite responses to disputed findings.
   Get it before the first round; carry it through every
