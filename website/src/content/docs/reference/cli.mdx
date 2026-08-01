@@ -382,6 +382,16 @@ when the candidate version introduces no *new* translation loss (an adapter
 skip) for an enabled agent — an excluded upgrade is reported, never silently
 dropped. `--scope`/`--project` resolve exactly as `apply` does.
 
+The check renders every *enabled* agent and does **not** honour a plugin's
+`agents` / `native_agents`, so it can decline over a loss falling on an agent
+the plugin is never projected to. A refusal on that basis says so and points at
+`agentsync plugin explain <id>`; if the affected agent is not listed there, the
+upgrade is safe for you and you can re-run without the flag. (Under `--all` that
+note prints once for the run, not once per bump.) A bump that could not be
+*evaluated* is excluded too, but reported separately and without that note —
+such a refusal is not about targeting, and dropping the flag is not the answer
+to it.
+
 ```bash
 agentsync plugin outdated
 agentsync plugin upgrade --all --lossless

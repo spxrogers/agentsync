@@ -57,6 +57,27 @@ func nativePluginOwners(reg *adapter.Registry) map[string][]string {
 	return out
 }
 
+// declaredPlugins returns the plugins a canonical EFFECTIVELY declares — every
+// non-disabled entry, keyed by the plugins/<id>.toml stem.
+//
+// Extracted as a helper because two call sites must agree on it exactly:
+// duplicatedNativePlugins returns nil (having checked nothing) when this set is
+// empty, and status's `--agents` scoping note exists to qualify that very
+// silence. A note computing "did we have anything to check?" its own way — off
+// the merged canonical rather than the scoped one, or counting disabled pins —
+// disagrees with the check in both directions: it claims a narrowed check that
+// never ran, and it stays quiet when narrowing really did hide a duplicate.
+// Callers must pass the SAME canonical they pass to duplicatedNativePlugins.
+func declaredPlugins(c source.Canonical) map[string]source.PluginSpec {
+	declared := make(map[string]source.PluginSpec, len(c.Plugins))
+	for _, pl := range c.Plugins {
+		if !pl.Plugin.Disabled {
+			declared[pl.ID.Unverified()] = pl.Plugin
+		}
+	}
+	return declared
+}
+
 // duplicatedNativePlugins reports, per agent, the declared plugins that agent
 // installs ITSELF and that agentsync also projects to it — the duplicate: every
 // skill, subagent, and command lands twice (once from the agent's own install
@@ -79,12 +100,7 @@ func nativePluginOwners(reg *adapter.Registry) map[string][]string {
 // Read-only and best-effort: a discovery error is skipped, never surfaced as a
 // failure, exactly like the sibling nudge.
 func duplicatedNativePlugins(c source.Canonical, reg *adapter.Registry, agents []string) map[string][]untrusted.Text {
-	declared := make(map[string]source.PluginSpec, len(c.Plugins))
-	for _, pl := range c.Plugins {
-		if !pl.Plugin.Disabled {
-			declared[pl.ID.Unverified()] = pl.Plugin
-		}
-	}
+	declared := declaredPlugins(c)
 	if len(declared) == 0 {
 		return nil
 	}

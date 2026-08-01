@@ -436,7 +436,11 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string, lossless bool) error {
 	// renders the installed cache and a throwaway fetch of the candidate and
 	// compares skip identities; a candidate that adds one is reported and the
 	// upgrade is refused, leaving cache + TOML exactly as they were. An
-	// evaluation failure is conservatively lossy, matching --all's filter.
+	// evaluation failure is conservatively EXCLUDED too, matching --all's filter
+	// — but as its own outcome, not as a measured loss. The two paths report it
+	// differently (this one hard-errors; --all warns and drops the bump into its
+	// `unevaluable` bucket) and agree on what matters: neither treats it as a
+	// measured loss, and neither carries the targeting caveat.
 	if lossless {
 		userHome := paths.HomeDir(paths.OSEnv{})
 		c, cerr := source.Load(afero.NewOsFs(), home)
@@ -456,6 +460,7 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string, lossless bool) error {
 		case isLossy:
 			diag(cmd, ui.LevelInfo,
 				"lossless: skipping lossy upgrade %s (candidate version drops translation for an agent)", id)
+			detail(cmd, "%s", losslessTargetingCaveat)
 			return nil
 		}
 	}

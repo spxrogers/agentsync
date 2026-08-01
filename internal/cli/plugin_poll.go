@@ -147,18 +147,61 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 	// candidate manifest and diffing the skip identities a render emits;
 	// comparing both under identical conditions makes any render quirk cancel, so
 	// the delta is exactly the bump's effect. An excluded bump is REPORTED, never
-	// silently dropped. Evaluation failures are treated as lossy (conservative).
+	// silently dropped. Evaluation failures are excluded too (conservative), but
+	// reported as what they are rather than as measured losses.
+	var excluded int
 	if o.lossless {
-		safe, lossy := filterSafeBumps(home, bumps, fetched, c.Config, userHome, warnW)
+		safe, lossy, unevaluable := filterSafeBumps(home, bumps, fetched, c.Config, userHome, warnW)
 		for _, b := range lossy {
 			p.Infof("lossless: skipping lossy bump %s %s → %s (candidate version drops translation for an agent)",
 				b.ID, b.From, b.To)
 		}
+		// Printed ONCE for the whole run rather than per bump: the caveat is a
+		// property of the check, not of any one bump, and repeating it per line
+		// would bury the bumps it is meant to qualify.
+		//
+		// Gated on `lossy` alone, NOT on everything excluded: the caveat says the
+		// loss may fall on an agent this plugin is not projected to, and offers
+		// re-running without --lossless. Neither sentence is true of a bump that
+		// could not be evaluated — there is no identified loss and no agent — and
+		// telling that user to drop the flag would invert a refusal that exists
+		// precisely because nothing is known.
+		//
+		// Emitted between the two loops, not after both. Detailf is an UNLABELED
+		// continuation line that hangs under whatever diagnostic precedes it, so
+		// printing it last would render it attached to an unevaluable bump — the
+		// very misattribution the gate above exists to prevent. Gating and
+		// placement have to agree.
+		if len(lossy) > 0 {
+			p.Detailf("%s", losslessTargetingCaveat)
+		}
+		for _, b := range unevaluable {
+			p.Infof("lossless: skipping bump %s %s → %s (could not be evaluated; see the warning above)",
+				b.ID, b.From, b.To)
+		}
+		excluded = len(lossy) + len(unevaluable)
 		bumps = safe
 	}
 
 	if len(bumps) == 0 {
-		p.Successf(ui.EmojiSuccess, "all plugins are up to date")
+		// "up to date" is only true if nothing was held back. Announcing refusals
+		// and then reporting success contradicts them — and undoes the point of
+		// saying why the upgrade was declined in the first place.
+		//
+		// Written to Out, not via Infof: this is the command's terminal RESULT,
+		// the sibling of the "up to date" line below and of the pending-bumps
+		// list, not a diagnostic about it (see the Infof doc in internal/ui).
+		// Plain rather than Successf because the emoji vocabulary has no glyph
+		// for "held back", and ✅ would restate the contradiction this replaces.
+		if excluded > 0 {
+			what := fmt.Sprintf("all %d pending bumps", excluded)
+			if excluded == 1 {
+				what = "the only pending bump"
+			}
+			fmt.Fprintf(p.Out, "no upgrades applied: --lossless excluded %s\n", what)
+		} else {
+			p.Successf(ui.EmojiSuccess, "all plugins are up to date")
+		}
 	} else {
 		fmt.Fprintf(cmd.OutOrStdout(), "\npending bumps (%d):\n", len(bumps))
 		for _, b := range bumps {
@@ -446,11 +489,22 @@ func swapDir(src, dst string) error {
 	return os.Rename(src, dst)
 }
 
-// filterSafeBumps partitions bumps into those whose candidate version adds no
-// new translation losses (safe) and those that do (lossy), for `plugin upgrade
-// --all --lossless`. An evaluation error is conservatively treated as lossy so
-// a fetch/parse failure can never cause a lossy bump to slip through.
-func filterSafeBumps(home string, bumps []marketplace.Bump, fetched map[string]map[string]marketplace.PluginEntry, cfg source.Config, userHome string, warn io.Writer) (safe, lossy []marketplace.Bump) {
+// filterSafeBumps partitions bumps for `plugin upgrade --all --lossless` into
+// three sets: those whose candidate version adds no new translation losses
+// (safe), those a render judged to add one (lossy), and those that could not be
+// evaluated at all (unevaluable). Only `safe` is applied — an evaluation error
+// is still excluded conservatively, so a fetch/parse failure can never let a
+// lossy bump slip through.
+//
+// unevaluable is kept SEPARATE from lossy rather than folded into it, even
+// though both are excluded, because the two have opposite explanations: a lossy
+// bump was measured and found to drop translation, while an unevaluable one was
+// never measured. Reporting them as one set produced a "candidate version drops
+// translation for an agent" line for a bump nothing had judged, and attached
+// losslessTargetingCaveat — whose advice is "the affected agent may not receive
+// this plugin; re-run without --lossless" — to a refusal that had no affected
+// agent and was not about targeting at all.
+func filterSafeBumps(home string, bumps []marketplace.Bump, fetched map[string]map[string]marketplace.PluginEntry, cfg source.Config, userHome string, warn io.Writer) (safe, lossy, unevaluable []marketplace.Bump) {
 	reg := registryFactory()
 	var agents []string
 	for name, ag := range cfg.Agents {
@@ -462,7 +516,7 @@ func filterSafeBumps(home string, bumps []marketplace.Bump, fetched map[string]m
 		isLossy, err := bumpIsLossy(home, b, fetched, cfg, reg, agents, userHome)
 		if err != nil {
 			fmt.Fprintf(warn, "warning: lossless: cannot evaluate %s (%v); excluding to be safe\n", b.ID, err)
-			lossy = append(lossy, b)
+			unevaluable = append(unevaluable, b)
 			continue
 		}
 		if isLossy {
@@ -471,7 +525,7 @@ func filterSafeBumps(home string, bumps []marketplace.Bump, fetched map[string]m
 			safe = append(safe, b)
 		}
 	}
-	return safe, lossy
+	return safe, lossy, unevaluable
 }
 
 // bumpIsLossy reports whether applying b introduces a new adapter Skip (a
@@ -541,6 +595,32 @@ func entryIsLossy(home, id string, mpEntry marketplace.PluginEntry, mpCacheRoot 
 	return false, nil
 }
 
+// losslessTargetingCaveat qualifies every `--lossless` refusal that a render
+// actually judged lossy. A bump excluded because it could not be EVALUATED does
+// not carry it: there is no identified loss and no affected agent, so neither
+// half of the caveat's advice applies.
+//
+// The lossiness probe renders the plugin for every ENABLED agent, from a
+// canonical that carries no plugin provenance (see the KNOWN GAP on
+// projectedSkips), so `render.Plan`'s per-agent narrowing does not run: a skip
+// on an agent this plugin's `agents` / `native_agents` exclude still counts as
+// loss and still refuses the upgrade. That refusal is safe — it declines rather
+// than performs — but on its own it is undiagnosable, because the user sees an
+// upgrade blocked over an agent they know does not receive this plugin, with
+// nothing in the message to search for.
+//
+// Naming the caveat is deliberately NOT a fix. The fix is to stamp provenance
+// on the probe's canonical, which means threading the plugin's targeting lists
+// down through entryIsLossy's callers; until then the honest thing is to say
+// what the check did and did not consider.
+// The text opens capitalized: Detailf is UNLABELED, so unlike Warnf/Infof no
+// level label supplies the sentence start (cf. the sibling prose Detailf in
+// revert.go).
+const losslessTargetingCaveat = "This check renders every ENABLED agent and does not honour the plugin's " +
+	"`agents` / `native_agents` targeting, so the loss may fall on an agent this plugin is not " +
+	"projected to. Check `agentsync plugin explain <id>`; if the affected agent is not listed as " +
+	"receiving it, the upgrade is safe for you — re-run without --lossless."
+
 // projectedSkips projects a plugin via marketplace.Project — the SAME single
 // projector apply now uses (marketplace.LoadProjected) — and returns the set of
 // "agent\x00component\x00name" skip identities rendering just that plugin's
@@ -555,10 +635,14 @@ func entryIsLossy(home, id string, mpEntry marketplace.PluginEntry, mpCacheRoot 
 // empty Plugin, source.PluginTargetsAgent returns true, and render.Plan's
 // per-agent narrowing is a no-op — meaning this probe can report an upgrade as
 // lossy because of a skip on an agent the plugin's `agents` / `native_agents`
-// exclude. It is advisory only (it gates a warning, never a write), and closing
-// it means threading the plugin's two targeting lists down from entryIsLossy's
-// callers. Deliberately deferred; fix it there rather than by re-deriving the
-// gates here, which would be a second place they can drift.
+// exclude. This GATES BEHAVIOUR, not just a warning: pluginUpgradeRun returns
+// without upgrading and filterSafeBumps drops the bump. It errs safe (it
+// declines rather than performs), but a user can be blocked over an agent that
+// never receives this plugin — which is why every such refusal carries
+// losslessTargetingCaveat. Closing the gap means threading the plugin's two
+// targeting lists down from entryIsLossy's callers. Deliberately deferred; fix
+// it there rather than by re-deriving the gates here, which would be a second
+// place they can drift.
 func projectedSkips(entry marketplace.PluginEntry, cacheDir string, cfg source.Config, reg *adapter.Registry, agents []string, userHome string) (map[string]bool, error) {
 	proj, err := marketplace.Project(entry, cacheDir)
 	if err != nil {

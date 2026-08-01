@@ -645,7 +645,22 @@ narrowed allowlist or an adopted plugin is never silently reset.
 
 Because apply's plan never reads the destination, agentsync cannot notice a
 plugin you install natively AFTER declaring it. `status` and `doctor` do read
-it, and warn when a plugin is installed in an agent *and* projected there.
+it, and warn when a plugin is installed in an agent *and* projected there. Under
+`--agents`, that check follows the agents you selected — so a narrowed run names
+the enabled agents with a native plugin manager that it did not examine, rather
+than letting silence read as a clean bill of health.
+
+One caveat on `--lossless` (`plugin upgrade <id> --lossless` and
+`plugin upgrade --all --lossless`; `plugin outdated` does not take the flag):
+the check that decides whether an upgrade would lose something in translation
+renders every *enabled* agent and does **not** honour a plugin's `agents` /
+`native_agents`. So it can decline an upgrade over a loss that falls on an agent
+this plugin is never projected to. It errs toward declining, never toward
+upgrading; run `agentsync plugin explain <id>` to see which agents actually
+receive the plugin, and re-run without `--lossless` if the affected one is not
+among them. A bump the check could not evaluate at all is also excluded, but
+reported separately — that refusal is not about targeting, and dropping the flag
+is not the answer to it.
 
 (A per-component `[plugin.overrides.<agent>]` table was specced but is **not
 wired in v1** — the projector does not consult it; use the keys above.)

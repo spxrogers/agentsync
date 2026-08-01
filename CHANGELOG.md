@@ -9,6 +9,41 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Changed
+
+- **`--lossless` now says what its check did not consider.** The lossiness probe
+  renders every enabled agent from a canonical carrying no plugin provenance, so
+  it does not honour a plugin's `agents` / `native_agents`: a skip on an agent
+  the plugin is not projected to still refuses the upgrade. The refusal is safe
+  (it declines rather than performs) but was undiagnosable — an upgrade blocked
+  over an agent the user knows does not receive the plugin, with nothing to
+  search for. Both forms that take the flag — `plugin upgrade <id> --lossless`
+  and `plugin upgrade --all --lossless` — now name the gap, point at
+  `plugin explain <id>` to check, and say to re-run without the flag if the
+  affected agent does not receive the plugin. The underlying gap is unchanged.
+  (`plugin outdated` does not define `--lossless`; the flag only filters what
+  gets applied.)
+- **`--lossless` no longer reports an unevaluable bump as a lossy one.**
+  `plugin upgrade --all --lossless` excluded fetch/parse failures conservatively
+  — correct — but folded them in with measured losses, so a bump nothing had
+  judged was announced as "candidate version drops translation for an agent".
+  Those are now reported as what they are, and the targeting caveat above is
+  attached only to bumps a render actually judged lossy: its advice ("the loss
+  may fall on an agent this plugin is not projected to; re-run without
+  `--lossless`") is wrong for a bump that was never measured. Which bumps get
+  applied is unchanged.
+- **A `--lossless` run that excluded everything no longer reports success.**
+  `plugin upgrade --all --lossless` ended with `all plugins are up to date`
+  even when every pending bump had just been refused — contradicting the
+  refusals it had printed a line earlier. It now reports the exclusion instead,
+  on stdout with the result rather than among the diagnostics.
+- **`status --agents` says which agents its duplicate check skipped.** The
+  installed-natively-AND-projected warning follows the selected set, which is
+  correct — a narrowed report should not discuss agents it excluded — but it
+  made silence ambiguous between "no duplicates" and "duplicates on an agent you
+  narrowed away". A narrowed run now names the enabled agents that install
+  plugins natively and went unexamined, whether or not a duplicate was found.
+
 ### Added
 
 - **`status --legend`** prints a standalone glossary explaining all nine drift
