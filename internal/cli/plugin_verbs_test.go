@@ -305,6 +305,18 @@ func TestLossless_UnevaluableIsNotReportedAsLossy(t *testing.T) {
 	if !strings.Contains(out, "skipping bump lossy2") {
 		t.Errorf("an excluded bump must still be REPORTED, as what it actually is; got:\n%s", out)
 	}
+	// ORDER, not just presence. Detailf is an unlabeled continuation line that
+	// hangs under whatever precedes it, so a caveat printed after the unevaluable
+	// line renders as if it qualified THAT bump — the misattribution the gate
+	// exists to prevent. Gating alone cannot catch this; position can.
+	caveatAt := strings.Index(out, "plugin explain")
+	unevalAt := strings.Index(out, "skipping bump lossy2")
+	if caveatAt < 0 || unevalAt < 0 {
+		t.Fatalf("setup: expected both the caveat and the unevaluable line; got:\n%s", out)
+	}
+	if caveatAt > unevalAt {
+		t.Errorf("the caveat must hang under the LOSSY line, not the unevaluable one; got:\n%s", out)
+	}
 	// Neither bump was applied: excluding conservatively is unchanged.
 	home := filepath.Join(tmp, ".agentsync")
 	for _, id := range []string{"lossy1", "lossy2"} {
@@ -312,6 +324,58 @@ func TestLossless_UnevaluableIsNotReportedAsLossy(t *testing.T) {
 		if strings.Contains(pinned, "2.0.0") {
 			t.Errorf("%s should not have been upgraded under --lossless:\n%s", id, pinned)
 		}
+	}
+}
+
+// TestLossless_UnevaluableOnlyRunCarriesNoCaveat is the case the mixed-bump test
+// above cannot reach: NOTHING was judged lossy.
+//
+// With one lossy bump present the caveat prints either way, so a gate on
+// `len(lossy)` and a gate on "anything was excluded" are indistinguishable —
+// the assertion passes on the bug. Here every exclusion is an evaluation
+// failure, so the caveat must be absent entirely. This is the run where its
+// advice is actively wrong: "re-run without --lossless" would perform the
+// upgrade the refusal exists to prevent, on a bump nobody has measured.
+func TestLossless_UnevaluableOnlyRunCarriesNoCaveat(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	base := t.TempDir()
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	mustRun(t, env, "agent", "add", "opencode")
+
+	mpDir := makeTwoLossyMarketplace(t, base, "1.0.0")
+	mustRun(t, env, "marketplace", "add", mpDir)
+	mustRun(t, env, "plugin", "add", "lossy1@as2-mp")
+	mustRun(t, env, "plugin", "add", "lossy2@as2-mp")
+	mustRun(t, env, "apply")
+
+	// BOTH candidates unparseable: every pending bump is unevaluable.
+	_ = makeTwoLossyMarketplace(t, base, "2.0.0")
+	for _, id := range []string{"lossy1", "lossy2"} {
+		corrupt := filepath.Join(mpDir, "plugins", id, ".claude-plugin", "plugin.json")
+		if err := os.WriteFile(corrupt, []byte("{ not json"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := runCLI(t, env, "plugin", "upgrade", "--all", "--lossless")
+	if err != nil {
+		t.Fatalf("plugin upgrade --all --lossless: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "cannot evaluate lossy1") || !strings.Contains(out, "cannot evaluate lossy2") {
+		t.Fatalf("setup: both candidates should have failed evaluation; got:\n%s", out)
+	}
+	if strings.Contains(out, "plugin explain") {
+		t.Errorf("nothing was judged lossy, so the targeting caveat must not appear — its "+
+			"advice would undo a refusal made because nothing is known; got:\n%s", out)
+	}
+	// And the run must not then claim everything is fine.
+	if strings.Contains(out, "all plugins are up to date") {
+		t.Errorf("every bump was excluded; reporting success contradicts the refusals; got:\n%s", out)
+	}
+	if !strings.Contains(out, "excluded all 2 pending bump(s)") {
+		t.Errorf("an all-excluded run must say so; got:\n%s", out)
 	}
 }
 

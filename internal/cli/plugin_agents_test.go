@@ -757,6 +757,79 @@ func TestProjectScope_NativeAgentsIsHonoured(t *testing.T) {
 	}
 }
 
+// TestProjectScope_ScopingNoteFollowsTheScopedCanonical pins the half of the
+// note's guard that user-scope tests structurally cannot reach.
+//
+// The guard asks "was there anything to check?" via declaredPlugins(rc), where
+// rc is reportCanonical(c, sc). At USER scope rc == c, so swapping one for the
+// other changes nothing and every user-scope test stays green — a mutation
+// sweep confirmed exactly that. Only at PROJECT scope do they diverge, because
+// project.Merge never overlays Plugins: the merged canonical carries the USER
+// pins while a project-scope render honours the PROJECT ones.
+//
+// Here the project declares NO plugin while the user does. Nothing was checked,
+// so a narrowed run has no silence to qualify — and a guard reading the merged
+// canonical would announce a narrowed check that never happened.
+func TestProjectScope_ScopingNoteFollowsTheScopedCanonical(t *testing.T) {
+	tmpHome := t.TempDir()
+	proj := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+
+	for _, args := range [][]string{
+		{"init"},
+		{"agent", "add", "claude"},
+		{"agent", "add", "codex"},
+		{"init", "--scope", "project", "--project", proj},
+		{"agent", "add", "claude", "--scope", "project", "--project", proj},
+		{"agent", "add", "codex", "--scope", "project", "--project", proj},
+	} {
+		if out, err := runCLI(t, env, args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	// A plugin at USER scope only — the project tree declares none.
+	mpDir := makeFanOutMarketplace(t, t.TempDir())
+	if out, err := runCLI(t, env, "marketplace", "add", mpDir); err != nil {
+		t.Fatalf("marketplace add: %v\n%s", err, out)
+	}
+	if out, err := runCLI(t, env, "plugin", "add", "toolkit"); err != nil {
+		t.Fatalf("plugin add: %v\n%s", err, out)
+	}
+	writeClaudeSettings(t, tmpHome, directoryMarketplaceSettings("fanout-mp", mpDir, "toolkit"))
+
+	// Narrowed to codex, so claude (an ingester) goes unexamined — the note's
+	// other precondition is satisfied and only the canonical decides.
+	out, err := runCLI(t, env, "status", "--scope", "project", "--project", proj, "--agents", "codex")
+	if err != nil {
+		t.Fatalf("project status --agents codex: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "not examined for duplicate plugin projection") {
+		t.Errorf("the project declares no plugin, so no duplicate check ran and there is "+
+			"nothing for the narrowing to have hidden; got:\n%s", out)
+	}
+
+	// Converse: commit the pin into the project and the note becomes correct —
+	// proving the assertion above is about the scoped canonical, not about the
+	// note having quietly stopped working.
+	pin := mustReadFile(t, filepath.Join(tmpHome, ".agentsync", "plugins", "toolkit.toml"))
+	projPlugins := filepath.Join(proj, ".agentsync", "plugins")
+	if err := os.MkdirAll(projPlugins, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projPlugins, "toolkit.toml"), []byte(pin), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runCLI(t, env, "status", "--scope", "project", "--project", proj, "--agents", "codex")
+	if err != nil {
+		t.Fatalf("project status after committing the pin: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "not examined for duplicate plugin projection") {
+		t.Errorf("the project now declares the plugin, so the narrowed check must be "+
+			"qualified; got:\n%s", out)
+	}
+}
+
 // TestStatus_NarrowedDuplicateCheckSaysSo pins the `--agents` scoping note.
 //
 // Following the selected set is correct — a narrowed report should not talk
@@ -787,7 +860,7 @@ func TestStatus_NarrowedDuplicateCheckSaysSo(t *testing.T) {
 	if !strings.Contains(out, "projected there by agentsync") {
 		t.Fatalf("setup: the unnarrowed run should report the duplicate; got:\n%s", out)
 	}
-	if strings.Contains(out, "were not examined") {
+	if strings.Contains(out, "not examined for duplicate plugin projection") {
 		t.Errorf("an unnarrowed run examined every agent; it must not claim otherwise:\n%s", out)
 	}
 
@@ -800,13 +873,13 @@ func TestStatus_NarrowedDuplicateCheckSaysSo(t *testing.T) {
 	if strings.Contains(out, "projected there by agentsync") {
 		t.Errorf("a narrowed report must not talk about the agent it excluded; got:\n%s", out)
 	}
-	if !strings.Contains(out, "were not examined") {
+	if !strings.Contains(out, "not examined for duplicate plugin projection") {
 		t.Errorf("silence under --agents must say which agents went unchecked; got:\n%s", out)
 	}
 	// The note NAMES the unexamined agents rather than counting them: "claude"
 	// is the one that could have carried a duplicate, and it is the whole point
 	// of the sentence.
-	if !strings.Contains(out, "claude also install plugins natively") {
+	if !strings.Contains(out, "claude also installs plugins natively") {
 		t.Errorf("the note must name the unexamined agent, not just count it; got:\n%s", out)
 	}
 	// Silence-qualifying half: this run found nothing, and the lead clause must
@@ -825,11 +898,28 @@ func TestStatus_NarrowedDuplicateCheckSaysSo(t *testing.T) {
 	if !strings.Contains(out, "projected there by agentsync") {
 		t.Fatalf("setup: narrowing to claude should still report the duplicate; got:\n%s", out)
 	}
-	if !strings.Contains(out, "were not examined") {
+	if !strings.Contains(out, "not examined for duplicate plugin projection") {
 		t.Errorf("a narrowed run must be qualified whether or not it warned; got:\n%s", out)
 	}
 	if strings.Contains(out, "no duplicates found") {
 		t.Errorf("a run that DID report a duplicate must not also say none was found; got:\n%s", out)
+	}
+
+	// Two ingester agents narrowed away at once: the names are listed in a
+	// DETERMINISTIC order. `enabled` comes from a map, so without the sort this
+	// line reorders between runs — the kind of churn that makes CLI output
+	// untestable and diffs noisy. One unexamined agent cannot catch it.
+	if _, err := runCLI(t, env, "agent", "add", "opencode"); err != nil {
+		t.Fatalf("agent add opencode: %v", err)
+	}
+	for i := range 8 {
+		out, err = runCLI(t, env, "status", "--agents", "opencode")
+		if err != nil {
+			t.Fatalf("status --agents opencode (run %d): %v\n%s", i, err, out)
+		}
+		if !strings.Contains(out, "claude, codex also install plugins natively") {
+			t.Fatalf("unexamined agents must be listed sorted and stably (run %d); got:\n%s", i, out)
+		}
 	}
 }
 
@@ -869,7 +959,7 @@ func TestStatus_ScopingNoteStaysSilentWhenNothingWasHidden(t *testing.T) {
 		if err != nil {
 			t.Fatalf("status --agents codex: %v\n%s", err, out)
 		}
-		if strings.Contains(out, "were not examined") {
+		if strings.Contains(out, "not examined for duplicate plugin projection") {
 			t.Errorf("a disabled plugin is not checked for duplication, so there is no "+
 				"narrowed check to qualify; got:\n%s", out)
 		}
@@ -898,7 +988,7 @@ func TestStatus_ScopingNoteStaysSilentWhenNothingWasHidden(t *testing.T) {
 		if !strings.Contains(out, "projected there by agentsync") {
 			t.Fatalf("setup: claude should still report the duplicate; got:\n%s", out)
 		}
-		if strings.Contains(out, "were not examined") {
+		if strings.Contains(out, "not examined for duplicate plugin projection") {
 			t.Errorf("opencode installs no plugins natively; narrowing it away hid nothing "+
 				"and must not be reported as a gap; got:\n%s", out)
 		}

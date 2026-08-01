@@ -149,14 +149,11 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 	// the delta is exactly the bump's effect. An excluded bump is REPORTED, never
 	// silently dropped. Evaluation failures are excluded too (conservative), but
 	// reported as what they are rather than as measured losses.
+	var excluded int
 	if o.lossless {
 		safe, lossy, unevaluable := filterSafeBumps(home, bumps, fetched, c.Config, userHome, warnW)
 		for _, b := range lossy {
 			p.Infof("lossless: skipping lossy bump %s %s → %s (candidate version drops translation for an agent)",
-				b.ID, b.From, b.To)
-		}
-		for _, b := range unevaluable {
-			p.Infof("lossless: skipping bump %s %s → %s (could not be evaluated; see the warning above)",
 				b.ID, b.From, b.To)
 		}
 		// Printed ONCE for the whole run rather than per bump: the caveat is a
@@ -169,14 +166,32 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 		// could not be evaluated — there is no identified loss and no agent — and
 		// telling that user to drop the flag would invert a refusal that exists
 		// precisely because nothing is known.
+		//
+		// Emitted between the two loops, not after both. Detailf is an UNLABELED
+		// continuation line that hangs under whatever diagnostic precedes it, so
+		// printing it last would render it attached to an unevaluable bump — the
+		// very misattribution the gate above exists to prevent. Gating and
+		// placement have to agree.
 		if len(lossy) > 0 {
 			p.Detailf("%s", losslessTargetingCaveat)
 		}
+		for _, b := range unevaluable {
+			p.Infof("lossless: skipping bump %s %s → %s (could not be evaluated; see the warning above)",
+				b.ID, b.From, b.To)
+		}
+		excluded = len(lossy) + len(unevaluable)
 		bumps = safe
 	}
 
 	if len(bumps) == 0 {
-		p.Successf(ui.EmojiSuccess, "all plugins are up to date")
+		// "up to date" is only true if nothing was held back. Announcing refusals
+		// and then reporting success contradicts them — and undoes the point of
+		// saying why the upgrade was declined in the first place.
+		if excluded > 0 {
+			p.Infof("no upgrades applied: --lossless excluded all %d pending bump(s), reported above", excluded)
+		} else {
+			p.Successf(ui.EmojiSuccess, "all plugins are up to date")
+		}
 	} else {
 		fmt.Fprintf(cmd.OutOrStdout(), "\npending bumps (%d):\n", len(bumps))
 		for _, b := range bumps {
@@ -570,7 +585,10 @@ func entryIsLossy(home, id string, mpEntry marketplace.PluginEntry, mpCacheRoot 
 	return false, nil
 }
 
-// losslessTargetingCaveat qualifies every `--lossless` refusal.
+// losslessTargetingCaveat qualifies every `--lossless` refusal that a render
+// actually judged lossy. A bump excluded because it could not be EVALUATED does
+// not carry it: there is no identified loss and no affected agent, so neither
+// half of the caveat's advice applies.
 //
 // The lossiness probe renders the plugin for every ENABLED agent, from a
 // canonical that carries no plugin provenance (see the KNOWN GAP on
@@ -585,7 +603,10 @@ func entryIsLossy(home, id string, mpEntry marketplace.PluginEntry, mpCacheRoot 
 // on the probe's canonical, which means threading the plugin's targeting lists
 // down through entryIsLossy's callers; until then the honest thing is to say
 // what the check did and did not consider.
-const losslessTargetingCaveat = "this check renders every ENABLED agent and does not honour the plugin's " +
+// The text opens capitalized: Detailf is UNLABELED, so unlike Warnf/Infof no
+// level label supplies the sentence start (cf. the sibling prose Detailf in
+// revert.go).
+const losslessTargetingCaveat = "This check renders every ENABLED agent and does not honour the plugin's " +
 	"`agents` / `native_agents` targeting, so the loss may fall on an agent this plugin is not " +
 	"projected to. Check `agentsync plugin explain <id>`; if the affected agent is not listed as " +
 	"receiving it, the upgrade is safe for you — re-run without --lossless."

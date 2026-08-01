@@ -32,6 +32,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   may fall on an agent this plugin is not projected to; re-run without
   `--lossless`") is wrong for a bump that was never measured. Which bumps get
   applied is unchanged.
+- **A `--lossless` run that excluded everything no longer reports success.**
+  `plugin upgrade --all --lossless` ended with `all plugins are up to date`
+  even when every pending bump had just been refused — contradicting the
+  refusals it had printed a line earlier. It now says how many bumps were
+  excluded instead.
 - **`status --agents` says which agents its duplicate check skipped.** The
   installed-natively-AND-projected warning follows the selected set, which is
   correct — a narrowed report should not discuss agents it excluded — but it

@@ -60,7 +60,7 @@ func nativePluginOwners(reg *adapter.Registry) map[string][]string {
 // declaredPlugins returns the plugins a canonical EFFECTIVELY declares — every
 // non-disabled entry, keyed by the plugins/<id>.toml stem.
 //
-// Exported as a helper because two call sites must agree on it exactly:
+// Extracted as a helper because two call sites must agree on it exactly:
 // duplicatedNativePlugins returns nil (having checked nothing) when this set is
 // empty, and status's `--agents` scoping note exists to qualify that very
 // silence. A note computing "did we have anything to check?" its own way — off

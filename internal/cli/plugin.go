@@ -436,7 +436,9 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string, lossless bool) error {
 	// renders the installed cache and a throwaway fetch of the candidate and
 	// compares skip identities; a candidate that adds one is reported and the
 	// upgrade is refused, leaving cache + TOML exactly as they were. An
-	// evaluation failure is conservatively lossy, matching --all's filter.
+	// evaluation failure is conservatively EXCLUDED too, matching --all's filter
+	// — but as its own outcome, not as a measured loss: it hard-errors here and
+	// carries no targeting caveat, exactly as --all's `unevaluable` bucket does.
 	if lossless {
 		userHome := paths.HomeDir(paths.OSEnv{})
 		c, cerr := source.Load(afero.NewOsFs(), home)

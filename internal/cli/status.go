@@ -872,9 +872,11 @@ func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry
 		}
 		// Agent names are trusted registry ids (as in the warning above, where
 		// only the plugin names needed untrusted.Join).
-		p.Infof("%s check covered only the agent(s) --agents selected; %s also install plugins "+
-			"natively and were not examined for duplicate plugin projection.",
-			lead, strings.Join(unexamined, ", "))
+		n := len(unexamined)
+		p.Infof("%s check covered only the agent(s) --agents selected; %s also %s plugins "+
+			"natively and %s not examined for duplicate plugin projection.",
+			lead, strings.Join(unexamined, ", "),
+			plural(n, "installs", "install"), plural(n, "was", "were"))
 	}
 }
 
