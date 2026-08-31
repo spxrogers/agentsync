@@ -943,10 +943,12 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
 8. **Injective state keys** (`internal/state/key.go`) — every entry in
    `targets.json` is addressed by a typed `state.Key`
    (agent · scope · portable project root · portable dest path · JSON pointer),
-   which is the Go **map key type** of `Targets.Files` / `Targets.Keys`. Building
-   a key by hand is therefore a compile error, and the format has exactly one
-   owner instead of being a `fmt.Sprintf` contract spread across `render`, `cli`
-   and one adapter. The wire form is length-prefixed —
+   which is the Go **map key type** of `Targets.Files` / `Targets.Keys`. A
+   hand-rolled `fmt.Sprintf` key is therefore a compile error, and the format has
+   exactly one owner instead of a string contract spread across `render`, `cli`
+   and one adapter. (A `state.Key{…}` composite literal still compiles — it just
+   bypasses `NewFileKey`'s `paths.HomeRelative`, which is how tests plant keys in
+   a specific portable spelling.) The wire form is length-prefixed —
    `as1|6:claude|4:user|0:|29:${HOME}/.claude/settings.json|0:` — the same
    technique `hookSignature` uses, so decoding never interprets a field's bytes
    and `ParseKey` is a total left inverse of `String()`: two distinct
@@ -959,14 +961,20 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    possible reading **refuses the load**, naming the key and the remedy, rather
    than guessing and recording it under the wrong project. Disambiguation leans
    on one property — every adapter joins its project-scope destinations onto the
-   project root — so the containment test normalizes `\` as well as `/`: a
-   Windows project root outside `%USERPROFILE%` is stored verbatim, drive colon
-   and backslashes included, and a slash-only test would find no contained
-   reading and refuse every such file. At `schema_version: 2` each key is
-   role-checked as well as parsed — a `files` key must carry no JSON pointer, a
-   `keys` key must carry one — so a hand-edited file cannot be laxer than the v1
-   format it replaced. An older binary already refuses a newer `schema_version`,
-   which is the downgrade story.
+   project root, so the reading agentsync *actually wrote* is always contained,
+   and a competing reading can only push the contained count to two and force a
+   refusal, never take the acceptance for itself. Keeping that true makes the
+   containment test a per-component filter: it treats `\` as a separator
+   alongside `/` (a Windows project root outside `%USERPROFILE%` is stored
+   verbatim, drive colon and backslashes included, and a slash-only test would
+   find no contained reading and refuse every such file), and it deliberately
+   does **not** collapse `..`. `path.Clean` did, and that collapse could drop the
+   true reading out of the contained set and leave a false one alone in it —
+   accepted silently under the wrong project, the very bug this format removes.
+   At `schema_version: 2` each key is role-checked as well as parsed — a `files`
+   key must carry no JSON pointer, a `keys` key must carry one — so a
+   hand-edited file cannot be laxer than the v1 format it replaced. An older
+   binary already refuses a newer `schema_version`, which is the downgrade story.
    One boundary is narrower than the encoding: `targets.json` is JSON, and
    `encoding/json` rewrites an invalid UTF-8 byte in a string to U+FFFD, which
    would break a length prefix and make the next `Load` refuse the file — with

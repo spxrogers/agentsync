@@ -61,11 +61,21 @@ func migrate(raw *rawTargets) (*Targets, error) {
 
 	var bad []string
 	ambiguous := false
+	// The key is quoted with %q, never interpolated raw. Map keys here come
+	// VERBATIM from targets.json, which is a hand-editable file: an unsanitized
+	// key carrying ESC or CR would reach the terminal through whichever sink
+	// prints this error (ui.WarnWriter passes lines 2..n of a multi-line message
+	// through untouched, and this refusal is ALWAYS multi-line), and a key
+	// carrying a newline could forge whole extra output lines even through a
+	// SANITIZING sink, since sanitization preserves newlines. %q escapes all
+	// three, needs no import, and matches what every inner error in legacy.go /
+	// key.go already does — so the escaping lives at this single source rather
+	// than in each present and future sink.
 	note := func(s string, err error) {
 		if errors.Is(err, errAmbiguousLegacyKey) {
 			ambiguous = true
 		}
-		bad = append(bad, fmt.Sprintf("%s — %v", s, err))
+		bad = append(bad, fmt.Sprintf("%q — %v", s, err))
 	}
 	for s, entry := range raw.Files {
 		k, err := parseFile(s)

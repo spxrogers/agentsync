@@ -229,13 +229,14 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 // ~/.config/opencode/{agents,commands}/ directories, never a user's
 // hand-authored files sitting alongside them.
 //
-// The state key mirrors render.RecordOpsState exactly —
-// "<agent>:<scope>:<home-rel-project>:<home-rel-path>" — so a file apply wrote
-// is recognized here. Home-relativization uses the adapter's configured
-// TargetRoot, the SAME base ResolvePaths uses for every other path, so the read
-// side agrees with the write side in production (the CLI registry constructs
-// every adapter with TargetRoot = paths.HomeDir, the same value apply feeds
-// RecordOpsState).
+// The state key mirrors render.RecordOpsState exactly — both build it with
+// state.NewFileKey(userHome, agent, scope, project, dest), the typed
+// agent · scope · home-rel project · home-rel path · pointer tuple — so a file
+// apply wrote is recognized here. Home-relativization uses the adapter's
+// configured TargetRoot, the SAME base ResolvePaths uses for every other path,
+// so the read side agrees with the write side in production (the CLI registry
+// constructs every adapter with TargetRoot = paths.HomeDir, the same value
+// apply feeds RecordOpsState).
 //
 // Scope note: filtering ingest by ownership is currently OpenCode-only — no
 // other deep adapter filters its Ingest yet (a known class-wide gap tracked for

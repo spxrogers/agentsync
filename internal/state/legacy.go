@@ -3,7 +3,6 @@ package state
 import (
 	"errors"
 	"fmt"
-	"path"
 	"strings"
 )
 
@@ -49,11 +48,13 @@ func parseLegacyPointerKey(s string) (Key, error) { return parseLegacyKey(s, tru
 //  6. Exactly one candidate reading: take it.
 //  7. Several: prefer the readings whose path lies WITHIN the project root.
 //     Every adapter's project-scope ResolvePaths joins its destinations onto the
-//     project root, so this holds for every key agentsync has ever written —
-//     provided containment is tested with the separator that key actually uses,
-//     which is why withinProject normalizes '\' as well as '/'. It is used only
-//     as a tie-breaker, never as a filter — a lone candidate is accepted at step
-//     6 whether or not it is contained.
+//     project root, so the reading agentsync ACTUALLY WROTE is always contained
+//     — withinProject is normalized so that stays true for any bytes, separator
+//     or dot segment. A false reading can therefore only ADD to the contained
+//     set, never displace the true one: at worst it pushes the count to two and
+//     turns an acceptance into the refusal at step 8. Containment is only ever
+//     a tie-break, never a filter — a lone candidate is accepted at step 6
+//     whether or not it is contained.
 //  8. Still several, or none: errAmbiguousLegacyKey / a parse error.
 func parseLegacyKey(s string, pointered bool) (Key, error) {
 	agent, rest, ok := strings.Cut(s, ":")
@@ -129,38 +130,83 @@ func parseLegacyKey(s string, pointered bool) (Key, error) {
 
 // withinProject reports whether destination path p lies inside the project root.
 //
-// The two arguments are NOT necessarily slash-form. paths.HomeRelative stores a
-// path under $HOME as "${HOME}/..." with forward slashes, but returns a path
-// OUTSIDE $HOME verbatim — so on Windows an ordinary project root outside
-// %USERPROFILE% arrives here as `C:\dev\repo` with a drive colon and
-// backslashes. That drive colon makes the v1 key ambiguous (three candidate
-// project/tail splits), and a slash-only containment test finds ZERO contained
-// readings, so the tie-break below could never fire and the whole state file was
-// refused on the first run after upgrade. toSlashAny is what makes it fire.
+// This is parseLegacyKey's step-7 tie-break, and the property it must have is
+// not "be accurate" but "never lose the reading agentsync actually wrote". If
+// the true reading always survives the filter, a false reading can at most make
+// the survivor count two and turn the acceptance into a REFUSAL — it can never
+// take the acceptance for itself. That is what makes the tie-break safe, and it
+// follows from how containmentParts normalizes:
 //
-// After normalization path.Clean is the right normalizer — it also collapses the
-// "${HOME}/." form paths.HomeRelative produces when the project root IS the
-// user's $HOME.
+//	agentsync writes a project-scope destination as the project root plus a
+//	relative tail, so the true reading's p is byte-for-byte root + separator +
+//	tail. containmentParts is a per-component FILTER — it drops only empty and
+//	"." components and never rewrites, reorders or removes anything else — so
+//	p's components are exactly the root's components followed by the tail's, and
+//	the true reading is ALWAYS contained.
+//
+// The previous implementation (path.Clean over a slash-substituted string) did
+// NOT have that property. Clean collapses "..", so a root or destination
+// carrying a ".." component lost components the other did not; the true reading
+// could drop out of the contained set and leave a FALSE reading alone in it,
+// which then won — a silent wrong-project acceptance, exactly the bug class the
+// typed key exists to remove (e.g. `claude:project:H/\..:H/\../..:` decoded
+// under project `H/\..:H/\../..` instead of `H/\..`, with no error). Hence
+// containmentParts leaves ".." alone: in a state key a component is a stored
+// string, not a path to resolve.
 func withinProject(project, p string) bool {
+	// A key with no project field roots nothing: "" is not a directory, so it
+	// must not be reported as containing anything. The guard is load-bearing,
+	// not belt-and-braces: "" normalizes to the EMPTY component list, which is a
+	// prefix of every relative path, so without it a candidate whose project
+	// field is empty would vacuously contain any non-rooted destination and
+	// silently settle a tie ("claude:project::a:b/x" in legacy_test.go).
 	if project == "" {
 		return false
 	}
-	root, dest := path.Clean(toSlashAny(project)), path.Clean(toSlashAny(p))
-	return dest == root || strings.HasPrefix(dest, root+"/")
+	rootAbs, root := containmentParts(project)
+	destAbs, dest := containmentParts(p)
+	if rootAbs != destAbs || len(dest) < len(root) {
+		return false
+	}
+	for i := range root {
+		if dest[i] != root[i] {
+			return false
+		}
+	}
+	return true
 }
 
-// toSlashAny rewrites every '\' to '/' UNCONDITIONALLY — deliberately not
-// filepath.ToSlash, which is compiled against the HOST separator and is a no-op
-// on POSIX. targets.json is a portable artifact (the ${HOME}-relative encoding
-// exists so it can be synced between machines), and parseLegacyKey is pure
-// string work, so a Windows-written key must decode identically wherever it is
-// read — including in the Linux container this package's tests run in.
+// containmentParts splits s into the components withinProject compares: rooted
+// reports a leading separator, and parts are the separator-delimited fields with
+// the empty ("a//b") and "." fields dropped. Dropping "." is what handles the
+// "${HOME}/." form paths.HomeRelative produces when the project root IS the
+// user's $HOME.
 //
-// A POSIX filename may legally contain '\', so this can only make containment
-// MORE permissive there (byte-substitution preserves the prefix relation, it
-// never breaks one). That is safe by construction: containment is only ever a
-// TIE-BREAK among readings already enumerated, never a filter, so the extra
-// permissiveness can turn a refusal into an acceptance (the Windows fix) or a
-// lone acceptance into a refusal (still fail-closed) — it can never silently
-// swap the winning reading for a different one.
-func toSlashAny(s string) string { return strings.ReplaceAll(s, `\`, "/") }
+// Both '\' and '/' are separators, UNCONDITIONALLY — deliberately not
+// filepath.Separator, which is compiled against the HOST and would make this a
+// slash-only test on POSIX. targets.json is a portable artifact (the
+// ${HOME}-relative encoding exists so it can be synced between machines) and
+// parseLegacyKey is pure string work, so a Windows-written key must decode
+// identically wherever it is read — including in the Linux container this
+// package's tests run in. paths.HomeRelative stores a path under $HOME as
+// "${HOME}/..." with forward slashes but returns a path OUTSIDE $HOME verbatim,
+// so on Windows an ordinary project root outside %USERPROFILE% arrives here as
+// `C:\dev\repo`. That drive colon makes the v1 key ambiguous (three candidate
+// project/tail splits), and a slash-only containment test finds ZERO contained
+// readings, so the tie-break could never fire and the whole state file was
+// refused on the first run after upgrade. Treating '\' as a separator is what
+// makes it fire.
+//
+// ".." is deliberately NOT collapsed; see withinProject for why that is
+// load-bearing.
+func containmentParts(s string) (rooted bool, parts []string) {
+	s = strings.ReplaceAll(s, `\`, "/")
+	rooted = strings.HasPrefix(s, "/")
+	for _, c := range strings.Split(s, "/") {
+		if c == "" || c == "." {
+			continue
+		}
+		parts = append(parts, c)
+	}
+	return rooted, parts
+}

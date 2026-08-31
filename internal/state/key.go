@@ -139,8 +139,14 @@ func ParseKey(s string) (Key, error) {
 func (k Key) MarshalText() ([]byte, error) { return []byte(k.String()), nil }
 
 // UnmarshalText is the inverse of MarshalText, so a map[Key]V round-trips
-// through encoding/json. A key that does not decode fails the whole unmarshal —
-// the fail-closed behavior Load wants.
+// through encoding/json (TestKey_IsAJSONObjectKey); a key that does not decode
+// fails the whole unmarshal.
+//
+// It exists to complete the encoding.TextMarshaler/TextUnmarshaler pair, not to
+// guard Load: nothing in production unmarshals into a map[Key]V. Load decodes
+// targets.json into rawTargets — string-keyed, because a v1 document's keys
+// could not unmarshal into map[Key]V at all — and migrate re-keys it through
+// ParseKey/parseCurrentKey, which is where the fail-closed role check lives.
 func (k *Key) UnmarshalText(b []byte) error {
 	parsed, err := ParseKey(string(b))
 	if err != nil {

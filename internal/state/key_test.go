@@ -2,7 +2,6 @@ package state_test
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/state"
@@ -106,20 +105,22 @@ func TestKey_RoundTripsAdversarialFields(t *testing.T) {
 //	claude:project:${HOME}/work/app:${HOME}/work/app/.mcp.json
 //	claude:project:${HOME}/work/app:staging:${HOME}/work/app:staging/.mcp.json
 //
-// and the second STRING-PREFIX-matched the first project's key prefix
-// ("claude:project:${HOME}/work/app:"), so an apply of the first project deleted
-// the second project's ownership.
+// and the second STRING-PREFIX-matched the PRUNE PREFIX an apply of the first
+// project scoped its state sweep with ("claude:project:${HOME}/work/app:"), so
+// applying the first project deleted the second project's ownership.
+//
+// The v2 counterpart of that prune prefix is InTree — no consumer builds a key
+// prefix any more — so InTree is what the assertions below pin. (Asserting the
+// two v2 ENCODINGS do not prefix one another would be decorative: length
+// prefixes make the encoding injective for any bytes, and the encodings of
+// these two keys happen not to prefix each other under v1 either. What went
+// wrong was the prune prefix, not the key-to-key relation.)
 func TestKey_HistoricalCollisionIsGone(t *testing.T) {
 	p1 := state.Key{Agent: "claude", Scope: "project", Project: "${HOME}/work/app", Path: "${HOME}/work/app/.mcp.json"}
 	p2 := state.Key{Agent: "claude", Scope: "project", Project: "${HOME}/work/app:staging", Path: "${HOME}/work/app:staging/.mcp.json"}
 
 	if p1.String() == p2.String() {
 		t.Fatal("distinct destinations must not share an encoding")
-	}
-	// The v1 bug was a PREFIX match, so pin that too: neither encoding may be a
-	// prefix of the other.
-	if strings.HasPrefix(p2.String(), p1.String()) || strings.HasPrefix(p1.String(), p2.String()) {
-		t.Fatalf("one encoding prefixes the other:\n  %q\n  %q", p1.String(), p2.String())
 	}
 	if !p1.InTree("claude", "project", "${HOME}/work/app") {
 		t.Fatal("p1 must be in its own tree")
@@ -137,6 +138,12 @@ func TestKey_ParseRejectsMalformed(t *testing.T) {
 		{"empty", ""},
 		{"a v1 legacy key", "claude:user::${HOME}/.claude.json"},
 		{"wrong marker", "as2|6:claude|4:user|0:|1:x|0:"},
+		// The marker itself, not just its bytes: every other row here also trips
+		// the '|' / length-prefix checks, so none of them discriminates the
+		// marker. This one is perfectly framed and differs ONLY by the missing
+		// "as1" — swapping ParseKey's strings.CutPrefix for strings.TrimPrefix
+		// leaves the rest of the suite green but fails this row.
+		{"well-framed but marker-less", "|6:claude|4:user|0:|1:x|0:"},
 		{"missing separator", "as16:claude|4:user|0:|1:x|0:"},
 		{"missing length prefix", "as1|claude|4:user|0:|1:x|0:"},
 		{"non-canonical length", "as1|06:claude|4:user|0:|1:x|0:"},

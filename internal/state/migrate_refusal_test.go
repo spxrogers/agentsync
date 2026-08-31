@@ -1,6 +1,7 @@
 package state_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,5 +69,61 @@ func TestLoad_RefusesUnreadableKeys(t *testing.T) {
 					got, tc.wantAmbiguity, err)
 			}
 		})
+	}
+}
+
+// TestLoad_RefusalEscapesUntrustedKeyBytes pins that a state key — read
+// VERBATIM from the hand-editable targets.json — cannot carry terminal control
+// bytes into the refusal message.
+//
+// The refusal is always MULTI-LINE, and ui.WarnWriter passes lines 2..n through
+// unsanitized, so a raw ESC/CR in a key reaches the terminal as a control
+// sequence at several sinks (opencode ingest's warn, import's warnf, doctor).
+// A raw newline is worse than a control byte even at a SANITIZING sink:
+// sanitization preserves newlines, so the key could forge whole extra output
+// lines. migrate therefore quotes the key at the SOURCE (%q), which escapes all
+// three, rather than relying on every present and future sink to do it.
+func TestLoad_RefusalEscapesUntrustedKeyBytes(t *testing.T) {
+	const hostile = "\x1b[2KSPOOFED\r\nevil"
+	// Same shape, no control bytes: the structural newline count of the refusal
+	// must not depend on the key's content.
+	const benign = "x[2KSPOOFEDxxevil"
+
+	load := func(t *testing.T, key string) error {
+		t.Helper()
+		enc, err := json.Marshal(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc := `{"schema_version":2,"files":{` + string(enc) + `:{"sha256":"x"}}}`
+		p := filepath.Join(t.TempDir(), "targets.json")
+		if err := os.WriteFile(p, []byte(doc), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		lerr := func() error { _, e := state.Load(p); return e }()
+		if lerr == nil {
+			t.Fatalf("Load must refuse the unreadable key %q", key)
+		}
+		return lerr
+	}
+
+	got := load(t, hostile).Error()
+	for _, raw := range []struct{ name, b string }{
+		{"ESC", "\x1b"},
+		{"CR", "\r"},
+	} {
+		if strings.Contains(got, raw.b) {
+			t.Fatalf("refusal leaked a raw %s byte from the state key: %q", raw.name, got)
+		}
+	}
+	for _, want := range []string{`\x1b`, `\r`, `\n`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("refusal must escape the key (missing %s); got %q", want, got)
+		}
+	}
+	// The key must not be able to forge output lines: the refusal for a hostile
+	// key has exactly as many real newlines as the refusal for a benign one.
+	if h, b := strings.Count(got, "\n"), strings.Count(load(t, benign).Error(), "\n"); h != b {
+		t.Fatalf("state key forged %d extra output line(s): hostile=%d newlines, benign=%d\n%q", h-b, h, b, got)
 	}
 }

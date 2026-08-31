@@ -135,6 +135,49 @@ func TestParseLegacyKey(t *testing.T) {
 			wantErr:   true,
 			ambiguous: true,
 		},
+		// Dot-segment forgery. The containment tie-break used to normalize with
+		// path.Clean, which COLLAPSES ".." — so a root or destination carrying a
+		// ".." component lost components the other did not, the TRUE reading fell
+		// out of the contained set, and a false reading was left alone in it and
+		// won silently under the WRONG project. containmentParts leaves ".."
+		// alone, so the true reading is always contained and the worst a false
+		// one can do is force a refusal. The last two rows show the enabler is
+		// the ".." collapse itself, not the '\' substitution: the family occurs
+		// with backslashes, with only backslashes, and with none at all.
+		{
+			name: "dot segments do not forge a wrong-project reading",
+			in:   `claude:project:H/\..:H/\../..:`,
+			want: Key{Agent: "claude", Scope: "project", Project: `H/\..`, Path: `H/\../..:`},
+		},
+		{
+			name: "dot segments with backslash separators only",
+			in:   `claude:project:H\..:H\..\..:`,
+			want: Key{Agent: "claude", Scope: "project", Project: `H\..`, Path: `H\..\..:`},
+		},
+		{
+			name: "dot segments forge with no backslash at all",
+			in:   "claude:project:H/..:H/../..:",
+			want: Key{Agent: "claude", Scope: "project", Project: "H/..", Path: "H/../..:"},
+		},
+		{
+			// Same family in a pointer key, where the forged reading swapped the
+			// path/pointer split rather than the project. Two readings are now
+			// genuinely contained, so it refuses instead of guessing.
+			name:      "dot segments in a pointer key refuse rather than guess",
+			in:        "claude:project:H:H/..:/a:/b",
+			pointered: true,
+			wantErr:   true,
+			ambiguous: true,
+		},
+		{
+			// Pins withinProject's empty-project guard: without it the "" root
+			// vacuously contains every relative path, so this tie would be
+			// settled silently by the reading whose project field is empty.
+			name:      "project scope, empty project field with a tie is refused",
+			in:        "claude:project::a:b/x",
+			wantErr:   true,
+			ambiguous: true,
+		},
 		{
 			name:    "user scope with a non-empty project field",
 			in:      "claude:user:proj:${HOME}/x.md",
