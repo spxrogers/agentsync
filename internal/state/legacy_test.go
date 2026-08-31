@@ -83,6 +83,73 @@ func TestParseLegacyKey(t *testing.T) {
 				Path: "${HOME}/proj/.claude/settings.json", Pointer: "/hooks/PreToolUse",
 			},
 		},
+		// Windows shapes. paths.HomeRelative stores a path INSIDE $HOME as
+		// "${HOME}/..." with forward slashes, but returns a path OUTSIDE it
+		// VERBATIM — on Windows that keeps the drive colon and the backslashes.
+		// Such a root therefore has several candidate ':' splits and only the
+		// containment tie-break can settle them, so withinProject must treat '\'
+		// as a separator too. parseLegacyKey is pure string work, so these rows
+		// exercise the Windows encoding from the Linux container.
+		{
+			name: "windows drive-letter project root outside %USERPROFILE%",
+			in:   `claude:project:C:\dev\repo:C:\dev\repo\.mcp.json`,
+			want: Key{
+				Agent: "claude", Scope: "project",
+				Project: `C:\dev\repo`, Path: `C:\dev\repo\.mcp.json`,
+			},
+		},
+		{
+			name: "windows project root on another drive",
+			in:   `claude:project:D:\work\repo:D:\work\repo\.mcp.json`,
+			want: Key{
+				Agent: "claude", Scope: "project",
+				Project: `D:\work\repo`, Path: `D:\work\repo\.mcp.json`,
+			},
+		},
+		{
+			name:      "windows drive-letter root, pointer key",
+			in:        `claude:project:C:\dev\repo:C:\dev\repo\.claude\settings.json:/hooks/PreToolUse`,
+			pointered: true,
+			want: Key{
+				Agent: "claude", Scope: "project", Project: `C:\dev\repo`,
+				Path: `C:\dev\repo\.claude\settings.json`, Pointer: "/hooks/PreToolUse",
+			},
+		},
+		{
+			// A Windows project root INSIDE %USERPROFILE% is stored ${HOME}-relative
+			// with forward slashes and no drive colon, so it was never affected —
+			// pinned so the claim above is checked rather than asserted.
+			name: "windows project root inside %USERPROFILE% is slash-form",
+			in:   "claude:project:${HOME}/dev/repo:${HOME}/dev/repo/.mcp.json",
+			want: Key{
+				Agent: "claude", Scope: "project",
+				Project: "${HOME}/dev/repo", Path: "${HOME}/dev/repo/.mcp.json",
+			},
+		},
+		{
+			// The separator fix is a TIE-BREAK, not a guess: a drive-letter root
+			// whose destination is not under it still has no unique reading and is
+			// still refused.
+			name:      "windows drive-letter root with a dest outside it stays ambiguous",
+			in:        `claude:project:C:\dev\repo:C:\other\x.md`,
+			wantErr:   true,
+			ambiguous: true,
+		},
+		{
+			name:    "user scope with a non-empty project field",
+			in:      "claude:user:proj:${HOME}/x.md",
+			wantErr: true,
+		},
+		{
+			name:    "project scope with no ':' in the remainder",
+			in:      "claude:project:onlyproject",
+			wantErr: true,
+		},
+		{
+			name: "project scope with an empty project field",
+			in:   "claude:project::${HOME}/x.md",
+			want: Key{Agent: "claude", Scope: "project", Path: "${HOME}/x.md"},
+		},
 		{
 			name:    "no scope field",
 			in:      "opencode:user",

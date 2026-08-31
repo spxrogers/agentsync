@@ -957,8 +957,13 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    consumer now compares **fields**, never string prefixes. `state.Load`
    upgrades `schema_version` 0/1 → 2 on read; a legacy key with more than one
    possible reading **refuses the load**, naming the key and the remedy, rather
-   than guessing and recording it under the wrong project. An older binary
-   already refuses a newer `schema_version`, which is the downgrade story.
+   than guessing and recording it under the wrong project. Disambiguation leans
+   on one property — every adapter joins its project-scope destinations onto the
+   project root — so the containment test normalizes `\` as well as `/`: a
+   Windows project root outside `%USERPROFILE%` is stored verbatim, drive colon
+   and backslashes included, and a slash-only test would find no contained
+   reading and refuse every such file. An older binary already refuses a newer
+   `schema_version`, which is the downgrade story.
    One boundary is narrower than the encoding: `targets.json` is JSON, and
    `encoding/json` rewrites an invalid UTF-8 byte in a string to U+FFFD, which
    would break a length prefix and make the next `Load` refuse the file — with
