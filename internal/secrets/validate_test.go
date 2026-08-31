@@ -368,3 +368,83 @@ func writeIdentity(t *testing.T, path string, mode os.FileMode) {
 		t.Fatal(err)
 	}
 }
+
+// TestRequireAgeVault pins the `secret` group's precondition. It is a DIFFERENT
+// rule from ValidateConfig — these commands manage the age vault, so
+// backend = "env" is a legitimate refusal for them even though it is a valid
+// configuration — but it MUST share NormalizeBackend, or a backend spelling
+// apply accepts gets refused here (issue #228).
+func TestRequireAgeVault(t *testing.T) {
+	const idPath = "/home/u/.config/agentsync/age.key"
+	tests := []struct {
+		name         string
+		cfg          source.SecretsConfig
+		access       secrets.VaultAccess
+		wantErr      bool
+		wantContains string
+	}{
+		{
+			name:    "complete age config, read",
+			cfg:     source.SecretsConfig{Backend: "age", Recipient: "age1qqqq", IdentityFile: idPath},
+			access:  secrets.VaultRead,
+			wantErr: false,
+		},
+		{
+			name:    "uppercase age is accepted",
+			cfg:     source.SecretsConfig{Backend: "AGE", Recipient: "age1qqqq", IdentityFile: idPath},
+			access:  secrets.VaultWrite,
+			wantErr: false,
+		},
+		{
+			name:         "env backend is refused",
+			cfg:          source.SecretsConfig{Backend: "env"},
+			access:       secrets.VaultRead,
+			wantErr:      true,
+			wantContains: `backend = "age"`,
+		},
+		{
+			name:         "no backend is refused",
+			cfg:          source.SecretsConfig{},
+			access:       secrets.VaultRead,
+			wantErr:      true,
+			wantContains: `backend = "age"`,
+		},
+		{
+			name:         "read without identity_file is refused",
+			cfg:          source.SecretsConfig{Backend: "age", Recipient: "age1qqqq"},
+			access:       secrets.VaultRead,
+			wantErr:      true,
+			wantContains: "identity_file",
+		},
+		{
+			name:    "read without recipient is allowed",
+			cfg:     source.SecretsConfig{Backend: "age", IdentityFile: idPath},
+			access:  secrets.VaultRead,
+			wantErr: false,
+		},
+		{
+			name:         "write without recipient is refused",
+			cfg:          source.SecretsConfig{Backend: "age", IdentityFile: idPath},
+			access:       secrets.VaultWrite,
+			wantErr:      true,
+			wantContains: "recipient",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := secrets.RequireAgeVault(tc.cfg, "secret list", tc.access)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("RequireAgeVault = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err == nil {
+				return
+			}
+			if !strings.Contains(err.Error(), tc.wantContains) {
+				t.Errorf("error %q should contain %q", err, tc.wantContains)
+			}
+			if !strings.Contains(err.Error(), "secret list") {
+				t.Errorf("error %q should name the operation it refused", err)
+			}
+		})
+	}
+}

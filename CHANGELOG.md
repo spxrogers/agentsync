@@ -38,6 +38,23 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   passing with a false `not yet created` warning pointing at
   `agentsync secret edit`. The `env` backend is now documented in the secrets
   guide, the user guide and the configuration reference.
+- **The `agentsync secret` subcommands agree with `apply` on the backend name,
+  and check the vault before touching it.** All five (`get`, `list`, `set`,
+  `edit`, `remove`) compared `[secrets].backend` against the literal `"age"`, so
+  `backend = "AGE"` — which `apply` resolves fine — was refused. They now share
+  `secrets.NormalizeBackend` with `apply`'s `SelectBackend`. `secret get`,
+  `secret list` and `secret remove` also refuse up front when `identity_file` is
+  unset — instead of failing inside the decrypt with `read identity :`, or, on a
+  vault that does not exist yet, appearing to work (`secret list` printed
+  `(vault is empty)` on a config `agentsync check` rejects); and
+  `secret remove` now requires `[secrets].recipient` *before* it decrypts,
+  rather than mutating the vault in memory and then dying in
+  `parse age recipient` — it re-encrypts, so it always needed one. Two of the
+  refusal messages named `secrets edit` and `secrets set`, commands renamed to
+  `secret edit` / `secret set` with no alias; they now name the real commands,
+  and each says *why* an age vault is required rather than implying
+  `backend = "env"` is invalid (it is a supported backend — it just keeps no
+  vault for these commands to manage).
 
 ### Changed
 

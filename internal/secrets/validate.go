@@ -207,3 +207,53 @@ func validateAgeFile(cfg source.SecretsConfig, agentsyncHome, userHome string) F
 	}
 	return finding(FieldFile, SeverityOK, "%s", path)
 }
+
+// VaultAccess says which age-vault operation a `secret` subcommand performs.
+type VaultAccess int
+
+const (
+	// VaultRead only reads the vault (`secret get`, `secret list`).
+	VaultRead VaultAccess = iota
+	// VaultWrite re-encrypts the vault as well as reading it (`secret set`,
+	// `secret edit`, `secret remove`), so it additionally needs a recipient.
+	VaultWrite
+)
+
+// RequireAgeVault reports why cfg cannot serve op, or nil.
+//
+// This is a DIFFERENT rule from ValidateConfig, deliberately: the `secret`
+// subcommands manage the age-encrypted vault specifically, so `backend = "env"`
+// is a legitimate refusal for them even though it is a perfectly valid
+// configuration for apply. What they must NOT do is invent their own idea of
+// how a backend name is spelled — five hand-written copies of
+// `cfg.Backend != "age"` refused a `backend = "AGE"` that apply resolves
+// cleanly (issue #228). Routing through NormalizeBackend fixes all five at
+// once, so these commands accept an age backend in any casing.
+//
+// op is the command as the user types it today ("secret set", "secret edit"),
+// so a refusal names a live command rather than a retired spelling — two of the
+// copies this replaces still said `secrets edit` / `secrets set`, renamed to the
+// singular group with no alias in #200 F4.
+func RequireAgeVault(cfg source.SecretsConfig, op string, access VaultAccess) error {
+	if NormalizeBackend(cfg.Backend) != BackendAge {
+		// %q escapes control bytes, so a config-derived backend name cannot
+		// smuggle a terminal escape through this message.
+		return fmt.Errorf("%s manages the age-encrypted vault; set backend = %q in agentsync.toml [secrets] (found %q)",
+			op, BackendAge, cfg.Backend)
+	}
+	// Every one of these commands decrypts the vault when one exists, and
+	// decryption needs the identity — and a backend = "age" config without an
+	// identity_file is invalid anyway (ValidateConfig fails it). Refusing here
+	// names the field: without it the failure surfaced deep inside Decrypt as
+	// `read identity : no such file or directory`, and against a not-yet-created
+	// vault it did not surface at all — `secret list` printed "(vault is empty)".
+	if cfg.IdentityFile == "" {
+		return fmt.Errorf("%s requires [secrets].identity_file in agentsync.toml", op)
+	}
+	// Only the re-encrypting operations need a recipient — Encrypt parses it as
+	// an X25519 recipient and an empty one fails there.
+	if access == VaultWrite && cfg.Recipient == "" {
+		return fmt.Errorf("%s requires [secrets].recipient in agentsync.toml", op)
+	}
+	return nil
+}

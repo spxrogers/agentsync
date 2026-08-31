@@ -212,6 +212,13 @@ before `list`/`remove` it was the only way to see or delete a key.
 terminal it prints a caution first, since a bare `secret get` puts a live
 credential in your scrollback.
 
+The `secret` group manages the **age vault**, so it requires
+`[secrets].backend = "age"` (matched case-insensitively, exactly as `apply`
+matches it) and `[secrets].identity_file`; the commands that re-encrypt —
+`set`, `edit`, `remove` — additionally require `[secrets].recipient`. With
+`backend = "env"` there is no vault to manage: set the environment variable
+instead.
+
 ---
 
 ## The apply / capture loop

@@ -185,16 +185,16 @@ func requireInitializedSource(root string, sc adapter.Scope) error {
 //
 // `doctor` renders from this same validator now, so check and doctor can no
 // longer reach different verdicts on one [secrets] block
-// (TestSecretsValidationParity pins that). FIVE hand-written copies of the
-// contract remain, all in internal/cli/secrets.go: the `backend != "age"` gates
-// in the `secret` subcommands — edit, get, set, list, remove. Refusing
-// `backend = "env"` is CORRECT for those five — unlike doctor's refusal, which
-// was the #228 bug: they read and write an age vault, so there is nothing for
-// them to do without one.
-// What they do still carry is the casing divergence check just shed — each
-// compares against the literal "age", so `secret get` refuses the
-// `backend = "AGE"` apply resolves. Collapsing all five onto ValidateConfig,
-// which folds the name through NormalizeBackend, is the rest of #228.
+// (TestSecretsValidationParity pins that). The `secret` subcommands — edit,
+// get, set, list, remove — gate on secrets.RequireAgeVault instead: a
+// deliberately DIFFERENT and narrower rule, because they manage the age vault
+// itself, so `backend = "env"` is a correct refusal for them (doctor's refusal
+// of the same value was the #228 bug — it only reports). What they no longer
+// keep is a private idea of how a backend name is spelled: RequireAgeVault
+// folds it through the same NormalizeBackend, so the `backend = "AGE"` apply
+// resolves is accepted there too. Nothing in internal/cli decides what a valid
+// [secrets] block is any more — internal/secrets owns both rules, and check,
+// doctor and the `secret` group are its consumers.
 //
 // Only SeverityFail findings become an error. SeverityWarn (a vault that has
 // not been created yet) and the passing tiers are for a REPORT surface to

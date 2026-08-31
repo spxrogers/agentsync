@@ -497,3 +497,107 @@ func TestSecretsSet_AllowEmptyStoresEmpty(t *testing.T) {
 		t.Fatalf("stored value should be empty; got %q", got)
 	}
 }
+
+// setSecretsBackend rewrites [secrets].backend in the fixture's agentsync.toml,
+// leaving recipient and identity_file in place — the gates must decide on the
+// backend NAME alone.
+func setSecretsBackend(t *testing.T, env map[string]string, backend string) {
+	t.Helper()
+	cfgPath := filepath.Join(env["AGENTSYNC_TARGET_ROOT"], ".agentsync", "agentsync.toml")
+	body, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const literal = `backend = "age"`
+	if !bytes.Contains(body, []byte(literal)) {
+		t.Fatalf("fixture no longer writes %s to agentsync.toml", literal)
+	}
+	rewritten := bytes.Replace(body, []byte(literal), fmt.Appendf(nil, "backend = %q", backend), 1)
+	if err := os.WriteFile(cfgPath, rewritten, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// noopEditor returns the path to an "editor" that exits without touching the
+// file, so `secret edit` can be driven end to end without an interactive vi.
+func noopEditor(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "noop-editor.sh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestSecretSubcommandsGateOnRequireAgeVault pins the WIRING of all five
+// `secret` subcommands onto secrets.RequireAgeVault. The rule itself is unit
+// tested (secrets.TestRequireAgeVault); what only a CLI test catches is a gate
+// that drifts back to its own literal "age" comparison — that is issue #228,
+// where `backend = "AGE"` applied cleanly and every one of these refused it.
+//
+// The env half pins the other direction: refusing the env backend HERE is
+// correct (there is no vault to manage), unlike `doctor`, which only reports
+// and whose refusal was the bug.
+func TestSecretSubcommandsGateOnRequireAgeVault(t *testing.T) {
+	t.Run("the backend spelling apply resolves is accepted", func(t *testing.T) {
+		env, _, _, _ := setupSecretsEnv(t)
+		setSecretsBackend(t, env, "AGE")
+		t.Setenv("EDITOR", noopEditor(t))
+		// Ordered: each step leaves the vault in the state the next one needs.
+		steps := []struct {
+			name  string
+			stdin string
+			args  []string
+		}{
+			{name: "set", stdin: "tok-value\n", args: []string{"secret", "set", "svc.token", "--stdin"}},
+			{name: "list", args: []string{"secret", "list"}},
+			{name: "get", args: []string{"secret", "get", "svc.token"}},
+			{name: "remove", args: []string{"secret", "remove", "svc.token"}},
+			{name: "edit", args: []string{"secret", "edit"}},
+		}
+		for _, tc := range steps {
+			t.Run(tc.name, func(t *testing.T) {
+				out, err := runCLIWithStdin(t, env, tc.stdin, tc.args...)
+				if err != nil {
+					t.Fatalf("`agentsync %s` must accept backend = \"AGE\" — the spelling apply resolves: %v\n%s",
+						strings.Join(tc.args, " "), err, out)
+				}
+			})
+		}
+	})
+
+	t.Run("the env backend is refused, naming the command and the reason", func(t *testing.T) {
+		env, _, _, _ := setupSecretsEnv(t)
+		setSecretsBackend(t, env, "env")
+		t.Setenv("EDITOR", noopEditor(t))
+		tests := []struct {
+			name string
+			args []string
+		}{
+			{name: "edit", args: []string{"secret", "edit"}},
+			{name: "get", args: []string{"secret", "get", "svc.token"}},
+			{name: "set", args: []string{"secret", "set", "svc.token=v"}},
+			{name: "list", args: []string{"secret", "list"}},
+			{name: "remove", args: []string{"secret", "remove", "svc.token"}},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := runCLI(t, env, tc.args...)
+				if err == nil {
+					t.Fatalf("`agentsync %s` has no vault to manage on the env backend; it must refuse",
+						strings.Join(tc.args, " "))
+				}
+				// Say WHY it refused — the env backend is supported, it just
+				// keeps no vault for these commands to operate on.
+				if !strings.Contains(err.Error(), "age-encrypted vault") {
+					t.Errorf("refusal %q should say the command manages the age vault", err)
+				}
+				// …and name the command as it is spelled today: two of the
+				// messages this replaced still said `secrets edit`/`secrets set`.
+				if !strings.Contains(err.Error(), "secret "+tc.name) {
+					t.Errorf("refusal %q should name `secret %s`", err, tc.name)
+				}
+			})
+		}
+	})
+}

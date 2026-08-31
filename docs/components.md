@@ -96,6 +96,8 @@ The `Resolved` wrapper type is the load-bearing leak guard.
   `SelectBackend`); `ValidateConfig` → `[]Finding` (the single definition of a
   valid `[secrets]` block — at most one severity-ranked finding per field, for an
   error-or-nil surface and a report surface to render the same contract from);
+  `RequireAgeVault` (the `secret` group's age-vault precondition, sharing
+  `NormalizeBackend`);
   `Resolved.ForAgent` (per-agent narrowing at the render waist,
   delegating to `source.FilterForAgent`); and the single field list
   `walkSecretFields` (in `walk.go`).
