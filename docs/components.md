@@ -406,19 +406,20 @@ Pure 3-way classifier — no IO.
 Persists last-applied hashes and plugin/marketplace pins to
 `.state/targets.json`; schema-versioned with migrators. Owns the `targets.json`
 **key format**: `Key` is a typed, length-prefixed, injective identifier
-(agent · scope · portable project root · portable dest path · JSON pointer), so
-no other package has to build or take apart a key by hand (issue #227). Also
-owns the per-machine run record `.state/last-run.json`, which backs the one-time
-first-run-after-upgrade notice — a SEPARATE file on purpose: it must be
-writable by read-only commands and must never gate on (or bump) the drift
-state's `SchemaVersion`.
-- **Key:** `SchemaVersion`; `Key` (+ `NewFileKey`, `NewPointerKey`, `ParseKey`,
-  `String`, `AbsPath`, `InTree`); `Targets` (`Files`, `Keys`, `Marketplaces`,
-  `Plugins`); `FileEntry`; `KeyEntry`; `Load`/`Save`; `migrate`;
-  `LastRun`/`LoadLastRun`/`SaveLastRun`.
+(agent · scope · portable project · portable dest path · JSON pointer) used as
+the Go map key of `Files`/`Keys`, so no other package can build or parse one
+(issue #227). Also owns the per-machine run record `.state/last-run.json`, which
+backs the one-time first-run-after-upgrade notice — a SEPARATE file on purpose:
+it must be writable by read-only commands and must never gate on (or bump) the
+drift state's `SchemaVersion`.
+- **Key:** `SchemaVersion` (currently 2); `Key` (+ `NewFileKey`,
+  `NewPointerKey`, `ParseKey`, `String`, `AbsPath`, `InTree`); `Targets`
+  (`Files`, `Keys`, `Marketplaces`, `Plugins`); `FileEntry`; `KeyEntry`;
+  `Load`/`Save`; `ErrNonUTF8Key` (`Save` refuses a key JSON cannot carry
+  losslessly); `migrate` (v1 keys → typed keys); `LastRun`/`LoadLastRun`/
+  `SaveLastRun`.
 - **Depends on:** iox, paths. **Files:** `schema.go`, `store.go`, `key.go`,
-  `legacy.go` (the v1 key parser, used only by `migrate`), `migrate.go`,
-  `lastrun.go`.
+  `legacy.go`, `migrate.go`, `lastrun.go`.
 
 ### `internal/marketplace`
 Models the Claude marketplace/plugin format, fetches sources, and projects plugin

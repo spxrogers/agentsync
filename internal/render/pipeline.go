@@ -220,25 +220,14 @@ func PreviewApply(
 // ownedKeysFor returns the JSON-pointer strings owned by agentsync for a given
 // agent+scope+project+path combination, as recorded in state.Keys.
 func ownedKeysFor(s *state.Targets, agent string, scope adapter.Scope, project, path, userHome string) []string {
-	prefix := fmt.Sprintf("%s:%s:%s:%s:", agent, scope.String(),
-		paths.HomeRelative(userHome, project), paths.HomeRelative(userHome, path))
+	portableProject := paths.HomeRelative(userHome, project)
+	portablePath := paths.HomeRelative(userHome, path)
 	var out []string
 	for k := range s.Keys {
-		if !strings.HasPrefix(k, prefix) {
+		if !k.InTree(agent, scope.String(), portableProject) || k.Path != portablePath {
 			continue
 		}
-		ptr := strings.TrimPrefix(k, prefix)
-		// The remainder must be a JSON pointer, which always begins with '/'.
-		// If it doesn't, this key belongs to a DIFFERENT dest path that merely
-		// shares a colon-delimited string prefix with `path` (e.g. dest "a" vs
-		// "a:b", realistic only for a Windows drive-letter path stored
-		// absolute). Claiming it would inject a foreign pointer into this op's
-		// OwnedKeys and corrupt ownership — the same colon-ambiguity class
-		// PruneStaleState and orphanCleanupOps already guard against.
-		if !strings.HasPrefix(ptr, "/") {
-			continue
-		}
-		out = append(out, ptr)
+		out = append(out, k.Pointer)
 	}
 	return out
 }
@@ -323,37 +312,23 @@ func orphanCleanupOps(s *state.Targets, a adapter.Adapter, agent string, scope a
 	}
 
 	// Group owned pointers by their portable dest path from state.Keys.
-	prefix := fmt.Sprintf("%s:%s:%s:", agent, scope.String(), paths.HomeRelative(userHome, project))
+	scopeName := scope.String()
+	portableProject := paths.HomeRelative(userHome, project)
 	ownedByPath := map[string][]string{}
 	var order []string
 	for k := range s.Keys {
-		if !strings.HasPrefix(k, prefix) {
+		if !k.InTree(agent, scopeName, portableProject) {
 			continue
 		}
-		rest := strings.TrimPrefix(k, prefix)
-		// rest = "<portablePath>:<pointer>". The pointer is a JSON pointer
-		// that always starts with '/', so the ":/" sequence marks the
-		// boundary. This is reliable for the realistic path shapes: portable
-		// "${HOME}/..." paths and POSIX absolute paths contain no ':', and
-		// Windows absolute paths use '\' (so a drive is "C:\", not "C:/").
-		// In the pathological case where a path or pointer-key still contains
-		// a literal ":/", a mis-split yields a path that fails the os.Stat
-		// existence check below and is harmlessly skipped (the orphan simply
-		// isn't cleaned that run) — it never deletes the wrong data.
-		i := strings.Index(rest, ":/")
-		if i < 0 {
-			continue
-		}
-		path, ptr := rest[:i], rest[i+1:]
-		if secs, ok := renderedSections[path]; ok {
-			if _, sectionRendered := secs[firstPointerSegment(ptr)]; sectionRendered {
+		if secs, ok := renderedSections[k.Path]; ok {
+			if _, sectionRendered := secs[firstPointerSegment(k.Pointer)]; sectionRendered {
 				continue // a real op for this section handles its own removals
 			}
 		}
-		if _, seen := ownedByPath[path]; !seen {
-			order = append(order, path)
+		if _, seen := ownedByPath[k.Path]; !seen {
+			order = append(order, k.Path)
 		}
-		ownedByPath[path] = append(ownedByPath[path], ptr)
+		ownedByPath[k.Path] = append(ownedByPath[k.Path], k.Pointer)
 	}
 
 	var cleanup []adapter.FileOp

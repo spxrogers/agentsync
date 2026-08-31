@@ -127,13 +127,13 @@ func TestRecordOpsState_MergeTomlNumericNoFalseDrift(t *testing.T) {
 			if len(st.Keys) != 1 {
 				t.Fatalf("want exactly one recorded key, got %d: %v", len(st.Keys), st.Keys)
 			}
-			var gotKey string
+			var gotKey state.Key
 			var gotEntry state.KeyEntry
 			for k, e := range st.Keys {
 				gotKey, gotEntry = k, e
 			}
-			if !strings.HasSuffix(gotKey, ":"+tc.wantPtr) {
-				t.Errorf("recorded key %q does not end with pointer %q", gotKey, tc.wantPtr)
+			if gotKey.Pointer != tc.wantPtr {
+				t.Errorf("recorded key %+v does not carry pointer %q", gotKey, tc.wantPtr)
 			}
 			// No false drift (the actual #162 bug class): the recorded hash is taken
 			// from the TOML-decoded dest value, while status/diff hash the JSON-decoded

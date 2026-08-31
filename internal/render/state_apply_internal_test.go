@@ -39,8 +39,8 @@ func TestRecordOpsState_SkipsAbsentMergePointers(t *testing.T) {
 		t.Fatalf("RecordOpsState: %v", err)
 	}
 
-	wantOwned := "claude:user::" + dest + ":/mcpServers/a"
-	wantAbsent := "claude:user::" + dest + ":/mcpServers/b"
+	wantOwned := state.Key{Agent: "claude", Scope: "user", Path: dest, Pointer: "/mcpServers/a"}
+	wantAbsent := state.Key{Agent: "claude", Scope: "user", Path: dest, Pointer: "/mcpServers/b"}
 	if _, ok := s.Keys[wantOwned]; !ok {
 		t.Fatalf("present pointer /mcpServers/a was not recorded as owned; keys=%v", s.Keys)
 	}

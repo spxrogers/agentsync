@@ -4,129 +4,81 @@ import (
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/state"
 	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
-// TestPurgeKeyRest pins the purge state-key matcher, in particular the
-// colon-safety of the project-scope match: a portable project root is not
-// guaranteed colon-free (a root outside $HOME stays an absolute path), so the
-// matcher compares a full literal prefix instead of colon-split fields.
-func TestPurgeKeyRest(t *testing.T) {
+// TestPurgeMatches pins the purge state-key matcher. Under the v1 string key
+// this needed a literal-prefix match plus a colon-split fallback, and a
+// colon-bearing project root mangled the extracted path — an accepted residual
+// that made `--purge` under-delete while reporting success (issue #227). The
+// typed key compares fields, so a colon-bearing root is now ordinary.
+func TestPurgeMatches(t *testing.T) {
 	testenv.RequireContainer(t)
 	cases := []struct {
 		name            string
-		key             string
+		key             state.Key
 		agent           string
 		sc              adapter.Scope
 		portableProject string
-		wantOK          bool
-		wantRest        string
+		want            bool
 	}{
 		{
 			name:  "user scope matches every scope and project of the agent",
-			key:   "claude:project:${HOME}/proj:${HOME}/proj/.mcp.json",
+			key:   state.Key{Agent: "claude", Scope: "project", Project: "${HOME}/proj", Path: "${HOME}/proj/.mcp.json"},
 			agent: "claude", sc: adapter.ScopeUser,
-			wantOK: true, wantRest: "${HOME}/proj/.mcp.json",
+			want: true,
 		},
 		{
 			name:  "user scope binds the agent name exactly, not as a sub-prefix",
-			key:   "claude2:user::${HOME}/.claude.json",
+			key:   state.Key{Agent: "claude2", Scope: "user", Path: "${HOME}/.claude.json"},
 			agent: "claude", sc: adapter.ScopeUser,
-			wantOK: false,
+			want: false,
 		},
 		{
 			name:  "project scope matches only that project root",
-			key:   "claude:project:${HOME}/proj:${HOME}/proj/.mcp.json",
+			key:   state.Key{Agent: "claude", Scope: "project", Project: "${HOME}/proj", Path: "${HOME}/proj/.mcp.json"},
 			agent: "claude", sc: adapter.ScopeProject, portableProject: "${HOME}/proj",
-			wantOK: true, wantRest: "${HOME}/proj/.mcp.json",
+			want: true,
 		},
 		{
 			name:  "project scope rejects another project's keys",
-			key:   "claude:project:${HOME}/other:${HOME}/other/.mcp.json",
+			key:   state.Key{Agent: "claude", Scope: "project", Project: "${HOME}/other", Path: "${HOME}/other/.mcp.json"},
 			agent: "claude", sc: adapter.ScopeProject, portableProject: "${HOME}/proj",
-			wantOK: false,
+			want: false,
 		},
 		{
 			name:  "project scope rejects the agent's user-scope keys",
-			key:   "claude:user::${HOME}/.claude.json",
+			key:   state.Key{Agent: "claude", Scope: "user", Path: "${HOME}/.claude.json"},
 			agent: "claude", sc: adapter.ScopeProject, portableProject: "${HOME}/proj",
-			wantOK: false,
+			want: false,
 		},
 		{
-			name:  "project scope survives a colon-bearing project root",
-			key:   "claude:project:/mnt/we:ird/proj:/mnt/we:ird/proj/.mcp.json",
+			name:  "project scope handles a colon-bearing project root",
+			key:   state.Key{Agent: "claude", Scope: "project", Project: "/mnt/we:ird/proj", Path: "/mnt/we:ird/proj/.mcp.json"},
 			agent: "claude", sc: adapter.ScopeProject, portableProject: "/mnt/we:ird/proj",
-			wantOK: true, wantRest: "/mnt/we:ird/proj/.mcp.json",
+			want: true,
 		},
 		{
-			name:  "keys entry remainder keeps the path:ptr tail",
-			key:   "claude:project:${HOME}/proj:${HOME}/proj/.mcp.json:/mcpServers/x",
+			name: "project scope rejects a SIBLING root that merely shares a prefix",
+			key: state.Key{
+				Agent: "claude", Scope: "project",
+				Project: "${HOME}/work/app:staging", Path: "${HOME}/work/app:staging/.mcp.json",
+			},
+			agent: "claude", sc: adapter.ScopeProject, portableProject: "${HOME}/work/app",
+			want: false,
+		},
+		{
+			name:  "pointer keys match on the same legs",
+			key:   state.Key{Agent: "claude", Scope: "project", Project: "${HOME}/proj", Path: "${HOME}/proj/.mcp.json", Pointer: "/mcpServers/x"},
 			agent: "claude", sc: adapter.ScopeProject, portableProject: "${HOME}/proj",
-			wantOK: true, wantRest: "${HOME}/proj/.mcp.json:/mcpServers/x",
-		},
-		{
-			name:  "user-scope keys entry remainder keeps the path:ptr tail",
-			key:   "claude:user::${HOME}/.claude.json:/mcpServers/x",
-			agent: "claude", sc: adapter.ScopeUser,
-			wantOK: true, wantRest: "${HOME}/.claude.json:/mcpServers/x",
+			want: true,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rest, ok := purgeKeyRest(tc.key, tc.agent, tc.sc, tc.portableProject)
-			if ok != tc.wantOK {
-				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
-			}
-			if ok && rest != tc.wantRest {
-				t.Fatalf("rest = %q, want %q", rest, tc.wantRest)
-			}
-		})
-	}
-}
-
-// TestOtherFilesKeyPath pins the shared-file guard's path extraction: keys
-// under the purge's OWN project root are stripped colon-safely (they are the
-// candidates for a co-owned dest), everything else falls back to the 4th colon
-// field. Both sides of the guard must extract a same-root dest identically, or
-// a co-owned file under a colon-bearing root would lose its protection and be
-// deleted without backup.
-func TestOtherFilesKeyPath(t *testing.T) {
-	testenv.RequireContainer(t)
-	cases := []struct {
-		name            string
-		key             string
-		portableProject string
-		want            string
-	}{
-		{
-			name:            "same project root, colon-bearing, extracts the exact path",
-			key:             "opencode:project:/mnt/we:ird/proj:/mnt/we:ird/proj/x/SKILL.md",
-			portableProject: "/mnt/we:ird/proj",
-			want:            "/mnt/we:ird/proj/x/SKILL.md",
-		},
-		{
-			name:            "same project root, plain, extracts the path",
-			key:             "opencode:project:${HOME}/proj:${HOME}/proj/.mcp.json",
-			portableProject: "${HOME}/proj",
-			want:            "${HOME}/proj/.mcp.json",
-		},
-		{
-			name:            "user-scope key falls back to the exact 4th field",
-			key:             "opencode:user::${HOME}/.claude.json",
-			portableProject: "${HOME}/proj",
-			want:            "${HOME}/.claude.json",
-		},
-		{
-			name:            "malformed short key yields nothing",
-			key:             "opencode:user",
-			portableProject: "${HOME}/proj",
-			want:            "",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := otherFilesKeyPath(tc.key, tc.portableProject); got != tc.want {
-				t.Fatalf("otherFilesKeyPath(%q) = %q, want %q", tc.key, got, tc.want)
+			if got := purgeMatches(tc.key, tc.agent, tc.sc, tc.portableProject); got != tc.want {
+				t.Fatalf("purgeMatches(%+v) = %v, want %v", tc.key, got, tc.want)
 			}
 		})
 	}

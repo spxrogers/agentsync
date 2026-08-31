@@ -64,15 +64,17 @@ func TestPruneEmptySkillDirs_KeepsNonEmptyDirs(t *testing.T) {
 // ownedKeysFor was not: a state key whose dest path is a colon-delimited
 // string prefix of another path (realistic for a Windows drive path stored
 // absolute) must not be claimed as an owned pointer for the shorter path.
-// The remainder after the prefix is a JSON pointer, which always begins with
-// '/'. ownedKeysFor must reject any remainder that does not.
+// Since the state key became typed (issue #227) Path is its own field and is
+// compared for equality, so this holds by construction — the case stays as a
+// regression against anyone reintroducing string matching.
 func TestOwnedKeysFor_DisambiguatesColonPaths(t *testing.T) {
 	s := state.New()
 	// A real owned pointer for path "a".
-	s.Keys["claude:user::a:/legit"] = state.KeyEntry{SHA256: "x"}
-	// A pointer for the DIFFERENT path "a:b" — its key shares the "...:a:"
-	// prefix but the remainder ("b:/realptr") is not a pointer for "a".
-	s.Keys["claude:user::a:b:/realptr"] = state.KeyEntry{SHA256: "y"}
+	s.Keys[state.Key{Agent: "claude", Scope: "user", Path: "a", Pointer: "/legit"}] = state.KeyEntry{SHA256: "x"}
+	// A pointer for the DIFFERENT path "a:b". Under the v1 string key its
+	// encoding shared the "...:a:" prefix of the shorter path's; the typed key
+	// keeps Path in its own field, so this can no longer be misattributed.
+	s.Keys[state.Key{Agent: "claude", Scope: "user", Path: "a:b", Pointer: "/realptr"}] = state.KeyEntry{SHA256: "y"}
 
 	got := ownedKeysFor(s, "claude", adapter.ScopeUser, "", "a", "")
 

@@ -41,7 +41,8 @@ func PruneStaleState(s *state.Targets, userHome, agent string, scope adapter.Sco
 	if s == nil {
 		return
 	}
-	prefix := fmt.Sprintf("%s:%s:%s:", agent, scope.String(), paths.HomeRelative(userHome, project))
+	scopeName := scope.String()
+	portableProject := paths.HomeRelative(userHome, project)
 
 	// Build the set of paths and per-path pointer sets that this agent's
 	// current plan still produces. Paths are normalized to HOME-relative
@@ -74,11 +75,10 @@ func PruneStaleState(s *state.Targets, userHome, agent string, scope adapter.Sco
 	}
 
 	for key, entry := range s.Files {
-		if !strings.HasPrefix(key, prefix) {
+		if !key.InTree(agent, scopeName, portableProject) {
 			continue
 		}
-		path := strings.TrimPrefix(key, prefix)
-		if _, ok := currentFiles[path]; ok {
+		if _, ok := currentFiles[key.Path]; ok {
 			continue
 		}
 		// Keep tracking a reclaimable destination that is STILL ON DISK.
@@ -105,39 +105,22 @@ func PruneStaleState(s *state.Targets, userHome, agent string, scope adapter.Sco
 			// Lstat, not Stat: a DANGLING SYMLINK is a destination that is still
 			// there (os.Remove can clear it) but that Stat reports as absent,
 			// which would prune the entry and strand the link forever.
-			if _, err := os.Lstat(paths.FromHomeRelative(userHome, path)); !errors.Is(err, fs.ErrNotExist) {
+			if _, err := os.Lstat(key.AbsPath(userHome)); !errors.Is(err, fs.ErrNotExist) {
 				continue
 			}
 		}
 		delete(s.Files, key)
 	}
 	for key := range s.Keys {
-		if !strings.HasPrefix(key, prefix) {
+		if !key.InTree(agent, scopeName, portableProject) {
 			continue
 		}
-		rest := strings.TrimPrefix(key, prefix)
-		// rest = "<path>:<pointer>", and BOTH path and pointer can contain
-		// ':' (e.g. a Windows "C:"-drive dest path), so the split point is
-		// ambiguous. Test every currentKeys path whose "path:" prefixes rest
-		// and keep the key if ANY of them owns the remaining pointer. We must
-		// NOT stop at the first prefix match: when one path is a colon-
-		// delimited string-prefix of another, the first candidate (map order
-		// is random) may be the wrong one, and breaking there would prune a
-		// live key.
-		matched := false
-		for path, ptrs := range currentKeys {
-			if !strings.HasPrefix(rest, path+":") {
+		if ptrs, ok := currentKeys[key.Path]; ok {
+			if _, owned := ptrs[key.Pointer]; owned {
 				continue
 			}
-			ptr := strings.TrimPrefix(rest, path+":")
-			if _, ok := ptrs[ptr]; ok {
-				matched = true
-				break
-			}
 		}
-		if !matched {
-			delete(s.Keys, key)
-		}
+		delete(s.Keys, key)
 	}
 }
 
@@ -151,7 +134,8 @@ func OrphanFiles(s *state.Targets, userHome, agent string, scope adapter.Scope, 
 	if s == nil {
 		return nil
 	}
-	prefix := fmt.Sprintf("%s:%s:%s:", agent, scope.String(), paths.HomeRelative(userHome, project))
+	scopeName := scope.String()
+	portableProject := paths.HomeRelative(userHome, project)
 	current := map[string]struct{}{}
 	for _, op := range ops {
 		if op.Action != "" && op.Action != "write" {
@@ -164,12 +148,11 @@ func OrphanFiles(s *state.Targets, userHome, agent string, scope adapter.Scope, 
 	}
 	var out []string
 	for key := range s.Files {
-		if !strings.HasPrefix(key, prefix) {
+		if !key.InTree(agent, scopeName, portableProject) {
 			continue
 		}
-		path := strings.TrimPrefix(key, prefix)
-		if _, ok := current[path]; !ok {
-			out = append(out, paths.FromHomeRelative(userHome, path))
+		if _, ok := current[key.Path]; !ok {
+			out = append(out, key.AbsPath(userHome))
 		}
 	}
 	sort.Strings(out)
@@ -268,7 +251,8 @@ func orphanDeletes(s *state.Targets, userHome, agent string, scope adapter.Scope
 	if s == nil {
 		return nil
 	}
-	prefix := fmt.Sprintf("%s:%s:%s:", agent, scope.String(), paths.HomeRelative(userHome, project))
+	scopeName := scope.String()
+	portableProject := paths.HomeRelative(userHome, project)
 	rendered := map[string]struct{}{}
 	for _, op := range ops {
 		if op.Action != "" && op.Action != "write" {
@@ -281,19 +265,18 @@ func orphanDeletes(s *state.Targets, userHome, agent string, scope adapter.Scope
 	}
 	var out []adapter.FileOp
 	for key, entry := range s.Files {
-		if !strings.HasPrefix(key, prefix) {
+		if !key.InTree(agent, scopeName, portableProject) {
 			continue
 		}
 		if !isOrphanReclaimable(entry.SourceID) {
 			continue
 		}
-		path := strings.TrimPrefix(key, prefix)
-		if _, ok := rendered[path]; ok {
+		if _, ok := rendered[key.Path]; ok {
 			continue
 		}
 		out = append(out, adapter.FileOp{
 			Action:   "delete",
-			Path:     paths.FromHomeRelative(userHome, path),
+			Path:     key.AbsPath(userHome),
 			SourceID: entry.SourceID,
 			Mode:     entry.Mode,
 		})
@@ -314,12 +297,11 @@ func orphanDeletes(s *state.Targets, userHome, agent string, scope adapter.Scope
 // the base leaves every key machine-absolute and unportable.
 func RecordOpsState(s *state.Targets, userHome, agent string, scope adapter.Scope, project string, ops []adapter.FileOp) error {
 	now := time.Now().UTC()
-	portableProject := paths.HomeRelative(userHome, project)
+	scopeName := scope.String()
 	for _, op := range ops {
 		if op.Action != "" && op.Action != "write" {
 			continue
 		}
-		portablePath := paths.HomeRelative(userHome, op.Path)
 		switch op.MergeStrategy {
 		case "merge-json-keys", "merge-jsonc-keys", "merge-toml-keys":
 			// Re-read final on-disk content and record per pointer. The
@@ -361,8 +343,7 @@ func RecordOpsState(s *state.Targets, userHome, agent string, scope adapter.Scop
 				// (no data loss). A hard guard here was removed — it wrongly FAILED
 				// apply on ordinary numeric passthrough (e.g. a codex MCP timeout).
 				hash := hashAny(v)
-				key := fmt.Sprintf("%s:%s:%s:%s:%s", agent, scope.String(), portableProject, portablePath, ptr)
-				s.Keys[key] = state.KeyEntry{
+				s.Keys[state.NewPointerKey(userHome, agent, scopeName, project, op.Path, ptr)] = state.KeyEntry{
 					SHA256:    hash,
 					AppliedAt: now,
 					SourceID:  op.SourceID,
@@ -374,8 +355,7 @@ func RecordOpsState(s *state.Targets, userHome, agent string, scope adapter.Scop
 				return fmt.Errorf("read post-apply %s: %w", op.Path, err)
 			}
 			sum := sha256.Sum256(data)
-			key := fmt.Sprintf("%s:%s:%s:%s", agent, scope.String(), portableProject, portablePath)
-			s.Files[key] = state.FileEntry{
+			s.Files[state.NewFileKey(userHome, agent, scopeName, project, op.Path)] = state.FileEntry{
 				SHA256:    hex.EncodeToString(sum[:]),
 				Mode:      op.Mode,
 				AppliedAt: now,

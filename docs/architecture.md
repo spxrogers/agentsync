@@ -789,7 +789,8 @@ only through the secret backend, so an unresolvable env ref stays a warning.)
 key:
 
 - `H_src` — computed now from the canonical source
-- `H_applied` — recorded last apply in `targets.json`
+- `H_applied` — recorded last apply in `targets.json`, under a typed
+  `state.Key` (agent · scope · project · path · pointer) — see §7.8
 - `H_dest` — current on-disk content (or nil)
 
 | `H_applied` vs `H_src` | `H_applied` vs `H_dest` | Class | `apply` behavior |
@@ -939,6 +940,33 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    `secrets.Resolved.ComponentIDs()` accessor), never unwrapping the resolved model
    to a writable `source.Canonical`, so the guard doesn't cross the secrets lint
    fence (§8).
+8. **Injective state keys** (`internal/state/key.go`) — every entry in
+   `targets.json` is addressed by a typed `state.Key`
+   (agent · scope · portable project root · portable dest path · JSON pointer),
+   which is the Go **map key type** of `Targets.Files` / `Targets.Keys`. Building
+   a key by hand is therefore a compile error, and the format has exactly one
+   owner instead of being a `fmt.Sprintf` contract spread across `render`, `cli`
+   and one adapter. The wire form is length-prefixed —
+   `as1|6:claude|4:user|0:|29:${HOME}/.claude/settings.json|0:` — the same
+   technique `hookSignature` uses, so decoding never interprets a field's bytes
+   and `ParseKey` is a total left inverse of `String()`: two distinct
+   destinations can never share a key. The v1 `agent:scope:project:path[:ptr]`
+   encoding could: `:` is legal in a POSIX path, so a project root containing
+   one produced keys that string-prefixed a *sibling* project's, and a
+   prefix-scoped prune deleted the sibling's ownership (issue #227). Every
+   consumer now compares **fields**, never string prefixes. `state.Load`
+   upgrades `schema_version` 0/1 → 2 on read; a legacy key with more than one
+   possible reading **refuses the load**, naming the key and the remedy, rather
+   than guessing and recording it under the wrong project. An older binary
+   already refuses a newer `schema_version`, which is the downgrade story.
+   One boundary is narrower than the encoding: `targets.json` is JSON, and
+   `encoding/json` rewrites an invalid UTF-8 byte in a string to U+FFFD, which
+   would break a length prefix and make the next `Load` refuse the file — with
+   no way out, since the next apply rebuilds the same key. `state.Save` therefore
+   refuses a key whose any field is not valid UTF-8 (`state.ErrNonUTF8Key`)
+   before writing, naming the offending destination path. Linux paths are byte
+   strings, so this is reachable; failing closed at the moment the key is created
+   is what makes it actionable.
 
 ---
 

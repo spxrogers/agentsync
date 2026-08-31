@@ -11,6 +11,20 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
+- **`.state/targets.json` is now `schema_version: 2`.** The upgrade is automatic
+  and requires nothing: the first command you run rewrites the keys in place and
+  ownership is preserved, so no destination is re-adopted or backed up. Three
+  consequences worth knowing: an **older** agentsync binary will refuse the
+  upgraded file (it already refuses any newer `schema_version` — remove
+  `~/.agentsync/.state/targets.json` to start that binary fresh); in the rare
+  case where a pre-upgrade key cannot be read unambiguously — only possible when
+  a project root or destination path contains `:` — agentsync refuses the load
+  and names the entry rather than guessing; and a destination whose path is not
+  valid UTF-8 is now refused when state is written, naming the path, instead of
+  being silently mangled (the v1 format mangled it into permanent
+  foreign-collision churn). `targets.json` holds no configuration, so the remedy
+  for the second case is to delete the named entries (or the file); the next
+  `apply` re-adopts each destination, backing up any pre-existing content first.
 - **`--lossless` now says what its check did not consider.** The lossiness probe
   renders every enabled agent from a canonical carrying no plugin provenance, so
   it does not honour a plugin's `agents` / `native_agents`: a skip on an agent
@@ -85,6 +99,17 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **A project root containing `:` no longer costs a sibling project its state.**
+  `targets.json` keys were `agent:scope:project:path[:pointer]` strings, and `:`
+  is a legal byte in a POSIX path — so a repo at `~/work/app:staging` produced
+  keys that string-prefixed those of a repo at `~/work/app`. Applying the shorter
+  one deleted the longer one's ownership, and its next apply then treated every
+  destination as a foreign collision: backed up to `.state/backups/` and
+  rewritten. The same mismatch made `agent disable --purge` extract a mangled
+  path — deleting the state entry while the destination file survived, then
+  reporting `purged … deleted 1 file(s)`. State entries are now addressed by a
+  typed, length-prefixed key that cannot be confused with a neighbour's, and
+  every consumer compares fields rather than string prefixes.
 - **`apply`'s translation report no longer over-counts.** Every per-agent count
   honours the providing plugin's gates now; previously none did, so a deferred
   plugin's components were counted under another plugin's row for the same agent

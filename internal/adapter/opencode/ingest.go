@@ -11,7 +11,6 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/jsonkeys"
-	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -246,10 +245,9 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 // (<target-root>/.agentsync); an AGENTSYNC_HOME relocated outside TargetRoot is
 // not honored here.
 func (a *Adapter) destOwned(st *state.Targets, scope adapter.Scope, project, destPath string) bool {
-	home := a.opts.TargetRoot
-	key := fmt.Sprintf("opencode:%s:%s:%s", scope.String(),
-		paths.HomeRelative(home, project), paths.HomeRelative(home, destPath))
-	_, ok := st.Files[key]
+	// The key format is owned by internal/state (the documented opencode -> state
+	// layering exception, issue #148); this must never rebuild it by hand.
+	_, ok := st.Files[state.NewFileKey(a.opts.TargetRoot, "opencode", scope.String(), project, destPath)]
 	return ok
 }
 

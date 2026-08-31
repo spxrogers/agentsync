@@ -1624,16 +1624,20 @@ func TestImport_RetireDisownIsScopeExact(t *testing.T) {
 	// "${HOME}/…" form paths.HomeRelative produces — or the survival
 	// assertion is trivially true against a spelling the disown could never
 	// match anyway. What this pins is the SCOPE leg (dropping sc.String()
-	// from scopeMid disowns this key and fails the test); at user scope the
-	// project leg is empty on both sides, so the project-leg distinction
-	// between two different projects is exercised only via the scope word —
-	// the accepted residual documented on retireRefusedHookEvents.
+	// from the comparison disowns this key and fails the test); the project
+	// leg is now a compared field, so the scope and project legs are both
+	// exact.
 	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
 	st, err := state.Load(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const projectKey = "claude:project:${HOME}/proj:${HOME}/proj/.claude/settings.json:/hooks/PreToolUse"
+	projectKey := state.Key{
+		Agent: "claude", Scope: "project",
+		Project: "${HOME}/proj",
+		Path:    "${HOME}/proj/.claude/settings.json",
+		Pointer: "/hooks/PreToolUse",
+	}
 	st.Keys[projectKey] = state.KeyEntry{SHA256: "deadbeef", SourceID: "hooks/PreToolUse.toml"}
 	if err := state.Save(statePath, st); err != nil {
 		t.Fatal(err)
@@ -1654,7 +1658,7 @@ func TestImport_RetireDisownIsScopeExact(t *testing.T) {
 		t.Fatal("user-scope retirement disowned a PROJECT-scope key whose canonical overlay file survives")
 	}
 	for key := range st2.Keys {
-		if strings.HasPrefix(key, "claude:user:") && strings.HasSuffix(key, ":/hooks/PreToolUse") {
+		if key.Agent == "claude" && key.Scope == "user" && key.Pointer == "/hooks/PreToolUse" {
 			t.Fatalf("user-scope key should have been disowned by the retirement: %s", key)
 		}
 	}

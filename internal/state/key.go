@@ -131,6 +131,11 @@ func ParseKey(s string) (Key, error) {
 // MarshalText lets Key be a JSON object key: encoding/json renders a map[Key]V
 // as an ordinary string-keyed object, sorted by the marshalled text, so
 // targets.json keeps the shape it has always had and stays byte-deterministic.
+//
+// The ENCODING is byte-safe, but the JSON container is narrower than the
+// encoding: encoding/json rewrites an invalid UTF-8 byte in a string to U+FFFD,
+// which would break the length prefix. Save refuses such a key before it ever
+// reaches this boundary — see ErrNonUTF8Key.
 func (k Key) MarshalText() ([]byte, error) { return []byte(k.String()), nil }
 
 // UnmarshalText is the inverse of MarshalText, so a map[Key]V round-trips

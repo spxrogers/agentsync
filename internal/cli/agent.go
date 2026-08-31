@@ -605,66 +605,30 @@ func agentDisableRun(cmd *cobra.Command, args []string, purge bool) error {
 	return purgeAgentDests(cmd, name, home, sc, projectRoot)
 }
 
-// purgeKeyRest reports whether a state key ("agent:scope:project:path[:ptr]")
-// belongs to the purge set and, if so, returns the key's remainder after the
-// dest-identifying prefix (the path, or "path:ptr" for a Keys entry). At user
-// scope the purge keeps its historical cleanup-everything semantics: every
-// entry of the named agent, across all scopes and projects. At project scope it
-// matches only the agent's entries for THAT project root — purging a project
-// must not delete the user's machine-wide destinations or another repo's
-// rendered files. The project-scope match compares the full literal prefix
-// (like render.PruneStaleState's key prefixes) instead of colon-split fields:
-// a portable project root is not guaranteed colon-free (a root outside $HOME
-// stays an absolute path), and field-splitting would silently mismatch it.
-func purgeKeyRest(key, agent string, sc adapter.Scope, portableProject string) (rest string, ok bool) {
-	if sc == adapter.ScopeProject {
-		prefix := agent + ":" + adapter.ScopeProject.String() + ":" + portableProject + ":"
-		if !strings.HasPrefix(key, prefix) {
-			return "", false
-		}
-		return key[len(prefix):], true
+// purgeMatches reports whether a state key belongs to the purge set for the
+// named agent.
+//
+// RATIFIED POLICY (issue #171): a USER-scope `--purge` is intentionally
+// cross-scope — it is the machine-wide "remove everything this agent ever
+// wrote" affordance, so it spans every scope/project pair for the agent,
+// including project-scope destinations in checked-out repos. A PROJECT-scope
+// purge stays isolated to that repo: purging a project must not delete the
+// user's machine-wide destinations or another repo's rendered files.
+//
+// portableProject is the ${HOME}-relative root (paths.HomeRelative), matching
+// what state.NewFileKey stores. The v1 matcher this replaces compared string
+// prefixes and colon-split fields and could not tell a sibling project apart
+// when a root contained ':' (issue #227); state.Key compares fields, so that
+// whole class — and the shared-file guard's matching "accepted residual" —
+// is gone.
+func purgeMatches(k state.Key, agent string, sc adapter.Scope, portableProject string) bool {
+	if k.Agent != agent {
+		return false
 	}
-	if !strings.HasPrefix(key, agent+":") {
-		return "", false
+	if sc != adapter.ScopeProject {
+		return true
 	}
-	// RATIFIED POLICY (issue #171, decision confirmed): a USER-scope `--purge` is
-	// intentionally cross-scope — it is the machine-wide "remove everything this
-	// agent ever wrote" affordance, so it spans every scope:project pair for the
-	// agent (including project-scope dest files in checked-out repos). It matches by
-	// the `agent:` prefix and takes the 4th colon field as the remainder. That is
-	// exact for user-scope keys (empty project segment) and colon-free project
-	// roots; a colon-bearing root mangles it — an accepted residual, safe because
-	// otherFilesKeyPath mangles identically, keeping the shared-file guard aligned.
-	// (Project-scope `--purge --scope project` stays isolated to that repo, above.)
-	parts := strings.SplitN(key, ":", 4)
-	if len(parts) < 4 {
-		return "", false
-	}
-	return parts[3], true
-}
-
-// otherFilesKeyPath extracts the dest path from a Files key that is NOT part
-// of the purge set, for the shared-file guard. A key whose project segment
-// matches the purge's own portableProject is stripped colon-safely by literal
-// prefix — a co-owned dest under the same project root is exactly the case the
-// guard protects, and the root is not guaranteed colon-free. Every other key
-// falls back to the 4th colon field: user-scope keys carry an empty (colon-
-// free) project segment there, and a DIFFERENT project's dest can never
-// collide with this purge's paths, so a mangled extraction cannot cause a
-// false unprotected delete (it can only fail to match, which is the status
-// quo for keys that were never candidates).
-func otherFilesKeyPath(key, portableProject string) string {
-	if i := strings.Index(key, ":"); i >= 0 {
-		marker := ":" + adapter.ScopeProject.String() + ":" + portableProject + ":"
-		if tail := key[i:]; strings.HasPrefix(tail, marker) {
-			return tail[len(marker):]
-		}
-	}
-	parts := strings.SplitN(key, ":", 4)
-	if len(parts) < 4 {
-		return ""
-	}
-	return parts[3]
+	return k.Scope == adapter.ScopeProject.String() && k.Project == portableProject
 }
 
 // purgeAgentDests deletes the destination files owned solely by the named
@@ -688,21 +652,19 @@ func purgeAgentDests(cmd *cobra.Command, name, home string, sc adapter.Scope, pr
 
 	// File-owned dests (whole-file replace ops, e.g. ~/.claude/skills/<n>/
 	// SKILL.md): the whole file is agentsync's, so a whole-file delete is
-	// correct — unless another agent still owns the same shared file. The
-	// dest path is field index 3 in a Files key ("agent:scope:project:path").
+	// correct — unless another agent still owns the same shared file.
 	purgedFilePaths := map[string]bool{}
 	otherFilePaths := map[string]bool{}
 	for key := range s.Files {
-		if path, ok := purgeKeyRest(key, name, sc, portableProject); ok {
-			if path != "" {
-				purgedFilePaths[path] = true
-			}
+		if key.Path == "" {
+			continue
+		}
+		if purgeMatches(key, name, sc, portableProject) {
+			purgedFilePaths[key.Path] = true
 			continue
 		}
 		// Not ours: record the path so shared files stay protected below.
-		if path := otherFilesKeyPath(key, portableProject); path != "" {
-			otherFilePaths[path] = true
-		}
+		otherFilePaths[key.Path] = true
 	}
 
 	// Key-owned dests (merge-key pointers within a possibly-shared file, e.g.
@@ -712,16 +674,13 @@ func purgeAgentDests(cmd *cobra.Command, name, home string, sc adapter.Scope, pr
 	// this agent's owned pointers per path so we can remove ONLY them.
 	purgedKeyPtrs := map[string][]string{}
 	for key := range s.Keys {
-		rest, ok := purgeKeyRest(key, name, sc, portableProject)
-		if !ok {
+		if key.Path == "" || key.Pointer == "" {
 			continue
 		}
-		// rest is "path:ptr" for a Keys entry.
-		parts := strings.SplitN(rest, ":", 2)
-		if len(parts) < 2 || parts[0] == "" {
+		if !purgeMatches(key, name, sc, portableProject) {
 			continue
 		}
-		purgedKeyPtrs[parts[0]] = append(purgedKeyPtrs[parts[0]], parts[1])
+		purgedKeyPtrs[key.Path] = append(purgedKeyPtrs[key.Path], key.Pointer)
 	}
 
 	reg := registryFactory()
@@ -772,12 +731,12 @@ func purgeAgentDests(cmd *cobra.Command, name, home string, sc adapter.Scope, pr
 
 	// Remove the matching state entries for this agent.
 	for key := range s.Files {
-		if _, ok := purgeKeyRest(key, name, sc, portableProject); ok {
+		if purgeMatches(key, name, sc, portableProject) {
 			delete(s.Files, key)
 		}
 	}
 	for key := range s.Keys {
-		if _, ok := purgeKeyRest(key, name, sc, portableProject); ok {
+		if purgeMatches(key, name, sc, portableProject) {
 			delete(s.Keys, key)
 		}
 	}
