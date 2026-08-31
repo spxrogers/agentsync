@@ -390,7 +390,7 @@ func TestPipeline_OwnedKeysInjected(t *testing.T) {
 
 	// Pre-populate state with one owned pointer in HOME-relative form.
 	s := state.New()
-	key := "claude:user::${HOME}/.claude.json:/mcpServers/github"
+	key := state.Key{Agent: "claude", Scope: "user", Path: "${HOME}/.claude.json", Pointer: "/mcpServers/github"}
 	s.Keys[key] = state.KeyEntry{SHA256: "abc123", AppliedAt: time.Now()}
 
 	plan, err := render.Plan(secrets.ForRender(source.Canonical{}), reg, []string{"claude"}, adapter.ScopeUser, "", s, home)

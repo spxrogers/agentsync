@@ -83,7 +83,7 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 	}
 
 	stopSpin := p.Spin(fmt.Sprintf("fetching marketplace %s", rawURL))
-	mpName, headSHA, err := addMarketplaceSource(home, src, rawURL)
+	mpName, headSHA, err := addMarketplaceSource(home, src, rawURL, p.Warnf)
 	stopSpin()
 	if err != nil {
 		return err
@@ -101,8 +101,10 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 //
 // It does not print a success line or acquire the global lock — callers do.
 // Both `marketplace add` and `import` use it so the two produce byte-identical
-// canonical artifacts.
-func addMarketplaceSource(home string, src marketplace.Source, rawURL string) (mpName, headSHA string, err error) {
+// canonical artifacts. warnf is the caller's warning sink (p.Warnf for
+// `marketplace add`, importIO.warnf for `import`): the state record is
+// best-effort and its only failure mode is invisible otherwise.
+func addMarketplaceSource(home string, src marketplace.Source, rawURL string, warnf func(string, ...any)) (mpName, headSHA string, err error) {
 	// Derive a slug for the marketplace.
 	slug := deriveMarketplaceSlug(rawURL)
 	cacheDir := marketplaceCacheDir(home, slug)
@@ -157,17 +159,53 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string) (m
 	}
 
 	// Update state.json so the update command can track fetch timestamps and SHAs.
+	//
+	// The read guard is load-bearing, not defensive noise: Load already returns a
+	// FRESH EMPTY state with no error for an absent file, so a non-nil error here
+	// means targets.json exists and could not be read — a refused migration (an
+	// ambiguous v1 key, a v2 role violation, a non-UTF-8 key), a permissions
+	// problem, corruption. Substituting state.New() there and saving would
+	// OVERWRITE targets.json with an empty state, discarding every Files/Keys/
+	// Plugins entry and every other marketplace; the next apply would then see no
+	// ownership at all and back up every managed destination as a foreign
+	// collision. Skipping the record instead costs only a stale fetch timestamp,
+	// which the next successful add/update repairs. Mirrors marketplaceRemoveRun.
 	statePath := filepath.Join(home, ".state", "targets.json")
-	st, _ := state.Load(statePath) // best-effort; ignore read errors on fresh home
-	if st == nil {
-		st = state.New()
+	if st, lerr := state.Load(statePath); lerr == nil {
+		st.Marketplaces[mpName] = state.Marketplace{
+			URL:       rawURL,
+			HeadSHA:   result.HeadSHA,
+			FetchedAt: time.Now().UTC(),
+		}
+		_ = state.Save(statePath, st) // best-effort; don't fail add on state write errors
+	} else {
+		// Skipping the record is right, but doing it SILENTLY is not: the user
+		// gets a success line while every other command — status, apply, diff,
+		// doctor — is already failing on the same unreadable file, and nothing
+		// connects the two. Name the file and the underlying error so the fix is
+		// findable; the add itself succeeded, so this is a warning, not an error.
+		//
+		// sanitizeLines, not a raw %v — the same backstop, and for the same
+		// reason, as cli/doctor.go's state-file check: a state.Load failure
+		// interpolates map keys read VERBATIM from a targets.json whose own
+		// schema-2 remedy invites the user to hand-edit it, and the #93/#171 class
+		// is a crafted key repainting the terminal around the success line this
+		// warning sits beside.
+		//
+		// Applied HERE rather than left to the sink, because the two callers do
+		// not agree: `marketplace add` passes p.Warnf, which reaches fmt.Fprintf
+		// through ui.Fdiagf untouched, while `import` passes importIO.warnf, whose
+		// "warning: " line ui.WarnWriter happens to sanitize. One call site covers
+		// both without depending on which sink was supplied.
+		//
+		// migrate already %q-quotes every key, so nothing reaching here today
+		// carries a raw escape; this is what keeps that true if a future error
+		// constructor forgets. Per line, because the refusal is multi-line and
+		// ui.Sanitize STRIPS newlines.
+		warnf("marketplace %s was added but not recorded in %s, which could not be read: %s; "+
+			"run `agentsync doctor` — the record is restored by the next successful "+
+			"`agentsync marketplace add`/`update`", mpName, statePath, sanitizeLines(lerr.Error()))
 	}
-	st.Marketplaces[mpName] = state.Marketplace{
-		URL:       rawURL,
-		HeadSHA:   result.HeadSHA,
-		FetchedAt: time.Now().UTC(),
-	}
-	_ = state.Save(statePath, st) // best-effort; don't fail add on state write errors
 
 	return mpName, result.HeadSHA, nil
 }
@@ -216,11 +254,20 @@ func marketplaceRemoveRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("remove cache %s: %w", cacheDir, err)
 	}
 
-	// Remove from state.json (best-effort).
+	// Remove from state.json (best-effort). Same rule as addMarketplaceSource:
+	// keep an unreadable targets.json rather than replace it with an empty one,
+	// but say so — a silent skip leaves a stale marketplace record behind while
+	// the success line claims a clean removal.
 	statePath := filepath.Join(home, ".state", "targets.json")
-	if st, err := state.Load(statePath); err == nil {
+	if st, lerr := state.Load(statePath); lerr == nil {
 		delete(st.Marketplaces, name)
 		_ = state.Save(statePath, st)
+	} else {
+		// sanitizeLines for the same reason as the add twin above: diag reaches
+		// fmt.Fprintf through ui.Fdiagf without sanitizing, and this error
+		// interpolates hand-editable targets.json keys.
+		diag(cmd, ui.LevelWarn, "marketplace %s was removed but its record remains in %s, "+
+			"which could not be read: %s; run `agentsync doctor`", name, statePath, sanitizeLines(lerr.Error()))
 	}
 
 	success(cmd, ui.EmojiRemoved, "removed marketplace %s", name)

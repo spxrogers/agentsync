@@ -2,7 +2,6 @@ package render_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	_ "github.com/spxrogers/agentsync/internal/adapter/noop"
-	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
@@ -36,15 +34,9 @@ func TestRecordState_FilesAndKeys(t *testing.T) {
 	}
 
 	// Expect a key entry for /mcpServers/github keyed by ${HOME}/.claude.json.
-	wantKey := "claude:user::${HOME}/.claude.json:/mcpServers/github"
-	var found bool
-	for k := range s.Keys {
-		if k == wantKey {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("missing key %q; have: %+v", wantKey, s.Keys)
+	wantKey := state.Key{Agent: "claude", Scope: "user", Path: "${HOME}/.claude.json", Pointer: "/mcpServers/github"}
+	if _, found := s.Keys[wantKey]; !found {
+		t.Fatalf("missing key %+v; have: %+v", wantKey, s.Keys)
 	}
 	_ = json.RawMessage{}
 }
@@ -67,10 +59,10 @@ func TestRecordState_FileReplace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	key := "claude:user::${HOME}/CLAUDE.md"
+	key := state.Key{Agent: "claude", Scope: "user", Path: "${HOME}/CLAUDE.md"}
 	fe, ok := s.Files[key]
 	if !ok {
-		t.Fatalf("missing file entry %q; have: %+v", key, s.Files)
+		t.Fatalf("missing file entry %+v; have: %+v", key, s.Files)
 	}
 	if fe.SHA256 == "" {
 		t.Fatal("SHA256 must not be empty")
@@ -83,9 +75,9 @@ func TestRecordState_FileReplace(t *testing.T) {
 func TestPruneStaleState_DropsRemovedFiles(t *testing.T) {
 	s := state.New()
 	home := "/home/me"
-	keep := "claude:user::${HOME}/.claude/agents/keep.md"
-	drop := "claude:user::${HOME}/.claude/agents/dropme.md"
-	otherAgent := "opencode:user::${HOME}/.config/opencode/agent/keep.md"
+	keep := state.Key{Agent: "claude", Scope: "user", Path: "${HOME}/.claude/agents/keep.md"}
+	drop := state.Key{Agent: "claude", Scope: "user", Path: "${HOME}/.claude/agents/dropme.md"}
+	otherAgent := state.Key{Agent: "opencode", Scope: "user", Path: "${HOME}/.config/opencode/agent/keep.md"}
 	s.Files[keep] = state.FileEntry{SHA256: "a"}
 	s.Files[drop] = state.FileEntry{SHA256: "b"}
 	s.Files[otherAgent] = state.FileEntry{SHA256: "c"}
@@ -108,8 +100,8 @@ func TestPruneStaleState_DropsRemovedKeys(t *testing.T) {
 	s := state.New()
 	home := "/home/me"
 	clauJSON := "/home/me/.claude.json"
-	keepKey := "claude:user::${HOME}/.claude.json:/mcpServers/keep"
-	dropKey := "claude:user::${HOME}/.claude.json:/mcpServers/dropme"
+	keepKey := state.Key{Agent: "claude", Scope: "user", Path: "${HOME}/.claude.json", Pointer: "/mcpServers/keep"}
+	dropKey := state.Key{Agent: "claude", Scope: "user", Path: "${HOME}/.claude.json", Pointer: "/mcpServers/dropme"}
 	s.Keys[keepKey] = state.KeyEntry{SHA256: "a"}
 	s.Keys[dropKey] = state.KeyEntry{SHA256: "b"}
 
@@ -151,14 +143,14 @@ func TestState_PortableAcrossHomes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gotKey := "claude:user::${HOME}/.claude.json"
+	gotKey := state.Key{Agent: "claude", Scope: "user", Path: "${HOME}/.claude.json"}
 	if _, ok := s.Files[gotKey]; !ok {
-		t.Fatalf("RecordOpsState did not produce a portable key %q; have %v", gotKey, s.Files)
+		t.Fatalf("RecordOpsState did not produce a portable key %+v; have %v", gotKey, s.Files)
 	}
 	// The machine-absolute path must NOT appear anywhere in the keys.
 	for k := range s.Files {
-		if strings.Contains(k, macHome) {
-			t.Fatalf("state key embeds machine-absolute path %q: %q", macHome, k)
+		if strings.Contains(k.String(), macHome) {
+			t.Fatalf("state key embeds machine-absolute path %q: %q", macHome, k.String())
 		}
 	}
 
@@ -174,29 +166,26 @@ func TestState_PortableAcrossHomes(t *testing.T) {
 	}
 }
 
-// TestPruneStaleState_AmbiguousPathPrefixKeepsLiveKey is the regression for
-// the prune bug where the Keys loop broke after the FIRST path whose
-// "path:" prefixed the key, even when that path's pointer set didn't match.
-// When one dest path is a colon-delimited string-prefix of another (e.g. a
-// Windows "C:"-drive path, or any path containing ':'), the wrong candidate
-// could be picked first (map order is random) and a live key pruned —
-// dropping ownership and forcing a needless foreign-collision backup next
-// apply. Looped to defeat map-iteration randomness: the old code failed
-// ~half the time, the fix passes every time.
+// TestPruneStaleState_AmbiguousPathPrefixKeepsLiveKey pins that a dest path
+// which is a colon-delimited string-prefix of another ("a" vs "a:b") never
+// costs the longer path its ownership. Since the state key became typed
+// (issue #227) this holds BY CONSTRUCTION — Path is its own field and is
+// compared for equality, never as a string prefix — but the case stays as a
+// regression against anyone reintroducing string matching.
 func TestPruneStaleState_AmbiguousPathPrefixKeepsLiveKey(t *testing.T) {
 	ops := []adapter.FileOp{
 		{Action: "write", Path: "a", MergeStrategy: "merge-json-keys", Content: []byte(`{"x":1}`)},
 		{Action: "write", Path: "a:b", MergeStrategy: "merge-json-keys", Content: []byte(`{"realptr":1}`)},
 	}
-	const liveKey = "claude:user::a:b:/realptr"
+	liveKey := state.Key{Agent: "claude", Scope: "user", Path: "a:b", Pointer: "/realptr"}
 	for i := 0; i < 64; i++ {
 		s := state.New()
 		s.Keys[liveKey] = state.KeyEntry{SHA256: "deadbeef"}
-		s.Keys["claude:user::a:/x"] = state.KeyEntry{SHA256: "feed"}
+		s.Keys[state.Key{Agent: "claude", Scope: "user", Path: "a", Pointer: "/x"}] = state.KeyEntry{SHA256: "feed"}
 		// userHome "" so HomeRelative leaves the colon-bearing paths intact.
 		render.PruneStaleState(s, "", "claude", adapter.ScopeUser, "", ops)
 		if _, ok := s.Keys[liveKey]; !ok {
-			t.Fatalf("iteration %d: live key %q wrongly pruned (ambiguous path prefix)", i, liveKey)
+			t.Fatalf("iteration %d: live key %+v wrongly pruned (ambiguous path prefix)", i, liveKey)
 		}
 	}
 }
@@ -244,27 +233,26 @@ func TestPruneStaleState_ReclaimableOrphanRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prefix := fmt.Sprintf("claude:user:%s:", paths.HomeRelative(tmp, ""))
 	st := state.New()
 	for path, srcID := range map[string]string{
 		present:        "subagents/still-here.md",
 		gone:           "subagents/reclaimed.md",
 		notReclaimable: "memory/AGENTS.md",
 	} {
-		st.Files[prefix+paths.HomeRelative(tmp, path)] = state.FileEntry{SHA256: "old", SourceID: srcID}
+		st.Files[state.NewFileKey(tmp, "claude", "user", "", path)] = state.FileEntry{SHA256: "old", SourceID: srcID}
 	}
 
 	// No ops at all: every entry is "no longer rendered".
 	render.PruneStaleState(st, tmp, "claude", adapter.ScopeUser, "", nil)
 
-	if _, ok := st.Files[prefix+paths.HomeRelative(tmp, present)]; !ok {
+	if _, ok := st.Files[state.NewFileKey(tmp, "claude", "user", "", present)]; !ok {
 		t.Error("a reclaimable destination that is still on disk must keep its entry, " +
 			"so a skipped delete is retried rather than forgotten")
 	}
-	if _, ok := st.Files[prefix+paths.HomeRelative(tmp, gone)]; ok {
+	if _, ok := st.Files[state.NewFileKey(tmp, "claude", "user", "", gone)]; ok {
 		t.Error("a reclaimable destination that is gone must still be pruned")
 	}
-	if _, ok := st.Files[prefix+paths.HomeRelative(tmp, notReclaimable)]; ok {
+	if _, ok := st.Files[state.NewFileKey(tmp, "claude", "user", "", notReclaimable)]; ok {
 		t.Error("the exemption must apply only to reclaimable SourceIDs; " +
 			"a non-reclaimable entry must prune as before")
 	}
@@ -292,9 +280,8 @@ func TestPruneStaleState_DanglingSymlinkIsKept(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prefix := fmt.Sprintf("claude:user:%s:", paths.HomeRelative(tmp, ""))
 	st := state.New()
-	key := prefix + paths.HomeRelative(tmp, link)
+	key := state.NewFileKey(tmp, "claude", "user", "", link)
 	st.Files[key] = state.FileEntry{SHA256: "old", SourceID: "subagents/dangling.md"}
 
 	render.PruneStaleState(st, tmp, "claude", adapter.ScopeUser, "", nil)
@@ -328,9 +315,8 @@ func TestPruneStaleState_RetiredSubagentSourceIDIsReclaimable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prefix := fmt.Sprintf("claude:user:%s:", paths.HomeRelative(tmp, ""))
 	st := state.New()
-	key := prefix + paths.HomeRelative(tmp, legacy)
+	key := state.NewFileKey(tmp, "claude", "user", "", legacy)
 	// The RETIRED spelling, as a pre-upgrade state file carries it.
 	st.Files[key] = state.FileEntry{SHA256: "old", SourceID: "agents/code-reviewer.md"}
 
@@ -373,5 +359,38 @@ func TestOrphanReclaimedPrefixes_RetiredAliasDoesNotOverMatch(t *testing.T) {
 	}
 	if render.OrphanIsReclaimable("memory/AGENTS.md") {
 		t.Error("a non-component SourceID must not be reclaimable")
+	}
+}
+
+// TestPruneStaleState_SiblingColonProjectRootSurvives is the direct regression
+// for issue #227. Two project roots differ only by a ':'-suffixed variant:
+//
+//	${HOME}/work/app          and  ${HOME}/work/app:staging
+//
+// Under the v1 string key the second project's entry began with the first's
+// prefix ("claude:project:${HOME}/work/app:"), so an apply of the SHORTER root
+// pruned the LONGER root's ownership — and the next apply of that project
+// classified its .mcp.json as a foreign collision, backing it up and rewriting
+// it. The typed key compares Project as a field, so the sibling is untouched.
+func TestPruneStaleState_SiblingColonProjectRootSurvives(t *testing.T) {
+	const userHome = "/home/alice"
+	shortRoot := filepath.Join(userHome, "work", "app")
+	longRoot := filepath.Join(userHome, "work", "app:staging")
+
+	s := state.New()
+	shortKey := state.NewFileKey(userHome, "claude", "project", shortRoot, filepath.Join(shortRoot, ".mcp.json"))
+	longKey := state.NewFileKey(userHome, "claude", "project", longRoot, filepath.Join(longRoot, ".mcp.json"))
+	s.Files[shortKey] = state.FileEntry{SHA256: "a"}
+	s.Files[longKey] = state.FileEntry{SHA256: "b"}
+
+	// Apply the SHORT project with no ops at all: everything it owns is stale.
+	render.PruneStaleState(s, userHome, "claude", adapter.ScopeProject, shortRoot, nil)
+
+	if _, ok := s.Files[shortKey]; ok {
+		t.Fatal("the short project's own stale entry should have been pruned")
+	}
+	if _, ok := s.Files[longKey]; !ok {
+		t.Fatalf("a SIBLING project whose root merely shares a ':'-delimited prefix "+
+			"must keep its ownership; have %+v", s.Files)
 	}
 }

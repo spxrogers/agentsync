@@ -914,28 +914,25 @@ func unexaminedPluginAgents(reg *adapter.Registry, enabled, selected []string) [
 	return out
 }
 
-// orphanedStateAgents returns, sorted, the agent names that appear as a state
-// key prefix ("agent:scope:…") but are not in the enabled set — i.e. agents
-// whose rendered native config and state entries linger after a `remove` or a
-// `disable` without `--purge`.
+// orphanedStateAgents returns, sorted, the agent names recorded in a state key
+// that are not in the enabled set — i.e. agents whose rendered native config and
+// state entries linger after a `remove` or a `disable` without `--purge`.
 func orphanedStateAgents(s *state.Targets, enabled []string) []string {
 	en := make(map[string]bool, len(enabled))
 	for _, n := range enabled {
 		en[n] = true
 	}
 	found := map[string]bool{}
-	collect := func(key string) {
-		if i := strings.IndexByte(key, ':'); i > 0 {
-			if a := key[:i]; !en[a] {
-				found[a] = true
-			}
+	collect := func(agent string) {
+		if agent != "" && !en[agent] {
+			found[agent] = true
 		}
 	}
 	for k := range s.Files {
-		collect(k)
+		collect(k.Agent)
 	}
 	for k := range s.Keys {
-		collect(k)
+		collect(k.Agent)
 	}
 	out := make([]string, 0, len(found))
 	for a := range found {
@@ -945,20 +942,18 @@ func orphanedStateAgents(s *state.Targets, enabled []string) []string {
 	return out
 }
 
-// stateFileKey builds the state Files map key matching render.RecordOpsState.
-// Format: "agent:scope:portableProject:portablePath" (project and path are
-// HOME-relative against the user's $HOME so keys are portable across
-// machines — userHome must be paths.HomeDir, NOT the agentsync home).
-func stateFileKey(userHome, agent string, sc adapter.Scope, projectRoot, path string) string {
-	return fmt.Sprintf("%s:%s:%s:%s", agent, sc.String(),
-		paths.HomeRelative(userHome, projectRoot), paths.HomeRelative(userHome, path))
+// stateFileKey builds the state Files map key for a destination. It exists only
+// to convert adapter.Scope to the plain string internal/state takes (state sits
+// below adapter in the package layering); the format itself is owned by
+// state.Key, so this can no longer drift from render.RecordOpsState.
+func stateFileKey(userHome, agent string, sc adapter.Scope, projectRoot, path string) state.Key {
+	return state.NewFileKey(userHome, agent, sc.String(), projectRoot, path)
 }
 
-// stateKeyKey builds the state Keys map key matching render.RecordOpsState.
-// Format: "agent:scope:portableProject:portablePath:ptr".
-func stateKeyKey(userHome, agent string, sc adapter.Scope, projectRoot, path, ptr string) string {
-	return fmt.Sprintf("%s:%s:%s:%s:%s", agent, sc.String(),
-		paths.HomeRelative(userHome, projectRoot), paths.HomeRelative(userHome, path), ptr)
+// stateKeyKey builds the state Keys map key for one JSON pointer inside a
+// shared destination file. Same conversion-only role as stateFileKey.
+func stateKeyKey(userHome, agent string, sc adapter.Scope, projectRoot, path, ptr string) state.Key {
+	return state.NewPointerKey(userHome, agent, sc.String(), projectRoot, path, ptr)
 }
 
 func hashContent(b []byte) string {

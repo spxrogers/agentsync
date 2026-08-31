@@ -404,16 +404,27 @@ Pure 3-way classifier — no IO.
 
 ### `internal/state`
 Persists last-applied hashes and plugin/marketplace pins to
-`.state/targets.json`; schema-versioned with migrators. Also owns the
-per-machine run record `.state/last-run.json`, which backs the one-time
-first-run-after-upgrade notice — a SEPARATE file on purpose: it must be
-writable by read-only commands and must never gate on (or bump) the drift
-state's `SchemaVersion`.
-- **Key:** `SchemaVersion`; `Targets` (`Files`, `Keys`, `Marketplaces`,
-  `Plugins`); `FileEntry`; `KeyEntry`; `Load`/`Save`; `migrate`;
-  `LastRun`/`LoadLastRun`/`SaveLastRun`.
-- **Depends on:** iox. **Files:** `schema.go`, `store.go`, `migrate.go`,
-  `lastrun.go`.
+`.state/targets.json`; schema-versioned with migrators. Owns the `targets.json`
+**key format**: `Key` is a typed, length-prefixed, injective identifier
+(agent · scope · portable project · portable dest path · JSON pointer) used as
+the Go map key of `Files`/`Keys`, so a hand-rolled `fmt.Sprintf` key is a
+compile error rather than a convention (issue #227). The *encoding* has exactly
+one owner — `String`/`ParseKey` live here and nothing else formats or decodes it
+— but neither is sealed: `ParseKey` is exported (below), and a `state.Key{…}`
+composite literal compiles anywhere, which is how `render`'s and `cli`'s tests
+plant keys in a specific portable spelling instead of going through
+`NewFileKey`. Also owns the per-machine run record `.state/last-run.json`, which
+backs the one-time first-run-after-upgrade notice — a SEPARATE file on purpose:
+it must be writable by read-only commands and must never gate on (or bump) the
+drift state's `SchemaVersion`.
+- **Key:** `SchemaVersion` (currently 2); `Key` (+ `NewFileKey`,
+  `NewPointerKey`, `ParseKey`, `String`, `AbsPath`, `InTree`); `Targets`
+  (`Files`, `Keys`, `Marketplaces`, `Plugins`); `FileEntry`; `KeyEntry`;
+  `Load`/`Save`; `ErrNonUTF8Key` (`Save` refuses a key JSON cannot carry
+  losslessly); `migrate` (v1 keys → typed keys); `LastRun`/`LoadLastRun`/
+  `SaveLastRun`.
+- **Depends on:** iox, paths. **Files:** `schema.go`, `store.go`, `key.go`,
+  `legacy.go`, `migrate.go`, `lastrun.go`.
 
 ### `internal/marketplace`
 Models the Claude marketplace/plugin format, fetches sources, and projects plugin

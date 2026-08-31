@@ -58,7 +58,7 @@ func TestSaveBestEffortState_OnlyRecordsWrittenPaths(t *testing.T) {
 
 func fileKeyRecorded(st *state.Targets, nameSubstr string) bool {
 	for k := range st.Files {
-		if strings.Contains(k, nameSubstr) {
+		if strings.Contains(k.Path, nameSubstr) {
 			return true
 		}
 	}

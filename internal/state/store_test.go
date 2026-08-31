@@ -42,7 +42,8 @@ func TestStore_RoundTrip(t *testing.T) {
 	p := filepath.Join(dir, "targets.json")
 
 	in := state.New()
-	in.Files["claude:user::~/.claude/settings.json"] = state.FileEntry{
+	settingsKey := state.Key{Agent: "claude", Scope: "user", Path: "~/.claude/settings.json"}
+	in.Files[settingsKey] = state.FileEntry{
 		SHA256:    "abc",
 		Mode:      0o644,
 		AppliedAt: time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC),
@@ -56,7 +57,7 @@ func TestStore_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	got := out.Files["claude:user::~/.claude/settings.json"]
+	got := out.Files[settingsKey]
 	if got.SHA256 != "abc" || got.SourceID != "mcp/github.toml" {
 		t.Fatalf("entry round-trip lost data: %+v", got)
 	}

@@ -488,15 +488,11 @@ func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adap
 	// DISOWN the retired events' key-state entries — for EVERY agent, at exactly
 	// this scope+project (see the cross-agent note above; a user-scope retirement
 	// must not disown project-scope keys whose canonical overlay file survives,
-	// and vice versa). Key shape: "<agent>:<scope>:<project>:<file>:<pointer>"
-	// (render.RecordOpsState); agent names carry no ':' and the scope/project
-	// legs are matched as one exact ":"-delimited run right after the agent leg.
-	// Residual (accepted): a project path that itself contains ':' can prefix-
-	// match a sibling project's run — bounded to a benign over-disown (the key
-	// is re-recorded by that project's next apply), and the key format offers
-	// no unambiguous parse to do better.
+	// and vice versa). The state key is typed (state.Key), so the scope and
+	// project legs are compared field-by-field: a project root containing ':'
+	// can no longer prefix-match a sibling project's entries (issue #227).
 	userHome := paths.HomeDir(paths.OSEnv{})
-	scopeMid := ":" + sc.String() + ":" + paths.HomeRelative(userHome, projectRoot) + ":"
+	portableProject := paths.HomeRelative(userHome, projectRoot)
 	statePath := filepath.Join(agentsyncHome, ".state", "targets.json")
 	st, serr := state.Load(statePath)
 	if serr != nil {
@@ -520,8 +516,9 @@ func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adap
 	// until the next apply re-records it — and if the user deletes the
 	// canonical file inside that window, the now-unowned native entry is left
 	// behind for good (never clobbered, though). Aliases are NOT id-gated the
-	// way retired events are, but a ':'-bearing native spelling still cannot
-	// cross a key boundary: canonical pointers never contain ':'.
+	// way retired events are; the pointer is matched exactly against the typed
+	// key's Pointer field, so a ':'-bearing native spelling cannot reach a
+	// neighbouring key.
 	var aliases []string
 	for _, event := range retired {
 		aliases = append(aliases, event)
@@ -537,12 +534,11 @@ func retireRefusedHookEvents(io *importIO, agentsyncHome, srcHome string, a adap
 	}
 	changed := false
 	for key := range st.Keys {
-		agentEnd := strings.Index(key, ":")
-		if agentEnd < 0 || !strings.HasPrefix(key[agentEnd:], scopeMid) {
+		if key.Scope != sc.String() || key.Project != portableProject {
 			continue
 		}
 		for _, alias := range aliases {
-			if strings.HasSuffix(key, ":/hooks/"+alias) {
+			if key.Pointer == "/hooks/"+alias {
 				delete(st.Keys, key)
 				changed = true
 			}
@@ -1787,7 +1783,7 @@ func importPlugins(io *importIO, home, agentName string, a adapter.Adapter, name
 			resolved[mpID] = mpID
 			return mpID, true
 		}
-		mpName, _, ferr := addMarketplaceSource(home, src, rawURL)
+		mpName, _, ferr := addMarketplaceSource(home, src, rawURL, io.warnf)
 		if ferr != nil {
 			io.warnf("skipping marketplace %q: %v", mpID, ferr)
 			resolved[mpID] = ""

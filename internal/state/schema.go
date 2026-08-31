@@ -5,19 +5,35 @@ package state
 
 import "time"
 
-const SchemaVersion = 1
+// SchemaVersion is the on-disk format version of targets.json.
+//
+//	1 — files/keys were string maps keyed "agent:scope:project:path[:pointer]",
+//	    a ':'-joined encoding that is NOT injective: ':' is legal in a POSIX
+//	    path, so a project root containing one produced keys that string-prefixed
+//	    a sibling project's (issue #227).
+//	2 — files/keys are keyed by the typed, length-prefixed state.Key (key.go).
+//	    Load migrates 0/1 -> 2 in place; the next Save commits the upgrade.
+const SchemaVersion = 2
 
 // Targets is the root state document.
+//
+// Files and Keys are keyed by the typed Key, so a hand-rolled fmt.Sprintf key is
+// a compile error rather than a convention. That is the guarantee — NOT that
+// NewFileKey/NewPointerKey are the only way in: a Key{…} composite literal
+// compiles anywhere (it just skips their paths.HomeRelative, which is how tests
+// plant a key in a specific portable spelling), and ParseKey is exported.
+// Marketplaces and Plugins keep string keys: those are marketplace names and
+// "owner/plugin" ids, a different namespace with no ambiguity problem.
 type Targets struct {
 	SchemaVersion int                    `json:"schema_version"`
-	Files         map[string]FileEntry   `json:"files,omitempty"`
-	Keys          map[string]KeyEntry    `json:"keys,omitempty"`
+	Files         map[Key]FileEntry      `json:"files,omitempty"`
+	Keys          map[Key]KeyEntry       `json:"keys,omitempty"`
 	Marketplaces  map[string]Marketplace `json:"marketplaces,omitempty"`
 	Plugins       map[string]PluginEntry `json:"plugins,omitempty"`
 }
 
-// FileEntry tracks one fully-managed destination file.
-// Key format: "<agent>:<scope>:<project>:<dest_path>"
+// FileEntry tracks one fully-managed destination file, under a Key whose
+// Pointer is empty.
 type FileEntry struct {
 	SHA256    string    `json:"sha256"`
 	Mode      uint32    `json:"mode"`
@@ -26,8 +42,7 @@ type FileEntry struct {
 }
 
 // KeyEntry tracks one managed JSON-pointer-addressable key inside a shared
-// destination file.
-// Key format: "<agent>:<scope>:<project>:<file>:<json_pointer>"
+// destination file, under a Key whose Pointer is that JSON pointer.
 type KeyEntry struct {
 	SHA256    string    `json:"sha256"`
 	AppliedAt time.Time `json:"applied_at"`
@@ -51,8 +66,8 @@ type PluginEntry struct {
 func New() *Targets {
 	return &Targets{
 		SchemaVersion: SchemaVersion,
-		Files:         map[string]FileEntry{},
-		Keys:          map[string]KeyEntry{},
+		Files:         map[Key]FileEntry{},
+		Keys:          map[Key]KeyEntry{},
 		Marketplaces:  map[string]Marketplace{},
 		Plugins:       map[string]PluginEntry{},
 	}

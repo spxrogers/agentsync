@@ -236,8 +236,9 @@ func rewriteSubagentStateIDs(userAgentsyncHome string, sc adapter.Scope, project
 	portableProject := paths.HomeRelative(userHome, projectRoot)
 
 	changed := false
+	scopeName := sc.String()
 	for key, entry := range st.Files {
-		if !stateKeyInTree(key, sc, portableProject) {
+		if key.Scope != scopeName || key.Project != portableProject {
 			continue
 		}
 		if id, ok := migratedSourceID(entry.SourceID); ok {
@@ -247,7 +248,7 @@ func rewriteSubagentStateIDs(userAgentsyncHome string, sc adapter.Scope, project
 		}
 	}
 	for key, entry := range st.Keys {
-		if !stateKeyInTree(key, sc, portableProject) {
+		if key.Scope != scopeName || key.Project != portableProject {
 			continue
 		}
 		if id, ok := migratedSourceID(entry.SourceID); ok {
@@ -260,22 +261,6 @@ func rewriteSubagentStateIDs(userAgentsyncHome string, sc adapter.Scope, project
 		return nil
 	}
 	return state.Save(statePath, st)
-}
-
-// stateKeyInTree reports whether a state key ("<agent>:<scope>:<project>:…")
-// belongs to the tree identified by scope + portable project root. Both the
-// project root and the dest path may themselves contain ':' (a Windows drive
-// letter), so only the first two fields are split off positionally and the
-// project root is matched as a prefix of the remainder.
-func stateKeyInTree(key string, sc adapter.Scope, portableProject string) bool {
-	parts := strings.SplitN(key, ":", 3)
-	if len(parts) < 3 {
-		return false
-	}
-	if parts[1] != sc.String() {
-		return false
-	}
-	return strings.HasPrefix(parts[2], portableProject+":")
 }
 
 // migratedSourceID rewrites a legacy `agents/<name>.md` SourceID to the

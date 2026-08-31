@@ -173,8 +173,9 @@ environment. The public **recipient** key is safe to commit; the private
 ### State (`~/.agentsync/.state/`)
 Gitignored bookkeeping: `targets.json` (the last-applied hashes that make drift
 detection possible), the apply lock, the two-phase write staging dir, first-apply
-backups, and the marketplace/plugin cache. Keys are stored `${HOME}`-relative so
-state is portable across machines.
+backups, and the marketplace/plugin cache. Each entry is addressed by an opaque,
+injective key that stores the project root and destination path `${HOME}`-relative,
+so state stays portable across machines.
 
 ### Destination git backup (rollback history)
 Optionally, each **user-scope destination dir** (`~/.claude`, `~/.codex`, …) gets

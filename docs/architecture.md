@@ -789,7 +789,8 @@ only through the secret backend, so an unresolvable env ref stays a warning.)
 key:
 
 - `H_src` — computed now from the canonical source
-- `H_applied` — recorded last apply in `targets.json`
+- `H_applied` — recorded last apply in `targets.json`, under a typed
+  `state.Key` (agent · scope · project · path · pointer) — see §7.8
 - `H_dest` — current on-disk content (or nil)
 
 | `H_applied` vs `H_src` | `H_applied` vs `H_dest` | Class | `apply` behavior |
@@ -939,6 +940,110 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    `secrets.Resolved.ComponentIDs()` accessor), never unwrapping the resolved model
    to a writable `source.Canonical`, so the guard doesn't cross the secrets lint
    fence (§8).
+8. **Injective state keys** (`internal/state/key.go`) — every entry in
+   `targets.json` is addressed by a typed `state.Key`
+   (agent · scope · portable project root · portable dest path · JSON pointer),
+   which is the Go **map key type** of `Targets.Files` / `Targets.Keys`. A
+   hand-rolled `fmt.Sprintf` key is therefore a compile error, and the format has
+   exactly one owner instead of a string contract spread across `render`, `cli`
+   and one adapter. (A `state.Key{…}` composite literal still compiles — it just
+   bypasses `NewFileKey`'s `paths.HomeRelative`, which is how tests plant keys in
+   a specific portable spelling.) The wire form is length-prefixed —
+   `as1|6:claude|4:user|0:|29:${HOME}/.claude/settings.json|0:` — the same
+   technique `hookSignature` uses, so decoding never interprets a field's bytes
+   and `ParseKey` is a total left inverse of `String()`: two distinct
+   destinations can never share a key. The v1 `agent:scope:project:path[:ptr]`
+   encoding could: `:` is legal in a POSIX path, so a project root containing
+   one produced keys that string-prefixed a *sibling* project's, and a
+   prefix-scoped prune deleted the sibling's ownership (issue #227). Every
+   consumer now compares **fields**, never string prefixes. `state.Load`
+   upgrades `schema_version` 0/1 → 2 on read; a legacy key with more than one
+   possible reading **refuses the load**, naming the key and the remedy, rather
+   than guessing and recording it under the wrong project. Disambiguation leans
+   on one property — every adapter joins its project-scope destinations onto the
+   project root, so the reading agentsync *actually wrote* is always contained,
+   and a competing reading can only push the contained count to two and force a
+   refusal, never take the acceptance for itself. Keeping that true makes the
+   containment test a per-component filter: it treats `\` as a separator
+   alongside `/` (a Windows project root outside `%USERPROFILE%` is stored
+   verbatim, drive colon and backslashes included, and a slash-only test would
+   find no contained reading and refuse every such file), and it deliberately
+   does **not** collapse `..`. `path.Clean` did, and that collapse could drop the
+   true reading out of the contained set and leave a false one alone in it —
+   accepted silently under the wrong project, the very bug this format removes.
+   For the same reason a root that normalizes to *zero* components (`/`) stays
+   contained even though it discriminates nothing: excluding it would recover a
+   handful of keys whose false split happens to be `/`, at the price of
+   misdecoding any key whose true root **is** `/`. Over-refusal is the cheap
+   failure here and misrecovery the expensive one, so the trade is refused;
+   `TestLegacyContainmentProperties` pins the invariant over a generated corpus
+   of 20,628 (root, destination) pairs — 41,256 keys, file and pointer — of which
+   about 70% decode and none decodes under a project other than the root it was
+   built from. (The counterfactual for the zero-component exclusion is not in
+   that test: it comes from a throwaway sweep recorded in `legacy.go`'s comment,
+   which says so.)
+   Enumeration is also **capped**. The candidate readings are a product of the
+   `:` and `:/` counts and the tie-break walks all of them, so an uncapped key of
+   a few KB could OOM-kill any command that loads state; on the 65th candidate
+   agentsync stops counting and refuses the key. That cap bounds *enumeration*,
+   not ambiguity — it fires mid-count, so a key it refuses may have had many
+   readings, exactly one, or none — so the refusal carries its own sentinel and
+   its own remedy paragraph, and never claims the key was ambiguous. The remedy
+   itself is the same cheap delete-and-re-adopt.
+   At `schema_version: 2` each key is role-checked as well as parsed — a `files`
+   key must carry no JSON pointer, a `keys` key must carry one — so a
+   hand-edited file cannot be laxer than the v1 format it replaced.
+
+   **Downgrading is not safe, and the docs used to say it was.** `migrate` does
+   refuse a newer `schema_version`, but refusing at the migrate layer is not the
+   same as being safe at the layer the user experiences — the question is what
+   each *caller* does with that error. On a pre-schema-2 build, `status`,
+   `diff`, `apply`, `reconcile`, `explain`, `migrate`, `plugin` and
+   `agent disable --purge` return it (non-zero exit) and `doctor` reports a
+   corrupt state file; none of them touch `targets.json`. But those builds'
+   `addMarketplaceSource` did `st, _ := state.Load(...)`, so `marketplace add`
+   (and `import`, which registers a plugin's marketplace through the same
+   function) fell through to `state.New()` and **saved it**: exit 0, a
+   `✅ added marketplace …` line, and `targets.json` replaced by a
+   `schema_version: 1` document holding only the marketplace just added — every
+   `files`/`keys` ownership entry, every plugin pin and every other marketplace
+   record destroyed. The canonical tree and the native files are untouched, and
+   the next `apply` re-adopts each destination (backing up pre-existing content
+   to `.state/backups/` first), but that is a full re-adopt, not a no-op. Old
+   binaries cannot be patched: the mitigation is to back up
+   `~/.agentsync/.state/targets.json` before downgrading, or delete it so the
+   older build starts fresh. The read guard is now in place going forward
+   (`internal/cli/marketplace.go`, pinned by
+   `TestMarketplaceAdd_DoesNotClobberUnreadableState` and its `remove` twin),
+   which protects a *future* downgrade past this release but nothing already
+   shipped.
+
+   **Refusing an unreadable state file is pinned, not merely intended.** The
+   paragraph above describes *pre*-schema-2 builds, which no test in this tree
+   can drive; what it says about this build is what makes a downgrade past *this*
+   release survivable, and that half is now enforced. It needed to be: the
+   tempting regression at any of the 15 `state.Load` call sites — `if err != nil
+   { s = state.New() }`, exactly the `marketplace add` bug — is silent, turning a
+   refusal into an apply against an empty state, which owns nothing and backs up
+   every managed destination as a foreign collision.
+   `TestCommandsRefuseUnreadableState` drives each command in-process against an
+   unreadable `targets.json` and asserts both halves: a non-zero exit carrying
+   the migration refusal, and the file byte-for-byte unchanged. It covers
+   `status`, `diff`, `apply` (plain and `--dry-run`), `reconcile`, `explain`,
+   `plugin outdated`, `agent disable --purge`, `migrate subagents` and `doctor`.
+   The five remaining `state.Load` sites deliberately warn and continue instead
+   of refusing: `marketplace add`/`remove`, pinned by the two tests named above,
+   and `import`'s two sites plus opencode's `Ingest`, which emit a `warning: `
+   line into `ui.WarnWriter`.
+
+   One boundary is narrower than the encoding: `targets.json` is JSON, and
+   `encoding/json` rewrites an invalid UTF-8 byte in a string to U+FFFD, which
+   would break a length prefix and make the next `Load` refuse the file — with
+   no way out, since the next apply rebuilds the same key. `state.Save` therefore
+   refuses a key whose any field is not valid UTF-8 (`state.ErrNonUTF8Key`)
+   before writing, naming the offending destination path. Linux paths are byte
+   strings, so this is reachable; failing closed at the moment the key is created
+   is what makes it actionable.
 
 ---
 
@@ -1297,7 +1402,9 @@ exception: its `Ingest` reads the apply-state file (`internal/state`) to build a
 never hand-authored siblings in OpenCode's shared `agents/`/`commands/` dirs (issue
 #148). This is a deliberate, opencode-scoped dependency — the general fix (threading
 the owned-path set in from the CLI caller so no adapter touches `state`) is a
-class-wide follow-up, since no other adapter filters ingest ownership yet. The state
-**key format** the filter reconstructs is not silently duplicated: the round-trip
-test seeds ownership through the real `render.RecordOpsState`, so any drift in the
-key scheme breaks that test rather than silently under-capturing.
+class-wide follow-up, since no other adapter filters ingest ownership yet. The filter
+does not duplicate the state **key format**: it calls `state.NewFileKey`, the same
+constructor `render.RecordOpsState` uses, so the two agree structurally rather than by
+convention — and the round-trip test seeds ownership through the real
+`render.RecordOpsState`, so a divergence in what either side *passes* that constructor
+breaks that test rather than silently under-capturing.

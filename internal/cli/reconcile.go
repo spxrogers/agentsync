@@ -739,13 +739,13 @@ func collectOrphanFileItems(plan render.RenderPlan, reg *adapter.Registry, s *st
 }
 
 // pruneStateFilesForPath removes every agent's Files state entry for a single
-// dest path (after the user removes an orphan). The path is the last
-// colon-delimited field of a Files key, so a suffix match is exact even when
-// the path itself contains ':'.
+// dest path (after the user removes an orphan). The path is its own field of the
+// typed state key, so the match is exact for any path — including one containing
+// ':', which the previous suffix match only happened to get right.
 func pruneStateFilesForPath(s *state.Targets, userHome, absPath string) {
-	suffix := ":" + paths.HomeRelative(userHome, absPath)
+	portable := paths.HomeRelative(userHome, absPath)
 	for key := range s.Files {
-		if strings.HasSuffix(key, suffix) {
+		if key.Path == portable {
 			delete(s.Files, key)
 		}
 	}

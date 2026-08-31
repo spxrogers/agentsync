@@ -2,14 +2,12 @@ package render_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
-	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -313,8 +311,7 @@ func TestWriter_NoCollisionWhenAlreadyOwned(t *testing.T) {
 	st := state.New()
 	// State keys are HOME-relative against the user's $HOME (here tmp), so an
 	// owned dest under tmp is recorded as "${HOME}/<rel>".
-	rel, _ := filepath.Rel(tmp, dest)
-	st.Files["claude:user::${HOME}/"+filepath.ToSlash(rel)] = state.FileEntry{SHA256: "anything"}
+	st.Files[state.NewFileKey(tmp, "claude", "user", "", dest)] = state.FileEntry{SHA256: "anything"}
 
 	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
 	op := adapter.FileOp{Action: "write", Path: dest, Content: []byte("ours-v2"), Mode: 0o644}
@@ -714,7 +711,7 @@ func TestApply_UnreadableOrphanIsSkippedNotDeleted(t *testing.T) {
 	live := filepath.Join(tmp, ".claude", "agents", "live.md")
 
 	st := state.New()
-	st.Files[fmt.Sprintf("claude:user:%s:%s", paths.HomeRelative(tmp, ""), paths.HomeRelative(tmp, orphan))] = state.FileEntry{SHA256: "stale", SourceID: "subagents/gone.md", Mode: 0o644}
+	st.Files[state.NewFileKey(tmp, "claude", "user", "", orphan)] = state.FileEntry{SHA256: "stale", SourceID: "subagents/gone.md", Mode: 0o644}
 
 	reg := adapter.NewRegistry()
 	_ = reg.Register(&fakeJSONApply{name: "claude"})
@@ -740,7 +737,7 @@ func TestApply_UnreadableOrphanIsSkippedNotDeleted(t *testing.T) {
 	// vanish here, orphanDeletes could never synthesize the delete again, and the
 	// one warning would never repeat. The stale file would live forever, which is
 	// the leftover-duplicate failure reclamation exists to prevent.
-	stateKey := fmt.Sprintf("claude:user:%s:%s", paths.HomeRelative(tmp, ""), paths.HomeRelative(tmp, orphan))
+	stateKey := state.NewFileKey(tmp, "claude", "user", "", orphan)
 	render.PruneStaleState(st, tmp, "claude", adapter.ScopeUser, "", plan.PerAgent["claude"].Ops)
 	if _, stillOwned := st.Files[stateKey]; !stillOwned {
 		t.Fatal("a skipped orphan must keep its state entry so the next apply retries and re-warns")
