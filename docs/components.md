@@ -404,16 +404,20 @@ Pure 3-way classifier — no IO.
 
 ### `internal/state`
 Persists last-applied hashes and plugin/marketplace pins to
-`.state/targets.json`; schema-versioned with migrators. Also owns the
-per-machine run record `.state/last-run.json`, which backs the one-time
+`.state/targets.json`; schema-versioned with migrators. Owns the `targets.json`
+**key format**: `Key` is a typed, length-prefixed, injective identifier
+(agent · scope · portable project root · portable dest path · JSON pointer), so
+no other package has to build or take apart a key by hand (issue #227). Also
+owns the per-machine run record `.state/last-run.json`, which backs the one-time
 first-run-after-upgrade notice — a SEPARATE file on purpose: it must be
 writable by read-only commands and must never gate on (or bump) the drift
 state's `SchemaVersion`.
-- **Key:** `SchemaVersion`; `Targets` (`Files`, `Keys`, `Marketplaces`,
+- **Key:** `SchemaVersion`; `Key` (+ `NewFileKey`, `NewPointerKey`, `ParseKey`,
+  `String`, `AbsPath`, `InTree`); `Targets` (`Files`, `Keys`, `Marketplaces`,
   `Plugins`); `FileEntry`; `KeyEntry`; `Load`/`Save`; `migrate`;
   `LastRun`/`LoadLastRun`/`SaveLastRun`.
-- **Depends on:** iox. **Files:** `schema.go`, `store.go`, `migrate.go`,
-  `lastrun.go`.
+- **Depends on:** iox, paths. **Files:** `schema.go`, `store.go`, `key.go`,
+  `migrate.go`, `lastrun.go`.
 
 ### `internal/marketplace`
 Models the Claude marketplace/plugin format, fetches sources, and projects plugin
