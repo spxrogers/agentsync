@@ -417,7 +417,8 @@ state's `SchemaVersion`.
   `Plugins`); `FileEntry`; `KeyEntry`; `Load`/`Save`; `migrate`;
   `LastRun`/`LoadLastRun`/`SaveLastRun`.
 - **Depends on:** iox, paths. **Files:** `schema.go`, `store.go`, `key.go`,
-  `migrate.go`, `lastrun.go`.
+  `legacy.go` (the v1 key parser, used only by `migrate`), `migrate.go`,
+  `lastrun.go`.
 
 ### `internal/marketplace`
 Models the Claude marketplace/plugin format, fetches sources, and projects plugin
