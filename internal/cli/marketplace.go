@@ -157,17 +157,26 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string) (m
 	}
 
 	// Update state.json so the update command can track fetch timestamps and SHAs.
+	//
+	// The read guard is load-bearing, not defensive noise: Load already returns a
+	// FRESH EMPTY state with no error for an absent file, so a non-nil error here
+	// means targets.json exists and could not be read — a refused migration (an
+	// ambiguous v1 key, a v2 role violation, a non-UTF-8 key), a permissions
+	// problem, corruption. Substituting state.New() there and saving would
+	// OVERWRITE targets.json with an empty state, discarding every Files/Keys/
+	// Plugins entry and every other marketplace; the next apply would then see no
+	// ownership at all and back up every managed destination as a foreign
+	// collision. Skipping the record instead costs only a stale fetch timestamp,
+	// which the next successful add/update repairs. Mirrors marketplaceRemoveRun.
 	statePath := filepath.Join(home, ".state", "targets.json")
-	st, _ := state.Load(statePath) // best-effort; ignore read errors on fresh home
-	if st == nil {
-		st = state.New()
+	if st, lerr := state.Load(statePath); lerr == nil {
+		st.Marketplaces[mpName] = state.Marketplace{
+			URL:       rawURL,
+			HeadSHA:   result.HeadSHA,
+			FetchedAt: time.Now().UTC(),
+		}
+		_ = state.Save(statePath, st) // best-effort; don't fail add on state write errors
 	}
-	st.Marketplaces[mpName] = state.Marketplace{
-		URL:       rawURL,
-		HeadSHA:   result.HeadSHA,
-		FetchedAt: time.Now().UTC(),
-	}
-	_ = state.Save(statePath, st) // best-effort; don't fail add on state write errors
 
 	return mpName, result.HeadSHA, nil
 }

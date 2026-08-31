@@ -113,6 +113,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   reporting `purged … deleted 1 file(s)`. State entries are now addressed by a
   typed, length-prefixed key that cannot be confused with a neighbour's, and
   every consumer compares fields rather than string prefixes.
+- **`marketplace add` no longer replaces an unreadable `targets.json` with an
+  empty one.** State is loaded best-effort so a fresh home works, but a *real*
+  read failure — a permissions problem, corruption, or a state file agentsync
+  refuses (an ambiguous pre-upgrade key, a destination path that is not valid
+  UTF-8) — fell through to a blank state and then SAVED it, discarding every
+  ownership record, plugin pin, and other marketplace. The next `apply` then
+  owned nothing and backed up every managed destination as a foreign collision.
+  The fetch record is now skipped when state cannot be read, exactly as
+  `marketplace remove` already did; the next successful add or update fills it
+  back in.
 - **`apply`'s translation report no longer over-counts.** Every per-agent count
   honours the providing plugin's gates now; previously none did, so a deferred
   plugin's components were counted under another plugin's row for the same agent
