@@ -54,6 +54,17 @@ func TestPurgeMatches(t *testing.T) {
 			want: false,
 		},
 		{
+			// The scope leg is load-bearing exactly when portableProject is
+			// empty: a user-scope key's Project field is "" too, so without
+			// `k.Scope == adapter.ScopeProject.String()` a project-scope purge
+			// rooted at "" would sweep up the agent's USER-scope ownership,
+			// deleting user-scope destinations under a project-scoped command.
+			name:  "project scope with an empty root still rejects user-scope keys",
+			key:   state.Key{Agent: "claude", Scope: "user", Path: "${HOME}/.claude.json"},
+			agent: "claude", sc: adapter.ScopeProject, portableProject: "",
+			want: false,
+		},
+		{
 			name:  "project scope handles a colon-bearing project root",
 			key:   state.Key{Agent: "claude", Scope: "project", Project: "/mnt/we:ird/proj", Path: "/mnt/we:ird/proj/.mcp.json"},
 			agent: "claude", sc: adapter.ScopeProject, portableProject: "/mnt/we:ird/proj",

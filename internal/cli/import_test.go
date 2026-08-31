@@ -1623,10 +1623,13 @@ func TestImport_RetireDisownIsScopeExact(t *testing.T) {
 	// MUST use the exact spelling render.RecordOpsState emits — the
 	// "${HOME}/…" form paths.HomeRelative produces — or the survival
 	// assertion is trivially true against a spelling the disown could never
-	// match anyway. What this pins is the SCOPE leg (dropping sc.String()
-	// from the comparison disowns this key and fails the test); the project
-	// leg is now a compared field, so the scope and project legs are both
-	// exact.
+	// match anyway. What this pins is the SCOPE leg: dropping sc.String() from
+	// the comparison disowns this key and fails the test. The PROJECT leg
+	// cannot be exercised from a user-scope import — every user-scope key's
+	// Project field is "" and so is portableProject, so the comparison is
+	// vacuously true either way — and is pinned instead by
+	// TestImport_RetireDisownIsProjectExact below, along with the exactness of
+	// the pointer match.
 	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
 	st, err := state.Load(statePath)
 	if err != nil {
@@ -1661,6 +1664,103 @@ func TestImport_RetireDisownIsScopeExact(t *testing.T) {
 		if key.Agent == "claude" && key.Scope == "user" && key.Pointer == "/hooks/PreToolUse" {
 			t.Fatalf("user-scope key should have been disowned by the retirement: %s", key)
 		}
+	}
+}
+
+// TestImport_RetireDisownIsProjectExact is the PROJECT-scope half of the test
+// above, and it is what makes the retirement's other two comparisons
+// load-bearing. At user scope every key's Project field is "" and every hook
+// pointer is "/hooks/<event>", so neither the project leg nor the exactness of
+// the pointer match can fail there.
+//
+// Both planted survivors are shapes the v1 string key got wrong or only
+// happened to get right: a SIBLING project root whose portable spelling extends
+// this project's with ':' (the #227 collision — the old scope+project prefix
+// match swallowed it), and a pointer that merely ENDS with the retired event's
+// (the old match was strings.HasSuffix(key, ":/hooks/"+alias)).
+func TestImport_RetireDisownIsProjectExact(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+
+	// A project INSIDE the target root, so its portable spelling is
+	// "${HOME}/proj" — the form paths.HomeRelative produces and the disown
+	// compares against.
+	proj := filepath.Join(tmp, "proj")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, env, "init", "--scope", "project", "--project", proj)
+
+	settings := filepath.Join(proj, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	clean := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi"}]}]}}`
+	if err := os.WriteFile(settings, []byte(clean), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude:hook:PreToolUse", "--scope", "project", "--project", proj); err != nil {
+		t.Fatalf("import: %v\n%s", err, out)
+	}
+
+	statePath := filepath.Join(tmp, ".agentsync", ".state", "targets.json")
+	st, err := state.Load(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The key the import seeded for THIS project — the one the retirement must
+	// disown. Assert it is there, or the disown assertion below is vacuous.
+	target := state.Key{
+		Agent: "claude", Scope: "project",
+		Project: "${HOME}/proj",
+		Path:    "${HOME}/proj/.claude/settings.json",
+		Pointer: "/hooks/PreToolUse",
+	}
+	if _, ok := st.Keys[target]; !ok {
+		t.Fatalf("premise broken: import did not seed %+v; keys = %v", target, st.Keys)
+	}
+	sibling := state.Key{
+		Agent: "claude", Scope: "project",
+		Project: "${HOME}/proj:staging",
+		Path:    "${HOME}/proj:staging/.claude/settings.json",
+		Pointer: "/hooks/PreToolUse",
+	}
+	nested := state.Key{
+		Agent: "claude", Scope: "project",
+		Project: "${HOME}/proj",
+		Path:    "${HOME}/proj/.claude/settings.json",
+		Pointer: "/nested/hooks/PreToolUse",
+	}
+	st.Keys[sibling] = state.KeyEntry{SHA256: "deadbeef", SourceID: "hooks/PreToolUse.toml"}
+	st.Keys[nested] = state.KeyEntry{SHA256: "deadbeef", SourceID: "hooks/PreToolUse.toml"}
+	if err := state.Save(statePath, st); err != nil {
+		t.Fatal(err)
+	}
+
+	// Make the event unrepresentable so ingest refuses it and the canonical file
+	// is retired, which is what triggers the disown.
+	enriched := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 30}]}]}}`
+	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "import", "claude", "--scope", "project", "--project", proj); err != nil {
+		t.Fatalf("re-import: %v\n%s", err, out)
+	}
+
+	st2, err := state.Load(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st2.Keys[target]; ok {
+		t.Fatal("this project's own key should have been disowned by the retirement")
+	}
+	if _, ok := st2.Keys[sibling]; !ok {
+		t.Fatal("the retirement disowned a SIBLING project's key: the project leg must be compared exactly")
+	}
+	if _, ok := st2.Keys[nested]; !ok {
+		t.Fatal("the retirement disowned a key whose pointer merely ENDS with the retired event's: the pointer must be compared exactly")
 	}
 }
 

@@ -3,6 +3,7 @@ package render
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -78,22 +79,13 @@ func TestOwnedKeysFor_DisambiguatesColonPaths(t *testing.T) {
 
 	got := ownedKeysFor(s, "claude", adapter.ScopeUser, "", "a", "")
 
-	for _, k := range got {
-		if k == "b:/realptr" {
-			t.Fatalf("ownedKeysFor wrongly claimed a foreign path's pointer: %v", got)
-		}
-		if !strings.HasPrefix(k, "/") {
-			t.Fatalf("ownedKeysFor returned a non-pointer remainder %q: %v", k, got)
-		}
-	}
-	found := false
-	for _, k := range got {
-		if k == "/legit" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("ownedKeysFor dropped the legitimate pointer /legit: %v", got)
+	// The assertion is on the EXACT set, not "contains" plus a shape check.
+	// ownedKeysFor feeds the key-merge writer's prune, so a pointer it wrongly
+	// claims for path "a" is a pointer DELETED out of a file this op does not
+	// own — and dropping the Path comparison returns a perfectly well-shaped
+	// "/realptr" alongside "/legit", which only an exact-set check catches.
+	if want := []string{"/legit"}; !slices.Equal(got, want) {
+		t.Fatalf("ownedKeysFor = %v, want exactly %v — a different dest path's pointer must not be claimed", got, want)
 	}
 }
 
