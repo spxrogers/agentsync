@@ -24,6 +24,20 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   move and each is now prefixed with the `[secrets]` key it came from
   (`identity_file: …`, `file: …`), so a report about the *defaulted* vault path
   names the key that produced it.
+- **`agentsync doctor` no longer fails the `env` secrets backend.**
+  `backend = "env"` is supported — `apply` resolves `${secret:…}` through it, and
+  `agentsync check` has always accepted it — but `doctor` hard-failed anything
+  but `"age"` with `unsupported: "env" (want "age")`, so a user on the env
+  backend passed `check` and failed `doctor` on the same config. `doctor` now
+  renders its `[secrets]`-block report from the same `secrets.ValidateConfig`
+  that `check` errors from, and a cross-command parity test pins that the two
+  commands reach the same verdict on the same `[secrets]` block. Two further
+  fixes fall out: an uppercase backend (`"AGE"`) is accepted, matching `apply`;
+  and a configured vault path that cannot be stat'd for a reason other than
+  "does not exist" is now reported as `not readable` and fails, instead of
+  passing with a false `not yet created` warning pointing at
+  `agentsync secret edit`. The `env` backend is now documented in the secrets
+  guide, the user guide and the configuration reference.
 
 ### Changed
 

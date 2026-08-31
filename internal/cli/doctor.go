@@ -140,6 +140,15 @@ func warnCheck(p *ui.Printer, label, status string) {
 	fmt.Fprintf(p.Out, "  %s %s%s\n", p.Yellow(ui.GlyphWarn), label, p.Yellow(status))
 }
 
+// infoCheck renders an informational readiness line — neither a pass nor a
+// problem, such as doctor reporting that there is no [secrets] block to
+// validate at all. It matches okCheck/failCheck/warnCheck's layout so the
+// "<label><status>" substring the doctor tests pin stays contiguous when color
+// is off.
+func infoCheck(p *ui.Printer, label, status string) {
+	fmt.Fprintf(p.Out, "  %s %s%s\n", p.Faint(ui.GlyphInfo), label, p.Faint(status))
+}
+
 // checkHomeDir verifies that AGENTSYNC_HOME exists and is a directory.
 // Returns 1 if the check fails, 0 otherwise.
 func checkHomeDir(p *ui.Printer, home string) int {
@@ -421,67 +430,60 @@ func checkDestinationGitBackup(p *ui.Printer, cfg source.DestinationGitBackupCon
 	}
 }
 
-// checkSecrets validates the [secrets] block: backend present, identity
-// file exists with restrictive permissions, recipient set.
+// secretsFieldLabel maps a [secrets] validator Field to doctor's padded report
+// column. The padding is part of the "<label><status>" substring the doctor
+// tests pin, so it belongs to the LABEL, not to the message.
+func secretsFieldLabel(f secrets.Field) string {
+	switch f {
+	case secrets.FieldBackend:
+		return "backend    "
+	case secrets.FieldRecipient:
+		return "recipient  "
+	case secrets.FieldIdentityFile:
+		return "identity   "
+	case secrets.FieldFile:
+		return "age file   "
+	}
+	// Defensive: a Field added to internal/secrets without a column here still
+	// renders, just unaligned, rather than printing an empty label.
+	return string(f) + " "
+}
+
+// checkSecrets renders the [secrets] block's readiness from the SINGLE
+// validator in internal/secrets — the same secrets.ValidateConfig `agentsync
+// check` errors from, folding the backend name through the same
+// NormalizeBackend `apply`'s SelectBackend uses.
+//
+// doctor does not decide what a valid [secrets] block is; it only chooses a
+// glyph per severity. That is the whole point: doctor and check each used to
+// carry their own copy of the contract, and the copies disagreed with each
+// other AND with apply — doctor hard-failed `backend = "env"` (a supported
+// backend that check accepted and apply resolves), both rejected an uppercase
+// `"AGE"` that apply accepts, and doctor reported an un-stat-able vault path as
+// "not yet created" and passed where check failed. (issue #228)
+//
+// Returns the number of hard failures, which the caller adds to doctor's issue
+// count.
 func checkSecrets(p *ui.Printer, cfg source.SecretsConfig, home string) int {
-	if cfg.Backend == "" {
-		fmt.Fprintf(p.Out, "  %s backend    %s\n", p.Faint(ui.GlyphInfo), p.Faint("not configured (skip — no [secrets] block)"))
-		return 0
-	}
-	if cfg.Backend != "age" {
-		failCheck(p, "backend    ", fmt.Sprintf("unsupported: %q (want \"age\")", cfg.Backend))
-		return 1
-	}
-	okCheck(p, "backend    ", "age")
-
-	fails := 0
-	if cfg.Recipient == "" {
-		failCheck(p, "recipient  ", "missing — set [secrets].recipient in agentsync.toml")
-		fails++
-	} else {
-		okCheck(p, "recipient  ", "set")
-	}
-
-	if cfg.IdentityFile == "" {
-		failCheck(p, "identity   ", "missing — set [secrets].identity_file in agentsync.toml")
-		return fails + 1
-	}
-	// Resolve identity_file the same way apply does (expanding ${env:HOME}/~
-	// via paths.HomeDir so it honours AGENTSYNC_TARGET_ROOT), so doctor and
-	// apply never disagree on the path.
 	userHome := paths.HomeDir(paths.OSEnv{})
-	idPath := secrets.ResolveIdentityFile(cfg, home, userHome)
-	// idPath/agePath derive from the config's [secrets] identity_file/age_file,
-	// which are shareable dotfiles — a crafted path can carry raw ESC/bidi bytes.
-	// Display through untrusted.Text so every print below sanitizes by
-	// construction (the "not readable"/"not yet created" branches fire on a
-	// path that need not even exist); the raw path is still used for os.Stat /
-	// CheckIdentityPermissions (issue #93/#171 class).
-	idDisp := untrusted.Wrap(idPath)
-	info, err := os.Stat(idPath)
-	if err != nil {
-		// err is a *PathError whose message embeds the raw idPath, so sanitize
-		// its rendering too — not just idDisp — or the ESC leaks through %v.
-		failCheck(p, "identity   ", fmt.Sprintf("%s — not readable (%s)", idDisp, untrusted.Wrap(err.Error())))
-		return fails + 1
-	}
-	// Use the same check apply/verify use so doctor never disagrees: it honors
-	// AGENTSYNC_AGE_SKIP_PERM_CHECK=1 and the Windows ACL caveat, unlike the
-	// previous inline 0o077 mask which falsely failed an opted-out 0644 key.
-	if permErr := secrets.CheckIdentityPermissions(idPath); permErr != nil {
-		failCheck(p, "identity   ", fmt.Sprintf("%s — too permissive (%v); chmod 600 (or set AGENTSYNC_AGE_SKIP_PERM_CHECK=1)", idDisp, info.Mode().Perm()))
-		return fails + 1
-	}
-	okCheck(p, "identity   ", fmt.Sprintf("ok (%s)", idDisp))
-
-	// Age-encrypted file location — warn if missing (legitimate on a
-	// fresh install where the user hasn't called `secrets set` yet).
-	agePath := secrets.ResolveAgeFile(cfg, home, userHome)
-	ageDisp := untrusted.Wrap(agePath)
-	if _, err := os.Stat(agePath); err != nil {
-		warnCheck(p, "age file   ", fmt.Sprintf("%s — not yet created (run `agentsync secret edit` to author)", ageDisp))
-	} else {
-		okCheck(p, "age file   ", ageDisp.String())
+	fails := 0
+	for _, f := range secrets.ValidateConfig(cfg, home, userHome) {
+		// f.Message is untrusted.Text: String() sanitizes the config-derived
+		// identity_file / file paths it embeds, so a crafted (shareable-dotfile)
+		// [secrets] value cannot inject terminal escapes into doctor's report
+		// (issue #93/#171).
+		label, status := secretsFieldLabel(f.Field), f.Message.String()
+		switch f.Severity {
+		case secrets.SeverityFail:
+			failCheck(p, label, status)
+			fails++
+		case secrets.SeverityWarn:
+			warnCheck(p, label, status)
+		case secrets.SeverityInfo:
+			infoCheck(p, label, status)
+		default:
+			okCheck(p, label, status)
+		}
 	}
 	return fails
 }

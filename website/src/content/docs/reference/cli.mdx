@@ -81,7 +81,11 @@ rename — `~/.agentsync` is usually a dotfiles repo.
 
 ### `doctor`
 A health check: verifies your `PATH`, that home and state directories are
-writable, that the config schema parses, and that the secrets backend is reachable.
+writable, that the config schema parses, and that the secrets backend is
+reachable. Its **Secrets** section validates the `[secrets]` block against the
+same rules `agentsync check` enforces — both accept `backend = "age"` and
+`backend = "env"`, in any casing — and then resolves every `${secret:…}` /
+`${env:…}` reference your source carries.
 It also lists plugins installed natively in an agent (Claude and Codex) that aren't in your
 source yet — run `import <agent>:plugin` to capture them. A **Destination git
 backup** section reports the configured `[destination_directory_git_backup]` mode

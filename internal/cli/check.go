@@ -183,15 +183,18 @@ func requireInitializedSource(root string, sc adapter.Scope) error {
 // than apply it stays so: an unrecognised backend fails here, while apply
 // degrades it to NopResolver and errors only at the first ${secret:…}.
 //
-// SIX hand-written copies of this contract are still out there, every one of
-// them comparing cfg.Backend against the literal "age": doctor's checkSecrets,
-// and the gates in the five `secret` subcommands — edit, get, set, list,
-// remove (internal/cli/secrets.go). All six therefore still carry the casing
-// divergence check just shed: `secret get` refuses the `backend = "AGE"` apply
-// resolves. doctor refuses `backend = "env"` on top of that, which is the
-// other half of the bug — the five `secret` gates refuse env legitimately,
-// since they read and write an age vault. Collapsing all six onto
-// ValidateConfig is the rest of #228.
+// `doctor` renders from this same validator now, so check and doctor can no
+// longer reach different verdicts on one [secrets] block
+// (TestSecretsValidationParity pins that). FIVE hand-written copies of the
+// contract remain, all in internal/cli/secrets.go: the `backend != "age"` gates
+// in the `secret` subcommands — edit, get, set, list, remove. Refusing
+// `backend = "env"` is CORRECT for those five — unlike doctor's refusal, which
+// was the #228 bug: they read and write an age vault, so there is nothing for
+// them to do without one.
+// What they do still carry is the casing divergence check just shed — each
+// compares against the literal "age", so `secret get` refuses the
+// `backend = "AGE"` apply resolves. Collapsing all five onto ValidateConfig,
+// which folds the name through NormalizeBackend, is the rest of #228.
 //
 // Only SeverityFail findings become an error. SeverityWarn (a vault that has
 // not been created yet) and the passing tiers are for a REPORT surface to

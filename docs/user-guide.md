@@ -721,6 +721,30 @@ your source — `agentsync diff` even redacts it so a piped diff can't leak it.
 > **agentsync does not back it up for you.** Lose it and you lose access to every
 > encrypted secret. Stash it in a 1Password Secure Note or your machine-setup repo.
 
+#### The `env` backend
+
+`[secrets].backend` takes one of two values, **matched case-insensitively**
+(`"age"`, `"Age"` and `"AGE"` are the same value — agentsync folds the name
+before selecting a backend). `"age"` — everything above — resolves `${secret:…}`
+from the age-encrypted vault. `"env"` resolves it from the process environment
+instead, the same lookup `${env:…}` performs:
+
+```toml
+[secrets]
+backend = "env"
+```
+
+Reach for it when something else already puts credentials in the environment —
+`direnv`, the 1Password CLI, a CI secret store. There is no vault and no
+identity file, so `recipient`, `identity_file` and `file` are unused; the
+`agentsync secret` subcommands manage the age vault and refuse with a message
+naming the backend they need. Both `agentsync check` and `agentsync doctor`
+accept `backend = "env"` (in any casing). Any other **non-empty** value —
+whitespace included, since the name is folded but never trimmed — is rejected by
+both; an absent or empty `backend` is not a third value but "no secrets
+configured", and both commands skip it. `apply` treats an unrecognised *or*
+empty backend as *no* backend, so every `${secret:…}` then fails to resolve.
+
 ### Project-local config
 
 A repo can carry its own **project source tree** — a `.agentsync/` directory at
@@ -937,7 +961,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | Command | Purpose | Key flags / args |
 |---|---|---|
 | `init [<git-url>]` | Create `~/.agentsync/` (user scope); optionally clone a bootstrap repo. `--scope project` scaffolds a project tree at `<cwd>/.agentsync/` instead; `--project <path>` targets `<path>/.agentsync/` (implies project scope). A git-URL clone is user-scope only. | `--scope --project` |
-| `doctor` | Diagnose setup: PATH, home/state writability, config schema, secrets backend, destination-git-backup mode + per-dir repo status; flags natively-installed plugins missing from source. | |
+| `doctor` | Diagnose setup: PATH, home/state writability, config schema, the `[secrets]` block (validated by the same rules `check` enforces), destination-git-backup mode + per-dir repo status; flags natively-installed plugins missing from source. | |
 | `check` | Validate the **config**: schema lint plus every `${secret:}`/`${env:}` reference resolved. `--scope project`/`--project <path>` lints the project tree against the inherited user secrets backend. Its sibling is `doctor`, which validates the **machine**. (Renamed from `verify` — see [Upgrading](#command-reference).) | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or with `--scope project`/`--project <path>` the project tree's own `[agents]` declaration (which project scope renders from; never inherited). At project scope `disable --purge` touches only that project's rendered files. | `disable --purge --scope --project` |
 | `skill\|subagent\|command\|hook\|lsp list` | List that component in the canonical source. Read-only by design: unlike an MCP server, none of these is flag-authorable — a skill is a *directory*, a subagent is a markdown file — so you author them on disk or capture them with `import`. | `--scope --project` |
