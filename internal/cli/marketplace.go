@@ -184,9 +184,27 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string, wa
 		// doctor — is already failing on the same unreadable file, and nothing
 		// connects the two. Name the file and the underlying error so the fix is
 		// findable; the add itself succeeded, so this is a warning, not an error.
-		warnf("marketplace %s was added but not recorded in %s, which could not be read: %v; "+
+		//
+		// sanitizeLines, not a raw %v — the same backstop, and for the same
+		// reason, as cli/doctor.go's state-file check: a state.Load failure
+		// interpolates map keys read VERBATIM from a targets.json whose own
+		// schema-2 remedy invites the user to hand-edit it, and the #93/#171 class
+		// is a crafted key repainting the terminal around the success line this
+		// warning sits beside.
+		//
+		// Applied HERE rather than left to the sink, because the two callers do
+		// not agree: `marketplace add` passes p.Warnf, which reaches fmt.Fprintf
+		// through ui.Fdiagf untouched, while `import` passes importIO.warnf, whose
+		// "warning: " line ui.WarnWriter happens to sanitize. One call site covers
+		// both without depending on which sink was supplied.
+		//
+		// migrate already %q-quotes every key, so nothing reaching here today
+		// carries a raw escape; this is what keeps that true if a future error
+		// constructor forgets. Per line, because the refusal is multi-line and
+		// ui.Sanitize STRIPS newlines.
+		warnf("marketplace %s was added but not recorded in %s, which could not be read: %s; "+
 			"run `agentsync doctor` — the record is restored by the next successful "+
-			"`agentsync marketplace add`/`update`", mpName, statePath, lerr)
+			"`agentsync marketplace add`/`update`", mpName, statePath, sanitizeLines(lerr.Error()))
 	}
 
 	return mpName, result.HeadSHA, nil
@@ -245,8 +263,11 @@ func marketplaceRemoveRun(cmd *cobra.Command, args []string) error {
 		delete(st.Marketplaces, name)
 		_ = state.Save(statePath, st)
 	} else {
+		// sanitizeLines for the same reason as the add twin above: diag reaches
+		// fmt.Fprintf through ui.Fdiagf without sanitizing, and this error
+		// interpolates hand-editable targets.json keys.
 		diag(cmd, ui.LevelWarn, "marketplace %s was removed but its record remains in %s, "+
-			"which could not be read: %v; run `agentsync doctor`", name, statePath, lerr)
+			"which could not be read: %s; run `agentsync doctor`", name, statePath, sanitizeLines(lerr.Error()))
 	}
 
 	success(cmd, ui.EmojiRemoved, "removed marketplace %s", name)

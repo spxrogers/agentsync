@@ -309,6 +309,16 @@ func TestParseLegacyKey(t *testing.T) {
 // The assertion is on ALLOCATED BYTES, not a timeout: it is a real bound the
 // uncapped implementation misses by roughly five orders of magnitude, and it
 // does not turn a slow CI machine into a flake.
+//
+// The cap is enforced at TWO multiplying sites — the project/tail split loop and
+// the path/pointer reading loop — and the rows below cover both ON PURPOSE. The
+// first three carry well over 64 ':' in the remainder, so the SPLIT site fires
+// and the reading site is never reached; deleting the reading-site guard left
+// this test (and the whole package) green. The last row is shaped the other way
+// round — 60 colons, under the split cap, but ":/"-dense enough that the
+// readings accumulate past 64 across those splits — so it is the only row that
+// exercises the second site. Measured: 2,677,240 bytes uncapped against 18,520
+// capped, 34x over this test's own bound for a 195-byte key.
 func TestParseLegacyKey_ReadingCapBoundsWork(t *testing.T) {
 	tests := []struct {
 		name string
@@ -317,6 +327,7 @@ func TestParseLegacyKey_ReadingCapBoundsWork(t *testing.T) {
 		{"pathological pointer key", "claude:project:" + strings.Repeat(":/", 800)},
 		{"pathological pointer key, 40x larger", "claude:project:" + strings.Repeat(":/", 20000)},
 		{"pathological file key", "claude:project:" + strings.Repeat(":", 1600)},
+		{"pointer key under the split cap that still floods the reading cap", "claude:project:" + strings.Repeat(":/a", 60)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -333,14 +344,91 @@ func TestParseLegacyKey_ReadingCapBoundsWork(t *testing.T) {
 			_, err := parseLegacyPointerKey(tc.key)
 			runtime.ReadMemStats(&m1)
 
-			if !errors.Is(err, errAmbiguousLegacyKey) {
-				t.Fatalf("a key past the cap must refuse as ambiguous; got %v", err)
+			if !errors.Is(err, errLegacyEnumerationCapped) {
+				t.Fatalf("a key past the cap must refuse with errLegacyEnumerationCapped; got %v", err)
 			}
 			if !strings.Contains(err.Error(), "more than 64") {
 				t.Errorf("the refusal must name the cap that fired; got %v", err)
 			}
 			if got := m1.TotalAlloc - m0.TotalAlloc; got > want {
 				t.Fatalf("parsing a %d-byte key allocated %d bytes, want <= %d", len(tc.key), got, want)
+			}
+		})
+	}
+}
+
+// TestParseLegacyKey_CapIsNotAnAmbiguityVerdict pins what the enumeration cap
+// does and does NOT claim.
+//
+// maxLegacyReadings bounds enumeration, not ambiguity: it fires while counting,
+// so it refuses a key without ever learning how many readings that key had. The
+// refusal must therefore report itself as the cap (errLegacyEnumerationCapped)
+// and never as errAmbiguousLegacyKey — migrate branches on the two to pick a
+// remedy paragraph, and telling a user "agentsync refuses to guess between the
+// readings" about a key with exactly one reading is the wrong remedy.
+//
+// The test certifies the reading count itself rather than asserting it: each row
+// parses the SAME key shape trimmed to just under the cap, where the parser runs
+// to completion, and pins what it finds there — one reading in the first row,
+// none in the second. Without that half the rows would only be restating the
+// comment.
+func TestParseLegacyKey_CapIsNotAnAmbiguityVerdict(t *testing.T) {
+	tests := []struct {
+		name string
+		// under is the same shape with few enough ':' to stay under the cap, so
+		// the parser finishes and the row can prove its own premise.
+		under, over string
+		// wantUnder is what `under` must decode to. Its zero value means `under`
+		// has NO valid reading and must fail — with neither sentinel, since a
+		// zero-reading key is not ambiguous either.
+		wantUnder Key
+	}{
+		{
+			// 84 bytes over, 83 under. Only one ":/" exists in the whole key, so
+			// exactly one reading survives however the project/tail boundary
+			// moves — yet 65 colons is enough to stop the split loop first.
+			name:  "a key with exactly one reading is still refused past the cap",
+			under: "claude:project:a:b:/c" + strings.Repeat(":", 62),
+			over:  "claude:project:a:b:/c" + strings.Repeat(":", 63),
+			wantUnder: Key{
+				Agent: "claude", Scope: "project", Project: "a", Path: "b",
+				Pointer: "/c" + strings.Repeat(":", 62),
+			},
+		},
+		{
+			// No ":/" anywhere, so a pointer key has nowhere to split path from
+			// pointer and there is no reading at all — the colons alone trip the
+			// cap.
+			name:  "a key with no valid reading at all is still refused past the cap",
+			under: "claude:project:" + strings.Repeat("a:", 32),
+			over:  "claude:project:" + strings.Repeat("a:", 70),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseLegacyPointerKey(tc.under)
+			if tc.wantUnder == (Key{}) {
+				if err == nil {
+					t.Fatalf("premise: %q must have no valid reading; got %+v", tc.under, got)
+				}
+				if errors.Is(err, errAmbiguousLegacyKey) || errors.Is(err, errLegacyEnumerationCapped) {
+					t.Fatalf("premise: %q must fail for having no reading, not as ambiguous or capped; got %v", tc.under, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("premise: %q must decode uniquely under the cap; got %v", tc.under, err)
+				}
+				if got != tc.wantUnder {
+					t.Fatalf("premise: %q = %+v, want %+v", tc.under, got, tc.wantUnder)
+				}
+			}
+
+			_, err = parseLegacyPointerKey(tc.over)
+			if !errors.Is(err, errLegacyEnumerationCapped) {
+				t.Fatalf("parse(%q) must refuse with errLegacyEnumerationCapped; got %v", tc.over, err)
+			}
+			if errors.Is(err, errAmbiguousLegacyKey) {
+				t.Fatalf("parse(%q) must NOT claim ambiguity — the cap never counted its readings; got %v", tc.over, err)
 			}
 		})
 	}
@@ -495,9 +583,10 @@ func TestLegacyContainmentProperties(t *testing.T) {
 			}
 		}
 		// Refusing everything would satisfy the property VACUOUSLY, so pin a
-		// floor. 70.7% of this deliberately adversarial corpus decodes today;
-		// half is well clear of that, and still fails loudly if a change turns
-		// the tie-break into a blanket refusal.
+		// floor. 29,140 of the 41,256 keys this corpus generates — 70.6% of a
+		// deliberately adversarial set — decode today; half is well clear of
+		// that, and still fails loudly if a change turns the tie-break into a
+		// blanket refusal.
 		total := 2 * len(corpus)
 		if accepted < total/2 {
 			t.Fatalf("only %d of %d generated keys decoded; the property is near-vacuous", accepted, total)

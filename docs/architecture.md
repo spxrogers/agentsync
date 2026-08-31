@@ -977,12 +977,19 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    misdecoding any key whose true root **is** `/`. Over-refusal is the cheap
    failure here and misrecovery the expensive one, so the trade is refused;
    `TestLegacyContainmentProperties` pins the invariant over a generated corpus
-   (79,632 keys: zero misrecoveries as written, 24 with the exclusion).
-   Enumeration is also **capped**: the candidate readings are a product of the
+   of 20,628 (root, destination) pairs — 41,256 keys, file and pointer — of which
+   about 70% decode and none decodes under a project other than the root it was
+   built from. (The counterfactual for the zero-component exclusion is not in
+   that test: it comes from a throwaway sweep recorded in `legacy.go`'s comment,
+   which says so.)
+   Enumeration is also **capped**. The candidate readings are a product of the
    `:` and `:/` counts and the tie-break walks all of them, so an uncapped key of
-   a few KB could OOM-kill any command that loads state; past 64 candidate
-   readings the key is refused with the same fail-closed message and the same
-   cheap remedy.
+   a few KB could OOM-kill any command that loads state; on the 65th candidate
+   agentsync stops counting and refuses the key. That cap bounds *enumeration*,
+   not ambiguity — it fires mid-count, so a key it refuses may have had many
+   readings, exactly one, or none — so the refusal carries its own sentinel and
+   its own remedy paragraph, and never claims the key was ambiguous. The remedy
+   itself is the same cheap delete-and-re-adopt.
    At `schema_version: 2` each key is role-checked as well as parsed — a `files`
    key must carry no JSON pointer, a `keys` key must carry one — so a
    hand-edited file cannot be laxer than the v1 format it replaced.
@@ -1007,8 +1014,27 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    `~/.agentsync/.state/targets.json` before downgrading, or delete it so the
    older build starts fresh. The read guard is now in place going forward
    (`internal/cli/marketplace.go`, pinned by
-   `TestMarketplaceAdd_DoesNotClobberUnreadableState`), which protects a
-   *future* downgrade past this release but nothing already shipped.
+   `TestMarketplaceAdd_DoesNotClobberUnreadableState` and its `remove` twin),
+   which protects a *future* downgrade past this release but nothing already
+   shipped.
+
+   **Refusing an unreadable state file is pinned, not merely intended.** The
+   paragraph above describes *pre*-schema-2 builds, which no test in this tree
+   can drive; what it says about this build is what makes a downgrade past *this*
+   release survivable, and that half is now enforced. It needed to be: the
+   tempting regression at any of the 15 `state.Load` call sites — `if err != nil
+   { s = state.New() }`, exactly the `marketplace add` bug — is silent, turning a
+   refusal into an apply against an empty state, which owns nothing and backs up
+   every managed destination as a foreign collision.
+   `TestCommandsRefuseUnreadableState` drives each command in-process against an
+   unreadable `targets.json` and asserts both halves: a non-zero exit carrying
+   the migration refusal, and the file byte-for-byte unchanged. It covers
+   `status`, `diff`, `apply` (plain and `--dry-run`), `reconcile`, `explain`,
+   `plugin outdated`, `agent disable --purge`, `migrate subagents` and `doctor`.
+   The five remaining `state.Load` sites deliberately warn and continue instead
+   of refusing: `marketplace add`/`remove`, pinned by the two tests named above,
+   and `import`'s two sites plus opencode's `Ingest`, which emit a `warning: `
+   line into `ui.WarnWriter`.
 
    One boundary is narrower than the encoding: `targets.json` is JSON, and
    `encoding/json` rewrites an invalid UTF-8 byte in a string to U+FFFD, which

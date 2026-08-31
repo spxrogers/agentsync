@@ -29,6 +29,13 @@ import (
 // user-facing remedy errAmbiguousLegacyKey's doc comment points at, and an
 // ambiguous reading gets its own paragraph explaining why nothing is guessed.
 //
+// A key that reached maxLegacyReadings is refused too, but it gets a DIFFERENT
+// paragraph. The cap fires mid-enumeration, so agentsync never learns how many
+// readings that key had — calling it ambiguous would tell the user agentsync
+// declined to choose between readings when in fact it declined to finish
+// counting them, and the key may well have had exactly one (or none). See
+// errLegacyEnumerationCapped.
+//
 // Marketplaces and Plugins keys are marketplace names and "owner/plugin" ids —
 // a different namespace — and are carried across verbatim.
 //
@@ -60,7 +67,7 @@ func migrate(raw *rawTargets) (*Targets, error) {
 	}
 
 	var bad []string
-	ambiguous := false
+	ambiguous, capped := false, false
 	// The line is the error alone: EVERY error parseFile/parsePointer can return
 	// already names the offending key, quoted with %q (legacy.go, key.go,
 	// parseCurrentKey) — so prefixing the key again here printed it twice per
@@ -74,8 +81,14 @@ func migrate(raw *rawTargets) (*Targets, error) {
 	// whole extra output lines even through a SANITIZING sink, since
 	// sanitization preserves newlines. %q escapes all three and needs no import.
 	note := func(err error) {
+		// Two sentinels, two paragraphs — never folded into one. errors.Is on
+		// each rather than a switch on the first match, so a file holding both
+		// kinds of bad key gets both explanations.
 		if errors.Is(err, errAmbiguousLegacyKey) {
 			ambiguous = true
+		}
+		if errors.Is(err, errLegacyEnumerationCapped) {
+			capped = true
 		}
 		bad = append(bad, err.Error())
 	}
@@ -110,6 +123,19 @@ func migrate(raw *rawTargets) (*Targets, error) {
 				"contains ':'. agentsync refuses to guess the project/path split because recording the " +
 				"entry under the wrong project is exactly the over-disown bug this format change removes; " +
 				"deleting it costs only the re-adopt above"
+		}
+		if capped {
+			// Deliberately NOT the ambiguity paragraph. An entry refused by the
+			// cap was never read to the end, so "agentsync refuses to guess
+			// between the readings" would be a claim about a reading set that
+			// was never built — and for a key with one reading (or none) it is
+			// simply false. Say what actually happened instead.
+			remedy += ".\nAn entry reported as having too many candidates is one whose v1 encoding packs " +
+				"enough ':' bytes into a single key that listing its possible readings is superlinear " +
+				"work; unbounded, a hand-edited targets.json of a few KB could exhaust memory in every " +
+				"command that loads state. agentsync stops counting at the cap named on that line, so it " +
+				"does not know whether the key had one reading, several or none — it is refused unread, " +
+				"and deleting it costs only the re-adopt above"
 		}
 		return nil, fmt.Errorf("%d state key(s) could not be read at schema_version=%d:\n  %s\n%s",
 			len(bad), raw.SchemaVersion, strings.Join(bad, "\n  "), remedy)

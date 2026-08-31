@@ -18,12 +18,35 @@ import (
 // to remove — so migrate refuses instead. See migrate for the user-facing
 // remedy.
 //
-// It also marks a key refused for exceeding maxLegacyReadings: that key too has
-// more readings than agentsync will settle, and the remedy is identical.
+// A key refused by the enumeration cap is NOT this error — see
+// errLegacyEnumerationCapped, which makes no claim about how many readings its
+// key has.
 var errAmbiguousLegacyKey = errors.New("legacy state key has more than one possible reading")
 
-// maxLegacyReadings bounds how many candidate readings parseLegacyKey will
-// enumerate for one v1 key before refusing it outright.
+// errLegacyEnumerationCapped marks a v1 key refused for reaching
+// maxLegacyReadings while its candidates were still being ENUMERATED.
+//
+// It is a separate sentinel from errAmbiguousLegacyKey deliberately, because it
+// is not an ambiguity verdict. The cap fires mid-count — before the reading set
+// is complete and before containment has scored any of it — so a key refused
+// this way may have had several readings, exactly ONE, or NONE at all.
+// parseLegacyKey never finds out, which is the whole point of stopping. Two
+// examples, both refused here and both pinned by
+// TestParseLegacyKey_CapIsNotAnAmbiguityVerdict, which certifies each reading
+// count by parsing the same key shape just UNDER the cap:
+//
+//	"claude:project:a:b:/c" + strings.Repeat(":", 63) // 84 bytes, ONE reading
+//	"claude:project:" + strings.Repeat("a:", 70)      // 155 bytes, NO reading
+//
+// Reporting either as ambiguous would hand the user the wrong remedy: migrate's
+// ambiguity paragraph explains why agentsync will not pick BETWEEN readings,
+// which is not what happened. migrate branches on the two sentinels separately
+// and prints a paragraph for each. The fix is the same (delete the entry; the
+// next apply re-adopts the destination); the explanation is not.
+var errLegacyEnumerationCapped = errors.New("legacy state key has too many candidate readings to enumerate")
+
+// maxLegacyReadings bounds how many candidates parseLegacyKey will enumerate
+// for one v1 key before refusing it outright.
 //
 // The enumeration is a PRODUCT, and the tie-break walks its result: at project
 // scope every ':' in the remainder is a candidate project/tail boundary, and in
@@ -36,12 +59,18 @@ var errAmbiguousLegacyKey = errors.New("legacy state key has more than one possi
 // and 20 MiB, an 815-byte key 0.9 s and 1.3 GiB, and a 1615-byte key 4.7 s and
 // 10 GiB — enough to OOM-kill the process a little above 4 KB.
 //
-// The cap is a deliberate, documented narrowing, not a free win: a key with
-// more than 64 candidate readings that containment WOULD have settled is now
-// refused instead of recovered. Nothing agentsync writes can reach it — a key
-// needs 64 ':' bytes (or about a dozen ":/" pairs) spread across its project
-// and path fields — and the refusal is the same fail-closed answer an ambiguous
-// key already gets, with the same cheap remedy (see migrate).
+// The cap is a deliberate, documented narrowing, and its cost is WIDER than
+// "keys that were ambiguous anyway": it bounds ENUMERATION, not ambiguity.
+// Counting stops the moment the cap is reached, so a key past it is refused
+// whether it would have had many readings, exactly one, or none at all — see
+// errLegacyEnumerationCapped, which is the sentinel both sites wrap and which
+// carries a measured example of each. What it takes to get there: at project
+// scope, a 65th ':' anywhere in the remainder — project, path and, in a pointer
+// key, pointer all contribute; or, in a pointer key at either scope, a 65th
+// candidate reading, which a ":/"-dense key reaches on FEWER colons than that
+// (see the fourth row of the cap test). The refusal is the same
+// fail-closed answer an ambiguous key already gets, with the same cheap remedy
+// (see migrate), and TestParseLegacyKey_ReadingCapBoundsWork pins both sites.
 const maxLegacyReadings = 64
 
 // parseLegacyFileKey decodes a v1 Targets.Files key,
@@ -71,7 +100,8 @@ func parseLegacyPointerKey(s string) (Key, error) { return parseLegacyKey(s, tru
 //  5. For a pointer key every ":/" in the tail is a candidate path/pointer
 //     boundary — a JSON pointer always begins with '/' (render.CollectPointers).
 //     Steps 4 and 5 multiply, so both are capped at maxLegacyReadings: a key
-//     past the cap is refused without enumerating the rest.
+//     past the cap is refused (errLegacyEnumerationCapped) without enumerating
+//     the rest — and therefore without ever learning how many readings it had.
 //  6. Exactly one candidate reading: take it.
 //  7. Several: prefer the readings whose path lies WITHIN the project root.
 //     Every adapter's project-scope ResolvePaths joins its destinations onto the
@@ -110,7 +140,7 @@ func parseLegacyKey(s string, pointered bool) (Key, error) {
 			}
 			if len(splits) == maxLegacyReadings {
 				return Key{}, fmt.Errorf("%w: %q has more than %d candidate project/path splits",
-					errAmbiguousLegacyKey, s, maxLegacyReadings)
+					errLegacyEnumerationCapped, s, maxLegacyReadings)
 			}
 			splits = append(splits, split{project: remainder[:i], tail: remainder[i+1:]})
 		}
@@ -133,7 +163,7 @@ func parseLegacyKey(s string, pointered bool) (Key, error) {
 				}
 				if len(all) == maxLegacyReadings {
 					return Key{}, fmt.Errorf("%w: %q has more than %d possible readings",
-						errAmbiguousLegacyKey, s, maxLegacyReadings)
+						errLegacyEnumerationCapped, s, maxLegacyReadings)
 				}
 				all = append(all, Key{
 					Agent:   agent,

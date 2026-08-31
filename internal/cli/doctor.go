@@ -201,12 +201,33 @@ func checkStateDir(p *ui.Printer, home string) int {
 	// already quotes every key with %q, which escapes the whole strip set
 	// (controls, bidi overrides, zero-width) — so this call is a BACKSTOP, not
 	// the only defense, and no state.Load error reaching it today carries a raw
-	// escape. It stays because doctor prints its diagnostics inline while every
-	// OTHER state.Load error in the CLI is returned and printed by reportErrorTo,
-	// which sanitizes the same way: doctor must not be the one print site where a
-	// future unquoted interpolation reaches the terminal raw. sanitizeLines rather
-	// than untrusted.Wrap because the refusal is multi-line and ui.Sanitize STRIPS
-	// newlines — wrapping would run the remedy paragraphs together.
+	// escape.
+	//
+	// It stays because doctor prints its diagnostic inline rather than returning
+	// it, and the rule is that EVERY state.Load error that can reach a terminal
+	// passes through a sanitizer on the way. As of this comment there are 15
+	// state.Load call sites and they take one of four routes — this is the
+	// fourth, not an exception:
+	//
+	//   - returned to main (status, diff, apply, reconcile, explain, migrate,
+	//     agent disable --purge, plugin's two poll sites): reportErrorTo
+	//     sanitizeLines the whole chain;
+	//   - warned as a "warning: " sentinel line into ui.WarnWriter, whose emit
+	//     sanitizes the body (TestWarnWriterSanitizesAdapterText): import's
+	//     hook-disown and state-seed sites via importIO.warnf, and opencode's
+	//     Ingest, which cannot call ui.Sanitize itself — an adapter must not
+	//     import ui, which is the whole reason that sentinel exists;
+	//   - warned inline by `marketplace add`/`remove`, whose p.Warnf and diag
+	//     sinks reach fmt.Fprintf WITHOUT sanitizing: sanitizeLines is applied at
+	//     those two call sites instead, so the warning is covered whichever sink
+	//     the caller passed;
+	//   - printed inline here.
+	//
+	// Adding a 16th site means picking one of those four, not inventing a fifth.
+	//
+	// sanitizeLines rather than untrusted.Wrap because the refusal is multi-line
+	// and ui.Sanitize STRIPS newlines — wrapping would run the remedy paragraphs
+	// together.
 	if _, err := state.Load(filepath.Join(stateDir, "targets.json")); err != nil {
 		failCheck(p, "state file ", fmt.Sprintf("corrupt: %s", sanitizeLines(err.Error())))
 		return 1

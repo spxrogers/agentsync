@@ -20,12 +20,15 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   Two other consequences worth knowing: in the rare case where a pre-upgrade key
   cannot be read unambiguously — only possible when a project root or destination
   path contains `:` — agentsync refuses the load and names the entry rather than
-  guessing (a key needing more than 64 candidate readings to resolve is refused
-  the same way, without enumerating them: reading such a key is superlinear work
-  driven by a hand-editable file, and past a few KB it could exhaust memory);
-  and a destination whose path is not valid UTF-8 is now refused when
-  state is written, naming the path, instead of being silently mangled (the v1
-  format mangled it into permanent foreign-collision churn). `targets.json` holds
+  guessing (a key packing more than 64 candidate readings is refused too, but for
+  a different reason and with its own message: enumerating them is superlinear
+  work driven by a hand-editable file, and past a few KB it could exhaust memory,
+  so agentsync stops counting and refuses the key *unread* — it does not claim
+  such a key was ambiguous, because it never finds out whether the key had one
+  reading, several or none); and a destination whose path is not valid UTF-8 is
+  now refused when state is written, naming the path, instead of being silently
+  mangled (the v1 format mangled it into permanent foreign-collision churn).
+  `targets.json` holds
   no configuration, so the remedy for the first is to delete the named entries
   (or the file); the next `apply` re-adopts each destination, backing up any
   pre-existing content first.
@@ -47,7 +50,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `.state/backups/` first; but that is a full re-adopt of every managed file, not
   a no-op. Old binaries cannot be patched, so the only protections are the backup
   above or deleting `targets.json` so the older build starts fresh. Builds from
-  this release on skip the record and warn instead.
+  this release on skip the record and warn instead, for `marketplace remove` as
+  well as `add`; and the refusing half of that list is now pinned by a test that
+  drives `status`, `diff`, `apply` (plain and `--dry-run`), `reconcile`,
+  `explain`, `plugin outdated`, `agent disable --purge`, `migrate subagents` and
+  `doctor` against an unreadable `targets.json` and asserts each one exits
+  non-zero *and* leaves the file byte-for-byte unchanged.
 - **`--lossless` now says what its check did not consider.** The lossiness probe
   renders every enabled agent from a canonical carrying no plugin provenance, so
   it does not honour a plugin's `agents` / `native_agents`: a skip on an agent

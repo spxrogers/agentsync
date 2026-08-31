@@ -55,18 +55,29 @@ func TestMigrate_FutureRejected(t *testing.T) {
 
 // TestMigrate_UnreadableKeysRefuseWithRemedy pins the refusal legacy.go's
 // errAmbiguousLegacyKey doc comment points at ("See migrate for the user-facing
-// remedy"). Both kinds of unreadable v1 key stop the load and carry the cheap
-// delete-and-re-adopt remedy; only a genuinely AMBIGUOUS one — several valid
-// readings, possible solely when a project root or dest path contains ':' —
-// additionally explains why agentsync will not pick one, since that is the only
-// case where guessing was even an option.
+// remedy"). Every kind of unreadable v1 key stops the load and carries the cheap
+// delete-and-re-adopt remedy; two of them add a paragraph, and the paragraphs
+// are NOT interchangeable:
+//
+//   - A genuinely AMBIGUOUS key — several valid readings, possible solely when a
+//     project root or dest path contains ':' — explains why agentsync will not
+//     pick one, since that is the only case where guessing was an option at all.
+//   - A key past maxLegacyReadings explains that enumeration was ABANDONED. It
+//     must not get the ambiguity paragraph: the cap fires while counting, so such
+//     a key may have had one reading or none (see
+//     TestParseLegacyKey_CapIsNotAnAmbiguityVerdict, which certifies both), and
+//     "agentsync refuses to guess between the readings" would then be false.
 func TestMigrate_UnreadableKeysRefuseWithRemedy(t *testing.T) {
-	const ambiguityNote = "refuses to guess the project/path split"
+	const (
+		ambiguityNote = "refuses to guess the project/path split"
+		cappedNote    = "agentsync stops counting at the cap"
+	)
 	tests := []struct {
 		name          string
 		raw           *rawTargets
 		wantSubstrs   []string
 		wantAmbiguity bool
+		wantCapped    bool
 		// wantKeyOnce, when set, must appear EXACTLY once in the refusal. Every
 		// error the key parsers return already names the key with %q, so the
 		// message used to print it twice (three times when the error also quoted
@@ -135,11 +146,13 @@ func TestMigrate_UnreadableKeysRefuseWithRemedy(t *testing.T) {
 			wantAmbiguity: true,
 		},
 		{
-			// A key whose candidate readings exceed maxLegacyReadings is refused
-			// without enumerating them; parseLegacyKey's enumeration is a product
-			// and the containment tie-break walks its result, so an uncapped key
-			// of a few KB could OOM-kill the process (see maxLegacyReadings).
-			name: "a key past the reading cap is refused as ambiguous",
+			// A key whose candidates exceed maxLegacyReadings is refused without
+			// enumerating them; parseLegacyKey's enumeration is a product and the
+			// containment tie-break walks its result, so an uncapped key of a few
+			// KB could OOM-kill the process (see maxLegacyReadings). It gets the
+			// cap paragraph and NOT the ambiguity one — nothing counted its
+			// readings, so nothing may claim there was more than one.
+			name: "a key past the reading cap is refused as capped, not as ambiguous",
 			raw: &rawTargets{
 				SchemaVersion: 1,
 				Files:         map[string]FileEntry{"claude:project:" + strings.Repeat(":/", 200): {SHA256: "a"}},
@@ -148,7 +161,42 @@ func TestMigrate_UnreadableKeysRefuseWithRemedy(t *testing.T) {
 				"more than 64 candidate project/path splits",
 				"targets.json is bookkeeping only",
 			},
+			wantCapped: true,
+		},
+		{
+			// The sharp case for keeping the two paragraphs apart: uncapped, this
+			// key has EXACTLY ONE reading (TestParseLegacyKey_CapIsNotAnAmbiguity
+			// Verdict pins that by parsing it one colon shorter). Telling this
+			// user agentsync "refuses to guess the project/path split" would be
+			// describing a choice that was never available.
+			name: "a capped key that has only one reading still avoids the ambiguity paragraph",
+			raw: &rawTargets{
+				SchemaVersion: 1,
+				Keys: map[string]KeyEntry{
+					"claude:project:a:b:/c" + strings.Repeat(":", 63): {SHA256: "a"},
+				},
+			},
+			wantSubstrs: []string{
+				"more than 64 candidate project/path splits",
+				"refused unread",
+			},
+			wantCapped: true,
+		},
+		{
+			// Both kinds in one file must produce BOTH paragraphs: a user whose
+			// targets.json holds an ambiguous key and a capped one needs the
+			// explanation for each, not whichever the loop happened to see last.
+			name: "a file holding both kinds of bad key gets both paragraphs",
+			raw: &rawTargets{
+				SchemaVersion: 1,
+				Files: map[string]FileEntry{
+					"claude:project:${HOME}/a:${HOME}/b:${HOME}/c": {SHA256: "a"},
+					"claude:project:" + strings.Repeat(":/", 200):  {SHA256: "b"},
+				},
+			},
+			wantSubstrs:   []string{"2 state key(s) could not be read"},
 			wantAmbiguity: true,
+			wantCapped:    true,
 		},
 		{
 			// v1 distinguishes the two maps structurally, so v2 must too: without
@@ -206,6 +254,9 @@ func TestMigrate_UnreadableKeysRefuseWithRemedy(t *testing.T) {
 			}
 			if hasNote := strings.Contains(err.Error(), ambiguityNote); hasNote != tc.wantAmbiguity {
 				t.Errorf("ambiguity remedy present = %v, want %v; got %q", hasNote, tc.wantAmbiguity, err)
+			}
+			if hasNote := strings.Contains(err.Error(), cappedNote); hasNote != tc.wantCapped {
+				t.Errorf("enumeration-cap remedy present = %v, want %v; got %q", hasNote, tc.wantCapped, err)
 			}
 			if tc.wantKeyOnce != "" {
 				if n := strings.Count(err.Error(), tc.wantKeyOnce); n != 1 {
