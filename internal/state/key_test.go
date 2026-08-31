@@ -161,9 +161,15 @@ func TestKey_ParseRejectsMalformed(t *testing.T) {
 	}
 }
 
-// TestKey_ConstructorsPortabilize pins that the constructors — the ONLY place
-// paths.HomeRelative is called for a state key — produce the portable form, and
-// that AbsPath is its inverse.
+// TestKey_ConstructorsPortabilize pins that the constructors produce the
+// portable form and that AbsPath is its inverse.
+//
+// They are the only place a Key's fields are portabilized on the way IN, but not
+// the only paths.HomeRelative call that has to agree with them: every caller
+// that COMPARES against a stored key portabilizes its own operand first
+// (render.PruneStaleState, render.ownedKeysFor, cli's import/migrate/reconcile/
+// agent-purge InTree loops all hoist paths.HomeRelative out of the loop). This
+// test pins the spelling those callers have to match.
 func TestKey_ConstructorsPortabilize(t *testing.T) {
 	const userHome = "/home/alice"
 	k := state.NewFileKey(userHome, "claude", "user", "", "/home/alice/.claude.json")

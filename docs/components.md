@@ -407,8 +407,13 @@ Persists last-applied hashes and plugin/marketplace pins to
 `.state/targets.json`; schema-versioned with migrators. Owns the `targets.json`
 **key format**: `Key` is a typed, length-prefixed, injective identifier
 (agent · scope · portable project · portable dest path · JSON pointer) used as
-the Go map key of `Files`/`Keys`, so no other package can build or parse one
-(issue #227). Also owns the per-machine run record `.state/last-run.json`, which
+the Go map key of `Files`/`Keys`, so a hand-rolled `fmt.Sprintf` key is a
+compile error rather than a convention (issue #227). The *encoding* has exactly
+one owner — `String`/`ParseKey` live here and nothing else formats or decodes it
+— but neither is sealed: `ParseKey` is exported (below), and a `state.Key{…}`
+composite literal compiles anywhere, which is how `render`'s and `cli`'s tests
+plant keys in a specific portable spelling instead of going through
+`NewFileKey`. Also owns the per-machine run record `.state/last-run.json`, which
 backs the one-time first-run-after-upgrade notice — a SEPARATE file on purpose:
 it must be writable by read-only commands and must never gate on (or bump) the
 drift state's `SchemaVersion`.

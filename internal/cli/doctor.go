@@ -194,15 +194,19 @@ func checkStateDir(p *ui.Printer, home string) int {
 	// check that ignores it would falsely report healthy. A missing file is
 	// fine (state.Load returns an empty state on a fresh install).
 	//
-	// sanitizeLines, not a raw %v: a migration refusal interpolates map keys read
+	// sanitizeLines, not a raw %v. A migration refusal interpolates map keys read
 	// verbatim from targets.json, which the schema-2 remedy explicitly expects may
-	// be hand-edited, so a crafted key could smuggle a terminal escape into this
-	// line and forge a passing check below it (#93/#171). Every OTHER state.Load
-	// error in the CLI is returned and printed by reportErrorTo, which already
-	// sanitizes the same way; doctor prints its diagnostics inline, so it has to
-	// sanitize here. sanitizeLines rather than untrusted.Wrap because the refusal
-	// is multi-line and ui.Sanitize STRIPS newlines — wrapping would run the
-	// remedy paragraphs together.
+	// be hand-edited, so a crafted key could otherwise smuggle a terminal escape
+	// into this line and forge a passing check below it (#93/#171). migrate
+	// already quotes every key with %q, which escapes the whole strip set
+	// (controls, bidi overrides, zero-width) — so this call is a BACKSTOP, not
+	// the only defense, and no state.Load error reaching it today carries a raw
+	// escape. It stays because doctor prints its diagnostics inline while every
+	// OTHER state.Load error in the CLI is returned and printed by reportErrorTo,
+	// which sanitizes the same way: doctor must not be the one print site where a
+	// future unquoted interpolation reaches the terminal raw. sanitizeLines rather
+	// than untrusted.Wrap because the refusal is multi-line and ui.Sanitize STRIPS
+	// newlines — wrapping would run the remedy paragraphs together.
 	if _, err := state.Load(filepath.Join(stateDir, "targets.json")); err != nil {
 		failCheck(p, "state file ", fmt.Sprintf("corrupt: %s", sanitizeLines(err.Error())))
 		return 1

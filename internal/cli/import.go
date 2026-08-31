@@ -1783,7 +1783,7 @@ func importPlugins(io *importIO, home, agentName string, a adapter.Adapter, name
 			resolved[mpID] = mpID
 			return mpID, true
 		}
-		mpName, _, ferr := addMarketplaceSource(home, src, rawURL)
+		mpName, _, ferr := addMarketplaceSource(home, src, rawURL, io.warnf)
 		if ferr != nil {
 			io.warnf("skipping marketplace %q: %v", mpID, ferr)
 			resolved[mpID] = ""

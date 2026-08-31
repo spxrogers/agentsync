@@ -33,19 +33,24 @@ func TestDoctor_DetectsCorruptState(t *testing.T) {
 	}
 }
 
-// TestDoctor_SanitizesCorruptStateDiagnostic pins the print boundary for the
-// schema-2 migration refusal.
+// TestDoctor_CorruptStateDiagnosticCarriesNoRawEscape pins the OUTPUT of the
+// schema-2 migration refusal: whatever doctor prints, a terminal escape read
+// verbatim out of targets.json must not survive into it.
 //
 // The refusal names each unreadable key by interpolating the map key read
-// VERBATIM from targets.json (migrate's `bad` list) — and the remedy that error
-// carries explicitly contemplates the user hand-editing that file. A key holding
-// a terminal escape would therefore reach the terminal raw: the #93/#171 class,
+// VERBATIM from that file (migrate's `bad` list) — and the remedy the error
+// carries explicitly contemplates the user hand-editing it. A key holding a
+// terminal escape would otherwise reach the terminal raw: the #93/#171 class,
 // where crafted config repaints the screen or forges a passing check line.
 //
-// Every other state.Load error in the CLI is returned and printed by
-// reportErrorTo, which sanitizes per line. doctor prints its checks inline, so
-// it must sanitize at its own print site; this asserts it does.
-func TestDoctor_SanitizesCorruptStateDiagnostic(t *testing.T) {
+// It is deliberately an END-TO-END assertion and does NOT pin any one layer.
+// Two things stand between the key and the terminal — migrate's %q, which
+// escapes the whole of ui.Sanitize's strip set (controls, bidi overrides,
+// zero-width), and doctor's own sanitizeLines call — so no input can isolate
+// the second: removing it leaves this test green. That is the honest state of
+// affairs, and doctor.go says why the backstop stays anyway. Claiming this test
+// pins sanitizeLines specifically would be a lie.
+func TestDoctor_CorruptStateDiagnosticCarriesNoRawEscape(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	if _, err := runCLI(t, env, "init"); err != nil {

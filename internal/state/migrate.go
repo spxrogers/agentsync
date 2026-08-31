@@ -61,26 +61,28 @@ func migrate(raw *rawTargets) (*Targets, error) {
 
 	var bad []string
 	ambiguous := false
-	// The key is quoted with %q, never interpolated raw. Map keys here come
-	// VERBATIM from targets.json, which is a hand-editable file: an unsanitized
-	// key carrying ESC or CR would reach the terminal through whichever sink
-	// prints this error (ui.WarnWriter passes lines 2..n of a multi-line message
-	// through untouched, and this refusal is ALWAYS multi-line), and a key
-	// carrying a newline could forge whole extra output lines even through a
-	// SANITIZING sink, since sanitization preserves newlines. %q escapes all
-	// three, needs no import, and matches what every inner error in legacy.go /
-	// key.go already does — so the escaping lives at this single source rather
-	// than in each present and future sink.
-	note := func(s string, err error) {
+	// The line is the error alone: EVERY error parseFile/parsePointer can return
+	// already names the offending key, quoted with %q (legacy.go, key.go,
+	// parseCurrentKey) — so prefixing the key again here printed it twice per
+	// line, three times when the message also quotes the field that failed.
+	// That %q is a CONTRACT, not a coincidence, and a new error constructor in
+	// those files must keep it. Map keys come VERBATIM from targets.json, which
+	// is a hand-editable file: an unsanitized key carrying ESC or CR would reach
+	// the terminal through whichever sink prints this error (ui.WarnWriter
+	// passes lines 2..n of a multi-line message through untouched, and this
+	// refusal is ALWAYS multi-line), and a key carrying a newline could forge
+	// whole extra output lines even through a SANITIZING sink, since
+	// sanitization preserves newlines. %q escapes all three and needs no import.
+	note := func(err error) {
 		if errors.Is(err, errAmbiguousLegacyKey) {
 			ambiguous = true
 		}
-		bad = append(bad, fmt.Sprintf("%q — %v", s, err))
+		bad = append(bad, err.Error())
 	}
 	for s, entry := range raw.Files {
 		k, err := parseFile(s)
 		if err != nil {
-			note(s, err)
+			note(err)
 			continue
 		}
 		out.Files[k] = entry
@@ -88,14 +90,16 @@ func migrate(raw *rawTargets) (*Targets, error) {
 	for s, entry := range raw.Keys {
 		k, err := parsePointer(s)
 		if err != nil {
-			note(s, err)
+			note(err)
 			continue
 		}
 		out.Keys[k] = entry
 	}
 	if len(bad) > 0 {
 		sort.Strings(bad)
-		remedy := "targets.json is bookkeeping only; no configuration lives here. Delete those entries " +
+		remedy := "each key above is shown Go-quoted, so a backslash appears doubled and a control byte " +
+			"as an escape — unquote it before searching targets.json.\n" +
+			"targets.json is bookkeeping only; no configuration lives here. Delete those entries " +
 			"(or the whole file) and re-run — the next `agentsync apply` re-adopts each destination, " +
 			"backing up any pre-existing content to .state/backups/ first, so nothing is lost"
 		if ambiguous {

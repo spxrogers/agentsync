@@ -17,10 +17,13 @@ const SchemaVersion = 2
 
 // Targets is the root state document.
 //
-// Files and Keys are keyed by the typed Key, so a state key can only be built
-// through NewFileKey/NewPointerKey — a hand-rolled fmt.Sprintf is a compile
-// error. Marketplaces and Plugins keep string keys: those are marketplace names
-// and "owner/plugin" ids, a different namespace with no ambiguity problem.
+// Files and Keys are keyed by the typed Key, so a hand-rolled fmt.Sprintf key is
+// a compile error rather than a convention. That is the guarantee — NOT that
+// NewFileKey/NewPointerKey are the only way in: a Key{…} composite literal
+// compiles anywhere (it just skips their paths.HomeRelative, which is how tests
+// plant a key in a specific portable spelling), and ParseKey is exported.
+// Marketplaces and Plugins keep string keys: those are marketplace names and
+// "owner/plugin" ids, a different namespace with no ambiguity problem.
 type Targets struct {
 	SchemaVersion int                    `json:"schema_version"`
 	Files         map[Key]FileEntry      `json:"files,omitempty"`

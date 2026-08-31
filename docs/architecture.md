@@ -971,10 +971,45 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    does **not** collapse `..`. `path.Clean` did, and that collapse could drop the
    true reading out of the contained set and leave a false one alone in it —
    accepted silently under the wrong project, the very bug this format removes.
+   For the same reason a root that normalizes to *zero* components (`/`) stays
+   contained even though it discriminates nothing: excluding it would recover a
+   handful of keys whose false split happens to be `/`, at the price of
+   misdecoding any key whose true root **is** `/`. Over-refusal is the cheap
+   failure here and misrecovery the expensive one, so the trade is refused;
+   `TestLegacyContainmentProperties` pins the invariant over a generated corpus
+   (79,632 keys: zero misrecoveries as written, 24 with the exclusion).
+   Enumeration is also **capped**: the candidate readings are a product of the
+   `:` and `:/` counts and the tie-break walks all of them, so an uncapped key of
+   a few KB could OOM-kill any command that loads state; past 64 candidate
+   readings the key is refused with the same fail-closed message and the same
+   cheap remedy.
    At `schema_version: 2` each key is role-checked as well as parsed — a `files`
    key must carry no JSON pointer, a `keys` key must carry one — so a
-   hand-edited file cannot be laxer than the v1 format it replaced. An older
-   binary already refuses a newer `schema_version`, which is the downgrade story.
+   hand-edited file cannot be laxer than the v1 format it replaced.
+
+   **Downgrading is not safe, and the docs used to say it was.** `migrate` does
+   refuse a newer `schema_version`, but refusing at the migrate layer is not the
+   same as being safe at the layer the user experiences — the question is what
+   each *caller* does with that error. On a pre-schema-2 build, `status`,
+   `diff`, `apply`, `reconcile`, `explain`, `migrate`, `plugin` and
+   `agent disable --purge` return it (non-zero exit) and `doctor` reports a
+   corrupt state file; none of them touch `targets.json`. But those builds'
+   `addMarketplaceSource` did `st, _ := state.Load(...)`, so `marketplace add`
+   (and `import`, which registers a plugin's marketplace through the same
+   function) fell through to `state.New()` and **saved it**: exit 0, a
+   `✅ added marketplace …` line, and `targets.json` replaced by a
+   `schema_version: 1` document holding only the marketplace just added — every
+   `files`/`keys` ownership entry, every plugin pin and every other marketplace
+   record destroyed. The canonical tree and the native files are untouched, and
+   the next `apply` re-adopts each destination (backing up pre-existing content
+   to `.state/backups/` first), but that is a full re-adopt, not a no-op. Old
+   binaries cannot be patched: the mitigation is to back up
+   `~/.agentsync/.state/targets.json` before downgrading, or delete it so the
+   older build starts fresh. The read guard is now in place going forward
+   (`internal/cli/marketplace.go`, pinned by
+   `TestMarketplaceAdd_DoesNotClobberUnreadableState`), which protects a
+   *future* downgrade past this release but nothing already shipped.
+
    One boundary is narrower than the encoding: `targets.json` is JSON, and
    `encoding/json` rewrites an invalid UTF-8 byte in a string to U+FFFD, which
    would break a length prefix and make the next `Load` refuse the file — with
@@ -1341,7 +1376,9 @@ exception: its `Ingest` reads the apply-state file (`internal/state`) to build a
 never hand-authored siblings in OpenCode's shared `agents/`/`commands/` dirs (issue
 #148). This is a deliberate, opencode-scoped dependency — the general fix (threading
 the owned-path set in from the CLI caller so no adapter touches `state`) is a
-class-wide follow-up, since no other adapter filters ingest ownership yet. The state
-**key format** the filter reconstructs is not silently duplicated: the round-trip
-test seeds ownership through the real `render.RecordOpsState`, so any drift in the
-key scheme breaks that test rather than silently under-capturing.
+class-wide follow-up, since no other adapter filters ingest ownership yet. The filter
+does not duplicate the state **key format**: it calls `state.NewFileKey`, the same
+constructor `render.RecordOpsState` uses, so the two agree structurally rather than by
+convention — and the round-trip test seeds ownership through the real
+`render.RecordOpsState`, so a divergence in what either side *passes* that constructor
+breaks that test rather than silently under-capturing.

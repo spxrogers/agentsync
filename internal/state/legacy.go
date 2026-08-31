@@ -17,7 +17,32 @@ import (
 // the wrong project — reproducing the very over-disown bug the typed key exists
 // to remove — so migrate refuses instead. See migrate for the user-facing
 // remedy.
+//
+// It also marks a key refused for exceeding maxLegacyReadings: that key too has
+// more readings than agentsync will settle, and the remedy is identical.
 var errAmbiguousLegacyKey = errors.New("legacy state key has more than one possible reading")
+
+// maxLegacyReadings bounds how many candidate readings parseLegacyKey will
+// enumerate for one v1 key before refusing it outright.
+//
+// The enumeration is a PRODUCT, and the tie-break walks its result: at project
+// scope every ':' in the remainder is a candidate project/tail boundary, and in
+// a pointer key every ":/" in each of those tails is a candidate path/pointer
+// boundary — so a key holding n ":/" pairs yields O(n²) readings, each costing
+// a containment test linear in the key. That is O(n³) byte work driven by a
+// hand-editable file that `status`, `apply`, `diff` and `doctor` all read.
+// Unbounded it is a denial of service from a few KB of targets.json: measured
+// on `"claude:project:" + strings.Repeat(":/", n)`, a 215-byte key cost 15 ms
+// and 20 MiB, an 815-byte key 0.9 s and 1.3 GiB, and a 1615-byte key 4.7 s and
+// 10 GiB — enough to OOM-kill the process a little above 4 KB.
+//
+// The cap is a deliberate, documented narrowing, not a free win: a key with
+// more than 64 candidate readings that containment WOULD have settled is now
+// refused instead of recovered. Nothing agentsync writes can reach it — a key
+// needs 64 ':' bytes (or about a dozen ":/" pairs) spread across its project
+// and path fields — and the refusal is the same fail-closed answer an ambiguous
+// key already gets, with the same cheap remedy (see migrate).
+const maxLegacyReadings = 64
 
 // parseLegacyFileKey decodes a v1 Targets.Files key,
 // "<agent>:<scope>:<project>:<path>".
@@ -45,16 +70,20 @@ func parseLegacyPointerKey(s string) (Key, error) { return parseLegacyKey(s, tru
 //     boundary.
 //  5. For a pointer key every ":/" in the tail is a candidate path/pointer
 //     boundary — a JSON pointer always begins with '/' (render.CollectPointers).
+//     Steps 4 and 5 multiply, so both are capped at maxLegacyReadings: a key
+//     past the cap is refused without enumerating the rest.
 //  6. Exactly one candidate reading: take it.
 //  7. Several: prefer the readings whose path lies WITHIN the project root.
 //     Every adapter's project-scope ResolvePaths joins its destinations onto the
 //     project root, so the reading agentsync ACTUALLY WROTE is always contained
-//     — withinProject is normalized so that stays true for any bytes, separator
-//     or dot segment. A false reading can therefore only ADD to the contained
-//     set, never displace the true one: at worst it pushes the count to two and
-//     turns an acceptance into the refusal at step 8. Containment is only ever
-//     a tie-break, never a filter — a lone candidate is accepted at step 6
-//     whether or not it is contained.
+//     — projectRoot.contains is normalized so that stays true for any bytes,
+//     separator or dot segment. A false reading can therefore only ADD to the
+//     contained set, never displace the true one: at worst it pushes the count
+//     to two and turns an acceptance into the refusal at step 8. Containment is
+//     only ever a tie-break, never a filter — a lone candidate is accepted at
+//     step 6 whether or not it is contained.
+//     TestLegacyContainmentProperties pins that invariant over a generated
+//     corpus; it is prose everywhere else.
 //  8. Still several, or none: errAmbiguousLegacyKey / a parse error.
 func parseLegacyKey(s string, pointered bool) (Key, error) {
 	agent, rest, ok := strings.Cut(s, ":")
@@ -76,20 +105,36 @@ func parseLegacyKey(s string, pointered bool) (Key, error) {
 		splits = append(splits, split{project: "", tail: tail})
 	} else {
 		for i := 0; i < len(remainder); i++ {
-			if remainder[i] == ':' {
-				splits = append(splits, split{project: remainder[:i], tail: remainder[i+1:]})
+			if remainder[i] != ':' {
+				continue
 			}
+			if len(splits) == maxLegacyReadings {
+				return Key{}, fmt.Errorf("%w: %q has more than %d candidate project/path splits",
+					errAmbiguousLegacyKey, s, maxLegacyReadings)
+			}
+			splits = append(splits, split{project: remainder[:i], tail: remainder[i+1:]})
 		}
 	}
 
-	var all []Key
+	var all, contained []Key
 	for _, sp := range splits {
+		// The candidate root is parsed ONCE per project/tail split rather than
+		// once per reading — every reading this split produces shares its project
+		// field. With the cap above that keeps a key's containment work
+		// proportional to its LENGTH instead of to the square of its ':' count.
+		root := newProjectRoot(sp.project)
+		start := len(all)
 		if !pointered {
 			all = append(all, Key{Agent: agent, Scope: scope, Project: sp.project, Path: sp.tail})
-			continue
-		}
-		for i := 0; i+1 < len(sp.tail); i++ {
-			if sp.tail[i] == ':' && sp.tail[i+1] == '/' {
+		} else {
+			for i := 0; i+1 < len(sp.tail); i++ {
+				if sp.tail[i] != ':' || sp.tail[i+1] != '/' {
+					continue
+				}
+				if len(all) == maxLegacyReadings {
+					return Key{}, fmt.Errorf("%w: %q has more than %d possible readings",
+						errAmbiguousLegacyKey, s, maxLegacyReadings)
+				}
 				all = append(all, Key{
 					Agent:   agent,
 					Scope:   scope,
@@ -99,6 +144,11 @@ func parseLegacyKey(s string, pointered bool) (Key, error) {
 				})
 			}
 		}
+		for _, k := range all[start:] {
+			if root.contains(k.Path) {
+				contained = append(contained, k)
+			}
+		}
 	}
 
 	switch len(all) {
@@ -106,12 +156,6 @@ func parseLegacyKey(s string, pointered bool) (Key, error) {
 		return Key{}, fmt.Errorf("legacy state key %q: no valid reading", s)
 	case 1:
 		return all[0], nil
-	}
-	var contained []Key
-	for _, k := range all {
-		if withinProject(k.Project, k.Path) {
-			contained = append(contained, k)
-		}
 	}
 	if len(contained) == 1 {
 		return contained[0], nil
@@ -125,10 +169,43 @@ func parseLegacyKey(s string, pointered bool) (Key, error) {
 	if len(contained) >= 2 {
 		n = len(contained)
 	}
-	return Key{}, fmt.Errorf("%w: %q has %d readings", errAmbiguousLegacyKey, s, n)
+	return Key{}, fmt.Errorf("%w: %q (%d readings)", errAmbiguousLegacyKey, s, n)
 }
 
-// withinProject reports whether destination path p lies inside the project root.
+// projectRoot is one candidate reading's project field, parsed into the
+// component form contains compares destination paths against. parseLegacyKey
+// builds ONE per project/tail split and reuses it for every reading that split
+// produces.
+type projectRoot struct {
+	// roots reports whether the field names a directory at all; when false,
+	// contains is always false. See newProjectRoot.
+	roots  bool
+	rooted bool
+	parts  []string
+}
+
+// newProjectRoot parses a candidate reading's project field.
+//
+// A key with no project field roots nothing: "" is not a directory, so it must
+// not be reported as containing anything. The guard is load-bearing, not
+// belt-and-braces: "" normalizes to the EMPTY component list, which is a prefix
+// of every relative path, so without it a candidate whose project field is empty
+// would vacuously contain any non-rooted destination and silently settle a tie
+// ("claude:project::a:b/x" in legacy_test.go).
+//
+// "" is the only field treated this way — deliberately. Other fields also
+// normalize to zero components ("/", "\", ".", "./."), and those DO vacuously
+// contain every path of matching rootedness; contains documents why excluding
+// them would be a regression rather than a fix.
+func newProjectRoot(project string) projectRoot {
+	if project == "" {
+		return projectRoot{}
+	}
+	rooted, parts := containmentParts(project)
+	return projectRoot{roots: true, rooted: rooted, parts: parts}
+}
+
+// contains reports whether destination path p lies inside r.
 //
 // This is parseLegacyKey's step-7 tie-break, and the property it must have is
 // not "be accurate" but "never lose the reading agentsync actually wrote". If
@@ -144,6 +221,10 @@ func parseLegacyKey(s string, pointered bool) (Key, error) {
 //	p's components are exactly the root's components followed by the tail's, and
 //	the true reading is ALWAYS contained.
 //
+// TestLegacyContainmentProperties enforces that over a generated corpus of
+// (root, tail) pairs, end to end through parseLegacyKey: no generated key ever
+// decodes under a project other than the one it was built from.
+//
 // The previous implementation (path.Clean over a slash-substituted string) did
 // NOT have that property. Clean collapses "..", so a root or destination
 // carrying a ".." component lost components the other did not; the true reading
@@ -153,34 +234,50 @@ func parseLegacyKey(s string, pointered bool) (Key, error) {
 // under project `H/\..:H/\../..` instead of `H/\..`, with no error). Hence
 // containmentParts leaves ".." alone: in a state key a component is a stored
 // string, not a path to resolve.
-func withinProject(project, p string) bool {
-	// A key with no project field roots nothing: "" is not a directory, so it
-	// must not be reported as containing anything. The guard is load-bearing,
-	// not belt-and-braces: "" normalizes to the EMPTY component list, which is a
-	// prefix of every relative path, so without it a candidate whose project
-	// field is empty would vacuously contain any non-rooted destination and
-	// silently settle a tie ("claude:project::a:b/x" in legacy_test.go).
-	if project == "" {
+//
+// # Zero-component roots are deliberately still contained
+//
+// "/" normalizes to the empty component list (so do "\", "." and "./.", which a
+// stored project field cannot actually hold — paths.HomeRelative emits
+// "${HOME}/." for $HOME itself, one component, and an absolute root verbatim).
+// An empty component list is a prefix of everything, so such a root vacuously
+// contains every path of matching rootedness and can never discriminate.
+//
+// Excluding it looks like a pure win: a FALSE split of "/" then stops padding
+// the contained set, and keys whose true root merely starts with "/:" are
+// recovered instead of refused. It is not a win, because "/" is also a legal
+// TRUE project root, and excluding it drops that true reading out of the
+// contained set — leaving a false reading alone in it, which then wins silently
+// under the wrong project. A sweep of 79,632 generated project-scope keys found
+// zero misrecoveries as written and 24 with the exclusion, e.g.
+// `claude:project:/://:/:` (true root "/", path "//:/:"), which decodes
+// correctly today and under project "/://" with it. Over-refusing a key whose
+// root begins "/:" is the cheap failure; misrecovering one rooted at "/" is the
+// expensive one, so the vacuous containment stays.
+func (r projectRoot) contains(p string) bool {
+	if !r.roots {
 		return false
 	}
-	rootAbs, root := containmentParts(project)
 	destAbs, dest := containmentParts(p)
-	if rootAbs != destAbs || len(dest) < len(root) {
+	if r.rooted != destAbs || len(dest) < len(r.parts) {
 		return false
 	}
-	for i := range root {
-		if dest[i] != root[i] {
+	for i := range r.parts {
+		if dest[i] != r.parts[i] {
 			return false
 		}
 	}
 	return true
 }
 
-// containmentParts splits s into the components withinProject compares: rooted
-// reports a leading separator, and parts are the separator-delimited fields with
-// the empty ("a//b") and "." fields dropped. Dropping "." is what handles the
-// "${HOME}/." form paths.HomeRelative produces when the project root IS the
-// user's $HOME.
+// containmentParts splits s into the components projectRoot.contains compares:
+// rooted reports a leading separator, and parts are the separator-delimited
+// fields with the empty ("a//b") and "." fields dropped. Dropping "." is what
+// handles the "${HOME}/." form paths.HomeRelative produces when the project root
+// IS the user's $HOME (paths.HomeRelative calls filepath.Rel(home, home), which
+// returns "."). TestParseLegacyKey pins that with a "${HOME}/." row; without the
+// "." drop the root's components are ["${HOME}", "."] and no destination under
+// it is contained.
 //
 // Both '\' and '/' are separators, UNCONDITIONALLY — deliberately not
 // filepath.Separator, which is compiled against the HOST and would make this a
@@ -197,7 +294,7 @@ func withinProject(project, p string) bool {
 // refused on the first run after upgrade. Treating '\' as a separator is what
 // makes it fire.
 //
-// ".." is deliberately NOT collapsed; see withinProject for why that is
+// ".." is deliberately NOT collapsed; see projectRoot.contains for why that is
 // load-bearing.
 func containmentParts(s string) (rooted bool, parts []string) {
 	s = strings.ReplaceAll(s, `\`, "/")

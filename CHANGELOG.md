@@ -17,17 +17,37 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   --purge`, `plugin`, `marketplace`) rewrites them in place. Ownership is
   preserved either way, so no destination is re-adopted or backed up; a
   read-only `status`/`diff`/`explain` simply leaves the v1 file as it found it.
-  Three consequences worth knowing: an **older** agentsync binary will refuse the
-  upgraded file (it already refuses any newer `schema_version` — remove
-  `~/.agentsync/.state/targets.json` to start that binary fresh); in the rare
-  case where a pre-upgrade key cannot be read unambiguously — only possible when
-  a project root or destination path contains `:` — agentsync refuses the load
-  and names the entry rather than guessing; and a destination whose path is not
-  valid UTF-8 is now refused when state is written, naming the path, instead of
-  being silently mangled (the v1 format mangled it into permanent
-  foreign-collision churn). `targets.json` holds no configuration, so the remedy
-  for the second case is to delete the named entries (or the file); the next
-  `apply` re-adopts each destination, backing up any pre-existing content first.
+  Two other consequences worth knowing: in the rare case where a pre-upgrade key
+  cannot be read unambiguously — only possible when a project root or destination
+  path contains `:` — agentsync refuses the load and names the entry rather than
+  guessing (a key needing more than 64 candidate readings to resolve is refused
+  the same way, without enumerating them: reading such a key is superlinear work
+  driven by a hand-editable file, and past a few KB it could exhaust memory);
+  and a destination whose path is not valid UTF-8 is now refused when
+  state is written, naming the path, instead of being silently mangled (the v1
+  format mangled it into permanent foreign-collision churn). `targets.json` holds
+  no configuration, so the remedy for the first is to delete the named entries
+  (or the file); the next `apply` re-adopts each destination, backing up any
+  pre-existing content first.
+- **BACK UP `~/.agentsync/.state/targets.json` BEFORE DOWNGRADING to a
+  pre-`schema_version: 2` build.** Rolling back is *not* safe, and the failure is
+  silent. Most commands do refuse the upgraded file — `status`, `diff`, `apply`,
+  `reconcile`, `explain`, `migrate`, `plugin`, `agent disable --purge` all exit
+  non-zero with "state schema_version=2 is newer than this binary supports", and
+  `doctor` reports it as a corrupt state file; none of them touch the file. But
+  **`agentsync marketplace add`** on those builds discards that error, falls back
+  to an empty state and then SAVES it: it exits 0, prints
+  `✅ added marketplace …`, and leaves `targets.json` replaced by a
+  `schema_version: 1` file holding nothing but the marketplace just added. Every
+  ownership entry (`files`/`keys`), every plugin pin and every other marketplace
+  record is gone. `agentsync import` reaches the same code path when it registers
+  a plugin's marketplace. Nothing outside `targets.json` is lost — the canonical
+  `~/.agentsync/` tree and the native agent files are untouched — and the next
+  `apply` re-adopts every destination, backing up any pre-existing content to
+  `.state/backups/` first; but that is a full re-adopt of every managed file, not
+  a no-op. Old binaries cannot be patched, so the only protections are the backup
+  above or deleting `targets.json` so the older build starts fresh. Builds from
+  this release on skip the record and warn instead.
 - **`--lossless` now says what its check did not consider.** The lossiness probe
   renders every enabled agent from a canonical carrying no plugin provenance, so
   it does not honour a plugin's `agents` / `native_agents`: a skip on an agent
@@ -122,7 +142,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   owned nothing and backed up every managed destination as a foreign collision.
   The fetch record is now skipped when state cannot be read, exactly as
   `marketplace remove` already did; the next successful add or update fills it
-  back in.
+  back in. Both commands now also **warn** when they skip, naming
+  `targets.json` and the read error — skipping silently left the user with a
+  success line while `status`, `apply`, `diff` and `doctor` were all already
+  failing on the same file, with nothing connecting the two.
 - **`apply`'s translation report no longer over-counts.** Every per-agent count
   honours the providing plugin's gates now; previously none did, so a deferred
   plugin's components were counted under another plugin's row for the same agent

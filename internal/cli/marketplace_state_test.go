@@ -3,6 +3,7 @@ package cli_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/state"
@@ -34,6 +35,10 @@ func writeMarketplaceFixture(t *testing.T, dir, name string) string {
 // apply would then own nothing and back up every managed destination as a
 // foreign collision — the exact mass-backup failure the typed key exists to
 // prevent. The record must be skipped instead.
+//
+// Skipping SILENTLY would be its own defect, so the test also pins the warning:
+// without it the user reads a success line while status/apply/diff/doctor are
+// all already failing on the same file, with nothing connecting the two.
 func TestMarketplaceAdd_DoesNotClobberUnreadableState(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
@@ -59,8 +64,19 @@ func TestMarketplaceAdd_DoesNotClobberUnreadableState(t *testing.T) {
 		t.Fatal("premise broken: state.Load must refuse this targets.json")
 	}
 
-	if out, err := runCLI(t, env, "marketplace", "add", fixture); err != nil {
+	out, err := runCLI(t, env, "marketplace", "add", fixture)
+	if err != nil {
 		t.Fatalf("marketplace add: %v\n%s", err, out)
+	}
+	// The add itself succeeded, so this is a warning beside the success line —
+	// not a failure. It must name the file, or the user has nothing to go on.
+	for _, want := range []string{"WARN", "not recorded", "targets.json", "agentsync doctor"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("skipping the state record must warn and mention %q; got:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, "added marketplace") {
+		t.Errorf("the add still succeeded and must still say so; got:\n%s", out)
 	}
 
 	got, err := os.ReadFile(statePath)

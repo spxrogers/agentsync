@@ -67,6 +67,11 @@ func TestMigrate_UnreadableKeysRefuseWithRemedy(t *testing.T) {
 		raw           *rawTargets
 		wantSubstrs   []string
 		wantAmbiguity bool
+		// wantKeyOnce, when set, must appear EXACTLY once in the refusal. Every
+		// error the key parsers return already names the key with %q, so the
+		// message used to print it twice (three times when the error also quoted
+		// the offending field). See migrate's note closure.
+		wantKeyOnce string
 	}{
 		{
 			name: "unparseable v1 key refuses with the base remedy only",
@@ -80,6 +85,7 @@ func TestMigrate_UnreadableKeysRefuseWithRemedy(t *testing.T) {
 				"targets.json is bookkeeping only",
 				"re-adopts each destination",
 			},
+			wantKeyOnce: "no-scope-field",
 		},
 		{
 			name: "ambiguous v1 key also explains why nothing is guessed",
@@ -89,10 +95,11 @@ func TestMigrate_UnreadableKeysRefuseWithRemedy(t *testing.T) {
 			},
 			wantSubstrs: []string{
 				"claude:project:${HOME}/a:${HOME}/b:${HOME}/c",
-				"has 2 readings",
+				"(2 readings)",
 				"targets.json is bookkeeping only",
 			},
 			wantAmbiguity: true,
+			wantKeyOnce:   "claude:project:${HOME}/a:${HOME}/b:${HOME}/c",
 		},
 		{
 			// Containment narrowed three candidate splits to two but could not
@@ -106,7 +113,40 @@ func TestMigrate_UnreadableKeysRefuseWithRemedy(t *testing.T) {
 			},
 			wantSubstrs: []string{
 				"claude:project:/a:/a/p:/a:/a/p/q",
-				"has 2 readings",
+				"(2 readings)",
+			},
+			wantAmbiguity: true,
+		},
+		{
+			// The key is printed Go-quoted, which DOUBLES a backslash — a
+			// Windows-shaped key pasted straight from this message into an editor
+			// search of targets.json finds nothing. Say so rather than leave the
+			// reader to work it out.
+			name: "a backslash-bearing key is quoted and the remedy says so",
+			raw: &rawTargets{
+				SchemaVersion: 1,
+				Files:         map[string]FileEntry{`claude:project:C:\dev\repo:C:\other\x.md`: {SHA256: "a"}},
+			},
+			wantSubstrs: []string{
+				`C:\\dev\\repo`, // %q doubled the separators
+				"shown Go-quoted",
+				"unquote it before searching targets.json",
+			},
+			wantAmbiguity: true,
+		},
+		{
+			// A key whose candidate readings exceed maxLegacyReadings is refused
+			// without enumerating them; parseLegacyKey's enumeration is a product
+			// and the containment tie-break walks its result, so an uncapped key
+			// of a few KB could OOM-kill the process (see maxLegacyReadings).
+			name: "a key past the reading cap is refused as ambiguous",
+			raw: &rawTargets{
+				SchemaVersion: 1,
+				Files:         map[string]FileEntry{"claude:project:" + strings.Repeat(":/", 200): {SHA256: "a"}},
+			},
+			wantSubstrs: []string{
+				"more than 64 candidate project/path splits",
+				"targets.json is bookkeeping only",
 			},
 			wantAmbiguity: true,
 		},
@@ -166,6 +206,11 @@ func TestMigrate_UnreadableKeysRefuseWithRemedy(t *testing.T) {
 			}
 			if hasNote := strings.Contains(err.Error(), ambiguityNote); hasNote != tc.wantAmbiguity {
 				t.Errorf("ambiguity remedy present = %v, want %v; got %q", hasNote, tc.wantAmbiguity, err)
+			}
+			if tc.wantKeyOnce != "" {
+				if n := strings.Count(err.Error(), tc.wantKeyOnce); n != 1 {
+					t.Errorf("refusal names %q %d times, want exactly 1; got %q", tc.wantKeyOnce, n, err)
+				}
 			}
 		})
 	}

@@ -83,7 +83,7 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 	}
 
 	stopSpin := p.Spin(fmt.Sprintf("fetching marketplace %s", rawURL))
-	mpName, headSHA, err := addMarketplaceSource(home, src, rawURL)
+	mpName, headSHA, err := addMarketplaceSource(home, src, rawURL, p.Warnf)
 	stopSpin()
 	if err != nil {
 		return err
@@ -101,8 +101,10 @@ func marketplaceAddRun(cmd *cobra.Command, args []string) error {
 //
 // It does not print a success line or acquire the global lock — callers do.
 // Both `marketplace add` and `import` use it so the two produce byte-identical
-// canonical artifacts.
-func addMarketplaceSource(home string, src marketplace.Source, rawURL string) (mpName, headSHA string, err error) {
+// canonical artifacts. warnf is the caller's warning sink (p.Warnf for
+// `marketplace add`, importIO.warnf for `import`): the state record is
+// best-effort and its only failure mode is invisible otherwise.
+func addMarketplaceSource(home string, src marketplace.Source, rawURL string, warnf func(string, ...any)) (mpName, headSHA string, err error) {
 	// Derive a slug for the marketplace.
 	slug := deriveMarketplaceSlug(rawURL)
 	cacheDir := marketplaceCacheDir(home, slug)
@@ -176,6 +178,15 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string) (m
 			FetchedAt: time.Now().UTC(),
 		}
 		_ = state.Save(statePath, st) // best-effort; don't fail add on state write errors
+	} else {
+		// Skipping the record is right, but doing it SILENTLY is not: the user
+		// gets a success line while every other command — status, apply, diff,
+		// doctor — is already failing on the same unreadable file, and nothing
+		// connects the two. Name the file and the underlying error so the fix is
+		// findable; the add itself succeeded, so this is a warning, not an error.
+		warnf("marketplace %s was added but not recorded in %s, which could not be read: %v; "+
+			"run `agentsync doctor` — the record is restored by the next successful "+
+			"`agentsync marketplace add`/`update`", mpName, statePath, lerr)
 	}
 
 	return mpName, result.HeadSHA, nil
@@ -225,11 +236,17 @@ func marketplaceRemoveRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("remove cache %s: %w", cacheDir, err)
 	}
 
-	// Remove from state.json (best-effort).
+	// Remove from state.json (best-effort). Same rule as addMarketplaceSource:
+	// keep an unreadable targets.json rather than replace it with an empty one,
+	// but say so — a silent skip leaves a stale marketplace record behind while
+	// the success line claims a clean removal.
 	statePath := filepath.Join(home, ".state", "targets.json")
-	if st, err := state.Load(statePath); err == nil {
+	if st, lerr := state.Load(statePath); lerr == nil {
 		delete(st.Marketplaces, name)
 		_ = state.Save(statePath, st)
+	} else {
+		diag(cmd, ui.LevelWarn, "marketplace %s was removed but its record remains in %s, "+
+			"which could not be read: %v; run `agentsync doctor`", name, statePath, lerr)
 	}
 
 	success(cmd, ui.EmojiRemoved, "removed marketplace %s", name)
