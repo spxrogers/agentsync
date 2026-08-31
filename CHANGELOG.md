@@ -9,6 +9,22 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Fixed
+
+- **`agentsync check` no longer rejects a `[secrets].backend` that `apply`
+  accepts.** `secrets.SelectBackend` — the function `apply` actually resolves
+  through — lower-cases the backend name, but `check` compared it against the
+  literal `"age"`/`"env"`, so a config written `backend = "AGE"` applied
+  successfully and failed `check` with `backend "AGE" not supported`. `check`
+  now validates through one `secrets.ValidateConfig` that shares
+  `SelectBackend`'s normalization, so the backend name is matched
+  **case-insensitively** — exactly as `apply` matches it. A `[secrets]` block
+  missing both `recipient` and `identity_file` now also reports both fields
+  instead of stopping at the first. The failure messages are reworded in the
+  move and each is now prefixed with the `[secrets]` key it came from
+  (`identity_file: …`, `file: …`), so a report about the *defaulted* vault path
+  names the key that produced it.
+
 ### Changed
 
 - **`.state/targets.json` is now `schema_version: 2`.** The upgrade is automatic

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
@@ -100,8 +101,8 @@ wrong, and check when something is written wrong.`,
 					return fmt.Errorf("agents.%q: %w", name, err)
 				}
 			}
-			if err := verifySecrets(c.Config.Secrets, home); err != nil {
-				return fmt.Errorf("check secrets: %w", err)
+			if err := secretsProblems(c.Config.Secrets, home, userHome); err != nil {
+				return err
 			}
 			// Reference checking, two layers (issue #171):
 			//   1. SHAPE — both modes. A malformed ref (${secret:} empty key,
@@ -173,49 +174,48 @@ func requireInitializedSource(root string, sc adapter.Scope) error {
 	return nil
 }
 
-// verifySecrets validates the [secrets] block beyond the schema decode:
-// recipient and identity_file are required when backend is age, the
-// identity file must be readable, and on POSIX the file must not be
-// world- or group-readable.
-func verifySecrets(cfg source.SecretsConfig, home string) error {
-	if cfg.Backend == "" || cfg.Backend == "env" {
+// secretsProblems maps the SINGLE [secrets] validator's hard failures onto
+// check's one error-or-nil verdict. check does not decide what a valid
+// [secrets] block is — secrets.ValidateConfig does, in the same package as the
+// SelectBackend apply resolves through and folding the backend name through
+// the same NormalizeBackend, so `backend = "AGE"` can no longer apply cleanly
+// and fail check (issue #228). Where the validator is deliberately STRICTER
+// than apply it stays so: an unrecognised backend fails here, while apply
+// degrades it to NopResolver and errors only at the first ${secret:…}.
+//
+// SIX hand-written copies of this contract are still out there, every one of
+// them comparing cfg.Backend against the literal "age": doctor's checkSecrets,
+// and the gates in the five `secret` subcommands — edit, get, set, list,
+// remove (internal/cli/secrets.go). All six therefore still carry the casing
+// divergence check just shed: `secret get` refuses the `backend = "AGE"` apply
+// resolves. doctor refuses `backend = "env"` on top of that, which is the
+// other half of the bug — the five `secret` gates refuse env legitimately,
+// since they read and write an age vault. Collapsing all six onto
+// ValidateConfig is the rest of #228.
+//
+// Only SeverityFail findings become an error. SeverityWarn (a vault that has
+// not been created yet) and the passing tiers are for a REPORT surface to
+// render: check's contract is "is this config valid", and an unwritten vault
+// is not invalid config.
+//
+// Each failure is labelled with its [secrets] key. ValidateConfig carries the
+// key in Finding.Field precisely because several messages do not name it
+// themselves — most sharply the vault path, which is DEFAULTED when
+// [secrets].file is unset, so an unlabelled "<path> — not readable" would
+// print a path the user never wrote with no clue which key produced it.
+func secretsProblems(cfg source.SecretsConfig, agentsyncHome, userHome string) error {
+	var msgs []string
+	for _, f := range secrets.ValidateConfig(cfg, agentsyncHome, userHome) {
+		if f.Severity != secrets.SeverityFail {
+			continue
+		}
+		// f.Message is untrusted.Text, so %s invokes its sanitizing String()
+		// and a crafted [secrets].identity_file cannot inject terminal escapes
+		// into this error (issue #93/#171). f.Field is a validator constant.
+		msgs = append(msgs, fmt.Sprintf("%s: %s", f.Field, f.Message))
+	}
+	if len(msgs) == 0 {
 		return nil
 	}
-	if cfg.Backend != "age" {
-		return fmt.Errorf("backend %q not supported (want \"age\" or \"env\")", cfg.Backend)
-	}
-	if cfg.Recipient == "" {
-		return fmt.Errorf("[secrets].recipient is required for backend = \"age\"")
-	}
-	if cfg.IdentityFile == "" {
-		return fmt.Errorf("[secrets].identity_file is required for backend = \"age\"")
-	}
-	userHome := paths.HomeDir(paths.OSEnv{})
-	// Resolve identity_file exactly as apply does (SelectBackend ->
-	// ResolveIdentityFile) so check and apply never disagree on the path.
-	idPath := secrets.ResolveIdentityFile(cfg, home, userHome)
-	if _, err := os.Stat(idPath); err != nil {
-		// idPath is config-derived ([secrets].identity_file, a shareable dotfile)
-		// and the *PathError re-embeds it; sanitize both the path and the error
-		// rendering (dropping %w) so a crafted path can't inject terminal escapes
-		// into `verify`'s output — the verifySecrets twin of the doctor fix
-		// (issue #93/#171).
-		return fmt.Errorf("identity_file %s: %s", untrusted.Wrap(idPath), untrusted.Wrap(err.Error()))
-	}
-	// Use the same permission check apply uses — it honours
-	// AGENTSYNC_AGE_SKIP_PERM_CHECK=1, which the previous inline
-	// runtime.GOOS check did not. Apply and verify must agree on
-	// what "secure" means or users will end up in a config where
-	// verify refuses but apply works (or vice versa).
-	if err := secrets.CheckIdentityPermissions(idPath); err != nil {
-		return err
-	}
-	// Age file location is optional in config (defaults to DefaultAgeFile)
-	// and may not exist yet on a brand-new install. Resolve it the same way
-	// apply does, then only flag a present-but-unreadable file.
-	agePath := secrets.ResolveAgeFile(cfg, home, userHome)
-	if _, err := os.Stat(agePath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("secrets.file %s: %s", untrusted.Wrap(agePath), untrusted.Wrap(err.Error()))
-	}
-	return nil
+	return fmt.Errorf("check secrets: %s", strings.Join(msgs, "; "))
 }
