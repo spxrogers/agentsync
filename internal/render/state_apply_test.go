@@ -361,3 +361,36 @@ func TestOrphanReclaimedPrefixes_RetiredAliasDoesNotOverMatch(t *testing.T) {
 		t.Error("a non-component SourceID must not be reclaimable")
 	}
 }
+
+// TestPruneStaleState_SiblingColonProjectRootSurvives is the direct regression
+// for issue #227. Two project roots differ only by a ':'-suffixed variant:
+//
+//	${HOME}/work/app          and  ${HOME}/work/app:staging
+//
+// Under the v1 string key the second project's entry began with the first's
+// prefix ("claude:project:${HOME}/work/app:"), so an apply of the SHORTER root
+// pruned the LONGER root's ownership — and the next apply of that project
+// classified its .mcp.json as a foreign collision, backing it up and rewriting
+// it. The typed key compares Project as a field, so the sibling is untouched.
+func TestPruneStaleState_SiblingColonProjectRootSurvives(t *testing.T) {
+	const userHome = "/home/alice"
+	shortRoot := filepath.Join(userHome, "work", "app")
+	longRoot := filepath.Join(userHome, "work", "app:staging")
+
+	s := state.New()
+	shortKey := state.NewFileKey(userHome, "claude", "project", shortRoot, filepath.Join(shortRoot, ".mcp.json"))
+	longKey := state.NewFileKey(userHome, "claude", "project", longRoot, filepath.Join(longRoot, ".mcp.json"))
+	s.Files[shortKey] = state.FileEntry{SHA256: "a"}
+	s.Files[longKey] = state.FileEntry{SHA256: "b"}
+
+	// Apply the SHORT project with no ops at all: everything it owns is stale.
+	render.PruneStaleState(s, userHome, "claude", adapter.ScopeProject, shortRoot, nil)
+
+	if _, ok := s.Files[shortKey]; ok {
+		t.Fatal("the short project's own stale entry should have been pruned")
+	}
+	if _, ok := s.Files[longKey]; !ok {
+		t.Fatalf("a SIBLING project whose root merely shares a ':'-delimited prefix "+
+			"must keep its ownership; have %+v", s.Files)
+	}
+}
