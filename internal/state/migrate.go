@@ -15,8 +15,9 @@ import (
 //     (legacy.go) and re-keyed as a state.Key. The version is stamped to
 //     SchemaVersion; the next Save commits the upgrade.
 //   - schema_version == SchemaVersion: keys must already be state.Key
-//     encodings; each is parsed, so a hand-edited or corrupted file fails loudly
-//     instead of silently disowning a destination.
+//     encodings; each is parsed AND role-checked (parseCurrentKey), so a
+//     hand-edited or corrupted file fails loudly instead of silently disowning a
+//     destination.
 //   - A higher schema_version means a newer agentsync binary wrote this file and
 //     the current binary cannot safely interpret it. We refuse rather than
 //     silently treat unknown future fields as missing.
@@ -46,7 +47,8 @@ func migrate(raw *rawTargets) (*Targets, error) {
 	case 0, 1:
 		parseFile, parsePointer = parseLegacyFileKey, parseLegacyPointerKey
 	case SchemaVersion:
-		parseFile, parsePointer = ParseKey, ParseKey
+		parseFile = func(s string) (Key, error) { return parseCurrentKey(s, false) }
+		parsePointer = func(s string) (Key, error) { return parseCurrentKey(s, true) }
 	default:
 		if raw.SchemaVersion > SchemaVersion {
 			return nil, fmt.Errorf("state schema_version=%d is newer than this binary supports (%d); "+
@@ -99,4 +101,32 @@ func migrate(raw *rawTargets) (*Targets, error) {
 			len(bad), raw.SchemaVersion, strings.Join(bad, "\n  "), remedy)
 	}
 	return out, nil
+}
+
+// parseCurrentKey decodes a current-encoding key and enforces its ROLE: a
+// Targets.Files key names a whole file and must carry NO pointer; a Targets.Keys
+// key names one JSON-pointer-addressable key inside a shared file and must carry
+// one.
+//
+// The v1 parser enforces that structurally — parseLegacyPointerKey only produces
+// readings that contain a ":/" boundary, and parseLegacyFileKey never splits one
+// off — so without this check the CURRENT schema would be LAXER than the one it
+// replaced: a hand-edited v2 file could file a pointered key under "files" (its
+// whole-file entry would then own a path it does not write) or an empty-Pointer
+// key under "keys" (which reaches jsonkeys.MergeKeys as the pointer "", where
+// pointerExists is vacuously true and the entry is never pruned). Both load
+// silently today. Refusing costs the user only the cheap re-adopt every other
+// refusal in migrate offers.
+func parseCurrentKey(s string, pointered bool) (Key, error) {
+	k, err := ParseKey(s)
+	if err != nil {
+		return Key{}, err
+	}
+	if pointered && k.Pointer == "" {
+		return Key{}, fmt.Errorf("state key %q: a keys entry must name a JSON pointer, but its pointer field is empty", s)
+	}
+	if !pointered && k.Pointer != "" {
+		return Key{}, fmt.Errorf("state key %q: a files entry names a whole file and must not carry a JSON pointer (has %q)", s, k.Pointer)
+	}
+	return k, nil
 }

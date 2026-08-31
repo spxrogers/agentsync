@@ -40,6 +40,19 @@ func TestKey_EncodingIsExact(t *testing.T) {
 			},
 			want: "as1|6:claude|7:project|24:${HOME}/work/app:staging|34:${HOME}/work/app:staging/.mcp.json|18:/mcpServers/github",
 		},
+		{
+			// The length prefix is a BYTE count, and only a multibyte field can
+			// say so: every other row here is ASCII, where len and rune count
+			// agree, so a utf8.RuneCountInString implementation would satisfy
+			// them all. "héllo.md" is 8 runes but 9 bytes, and "日本" is 2 runes
+			// but 6 — the wanted prefixes below are the byte counts.
+			name: "multibyte fields are length-prefixed in BYTES, not runes",
+			key: state.Key{
+				Agent: "claude", Scope: "project",
+				Project: "${HOME}/日本", Path: "${HOME}/日本/héllo.md", Pointer: "/mcpServers/héllo",
+			},
+			want: "as1|6:claude|7:project|14:${HOME}/日本|24:${HOME}/日本/héllo.md|18:/mcpServers/héllo",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -65,6 +78,14 @@ func TestKey_RoundTripsAdversarialFields(t *testing.T) {
 		{"field that looks like its own prefix", state.Key{Agent: "12:abc", Path: "0:"}},
 		{"NUL and invalid utf-8", state.Key{Agent: "a\x00b", Path: "\xff\xfe"}},
 		{"portable home path", state.Key{Agent: "codex", Scope: "user", Path: "${HOME}/.codex/config.toml", Pointer: "/mcp_servers/gh"}},
+		// Valid multibyte UTF-8, where len(f) and utf8.RuneCountInString(f)
+		// DIVERGE. Every other row is ASCII or invalid UTF-8 ("\xff\xfe" has
+		// rune count 2 as well as length 2), so without this one a rune-counting
+		// String would round-trip the whole table.
+		{"valid multibyte utf-8", state.Key{Agent: "héllo", Scope: "user", Project: "日本", Path: "${HOME}/héllo/日本.md", Pointer: "/mcpServers/héllo"}},
+		// A field whose CONTENT is itself a well-formed encoded key: the decoder
+		// must consume it as opaque bytes, never re-enter the grammar.
+		{"field holding a valid encoded key", state.Key{Agent: "as1|1:a|1:b|0:|0:|0:", Path: "as1|1:a|1:b|0:|0:|0:"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -16,22 +16,30 @@ import (
 // file that already claims schema_version 2 means a hand-edit or corruption and
 // is refused for the same reason.
 func TestLoad_RefusesUnreadableKeys(t *testing.T) {
+	// The ambiguity-specific half of the remedy. Asserting only the key name and
+	// the shared "bookkeeping only" line would pass for ANY refusal, so this file
+	// — the one named for the refusals — could not tell an ambiguous key from a
+	// plainly unparseable one. Each row pins which of the two it is.
+	const ambiguityNote = "refuses to guess the project/path split"
 	tests := []struct {
-		name        string
-		content     string
-		wantInError string
+		name          string
+		content       string
+		wantInError   string
+		wantAmbiguity bool
 	}{
 		{
 			name: "ambiguous legacy files key",
 			content: `{"schema_version":1,"files":{` +
 				`"claude:project:${HOME}/a:${HOME}/b:${HOME}/c":{"sha256":"x"}}}`,
-			wantInError: "claude:project:${HOME}/a:${HOME}/b:${HOME}/c",
+			wantInError:   "claude:project:${HOME}/a:${HOME}/b:${HOME}/c",
+			wantAmbiguity: true,
 		},
 		{
 			name: "ambiguous legacy keys key",
 			content: `{"schema_version":1,"keys":{` +
 				`"claude:user::a:/b:/c":{"sha256":"x"}}}`,
-			wantInError: "claude:user::a:/b:/c",
+			wantInError:   "claude:user::a:/b:/c",
+			wantAmbiguity: true,
 		},
 		{
 			name:        "malformed key in a schema-2 file",
@@ -54,6 +62,10 @@ func TestLoad_RefusesUnreadableKeys(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "bookkeeping only") {
 				t.Fatalf("error must state the remedy; got %q", err)
+			}
+			if got := strings.Contains(err.Error(), ambiguityNote); got != tc.wantAmbiguity {
+				t.Fatalf("ambiguity-specific remedy present = %v, want %v; got %q",
+					got, tc.wantAmbiguity, err)
 			}
 		})
 	}

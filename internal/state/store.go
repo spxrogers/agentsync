@@ -54,12 +54,9 @@ func Load(path string) (*Targets, error) {
 	if err != nil {
 		return nil, fmt.Errorf("migrate %s: %w", path, err)
 	}
-	if t.Files == nil {
-		t.Files = map[Key]FileEntry{}
-	}
-	if t.Keys == nil {
-		t.Keys = map[Key]KeyEntry{}
-	}
+	// Files and Keys are always allocated by migrate; Marketplaces and Plugins
+	// are copied straight from the decoded document and are nil when the file
+	// omits them, so only those two need a guard.
 	if t.Marketplaces == nil {
 		t.Marketplaces = map[string]Marketplace{}
 	}
@@ -81,6 +78,12 @@ func Load(path string) (*Targets, error) {
 // that does not converge, because the next apply rebuilds and re-writes the same
 // mangled key. Save therefore fails closed at the moment the key is created,
 // naming the destination path so the user can rename it.
+//
+// It fires from Save, which every caller reaches AFTER doing its work (apply has
+// already written every destination), so the message also says so: the files
+// landed, only the ownership record did not. Validating at plan time instead was
+// considered and declined — it would reshape the apply pipeline for a failure
+// mode that already self-heals on the next run.
 var ErrNonUTF8Key = errors.New("state key field is not valid UTF-8")
 
 // checkKeysEncodable rejects every key in t whose fields are not all valid
@@ -114,8 +117,16 @@ func checkKeysEncodable(t *Targets) error {
 		return nil
 	}
 	sort.Strings(bad)
+	// Say where in the run this lands. checkKeysEncodable fires from Save, which
+	// every caller reaches AFTER doing its work, so a user hitting this has a
+	// half-recorded machine and no way to tell from "rename it and re-run"
+	// whether their destinations were written. They were.
 	return fmt.Errorf("%w:\n  %s\nagentsync cannot record a destination whose path is not valid UTF-8; "+
-		"rename it (or drop it from this agent's config) and re-run",
+		"rename it (or drop it from this agent's config) and re-run.\n"+
+		"This check runs when state is SAVED, which is after the run has already done its work: "+
+		"anything this run wrote is on disk and correct — only the ownership record was not updated. "+
+		"Re-running after the rename converges (a destination agentsync does not own is backed up to "+
+		".state/backups/ and re-adopted), but until then every attempt adds another backup",
 		ErrNonUTF8Key, strings.Join(bad, "\n  "))
 }
 

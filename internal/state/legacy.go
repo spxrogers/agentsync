@@ -115,7 +115,16 @@ func parseLegacyKey(s string, pointered bool) (Key, error) {
 	if len(contained) == 1 {
 		return contained[0], nil
 	}
-	return Key{}, fmt.Errorf("%w: %q has %d readings", errAmbiguousLegacyKey, s, len(all))
+	// Report the number of readings the user must actually disambiguate. When
+	// containment narrowed the field but did not settle it, the surviving tie is
+	// among the CONTAINED readings — quoting the raw candidate count there would
+	// overstate it and send the reader looking for splits agentsync has already
+	// ruled out.
+	n := len(all)
+	if len(contained) >= 2 {
+		n = len(contained)
+	}
+	return Key{}, fmt.Errorf("%w: %q has %d readings", errAmbiguousLegacyKey, s, n)
 }
 
 // withinProject reports whether destination path p lies inside the project root.

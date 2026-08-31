@@ -439,8 +439,9 @@ agentsync explain <path>[#<pointer>] [--pointer …] [--json]  # dest provenance
 > **Superseded (2026-08-31, issue #227).** The `files`/`keys` map keys shown
 > below are the `schema_version: 1` encoding. They are now length-prefixed
 > `state.Key` encodings at `schema_version: 2` — see
-> [`2026-08-31-typed-state-keys.md`](2026-08-31-typed-state-keys.md). The entry
-> payloads and the `marketplaces`/`plugins` keys are unchanged.
+> [`docs/architecture.md` §7 item 8](../../architecture.md#7-safety-primitives)
+> for the encoding and the migration, and issue #227 for the bug that motivated
+> them. The entry payloads and the `marketplaces`/`plugins` keys are unchanged.
 
 ```json
 {

@@ -962,8 +962,11 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    project root — so the containment test normalizes `\` as well as `/`: a
    Windows project root outside `%USERPROFILE%` is stored verbatim, drive colon
    and backslashes included, and a slash-only test would find no contained
-   reading and refuse every such file. An older binary already refuses a newer
-   `schema_version`, which is the downgrade story.
+   reading and refuse every such file. At `schema_version: 2` each key is
+   role-checked as well as parsed — a `files` key must carry no JSON pointer, a
+   `keys` key must carry one — so a hand-edited file cannot be laxer than the v1
+   format it replaced. An older binary already refuses a newer `schema_version`,
+   which is the downgrade story.
    One boundary is narrower than the encoding: `targets.json` is JSON, and
    `encoding/json` rewrites an invalid UTF-8 byte in a string to U+FFFD, which
    would break a length prefix and make the next `Load` refuse the file — with

@@ -69,6 +69,12 @@ func TestSave_RefusesNonUTF8Keys(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.wantPath) {
 				t.Fatalf("error must name the offending path %q; got %q", tc.wantPath, err)
 			}
+			// Save runs after the caller has already written its destinations, so
+			// the message must say the run's writes landed — otherwise "rename it
+			// and re-run" reads as if nothing happened.
+			if !strings.Contains(err.Error(), "anything this run wrote is on disk and correct") {
+				t.Fatalf("error must say the run's writes already landed; got %q", err)
+			}
 			if _, statErr := os.Stat(p); !errors.Is(statErr, os.ErrNotExist) {
 				t.Fatalf("Save must refuse BEFORE writing; stat(%s) = %v", p, statErr)
 			}

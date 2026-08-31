@@ -12,9 +12,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 ### Changed
 
 - **`.state/targets.json` is now `schema_version: 2`.** The upgrade is automatic
-  and requires nothing: the first command you run rewrites the keys in place and
-  ownership is preserved, so no destination is re-adopted or backed up. Three
-  consequences worth knowing: an **older** agentsync binary will refuse the
+  and requires nothing: every command reads the old keys, and the first command
+  that WRITES state (`apply`, `import`, `reconcile`, `migrate`, `agent disable
+  --purge`, `plugin`, `marketplace`) rewrites them in place. Ownership is
+  preserved either way, so no destination is re-adopted or backed up; a
+  read-only `status`/`diff`/`explain` simply leaves the v1 file as it found it.
+  Three consequences worth knowing: an **older** agentsync binary will refuse the
   upgraded file (it already refuses any newer `schema_version` — remove
   `~/.agentsync/.state/targets.json` to start that binary fresh); in the rare
   case where a pre-upgrade key cannot be read unambiguously — only possible when

@@ -193,8 +193,18 @@ func checkStateDir(p *ui.Printer, home string) int {
 	// do. A corrupt state file makes every real command exit 1, so a readiness
 	// check that ignores it would falsely report healthy. A missing file is
 	// fine (state.Load returns an empty state on a fresh install).
+	//
+	// sanitizeLines, not a raw %v: a migration refusal interpolates map keys read
+	// verbatim from targets.json, which the schema-2 remedy explicitly expects may
+	// be hand-edited, so a crafted key could smuggle a terminal escape into this
+	// line and forge a passing check below it (#93/#171). Every OTHER state.Load
+	// error in the CLI is returned and printed by reportErrorTo, which already
+	// sanitizes the same way; doctor prints its diagnostics inline, so it has to
+	// sanitize here. sanitizeLines rather than untrusted.Wrap because the refusal
+	// is multi-line and ui.Sanitize STRIPS newlines — wrapping would run the
+	// remedy paragraphs together.
 	if _, err := state.Load(filepath.Join(stateDir, "targets.json")); err != nil {
-		failCheck(p, "state file ", fmt.Sprintf("corrupt: %v", err))
+		failCheck(p, "state file ", fmt.Sprintf("corrupt: %s", sanitizeLines(err.Error())))
 		return 1
 	}
 	okCheck(p, "state file ", "ok")

@@ -24,15 +24,22 @@ func TestMigrate_LegacyZeroBecomesCurrent(t *testing.T) {
 
 func TestMigrate_CurrentIsNoop(t *testing.T) {
 	k := Key{Agent: "claude", Scope: "user", Path: "x"}
+	ptr := Key{Agent: "claude", Scope: "user", Path: "y", Pointer: "/mcpServers/gh"}
 	got, err := migrate(&rawTargets{
 		SchemaVersion: SchemaVersion,
 		Files:         map[string]FileEntry{k.String(): {SHA256: "a"}},
+		Keys:          map[string]KeyEntry{ptr.String(): {SHA256: "b"}},
 	})
 	if err != nil {
 		t.Fatalf("current schema should be no-op: %v", err)
 	}
 	if entry, ok := got.Files[k]; !ok || entry.SHA256 != "a" {
 		t.Errorf("current-schema key was not preserved: have %+v", got.Files)
+	}
+	// The role check parseCurrentKey adds must not reject a correctly-filed
+	// pointer entry — pin the accepting half beside the two refusals below.
+	if entry, ok := got.Keys[ptr]; !ok || entry.SHA256 != "b" {
+		t.Errorf("current-schema pointer key was not preserved: have %+v", got.Keys)
 	}
 }
 
@@ -86,6 +93,53 @@ func TestMigrate_UnreadableKeysRefuseWithRemedy(t *testing.T) {
 				"targets.json is bookkeeping only",
 			},
 			wantAmbiguity: true,
+		},
+		{
+			// Containment narrowed three candidate splits to two but could not
+			// settle them. The count must name what the reader still has to
+			// disambiguate, not the raw candidate count — otherwise it sends them
+			// looking for a split agentsync has already ruled out.
+			name: "an ambiguity narrowed by containment reports the narrowed count",
+			raw: &rawTargets{
+				SchemaVersion: 1,
+				Files:         map[string]FileEntry{"claude:project:/a:/a/p:/a:/a/p/q": {SHA256: "a"}},
+			},
+			wantSubstrs: []string{
+				"claude:project:/a:/a/p:/a:/a/p/q",
+				"has 2 readings",
+			},
+			wantAmbiguity: true,
+		},
+		{
+			// v1 distinguishes the two maps structurally, so v2 must too: without
+			// the role check a hand-edited file could put a whole-file key in
+			// "keys" (it would reach jsonkeys.MergeKeys as the pointer "") or a
+			// pointered key in "files", and load silently.
+			name: "a v2 pointered key filed under files is refused",
+			raw: &rawTargets{
+				SchemaVersion: SchemaVersion,
+				Files: map[string]FileEntry{
+					Key{Agent: "claude", Scope: "user", Path: "x", Pointer: "/mcpServers/gh"}.String(): {SHA256: "a"},
+				},
+			},
+			wantSubstrs: []string{
+				"must not carry a JSON pointer",
+				`"/mcpServers/gh"`,
+				"targets.json is bookkeeping only",
+			},
+		},
+		{
+			name: "a v2 whole-file key filed under keys is refused",
+			raw: &rawTargets{
+				SchemaVersion: SchemaVersion,
+				Keys: map[string]KeyEntry{
+					Key{Agent: "claude", Scope: "user", Path: "x"}.String(): {SHA256: "a"},
+				},
+			},
+			wantSubstrs: []string{
+				"must name a JSON pointer",
+				"targets.json is bookkeeping only",
+			},
 		},
 		{
 			name: "a v2 key that does not decode refuses the same way",

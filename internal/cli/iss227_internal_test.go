@@ -31,6 +31,14 @@ func TestStatus_OwnershipSurvivesLegacyStateMigration(t *testing.T) {
 	if err := os.WriteFile(dest, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// os.WriteFile's mode is masked by the process umask, so under a non-022
+	// umask the file lands 0600 while the seeded state below records mode 420
+	// (0o644). buildStatusModel compares the exact permission bits, so the item
+	// would classify `drift` and this test would fail for a reason that has
+	// nothing to do with the key migration it is asserting. Chmod is not masked.
+	if err := os.Chmod(dest, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// A schema_version 1 file, keyed the way every pre-upgrade agentsync wrote it.
 	legacy := fmt.Sprintf(
