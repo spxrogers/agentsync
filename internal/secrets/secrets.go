@@ -93,9 +93,6 @@ func (NopResolver) Resolve(key string) (string, error) {
 // the EnvBackend; ANY OTHER VALUE — including an EMPTY backend — selects
 // NopResolver, which errors on every ${secret:…} lookup.
 //
-// (The previous version of this comment claimed an empty backend returned
-// EnvBackend. It never did — an empty string falls to the default arm.)
-//
 // agentsyncHome anchors relative cfg.File / identity_file paths; userHome
 // (paths.HomeDir) expands ${env:HOME} and a leading ~. Both the age file
 // (defaulted via ResolveAgeFile) and the identity file (expanded via

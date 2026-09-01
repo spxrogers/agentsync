@@ -23,7 +23,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   instead of stopping at the first. The failure messages are reworded in the
   move and each is now prefixed with the `[secrets]` key it came from
   (`identity_file: …`, `file: …`), so a report about the *defaulted* vault path
-  names the key that produced it.
+  names the key that produced it. The messages themselves are **field-relative**
+  — none repeats its own key — so neither `check`'s `<field>: <message>` error
+  nor `doctor`'s padded label column stutters: `recipient: missing — required
+  for backend = "age"`, `backend: unsupported "vault" (want "age" or "env")`.
 - **`agentsync doctor` no longer fails the `env` secrets backend.**
   `backend = "env"` is supported — `apply` resolves `${secret:…}` through it, and
   `agentsync check` has always accepted it — but `doctor` hard-failed anything
@@ -46,7 +49,7 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `secret list` and `secret remove` also refuse up front when `identity_file` is
   unset — instead of failing inside the decrypt with `read identity :`, or, on a
   vault that does not exist yet, appearing to work (`secret list` printed
-  `(vault is empty)` on a config `agentsync check` rejects); and
+  `(vault is empty; …)` on a config `agentsync check` rejects); and
   `secret remove` now requires `[secrets].recipient` *before* it decrypts,
   rather than mutating the vault in memory and then dying in
   `parse age recipient` — it re-encrypts, so it always needed one. Two of the
@@ -58,15 +61,19 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 - **`check` and `doctor` agree on what a half-initialized source tree is.**
   Three copies of the "is this initialized" probe tested three different things:
   `check` accepted a `~/.agentsync` that was a regular file and then failed with
-  the internal-looking `stat agentsync.toml: not a directory`, and both `check`
-  and `doctor` accepted an `agentsync.toml` that was a *directory* — `doctor`
-  printing `✓ home dir   ok` — leaving the real failure to surface later as
-  `read …/agentsync.toml: is a directory`. All three callers (`check`'s guard,
-  `doctor`'s `home dir` line, and the upgrade-notice probe) now share one
-  `probeSourceInit`, which requires the root to be a directory and
-  `agentsync.toml` to be a regular file. The upgrade-notice probe's answer is
-  unchanged, by design — a stricter answer there would fire a breaking-change
-  banner at a brand-new user.
+  the internal-looking `check: stat agentsync.toml: stat …/agentsync.toml: not a
+  directory`, and both `check` and `doctor` accepted an `agentsync.toml` that was
+  a *directory* — `doctor` printing `✓ home dir   ok` — leaving the real failure
+  to surface later as `read …/agentsync.toml: is a directory`. All three callers
+  (`check`'s guard, `doctor`'s `home dir` line, and the upgrade-notice probe)
+  now share one `probeSourceInit`, which requires the root to be a directory and
+  `agentsync.toml` to be a regular file. When the root or `agentsync.toml`
+  cannot be stat'd at all (a symlink loop, a permission denial), `check`'s
+  message now names just the path that actually failed, instead of re-prefixing
+  a path of its own and doubling the `stat …: stat …:` above — a user debugging
+  a symlink or permission problem is pointed at the file, not the directory.
+  The upgrade-notice probe's answer is unchanged, by design — a stricter answer
+  there would fire a breaking-change banner at a brand-new user.
 
 ### Changed
 

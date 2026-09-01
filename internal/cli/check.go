@@ -172,7 +172,16 @@ func requireInitializedSource(root string, sc adapter.Scope) error {
 		return fmt.Errorf("%s %s has an agentsync.toml that is not a regular file (half-initialized); run %s",
 			label, root, initCmd)
 	default: // sourceInitRootUnreadable, sourceInitConfigUnreadable
-		return fmt.Errorf("check: stat %s: %w", root, err)
+		// err is the *fs.PathError probeSourceInit returns, so it already names
+		// the path that actually failed to stat — the root for
+		// sourceInitRootUnreadable, agentsync.toml for sourceInitConfigUnreadable.
+		// Do NOT re-prefix it with the root: this arm covers both states, so a
+		// `stat <root>: ` prefix contradicts itself on the config one
+		// (`check: stat <root>: stat <root>/agentsync.toml: too many levels of
+		// symbolic links`) and points a user debugging a symlink or permission
+		// problem at the directory instead of the file. doctor renders the same
+		// two states from the same error and names the right path in both.
+		return fmt.Errorf("check: %w", err)
 	}
 }
 
@@ -203,11 +212,11 @@ func requireInitializedSource(root string, sc adapter.Scope) error {
 // render: check's contract is "is this config valid", and an unwritten vault
 // is not invalid config.
 //
-// Each failure is labelled with its [secrets] key. ValidateConfig carries the
-// key in Finding.Field precisely because several messages do not name it
-// themselves — most sharply the vault path, which is DEFAULTED when
-// [secrets].file is unset, so an unlabelled "<path> — not readable" would
-// print a path the user never wrote with no clue which key produced it.
+// Each failure is labelled with its [secrets] key. ValidateConfig's messages
+// are field-relative — not one names its own key — so the label is check's to
+// supply, and this composes `<field>: <message>`. The vault path is the sharp
+// case: [secrets].file is DEFAULTED, so an unlabelled "<path> — not readable"
+// would print a path the user never wrote with no clue which key produced it.
 func secretsProblems(cfg source.SecretsConfig, agentsyncHome, userHome string) error {
 	var msgs []string
 	for _, f := range secrets.ValidateConfig(cfg, agentsyncHome, userHome) {

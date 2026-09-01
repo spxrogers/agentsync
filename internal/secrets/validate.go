@@ -32,10 +32,13 @@ func NormalizeBackend(b string) string { return strings.ToLower(b) }
 // Severity ranks a Finding.
 //
 // The four tiers exist so that a report surface (`agentsync doctor`) can derive
-// its whole Secrets section from this validator — including the lines that pass
-// — instead of restating which fields exist, in what order, and what counts as
-// healthy. Two independently hand-written copies of exactly that is how `check`
-// and `doctor` came to disagree about the same block (issue #228). An
+// its whole [secrets]-block report from this validator — including the lines
+// that pass — instead of restating which fields exist, in what order, and what
+// counts as healthy. Two independently hand-written copies of exactly that is
+// how `check` and `doctor` came to disagree about the same block (issue #228).
+// The BLOCK's report, not doctor's whole Secrets section: doctor prints these
+// lines and then its own ${secret:…}/${env:…} reference-resolution lines under
+// the same heading, and resolvability is not this validator's business. An
 // error-or-nil surface (`agentsync check`) has one verdict to give and acts on
 // SeverityFail alone.
 type Severity int
@@ -68,10 +71,18 @@ func (s Severity) String() string {
 }
 
 // Field names the [secrets] key a Finding is about, so a caller can label or
-// group findings — a padded report column, say. It is not redundant with the
-// message: several messages carry no field name of their own (an OK recipient's
-// "set", a bare resolved path), so a surface that drops the Field has to supply
-// the key itself.
+// group findings — a padded report column, say.
+//
+// It is never redundant with the message, because the messages are
+// FIELD-RELATIVE by construction: not one of them names its own key ("set",
+// "age", "missing — required for backend = …", a bare resolved path). That is
+// what lets a single validator read well on both surfaces — `check` composes
+// `<field>: <message>` into one error line, `doctor` prints the message under a
+// padded label column — and a message that named its key would stutter on both.
+// The corollary is that a surface which DROPS the Field prints an unlabelled
+// line; the vault path is the sharp case, since [secrets].file is DEFAULTED, so
+// a bare "<path> — not readable" names a path the user never wrote. Keep new
+// messages field-relative.
 type Field string
 
 const (
@@ -141,7 +152,7 @@ func ValidateConfig(cfg source.SecretsConfig, agentsyncHome, userHome string) []
 		// ${secret:…}, with "no secrets backend configured". Catching the typo
 		// here is the whole point of a validator.
 		return []Finding{finding(FieldBackend, SeverityFail,
-			"unsupported backend %q (want %q or %q)", cfg.Backend, BackendAge, BackendEnv)}
+			"unsupported %q (want %q or %q)", cfg.Backend, BackendAge, BackendEnv)}
 	}
 
 	return []Finding{
@@ -163,7 +174,7 @@ func ValidateConfig(cfg source.SecretsConfig, agentsyncHome, userHome string) []
 func validateRecipient(cfg source.SecretsConfig) Finding {
 	if cfg.Recipient == "" {
 		return finding(FieldRecipient, SeverityFail,
-			"[secrets].recipient is required for backend = %q", BackendAge)
+			"missing — required for backend = %q", BackendAge)
 	}
 	return finding(FieldRecipient, SeverityOK, "set")
 }
@@ -175,7 +186,7 @@ func validateRecipient(cfg source.SecretsConfig) Finding {
 func validateIdentity(cfg source.SecretsConfig, agentsyncHome, userHome string) Finding {
 	if cfg.IdentityFile == "" {
 		return finding(FieldIdentityFile, SeverityFail,
-			"[secrets].identity_file is required for backend = %q", BackendAge)
+			"missing — required for backend = %q", BackendAge)
 	}
 	path := ResolveIdentityFile(cfg, agentsyncHome, userHome)
 	info, err := os.Stat(path)
@@ -248,7 +259,7 @@ func RequireAgeVault(cfg source.SecretsConfig, op string, access VaultAccess) er
 	// identity_file is invalid anyway (ValidateConfig fails it). Refusing here
 	// names the field: without it the failure surfaced deep inside Decrypt as
 	// `read identity : no such file or directory`, and against a not-yet-created
-	// vault it did not surface at all — `secret list` printed "(vault is empty)".
+	// vault it did not surface at all — `secret list` printed "(vault is empty; …)".
 	if cfg.IdentityFile == "" {
 		return fmt.Errorf("%s requires [secrets].identity_file in agentsync.toml", op)
 	}

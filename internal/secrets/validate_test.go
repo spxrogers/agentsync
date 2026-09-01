@@ -171,7 +171,7 @@ func TestValidateConfig(t *testing.T) {
 			},
 			wantField:    secrets.FieldRecipient,
 			wantSeverity: secrets.SeverityFail,
-			wantContains: "[secrets].recipient is required",
+			wantContains: "missing — required for backend",
 			wantFails:    1,
 		},
 		{
@@ -181,7 +181,7 @@ func TestValidateConfig(t *testing.T) {
 			},
 			wantField:    secrets.FieldIdentityFile,
 			wantSeverity: secrets.SeverityFail,
-			wantContains: "[secrets].identity_file is required",
+			wantContains: "missing — required for backend",
 			wantFails:    1,
 		},
 		{
@@ -291,6 +291,19 @@ func TestValidateConfig(t *testing.T) {
 			}
 			if fails != tc.wantFails {
 				t.Errorf("got %d fail(s), want %d: %+v", fails, tc.wantFails, got)
+			}
+			// FIELD-RELATIVE contract (see the Field doc): a message never names
+			// its own key, because Finding.Field carries it and both surfaces
+			// supply the label themselves — `check` composes "<field>: <message>"
+			// and `doctor` prints the message under a padded label column. A
+			// message written "[secrets].recipient is required …" doubles the key
+			// on both. `[secrets]` unqualified is fine ("no [secrets] block"); it
+			// is the "[secrets].<key>" form that stutters.
+			for _, x := range got {
+				if strings.Contains(x.Message.String(), "[secrets].") {
+					t.Errorf("field %q message names its own key — keep messages field-relative: %q",
+						x.Field, x.Message.String())
+				}
 			}
 		})
 	}
