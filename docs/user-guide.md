@@ -741,9 +741,27 @@ identity file, so `recipient`, `identity_file` and `file` are unused; the
 naming the backend they need. Both `agentsync check` and `agentsync doctor`
 accept `backend = "env"` (in any casing). Any other **non-empty** value —
 whitespace included, since the name is folded but never trimmed — is rejected by
-both; an absent or empty `backend` is not a third value but "no secrets
-configured", and both commands skip it. `apply` treats an unrecognised *or*
-empty backend as *no* backend, so every `${secret:…}` then fails to resolve.
+both.
+
+An absent or empty `backend` is not a third value but "no secrets configured" —
+but the two commands do not report it the same way, because two different
+configs land there:
+
+- **No `[secrets]` block at all** (or a bare `[secrets]` header with nothing
+  under it, which parses identically): `check` says nothing about it, and
+  `doctor` prints one informational line — `• backend    not configured (skip —
+  no [secrets] block)`.
+- **A `[secrets]` block that is present but sets no `backend`** — it carries
+  `recipient` / `identity_file` / `file`, but nothing switched the vault on:
+  `doctor` **warns**, `⚠ backend    not set — ${secret:…} will not resolve (set
+  "age" or "env")`, because that block is inert rather than absent. `check` still
+  exits 0 on it, deliberately: a source carrying no `${secret:…}` reference
+  applies cleanly with that block, so failing there would make `check` refuse a
+  config `apply` accepts. When references *are* present, `check` fails on them,
+  alongside `doctor` and `apply`.
+
+`apply` treats an unrecognised *or* empty backend as *no* backend, so every
+`${secret:…}` then fails to resolve.
 
 ### Project-local config
 

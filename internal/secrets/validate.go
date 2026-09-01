@@ -45,6 +45,17 @@ type Severity int
 
 const (
 	// SeverityOK — the field is configured correctly.
+	//
+	// It is deliberately the ZERO value, so a Finding nobody filled in would
+	// render as a pass. That is safe only because no such Finding exists: every
+	// Finding in this package is built by finding(), which takes a Severity
+	// explicitly, and both consumers read them straight back from
+	// ValidateConfig. Note what this is NOT: doctor's defensive `default:` arm
+	// guards against a NEW TIER added here without a home there, and a new tier
+	// takes a distinct value wherever it is inserted in this block — the named
+	// arms keep routing correctly and the newcomer lands on `default:`. A
+	// `severityUnset = iota` sentinel would therefore renumber an exported type
+	// to guard a state nothing can produce; declined deliberately.
 	SeverityOK Severity = iota
 	// SeverityInfo — there is nothing to check (no [secrets] block at all).
 	SeverityInfo
@@ -144,10 +155,19 @@ func ValidateConfig(cfg source.SecretsConfig, agentsyncHome, userHome string) []
 		// was right there with two keys in it.
 		//
 		// source.SecretsConfig is all-string and comparable, so its zero value
-		// is exactly "not one [secrets] key is set". A `[secrets]` header with
-		// no keys under it unmarshals to that same zero value; the two are
-		// indistinguishable after parsing and equally inert, so reporting them
-		// alike is correct.
+		// says "no [secrets] key carries a VALUE" — which is narrower than "no
+		// key is set", and the comparison below deliberately does not try to be
+		// the latter. THREE different configs compare equal to it: no
+		// `[secrets]` table at all, a bare `[secrets]` header with nothing under
+		// it, and a table that sets its keys to the empty string
+		// (`backend = ""`, `recipient = ""`).
+		// The decoder leaves nothing behind that could tell them apart, and all
+		// three are equally inert — no backend to resolve through, nothing to
+		// validate against — so one informational line for the lot is correct,
+		// even though the wording ("no [secrets] block") is literally true of
+		// only the first. The remedy is identical in every case (set a backend),
+		// so plumbing a `present bool` out of the decoder would buy a third
+		// state with no different answer behind it.
 		if cfg == (source.SecretsConfig{}) {
 			return []Finding{finding(FieldBackend, SeverityInfo, "not configured (skip — no [secrets] block)")}
 		}
@@ -211,6 +231,20 @@ func validateRecipient(cfg source.SecretsConfig) Finding {
 // apply does (ResolveIdentityFile) and gating it with the same
 // CheckIdentityPermissions apply uses — which honours
 // AGENTSYNC_AGE_SKIP_PERM_CHECK=1 and the Windows ACL caveat.
+//
+// A path that stats fine but is NOT a regular file — a directory, a FIFO, a
+// socket — is a hard failure, the same rule validateAgeFile applies to the vault
+// and probeSourceInit to agentsync.toml. It belongs here most of all: this is
+// the path age.ParseIdentities is actually fed, through os.ReadFile in
+// AgeBackend.load and Decrypt. A directory reported `✓ identity   ok` on doctor
+// and exited 0 on check, then failed the eventual read with `read identity …: is
+// a directory`. A FIFO is the sharp one — it clears stat AND, at 0600, the
+// permission gate, and its read does not even fail: os.ReadFile waits forever
+// for a writer that never comes.
+//
+// The shape check comes FIRST, before the permission gate, because a 0755
+// directory is an ordinary directory: reporting it "too permissive; chmod 600"
+// would name the wrong problem and hand the user a remedy that does not apply.
 func validateIdentity(cfg source.SecretsConfig, agentsyncHome, userHome string) Finding {
 	if cfg.IdentityFile == "" {
 		return finding(FieldIdentityFile, SeverityFail,
@@ -220,6 +254,9 @@ func validateIdentity(cfg source.SecretsConfig, agentsyncHome, userHome string) 
 	info, err := os.Stat(path)
 	if err != nil {
 		return finding(FieldIdentityFile, SeverityFail, "%s — not readable (%v)", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return finding(FieldIdentityFile, SeverityFail, "%s — not a regular file", path)
 	}
 	if permErr := CheckIdentityPermissions(path); permErr != nil {
 		return finding(FieldIdentityFile, SeverityFail,

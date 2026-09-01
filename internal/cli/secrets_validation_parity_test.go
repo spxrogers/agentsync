@@ -130,6 +130,11 @@ func TestSecretsValidationParity(t *testing.T) {
 		// identityMode is the mode to create the identity file with; 0 means do
 		// not create it.
 		identityMode os.FileMode
+		// dirIdentity plants a DIRECTORY at the identity path instead of a
+		// regular file. Mutually exclusive with identityMode. It is created
+		// 0o700 so it also clears CheckIdentityPermissions, leaving the
+		// regular-file rule as the only arm that can catch it.
+		dirIdentity bool
 		// blockVault plants a regular file at <home>/blocker so a vault
 		// configured at "blocker/x.age" fails os.Stat with ENOTDIR, not ENOENT.
 		blockVault bool
@@ -260,6 +265,29 @@ func TestSecretsValidationParity(t *testing.T) {
 			},
 		},
 		{
+			// The identity twin of the vault row below. A directory stats fine
+			// and at 0o700 clears the permission gate too, so both surfaces
+			// printed `✓ identity   ok` for a path os.ReadFile then fails on
+			// with `is a directory` — the same false green the vault row exists
+			// to catch, on the path that is actually read.
+			//
+			// The FIFO case cannot be driven from here: it would report ✓ the
+			// same way, but a command that went on to read it would block
+			// forever rather than fail. It is pinned one layer down, where the
+			// validator only stats — see TestValidateConfigFIFOIdentity in
+			// internal/secrets.
+			name: "age backend with a directory at the identity path",
+			block: func(idPath, _ string) string {
+				return "backend = \"age\"\nrecipient = \"age1qqqq\"\nidentity_file = \"" + idPath + "\"\n"
+			},
+			dirIdentity: true,
+			wantFail:    true,
+			wantGlyphs: map[string]string{
+				"backend    ": glyphOK, "recipient  ": glyphOK,
+				"identity   ": glyphFail, "age file   ": glyphWarn,
+			},
+		},
+		{
 			name: "age backend with an un-stat-able vault path",
 			block: func(idPath, _ string) string {
 				return "backend = \"age\"\nrecipient = \"age1qqqq\"\nidentity_file = \"" + idPath + "\"\n" +
@@ -329,6 +357,11 @@ func TestSecretsValidationParity(t *testing.T) {
 				// os.WriteFile applies the process umask; chmod is what actually
 				// pins the bits CheckIdentityPermissions reads.
 				if err := os.Chmod(idPath, tc.identityMode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.dirIdentity {
+				if err := os.MkdirAll(idPath, 0o700); err != nil {
 					t.Fatal(err)
 				}
 			}

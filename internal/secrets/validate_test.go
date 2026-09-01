@@ -314,6 +314,51 @@ func TestValidateConfig(t *testing.T) {
 			wantFails:    1,
 		},
 		{
+			// A DIRECTORY at the identity path stats fine, and at 0o700 it also
+			// clears CheckIdentityPermissions (0o700&0o077 == 0), so before the
+			// regular-file arm neither of validateIdentity's failure arms could
+			// see it: `doctor` printed `✓ identity   ok` and `check` exited 0.
+			// The identity is the path age.ParseIdentities is fed through
+			// os.ReadFile (internal/secrets/age.go), so a directory is not an
+			// identity — the same rule validateAgeFile applies to the vault, and
+			// probeSourceInit to agentsync.toml, finally carried to the third
+			// path this package stats before something else reads it.
+			name: "age with a directory at the identity path fails",
+			mutate: func(t *testing.T, _, idPath string) source.SecretsConfig {
+				if err := os.MkdirAll(idPath, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				return source.SecretsConfig{Backend: "age", Recipient: "age1qqqq", IdentityFile: idPath}
+			},
+			wantField:    secrets.FieldIdentityFile,
+			wantSeverity: secrets.SeverityFail,
+			wantContains: "not a regular file",
+			wantFails:    1,
+		},
+		{
+			// ORDERING, pinned: 0o755 is an ordinary mode for a directory and a
+			// group/other-readable one for a file, so both of validateIdentity's
+			// failure arms match it. The shape arm must answer, because
+			// "too permissive … chmod 600" would name the wrong problem and hand
+			// the user a remedy that does not apply to a directory.
+			name: "a 0755 directory identity is named as the wrong shape, not as too permissive",
+			mutate: func(t *testing.T, _, idPath string) source.SecretsConfig {
+				if err := os.MkdirAll(idPath, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				// MkdirAll applies the umask; chmod is what pins the bits.
+				if err := os.Chmod(idPath, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				return source.SecretsConfig{Backend: "age", Recipient: "age1qqqq", IdentityFile: idPath}
+			},
+			wantField:       secrets.FieldIdentityFile,
+			wantSeverity:    secrets.SeverityFail,
+			wantContains:    "not a regular file",
+			wantNotContains: "too permissive",
+			wantFails:       1,
+		},
+		{
 			name: "age with an absent vault only warns",
 			mutate: func(t *testing.T, _, idPath string) source.SecretsConfig {
 				writeIdentity(t, idPath, 0o600)

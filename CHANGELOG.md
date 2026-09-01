@@ -54,14 +54,24 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   canonical source carrying no `${secret:…}` reference applies cleanly with it,
   so failing `check` there would be a new `check`/`apply` divergence of exactly
   the kind this release removes. When references *are* present, `check` and
-  `doctor` already fail on them, alongside `apply`.
-- **A directory at the `[secrets].file` vault path is no longer reported as
-  healthy.** A directory (or FIFO, or socket) stats successfully, so it reached
-  neither the "not yet created" nor the "not readable" arm and both
-  `agentsync check` and `agentsync doctor` passed it with a `✓`, leaving the
-  real failure to the first decrypt. The vault must now be a regular file — the
-  same rule both commands already apply to `agentsync.toml` — and each reports
-  it as a hard failure (`file: <path> — not a regular file`).
+  `doctor` already fail on them, alongside `apply`. The user guide and the
+  configuration reference now draw the same absent-block / present-but-inert
+  split, instead of saying both commands skip either one.
+- **A directory at the `[secrets].file` vault path or the
+  `[secrets].identity_file` age key is no longer reported as healthy.** A
+  directory (or FIFO, or socket) stats successfully, so neither path reached the
+  "not yet created" or the "not readable" arm and both `agentsync check` and
+  `agentsync doctor` passed them with a `✓`, leaving the real failure to the
+  first decrypt. Both must now be regular files — the same rule both commands
+  already apply to `agentsync.toml` — and each is reported as a hard failure
+  (`file: <path> — not a regular file`, `identity_file: <path> — not a regular
+  file`). The identity is the sharper of the two, because it is the path
+  `secrets.Decrypt` hands to `os.ReadFile`: a directory there failed the decrypt
+  with `read identity …: is a directory`, and a FIFO did not fail it at all —
+  `os.ReadFile` waits forever for a writer that never comes, so a `secret get`
+  against a vault that exists hung instead of erroring. The identity's *shape*
+  is now checked before its *permissions*, so a `0755` directory is named as the
+  wrong shape rather than told to `chmod 600`.
 - **The `agentsync secret` subcommands agree with `apply` on the backend name,
   and check the vault before touching it.** All five (`get`, `list`, `set`,
   `edit`, `remove`) compared `[secrets].backend` against the literal `"age"`, so
