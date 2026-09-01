@@ -1157,8 +1157,8 @@ func writeBackFileItem(home string, it reconcileItem) error {
 		// mid-prompt with a keystroke to choose, and "read dest X: not a regular
 		// file" alone does not tell them which one gets them unstuck.
 		//
-		// [o]verride is deliberately NOT offered, unlike the peer refusals in
-		// this file. It re-applies through render.Writer.Write, whose
+		// [o]verride is deliberately NOT offered for THIS arm, unlike the peer
+		// refusals in this file and unlike the absent-destination arm below. It re-applies through render.Writer.Write, whose
 		// convergence read is not shape-guarded, so on this exact item it does
 		// not fail — it HANGS (measured: `reconcile --auto-override` rc=124).
 		// An earlier version of this message recommended it, which walked the
@@ -1168,11 +1168,14 @@ func writeBackFileItem(home string, it reconcileItem) error {
 			return fmt.Errorf("read dest %s: %w — remove or replace the non-regular file at "+
 				"that path and re-run, or [i]gnore to suppress this item", it.op.Path, err)
 		}
-		// Any other read failure — an absent destination (the common case: the
-		// user deleted a managed file, which is itself drift and offers [w]), a
-		// permission error — must NOT be told to "remove the non-regular file".
-		// An earlier version appended that sentence unconditionally.
-		return fmt.Errorf("read dest %s: %w — [i]gnore suppresses this item", it.op.Path, err)
+		// Any other read failure keeps the peers' remedy set. The common one is
+		// an ABSENT destination — the user deleted a managed file, which is
+		// itself drift — and there [o]verride is both safe and usually the fix:
+		// Writer.Write's convergence read gets ENOENT and falls straight
+		// through to the write. Withholding it is only correct for the
+		// non-regular case above.
+		return fmt.Errorf("read dest %s: %w — use [o]verride to restore it from canonical, "+
+			"or [i]gnore to suppress this item", it.op.Path, err)
 	}
 	srcID := it.op.SourceID
 	if srcID == "" {

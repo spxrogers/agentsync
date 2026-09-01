@@ -14,8 +14,11 @@ import (
 // double it in the wrapped message.
 var errDestNotRegular = errors.New("not a regular file")
 
-// readDestBytes reads a destination file's bytes, refusing before the open any
-// path whose shape cannot be read as a file.
+// readDestBytes reads a destination file's bytes, refusing any path whose shape
+// cannot be read as a file. The check is a stat before the open, so it is
+// racy against something reshaping the path in between — that window needs
+// write access to the destination's own directory, which is already game over,
+// and closing it properly needs O_RDONLY|O_NONBLOCK + fstat.
 //
 // The guard is not defensive tidying. os.ReadFile on a FIFO does not fail — it
 // BLOCKS in the open, waiting for a writer that never comes, so no error path
@@ -44,24 +47,27 @@ var errDestNotRegular = errors.New("not a regular file")
 // `reconcile` have always reported. That belongs with the drift-walk
 // unification in #229, where all four walks can be changed together.
 //
-// (An earlier version of this comment justified it differently, by claiming
-// AGENTSYNC_ALLOW_SYMLINK_DEST=1 would break. That was wrong — the variable is
-// read only in internal/iox, on the WRITE path, so a read gate cannot affect
-// it. The real consequence of the split is worse and is worth naming: under
-// that supported setup apply writes THROUGH the link, yet hashFile refuses
-// links unconditionally, so `status` reports drift that no apply can ever
-// clear. #229 owns that too.)
-// TestHashFileSentinels asserts both halves of the split.
+// The split has a real cost worth naming: under AGENTSYNC_ALLOW_SYMLINK_DEST=1
+// apply writes THROUGH a symlinked destination, yet hashFile refuses links
+// unconditionally, so `status` reports drift that no apply can ever clear. #229
+// owns that too. TestHashFileSentinels asserts both halves of the split.
 //
-// What a caller DOES with the refusal is its own business, and two of them
-// currently swallow it: `diff` (internal/cli/diff.go) leaves the destination
-// text empty and `readDestFile` decodes to an empty map, so a refused
-// destination renders as "every byte / every key removed" — indistinguishable
-// from an absent one. That is a poorer diagnosis than the shape error deserves,
-// and it is the same silent-drop shape this repo's own rules warn about; it is
-// left as-is here because surfacing it means changing what those two commands
-// print, which belongs with the drift-walk unification in #229. `status`,
-// `doctor` and `reconcile`'s write-back all name the shape correctly.
+// What a caller DOES with the refusal is its own business, and today almost
+// none of them surface it. Measured against a FIFO destination:
+//
+//   - `reconcile`'s write-back is the ONLY surface that names the shape.
+//   - `status` maps it to the opaque not-a-regular-file hash, which exists only
+//     to never equal a content hash; statusItem carries no reason, so the user
+//     sees a bare "drift".
+//   - `diff` leaves the destination text empty and readDestFile decodes to an
+//     empty map, so a refused destination renders as "every byte / every key
+//     removed" — indistinguishable from an absent one. `explain` inherits that.
+//   - `doctor` reads no destination at all and reports "all checks passed".
+//
+// So the refusal is mostly a better DIAGNOSIS available to callers rather than
+// one they give the user, and that gap is wider than this gate. Narrowing it
+// means changing what several commands print, which belongs with the drift-walk
+// unification in #229 rather than here.
 //
 // An ABSENT path is not refused: render.IsRegularOrAbsent reports absent as
 // acceptable, so os.ReadFile runs and its ENOENT reaches the caller unchanged.

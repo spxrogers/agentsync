@@ -205,6 +205,14 @@ func TestWriteBackFileItemMessageMatchesTheFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "[i]gnore") {
 		t.Errorf("error = %q, want it to still name a next step", err)
 	}
+	// [o]verride is withheld only for a NON-REGULAR destination, where it would
+	// hang (#241). For an absent one it is safe — Writer.Write's convergence
+	// read gets ENOENT and falls through to the write — and it is the actual
+	// fix, so withholding it here would deny the user the remedy that works.
+	if !strings.Contains(err.Error(), "[o]verride") {
+		t.Errorf("error = %q, want it to offer [o]verride: the destination is absent, not "+
+			"non-regular, so re-applying canonical is safe and is the fix", err)
+	}
 }
 
 // mkfifoDest creates a 0600 FIFO at a destination path and returns it. mkfifo

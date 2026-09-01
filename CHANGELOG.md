@@ -12,9 +12,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 ### Fixed
 
 - **A FIFO at a managed destination no longer hangs `status`, `diff`, or
-  `reconcile`'s drift walk and write-back.** (A directory there never hung —
-  `os.ReadFile` fails it immediately with `EISDIR` — but it is now refused with
-  the same shape error instead of that surfacing from deeper in the decode.) `os.ReadFile` on a FIFO does
+  `reconcile`'s drift walk and write-back.** (A directory there never hung — `os.ReadFile`
+  fails it immediately with `EISDIR` — and for `status` and `diff` nothing about
+  it changes; only `reconcile`'s write-back now names the shape rather than
+  reporting `EISDIR`.) `os.ReadFile` on a FIFO does
   not fail — it blocks in the open waiting for a writer that never comes — so
   the read's own error path never runs and the command never returns. Measured
   on the previous release: a FIFO at a whole-file destination wedged `diff` and

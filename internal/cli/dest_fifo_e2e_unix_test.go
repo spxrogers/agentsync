@@ -4,6 +4,7 @@ package cli_test
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,11 +72,15 @@ func TestCommandsDoNotHangOnNonRegularDestination(t *testing.T) {
 			// Swap the applied destination for a FIFO, and RESTORE it after.
 			// Removing the FIFO is not enough: the subtests share one applied
 			// home, so leaving the path absent means the next shape's subtest
-			// runs against a home that was never fully applied. Measured before
-			// this restore: with the skips deleted, `import claude` and
-			// `reconcile --auto-override` PASSED in a full run and HUNG when
-			// their subtest ran alone — so whoever closes #241/#242 would have
-			// inherited a row that was green for the wrong reason.
+			// runs against a home that was never fully applied — contradicting
+			// this test's own premise.
+			//
+			// That is a structural property, not a measured pass/hang flip. An
+			// earlier version of this comment claimed the un-skipped rows
+			// changed outcome without the restore; eight configurations could
+			// not reproduce that. What actually varies there is goroutines left
+			// parked in open(2) by PRECEDING timed-out rows, which can pair
+			// with a later opener — nondeterministic, and orthogonal to this.
 			applied, err := os.ReadFile(dest.path)
 			if err != nil {
 				t.Fatal(err)
@@ -88,17 +93,12 @@ func TestCommandsDoNotHangOnNonRegularDestination(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err := syscall.Mkfifo(dest.path, 0o600); err != nil {
-				// Put the destination back before bailing out.
+				// Safe to write directly here: mkfifo failed, so the path is
+				// still absent rather than a FIFO.
 				_ = os.WriteFile(dest.path, applied, info.Mode().Perm())
 				t.Skipf("mkfifo unsupported here: %v", err)
 			}
-			t.Cleanup(func() {
-				_ = os.Remove(dest.path)
-				if err := os.WriteFile(dest.path, applied, info.Mode().Perm()); err != nil {
-					t.Errorf("restoring %s: %v — the next subtest would run against a "+
-						"partially-applied home", dest.path, err)
-				}
-			})
+			t.Cleanup(func() { restoreDest(t, dest.path, applied, info.Mode().Perm()) })
 
 			// The first group is what this change fixes. The second still hangs
 			// on this exact fixture and is SKIPPED rather than asserted or
@@ -139,20 +139,20 @@ func TestCommandsDoNotHangOnNonRegularDestination(t *testing.T) {
 // be set by the caller on the test goroutine (runCLI's t.Setenv persists for the
 // whole test), so nothing here touches testing.T off the test goroutine except
 // the final t.Fatalf.
-func runBounded(t *testing.T, d time.Duration, args ...string) string {
+func runBounded(t *testing.T, d time.Duration, args ...string) {
 	t.Helper()
-	out, ran, err := runBoundedE(t, d, args...)
+	ran, err := runBoundedE(t, d, args...)
 	if !ran {
 		t.Fatalf("`agentsync %s` never reached its command body (err=%v) — the row executed "+
 			"none of the code it names, so \"it returned\" proves nothing", strings.Join(args, " "), err)
 	}
-	return out
 }
 
 // runBoundedE runs the CLI in a goroutine, bounded by d, and reports whether the
-// resolved command's body actually STARTED. It returns rather than failing, so
-// the anti-vacuity check itself can be tested; runBounded is the fatal wrapper
-// every real row uses.
+// resolved command's body actually STARTED. It REPORTS that verdict rather than
+// failing on it, so the anti-vacuity check itself can be tested; runBounded is
+// the fatal wrapper every real row uses. (The timeout path still fails here —
+// a wedged command has no verdict to report.)
 //
 // `ran` is OBSERVED, by wrapping the resolved command's RunE, rather than
 // inferred from cobra's error text. Two earlier versions inferred it and both
@@ -164,7 +164,7 @@ func runBounded(t *testing.T, d time.Duration, args ...string) string {
 // enforceScopeStance (internal/cli/scope_flags.go), a PersistentPreRunE refusal
 // that never reaches RunE. Wrapping the body answers the actual question and
 // cannot drift with cobra's wording.
-func runBoundedE(t *testing.T, d time.Duration, args ...string) (out string, ran bool, err error) {
+func runBoundedE(t *testing.T, d time.Duration, args ...string) (ran bool, err error) {
 	t.Helper()
 	detachSlog(t)
 	type result struct {
@@ -202,12 +202,12 @@ func runBoundedE(t *testing.T, d time.Duration, args ...string) (out string, ran
 	}()
 	select {
 	case r := <-done:
-		return r.out, r.ran, r.err
+		return r.ran, r.err
 	case <-time.After(d):
 		t.Fatalf("`agentsync %s` BLOCKED on a non-regular destination — os.ReadFile on a "+
 			"FIFO waits for a writer that never comes, so the read's own error path never "+
 			"runs and the command never returns", strings.Join(args, " "))
-		return "", false, nil
+		return false, nil
 	}
 }
 
@@ -235,7 +235,7 @@ func TestRunBoundedDetectsACommandThatNeverRan(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, ran, err := runBoundedE(t, 8*time.Second, tc.args...)
+			ran, err := runBoundedE(t, 8*time.Second, tc.args...)
 			if err == nil {
 				t.Fatalf("`agentsync %s` returned nil; expected it to be refused",
 					strings.Join(tc.args, " "))
@@ -251,9 +251,90 @@ func TestRunBoundedDetectsACommandThatNeverRan(t *testing.T) {
 	// The other direction: a command that DOES run must report ran=true, or
 	// every real row would fail as vacuous.
 	t.Run("a command that runs is reported as having run", func(t *testing.T) {
-		if _, ran, _ := runBoundedE(t, 8*time.Second, "version"); !ran {
+		if ran, _ := runBoundedE(t, 8*time.Second, "version"); !ran {
 			t.Error("runBoundedE reported ran=false for `version`, which has no arguments to " +
 				"get wrong — the wrap is not finding the resolved command")
 		}
 	})
+}
+
+// restoreDest puts a captured destination back, by RENAME rather than by
+// writing to the path.
+//
+// os.WriteFile opens the destination, and opening a FIFO blocks until the other
+// end appears — inside t.Cleanup, where no per-row timeout applies, that wedges
+// the suite outright. Worse, when a reader IS present — which is what a
+// timed-out row leaves parked in open(2), and becomes common once the #241/#242
+// skips are deleted — the write succeeds, drains into the pipe, returns nil,
+// and leaves the FIFO in place, so an error check never fires and the
+// destination is silently not restored. Rename never opens the target.
+// TestRestoreDestReplacesAFIFOEvenWithAReaderAttached measures exactly that.
+func restoreDest(t *testing.T, path string, data []byte, mode os.FileMode) {
+	t.Helper()
+	tmp := path + ".restore"
+	if err := os.WriteFile(tmp, data, mode); err != nil {
+		t.Errorf("restoring %s: %v", path, err)
+		return
+	}
+	// os.WriteFile's mode is masked by umask on create; chmod pins it.
+	if err := os.Chmod(tmp, mode); err != nil {
+		t.Errorf("restoring %s: %v", path, err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		t.Errorf("restoring %s: %v — the next subtest would run against a "+
+			"partially-applied home", path, err)
+	}
+}
+
+// TestRestoreDestReplacesAFIFOEvenWithAReaderAttached pins the reason
+// restoreDest renames instead of writing.
+//
+// The reader goroutine reproduces what a timed-out row leaves behind. Without
+// the rename, os.WriteFile succeeds here — the bytes vanish into the pipe, the
+// error is nil, and the FIFO survives, so the destination is silently NOT
+// restored and the next subtest runs against a partially-applied home.
+func TestRestoreDestReplacesAFIFOEvenWithAReaderAttached(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dest")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Skipf("mkfifo unsupported here: %v", err)
+	}
+
+	// A reader parked on the FIFO, as an abandoned CLI goroutine would be.
+	opened := make(chan struct{})
+	go func() {
+		f, err := os.Open(path)
+		close(opened)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, f)
+			_ = f.Close()
+		}
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		restoreDest(t, path, []byte("applied"), 0o644)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("restoreDest BLOCKED on %s — it must not open the destination", path)
+	}
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("destination is %s after restore, want a regular file: the write went INTO "+
+			"the FIFO instead of replacing it, so the fixture was never restored",
+			info.Mode().Type())
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "applied" {
+		t.Errorf("restored content = (%q, %v), want %q", got, err, "applied")
+	}
+	<-opened
 }
