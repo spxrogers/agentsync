@@ -287,8 +287,14 @@ func validateIdentity(cfg source.SecretsConfig, agentsyncHome, userHome string) 
 // socket — is a hard failure too. secrets.Decrypt os.Opens the path and reads
 // an age stream out of it, so none of those is a vault; without this arm a
 // directory at the vault path reported ✓ on both surfaces and left the real
-// failure to the first decrypt. It is the same rule probeSourceInit adopted for
-// agentsync.toml, carried here.
+// failure to the first decrypt, and a FIFO there produced no failure at all —
+// open(2) blocked until the command was killed. It is the same rule
+// probeSourceInit adopted for agentsync.toml, carried here.
+//
+// This arm REPORTS. The matching rule on the path that READS is openVault
+// (internal/secrets/age.go), which every vault open goes through: only `check`
+// runs this validator before reading, so a report-side rule alone left the
+// whole `secret` group free to open the FIFO it had just been told about.
 func validateAgeFile(cfg source.SecretsConfig, agentsyncHome, userHome string) Finding {
 	path := ResolveAgeFile(cfg, agentsyncHome, userHome)
 	info, err := os.Stat(path)

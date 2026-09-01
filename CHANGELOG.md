@@ -65,29 +65,40 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   a `✓` whenever its mode set no group/other bits — a `0700` directory, say, or
   a `0600` FIFO. (An identity directory at `0755` did not pass; it drew
   `too permissive … chmod 600`, a remedy that does not apply to a directory.)
-  Either way the real failure was left to the first decrypt. Both must now be
-  regular files — the same rule both commands already apply to `agentsync.toml`
-  — reported as a hard failure (`file: <path> — not a regular file`,
+  Either way the real failure was left to the first decrypt — where, as below, a
+  FIFO produced no failure at all. Both must now be regular files — the same
+  rule both commands already apply to `agentsync.toml` — reported as a hard
+  failure (`file: <path> — not a regular file`,
   `identity_file: <path> — not a regular file`), and the identity's *shape* is
   now checked before its *permissions*, so a `0755` directory is named as the
   wrong shape rather than told to `chmod 600`.
 
-  The identity is the sharper of the two, because it is the path
-  `secrets.Decrypt` and `AgeBackend.load` hand to `os.ReadFile`: a directory
-  there failed the decrypt with `read identity …: is a directory`, and a FIFO
-  did not fail it at all — `os.ReadFile` waits forever for a writer that never
-  comes. **Fixing the report alone did not fix that**, because only `check` runs
-  the validator before reading. Measured against a vault that exists, with a live
-  `${secret:…}` reference and a valid recipient, a `0600` FIFO identity still
-  wedged `secret get`, `secret list`, `secret set`, `secret edit`,
-  `secret remove`, `apply` and `doctor` — the last of those after printing its
-  own `✗` for the very file it then blocked on — until each was killed. The
-  regular-file rule therefore also sits on `secrets.CheckIdentityPermissions`,
-  the one pre-read gate every path that reads the identity already calls, ahead
-  of both its Windows caveat and its `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` override:
-  neither of those is about mode bits, and a FIFO is a FIFO regardless. All of
-  those commands now fail immediately with `age identity <path> is not a regular
-  file`.
+  **Fixing the report alone did not fix either one**, because only `check` runs
+  the validator before reading. Both paths are handed straight to the OS by
+  `secrets.Decrypt` and `AgeBackend.load` — the identity to `os.ReadFile`, the
+  vault to `os.Open` — and neither call fails on a FIFO: it waits forever for a
+  writer that never comes. (A directory is the milder shape: it does fail, but
+  several layers down, as `read identity …: is a directory` or an age header
+  parse error naming the wrong problem.) Measured against a fixture with a real
+  age keypair, a decryptable vault and a valid recipient, a `0600` FIFO
+  *identity* — with a live `${secret:…}` reference present — wedged
+  `secret get`, `secret list`, `secret set`, `secret edit`, `secret remove`,
+  `apply` and `doctor`, the last of those after printing its own `✗` for the
+  very file it then blocked on; a `0600` FIFO *vault* wedged `secret list` and
+  `secret get` the same way, with zero output. Each had to be killed. Only
+  `check` was clean.
+
+  The regular-file rule therefore also sits on the gate each read path passes
+  through. For the identity that is `secrets.CheckIdentityPermissions` — which
+  every path that reads the identity already calls — ahead of both its Windows
+  caveat and its `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` override: neither of those is
+  about mode bits, and a FIFO is a FIFO regardless. For the vault it is a
+  function that returns the opened handle, so that obtaining the file *is* the
+  check and a third read site cannot forget to call it. Those commands now fail
+  immediately with `age identity <path> is not a regular file` or `age file
+  <path> is not a regular file`. A vault that is merely ABSENT is untouched:
+  the gate stats only for shape and lets every other stat failure fall through
+  to the open, which still reports it as not yet created.
 - **The `agentsync secret` subcommands agree with `apply` on the backend name,
   and check their `[secrets]` keys before touching the vault.** All five
   (`get`, `list`, `set`, `edit`, `remove`) compared `[secrets].backend` against

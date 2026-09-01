@@ -3,12 +3,16 @@
 package secrets_test
 
 import (
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"filippo.io/age"
 
 	"github.com/spxrogers/agentsync/internal/secrets"
 )
@@ -154,6 +158,198 @@ func mkfifoIdentity(t *testing.T, tmp string) string {
 	// mkfifo applies the process umask; chmod is what pins 0600, so a FIFO row
 	// cannot be answered by the "too permissive" arm instead of the shape one.
 	if err := os.Chmod(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestVaultShapeGate pins the SHAPE arm on the OTHER age path — the
+// [secrets].file vault that AgeBackend.load and secrets.Decrypt open.
+//
+// It is the exact twin of TestCheckIdentityPermissionsShape, one field over,
+// and it exists because the identity fix did not cover it: open(2) on a FIFO
+// blocks in the OPEN, so `open age file %s: %w` never runs. Measured against
+// this fixture's shape at the commit before the fix, a 0600 FIFO at the vault
+// path wedged `secret list` and `secret get` with zero output until they were
+// killed, while `agentsync check` was clean — the identity symptom verbatim.
+//
+// THE REAL KEYPAIR BELOW IS LOAD-BEARING, not scene-setting. Both entry points
+// read and PARSE the identity before they ever open the vault, so a fixture
+// with a placeholder identity fails at age.ParseIdentities two statements
+// early and never reaches the gate under test — every row would pass, and pass
+// for the wrong reason, whether or not the gate exists. A hand probe built that
+// way is what made this bug look unreproducible for a round.
+//
+// As in the sibling test, the per-case timeout is the guard: if the gate is
+// ever changed to open the path it means to check, this reports in 5s instead
+// of wedging CI with no diagnostic.
+func TestVaultShapeGate(t *testing.T) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		// setup returns the vault path to gate. It must never OPEN that path.
+		setup func(t *testing.T, tmp string) string
+		// wantErrContains is asserted on the error from BOTH entry points; an
+		// empty value means the row must SUCCEED and yield the fixture secret.
+		wantErrContains string
+		// wantErrLacks guards against an over-broad arm answering a row that
+		// belongs to a different one.
+		wantErrLacks string
+	}{
+		{
+			// The sharp one. A FIFO clears stat, and its open never returns.
+			name:            "a FIFO vault is rejected by shape",
+			setup:           mkfifoVault,
+			wantErrContains: "not a regular file",
+		},
+		{
+			// A directory does fail the open (EISDIR), so this row is about the
+			// DIAGNOSIS: "is a directory" surfaces from age's stream parser
+			// several layers down, "not a regular file" names the actual defect.
+			name: "a directory vault is rejected by shape",
+			setup: func(t *testing.T, tmp string) string {
+				t.Helper()
+				p := filepath.Join(tmp, "secrets.age")
+				if err := os.Mkdir(p, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				return p
+			},
+			wantErrContains: "not a regular file",
+		},
+		{
+			// The fail-open row, and the reason the gate stats rather than
+			// refusing on any stat error: an ABSENT vault is the ordinary state
+			// of an install that has not run `secret set` yet, and must keep
+			// reporting itself as absent rather than as the wrong shape.
+			name: "an absent vault still reports the truthful open error",
+			setup: func(t *testing.T, tmp string) string {
+				t.Helper()
+				return filepath.Join(tmp, "secrets.age")
+			},
+			wantErrContains: "open age file",
+			wantErrLacks:    "not a regular file",
+		},
+		{
+			// The guard against an over-broad arm: an ordinary vault must still
+			// decrypt end to end. This row fails if the gate rejects, if it
+			// consumes the stream before age sees it, or if it leaks the handle.
+			name: "an ordinary regular vault still decrypts",
+			setup: func(t *testing.T, tmp string) string {
+				t.Helper()
+				return writeVault(t, tmp, id.Recipient())
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			idPath := filepath.Join(tmp, "age.key")
+			if err := os.WriteFile(idPath, []byte(id.String()+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			vault := tc.setup(t, tmp)
+
+			// Both read paths are asserted: Decrypt and AgeBackend.load are
+			// separate copies of the same open, so pinning one would leave the
+			// other free to regress silently.
+			entries := map[string]func() error{
+				"secrets.Decrypt": func() error {
+					raw, err := secrets.Decrypt(vault, idPath)
+					if err == nil && !strings.Contains(string(raw), "s3cr3t") {
+						return fmt.Errorf("decrypted %q, want the fixture secret", raw)
+					}
+					return err
+				},
+				"AgeBackend.Resolve": func() error {
+					got, err := secrets.NewAgeBackend(vault, idPath).Resolve("demo.key")
+					if err == nil && got != "s3cr3t" {
+						return fmt.Errorf("resolved %q, want %q", got, "s3cr3t")
+					}
+					return err
+				},
+			}
+
+			for name, run := range entries {
+				t.Run(name, func(t *testing.T) {
+					// By channel, not a captured variable, so an entry point
+					// that DID block cannot race the assertions under -race.
+					errCh := make(chan error, 1)
+					go func() { errCh <- run() }()
+					var err error
+					select {
+					case err = <-errCh:
+					case <-time.After(5 * time.Second):
+						t.Fatalf("%s BLOCKED on %s — the vault must be STAT'd for shape "+
+							"before it is opened: open(2) on a FIFO waits for a writer "+
+							"that never comes, so the open's own error path never runs",
+							name, vault)
+					}
+
+					if tc.wantErrContains == "" {
+						if err != nil {
+							t.Fatalf("%s = %v, want success", name, err)
+						}
+						return
+					}
+					if err == nil {
+						t.Fatalf("%s(%s) = nil, want an error containing %q",
+							name, vault, tc.wantErrContains)
+					}
+					if !strings.Contains(err.Error(), tc.wantErrContains) {
+						t.Errorf("%s error = %q, want it to contain %q",
+							name, err.Error(), tc.wantErrContains)
+					}
+					if tc.wantErrLacks != "" && strings.Contains(err.Error(), tc.wantErrLacks) {
+						t.Errorf("%s error = %q, want it NOT to contain %q",
+							name, err.Error(), tc.wantErrLacks)
+					}
+				})
+			}
+		})
+	}
+}
+
+// mkfifoVault creates a 0600 FIFO at the vault path. mkfifo and chmod do not
+// open the FIFO; nothing in this file ever does.
+func mkfifoVault(t *testing.T, tmp string) string {
+	t.Helper()
+	p := filepath.Join(tmp, "secrets.age")
+	if err := syscall.Mkfifo(p, 0o600); err != nil {
+		t.Skipf("mkfifo unsupported here: %v", err)
+	}
+	// mkfifo applies the process umask; chmod pins 0600 so this row cannot be
+	// answered by a permission arm instead of the shape one.
+	if err := os.Chmod(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// writeVault encrypts the fixture secret to recipient and returns its path.
+// The vault is written UNARMORED because that is what secrets.Encrypt writes
+// and what age.Decrypt reads here; an armored file fails at header parsing.
+func writeVault(t *testing.T, tmp string, recipient age.Recipient) string {
+	t.Helper()
+	p := filepath.Join(tmp, "secrets.age")
+	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	w, err := age.Encrypt(f, recipient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(w, "[demo]\nkey = \"s3cr3t\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return p
