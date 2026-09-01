@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
-	"path/filepath"
+	"strings"
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
@@ -100,8 +100,8 @@ wrong, and check when something is written wrong.`,
 					return fmt.Errorf("agents.%q: %w", name, err)
 				}
 			}
-			if err := verifySecrets(c.Config.Secrets, home); err != nil {
-				return fmt.Errorf("check secrets: %w", err)
+			if err := secretsProblems(c.Config.Secrets, home, userHome); err != nil {
+				return err
 			}
 			// Reference checking, two layers (issue #171):
 			//   1. SHAPE — both modes. A malformed ref (${secret:} empty key,
@@ -158,64 +158,109 @@ func requireInitializedSource(root string, sc adapter.Scope) error {
 		label = "project source tree"
 		initCmd = "`agentsync init --scope project`"
 	}
-	if _, err := os.Stat(root); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("%s %s does not exist; run %s first", label, root, initCmd)
-		}
-		return fmt.Errorf("check: stat %s: %w", root, err)
+	st, err := probeSourceInit(root)
+	switch st {
+	case sourceInitOK:
+		return nil
+	case sourceInitRootMissing:
+		return fmt.Errorf("%s %s does not exist; run %s first", label, root, initCmd)
+	case sourceInitRootNotDir:
+		return fmt.Errorf("%s %s exists but is not a directory; move it aside and run %s", label, root, initCmd)
+	case sourceInitConfigMissing:
+		return fmt.Errorf("%s %s is missing agentsync.toml (half-initialized); run %s", label, root, initCmd)
+	case sourceInitConfigNotFile:
+		return fmt.Errorf("%s %s has an agentsync.toml that is not a regular file (half-initialized); run %s",
+			label, root, initCmd)
+	case sourceInitRootUnreadable, sourceInitConfigUnreadable:
+		// err is the *fs.PathError probeSourceInit returns, so it already names
+		// the path that actually failed to stat — the root for
+		// sourceInitRootUnreadable, agentsync.toml for sourceInitConfigUnreadable.
+		// Do NOT re-prefix it with the root: this arm covers both states, so a
+		// `stat <root>: ` prefix contradicts itself on the config one
+		// (`check: stat <root>: stat <root>/agentsync.toml: too many levels of
+		// symbolic links`) and points a user debugging a symlink or permission
+		// problem at the directory instead of the file. doctor renders the same
+		// two states from the same error and names the right path in both.
+		return fmt.Errorf("check: %w", err)
+	default:
+		// DEFENSIVE ONLY — every sourceInitState is named above. A state added
+		// to sourceinit.go without a home here reaches this arm with a nil err
+		// (only the two *Unreadable states carry one), and the `%w` wrap this
+		// used to fall through to would have printed `check: %!w(<nil>)`. Name
+		// the unclassified state instead, so the gap is visible.
+		return fmt.Errorf("%s %s is not usable (unhandled source state %d); run %s",
+			label, root, int(st), initCmd)
 	}
-	if _, err := os.Stat(filepath.Join(root, "agentsync.toml")); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("%s %s is missing agentsync.toml (half-initialized); run %s", label, root, initCmd)
-		}
-		return fmt.Errorf("check: stat agentsync.toml: %w", err)
-	}
-	return nil
 }
 
-// verifySecrets validates the [secrets] block beyond the schema decode:
-// recipient and identity_file are required when backend is age, the
-// identity file must be readable, and on POSIX the file must not be
-// world- or group-readable.
-func verifySecrets(cfg source.SecretsConfig, home string) error {
-	if cfg.Backend == "" || cfg.Backend == "env" {
+// secretsProblems maps the SINGLE [secrets] validator's hard failures onto
+// check's one error-or-nil verdict. check does not decide what a valid
+// [secrets] block is — secrets.ValidateConfig does, in the same package as the
+// SelectBackend apply resolves through and folding the backend name through
+// the same NormalizeBackend, so `backend = "AGE"` can no longer apply cleanly
+// and fail check (issue #228). Where the validator is deliberately STRICTER
+// than apply it stays so: an unrecognised backend fails here, while apply
+// degrades it to NopResolver and errors only at the first ${secret:…}.
+//
+// `doctor` renders from this same validator now, so check and doctor can no
+// longer reach different verdicts on one [secrets] block
+// (TestSecretsValidationParity pins that). The `secret` subcommands — edit,
+// get, set, list, remove — gate on secrets.RequireAgeVault instead: a
+// deliberately DIFFERENT and narrower rule, because they manage the age vault
+// itself, so `backend = "env"` is a correct refusal for them (doctor's refusal
+// of the same value was the #228 bug — it only reports). What they no longer
+// keep is a private idea of how a backend name is spelled: RequireAgeVault
+// folds it through the same NormalizeBackend, so the `backend = "AGE"` apply
+// resolves is accepted there too. Nothing in internal/cli decides what a valid
+// [secrets] block is any more — internal/secrets owns both rules, and check,
+// doctor and the `secret` group are its consumers.
+//
+// Only SeverityFail findings become an error (and, defensively, any tier this
+// switch does not name — see its default arm). SeverityWarn and the passing
+// tiers are for a REPORT surface to render: check's contract is "is this config
+// valid", and neither of the two states the validator warns on is invalid
+// config. A vault that has not been created yet is a fresh install. A [secrets]
+// block with no backend set is inert — a canonical source carrying no
+// ${secret:…} reference applies cleanly with it, so failing here would make
+// check refuse a config apply accepts, which is the divergence this whole
+// unification removes; when references ARE present, check's own resolvability
+// pass below fails on them, as apply does.
+//
+// Each failure is labelled with its [secrets] key. ValidateConfig's messages
+// are field-relative — not one names its own key — so the label is check's to
+// supply, and this composes `<field>: <message>`. The vault path is the sharp
+// case: [secrets].file is DEFAULTED, so an unlabelled "<path> — not readable"
+// would print a path the user never wrote with no clue which key produced it.
+func secretsProblems(cfg source.SecretsConfig, agentsyncHome, userHome string) error {
+	var msgs []string
+	for _, f := range secrets.ValidateConfig(cfg, agentsyncHome, userHome) {
+		switch f.Severity {
+		case secrets.SeverityOK, secrets.SeverityInfo, secrets.SeverityWarn:
+			continue
+		case secrets.SeverityFail:
+			// The one tier check acts on; fall through and record it.
+		default:
+			// DEFENSIVE ONLY — every secrets.Severity is named above, and this
+			// is the twin of doctor's default arm (checkSecrets). A tier added
+			// to internal/secrets without a home here must NOT be silently
+			// DROPPED: `!= SeverityFail` would have skipped a hypothetical tier
+			// STRICTER than Fail, exiting 0 on a config the validator had just
+			// condemned — a false pass of exactly the #228 kind. Fail loudly on
+			// an unrecognised verdict instead: a spurious error is noisy and
+			// gets fixed, a spurious exit 0 is the bug this whole unification
+			// removes. Note the two defensive arms then answer DIFFERENTLY
+			// (doctor warns without counting an issue; this errors), so
+			// TestSecretsValidationParity fires on such a tier — which is the
+			// point: it must be given a real home on both surfaces, not left to
+			// whichever default caught it.
+		}
+		// f.Message is untrusted.Text, so %s invokes its sanitizing String()
+		// and a crafted [secrets].identity_file cannot inject terminal escapes
+		// into this error (issue #93/#171). f.Field is a validator constant.
+		msgs = append(msgs, fmt.Sprintf("%s: %s", f.Field, f.Message))
+	}
+	if len(msgs) == 0 {
 		return nil
 	}
-	if cfg.Backend != "age" {
-		return fmt.Errorf("backend %q not supported (want \"age\" or \"env\")", cfg.Backend)
-	}
-	if cfg.Recipient == "" {
-		return fmt.Errorf("[secrets].recipient is required for backend = \"age\"")
-	}
-	if cfg.IdentityFile == "" {
-		return fmt.Errorf("[secrets].identity_file is required for backend = \"age\"")
-	}
-	userHome := paths.HomeDir(paths.OSEnv{})
-	// Resolve identity_file exactly as apply does (SelectBackend ->
-	// ResolveIdentityFile) so check and apply never disagree on the path.
-	idPath := secrets.ResolveIdentityFile(cfg, home, userHome)
-	if _, err := os.Stat(idPath); err != nil {
-		// idPath is config-derived ([secrets].identity_file, a shareable dotfile)
-		// and the *PathError re-embeds it; sanitize both the path and the error
-		// rendering (dropping %w) so a crafted path can't inject terminal escapes
-		// into `verify`'s output — the verifySecrets twin of the doctor fix
-		// (issue #93/#171).
-		return fmt.Errorf("identity_file %s: %s", untrusted.Wrap(idPath), untrusted.Wrap(err.Error()))
-	}
-	// Use the same permission check apply uses — it honours
-	// AGENTSYNC_AGE_SKIP_PERM_CHECK=1, which the previous inline
-	// runtime.GOOS check did not. Apply and verify must agree on
-	// what "secure" means or users will end up in a config where
-	// verify refuses but apply works (or vice versa).
-	if err := secrets.CheckIdentityPermissions(idPath); err != nil {
-		return err
-	}
-	// Age file location is optional in config (defaults to DefaultAgeFile)
-	// and may not exist yet on a brand-new install. Resolve it the same way
-	// apply does, then only flag a present-but-unreadable file.
-	agePath := secrets.ResolveAgeFile(cfg, home, userHome)
-	if _, err := os.Stat(agePath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("secrets.file %s: %s", untrusted.Wrap(agePath), untrusted.Wrap(err.Error()))
-	}
-	return nil
+	return fmt.Errorf("check secrets: %s", strings.Join(msgs, "; "))
 }

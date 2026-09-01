@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"strings"
 
 	"github.com/spxrogers/agentsync/internal/source"
 )
@@ -89,22 +88,28 @@ func (NopResolver) Resolve(key string) (string, error) {
 	return "", fmt.Errorf("no secrets backend configured; cannot resolve %q", key)
 }
 
-// SelectBackend returns the appropriate Resolver for the given SecretsConfig.
-// For "age" backend it returns an AgeBackend; for "env" or empty it returns EnvBackend.
+// SelectBackend returns the Resolver apply renders through for the given
+// [secrets] config. "age" (in any casing) selects an AgeBackend; "env" selects
+// the EnvBackend; ANY OTHER VALUE — including an EMPTY backend — selects
+// NopResolver, which errors on every ${secret:…} lookup.
 //
 // agentsyncHome anchors relative cfg.File / identity_file paths; userHome
 // (paths.HomeDir) expands ${env:HOME} and a leading ~. Both the age file
 // (defaulted via ResolveAgeFile) and the identity file (expanded via
-// ResolveIdentityFile) are resolved here so apply/verify/diff agree with the
-// `secrets` subcommands on which files to read.
+// ResolveIdentityFile) are resolved here so apply/check/doctor/diff agree with
+// the `secret` subcommands on which files to read.
+//
+// The backend name is folded through NormalizeBackend — the same helper
+// ValidateConfig uses — so no validator built on it can reject a spelling apply
+// accepts.
 func SelectBackend(cfg source.SecretsConfig, agentsyncHome, userHome string) Resolver {
-	switch strings.ToLower(cfg.Backend) {
-	case "age":
+	switch NormalizeBackend(cfg.Backend) {
+	case BackendAge:
 		return NewAgeBackend(
 			ResolveAgeFile(cfg, agentsyncHome, userHome),
 			ResolveIdentityFile(cfg, agentsyncHome, userHome),
 		)
-	case "env":
+	case BackendEnv:
 		return EnvBackend{}
 	default:
 		return NopResolver{}

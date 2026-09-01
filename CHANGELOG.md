@@ -9,6 +9,141 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Fixed
+
+- **`agentsync check` no longer rejects a `[secrets].backend` that `apply`
+  accepts.** `secrets.SelectBackend` — the function `apply` actually resolves
+  through — lower-cases the backend name, but `check` compared it against the
+  literal `"age"`/`"env"`, so a config written `backend = "AGE"` applied
+  successfully and failed `check` with `backend "AGE" not supported`. `check`
+  now validates through one `secrets.ValidateConfig` that shares
+  `SelectBackend`'s normalization, so the backend name is matched
+  **case-insensitively** — exactly as `apply` matches it. A `[secrets]` block
+  missing both `recipient` and `identity_file` now also reports both fields
+  instead of stopping at the first. The failure messages are reworded in the
+  move and each is now prefixed with the `[secrets]` key it came from
+  (`identity_file: …`, `file: …`), so a report about the *defaulted* vault path
+  names the key that produced it. The messages themselves are **field-relative**
+  — none repeats its own key — so neither `check`'s `<field>: <message>` error
+  nor `doctor`'s padded label column stutters: `recipient: missing — required
+  for backend = "age"`, `backend: unsupported "vault" (want "age" or "env")`.
+- **`agentsync doctor` no longer fails the `env` secrets backend.**
+  `backend = "env"` is supported — `apply` resolves `${secret:…}` through it, and
+  `agentsync check` has always accepted it — but `doctor` hard-failed anything
+  but `"age"` with `unsupported: "env" (want "age")`, so a user on the env
+  backend passed `check` and failed `doctor` on the same config. `doctor` now
+  renders its `[secrets]`-block report from the same `secrets.ValidateConfig`
+  that `check` errors from, and a cross-command parity test pins that the two
+  commands reach the same verdict on the same `[secrets]` block. Two further
+  fixes fall out: an uppercase backend (`"AGE"`) is accepted, matching `apply`;
+  and a configured vault path that cannot be stat'd for a reason other than
+  "does not exist" is now reported as `not readable` and fails, instead of
+  passing with a false `not yet created` warning pointing at
+  `agentsync secret edit`. The `env` backend is now documented in the secrets
+  guide, the user guide and the configuration reference.
+- **`agentsync doctor` no longer reports "no `[secrets]` block" at a block that
+  is right there.** A `[secrets]` table carrying `recipient` / `identity_file` /
+  `file` but no `backend` printed the informational line
+  `• backend    not configured (skip — no [secrets] block)` — a sentence that is
+  false about the block it is describing — while `apply` resolves that config
+  through a no-op backend, so every `${secret:…}` in the source fails at apply
+  time with `no secrets backend configured`. It is now a warning that says so:
+  `⚠ backend    not set — ${secret:…} will not resolve (set "age" or "env")`.
+  The informational line is unchanged for a config that sets no `[secrets]` key
+  at all. `agentsync check` still exits 0 on such a block, deliberately: a
+  canonical source carrying no `${secret:…}` reference applies cleanly with it,
+  so failing `check` there would be a new `check`/`apply` divergence of exactly
+  the kind this release removes. When references *are* present, `check` and
+  `doctor` already fail on them, alongside `apply`. The user guide and the
+  configuration reference now draw the same absent-block / present-but-inert
+  split, instead of saying both commands skip either one.
+- **A directory or FIFO at the `[secrets].file` vault path or the
+  `[secrets].identity_file` age key is no longer reported as healthy — or read.**
+  A non-regular file stats successfully, so neither path reached the "not yet
+  created" or the "not readable" arm: `agentsync check` and `agentsync doctor`
+  passed the *vault* with a `✓` whatever its mode, and passed the *identity* with
+  a `✓` whenever its mode set no group/other bits — a `0700` directory, say, or
+  a `0600` FIFO. (An identity directory at `0755` did not pass; it drew
+  `too permissive … chmod 600`, a remedy that does not apply to a directory.)
+  Either way the real failure was left to the first decrypt — where, as below, a
+  FIFO produced no failure at all. Both must now be regular files — the same
+  rule both commands already apply to `agentsync.toml` — reported as a hard
+  failure (`file: <path> — not a regular file`,
+  `identity_file: <path> — not a regular file`), and the identity's *shape* is
+  now checked before its *permissions*, so a `0755` directory is named as the
+  wrong shape rather than told to `chmod 600`.
+
+  **Fixing the report alone did not fix either one**, because only `check` runs
+  the validator before reading. Both paths are handed straight to the OS by
+  `secrets.Decrypt` and `AgeBackend.load` — the identity to `os.ReadFile`, the
+  vault to `os.Open` — and neither call fails on a FIFO: it waits forever for a
+  writer that never comes. (A directory is the milder shape: it does fail, but
+  several layers down, as `read identity …: is a directory` or an age header
+  parse error naming the wrong problem.) Measured against a fixture with a real
+  age keypair, a decryptable vault and a valid recipient, a `0600` FIFO at
+  either path wedged the `secret` subcommands outright, and — once a live
+  `${secret:…}` reference gave them something to resolve — `apply` and `doctor`
+  too, the last after printing its own `✗` for the very file it then blocked on.
+  Each had to be killed. Only `check` was clean.
+
+  The regular-file rule therefore also sits on the gate each read path passes
+  through. For the identity that is `secrets.CheckIdentityPermissions` — which
+  every path that reads the identity already calls — ahead of both its Windows
+  caveat and its `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` override: neither of those is
+  about mode bits, and a FIFO is a FIFO regardless. For the vault it is a
+  function that returns the opened handle, so that obtaining the file *is* the
+  check and no read site can reach the vault without passing it. Those commands now fail
+  immediately with `age identity <path> is not a regular file` or `age file
+  <path> is not a regular file`. A vault that is merely ABSENT is untouched: the
+  gate stats only for shape and lets every other stat failure fall through to
+  the open, which reports it as absent exactly as before — `check` still calls
+  such a vault `not yet created` and still exits 0.
+
+  The same asymmetry remains one level up, on `agentsync.toml` itself: `check`
+  refuses a non-regular config, while the surfaces that read it still block on a
+  FIFO. That is pre-existing, is not a `[secrets]` concern, and is tracked as
+  issue #238.
+
+  One vault read lives outside `internal/secrets` — the rollback snapshot
+  `agentsync secret` takes before re-encrypting — and it goes through the same
+  gate. It was reachable, not theoretical: `secret edit` skips the decrypt
+  entirely when the vault is absent, so an `$EDITOR` that created a FIFO at the
+  vault path during its own edit window wedged the command outright.
+- **The `agentsync secret` subcommands agree with `apply` on the backend name,
+  and check their `[secrets]` keys before touching the vault.** All five
+  (`get`, `list`, `set`, `edit`, `remove`) compared `[secrets].backend` against
+  the literal `"age"`, so
+  `backend = "AGE"` — which `apply` resolves fine — was refused. They now share
+  `secrets.NormalizeBackend` with `apply`'s `SelectBackend`. `secret get`,
+  `secret list` and `secret remove` also refuse up front when `identity_file` is
+  unset — instead of failing inside the decrypt with `read identity :`, or, on a
+  vault that does not exist yet, appearing to work (`secret list` printed
+  `(vault is empty; …)` on a config `agentsync check` rejects); and
+  `secret remove` now requires `[secrets].recipient` *before* it decrypts,
+  rather than mutating the vault in memory and then dying in
+  `parse age recipient` — it re-encrypts, so it always needed one. Two of the
+  refusal messages named `secrets edit` and `secrets set`, commands renamed to
+  `secret edit` / `secret set` with no alias; they now name the real commands,
+  and each says *why* an age vault is required rather than implying
+  `backend = "env"` is invalid (it is a supported backend — it just keeps no
+  vault for these commands to manage).
+- **`check` and `doctor` agree on what a half-initialized source tree is.**
+  Three copies of the "is this initialized" probe tested three different things:
+  `check` accepted a `~/.agentsync` that was a regular file and then failed with
+  the internal-looking `check: stat agentsync.toml: stat …/agentsync.toml: not a
+  directory`, and both `check` and `doctor` accepted an `agentsync.toml` that was
+  a *directory* — `doctor` printing `✓ home dir   ok` — leaving the real failure
+  to surface later as `read …/agentsync.toml: is a directory`. All three callers
+  (`check`'s guard, `doctor`'s `home dir` line, and the upgrade-notice probe)
+  now share one `probeSourceInit`, which requires the root to be a directory and
+  `agentsync.toml` to be a regular file. When the root or `agentsync.toml`
+  cannot be stat'd at all (a symlink loop, a permission denial), `check`'s
+  message now names just the path that actually failed, instead of re-prefixing
+  a path of its own and doubling the `stat …: stat …:` above — a user debugging
+  a symlink or permission problem is pointed at the file, not the directory.
+  The upgrade-notice probe's answer is unchanged, by design — a stricter answer
+  there would fire a breaking-change banner at a brand-new user.
+
 ### Changed
 
 - **`.state/targets.json` is now `schema_version: 2`.** The upgrade is automatic

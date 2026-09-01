@@ -75,7 +75,8 @@ default_interval = "24h"     # configured update cadence
 
 # Secrets backend — see the Secrets guide.
 [secrets]
-backend       = "age"
+backend       = "age"                                # "age" (encrypted vault) | "env";
+                                                     # matched case-insensitively
 file          = "secrets/secrets.age"                # vault path; relative → under
                                                      # ~/.agentsync, default shown
 recipient     = "age1…"                              # public key, safe to commit
@@ -100,6 +101,30 @@ resolved under `~/.agentsync/` (honouring `AGENTSYNC_HOME`); an absolute path or
 one with a leading `~` / `${env:HOME}` is expanded as written. When omitted it
 defaults to `secrets/secrets.age`, so most configs can leave it out. See the
 [Secrets guide](/guides/secrets/).
+
+`[secrets].backend` selects where `${secret:…}` is resolved from: `"age"` reads
+the encrypted vault described here, and `"env"` reads the process environment
+(the same lookup `${env:…}` uses), for setups where `direnv`, the 1Password CLI
+or a CI secret store already supplies the credential. The name is matched
+**case-insensitively** — `"AGE"` and `"age"` are the same value — but it is
+never trimmed, so a value with surrounding whitespace like `" age"` is rejected.
+With `"env"` there is no vault, so `recipient` / `identity_file` / `file` are
+unused and the `agentsync secret` subcommands — which manage the age vault —
+refuse to run. Any other **non-empty** value is rejected by `agentsync check`
+and `agentsync doctor`.
+
+An absent or empty `backend` means no secrets backend is configured — but the
+two commands do not report it the same way, because two different configs land
+there. With **no `[secrets]` block at all** (or a bare `[secrets]` header, which
+parses identically), `check` says nothing about it and `doctor` prints one
+informational line, `• backend    not configured (skip — no [secrets] block)`.
+With a **`[secrets]` block that is present but sets no `backend`**, `doctor`
+**warns** instead — `⚠ backend    not set — ${secret:…} will not resolve (set "age" or
+"env")` — because that block is inert rather than absent; `check` still exits 0
+on it, deliberately, since a source carrying no `${secret:…}` reference applies
+cleanly with that block and failing there would reject a config `apply` accepts.
+`apply` treats an unrecognised *or* empty backend as *no* backend, so every
+`${secret:…}` fails to resolve.
 
 The `[memory] banner` notice that agentsync prepends to each rendered memory file
 points edits back at `.agentsync/memory/AGENTS.md` + `agentsync apply`. It lives

@@ -16,8 +16,11 @@ agentsync reads and writes coding-agent configuration on a single machine and
 can resolve secrets into native config files. Areas of particular interest:
 
 - **age-encrypted secrets** (`internal/secrets`): the age identity file must
-  be `0600`; agentsync refuses to read a group/other-readable identity unless
-  `AGENTSYNC_AGE_SKIP_PERM_CHECK=1`. agentsync never writes decrypted secret
+  be a **regular file** at `0600`; agentsync refuses to read a group/other-readable
+  identity unless `AGENTSYNC_AGE_SKIP_PERM_CHECK=1`, and refuses to read a
+  directory, socket or FIFO there *regardless* of that override — the override
+  exists for setups where mode bits are meaningless, which says nothing about
+  shape, and a FIFO with no writer makes the read block forever rather than fail. agentsync never writes decrypted secret
   values to durable storage and redacts resolved `${secret:...}` values in
   `agentsync diff`. The single dest→source write-back path (`capture.Capture`)
   is fail-closed: it re-references resolved secrets back to `${secret:…}` and
@@ -30,6 +33,10 @@ can resolve secrets into native config files. Areas of particular interest:
   and path-bounded to `~/.agentsync`; import's stale-hook retirement) — a
   deletion carries no secret content to persist, and anything that writes
   content back still goes through `capture.Capture`.
+  The alternative `backend = "env"` stores nothing: `${secret:…}` resolves from
+  the process environment at apply time, so there is no vault, no identity file
+  and no decryption — the credential's protection is whatever protects the
+  environment it is set in.
 - **Untrusted marketplaces / plugins**: a marketplace or plugin you add is
   treated as untrusted input. The npm fetcher rejects every symlink; the
   relative (local-directory) fetcher rejects every symlink *inside* the copied

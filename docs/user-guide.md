@@ -721,6 +721,48 @@ your source — `agentsync diff` even redacts it so a piped diff can't leak it.
 > **agentsync does not back it up for you.** Lose it and you lose access to every
 > encrypted secret. Stash it in a 1Password Secure Note or your machine-setup repo.
 
+#### The `env` backend
+
+`[secrets].backend` takes one of two values, **matched case-insensitively**
+(`"age"`, `"Age"` and `"AGE"` are the same value — agentsync folds the name
+before selecting a backend). `"age"` — everything above — resolves `${secret:…}`
+from the age-encrypted vault. `"env"` resolves it from the process environment
+instead, the same lookup `${env:…}` performs:
+
+```toml
+[secrets]
+backend = "env"
+```
+
+Reach for it when something else already puts credentials in the environment —
+`direnv`, the 1Password CLI, a CI secret store. There is no vault and no
+identity file, so `recipient`, `identity_file` and `file` are unused; the
+`agentsync secret` subcommands manage the age vault and refuse with a message
+naming the backend they need. Both `agentsync check` and `agentsync doctor`
+accept `backend = "env"` (in any casing). Any other **non-empty** value —
+whitespace included, since the name is folded but never trimmed — is rejected by
+both.
+
+An absent or empty `backend` is not a third value but "no secrets configured" —
+but the two commands do not report it the same way, because two different
+configs land there:
+
+- **No `[secrets]` block at all** (or a bare `[secrets]` header with nothing
+  under it, which parses identically): `check` says nothing about it, and
+  `doctor` prints one informational line — `• backend    not configured (skip —
+  no [secrets] block)`.
+- **A `[secrets]` block that is present but sets no `backend`** — it carries
+  `recipient` / `identity_file` / `file`, but nothing switched the vault on:
+  `doctor` **warns**, `⚠ backend    not set — ${secret:…} will not resolve (set
+  "age" or "env")`, because that block is inert rather than absent. `check` still
+  exits 0 on it, deliberately: a source carrying no `${secret:…}` reference
+  applies cleanly with that block, so failing there would make `check` refuse a
+  config `apply` accepts. When references *are* present, `check` fails on them,
+  alongside `doctor` and `apply`.
+
+`apply` treats an unrecognised *or* empty backend as *no* backend, so every
+`${secret:…}` then fails to resolve.
+
 ### Project-local config
 
 A repo can carry its own **project source tree** — a `.agentsync/` directory at
@@ -937,7 +979,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | Command | Purpose | Key flags / args |
 |---|---|---|
 | `init [<git-url>]` | Create `~/.agentsync/` (user scope); optionally clone a bootstrap repo. `--scope project` scaffolds a project tree at `<cwd>/.agentsync/` instead; `--project <path>` targets `<path>/.agentsync/` (implies project scope). A git-URL clone is user-scope only. | `--scope --project` |
-| `doctor` | Diagnose setup: PATH, home/state writability, config schema, secrets backend, destination-git-backup mode + per-dir repo status; flags natively-installed plugins missing from source. | |
+| `doctor` | Diagnose setup: PATH, home/state writability, config schema, the `[secrets]` block (validated by the same rules `check` enforces), destination-git-backup mode + per-dir repo status; flags natively-installed plugins missing from source. | |
 | `check` | Validate the **config**: schema lint plus every `${secret:}`/`${env:}` reference resolved. `--scope project`/`--project <path>` lints the project tree against the inherited user secrets backend. Its sibling is `doctor`, which validates the **machine**. (Renamed from `verify` — see [Upgrading](#command-reference).) | `--scope --project` |
 | `agent add\|remove\|list\|enable\|disable <name>` | Manage the agent registry — the user's, or with `--scope project`/`--project <path>` the project tree's own `[agents]` declaration (which project scope renders from; never inherited). At project scope `disable --purge` touches only that project's rendered files. | `disable --purge --scope --project` |
 | `skill\|subagent\|command\|hook\|lsp list` | List that component in the canonical source. Read-only by design: unlike an MCP server, none of these is flag-authorable — a skill is a *directory*, a subagent is a markdown file — so you author them on disk or capture them with `import`. | `--scope --project` |
@@ -945,7 +987,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `mcp add\|remove\|list\|enable\|disable <name>` | Manage MCP servers. `enable`/`disable` flip the server's `enabled` bit — keeping the definition but stopping the render (`remove` deletes it). `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site, e.g. `--header "Authorization: Bearer ${secret:TOKEN}"`. | `--type --command --args --url --env --agents --header` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
 | `plugin add\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` / `outdated` / `explain` | Manage plugins (the lifecycle subcommands all accept the same `id[@marketplace]` ref `add` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). `outdated` **(network)** polls the marketplaces and reports pending bumps — it also writes each marketplace's fetch timestamp + head SHA to state. `upgrade` **(network)** re-fetches one plugin, or with `--all` every plugin with a pending bump, and **re-applies** in both cases; `--lossless` skips an upgrade that would introduce a new translation loss, reporting it. `explain` shows per-agent translation coverage. | `outdated` · `upgrade [<id>] --all --lossless --scope --project` · `explain [<id>...] --all --json` |
-| `secret set\|get\|list\|remove <key>` / `secret edit` | Manage age-encrypted secrets (`list` prints KEYS only; `edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). | `set --stdin` |
+| `secret set\|get\|list\|remove <key>` / `secret edit` | Manage age-encrypted secrets (`list` prints KEYS only; `edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). All five require `[secrets].backend = "age"` (matched case-insensitively, exactly as `apply` matches it) and `[secrets].identity_file`; the three that re-encrypt — `set`, `edit`, `remove` — additionally require `[secrets].recipient`. | `set --stdin` |
 | `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. A delete-only run (a component removed from source) reports `removed: N key(s), M file(s)` — key-removals and file-deletes counted distinctly — and a mixed run `applied: X ops, removed: …`, rather than mislabeling itself `up to date`/`applied: 0 ops`; `--dry-run` previews the same removal counts. | `--agents --dry-run --scope --project --no-git-backup` |
 | `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. `--to` must name one of the dir's own checkpoints (the current one or an ancestor) — anything else is refused. A dir under which a foreign git repo has appeared (or that isn't an agentsync-managed backup) is an **error** when you name the agent, and a **skip with a warning** under `--all` — strictness follows the invocation; there is no `--strict` flag. | `--agents --to --all --dry-run` |
 | `status` | Summarize drift/pending across agents; notes natively-installed plugins not yet in source. Skill directories collapse to one summary row by default (`--verbose` expands them). The formatted report shows `converged` items as `clean` (both mean apply has nothing to do); `--json` keeps the two distinct. `--legend` prints a standalone glossary of all nine drift classification statuses and exits (rejects combination with `--json`/`--exit-code`/`--agents` rather than silently ignoring them). `--exit-code` makes it a CI gate: exit `2` when any drift is detected, `0` when clean. | `--agents --verbose --legend --scope --project --json --exit-code` |

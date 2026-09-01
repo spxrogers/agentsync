@@ -81,7 +81,11 @@ rename — `~/.agentsync` is usually a dotfiles repo.
 
 ### `doctor`
 A health check: verifies your `PATH`, that home and state directories are
-writable, that the config schema parses, and that the secrets backend is reachable.
+writable, that the config schema parses, and that the secrets backend is
+reachable. Its **Secrets** section validates the `[secrets]` block against the
+same rules `agentsync check` enforces — both accept `backend = "age"` and
+`backend = "env"`, in any casing — and then resolves every `${secret:…}` /
+`${env:…}` reference your source carries.
 It also lists plugins installed natively in an agent (Claude and Codex) that aren't in your
 source yet — run `import <agent>:plugin` to capture them. A **Destination git
 backup** section reports the configured `[destination_directory_git_backup]` mode
@@ -207,6 +211,13 @@ before `list`/`remove` it was the only way to see or delete a key.
 `secret get` writes the raw value to stdout for piping. When stdout is a
 terminal it prints a caution first, since a bare `secret get` puts a live
 credential in your scrollback.
+
+The `secret` group manages the **age vault**, so it requires
+`[secrets].backend = "age"` (matched case-insensitively, exactly as `apply`
+matches it) and `[secrets].identity_file`; the commands that re-encrypt —
+`set`, `edit`, `remove` — additionally require `[secrets].recipient`. With
+`backend = "env"` there is no vault to manage: set the environment variable
+instead.
 
 ---
 

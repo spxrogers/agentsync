@@ -163,7 +163,13 @@ func encryptMap(m map[string]any, cfg source.SecretsConfig, home string) error {
 func writeSecretsVerified(plain []byte, cfg source.SecretsConfig, home string) error {
 	agePath := resolveAgePath(cfg, home)
 	prev, hadPrev := []byte(nil), false
-	if data, err := os.ReadFile(agePath); err == nil {
+	// Through the shape gate, not os.ReadFile: os.ReadFile blocks on a FIFO
+	// exactly as os.Open does, and `secret edit` reaches here WITHOUT having
+	// decrypted whenever the vault was absent at its own stat (the
+	// os.IsNotExist arm below), so nothing else refuses a non-regular vault
+	// first. A non-regular path simply reports no previous vault to preserve,
+	// which is the truth: a FIFO is not a vault.
+	if data, err := secrets.ReadVault(agePath); err == nil {
 		prev, hadPrev = data, true
 	}
 	if err := secrets.Encrypt(plain, cfg.Recipient, agePath); err != nil {
@@ -273,14 +279,8 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if cfg.Backend != "age" {
-		return fmt.Errorf("secrets edit requires backend = \"age\" in agentsync.toml [secrets]")
-	}
-	if cfg.Recipient == "" {
-		return fmt.Errorf("secrets edit requires [secrets].recipient in agentsync.toml")
-	}
-	if cfg.IdentityFile == "" {
-		return fmt.Errorf("secrets edit requires [secrets].identity_file in agentsync.toml")
+	if err := secrets.RequireAgeVault(cfg, "secret edit", secrets.VaultWrite); err != nil {
+		return err
 	}
 
 	agePath := resolveAgePath(cfg, home)
@@ -368,8 +368,8 @@ func secretsGet(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if cfg.Backend != "age" {
-		return fmt.Errorf("secret get requires backend = \"age\" in agentsync.toml [secrets]")
+	if err := secrets.RequireAgeVault(cfg, "secret get", secrets.VaultRead); err != nil {
+		return err
 	}
 
 	m, err := decryptToMap(cfg, home)
@@ -412,14 +412,8 @@ func secretsSet(cmd *cobra.Command, arg string, useStdin, allowEmpty bool) error
 	if err != nil {
 		return err
 	}
-	if cfg.Backend != "age" {
-		return fmt.Errorf("secrets set requires backend = \"age\" in agentsync.toml [secrets]")
-	}
-	if cfg.Recipient == "" {
-		return fmt.Errorf("secrets set requires [secrets].recipient in agentsync.toml")
-	}
-	if cfg.IdentityFile == "" {
-		return fmt.Errorf("secrets set requires [secrets].identity_file in agentsync.toml")
+	if err := secrets.RequireAgeVault(cfg, "secret set", secrets.VaultWrite); err != nil {
+		return err
 	}
 
 	key, value, err := resolveSecretKeyValue(cmd, arg, useStdin)
@@ -529,8 +523,8 @@ func newSecretsListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if cfg.Backend != "age" {
-				return fmt.Errorf("secret list requires backend = \"age\" in agentsync.toml [secrets]")
+			if err := secrets.RequireAgeVault(cfg, "secret list", secrets.VaultRead); err != nil {
+				return err
 			}
 			m, err := decryptToMap(cfg, home)
 			if err != nil {
@@ -594,8 +588,8 @@ func secretsRemove(cmd *cobra.Command, key string) error {
 	if err != nil {
 		return err
 	}
-	if cfg.Backend != "age" {
-		return fmt.Errorf("secret remove requires backend = \"age\" in agentsync.toml [secrets]")
+	if err := secrets.RequireAgeVault(cfg, "secret remove", secrets.VaultWrite); err != nil {
+		return err
 	}
 	m, err := decryptToMap(cfg, home)
 	if err != nil {

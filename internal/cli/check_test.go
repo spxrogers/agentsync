@@ -404,19 +404,21 @@ func TestCheck_SanitizesHostileAgentKey(t *testing.T) {
 	}
 }
 
-// TestCheck_SanitizesHostileSecretPath pins that check's verifySecrets escapes a
-// config-derived [secrets].identity_file path (the twin of doctor's checkSecrets):
-// a shareable dotfiles config with an ESC-laden, non-existent path must not inject
-// terminal escapes into `check`'s error on the default (non-offline) path
-// (issue #93/#171 class).
+// TestCheck_SanitizesHostileSecretPath pins that check's [secrets] validation
+// escapes a config-derived [secrets].identity_file path: a shareable dotfiles
+// config with an ESC-laden, non-existent path must not inject terminal escapes
+// into `check`'s error on the default (non-offline) path (issue #93/#171 class).
+// The escaping now lives one layer down — secrets.ValidateConfig reports the
+// path in a Finding whose Message is an untrusted.Text — so this also covers
+// secretsProblems rendering that Message through String().
 func TestCheck_SanitizesHostileSecretPath(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp}
 	_, _ = runCLI(t, env, "init")
 	cfgPath := filepath.Join(tmp, ".agentsync", "agentsync.toml")
-	// identity_file holds a raw ESC (TOML  escape) and points nowhere, so
-	// verifySecrets' os.Stat fails and it returns the path (and the *PathError)
-	// in its error — which must be sanitized.
+	// identity_file holds a raw ESC (TOML \u escape) and points nowhere, so
+	// the validator's os.Stat fails and it reports the path (and the
+	// *PathError) in a SeverityFail finding — which must be sanitized.
 	body := "[agents]\n[secrets]\nbackend       = \"age\"\nrecipient     = \"age1qqqq\"\n" +
 		"identity_file = \"/nope/x\\u001b[2K\\u001b[31mHACKED/age.key\"\n"
 	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
@@ -431,5 +433,147 @@ func TestCheck_SanitizesHostileSecretPath(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "HACKED") {
 		t.Fatalf("error should still name the (sanitized) path; got: %q", err.Error())
+	}
+}
+
+// TestCheck_AcceptsBackendSpellingsApplyAccepts is the regression for #228:
+// secrets.SelectBackend — the resolver `apply` renders through — lower-cases
+// the backend name, but `check` compared it against the literal "age"/"env".
+// A config written `backend = "AGE"` therefore applied cleanly and failed
+// `check` with `backend "AGE" not supported`.
+func TestCheck_AcceptsBackendSpellingsApplyAccepts(t *testing.T) {
+	tests := []struct {
+		name    string
+		backend string
+	}{
+		{name: "uppercase age", backend: "AGE"},
+		{name: "mixed case age", backend: "Age"},
+		{name: "lowercase env", backend: "env"},
+		{name: "uppercase env", backend: "ENV"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			// The perm-check opt-out and AGENTSYNC_HOME are pinned so an
+			// exported value in a developer's shell cannot change what this
+			// test exercises: AGENTSYNC_AGE_SKIP_PERM_CHECK=1 short-circuits
+			// CheckIdentityPermissions, so the age rows would pass without the
+			// 0600 identity below ever being inspected, and AGENTSYNC_HOME
+			// outranks AGENTSYNC_TARGET_ROOT in paths.AgentsyncHome, so an
+			// exported one would aim check at the developer's real home.
+			env := map[string]string{
+				"AGENTSYNC_TARGET_ROOT":         tmp,
+				"HOME":                          tmp,
+				"AGENTSYNC_AGE_SKIP_PERM_CHECK": "",
+				"AGENTSYNC_HOME":                "",
+			}
+			if _, err := runCLI(t, env, "init"); err != nil {
+				t.Fatalf("init: %v", err)
+			}
+			identity := filepath.Join(tmp, "age.key")
+			if err := os.WriteFile(identity, []byte("# fixture identity\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(identity, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			body := "[agents]\n[secrets]\nbackend       = \"" + tc.backend + "\"\n" +
+				"recipient     = \"age1qqqq\"\nidentity_file = \"" + identity + "\"\n"
+			if err := os.WriteFile(filepath.Join(tmp, ".agentsync", "agentsync.toml"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			out, err := runCLI(t, env, "check")
+			if err != nil {
+				t.Fatalf("check must accept backend = %q (apply resolves it); got err=%v\n%s", tc.backend, err, out)
+			}
+		})
+	}
+}
+
+// TestCheck_ReportsEveryMissingSecretsField pins that check no longer stops at
+// the first missing [secrets] field. It used to name `recipient` and return,
+// hiding the missing identity_file until the user fixed the first one —
+// while `doctor` reports both.
+func TestCheck_ReportsEveryMissingSecretsField(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{
+		"AGENTSYNC_TARGET_ROOT": tmp,
+		"HOME":                  tmp,
+		// AGENTSYNC_HOME outranks AGENTSYNC_TARGET_ROOT in paths.AgentsyncHome,
+		// so an exported one would aim check at the developer's real home. No
+		// identity file exists in this fixture, so the perm-check opt-out is not
+		// in play here.
+		"AGENTSYNC_HOME": "",
+	}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	body := "[agents]\n[secrets]\nbackend = \"age\"\n"
+	if err := os.WriteFile(filepath.Join(tmp, ".agentsync", "agentsync.toml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runCLI(t, env, "check")
+	if err == nil {
+		t.Fatal("check must fail on an age backend with no recipient and no identity_file")
+	}
+	for _, want := range []string{"recipient", "identity_file"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("check error should name %q; got: %v", want, err)
+		}
+	}
+}
+
+// TestCheck_LabelsSecretsFailureWithItsField pins that check names the
+// [secrets] key each failure came from. secrets.ValidateConfig carries the key
+// in Finding.Field because several of its messages do not name it themselves,
+// and the vault path is the sharp case: [secrets].file is optional, so the path
+// below is the DEFAULT one — an unlabelled "<path> — not readable" would print
+// a path this config never mentions.
+func TestCheck_LabelsSecretsFailureWithItsField(t *testing.T) {
+	tmp := t.TempDir()
+	// AGENTSYNC_HOME outranks AGENTSYNC_TARGET_ROOT in paths.AgentsyncHome, so
+	// an exported one would aim check at the developer's real home.
+	env := map[string]string{
+		"AGENTSYNC_TARGET_ROOT": tmp,
+		"HOME":                  tmp,
+		"AGENTSYNC_HOME":        "",
+	}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	identity := filepath.Join(tmp, "age.key")
+	if err := os.WriteFile(identity, []byte("# fixture identity\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(identity, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A self-referential symlink at the DEFAULT vault path (secrets.DefaultAgeFile
+	// under the agentsync home): os.Stat follows it and fails with ELOOP, which
+	// is not IsNotExist, so the validator reports it as a hard failure rather
+	// than the "not yet created" warning an absent vault earns.
+	vault := filepath.Join(tmp, ".agentsync", "secrets", "secrets.age")
+	if err := os.MkdirAll(filepath.Dir(vault), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(vault, vault); err != nil {
+		t.Fatal(err)
+	}
+	body := "[agents]\n[secrets]\nbackend       = \"age\"\n" +
+		"recipient     = \"age1qqqq\"\nidentity_file = \"" + identity + "\"\n"
+	if err := os.WriteFile(filepath.Join(tmp, ".agentsync", "agentsync.toml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runCLI(t, env, "check")
+	if err == nil {
+		t.Fatal("check must fail on a vault path that stats with something other than ENOENT")
+	}
+	if !strings.Contains(err.Error(), "file: ") {
+		t.Errorf("check error should label the failure with its [secrets] key; got: %v", err)
+	}
+	// The identity is present and 0600, so the vault is the only failure — if
+	// identity_file appears, the label above is not the one being asserted.
+	if strings.Contains(err.Error(), "identity_file") {
+		t.Errorf("only the vault should fail in this fixture; got: %v", err)
 	}
 }

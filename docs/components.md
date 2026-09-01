@@ -92,12 +92,19 @@ The `Resolved` wrapper type is the load-bearing leak guard.
   `SubstituteCanonical` (→ `Resolved`); `ReReferenceCanonical`; `CollectResolved`;
   `UnresolvedSecretRefs`; `SecretRefsByComponent` (per-component REFERENCES, for
   `explain`); `MaskResolved`; `AgeBackend`/`EnvBackend`/`NopResolver`;
-  `SelectBackend`; `Resolved.ForAgent` (per-agent narrowing at the render waist,
+  `SelectBackend`; `NormalizeBackend` (the one backend-name folding, shared with
+  `SelectBackend`); `ValidateConfig` → `[]Finding` (the single definition of a
+  valid `[secrets]` block — at most one severity-ranked finding per field, for an
+  error-or-nil surface and a report surface to render the same contract from);
+  `RequireAgeVault` (the `secret` group's age-vault precondition, sharing
+  `NormalizeBackend`);
+  `Resolved.ForAgent` (per-agent narrowing at the render waist,
   delegating to `source.FilterForAgent`); and the single field list
   `walkSecretFields` (in `walk.go`).
-- **Depends on:** source, iox.
+- **Depends on:** source, iox, untrusted.
 - **Files:** `secrets.go`, `age.go`, `resolved.go`, `substitute.go`,
-  `rereference.go`, `mask.go`, `refs.go`, `walk.go`, `secretpaths.go`, `leakscan.go`
+  `rereference.go`, `mask.go`, `refs.go`, `walk.go`, `secretpaths.go`,
+  `validate.go` (the `ValidateConfig` contract), `leakscan.go`
   (the `ResidualSecretCleartext` backstop), `runtime.go`.
 
 ### `internal/project`

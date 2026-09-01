@@ -35,8 +35,12 @@ several tiers of defense, in increasing distance from the danger:
 
 ## age-encrypted secrets
 
-- The age **identity** file (private key) must be `0600`; agentsync refuses to
-  read a group/other-readable identity unless `AGENTSYNC_AGE_SKIP_PERM_CHECK=1`.
+- The age **identity** file (private key) must be a **regular file** at `0600`;
+  agentsync refuses to read a group/other-readable identity unless
+  `AGENTSYNC_AGE_SKIP_PERM_CHECK=1`, and refuses to read a directory, socket or
+  FIFO there *regardless* of that override — the override is for setups where
+  mode bits are meaningless, which says nothing about shape, and a FIFO with no
+  writer makes the read block forever rather than fail.
 - agentsync **never** writes decrypted secret values to durable storage and
   **redacts** resolved `${secret:…}` values in `agentsync diff`.
 - `agentsync secret set --stdin` keeps secret values off `argv`, shell history,
