@@ -214,8 +214,10 @@ type VaultAccess int
 const (
 	// VaultRead only reads the vault (`secret get`, `secret list`).
 	VaultRead VaultAccess = iota
-	// VaultWrite re-encrypts the vault as well as reading it (`secret set`,
-	// `secret edit`, `secret remove`), so it additionally needs a recipient.
+	// VaultWrite re-encrypts the vault (`secret set`, `secret edit`,
+	// `secret remove`), decrypting it first when one exists, so it
+	// additionally needs a recipient. It does NOT always read: against a
+	// not-yet-created vault these commands write without decrypting anything.
 	VaultWrite
 )
 
