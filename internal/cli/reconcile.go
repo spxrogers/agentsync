@@ -1164,8 +1164,15 @@ func writeBackFileItem(home string, it reconcileItem) error {
 		// An earlier version of this message recommended it, which walked the
 		// user out of a clean refusal and into an unbounded wedge. Restore that
 		// suggestion only once #241 is fixed.
-		return fmt.Errorf("read dest %s: %w — remove or replace the non-regular file at that "+
-			"path and re-run, or [i]gnore to suppress this item", it.op.Path, err)
+		if errors.Is(err, errDestNotRegular) {
+			return fmt.Errorf("read dest %s: %w — remove or replace the non-regular file at "+
+				"that path and re-run, or [i]gnore to suppress this item", it.op.Path, err)
+		}
+		// Any other read failure — an absent destination (the common case: the
+		// user deleted a managed file, which is itself drift and offers [w]), a
+		// permission error — must NOT be told to "remove the non-regular file".
+		// An earlier version appended that sentence unconditionally.
+		return fmt.Errorf("read dest %s: %w — [i]gnore suppresses this item", it.op.Path, err)
 	}
 	srcID := it.op.SourceID
 	if srcID == "" {

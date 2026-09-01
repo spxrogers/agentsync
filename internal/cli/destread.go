@@ -25,8 +25,9 @@ var errDestNotRegular = errors.New("not a regular file")
 // ~/.claude.json, say) wedged `status` — which is advertised as read-only —
 // through the shared readDestFile.
 //
-// This gate covers THIS PACKAGE only. `apply`, `apply --dry-run` and
-// `import <agent>` still hang on the same fixture; their reads live in
+// This gate covers THIS PACKAGE only. `apply`, `apply --dry-run`,
+// `reconcile --auto-override` (which re-applies through render.Writer.Write)
+// and `import <agent>` still hang on the same fixture; their reads live in
 // internal/render and the adapter Ingest paths (#241, #242).
 //
 // Every destination read in this package routes here, cli.hashFile included, so
@@ -36,12 +37,31 @@ var errDestNotRegular = errors.New("not a regular file")
 // refuses a link outright with its own sentinel; this function does not, so a
 // read that reaches os.ReadFile follows it. `status` therefore calls a symlinked
 // destination drifted while `diff` reads through it and compares the target.
-// That predates this gate — the reads it replaced were bare os.ReadFile, which
-// follows links too — and is left alone because AGENTSYNC_ALLOW_SYMLINK_DEST=1
-// is a documented, supported setup in which apply writes THROUGH the link, so
-// refusing links here would break it. Reconciling the two is a behavior
-// decision, tracked with the drift-walk unification in #229.
-// TestHashFileSentinels asserts both halves.
+//
+// It is left alone because changing it is a BEHAVIOR decision, not because the
+// current split is right: the reads this gate replaced were bare os.ReadFile,
+// which follows links too, so refusing links here would change what `diff` and
+// `reconcile` have always reported. That belongs with the drift-walk
+// unification in #229, where all four walks can be changed together.
+//
+// (An earlier version of this comment justified it differently, by claiming
+// AGENTSYNC_ALLOW_SYMLINK_DEST=1 would break. That was wrong — the variable is
+// read only in internal/iox, on the WRITE path, so a read gate cannot affect
+// it. The real consequence of the split is worse and is worth naming: under
+// that supported setup apply writes THROUGH the link, yet hashFile refuses
+// links unconditionally, so `status` reports drift that no apply can ever
+// clear. #229 owns that too.)
+// TestHashFileSentinels asserts both halves of the split.
+//
+// What a caller DOES with the refusal is its own business, and two of them
+// currently swallow it: `diff` (internal/cli/diff.go) leaves the destination
+// text empty and `readDestFile` decodes to an empty map, so a refused
+// destination renders as "every byte / every key removed" — indistinguishable
+// from an absent one. That is a poorer diagnosis than the shape error deserves,
+// and it is the same silent-drop shape this repo's own rules warn about; it is
+// left as-is here because surfacing it means changing what those two commands
+// print, which belongs with the drift-walk unification in #229. `status`,
+// `doctor` and `reconcile`'s write-back all name the shape correctly.
 //
 // An ABSENT path is not refused: render.IsRegularOrAbsent reports absent as
 // acceptable, so os.ReadFile runs and its ENOENT reaches the caller unchanged.

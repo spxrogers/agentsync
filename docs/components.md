@@ -394,10 +394,10 @@ symmetric with the dest→source write boundary (see architecture §7).
   is shared with `internal/cli`'s destination reads so a FIFO cannot block
   **those**: every one of them goes through `readDestBytes`
   (`internal/cli/destread.go`), which applies this predicate before the open.
-  Enforced, not asserted — `TestEveryDestinationReadGoesThroughTheGate` fails on
-  a bare `os.ReadFile(op.Path)` anywhere under `internal/cli`. (The claim was
-  written ahead of the code: until then only `status`'s `hashFile` used the
-  predicate, and `diff`, `reconcile` and the shared key-merge read all blocked.)
+  `TestEveryDestinationReadGoesThroughTheGate` backs this up by failing on a
+  bare `os.ReadFile(op.Path)` anywhere under `internal/cli` — a two-spelling
+  text matcher, so it catches the copy-paste that happened rather than every
+  possible spelling.
   It is **not** yet true of this package's own `Writer.Write` convergence read
   or of the adapter `Ingest` paths, so `apply`, `apply --dry-run`,
   `reconcile --auto-override` (which re-applies through `Writer.Write`) and

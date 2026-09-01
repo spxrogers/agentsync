@@ -184,6 +184,29 @@ func TestKeyMergeAndWriteBackReadsAreGuarded(t *testing.T) {
 	})
 }
 
+// TestWriteBackFileItemMessageMatchesTheFailure pins that the remedy named in
+// writeBackFileItem's refusal depends on WHY the read failed.
+//
+// The shape sentence ("remove or replace the non-regular file") was once
+// appended to every readDestBytes error, so deleting a managed file — the
+// common case, which is itself drift and offers [w] — produced
+// "no such file or directory — remove or replace the non-regular file at that
+// path", advice that describes a situation the user is not in.
+func TestWriteBackFileItemMessageMatchesTheFailure(t *testing.T) {
+	absent := filepath.Join(t.TempDir(), "deleted.md")
+	err := writeBackFileItem(t.TempDir(), reconcileItem{op: adapter.FileOp{Path: absent, SourceID: "demo"}})
+	if err == nil {
+		t.Fatal("writeBackFileItem = nil for an absent destination, want an error")
+	}
+	if strings.Contains(err.Error(), "non-regular") {
+		t.Errorf("error = %q calls an ABSENT destination non-regular; the remedy must match "+
+			"the failure that actually occurred", err)
+	}
+	if !strings.Contains(err.Error(), "[i]gnore") {
+		t.Errorf("error = %q, want it to still name a next step", err)
+	}
+}
+
 // mkfifoDest creates a 0600 FIFO at a destination path and returns it. mkfifo
 // and chmod do not open the FIFO; nothing in this file ever does.
 func mkfifoDest(t *testing.T, tmp string) string {
@@ -261,7 +284,11 @@ func TestHashFileSentinels(t *testing.T) {
 				}
 				return p
 			},
-			want: hashContent([]byte("payload")),
+			// A literal, not hashContent([]byte("payload")): computing the
+			// expectation with the function under test is a tautology — salting
+			// hashContent leaves this row green. This digest is what a state
+			// file records for that content.
+			want: "239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5",
 		},
 	}
 
