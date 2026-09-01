@@ -12,7 +12,7 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 ### Fixed
 
 - **A FIFO, directory, or other non-regular file at a managed destination no
-  longer hangs `status`, `diff` or `reconcile`.** `os.ReadFile` on a FIFO does
+  longer hangs `status`, `diff`, or `reconcile`'s drift walk and write-back.** `os.ReadFile` on a FIFO does
   not fail — it blocks in the open waiting for a writer that never comes — so
   the read's own error path never runs and the command never returns. Measured
   on the previous release: a FIFO at a whole-file destination wedged `diff` and
@@ -32,9 +32,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   a non-regular destination would classify as drift and then hang one keystroke
   later.
 
-  **`apply`, `apply --dry-run` and `import <agent>` are NOT fixed by this** and
-  still hang on the same fixture — their reads are in `internal/render` and the
-  adapter `Ingest` paths, a far wider sweep. Tracked as
+  **`apply`, `apply --dry-run`, `reconcile`'s `[o]verride` and `import <agent>`
+  are NOT fixed by this** and still hang on the same fixture — their reads are
+  in `internal/render` and the adapter `Ingest` paths, a far wider sweep.
+  `[o]verride` re-applies through `render.Writer.Write`, so it shares `apply`'s
+  unguarded read; the refusal message therefore points at removing or replacing
+  the file rather than at `[o]`, which would wedge. Tracked as
   [#241](https://github.com/spxrogers/agentsync/issues/241) and
   [#242](https://github.com/spxrogers/agentsync/issues/242).
 

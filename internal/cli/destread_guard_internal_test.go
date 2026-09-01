@@ -10,17 +10,20 @@ import (
 // destination path with a bare os.ReadFile. It is an invariant over the two
 // spellings below, not over every possible one — see LIMITS.
 //
-// Why an invariant and not just the behavior tests: the four reads that were
-// MEASURED to hang (readDestFile, diff's and reconcile's per-op reads, and
-// writeBackFileItem) are each pinned by a timeout-bounded test. The three in
-// import's state-seeding path are not — no fixture was found that reaches them
-// with a non-regular destination, and with every guard removed `agentsync
-// import` still returned. They were routed through the gate anyway, because
-// three structurally identical unguarded reads sitting beside four guarded ones
-// invite exactly the question "why those and not these", and the honest answer
-// — "nobody found a fixture yet" — is not a reason to leave them. This test is
-// what keeps that decision from silently rotting: a new bare destination read
-// fails here even where no hang can be demonstrated.
+// Why an invariant and not just the behavior tests: the four reads MEASURED to
+// hang (readDestFile, diff's and reconcile's per-op reads, and writeBackFileItem)
+// are each pinned by a timeout-bounded test. The three in import's state-seeding
+// path are not, and cannot be from here — `agentsync import <agent>` does hang
+// on a non-regular destination, but upstream of these sites, in the adapter
+// Ingest reads this gate does not cover (#242). Guarding them neither fixed that
+// nor could have.
+//
+// They were routed through the gate anyway, because three structurally
+// identical unguarded reads sitting beside four guarded ones invite exactly the
+// question "why those and not these", and there is no answer that survives
+// being written down. This test is what keeps that decision from rotting: a new
+// bare destination read fails here even where no hang is demonstrable at the
+// site itself.
 //
 // LIMITS, stated so a reader does not over-trust it:
 //   - The pattern is TEXT-shaped. A read spelled through a variable
@@ -56,10 +59,18 @@ func TestEveryDestinationReadGoesThroughTheGate(t *testing.T) {
 	// same. This one drives the REAL matcher over synthetic sources — if the
 	// matcher is ever narrowed or a pattern is dropped, this fails here rather
 	// than silently stopping the repo walk from finding anything.
-	for _, pat := range forbidden {
-		if got := match("func f() { data, _ := " + pat + " }"); got != pat {
-			t.Fatalf("negative control: matcher missed the planted %q (got %q) — "+
-				"the repo walk below cannot be trusted", pat, got)
+	// The planted sources are LITERALS, deliberately not built from `forbidden`.
+	// A control assembled out of the same slice it is checking is tautological:
+	// it passes by construction and cannot notice a pattern being dropped, which
+	// is the most likely way this guard dies.
+	for _, planted := range []string{
+		"func f() { data, _ := os.ReadFile(op.Path) }",
+		"func f(it reconcileItem) { data, _ := os.ReadFile(it.op.Path) }",
+	} {
+		if got := match(planted); got == "" {
+			t.Fatalf("negative control: matcher missed a planted bare destination read in %q — "+
+				"a pattern has been dropped from `forbidden`, and the repo walk below "+
+				"cannot be trusted", planted)
 		}
 	}
 	if got := match("func f() { data, _ := readDestBytes(op.Path) }"); got != "" {

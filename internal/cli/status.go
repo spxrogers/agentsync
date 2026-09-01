@@ -988,11 +988,9 @@ func hashFile(path string) string {
 	// symlink; both are opaque to callers, which only ever compare hashes for
 	// equality.
 	//
-	// The shape rule is NOT applied here: it comes from readDestBytes, the one
-	// gate every destination read in this package passes through. This function
-	// used to hold a second copy of it, which is the duplication the gate exists
-	// to remove — and while the two copies agreed, "the guards cannot disagree"
-	// was a claim rather than a property.
+	// The shape rule itself lives in readDestBytes, the one gate every
+	// destination read in this package passes through; this function maps its
+	// refusal onto the sentinel above rather than re-deciding it.
 	data, err := readDestBytes(path)
 	if err != nil {
 		if errors.Is(err, errDestNotRegular) {

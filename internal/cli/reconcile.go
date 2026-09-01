@@ -1156,8 +1156,16 @@ func writeBackFileItem(home string, it reconcileItem) error {
 		// Named next steps, like this function's other refusals: the user is
 		// mid-prompt with a keystroke to choose, and "read dest X: not a regular
 		// file" alone does not tell them which one gets them unstuck.
-		return fmt.Errorf("read dest %s: %w — use [o]verride to push canonical to the dest, "+
-			"or [i]gnore to suppress this item", it.op.Path, err)
+		//
+		// [o]verride is deliberately NOT offered, unlike the peer refusals in
+		// this file. It re-applies through render.Writer.Write, whose
+		// convergence read is not shape-guarded, so on this exact item it does
+		// not fail — it HANGS (measured: `reconcile --auto-override` rc=124).
+		// An earlier version of this message recommended it, which walked the
+		// user out of a clean refusal and into an unbounded wedge. Restore that
+		// suggestion only once #241 is fixed.
+		return fmt.Errorf("read dest %s: %w — remove or replace the non-regular file at that "+
+			"path and re-run, or [i]gnore to suppress this item", it.op.Path, err)
 	}
 	srcID := it.op.SourceID
 	if srcID == "" {

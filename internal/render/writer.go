@@ -366,7 +366,8 @@ func OrphanDeleteWillProceed(op adapter.FileOp) bool {
 }
 
 // IsRegularOrAbsent is the exported view of isRegularOrAbsent, for the sibling
-// destination reads outside this package (internal/cli's hashFile). They face
+// destination reads outside this package (internal/cli's readDestBytes, the one
+// gate every destination read in that package passes through). They face
 // the identical hazard and must not answer it differently.
 func IsRegularOrAbsent(path string) bool { return isRegularOrAbsent(path) }
 

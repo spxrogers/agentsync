@@ -29,23 +29,19 @@ var errDestNotRegular = errors.New("not a regular file")
 // `import <agent>` still hang on the same fixture; their reads live in
 // internal/render and the adapter Ingest paths (#241, #242).
 //
-// cli.hashFile already applied exactly this rule, and said so: "Shares render's
-// predicate so the destination-read guards cannot disagree about what is safe
-// to read." That was true of the HASH and false of every other destination
-// read. hashFile now calls this function instead of holding a second copy, so
-// within this package that sentence describes a property rather than a
-// coincidence.
+// Every destination read in this package routes here, cli.hashFile included, so
+// they cannot disagree about what is safe to read.
 //
-// It does NOT hold across the symlink axis, and this comment previously claimed
-// it did. hashFile Lstats first and refuses a symlink outright with its own
-// sentinel; this function does not, so a read that reaches os.ReadFile follows
-// the link. `status` therefore calls a symlinked destination drifted while
-// `diff` reads through it and compares the target. That divergence predates the
-// gate — every one of these reads was a bare os.ReadFile, which follows links
-// too — and is deliberately left alone, because AGENTSYNC_ALLOW_SYMLINK_DEST=1
+// They DO still disagree about symlinks, deliberately. hashFile Lstats first and
+// refuses a link outright with its own sentinel; this function does not, so a
+// read that reaches os.ReadFile follows it. `status` therefore calls a symlinked
+// destination drifted while `diff` reads through it and compares the target.
+// That predates this gate — the reads it replaced were bare os.ReadFile, which
+// follows links too — and is left alone because AGENTSYNC_ALLOW_SYMLINK_DEST=1
 // is a documented, supported setup in which apply writes THROUGH the link, so
 // refusing links here would break it. Reconciling the two is a behavior
 // decision, tracked with the drift-walk unification in #229.
+// TestHashFileSentinels asserts both halves.
 //
 // An ABSENT path is not refused: render.IsRegularOrAbsent reports absent as
 // acceptable, so os.ReadFile runs and its ENOENT reaches the caller unchanged.

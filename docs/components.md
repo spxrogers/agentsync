@@ -399,7 +399,8 @@ symmetric with the dest→source write boundary (see architecture §7).
   written ahead of the code: until then only `status`'s `hashFile` used the
   predicate, and `diff`, `reconcile` and the shared key-merge read all blocked.)
   It is **not** yet true of this package's own `Writer.Write` convergence read
-  or of the adapter `Ingest` paths, so `apply`, `apply --dry-run` and
+  or of the adapter `Ingest` paths, so `apply`, `apply --dry-run`,
+  `reconcile --auto-override` (which re-applies through `Writer.Write`) and
   `import <agent>` still block on a non-regular destination — issues #241 and
   #242.
 - **Depends on:** adapter, secrets, source, state, paths, iox, drift.

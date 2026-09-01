@@ -162,9 +162,20 @@ func TestKeyMergeAndWriteBackReadsAreGuarded(t *testing.T) {
 				t.Errorf("error = %q, want it to name the destination %q: errDestNotRegular "+
 					"carries no path, so this caller must supply it", err, p)
 			}
-			if !strings.Contains(err.Error(), "[o]verride") || !strings.Contains(err.Error(), "[i]gnore") {
+			if !strings.Contains(err.Error(), "[i]gnore") || !strings.Contains(err.Error(), "re-run") {
 				t.Errorf("error = %q, want a next step: the user is mid-prompt choosing a "+
 					"keystroke, and this function's other refusals all name one", err)
+			}
+			// The remedy must not be one that hangs. This function's peers all
+			// offer [o]verride, and an earlier version of this message copied
+			// them — but [o] re-applies through render.Writer.Write's unguarded
+			// convergence read, so on a non-regular destination it wedges
+			// instead of failing (#241). Suggesting it is worse than saying
+			// nothing, and this assertion is what stops it coming back by
+			// symmetry with the neighbours.
+			if strings.Contains(err.Error(), "[o]verride") {
+				t.Errorf("error = %q recommends [o]verride, which HANGS on a non-regular "+
+					"destination (#241) — offer it again only once that is fixed", err)
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatalf("writeBackFileItem BLOCKED on a FIFO destination (%s) — [w] must refuse, "+
@@ -185,4 +196,113 @@ func mkfifoDest(t *testing.T, tmp string) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// TestHashFileSentinels pins hashFile's three-way answer, which every drift
+// verdict in this package is built on. The values are opaque — callers only
+// ever compare them for equality — so a changed sentinel does not fail a build
+// or a type check. It silently changes what drift.Classify decides, at four
+// call sites.
+//
+// Two of these rows cover behavior that a mutation sweep found UNPINNED: the
+// whole suite stayed green with hashFile returning the shape sentinel for every
+// error (absent included), and green again with the symlink arm removed
+// entirely.
+func TestHashFileSentinels(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, tmp string) string
+		want  string
+	}{
+		{
+			// The absent contract. "" is what drift.Classify reads as "no
+			// destination", which is what makes an unrendered-but-recorded file
+			// an Orphan rather than drift. Returning the shape sentinel here
+			// instead would silently reclassify every absent destination — and
+			// the ENOENT branch is taken 43 times in this package's own suite,
+			// none of which asserted the value.
+			name:  "an absent destination hashes to the empty sentinel",
+			setup: func(t *testing.T, tmp string) string { return filepath.Join(tmp, "gone") },
+			want:  "",
+		},
+		{
+			// The symlink arm, which runs BEFORE the shape gate and is the one
+			// place status and diff deliberately disagree: this refuses the
+			// link, while readDestBytes (and so diff) follows it. destread.go's
+			// doc comment asserts exactly that divergence; this is the test
+			// behind the claim.
+			name: "a symlink to a regular file is refused as a symlink, not followed",
+			setup: func(t *testing.T, tmp string) string {
+				t.Helper()
+				target := filepath.Join(tmp, "target")
+				if err := os.WriteFile(target, []byte("payload"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				link := filepath.Join(tmp, "link")
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatal(err)
+				}
+				return link
+			},
+			want: "symlink-not-regular-file",
+		},
+		{
+			name:  "a FIFO is refused by shape",
+			setup: mkfifoDest,
+			want:  "not-a-regular-file",
+		},
+		{
+			name: "an ordinary regular file hashes its content",
+			setup: func(t *testing.T, tmp string) string {
+				t.Helper()
+				p := filepath.Join(tmp, "dest")
+				if err := os.WriteFile(p, []byte("payload"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return p
+			},
+			want: hashContent([]byte("payload")),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := tc.setup(t, t.TempDir())
+			// Bounded for the same reason as everything else here: a regression
+			// that reintroduces an unguarded read hangs rather than fails.
+			got := make(chan string, 1)
+			go func() { got <- hashFile(path) }()
+			select {
+			case h := <-got:
+				if h != tc.want {
+					t.Errorf("hashFile = %q, want %q — these sentinels are compared only for "+
+						"equality, so changing one silently changes drift.Classify's verdict",
+						h, tc.want)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("hashFile BLOCKED on %s", path)
+			}
+		})
+	}
+
+	// The divergence destread.go documents, asserted in both directions in one
+	// place so the claim cannot rot: hashFile refuses the link, readDestBytes
+	// reads through it.
+	t.Run("readDestBytes follows the symlink hashFile refuses", func(t *testing.T) {
+		tmp := t.TempDir()
+		target := filepath.Join(tmp, "target")
+		if err := os.WriteFile(target, []byte("payload"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(tmp, "link")
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+		data, err := readDestBytes(link)
+		if err != nil || string(data) != "payload" {
+			t.Fatalf("readDestBytes(symlink) = (%q, %v), want the target's content: this "+
+				"asymmetry with hashFile is what makes status report drift on a symlinked "+
+				"destination while diff reads through it, and destread.go says so", data, err)
+		}
+	})
 }

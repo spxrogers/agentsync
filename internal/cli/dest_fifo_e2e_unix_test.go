@@ -75,17 +75,30 @@ func TestCommandsDoNotHangOnNonRegularDestination(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = os.Remove(dest.path) })
 
-			// Only the three commands this change actually fixes. `apply`,
-			// `apply --dry-run` and `import <agent>` still hang on this exact
-			// fixture — their reads are in internal/render and the adapter
-			// Ingest paths, which this gate does not cover (issues #241, #242).
-			// Asserting them here would be asserting a bug.
-			for _, args := range [][]string{
-				{"status"},
-				{"diff"},
-				{"reconcile", "--auto-safe"},
+			// The first group is what this change fixes. The second still hangs
+			// on this exact fixture and is SKIPPED rather than asserted or
+			// omitted: asserting the hang costs 8s a row and would start
+			// failing the day it is fixed, reading as a regression; omitting it
+			// leaves nothing to find. A skip is greppable, shows up in -v, and
+			// the person who closes the issue deletes one line to inherit a
+			// ready-made assertion.
+			for _, tc := range []struct {
+				args []string
+				skip string
+			}{
+				{args: []string{"status"}},
+				{args: []string{"diff"}},
+				{args: []string{"reconcile", "--auto-safe"}},
+				{args: []string{"apply", "--dry-run"}, skip: "#241: render.Writer.Write's convergence read is unguarded"},
+				{args: []string{"apply"}, skip: "#241: render.Writer.Write's convergence read is unguarded"},
+				{args: []string{"reconcile", "--auto-override"}, skip: "#241: [o]verride queues into render.Writer.Write"},
+				{args: []string{"import", "claude"}, skip: "#242: the adapter Ingest reads are unguarded"},
 			} {
+				args := tc.args
 				t.Run(strings.Join(args, " "), func(t *testing.T) {
+					if tc.skip != "" {
+						t.Skip(tc.skip)
+					}
 					// Exit status is deliberately not asserted: a non-regular
 					// destination may legitimately report drift, or refuse. The
 					// contract under test is that the command RETURNS.
@@ -103,32 +116,107 @@ func TestCommandsDoNotHangOnNonRegularDestination(t *testing.T) {
 func runBounded(t *testing.T, d time.Duration, args ...string) string {
 	t.Helper()
 	detachSlog(t)
-	done := make(chan string, 1)
+	type result struct {
+		out string
+		err error
+	}
+	done := make(chan result, 1)
 	go func() {
 		var buf bytes.Buffer
 		root := cli.NewRoot()
 		root.SetOut(&buf)
 		root.SetErr(&buf)
 		root.SetArgs(args)
-		_ = root.Execute()
-		done <- buf.String()
+		err := root.Execute()
+		done <- result{buf.String(), err}
 	}()
 	select {
-	case out := <-done:
+	case r := <-done:
 		// Anti-vacuity. An earlier version of this test ran `import` with no
 		// agent selector; cobra rejected it at ExactArgs(1) before RunE, so the
 		// row executed zero lines of the code it named and passed identically
 		// with the fix reverted. A command that never starts cannot hang, so
 		// "it returned" is only meaningful once we know it ran.
-		if strings.Contains(out, "arg(s), received") || strings.Contains(out, "unknown command") {
-			t.Fatalf("`agentsync %s` never reached its RunE — cobra rejected the invocation: %s",
-				strings.Join(args, " "), strings.TrimSpace(out))
+		//
+		// The check MUST read the returned error, not the output buffer.
+		// NewRoot sets SilenceErrors, so cobra prints nothing on a rejection —
+		// the first version of this guard inspected the buffer, could therefore
+		// never fire, and was itself the bug it was written to prevent. Worse,
+		// the buffer carries ordinary stdout, so matching these substrings
+		// against it made a plain `diff` fail whenever a rendered file happened
+		// to contain the words. TestRunBoundedRejectsAnInvocationCobraRefuses is
+		// the positive control that keeps this honest.
+		if r.err != nil && isCobraRejection(r.err) {
+			t.Fatalf("`agentsync %s` never reached its RunE — cobra rejected the invocation: %v",
+				strings.Join(args, " "), r.err)
 		}
-		return out
+		return r.out
 	case <-time.After(d):
 		t.Fatalf("`agentsync %s` BLOCKED on a non-regular destination — os.ReadFile on a "+
 			"FIFO waits for a writer that never comes, so the read's own error path never "+
 			"runs and the command never returns", strings.Join(args, " "))
 		return ""
+	}
+}
+
+// isCobraRejection reports whether err is cobra refusing the invocation itself
+// — a wrong argument count, an unknown command or flag — as opposed to a real
+// failure from inside the command.
+//
+// It matches the returned error only. NewRoot sets SilenceErrors, so none of
+// this text is ever printed, which is what made the first version of this check
+// (written against the output buffer) unable to fire.
+func isCobraRejection(err error) bool {
+	msg := err.Error()
+	for _, marker := range []string{
+		"arg(s), received",
+		"unknown command",
+		"unknown flag",
+		"unknown shorthand flag",
+		"requires at least",
+		"accepts at most",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRunBoundedRejectsAnInvocationCobraRefuses is the positive control for the
+// anti-vacuity check in runBounded. Without it that check is unfalsifiable: it
+// only ever fires on a broken invocation, so nothing in a green suite proves it
+// still works, and its first version silently never fired at all.
+//
+// It asserts on isCobraRejection rather than by calling runBounded, because
+// runBounded signals failure with t.Fatalf — driving it with a bad invocation
+// would fail this test rather than pass it.
+func TestRunBoundedRejectsAnInvocationCobraRefuses(t *testing.T) {
+	// Exactly the invocations that silently passed before: `import` without the
+	// agent selector its ExactArgs(1) requires, and an outright bad command.
+	for _, args := range [][]string{{"import"}, {"nosuchcommand"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var buf bytes.Buffer
+			root := cli.NewRoot()
+			root.SetOut(&buf)
+			root.SetErr(&buf)
+			root.SetArgs(args)
+			err := root.Execute()
+			if err == nil {
+				t.Fatalf("`agentsync %s` returned nil; expected cobra to refuse it",
+					strings.Join(args, " "))
+			}
+			if !isCobraRejection(err) {
+				t.Errorf("isCobraRejection(%q) = false, want true — runBounded would let this "+
+					"invocation pass as if the command had run", err)
+			}
+			// The reason the check reads the error and not the buffer.
+			if strings.Contains(buf.String(), "arg(s), received") ||
+				strings.Contains(buf.String(), "unknown command") {
+				t.Errorf("cobra printed its rejection into the output buffer (%q) — if that ever "+
+					"becomes true, the simpler buffer-based check would work and this "+
+					"indirection can go", buf.String())
+			}
+		})
 	}
 }
