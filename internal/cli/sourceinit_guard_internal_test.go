@@ -75,7 +75,8 @@ func scanProbeViolations(files map[string]string, allowed map[string]string) (un
 //     #228 closed for the age identity and then the age vault, one level up. It
 //     is deliberately left to a follow-up because the read sites include
 //     source.loadConfig (internal/source) as well as this one, so closing it
-//     belongs to the loader rather than to a secrets-validation change.
+//     belongs to the loader rather than to a secrets-validation change. Tracked
+//     as issue #238.
 //
 //     What does NOT survive is the reason this bullet used to give for
 //     declining — that folding loadSecretsConfig in "would mean stat-ing a file

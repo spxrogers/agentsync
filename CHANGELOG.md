@@ -99,6 +99,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   the open, which reports it as absent exactly as before — `check` still calls
   such a vault `not yet created` and still exits 0.
 
+  The same asymmetry remains one level up, on `agentsync.toml` itself: `check`
+  refuses a non-regular config, while the surfaces that read it still block on a
+  FIFO. That is pre-existing, is not a `[secrets]` concern, and is tracked as
+  issue #238.
+
   One vault read lives outside `internal/secrets` — the rollback snapshot
   `agentsync secret` takes before re-encrypting — and it goes through the same
   gate. It was reachable, not theoretical: `secret edit` skips the decrypt
