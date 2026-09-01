@@ -391,7 +391,13 @@ symmetric with the dest→source write boundary (see architecture §7).
   this component KIND reclaimed at all — drives reconcile's prompt wording) and
   `OrphanDeleteWillProceed` (will THIS destination actually be removed on this
   run — keeps the apply summary from counting a skipped delete). `IsRegularOrAbsent`
-  is shared with `internal/cli`'s destination reads so a FIFO cannot block them.
+  is shared with `internal/cli`'s destination reads so a FIFO cannot block them:
+  every one of them goes through `readDestBytes` (`internal/cli/destread.go`),
+  which applies this predicate before the open. Enforced, not asserted —
+  `TestEveryDestinationReadGoesThroughTheGate` fails on a bare
+  `os.ReadFile(op.Path)` anywhere under `internal/cli`. (The claim was written
+  ahead of the code: until then only `status`'s `hashFile` used the predicate,
+  and `diff`, `reconcile` and the shared key-merge read all blocked.)
 - **Depends on:** adapter, secrets, source, state, paths, iox, drift.
 - **Files:** `pipeline.go`, `writer.go`, `state_apply.go`, `report.go`.
 

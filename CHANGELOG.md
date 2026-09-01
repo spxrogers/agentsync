@@ -11,6 +11,25 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **A FIFO, directory, or other non-regular file at a managed destination no
+  longer hangs `status`, `diff` or `reconcile`.** `os.ReadFile` on a FIFO does
+  not fail — it blocks in the open waiting for a writer that never comes — so
+  the read's own error path never runs and the command never returns. Measured
+  on the previous release: a FIFO at a whole-file destination wedged `diff` and
+  `reconcile`, and a FIFO-shaped key-merge destination (a `~/.claude.json`,
+  say) additionally wedged `status`, which is advertised as read-only. Each had
+  to be killed.
+
+  `status` was already safe for the whole-file shape, because its `hashFile`
+  applied `render.IsRegularOrAbsent` and said it "shares render's predicate so
+  the destination-read guards cannot disagree about what is safe to read". That
+  was true of the hash and false of every other destination read. All of them
+  now go through one gate, `readDestBytes`, which refuses a non-regular path
+  before the open and lets an ABSENT one through to the read, whose ENOENT is
+  the answer every caller already handles. A `reconcile` write-back (`[w]`) is
+  covered too — with only the classification reads guarded, a non-regular
+  destination would classify as drift and then hang one keystroke later.
+
 - **`agentsync check` no longer rejects a `[secrets].backend` that `apply`
   accepts.** `secrets.SelectBackend` — the function `apply` actually resolves
   through — lower-cases the backend name, but `check` compared it against the

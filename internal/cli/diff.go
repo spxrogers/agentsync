@@ -175,7 +175,7 @@ func newDiffCmd() *cobra.Command {
 						}
 						seen[op.Path] = true
 						srcStr := secrets.MaskResolved(string(op.Content), redact)
-						dstBytes, readErr := os.ReadFile(op.Path)
+						dstBytes, readErr := readDestBytes(op.Path)
 						dstStr := ""
 						if readErr == nil {
 							dstStr = secrets.MaskResolved(string(dstBytes), redact)

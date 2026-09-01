@@ -655,7 +655,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 				happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, op.Path)].SHA256
 				hdest := hashFile(op.Path)
 				cls := drift.Classify(hsrc, happlied, hdest)
-				dstBytes, _ := os.ReadFile(op.Path)
+				dstBytes, _ := readDestBytes(op.Path)
 				items = append(items, reconcileItem{
 					agentName:   name,
 					op:          op,
@@ -1151,7 +1151,7 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 //
 // Both used to return nil with a success message, hiding data loss.
 func writeBackFileItem(home string, it reconcileItem) error {
-	data, err := os.ReadFile(it.op.Path)
+	data, err := readDestBytes(it.op.Path)
 	if err != nil {
 		return fmt.Errorf("read dest %s: %w", it.op.Path, err)
 	}
