@@ -3,10 +3,48 @@ package cli_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/testenv"
 )
+
+// secretsReportLabels are the four padded columns doctor renders the [secrets]
+// validator's fields under (doctor.go's secretsFieldLabel). They are spelled out
+// here rather than reached for through the unexported helper because this guard
+// is on doctor's RENDERED output — the thing a user reads and the thing a glyph
+// regression would break.
+var secretsReportLabels = []string{"backend    ", "recipient  ", "identity   ", "age file   "}
+
+// doctorFailLines splits doctor's failing REPORT lines into the ones sitting on
+// a [secrets] label and the ones sitting on any other label.
+//
+// failCheck renders "  <glyph> <padded label><status>" and the fixture sets
+// NO_COLOR=1, so a failing report line starts with the bare "  \u2717 ". doctor's
+// closing "N issue(s) detected" summary carries the same glyph at column 0, so
+// the two-space indent is what keeps it out of this classification.
+func doctorFailLines(out string) (secretsFails, otherFails []string) {
+	const failPrefix = "  \u2717 "
+	for _, l := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(l, failPrefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(l, failPrefix)
+		isSecrets := false
+		for _, label := range secretsReportLabels {
+			if strings.HasPrefix(rest, label) {
+				isSecrets = true
+				break
+			}
+		}
+		if isSecrets {
+			secretsFails = append(secretsFails, l)
+		} else {
+			otherFails = append(otherFails, l)
+		}
+	}
+	return secretsFails, otherFails
+}
 
 // TestSecretsValidationParity is the DIVERGENCE GUARD for issue #228.
 //
@@ -21,6 +59,18 @@ import (
 // The fixture home is freshly `init`ed and otherwise clean, so doctor's other
 // sections (state, schema, adapter detection, plugins, git backup) never fail;
 // the [secrets] block is the only variable.
+//
+// It enforces three things per row, not one:
+//   - check and doctor agree on the VERDICT (both exit zero, or both do not),
+//     and that verdict is the expected one;
+//   - doctor's ✗ actually lands on a [secrets] report line when the row is
+//     supposed to fail. Exit-code parity alone would pass a doctor that stopped
+//     rendering the glyph but still counted the issue, and it would call a row
+//     "parity" when doctor's non-zero exit came from an unrelated section;
+//   - NO other doctor report line carries a ✗, on any row. That is the "other
+//     sections never fail" sentence above, asserted rather than assumed: if one
+//     of them starts failing, this test says so instead of blaming the
+//     [secrets] block for a divergence that is not there.
 func TestSecretsValidationParity(t *testing.T) {
 	testenv.RequireContainer(t)
 
@@ -182,6 +232,20 @@ func TestSecretsValidationParity(t *testing.T) {
 			if (checkErr != nil) != tc.wantFail {
 				t.Fatalf("want fail=%v, got check err=%v\ncheck out:\n%s\ndoctor out:\n%s",
 					tc.wantFail, checkErr, checkOut, doctorOut)
+			}
+
+			secretsFails, otherFails := doctorFailLines(doctorOut)
+			if len(otherFails) > 0 {
+				t.Errorf("doctor failed a section other than [secrets] on a fixture that is "+
+					"otherwise freshly `init`ed — the parity claim above is then about the "+
+					"wrong block:\n  %s\ndoctor out:\n%s",
+					strings.Join(otherFails, "\n  "), doctorOut)
+			}
+			if got := len(secretsFails) > 0; got != tc.wantFail {
+				t.Errorf("doctor [secrets] report lines carrying ✗ = %v, want %v — check and "+
+					"doctor must not only reach the same exit code but blame the same "+
+					"block.\nfailing [secrets] lines: %v\ndoctor out:\n%s",
+					got, tc.wantFail, secretsFails, doctorOut)
 			}
 		})
 	}

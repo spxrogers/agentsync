@@ -69,6 +69,12 @@ func scanTokenViolations(files map[string]string, token string, allowed map[stri
 //   - It over-approximates in the other direction too (a future `.BackendKind`
 //     field would match `.Backend`). A false positive costs one allowlist line;
 //     a false negative costs another silent divergence.
+//   - It reads Go SOURCE TEXT, not Go syntax, so a hit inside a COMMENT or a
+//     STRING LITERAL counts exactly like real code. A doc comment in a
+//     non-allowlisted file that writes `cfg.Backend` in prose therefore trips
+//     this — and the allowlist bar below correctly refuses to absorb it, since
+//     that file is not the single definition. The remedy is to reword the
+//     comment (say "the [secrets].backend field"), not to allowlist the file.
 //
 // The bar for adding a file to an allowlist here: it IS the single definition,
 // or it is the path resolver that must return "" for an unset value.
