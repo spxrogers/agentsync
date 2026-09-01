@@ -4,8 +4,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
 // secretsTokenRule is one token whose interpretation must have a single home,
@@ -75,7 +73,6 @@ func scanTokenViolations(files map[string]string, token string, allowed map[stri
 // The bar for adding a file to an allowlist here: it IS the single definition,
 // or it is the path resolver that must return "" for an unset value.
 func TestSecretsConfigIsInterpretedInOnePlace(t *testing.T) {
-	testenv.RequireContainer(t)
 	repoRoot := repoRootFromCaller(t)
 
 	files := map[string]string{}
@@ -90,8 +87,12 @@ func TestSecretsConfigIsInterpretedInOnePlace(t *testing.T) {
 			why: "the [secrets].backend name is interpreted in exactly two places: SelectBackend " +
 				"(what apply resolves through) and validate.go (what check, doctor and the secret " +
 				"group gate on). A third comparison is how `backend = \"AGE\"` came to apply " +
-				"cleanly and fail every validator. Route it through secrets.NormalizeBackend / " +
-				"secrets.ValidateConfig / secrets.RequireAgeVault instead.",
+				"cleanly and fail every validator. Route it through secrets.ValidateConfig or " +
+				"secrets.RequireAgeVault instead — they take the whole [secrets] block, so a " +
+				"caller never reads .Backend at all. (secrets.NormalizeBackend is the shared " +
+				"lower-casing primitive those two and SelectBackend agree through; calling it " +
+				"from a new file still reads .Backend and so still trips this guard — correctly, " +
+				"because it means a third interpretation is being written.)",
 			allowed: map[string]string{
 				"internal/secrets/secrets.go":  "SelectBackend — the resolver apply renders through",
 				"internal/secrets/validate.go": "NormalizeBackend, ValidateConfig, RequireAgeVault",
