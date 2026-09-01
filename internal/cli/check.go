@@ -215,7 +215,8 @@ func requireInitializedSource(root string, sc adapter.Scope) error {
 // [secrets] block is any more — internal/secrets owns both rules, and check,
 // doctor and the `secret` group are its consumers.
 //
-// Only SeverityFail findings become an error. SeverityWarn and the passing
+// Only SeverityFail findings become an error (and, defensively, any tier this
+// switch does not name — see its default arm). SeverityWarn and the passing
 // tiers are for a REPORT surface to render: check's contract is "is this config
 // valid", and neither of the two states the validator warns on is invalid
 // config. A vault that has not been created yet is a fresh install. A [secrets]
@@ -233,8 +234,25 @@ func requireInitializedSource(root string, sc adapter.Scope) error {
 func secretsProblems(cfg source.SecretsConfig, agentsyncHome, userHome string) error {
 	var msgs []string
 	for _, f := range secrets.ValidateConfig(cfg, agentsyncHome, userHome) {
-		if f.Severity != secrets.SeverityFail {
+		switch f.Severity {
+		case secrets.SeverityOK, secrets.SeverityInfo, secrets.SeverityWarn:
 			continue
+		case secrets.SeverityFail:
+			// The one tier check acts on; fall through and record it.
+		default:
+			// DEFENSIVE ONLY — every secrets.Severity is named above, and this
+			// is the twin of doctor's default arm (checkSecrets). A tier added
+			// to internal/secrets without a home here must NOT be silently
+			// DROPPED: `!= SeverityFail` would have skipped a hypothetical tier
+			// STRICTER than Fail, exiting 0 on a config the validator had just
+			// condemned — a false pass of exactly the #228 kind. Fail loudly on
+			// an unrecognised verdict instead: a spurious error is noisy and
+			// gets fixed, a spurious exit 0 is the bug this whole unification
+			// removes. Note the two defensive arms then answer DIFFERENTLY
+			// (doctor warns without counting an issue; this errors), so
+			// TestSecretsValidationParity fires on such a tier — which is the
+			// point: it must be given a real home on both surfaces, not left to
+			// whichever default caught it.
 		}
 		// f.Message is untrusted.Text, so %s invokes its sanitizing String()
 		// and a crafted [secrets].identity_file cannot inject terminal escapes

@@ -182,14 +182,22 @@ func TestValidateConfig(t *testing.T) {
 		wantFails int
 	}{
 		{
+			// Pinned as the WHOLE message, and with the warning twin's wording
+			// pinned absent, for the same reason that row does it: these two
+			// arms differ only in which sentence they print about the same empty
+			// backend, so a substring loose enough to match either one would let
+			// them swap without failing. "no [secrets] block" is the sentence
+			// that is TRUE here and false one row down — the split, from this
+			// side.
 			name: "no backend is informational",
 			mutate: func(_ *testing.T, _, _ string) source.SecretsConfig {
 				return source.SecretsConfig{}
 			},
-			wantField:    secrets.FieldBackend,
-			wantSeverity: secrets.SeverityInfo,
-			wantContains: "not configured",
-			wantFails:    0,
+			wantField:       secrets.FieldBackend,
+			wantSeverity:    secrets.SeverityInfo,
+			wantContains:    "not configured (skip — no [secrets] block)",
+			wantNotContains: "will not resolve",
+			wantFails:       0,
 		},
 		{
 			// The branch's own thesis applied to itself: a [secrets] block with

@@ -57,24 +57,41 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `doctor` already fail on them, alongside `apply`. The user guide and the
   configuration reference now draw the same absent-block / present-but-inert
   split, instead of saying both commands skip either one.
-- **A directory at the `[secrets].file` vault path or the
-  `[secrets].identity_file` age key is no longer reported as healthy.** A
-  directory (or FIFO, or socket) stats successfully, so neither path reached the
-  "not yet created" or the "not readable" arm and both `agentsync check` and
-  `agentsync doctor` passed them with a `✓`, leaving the real failure to the
-  first decrypt. Both must now be regular files — the same rule both commands
-  already apply to `agentsync.toml` — and each is reported as a hard failure
-  (`file: <path> — not a regular file`, `identity_file: <path> — not a regular
-  file`). The identity is the sharper of the two, because it is the path
-  `secrets.Decrypt` hands to `os.ReadFile`: a directory there failed the decrypt
-  with `read identity …: is a directory`, and a FIFO did not fail it at all —
-  `os.ReadFile` waits forever for a writer that never comes, so a `secret get`
-  against a vault that exists hung instead of erroring. The identity's *shape*
-  is now checked before its *permissions*, so a `0755` directory is named as the
+- **A directory or FIFO at the `[secrets].file` vault path or the
+  `[secrets].identity_file` age key is no longer reported as healthy — or read.**
+  A non-regular file stats successfully, so neither path reached the "not yet
+  created" or the "not readable" arm: `agentsync check` and `agentsync doctor`
+  passed the *vault* with a `✓` whatever its mode, and passed the *identity* with
+  a `✓` whenever its mode set no group/other bits — a `0700` directory, say, or
+  a `0600` FIFO. (An identity directory at `0755` did not pass; it drew
+  `too permissive … chmod 600`, a remedy that does not apply to a directory.)
+  Either way the real failure was left to the first decrypt. Both must now be
+  regular files — the same rule both commands already apply to `agentsync.toml`
+  — reported as a hard failure (`file: <path> — not a regular file`,
+  `identity_file: <path> — not a regular file`), and the identity's *shape* is
+  now checked before its *permissions*, so a `0755` directory is named as the
   wrong shape rather than told to `chmod 600`.
+
+  The identity is the sharper of the two, because it is the path
+  `secrets.Decrypt` and `AgeBackend.load` hand to `os.ReadFile`: a directory
+  there failed the decrypt with `read identity …: is a directory`, and a FIFO
+  did not fail it at all — `os.ReadFile` waits forever for a writer that never
+  comes. **Fixing the report alone did not fix that**, because only `check` runs
+  the validator before reading. Measured against a vault that exists, with a live
+  `${secret:…}` reference and a valid recipient, a `0600` FIFO identity still
+  wedged `secret get`, `secret list`, `secret set`, `secret edit`,
+  `secret remove`, `apply` and `doctor` — the last of those after printing its
+  own `✗` for the very file it then blocked on — until each was killed. The
+  regular-file rule therefore also sits on `secrets.CheckIdentityPermissions`,
+  the one pre-read gate every path that reads the identity already calls, ahead
+  of both its Windows caveat and its `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` override:
+  neither of those is about mode bits, and a FIFO is a FIFO regardless. All of
+  those commands now fail immediately with `age identity <path> is not a regular
+  file`.
 - **The `agentsync secret` subcommands agree with `apply` on the backend name,
-  and check the vault before touching it.** All five (`get`, `list`, `set`,
-  `edit`, `remove`) compared `[secrets].backend` against the literal `"age"`, so
+  and check their `[secrets]` keys before touching the vault.** All five
+  (`get`, `list`, `set`, `edit`, `remove`) compared `[secrets].backend` against
+  the literal `"age"`, so
   `backend = "AGE"` — which `apply` resolves fine — was refused. They now share
   `secrets.NormalizeBackend` with `apply`'s `SelectBackend`. `secret get`,
   `secret list` and `secret remove` also refuse up front when `identity_file` is

@@ -31,7 +31,7 @@ the rest are escape hatches you'll rarely need.
 | `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` | Register an agent with no implemented adapter yet (none today — every valid agent is real). |
 | `AGENTSYNC_ALLOW_PLUGIN_DRIFT=1` | Bypass the plugin-cache manifest-SHA check (after hand-editing). |
 | `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Skip `${secret:…}` resolution in `check`; reference *shape* (well-formed `${secret:…}`/`${env:…}`) is still validated (CI without an age key). |
-| `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` | Skip the 0600 mode check on the age identity file (ACL'd NFS). |
+| `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` | Skip the 0600 **mode** check on the age identity file (ACL'd NFS). The identity must still be a regular file. |
 | `AGENTSYNC_MAX_TARBALL_MB=<N>` | Override the per-tarball decompressed-bytes cap (default 512; 0 disables). |
 | `AGENTSYNC_NO_UPGRADE_NOTICE=1` | Suppress the one-time first-run-after-upgrade notice (see [Upgrading](/reference/upgrading/)). Nothing is printed and nothing is recorded, so unsetting it later still surfaces an unseen notice. |
 | `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |

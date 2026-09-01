@@ -230,29 +230,69 @@ func Decrypt(ageFile, identityFile string) ([]byte, error) {
 	return raw, err
 }
 
-// SkipPermCheckEnv is the env var that disables CheckIdentityPermissions.
-// Set to "1" for setups (network homes, dev containers) where mode bits
-// don't reflect actual access (e.g. NFS roots squash, ACLs override).
+// SkipPermCheckEnv is the env var that disables CheckIdentityPermissions'
+// PERMISSION gate. Set to "1" for setups (network homes, dev containers) where
+// mode bits don't reflect actual access (e.g. NFS roots squash, ACLs override).
+// It does NOT disable the regular-file check: that one is not about mode bits,
+// and switching it off would restore an unkillable hang. See
+// CheckIdentityPermissions.
 const SkipPermCheckEnv = "AGENTSYNC_AGE_SKIP_PERM_CHECK"
 
-// CheckIdentityPermissions ensures the age identity file is not readable by
-// group or other. A 0o644 identity file defeats the purpose of encryption.
-// On Windows the mode bits are not POSIX semantics; we skip the check there.
-// Users can opt out by setting AGENTSYNC_AGE_SKIP_PERM_CHECK=1.
+// CheckIdentityPermissions is the shared pre-read gate on the age identity
+// file: every path that goes on to os.ReadFile it — AgeBackend.load (apply,
+// `secret get`/`list`/`set`/`edit`/`remove`, doctor's checkSecretReferences)
+// and Decrypt — calls this first. It enforces two rules.
+//
+// SHAPE: the path must be a REGULAR file. A directory, socket or FIFO is not an
+// age identity, and a FIFO is the sharp one — os.ReadFile on a FIFO with no
+// writer does not fail, it BLOCKS FOREVER. Before this arm, a 0600 FIFO at
+// [secrets].identity_file cleared the permission gate and wedged every command
+// that read the vault: measured against a vault that exists, with a live
+// ${secret:…} reference and a valid recipient, `secret get`, `secret list`,
+// `secret set`, `secret edit`, `secret remove`, `apply --dry-run` and `doctor`
+// all hung until killed — `doctor` after printing its own ✗ for the same file.
+// Only `agentsync check` was clean, because it stops at secrets.ValidateConfig
+// and never reads. Putting the rule on the surfaces that REPORT
+// (validateIdentity) and not on the gate that READS is what left that gap; it
+// belongs here, where one arm closes it for every caller at once. (issue #228)
+//
+// PERMISSIONS: the file must not be readable by group or other. A 0o644
+// identity file defeats the purpose of encryption. On Windows the mode bits are
+// not POSIX semantics, so that rule is skipped there, and users can opt out with
+// AGENTSYNC_AGE_SKIP_PERM_CHECK=1.
+//
+// The shape check is deliberately placed AHEAD of both of those escapes. The
+// Windows caveat and the env override exist because MODE BITS can be
+// meaningless; a FIFO is a FIFO on every OS and under every override, so
+// letting either one skip past the shape rule would hand the hang straight back
+// to the users most likely to set it. It is also ahead of the permission rule
+// for the reason validateIdentity orders them the same way: telling the owner of
+// a 0755 directory to `chmod 600` names the wrong problem.
+//
+// The name is narrower than the contract — kept because this is the single gate
+// every read path already calls, and a second entry point beside it would be
+// fail-OPEN by construction: a future reader that picked the permissions-only
+// one would silently reopen the hang.
 func CheckIdentityPermissions(path string) error {
 	if path == "" {
 		return nil
 	}
-	if os.Getenv(SkipPermCheckEnv) == "1" {
-		return nil
-	}
 	info, err := os.Stat(path)
 	if err != nil {
-		// DELIBERATE: bypass the permission gate ONLY when the file is
-		// absent/unreadable — the decrypt caller surfaces the real open error, so
-		// manufacturing a "bad permissions" error here would be misleading. This is
-		// NOT a hole in the gate: a file that is PRESENT but insecure still stats
-		// successfully and is rejected by the mode&0o077 check below. (issue #163)
+		// DELIBERATE: bypass the gate ONLY when the file is absent/unreadable —
+		// the decrypt caller surfaces the real open error, so manufacturing an
+		// error here would be misleading. This is NOT a hole: a file that is
+		// PRESENT is stat'd successfully and still faces both rules below — the
+		// wrong SHAPE and the mode&0o077 check alike. (issue #163)
+		return nil
+	}
+	// Shape first, and before the two mode-bit escapes below — see the doc
+	// comment. Wording mirrors validateIdentity's finding so the gate and the
+	// report say the same thing about the same file.
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("age identity %s is not a regular file", untrusted.Wrap(path))
+	}
+	if os.Getenv(SkipPermCheckEnv) == "1" {
 		return nil
 	}
 	mode := info.Mode().Perm()

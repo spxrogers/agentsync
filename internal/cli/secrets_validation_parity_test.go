@@ -142,7 +142,11 @@ func TestSecretsValidationParity(t *testing.T) {
 		// fine and so reaches neither the "not yet created" nor the "not
 		// readable" arm.
 		dirVault bool
-		wantFail bool
+		// bareTable writes a `[secrets]` HEADER with nothing under it. It is
+		// distinct from a block func returning "", which writes no table at
+		// all, and the difference is the whole point of the row that sets it.
+		bareTable bool
+		wantFail  bool
 		// wantGlyphs is the complete set of [secrets] report lines doctor must
 		// print for this row, label → glyph. Compared for equality, so a
 		// missing or extra line fails too.
@@ -153,6 +157,51 @@ func TestSecretsValidationParity(t *testing.T) {
 			block:      func(_, _ string) string { return "" },
 			wantFail:   false,
 			wantGlyphs: map[string]string{"backend    ": glyphInfo},
+		},
+		{
+			// THE DECODER ROWS. ValidateConfig's empty-backend arm splits on
+			// `cfg == (source.SecretsConfig{})`, and the user guide and the
+			// configuration reference both promise a specific answer for three
+			// TOML spellings that arm cannot tell apart — "no [secrets] block at
+			// all (or a bare [secrets] header, which parses identically)" and
+			// "an absent OR EMPTY backend". Nothing asserted that, because
+			// TestValidateConfig builds source.SecretsConfig with Go struct
+			// literals, which cannot distinguish `backend = ""` from an absent
+			// key: the claim is about the DECODER, so only a row that starts
+			// from real TOML can back it. These three do, end to end through
+			// both commands.
+			//
+			// A bare header: the promise is that it is indistinguishable from no
+			// table, so the expectation here is deliberately identical to the
+			// row above, glyph for glyph.
+			name:       "bare [secrets] header",
+			block:      func(_, _ string) string { return "" },
+			bareTable:  true,
+			wantFail:   false,
+			wantGlyphs: map[string]string{"backend    ": glyphInfo},
+		},
+		{
+			// An EMPTY backend and no other key: `backend = ""` decodes to the
+			// same zero-valued SecretsConfig as an absent key, so this is the
+			// informational tier too, not the warning one. If the decoder ever
+			// stopped round-tripping "" to "" — or a loader started defaulting a
+			// sibling key like `file`, making the struct non-zero — this row
+			// flips to ⚠ and says so.
+			name:       "empty backend string alone",
+			block:      func(_, _ string) string { return "backend = \"\"\n" },
+			wantFail:   false,
+			wantGlyphs: map[string]string{"backend    ": glyphInfo},
+		},
+		{
+			// The other half of "absent or empty": an empty backend beside a key
+			// that carries a VALUE is a block that was never switched on, so it
+			// takes the warning tier — the same answer as omitting `backend`
+			// entirely (the "secrets table with no backend" row below). That
+			// equality is the doc claim; asserting the pair is what pins it.
+			name:       "empty backend string with a recipient",
+			block:      func(_, _ string) string { return "backend = \"\"\nrecipient = \"age1qqqq\"\n" },
+			wantFail:   false,
+			wantGlyphs: map[string]string{"backend    ": glyphWarn},
 		},
 		{
 			// The residual the rest of this branch's thesis targets: a [secrets]
@@ -381,6 +430,8 @@ func TestSecretsValidationParity(t *testing.T) {
 			body := "[agents]\n"
 			if b := tc.block(idPath, home); b != "" {
 				body += "[secrets]\n" + b
+			} else if tc.bareTable {
+				body += "[secrets]\n"
 			}
 			if err := os.WriteFile(filepath.Join(home, "agentsync.toml"), []byte(body), 0o600); err != nil {
 				t.Fatal(err)

@@ -50,10 +50,12 @@ const (
 	// render as a pass. That is safe only because no such Finding exists: every
 	// Finding in this package is built by finding(), which takes a Severity
 	// explicitly, and both consumers read them straight back from
-	// ValidateConfig. Note what this is NOT: doctor's defensive `default:` arm
-	// guards against a NEW TIER added here without a home there, and a new tier
-	// takes a distinct value wherever it is inserted in this block — the named
-	// arms keep routing correctly and the newcomer lands on `default:`. A
+	// ValidateConfig. Note what this is NOT: the defensive `default:` arms in
+	// doctor's checkSecrets and check's secretsProblems guard against a NEW TIER
+	// added here without a home there, and a new tier takes a distinct value
+	// wherever it is inserted in this block — the named arms keep routing
+	// correctly and the newcomer lands on `default:` (doctor warns rather than
+	// printing a ✓; check errors rather than exiting 0). A
 	// `severityUnset = iota` sentinel would therefore renumber an exported type
 	// to guard a state nothing can produce; declined deliberately.
 	SeverityOK Severity = iota
@@ -236,11 +238,19 @@ func validateRecipient(cfg source.SecretsConfig) Finding {
 // socket — is a hard failure, the same rule validateAgeFile applies to the vault
 // and probeSourceInit to agentsync.toml. It belongs here most of all: this is
 // the path age.ParseIdentities is actually fed, through os.ReadFile in
-// AgeBackend.load and Decrypt. A directory reported `✓ identity   ok` on doctor
-// and exited 0 on check, then failed the eventual read with `read identity …: is
-// a directory`. A FIFO is the sharp one — it clears stat AND, at 0600, the
-// permission gate, and its read does not even fail: os.ReadFile waits forever
-// for a writer that never comes.
+// AgeBackend.load and Decrypt. A directory whose mode set no group/other bits
+// reported `✓ identity   ok` on doctor and exited 0 on check, then failed the
+// eventual read with `read identity …: is a directory`; one at 0755 did not
+// report ✓ — it drew the permission arm's "too permissive; chmod 600", which is
+// the WRONG problem, not a pass. (The vault has no permission arm, so a
+// directory there reported ✓ at any mode.) A FIFO is the sharp one — it clears
+// stat AND, at 0600, the permission gate, and its read does not even fail:
+// os.ReadFile waits forever for a writer that never comes.
+//
+// This arm covers the REPORT. It does not, on its own, cover the read: only
+// `check` runs this validator before touching the vault, so the same rule also
+// sits on CheckIdentityPermissions, the shared pre-read gate — see its doc
+// comment for why that is where the hang is actually closed.
 //
 // The shape check comes FIRST, before the permission gate, because a 0755
 // directory is an ordinary directory: reporting it "too permissive; chmod 600"
