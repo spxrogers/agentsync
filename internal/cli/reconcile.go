@@ -1153,7 +1153,11 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 func writeBackFileItem(home string, it reconcileItem) error {
 	data, err := readDestBytes(it.op.Path)
 	if err != nil {
-		return fmt.Errorf("read dest %s: %w", it.op.Path, err)
+		// Named next steps, like this function's other refusals: the user is
+		// mid-prompt with a keystroke to choose, and "read dest X: not a regular
+		// file" alone does not tell them which one gets them unstuck.
+		return fmt.Errorf("read dest %s: %w — use [o]verride to push canonical to the dest, "+
+			"or [i]gnore to suppress this item", it.op.Path, err)
 	}
 	srcID := it.op.SourceID
 	if srcID == "" {

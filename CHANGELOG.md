@@ -23,12 +23,20 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `status` was already safe for the whole-file shape, because its `hashFile`
   applied `render.IsRegularOrAbsent` and said it "shares render's predicate so
   the destination-read guards cannot disagree about what is safe to read". That
-  was true of the hash and false of every other destination read. All of them
-  now go through one gate, `readDestBytes`, which refuses a non-regular path
-  before the open and lets an ABSENT one through to the read, whose ENOENT is
-  the answer every caller already handles. A `reconcile` write-back (`[w]`) is
-  covered too — with only the classification reads guarded, a non-regular
-  destination would classify as drift and then hang one keystroke later.
+  was true of the hash and false of every other destination read. Every
+  destination read in `internal/cli` — `hashFile` included, which held a second
+  copy of the rule — now goes through one gate, `readDestBytes`, which refuses a
+  non-regular path before the open and lets an ABSENT one through to the read,
+  whose ENOENT is the answer every caller already handles. A `reconcile`
+  write-back (`[w]`) is covered too: with only the classification reads guarded,
+  a non-regular destination would classify as drift and then hang one keystroke
+  later.
+
+  **`apply`, `apply --dry-run` and `import <agent>` are NOT fixed by this** and
+  still hang on the same fixture — their reads are in `internal/render` and the
+  adapter `Ingest` paths, a far wider sweep. Tracked as
+  [#241](https://github.com/spxrogers/agentsync/issues/241) and
+  [#242](https://github.com/spxrogers/agentsync/issues/242).
 
 - **`agentsync check` no longer rejects a `[secrets].backend` that `apply`
   accepts.** `secrets.SelectBackend` — the function `apply` actually resolves

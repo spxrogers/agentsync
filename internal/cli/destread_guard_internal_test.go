@@ -6,8 +6,9 @@ import (
 )
 
 // TestEveryDestinationReadGoesThroughTheGate enforces the invariant that makes
-// the FIFO guard hold: no production code in this package reads a destination
-// path with a bare os.ReadFile.
+// the FIFO guard hold: no production code in this package reads an op's
+// destination path with a bare os.ReadFile. It is an invariant over the two
+// spellings below, not over every possible one — see LIMITS.
 //
 // Why an invariant and not just the behavior tests: the four reads that were
 // MEASURED to hang (readDestFile, diff's and reconcile's per-op reads, and
@@ -25,7 +26,13 @@ import (
 //   - The pattern is TEXT-shaped. A read spelled through a variable
 //     (`p := op.Path; os.ReadFile(p)`), via afero, or with os.Open + io.ReadAll
 //     slips past. It catches the copy-paste that actually happened seven times,
-//     not every conceivable spelling.
+//     not every conceivable spelling. Concretely: reverting readDestFile's own
+//     read to `os.ReadFile(path)` is NOT caught here — the behavior tests are
+//     what cover that one.
+//   - It is scoped to THIS PACKAGE. `apply` and `import <agent>` still hang on
+//     a non-regular destination through internal/render and the adapter Ingest
+//     paths (#241, #242); this guard says nothing about them, and passing it
+//     does not mean agentsync as a whole is safe.
 //   - It scans comments and string literals too, so a mention of the pattern in
 //     prose would trip it. That is the safe direction to fail.
 func TestEveryDestinationReadGoesThroughTheGate(t *testing.T) {
@@ -33,6 +40,31 @@ func TestEveryDestinationReadGoesThroughTheGate(t *testing.T) {
 	forbidden := []string{
 		"os.ReadFile(op.Path)",
 		"os.ReadFile(it.op.Path)",
+	}
+	match := func(src string) string {
+		for _, pat := range forbidden {
+			if strings.Contains(src, pat) {
+				return pat
+			}
+		}
+		return ""
+	}
+
+	// Negative control, run every time and not only when the tree is dirty:
+	// a guard that passes whatever the tree looks like is worse than none,
+	// because it reads as coverage. Both prior guards in this package do the
+	// same. This one drives the REAL matcher over synthetic sources — if the
+	// matcher is ever narrowed or a pattern is dropped, this fails here rather
+	// than silently stopping the repo walk from finding anything.
+	for _, pat := range forbidden {
+		if got := match("func f() { data, _ := " + pat + " }"); got != pat {
+			t.Fatalf("negative control: matcher missed the planted %q (got %q) — "+
+				"the repo walk below cannot be trusted", pat, got)
+		}
+	}
+	if got := match("func f() { data, _ := readDestBytes(op.Path) }"); got != "" {
+		t.Fatalf("negative control: matcher flagged the CORRECT spelling as %q — "+
+			"it would fail on a compliant tree", got)
 	}
 
 	repoRoot := repoRootFromCaller(t)
@@ -47,13 +79,11 @@ func TestEveryDestinationReadGoesThroughTheGate(t *testing.T) {
 			return
 		}
 		scanned++
-		for _, pat := range forbidden {
-			if strings.Contains(src, pat) {
-				t.Errorf("%s contains %q — destination reads must go through readDestBytes "+
-					"(internal/cli/destread.go), which refuses a non-regular path BEFORE the "+
-					"open. os.ReadFile on a FIFO does not fail, it BLOCKS, so the read's own "+
-					"error path never runs and the command never returns.", rel, pat)
-			}
+		if pat := match(src); pat != "" {
+			t.Errorf("%s contains %q — destination reads must go through readDestBytes "+
+				"(internal/cli/destread.go), which refuses a non-regular path BEFORE the "+
+				"open. os.ReadFile on a FIFO does not fail, it BLOCKS, so the read's own "+
+				"error path never runs and the command never returns.", rel, pat)
 		}
 	}); err != nil {
 		t.Fatal(err)

@@ -75,16 +75,15 @@ func TestCommandsDoNotHangOnNonRegularDestination(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = os.Remove(dest.path) })
 
+			// Only the three commands this change actually fixes. `apply`,
+			// `apply --dry-run` and `import <agent>` still hang on this exact
+			// fixture — their reads are in internal/render and the adapter
+			// Ingest paths, which this gate does not cover (issues #241, #242).
+			// Asserting them here would be asserting a bug.
 			for _, args := range [][]string{
 				{"status"},
 				{"diff"},
 				{"reconcile", "--auto-safe"},
-				{"import", "--dry-run"},
-				// A REAL import too: importRun returns early on --dry-run
-				// (import.go:331), so the state-seeding destination reads in
-				// seedStateFromCurrentDest and unimportedDestPointers are only
-				// reachable without it.
-				{"import"},
 			} {
 				t.Run(strings.Join(args, " "), func(t *testing.T) {
 					// Exit status is deliberately not asserted: a non-regular
@@ -116,6 +115,15 @@ func runBounded(t *testing.T, d time.Duration, args ...string) string {
 	}()
 	select {
 	case out := <-done:
+		// Anti-vacuity. An earlier version of this test ran `import` with no
+		// agent selector; cobra rejected it at ExactArgs(1) before RunE, so the
+		// row executed zero lines of the code it named and passed identically
+		// with the fix reverted. A command that never starts cannot hang, so
+		// "it returned" is only meaningful once we know it ran.
+		if strings.Contains(out, "arg(s), received") || strings.Contains(out, "unknown command") {
+			t.Fatalf("`agentsync %s` never reached its RunE — cobra rejected the invocation: %s",
+				strings.Join(args, " "), strings.TrimSpace(out))
+		}
 		return out
 	case <-time.After(d):
 		t.Fatalf("`agentsync %s` BLOCKED on a non-regular destination — os.ReadFile on a "+

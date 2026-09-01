@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -985,13 +986,18 @@ func hashFile(path string) string {
 	// computing, so answer a sentinel that can never match one. It is a DIFFERENT
 	// sentinel from the symlink case above so a diagnostic never calls a FIFO a
 	// symlink; both are opaque to callers, which only ever compare hashes for
-	// equality. Shares render's predicate so the destination-read guards cannot
-	// disagree about what is safe to read.
-	if !render.IsRegularOrAbsent(path) {
-		return "not-a-regular-file"
-	}
-	data, err := os.ReadFile(path)
+	// equality.
+	//
+	// The shape rule is NOT applied here: it comes from readDestBytes, the one
+	// gate every destination read in this package passes through. This function
+	// used to hold a second copy of it, which is the duplication the gate exists
+	// to remove — and while the two copies agreed, "the guards cannot disagree"
+	// was a claim rather than a property.
+	data, err := readDestBytes(path)
 	if err != nil {
+		if errors.Is(err, errDestNotRegular) {
+			return "not-a-regular-file"
+		}
 		return ""
 	}
 	return hashContent(data)

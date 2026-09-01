@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -151,6 +152,19 @@ func TestKeyMergeAndWriteBackReadsAreGuarded(t *testing.T) {
 		case err := <-ch:
 			if err == nil {
 				t.Fatal("writeBackFileItem = nil, want an error: a FIFO carries no dest content to write back")
+			}
+			// The sentinel is pathless on the rationale that every caller wraps
+			// it with the path itself. This is the caller that does, and the one
+			// whose message a user reads mid-prompt, so both halves are pinned
+			// here — otherwise dropping the wrap leaves the suite green and the
+			// rationale untested.
+			if !strings.Contains(err.Error(), p) {
+				t.Errorf("error = %q, want it to name the destination %q: errDestNotRegular "+
+					"carries no path, so this caller must supply it", err, p)
+			}
+			if !strings.Contains(err.Error(), "[o]verride") || !strings.Contains(err.Error(), "[i]gnore") {
+				t.Errorf("error = %q, want a next step: the user is mid-prompt choosing a "+
+					"keystroke, and this function's other refusals all name one", err)
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatalf("writeBackFileItem BLOCKED on a FIFO destination (%s) — [w] must refuse, "+
