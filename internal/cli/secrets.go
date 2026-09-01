@@ -163,7 +163,13 @@ func encryptMap(m map[string]any, cfg source.SecretsConfig, home string) error {
 func writeSecretsVerified(plain []byte, cfg source.SecretsConfig, home string) error {
 	agePath := resolveAgePath(cfg, home)
 	prev, hadPrev := []byte(nil), false
-	if data, err := os.ReadFile(agePath); err == nil {
+	// Through the shape gate, not os.ReadFile: os.ReadFile blocks on a FIFO
+	// exactly as os.Open does, and `secret edit` reaches here WITHOUT having
+	// decrypted whenever the vault was absent at its own stat (the
+	// os.IsNotExist arm below), so nothing else refuses a non-regular vault
+	// first. A non-regular path simply reports no previous vault to preserve,
+	// which is the truth: a FIFO is not a vault.
+	if data, err := secrets.ReadVault(agePath); err == nil {
 		prev, hadPrev = data, true
 	}
 	if err := secrets.Encrypt(plain, cfg.Recipient, agePath); err != nil {

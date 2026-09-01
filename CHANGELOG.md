@@ -80,13 +80,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   writer that never comes. (A directory is the milder shape: it does fail, but
   several layers down, as `read identity …: is a directory` or an age header
   parse error naming the wrong problem.) Measured against a fixture with a real
-  age keypair, a decryptable vault and a valid recipient, a `0600` FIFO
-  *identity* — with a live `${secret:…}` reference present — wedged
-  `secret get`, `secret list`, `secret set`, `secret edit`, `secret remove`,
-  `apply` and `doctor`, the last of those after printing its own `✗` for the
-  very file it then blocked on; a `0600` FIFO *vault* wedged `secret list` and
-  `secret get` the same way, with zero output. Each had to be killed. Only
-  `check` was clean.
+  age keypair, a decryptable vault and a valid recipient, a `0600` FIFO at
+  either path wedged the `secret` subcommands outright, and — once a live
+  `${secret:…}` reference gave them something to resolve — `apply` and `doctor`
+  too, the last after printing its own `✗` for the very file it then blocked on.
+  Each had to be killed. Only `check` was clean.
 
   The regular-file rule therefore also sits on the gate each read path passes
   through. For the identity that is `secrets.CheckIdentityPermissions` — which
@@ -94,11 +92,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   caveat and its `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` override: neither of those is
   about mode bits, and a FIFO is a FIFO regardless. For the vault it is a
   function that returns the opened handle, so that obtaining the file *is* the
-  check and a third read site cannot forget to call it. Those commands now fail
+  check and no read site can reach the vault without passing it. Those commands now fail
   immediately with `age identity <path> is not a regular file` or `age file
-  <path> is not a regular file`. A vault that is merely ABSENT is untouched:
-  the gate stats only for shape and lets every other stat failure fall through
-  to the open, which still reports it as not yet created.
+  <path> is not a regular file`. A vault that is merely ABSENT is untouched: the
+  gate stats only for shape and lets every other stat failure fall through to
+  the open, which reports it as absent exactly as before — `check` still calls
+  such a vault `not yet created` and still exits 0.
+
+  One vault read lives outside `internal/secrets` — the rollback snapshot
+  `agentsync secret` takes before re-encrypting — and it goes through the same
+  gate. It was reachable, not theoretical: `secret edit` skips the decrypt
+  entirely when the vault is absent, so an `$EDITOR` that created a FIFO at the
+  vault path during its own edit window wedged the command outright.
 - **The `agentsync secret` subcommands agree with `apply` on the backend name,
   and check their `[secrets]` keys before touching the vault.** All five
   (`get`, `list`, `set`, `edit`, `remove`) compared `[secrets].backend` against

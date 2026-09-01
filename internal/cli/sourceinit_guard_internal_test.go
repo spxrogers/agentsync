@@ -52,6 +52,7 @@ func scanProbeViolations(files map[string]string, allowed map[string]string) (un
 // internal/cli/sourceinit.go contains `os.Stat(` and `"agentsync.toml"` on one
 // line. That is narrower than "there is only one initialized-source probe in
 // the codebase", and deliberately so:
+//
 //   - KNOWN EXCEPTION, not a violation: loadSecretsConfig
 //     (internal/cli/secrets.go) also answers "is this home initialized", via
 //     os.ReadFile + an ENOENT arm carrying its own "run `agentsync init`"
@@ -63,11 +64,27 @@ func scanProbeViolations(files map[string]string, allowed map[string]string) (un
 //     read too; only the wording of the refusal differs. Those four are the
 //     extent of the agreement, not a claim about every node type: probeSourceInit
 //     also rejects a FIFO- or socket-shaped agentsync.toml (sourceInitConfigNotFile,
-//     added by #228), where loadSecretsConfig's os.ReadFile would instead block
-//     indefinitely on a FIFO with no writer, or fail with a device error on a
-//     socket. Neither is reachable through `init`, and neither changes the
-//     conclusion: folding loadSecretsConfig in would mean stat-ing a file it is
-//     about to read. It does not match the pattern above, and it is not meant to.
+//     added by #228), where loadSecretsConfig's os.ReadFile instead blocks
+//     indefinitely on a FIFO with no writer, or fails with a device error on a
+//     socket.
+//
+//     That gap is REAL and measured, not theoretical. With a 0600 FIFO at
+//     ~/.agentsync/agentsync.toml, `secret list`, `status` and `doctor` hang
+//     with zero output until killed, while `check` — the one surface that runs
+//     probeSourceInit — refuses cleanly. It is the same report-vs-read asymmetry
+//     #228 closed for the age identity and then the age vault, one level up. It
+//     is deliberately left to a follow-up because the read sites include
+//     source.loadConfig (internal/source) as well as this one, so closing it
+//     belongs to the loader rather than to a secrets-validation change.
+//
+//     What does NOT survive is the reason this bullet used to give for
+//     declining — that folding loadSecretsConfig in "would mean stat-ing a file
+//     it is about to read". CheckIdentityPermissions and openVault both do
+//     exactly that, deliberately, because a stat is the only way to learn a
+//     path's shape without an open that may never return. The remaining
+//     objection is scope, not principle. It still does not match the
+//     line-shaped pattern above, and it is still not meant to.
+//
 //   - LIMIT: the pattern is line-shaped, so a probe written with os.Lstat, an
 //     afero FS, os.ReadFile, or with the filename held in a variable slips
 //     past. It catches the copy-paste that actually happened three times, not
@@ -75,6 +92,7 @@ func scanProbeViolations(files map[string]string, allowed map[string]string) (un
 //     considered and declined: os.ReadFile of a config path is a shape the rest
 //     of the codebase uses legitimately, so the guard would become a
 //     false-positive generator.
+//
 //   - LIMIT: walkRepoGoFiles skips _test.go files, so a test that stats
 //     agentsync.toml to assert on a tree it built (init_test.go does) is out of
 //     scope. Tests observe the filesystem; they do not define what

@@ -147,20 +147,10 @@ func TestCheckIdentityPermissionsShape(t *testing.T) {
 	}
 }
 
-// mkfifoIdentity creates a 0600 FIFO and returns its path. mkfifo and chmod do
-// not open the FIFO; nothing in this file ever does.
+// mkfifoIdentity creates a 0600 FIFO at the identity path.
 func mkfifoIdentity(t *testing.T, tmp string) string {
 	t.Helper()
-	p := filepath.Join(tmp, "age.key")
-	if err := syscall.Mkfifo(p, 0o600); err != nil {
-		t.Skipf("mkfifo unsupported here: %v", err)
-	}
-	// mkfifo applies the process umask; chmod is what pins 0600, so a FIFO row
-	// cannot be answered by the "too permissive" arm instead of the shape one.
-	if err := os.Chmod(p, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return p
+	return mkfifoAt(t, filepath.Join(tmp, "age.key"))
 }
 
 // TestVaultShapeGate pins the SHAPE arm on the OTHER age path — the
@@ -173,12 +163,15 @@ func mkfifoIdentity(t *testing.T, tmp string) string {
 // path wedged `secret list` and `secret get` with zero output until they were
 // killed, while `agentsync check` was clean — the identity symptom verbatim.
 //
-// THE REAL KEYPAIR BELOW IS LOAD-BEARING, not scene-setting. Both entry points
-// read and PARSE the identity before they ever open the vault, so a fixture
-// with a placeholder identity fails at age.ParseIdentities two statements
-// early and never reaches the gate under test — every row would pass, and pass
-// for the wrong reason, whether or not the gate exists. A hand probe built that
-// way is what made this bug look unreproducible for a round.
+// THE REAL KEYPAIR BELOW IS LOAD-BEARING, not scene-setting. Every entry point
+// reads and PARSES the identity before it ever opens the vault, so a fixture
+// with a placeholder identity dies at age.ParseIdentities two statements early
+// and never reaches the gate under test. Inside this test that failure is LOUD
+// — each row misses its wantErrContains and fails — but it is exactly how the
+// same mistake goes SILENT outside one: a hand probe of this scenario, run with
+// no assertions at all, reported a clean exit and made the bug look
+// unreproducible for a whole round. The assertions are what turn the trap into
+// a failure. Keep them, and keep the real key.
 //
 // As in the sibling test, the per-case timeout is the guard: if the gate is
 // ever changed to open the path it means to check, this reports in 5s instead
@@ -266,6 +259,16 @@ func TestVaultShapeGate(t *testing.T) {
 					}
 					return err
 				},
+				// The cross-package read. internal/cli's rollback snapshot
+				// calls it, and that caller is reachable with a non-regular
+				// vault (see TestWriteSecretsVerifiedSurvivesNonRegularVault).
+				"secrets.ReadVault": func() error {
+					raw, err := secrets.ReadVault(vault)
+					if err == nil && len(raw) == 0 {
+						return fmt.Errorf("read 0 bytes, want the encrypted vault")
+					}
+					return err
+				},
 				"AgeBackend.Resolve": func() error {
 					got, err := secrets.NewAgeBackend(vault, idPath).Resolve("demo.key")
 					if err == nil && got != "s3cr3t" {
@@ -315,20 +318,28 @@ func TestVaultShapeGate(t *testing.T) {
 	}
 }
 
-// mkfifoVault creates a 0600 FIFO at the vault path. mkfifo and chmod do not
-// open the FIFO; nothing in this file ever does.
+// mkfifoVault creates a 0600 FIFO at the vault path.
 func mkfifoVault(t *testing.T, tmp string) string {
 	t.Helper()
-	p := filepath.Join(tmp, "secrets.age")
-	if err := syscall.Mkfifo(p, 0o600); err != nil {
+	return mkfifoAt(t, filepath.Join(tmp, "secrets.age"))
+}
+
+// mkfifoAt creates a 0600 FIFO at path and returns it. mkfifo and chmod do not
+// open the FIFO; nothing in this package ever does — a test that opened one
+// would not fail, it would wedge the suite.
+//
+// The chmod is not redundant: mkfifo applies the process umask, so without it a
+// FIFO row could be answered by a "too permissive" arm instead of the shape one
+// it is written to exercise.
+func mkfifoAt(t *testing.T, path string) string {
+	t.Helper()
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
 		t.Skipf("mkfifo unsupported here: %v", err)
 	}
-	// mkfifo applies the process umask; chmod pins 0600 so this row cannot be
-	// answered by a permission arm instead of the shape one.
-	if err := os.Chmod(p, 0o600); err != nil {
+	if err := os.Chmod(path, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return p
+	return path
 }
 
 // writeVault encrypts the fixture secret to recipient and returns its path.

@@ -46,7 +46,6 @@ type AgeBackend struct {
 	cache        map[string]string
 }
 
-// NewAgeBackend returns an AgeBackend configured with the given file paths.
 // openVault opens the encrypted vault at path for reading, refusing any path
 // that is not a regular file BEFORE the open.
 //
@@ -62,8 +61,19 @@ type AgeBackend struct {
 //
 // It is a function that RETURNS THE HANDLE rather than a Check* the two callers
 // must remember to call first, because a gate you can forget to call is
-// fail-open by construction: obtaining the file IS the check, so a third read
-// site cannot skip it without visibly reaching for os.Open itself.
+// fail-open by construction: obtaining the file IS the check.
+//
+// The one caller outside this package that needs the vault's raw bytes goes
+// through ReadVault, which is this same gate: writeSecretsVerified's rollback
+// snapshot (internal/cli/secrets.go) previously reached for os.ReadFile, and
+// os.ReadFile blocks on a FIFO exactly as os.Open does. It was reachable, not
+// theoretical — `secret edit` with an ABSENT vault takes a branch that never
+// decrypts (internal/cli/secrets.go, the os.IsNotExist arm), so no earlier
+// refusal stood between that read and an unkillable hang; an $EDITOR that
+// created a FIFO at the vault path during its own edit window wedged the
+// command deterministically. Exporting the READ rather than a predicate keeps
+// the property that makes this shape work: bytes cannot be obtained without
+// passing the gate, so there is no separate check to forget.
 //
 // A stat FAILURE falls through to the open deliberately. Unlike the identity,
 // an ABSENT vault is the ordinary state of a fresh install that has not run
@@ -88,6 +98,20 @@ func openVault(path string) (*os.File, error) {
 	return f, nil
 }
 
+// ReadVault reads the whole encrypted vault at path, refusing any path that is
+// not a regular file before the open. It is the cross-package form of
+// openVault; see that function for why the gate returns data rather than a
+// verdict.
+func ReadVault(path string) ([]byte, error) {
+	f, err := openVault(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+// NewAgeBackend returns an AgeBackend configured with the given file paths.
 func NewAgeBackend(ageFile, identityFile string) *AgeBackend {
 	return &AgeBackend{AgeFile: ageFile, IdentityFile: identityFile}
 }
