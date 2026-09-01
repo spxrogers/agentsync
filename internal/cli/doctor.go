@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -149,35 +148,36 @@ func infoCheck(p *ui.Printer, label, status string) {
 	fmt.Fprintf(p.Out, "  %s %s%s\n", p.Faint(ui.GlyphInfo), label, p.Faint(status))
 }
 
-// checkHomeDir verifies that AGENTSYNC_HOME exists and is a directory.
+// checkHomeDir verifies that AGENTSYNC_HOME is an initialized source root — it
+// exists, is a directory, and holds a regular agentsync.toml. A home without
+// agentsync.toml is half-initialized (e.g. an authoring command run before
+// `init`); naming that explicitly avoids calling the schema "ok" on a
+// config-less home.
+//
+// The classification comes from probeSourceInit — the same probe `check` and
+// the upgrade notice use — so the three cannot disagree about what
+// "initialized" means; only the rendering is doctor's own.
 // Returns 1 if the check fails, 0 otherwise.
 func checkHomeDir(p *ui.Printer, home string) int {
-	info, err := os.Stat(home)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			failCheck(p, "home dir   ", "missing — run `agentsync init`")
-			return 1
-		}
-		failCheck(p, "home dir   ", fmt.Sprintf("unreadable: %v", err))
-		return 1
-	}
-	if !info.IsDir() {
+	st, err := probeSourceInit(home)
+	switch st {
+	case sourceInitOK:
+		okCheck(p, "home dir   ", "ok")
+		return 0
+	case sourceInitRootMissing:
+		failCheck(p, "home dir   ", "missing — run `agentsync init`")
+	case sourceInitRootNotDir:
 		failCheck(p, "home dir   ", fmt.Sprintf("exists but is not a directory: %s", home))
-		return 1
-	}
-	// A home dir without agentsync.toml is half-initialized (e.g. an authoring
-	// command run before `init`); naming it explicitly, like `verify` does,
-	// avoids calling the schema "ok" on a config-less home.
-	if _, err := os.Stat(filepath.Join(home, "agentsync.toml")); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			failCheck(p, "home dir   ", "missing agentsync.toml (half-initialized) — run `agentsync init`")
-			return 1
-		}
+	case sourceInitConfigMissing:
+		failCheck(p, "home dir   ", "missing agentsync.toml (half-initialized) — run `agentsync init`")
+	case sourceInitConfigNotFile:
+		failCheck(p, "home dir   ", "agentsync.toml is not a regular file (half-initialized) — run `agentsync init`")
+	case sourceInitConfigUnreadable:
 		failCheck(p, "home dir   ", fmt.Sprintf("agentsync.toml unreadable: %v", err))
-		return 1
+	default: // sourceInitRootUnreadable
+		failCheck(p, "home dir   ", fmt.Sprintf("unreadable: %v", err))
 	}
-	okCheck(p, "home dir   ", "ok")
-	return 0
+	return 1
 }
 
 // checkStateDir verifies that .state/ is writable.

@@ -285,9 +285,16 @@ func homeExists(home string) bool {
 // Without this check, the first project-scope command to record state creates
 // ~/.agentsync/ with no record, and "home exists + no record" reads as an
 // upgrade — firing a breaking-change banner at a brand-new user.
+//
+// It delegates to probeSourceInit, the one stat-shaped initialized-source
+// probe. That is not a behavior change: sourceInitOK requires exactly what this
+// function already required — a regular agentsync.toml — and a regular file
+// inside root implies root is a directory. Keeping the answer identical
+// matters, because a STRICTER answer here would fire a breaking-change banner
+// at a brand-new user, which is the thing this function exists to prevent.
 func hasUserConfig(home string) bool {
-	fi, err := os.Stat(filepath.Join(home, "agentsync.toml"))
-	return err == nil && fi.Mode().IsRegular()
+	st, _ := probeSourceInit(home)
+	return st == sourceInitOK
 }
 
 // printUpgradeNotices renders the banner to stderr.

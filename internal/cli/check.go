@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/afero"
@@ -159,19 +158,22 @@ func requireInitializedSource(root string, sc adapter.Scope) error {
 		label = "project source tree"
 		initCmd = "`agentsync init --scope project`"
 	}
-	if _, err := os.Stat(root); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("%s %s does not exist; run %s first", label, root, initCmd)
-		}
+	st, err := probeSourceInit(root)
+	switch st {
+	case sourceInitOK:
+		return nil
+	case sourceInitRootMissing:
+		return fmt.Errorf("%s %s does not exist; run %s first", label, root, initCmd)
+	case sourceInitRootNotDir:
+		return fmt.Errorf("%s %s exists but is not a directory; move it aside and run %s", label, root, initCmd)
+	case sourceInitConfigMissing:
+		return fmt.Errorf("%s %s is missing agentsync.toml (half-initialized); run %s", label, root, initCmd)
+	case sourceInitConfigNotFile:
+		return fmt.Errorf("%s %s has an agentsync.toml that is not a regular file (half-initialized); run %s",
+			label, root, initCmd)
+	default: // sourceInitRootUnreadable, sourceInitConfigUnreadable
 		return fmt.Errorf("check: stat %s: %w", root, err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "agentsync.toml")); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("%s %s is missing agentsync.toml (half-initialized); run %s", label, root, initCmd)
-		}
-		return fmt.Errorf("check: stat agentsync.toml: %w", err)
-	}
-	return nil
 }
 
 // secretsProblems maps the SINGLE [secrets] validator's hard failures onto

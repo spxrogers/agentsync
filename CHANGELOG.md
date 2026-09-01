@@ -55,6 +55,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   and each says *why* an age vault is required rather than implying
   `backend = "env"` is invalid (it is a supported backend — it just keeps no
   vault for these commands to manage).
+- **`check` and `doctor` agree on what a half-initialized source tree is.**
+  Three copies of the "is this initialized" probe tested three different things:
+  `check` accepted a `~/.agentsync` that was a regular file and then failed with
+  the internal-looking `stat agentsync.toml: not a directory`, and both `check`
+  and `doctor` accepted an `agentsync.toml` that was a *directory* — `doctor`
+  printing `✓ home dir   ok` — leaving the real failure to surface later as
+  `read …/agentsync.toml: is a directory`. All three callers (`check`'s guard,
+  `doctor`'s `home dir` line, and the upgrade-notice probe) now share one
+  `probeSourceInit`, which requires the root to be a directory and
+  `agentsync.toml` to be a regular file. The upgrade-notice probe's answer is
+  unchanged, by design — a stricter answer there would fire a breaking-change
+  banner at a brand-new user.
 
 ### Changed
 
