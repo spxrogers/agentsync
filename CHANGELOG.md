@@ -41,6 +41,27 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   passing with a false `not yet created` warning pointing at
   `agentsync secret edit`. The `env` backend is now documented in the secrets
   guide, the user guide and the configuration reference.
+- **`agentsync doctor` no longer reports "no `[secrets]` block" at a block that
+  is right there.** A `[secrets]` table carrying `recipient` / `identity_file` /
+  `file` but no `backend` printed the informational line
+  `• backend    not configured (skip — no [secrets] block)` — a sentence that is
+  false about the block it is describing — while `apply` resolves that config
+  through a no-op backend, so every `${secret:…}` in the source fails at apply
+  time with `no secrets backend configured`. It is now a warning that says so:
+  `⚠ backend    not set — ${secret:…} will not resolve (set "age" or "env")`.
+  The informational line is unchanged for a config that sets no `[secrets]` key
+  at all. `agentsync check` still exits 0 on such a block, deliberately: a
+  canonical source carrying no `${secret:…}` reference applies cleanly with it,
+  so failing `check` there would be a new `check`/`apply` divergence of exactly
+  the kind this release removes. When references *are* present, `check` and
+  `doctor` already fail on them, alongside `apply`.
+- **A directory at the `[secrets].file` vault path is no longer reported as
+  healthy.** A directory (or FIFO, or socket) stats successfully, so it reached
+  neither the "not yet created" nor the "not readable" arm and both
+  `agentsync check` and `agentsync doctor` passed it with a `✓`, leaving the
+  real failure to the first decrypt. The vault must now be a regular file — the
+  same rule both commands already apply to `agentsync.toml` — and each reports
+  it as a hard failure (`file: <path> — not a regular file`).
 - **The `agentsync secret` subcommands agree with `apply` on the backend name,
   and check the vault before touching it.** All five (`get`, `list`, `set`,
   `edit`, `remove`) compared `[secrets].backend` against the literal `"age"`, so

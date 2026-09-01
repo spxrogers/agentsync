@@ -56,27 +56,94 @@ func TestNormalizeBackend(t *testing.T) {
 }
 
 // TestSelectBackendUsesNormalizeBackend pins that the resolver apply renders
-// through and the validator agree on every spelling — the exact axis on which
-// check/doctor disagreed with apply before #228.
+// through, the validator `check`/`doctor` report from, and the gate the
+// `secret` group refuses on all agree on every spelling of the backend name —
+// the exact axis on which check/doctor disagreed with apply before #228.
+//
+// All three are exercised on ONE fixture per spelling, which is the point: the
+// header used to claim the validator was covered while the body only called
+// SelectBackend. The agreement asserted is not "same verdict" (the three have
+// deliberately different rules — RequireAgeVault refuses the perfectly valid
+// env backend, because there is no vault for it to manage) but "same reading of
+// the NAME":
+//   - a spelling SelectBackend resolves to a real backend is one ValidateConfig
+//     blesses (SeverityOK on the backend field);
+//   - a spelling that degrades to NopResolver is one ValidateConfig does NOT
+//     bless — Fail for a typo, Warn for an unset backend in a block that
+//     carries other keys;
+//   - RequireAgeVault accepts exactly the spellings that select an AgeBackend.
 func TestSelectBackendUsesNormalizeBackend(t *testing.T) {
 	tests := []struct {
 		name    string
 		backend string
 		want    string // %T of the returned Resolver
+		// wantBackendSeverity is ValidateConfig's verdict on the BACKEND field
+		// for the same spelling. (The fixture's identity file does not exist, so
+		// the age rows also carry an identity_file failure; only the backend
+		// field's finding is read here.)
+		wantBackendSeverity secrets.Severity
+		// wantVaultOK is whether RequireAgeVault admits the same spelling.
+		wantVaultOK bool
 	}{
-		{name: "age", backend: "age", want: "*secrets.AgeBackend"},
-		{name: "AGE folds to age", backend: "AGE", want: "*secrets.AgeBackend"},
-		{name: "env", backend: "env", want: "secrets.EnvBackend"},
-		{name: "ENV folds to env", backend: "ENV", want: "secrets.EnvBackend"},
-		{name: "empty is NOT env", backend: "", want: "secrets.NopResolver"},
-		{name: "unknown degrades", backend: "vault", want: "secrets.NopResolver"},
+		{
+			name: "age", backend: "age", want: "*secrets.AgeBackend",
+			wantBackendSeverity: secrets.SeverityOK, wantVaultOK: true,
+		},
+		{
+			name: "AGE folds to age", backend: "AGE", want: "*secrets.AgeBackend",
+			wantBackendSeverity: secrets.SeverityOK, wantVaultOK: true,
+		},
+		{
+			name: "env", backend: "env", want: "secrets.EnvBackend",
+			wantBackendSeverity: secrets.SeverityOK, wantVaultOK: false,
+		},
+		{
+			name: "ENV folds to env", backend: "ENV", want: "secrets.EnvBackend",
+			wantBackendSeverity: secrets.SeverityOK, wantVaultOK: false,
+		},
+		{
+			// The fixture sets recipient and identity_file, so this is the
+			// "configured a vault and never switched it on" block: NopResolver
+			// at apply time, and a warning — not a pass — from the validator.
+			name: "empty is NOT env", backend: "", want: "secrets.NopResolver",
+			wantBackendSeverity: secrets.SeverityWarn, wantVaultOK: false,
+		},
+		{
+			name: "unknown degrades", backend: "vault", want: "secrets.NopResolver",
+			wantBackendSeverity: secrets.SeverityFail, wantVaultOK: false,
+		},
+		{
+			// NormalizeBackend does not trim, so this is a typo on all three
+			// surfaces — a validator that trimmed would bless a spelling apply
+			// resolves as NopResolver.
+			name: "leading space is not trimmed", backend: " age", want: "secrets.NopResolver",
+			wantBackendSeverity: secrets.SeverityFail, wantVaultOK: false,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := source.SecretsConfig{Backend: tc.backend, Recipient: "age1qqqq", IdentityFile: "/nope/id"}
-			got := secrets.SelectBackend(cfg, "/home/.agentsync", "/home")
+			userHome := t.TempDir()
+			home := filepath.Join(userHome, ".agentsync")
+			idPath := filepath.Join(userHome, "age.key") // deliberately not created
+			cfg := source.SecretsConfig{Backend: tc.backend, Recipient: "age1qqqq", IdentityFile: idPath}
+
+			got := secrets.SelectBackend(cfg, home, userHome)
 			if gotType := typeName(got); gotType != tc.want {
 				t.Fatalf("SelectBackend(backend=%q) = %s, want %s", tc.backend, gotType, tc.want)
+			}
+
+			f := findingFor(t, secrets.ValidateConfig(cfg, home, userHome), secrets.FieldBackend)
+			if f.Severity != tc.wantBackendSeverity {
+				t.Errorf("ValidateConfig(backend=%q) backend severity = %s, want %s — the validator "+
+					"and SelectBackend must read the same spelling the same way (message: %s)",
+					tc.backend, f.Severity, tc.wantBackendSeverity, f.Message)
+			}
+
+			vaultErr := secrets.RequireAgeVault(cfg, "secret list", secrets.VaultRead)
+			if (vaultErr == nil) != tc.wantVaultOK {
+				t.Errorf("RequireAgeVault(backend=%q) = %v, want ok=%v — the `secret` group must admit "+
+					"exactly the spellings SelectBackend resolves to an age backend",
+					tc.backend, vaultErr, tc.wantVaultOK)
 			}
 		})
 	}
@@ -109,6 +176,8 @@ func TestValidateConfig(t *testing.T) {
 		wantField    secrets.Field
 		wantSeverity secrets.Severity
 		wantContains string
+		// wantNotContains, when set, must NOT appear in the field's message.
+		wantNotContains string
 		// wantFails is the total number of SeverityFail findings.
 		wantFails int
 	}{
@@ -120,6 +189,45 @@ func TestValidateConfig(t *testing.T) {
 			wantField:    secrets.FieldBackend,
 			wantSeverity: secrets.SeverityInfo,
 			wantContains: "not configured",
+			wantFails:    0,
+		},
+		{
+			// The branch's own thesis applied to itself: a [secrets] block with
+			// recipient and identity_file but no backend used to report
+			// "not configured (skip — no [secrets] block)" — a sentence that is
+			// false about the block sitting right there — at SeverityInfo, so
+			// doctor printed it as a neutral bullet and nothing anywhere said
+			// that SelectBackend will hand apply a NopResolver.
+			name: "a [secrets] block with no backend warns instead of claiming there is no block",
+			mutate: func(t *testing.T, _, idPath string) source.SecretsConfig {
+				writeIdentity(t, idPath, 0o600)
+				return source.SecretsConfig{Recipient: "age1qqqq", IdentityFile: idPath}
+			},
+			wantField:    secrets.FieldBackend,
+			wantSeverity: secrets.SeverityWarn,
+			wantContains: "not set — ${secret:…} will not resolve",
+			// The false sentence, pinned as gone rather than merely reworded.
+			wantNotContains: "no [secrets] block",
+			// Warn, not Fail: with no ${secret:…} reference in the source this
+			// config applies cleanly, so failing `check` here would be a NEW
+			// check/apply divergence. See ValidateConfig's empty-backend arm.
+			wantFails: 0,
+		},
+		{
+			// ANY set key makes source.SecretsConfig non-zero, so the warning is
+			// not keyed on recipient/identity_file specifically: a block holding
+			// only `file` — the one key that is defaulted anyway — is still a
+			// block whose ${secret:…} will not resolve. (A `[secrets]` header
+			// with nothing under it is the one case that stays informational: it
+			// unmarshals to the same zero value as no block at all, and there is
+			// nothing after parsing that could tell the two apart.)
+			name: "a [secrets] block with only a defaulted file key still warns",
+			mutate: func(_ *testing.T, _, _ string) source.SecretsConfig {
+				return source.SecretsConfig{File: "secrets/secrets.age"}
+			},
+			wantField:    secrets.FieldBackend,
+			wantSeverity: secrets.SeverityWarn,
+			wantContains: "not set",
 			wantFails:    0,
 		},
 		{
@@ -238,6 +346,25 @@ func TestValidateConfig(t *testing.T) {
 			wantFails:    1,
 		},
 		{
+			// A directory stats fine, so the "not yet created" / "not readable"
+			// arms both miss it and the vault path reported ✓ on check and
+			// doctor alike. secrets.Decrypt os.Opens this path and reads an age
+			// stream out of it, so a directory is not a vault — the same
+			// regular-file rule probeSourceInit adopted for agentsync.toml.
+			name: "age with a directory at the vault path fails",
+			mutate: func(t *testing.T, home, idPath string) source.SecretsConfig {
+				writeIdentity(t, idPath, 0o600)
+				if err := os.MkdirAll(filepath.Join(home, "secrets", "secrets.age"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				return source.SecretsConfig{Backend: "age", Recipient: "age1qqqq", IdentityFile: idPath}
+			},
+			wantField:    secrets.FieldFile,
+			wantSeverity: secrets.SeverityFail,
+			wantContains: "not a regular file",
+			wantFails:    1,
+		},
+		{
 			name: "age with a present vault is ok",
 			mutate: func(t *testing.T, home, idPath string) source.SecretsConfig {
 				writeIdentity(t, idPath, 0o600)
@@ -282,6 +409,10 @@ func TestValidateConfig(t *testing.T) {
 			if !strings.Contains(f.Message.String(), tc.wantContains) {
 				t.Errorf("field %q message = %q, want it to contain %q",
 					tc.wantField, f.Message.String(), tc.wantContains)
+			}
+			if tc.wantNotContains != "" && strings.Contains(f.Message.String(), tc.wantNotContains) {
+				t.Errorf("field %q message = %q, want it NOT to contain %q",
+					tc.wantField, f.Message.String(), tc.wantNotContains)
 			}
 			fails := 0
 			for _, x := range got {

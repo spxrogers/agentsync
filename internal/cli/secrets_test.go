@@ -518,6 +518,35 @@ func setSecretsBackend(t *testing.T, env map[string]string, backend string) {
 	}
 }
 
+// removeSecretsRecipient deletes the [secrets].recipient line from the
+// fixture's agentsync.toml, leaving backend and identity_file in place. That is
+// the one config shape that tells VaultRead and VaultWrite apart: the vault can
+// still be decrypted (decryption needs the identity), but nothing can
+// re-encrypt it.
+func removeSecretsRecipient(t *testing.T, env map[string]string) {
+	t.Helper()
+	cfgPath := filepath.Join(env["AGENTSYNC_TARGET_ROOT"], ".agentsync", "agentsync.toml")
+	body, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	dropped := 0
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "recipient = ") {
+			dropped++
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if dropped != 1 {
+		t.Fatalf("fixture agentsync.toml should carry exactly one `recipient = ` line, found %d", dropped)
+	}
+	if err := os.WriteFile(cfgPath, []byte(strings.Join(kept, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // noopEditor returns the path to an "editor" that exits without touching the
 // file, so `secret edit` can be driven end to end without an interactive vi.
 func noopEditor(t *testing.T) string {
@@ -600,4 +629,86 @@ func TestSecretSubcommandsGateOnRequireAgeVault(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestSecretSubcommandsPinVaultAccess pins WHICH secrets.VaultAccess each of
+// the five `secret` subcommands passes to RequireAgeVault.
+//
+// TestSecretSubcommandsGateOnRequireAgeVault above pins that every command is
+// wired to the gate at all, and secrets.TestRequireAgeVault pins what the gate
+// decides — but neither reads the access argument, so swapping VaultRead and
+// VaultWrite at any of the five call sites changed no test's answer. The rule
+// only bites on one config: an age backend with an identity_file and NO
+// recipient. There the read commands must sail through (decryption needs the
+// identity, not the recipient) and the three re-encrypting ones must refuse.
+//
+// It is also the test behind a CHANGELOG claim that had none: `secret remove`
+// refusing on a missing recipient BEFORE it decrypts. Without the gate, remove
+// decrypts, deletes the key in memory and dies inside Encrypt with `parse age
+// recipient` — an error that also contains the word "recipient", which is why
+// the assertion below is on the gate's whole sentence and not that word.
+func TestSecretSubcommandsPinVaultAccess(t *testing.T) {
+	env, agePath, _, id := setupSecretsEnv(t)
+	// A vault with something in it, so the read commands have a real answer to
+	// give and `remove` names a key that actually exists — otherwise a missing
+	// gate would fail on "not found" and look like a refusal.
+	if err := secrets_pkg.Encrypt([]byte("[svc]\ntoken = \"tok-value\"\n"), id.Recipient().String(), agePath); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(agePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeSecretsRecipient(t, env)
+	t.Setenv("EDITOR", noopEditor(t))
+
+	tests := []struct {
+		name  string
+		stdin string
+		args  []string
+		// wantRefusal is whether RequireAgeVault must refuse this command for a
+		// missing recipient — i.e. whether it passes VaultWrite.
+		wantRefusal bool
+	}{
+		{name: "get reads", args: []string{"secret", "get", "svc.token"}},
+		{name: "list reads", args: []string{"secret", "list"}},
+		{name: "set re-encrypts", stdin: "new-value\n", args: []string{"secret", "set", "svc.token", "--stdin"}, wantRefusal: true},
+		{name: "edit re-encrypts", args: []string{"secret", "edit"}, wantRefusal: true},
+		{name: "remove re-encrypts", args: []string{"secret", "remove", "svc.token"}, wantRefusal: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runCLIWithStdin(t, env, tc.stdin, tc.args...)
+			if !tc.wantRefusal {
+				if err != nil {
+					t.Fatalf("`agentsync %s` only reads the vault, which needs the identity and not "+
+						"the recipient — it must not be gated on VaultWrite: %v\n%s",
+						strings.Join(tc.args, " "), err, out)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("`agentsync %s` re-encrypts the vault, so it must refuse a [secrets] block "+
+					"with no recipient (VaultWrite):\n%s", strings.Join(tc.args, " "), out)
+			}
+			// The gate's own sentence, not just the word "recipient": the
+			// failures further downstream (`parse age recipient`) carry that
+			// word too, so matching it alone would pass a command that decrypted
+			// first and only refused at the re-encrypt.
+			want := tc.args[1] // the subcommand as RequireAgeVault names it
+			if !strings.Contains(err.Error(), "secret "+want+" requires [secrets].recipient") {
+				t.Errorf("refusal %q should be RequireAgeVault's, naming `secret %s` and the missing key", err, want)
+			}
+		})
+	}
+
+	// Nothing above got as far as writing: a refused re-encrypt must leave the
+	// vault byte-for-byte alone.
+	after, err := os.ReadFile(agePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Error("a `secret` command refused for a missing recipient rewrote the vault anyway")
+	}
 }

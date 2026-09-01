@@ -139,7 +139,35 @@ func finding(f Field, s Severity, format string, a ...any) Finding {
 func ValidateConfig(cfg source.SecretsConfig, agentsyncHome, userHome string) []Finding {
 	switch NormalizeBackend(cfg.Backend) {
 	case "":
-		return []Finding{finding(FieldBackend, SeverityInfo, "not configured (skip — no [secrets] block)")}
+		// TWO different states share the empty backend, and conflating them is
+		// how this validator came to print "no [secrets] block" at a block that
+		// was right there with two keys in it.
+		//
+		// source.SecretsConfig is all-string and comparable, so its zero value
+		// is exactly "not one [secrets] key is set". A `[secrets]` header with
+		// no keys under it unmarshals to that same zero value; the two are
+		// indistinguishable after parsing and equally inert, so reporting them
+		// alike is correct.
+		if cfg == (source.SecretsConfig{}) {
+			return []Finding{finding(FieldBackend, SeverityInfo, "not configured (skip — no [secrets] block)")}
+		}
+		// A block carrying recipient / identity_file / file but NO backend is a
+		// vault that was never switched on. SelectBackend returns NopResolver
+		// for an empty backend exactly as it does for a typo, so every
+		// ${secret:…} fails at apply time with "no secrets backend configured".
+		//
+		// WARN, not FAIL, deliberately. A canonical source carrying no
+		// ${secret:…}/${env:…} reference at all applies cleanly with this
+		// block, so failing here would make `check` refuse a config `apply`
+		// accepts — the very divergence class this validator exists to close.
+		// When references ARE present, `check`'s resolvability pass and
+		// doctor's checkSecretReferences already fail, alongside apply. So the
+		// tier that fits is the one this warning IS: usable now, will bite
+		// later. `doctor` renders it as ⚠; `check`, whose contract is
+		// error-or-nil, stays silent, because an inert [secrets] block is not
+		// invalid config.
+		return []Finding{finding(FieldBackend, SeverityWarn,
+			"not set — ${secret:…} will not resolve (set %q or %q)", BackendAge, BackendEnv)}
 	case BackendEnv:
 		// The env backend keeps no vault and no identity, so recipient /
 		// identity_file / file are not its business — nothing else to check.
@@ -207,14 +235,25 @@ func validateIdentity(cfg source.SecretsConfig, agentsyncHome, userHome string) 
 // failure — a path that is blocked rather than missing (a non-directory parent,
 // a permission denial) is not "not yet created", and reporting it as such is
 // what let doctor exit 0 on a config `check` exits 1 on (issue #228).
+//
+// A path that stats fine but is NOT a regular file — a directory, a FIFO, a
+// socket — is a hard failure too. secrets.Decrypt os.Opens the path and reads
+// an age stream out of it, so none of those is a vault; without this arm a
+// directory at the vault path reported ✓ on both surfaces and left the real
+// failure to the first decrypt. It is the same rule probeSourceInit adopted for
+// agentsync.toml, carried here.
 func validateAgeFile(cfg source.SecretsConfig, agentsyncHome, userHome string) Finding {
 	path := ResolveAgeFile(cfg, agentsyncHome, userHome)
-	if _, err := os.Stat(path); err != nil {
+	info, err := os.Stat(path)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return finding(FieldFile, SeverityWarn,
 				"%s — not yet created (run `agentsync secret edit` to author)", path)
 		}
 		return finding(FieldFile, SeverityFail, "%s — not readable (%v)", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return finding(FieldFile, SeverityFail, "%s — not a regular file", path)
 	}
 	return finding(FieldFile, SeverityOK, "%s", path)
 }

@@ -171,7 +171,7 @@ func requireInitializedSource(root string, sc adapter.Scope) error {
 	case sourceInitConfigNotFile:
 		return fmt.Errorf("%s %s has an agentsync.toml that is not a regular file (half-initialized); run %s",
 			label, root, initCmd)
-	default: // sourceInitRootUnreadable, sourceInitConfigUnreadable
+	case sourceInitRootUnreadable, sourceInitConfigUnreadable:
 		// err is the *fs.PathError probeSourceInit returns, so it already names
 		// the path that actually failed to stat — the root for
 		// sourceInitRootUnreadable, agentsync.toml for sourceInitConfigUnreadable.
@@ -182,6 +182,14 @@ func requireInitializedSource(root string, sc adapter.Scope) error {
 		// problem at the directory instead of the file. doctor renders the same
 		// two states from the same error and names the right path in both.
 		return fmt.Errorf("check: %w", err)
+	default:
+		// DEFENSIVE ONLY — every sourceInitState is named above. A state added
+		// to sourceinit.go without a home here reaches this arm with a nil err
+		// (only the two *Unreadable states carry one), and the `%w` wrap this
+		// used to fall through to would have printed `check: %!w(<nil>)`. Name
+		// the unclassified state instead, so the gap is visible.
+		return fmt.Errorf("%s %s is not usable (unhandled source state %d); run %s",
+			label, root, int(st), initCmd)
 	}
 }
 
@@ -207,10 +215,15 @@ func requireInitializedSource(root string, sc adapter.Scope) error {
 // [secrets] block is any more — internal/secrets owns both rules, and check,
 // doctor and the `secret` group are its consumers.
 //
-// Only SeverityFail findings become an error. SeverityWarn (a vault that has
-// not been created yet) and the passing tiers are for a REPORT surface to
-// render: check's contract is "is this config valid", and an unwritten vault
-// is not invalid config.
+// Only SeverityFail findings become an error. SeverityWarn and the passing
+// tiers are for a REPORT surface to render: check's contract is "is this config
+// valid", and neither of the two states the validator warns on is invalid
+// config. A vault that has not been created yet is a fresh install. A [secrets]
+// block with no backend set is inert — a canonical source carrying no
+// ${secret:…} reference applies cleanly with it, so failing here would make
+// check refuse a config apply accepts, which is the divergence this whole
+// unification removes; when references ARE present, check's own resolvability
+// pass below fails on them, as apply does.
 //
 // Each failure is labelled with its [secrets] key. ValidateConfig's messages
 // are field-relative — not one names its own key — so the label is check's to

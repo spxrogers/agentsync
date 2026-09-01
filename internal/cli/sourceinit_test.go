@@ -114,66 +114,113 @@ func TestSourceInitProbeAgreement(t *testing.T) {
 }
 
 // TestSourceInitUnreadableNamesTheFileThatFailed pins that check's message for
-// the two *Unreadable probe states names the path that actually failed to stat.
+// the two *Unreadable probe states names the path that actually failed to stat,
+// and that doctor renders each of the two under its own arm.
 //
-// One `default:` arm serves sourceInitRootUnreadable AND
-// sourceInitConfigUnreadable, so a formatted `stat <root>: ` prefix is right
-// for the first and wrong for the second: it printed
+// One `default:` arm used to serve sourceInitRootUnreadable AND
+// sourceInitConfigUnreadable in check, so a formatted `stat <root>: ` prefix was
+// right for the first and wrong for the second: it printed
 // `check: stat <root>: stat <root>/agentsync.toml: too many levels of symbolic
 // links` — a self-contradicting message that points a user debugging a symlink
-// or permission problem at the directory rather than the file. doctor rendered
-// the same state correctly, so check was the outlier on a branch whose subject
-// is that the two must not diverge. The fix is to wrap the probe's own
-// *fs.PathError unchanged, which is what the single-`stat ` count below pins.
+// or permission problem at the directory rather than the file. The fix is to
+// wrap the probe's own *fs.PathError unchanged, which is what the single-`stat `
+// count below pins.
+//
+// The root row exists because sourceInitRootUnreadable had no test at all:
+// doctor's arm for it could return `ok` with nothing failing. Both rows reach
+// their state the same way — a self-referential symlink, which os.Stat follows
+// into ELOOP: neither ErrNotExist nor a successful stat, and the one way to get
+// there without dropping privileges.
 func TestSourceInitUnreadableNamesTheFileThatFailed(t *testing.T) {
-	tmp := t.TempDir()
-	env := map[string]string{
-		"AGENTSYNC_TARGET_ROOT": tmp,
-		"HOME":                  tmp,
-		"NO_COLOR":              "1",
-		// AGENTSYNC_HOME outranks AGENTSYNC_TARGET_ROOT in paths.AgentsyncHome,
-		// so an exported one would aim both commands at the developer's real
-		// home instead of the planted tree.
-		"AGENTSYNC_HOME": "",
-	}
-	home := filepath.Join(tmp, ".agentsync")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	// A self-referential symlink: os.Stat follows it and fails with ELOOP,
-	// which is neither ErrNotExist nor a successful stat — the one way to reach
-	// sourceInitConfigUnreadable without needing to drop privileges.
-	cfg := filepath.Join(home, "agentsync.toml")
-	if err := os.Symlink(cfg, cfg); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name string
+		// plant builds the tree under tmp and returns the path os.Stat fails on.
+		plant func(t *testing.T, tmp string) string
+		// wantDoctorContains is the label+status substring doctor's `home dir`
+		// line must carry. The two states render differently, so this is what
+		// tells them apart: the config arm prefixes "agentsync.toml".
+		wantDoctorContains string
+	}{
+		{
+			// sourceInitConfigUnreadable.
+			name: "agentsync.toml cannot be stat'd",
+			plant: func(t *testing.T, tmp string) string {
+				home := filepath.Join(tmp, ".agentsync")
+				if err := os.MkdirAll(home, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				cfg := filepath.Join(home, "agentsync.toml")
+				if err := os.Symlink(cfg, cfg); err != nil {
+					t.Fatal(err)
+				}
+				return cfg
+			},
+			wantDoctorContains: "home dir   agentsync.toml unreadable:",
+		},
+		{
+			// sourceInitRootUnreadable — the root never becomes stat-able, so
+			// the probe returns before it looks for agentsync.toml at all.
+			name: "the source root itself cannot be stat'd",
+			plant: func(t *testing.T, tmp string) string {
+				home := filepath.Join(tmp, ".agentsync")
+				if err := os.Symlink(home, home); err != nil {
+					t.Fatal(err)
+				}
+				return home
+			},
+			wantDoctorContains: "home dir   unreadable:",
+		},
 	}
 
-	_, checkErr := runCLI(t, env, "check")
-	if checkErr == nil {
-		t.Fatal("check must refuse a source root whose agentsync.toml cannot be stat'd")
-	}
-	msg := checkErr.Error()
-	if !strings.Contains(msg, cfg+":") {
-		t.Errorf("check error should name the agentsync.toml that failed to stat; got: %q", msg)
-	}
-	// Exactly one `stat ` segment: a second one is the re-prefixed root that
-	// contradicted the wrapped error.
-	if got := strings.Count(msg, "stat "); got != 1 {
-		t.Errorf("check error should carry exactly one `stat ` segment (the failing path), got %d: %q", got, msg)
-	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			env := map[string]string{
+				"AGENTSYNC_TARGET_ROOT": tmp,
+				"HOME":                  tmp,
+				"NO_COLOR":              "1",
+				// AGENTSYNC_HOME outranks AGENTSYNC_TARGET_ROOT in
+				// paths.AgentsyncHome, so an exported one would aim both commands
+				// at the developer's real home instead of the planted tree.
+				"AGENTSYNC_HOME": "",
+			}
+			failing := tc.plant(t, tmp)
 
-	doctorOut, doctorErr := runCLI(t, env, "doctor")
-	if doctorErr == nil {
-		t.Fatalf("doctor must refuse the same tree; got:\n%s", doctorOut)
+			_, checkErr := runCLI(t, env, "check")
+			if checkErr == nil {
+				t.Fatal("check must refuse a source root it cannot stat")
+			}
+			msg := checkErr.Error()
+			if !strings.Contains(msg, failing+":") {
+				t.Errorf("check error should name the path that failed to stat (%s); got: %q", failing, msg)
+			}
+			// Exactly one `stat ` segment: a second one is the re-prefixed root
+			// that contradicted the wrapped error.
+			if got := strings.Count(msg, "stat "); got != 1 {
+				t.Errorf("check error should carry exactly one `stat ` segment (the failing path), got %d: %q", got, msg)
+			}
+
+			doctorOut, doctorErr := runCLI(t, env, "doctor")
+			if doctorErr == nil {
+				t.Fatalf("doctor must refuse the same tree; got:\n%s", doctorOut)
+			}
+			homeLine := ""
+			for _, l := range strings.Split(doctorOut, "\n") {
+				if strings.Contains(l, "home dir") {
+					homeLine = l
+					break
+				}
+			}
+			if homeLine == "" {
+				t.Fatalf("doctor printed no `home dir` line:\n%s", doctorOut)
+			}
+			if !strings.Contains(homeLine, failing+":") {
+				t.Errorf("doctor `home dir` line should name the same failing path check names; got: %q", homeLine)
+			}
+			if !strings.Contains(homeLine, tc.wantDoctorContains) {
+				t.Errorf("doctor `home dir` line %q should contain %q — the two *Unreadable states "+
+					"render under their own arms", homeLine, tc.wantDoctorContains)
+			}
+		})
 	}
-	for _, l := range strings.Split(doctorOut, "\n") {
-		if !strings.Contains(l, "home dir") {
-			continue
-		}
-		if !strings.Contains(l, cfg+":") {
-			t.Errorf("doctor `home dir` line should name the same failing path check names; got: %q", l)
-		}
-		return
-	}
-	t.Fatalf("doctor printed no `home dir` line:\n%s", doctorOut)
 }

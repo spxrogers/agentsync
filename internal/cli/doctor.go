@@ -174,8 +174,14 @@ func checkHomeDir(p *ui.Printer, home string) int {
 		failCheck(p, "home dir   ", "agentsync.toml is not a regular file (half-initialized) — run `agentsync init`")
 	case sourceInitConfigUnreadable:
 		failCheck(p, "home dir   ", fmt.Sprintf("agentsync.toml unreadable: %v", err))
-	default: // sourceInitRootUnreadable
+	case sourceInitRootUnreadable:
 		failCheck(p, "home dir   ", fmt.Sprintf("unreadable: %v", err))
+	default:
+		// DEFENSIVE ONLY — every sourceInitState is named above. A state added
+		// to sourceinit.go without a home here would otherwise have printed
+		// `unreadable: <nil>` (err is nil for every state but the two
+		// *Unreadable ones); say what actually happened instead.
+		failCheck(p, "home dir   ", fmt.Sprintf("not usable (unhandled source state %d)", int(st)))
 	}
 	return 1
 }
@@ -481,8 +487,15 @@ func checkSecrets(p *ui.Printer, cfg source.SecretsConfig, home string) int {
 			warnCheck(p, label, status)
 		case secrets.SeverityInfo:
 			infoCheck(p, label, status)
-		default:
+		case secrets.SeverityOK:
 			okCheck(p, label, status)
+		default:
+			// DEFENSIVE ONLY — every secrets.Severity is named above. A tier
+			// added to internal/secrets without a home here must NOT land on
+			// okCheck: a ✓ against an unrecognised verdict is a false pass of
+			// exactly the #228 kind (doctor reporting healthy where the config
+			// is not). Warn instead, so a new tier is visible rather than green.
+			warnCheck(p, label, status)
 		}
 	}
 	return fails

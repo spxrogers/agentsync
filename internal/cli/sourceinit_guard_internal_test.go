@@ -57,12 +57,17 @@ func scanProbeViolations(files map[string]string, allowed map[string]string) (un
 //     os.ReadFile + an ENOENT arm carrying its own "run `agentsync init`"
 //     message. It reads the file because it must PARSE it; the initialization
 //     answer is a by-product of that read, not a separate stat. It is untouched
-//     by #228 and does not disagree with probeSourceInit about whether a tree is
-//     usable: that read also fails on a missing root, a root that is a regular
-//     file, a missing agentsync.toml and a directory-shaped agentsync.toml —
-//     only the wording of the refusal differs. Folding it in would mean stat-ing
-//     a file it is about to read. It does not match the pattern above, and it is
-//     not meant to.
+//     by #228 and agrees with probeSourceInit on the four shapes a user can
+//     actually arrive at — a missing root, a root that is a regular file, a
+//     missing agentsync.toml and a directory-shaped agentsync.toml all fail that
+//     read too; only the wording of the refusal differs. Those four are the
+//     extent of the agreement, not a claim about every node type: probeSourceInit
+//     also rejects a FIFO- or socket-shaped agentsync.toml (sourceInitConfigNotFile,
+//     added by #228), where loadSecretsConfig's os.ReadFile would instead block
+//     indefinitely on a FIFO with no writer, or fail with a device error on a
+//     socket. Neither is reachable through `init`, and neither changes the
+//     conclusion: folding loadSecretsConfig in would mean stat-ing a file it is
+//     about to read. It does not match the pattern above, and it is not meant to.
 //   - LIMIT: the pattern is line-shaped, so a probe written with os.Lstat, an
 //     afero FS, os.ReadFile, or with the filename held in a variable slips
 //     past. It catches the copy-paste that actually happened three times, not

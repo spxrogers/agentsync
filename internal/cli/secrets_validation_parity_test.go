@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,47 @@ import (
 // is on doctor's RENDERED output — the thing a user reads and the thing a glyph
 // regression would break.
 var secretsReportLabels = []string{"backend    ", "recipient  ", "identity   ", "age file   "}
+
+// The four glyphs doctor's readiness lines can carry, spelled out for the same
+// reason the labels above are: this guard is on the RENDERED output. They are
+// ui.GlyphOK / GlyphErr / GlyphWarn / GlyphInfo.
+const (
+	glyphOK   = "✓"
+	glyphFail = "✗"
+	glyphWarn = "⚠"
+	glyphInfo = "•"
+)
+
+// doctorSecretsGlyphs maps each [secrets] report label doctor printed to the
+// glyph on its line.
+//
+// It exists because exit-code parity pins only the ✗ tier: SeverityWarn and
+// SeverityInfo both rendering as okCheck, or infoCheck rendering a ✓, changes
+// nothing any other assertion in this file reads — and `✓ age file   … not yet
+// created` is a false pass of exactly the #228 kind. The severity→glyph mapping
+// in doctor.go is the last hand-written step between the single validator and
+// what a user actually reads, so it is pinned here per row.
+//
+// The returned map's KEY SET is meaningful too: a label appears only when
+// ValidateConfig emitted a finding for that field, so comparing the whole map
+// also pins which fields get a line at all.
+func doctorSecretsGlyphs(out string) map[string]string {
+	got := map[string]string{}
+	for _, l := range strings.Split(out, "\n") {
+		for _, g := range []string{glyphOK, glyphFail, glyphWarn, glyphInfo} {
+			rest, ok := strings.CutPrefix(l, "  "+g+" ")
+			if !ok {
+				continue
+			}
+			for _, label := range secretsReportLabels {
+				if strings.HasPrefix(rest, label) {
+					got[label] = g
+				}
+			}
+		}
+	}
+	return got
+}
 
 // doctorFailLines splits doctor's failing REPORT lines into the ones sitting on
 // a [secrets] label and the ones sitting on any other label.
@@ -71,6 +113,11 @@ func doctorFailLines(out string) (secretsFails, otherFails []string) {
 //     sections never fail" sentence above, asserted rather than assumed: if one
 //     of them starts failing, this test says so instead of blaming the
 //     [secrets] block for a divergence that is not there.
+//
+// It also pins doctor's severity→glyph mapping per row (wantGlyphs). Exit-code
+// parity alone covers only the ✗ tier, so a Warn or Info line rendered as ✓
+// would slip through everything above while telling a user their config is
+// healthy — see doctorSecretsGlyphs.
 func TestSecretsValidationParity(t *testing.T) {
 	testenv.RequireContainer(t)
 
@@ -86,22 +133,50 @@ func TestSecretsValidationParity(t *testing.T) {
 		// blockVault plants a regular file at <home>/blocker so a vault
 		// configured at "blocker/x.age" fails os.Stat with ENOTDIR, not ENOENT.
 		blockVault bool
-		wantFail   bool
+		// dirVault plants a DIRECTORY at the default vault path, which stats
+		// fine and so reaches neither the "not yet created" nor the "not
+		// readable" arm.
+		dirVault bool
+		wantFail bool
+		// wantGlyphs is the complete set of [secrets] report lines doctor must
+		// print for this row, label → glyph. Compared for equality, so a
+		// missing or extra line fails too.
+		wantGlyphs map[string]string
 	}{
 		{
-			name:     "no secrets table",
-			block:    func(_, _ string) string { return "" },
-			wantFail: false,
+			name:       "no secrets table",
+			block:      func(_, _ string) string { return "" },
+			wantFail:   false,
+			wantGlyphs: map[string]string{"backend    ": glyphInfo},
 		},
 		{
-			name:     "env backend",
-			block:    func(_, _ string) string { return "backend = \"env\"\n" },
-			wantFail: false,
+			// The residual the rest of this branch's thesis targets: a [secrets]
+			// block carrying recipient and identity_file but no backend used to
+			// print "• backend    not configured (skip — no [secrets] block)" —
+			// a sentence that is false about the block it is describing — while
+			// SelectBackend hands apply a NopResolver for it. It now warns.
+			name: "secrets table with no backend",
+			block: func(idPath, _ string) string {
+				return "recipient = \"age1qqqq\"\nidentity_file = \"" + idPath + "\"\n"
+			},
+			identityMode: 0o600,
+			// Non-fatal on both surfaces: with no ${secret:…} reference in the
+			// source this config applies cleanly, so failing `check` here would
+			// be a new check/apply divergence.
+			wantFail:   false,
+			wantGlyphs: map[string]string{"backend    ": glyphWarn},
 		},
 		{
-			name:     "uppercase env backend",
-			block:    func(_, _ string) string { return "backend = \"ENV\"\n" },
-			wantFail: false,
+			name:       "env backend",
+			block:      func(_, _ string) string { return "backend = \"env\"\n" },
+			wantFail:   false,
+			wantGlyphs: map[string]string{"backend    ": glyphOK},
+		},
+		{
+			name:       "uppercase env backend",
+			block:      func(_, _ string) string { return "backend = \"ENV\"\n" },
+			wantFail:   false,
+			wantGlyphs: map[string]string{"backend    ": glyphOK},
 		},
 		{
 			name: "complete age backend",
@@ -110,6 +185,14 @@ func TestSecretsValidationParity(t *testing.T) {
 			},
 			identityMode: 0o600,
 			wantFail:     false,
+			// The ⚠ here is the load-bearing one: the vault has not been created
+			// yet, which is legitimate on a fresh install and must not read as a
+			// pass. `✓ age file   … not yet created` is the false green this row
+			// exists to catch.
+			wantGlyphs: map[string]string{
+				"backend    ": glyphOK, "recipient  ": glyphOK,
+				"identity   ": glyphOK, "age file   ": glyphWarn,
+			},
 		},
 		{
 			name: "uppercase age backend",
@@ -118,11 +201,16 @@ func TestSecretsValidationParity(t *testing.T) {
 			},
 			identityMode: 0o600,
 			wantFail:     false,
+			wantGlyphs: map[string]string{
+				"backend    ": glyphOK, "recipient  ": glyphOK,
+				"identity   ": glyphOK, "age file   ": glyphWarn,
+			},
 		},
 		{
-			name:     "unknown backend",
-			block:    func(_, _ string) string { return "backend = \"vault\"\n" },
-			wantFail: true,
+			name:       "unknown backend",
+			block:      func(_, _ string) string { return "backend = \"vault\"\n" },
+			wantFail:   true,
+			wantGlyphs: map[string]string{"backend    ": glyphFail},
 		},
 		{
 			name: "age backend with no recipient",
@@ -131,6 +219,10 @@ func TestSecretsValidationParity(t *testing.T) {
 			},
 			identityMode: 0o600,
 			wantFail:     true,
+			wantGlyphs: map[string]string{
+				"backend    ": glyphOK, "recipient  ": glyphFail,
+				"identity   ": glyphOK, "age file   ": glyphWarn,
+			},
 		},
 		{
 			name: "age backend with no identity_file",
@@ -138,6 +230,10 @@ func TestSecretsValidationParity(t *testing.T) {
 				return "backend = \"age\"\nrecipient = \"age1qqqq\"\n"
 			},
 			wantFail: true,
+			wantGlyphs: map[string]string{
+				"backend    ": glyphOK, "recipient  ": glyphOK,
+				"identity   ": glyphFail, "age file   ": glyphWarn,
+			},
 		},
 		{
 			name: "age backend whose identity file is absent",
@@ -146,6 +242,10 @@ func TestSecretsValidationParity(t *testing.T) {
 			},
 			identityMode: 0,
 			wantFail:     true,
+			wantGlyphs: map[string]string{
+				"backend    ": glyphOK, "recipient  ": glyphOK,
+				"identity   ": glyphFail, "age file   ": glyphWarn,
+			},
 		},
 		{
 			name: "age backend with a group-readable identity",
@@ -154,6 +254,10 @@ func TestSecretsValidationParity(t *testing.T) {
 			},
 			identityMode: 0o644,
 			wantFail:     true,
+			wantGlyphs: map[string]string{
+				"backend    ": glyphOK, "recipient  ": glyphOK,
+				"identity   ": glyphFail, "age file   ": glyphWarn,
+			},
 		},
 		{
 			name: "age backend with an un-stat-able vault path",
@@ -164,6 +268,27 @@ func TestSecretsValidationParity(t *testing.T) {
 			identityMode: 0o600,
 			blockVault:   true,
 			wantFail:     true,
+			wantGlyphs: map[string]string{
+				"backend    ": glyphOK, "recipient  ": glyphOK,
+				"identity   ": glyphOK, "age file   ": glyphFail,
+			},
+		},
+		{
+			// A directory at the vault path stats fine, so it reached neither
+			// the "not yet created" nor the "not readable" arm and reported ✓ on
+			// both surfaces — the regular-file rule probeSourceInit adopted for
+			// agentsync.toml, carried to the vault.
+			name: "age backend with a directory at the vault path",
+			block: func(idPath, _ string) string {
+				return "backend = \"age\"\nrecipient = \"age1qqqq\"\nidentity_file = \"" + idPath + "\"\n"
+			},
+			identityMode: 0o600,
+			dirVault:     true,
+			wantFail:     true,
+			wantGlyphs: map[string]string{
+				"backend    ": glyphOK, "recipient  ": glyphOK,
+				"identity   ": glyphOK, "age file   ": glyphFail,
+			},
 		},
 	}
 
@@ -212,6 +337,13 @@ func TestSecretsValidationParity(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if tc.dirVault {
+				// The DEFAULT vault path ([secrets].file unset), so the row does
+				// not have to restate it.
+				if err := os.MkdirAll(filepath.Join(home, "secrets", "secrets.age"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
 
 			body := "[agents]\n"
 			if b := tc.block(idPath, home); b != "" {
@@ -246,6 +378,12 @@ func TestSecretsValidationParity(t *testing.T) {
 					"doctor must not only reach the same exit code but blame the same "+
 					"block.\nfailing [secrets] lines: %v\ndoctor out:\n%s",
 					got, tc.wantFail, secretsFails, doctorOut)
+			}
+			if got := doctorSecretsGlyphs(doctorOut); !maps.Equal(got, tc.wantGlyphs) {
+				t.Errorf("doctor [secrets] glyphs = %v, want %v — every tier the validator "+
+					"emits must reach the user as its own glyph; a ⚠ or • rendered as ✓ is a "+
+					"false pass that exit-code parity cannot see.\ndoctor out:\n%s",
+					got, tc.wantGlyphs, doctorOut)
 			}
 		})
 	}
