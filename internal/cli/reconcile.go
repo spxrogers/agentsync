@@ -1158,9 +1158,11 @@ func writeBackFileItem(home string, it reconcileItem) error {
 		// file" alone does not tell them which one gets them unstuck.
 		//
 		// [o]verride is deliberately NOT offered for THIS arm, unlike the peer
-		// refusals in this file and unlike the absent-destination arm below. It re-applies through render.Writer.Write, whose
-		// convergence read is not shape-guarded, so on this exact item it does
-		// not fail — it HANGS (measured: `reconcile --auto-override` rc=124).
+		// refusals in this file and unlike the arm below. It re-applies through render.Writer.Write,
+		// whose
+		// convergence read is not shape-guarded, so on this exact item it
+		// does not fail — it HANGS (measured: `reconcile --auto-override`
+		// rc=124).
 		// An earlier version of this message recommended it, which walked the
 		// user out of a clean refusal and into an unbounded wedge. Restore that
 		// suggestion only once #241 is fixed.

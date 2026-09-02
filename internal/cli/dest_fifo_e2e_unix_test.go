@@ -275,6 +275,10 @@ func restoreDest(t *testing.T, path string, data []byte, mode os.FileMode) {
 		t.Errorf("restoring %s: %v", path, err)
 		return
 	}
+	// On success the rename consumes tmp and this is a no-op; on any failure
+	// below it stops a stray .restore file being left in the applied home —
+	// which is the very contamination this helper exists to prevent.
+	defer func() { _ = os.Remove(tmp) }()
 	// os.WriteFile's mode is masked by umask on create; chmod pins it.
 	if err := os.Chmod(tmp, mode); err != nil {
 		t.Errorf("restoring %s: %v", path, err)
@@ -321,7 +325,12 @@ func TestRestoreDestReplacesAFIFOEvenWithAReaderAttached(t *testing.T) {
 	// Called on the test goroutine: with a reader attached neither restoreDest
 	// nor the os.WriteFile variant can block, so no timeout wrapper is needed —
 	// and restoreDest's t.Errorf stays on the goroutine that owns the test.
-	restoreDest(t, path, []byte("applied"), 0o644)
+	// 0666, not 0644, and the choice is load-bearing: at the ambient umask 0022
+	// os.WriteFile(_, _, 0o644) already yields 0644, so the mode assertion below
+	// would hold with or without the chmod — the pin would be vacuous in CI,
+	// which is exactly where it needs to work. 0666 masks down to 0644 on
+	// create, so only the chmod can produce it.
+	restoreDest(t, path, []byte("applied"), 0o666)
 
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -339,8 +348,8 @@ func TestRestoreDestReplacesAFIFOEvenWithAReaderAttached(t *testing.T) {
 	// The chmod, which os.WriteFile alone cannot guarantee: its mode argument is
 	// masked by umask on create, so without the explicit chmod a restored
 	// destination can come back more restrictive than the one that was captured.
-	if perm := info.Mode().Perm(); perm != 0o644 {
-		t.Errorf("restored mode = %04o, want 0644: os.WriteFile's mode is umask-masked, so "+
+	if perm := info.Mode().Perm(); perm != 0o666 {
+		t.Errorf("restored mode = %04o, want 0666: os.WriteFile's mode is umask-masked, so "+
 			"restoreDest must chmod to pin what it captured", perm)
 	}
 }

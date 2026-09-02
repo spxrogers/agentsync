@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"os"
 
 	"github.com/spxrogers/agentsync/internal/render"
@@ -13,6 +14,17 @@ import (
 // discards it or wraps it with the path itself, and embedding one here would
 // double it in the wrapped message.
 var errDestNotRegular = errors.New("not a regular file")
+
+// errDestUnstattable is returned when the destination cannot be STAT'd for a
+// reason other than absence — EACCES on a parent, ELOOP, ENOTDIR. It wraps the
+// real errno.
+//
+// It is separate from errDestNotRegular because the two are not the same claim
+// and one caller shows its sentinel to a user: reconcile's write-back refusal
+// says "remove or replace the non-regular file at that path", which is false
+// for a permission problem. hashFile, whose sentinels are opaque tokens
+// compared only for equality, deliberately treats both alike — see its comment.
+var errDestUnstattable = errors.New("cannot stat destination")
 
 // readDestBytes reads a destination file's bytes, refusing before the open any
 // path whose shape cannot be read as a file.
@@ -30,7 +42,9 @@ var errDestNotRegular = errors.New("not a regular file")
 // covered: `apply`, `apply --dry-run`, `reconcile --auto-override` and
 // `import <agent>` still hang, and `doctor` is exposed through its plugin
 // check, because those reads live in internal/render and the adapter Ingest
-// paths (#241, #242).
+// paths (#241, #242). `doctor` is not merely exposed there: with a FIFO at
+// ~/.claude/settings.json it hangs outright (measured, rc=124, wedged after
+// printing "Plugins"), through claude.IngestPlugins.
 //
 // Two deliberate limits:
 //
@@ -38,6 +52,9 @@ var errDestNotRegular = errors.New("not a regular file")
 //     open. That window needs write access to the destination's own directory,
 //     which is already game over; closing it properly needs O_RDONLY|O_NONBLOCK
 //     plus fstat.
+//   - A destination that cannot be stat'd comes back as errDestUnstattable
+//     wrapping the real errno, NOT as a shape error, because those are
+//     different claims and one of them is shown to a user.
 //   - Symlinks are followed here but refused outright by hashFile, so `status`
 //     calls a symlinked destination drifted while `diff` reads through it. The
 //     reads this gate replaced followed links too, so changing that is a
@@ -55,17 +72,17 @@ var errDestNotRegular = errors.New("not a regular file")
 // caller unchanged, because manufacturing a shape error for a file that is not
 // there would name the wrong problem.
 func readDestBytes(path string) ([]byte, error) {
-	// A stat failure that is NOT absence — EACCES on a parent, ELOOP — is
-	// reported as itself. render.IsRegularOrAbsent answers false for those too,
-	// and letting them through as errDestNotRegular would put a false statement
-	// in front of the user: reconcile's refusal names that sentinel and would
-	// tell someone with a permission problem to "remove or replace the
-	// non-regular file at that path". The extra stat costs one syscall on an
-	// error path and keeps render's predicate the single authority on SHAPE.
-	if _, serr := os.Stat(path); serr != nil && !os.IsNotExist(serr) {
-		return nil, serr
-	}
+	// render.IsRegularOrAbsent stays the single authority on SHAPE, and it is
+	// asked FIRST so the ordinary read costs exactly one stat. It answers false
+	// for two different situations, though — a path that is present and the
+	// wrong shape, and one that cannot be stat'd at all — so the refusal path
+	// pays a second stat to tell them apart. Collapsing them was a real defect:
+	// reconcile's refusal names errDestNotRegular and told someone with a
+	// permission problem to "remove or replace the non-regular file".
 	if !render.IsRegularOrAbsent(path) {
+		if _, serr := os.Stat(path); serr != nil {
+			return nil, fmt.Errorf("%w: %w", errDestUnstattable, serr)
+		}
 		return nil, errDestNotRegular
 	}
 	return os.ReadFile(path)

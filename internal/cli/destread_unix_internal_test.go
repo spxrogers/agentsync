@@ -283,6 +283,24 @@ func TestHashFileSentinels(t *testing.T) {
 			want:  "not-a-regular-file",
 		},
 		{
+			// The parity row. A destination that cannot be STAT'd at all —
+			// here because a parent component is a regular file, so the walk
+			// gets ENOTDIR — answered "not-a-regular-file" before this package
+			// had a read gate, and must still. Splitting it off to "" would
+			// read as absent, moving such a destination from ForeignCollision
+			// to New when nothing was applied — and New is SafeForAutoApply.
+			name: "an unstattable destination keeps the shape sentinel",
+			setup: func(t *testing.T, tmp string) string {
+				t.Helper()
+				blocker := filepath.Join(tmp, "notadir")
+				if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return filepath.Join(blocker, "dest")
+			},
+			want: "not-a-regular-file",
+		},
+		{
 			name: "an ordinary regular file hashes its content",
 			setup: func(t *testing.T, tmp string) string {
 				t.Helper()

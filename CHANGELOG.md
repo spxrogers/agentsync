@@ -11,8 +11,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
-- **A FIFO at a managed destination no longer hangs `status`, `diff`, or
-  `reconcile`'s drift walk and write-back.** (A directory there never hung — `os.ReadFile`
+- **A FIFO at a managed destination no longer hangs `status`, `diff`, `explain`,
+  or `reconcile`'s drift walk and write-back.** (A directory there never hung — `os.ReadFile`
   fails it immediately with `EISDIR` — and for `status` and `diff` nothing about
   it changes; only `reconcile`'s write-back now names the shape rather than
   reporting `EISDIR`.) `os.ReadFile` on a FIFO does
@@ -35,12 +35,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   a non-regular destination would classify as drift and then hang one keystroke
   later.
 
-  **`apply`, `apply --dry-run`, `reconcile`'s `[o]verride` and `import <agent>`
-  are NOT fixed by this** and still hang on the same fixture — their reads are
+  **`apply`, `apply --dry-run`, `reconcile`'s `[o]verride`, `import <agent>` and
+  `doctor` are NOT fixed by this** and still hang on the same fixture — their reads are
   in `internal/render` and the adapter `Ingest` paths, a far wider sweep.
   `[o]verride` re-applies through `render.Writer.Write`, so it shares `apply`'s
   unguarded read; the refusal message therefore points at removing or replacing
-  the file rather than at `[o]`, which would wedge. Tracked as
+  the file rather than at `[o]`, which would wedge. `doctor` reads no
+  destination itself but reaches one through its plugin check — a FIFO at
+  `~/.claude/settings.json` wedges it after it prints `Plugins`. Tracked as
   [#241](https://github.com/spxrogers/agentsync/issues/241) and
   [#242](https://github.com/spxrogers/agentsync/issues/242).
 
