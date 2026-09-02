@@ -4,7 +4,6 @@ package cli_test
 
 import (
 	"bytes"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -301,27 +300,28 @@ func TestRestoreDestReplacesAFIFOEvenWithAReaderAttached(t *testing.T) {
 		t.Skipf("mkfifo unsupported here: %v", err)
 	}
 
-	// A reader parked on the FIFO, as an abandoned CLI goroutine would be.
-	opened := make(chan struct{})
-	go func() {
-		f, err := os.Open(path)
-		close(opened)
-		if err == nil {
-			_, _ = io.Copy(io.Discard, f)
-			_ = f.Close()
-		}
-	}()
-
-	done := make(chan struct{})
-	go func() {
-		restoreDest(t, path, []byte("applied"), 0o644)
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatalf("restoreDest BLOCKED on %s — it must not open the destination", path)
+	// A reader ATTACHED to the FIFO, standing in for what a timed-out row leaves
+	// parked in open(2).
+	//
+	// O_NONBLOCK is load-bearing. A blocking os.Open in a goroutine looks like
+	// the real thing but is a RACE against restoreDest: if the rename lands
+	// first the open returns instantly on a regular file, and if the reader
+	// wins it parks forever, because restoreDest's entire purpose is never to
+	// open the target. The first version of this test did exactly that and hung
+	// most of the time — reproducing, in the test meant to prevent it, the
+	// failure mode this whole PR is about. O_NONBLOCK returns immediately and
+	// leaves a genuinely attached reader, so the counterfactual below (a direct
+	// os.WriteFile succeeding into the pipe) is real and deterministic.
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatalf("attaching a reader to %s: %v", path, err)
 	}
+	defer func() { _ = syscall.Close(fd) }()
+
+	// Called on the test goroutine: with a reader attached neither restoreDest
+	// nor the os.WriteFile variant can block, so no timeout wrapper is needed —
+	// and restoreDest's t.Errorf stays on the goroutine that owns the test.
+	restoreDest(t, path, []byte("applied"), 0o644)
 
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -336,5 +336,4 @@ func TestRestoreDestReplacesAFIFOEvenWithAReaderAttached(t *testing.T) {
 	if err != nil || string(got) != "applied" {
 		t.Errorf("restored content = (%q, %v), want %q", got, err, "applied")
 	}
-	<-opened
 }

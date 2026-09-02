@@ -341,3 +341,38 @@ func TestHashFileSentinels(t *testing.T) {
 		}
 	})
 }
+
+// TestReadDestBytesReportsAStatFailureAsItself pins that a stat failure which
+// is not absence surfaces as the real error rather than as errDestNotRegular.
+//
+// It matters because the sentinel is not private: reconcile's write-back names
+// it and tells the user to "remove or replace the non-regular file at that
+// path". Answering it for a symlink loop or a permission problem states
+// something false about the destination.
+//
+// ELOOP rather than EACCES because these tests run as root in the container,
+// where permission bits are not enforced and an EACCES fixture would not fail.
+func TestReadDestBytesReportsAStatFailureAsItself(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a")
+	b := filepath.Join(dir, "b")
+	if err := os.Symlink(b, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(a, b); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := readDestBytes(a)
+	if err == nil {
+		t.Fatal("readDestBytes on a symlink loop = nil, want ELOOP")
+	}
+	if errors.Is(err, errDestNotRegular) {
+		t.Errorf("error = %v, want the real stat failure: a symlink loop is not a shape "+
+			"problem, and reporting it as one makes reconcile tell the user to remove a "+
+			"non-regular file that isn't there", err)
+	}
+	if !errors.Is(err, syscall.ELOOP) {
+		t.Errorf("error = %v, want it to wrap ELOOP", err)
+	}
+}

@@ -62,7 +62,10 @@ var errDestNotRegular = errors.New("not a regular file")
 //   - `diff` leaves the destination text empty and readDestFile decodes to an
 //     empty map, so a refused destination renders as "every byte / every key
 //     removed" — indistinguishable from an absent one. `explain` inherits that.
-//   - `doctor` reads no destination at all and reports "all checks passed".
+//   - `doctor` performs no read through this gate, but its plugin check reaches
+//     one anyway, in the adapter Ingest path (`IngestPlugins` -> a bare
+//     os.ReadFile of the agent's settings). That read is unguarded, so `doctor`
+//     is exposed to the same hang as `import` (#242), not immune to it.
 //
 // So the refusal is mostly a better DIAGNOSIS available to callers rather than
 // one they give the user, and that gap is wider than this gate. Narrowing it
@@ -72,12 +75,18 @@ var errDestNotRegular = errors.New("not a regular file")
 // An ABSENT path is not refused: render.IsRegularOrAbsent reports absent as
 // acceptable, so os.ReadFile runs and its ENOENT reaches the caller unchanged.
 // Manufacturing a shape error for a file that is not there would name the wrong
-// problem. Note the predicate also answers false for a stat failure that is NOT
-// ENOENT (EACCES on a parent, ELOOP), so those surface as errDestNotRegular
-// rather than as themselves — imprecise, but in the safe direction, and it
-// keeps this function's answer identical to the one hashFile gave before it was
-// folded in.
+// problem.
 func readDestBytes(path string) ([]byte, error) {
+	// A stat failure that is NOT absence — EACCES on a parent, ELOOP — is
+	// reported as itself. render.IsRegularOrAbsent answers false for those too,
+	// and letting them through as errDestNotRegular would put a false statement
+	// in front of the user: reconcile's refusal names that sentinel and would
+	// tell someone with a permission problem to "remove or replace the
+	// non-regular file at that path". The extra stat costs one syscall on an
+	// error path and keeps render's predicate the single authority on SHAPE.
+	if _, serr := os.Stat(path); serr != nil && !os.IsNotExist(serr) {
+		return nil, serr
+	}
 	if !render.IsRegularOrAbsent(path) {
 		return nil, errDestNotRegular
 	}

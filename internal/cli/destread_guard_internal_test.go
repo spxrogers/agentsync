@@ -82,10 +82,12 @@ func TestEveryDestinationReadGoesThroughTheGate(t *testing.T) {
 	scanned := 0
 	if err := walkRepoGoFiles(repoRoot, func(rel, src string) {
 		// Scoped to this package deliberately. internal/render and the adapter
-		// Apply paths also read op.Path, but those are the WRITE path, with
-		// their own upstream shape handling (see render.isRegularOrAbsent's doc
-		// comment, which names apply's pre-delete read). They were not audited
-		// here and this guard makes no claim about them.
+		// Apply paths also read op.Path, but on the WRITE path, which this
+		// change does not cover. Do NOT read that as "handled elsewhere":
+		// render.isRegularOrAbsent's own doc says it is what stops
+		// `apply --dry-run` hanging on a FIFO, and that is false — Writer.Write's
+		// convergence read never calls it, and `apply --dry-run` still hangs
+		// (#241). This guard makes no claim about those reads either way.
 		if !strings.HasPrefix(rel, "internal/cli/") {
 			return
 		}
