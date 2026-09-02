@@ -336,4 +336,11 @@ func TestRestoreDestReplacesAFIFOEvenWithAReaderAttached(t *testing.T) {
 	if err != nil || string(got) != "applied" {
 		t.Errorf("restored content = (%q, %v), want %q", got, err, "applied")
 	}
+	// The chmod, which os.WriteFile alone cannot guarantee: its mode argument is
+	// masked by umask on create, so without the explicit chmod a restored
+	// destination can come back more restrictive than the one that was captured.
+	if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Errorf("restored mode = %04o, want 0644: os.WriteFile's mode is umask-masked, so "+
+			"restoreDest must chmod to pin what it captured", perm)
+	}
 }
