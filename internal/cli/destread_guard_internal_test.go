@@ -85,9 +85,10 @@ func TestEveryDestinationReadGoesThroughTheGate(t *testing.T) {
 		// Apply paths also read op.Path, but on the WRITE path, which this
 		// change does not cover. Do NOT read that as "handled elsewhere":
 		// render.isRegularOrAbsent's own doc says it is what stops
-		// `apply --dry-run` hanging on a FIFO, and that is false — Writer.Write's
-		// convergence read never calls it, and `apply --dry-run` still hangs
-		// (#241). This guard makes no claim about those reads either way.
+		// `apply --dry-run` hanging on a FIFO. That is true of the orphan-delete
+		// read it actually guards, and false of Writer.Write's convergence read,
+		// which never calls it — so `apply --dry-run` still hangs (#241). This
+		// guard makes no claim about those reads either way.
 		if !strings.HasPrefix(rel, "internal/cli/") {
 			return
 		}

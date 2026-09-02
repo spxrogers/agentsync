@@ -400,9 +400,9 @@ symmetric with the dest→source write boundary (see architecture §7).
   possible spelling.
   It is **not** yet true of this package's own `Writer.Write` convergence read
   or of the adapter `Ingest` paths, so `apply`, `apply --dry-run`,
-  `reconcile --auto-override` (which re-applies through `Writer.Write`) and
-  `import <agent>` still block on a non-regular destination — issues #241 and
-  #242.
+  `reconcile --auto-override` (which re-applies through `Writer.Write`),
+  `import <agent>` and `doctor` (through its plugin check) still block on a
+  non-regular destination — issues #241 and #242.
 - **Depends on:** adapter, secrets, source, state, paths, iox, drift.
 - **Files:** `pipeline.go`, `writer.go`, `state_apply.go`, `report.go`.
 

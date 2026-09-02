@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 
 	"github.com/spxrogers/agentsync/internal/render"
@@ -46,15 +47,16 @@ var errDestUnstattable = errors.New("cannot stat destination")
 // ~/.claude/settings.json it hangs outright (measured, rc=124, wedged after
 // printing "Plugins"), through claude.IngestPlugins.
 //
-// Two deliberate limits:
+// Three things to know about the shape check:
 //
 //   - The check is a stat, so it is racy against a reshape between stat and
 //     open. That window needs write access to the destination's own directory,
 //     which is already game over; closing it properly needs O_RDONLY|O_NONBLOCK
 //     plus fstat.
 //   - A destination that cannot be stat'd comes back as errDestUnstattable
-//     wrapping the real errno, NOT as a shape error, because those are
-//     different claims and one of them is shown to a user.
+//     wrapping the real errno, NOT as a shape error. "Present and the wrong
+//     shape" and "shape unknown" are different facts, and one of them reaches a
+//     user.
 //   - Symlinks are followed here but refused outright by hashFile, so `status`
 //     calls a symlinked destination drifted while `diff` reads through it. The
 //     reads this gate replaced followed links too, so changing that is a
@@ -71,6 +73,16 @@ var errDestUnstattable = errors.New("cannot stat destination")
 // An ABSENT path is not refused: os.ReadFile runs and its ENOENT reaches the
 // caller unchanged, because manufacturing a shape error for a file that is not
 // there would name the wrong problem.
+// pathlessStatErr strips the redundant path from a *fs.PathError, mirroring
+// secrets.pathlessErr. errors.Is still matches the underlying errno.
+func pathlessStatErr(err error) error {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err
+	}
+	return err
+}
+
 func readDestBytes(path string) ([]byte, error) {
 	// render.IsRegularOrAbsent stays the single authority on SHAPE, and it is
 	// asked FIRST so the ordinary read costs exactly one stat. It answers false
@@ -81,7 +93,12 @@ func readDestBytes(path string) ([]byte, error) {
 	// permission problem to "remove or replace the non-regular file".
 	if !render.IsRegularOrAbsent(path) {
 		if _, serr := os.Stat(path); serr != nil {
-			return nil, fmt.Errorf("%w: %w", errDestUnstattable, serr)
+			// Pathless, for the reason errDestNotRegular carries no path: the
+			// caller supplies it, and a *fs.PathError would make reconcile print
+			// "read dest X: cannot stat destination: stat X: ...". Unwrapping to
+			// the bare errno keeps errors.Is matching BOTH this sentinel and the
+			// underlying syscall error.
+			return nil, fmt.Errorf("%w: %w", errDestUnstattable, pathlessStatErr(serr))
 		}
 		return nil, errDestNotRegular
 	}

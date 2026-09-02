@@ -377,9 +377,11 @@ func IsRegularOrAbsent(path string) bool { return isRegularOrAbsent(path) }
 //
 // It uses Stat, which FOLLOWS symlinks, so a symlink pointing at a FIFO is
 // caught as well as a bare one. That matters because os.Open on a FIFO with no
-// writer BLOCKS rather than failing: without this, `apply --dry-run` (advertised
-// as read-only) and the real apply's pre-delete read would both hang forever on
-// a FIFO left at a destination path. A dangling symlink reports absent, which is
+// writer BLOCKS rather than failing: without this, the pre-delete read below
+// would hang forever on a FIFO left at a destination path, in the real apply and
+// in `apply --dry-run` alike. It does NOT cover Writer.Write's convergence read,
+// which never calls it — so `apply --dry-run` still hangs on a FIFO at a
+// RENDERED destination (#241). A dangling symlink reports absent, which is
 // the right answer — the link is removable and carries nothing to preserve.
 func isRegularOrAbsent(path string) bool {
 	fi, err := os.Stat(path)
