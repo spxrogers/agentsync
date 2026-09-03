@@ -1,0 +1,277 @@
+package cli
+
+import (
+	"encoding/json"
+	"os"
+	"sort"
+
+	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/drift"
+	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/state"
+)
+
+// planItem is one classified destination the walk yields: a whole destination
+// file, one RFC-6901 pointer inside a key-merged file, or a whole-file orphan
+// (a destination this agent still owns in state but no longer renders).
+//
+// SECURITY. Every field is unexported, deliberately. op.Content holds RESOLVED
+// CLEARTEXT whenever the caller built its plan from secrets.SubstituteCanonical
+// — `status` and `explain` both do. A planItem must therefore never be
+// marshalled, logged or persisted. encoding/json ignores unexported fields,
+// which makes "planItem is not a serialization surface" a property of the type
+// rather than a rule a reviewer has to remember;
+// TestPlanItemIsNotASerializationSurface fails if a field is ever exported or
+// given a `json:` tag. Callers project a planItem into their own statusItem /
+// diffHunk / reconcileItem / explainItem and mask before display
+// (secrets.MaskResolved). Nothing here is ever logged.
+type planItem struct {
+	// agent is the adapter whose op produced this item.
+	agent string
+
+	// op is the plan op that produced the item. For an ORPHAN it is SYNTHESIZED
+	// — adapter.FileOp{Action: "delete", Path: <orphan>, SourceID: <state
+	// entry's>} — carrying only what state knows. Mode is deliberately left 0:
+	// the orphan removal path uses render.BackupFile + os.Remove, never
+	// Writer.Delete, so nothing reads it and setting it would imply otherwise.
+	op adapter.FileOp
+
+	// ptr is the RFC-6901 pointer for a key item; "" for a whole-file item.
+	ptr string
+
+	// orphan marks a whole-file destination owned in state that this agent no
+	// longer renders. The set is PER AGENT and UNFILTERED: a path another
+	// enabled agent still renders IS yielded (status's ownership view).
+	// reconcile applies its own cross-agent exclusion and path dedupe on top —
+	// see collectOrphanFileItems.
+	orphan bool
+
+	// cls is the CONTENT-only classification. It deliberately does NOT fold in
+	// permission drift; see recordedModeDrifted / opModeDrifted.
+	cls drift.Class
+
+	// The triple cls was computed from. hdest is "" for absent-or-unreadable,
+	// and one of two opaque sentinels for a symlinked or wrong-shaped
+	// destination — see hashFile, whose semantics this reproduces exactly.
+	hsrc, happlied, hdest string
+
+	// Whole-file mode facts. recordedMode is state's FileEntry.Mode (0 =
+	// unrecorded). destPerm/destRegular come from destModePerm: destRegular is
+	// false for an absent, symlinked or non-regular destination, which is what
+	// keeps `chmod 000` distinguishable from "absent" (destPerm 0, regular true
+	// vs destPerm 0, regular false). Populated for orphan items too; no caller
+	// consults them there today, and none may start to in #229 PR-B.
+	recordedMode uint32
+	destPerm     uint32
+	destRegular  bool
+
+	// srcText/dstText are populated only when planWalk.withText, and never for
+	// an orphan. For a key item they are marshalPretty of the pointer's value
+	// on each side ("<absent>" when missing); for a whole-file item they are
+	// the raw op content and the guarded destination read ("" on any read
+	// error), which FOLLOWS symlinks — the hash half above does not. That split
+	// is reconcile's existing behavior and is what keeps `diff` byte-identical
+	// (#229 axis 9 is PR-C's call). Text is RAW: callers mask
+	// (secrets.MaskResolved) at their own existing call sites.
+	srcText, dstText string
+}
+
+// recordedModeDrifted is status's question: does the destination's permission
+// bits differ from the mode agentsync RECORDED for it? Exactly the truth table
+// of the modeDrifted helper it replaced (#229): an unrecorded mode (0) is never
+// drift, and an absent / symlinked / non-regular destination is left to the
+// content classifier.
+func (i planItem) recordedModeDrifted() bool {
+	if i.recordedMode == 0 || !i.destRegular {
+		return false
+	}
+	return os.FileMode(i.destPerm).Perm() != os.FileMode(i.recordedMode).Perm()
+}
+
+// opModeDrifted is diff's question: does it differ from the mode the next apply
+// would WRITE (op.Mode — render.Writer.Write chmods to it)? Exactly modeHunk's
+// gate. status will move to this in PR-C (#229 axis 14); do not move it here.
+func (i planItem) opModeDrifted() bool {
+	if i.op.Mode == 0 || !i.destRegular {
+		return false
+	}
+	return os.FileMode(i.destPerm).Perm() != os.FileMode(i.op.Mode).Perm()
+}
+
+// destModePerm answers the permission bits of the REGULAR file at path.
+// regular is false — and perm 0 — for an absent, symlinked or non-regular
+// destination, so a caller can tell `chmod 000` (0, true) from "not there"
+// (0, false). It is the Lstat/symlink/IsRegular triage both mode predicates
+// share; it never opens the path.
+func destModePerm(path string) (perm uint32, regular bool) {
+	fi, err := os.Lstat(path)
+	if err != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
+		return 0, false
+	}
+	return uint32(fi.Mode().Perm()), true
+}
+
+// planWalk is the input to walkPlanItems.
+type planWalk struct {
+	plan render.RenderPlan
+	// agents is the iteration order. Production callers pass reg.Names();
+	// unit callers pass a literal such as []string{"claude"}.
+	agents []string
+	// state is REQUIRED, non-nil: every caller state.Load()s first. Do NOT add
+	// a state.New() fallback — a behavior change with no oracle.
+	state *state.Targets
+	// userHome is the user's $HOME, the HomeRelative base for state keys.
+	userHome    string
+	scope       adapter.Scope
+	projectRoot string
+
+	// matchOp, when non-nil, narrows the walk to the ops it accepts. It is
+	// called EXACTLY ONCE per op that survives the Action filter, in walk
+	// order, and side effects are an intended use: `diff` sets filterMatched
+	// and `explain` sets pathManaged/keyMergers inside it, because both must
+	// record "the path matched an op" for an op that yields ZERO items (a
+	// synthesized orphan-cleanup op has Content "{}" → no pointers). Deriving
+	// those flags from len(items) is a regression — see #229 amendment A3.
+	// matchOp is NOT applied to orphan items.
+	matchOp func(agent string, op adapter.FileOp) bool
+
+	// includeOrphans appends each agent's render.OrphanFiles items AFTER that
+	// agent's op items, unfiltered (see planItem.orphan).
+	includeOrphans bool
+
+	// withText populates srcText/dstText. It governs THOSE FIELDS ONLY:
+	// op.Content still carries resolved cleartext for status and explain
+	// whether or not this is set, so it is a cost control, not a secrecy
+	// control (#229 amendment A5). The secrecy guard is the unexported-field
+	// rule on planItem.
+	withText bool
+
+	// readDestConfig is a TEST SEAM: nil means readDestFile. It exists so a
+	// test can count key-merge destination reads and prove they are once-per-op
+	// rather than once-per-pointer (#229 axis 5). Production callers leave it
+	// nil.
+	readDestConfig func(strategy, path string) map[string]any
+}
+
+// walkPlanItems classifies every destination a rendered plan touches, for one
+// scope, against state and the current on-disk contents. It is the single walk
+// behind `status`, `diff`, `reconcile` and `explain`; before #229 each of those
+// held its own copy and the four disagreed.
+//
+// ORDER is part of the contract. For each name in w.agents that w.plan has a
+// result for, in w.agents order: the agent's ops in plan order; within one
+// key-merge op, pointers SORTED ascending; then, when w.includeOrphans, that
+// agent's render.OrphanFiles (already path-sorted). Whole-file ops are deduped
+// by path PER AGENT. Key-merge ops are NEVER deduped by path — one agent emits
+// several of them to one file (codex /mcp_servers + /hooks → config.toml;
+// claude /hooks + /lspServers → settings.json), each owning a distinct section,
+// and deduping dropped the second section's items.
+//
+// ERRORS DO NOT TRAVEL. Every read, stat and parse failure becomes item state —
+// an empty or sentinel hdest, an empty decoded map, an empty dstText — exactly
+// as all four copies did. A malformed op.Content is swallowed the same way
+// (json.Unmarshal's error is discarded, ours stays nil, the op contributes no
+// items). Introducing an error return would be a behavior change with no
+// oracle.
+//
+// Every destination read goes through hashFile / readDestFile / readDestBytes,
+// so a FIFO, device, socket or directory at a destination can never block a
+// read-only command (internal/cli/destread.go, #240).
+func walkPlanItems(w planWalk) []planItem {
+	readDest := w.readDestConfig
+	if readDest == nil {
+		readDest = readDestFile
+	}
+	var out []planItem
+	for _, name := range w.agents {
+		res, ok := w.plan.PerAgent[name]
+		if !ok {
+			continue
+		}
+		seenPath := map[string]bool{}
+		for _, op := range res.Ops {
+			if op.Action != "" && op.Action != "write" {
+				continue
+			}
+			if w.matchOp != nil && !w.matchOp(name, op) {
+				continue
+			}
+			if render.IsKeyMerge(op.MergeStrategy) {
+				var ours map[string]any
+				_ = json.Unmarshal(op.Content, &ours)
+				// ONCE per op, not per pointer: every pointer of one op
+				// classifies against the same destination snapshot (#229 axis 5).
+				final := readDest(op.MergeStrategy, op.Path)
+				ptrs := render.CollectPointers(ours, "")
+				sort.Strings(ptrs) // CollectPointers ranges a map (#229 axis 13)
+				for _, ptr := range ptrs {
+					srcV := getPointerValue(ours, ptr)
+					dstV := getPointerValue(final, ptr)
+					it := planItem{
+						agent:    name,
+						op:       op,
+						ptr:      ptr,
+						hsrc:     hashAnyValue(srcV),
+						happlied: w.state.Keys[stateKeyKey(w.userHome, name, w.scope, w.projectRoot, op.Path, ptr)].SHA256,
+						hdest:    hashAnyValue(dstV),
+					}
+					it.cls = drift.Classify(it.hsrc, it.happlied, it.hdest)
+					if w.withText {
+						it.srcText, it.dstText = marshalPretty(srcV), marshalPretty(dstV)
+					}
+					out = append(out, it)
+				}
+				continue
+			}
+			if seenPath[op.Path] {
+				continue
+			}
+			seenPath[op.Path] = true
+			entry := w.state.Files[stateFileKey(w.userHome, name, w.scope, w.projectRoot, op.Path)]
+			perm, reg := destModePerm(op.Path)
+			it := planItem{
+				agent:        name,
+				op:           op,
+				hsrc:         hashContent(op.Content),
+				happlied:     entry.SHA256,
+				hdest:        hashFile(op.Path),
+				recordedMode: entry.Mode,
+				destPerm:     perm,
+				destRegular:  reg,
+			}
+			it.cls = drift.Classify(it.hsrc, it.happlied, it.hdest)
+			if w.withText {
+				it.srcText = string(op.Content)
+				// Follows symlinks (hashFile does not) and answers "" on ANY
+				// read error, partial data included — diff's semantics.
+				if b, err := readDestBytes(op.Path); err == nil {
+					it.dstText = string(b)
+				}
+			}
+			out = append(out, it)
+		}
+		if !w.includeOrphans {
+			continue
+		}
+		for _, orphan := range render.OrphanFiles(w.state, w.userHome, name, w.scope, w.projectRoot, res.Ops) {
+			entry := w.state.Files[stateFileKey(w.userHome, name, w.scope, w.projectRoot, orphan)]
+			perm, reg := destModePerm(orphan)
+			it := planItem{
+				agent:  name,
+				orphan: true,
+				// SourceID matters: the reclaimable-KIND check behind reconcile's
+				// prompt wording is SourceID-keyed and silently degrades to
+				// "unknown kind" without it.
+				op:           adapter.FileOp{Action: "delete", Path: orphan, SourceID: entry.SourceID},
+				happlied:     entry.SHA256,
+				hdest:        hashFile(orphan),
+				recordedMode: entry.Mode,
+				destPerm:     perm,
+				destRegular:  reg,
+			}
+			it.cls = drift.Classify("", it.happlied, it.hdest)
+			out = append(out, it) // srcText/dstText stay "" for an orphan
+		}
+	}
+	return out
+}
