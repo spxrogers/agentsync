@@ -36,6 +36,19 @@ func TestMergedKeyOrderIsDeterministic(t *testing.T) {
 			},
 		},
 		{
+			// N-7: diff's hunks (every key differs, so all five print).
+			name: "diff",
+			pointers: func(t *testing.T, _, _ string, plan render.RenderPlan, _ *state.Targets) []string {
+				t.Helper()
+				hunks, _ := collectDiffHunks(plan, []string{"claude"}, "", nil)
+				var out []string
+				for _, h := range hunks {
+					out = append(out, h.Pointer)
+				}
+				return out
+			},
+		},
+		{
 			// N-8: reconcile's prompt queue.
 			name: "reconcile",
 			pointers: func(t *testing.T, userHome, _ string, plan render.RenderPlan, s *state.Targets) []string {

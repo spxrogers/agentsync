@@ -74,18 +74,23 @@ func TestStatusDiff_ModeDriftDetection(t *testing.T) {
 		t.Errorf("status must compare against the RECORDED mode (0644 == disk), not op.Mode (0755): summary=%v", model.Summary)
 	}
 
-	// modeHunk (diff side): intended 0755 vs on-disk 0644 → a hunk.
-	src, dst, ok := modeHunk(p, 0o755)
+	// modeHunk (diff side): intended 0755 vs on-disk 0644 → a hunk. The walk
+	// records the on-disk side (destModePerm) and the op carries the intended.
+	hunkItem := func(wantMode uint32) planItem {
+		perm, regular := destModePerm(p)
+		return planItem{op: adapter.FileOp{Path: p, Mode: wantMode}, destPerm: perm, destRegular: regular}
+	}
+	src, dst, ok := modeHunk(hunkItem(0o755))
 	if !ok {
 		t.Fatalf("modeHunk: expected a hunk for intended 0755 vs on-disk 0644")
 	}
 	if src != "mode 0755" || dst != "mode 0644" {
 		t.Errorf("modeHunk src=%q dst=%q, want 'mode 0755' / 'mode 0644'", src, dst)
 	}
-	if _, _, ok := modeHunk(p, 0o644); ok {
+	if _, _, ok := modeHunk(hunkItem(0o644)); ok {
 		t.Errorf("modeHunk: no hunk expected when intended mode == on-disk mode")
 	}
-	if _, _, ok := modeHunk(p, 0); ok {
+	if _, _, ok := modeHunk(hunkItem(0)); ok {
 		t.Errorf("modeHunk: no hunk expected for an unspecified intended mode (0)")
 	}
 }
