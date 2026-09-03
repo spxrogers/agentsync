@@ -168,8 +168,8 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 	if sc == adapter.ScopeProject && c.Project != nil {
 		ownerSrc = *c.Project
 	}
-	items := collectItems(plan, reg, s, sc, projectRoot, userHome, pluginProvidedSourceIDs(ownerSrc))
-	items = append(items, collectOrphanFileItems(plan, reg, s, sc, projectRoot, userHome)...)
+	items, orphans := collectReconcileItems(plan, reg, s, sc, projectRoot, userHome, pluginProvidedSourceIDs(ownerSrc))
+	items = append(items, orphans...)
 
 	w := p.Out
 	// stateDirty tracks orphan removals so we persist the pruned state at the end.
@@ -603,87 +603,24 @@ func unescapeJSONPointer(tok string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(tok, "~1", "/"), "~0", "~")
 }
 
-// collectItems builds the flat reconcile list from a rendered plan + state.
+// collectReconcileItems builds reconcile's flat item list from a rendered plan
+// + state with ONE walkPlanItems call. It answers two slices so the caller can
+// keep reconcile's prompt order — ALL rendered items, then ALL orphans — rather
+// than the walk's per-agent interleaving: items holds every whole-file / key
+// item in walk order (agents in registry order, ops in plan order, merged keys
+// sorted); orphans holds the whole-file dests agentsync still OWNS in state but
+// NO enabled agent renders anymore (the source component was removed), offered
+// for interactive delete/keep.
+//
 // userHome (the user's $HOME) is the HomeRelative base for state-key lookups.
 // pluginOwners (pluginProvidedSourceIDs) tags each item whose component comes
 // from a plugin, so write-back can refuse it.
-func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, userHome string, pluginOwners map[string]string) []reconcileItem {
-	var items []reconcileItem
-	for _, name := range reg.Names() {
-		res, ok := plan.PerAgent[name]
-		if !ok {
-			continue
-		}
-		seen := map[string]bool{}
-		for _, op := range res.Ops {
-			if render.IsKeyMerge(op.MergeStrategy) {
-				// NOT deduped by path: one agent emits several key-merge ops to one
-				// file (codex /mcp_servers + /hooks → config.toml; claude /hooks +
-				// settings.json), each a distinct section, so every op
-				// must be walked. Deduping by path dropped the second section's
-				// items (matching status's key loop and the apply pipeline).
-				var ours map[string]interface{}
-				_ = json.Unmarshal(op.Content, &ours)
-				final := readDestFile(op.MergeStrategy, op.Path)
-				for _, ptr := range render.CollectPointers(ours, "") {
-					hsrc := hashAnyValue(getPointerValue(ours, ptr))
-					happlied := s.Keys[stateKeyKey(userHome, name, sc, projectRoot, op.Path, ptr)].SHA256
-					hdest := hashAnyValue(getPointerValue(final, ptr))
-					cls := drift.Classify(hsrc, happlied, hdest)
-					items = append(items, reconcileItem{
-						agentName:   name,
-						op:          op,
-						ptr:         ptr,
-						cls:         cls,
-						hsrc:        hsrc,
-						happlied:    happlied,
-						hdest:       hdest,
-						scope:       sc,
-						projectRoot: projectRoot,
-						srcText:     marshalPretty(getPointerValue(ours, ptr)),
-						dstText:     marshalPretty(getPointerValue(final, ptr)),
-						hasText:     true,
-						pluginOwner: pluginOwnerForKeyItem(op.SourceID, ptr, pluginOwners),
-					})
-				}
-			} else {
-				if seen[op.Path] {
-					continue
-				}
-				seen[op.Path] = true
-				hsrc := hashContent(op.Content)
-				happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, op.Path)].SHA256
-				hdest := hashFile(op.Path)
-				cls := drift.Classify(hsrc, happlied, hdest)
-				dstBytes, _ := readDestBytes(op.Path)
-				items = append(items, reconcileItem{
-					agentName:   name,
-					op:          op,
-					cls:         cls,
-					hsrc:        hsrc,
-					happlied:    happlied,
-					hdest:       hdest,
-					scope:       sc,
-					projectRoot: projectRoot,
-					srcText:     string(op.Content),
-					dstText:     string(dstBytes),
-					hasText:     true,
-					pluginOwner: pluginOwners[filepath.ToSlash(op.SourceID)],
-				})
-			}
-		}
-	}
-	return items
-}
-
-// collectOrphanFileItems returns reconcile items for whole-file dests that
-// agentsync still OWNS in state but NO enabled agent renders anymore (the
-// source component was removed). These are offered for interactive delete/keep.
 //
-// A path that ANY enabled agent still renders is excluded — never offer to
-// delete a file another agent depends on (the shared-skill case). Deduped by
-// path so a file owned by two agents is prompted once.
-func collectOrphanFileItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, userHome string) []reconcileItem {
+// The walk's orphan set is per agent and unfiltered; reconcile narrows it: a
+// path that ANY enabled agent still renders is excluded — never offer to
+// delete a file another agent depends on (the shared-skill case) — and the
+// rest is deduped by path so a file owned by two agents is prompted once.
+func collectReconcileItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, userHome string, pluginOwners map[string]string) (items, orphans []reconcileItem) {
 	rendered := map[string]bool{}
 	for _, name := range reg.Names() {
 		res, ok := plan.PerAgent[name]
@@ -703,39 +640,65 @@ func collectOrphanFileItems(plan render.RenderPlan, reg *adapter.Registry, s *st
 		}
 	}
 	seen := map[string]bool{}
-	var items []reconcileItem
-	for _, name := range reg.Names() {
-		res, ok := plan.PerAgent[name]
-		if !ok {
-			continue
+	walk := planWalk{
+		plan: plan, agents: reg.Names(), state: s, userHome: userHome, scope: sc, projectRoot: projectRoot,
+		includeOrphans: true,
+		withText:       true,
+	}
+	for _, it := range walkPlanItems(walk) {
+		ri := reconcileItem{
+			agentName:   it.agent,
+			op:          it.op,
+			ptr:         it.ptr,
+			cls:         it.cls,
+			hsrc:        it.hsrc,
+			happlied:    it.happlied,
+			hdest:       it.hdest,
+			scope:       sc,
+			projectRoot: projectRoot,
+			orphan:      it.orphan,
 		}
-		for _, orphan := range render.OrphanFiles(s, userHome, name, sc, projectRoot, res.Ops) {
-			if rendered[orphan] || seen[orphan] {
+		if it.orphan {
+			// The walk's synthesized op carries the state entry's SourceID: the
+			// reclaimable-KIND check behind this item's prompt wording is
+			// SourceID-keyed and silently degrades to "unknown kind" without it
+			// — which is exactly how that branch once shipped dead. Mode is
+			// deliberately NOT carried: this path removes via render.BackupFile
+			// + os.Remove, never Writer.Delete, so nothing reads it and setting
+			// it would only imply otherwise. No text: an orphan has no source
+			// side, so the prompt falls back to the hash display.
+			if rendered[it.op.Path] || seen[it.op.Path] {
 				continue
 			}
-			seen[orphan] = true
-			entry := s.Files[stateFileKey(userHome, name, sc, projectRoot, orphan)]
-			happlied := entry.SHA256
-			hdest := hashFile(orphan)
-			items = append(items, reconcileItem{
-				agentName: name,
-				// SourceID matters: the reclaimable-KIND check behind this item's
-				// prompt wording is SourceID-keyed and silently degrades to
-				// "unknown kind" without it — which is exactly how that branch
-				// once shipped dead. Mode is deliberately NOT carried: this path
-				// removes via render.BackupFile + os.Remove, never Writer.Delete,
-				// so nothing reads it and setting it would only imply otherwise.
-				op:          adapter.FileOp{Action: "delete", Path: orphan, SourceID: entry.SourceID},
-				cls:         drift.Classify("", happlied, hdest),
-				happlied:    happlied,
-				hdest:       hdest,
-				scope:       sc,
-				projectRoot: projectRoot,
-				orphan:      true,
-			})
+			seen[it.op.Path] = true
+			orphans = append(orphans, ri)
+			continue
 		}
+		ri.srcText, ri.dstText, ri.hasText = it.srcText, it.dstText, true
+		if it.ptr != "" {
+			ri.pluginOwner = pluginOwnerForKeyItem(it.op.SourceID, it.ptr, pluginOwners)
+		} else {
+			ri.pluginOwner = pluginOwners[filepath.ToSlash(it.op.SourceID)]
+		}
+		items = append(items, ri)
 	}
+	return items, orphans
+}
+
+// collectItems is the rendered (non-orphan) half of collectReconcileItems, and
+// collectOrphanFileItems the orphan half. They remain as the two names the
+// characterization harness composes (`collectItems(...) ++
+// collectOrphanFileItems(...)`, the shape reconcileRun had before #229); the
+// production call site takes both halves from ONE collectReconcileItems call
+// so the plan is walked — and every destination read — once.
+func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, userHome string, pluginOwners map[string]string) []reconcileItem {
+	items, _ := collectReconcileItems(plan, reg, s, sc, projectRoot, userHome, pluginOwners)
 	return items
+}
+
+func collectOrphanFileItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, userHome string) []reconcileItem {
+	_, orphans := collectReconcileItems(plan, reg, s, sc, projectRoot, userHome, nil)
+	return orphans
 }
 
 // pruneStateFilesForPath removes every agent's Files state entry for a single
