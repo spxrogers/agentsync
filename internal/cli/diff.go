@@ -132,70 +132,7 @@ func newDiffCmd() *cobra.Command {
 			// formatted diff or --json. Pretty rendering and JSON share the
 			// same masked strings, so the secret-leak guards above protect
 			// both modes.
-			var hunks []diffHunk
-			// filterMatched tracks whether a <path> argument matched any rendered
-			// op across every selected agent, so a path that matches NOTHING (a
-			// typo, or an unmanaged file) can be reported distinctly from a managed
-			// path that is genuinely in sync ("no diff").
-			filterMatched := filterPath == ""
-			for _, name := range reg.Names() {
-				res, ok := plan.PerAgent[name]
-				if !ok {
-					continue
-				}
-				seen := map[string]bool{}
-				for _, op := range res.Ops {
-					if filterPath != "" && op.Path != filterPath {
-						continue
-					}
-					filterMatched = true
-					if render.IsKeyMerge(op.MergeStrategy) {
-						// Key-level diff: compare per pointer. NOT deduped by path —
-						// one agent emits several key-merge ops to one file (codex
-						// writes /mcp_servers AND /hooks to config.toml; claude writes
-						// /hooks AND /lspServers to settings.json), each owning a
-						// distinct section, so every op must be walked. Deduping by
-						// path here dropped the second section's drift (status's key
-						// loop and the apply pipeline never path-dedup key-merge ops).
-						var ours map[string]interface{}
-						_ = json.Unmarshal(op.Content, &ours)
-						final := readDestFile(op.MergeStrategy, op.Path)
-						for _, ptr := range render.CollectPointers(ours, "") {
-							srcStr := secrets.MaskResolved(marshalPretty(getPointerValue(ours, ptr)), redact)
-							dstStr := secrets.MaskResolved(marshalPretty(getPointerValue(final, ptr)), redact)
-							if srcStr == dstStr {
-								continue
-							}
-							hunks = append(hunks, diffHunk{Path: op.Path, Pointer: ptr, Source: srcStr, Dest: dstStr})
-						}
-					} else {
-						// File-level diff.
-						if seen[op.Path] {
-							continue
-						}
-						seen[op.Path] = true
-						srcStr := secrets.MaskResolved(string(op.Content), redact)
-						dstBytes, readErr := readDestBytes(op.Path)
-						dstStr := ""
-						if readErr == nil {
-							dstStr = secrets.MaskResolved(string(dstBytes), redact)
-						}
-						if srcStr == dstStr {
-							// Content is identical, but the file MODE may have drifted
-							// from what apply maintains (op.Mode). A content-identical
-							// chmod produces no text hunk, so surface it as a small
-							// "mode" hunk instead of reporting "no diff" — the mode
-							// analog of a content drift hunk (render.Writer.Write
-							// re-converges it on the next apply).
-							if src, dst, ok := modeHunk(op.Path, op.Mode); ok {
-								hunks = append(hunks, diffHunk{Path: op.Path, Pointer: "mode", Source: src, Dest: dst})
-							}
-							continue
-						}
-						hunks = append(hunks, diffHunk{Path: op.Path, Source: srcStr, Dest: dstStr})
-					}
-				}
-			}
+			hunks, filterMatched := collectDiffHunks(plan, reg.Names(), filterPath, redact)
 
 			// A <path> that matched no rendered op is a typo or an unmanaged file
 			// — distinct from a managed path that is in sync ("no diff"). Fail with
@@ -306,4 +243,79 @@ func marshalPretty(v any) string {
 		return fmt.Sprintf("%v", v)
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// collectDiffHunks walks every selected agent's rendered ops and collects the
+// masked source/dest hunks that differ, in registry order. names is the agent
+// iteration order (reg.Names()); filterPath, when non-empty, narrows the walk
+// to ops whose Path equals it exactly. filterMatched reports whether that path
+// matched ANY rendered op — it is set on op match, before any hunk is produced,
+// so a matching op that yields no hunk still counts (see the comment inside).
+func collectDiffHunks(plan render.RenderPlan, names []string, filterPath string,
+	redact map[string]string,
+) (hunks []diffHunk, filterMatched bool) {
+	// filterMatched tracks whether a <path> argument matched any rendered
+	// op across every selected agent, so a path that matches NOTHING (a
+	// typo, or an unmanaged file) can be reported distinctly from a managed
+	// path that is genuinely in sync ("no diff").
+	filterMatched = filterPath == ""
+	for _, name := range names {
+		res, ok := plan.PerAgent[name]
+		if !ok {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, op := range res.Ops {
+			if filterPath != "" && op.Path != filterPath {
+				continue
+			}
+			filterMatched = true
+			if render.IsKeyMerge(op.MergeStrategy) {
+				// Key-level diff: compare per pointer. NOT deduped by path —
+				// one agent emits several key-merge ops to one file (codex
+				// writes /mcp_servers AND /hooks to config.toml; claude writes
+				// /hooks AND /lspServers to settings.json), each owning a
+				// distinct section, so every op must be walked. Deduping by
+				// path here dropped the second section's drift (status's key
+				// loop and the apply pipeline never path-dedup key-merge ops).
+				var ours map[string]interface{}
+				_ = json.Unmarshal(op.Content, &ours)
+				final := readDestFile(op.MergeStrategy, op.Path)
+				for _, ptr := range render.CollectPointers(ours, "") {
+					srcStr := secrets.MaskResolved(marshalPretty(getPointerValue(ours, ptr)), redact)
+					dstStr := secrets.MaskResolved(marshalPretty(getPointerValue(final, ptr)), redact)
+					if srcStr == dstStr {
+						continue
+					}
+					hunks = append(hunks, diffHunk{Path: op.Path, Pointer: ptr, Source: srcStr, Dest: dstStr})
+				}
+			} else {
+				// File-level diff.
+				if seen[op.Path] {
+					continue
+				}
+				seen[op.Path] = true
+				srcStr := secrets.MaskResolved(string(op.Content), redact)
+				dstBytes, readErr := readDestBytes(op.Path)
+				dstStr := ""
+				if readErr == nil {
+					dstStr = secrets.MaskResolved(string(dstBytes), redact)
+				}
+				if srcStr == dstStr {
+					// Content is identical, but the file MODE may have drifted
+					// from what apply maintains (op.Mode). A content-identical
+					// chmod produces no text hunk, so surface it as a small
+					// "mode" hunk instead of reporting "no diff" — the mode
+					// analog of a content drift hunk (render.Writer.Write
+					// re-converges it on the next apply).
+					if src, dst, ok := modeHunk(op.Path, op.Mode); ok {
+						hunks = append(hunks, diffHunk{Path: op.Path, Pointer: "mode", Source: src, Dest: dst})
+					}
+					continue
+				}
+				hunks = append(hunks, diffHunk{Path: op.Path, Source: srcStr, Dest: dstStr})
+			}
+		}
+	}
+	return hunks, filterMatched
 }
