@@ -1,14 +1,12 @@
 package cli
 
 import (
-	"encoding/json"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/spf13/afero"
 	"github.com/spxrogers/agentsync/internal/adapter"
-	"github.com/spxrogers/agentsync/internal/drift"
 	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
@@ -66,46 +64,49 @@ func buildExplainModel(in explainInputs) explainModel {
 	// are reported as the different problems they are.
 	pathManaged := false
 
+	// The walk's matchOp is where pathManaged and keyMergers are recorded — on
+	// the op MATCH, not from the items — because both must hold for an op that
+	// yields zero items (an emptied "{}" section; #229 amendment A3).
+	items := walkPlanItems(planWalk{
+		plan: in.plan, agents: in.agents, state: in.state, userHome: in.userHome, scope: in.scope, projectRoot: in.projectRoot,
+		matchOp: func(agent string, op adapter.FileOp) bool {
+			if normalizeDestPathBestEffort(op.Path) != in.target {
+				return false
+			}
+			pathManaged = true
+			if render.IsKeyMerge(op.MergeStrategy) && !containsString(keyMergers, agent) {
+				keyMergers = append(keyMergers, agent)
+			}
+			return true
+		},
+	})
+	byAgent := map[string][]planItem{}
+	for _, it := range items {
+		byAgent[it.agent] = append(byAgent[it.agent], it)
+	}
 	for _, name := range in.agents {
 		res, ok := in.plan.PerAgent[name]
 		if !ok {
 			continue
 		}
 		owner := explainOwner{Agent: name}
-		seenFile := map[string]bool{}
-		for _, op := range res.Ops {
-			if op.Action != "" && op.Action != "write" {
-				continue
-			}
-			if normalizeDestPathBestEffort(op.Path) != in.target {
-				continue
-			}
-			pathManaged = true
-			if render.IsKeyMerge(op.MergeStrategy) {
-				if !containsString(keyMergers, name) {
-					keyMergers = append(keyMergers, name)
+		for _, it := range byAgent[name] {
+			if it.ptr != "" {
+				// Every rendered pointer counts as owned for the foreign-key
+				// complement, whether or not the query narrows to one.
+				renderedPointers[it.ptr] = true
+				if in.pointer != "" && it.ptr != in.pointer {
+					continue
 				}
-				var ours map[string]any
-				_ = json.Unmarshal(op.Content, &ours)
-				ptrs := render.CollectPointers(ours, "")
-				sort.Strings(ptrs)
-				for _, ptr := range ptrs {
-					renderedPointers[ptr] = true
-					if in.pointer != "" && ptr != in.pointer {
-						continue
-					}
-					owner.Items = append(owner.Items,
-						keyItem(in, name, op, ptr, ours, res.Skips, origins, secretRefs, hookEvents))
-				}
+				owner.Items = append(owner.Items, keyItem(in, it, res.Skips, origins, secretRefs, hookEvents))
 				continue
 			}
 			// Whole-file item. A pointer query does not apply to it.
-			if in.pointer != "" || seenFile[op.Path] {
+			if in.pointer != "" {
 				continue
 			}
-			seenFile[op.Path] = true
-			fileContent[name] = string(op.Content)
-			owner.Items = append(owner.Items, fileItem(in, name, op, res.Skips, origins, secretRefs))
+			fileContent[name] = string(it.op.Content)
+			owner.Items = append(owner.Items, fileItem(in, it, res.Skips, origins, secretRefs))
 		}
 		if len(owner.Items) > 0 {
 			model.Owners = append(model.Owners, owner)
@@ -141,21 +142,20 @@ func buildExplainModel(in explainInputs) explainModel {
 	return model
 }
 
-// fileItem builds the provenance for a whole-file destination.
-func fileItem(in explainInputs, agent string, op adapter.FileOp, skips []adapter.Skip,
+// fileItem builds the provenance for a whole-file destination from its walk
+// item, whose happlied and cls are the recorded hash and the classification.
+func fileItem(in explainInputs, it planItem, skips []adapter.Skip,
 	origins map[string]explainPluginOrigin, secretRefs map[secrets.RefLocation][]string,
 ) explainItem {
-	kind, name := componentFromSourceID(op.SourceID)
-	entry := in.state.Files[stateFileKey(in.userHome, agent, in.scope, in.projectRoot, op.Path)]
-	cls := drift.Classify(hashContent(op.Content), entry.SHA256, hashFile(op.Path))
+	kind, name := componentFromSourceID(it.op.SourceID)
 
 	item := explainItem{
-		Ownership:  ownership(entry.SHA256),
+		Ownership:  ownership(it.happlied),
 		Component:  kind,
 		Name:       name,
-		Source:     sourceOf(in, op.SourceID, kind),
+		Source:     sourceOf(in, it.op.SourceID, kind),
 		Transforms: matchingSkips(skips, kind, name),
-		Drift:      cls.String(),
+		Drift:      it.cls.String(),
 	}
 	if o, ok := origins[componentKey(kind, name)]; ok {
 		po := o
@@ -167,35 +167,29 @@ func fileItem(in explainInputs, agent string, op adapter.FileOp, skips []adapter
 	return item
 }
 
-// keyItem builds the provenance for one merged key inside a shared destination.
-func keyItem(in explainInputs, agent string, op adapter.FileOp, ptr string, ours map[string]any,
-	skips []adapter.Skip, origins map[string]explainPluginOrigin,
+// keyItem builds the provenance for one merged key inside a shared destination
+// from its walk item. The walk decoded the destination once for the whole op,
+// so every pointer of one file classifies against the same snapshot (#229
+// axis 5); nothing here reads the destination again.
+func keyItem(in explainInputs, it planItem, skips []adapter.Skip, origins map[string]explainPluginOrigin,
 	secretRefs map[secrets.RefLocation][]string, hookEvents []string,
 ) explainItem {
-	kind, name := componentFromPointer(agent, ptr, hookEvents)
-	key := stateKeyKey(in.userHome, agent, in.scope, in.projectRoot, op.Path, ptr)
-	applied := in.state.Keys[key].SHA256
-	dest := readDestFile(op.MergeStrategy, op.Path)
-	cls := drift.Classify(
-		hashAnyValue(getPointerValue(ours, ptr)),
-		applied,
-		hashAnyValue(getPointerValue(dest, ptr)),
-	)
+	kind, name := componentFromPointer(it.agent, it.ptr, hookEvents)
 
 	item := explainItem{
-		Pointer:    ptr,
-		Ownership:  ownership(applied),
+		Pointer:    it.ptr,
+		Ownership:  ownership(it.happlied),
 		Component:  kind,
 		Name:       name,
 		Transforms: matchingSkips(skips, kind, name),
-		Drift:      cls.String(),
+		Drift:      it.cls.String(),
 	}
 	// KeyEntry.SourceID inherits the OP-level SourceID, which for every MCP/hook
 	// key-merge op is a "<kind>/* (multiple)" sentinel — the state file genuinely
 	// does not say which mcp/<id>.toml produced /mcpServers/github. The real
 	// per-key resolution is the pointer-shape mapping reconcile owns, so this
 	// derives from it rather than trusting the coarser recorded value.
-	item.Source = pointerSource(in, agent, ptr, op.SourceID, hookEvents)
+	item.Source = pointerSource(in, it.agent, it.ptr, it.op.SourceID, hookEvents)
 	if o, ok := origins[componentKey(kind, name)]; ok {
 		po := o
 		item.Plugin = &po

@@ -18,7 +18,7 @@ import (
 // chmod that would otherwise read as "no diff". A file whose mode still
 // matches, or whose recorded/intended mode is unspecified (0), stays a no-op —
 // preserving the mtime-churn-avoidance intent. The four status rows are the
-// truth table of the modeDrifted helper this replaced (#229).
+// truth table of the pre-#229 status helper this replaced.
 func TestStatusDiff_ModeDriftDetection(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "run.sh")

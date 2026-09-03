@@ -78,7 +78,7 @@ type planItem struct {
 
 // recordedModeDrifted is status's question: does the destination's permission
 // bits differ from the mode agentsync RECORDED for it? Exactly the truth table
-// of the modeDrifted helper it replaced (#229): an unrecorded mode (0) is never
+// of the status-side helper it replaced (#229): an unrecorded mode (0) is never
 // drift, and an absent / symlinked / non-regular destination is left to the
 // content classifier.
 func (i planItem) recordedModeDrifted() bool {
