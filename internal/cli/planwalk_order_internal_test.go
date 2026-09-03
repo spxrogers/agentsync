@@ -24,6 +24,18 @@ func TestMergedKeyOrderIsDeterministic(t *testing.T) {
 		pointers func(t *testing.T, userHome, path string, plan render.RenderPlan, s *state.Targets) []string
 	}{
 		{
+			// N-6: status's --json payload and dashboard rows.
+			name: "status",
+			pointers: func(t *testing.T, userHome, _ string, plan render.RenderPlan, s *state.Targets) []string {
+				t.Helper()
+				var out []string
+				for _, it := range buildStatusModel(plan, []string{"claude"}, s, userHome, adapter.ScopeUser, "").Agents[0].Items {
+					out = append(out, it.Pointer)
+				}
+				return out
+			},
+		},
+		{
 			// N-8: reconcile's prompt queue.
 			name: "reconcile",
 			pointers: func(t *testing.T, userHome, _ string, plan render.RenderPlan, s *state.Targets) []string {
