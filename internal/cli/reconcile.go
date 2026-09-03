@@ -655,7 +655,7 @@ func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Target
 				happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, op.Path)].SHA256
 				hdest := hashFile(op.Path)
 				cls := drift.Classify(hsrc, happlied, hdest)
-				dstBytes, _ := os.ReadFile(op.Path)
+				dstBytes, _ := readDestBytes(op.Path)
 				items = append(items, reconcileItem{
 					agentName:   name,
 					op:          op,
@@ -1151,9 +1151,32 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 //
 // Both used to return nil with a success message, hiding data loss.
 func writeBackFileItem(home string, it reconcileItem) error {
-	data, err := os.ReadFile(it.op.Path)
+	data, err := readDestBytes(it.op.Path)
 	if err != nil {
-		return fmt.Errorf("read dest %s: %w", it.op.Path, err)
+		// Named next steps, like this function's other refusals: the user is
+		// mid-prompt with a keystroke to choose, and "read dest X: not a regular
+		// file" alone does not tell them which one gets them unstuck.
+		//
+		// [o]verride is deliberately NOT offered for THIS arm, unlike the peer
+		// refusals in this file and unlike the arm below. It re-applies
+		// through render.Writer.Write, whose convergence read is not
+		// shape-guarded, so on this exact item it does not fail — it HANGS
+		// (measured: `reconcile --auto-override` rc=124).
+		// An earlier version of this message recommended it, which walked the
+		// user out of a clean refusal and into an unbounded wedge. Restore that
+		// suggestion only once #241 is fixed.
+		if errors.Is(err, errDestNotRegular) {
+			return fmt.Errorf("read dest %s: %w — remove or replace the non-regular file at "+
+				"that path and re-run, or [i]gnore to suppress this item", it.op.Path, err)
+		}
+		// Any other read failure keeps the peers' remedy set. The common one is
+		// an ABSENT destination — the user deleted a managed file, which is
+		// itself drift — and there [o]verride is both safe and usually the fix:
+		// Writer.Write's convergence read gets ENOENT and falls straight
+		// through to the write. Withholding it is only correct for the
+		// non-regular case above.
+		return fmt.Errorf("read dest %s: %w — use [o]verride to restore it from canonical, "+
+			"or [i]gnore to suppress this item", it.op.Path, err)
 	}
 	srcID := it.op.SourceID
 	if srcID == "" {

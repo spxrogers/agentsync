@@ -75,7 +75,7 @@ func decodeDestBytes(strategy string, data []byte, v *map[string]any) error {
 // unreadable dest classifies as "absent" rather than crashing. Replaces the
 // JSON-only readJSONFile so a TOML config.toml decodes correctly.
 func readDestFile(strategy, path string) map[string]any {
-	data, err := os.ReadFile(path)
+	data, err := readDestBytes(path)
 	if err != nil {
 		return map[string]any{}
 	}
@@ -599,7 +599,7 @@ func unimportedDestPointers(agentsyncHome, srcHome, agentName string, reg *adapt
 		if !render.IsKeyMerge(op.MergeStrategy) {
 			continue
 		}
-		data, readErr := os.ReadFile(op.Path)
+		data, readErr := readDestBytes(op.Path)
 		if readErr != nil {
 			continue
 		}
@@ -714,7 +714,7 @@ func seedStateFromCurrentDest(agentsyncHome, srcHome, agentName string, reg *ada
 			// Per-key seed: hash the *current* value at each pointer the
 			// rendered op claims to own. The dest is decoded per strategy (TOML
 			// for merge-toml-keys); op.Content is always JSON.
-			data, readErr := os.ReadFile(op.Path)
+			data, readErr := readDestBytes(op.Path)
 			if readErr != nil {
 				continue // dest doesn't exist yet; nothing to seed
 			}
@@ -742,7 +742,7 @@ func seedStateFromCurrentDest(agentsyncHome, srcHome, agentName string, reg *ada
 				}
 			}
 		default:
-			data, readErr := os.ReadFile(op.Path)
+			data, readErr := readDestBytes(op.Path)
 			if readErr != nil {
 				continue
 			}

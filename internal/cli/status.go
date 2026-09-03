@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -962,8 +963,10 @@ func hashContent(b []byte) string {
 }
 
 // hashFile returns the SHA-256 hex digest of the file at path. Returns
-// the empty string on missing-file errors (which `drift.Classify` reads
-// as "absent" — the expected signal for Orphan / OrphanDrifted).
+// the empty string when the destination cannot be read as content at all —
+// absent, or present-and-unreadable — which `drift.Classify` reads as "absent",
+// the expected signal for Orphan / OrphanDrifted. A destination whose SHAPE is
+// wrong, or which cannot be stat'd, answers the opaque marker below instead.
 //
 // If the path is a symlink, hashFile returns a special marker so the
 // drift classifier can flag the file as drifted in a way the user can
@@ -985,13 +988,22 @@ func hashFile(path string) string {
 	// computing, so answer a sentinel that can never match one. It is a DIFFERENT
 	// sentinel from the symlink case above so a diagnostic never calls a FIFO a
 	// symlink; both are opaque to callers, which only ever compare hashes for
-	// equality. Shares render's predicate so the destination-read guards cannot
-	// disagree about what is safe to read.
-	if !render.IsRegularOrAbsent(path) {
-		return "not-a-regular-file"
-	}
-	data, err := os.ReadFile(path)
+	// equality.
+	//
+	// The shape rule itself lives in readDestBytes, the one gate every
+	// destination read in this package passes through; this function maps its
+	// refusal onto the sentinel above rather than re-deciding it.
+	data, err := readDestBytes(path)
 	if err != nil {
+		// Both refusals map to the SAME opaque token, deliberately. These
+		// sentinels are never shown; they exist only to never equal a content
+		// hash. Before this gate existed the predicate answered false for an
+		// unstattable destination too, so splitting them here would move a
+		// parent-ENOTDIR dest from ForeignCollision to New — and New is
+		// SafeForAutoApply. A plain read failure still answers "", as it did.
+		if errors.Is(err, errDestNotRegular) || errors.Is(err, errDestUnstattable) {
+			return "not-a-regular-file"
+		}
 		return ""
 	}
 	return hashContent(data)

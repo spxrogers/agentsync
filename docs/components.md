@@ -391,7 +391,18 @@ symmetric with the dest→source write boundary (see architecture §7).
   this component KIND reclaimed at all — drives reconcile's prompt wording) and
   `OrphanDeleteWillProceed` (will THIS destination actually be removed on this
   run — keeps the apply summary from counting a skipped delete). `IsRegularOrAbsent`
-  is shared with `internal/cli`'s destination reads so a FIFO cannot block them.
+  is shared with `internal/cli`'s destination reads so a FIFO cannot block
+  **those**: every one of them goes through `readDestBytes`
+  (`internal/cli/destread.go`), which applies this predicate before the open.
+  `TestEveryDestinationReadGoesThroughTheGate` backs this up by failing on a
+  bare `os.ReadFile(op.Path)` anywhere under `internal/cli` — a two-spelling
+  text matcher, so it catches the copy-paste that happened rather than every
+  possible spelling.
+  It is **not** yet true of this package's own `Writer.Write` convergence read
+  or of the adapter `Ingest` paths, so `apply`, `apply --dry-run`,
+  `reconcile --auto-override` (which re-applies through `Writer.Write`),
+  `import <agent>` and `doctor` (through its plugin check) still block on a
+  non-regular destination — issues #241 and #242.
 - **Depends on:** adapter, secrets, source, state, paths, iox, drift.
 - **Files:** `pipeline.go`, `writer.go`, `state_apply.go`, `report.go`.
 
