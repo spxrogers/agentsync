@@ -828,8 +828,12 @@ without consulting ownership; and any ONE unowned, differing pointer
 elsewhere in an otherwise-owned file triggers a whole-file backup that, as a
 side effect, also preserves your owned, drifted keys alongside it.
 
-`drift.SafeForAutoApply(class)` is what `reconcile --auto-safe` consults — it
-auto-resolves only the cases that can't lose work (`converged`, `pending`).
+`reconcile --auto-safe` resolves nothing on its own: every item that reaches its
+loop needs manual review (`drift`, `conflict`, `foreign-collision`,
+`orphan-drifted`, or an orphan), so it reports each one as skipped and leaves
+orphans in place. `drift.SafeForAutoApply` names the classes that could be
+resolved without losing work (`clean`, `pending`, `new`, `converged`) but has no
+production caller today.
 
 **Orphan reclamation on `apply`.** `apply` itself reclaims two kinds of orphan so
 a removed component doesn't linger in the destination: emptied key-merge sections
@@ -871,7 +875,22 @@ from the canonical source, which previously lingered until a `reconcile`.
 pointer**, so agentsync can own `$.mcpServers.github` inside `~/.claude.json`
 without touching keys it didn't write. Those untouched keys are **foreign keys**
 — surfaced in `status` but never entering the classifier. If a structured file
-fails to parse, the algorithm degrades to file-level on the whole file.
+fails to parse, the read degrades to an empty document: every key agentsync
+owns in it classifies against an absent value — per pointer, never as one
+file-level item.
+
+Every surface that classifies — `status`, `diff`, `reconcile`, `explain` — walks
+the plan through one shared iterator, `walkPlanItems` in
+`internal/cli/planwalk.go`, which composes `render.IsKeyMerge`,
+`render.CollectPointers`, `render.OrphanFiles`, the guarded destination readers
+and `drift.Classify`. Whole-file ops are deduped by destination path per agent;
+key-merge ops never are, because one agent emits several of them to one file
+(Codex's `/mcp_servers` and `/hooks` both land in `config.toml`). Merged keys
+are walked in sorted pointer order, so `status --json`, `diff` and `reconcile`
+list them reproducibly. Each surface keeps its own presentation on top: `status`
+re-partitions whole-file rows ahead of key rows and folds permission drift into
+the class, `diff` masks and compares text, `reconcile` excludes an orphan
+another agent still renders, `explain` groups by owner.
 
 ---
 

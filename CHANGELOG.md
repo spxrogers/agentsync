@@ -181,6 +181,29 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
+- **`status --json`, `diff` and `reconcile` now list a shared file's merged keys
+  in a stable, sorted order.** The three walked `render.CollectPointers`' output
+  directly, which ranges a Go map, so with five MCP servers in one
+  `~/.claude.json` a `status --json` payload came back in a different key order
+  almost every run (measured: five distinct orderings across 200 calls), diff
+  hunks reordered, and `reconcile`'s prompt queue shuffled between runs. Merged
+  keys are now walked in ascending pointer order. No item is added, dropped or
+  reclassified; only the order changes — but a `status --json` diffed between
+  runs, or a `reconcile` transcript compared against a previous one, will be
+  stable for the first time. `explain` already sorted and is unchanged.
+
+- **Internal: `status`, `diff`, `reconcile` and `explain` now share one
+  plan→drift walk.** They held four copies that had drifted apart; the copies
+  are gone ([#229](https://github.com/spxrogers/agentsync/issues/229)). One
+  further change rides along: `explain` now decodes a key-merged destination
+  once per rendered section rather than once per key, so every key in one file
+  is classified against the same snapshot. Behavior is otherwise unchanged in
+  this release — the disagreements the copies encoded (a permission-only change
+  that `status` calls drift, `reconcile` calls "nothing to reconcile" and
+  `explain` calls clean; a symlinked destination that `status` calls drift
+  forever while `diff` reads through it) are preserved deliberately, so each is
+  decided on its own rather than as a side effect of a refactor.
+
 - **`.state/targets.json` is now `schema_version: 2`.** The upgrade is automatic
   and requires nothing: every command reads the old keys, and the first command
   that WRITES state (`apply`, `import`, `reconcile`, `migrate`, `agent disable

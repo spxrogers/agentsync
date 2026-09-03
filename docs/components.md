@@ -44,7 +44,12 @@ The binary's `main`. Injects `Version`/`Commit`/`Date` via `-ldflags` and calls
 Wires every cobra subcommand into the root tree and dispatches to handlers; this
 is the only package that depends on nearly all the others.
 - **Key:** `NewRoot() *cobra.Command`, `Execute() int` (returns the process exit
-  code and owns the terminal `✗ ERROR` line), `Version`/`Commit`/`Date`.
+  code and owns the terminal `✗ ERROR` line), `Version`/`Commit`/`Date`;
+  `walkPlanItems` — the single plan→state→destination drift walk behind
+  `status`, `diff`, `reconcile` and `explain` (`planwalk.go`); its `planItem` is
+  deliberately unexported field-for-field so it can never become a `--json`
+  surface, because a plan built from `secrets.SubstituteCanonical` carries
+  resolved cleartext in `op.Content`.
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,
   `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
   `mcp {add,remove,list,enable,disable}`,
@@ -55,7 +60,8 @@ is the only package that depends on nearly all the others.
   `version`.
 - **Depends on:** adapter, source, state, secrets, paths, render, marketplace,
   project, drift, git, ui, log.
-- **Files:** `root.go` + one file per command group.
+- **Files:** `root.go` + one file per command group + shared helpers
+  (`destread.go`, `planwalk.go`).
 
 ---
 
@@ -403,7 +409,7 @@ symmetric with the dest→source write boundary (see architecture §7).
   `reconcile --auto-override` (which re-applies through `Writer.Write`),
   `import <agent>` and `doctor` (through its plugin check) still block on a
   non-regular destination — issues #241 and #242.
-- **Depends on:** adapter, secrets, source, state, paths, iox, drift.
+- **Depends on:** adapter, secrets, source, state, paths, iox.
 - **Files:** `pipeline.go`, `writer.go`, `state_apply.go`, `report.go`.
 
 ### `internal/capture`
@@ -414,7 +420,9 @@ source-only fields, writes via `source.Write*`. Used by `import` and reconcile.
 - **Files:** `capture.go`, `leak_fixture.go` (compile-time leak guard).
 
 ### `internal/drift`
-Pure 3-way classifier — no IO.
+Pure 3-way classifier — no IO. The walk that feeds it (`walkPlanItems`) lives in
+`internal/cli` beside the destination readers it needs, so this package stays
+IO-free.
 - **Key:** `Class` (`Clean`, `Pending`, `Drift`, `Converged`, `Conflict`, `New`,
   `ForeignCollision`, `Orphan`, `OrphanDrifted`); `Classify(hsrc, happlied, hdest)`;
   `SafeForAutoApply(c)`.
