@@ -888,9 +888,45 @@ key-merge ops never are, because one agent emits several of them to one file
 (Codex's `/mcp_servers` and `/hooks` both land in `config.toml`). Merged keys
 are walked in sorted pointer order, so `status --json`, `diff` and `reconcile`
 list them reproducibly. Each surface keeps its own presentation on top: `status`
-re-partitions whole-file rows ahead of key rows and folds permission drift into
-the class, `diff` masks and compares text, `reconcile` excludes an orphan
-another agent still renders, `explain` groups by owner.
+re-partitions whole-file rows ahead of key rows, and both `status` and `explain`
+fold permission drift into the class of a content-clean whole file — measured
+against `op.Mode`, the mode the next apply chmods to, which is the same question
+`diff`'s `mode` hunk asks (`planItem.opModeDrifted`, one predicate behind all
+three, so they cannot disagree). `reconcile` still ignores mode entirely; that gap is
+#245. `diff` masks and compares text, `reconcile` excludes
+an orphan another agent still renders, `explain` groups by owner.
+
+A **symlinked** destination is read through only when
+`AGENTSYNC_ALLOW_SYMLINK_DEST=1` — the same switch under which `iox.AtomicWrite`
+writes through the link. `iox.SymlinkDestAllowed` is the one reading of the
+switch, and `destReadPath` (`internal/cli/destread.go`) is the read-side gate
+that the three whole-file destination facts — the content hash, the permission
+bits and the text — pass through. Unset, all four surfaces answer an opaque
+sentinel that can never equal a content hash, so the classifier sees a changed
+destination (`drift`, or `conflict`/`foreign-collision` by its usual table);
+`diff` prints a `symlink` hunk naming the switch rather than reading through and
+reporting no difference; `reconcile` shows the SHA display instead of a text
+diff, and its `[w]`rite-back refuses to capture through the link with advice
+that omits `[o]verride` (#248: `Writer.Write`'s mode arm chmods through a link
+before the policy is consulted). Set, all four resolve the link and compare the
+file it points at, so a converged chezmoi setup reports `clean`; a link that
+does not resolve answers a second sentinel so the advice is "fix the link", not
+"set the switch". A link to a FIFO, device or directory is a shape problem the
+switch cannot fix: it is refused as a bare one is, and `diff` prints a `shape`
+hunk for both — as it does for a path it cannot stat, which shares the token.
+The mirror is a policy, not a prediction: `apply` itself only fails on a
+symlinked destination when the content differs (its convergence read follows
+the link), so the unset answer
+means "a managed regular file became a link you have not opted into — that is
+drift", not "the next apply would fail". The rule covers **whole-file**
+destinations only; the symlink sentinel is a whole-file-only policy signal. A
+key-merged destination is decoded through the link on every surface, as `apply`
+treats it (a converged symlinked key-merge destination is a no-op plus a chmod
+through the link, a differing one is `ErrSymlinkDest` — exactly as for a
+whole-file destination, so the read-through already has apply-parity): refusing
+it would make every owned pointer of a chezmoi `~/.claude.json` classify against
+an absent value permanently, because the classifier has no per-pointer sentinel
+to carry, with `reconcile`'s `[d]` showing `<absent>` and its `[w]` failing.
 
 ---
 
@@ -907,7 +943,8 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    bans `os.UserHomeDir()` in `_test.go`.
 4. **First-apply backups** — the `foreign-collision` case copies the pre-existing
    destination into `.state/backups/<ts>/` before writing. Symlinked
-   destinations are refused by default.
+   destinations are refused by default — and, on the read path, classified as
+   drift rather than read through (§6).
 5. **Manifest-SHA pinning** — every plugin records a `tree:v1:` content hash
    over its *entire* cache tree (every projected component body — skills,
    command/subagent markdown — not just `plugin.json`, excluding `.git/`), so a

@@ -17,14 +17,14 @@ import (
 // This file is the characterization harness for #229: it pins, fixture by
 // fixture, what the four plan→drift walks — buildStatusModel (S),
 // collectDiffHunks (D), collectReconcileItems (R) and buildExplainModel (E) —
-// answer TODAY, before they are unified behind one shared walk. Every golden
-// below was written from the drift classifier's truth table and each surface's
-// documented rules, then confirmed against the unmodified code; the harness is
-// an oracle for the OLD behaviour, so a refactor that needs to edit a golden
-// here is not a refactor. The two policy changes #229 defers to its PR-C
-// (axes 9 and 14) are the expected exceptions: they edit T-10
-// (whole-file/dest-is-symlink) and T-09 (whole-file/mode-drift-only), nothing
-// else.
+// answered before they were unified behind one shared walk (#244). Every
+// golden below was written from the drift classifier's truth table and each
+// surface's documented rules, then confirmed against the unmodified code; the
+// harness is an oracle for that behaviour, so a refactor that needs to edit a
+// golden here is not a refactor. Two goldens are the deliberate exceptions and
+// encode the policy #229's PR-C CHOSE, not the old answer: T-09
+// (whole-file/mode-drift-only: explain folds mode drift) and T-10
+// (whole-file/dest-is-symlink: diff's symlink hunk, reconcile's SHA fallback).
 //
 // What is compared IN ORDER: agent order, op order across paths, status's
 // whole-file-before-key partition, reconcile's all-items-before-all-orphans
@@ -311,11 +311,14 @@ func planFixtures() []planFixture {
 		orphanFixture("whole-file/orphan", "APPLIED", "orphan"),
 		orphanFixture("whole-file/orphan-drifted", "EDITED", "orphan-drifted"),
 
-		// T-09: content clean, permission bits drifted. Three answers today:
-		// status folds RECORDED-mode drift into `drift`; diff emits a "mode"
-		// hunk against op.Mode; reconcile and explain ignore mode entirely.
-		// recordedMode (0755) != op.Mode (0700) != on disk (0644), so a walk
-		// that swapped the recorded mode for op.Mode would still be caught.
+		// T-09: content clean, permission bits drifted. status and explain fold
+		// mode drift measured against op.Mode into `drift`; diff emits a "mode"
+		// hunk against op.Mode; reconcile ignores mode entirely. The recorded
+		// mode (0755) != op.Mode (0700) != on disk (0644), so D's
+		// `Source: "mode 0700"` still catches a walk that swapped op.Mode for
+		// the recorded mode. S does NOT discriminate between the two formulas
+		// here (both fire); TestStatus_ModeDriftUsesOpModeNotRecordedMode is
+		// that oracle. E is the projection #229 PR-C moved (was `clean`).
 		{
 			name:   "whole-file/mode-drift-only",
 			target: func(h string) string { return dest(h, "run.sh") },
@@ -350,15 +353,18 @@ func planFixtures() []planFixture {
 				}}
 			},
 			wantE: func(string) eProj {
-				return eProj{rows: []eRow{{"claude", "", "managed", "clean"}}, pathManaged: true}
+				return eProj{rows: []eRow{{"claude", "", "managed", "drift"}}, pathManaged: true}
 			},
 		},
 
-		// T-10: the destination is a symlink to an identical file. The HASH side
-		// (status/reconcile/explain) answers the symlink sentinel → drift; the
-		// TEXT side (diff, reconcile's dstText) reads THROUGH the link → equal.
-		// That split is #229 axis 9 and is preserved as-is. explain's target is
-		// the link's TARGET: explain resolves op paths through symlinks.
+		// T-10: the destination is a symlink to an identical file, with
+		// AGENTSYNC_ALLOW_SYMLINK_DEST unset (the suite's state). Every surface
+		// refuses the link (#229 axis 9): the hash side answers the symlink
+		// sentinel → drift; diff emits a "symlink" hunk naming the switch
+		// instead of reading through and printing nothing; reconcile carries
+		// no destination text (hasText false → the SHA display). explain's
+		// target is the link's TARGET: explain resolves op paths through
+		// symlinks.
 		{
 			name:   "whole-file/dest-is-symlink",
 			target: func(h string) string { return dest(h, "real.md") },
@@ -380,12 +386,17 @@ func planFixtures() []planFixture {
 					summary: map[string]int{"drift": 1},
 				}
 			},
-			wantD: func(string) dProj { return dProj{filterMatched: true} },
+			wantD: func(h string) dProj {
+				return dProj{hunks: []diffHunk{{
+					Path: dest(h, "link.md"), Pointer: "symlink", Source: "regular file",
+					Dest: "symlink (not compared through; set AGENTSYNC_ALLOW_SYMLINK_DEST=1 to read and write through the link)",
+				}}, filterMatched: true}
+			},
 			wantR: func(h string) []rRow {
 				return []rRow{{
 					agent: "claude", path: dest(h, "link.md"), cls: "drift",
 					hsrc: hf("SOURCE"), happlied: hf("SOURCE"), hdest: "symlink-not-regular-file",
-					hasText: true, srcText: "SOURCE", dstText: "SOURCE",
+					hasText: false, srcText: "SOURCE", dstText: "",
 				}}
 			},
 			wantE: func(string) eProj {
@@ -393,12 +404,12 @@ func planFixtures() []planFixture {
 			},
 			extra: func(t *testing.T, _ string, s sProj, d dProj, r []rRow, _ eProj) {
 				t.Helper()
-				// D2's split, asserted by name so the intent survives a golden edit.
+				// The refusal, asserted by name so the intent survives a golden edit.
 				if r[0].hdest != "symlink-not-regular-file" || r[0].cls != "drift" || s.agents[0].rows[0].cls != "drift" {
 					t.Errorf("hash side must answer the symlink sentinel and classify drift: %+v", r[0])
 				}
-				if r[0].srcText != r[0].dstText || len(d.hunks) != 0 {
-					t.Errorf("text side must read through the link and produce no hunk: r=%+v d=%+v", r[0], d)
+				if r[0].dstText != "" || r[0].hasText || len(d.hunks) != 1 || d.hunks[0].Pointer != "symlink" {
+					t.Errorf("text side must refuse the link too — no dest text, and one symlink hunk: r=%+v d=%+v", r[0], d)
 				}
 			},
 		},
@@ -1008,10 +1019,11 @@ func projectS(m statusModel) sProj {
 }
 
 func projectD(hunks []diffHunk, matched bool) dProj {
-	// A "mode" hunk is a whole-file row wearing a label, not a pointer; keep it
-	// out of the run sort so its placement stays asserted in order.
+	// A "mode" or "symlink" hunk is a whole-file row wearing a label, not a
+	// pointer; keep both out of the run sort so their placement stays asserted
+	// in order.
 	hunks = normalizeRuns(hunks, func(h diffHunk) (string, string, string) {
-		if h.Pointer == "mode" {
+		if isPseudoPointer(h.Pointer) {
 			return "", h.Path, ""
 		}
 		return "", h.Path, h.Pointer

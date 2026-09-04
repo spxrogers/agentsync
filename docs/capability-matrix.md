@@ -585,8 +585,12 @@ in the [README](../README.md#known-limits); the highlights:
 - **Insecure sources** — `http://` and `git://` plugin/marketplace sources are
   rejected by default (MITM protection); override with
   `AGENTSYNC_ALLOW_INSECURE_URLS=1`.
-- **Symlinked destinations** are rejected by default; override with
-  `AGENTSYNC_ALLOW_SYMLINK_DEST=1`.
+- **Symlinked destinations** are rejected by default, for both writing and
+  drift comparison (`status`/`diff`/`reconcile`/`explain` report a symlinked
+  whole-file destination as drifted rather than reading through the link; a
+  key-merged file such as `~/.claude.json` is read through either way);
+  override with `AGENTSYNC_ALLOW_SYMLINK_DEST=1`, which `apply` and the four
+  drift commands (`status`, `diff`, `reconcile`, `explain`) then need.
 - **Planned / deferred**: Aider and Firebender (see [Breadth tier](#breadth-tier)
   § "Deliberate exclusions").
 

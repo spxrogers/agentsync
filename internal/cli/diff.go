@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
@@ -164,8 +165,7 @@ func newDiffCmd() *cobra.Command {
 					label = ui.Sanitize(label)
 					fmt.Fprintf(p.Out, "%s %s\n", p.Red("--- source"), label)
 					fmt.Fprintf(p.Out, "%s %s\n", p.Green("+++ dest  "), label)
-					diffs := dmp.DiffMain(h.Dest, h.Source, false)
-					fmt.Fprintln(p.Out, renderDiffText(p, diffs))
+					fmt.Fprintln(p.Out, renderDiffText(p, hunkDiffs(dmp, h)))
 				}
 			}
 			// --exit-code turns diff into a CI gate: non-zero (stable) when any
@@ -216,16 +216,88 @@ func renderDiffText(p *ui.Printer, diffs []diffmatchpatch.Diff) string {
 // modeHunk describes a permission-bit mismatch between the mode apply would
 // maintain for a whole-file item (op.Mode) and the file's current perm on
 // disk, both as the walk recorded them. ok is false when they match, op.Mode
-// is 0 (unspecified), or the file is absent/symlinked/non-regular (the content
-// path already covers those) — planItem.opModeDrifted's gate. It lets `diff`
-// surface a content-identical chmod — which yields no text hunk — rather than
-// silently reporting "no diff".
+// is 0 (unspecified), or the file is absent/refused-symlink/non-regular (the
+// content path already covers those) — planItem.opModeDrifted's gate. It lets
+// `diff` surface a content-identical chmod — which yields no text hunk — rather
+// than silently reporting "no diff".
 func modeHunk(it planItem) (source, dest string, ok bool) {
 	if !it.opModeDrifted() {
 		return "", "", false
 	}
 	return fmt.Sprintf("mode %04o", os.FileMode(it.op.Mode).Perm()),
 		fmt.Sprintf("mode %04o", os.FileMode(it.destPerm).Perm()), true
+}
+
+// symlinkRefusedHunkDest is the Dest of a "symlink" hunk. A CONSTANT,
+// deliberately: the link TARGET is attacker-choosable and this string reaches
+// the terminal unsanitized (only the hunk label goes through ui.Sanitize), so
+// embedding it would reopen the #93/#171 escape-injection class.
+const symlinkRefusedHunkDest = "symlink (not compared through; set " + iox.AllowSymlinkDestEnv +
+	"=1 to read and write through the link)"
+
+// symlinkUnresolvableHunkDest is its sibling for a link the user opted into
+// that does not resolve (dangling, loop); apply fails on it the same way.
+const symlinkUnresolvableHunkDest = "symlink (target cannot be resolved: dangling, loop, or unreadable; apply refuses it too)"
+
+// symlinkHunk describes a destination that is a symlink the read side will not
+// look through — refused by AGENTSYNC_ALLOW_SYMLINK_DEST being unset, the same
+// condition under which iox.AtomicWrite refuses to write through one, or
+// unresolvable. A whole-file hunk with an empty Dest was rejected: it asserts
+// the destination is EMPTY, which is false, and renders the entire source as
+// one insertion.
+func symlinkHunk(it planItem) (source, dest string, ok bool) {
+	if !it.destSymlinkRefused() {
+		return "", "", false
+	}
+	if it.hdest == symlinkUnresolvableSentinel {
+		return "regular file", symlinkUnresolvableHunkDest, true
+	}
+	return "regular file", symlinkRefusedHunkDest, true
+}
+
+// The pseudo-pointers: a whole-file finding that is not a text difference
+// carries one of these in diffHunk.Pointer instead of an RFC-6901 pointer.
+const (
+	ptrMode    = "mode"
+	ptrSymlink = "symlink"
+	ptrShape   = "shape"
+)
+
+// isPseudoPointer reports whether a hunk's Pointer is one of the labels above.
+func isPseudoPointer(p string) bool { return p == ptrMode || p == ptrSymlink || p == ptrShape }
+
+// hunkDiffs is what the formatted diff renders for one hunk. A symlink or
+// shape hunk carries two UNRELATED labels ("regular file" against a sentence),
+// and a character diff of those shreds both into fragments — so each side is
+// emitted whole, Delete for the destination and Insert for the source, the
+// direction DiffMain(h.Dest, h.Source) gives every other hunk. A mode hunk's
+// two sides share their shape ("mode 0644" / "mode 0755"), where a character
+// diff highlights the changed digits, and text hunks are text.
+func hunkDiffs(dmp *diffmatchpatch.DiffMatchPatch, h diffHunk) []diffmatchpatch.Diff {
+	if h.Pointer == ptrSymlink || h.Pointer == ptrShape {
+		return []diffmatchpatch.Diff{
+			{Type: diffmatchpatch.DiffDelete, Text: h.Dest},
+			{Type: diffmatchpatch.DiffInsert, Text: h.Source},
+		}
+	}
+	return dmp.DiffMain(h.Dest, h.Source, false)
+}
+
+// shapeHunkDest is the Dest of a "shape" hunk; a constant for the same reason
+// as the symlink ones.
+const shapeHunkDest = "not a regular file (FIFO, device, socket or directory), or the path cannot be " +
+	"stat'd; remove or replace it, or check permissions on the path"
+
+// shapeHunk describes a whole-file destination readDestBytes refused — a bare
+// FIFO, a link to one, or a path it cannot stat; hashFile answers one token
+// for both facts, so the Dest names both. Its text read is "" (there is no
+// content to compare), so without this hunk diff rendered the whole source as
+// an insertion against an "empty" destination that is not empty at all.
+func shapeHunk(it planItem) (source, dest string, ok bool) {
+	if !it.destShapeRefused() {
+		return "", "", false
+	}
+	return "regular file", shapeHunkDest, true
 }
 
 func marshalPretty(v any) string {
@@ -281,11 +353,21 @@ func collectDiffHunks(plan render.RenderPlan, names []string, filterPath string,
 			hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: it.ptr, Source: srcStr, Dest: dstStr})
 			continue
 		}
-		// File-level diff.
+		// File-level diff. The symlink check runs BEFORE the text comparison:
+		// a refused link's dstText is "", and an empty op.Content must not fall
+		// through to "equal" and then into the mode branch.
+		if src, dst, ok := symlinkHunk(it); ok {
+			hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: ptrSymlink, Source: src, Dest: dst})
+			continue
+		}
+		if src, dst, ok := shapeHunk(it); ok {
+			hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: ptrShape, Source: src, Dest: dst})
+			continue
+		}
 		if srcStr == dstStr {
 			// Content identical: surface a mode-only drift as a "mode" hunk.
 			if src, dst, ok := modeHunk(it); ok {
-				hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: "mode", Source: src, Dest: dst})
+				hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: ptrMode, Source: src, Dest: dst})
 			}
 			continue
 		}

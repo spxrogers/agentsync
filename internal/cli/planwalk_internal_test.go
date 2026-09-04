@@ -7,11 +7,15 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
+
+	"github.com/sergi/go-diff/diffmatchpatch"
 
 	"github.com/spf13/afero"
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/drift"
+	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -186,13 +190,16 @@ func TestWalkPlanItems(t *testing.T) {
 				if len(items) != 1 || !items[0].orphan {
 					t.Fatalf("want one orphan item, got %+v", items)
 				}
-				// The mode facts ARE populated (recorded 0755, disk 0644 → the
-				// predicate would say drift)…
-				if !items[0].recordedModeDrifted() {
+				// The on-disk mode facts ARE populated (0644, regular)…
+				if items[0].destPerm != 0o644 || !items[0].destRegular {
 					t.Fatalf("fixture: orphan mode facts not populated: %+v", items[0])
 				}
 				// …and the status projection must not consult them: an orphan's
-				// class is the classifier's, untouched by the chmod.
+				// class is the classifier's, untouched by the chmod. Since #229
+				// PR-C that protection is STRUCTURAL rather than a projection-side
+				// exclusion: the fold asks op.Mode, and a synthesized orphan op
+				// carries Mode 0, so opModeDrifted cannot fire for it no matter
+				// what state recorded (Mode 0o755 here) or what is on disk.
 				model := buildStatusModel(plan, []string{"claude"}, s, h, adapter.ScopeUser, "")
 				if got := model.Summary; got["orphan"] != 1 || got["drift"] != 0 {
 					t.Errorf("status must leave an orphan's class alone under a chmod: summary=%v", got)
@@ -234,6 +241,64 @@ func TestWalkPlanItems(t *testing.T) {
 				want := []string{"claude " + a, "claude " + p + "!"}
 				if !reflect.DeepEqual(got, want) {
 					t.Errorf("filtered items: got %v want %v", got, want)
+				}
+			},
+		},
+		{
+			// Converged content (dest == source, state stale) with a mode
+			// difference is drift too: the next apply chmods it, and diff
+			// already prints a mode hunk for it. Clean-only folding let status
+			// say "in sync" while diff --exit-code failed.
+			name: "converged-content-with-mode-drift-folds-to-drift",
+			run: func(t *testing.T, h string) {
+				p := dest(h, "s.sh")
+				mustWrite(t, p, "NEW")
+				if err := os.Chmod(p, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				s := state.New()
+				s.Files[fileKey(h, "claude", p)] = state.FileEntry{SHA256: hf("OLD")}
+				op := fileOp(p, "NEW")
+				op.Mode = 0o755
+				items := walkUser(h, planFor(map[string][]adapter.FileOp{"claude": {op}}), s, []string{"claude"}, nil)
+				if len(items) != 1 || items[0].cls != drift.Converged {
+					t.Fatalf("fixture: want one converged item, got %+v", itemKeys(items))
+				}
+				if got := items[0].classWithModeDrift(); got != drift.Drift {
+					t.Errorf("classWithModeDrift on converged content with a mode difference = %v, want drift", got)
+				}
+				op.Mode = 0o644
+				items = walkUser(h, planFor(map[string][]adapter.FileOp{"claude": {op}}), s, []string{"claude"}, nil)
+				if got := items[0].classWithModeDrift(); got != drift.Converged {
+					t.Errorf("classWithModeDrift with the mode in sync = %v, want converged untouched", got)
+				}
+			},
+		},
+		{
+			// The unresolvable sentinel must reach diff as its own hunk: a user
+			// who already set the switch is told to fix the link, not to set it.
+			name: "unresolvable-link-gets-its-own-diff-hunk",
+			run: func(t *testing.T, h string) {
+				t.Setenv(iox.AllowSymlinkDestEnv, "1")
+				link, target := dest(h, "link.md"), filepath.Join(h, "gone")
+				if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatal(err)
+				}
+				// An EMPTY source equals the refused read's "": the symlink check
+				// must run before the text compare or this prints "no diff".
+				hunks, _ := collectDiffHunks(planFor(map[string][]adapter.FileOp{"claude": {fileOp(link, "")}}), []string{"claude"}, "", nil)
+				if len(hunks) != 1 || hunks[0].Pointer != "symlink" {
+					t.Fatalf("want one symlink hunk for an unresolvable link, got %+v", hunks)
+				}
+				d := hunks[0].Dest
+				if !strings.Contains(d, "cannot be resolved") || strings.Contains(d, iox.AllowSymlinkDestEnv) {
+					t.Errorf("Dest = %q: must say the link is broken and must not advise the switch", d)
+				}
+				if strings.Contains(d, target) || strings.Contains(d, "/") {
+					t.Errorf("Dest = %q embeds a path; it must be a constant", d)
 				}
 			},
 		},
@@ -320,7 +385,7 @@ func TestWalkPlanItems(t *testing.T) {
 			},
 		},
 		{
-			name: "symlink-hash-text-split",
+			name: "symlink-refused-when-env-unset",
 			run: func(t *testing.T, h string) {
 				real, link := dest(h, "real.md"), dest(h, "link.md")
 				mustWrite(t, real, "SOURCE")
@@ -335,16 +400,51 @@ func TestWalkPlanItems(t *testing.T) {
 					t.Fatalf("got %d items", len(items))
 				}
 				it := items[0]
-				// D2: the hash side answers hashFile's symlink sentinel (→ drift);
-				// the text side reads THROUGH the link (→ identical text).
-				if it.hdest != "symlink-not-regular-file" || it.cls != drift.Drift {
-					t.Errorf("hash side: hdest=%q cls=%v", it.hdest, it.cls)
+				// #229 axis 9: with AGENTSYNC_ALLOW_SYMLINK_DEST unset the hash
+				// side answers hashFile's symlink sentinel (→ drift) AND the
+				// text side refuses too (→ ""): the two agree, where they once
+				// split (the text side used to read through the link).
+				if it.hdest != "symlink-not-regular-file" || it.cls != drift.Drift || !it.destSymlinkRefused() {
+					t.Errorf("hash side: hdest=%q cls=%v refused=%v", it.hdest, it.cls, it.destSymlinkRefused())
+				}
+				if it.srcText != "SOURCE" || it.dstText != "" {
+					t.Errorf("text side: src=%q dst=%q, want the text read to refuse the link too", it.srcText, it.dstText)
+				}
+				if it.destRegular {
+					t.Errorf("a refused symlink is not a regular file for the mode predicates")
+				}
+			},
+		},
+		{
+			name: "symlink-resolved-when-env-set",
+			run: func(t *testing.T, h string) {
+				t.Setenv(iox.AllowSymlinkDestEnv, "1")
+				real, link := dest(h, "real.md"), dest(h, "link.md")
+				mustWrite(t, real, "SOURCE")
+				if err := os.Chmod(real, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(real, link); err != nil {
+					t.Fatal(err)
+				}
+				s := state.New()
+				s.Files[fileKey(h, "claude", link)] = state.FileEntry{SHA256: hf("SOURCE")}
+				plan := planFor(map[string][]adapter.FileOp{"claude": {fileOp(link, "SOURCE")}})
+				items := walkUser(h, plan, s, []string{"claude"}, func(w *planWalk) { w.withText = true })
+				if len(items) != 1 {
+					t.Fatalf("got %d items", len(items))
+				}
+				it := items[0]
+				// The opt-in half: every whole-file fact resolves the link to
+				// the file apply writes through, so the item classifies clean.
+				if it.hdest != hf("SOURCE") || it.cls != drift.Clean || it.destSymlinkRefused() {
+					t.Errorf("hash side: hdest=%q cls=%v refused=%v", it.hdest, it.cls, it.destSymlinkRefused())
 				}
 				if it.srcText != "SOURCE" || it.dstText != "SOURCE" {
 					t.Errorf("text side: src=%q dst=%q", it.srcText, it.dstText)
 				}
-				if it.destRegular {
-					t.Errorf("a symlinked destination is not a regular file for the mode predicates")
+				if !it.destRegular || it.destPerm != 0o644 {
+					t.Errorf("mode facts must be the TARGET's: regular=%v perm=%04o", it.destRegular, it.destPerm)
 				}
 			},
 		},
@@ -483,7 +583,7 @@ func TestDestModePerm(t *testing.T) {
 		{name: "regular", path: reg, wantPerm: 0o644, wantRegular: true},
 		{name: "chmod-000-is-still-regular", path: zero, wantPerm: 0, wantRegular: true},
 		{name: "absent", path: filepath.Join(h, "nope"), wantPerm: 0, wantRegular: false},
-		{name: "symlink-is-the-link-not-the-target", path: link, wantPerm: 0, wantRegular: false},
+		{name: "symlink-refused-when-env-unset", path: link, wantPerm: 0, wantRegular: false},
 		{name: "directory", path: dir, wantPerm: 0, wantRegular: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -531,5 +631,52 @@ func TestPathFilterFlagsSurviveAZeroItemOp(t *testing.T) {
 	if !model.Unmanaged || !model.pathManaged {
 		t.Errorf("buildExplainModel: Unmanaged=%v pathManaged=%v; want Unmanaged=true (no owners) and pathManaged=true (the path matched an op)",
 			model.Unmanaged, model.pathManaged)
+	}
+}
+
+// TestShortValShowsSentinelsWhole pins reconcile's prompt display: a digest is
+// abbreviated, a sentinel is not — "symlink-not-regu..." told a user nothing.
+func TestShortValShowsSentinelsWhole(t *testing.T) {
+	digest := strings.Repeat("ab", 32)
+	for _, tc := range []struct{ name, in, want string }{
+		{name: "absent", in: "", want: "<absent>"},
+		{name: "digest is abbreviated", in: digest, want: digest[:16] + "..."},
+		{name: "symlink sentinel shown whole", in: symlinkRefusedSentinel, want: "symlink-not-regular-file"},
+		{name: "unresolvable sentinel shown whole", in: symlinkUnresolvableSentinel, want: "symlink-target-unresolvable"},
+		{name: "shape sentinel shown whole", in: shapeSentinel, want: "not-a-regular-file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shortVal(tc.in); got != tc.want {
+				t.Errorf("shortVal(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLabelHunksAreNotCharacterDiffed pins the formatted-diff rule for the
+// pseudo-pointers: a symlink or shape hunk's two unrelated labels are emitted
+// whole (a character diff shredded them), while a mode hunk keeps the
+// character diff its two like-shaped sides read well under.
+func TestLabelHunksAreNotCharacterDiffed(t *testing.T) {
+	dmp := diffmatchpatch.New()
+	for _, tc := range []struct {
+		name string
+		hunk diffHunk
+	}{
+		{name: "symlink-refused", hunk: diffHunk{Pointer: ptrSymlink, Source: "regular file", Dest: symlinkRefusedHunkDest}},
+		{name: "symlink-unresolvable", hunk: diffHunk{Pointer: ptrSymlink, Source: "regular file", Dest: symlinkUnresolvableHunkDest}},
+		{name: "shape", hunk: diffHunk{Pointer: ptrShape, Source: "regular file", Dest: shapeHunkDest}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := hunkDiffs(dmp, tc.hunk)
+			if len(got) != 2 || got[0].Type != diffmatchpatch.DiffDelete || got[0].Text != tc.hunk.Dest ||
+				got[1].Type != diffmatchpatch.DiffInsert || got[1].Text != tc.hunk.Source {
+				t.Errorf("got %+v, want [-Dest-] then {+Source+} whole", got)
+			}
+		})
+	}
+	mode := hunkDiffs(dmp, diffHunk{Pointer: ptrMode, Source: "mode 0755", Dest: "mode 0644"})
+	if len(mode) < 3 || mode[0].Type != diffmatchpatch.DiffEqual || mode[0].Text != "mode 0" {
+		t.Errorf("mode hunk: got %+v, want the shared \"mode 0\" prefix kept as equal text", mode)
 	}
 }

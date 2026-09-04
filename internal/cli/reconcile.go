@@ -42,8 +42,10 @@ type reconcileItem struct {
 	orphan      bool // owned-in-state whole-file dest no agent renders anymore
 	// srcText/dstText carry the actual (masked-on-display) source and destination
 	// content so the prompt/[d]iff can show a real value diff instead of only SHA
-	// prefixes. hasText is false for items with no meaningful textual content
-	// (orphans), which fall back to the hash display.
+	// prefixes. hasText is false for items with no textual content — orphans,
+	// and a whole-file destination the walk refused to read (a symlink not
+	// read through, or a shape readDestBytes refuses) — which fall back to
+	// the hash display.
 	srcText string
 	dstText string
 	hasText bool
@@ -666,7 +668,9 @@ func collectReconcileItems(plan render.RenderPlan, reg *adapter.Registry, s *sta
 			orphans = append(orphans, ri)
 			continue
 		}
-		ri.srcText, ri.dstText, ri.hasText = it.srcText, it.dstText, true
+		// A refused destination has no text to show: the SHA display, not the
+		// whole source rendered against an "empty" destination.
+		ri.srcText, ri.dstText, ri.hasText = it.srcText, it.dstText, !it.destSymlinkRefused() && !it.destShapeRefused()
 		if it.ptr != "" {
 			ri.pluginOwner = pluginOwnerForKeyItem(it.op.SourceID, it.ptr, pluginOwners)
 		} else {
@@ -722,10 +726,19 @@ func shortVal(hash string) string {
 	if hash == "" {
 		return "<absent>"
 	}
-	if len(hash) > 16 {
+	if len(hash) > 16 && isHexDigest(hash) {
 		return hash[:16] + "..."
 	}
-	return hash
+	return hash // a sentinel (the symlink and shape tokens) is shown whole
+}
+
+func isHexDigest(s string) bool {
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // renderItemValues shows the differing source/destination CONTENT for an item as
@@ -1090,15 +1103,31 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 //
 // Both used to return nil with a success message, hiding data loss.
 func writeBackFileItem(home string, it reconcileItem) error {
-	data, err := readDestBytes(it.op.Path)
+	readPath, why := destReadPath(it.op.Path)
+	switch why {
+	case symlinkRefusedByEnv:
+		// The drift walk classified this item without reading through the
+		// link, so [w] must not quietly capture through it. Neither symlink
+		// arm's advice suggests [o]verride: Writer.Write's convergence read
+		// follows the link, and its mode arm chmods the TARGET through it
+		// before the symlink policy is consulted (#248).
+		return fmt.Errorf("read dest %s: destination is a symlink agentsync is not reading through — "+
+			"set %s=1 (for apply, status, diff, reconcile and explain) to read and write through the link, replace the link with a "+
+			"regular file, or [i]gnore to suppress this item", it.op.Path, iox.AllowSymlinkDestEnv)
+	case symlinkUnresolvable:
+		return fmt.Errorf("read dest %s: destination is a symlink whose target cannot be resolved "+
+			"(dangling, loop, or unreadable; apply refuses it too) — fix or replace the link, or [i]gnore "+
+			"to suppress this item", it.op.Path)
+	}
+	data, err := readDestBytes(readPath)
 	if err != nil {
 		// Named next steps, like this function's other refusals: the user is
 		// mid-prompt with a keystroke to choose, and "read dest X: not a regular
 		// file" alone does not tell them which one gets them unstuck.
 		//
-		// [o]verride is deliberately NOT offered for THIS arm, unlike the peer
-		// refusals in this file and unlike the arm below. It re-applies
-		// through render.Writer.Write, whose convergence read is not
+		// This arm's advice deliberately omits [o]verride, as the symlink
+		// arms' does, unlike the absent arm below. It re-applies through
+		// render.Writer.Write, whose convergence read is not
 		// shape-guarded, so on this exact item it does not fail — it HANGS
 		// (measured: `reconcile --auto-override` rc=124).
 		// An earlier version of this message recommended it, which walked the
@@ -1112,8 +1141,8 @@ func writeBackFileItem(home string, it reconcileItem) error {
 		// an ABSENT destination — the user deleted a managed file, which is
 		// itself drift — and there [o]verride is both safe and usually the fix:
 		// Writer.Write's convergence read gets ENOENT and falls straight
-		// through to the write. Withholding it is only correct for the
-		// non-regular case above.
+		// through to the write. Leaving it out of the advice is only right for
+		// the non-regular case above.
 		return fmt.Errorf("read dest %s: %w — use [o]verride to restore it from canonical, "+
 			"or [i]gnore to suppress this item", it.op.Path, err)
 	}

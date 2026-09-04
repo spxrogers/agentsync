@@ -140,7 +140,9 @@ func buildExplainModel(in explainInputs) explainModel {
 }
 
 // fileItem builds the provenance for a whole-file destination from its walk
-// item, whose happlied and cls are the recorded hash and the classification.
+// item, whose happlied is the recorded hash. Drift is classWithModeDrift — the
+// same folded reading status reports — so a content-identical chmod is `drift`
+// here exactly when it is there, rather than `clean` beside status's `drift`.
 func fileItem(in explainInputs, it planItem, skips []adapter.Skip,
 	origins map[string]explainPluginOrigin, secretRefs map[secrets.RefLocation][]string,
 ) explainItem {
@@ -152,7 +154,7 @@ func fileItem(in explainInputs, it planItem, skips []adapter.Skip,
 		Name:       name,
 		Source:     sourceOf(in, it.op.SourceID, kind),
 		Transforms: matchingSkips(skips, kind, name),
-		Drift:      it.cls.String(),
+		Drift:      it.classWithModeDrift().String(),
 	}
 	if o, ok := origins[componentKey(kind, name)]; ok {
 		po := o

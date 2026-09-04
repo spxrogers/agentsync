@@ -576,3 +576,75 @@ func TestExplainPath_SharedDestGroupsPerAgent(t *testing.T) {
 		t.Fatalf("a shared destination must group per owning agent; got %+v\n%s", m.Owners, out)
 	}
 }
+
+// TestExplain_ReportsModeDrift pins #229 axis 14 for explain: a
+// content-identical chmod of a managed file is `drift` to explain exactly when
+// it is `drift` to status, because both read the one folded class
+// (planItem.classWithModeDrift). Before #229 PR-C explain printed `clean`
+// beside status's `drift` about the same file in the same second. status's
+// verdict is asserted in the same test so the fixture cannot silently stop
+// producing mode drift and leave the explain half vacuous.
+func TestExplain_ReportsModeDrift(t *testing.T) {
+	tmp, env := explainFixture(t)
+	dest := filepath.Join(tmp, ".claude", "agents", "reviewer.md")
+	// A subagent renders at 0644 (its op.Mode); the chmod leaves the content
+	// byte-identical, so only the permission bits differ from what the next
+	// apply would chmod to.
+	if err := os.Chmod(dest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sOut, err := runCLI(t, env, "status", "--json")
+	if err != nil {
+		t.Fatalf("status --json: %v\n%s", err, sOut)
+	}
+	var st struct {
+		Agents []struct {
+			Agent string `json:"agent"`
+			Items []struct {
+				Path  string `json:"path"`
+				Class string `json:"class"`
+			} `json:"items"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal([]byte(sOut), &st); err != nil {
+		t.Fatalf("status --json: invalid JSON: %v\n%s", err, sOut)
+	}
+	statusClass := ""
+	for _, ag := range st.Agents {
+		if ag.Agent != "claude" {
+			continue
+		}
+		for _, it := range ag.Items {
+			if it.Path == dest {
+				statusClass = it.Class
+			}
+		}
+	}
+	if statusClass != "drift" {
+		t.Fatalf("fixture: status must call the chmod'd subagent drift, got %q\n%s", statusClass, sOut)
+	}
+
+	eOut, err := runCLI(t, env, "explain", dest, "--json")
+	if err != nil {
+		t.Fatalf("explain --json: %v\n%s", err, eOut)
+	}
+	var ex struct {
+		Owners []struct {
+			Agent string `json:"agent"`
+			Items []struct {
+				Drift string `json:"drift"`
+			} `json:"items"`
+		} `json:"owners"`
+	}
+	if err := json.Unmarshal([]byte(eOut), &ex); err != nil {
+		t.Fatalf("explain --json: invalid JSON: %v\n%s", err, eOut)
+	}
+	if len(ex.Owners) != 1 || ex.Owners[0].Agent != "claude" || len(ex.Owners[0].Items) != 1 {
+		t.Fatalf("expected one claude owner with one item; got %+v", ex.Owners)
+	}
+	if got := ex.Owners[0].Items[0].Drift; got != statusClass {
+		t.Errorf("explain drift = %q, status class = %q: a content-identical chmod must get the "+
+			"SAME verdict from both — they read one folded class", got, statusClass)
+	}
+}

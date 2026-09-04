@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 
+	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/render"
 )
 
@@ -21,11 +23,21 @@ var errDestNotRegular = errors.New("not a regular file")
 // real errno.
 //
 // It is separate from errDestNotRegular because the two are not the same claim
-// and one caller shows its sentinel to a user: reconcile's write-back refusal
-// says "remove or replace the non-regular file at that path", which is false
-// for a permission problem. hashFile, whose sentinels are opaque tokens
-// compared only for equality, deliberately treats both alike — see its comment.
+// and reconcile's write-back refusal shows it: "remove or replace the
+// non-regular file at that path" is false for a permission problem. hashFile
+// deliberately maps both to one token (see its comment), so diff's shape hunk,
+// which keys on that token, words its advice for both.
 var errDestUnstattable = errors.New("cannot stat destination")
+
+// pathlessStatErr strips the redundant path from a *fs.PathError, mirroring
+// secrets.pathlessErr. errors.Is still matches the underlying errno.
+func pathlessStatErr(err error) error {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err
+	}
+	return err
+}
 
 // readDestBytes reads a destination file's bytes, refusing before the open any
 // path whose shape cannot be read as a file.
@@ -57,40 +69,25 @@ var errDestUnstattable = errors.New("cannot stat destination")
 //     wrapping the real errno, NOT as a shape error. "Present and the wrong
 //     shape" and "shape unknown" are different facts, and one of them reaches a
 //     user.
-//   - Symlinks are followed here but refused outright by hashFile, so `status`
-//     calls a symlinked destination drifted while `diff` reads through it. The
-//     reads this gate replaced followed links too, so changing that is a
-//     behavior decision for #229 — which also owns the consequence that under
-//     AGENTSYNC_ALLOW_SYMLINK_DEST=1, where apply writes THROUGH the link,
-//     `status` reports drift no apply can clear. TestHashFileSentinels asserts
-//     both halves.
+//   - Symlinks are FOLLOWED here, deliberately: this is also the key-merge
+//     read (readDestFile) and import's state-seeding read, where the symlink
+//     policy does not apply — a key-merge destination is decoded through the
+//     link on every surface, as apply writes through it. The WHOLE-FILE reads
+//     (hashFile, destModePerm, readDestText) apply the policy first, through
+//     destReadPath below, and hand this function a symlink's resolved target
+//     only when AGENTSYNC_ALLOW_SYMLINK_DEST=1 opted into it.
+//     TestHashFileSentinels asserts both halves.
 //
-// Callers mostly do not surface the refusal — reconcile's write-back is the
-// only one that names the shape today — so it is more a diagnosis available to
-// them than one the user sees. Narrowing that means changing what several
-// commands print; it is catalogued on #229 rather than here.
+// diff's shape hunk and reconcile's write-back name the refusal to the user;
+// status and explain classify with an opaque sentinel (hashFile).
 //
 // An ABSENT path is not refused: os.ReadFile runs and its ENOENT reaches the
 // caller unchanged, because manufacturing a shape error for a file that is not
 // there would name the wrong problem.
-// pathlessStatErr strips the redundant path from a *fs.PathError, mirroring
-// secrets.pathlessErr. errors.Is still matches the underlying errno.
-func pathlessStatErr(err error) error {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err
-	}
-	return err
-}
-
 func readDestBytes(path string) ([]byte, error) {
-	// render.IsRegularOrAbsent stays the single authority on SHAPE, and it is
-	// asked FIRST so the ordinary read costs exactly one stat. It answers false
-	// for two different situations, though — a path that is present and the
-	// wrong shape, and one that cannot be stat'd at all — so the refusal path
-	// pays a second stat to tell them apart. Collapsing them was a real defect:
-	// reconcile's refusal names errDestNotRegular and told someone with a
-	// permission problem to "remove or replace the non-regular file".
+	// render.IsRegularOrAbsent stays the single authority on SHAPE, asked FIRST
+	// so the ordinary read costs one stat; the refusal path pays a second stat
+	// to tell "wrong shape" from "cannot stat" (see errDestUnstattable).
 	if !render.IsRegularOrAbsent(path) {
 		if _, serr := os.Stat(path); serr != nil {
 			// Pathless, for the reason errDestNotRegular carries no path: the
@@ -103,4 +100,69 @@ func readDestBytes(path string) ([]byte, error) {
 		return nil, errDestNotRegular
 	}
 	return os.ReadFile(path)
+}
+
+// symlinkRefusal is why destReadPath would not look through a symlink.
+type symlinkRefusal int
+
+const (
+	symlinkNone         symlinkRefusal = iota // not a symlink, resolved, or a shape for readDestBytes to refuse
+	symlinkRefusedByEnv                       // switch unset: apply would not write through it either
+	symlinkUnresolvable                       // opted in, but the link does not resolve: apply fails on it too
+)
+
+// destReadPath applies the destination SYMLINK policy and answers the path the
+// whole-file destination reads should go on to read (readDestBytes still
+// applies its shape gate there). why is symlinkNone in that case; otherwise
+// each caller answers its own "cannot read" value. The two refusals stay apart
+// so that, once a user has opted in, a link that still cannot be read is
+// reported as broken rather than as "set the switch".
+//
+// It mirrors iox.resolveSymlinkDest, the write side, through the shared
+// iox.SymlinkDestAllowed, so the read side and apply cannot disagree about
+// whether a symlinked destination is supported. The mirror is a POLICY one, not
+// a literal prediction: apply only errors when the CONTENT differs (its
+// convergence read follows the link), so with the env unset this answers "a
+// managed regular file became a link you have not opted into — that is drift"
+// rather than "apply would fail here".
+//
+// The policy is scoped to WHOLE-FILE facts; a key-merge destination is decoded
+// through the link on every surface, as apply does (docs/architecture.md §6
+// has the reasoning).
+func destReadPath(path string) (resolved string, why symlinkRefusal) {
+	fi, err := os.Lstat(path)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return path, symlinkNone
+	}
+	// A link to a PRESENT non-regular target (FIFO, directory, device) is a
+	// shape problem whatever the switch says — opting in would only resolve
+	// to the shape refusal — so hand it to readDestBytes, which refuses it by
+	// shape on every surface exactly as it does a bare FIFO. A loop or a
+	// dangling link fails this Stat and stays a symlink refusal.
+	if ti, serr := os.Stat(path); serr == nil && !ti.Mode().IsRegular() {
+		return path, symlinkNone
+	}
+	if !iox.SymlinkDestAllowed() {
+		return "", symlinkRefusedByEnv
+	}
+	r, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", symlinkUnresolvable
+	}
+	return r, symlinkNone
+}
+
+// readDestText is the whole-file destination text read behind the drift walk:
+// the destination's bytes, or "" for a refused symlink, a refused shape, or any
+// read error — the three collapse because no caller distinguishes them.
+func readDestText(path string) string {
+	p, why := destReadPath(path)
+	if why != symlinkNone {
+		return ""
+	}
+	b, err := readDestBytes(p)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }

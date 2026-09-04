@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -287,7 +286,8 @@ func containsStar(names []string) bool {
 // tracked items)"). Each agent's rows are partitioned whole-file → merged key
 // → orphan — a stable re-ordering of the single-pass walk, which yields ops in
 // plan order — and permission drift is folded into the class of a
-// content-clean whole file.
+// content-clean whole file, measured against the mode the next apply writes
+// (planItem.classWithModeDrift, the reading explain shares).
 func buildStatusModel(plan render.RenderPlan, names []string, s *state.Targets, userHome string, sc adapter.Scope, projectRoot string) statusModel {
 	model := statusModel{Summary: map[string]int{}}
 	byAgent := map[string][]planItem{}
@@ -314,14 +314,12 @@ func buildStatusModel(plan render.RenderPlan, names []string, s *state.Targets, 
 				if !pass(it) {
 					continue
 				}
-				cls := it.cls.String()
-				// Content clean but permission bits drifted from what agentsync
-				// RECORDED is still drift: the next apply re-chmods it. Whole-file
-				// items only — a merged key has no mode. (An orphan classifies
-				// clean only from a hand-corrupted state entry, so no exclusion.)
-				if it.ptr == "" && cls == drift.Clean.String() && it.recordedModeDrifted() {
-					cls = drift.Drift.String()
-				}
+				// Content clean but the permission bits differ from what the next
+				// apply would chmod to (op.Mode) is still drift — the question
+				// diff's mode hunk and explain ask too, through classWithModeDrift,
+				// so the three cannot disagree. Whole-file items only: a merged key
+				// has no mode, and an orphan's synthesized op carries Mode 0.
+				cls := it.classWithModeDrift().String()
 				ag.Items = append(ag.Items, statusItem{Path: it.op.Path, Pointer: it.ptr, Class: cls})
 				model.Summary[cls]++
 			}
@@ -940,6 +938,22 @@ func stateKeyKey(userHome, agent string, sc adapter.Scope, projectRoot, path, pt
 	return state.NewPointerKey(userHome, agent, sc.String(), projectRoot, path, ptr)
 }
 
+// symlinkRefusedSentinel is hashFile's answer for a symlink this configuration
+// does not read through (destReadPath). Opaque: it exists only to never equal
+// a content hash, and diff keys its symlink hunk on the same value
+// (planItem.destSymlinkRefused), so the two sites must agree on it.
+const symlinkRefusedSentinel = "symlink-not-regular-file"
+
+// shapeSentinel is hashFile's answer for a destination readDestBytes refuses:
+// present and not a regular file (FIFO, device, socket, directory), or
+// unstattable. diff keys its shape hunk on it.
+const shapeSentinel = "not-a-regular-file"
+
+// symlinkUnresolvableSentinel is hashFile's answer for a symlink the user opted
+// into reading through that does not resolve (dangling, loop). Equally opaque;
+// a different token only so diff and reconcile can give the right advice.
+const symlinkUnresolvableSentinel = "symlink-target-unresolvable"
+
 func hashContent(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
@@ -951,41 +965,47 @@ func hashContent(b []byte) string {
 // the expected signal for Orphan / OrphanDrifted. A destination whose SHAPE is
 // wrong, or which cannot be stat'd, answers the opaque marker below instead.
 //
-// If the path is a symlink, hashFile returns a special marker so the
-// drift classifier can flag the file as drifted in a way the user can
-// act on. A managed file becoming a symlink (e.g. user replaced
-// .claude.json with `ln -s /dev/null`) used to silently read through
-// the link and compare hashes — making the swap invisible to status.
+// A SYMLINK at the path answers symlinkRefusedSentinel unless
+// AGENTSYNC_ALLOW_SYMLINK_DEST=1 (destReadPath — the gate apply writes under).
+// The sentinel is a whole-file-only policy signal: a managed regular file
+// became a link you have not opted into. Reading through such a link and
+// comparing hashes, as this once did, made the swap invisible to status. With
+// the env set the link is resolved and its TARGET hashed — the file apply
+// converges — so a chezmoi setup reports clean after a successful apply
+// instead of a drift no apply can clear. Opting in never lets a non-regular
+// target through: a link to one (`ln -s /dev/null`) resolves and then answers
+// the SHAPE sentinel below, with the switch set or unset — the switch cannot
+// help there; a dangling or looping link answers symlinkUnresolvableSentinel
+// once opted in (unset, it is refused like any other link), mirroring apply's
+// "resolve symlink" failure.
 func hashFile(path string) string {
-	info, lerr := os.Lstat(path)
-	if lerr == nil && info.Mode()&os.ModeSymlink != 0 {
-		// Return a sentinel that will never match a content hash.
-		// We don't include the link target to keep the sentinel stable
-		// (target may resolve to whatever attacker chose); just signal
-		// "this is a symlink now."
-		return "symlink-not-regular-file"
+	p, why := destReadPath(path)
+	switch why {
+	case symlinkRefusedByEnv:
+		// The link target is deliberately NOT part of either sentinel: it is
+		// attacker-choosable, and a sentinel must stay a stable opaque token
+		// that never equals a content hash.
+		return symlinkRefusedSentinel
+	case symlinkUnresolvable:
+		return symlinkUnresolvableSentinel
 	}
-	// A FIFO, device, or socket at a destination path would make os.ReadFile
-	// BLOCK forever rather than fail — wedging `status`, which is advertised as
-	// read-only, and reconcile's orphan listing. None has a content hash worth
-	// computing, so answer a sentinel that can never match one. It is a DIFFERENT
-	// sentinel from the symlink case above so a diagnostic never calls a FIFO a
-	// symlink; both are opaque to callers, which only ever compare hashes for
-	// equality.
-	//
+	path = p
 	// The shape rule itself lives in readDestBytes, the one gate every
 	// destination read in this package passes through; this function maps its
-	// refusal onto the sentinel above rather than re-deciding it.
+	// refusal onto a sentinel — distinct from the symlink ones, so a diagnostic
+	// never calls a FIFO a symlink — rather than re-deciding it.
 	data, err := readDestBytes(path)
 	if err != nil {
 		// Both refusals map to the SAME opaque token, deliberately. These
-		// sentinels are never shown; they exist only to never equal a content
-		// hash. Before this gate existed the predicate answered false for an
-		// unstattable destination too, so splitting them here would move a
-		// parent-ENOTDIR dest from ForeignCollision to New — and New is
-		// SafeForAutoApply. A plain read failure still answers "", as it did.
+		// sentinels exist to never equal a content hash; diff's shape hunk,
+		// which keys prose on this one, words it for both facts (reconcile's
+		// prompt shows the token itself). Before this gate existed the
+		// predicate answered false for an unstattable destination too, so
+		// splitting them here would move a parent-ENOTDIR dest from
+		// ForeignCollision to New — and New is SafeForAutoApply. A plain read
+		// failure still answers "", as it did.
 		if errors.Is(err, errDestNotRegular) || errors.Is(err, errDestUnstattable) {
-			return "not-a-regular-file"
+			return shapeSentinel
 		}
 		return ""
 	}

@@ -19,6 +19,13 @@ const AllowSymlinkDestEnv = "AGENTSYNC_ALLOW_SYMLINK_DEST"
 // caller has not set AGENTSYNC_ALLOW_SYMLINK_DEST=1.
 var ErrSymlinkDest = errors.New("destination is a symlink")
 
+// SymlinkDestAllowed reports whether the user has opted in to symlinked
+// destinations. It is the single reading of AllowSymlinkDestEnv: the write side
+// (resolveSymlinkDest) and the diagnostic read side (internal/cli/destread.go)
+// both ask it, so they cannot disagree about whether a symlinked destination is
+// a supported configuration.
+func SymlinkDestAllowed() bool { return os.Getenv(AllowSymlinkDestEnv) == "1" }
+
 // AtomicWrite writes data to dest using a three-phase approach: write to a
 // sibling .agentsync.tmp file (always created mode 0o600 so cleartext
 // payloads — secrets, age TOML — never sit world-readable in the destination
@@ -127,7 +134,7 @@ func resolveSymlinkDest(dest string) (string, error) {
 	if info.Mode()&os.ModeSymlink == 0 {
 		return dest, nil
 	}
-	if os.Getenv(AllowSymlinkDestEnv) != "1" {
+	if !SymlinkDestAllowed() {
 		target, _ := os.Readlink(dest)
 		return "", fmt.Errorf("%w: %s -> %s (refusing to replace the symlink; set %s=1 to write through it)",
 			ErrSymlinkDest, dest, target, AllowSymlinkDestEnv)

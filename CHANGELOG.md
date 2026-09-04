@@ -11,6 +11,43 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **A symlinked destination under `AGENTSYNC_ALLOW_SYMLINK_DEST=1` is no
+  longer reported as permanently drifted**
+  ([#229](https://github.com/spxrogers/agentsync/issues/229)). In the
+  documented chezmoi/Stow configuration, where `apply` writes THROUGH the link,
+  `status`, `reconcile` and `explain` hashed the link itself and answered a
+  sentinel that can never equal a content hash — so every run reported `drift`
+  no apply could clear and `status --exit-code` failed CI forever, while `diff`
+  read through the link and said `no diff`. The switch now governs the READ
+  side too — `apply`, `status`, `diff`, `reconcile` and `explain` all need it:
+  set, all resolve the link and compare the file it points at; unset, the four
+  drift commands refuse the link (`apply` fails only when the content
+  differs), `diff` prints a `symlink` hunk (`--json` `pointer:
+  "symlink"`, alongside `mode`) naming the switch, and `reconcile`'s
+  `[w]`rite-back refuses to capture through it (with advice that omits
+  `[o]verride`: #248). Once opted in, a link that does not resolve — dangling,
+  loop — is reported as such rather than as "set the switch". A link to a
+  FIFO, device or directory is a shape problem the switch cannot fix and is
+  refused as a bare one is; `diff` now prints a `shape` hunk for both instead
+  of rendering the whole source against an "empty" destination.
+
+- **`status`'s permission check now measures the mode the next `apply`
+  writes** ([#229](https://github.com/spxrogers/agentsync/issues/229)). It
+  compared the destination's permission bits against the mode RECORDED at the
+  last apply, so a file whose recorded mode was unset (state written before
+  modes were recorded) or whose adapter changed the mode it renders was
+  reported `clean` while the next apply would chmod it. It now asks `op.Mode`,
+  the question `diff`'s `mode` hunk already asked, so the two agree — on
+  `converged` destinations as well as `clean` ones.
+
+- **`explain <path>` now reports a mode-only drift instead of `clean`**
+  ([#229](https://github.com/spxrogers/agentsync/issues/229)). A
+  content-identical chmod made `status` say `drift` and `explain` say `clean`
+  about the same file in the same second; both now read the one folded class.
+  `reconcile` still ignores mode entirely — it reports "nothing to reconcile"
+  for a drift the other three surfaces name — and that gap is
+  [#245](https://github.com/spxrogers/agentsync/issues/245), not fixed here.
+
 - **A FIFO at a managed destination no longer hangs `status`, `diff`, `explain`,
   or `reconcile`'s drift walk and write-back.** (A directory there never hung — `os.ReadFile`
   fails it immediately with `EISDIR` — and for `status` and `diff` nothing about
@@ -202,8 +239,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   plan→drift walk** ([#229](https://github.com/spxrogers/agentsync/issues/229)).
   `explain` now decodes a key-merged destination once per rendered section
   rather than once per key, so every key in one file is classified against the
-  same snapshot. The ways the four surfaces still disagree (mode-only drift,
-  symlinked destinations) are unchanged and tracked in #229.
+  same snapshot. The ways the four surfaces disagreed (mode-only drift,
+  symlinked destinations) are resolved in the same release; see Fixed above.
 
 - **`.state/targets.json` is now `schema_version: 2`.** The upgrade is automatic
   and requires nothing: every command reads the old keys, and the first command
