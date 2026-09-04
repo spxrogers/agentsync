@@ -17,14 +17,14 @@ import (
 // This file is the characterization harness for #229: it pins, fixture by
 // fixture, what the four plan→drift walks — buildStatusModel (S),
 // collectDiffHunks (D), collectReconcileItems (R) and buildExplainModel (E) —
-// answer TODAY, before they are unified behind one shared walk. Every golden
-// below was written from the drift classifier's truth table and each surface's
-// documented rules, then confirmed against the unmodified code; the harness is
-// an oracle for the OLD behaviour, so a refactor that needs to edit a golden
-// here is not a refactor. The two policy changes #229 defers to its PR-C
-// (axes 9 and 14) are the expected exceptions: they edit T-10
-// (whole-file/dest-is-symlink) and T-09 (whole-file/mode-drift-only), nothing
-// else.
+// answered before they were unified behind one shared walk (#244). Every
+// golden below was written from the drift classifier's truth table and each
+// surface's documented rules, then confirmed against the unmodified code; the
+// harness is an oracle for that behaviour, so a refactor that needs to edit a
+// golden here is not a refactor. Two goldens are the deliberate exceptions and
+// encode the policy #229's PR-C CHOSE, not the old answer: T-09
+// (whole-file/mode-drift-only: explain folds mode drift) and T-10
+// (whole-file/dest-is-symlink: diff's symlink hunk, reconcile's SHA fallback).
 //
 // What is compared IN ORDER: agent order, op order across paths, status's
 // whole-file-before-key partition, reconcile's all-items-before-all-orphans

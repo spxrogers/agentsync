@@ -944,6 +944,11 @@ func stateKeyKey(userHome, agent string, sc adapter.Scope, projectRoot, path, pt
 // (planItem.destSymlinkRefused), so the two sites must agree on it.
 const symlinkSentinel = "symlink-not-regular-file"
 
+// symlinkUnresolvableSentinel is hashFile's answer for a symlink the user opted
+// into reading through that does not resolve (dangling, loop). Equally opaque;
+// a different token only so diff and reconcile can give the right advice.
+const symlinkUnresolvableSentinel = "symlink-target-unresolvable"
+
 func hashContent(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
@@ -964,15 +969,19 @@ func hashContent(b []byte) string {
 // converges — so a chezmoi setup reports clean after a successful apply
 // instead of a drift no apply can clear. Opting in never lets a non-regular
 // target through: a link to one (`ln -s /dev/null`) resolves and then answers
-// the SHAPE sentinel below; a dangling link answers symlinkSentinel with the
-// env set or unset, mirroring apply's "resolve symlink" failure.
+// the SHAPE sentinel below; a dangling or looping link answers
+// symlinkUnresolvableSentinel once opted in (unset, it is refused like any
+// other link), mirroring apply's "resolve symlink" failure.
 func hashFile(path string) string {
-	p, ok := destReadPath(path)
-	if !ok {
-		// The link target is deliberately NOT part of the sentinel: it is
+	p, why := destReadPath(path)
+	switch why {
+	case symlinkRefusedByEnv:
+		// The link target is deliberately NOT part of either sentinel: it is
 		// attacker-choosable, and a sentinel must stay a stable opaque token
 		// that never equals a content hash.
 		return symlinkSentinel
+	case symlinkUnresolvable:
+		return symlinkUnresolvableSentinel
 	}
 	path = p
 	// A FIFO, device, or socket at a destination path would make os.ReadFile

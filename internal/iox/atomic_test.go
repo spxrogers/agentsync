@@ -122,6 +122,8 @@ func TestSymlinkDestAllowed(t *testing.T) {
 		{name: "unset", unset: true, want: false},
 		{name: "set to 1", value: "1", want: true},
 		{name: "set to 0", value: "0", want: false},
+		{name: "set to true", value: "true", want: false},
+		{name: "set to 1 with trailing space", value: "1 ", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(iox.AllowSymlinkDestEnv, tc.value) // registers the restore

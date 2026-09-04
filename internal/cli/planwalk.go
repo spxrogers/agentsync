@@ -88,11 +88,12 @@ func (i planItem) opModeDrifted() bool {
 }
 
 // classWithModeDrift is the class status and explain report: the content class,
-// upgraded from clean to drift when only the permission bits differ from what the
+// upgraded from clean or converged (content in sync either way) to drift when
+// only the permission bits differ from what the
 // next apply would WRITE (op.Mode — render.Writer.Write chmods to it). A merged key
 // has no mode, and an orphan's synthesized op carries Mode 0, so both fall through.
 func (i planItem) classWithModeDrift() drift.Class {
-	if i.ptr == "" && i.cls == drift.Clean && i.opModeDrifted() {
+	if i.ptr == "" && (i.cls == drift.Clean || i.cls == drift.Converged) && i.opModeDrifted() {
 		return drift.Drift
 	}
 	return i.cls
@@ -103,7 +104,9 @@ func (i planItem) classWithModeDrift() drift.Class {
 // unset). It is a DERIVATION from hdest, not a field: diff keys its symlink
 // hunk on the very hash status, reconcile and explain classified from, so the
 // four surfaces cannot disagree about it (#229 axis 9).
-func (i planItem) destSymlinkRefused() bool { return i.ptr == "" && i.hdest == symlinkSentinel }
+func (i planItem) destSymlinkRefused() bool {
+	return i.ptr == "" && (i.hdest == symlinkSentinel || i.hdest == symlinkUnresolvableSentinel)
+}
 
 // destModePerm answers the permission bits of the REGULAR file at path.
 // regular is false — and perm 0 — for an absent, refused-symlink
@@ -113,8 +116,8 @@ func (i planItem) destSymlinkRefused() bool { return i.ptr == "" && i.hdest == s
 // resolved and the perm is the TARGET's — the bits apply's mode fix chmods
 // through the link.
 func destModePerm(path string) (perm uint32, regular bool) {
-	path, ok := destReadPath(path)
-	if !ok {
+	path, why := destReadPath(path)
+	if why != symlinkNone {
 		return 0, false
 	}
 	fi, err := os.Lstat(path)

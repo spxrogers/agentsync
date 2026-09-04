@@ -670,8 +670,8 @@ func collectReconcileItems(plan render.RenderPlan, reg *adapter.Registry, s *sta
 		}
 		// A refused whole-file symlink has no destination text to show: fall
 		// back to the SHA display rather than render the entire source as an
-		// insertion against an empty destination — the rendering diff's
-		// symlink hunk exists to avoid (#229 axis 9).
+		// insertion against an empty destination (the rendering diff's symlink
+		// hunk exists to avoid).
 		ri.srcText, ri.dstText, ri.hasText = it.srcText, it.dstText, !it.destSymlinkRefused()
 		if it.ptr != "" {
 			ri.pluginOwner = pluginOwnerForKeyItem(it.op.SourceID, it.ptr, pluginOwners)
@@ -728,10 +728,19 @@ func shortVal(hash string) string {
 	if hash == "" {
 		return "<absent>"
 	}
-	if len(hash) > 16 {
+	if len(hash) > 16 && isHexDigest(hash) {
 		return hash[:16] + "..."
 	}
-	return hash
+	return hash // a sentinel ("symlink-not-regular-file") is shown whole
+}
+
+func isHexDigest(s string) bool {
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // renderItemValues shows the differing source/destination CONTENT for an item as
@@ -1096,19 +1105,27 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 //
 // Both used to return nil with a success message, hiding data loss.
 func writeBackFileItem(home string, it reconcileItem) error {
-	readPath, ok := destReadPath(it.op.Path)
-	if !ok {
-		// The destination is a symlink this configuration does not look
-		// through — the same refusal the drift walk classified the item under,
-		// so [w] cannot quietly capture a file the classification never read.
-		// [o]verride stays offered, unlike the non-regular arm below:
-		// Writer.Write's convergence read follows the link and either no-ops
-		// (content converged) or fails cleanly with iox.ErrSymlinkDest; no
-		// FIFO is involved, so it cannot hang.
+	readPath, why := destReadPath(it.op.Path)
+	if why != symlinkNone && !render.IsRegularOrAbsent(it.op.Path) {
+		// A link to a FIFO or device is a SHAPE problem first (IsRegularOrAbsent
+		// Stats, so it follows the link): take the shape arm below, which is
+		// the arm that must never suggest [o]verride.
+		why, readPath = symlinkNone, it.op.Path
+	}
+	switch why {
+	case symlinkRefusedByEnv:
+		// The drift walk classified this item without reading through the
+		// link, so [w] must not quietly capture through it. [o]verride is
+		// withheld on both symlink arms: Writer.Write's convergence read
+		// follows the link, and its mode arm chmods the TARGET through it
+		// before the symlink policy is consulted (#248).
 		return fmt.Errorf("read dest %s: destination is a symlink agentsync is not reading through — "+
-			"set %s=1 (for every command) to capture the linked file, replace the link with a regular "+
-			"file, use [o]verride to re-apply canonical, or [i]gnore to suppress this item",
-			it.op.Path, iox.AllowSymlinkDestEnv)
+			"set %s=1 (for every command) to read and write through the link, replace the link with a "+
+			"regular file, or [i]gnore to suppress this item", it.op.Path, iox.AllowSymlinkDestEnv)
+	case symlinkUnresolvable:
+		return fmt.Errorf("read dest %s: destination is a symlink whose target cannot be resolved "+
+			"(dangling or loop; apply refuses it too) — fix or replace the link, or [i]gnore to "+
+			"suppress this item", it.op.Path)
 	}
 	data, err := readDestBytes(readPath)
 	if err != nil {
@@ -1116,8 +1133,8 @@ func writeBackFileItem(home string, it reconcileItem) error {
 		// mid-prompt with a keystroke to choose, and "read dest X: not a regular
 		// file" alone does not tell them which one gets them unstuck.
 		//
-		// [o]verride is deliberately NOT offered for THIS arm, unlike the peer
-		// refusals in this file and unlike the arm below. It re-applies
+		// [o]verride is deliberately NOT offered for THIS arm (nor for the
+		// symlink arms above), unlike the absent arm below. It re-applies
 		// through render.Writer.Write, whose convergence read is not
 		// shape-guarded, so on this exact item it does not fail — it HANGS
 		// (measured: `reconcile --auto-override` rc=124).

@@ -242,6 +242,36 @@ func TestWalkPlanItems(t *testing.T) {
 			},
 		},
 		{
+			// Converged content (dest == source, state stale) with a mode
+			// difference is drift too: the next apply chmods it, and diff
+			// already prints a mode hunk for it. Clean-only folding let status
+			// say "in sync" while diff --exit-code failed.
+			name: "converged-content-with-mode-drift-folds-to-drift",
+			run: func(t *testing.T, h string) {
+				p := dest(h, "s.sh")
+				mustWrite(t, p, "NEW")
+				if err := os.Chmod(p, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				s := state.New()
+				s.Files[fileKey(h, "claude", p)] = state.FileEntry{SHA256: hf("OLD")}
+				op := fileOp(p, "NEW")
+				op.Mode = 0o755
+				items := walkUser(h, planFor(map[string][]adapter.FileOp{"claude": {op}}), s, []string{"claude"}, nil)
+				if len(items) != 1 || items[0].cls != drift.Converged {
+					t.Fatalf("fixture: want one converged item, got %+v", itemKeys(items))
+				}
+				if got := items[0].classWithModeDrift(); got != drift.Drift {
+					t.Errorf("classWithModeDrift on converged content with a mode difference = %v, want drift", got)
+				}
+				op.Mode = 0o644
+				items = walkUser(h, planFor(map[string][]adapter.FileOp{"claude": {op}}), s, []string{"claude"}, nil)
+				if got := items[0].classWithModeDrift(); got != drift.Converged {
+					t.Errorf("classWithModeDrift with the mode in sync = %v, want converged untouched", got)
+				}
+			},
+		},
+		{
 			name: "action-not-write-is-skipped",
 			run: func(t *testing.T, h string) {
 				a, b := dest(h, "a.md"), dest(h, "b.md")

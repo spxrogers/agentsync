@@ -19,18 +19,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   sentinel that can never equal a content hash — so every run reported `drift`
   no apply could clear and `status --exit-code` failed CI forever, while `diff`
   read through the link and said `no diff`. The switch now governs the READ
-  side too, on every surface: with it set, all four resolve the link and
-  compare the file it points at (content, text and permission bits alike), so
-  a converged chezmoi setup reports `clean`; with it unset, all four refuse the
-  link as they always did, and `diff` prints a `symlink` hunk (`--json`
-  `pointer: "symlink"`, alongside the existing `mode` pseudo-pointer) naming
-  the switch instead of silently agreeing there is no difference. `reconcile`
-  shows such an item with the SHA display rather than a text diff against an
-  empty destination, and its `[w]`rite-back refuses to capture through a link
-  the classification did not read through (naming the switch, which every
-  command now needs — not only `apply`). Key-merged destinations (a symlinked
-  `~/.claude.json`) are decoded through the link either way, deliberately, as
-  `apply` treats them.
+  side too, on every surface and for every command, not only `apply`: set, all
+  four resolve the link and compare the file it points at; unset, all four
+  refuse the link, `diff` prints a `symlink` hunk (`--json` `pointer:
+  "symlink"`, alongside `mode`) naming the switch, and `reconcile`'s
+  `[w]`rite-back refuses to capture through it (and does not offer
+  `[o]verride`: #248). A link that does not resolve — dangling, loop — is
+  reported as such rather than as "set the switch".
 
 - **`status`'s permission check now measures the mode the next `apply`
   writes** ([#229](https://github.com/spxrogers/agentsync/issues/229)). It
@@ -38,7 +33,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   last apply, so a file whose recorded mode was unset (state written before
   modes were recorded) or whose adapter changed the mode it renders was
   reported `clean` while the next apply would chmod it. It now asks `op.Mode`,
-  the question `diff`'s `mode` hunk already asked, so the two agree.
+  the question `diff`'s `mode` hunk already asked, so the two agree — for
+  `converged` content as well as `clean`, which the old check skipped.
 
 - **`explain <path>` now reports a mode-only drift instead of `clean`**
   ([#229](https://github.com/spxrogers/agentsync/issues/229)). A

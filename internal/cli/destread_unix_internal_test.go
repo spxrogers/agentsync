@@ -303,6 +303,22 @@ func TestHashFileSentinels(t *testing.T) {
 			want: "239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5",
 		},
 		{
+			// Opted in, but the link does not resolve: a distinct sentinel, so
+			// diff and reconcile can say "fix the link" instead of "set the
+			// switch you already set". Pins destReadPath's EvalSymlinks arm.
+			name: "a dangling link is unresolvable when the env is set",
+			setup: func(t *testing.T, tmp string) string {
+				t.Helper()
+				t.Setenv(iox.AllowSymlinkDestEnv, "1")
+				link := filepath.Join(tmp, "link")
+				if err := os.Symlink(filepath.Join(tmp, "gone"), link); err != nil {
+					t.Fatal(err)
+				}
+				return link
+			},
+			want: symlinkUnresolvableSentinel,
+		},
+		{
 			name:  "a FIFO is refused by shape",
 			setup: mkfifoDest,
 			want:  "not-a-regular-file",
@@ -429,16 +445,57 @@ func TestWriteBackFileItemRefusesASymlinkItIsNotReadingThrough(t *testing.T) {
 			t.Fatal("writeBackFileItem = nil for a refused symlink, want an error: [w] must not " +
 				"capture through a link the classification did not read through")
 		}
-		for _, want := range []string{link, iox.AllowSymlinkDestEnv + "=1", "for every command", "[o]verride", "[i]gnore"} {
+		for _, want := range []string{link, iox.AllowSymlinkDestEnv + "=1", "for every command", "[i]gnore"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("error = %q, want it to contain %q", err, want)
 			}
+		}
+		// [o]verride re-applies through Writer.Write, whose mode arm chmods
+		// the TARGET through the link (#248): never suggest it here.
+		if strings.Contains(err.Error(), "[o]verride") {
+			t.Errorf("error = %q offers [o]verride on a refused symlink", err)
 		}
 		if strings.Contains(err.Error(), "non-regular") {
 			t.Errorf("error = %q calls a symlink non-regular; the remedy must match the failure", err)
 		}
 		if _, serr := os.Stat(filepath.Join(home, "demo")); serr == nil {
 			t.Errorf("write-back wrote %s despite refusing", filepath.Join(home, "demo"))
+		}
+	})
+
+	t.Run("env unset: a link to a FIFO takes the shape arm, which withholds [o]verride", func(t *testing.T) {
+		t.Setenv(iox.AllowSymlinkDestEnv, "")
+		if err := os.Unsetenv(iox.AllowSymlinkDestEnv); err != nil {
+			t.Fatal(err)
+		}
+		tmp := t.TempDir()
+		fifo := mkfifoDest(t, tmp)
+		link := filepath.Join(tmp, "link.md")
+		if err := os.Symlink(fifo, link); err != nil {
+			t.Fatal(err)
+		}
+		err := writeBackFileItem(t.TempDir(), reconcileItem{op: adapter.FileOp{Path: link, SourceID: "demo"}})
+		if err == nil || !errors.Is(err, errDestNotRegular) {
+			t.Fatalf("writeBackFileItem = %v, want the shape refusal (errDestNotRegular) for a link to a FIFO", err)
+		}
+		if strings.Contains(err.Error(), "[o]verride") || strings.Contains(err.Error(), iox.AllowSymlinkDestEnv) {
+			t.Errorf("error = %q: a link to a FIFO must get the shape remedy, not the symlink one", err)
+		}
+	})
+
+	t.Run("env set: a dangling link is unresolvable and the advice does not name the switch", func(t *testing.T) {
+		t.Setenv(iox.AllowSymlinkDestEnv, "1")
+		tmp := t.TempDir()
+		link := filepath.Join(tmp, "link.md")
+		if err := os.Symlink(filepath.Join(tmp, "gone"), link); err != nil {
+			t.Fatal(err)
+		}
+		err := writeBackFileItem(t.TempDir(), reconcileItem{op: adapter.FileOp{Path: link, SourceID: "demo"}})
+		if err == nil || !strings.Contains(err.Error(), "cannot be resolved") {
+			t.Fatalf("writeBackFileItem = %v, want the unresolvable-link refusal", err)
+		}
+		if strings.Contains(err.Error(), iox.AllowSymlinkDestEnv+"=1") || strings.Contains(err.Error(), "[o]verride") {
+			t.Errorf("error = %q tells a user who already set the switch to set it, or offers [o]verride", err)
 		}
 	})
 

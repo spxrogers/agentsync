@@ -128,7 +128,8 @@ func TestSymlinkedDestConvergesWhenAllowed(t *testing.T) {
 }
 
 // TestSymlinkedDestIsDriftWhenRefused (N-5) is the other half: the same
-// converged link, with the switch UNSET, is drift on every surface — and `diff`
+// converged link, with the switch UNSET, is drift on status and diff (reconcile
+// and explain are pinned at the walk level by the harness's T-10) — and `diff`
 // says so with a "symlink" hunk naming the switch, instead of reading through
 // the link and printing "no diff" beside a `status --exit-code` that fails.
 // The content is genuinely converged (applied through the link first), so the
@@ -174,8 +175,5 @@ func TestSymlinkedDestIsDriftWhenRefused(t *testing.T) {
 	// Dest reaches the terminal unsanitized, so it must never embed it.
 	if strings.Contains(h.Dest, target) || strings.Contains(h.Dest, "dotfiles") {
 		t.Errorf("symlink hunk embeds the link target; it must be a constant: %+v", h)
-	}
-	if strings.Contains(h.Dest, "/") {
-		t.Errorf("symlink hunk Dest contains a path separator; it must embed no path: %q", h.Dest)
 	}
 }

@@ -236,16 +236,22 @@ func modeHunk(it planItem) (source, dest string, ok bool) {
 const symlinkHunkDest = "symlink (not compared through; set " + iox.AllowSymlinkDestEnv +
 	"=1 to read and write through the link)"
 
+// symlinkUnresolvableHunkDest is its sibling for a link the user opted into
+// that does not resolve (dangling, loop); apply fails on it the same way.
+const symlinkUnresolvableHunkDest = "symlink (target cannot be resolved: dangling or loop; apply refuses it too)"
+
 // symlinkHunk describes a destination that is a symlink the read side will not
-// look through because AGENTSYNC_ALLOW_SYMLINK_DEST is not set — the same
-// condition under which iox.AtomicWrite refuses to write through one. Without
-// it diff read THROUGH the link and printed "no diff" for a destination status
-// called drift and `--exit-code` failed a CI gate on. A whole-file hunk with an
-// empty Dest was rejected too: it asserts the destination is EMPTY, which is
-// false, and renders the entire source as one insertion.
+// look through — refused by AGENTSYNC_ALLOW_SYMLINK_DEST being unset, the same
+// condition under which iox.AtomicWrite refuses to write through one, or
+// unresolvable. A whole-file hunk with an empty Dest was rejected: it asserts
+// the destination is EMPTY, which is false, and renders the entire source as
+// one insertion.
 func symlinkHunk(it planItem) (source, dest string, ok bool) {
 	if !it.destSymlinkRefused() {
 		return "", "", false
+	}
+	if it.hdest == symlinkUnresolvableSentinel {
+		return "regular file", symlinkUnresolvableHunkDest, true
 	}
 	return "regular file", symlinkHunkDest, true
 }

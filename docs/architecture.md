@@ -902,11 +902,16 @@ writes through the link. `iox.SymlinkDestAllowed` is the one reading of the
 switch, and `destReadPath` (`internal/cli/destread.go`) is the read-side gate
 that the three whole-file destination facts — the content hash, the permission
 bits and the text — pass through. Unset, all four surfaces answer an opaque
-sentinel: the file classifies `drift`; `diff` prints a `symlink` hunk naming the
-switch rather than reading through and reporting no difference; `reconcile`
-shows the SHA display instead of a text diff and its `[w]`rite-back refuses to
-capture through the link. Set, all four resolve the link and compare the file it
-points at, so a converged chezmoi setup reports `clean`. The mirror is a policy,
+sentinel that can never equal a content hash, so the classifier sees a changed
+destination (`drift`, or `conflict`/`foreign-collision` by its usual table);
+`diff` prints a `symlink` hunk naming the switch rather than reading through and
+reporting no difference; `reconcile` shows the SHA display instead of a text
+diff, and its `[w]`rite-back refuses to capture through the link and withholds
+`[o]verride` (#248: `Writer.Write`'s mode arm chmods through a link before the
+policy is consulted). Set, all four resolve the link and compare the file it
+points at, so a converged chezmoi setup reports `clean`; a link that does not
+resolve answers a second sentinel so the advice is "fix the link", not "set the
+switch". The mirror is a policy,
 not a prediction: `apply` itself only fails on a symlinked destination when the
 content differs (its convergence read follows the link), so the unset answer
 means "a managed regular file became a link you have not opted into — that is

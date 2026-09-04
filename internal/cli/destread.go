@@ -29,6 +29,16 @@ var errDestNotRegular = errors.New("not a regular file")
 // compared only for equality, deliberately treats both alike — see its comment.
 var errDestUnstattable = errors.New("cannot stat destination")
 
+// pathlessStatErr strips the redundant path from a *fs.PathError, mirroring
+// secrets.pathlessErr. errors.Is still matches the underlying errno.
+func pathlessStatErr(err error) error {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err
+	}
+	return err
+}
+
 // readDestBytes reads a destination file's bytes, refusing before the open any
 // path whose shape cannot be read as a file.
 //
@@ -76,16 +86,6 @@ var errDestUnstattable = errors.New("cannot stat destination")
 // An ABSENT path is not refused: os.ReadFile runs and its ENOENT reaches the
 // caller unchanged, because manufacturing a shape error for a file that is not
 // there would name the wrong problem.
-// pathlessStatErr strips the redundant path from a *fs.PathError, mirroring
-// secrets.pathlessErr. errors.Is still matches the underlying errno.
-func pathlessStatErr(err error) error {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err
-	}
-	return err
-}
-
 func readDestBytes(path string) ([]byte, error) {
 	// render.IsRegularOrAbsent stays the single authority on SHAPE, and it is
 	// asked FIRST so the ordinary read costs exactly one stat. It answers false
@@ -108,11 +108,21 @@ func readDestBytes(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+// symlinkRefusal is why destReadPath would not look through a symlink.
+type symlinkRefusal int
+
+const (
+	symlinkNone         symlinkRefusal = iota // not a symlink, or resolved through it
+	symlinkRefusedByEnv                       // switch unset: apply would not write through it either
+	symlinkUnresolvable                       // opted in, but the link does not resolve (dangling, loop): apply fails on it too
+)
+
 // destReadPath applies the destination SYMLINK policy and answers the path the
-// whole-file destination reads should actually look at. ok is false when the
-// destination is a symlink this configuration does not look through; each caller
-// answers its own "cannot read" value for that (hashFile the symlink sentinel,
-// destModePerm (0, false), readDestText "").
+// whole-file destination reads should actually look at. why is symlinkNone when
+// resolved can be read; otherwise each caller answers its own "cannot read"
+// value (hashFile a sentinel per reason, destModePerm (0, false), readDestText
+// ""), and the two reasons are kept apart so the advice a user sees is right:
+// "set the switch" is wrong advice for a link that would not resolve anyway.
 //
 // It mirrors iox.resolveSymlinkDest, the write side, through the shared
 // iox.SymlinkDestAllowed, so the read side and apply cannot disagree about
@@ -122,37 +132,30 @@ func readDestBytes(path string) ([]byte, error) {
 // managed regular file became a link you have not opted into — that is drift"
 // rather than "apply would fail here".
 //
-// The policy is scoped to WHOLE-FILE facts: the symlink sentinel is a
-// whole-file-only policy signal. A key-merge destination is decoded through the
-// link by readDestFile on every surface, as apply does — a converged symlinked
-// key-merge destination is a no-op plus a chmod through the link, a differing
-// one is iox.ErrSymlinkDest, exactly as for a whole-file destination, so the
-// read-through already has apply-parity. Refusing it instead would make EVERY
-// owned pointer of a chezmoi ~/.claude.json classify against <absent>
-// permanently — there is no per-pointer sentinel the classifier could carry —
-// with reconcile's [d] showing <absent> and its [w] failing on "not found in
-// destination".
-func destReadPath(path string) (resolved string, ok bool) {
+// The policy is scoped to WHOLE-FILE facts; a key-merge destination is decoded
+// through the link on every surface, as apply does (docs/architecture.md §6
+// has the reasoning).
+func destReadPath(path string) (resolved string, why symlinkRefusal) {
 	fi, err := os.Lstat(path)
 	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
-		return path, true
+		return path, symlinkNone
 	}
 	if !iox.SymlinkDestAllowed() {
-		return "", false
+		return "", symlinkRefusedByEnv
 	}
 	r, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return "", false
+		return "", symlinkUnresolvable
 	}
-	return r, true
+	return r, symlinkNone
 }
 
 // readDestText is the whole-file destination text read behind the drift walk:
 // the destination's bytes, or "" for a refused symlink, a refused shape, or any
 // read error — the three collapse because no caller distinguishes them.
 func readDestText(path string) string {
-	p, ok := destReadPath(path)
-	if !ok {
+	p, why := destReadPath(path)
+	if why != symlinkNone {
 		return ""
 	}
 	b, err := readDestBytes(p)
