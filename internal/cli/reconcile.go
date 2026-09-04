@@ -1125,9 +1125,9 @@ func writeBackFileItem(home string, it reconcileItem) error {
 		// mid-prompt with a keystroke to choose, and "read dest X: not a regular
 		// file" alone does not tell them which one gets them unstuck.
 		//
-		// This arm's advice deliberately omits [o]verride (so does the symlink
-		// arms'), unlike the absent arm below. It re-applies
-		// through render.Writer.Write, whose convergence read is not
+		// This arm's advice deliberately omits [o]verride, as the symlink
+		// arms' does, unlike the absent arm below. It re-applies through
+		// render.Writer.Write, whose convergence read is not
 		// shape-guarded, so on this exact item it does not fail — it HANGS
 		// (measured: `reconcile --auto-override` rc=124).
 		// An earlier version of this message recommended it, which walked the
@@ -1141,8 +1141,8 @@ func writeBackFileItem(home string, it reconcileItem) error {
 		// an ABSENT destination — the user deleted a managed file, which is
 		// itself drift — and there [o]verride is both safe and usually the fix:
 		// Writer.Write's convergence read gets ENOENT and falls straight
-		// through to the write. Withholding it is only correct for the
-		// non-regular case above.
+		// through to the write. Leaving it out of the advice is only right for
+		// the non-regular case above.
 		return fmt.Errorf("read dest %s: %w — use [o]verride to restore it from canonical, "+
 			"or [i]gnore to suppress this item", it.op.Path, err)
 	}

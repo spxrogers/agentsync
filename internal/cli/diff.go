@@ -269,8 +269,10 @@ func isPseudoPointer(p string) bool { return p == ptrMode || p == ptrSymlink || 
 // hunkDiffs is what the formatted diff renders for one hunk. A symlink or
 // shape hunk carries two UNRELATED labels ("regular file" against a sentence),
 // and a character diff of those shreds both into fragments — so each side is
-// emitted whole. A mode hunk's two sides share their shape ("mode 0644" /
-// "mode 0755"), where the character diff reads well, and text hunks are text.
+// emitted whole, Delete for the destination and Insert for the source, the
+// direction DiffMain(h.Dest, h.Source) gives every other hunk. A mode hunk's
+// two sides share their shape ("mode 0644" / "mode 0755"), where a character
+// diff highlights the changed digits, and text hunks are text.
 func hunkDiffs(dmp *diffmatchpatch.DiffMatchPatch, h diffHunk) []diffmatchpatch.Diff {
 	if h.Pointer == ptrSymlink || h.Pointer == ptrShape {
 		return []diffmatchpatch.Diff{

@@ -1001,9 +1001,9 @@ func hashFile(path string) string {
 		// which keys prose on this one, words it for both facts (reconcile's
 		// prompt shows the token itself). Before this gate existed the
 		// predicate answered false for an unstattable destination too, so
-		// splitting them here would move a
-		// parent-ENOTDIR dest from ForeignCollision to New — and New is
-		// SafeForAutoApply. A plain read failure still answers "", as it did.
+		// splitting them here would move a parent-ENOTDIR dest from
+		// ForeignCollision to New — and New is SafeForAutoApply. A plain read
+		// failure still answers "", as it did.
 		if errors.Is(err, errDestNotRegular) || errors.Is(err, errDestUnstattable) {
 			return shapeSentinel
 		}

@@ -914,8 +914,9 @@ does not resolve answers a second sentinel so the advice is "fix the link", not
 "set the switch". A link to a FIFO, device or directory is a shape problem the
 switch cannot fix: it is refused as a bare one is, and `diff` prints a `shape`
 hunk for both — as it does for a path it cannot stat, which shares the token.
-The mirror is a policy, not a prediction: `apply` itself only fails on a symlinked destination when the
-content differs (its convergence read follows the link), so the unset answer
+The mirror is a policy, not a prediction: `apply` itself only fails on a
+symlinked destination when the content differs (its convergence read follows
+the link), so the unset answer
 means "a managed regular file became a link you have not opted into — that is
 drift", not "the next apply would fail". The rule covers **whole-file**
 destinations only; the symlink sentinel is a whole-file-only policy signal. A

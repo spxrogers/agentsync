@@ -659,16 +659,21 @@ func TestShortValShowsSentinelsWhole(t *testing.T) {
 // character diff its two like-shaped sides read well under.
 func TestLabelHunksAreNotCharacterDiffed(t *testing.T) {
 	dmp := diffmatchpatch.New()
-	for _, h := range []diffHunk{
-		{Pointer: ptrSymlink, Source: "regular file", Dest: symlinkRefusedHunkDest},
-		{Pointer: ptrSymlink, Source: "regular file", Dest: symlinkUnresolvableHunkDest},
-		{Pointer: ptrShape, Source: "regular file", Dest: shapeHunkDest},
+	for _, tc := range []struct {
+		name string
+		hunk diffHunk
+	}{
+		{name: "symlink-refused", hunk: diffHunk{Pointer: ptrSymlink, Source: "regular file", Dest: symlinkRefusedHunkDest}},
+		{name: "symlink-unresolvable", hunk: diffHunk{Pointer: ptrSymlink, Source: "regular file", Dest: symlinkUnresolvableHunkDest}},
+		{name: "shape", hunk: diffHunk{Pointer: ptrShape, Source: "regular file", Dest: shapeHunkDest}},
 	} {
-		got := hunkDiffs(dmp, h)
-		if len(got) != 2 || got[0].Type != diffmatchpatch.DiffDelete || got[0].Text != h.Dest ||
-			got[1].Type != diffmatchpatch.DiffInsert || got[1].Text != h.Source {
-			t.Errorf("%s hunk: got %+v, want [-Dest-] then {+Source+} whole", h.Pointer, got)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			got := hunkDiffs(dmp, tc.hunk)
+			if len(got) != 2 || got[0].Type != diffmatchpatch.DiffDelete || got[0].Text != tc.hunk.Dest ||
+				got[1].Type != diffmatchpatch.DiffInsert || got[1].Text != tc.hunk.Source {
+				t.Errorf("got %+v, want [-Dest-] then {+Source+} whole", got)
+			}
+		})
 	}
 	mode := hunkDiffs(dmp, diffHunk{Pointer: ptrMode, Source: "mode 0755", Dest: "mode 0644"})
 	if len(mode) < 3 || mode[0].Type != diffmatchpatch.DiffEqual || mode[0].Text != "mode 0" {
