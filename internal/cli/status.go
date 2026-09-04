@@ -938,11 +938,16 @@ func stateKeyKey(userHome, agent string, sc adapter.Scope, projectRoot, path, pt
 	return state.NewPointerKey(userHome, agent, sc.String(), projectRoot, path, ptr)
 }
 
-// symlinkRefusedSentinel is hashFile's answer for a symlink this configuration does
-// not read through (destReadPath). Opaque: it exists only to never equal a
-// content hash, and diff keys its symlink hunk on the same value
+// symlinkRefusedSentinel is hashFile's answer for a symlink this configuration
+// does not read through (destReadPath). Opaque: it exists only to never equal
+// a content hash, and diff keys its symlink hunk on the same value
 // (planItem.destSymlinkRefused), so the two sites must agree on it.
 const symlinkRefusedSentinel = "symlink-not-regular-file"
+
+// shapeSentinel is hashFile's answer for a destination readDestBytes refuses:
+// present and not a regular file (FIFO, device, socket, directory), or
+// unstattable. diff keys its shape hunk on it.
+const shapeSentinel = "not-a-regular-file"
 
 // symlinkUnresolvableSentinel is hashFile's answer for a symlink the user opted
 // into reading through that does not resolve (dangling, loop). Equally opaque;
@@ -1006,7 +1011,7 @@ func hashFile(path string) string {
 		// parent-ENOTDIR dest from ForeignCollision to New — and New is
 		// SafeForAutoApply. A plain read failure still answers "", as it did.
 		if errors.Is(err, errDestNotRegular) || errors.Is(err, errDestUnstattable) {
-			return "not-a-regular-file"
+			return shapeSentinel
 		}
 		return ""
 	}

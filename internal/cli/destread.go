@@ -78,22 +78,16 @@ func pathlessStatErr(err error) error {
 //     only when AGENTSYNC_ALLOW_SYMLINK_DEST=1 opted into it.
 //     TestHashFileSentinels asserts both halves.
 //
-// Callers mostly do not surface the refusal — reconcile's write-back is the
-// only one that names the shape today — so it is more a diagnosis available to
-// them than one the user sees. Narrowing that means changing what several
-// commands print; it is catalogued on #229 rather than here.
+// diff's shape hunk and reconcile's write-back name the refusal to the user;
+// status and explain classify with an opaque sentinel (hashFile).
 //
 // An ABSENT path is not refused: os.ReadFile runs and its ENOENT reaches the
 // caller unchanged, because manufacturing a shape error for a file that is not
 // there would name the wrong problem.
 func readDestBytes(path string) ([]byte, error) {
-	// render.IsRegularOrAbsent stays the single authority on SHAPE, and it is
-	// asked FIRST so the ordinary read costs exactly one stat. It answers false
-	// for two different situations, though — a path that is present and the
-	// wrong shape, and one that cannot be stat'd at all — so the refusal path
-	// pays a second stat to tell them apart. Collapsing them was a real defect:
-	// reconcile's refusal names errDestNotRegular and told someone with a
-	// permission problem to "remove or replace the non-regular file".
+	// render.IsRegularOrAbsent stays the single authority on SHAPE, asked FIRST
+	// so the ordinary read costs one stat; the refusal path pays a second stat
+	// to tell "wrong shape" from "cannot stat" (see errDestUnstattable).
 	if !render.IsRegularOrAbsent(path) {
 		if _, serr := os.Stat(path); serr != nil {
 			// Pathless, for the reason errDestNotRegular carries no path: the
@@ -112,17 +106,17 @@ func readDestBytes(path string) ([]byte, error) {
 type symlinkRefusal int
 
 const (
-	symlinkNone         symlinkRefusal = iota // not a symlink, or resolved through it
+	symlinkNone         symlinkRefusal = iota // not a symlink, resolved, or a shape for readDestBytes to refuse
 	symlinkRefusedByEnv                       // switch unset: apply would not write through it either
-	symlinkUnresolvable                       // opted in, but the link does not resolve (dangling, loop, unreadable): apply fails on it too
+	symlinkUnresolvable                       // opted in, but the link does not resolve: apply fails on it too
 )
 
 // destReadPath applies the destination SYMLINK policy and answers the path the
-// whole-file destination reads should actually look at. why is symlinkNone when
-// resolved can be read; otherwise each caller answers its own "cannot read"
-// value. The two refusals stay apart so that, once a user has opted in, a link
-// that still cannot be read is reported as broken rather than as "set the
-// switch".
+// whole-file destination reads should go on to read (readDestBytes still
+// applies its shape gate there). why is symlinkNone in that case; otherwise
+// each caller answers its own "cannot read" value. The two refusals stay apart
+// so that, once a user has opted in, a link that still cannot be read is
+// reported as broken rather than as "set the switch".
 //
 // It mirrors iox.resolveSymlinkDest, the write side, through the shared
 // iox.SymlinkDestAllowed, so the read side and apply cannot disagree about
@@ -142,9 +136,9 @@ func destReadPath(path string) (resolved string, why symlinkRefusal) {
 	}
 	// A link to a PRESENT non-regular target (FIFO, directory, device) is a
 	// shape problem whatever the switch says — opting in would only resolve
-	// to the shape refusal — so leave it to readDestBytes, and every surface
-	// names the shape rather than the link. A loop or a dangling link fails
-	// this Stat and stays a symlink refusal.
+	// to the shape refusal — so hand it to readDestBytes, which refuses it by
+	// shape on every surface exactly as it does a bare FIFO. A loop or a
+	// dangling link fails this Stat and stays a symlink refusal.
 	if ti, serr := os.Stat(path); serr == nil && !ti.Mode().IsRegular() {
 		return path, symlinkNone
 	}

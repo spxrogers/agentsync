@@ -19,14 +19,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   sentinel that can never equal a content hash — so every run reported `drift`
   no apply could clear and `status --exit-code` failed CI forever, while `diff`
   read through the link and said `no diff`. The switch now governs the READ
-  side too — `apply`, `status`, `diff`, `reconcile` and `explain` all need it: set, all
-  four resolve the link and compare the file it points at; unset, all four
+  side too — `apply`, `status`, `diff`, `reconcile` and `explain` all need it:
+  set, all resolve the link and compare the file it points at; unset, all
   refuse the link, `diff` prints a `symlink` hunk (`--json` `pointer:
   "symlink"`, alongside `mode`) naming the switch, and `reconcile`'s
   `[w]`rite-back refuses to capture through it (and does not offer
-  `[o]verride`: #248). A link that does not resolve — dangling, loop — is
-  reported as such rather than as "set the switch", and a link to a FIFO or a
-  directory is reported as that shape, which the switch could not fix.
+  `[o]verride`: #248). Once opted in, a link that does not resolve — dangling,
+  loop — is reported as such rather than as "set the switch". A link to a
+  FIFO, device or directory is a shape problem the switch cannot fix and is
+  refused as a bare one is; `diff` now prints a `shape` hunk for both instead
+  of rendering the whole source against an "empty" destination.
 
 - **`status`'s permission check now measures the mode the next `apply`
   writes** ([#229](https://github.com/spxrogers/agentsync/issues/229)). It

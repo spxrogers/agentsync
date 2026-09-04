@@ -589,8 +589,8 @@ in the [README](../README.md#known-limits); the highlights:
   drift comparison (`status`/`diff`/`reconcile`/`explain` report a symlinked
   whole-file destination as drifted rather than reading through the link; a
   key-merged file such as `~/.claude.json` is read through either way);
-  override with `AGENTSYNC_ALLOW_SYMLINK_DEST=1`, which every command then
-  needs.
+  override with `AGENTSYNC_ALLOW_SYMLINK_DEST=1`, which `apply` and the four
+  drift commands (`status`, `diff`, `reconcile`, `explain`) then need.
 - **Planned / deferred**: Aider and Firebender (see [Breadth tier](#breadth-tier)
   § "Deliberate exclusions").
 

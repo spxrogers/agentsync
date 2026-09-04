@@ -911,7 +911,9 @@ diff, and its `[w]`rite-back refuses to capture through the link and withholds
 policy is consulted). Set, all four resolve the link and compare the file it
 points at, so a converged chezmoi setup reports `clean`; a link that does not
 resolve answers a second sentinel so the advice is "fix the link", not "set the
-switch". The mirror is a policy,
+switch". A link to a FIFO, device or directory is a shape problem the switch
+cannot fix: it is refused as a bare one is, and `diff` prints a `shape` hunk
+for both. The mirror is a policy,
 not a prediction: `apply` itself only fails on a symlinked destination when the
 content differs (its convergence read follows the link), so the unset answer
 means "a managed regular file became a link you have not opted into — that is

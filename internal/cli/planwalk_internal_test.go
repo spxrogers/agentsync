@@ -638,8 +638,8 @@ func TestShortValShowsSentinelsWhole(t *testing.T) {
 		{name: "absent", in: "", want: "<absent>"},
 		{name: "digest is abbreviated", in: digest, want: digest[:16] + "..."},
 		{name: "symlink sentinel shown whole", in: symlinkRefusedSentinel, want: "symlink-not-regular-file"},
-		{name: "unresolvable sentinel shown whole", in: "symlink-target-unresolvable", want: "symlink-target-unresolvable"},
-		{name: "shape sentinel shown whole", in: "not-a-regular-file", want: "not-a-regular-file"},
+		{name: "unresolvable sentinel shown whole", in: symlinkUnresolvableSentinel, want: "symlink-target-unresolvable"},
+		{name: "shape sentinel shown whole", in: shapeSentinel, want: "not-a-regular-file"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := shortVal(tc.in); got != tc.want {

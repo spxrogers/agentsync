@@ -1114,7 +1114,7 @@ func writeBackFileItem(home string, it reconcileItem) error {
 		// follows the link, and its mode arm chmods the TARGET through it
 		// before the symlink policy is consulted (#248).
 		return fmt.Errorf("read dest %s: destination is a symlink agentsync is not reading through — "+
-			"set %s=1 (for apply and every drift command) to read and write through the link, replace the link with a "+
+			"set %s=1 (for apply, status, diff, reconcile and explain) to read and write through the link, replace the link with a "+
 			"regular file, or [i]gnore to suppress this item", it.op.Path, iox.AllowSymlinkDestEnv)
 	case symlinkUnresolvable:
 		return fmt.Errorf("read dest %s: destination is a symlink whose target cannot be resolved "+

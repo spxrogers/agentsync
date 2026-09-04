@@ -320,21 +320,6 @@ func TestHashFileSentinels(t *testing.T) {
 			want: "symlink-target-unresolvable",
 		},
 		{
-			// A loop fails EvalSymlinks like a dangling link does; it must not
-			// slip into the shape gate (Stat fails with ELOOP, not "present").
-			name: "a symlink loop is unresolvable when the env is set",
-			setup: func(t *testing.T, tmp string) string {
-				t.Helper()
-				t.Setenv(iox.AllowSymlinkDestEnv, "1")
-				loop := filepath.Join(tmp, "loop")
-				if err := os.Symlink("loop", loop); err != nil {
-					t.Fatal(err)
-				}
-				return loop
-			},
-			want: "symlink-target-unresolvable",
-		},
-		{
 			// A link to a present non-regular target is a SHAPE problem whatever
 			// the switch says: every surface names the FIFO, not the link, so
 			// nobody is told to set a switch that would only reveal the FIFO.
@@ -451,7 +436,7 @@ func TestHashFileSentinels(t *testing.T) {
 // refused as a symlink reaches the prompt as drift; one keystroke later [w]
 // must not read THROUGH the link and capture a file the classification never
 // looked at. With the env unset the write-back refuses, names the switch and
-// says apply and every drift command need it; with it set the write-back captures
+// says apply and the four drift commands need it; with it set the write-back captures
 // the linked file — so the gate follows the policy rather than always
 // refusing.
 func TestWriteBackFileItemRefusesASymlinkItIsNotReadingThrough(t *testing.T) {
@@ -481,7 +466,7 @@ func TestWriteBackFileItemRefusesASymlinkItIsNotReadingThrough(t *testing.T) {
 			t.Fatal("writeBackFileItem = nil for a refused symlink, want an error: [w] must not " +
 				"capture through a link the classification did not read through")
 		}
-		for _, want := range []string{link, iox.AllowSymlinkDestEnv + "=1", "for apply and every drift command", "[i]gnore"} {
+		for _, want := range []string{link, iox.AllowSymlinkDestEnv + "=1", "for apply, status, diff, reconcile and explain", "[i]gnore"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("error = %q, want it to contain %q", err, want)
 			}
@@ -622,5 +607,46 @@ func TestReadDestBytesReportsAStatFailureAsItself(t *testing.T) {
 	if n := strings.Count(err.Error(), a); n != 0 {
 		t.Errorf("error = %q names the path %d time(s); it must carry none — the caller "+
 			"wraps it with the path and a *fs.PathError would double it", err, n)
+	}
+}
+
+// TestDiffPrintsAShapeHunkForANonRegularDestination pins that a FIFO at a
+// whole-file destination — bare, or behind a symlink whatever the switch says —
+// reaches diff as a "shape" hunk rather than as the whole source rendered
+// against an "empty" destination.
+func TestDiffPrintsAShapeHunkForANonRegularDestination(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  string
+		link bool
+	}{
+		{name: "bare FIFO", env: ""},
+		{name: "link to a FIFO, env unset", env: "", link: true},
+		{name: "link to a FIFO, env set", env: "1", link: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(iox.AllowSymlinkDestEnv, tc.env)
+			if tc.env == "" {
+				if err := os.Unsetenv(iox.AllowSymlinkDestEnv); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tmp := t.TempDir()
+			path := mkfifoDest(t, tmp)
+			if tc.link {
+				link := filepath.Join(tmp, "link.md")
+				if err := os.Symlink(path, link); err != nil {
+					t.Fatal(err)
+				}
+				path = link
+			}
+			hunks, _ := collectDiffHunks(planFor(map[string][]adapter.FileOp{"claude": {fileOp(path, "SOURCE")}}), []string{"claude"}, "", nil)
+			if len(hunks) != 1 || hunks[0].Pointer != "shape" {
+				t.Fatalf("want one shape hunk, got %+v", hunks)
+			}
+			if h := hunks[0]; h.Source != "regular file" || !strings.Contains(h.Dest, "not a regular file") || strings.Contains(h.Dest, "/") || strings.Contains(h.Dest, "SOURCE") {
+				t.Errorf("shape hunk = %+v: must name the shape, embed no path, and never render the source", h)
+			}
+		})
 	}
 }

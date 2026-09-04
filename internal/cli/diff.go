@@ -229,10 +229,10 @@ func modeHunk(it planItem) (source, dest string, ok bool) {
 		fmt.Sprintf("mode %04o", os.FileMode(it.destPerm).Perm()), true
 }
 
-// symlinkRefusedHunkDest is the Dest of a "symlink" hunk. A CONSTANT, deliberately:
-// the link TARGET is attacker-choosable and this string reaches the terminal
-// unsanitized (only the hunk label goes through ui.Sanitize), so embedding it
-// would reopen the #93/#171 escape-injection class.
+// symlinkRefusedHunkDest is the Dest of a "symlink" hunk. A CONSTANT,
+// deliberately: the link TARGET is attacker-choosable and this string reaches
+// the terminal unsanitized (only the hunk label goes through ui.Sanitize), so
+// embedding it would reopen the #93/#171 escape-injection class.
 const symlinkRefusedHunkDest = "symlink (not compared through; set " + iox.AllowSymlinkDestEnv +
 	"=1 to read and write through the link)"
 
@@ -254,6 +254,21 @@ func symlinkHunk(it planItem) (source, dest string, ok bool) {
 		return "regular file", symlinkUnresolvableHunkDest, true
 	}
 	return "regular file", symlinkRefusedHunkDest, true
+}
+
+// shapeHunkDest is the Dest of a "shape" hunk; a constant for the same reason
+// as the symlink ones.
+const shapeHunkDest = "not a regular file (FIFO, device, socket or directory); remove or replace it"
+
+// shapeHunk describes a whole-file destination readDestBytes refused by shape
+// — a bare FIFO, or a link to one. Its text read is "" (there is no content to
+// compare), so without this hunk diff rendered the whole source as an
+// insertion against an "empty" destination that is not empty at all.
+func shapeHunk(it planItem) (source, dest string, ok bool) {
+	if it.ptr != "" || it.hdest != shapeSentinel {
+		return "", "", false
+	}
+	return "regular file", shapeHunkDest, true
 }
 
 func marshalPretty(v any) string {
@@ -314,6 +329,10 @@ func collectDiffHunks(plan render.RenderPlan, names []string, filterPath string,
 		// through to "equal" and then into the mode branch.
 		if src, dst, ok := symlinkHunk(it); ok {
 			hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: "symlink", Source: src, Dest: dst})
+			continue
+		}
+		if src, dst, ok := shapeHunk(it); ok {
+			hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: "shape", Source: src, Dest: dst})
 			continue
 		}
 		if srcStr == dstStr {
