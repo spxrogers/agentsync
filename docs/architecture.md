@@ -187,10 +187,8 @@ label and count it as a removal rather than sniffing `{}`+`OwnedKeys`. Cleanup
 ops are built by `adapter.NewCleanupOp` — the only producer of `OpCleanup`,
 called from `render.orphanCleanupOps` and from `agent disable --purge` — and
 `TestEveryCleanupLiteralUsesNewCleanupOp` fails any production `FileOp` literal
-that hand-rolls the `{}` shape, so the kind cannot be missed at a synthesis
-site. `MergeStrategy` stays a plain string: typing it would change the
-published `Adapter` interface (`KeyMergeStrategy() string`) and is deferred to
-[#250](https://github.com/spxrogers/agentsync/issues/250).
+that hand-rolls the cleanup shape or stamps the kind by hand, so a hand-rolled
+cleanup literal cannot ship unstamped.
 
 **Key-merge strategies and on-disk format.** `KeyMergeStrategy` /
 `FileOp.MergeStrategy` name how an adapter co-owns keys inside a shared config
@@ -213,6 +211,9 @@ widening the accessor to a per-path strategy first. A central guard
 MCP+hook fixture through every registered adapter and pins `KeyMergeStrategy()`
 against the `MergeStrategy` stamped on every key-merge `FileOp` it emits, so the
 accessor can never silently drift from what an adapter actually writes.
+`MergeStrategy` itself stays a plain string: typing it would change this
+published interface (`KeyMergeStrategy() string`) and is deferred to
+[#250](https://github.com/spxrogers/agentsync/issues/250).
 
 **Deep vs breadth-tier adapters.** The nine hand-written packages above are
 *deep* adapters — agent-specific, multi-component, often bidirectional. Beyond

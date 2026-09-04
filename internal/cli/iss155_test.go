@@ -617,7 +617,21 @@ func TestApplyDryRun_CleanupOpNotCountedToWrite(t *testing.T) {
 	if opLine == "" {
 		t.Fatalf("dry-run should list the cleanup op for %s; got:\n%s", dest, dry)
 	}
-	if !strings.Contains(opLine, " remove ") || strings.Contains(opLine, "write") || strings.Contains(opLine, "synced") {
+	// Check the label part only: t.TempDir embeds this test's name in dest,
+	// and that name contains "Write".
+	label := strings.TrimSuffix(opLine, dest)
+	if !strings.Contains(label, " remove ") || strings.Contains(label, "write") || strings.Contains(label, "synced") {
 		t.Fatalf("the cleanup op's own line must carry the remove label, never write/synced; got %q in:\n%s", opLine, dry)
+	}
+	// The real apply reports the same op as a removal ONLY: "removed: 1
+	// key(s)" with no "applied:" partition, which is what removalCounts'
+	// appliedOps-- exists to produce (without it the headline reads
+	// "applied: 1 ops, removed: 1 key(s)" for a run that wrote nothing).
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "removed: 1 key(s)") || strings.Contains(out, "applied:") {
+		t.Fatalf("real apply should report the cleanup op as a removal only; got:\n%s", out)
 	}
 }

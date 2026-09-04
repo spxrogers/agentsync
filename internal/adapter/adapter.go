@@ -123,7 +123,7 @@ func (k OpKind) String() string {
 // the merge path performs. It is the only producer of OpCleanup: every site
 // that synthesizes a cleanup op must call it so the kind is never missed, and
 // TestEveryCleanupLiteralUsesNewCleanupOp fails any production FileOp literal
-// that hand-rolls the "{}" shape instead.
+// that hand-rolls the cleanup shape or stamps OpCleanup by hand instead.
 func NewCleanupOp(path, strategy string, owned []string) FileOp {
 	return FileOp{
 		Action:        ActionWrite,
