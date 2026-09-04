@@ -24,7 +24,7 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   drift commands refuse the link (`apply` fails only when the content
   differs), `diff` prints a `symlink` hunk (`--json` `pointer:
   "symlink"`, alongside `mode`) naming the switch, and `reconcile`'s
-  `[w]`rite-back refuses to capture through it (and does not offer
+  `[w]`rite-back refuses to capture through it (with advice that omits
   `[o]verride`: #248). Once opted in, a link that does not resolve — dangling,
   loop — is reported as such rather than as "set the switch". A link to a
   FIFO, device or directory is a shape problem the switch cannot fix and is

@@ -997,9 +997,9 @@ func hashFile(path string) string {
 	data, err := readDestBytes(path)
 	if err != nil {
 		// Both refusals map to the SAME opaque token, deliberately. These
-		// sentinels exist to never equal a content hash; the two surfaces that
-		// show one (reconcile's prompt via shortVal, diff's shape hunk) word it
-		// for both facts. Before this gate existed the predicate answered false for an
+		// sentinels exist to never equal a content hash; diff's shape hunk,
+		// which keys prose on this one, words it for both facts (reconcile's
+		// prompt shows the token itself). Before this gate existed the predicate answered false for an
 		// unstattable destination too, so splitting them here would move a
 		// parent-ENOTDIR dest from ForeignCollision to New — and New is
 		// SafeForAutoApply. A plain read failure still answers "", as it did.

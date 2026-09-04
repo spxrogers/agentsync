@@ -49,8 +49,8 @@ type planItem struct {
 	cls drift.Class
 
 	// The triple cls was computed from. hdest is "" for absent-or-unreadable,
-	// and one of two opaque sentinels for a refused-symlink or wrong-shaped
-	// destination — see hashFile, whose semantics this reproduces exactly.
+	// and one of three opaque sentinels for a refused symlink, an unresolvable
+	// one, or a refused shape — see hashFile, whose semantics this reproduces.
 	hsrc, happlied, hdest string
 
 	// Whole-file mode facts, from destModePerm: destRegular is false for an

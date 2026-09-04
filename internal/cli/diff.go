@@ -166,6 +166,13 @@ func newDiffCmd() *cobra.Command {
 					fmt.Fprintf(p.Out, "%s %s\n", p.Red("--- source"), label)
 					fmt.Fprintf(p.Out, "%s %s\n", p.Green("+++ dest  "), label)
 					diffs := dmp.DiffMain(h.Dest, h.Source, false)
+					if isPseudoPointer(h.Pointer) {
+						// Two short labels, not two texts: a character diff
+						// shreds "symlink (not compared through; …)" against
+						// "regular file" into fragments. Semantic cleanup
+						// re-joins each side whole.
+						diffs = dmp.DiffCleanupSemantic(diffs)
+					}
 					fmt.Fprintln(p.Out, renderDiffText(p, diffs))
 				}
 			}
@@ -255,6 +262,10 @@ func symlinkHunk(it planItem) (source, dest string, ok bool) {
 	}
 	return "regular file", symlinkRefusedHunkDest, true
 }
+
+// isPseudoPointer reports whether a hunk's Pointer is one of diff's whole-file
+// labels rather than an RFC-6901 pointer.
+func isPseudoPointer(p string) bool { return p == "mode" || p == "symlink" || p == "shape" }
 
 // shapeHunkDest is the Dest of a "shape" hunk; a constant for the same reason
 // as the symlink ones.

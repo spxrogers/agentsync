@@ -1034,7 +1034,7 @@ dashboards (`status --json` is never collapsed — it carries every tracked file
 pseudo-pointers for a whole-file finding that is not a text difference —
 `mode` for a content-identical permission change, `symlink` for a symlinked
 destination agentsync is not comparing through, `shape` for a destination
-that is not a regular file). For a
+that is not a readable regular file — wrong shape, or cannot be stat'd). For a
 gate that should **fail the build** on drift, add `--exit-code`: `status
 --exit-code` / `diff --exit-code` exit `2` when drift/hunks exist and `0` when
 clean (exit `2` is distinct from the generic error exit `1`, and prints no extra

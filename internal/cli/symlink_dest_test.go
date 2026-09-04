@@ -182,4 +182,13 @@ func TestSymlinkedDestIsDriftWhenRefused(t *testing.T) {
 	if strings.Contains(h.Dest, "/") {
 		t.Errorf("symlink hunk Dest contains a path separator; it must embed no path: %q", h.Dest)
 	}
+	// The formatted diff must print the two labels WHOLE: a character diff of
+	// "symlink (…)" against "regular file" shreds both into fragments.
+	text, err := runCLI(t, env, "diff")
+	if err != nil {
+		t.Fatalf("diff: %v\n%s", err, text)
+	}
+	if !strings.Contains(text, "symlink (not compared through") || !strings.Contains(text, "regular file") {
+		t.Errorf("formatted diff must print the symlink hunk's labels whole; got:\n%s", text)
+	}
 }

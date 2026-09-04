@@ -14,6 +14,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/iox"
+	"github.com/spxrogers/agentsync/internal/state"
 )
 
 // TestReadDestBytesShape pins the gate every destination read now passes
@@ -391,7 +392,7 @@ func TestHashFileSentinels(t *testing.T) {
 			case h := <-got:
 				if h != tc.want {
 					t.Errorf("hashFile = %q, want %q — these sentinels are compared only for "+
-						"equality, so changing one silently changes drift.Classify's verdict",
+						"equality — and diff now keys its shape hunk's prose on the shape one",
 						h, tc.want)
 				}
 			case <-time.After(5 * time.Second):
@@ -652,5 +653,41 @@ func TestDiffPrintsAShapeHunkForANonRegularDestination(t *testing.T) {
 				t.Errorf("shape hunk = %+v: must name the shape, embed no path, and never render the source", h)
 			}
 		})
+	}
+}
+
+// TestDiffPrintsAShapeHunkForAnUnstattableDestination pins the other fact the
+// shape token carries: a path under a regular-file parent cannot be stat'd,
+// reaches diff as the same hunk, and the hedged Dest says so.
+func TestDiffPrintsAShapeHunkForAnUnstattableDestination(t *testing.T) {
+	tmp := t.TempDir()
+	blocker := filepath.Join(tmp, "notadir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(blocker, "dest.md")
+	hunks, _ := collectDiffHunks(planFor(map[string][]adapter.FileOp{"claude": {fileOp(path, "SOURCE")}}), []string{"claude"}, "", nil)
+	if len(hunks) != 1 || hunks[0].Pointer != "shape" {
+		t.Fatalf("want one shape hunk for an unstattable destination, got %+v", hunks)
+	}
+	if d := hunks[0].Dest; !strings.Contains(d, "stat") || strings.Contains(d, "/") {
+		t.Errorf("Dest = %q: must say the path cannot be stat'd and embed no path", d)
+	}
+}
+
+// TestReconcileUsesTheSHADisplayForAShapeRefusedItem pins reconcile's prompt
+// half of the same rule diff's shape hunk enforces: a FIFO at a destination
+// has no text to show, so the item falls back to the SHA display instead of
+// rendering the whole source as an insertion against an "empty" destination.
+func TestReconcileUsesTheSHADisplayForAShapeRefusedItem(t *testing.T) {
+	tmp := t.TempDir()
+	fifo := mkfifoDest(t, tmp)
+	items, _ := collectReconcileItems(planFor(map[string][]adapter.FileOp{"claude": {fileOp(fifo, "SOURCE")}}),
+		registryFactory(), state.New(), adapter.ScopeUser, "", tmp, nil)
+	if len(items) != 1 || items[0].hdest != shapeSentinel {
+		t.Fatalf("want one shape-refused item, got %+v", items)
+	}
+	if items[0].hasText {
+		t.Error("hasText = true for a shape-refused item; the prompt would render the source against an empty destination")
 	}
 }

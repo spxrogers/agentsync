@@ -668,11 +668,12 @@ func collectReconcileItems(plan render.RenderPlan, reg *adapter.Registry, s *sta
 			orphans = append(orphans, ri)
 			continue
 		}
-		// A refused whole-file symlink has no destination text to show: fall
-		// back to the SHA display rather than render the entire source as an
-		// insertion against an empty destination (the rendering diff's symlink
-		// hunk exists to avoid).
-		ri.srcText, ri.dstText, ri.hasText = it.srcText, it.dstText, !it.destSymlinkRefused()
+		// A refused whole-file destination — a symlink not read through, or a
+		// shape readDestBytes refused — has no text to show: fall back to the
+		// SHA display rather than render the entire source as an insertion
+		// against an "empty" destination (the rendering diff's symlink and
+		// shape hunks exist to avoid).
+		ri.srcText, ri.dstText, ri.hasText = it.srcText, it.dstText, !it.destSymlinkRefused() && it.hdest != shapeSentinel
 		if it.ptr != "" {
 			ri.pluginOwner = pluginOwnerForKeyItem(it.op.SourceID, it.ptr, pluginOwners)
 		} else {
