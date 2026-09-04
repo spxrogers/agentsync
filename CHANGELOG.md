@@ -11,6 +11,22 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`status`'s permission check now measures the mode the next `apply`
+  writes** ([#229](https://github.com/spxrogers/agentsync/issues/229)). It
+  compared the destination's permission bits against the mode RECORDED at the
+  last apply, so a file whose recorded mode was unset (state written before
+  modes were recorded) or whose adapter changed the mode it renders was
+  reported `clean` while the next apply would chmod it. It now asks `op.Mode`,
+  the question `diff`'s `mode` hunk already asked, so the two agree.
+
+- **`explain <path>` now reports a mode-only drift instead of `clean`**
+  ([#229](https://github.com/spxrogers/agentsync/issues/229)). A
+  content-identical chmod made `status` say `drift` and `explain` say `clean`
+  about the same file in the same second; both now read the one folded class.
+  `reconcile` still ignores mode entirely — it reports "nothing to reconcile"
+  for a drift the other three surfaces name — and that gap is tracked as its
+  own issue rather than fixed here.
+
 - **A FIFO at a managed destination no longer hangs `status`, `diff`, `explain`,
   or `reconcile`'s drift walk and write-back.** (A directory there never hung — `os.ReadFile`
   fails it immediately with `EISDIR` — and for `status` and `diff` nothing about

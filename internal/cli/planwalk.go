@@ -44,7 +44,8 @@ type planItem struct {
 	orphan bool
 
 	// cls is the CONTENT-only classification. It deliberately does NOT fold in
-	// permission drift; see recordedModeDrifted / opModeDrifted.
+	// permission drift; classWithModeDrift is the folded reading status and
+	// explain report, and opModeDrifted the predicate behind it.
 	cls drift.Class
 
 	// The triple cls was computed from. hdest is "" for absent-or-unreadable,
@@ -52,14 +53,14 @@ type planItem struct {
 	// destination — see hashFile, whose semantics this reproduces exactly.
 	hsrc, happlied, hdest string
 
-	// Whole-file mode facts. recordedMode is state's FileEntry.Mode (0 =
-	// unrecorded). destPerm/destRegular come from destModePerm: destRegular is
-	// false for an absent, symlinked or non-regular destination, which is what
-	// keeps `chmod 000` distinguishable from "absent" (destPerm 0, regular true
-	// vs destPerm 0, regular false).
-	recordedMode uint32
-	destPerm     uint32
-	destRegular  bool
+	// Whole-file mode facts, from destModePerm: destRegular is false for an
+	// absent, symlinked or non-regular destination, which is what keeps
+	// `chmod 000` distinguishable from "absent" (destPerm 0, regular true vs
+	// destPerm 0, regular false). The intended mode is op.Mode; the mode state
+	// RECORDED at the last apply is deliberately not carried, because no
+	// surface asks it (#229 axis 14).
+	destPerm    uint32
+	destRegular bool
 
 	// srcText/dstText are populated only when planWalk.withText, and never for
 	// an orphan. For a key item they are marshalPretty of the pointer's value
@@ -72,26 +73,29 @@ type planItem struct {
 	srcText, dstText string
 }
 
-// recordedModeDrifted is status's question: does the destination's permission
-// bits differ from the mode agentsync RECORDED for it? Exactly the truth table
-// of the status-side helper it replaced (#229): an unrecorded mode (0) is never
-// drift, and an absent / symlinked / non-regular destination is left to the
-// content classifier.
-func (i planItem) recordedModeDrifted() bool {
-	if i.recordedMode == 0 || !i.destRegular {
-		return false
-	}
-	return os.FileMode(i.destPerm).Perm() != os.FileMode(i.recordedMode).Perm()
-}
-
-// opModeDrifted is diff's question: does it differ from the mode the next apply
-// would WRITE (op.Mode — render.Writer.Write chmods to it)? Exactly modeHunk's
-// gate. status will move to this in PR-C (#229 axis 14); do not move it here.
+// opModeDrifted is THE mode question, the one every surface that reports
+// permission drift asks: do the destination's permission bits differ from the
+// mode the next apply would WRITE (op.Mode — render.Writer.Write chmods to
+// it)? An unspecified op.Mode (0) is never drift, and an absent / symlinked /
+// non-regular destination is left to the content classifier. diff's modeHunk
+// and classWithModeDrift below are both gated on exactly this, so they cannot
+// disagree (#229 axis 14).
 func (i planItem) opModeDrifted() bool {
 	if i.op.Mode == 0 || !i.destRegular {
 		return false
 	}
 	return os.FileMode(i.destPerm).Perm() != os.FileMode(i.op.Mode).Perm()
+}
+
+// classWithModeDrift is the class status and explain report: the content class,
+// upgraded from clean to drift when only the permission bits differ from what the
+// next apply would WRITE (op.Mode — render.Writer.Write chmods to it). A merged key
+// has no mode, and an orphan's synthesized op carries Mode 0, so both fall through.
+func (i planItem) classWithModeDrift() drift.Class {
+	if i.ptr == "" && i.cls == drift.Clean && i.opModeDrifted() {
+		return drift.Drift
+	}
+	return i.cls
 }
 
 // destModePerm answers the permission bits of the REGULAR file at path.
@@ -226,14 +230,13 @@ func walkPlanItems(w planWalk) []planItem {
 			entry := w.state.Files[stateFileKey(w.userHome, name, w.scope, w.projectRoot, op.Path)]
 			perm, reg := destModePerm(op.Path)
 			it := planItem{
-				agent:        name,
-				op:           op,
-				hsrc:         hashContent(op.Content),
-				happlied:     entry.SHA256,
-				hdest:        hashFile(op.Path),
-				recordedMode: entry.Mode,
-				destPerm:     perm,
-				destRegular:  reg,
+				agent:       name,
+				op:          op,
+				hsrc:        hashContent(op.Content),
+				happlied:    entry.SHA256,
+				hdest:       hashFile(op.Path),
+				destPerm:    perm,
+				destRegular: reg,
 			}
 			it.cls = drift.Classify(it.hsrc, it.happlied, it.hdest)
 			if w.withText {
@@ -256,12 +259,11 @@ func walkPlanItems(w planWalk) []planItem {
 				// SourceID matters: the reclaimable-KIND check behind reconcile's
 				// prompt wording is SourceID-keyed and silently degrades to
 				// "unknown kind" without it.
-				op:           adapter.FileOp{Action: "delete", Path: orphan, SourceID: entry.SourceID},
-				happlied:     entry.SHA256,
-				hdest:        hashFile(orphan),
-				recordedMode: entry.Mode,
-				destPerm:     perm,
-				destRegular:  reg,
+				op:          adapter.FileOp{Action: "delete", Path: orphan, SourceID: entry.SourceID},
+				happlied:    entry.SHA256,
+				hdest:       hashFile(orphan),
+				destPerm:    perm,
+				destRegular: reg,
 			}
 			it.cls = drift.Classify("", it.happlied, it.hdest)
 			out = append(out, it)

@@ -311,11 +311,14 @@ func planFixtures() []planFixture {
 		orphanFixture("whole-file/orphan", "APPLIED", "orphan"),
 		orphanFixture("whole-file/orphan-drifted", "EDITED", "orphan-drifted"),
 
-		// T-09: content clean, permission bits drifted. Three answers today:
-		// status folds RECORDED-mode drift into `drift`; diff emits a "mode"
-		// hunk against op.Mode; reconcile and explain ignore mode entirely.
-		// recordedMode (0755) != op.Mode (0700) != on disk (0644), so a walk
-		// that swapped the recorded mode for op.Mode would still be caught.
+		// T-09: content clean, permission bits drifted. status and explain fold
+		// mode drift measured against op.Mode into `drift`; diff emits a "mode"
+		// hunk against op.Mode; reconcile ignores mode entirely. The recorded
+		// mode (0755) != op.Mode (0700) != on disk (0644), so D's
+		// `Source: "mode 0700"` still catches a walk that swapped op.Mode for
+		// the recorded mode. S does NOT discriminate between the two formulas
+		// here (both fire); TestStatus_ModeDriftUsesOpModeNotRecordedMode is
+		// that oracle. E is the projection #229 PR-C moved (was `clean`).
 		{
 			name:   "whole-file/mode-drift-only",
 			target: func(h string) string { return dest(h, "run.sh") },
@@ -350,7 +353,7 @@ func planFixtures() []planFixture {
 				}}
 			},
 			wantE: func(string) eProj {
-				return eProj{rows: []eRow{{"claude", "", "managed", "clean"}}, pathManaged: true}
+				return eProj{rows: []eRow{{"claude", "", "managed", "drift"}}, pathManaged: true}
 			},
 		},
 

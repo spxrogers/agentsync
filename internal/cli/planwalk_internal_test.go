@@ -186,13 +186,16 @@ func TestWalkPlanItems(t *testing.T) {
 				if len(items) != 1 || !items[0].orphan {
 					t.Fatalf("want one orphan item, got %+v", items)
 				}
-				// The mode facts ARE populated (recorded 0755, disk 0644 → the
-				// predicate would say drift)…
-				if !items[0].recordedModeDrifted() {
+				// The on-disk mode facts ARE populated (0644, regular)…
+				if items[0].destPerm != 0o644 || !items[0].destRegular {
 					t.Fatalf("fixture: orphan mode facts not populated: %+v", items[0])
 				}
 				// …and the status projection must not consult them: an orphan's
-				// class is the classifier's, untouched by the chmod.
+				// class is the classifier's, untouched by the chmod. Since #229
+				// PR-C that protection is STRUCTURAL rather than a projection-side
+				// exclusion: the fold asks op.Mode, and a synthesized orphan op
+				// carries Mode 0, so opModeDrifted cannot fire for it no matter
+				// what state recorded (Mode 0o755 here) or what is on disk.
 				model := buildStatusModel(plan, []string{"claude"}, s, h, adapter.ScopeUser, "")
 				if got := model.Summary; got["orphan"] != 1 || got["drift"] != 0 {
 					t.Errorf("status must leave an orphan's class alone under a chmod: summary=%v", got)

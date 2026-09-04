@@ -287,7 +287,8 @@ func containsStar(names []string) bool {
 // tracked items)"). Each agent's rows are partitioned whole-file → merged key
 // → orphan — a stable re-ordering of the single-pass walk, which yields ops in
 // plan order — and permission drift is folded into the class of a
-// content-clean whole file.
+// content-clean whole file, measured against the mode the next apply writes
+// (planItem.classWithModeDrift, the reading explain shares).
 func buildStatusModel(plan render.RenderPlan, names []string, s *state.Targets, userHome string, sc adapter.Scope, projectRoot string) statusModel {
 	model := statusModel{Summary: map[string]int{}}
 	byAgent := map[string][]planItem{}
@@ -314,14 +315,12 @@ func buildStatusModel(plan render.RenderPlan, names []string, s *state.Targets, 
 				if !pass(it) {
 					continue
 				}
-				cls := it.cls.String()
-				// Content clean but permission bits drifted from what agentsync
-				// RECORDED is still drift: the next apply re-chmods it. Whole-file
-				// items only — a merged key has no mode. (An orphan classifies
-				// clean only from a hand-corrupted state entry, so no exclusion.)
-				if it.ptr == "" && cls == drift.Clean.String() && it.recordedModeDrifted() {
-					cls = drift.Drift.String()
-				}
+				// Content clean but the permission bits differ from what the next
+				// apply would chmod to (op.Mode) is still drift — the question
+				// diff's mode hunk and explain ask too, through classWithModeDrift,
+				// so the three cannot disagree. Whole-file items only: a merged key
+				// has no mode, and an orphan's synthesized op carries Mode 0.
+				cls := it.classWithModeDrift().String()
 				ag.Items = append(ag.Items, statusItem{Path: it.op.Path, Pointer: it.ptr, Class: cls})
 				model.Summary[cls]++
 			}
