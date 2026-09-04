@@ -339,13 +339,14 @@ func printPlannedOp(w io.Writer, p *ui.Printer, op adapter.FileOp, wouldChange m
 	// an ESC in a shared config's name can't inject escapes into the plan preview
 	// (issue #93/#171).
 	dispPath := ui.Sanitize(op.Path)
-	// A pure orphan-cleanup op (the "{}"+OwnedKeys signature) is a key REMOVAL:
-	// it is excluded from the "to write" headline count (planSyncCounts) and
-	// summarized under "Removals:", so labeling it "write" here would make the
-	// listing disagree with both. Checked BEFORE isSyncedOp — planSyncCounts
-	// classifies it as a removal first too, and an already-converged cleanup op
-	// printing "synced" would reopen the same listing/headline split.
-	if render.IsKeyMerge(op.MergeStrategy) && strings.TrimSpace(string(op.Content)) == "{}" && len(op.OwnedKeys) > 0 {
+	// An orphan-cleanup op (adapter.OpCleanup, stamped at synthesis) is a key
+	// REMOVAL: it is excluded from the "to write" headline count
+	// (planSyncCounts) and summarized under "Removals:", so labeling it "write"
+	// here would make the listing disagree with both. Checked BEFORE isSyncedOp
+	// — planSyncCounts classifies it as a removal first too, and an
+	// already-converged cleanup op printing "synced" would reopen the same
+	// listing/headline split.
+	if op.Kind == adapter.OpCleanup {
 		fmt.Fprintf(w, "    %s %s %s\n", p.Yellow(ui.GlyphArrow), p.Yellow(ui.Pad("remove", 6)), dispPath)
 		return
 	}
@@ -372,13 +373,13 @@ func isSyncedOp(op adapter.FileOp, wouldChange map[string]bool) bool {
 func planSyncCounts(plan render.RenderPlan, wouldChange map[string]bool) (toWrite, synced, removals int) {
 	for _, res := range plan.PerAgent {
 		for _, op := range res.Ops {
-			// A pure orphan-cleanup op (the "{}"+OwnedKeys signature — same
-			// predicate as removalCounts) is previewed under "Removals:", and
-			// the real apply's headline subtracts it from "applied: X ops" —
-			// counting it in "to write" too made the dry-run and real headlines
-			// disagree by one per cleanup op. It is returned as its own count so
-			// the Plan line still sums to the total.
-			if render.IsKeyMerge(op.MergeStrategy) && strings.TrimSpace(string(op.Content)) == "{}" && len(op.OwnedKeys) > 0 {
+			// An orphan-cleanup op (adapter.OpCleanup — the same kind
+			// removalCounts reads) is previewed under "Removals:", and the real
+			// apply's headline subtracts it from "applied: X ops" — counting it
+			// in "to write" too made the dry-run and real headlines disagree by
+			// one per cleanup op. It is returned as its own count so the Plan
+			// line still sums to the total.
+			if op.Kind == adapter.OpCleanup {
 				removals++
 				continue
 			}
@@ -408,7 +409,7 @@ func planSyncCounts(plan render.RenderPlan, wouldChange map[string]bool) (toWrit
 //
 // The two counts are returned separately so the headline can label them
 // distinctly (a deleted key is not an "op" in the same sense a deleted file is).
-// appliedOps is plan.Total() with the pure "{}" removal ops subtracted, so a
+// appliedOps is plan.Total() with the cleanup (OpCleanup) ops subtracted, so a
 // mixed run reports the removal under "removed:" and does not also count it as an
 // applied write. MUST be called BEFORE PruneStaleState, which drops the state
 // entries OrphanDeletes reads. (Dry-run never prunes, so it can call this
@@ -428,12 +429,10 @@ func removalCounts(plan render.RenderPlan, s *state.Targets, userHome string, sc
 			}
 		}
 		for _, op := range res.Ops {
-			// An orphan-cleanup op is a key-merge op whose rendered content is the
-			// empty object "{}" but which carries owned pointers to delete. Adapters
-			// never render "{}" for a populated section (pinned by
-			// TestAdapters_NeverRenderEmptyObjectForPopulatedSection), so this
-			// signature is unique to the cleanup synthesis.
-			if render.IsKeyMerge(op.MergeStrategy) && strings.TrimSpace(string(op.Content)) == "{}" && len(op.OwnedKeys) > 0 {
+			// An orphan-cleanup op (adapter.OpCleanup, stamped by
+			// adapter.CleanupOp) carries the owned pointers to delete and writes
+			// nothing else.
+			if op.Kind == adapter.OpCleanup {
 				removedKeys += len(op.OwnedKeys)
 				appliedOps-- // a removal, not an applied write
 			}

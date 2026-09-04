@@ -58,8 +58,9 @@ func (s Scope) String() string {
 // there is nothing to normalize at any intake: no empty spelling exists that
 // an executor would write while a guard matching "write" let it through.
 // Unlike SkipKind below, whose zero value is invalid by design so an unstamped
-// Skip fails TestEverySkipLiteralSetsKind, the zero value of Action is
-// deliberately valid: the common case must need no stamp.
+// Skip fails TestEverySkipLiteralSetsKind, the zero values of Action and
+// OpKind are deliberately valid (write, render): the common case must need no
+// stamp.
 type Action int
 
 const (
@@ -86,8 +87,54 @@ func (a Action) String() string {
 	}
 }
 
+// OpKind says why a FileOp exists, orthogonally to what it does (Action). The
+// zero value is OpRender — an ordinary op an adapter's Render emitted — so, as
+// with Action, the common case needs no stamp.
+type OpKind int
+
+const (
+	// OpRender is an ordinary rendered op. It is the zero value.
+	OpRender OpKind = iota
+	// OpCleanup is an orphan-cleanup op, defined by its shape: an ActionWrite
+	// of "{}" to a key-merge destination whose only work is pruning OwnedKeys
+	// — the merge path performs the removal, so the op writes nothing new. It
+	// is produced by CleanupOp (called from render.orphanCleanupOps when a
+	// key-merge section empties in the source, and from `agent disable
+	// --purge`); consumers read this kind instead of sniffing the shape.
+	OpCleanup
+)
+
+// String renders the kind for human notes: "render" | "cleanup" | "opkind(<n>)".
+func (k OpKind) String() string {
+	switch k {
+	case OpRender:
+		return "render"
+	case OpCleanup:
+		return "cleanup"
+	default:
+		return fmt.Sprintf("opkind(%d)", int(k))
+	}
+}
+
+// CleanupOp builds the op that prunes owned keys from a key-merge destination:
+// an ActionWrite of "{}" whose only work is the OwnedKeys removal the merge
+// path performs. It is the ONLY producer of OpCleanup — every site that
+// synthesizes a cleanup op must call it so the kind is never missed.
+func CleanupOp(path, strategy string, owned []string) FileOp {
+	return FileOp{
+		Action:        ActionWrite,
+		Kind:          OpCleanup,
+		Path:          path,
+		Content:       []byte("{}"),
+		Mode:          0o644,
+		MergeStrategy: strategy,
+		OwnedKeys:     owned,
+	}
+}
+
 // FileOp describes one destination-side change. Action says what happens to
-// the destination: write (the zero value) or delete.
+// the destination (write — the zero value — or delete); Kind says why the op
+// exists (an ordinary render, or a synthesized orphan cleanup).
 // Path is absolute (after AGENTSYNC_TARGET_ROOT redirection).
 //
 // CONTRACT — Content is ALWAYS JSON for a key-merge op, regardless of the
@@ -109,6 +156,7 @@ func (a Action) String() string {
 // not emit the on-disk format here.
 type FileOp struct {
 	Action        Action // write (zero value) | delete
+	Kind          OpKind // render (zero value) | cleanup
 	Path          string
 	Content       []byte
 	Mode          uint32

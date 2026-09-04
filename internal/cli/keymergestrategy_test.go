@@ -124,16 +124,14 @@ func TestKeyMergeStrategy_MatchesEmittedOps(t *testing.T) {
 	}
 }
 
-// TestAdapters_NeverRenderEmptyObjectForPopulatedSection pins the assumption
-// removalCounts (internal/cli/apply.go) rests on: a key-merge op whose trimmed
-// content is "{}" AND which carries OwnedKeys is uniquely the orphan-cleanup op
-// render.Plan synthesizes for an emptied section — no adapter renders "{}" for
-// a POPULATED section. Cleanup ops only exist post-Plan, so ANY trimmed-"{}"
-// key-merge op straight out of an adapter's Render on this populated fixture
-// would collide with that signature (once Plan attached owned pointers, apply
-// would count the section's keys as "removed" and delete them). Renders the
-// same MCP+hook fixture as TestKeyMergeStrategy_MatchesEmittedOps through every
-// registered adapter at both scopes and asserts none emits it.
+// TestAdapters_NeverRenderEmptyObjectForPopulatedSection is an adapter-fidelity
+// guard: an adapter that renders a trimmed-"{}" key-merge op for a POPULATED
+// canonical section has silently dropped that section (CLAUDE.md, "models must
+// stay faithful to their on-disk artifacts"). It renders the same MCP+hook
+// fixture as TestKeyMergeStrategy_MatchesEmittedOps through every registered
+// adapter at both scopes — the only registry-wide check, so it also covers a
+// thinly-tested breadth-tier agent — and asserts none emits it. It is a narrow
+// guard: a `{"mcpServers":{}}` render for a populated section passes it.
 func TestAdapters_NeverRenderEmptyObjectForPopulatedSection(t *testing.T) {
 	testenv.RequireContainer(t)
 	fixture := keyMergeFixture()
@@ -166,9 +164,8 @@ func TestAdapters_NeverRenderEmptyObjectForPopulatedSection(t *testing.T) {
 				totalKeyMergeOps++
 				if strings.TrimSpace(string(op.Content)) == "{}" {
 					t.Errorf("[%s/%s] rendered a trimmed-\"{}\" key-merge op for %q "+
-						"(OwnedKeys=%v) from a populated fixture — this collides with the "+
-						"synthesized-cleanup signature removalCounts keys off",
-						name, sc.name, op.Path, op.OwnedKeys)
+						"from a populated fixture — the adapter silently dropped the section",
+						name, sc.name, op.Path)
 				}
 			}
 		}

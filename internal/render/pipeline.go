@@ -327,14 +327,7 @@ func orphanCleanupOps(s *state.Targets, a adapter.Adapter, agent string, scope a
 		if _, err := os.Stat(abs); err != nil {
 			continue
 		}
-		cleanup = append(cleanup, adapter.FileOp{
-			Action:        adapter.ActionWrite,
-			Path:          abs,
-			Content:       []byte("{}"),
-			Mode:          0o644,
-			MergeStrategy: strat,
-			OwnedKeys:     ownedByPath[path],
-		})
+		cleanup = append(cleanup, adapter.CleanupOp(abs, strat, ownedByPath[path]))
 	}
 	return cleanup
 }
