@@ -179,7 +179,31 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   The upgrade-notice probe's answer is unchanged, by design — a stricter answer
   there would fire a breaking-change banner at a brand-new user.
 
+- **`reconcile --help` no longer says `--auto-safe` "auto-resolve[s] only
+  converged/pending/new".** It resolves nothing: every item that reaches
+  `reconcile` needs a human, and the flag reports each one as left unresolved.
+  The user guide, the daily-loop guide and the CLI reference said the same
+  wrong thing and are corrected with it.
+
 ### Changed
+
+- **`status --json`, `diff` and `reconcile` now list a shared file's merged keys
+  in a stable, sorted order.** The three walked `render.CollectPointers`' output
+  directly, which ranges a Go map, so with five MCP servers in one
+  `~/.claude.json` a `status --json` payload came back in a different key order
+  almost every run (measured: five distinct orderings across 200 calls), diff
+  hunks reordered, and `reconcile`'s prompt queue shuffled between runs. Merged
+  keys are now walked in ascending pointer order. No item is added, dropped or
+  reclassified; only the order changes — but a `status --json` diffed between
+  runs, or a `reconcile` transcript compared against a previous one, will be
+  stable for the first time. `explain` already sorted and is unchanged.
+
+- **Internal: `status`, `diff`, `reconcile` and `explain` now share one
+  plan→drift walk** ([#229](https://github.com/spxrogers/agentsync/issues/229)).
+  `explain` now decodes a key-merged destination once per rendered section
+  rather than once per key, so every key in one file is classified against the
+  same snapshot. The ways the four surfaces still disagree (mode-only drift,
+  symlinked destinations) are unchanged and tracked in #229.
 
 - **`.state/targets.json` is now `schema_version: 2`.** The upgrade is automatic
   and requires nothing: every command reads the old keys, and the first command

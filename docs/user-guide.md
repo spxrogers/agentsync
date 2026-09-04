@@ -260,8 +260,10 @@ Inside `reconcile`, for each drifting item:
 - **`i`** stop tracking this path (adds it to `~/.agentsync/ignore.toml`).
 - **`s`/`q`** skip / quit.
 
-Scripting it? `--auto-writeback`, `--auto-override`, or `--auto-safe` (which only
-auto-resolves changes that can't lose work).
+Scripting it? `--auto-writeback`, `--auto-override`, or `--auto-safe`. The last
+resolves nothing — every item that reaches `reconcile` needs a human — and
+instead lists each one as left unresolved, so it works as a non-interactive
+"does anything need me" check.
 
 ---
 

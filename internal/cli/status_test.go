@@ -743,3 +743,72 @@ func TestStatus_LegendRejectsConflictingFlags(t *testing.T) {
 		})
 	}
 }
+
+// TestStatusJSON_NeverEmitsResolvedSecret pins that `status --json` (and the
+// dashboard) never carries a resolved secret. status builds its plan from
+// secrets.SubstituteCanonical, so every whole-file op.Content and merged-key
+// value it HASHES is cleartext; the payload must stay paths, pointers, classes
+// and counts.
+//
+// This is a two-fault tripwire, not a single-fault detector: the payload can
+// leak only if buildStatusModel asks the walk for text (withText: true) AND
+// statusItem grows a field that carries it. The real guard is
+// TestPlanItemIsNotASerializationSurface — a planItem has no exported field and
+// no json tag, so it cannot be marshalled by accident; this is the end-to-end
+// backstop behind it, on the same fixture TestDiff_DoesNotLeakResolvedSecrets
+// uses.
+func TestStatusJSON_NeverEmitsResolvedSecret(t *testing.T) {
+	const sentinel = "ghp_SENTINEL_DO_NOT_LEAK_THIS_TOKEN_123456789"
+
+	tmp := t.TempDir()
+	env := map[string]string{
+		"AGENTSYNC_TARGET_ROOT": tmp,
+		"GITHUB_TOKEN":          sentinel,
+	}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(tmp, ".agentsync", "mcp", "github.toml")
+	_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+	body := `[server]
+type = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+
+[server.env]
+GITHUB_TOKEN = "${env:GITHUB_TOKEN}"
+`
+	_ = os.WriteFile(mcp, []byte(body), 0o644)
+	if _, err := runCLI(t, env, "apply"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Setup invariant: the destination really holds the cleartext, so a leak
+	// is possible and the assertion below is not vacuous. Then drift it, so
+	// the item is not merely "clean".
+	dst := filepath.Join(tmp, ".claude.json")
+	dstBytes, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(dstBytes), sentinel) {
+		t.Fatalf("setup invariant failed — dest does not contain sentinel; got: %s", dstBytes)
+	}
+	_ = os.WriteFile(dst, []byte(strings.ReplaceAll(string(dstBytes), `"npx"`, `"npm"`)), 0o644)
+
+	for _, args := range [][]string{{"status", "--json"}, {"status"}} {
+		out, err := runCLI(t, env, args...)
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+		if strings.Contains(out, sentinel) {
+			t.Fatalf("SECURITY: %v output leaked sentinel secret %q\n%s", args, sentinel, out)
+		}
+		if !strings.Contains(out, "drift") {
+			t.Fatalf("%v: expected the drifted MCP key to be reported; got:\n%s", args, out)
+		}
+	}
+}

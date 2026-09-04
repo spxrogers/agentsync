@@ -10,6 +10,7 @@ import (
 	"github.com/sergi/go-diff/diffmatchpatch"
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
+	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
@@ -132,70 +133,7 @@ func newDiffCmd() *cobra.Command {
 			// formatted diff or --json. Pretty rendering and JSON share the
 			// same masked strings, so the secret-leak guards above protect
 			// both modes.
-			var hunks []diffHunk
-			// filterMatched tracks whether a <path> argument matched any rendered
-			// op across every selected agent, so a path that matches NOTHING (a
-			// typo, or an unmanaged file) can be reported distinctly from a managed
-			// path that is genuinely in sync ("no diff").
-			filterMatched := filterPath == ""
-			for _, name := range reg.Names() {
-				res, ok := plan.PerAgent[name]
-				if !ok {
-					continue
-				}
-				seen := map[string]bool{}
-				for _, op := range res.Ops {
-					if filterPath != "" && op.Path != filterPath {
-						continue
-					}
-					filterMatched = true
-					if render.IsKeyMerge(op.MergeStrategy) {
-						// Key-level diff: compare per pointer. NOT deduped by path —
-						// one agent emits several key-merge ops to one file (codex
-						// writes /mcp_servers AND /hooks to config.toml; claude writes
-						// /hooks AND /lspServers to settings.json), each owning a
-						// distinct section, so every op must be walked. Deduping by
-						// path here dropped the second section's drift (status's key
-						// loop and the apply pipeline never path-dedup key-merge ops).
-						var ours map[string]interface{}
-						_ = json.Unmarshal(op.Content, &ours)
-						final := readDestFile(op.MergeStrategy, op.Path)
-						for _, ptr := range render.CollectPointers(ours, "") {
-							srcStr := secrets.MaskResolved(marshalPretty(getPointerValue(ours, ptr)), redact)
-							dstStr := secrets.MaskResolved(marshalPretty(getPointerValue(final, ptr)), redact)
-							if srcStr == dstStr {
-								continue
-							}
-							hunks = append(hunks, diffHunk{Path: op.Path, Pointer: ptr, Source: srcStr, Dest: dstStr})
-						}
-					} else {
-						// File-level diff.
-						if seen[op.Path] {
-							continue
-						}
-						seen[op.Path] = true
-						srcStr := secrets.MaskResolved(string(op.Content), redact)
-						dstBytes, readErr := readDestBytes(op.Path)
-						dstStr := ""
-						if readErr == nil {
-							dstStr = secrets.MaskResolved(string(dstBytes), redact)
-						}
-						if srcStr == dstStr {
-							// Content is identical, but the file MODE may have drifted
-							// from what apply maintains (op.Mode). A content-identical
-							// chmod produces no text hunk, so surface it as a small
-							// "mode" hunk instead of reporting "no diff" — the mode
-							// analog of a content drift hunk (render.Writer.Write
-							// re-converges it on the next apply).
-							if src, dst, ok := modeHunk(op.Path, op.Mode); ok {
-								hunks = append(hunks, diffHunk{Path: op.Path, Pointer: "mode", Source: src, Dest: dst})
-							}
-							continue
-						}
-						hunks = append(hunks, diffHunk{Path: op.Path, Source: srcStr, Dest: dstStr})
-					}
-				}
-			}
+			hunks, filterMatched := collectDiffHunks(plan, reg.Names(), filterPath, redact)
 
 			// A <path> that matched no rendered op is a typo or an unmanaged file
 			// — distinct from a managed path that is in sync ("no diff"). Fail with
@@ -276,25 +214,18 @@ func renderDiffText(p *ui.Printer, diffs []diffmatchpatch.Diff) string {
 }
 
 // modeHunk describes a permission-bit mismatch between the mode apply would
-// maintain for path (wantMode, from op.Mode) and the file's current perm on
-// disk. ok is false when they match, wantMode is 0 (unspecified), or the file is
-// absent/symlinked/non-regular (the content path already covers those). It lets
-// `diff` surface a content-identical chmod — which yields no text hunk — rather
-// than silently reporting "no diff".
-func modeHunk(path string, wantMode uint32) (source, dest string, ok bool) {
-	if wantMode == 0 {
+// maintain for a whole-file item (op.Mode) and the file's current perm on
+// disk, both as the walk recorded them. ok is false when they match, op.Mode
+// is 0 (unspecified), or the file is absent/symlinked/non-regular (the content
+// path already covers those) — planItem.opModeDrifted's gate. It lets `diff`
+// surface a content-identical chmod — which yields no text hunk — rather than
+// silently reporting "no diff".
+func modeHunk(it planItem) (source, dest string, ok bool) {
+	if !it.opModeDrifted() {
 		return "", "", false
 	}
-	fi, err := os.Lstat(path)
-	if err != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
-		return "", "", false
-	}
-	want := os.FileMode(wantMode).Perm()
-	got := fi.Mode().Perm()
-	if want == got {
-		return "", "", false
-	}
-	return fmt.Sprintf("mode %04o", want), fmt.Sprintf("mode %04o", got), true
+	return fmt.Sprintf("mode %04o", os.FileMode(it.op.Mode).Perm()),
+		fmt.Sprintf("mode %04o", os.FileMode(it.destPerm).Perm()), true
 }
 
 func marshalPretty(v any) string {
@@ -306,4 +237,59 @@ func marshalPretty(v any) string {
 		return fmt.Sprintf("%v", v)
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// collectDiffHunks runs every selected agent's rendered ops through
+// walkPlanItems and collects the masked source/dest hunks that differ, in walk
+// order (registry order, plan order, merged keys sorted). names is the agent
+// iteration order (reg.Names()); filterPath, when non-empty, narrows the walk
+// to ops whose Path equals it exactly. filterMatched reports whether that path
+// matched ANY rendered op — it is set inside the walk's matchOp, on op match,
+// before any item is produced, so a matching op that yields no item (an emptied
+// "{}" section) still counts as managed rather than as a typo (#229 amendment
+// A3).
+//
+// diff never consults state: it has no "applied" side, and whether a hunk
+// prints is decided by MASKED-TEXT equality, never by the walk's class — a
+// templated source against a cleartext destination classifies `conflict` yet
+// masks to equal, and diff must print nothing there. The walk therefore runs
+// against an empty state, exactly as the pre-#229 copy consulted none; the
+// classes it computes are unused here.
+func collectDiffHunks(plan render.RenderPlan, names []string, filterPath string,
+	redact map[string]string,
+) (hunks []diffHunk, filterMatched bool) {
+	filterMatched = filterPath == ""
+	items := walkPlanItems(planWalk{
+		plan: plan, agents: names, state: state.New(),
+		withText: true,
+		matchOp: func(_ string, op adapter.FileOp) bool {
+			if filterPath != "" && op.Path != filterPath {
+				return false
+			}
+			filterMatched = true
+			return true
+		},
+	})
+	for _, it := range items {
+		srcStr := secrets.MaskResolved(it.srcText, redact)
+		dstStr := secrets.MaskResolved(it.dstText, redact)
+		if it.ptr != "" {
+			// Key-level diff: one hunk per differing pointer.
+			if srcStr == dstStr {
+				continue
+			}
+			hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: it.ptr, Source: srcStr, Dest: dstStr})
+			continue
+		}
+		// File-level diff.
+		if srcStr == dstStr {
+			// Content identical: surface a mode-only drift as a "mode" hunk.
+			if src, dst, ok := modeHunk(it); ok {
+				hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: "mode", Source: src, Dest: dst})
+			}
+			continue
+		}
+		hunks = append(hunks, diffHunk{Path: it.op.Path, Source: srcStr, Dest: dstStr})
+	}
+	return hunks, filterMatched
 }

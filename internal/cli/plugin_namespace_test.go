@@ -869,7 +869,8 @@ func TestImport_NamedHookEventAllPluginProvided(t *testing.T) {
 // TestReconcile_OrphanPromptSaysAutoReclaimKindsAreTemporary pins the prompt
 // wording — and exists because the branch shipped DEAD once already.
 //
-// reconcile's orphan items are built by collectOrphanFileItems, which originally
+// reconcile's orphan items are built by walkPlanItems (collectReconcileItems'
+// orphan half), which originally
 // synthesized a FileOp with no SourceID. The wording branch asks a
 // SourceID-keyed question, so it silently answered "not reclaimable" for every
 // orphan and the conditional text could never print. Nothing caught it because

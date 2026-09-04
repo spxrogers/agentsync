@@ -281,67 +281,50 @@ func containsStar(names []string) bool {
 // buildStatusModel classifies every tracked file/key/orphan across agents into
 // the structured statusModel. It is the single source of truth both the
 // formatted dashboard and --json render from.
+//
+// The classification itself is walkPlanItems'; status adds its presentation on
+// top. An agent with a plan result is listed even with zero items ("(no
+// tracked items)"). Each agent's rows are partitioned whole-file → merged key
+// → orphan — a stable re-ordering of the single-pass walk, which yields ops in
+// plan order — and permission drift is folded into the class of a
+// content-clean whole file.
 func buildStatusModel(plan render.RenderPlan, names []string, s *state.Targets, userHome string, sc adapter.Scope, projectRoot string) statusModel {
 	model := statusModel{Summary: map[string]int{}}
+	byAgent := map[string][]planItem{}
+	// withText stays false: status hashes op.Content but never shows it.
+	for _, it := range walkPlanItems(planWalk{
+		plan: plan, agents: names, state: s, userHome: userHome, scope: sc, projectRoot: projectRoot,
+		includeOrphans: true,
+	}) {
+		byAgent[it.agent] = append(byAgent[it.agent], it)
+	}
 	for _, name := range names {
-		res, ok := plan.PerAgent[name]
-		if !ok {
+		if _, ok := plan.PerAgent[name]; !ok {
 			continue
 		}
 		ag := statusAgent{Agent: name}
-		seen := map[string]bool{}
-		// file-level: every non-key-merge op is a whole-file item (including the
-		// "replace" strategy used by skills/subagents/commands/memory).
-		for _, op := range res.Ops {
-			if render.IsKeyMerge(op.MergeStrategy) {
-				continue // covered key-by-key below
-			}
-			if seen[op.Path] {
-				continue
-			}
-			seen[op.Path] = true
-			entry := s.Files[stateFileKey(userHome, name, sc, projectRoot, op.Path)]
-			hsrc := hashContent(op.Content)
-			happlied := entry.SHA256
-			hdest := hashFile(op.Path)
-			cls := drift.Classify(hsrc, happlied, hdest).String()
-			// A file whose CONTENT is clean but whose permission bits drifted from
-			// what agentsync last applied is still drift — the next apply re-
-			// converges the mode (render.Writer.Write chmods a content-identical
-			// file whose mode differs). Without this, a skill script that lost its
-			// +x bit reports "clean" yet the next apply would change it.
-			if cls == drift.Clean.String() && modeDrifted(entry.Mode, op.Path) {
-				cls = drift.Drift.String()
-			}
-			ag.Items = append(ag.Items, statusItem{Path: op.Path, Class: cls})
-			model.Summary[cls]++
-		}
-		// key-level: walk owned pointers for each merge op.
-		for _, op := range res.Ops {
-			if !render.IsKeyMerge(op.MergeStrategy) {
-				continue
-			}
-			var ours map[string]any
-			_ = json.Unmarshal(op.Content, &ours)
-			final := readDestFile(op.MergeStrategy, op.Path)
-			for _, ptr := range render.CollectPointers(ours, "") {
-				hsrc := hashAnyValue(getPointerValue(ours, ptr))
-				happlied := s.Keys[stateKeyKey(userHome, name, sc, projectRoot, op.Path, ptr)].SHA256
-				hdest := hashAnyValue(getPointerValue(final, ptr))
-				cls := drift.Classify(hsrc, happlied, hdest).String()
-				ag.Items = append(ag.Items, statusItem{Path: op.Path, Pointer: ptr, Class: cls})
+		items := byAgent[name]
+		// Stable partition: whole-file → merged key → orphan.
+		for _, pass := range []func(planItem) bool{
+			func(it planItem) bool { return it.ptr == "" && !it.orphan },
+			func(it planItem) bool { return it.ptr != "" },
+			func(it planItem) bool { return it.orphan },
+		} {
+			for _, it := range items {
+				if !pass(it) {
+					continue
+				}
+				cls := it.cls.String()
+				// Content clean but permission bits drifted from what agentsync
+				// RECORDED is still drift: the next apply re-chmods it. Whole-file
+				// items only — a merged key has no mode. (An orphan classifies
+				// clean only from a hand-corrupted state entry, so no exclusion.)
+				if it.ptr == "" && cls == drift.Clean.String() && it.recordedModeDrifted() {
+					cls = drift.Drift.String()
+				}
+				ag.Items = append(ag.Items, statusItem{Path: it.op.Path, Pointer: it.ptr, Class: cls})
 				model.Summary[cls]++
 			}
-		}
-		// orphans: whole-file dests this agent still owns in state but no longer
-		// renders (the source component was removed). Without these, status
-		// reports nothing for a file that lingers and the next apply/reconcile
-		// would act on.
-		for _, orphan := range render.OrphanFiles(s, userHome, name, sc, projectRoot, res.Ops) {
-			happlied := s.Files[stateFileKey(userHome, name, sc, projectRoot, orphan)].SHA256
-			cls := drift.Classify("", happlied, hashFile(orphan)).String()
-			ag.Items = append(ag.Items, statusItem{Path: orphan, Class: cls})
-			model.Summary[cls]++
 		}
 		model.Agents = append(model.Agents, ag)
 	}
@@ -1007,26 +990,6 @@ func hashFile(path string) string {
 		return ""
 	}
 	return hashContent(data)
-}
-
-// modeDrifted reports whether the regular file at path exists with permission
-// bits that differ from the mode agentsync last recorded for it (state
-// FileEntry.Mode). A recorded mode of 0 means "unspecified" (older state, or an
-// op whose adapter left Mode unset — the writer defaults those to 0o644 on
-// write), so it never counts as drift. A missing, symlinked, or non-regular file
-// is left to the content classifier (which already flags it), so this returns
-// false there. It is the permission-bit analog of the content-hash drift the
-// classifier detects: a content-identical chmod is real drift the next apply
-// re-converges (render.Writer.Write).
-func modeDrifted(recordedMode uint32, path string) bool {
-	if recordedMode == 0 {
-		return false
-	}
-	fi, err := os.Lstat(path)
-	if err != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
-		return false
-	}
-	return fi.Mode().Perm() != os.FileMode(recordedMode).Perm()
 }
 
 func hashAnyValue(v any) string {
