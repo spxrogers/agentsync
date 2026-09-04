@@ -49,7 +49,9 @@ is the only package that depends on nearly all the others.
   `status`, `diff`, `reconcile` and `explain` (`planwalk.go`); its `planItem` is
   deliberately unexported field-for-field so it can never become a `--json`
   surface, because a plan built from `secrets.SubstituteCanonical` carries
-  resolved cleartext in `op.Content`.
+  resolved cleartext in `op.Content`; `destReadPath` / `readDestText`
+  (`destread.go`) — the whole-file destination readers that carry the symlink
+  policy (`AGENTSYNC_ALLOW_SYMLINK_DEST`), mirroring `iox.AtomicWrite`'s.
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,
   `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
   `mcp {add,remove,list,enable,disable}`,
@@ -59,7 +61,7 @@ is the only package that depends on nearly all the others.
   `migrate subagents`, `explain <path>`,
   `version`.
 - **Depends on:** adapter, source, state, secrets, paths, render, marketplace,
-  project, drift, git, ui, log.
+  project, drift, git, iox, ui, log.
 - **Files:** `root.go` + one file per command group + shared helpers
   (`destread.go`, `planwalk.go`).
 
@@ -498,7 +500,9 @@ cleartext secrets the rendered files already contain).
 ### `internal/iox`
 Atomic file IO and locking.
 - **Key:** `AtomicWrite(dest, data, mode)`; `Lock`/`AcquireLock`/
-  `AcquireLockTimeout`; `ErrSymlinkDest`; `AllowSymlinkDestEnv`.
+  `AcquireLockTimeout`; `ErrSymlinkDest`; `AllowSymlinkDestEnv`;
+  `SymlinkDestAllowed` (the one reading of it, shared with `internal/cli`'s
+  read-side gate).
 - **Files:** `atomic.go`, `lock.go`.
 
 ### `internal/jsonkeys`

@@ -15,7 +15,7 @@ the rest are escape hatches you'll rarely need.
 | Env var | Purpose |
 | --- | --- |
 | `AGENTSYNC_HOME` | Override the `~/.agentsync/` location (absolute path). |
-| `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations (e.g. chezmoi-managed files). |
+| `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations, and compare through them when reading (e.g. chezmoi-managed files). Needed by every command, not only `apply`. |
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://` / `git://` plugin & marketplace sources. |
 | `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `check` validate reference *shape* only, skipping resolution (CI without an age key). |
 | `AGENTSYNC_NO_UPGRADE_NOTICE=1` | Never show the one-time [upgrade notice](/reference/upgrading/). |
@@ -26,7 +26,7 @@ the rest are escape hatches you'll rarely need.
 | --- | --- |
 | `AGENTSYNC_HOME` | Override `~/.agentsync/` location (absolute path). |
 | `AGENTSYNC_TARGET_ROOT` | Redirect `$HOME` for testing (used by the hermetic test container). |
-| `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Permit writes to symlinked destination files (resolves the link first). |
+| `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations, and compare through them when reading (resolves the link first). Needed by every command — `status`/`diff`/`reconcile`/`explain` too — not only `apply`. |
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://` and `git://` plugin / marketplace sources. |
 | `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` | Register an agent with no implemented adapter yet (none today — every valid agent is real). |
 | `AGENTSYNC_ALLOW_PLUGIN_DRIFT=1` | Bypass the plugin-cache manifest-SHA check (after hand-editing). |
@@ -41,4 +41,6 @@ the rest are escape hatches you'll rarely need.
 	MITM protection on insecure URLs, strand-protection on symlinked destinations,
 	tamper-detection on the plugin cache. Set them deliberately and scope them
 	narrowly (e.g. a single command invocation), not globally in your shell profile.
+	The exception is `AGENTSYNC_ALLOW_SYMLINK_DEST`: once you rely on it, every
+	command needs it, because it governs reads as well as writes.
 </Aside>

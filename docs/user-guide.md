@@ -1029,7 +1029,11 @@ exclusive. Every `list` accepts `ls`, and every `remove` accepts `rm`. `status
 --json` and `diff [<path>] --json` emit
 the structured report instead of the formatted one, suitable for CI gates and
 dashboards (`status --json` is never collapsed — it carries every tracked file;
-`diff --json` masks the same resolved secrets the formatted diff does). For a
+`diff --json` masks the same resolved secrets the formatted diff does; its
+`pointer` field is an RFC-6901 pointer for a merged key, and one of two
+pseudo-pointers for a whole-file finding that is not a text difference —
+`mode` for a content-identical permission change, `symlink` for a symlinked
+destination agentsync is not comparing through). For a
 gate that should **fail the build** on drift, add `--exit-code`: `status
 --exit-code` / `diff --exit-code` exit `2` when drift/hunks exist and `0` when
 clean (exit `2` is distinct from the generic error exit `1`, and prints no extra
@@ -1058,7 +1062,7 @@ and the complete environment-variable table. The ones you'll reach for most:
 | Env var | Purpose |
 |---|---|
 | `AGENTSYNC_HOME` | Override the `~/.agentsync/` location. |
-| `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations (e.g. chezmoi-managed files). |
+| `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations, and compare through them when reading (e.g. chezmoi-managed files). Needed by every command — `status`/`diff`/`reconcile`/`explain` too — not only `apply`. |
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://`/`git://` plugin/marketplace sources. |
 | `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `check` validate reference *shape* only, skipping resolution (CI without an age key). |
 | `AGENTSYNC_NO_UPGRADE_NOTICE=1` | Never show the one-time first-run-after-upgrade notice. |

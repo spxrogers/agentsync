@@ -239,8 +239,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   plan→drift walk** ([#229](https://github.com/spxrogers/agentsync/issues/229)).
   `explain` now decodes a key-merged destination once per rendered section
   rather than once per key, so every key in one file is classified against the
-  same snapshot. The ways the four surfaces still disagree (mode-only drift,
-  symlinked destinations) are unchanged and tracked in #229.
+  same snapshot. The ways the four surfaces disagreed (mode-only drift,
+  symlinked destinations) are resolved in the same release; see Fixed above.
 
 - **`.state/targets.json` is now `schema_version: 2`.** The upgrade is automatic
   and requires nothing: every command reads the old keys, and the first command

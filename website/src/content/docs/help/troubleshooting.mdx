@@ -89,6 +89,19 @@ the underlying file in place, keeping the link):
 AGENTSYNC_ALLOW_SYMLINK_DEST=1 agentsync apply
 ```
 
+The same switch governs how agentsync **reads** a symlinked whole-file
+destination (a `CLAUDE.md`, a skill, a subagent), so it is needed for every
+command, not only `apply`. Without it, `agentsync status` reports the file as
+`drift` on every run even right after an apply, and `agentsync diff` prints a
+`symlink` hunk instead of a content diff — that is the same refusal, seen from
+the read side. With it, `status`, `diff`, `reconcile` and `explain` resolve the
+link and compare the file it points at. (A key-merged file such as
+`~/.claude.json` is read through the link either way.)
+
+```bash
+AGENTSYNC_ALLOW_SYMLINK_DEST=1 agentsync status
+```
+
 ### OpenCode hooks aren't auto-translated
 OpenCode hooks are JS/TS plugins, not declarative shell commands. agentsync does
 **not** auto-translate Claude hooks to OpenCode — hand-author a small JS/TS plugin

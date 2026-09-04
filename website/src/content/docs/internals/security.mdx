@@ -68,7 +68,10 @@ boundary, fetchers:
 - Writes are **atomic** (two-phase: stage → fsync → rename).
 - agentsync refuses to clobber **symlinked destinations** by default (a rename
   would replace the link with a regular file and strand your linked source);
-  override with `AGENTSYNC_ALLOW_SYMLINK_DEST=1`.
+  override with `AGENTSYNC_ALLOW_SYMLINK_DEST=1`. Since #229 the same switch
+  gates every read-side surface too: unset, `status`, `diff`, `reconcile` and
+  `explain` classify a symlinked whole-file destination as drift rather than
+  reading through it, and `reconcile` refuses to write back through it.
 - Pre-existing **foreign files** are backed up to `.state/backups/<ts>/` before
   overwrite.
 
