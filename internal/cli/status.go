@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -939,6 +938,12 @@ func stateKeyKey(userHome, agent string, sc adapter.Scope, projectRoot, path, pt
 	return state.NewPointerKey(userHome, agent, sc.String(), projectRoot, path, ptr)
 }
 
+// symlinkSentinel is hashFile's answer for a symlink this configuration does
+// not read through (destReadPath). Opaque: it exists only to never equal a
+// content hash, and diff keys its symlink hunk on the same value
+// (planItem.destSymlinkRefused), so the two sites must agree on it.
+const symlinkSentinel = "symlink-not-regular-file"
+
 func hashContent(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
@@ -950,20 +955,26 @@ func hashContent(b []byte) string {
 // the expected signal for Orphan / OrphanDrifted. A destination whose SHAPE is
 // wrong, or which cannot be stat'd, answers the opaque marker below instead.
 //
-// If the path is a symlink, hashFile returns a special marker so the
-// drift classifier can flag the file as drifted in a way the user can
-// act on. A managed file becoming a symlink (e.g. user replaced
-// .claude.json with `ln -s /dev/null`) used to silently read through
-// the link and compare hashes — making the swap invisible to status.
+// A SYMLINK at the path answers symlinkSentinel unless
+// AGENTSYNC_ALLOW_SYMLINK_DEST=1 (destReadPath — the gate apply writes under).
+// The sentinel is a whole-file-only policy signal: a managed regular file
+// became a link you have not opted into. Reading through such a link and
+// comparing hashes, as this once did, made the swap invisible to status. With
+// the env set the link is resolved and its TARGET hashed — the file apply
+// converges — so a chezmoi setup reports clean after a successful apply
+// instead of a drift no apply can clear. Opting in never lets a non-regular
+// target through: a link to one (`ln -s /dev/null`) resolves and then answers
+// the SHAPE sentinel below; a dangling link answers symlinkSentinel with the
+// env set or unset, mirroring apply's "resolve symlink" failure.
 func hashFile(path string) string {
-	info, lerr := os.Lstat(path)
-	if lerr == nil && info.Mode()&os.ModeSymlink != 0 {
-		// Return a sentinel that will never match a content hash.
-		// We don't include the link target to keep the sentinel stable
-		// (target may resolve to whatever attacker chose); just signal
-		// "this is a symlink now."
-		return "symlink-not-regular-file"
+	p, ok := destReadPath(path)
+	if !ok {
+		// The link target is deliberately NOT part of the sentinel: it is
+		// attacker-choosable, and a sentinel must stay a stable opaque token
+		// that never equals a content hash.
+		return symlinkSentinel
 	}
+	path = p
 	// A FIFO, device, or socket at a destination path would make os.ReadFile
 	// BLOCK forever rather than fail — wedging `status`, which is advertised as
 	// read-only, and reconcile's orphan listing. None has a content hash worth

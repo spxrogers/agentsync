@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 
+	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/render"
 )
 
@@ -57,13 +59,14 @@ var errDestUnstattable = errors.New("cannot stat destination")
 //     wrapping the real errno, NOT as a shape error. "Present and the wrong
 //     shape" and "shape unknown" are different facts, and one of them reaches a
 //     user.
-//   - Symlinks are followed here but refused outright by hashFile, so `status`
-//     calls a symlinked destination drifted while `diff` reads through it. The
-//     reads this gate replaced followed links too, so changing that is a
-//     behavior decision for #229 — which also owns the consequence that under
-//     AGENTSYNC_ALLOW_SYMLINK_DEST=1, where apply writes THROUGH the link,
-//     `status` reports drift no apply can clear. TestHashFileSentinels asserts
-//     both halves.
+//   - Symlinks are FOLLOWED here, deliberately: this is also the key-merge
+//     read (readDestFile) and import's state-seeding read, where the symlink
+//     policy does not apply — a key-merge destination is decoded through the
+//     link on every surface, as apply writes through it. The WHOLE-FILE reads
+//     (hashFile, destModePerm, readDestText) apply the policy first, through
+//     destReadPath below, and hand this function a symlink's resolved target
+//     only when AGENTSYNC_ALLOW_SYMLINK_DEST=1 opted into it.
+//     TestHashFileSentinels asserts both halves.
 //
 // Callers mostly do not surface the refusal — reconcile's write-back is the
 // only one that names the shape today — so it is more a diagnosis available to
@@ -103,4 +106,58 @@ func readDestBytes(path string) ([]byte, error) {
 		return nil, errDestNotRegular
 	}
 	return os.ReadFile(path)
+}
+
+// destReadPath applies the destination SYMLINK policy and answers the path the
+// whole-file destination reads should actually look at. ok is false when the
+// destination is a symlink this configuration does not look through; each caller
+// answers its own "cannot read" value for that (hashFile the symlink sentinel,
+// destModePerm (0, false), readDestText "").
+//
+// It mirrors iox.resolveSymlinkDest, the write side, through the shared
+// iox.SymlinkDestAllowed, so the read side and apply cannot disagree about
+// whether a symlinked destination is supported. The mirror is a POLICY one, not
+// a literal prediction: apply only errors when the CONTENT differs (its
+// convergence read follows the link), so with the env unset this answers "a
+// managed regular file became a link you have not opted into — that is drift"
+// rather than "apply would fail here".
+//
+// The policy is scoped to WHOLE-FILE facts: the symlink sentinel is a
+// whole-file-only policy signal. A key-merge destination is decoded through the
+// link by readDestFile on every surface, as apply does — a converged symlinked
+// key-merge destination is a no-op plus a chmod through the link, a differing
+// one is iox.ErrSymlinkDest, exactly as for a whole-file destination, so the
+// read-through already has apply-parity. Refusing it instead would make EVERY
+// owned pointer of a chezmoi ~/.claude.json classify against <absent>
+// permanently — there is no per-pointer sentinel the classifier could carry —
+// with reconcile's [d] showing <absent> and its [w] failing on "not found in
+// destination".
+func destReadPath(path string) (resolved string, ok bool) {
+	fi, err := os.Lstat(path)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return path, true
+	}
+	if !iox.SymlinkDestAllowed() {
+		return "", false
+	}
+	r, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", false
+	}
+	return r, true
+}
+
+// readDestText is the whole-file destination text read behind the drift walk:
+// the destination's bytes, or "" for a refused symlink, a refused shape, or any
+// read error — the three collapse because no caller distinguishes them.
+func readDestText(path string) string {
+	p, ok := destReadPath(path)
+	if !ok {
+		return ""
+	}
+	b, err := readDestBytes(p)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/iox"
 )
 
 // TestReadDestBytesShape pins the gate every destination read now passes
@@ -257,12 +258,13 @@ func TestHashFileSentinels(t *testing.T) {
 			want:  "",
 		},
 		{
-			// The symlink arm, which runs BEFORE the shape gate and is the one
-			// place status and diff deliberately disagree: this refuses the
-			// link, while readDestBytes (and so diff) follows it. destread.go's
-			// doc comment asserts exactly that divergence; this is the test
-			// behind the claim.
-			name: "a symlink to a regular file is refused as a symlink, not followed",
+			// The symlink arm, which runs BEFORE the shape gate: with
+			// AGENTSYNC_ALLOW_SYMLINK_DEST unset (the suite's state) a link is
+			// refused, not followed — the same policy under which apply
+			// refuses to write through it. This is what every whole-file
+			// surface classifies a refused link from; diff keys its "symlink"
+			// hunk on the same value.
+			name: "a symlink to a regular file is refused as a symlink when the env is unset",
 			setup: func(t *testing.T, tmp string) string {
 				t.Helper()
 				target := filepath.Join(tmp, "target")
@@ -276,6 +278,29 @@ func TestHashFileSentinels(t *testing.T) {
 				return link
 			},
 			want: "symlink-not-regular-file",
+		},
+		{
+			// The opt-in half of the same policy: with the env set the link is
+			// resolved and the TARGET's content hashed — the file apply
+			// converges through the link — so a chezmoi setup can classify
+			// clean. t.Setenv is scoped to this subtest's t.
+			name: "a symlink to a regular file is resolved when the env is set",
+			setup: func(t *testing.T, tmp string) string {
+				t.Helper()
+				t.Setenv(iox.AllowSymlinkDestEnv, "1")
+				target := filepath.Join(tmp, "target")
+				if err := os.WriteFile(target, []byte("payload"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				link := filepath.Join(tmp, "link")
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatal(err)
+				}
+				return link
+			},
+			// A literal, for the same reason as the regular-file row below:
+			// this is the digest of "payload", what state records for it.
+			want: "239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5",
 		},
 		{
 			name:  "a FIFO is refused by shape",
@@ -338,9 +363,13 @@ func TestHashFileSentinels(t *testing.T) {
 		})
 	}
 
-	// The divergence destread.go documents, asserted in both directions in one
-	// place so the claim cannot rot: hashFile refuses the link, readDestBytes
-	// reads through it.
+	// The asymmetry destread.go documents, asserted in both directions in one
+	// place so the claim cannot rot: hashFile (a WHOLE-FILE read) refuses the
+	// link with the env unset, while readDestBytes still reads through it —
+	// because it is also the key-merge read (readDestFile) and import's
+	// state-seeding read, where the symlink policy deliberately does not
+	// apply. The whole-file reads route through destReadPath before reaching
+	// it; this one does not.
 	t.Run("readDestBytes follows the symlink hashFile refuses", func(t *testing.T) {
 		tmp := t.TempDir()
 		target := filepath.Join(tmp, "target")
@@ -353,9 +382,76 @@ func TestHashFileSentinels(t *testing.T) {
 		}
 		data, err := readDestBytes(link)
 		if err != nil || string(data) != "payload" {
-			t.Fatalf("readDestBytes(symlink) = (%q, %v), want the target's content: this "+
-				"asymmetry with hashFile is what makes status report drift on a symlinked "+
-				"destination while diff reads through it, and destread.go says so", data, err)
+			t.Fatalf("readDestBytes(symlink) = (%q, %v), want the target's content: it is "+
+				"the key-merge and import read, which decode through a link on every "+
+				"surface as apply writes through it; only the whole-file reads apply "+
+				"the symlink policy, and destread.go says so", data, err)
+		}
+		if got := hashFile(link); got != "symlink-not-regular-file" {
+			t.Fatalf("hashFile(symlink) = %q with the env unset, want the symlink sentinel: "+
+				"the whole-file read must NOT share readDestBytes' read-through", got)
+		}
+	})
+}
+
+// TestWriteBackFileItemRefusesASymlinkItIsNotReadingThrough pins the
+// reconcile half of #229 axis 9. A whole-file destination the drift walk
+// refused as a symlink reaches the prompt as drift; one keystroke later [w]
+// must not read THROUGH the link and capture a file the classification never
+// looked at. With the env unset the write-back refuses, names the switch and
+// says it is needed for every command; with it set the write-back captures
+// the linked file — so the gate follows the policy rather than always
+// refusing.
+func TestWriteBackFileItemRefusesASymlinkItIsNotReadingThrough(t *testing.T) {
+	mkLink := func(t *testing.T) string {
+		t.Helper()
+		tmp := t.TempDir()
+		target := filepath.Join(tmp, "target")
+		if err := os.WriteFile(target, []byte("payload"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(tmp, "link.md")
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+		return link
+	}
+
+	t.Run("env unset: refuses, naming the switch and that every command needs it", func(t *testing.T) {
+		t.Setenv(iox.AllowSymlinkDestEnv, "") // registers the restore
+		if err := os.Unsetenv(iox.AllowSymlinkDestEnv); err != nil {
+			t.Fatal(err)
+		}
+		home := t.TempDir()
+		link := mkLink(t)
+		err := writeBackFileItem(home, reconcileItem{op: adapter.FileOp{Path: link, SourceID: "demo"}})
+		if err == nil {
+			t.Fatal("writeBackFileItem = nil for a refused symlink, want an error: [w] must not " +
+				"capture through a link the classification did not read through")
+		}
+		for _, want := range []string{link, iox.AllowSymlinkDestEnv + "=1", "for every command", "[o]verride", "[i]gnore"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %q, want it to contain %q", err, want)
+			}
+		}
+		if strings.Contains(err.Error(), "non-regular") {
+			t.Errorf("error = %q calls a symlink non-regular; the remedy must match the failure", err)
+		}
+		if _, serr := os.Stat(filepath.Join(home, "demo")); serr == nil {
+			t.Errorf("write-back wrote %s despite refusing", filepath.Join(home, "demo"))
+		}
+	})
+
+	t.Run("env set: captures the linked file", func(t *testing.T) {
+		t.Setenv(iox.AllowSymlinkDestEnv, "1")
+		home := t.TempDir()
+		link := mkLink(t)
+		if err := writeBackFileItem(home, reconcileItem{op: adapter.FileOp{Path: link, SourceID: "demo"}}); err != nil {
+			t.Fatalf("writeBackFileItem with the env set: %v", err)
+		}
+		got, err := os.ReadFile(filepath.Join(home, "demo"))
+		if err != nil || string(got) != "payload" {
+			t.Fatalf("captured source = (%q, %v), want the linked file's content", got, err)
 		}
 	})
 }

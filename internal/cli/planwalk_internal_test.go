@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/drift"
+	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -323,7 +324,7 @@ func TestWalkPlanItems(t *testing.T) {
 			},
 		},
 		{
-			name: "symlink-hash-text-split",
+			name: "symlink-refused-when-env-unset",
 			run: func(t *testing.T, h string) {
 				real, link := dest(h, "real.md"), dest(h, "link.md")
 				mustWrite(t, real, "SOURCE")
@@ -338,16 +339,51 @@ func TestWalkPlanItems(t *testing.T) {
 					t.Fatalf("got %d items", len(items))
 				}
 				it := items[0]
-				// D2: the hash side answers hashFile's symlink sentinel (→ drift);
-				// the text side reads THROUGH the link (→ identical text).
-				if it.hdest != "symlink-not-regular-file" || it.cls != drift.Drift {
-					t.Errorf("hash side: hdest=%q cls=%v", it.hdest, it.cls)
+				// #229 axis 9: with AGENTSYNC_ALLOW_SYMLINK_DEST unset the hash
+				// side answers hashFile's symlink sentinel (→ drift) AND the
+				// text side refuses too (→ ""): the two agree, where they once
+				// split (the text side used to read through the link).
+				if it.hdest != "symlink-not-regular-file" || it.cls != drift.Drift || !it.destSymlinkRefused() {
+					t.Errorf("hash side: hdest=%q cls=%v refused=%v", it.hdest, it.cls, it.destSymlinkRefused())
+				}
+				if it.srcText != "SOURCE" || it.dstText != "" {
+					t.Errorf("text side: src=%q dst=%q, want the text read to refuse the link too", it.srcText, it.dstText)
+				}
+				if it.destRegular {
+					t.Errorf("a refused symlink is not a regular file for the mode predicates")
+				}
+			},
+		},
+		{
+			name: "symlink-resolved-when-env-set",
+			run: func(t *testing.T, h string) {
+				t.Setenv(iox.AllowSymlinkDestEnv, "1")
+				real, link := dest(h, "real.md"), dest(h, "link.md")
+				mustWrite(t, real, "SOURCE")
+				if err := os.Chmod(real, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(real, link); err != nil {
+					t.Fatal(err)
+				}
+				s := state.New()
+				s.Files[fileKey(h, "claude", link)] = state.FileEntry{SHA256: hf("SOURCE")}
+				plan := planFor(map[string][]adapter.FileOp{"claude": {fileOp(link, "SOURCE")}})
+				items := walkUser(h, plan, s, []string{"claude"}, func(w *planWalk) { w.withText = true })
+				if len(items) != 1 {
+					t.Fatalf("got %d items", len(items))
+				}
+				it := items[0]
+				// The opt-in half: every whole-file fact resolves the link to
+				// the file apply writes through, so the item classifies clean.
+				if it.hdest != hf("SOURCE") || it.cls != drift.Clean || it.destSymlinkRefused() {
+					t.Errorf("hash side: hdest=%q cls=%v refused=%v", it.hdest, it.cls, it.destSymlinkRefused())
 				}
 				if it.srcText != "SOURCE" || it.dstText != "SOURCE" {
 					t.Errorf("text side: src=%q dst=%q", it.srcText, it.dstText)
 				}
-				if it.destRegular {
-					t.Errorf("a symlinked destination is not a regular file for the mode predicates")
+				if !it.destRegular || it.destPerm != 0o644 {
+					t.Errorf("mode facts must be the TARGET's: regular=%v perm=%04o", it.destRegular, it.destPerm)
 				}
 			},
 		},
@@ -486,7 +522,7 @@ func TestDestModePerm(t *testing.T) {
 		{name: "regular", path: reg, wantPerm: 0o644, wantRegular: true},
 		{name: "chmod-000-is-still-regular", path: zero, wantPerm: 0, wantRegular: true},
 		{name: "absent", path: filepath.Join(h, "nope"), wantPerm: 0, wantRegular: false},
-		{name: "symlink-is-the-link-not-the-target", path: link, wantPerm: 0, wantRegular: false},
+		{name: "symlink-refused-when-env-unset", path: link, wantPerm: 0, wantRegular: false},
 		{name: "directory", path: dir, wantPerm: 0, wantRegular: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

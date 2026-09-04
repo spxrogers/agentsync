@@ -49,12 +49,12 @@ type planItem struct {
 	cls drift.Class
 
 	// The triple cls was computed from. hdest is "" for absent-or-unreadable,
-	// and one of two opaque sentinels for a symlinked or wrong-shaped
+	// and one of two opaque sentinels for a refused-symlink or wrong-shaped
 	// destination — see hashFile, whose semantics this reproduces exactly.
 	hsrc, happlied, hdest string
 
 	// Whole-file mode facts, from destModePerm: destRegular is false for an
-	// absent, symlinked or non-regular destination, which is what keeps
+	// absent, refused-symlink or non-regular destination, which is what keeps
 	// `chmod 000` distinguishable from "absent" (destPerm 0, regular true vs
 	// destPerm 0, regular false). The intended mode is op.Mode; the mode state
 	// RECORDED at the last apply is deliberately not carried, because no
@@ -65,21 +65,21 @@ type planItem struct {
 	// srcText/dstText are populated only when planWalk.withText, and never for
 	// an orphan. For a key item they are marshalPretty of the pointer's value
 	// on each side ("<absent>" when missing); for a whole-file item they are
-	// the raw op content and the guarded destination read ("" on any read
-	// error), which FOLLOWS symlinks — the hash half above does not. That split
-	// is reconcile's existing behavior and is what keeps `diff` byte-identical
-	// (#229 axis 9 is PR-C's call). Text is RAW: callers mask
-	// (secrets.MaskResolved) at their own existing call sites.
+	// the raw op content and readDestText's guarded destination read ("" on a
+	// refused symlink, a refused shape, or any read error), which applies the
+	// same symlink policy as the hash half above, so the two sides cannot
+	// disagree about whether a link is looked through (#229 axis 9). Text is
+	// RAW: callers mask (secrets.MaskResolved) at their own existing call sites.
 	srcText, dstText string
 }
 
 // opModeDrifted is THE mode question, the one every surface that reports
 // permission drift asks: do the destination's permission bits differ from the
 // mode the next apply would WRITE (op.Mode — render.Writer.Write chmods to
-// it)? An unspecified op.Mode (0) is never drift, and an absent / symlinked /
-// non-regular destination is left to the content classifier. diff's modeHunk
-// and classWithModeDrift below are both gated on exactly this, so they cannot
-// disagree (#229 axis 14).
+// it)? An unspecified op.Mode (0) is never drift, and an absent /
+// refused-symlink / non-regular destination is left to the content
+// classifier. diff's modeHunk and classWithModeDrift below are both gated on
+// exactly this, so they cannot disagree (#229 axis 14).
 func (i planItem) opModeDrifted() bool {
 	if i.op.Mode == 0 || !i.destRegular {
 		return false
@@ -98,11 +98,25 @@ func (i planItem) classWithModeDrift() drift.Class {
 	return i.cls
 }
 
+// destSymlinkRefused reports whether a whole-file destination is a symlink the
+// read side did not look through (destReadPath, AGENTSYNC_ALLOW_SYMLINK_DEST
+// unset). It is a DERIVATION from hdest, not a field: diff keys its symlink
+// hunk on the very hash status, reconcile and explain classified from, so the
+// four surfaces cannot disagree about it (#229 axis 9).
+func (i planItem) destSymlinkRefused() bool { return i.ptr == "" && i.hdest == symlinkSentinel }
+
 // destModePerm answers the permission bits of the REGULAR file at path.
-// regular is false — and perm 0 — for an absent, symlinked (Lstat: the link
-// itself is not regular) or non-regular destination, so a caller can tell
-// `chmod 000` (0, true) from "not there" (0, false).
+// regular is false — and perm 0 — for an absent, refused-symlink
+// (destReadPath: a link this configuration does not look through) or
+// non-regular destination, so a caller can tell `chmod 000` (0, true) from
+// "not there" (0, false). With AGENTSYNC_ALLOW_SYMLINK_DEST=1 a link is
+// resolved and the perm is the TARGET's — the bits apply's mode fix chmods
+// through the link.
 func destModePerm(path string) (perm uint32, regular bool) {
+	path, ok := destReadPath(path)
+	if !ok {
+		return 0, false
+	}
 	fi, err := os.Lstat(path)
 	if err != nil || !fi.Mode().IsRegular() {
 		return 0, false
@@ -174,9 +188,11 @@ type planWalk struct {
 // items). Introducing an error return would be a behavior change with no
 // oracle.
 //
-// Every destination read goes through hashFile / readDestFile / readDestBytes,
-// so a FIFO, device, socket or directory at a destination can never block a
-// read-only command (internal/cli/destread.go, #240).
+// Every destination read goes through hashFile / readDestFile / readDestText,
+// each of which reads through the readDestBytes gate, so a FIFO, device,
+// socket or directory at a destination can never block a read-only command
+// (internal/cli/destread.go, #240). The whole-file reads also share
+// destReadPath, the symlink policy (#229 axis 9).
 func walkPlanItems(w planWalk) []planItem {
 	readDest := w.readDestConfig
 	if readDest == nil {
@@ -240,10 +256,7 @@ func walkPlanItems(w planWalk) []planItem {
 			}
 			it.cls = drift.Classify(it.hsrc, it.happlied, it.hdest)
 			if w.withText {
-				it.srcText = string(op.Content)
-				if b, err := readDestBytes(op.Path); err == nil {
-					it.dstText = string(b)
-				}
+				it.srcText, it.dstText = string(op.Content), readDestText(op.Path)
 			}
 			out = append(out, it)
 		}

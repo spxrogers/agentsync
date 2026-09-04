@@ -11,6 +11,27 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **A symlinked destination under `AGENTSYNC_ALLOW_SYMLINK_DEST=1` is no
+  longer reported as permanently drifted**
+  ([#229](https://github.com/spxrogers/agentsync/issues/229)). In the
+  documented chezmoi/Stow configuration, where `apply` writes THROUGH the link,
+  `status`, `reconcile` and `explain` hashed the link itself and answered a
+  sentinel that can never equal a content hash — so every run reported `drift`
+  no apply could clear and `status --exit-code` failed CI forever, while `diff`
+  read through the link and said `no diff`. The switch now governs the READ
+  side too, on every surface: with it set, all four resolve the link and
+  compare the file it points at (content, text and permission bits alike), so
+  a converged chezmoi setup reports `clean`; with it unset, all four refuse the
+  link as they always did, and `diff` prints a `symlink` hunk (`--json`
+  `pointer: "symlink"`, alongside the existing `mode` pseudo-pointer) naming
+  the switch instead of silently agreeing there is no difference. `reconcile`
+  shows such an item with the SHA display rather than a text diff against an
+  empty destination, and its `[w]`rite-back refuses to capture through a link
+  the classification did not read through (naming the switch, which every
+  command now needs — not only `apply`). Key-merged destinations (a symlinked
+  `~/.claude.json`) are decoded through the link either way, deliberately, as
+  `apply` treats them.
+
 - **`status`'s permission check now measures the mode the next `apply`
   writes** ([#229](https://github.com/spxrogers/agentsync/issues/229)). It
   compared the destination's permission bits against the mode RECORDED at the

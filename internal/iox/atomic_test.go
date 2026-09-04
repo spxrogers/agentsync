@@ -109,6 +109,34 @@ func TestAtomicWrite_RefusesSymlinkDest(t *testing.T) {
 	}
 }
 
+// TestSymlinkDestAllowed pins the one reading of AllowSymlinkDestEnv that the
+// write side (resolveSymlinkDest) and the read side (internal/cli's
+// destReadPath) share: only the literal "1" opts in.
+func TestSymlinkDestAllowed(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+		unset bool
+		want  bool
+	}{
+		{name: "unset", unset: true, want: false},
+		{name: "set to 1", value: "1", want: true},
+		{name: "set to 0", value: "0", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(iox.AllowSymlinkDestEnv, tc.value) // registers the restore
+			if tc.unset {
+				if err := os.Unsetenv(iox.AllowSymlinkDestEnv); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := iox.SymlinkDestAllowed(); got != tc.want {
+				t.Errorf("SymlinkDestAllowed() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestAtomicWrite_AllowsSymlinkDestWithEnv proves the documented escape
 // hatch works for users who explicitly accept the chezmoi-link semantics.
 func TestAtomicWrite_AllowsSymlinkDestWithEnv(t *testing.T) {

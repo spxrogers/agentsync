@@ -357,11 +357,14 @@ func planFixtures() []planFixture {
 			},
 		},
 
-		// T-10: the destination is a symlink to an identical file. The HASH side
-		// (status/reconcile/explain) answers the symlink sentinel → drift; the
-		// TEXT side (diff, reconcile's dstText) reads THROUGH the link → equal.
-		// That split is #229 axis 9 and is preserved as-is. explain's target is
-		// the link's TARGET: explain resolves op paths through symlinks.
+		// T-10: the destination is a symlink to an identical file, with
+		// AGENTSYNC_ALLOW_SYMLINK_DEST unset (the suite's state). Every surface
+		// refuses the link (#229 axis 9): the hash side answers the symlink
+		// sentinel → drift; diff emits a "symlink" hunk naming the switch
+		// instead of reading through and printing nothing; reconcile carries
+		// no destination text (hasText false → the SHA display). explain's
+		// target is the link's TARGET: explain resolves op paths through
+		// symlinks.
 		{
 			name:   "whole-file/dest-is-symlink",
 			target: func(h string) string { return dest(h, "real.md") },
@@ -383,12 +386,17 @@ func planFixtures() []planFixture {
 					summary: map[string]int{"drift": 1},
 				}
 			},
-			wantD: func(string) dProj { return dProj{filterMatched: true} },
+			wantD: func(h string) dProj {
+				return dProj{hunks: []diffHunk{{
+					Path: dest(h, "link.md"), Pointer: "symlink", Source: "regular file",
+					Dest: "symlink (not compared through; set AGENTSYNC_ALLOW_SYMLINK_DEST=1 to read and write through the link)",
+				}}, filterMatched: true}
+			},
 			wantR: func(h string) []rRow {
 				return []rRow{{
 					agent: "claude", path: dest(h, "link.md"), cls: "drift",
 					hsrc: hf("SOURCE"), happlied: hf("SOURCE"), hdest: "symlink-not-regular-file",
-					hasText: true, srcText: "SOURCE", dstText: "SOURCE",
+					hasText: false, srcText: "SOURCE", dstText: "",
 				}}
 			},
 			wantE: func(string) eProj {
@@ -396,12 +404,12 @@ func planFixtures() []planFixture {
 			},
 			extra: func(t *testing.T, _ string, s sProj, d dProj, r []rRow, _ eProj) {
 				t.Helper()
-				// D2's split, asserted by name so the intent survives a golden edit.
+				// The refusal, asserted by name so the intent survives a golden edit.
 				if r[0].hdest != "symlink-not-regular-file" || r[0].cls != "drift" || s.agents[0].rows[0].cls != "drift" {
 					t.Errorf("hash side must answer the symlink sentinel and classify drift: %+v", r[0])
 				}
-				if r[0].srcText != r[0].dstText || len(d.hunks) != 0 {
-					t.Errorf("text side must read through the link and produce no hunk: r=%+v d=%+v", r[0], d)
+				if r[0].dstText != "" || r[0].hasText || len(d.hunks) != 1 || d.hunks[0].Pointer != "symlink" {
+					t.Errorf("text side must refuse the link too — no dest text, and one symlink hunk: r=%+v d=%+v", r[0], d)
 				}
 			},
 		},
@@ -1011,10 +1019,11 @@ func projectS(m statusModel) sProj {
 }
 
 func projectD(hunks []diffHunk, matched bool) dProj {
-	// A "mode" hunk is a whole-file row wearing a label, not a pointer; keep it
-	// out of the run sort so its placement stays asserted in order.
+	// A "mode" or "symlink" hunk is a whole-file row wearing a label, not a
+	// pointer; keep both out of the run sort so their placement stays asserted
+	// in order.
 	hunks = normalizeRuns(hunks, func(h diffHunk) (string, string, string) {
-		if h.Pointer == "mode" {
+		if h.Pointer == "mode" || h.Pointer == "symlink" {
 			return "", h.Path, ""
 		}
 		return "", h.Path, h.Pointer

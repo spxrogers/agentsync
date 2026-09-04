@@ -42,8 +42,10 @@ type reconcileItem struct {
 	orphan      bool // owned-in-state whole-file dest no agent renders anymore
 	// srcText/dstText carry the actual (masked-on-display) source and destination
 	// content so the prompt/[d]iff can show a real value diff instead of only SHA
-	// prefixes. hasText is false for items with no meaningful textual content
-	// (orphans), which fall back to the hash display.
+	// prefixes. hasText is false for items with no meaningful textual content —
+	// orphans, and a whole-file destination that is a symlink agentsync is not
+	// reading through (planItem.destSymlinkRefused) — which fall back to the
+	// hash display.
 	srcText string
 	dstText string
 	hasText bool
@@ -666,7 +668,11 @@ func collectReconcileItems(plan render.RenderPlan, reg *adapter.Registry, s *sta
 			orphans = append(orphans, ri)
 			continue
 		}
-		ri.srcText, ri.dstText, ri.hasText = it.srcText, it.dstText, true
+		// A refused whole-file symlink has no destination text to show: fall
+		// back to the SHA display rather than render the entire source as an
+		// insertion against an empty destination — the rendering diff's
+		// symlink hunk exists to avoid (#229 axis 9).
+		ri.srcText, ri.dstText, ri.hasText = it.srcText, it.dstText, !it.destSymlinkRefused()
 		if it.ptr != "" {
 			ri.pluginOwner = pluginOwnerForKeyItem(it.op.SourceID, it.ptr, pluginOwners)
 		} else {
@@ -1090,7 +1096,21 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 //
 // Both used to return nil with a success message, hiding data loss.
 func writeBackFileItem(home string, it reconcileItem) error {
-	data, err := readDestBytes(it.op.Path)
+	readPath, ok := destReadPath(it.op.Path)
+	if !ok {
+		// The destination is a symlink this configuration does not look
+		// through — the same refusal the drift walk classified the item under,
+		// so [w] cannot quietly capture a file the classification never read.
+		// [o]verride stays offered, unlike the non-regular arm below:
+		// Writer.Write's convergence read follows the link and either no-ops
+		// (content converged) or fails cleanly with iox.ErrSymlinkDest; no
+		// FIFO is involved, so it cannot hang.
+		return fmt.Errorf("read dest %s: destination is a symlink agentsync is not reading through — "+
+			"set %s=1 (for every command) to capture the linked file, replace the link with a regular "+
+			"file, use [o]verride to re-apply canonical, or [i]gnore to suppress this item",
+			it.op.Path, iox.AllowSymlinkDestEnv)
+	}
+	data, err := readDestBytes(readPath)
 	if err != nil {
 		// Named next steps, like this function's other refusals: the user is
 		// mid-prompt with a keystroke to choose, and "read dest X: not a regular

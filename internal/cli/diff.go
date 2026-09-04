@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/iox"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
@@ -216,16 +217,37 @@ func renderDiffText(p *ui.Printer, diffs []diffmatchpatch.Diff) string {
 // modeHunk describes a permission-bit mismatch between the mode apply would
 // maintain for a whole-file item (op.Mode) and the file's current perm on
 // disk, both as the walk recorded them. ok is false when they match, op.Mode
-// is 0 (unspecified), or the file is absent/symlinked/non-regular (the content
-// path already covers those) — planItem.opModeDrifted's gate. It lets `diff`
-// surface a content-identical chmod — which yields no text hunk — rather than
-// silently reporting "no diff".
+// is 0 (unspecified), or the file is absent/refused-symlink/non-regular (the
+// content path already covers those) — planItem.opModeDrifted's gate. It lets
+// `diff` surface a content-identical chmod — which yields no text hunk — rather
+// than silently reporting "no diff".
 func modeHunk(it planItem) (source, dest string, ok bool) {
 	if !it.opModeDrifted() {
 		return "", "", false
 	}
 	return fmt.Sprintf("mode %04o", os.FileMode(it.op.Mode).Perm()),
 		fmt.Sprintf("mode %04o", os.FileMode(it.destPerm).Perm()), true
+}
+
+// symlinkHunkDest is the Dest of a "symlink" hunk. A CONSTANT, deliberately:
+// the link TARGET is attacker-choosable and this string reaches the terminal
+// unsanitized (only the hunk label goes through ui.Sanitize), so embedding it
+// would reopen the #93/#171 escape-injection class.
+const symlinkHunkDest = "symlink (not compared through; set " + iox.AllowSymlinkDestEnv +
+	"=1 to read and write through the link)"
+
+// symlinkHunk describes a destination that is a symlink the read side will not
+// look through because AGENTSYNC_ALLOW_SYMLINK_DEST is not set — the same
+// condition under which iox.AtomicWrite refuses to write through one. Without
+// it diff read THROUGH the link and printed "no diff" for a destination status
+// called drift and `--exit-code` failed a CI gate on. A whole-file hunk with an
+// empty Dest was rejected too: it asserts the destination is EMPTY, which is
+// false, and renders the entire source as one insertion.
+func symlinkHunk(it planItem) (source, dest string, ok bool) {
+	if !it.destSymlinkRefused() {
+		return "", "", false
+	}
+	return "regular file", symlinkHunkDest, true
 }
 
 func marshalPretty(v any) string {
@@ -281,7 +303,13 @@ func collectDiffHunks(plan render.RenderPlan, names []string, filterPath string,
 			hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: it.ptr, Source: srcStr, Dest: dstStr})
 			continue
 		}
-		// File-level diff.
+		// File-level diff. The symlink check runs BEFORE the text comparison:
+		// a refused link's dstText is "", and an empty op.Content must not fall
+		// through to "equal" and then into the mode branch.
+		if src, dst, ok := symlinkHunk(it); ok {
+			hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: "symlink", Source: src, Dest: dst})
+			continue
+		}
 		if srcStr == dstStr {
 			// Content identical: surface a mode-only drift as a "mode" hunk.
 			if src, dst, ok := modeHunk(it); ok {
