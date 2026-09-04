@@ -42,10 +42,10 @@ type reconcileItem struct {
 	orphan      bool // owned-in-state whole-file dest no agent renders anymore
 	// srcText/dstText carry the actual (masked-on-display) source and destination
 	// content so the prompt/[d]iff can show a real value diff instead of only SHA
-	// prefixes. hasText is false for items with no meaningful textual content —
-	// orphans, and a whole-file destination that is a symlink agentsync is not
-	// reading through (planItem.destSymlinkRefused) — which fall back to the
-	// hash display.
+	// prefixes. hasText is false for items with no textual content — orphans,
+	// and a whole-file destination the walk refused to read (a symlink not
+	// read through, or a shape readDestBytes refuses) — which fall back to
+	// the hash display.
 	srcText string
 	dstText string
 	hasText bool
@@ -668,12 +668,9 @@ func collectReconcileItems(plan render.RenderPlan, reg *adapter.Registry, s *sta
 			orphans = append(orphans, ri)
 			continue
 		}
-		// A refused whole-file destination — a symlink not read through, or a
-		// shape readDestBytes refused — has no text to show: fall back to the
-		// SHA display rather than render the entire source as an insertion
-		// against an "empty" destination (the rendering diff's symlink and
-		// shape hunks exist to avoid).
-		ri.srcText, ri.dstText, ri.hasText = it.srcText, it.dstText, !it.destSymlinkRefused() && it.hdest != shapeSentinel
+		// A refused destination has no text to show: the SHA display, not the
+		// whole source rendered against an "empty" destination.
+		ri.srcText, ri.dstText, ri.hasText = it.srcText, it.dstText, !it.destSymlinkRefused() && !it.destShapeRefused()
 		if it.ptr != "" {
 			ri.pluginOwner = pluginOwnerForKeyItem(it.op.SourceID, it.ptr, pluginOwners)
 		} else {
@@ -1110,8 +1107,8 @@ func writeBackFileItem(home string, it reconcileItem) error {
 	switch why {
 	case symlinkRefusedByEnv:
 		// The drift walk classified this item without reading through the
-		// link, so [w] must not quietly capture through it. [o]verride is
-		// withheld on both symlink arms: Writer.Write's convergence read
+		// link, so [w] must not quietly capture through it. Neither symlink
+		// arm's advice suggests [o]verride: Writer.Write's convergence read
 		// follows the link, and its mode arm chmods the TARGET through it
 		// before the symlink policy is consulted (#248).
 		return fmt.Errorf("read dest %s: destination is a symlink agentsync is not reading through — "+
@@ -1128,8 +1125,8 @@ func writeBackFileItem(home string, it reconcileItem) error {
 		// mid-prompt with a keystroke to choose, and "read dest X: not a regular
 		// file" alone does not tell them which one gets them unstuck.
 		//
-		// [o]verride is deliberately NOT offered for THIS arm (nor for the
-		// symlink arms above), unlike the absent arm below. It re-applies
+		// This arm's advice deliberately omits [o]verride (so does the symlink
+		// arms'), unlike the absent arm below. It re-applies
 		// through render.Writer.Write, whose convergence read is not
 		// shape-guarded, so on this exact item it does not fail — it HANGS
 		// (measured: `reconcile --auto-override` rc=124).

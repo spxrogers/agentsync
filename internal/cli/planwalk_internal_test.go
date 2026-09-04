@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sergi/go-diff/diffmatchpatch"
+
 	"github.com/spf13/afero"
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/drift"
@@ -648,5 +650,28 @@ func TestShortValShowsSentinelsWhole(t *testing.T) {
 				t.Errorf("shortVal(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestLabelHunksAreNotCharacterDiffed pins the formatted-diff rule for the
+// pseudo-pointers: a symlink or shape hunk's two unrelated labels are emitted
+// whole (a character diff shredded them), while a mode hunk keeps the
+// character diff its two like-shaped sides read well under.
+func TestLabelHunksAreNotCharacterDiffed(t *testing.T) {
+	dmp := diffmatchpatch.New()
+	for _, h := range []diffHunk{
+		{Pointer: ptrSymlink, Source: "regular file", Dest: symlinkRefusedHunkDest},
+		{Pointer: ptrSymlink, Source: "regular file", Dest: symlinkUnresolvableHunkDest},
+		{Pointer: ptrShape, Source: "regular file", Dest: shapeHunkDest},
+	} {
+		got := hunkDiffs(dmp, h)
+		if len(got) != 2 || got[0].Type != diffmatchpatch.DiffDelete || got[0].Text != h.Dest ||
+			got[1].Type != diffmatchpatch.DiffInsert || got[1].Text != h.Source {
+			t.Errorf("%s hunk: got %+v, want [-Dest-] then {+Source+} whole", h.Pointer, got)
+		}
+	}
+	mode := hunkDiffs(dmp, diffHunk{Pointer: ptrMode, Source: "mode 0755", Dest: "mode 0644"})
+	if len(mode) < 3 || mode[0].Type != diffmatchpatch.DiffEqual || mode[0].Text != "mode 0" {
+		t.Errorf("mode hunk: got %+v, want the shared \"mode 0\" prefix kept as equal text", mode)
 	}
 }

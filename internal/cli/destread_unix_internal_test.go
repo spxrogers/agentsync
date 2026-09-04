@@ -208,7 +208,7 @@ func TestWriteBackFileItemMessageMatchesTheFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "[i]gnore") {
 		t.Errorf("error = %q, want it to still name a next step", err)
 	}
-	// [o]verride is withheld only for a NON-REGULAR destination, where it would
+	// [o]verride is left out of the advice only for a NON-REGULAR destination, where it would
 	// hang (#241). For an absent one it is safe — Writer.Write's convergence
 	// read gets ENOENT and falls through to the write — and it is the actual
 	// fix, so withholding it here would deny the user the remedy that works.
@@ -485,7 +485,7 @@ func TestWriteBackFileItemRefusesASymlinkItIsNotReadingThrough(t *testing.T) {
 		}
 	})
 
-	t.Run("env unset: a link to a FIFO takes the shape arm, which withholds [o]verride", func(t *testing.T) {
+	t.Run("env unset: a link to a FIFO takes the shape arm, whose advice omits [o]verride", func(t *testing.T) {
 		t.Setenv(iox.AllowSymlinkDestEnv, "")
 		if err := os.Unsetenv(iox.AllowSymlinkDestEnv); err != nil {
 			t.Fatal(err)

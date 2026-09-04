@@ -108,6 +108,11 @@ func (i planItem) destSymlinkRefused() bool {
 	return i.ptr == "" && (i.hdest == symlinkRefusedSentinel || i.hdest == symlinkUnresolvableSentinel)
 }
 
+// destShapeRefused is its sibling for a whole-file destination readDestBytes
+// refused: present and not a regular file, or unstattable (hashFile's one
+// token for both).
+func (i planItem) destShapeRefused() bool { return i.ptr == "" && i.hdest == shapeSentinel }
+
 // destModePerm answers the permission bits of the REGULAR file at path.
 // regular is false — and perm 0 — for an absent, refused-symlink
 // (destReadPath: a link this configuration does not look through) or

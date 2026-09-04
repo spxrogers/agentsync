@@ -165,15 +165,7 @@ func newDiffCmd() *cobra.Command {
 					label = ui.Sanitize(label)
 					fmt.Fprintf(p.Out, "%s %s\n", p.Red("--- source"), label)
 					fmt.Fprintf(p.Out, "%s %s\n", p.Green("+++ dest  "), label)
-					diffs := dmp.DiffMain(h.Dest, h.Source, false)
-					if isPseudoPointer(h.Pointer) {
-						// Two short labels, not two texts: a character diff
-						// shreds "symlink (not compared through; …)" against
-						// "regular file" into fragments. Semantic cleanup
-						// re-joins each side whole.
-						diffs = dmp.DiffCleanupSemantic(diffs)
-					}
-					fmt.Fprintln(p.Out, renderDiffText(p, diffs))
+					fmt.Fprintln(p.Out, renderDiffText(p, hunkDiffs(dmp, h)))
 				}
 			}
 			// --exit-code turns diff into a CI gate: non-zero (stable) when any
@@ -263,9 +255,31 @@ func symlinkHunk(it planItem) (source, dest string, ok bool) {
 	return "regular file", symlinkRefusedHunkDest, true
 }
 
-// isPseudoPointer reports whether a hunk's Pointer is one of diff's whole-file
-// labels rather than an RFC-6901 pointer.
-func isPseudoPointer(p string) bool { return p == "mode" || p == "symlink" || p == "shape" }
+// The pseudo-pointers: a whole-file finding that is not a text difference
+// carries one of these in diffHunk.Pointer instead of an RFC-6901 pointer.
+const (
+	ptrMode    = "mode"
+	ptrSymlink = "symlink"
+	ptrShape   = "shape"
+)
+
+// isPseudoPointer reports whether a hunk's Pointer is one of the labels above.
+func isPseudoPointer(p string) bool { return p == ptrMode || p == ptrSymlink || p == ptrShape }
+
+// hunkDiffs is what the formatted diff renders for one hunk. A symlink or
+// shape hunk carries two UNRELATED labels ("regular file" against a sentence),
+// and a character diff of those shreds both into fragments — so each side is
+// emitted whole. A mode hunk's two sides share their shape ("mode 0644" /
+// "mode 0755"), where the character diff reads well, and text hunks are text.
+func hunkDiffs(dmp *diffmatchpatch.DiffMatchPatch, h diffHunk) []diffmatchpatch.Diff {
+	if h.Pointer == ptrSymlink || h.Pointer == ptrShape {
+		return []diffmatchpatch.Diff{
+			{Type: diffmatchpatch.DiffDelete, Text: h.Dest},
+			{Type: diffmatchpatch.DiffInsert, Text: h.Source},
+		}
+	}
+	return dmp.DiffMain(h.Dest, h.Source, false)
+}
 
 // shapeHunkDest is the Dest of a "shape" hunk; a constant for the same reason
 // as the symlink ones.
@@ -278,7 +292,7 @@ const shapeHunkDest = "not a regular file (FIFO, device, socket or directory), o
 // content to compare), so without this hunk diff rendered the whole source as
 // an insertion against an "empty" destination that is not empty at all.
 func shapeHunk(it planItem) (source, dest string, ok bool) {
-	if it.ptr != "" || it.hdest != shapeSentinel {
+	if !it.destShapeRefused() {
 		return "", "", false
 	}
 	return "regular file", shapeHunkDest, true
@@ -341,17 +355,17 @@ func collectDiffHunks(plan render.RenderPlan, names []string, filterPath string,
 		// a refused link's dstText is "", and an empty op.Content must not fall
 		// through to "equal" and then into the mode branch.
 		if src, dst, ok := symlinkHunk(it); ok {
-			hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: "symlink", Source: src, Dest: dst})
+			hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: ptrSymlink, Source: src, Dest: dst})
 			continue
 		}
 		if src, dst, ok := shapeHunk(it); ok {
-			hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: "shape", Source: src, Dest: dst})
+			hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: ptrShape, Source: src, Dest: dst})
 			continue
 		}
 		if srcStr == dstStr {
 			// Content identical: surface a mode-only drift as a "mode" hunk.
 			if src, dst, ok := modeHunk(it); ok {
-				hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: "mode", Source: src, Dest: dst})
+				hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: ptrMode, Source: src, Dest: dst})
 			}
 			continue
 		}
