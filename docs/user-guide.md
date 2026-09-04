@@ -1030,7 +1030,7 @@ exclusive. Every `list` accepts `ls`, and every `remove` accepts `rm`. `status
 the structured report instead of the formatted one, suitable for CI gates and
 dashboards (`status --json` is never collapsed — it carries every tracked file;
 `diff --json` masks the same resolved secrets the formatted diff does; its
-`pointer` field is an RFC-6901 pointer for a merged key, and one of two
+`pointer` field is an RFC-6901 pointer for a merged key, and one of three
 pseudo-pointers for a whole-file finding that is not a text difference —
 `mode` for a content-identical permission change, `symlink` for a symlinked
 destination agentsync is not comparing through, `shape` for a destination

@@ -891,8 +891,8 @@ list them reproducibly. Each surface keeps its own presentation on top: `status`
 re-partitions whole-file rows ahead of key rows, and both `status` and `explain`
 fold permission drift into the class of a content-clean whole file — measured
 against `op.Mode`, the mode the next apply chmods to, which is the same question
-`diff`'s `mode` hunk asks (`planItem.classWithModeDrift`, one method, so the
-three cannot disagree). `reconcile` still ignores mode entirely; that gap is
+`diff`'s `mode` hunk asks (`planItem.opModeDrifted`, one predicate behind all
+three, so they cannot disagree). `reconcile` still ignores mode entirely; that gap is
 #245. `diff` masks and compares text, `reconcile` excludes
 an orphan another agent still renders, `explain` groups by owner.
 

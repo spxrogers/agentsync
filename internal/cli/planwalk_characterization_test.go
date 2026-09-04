@@ -1023,7 +1023,7 @@ func projectD(hunks []diffHunk, matched bool) dProj {
 	// pointer; keep both out of the run sort so their placement stays asserted
 	// in order.
 	hunks = normalizeRuns(hunks, func(h diffHunk) (string, string, string) {
-		if h.Pointer == "mode" || h.Pointer == "symlink" {
+		if h.Pointer == "mode" || h.Pointer == "symlink" || h.Pointer == "shape" {
 			return "", h.Path, ""
 		}
 		return "", h.Path, h.Pointer

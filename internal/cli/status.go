@@ -990,23 +990,16 @@ func hashFile(path string) string {
 		return symlinkUnresolvableSentinel
 	}
 	path = p
-	// A FIFO, device, or socket at a destination path would make os.ReadFile
-	// BLOCK forever rather than fail — wedging `status`, which is advertised as
-	// read-only, and reconcile's orphan listing. None has a content hash worth
-	// computing, so answer a sentinel that can never match one. It is a DIFFERENT
-	// sentinel from the symlink case above so a diagnostic never calls a FIFO a
-	// symlink; both are opaque to callers, which only ever compare hashes for
-	// equality.
-	//
 	// The shape rule itself lives in readDestBytes, the one gate every
 	// destination read in this package passes through; this function maps its
-	// refusal onto the sentinel above rather than re-deciding it.
+	// refusal onto a sentinel — distinct from the symlink ones, so a diagnostic
+	// never calls a FIFO a symlink — rather than re-deciding it.
 	data, err := readDestBytes(path)
 	if err != nil {
 		// Both refusals map to the SAME opaque token, deliberately. These
-		// sentinels exist to never equal a content hash (reconcile's prompt
-		// shows one whole, via shortVal, rather than as a truncated prefix).
-		// Before this gate existed the predicate answered false for an
+		// sentinels exist to never equal a content hash; the two surfaces that
+		// show one (reconcile's prompt via shortVal, diff's shape hunk) word it
+		// for both facts. Before this gate existed the predicate answered false for an
 		// unstattable destination too, so splitting them here would move a
 		// parent-ENOTDIR dest from ForeignCollision to New — and New is
 		// SafeForAutoApply. A plain read failure still answers "", as it did.

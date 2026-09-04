@@ -23,10 +23,10 @@ var errDestNotRegular = errors.New("not a regular file")
 // real errno.
 //
 // It is separate from errDestNotRegular because the two are not the same claim
-// and one caller shows its sentinel to a user: reconcile's write-back refusal
-// says "remove or replace the non-regular file at that path", which is false
-// for a permission problem. hashFile, whose sentinels are opaque tokens
-// compared only for equality, deliberately treats both alike — see its comment.
+// and reconcile's write-back refusal shows it: "remove or replace the
+// non-regular file at that path" is false for a permission problem. hashFile
+// deliberately maps both to one token (see its comment), so diff's shape hunk,
+// which keys on that token, words its advice for both.
 var errDestUnstattable = errors.New("cannot stat destination")
 
 // pathlessStatErr strips the redundant path from a *fs.PathError, mirroring

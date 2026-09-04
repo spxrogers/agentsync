@@ -258,12 +258,14 @@ func symlinkHunk(it planItem) (source, dest string, ok bool) {
 
 // shapeHunkDest is the Dest of a "shape" hunk; a constant for the same reason
 // as the symlink ones.
-const shapeHunkDest = "not a regular file (FIFO, device, socket or directory); remove or replace it"
+const shapeHunkDest = "not a regular file (FIFO, device, socket or directory), or the path cannot be " +
+	"stat'd; remove or replace it, or check permissions on the path"
 
-// shapeHunk describes a whole-file destination readDestBytes refused by shape
-// — a bare FIFO, or a link to one. Its text read is "" (there is no content to
-// compare), so without this hunk diff rendered the whole source as an
-// insertion against an "empty" destination that is not empty at all.
+// shapeHunk describes a whole-file destination readDestBytes refused — a bare
+// FIFO, a link to one, or a path it cannot stat; hashFile answers one token
+// for both facts, so the Dest names both. Its text read is "" (there is no
+// content to compare), so without this hunk diff rendered the whole source as
+// an insertion against an "empty" destination that is not empty at all.
 func shapeHunk(it planItem) (source, dest string, ok bool) {
 	if it.ptr != "" || it.hdest != shapeSentinel {
 		return "", "", false

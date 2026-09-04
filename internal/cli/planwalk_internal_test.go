@@ -285,7 +285,9 @@ func TestWalkPlanItems(t *testing.T) {
 				if err := os.Symlink(target, link); err != nil {
 					t.Fatal(err)
 				}
-				hunks, _ := collectDiffHunks(planFor(map[string][]adapter.FileOp{"claude": {fileOp(link, "SOURCE")}}), []string{"claude"}, "", nil)
+				// An EMPTY source equals the refused read's "": the symlink check
+				// must run before the text compare or this prints "no diff".
+				hunks, _ := collectDiffHunks(planFor(map[string][]adapter.FileOp{"claude": {fileOp(link, "")}}), []string{"claude"}, "", nil)
 				if len(hunks) != 1 || hunks[0].Pointer != "symlink" {
 					t.Fatalf("want one symlink hunk for an unresolvable link, got %+v", hunks)
 				}

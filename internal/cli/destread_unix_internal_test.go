@@ -454,7 +454,7 @@ func TestWriteBackFileItemRefusesASymlinkItIsNotReadingThrough(t *testing.T) {
 		return link
 	}
 
-	t.Run("env unset: refuses, naming the switch and that every command needs it", func(t *testing.T) {
+	t.Run("env unset: refuses, naming the switch and the commands that need it", func(t *testing.T) {
 		t.Setenv(iox.AllowSymlinkDestEnv, "") // registers the restore
 		if err := os.Unsetenv(iox.AllowSymlinkDestEnv); err != nil {
 			t.Fatal(err)
@@ -616,13 +616,17 @@ func TestReadDestBytesReportsAStatFailureAsItself(t *testing.T) {
 // against an "empty" destination.
 func TestDiffPrintsAShapeHunkForANonRegularDestination(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		env  string
-		link bool
+		name    string
+		env     string
+		link    bool
+		content string
 	}{
-		{name: "bare FIFO", env: ""},
-		{name: "link to a FIFO, env unset", env: "", link: true},
-		{name: "link to a FIFO, env set", env: "1", link: true},
+		{name: "bare FIFO", env: "", content: "SOURCE"},
+		{name: "link to a FIFO, env unset", env: "", link: true, content: "SOURCE"},
+		{name: "link to a FIFO, env set", env: "1", link: true, content: "SOURCE"},
+		// An EMPTY rendered source equals the refused read's "" — the shape
+		// check must run before the text compare or this prints "no diff".
+		{name: "bare FIFO, empty source", env: "", content: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(iox.AllowSymlinkDestEnv, tc.env)
@@ -640,7 +644,7 @@ func TestDiffPrintsAShapeHunkForANonRegularDestination(t *testing.T) {
 				}
 				path = link
 			}
-			hunks, _ := collectDiffHunks(planFor(map[string][]adapter.FileOp{"claude": {fileOp(path, "SOURCE")}}), []string{"claude"}, "", nil)
+			hunks, _ := collectDiffHunks(planFor(map[string][]adapter.FileOp{"claude": {fileOp(path, tc.content)}}), []string{"claude"}, "", nil)
 			if len(hunks) != 1 || hunks[0].Pointer != "shape" {
 				t.Fatalf("want one shape hunk, got %+v", hunks)
 			}

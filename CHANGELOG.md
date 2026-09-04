@@ -20,8 +20,9 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   no apply could clear and `status --exit-code` failed CI forever, while `diff`
   read through the link and said `no diff`. The switch now governs the READ
   side too — `apply`, `status`, `diff`, `reconcile` and `explain` all need it:
-  set, all resolve the link and compare the file it points at; unset, all
-  refuse the link, `diff` prints a `symlink` hunk (`--json` `pointer:
+  set, all resolve the link and compare the file it points at; unset, the four
+  drift commands refuse the link (`apply` fails only when the content
+  differs), `diff` prints a `symlink` hunk (`--json` `pointer:
   "symlink"`, alongside `mode`) naming the switch, and `reconcile`'s
   `[w]`rite-back refuses to capture through it (and does not offer
   `[o]verride`: #248). Once opted in, a link that does not resolve — dangling,
