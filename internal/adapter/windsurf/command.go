@@ -46,7 +46,7 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 		// it neither truncates nor flags an oversized workflow, mirroring the
 		// memory handling (documented in the capability matrix).
 		ops = append(ops, adapter.FileOp{
-			Action:        "write",
+			Action:        adapter.ActionWrite,
 			Path:          filepath.Join(p.WorkflowsDir, cmd.Name+".md"),
 			Content:       []byte(cmd.Body),
 			Mode:          0o644,

@@ -18,7 +18,7 @@ func TestApply_WritesNewFile(t *testing.T) {
 	_ = os.MkdirAll(filepath.Dir(path), 0o755)
 
 	op := adapter.FileOp{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          path,
 		Content:       []byte(`{"mcp":{"github":{"command":"npx"}}}`),
 		Mode:          0o644,
@@ -47,7 +47,7 @@ func TestApply_JSONC_PreservesForeignKeysAndComments(t *testing.T) {
 	_ = os.WriteFile(path, []byte(existing), 0o644)
 
 	op := adapter.FileOp{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          path,
 		Content:       []byte(`{"mcp":{"github":{"command":"npx"}}}`),
 		Mode:          0o644,
@@ -79,7 +79,7 @@ func TestApply_JSONC_OrphanRemoval(t *testing.T) {
 	_ = os.WriteFile(path, []byte(`{"mcp":{"github":{},"stale":{}}}`), 0o644)
 
 	op := adapter.FileOp{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          path,
 		Content:       []byte(`{"mcp":{"github":{"command":"npx"}}}`),
 		Mode:          0o644,
@@ -107,7 +107,7 @@ func TestApply_Delete_RemovesFile(t *testing.T) {
 	path := filepath.Join(tmp, "todelete.txt")
 	_ = os.WriteFile(path, []byte("bye"), 0o644)
 
-	op := adapter.FileOp{Action: "delete", Path: path}
+	op := adapter.FileOp{Action: adapter.ActionDelete, Path: path}
 	if err := a.Apply([]adapter.FileOp{op}, adapter.PassThroughWriter{}); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestApply_Delete_RemovesFile(t *testing.T) {
 func TestApply_Delete_MissingFileNoError(t *testing.T) {
 	tmp := t.TempDir()
 	a := opencode.New(opencode.Options{TargetRoot: tmp})
-	op := adapter.FileOp{Action: "delete", Path: filepath.Join(tmp, "nonexistent.txt")}
+	op := adapter.FileOp{Action: adapter.ActionDelete, Path: filepath.Join(tmp, "nonexistent.txt")}
 	if err := a.Apply([]adapter.FileOp{op}, adapter.PassThroughWriter{}); err != nil {
 		t.Fatalf("delete missing file should not error: %v", err)
 	}

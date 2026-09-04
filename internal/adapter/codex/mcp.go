@@ -39,7 +39,7 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, []ad
 		return nil, nil, fmt.Errorf("marshal codex mcp: %w", err)
 	}
 	return []adapter.FileOp{{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          p.Config,
 		Content:       append(body, '\n'),
 		Mode:          0o644,

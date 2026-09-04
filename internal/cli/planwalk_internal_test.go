@@ -145,7 +145,7 @@ func TestWalkPlanItems(t *testing.T) {
 					t.Errorf("orphan placement: got %v want %v", got, want)
 				}
 				o := items[1]
-				if o.op.Action != "delete" || o.op.SourceID != "skills/x/SKILL.md" || o.op.Mode != 0 ||
+				if o.op.Action != adapter.ActionDelete || o.op.SourceID != "skills/x/SKILL.md" || o.op.Mode != 0 ||
 					o.cls != drift.Orphan || o.hsrc != "" || o.happlied != hf("P") || o.hdest != hf("P") {
 					t.Errorf("orphan item: %+v", o)
 				}
@@ -214,7 +214,7 @@ func TestWalkPlanItems(t *testing.T) {
 				s := state.New()
 				s.Files[fileKey(h, "claude", p)] = state.FileEntry{SHA256: hf("P")}
 				del := fileOp(b, "B")
-				del.Action = "delete"
+				del.Action = adapter.ActionDelete
 				plan := planFor(map[string][]adapter.FileOp{
 					"claude":   {fileOp(a, "A"), fileOp(a, "A"), fileOp(b, "B"), del, keyOp(b, "{}")},
 					"opencode": {fileOp(b, "B")},
@@ -307,13 +307,15 @@ func TestWalkPlanItems(t *testing.T) {
 			run: func(t *testing.T, h string) {
 				a, b := dest(h, "a.md"), dest(h, "b.md")
 				del := fileOp(b, "B")
-				del.Action = "delete"
-				empty := fileOp(a, "A")
-				empty.Action = ""
-				plan := planFor(map[string][]adapter.FileOp{"claude": {del, empty}})
+				del.Action = adapter.ActionDelete
+				// Built without an Action on purpose: this pins that the zero
+				// value walks as a write (do not "tidy" it to ActionWrite).
+				zero := adapter.FileOp{Path: a, Content: []byte("A"), SourceID: "memory/AGENTS.md"}
+				plan := planFor(map[string][]adapter.FileOp{"claude": {del, zero}})
 				got := itemKeys(walkUser(h, plan, state.New(), []string{"claude"}, nil))
-				// "" and "write" are the accepted spellings; anything else is
-				// skipped (matches explain and render.OrphanFiles).
+				// ActionWrite — including the zero value, which IS write — is
+				// walked; a delete is skipped (matches explain and
+				// render.OrphanFiles).
 				if want := []string{"claude " + a}; !reflect.DeepEqual(got, want) {
 					t.Errorf("got %v want %v", got, want)
 				}

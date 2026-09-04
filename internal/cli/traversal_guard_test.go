@@ -93,7 +93,7 @@ func TestEveryAdapterRejectsTraversalComponentName(t *testing.T) {
 					t.Fatalf("Plan(%s, legitimate, scope=%s) = %v; want nil (happy path unchanged)", name, sc.scope, err)
 				}
 				for _, op := range plan.PerAgent[name].Ops {
-					if op.Action != "write" {
+					if op.Action != adapter.ActionWrite {
 						continue
 					}
 					sawControlOp = true

@@ -353,17 +353,14 @@ func printPlannedOp(w io.Writer, p *ui.Printer, op adapter.FileOp, wouldChange m
 		fmt.Fprintf(w, "    %s %s %s\n", p.Green(ui.GlyphOK), p.Green(ui.Pad("synced", 6)), dispPath)
 		return
 	}
-	// Plan ops never carry the "" Action spelling (Plan normalizes it to
-	// "write" at intake), so op.Action can be printed directly.
-	fmt.Fprintf(w, "    %s %s %s\n", p.Cyan(ui.GlyphArrow), p.Cyan(ui.Pad(op.Action, 6)), dispPath)
+	fmt.Fprintf(w, "    %s %s %s\n", p.Cyan(ui.GlyphArrow), p.Cyan(ui.Pad(op.Action.String(), 6)), dispPath)
 }
 
 // isSyncedOp reports whether a planned op is a write the destination already
 // satisfies — i.e. a real apply would skip it. Delete ops, and any write whose
-// destination would be created or modified, are never "synced". Operates on
-// plan ops, so Action is never "" (Plan normalizes it to "write" at intake).
+// destination would be created or modified, are never "synced".
 func isSyncedOp(op adapter.FileOp, wouldChange map[string]bool) bool {
-	if op.Action != "write" {
+	if op.Action != adapter.ActionWrite {
 		return false
 	}
 	return !wouldChange[op.Path]

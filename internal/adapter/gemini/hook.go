@@ -153,7 +153,7 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 		return nil, nil, fmt.Errorf("marshal hooks: %w", err)
 	}
 	return []adapter.FileOp{{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          p.Settings,
 		Content:       append(body, '\n'),
 		Mode:          0o644,

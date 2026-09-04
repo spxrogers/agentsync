@@ -68,7 +68,7 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 			return nil, nil, fmt.Errorf("encode opencode command %s: %w", cmd.Name, err)
 		}
 		ops = append(ops, adapter.FileOp{
-			Action:        "write",
+			Action:        adapter.ActionWrite,
 			Path:          filepath.Join(p.CommandsDir, cmd.Name+".md"),
 			Content:       body,
 			Mode:          0o644,

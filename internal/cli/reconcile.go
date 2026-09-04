@@ -630,9 +630,7 @@ func collectReconcileItems(plan render.RenderPlan, reg *adapter.Registry, s *sta
 			continue
 		}
 		for _, op := range res.Ops {
-			// Plan ops never carry the "" Action spelling (Plan normalizes it
-			// to "write" at intake).
-			if op.Action != "write" {
+			if op.Action != adapter.ActionWrite {
 				continue
 			}
 			if render.IsKeyMerge(op.MergeStrategy) {

@@ -52,7 +52,7 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, []ad
 		return nil, nil, fmt.Errorf("marshal gemini mcp: %w", err)
 	}
 	return []adapter.FileOp{{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          p.Settings,
 		Content:       append(body, '\n'),
 		Mode:          0o644,

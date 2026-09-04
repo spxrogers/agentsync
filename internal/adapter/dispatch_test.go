@@ -38,34 +38,36 @@ func TestDispatchOps(t *testing.T) {
 	}{
 		{
 			name:       "write action calls the write closure",
-			ops:        []adapter.FileOp{{Action: "write", Path: "a"}},
+			ops:        []adapter.FileOp{{Action: adapter.ActionWrite, Path: "a"}},
 			wantWrites: []string{"a"},
 		},
 		{
-			name:       "empty action is treated as write",
-			ops:        []adapter.FileOp{{Action: "", Path: "b"}},
+			// Built without an Action on purpose: this pins that the zero value
+			// writes (do not "tidy" it to an explicit ActionWrite).
+			name:       "zero-value action is treated as write",
+			ops:        []adapter.FileOp{{Path: "b"}},
 			wantWrites: []string{"b"},
 		},
 		{
 			name:       "delete action calls w.Delete",
-			ops:        []adapter.FileOp{{Action: "delete", Path: "c"}},
+			ops:        []adapter.FileOp{{Action: adapter.ActionDelete, Path: "c"}},
 			wantDelete: []string{"c"},
 		},
 		{
-			name:    "unknown action errors",
-			ops:     []adapter.FileOp{{Action: "frob", Path: "d"}},
-			wantErr: `unknown action "frob"`,
+			name:    "out-of-range action errors",
+			ops:     []adapter.FileOp{{Action: adapter.Action(9), Path: "d"}},
+			wantErr: `unknown action "action(9)"`,
 		},
 		{
 			name:       "delete error is wrapped with path",
-			ops:        []adapter.FileOp{{Action: "delete", Path: "e"}},
+			ops:        []adapter.FileOp{{Action: adapter.ActionDelete, Path: "e"}},
 			delErr:     errors.New("boom"),
 			wantDelete: []string{"e"},
 			wantErr:    "delete e: boom",
 		},
 		{
 			name:       "write closure error propagates verbatim",
-			ops:        []adapter.FileOp{{Action: "write", Path: "f"}},
+			ops:        []adapter.FileOp{{Action: adapter.ActionWrite, Path: "f"}},
 			writeErr:   errors.New("write-boom"),
 			wantWrites: []string{"f"},
 			wantErr:    "write-boom",
@@ -73,9 +75,9 @@ func TestDispatchOps(t *testing.T) {
 		{
 			name: "mixed sequence in order",
 			ops: []adapter.FileOp{
-				{Action: "write", Path: "w1"},
-				{Action: "delete", Path: "d1"},
-				{Action: "", Path: "w2"},
+				{Action: adapter.ActionWrite, Path: "w1"},
+				{Action: adapter.ActionDelete, Path: "d1"},
+				{Path: "w2"}, // zero-value Action on purpose: the zero value writes
 			},
 			wantWrites: []string{"w1", "w2"},
 			wantDelete: []string{"d1"},

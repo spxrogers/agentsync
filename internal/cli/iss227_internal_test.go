@@ -74,7 +74,7 @@ func TestStatus_OwnershipSurvivesLegacyStateMigration(t *testing.T) {
 
 	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
 		"claude": {Ops: []adapter.FileOp{
-			{Action: "write", Path: dest, Content: []byte(content), Mode: 0o644, SourceID: "memory/AGENTS.md"},
+			{Action: adapter.ActionWrite, Path: dest, Content: []byte(content), Mode: 0o644, SourceID: "memory/AGENTS.md"},
 		}},
 	}}
 	model := buildStatusModel(plan, []string{"claude"}, s, userHome, adapter.ScopeUser, "")
