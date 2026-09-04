@@ -304,13 +304,7 @@ func buildStatusModel(plan render.RenderPlan, names []string, s *state.Targets, 
 		}
 		ag := statusAgent{Agent: name}
 		items := byAgent[name]
-		// Stable partition. First every whole-file item (each non-key-merge op,
-		// including the "replace" strategy used by skills/subagents/commands/
-		// memory); then the owned pointers of each merge op; then orphans —
-		// whole-file dests this agent still owns in state but no longer renders
-		// (the source component was removed). Without those, status reports
-		// nothing for a file that lingers and the next apply/reconcile would
-		// act on.
+		// Stable partition: whole-file → merged key → orphan.
 		for _, pass := range []func(planItem) bool{
 			func(it planItem) bool { return it.ptr == "" && !it.orphan },
 			func(it planItem) bool { return it.ptr != "" },
@@ -323,8 +317,8 @@ func buildStatusModel(plan render.RenderPlan, names []string, s *state.Targets, 
 				cls := it.cls.String()
 				// Content clean but permission bits drifted from what agentsync
 				// RECORDED is still drift: the next apply re-chmods it. Whole-file
-				// items only — a merged key has no mode. (An orphan never
-				// classifies clean, so it needs no exclusion.)
+				// items only — a merged key has no mode. (An orphan classifies
+				// clean only from a hand-corrupted state entry, so no exclusion.)
 				if it.ptr == "" && cls == drift.Clean.String() && it.recordedModeDrifted() {
 					cls = drift.Drift.String()
 				}

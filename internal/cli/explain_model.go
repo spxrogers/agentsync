@@ -64,9 +64,6 @@ func buildExplainModel(in explainInputs) explainModel {
 	// are reported as the different problems they are.
 	pathManaged := false
 
-	// The walk's matchOp is where pathManaged and keyMergers are recorded — on
-	// the op MATCH, not from the items — because both must hold for an op that
-	// yields zero items (an emptied "{}" section; #229 amendment A3).
 	items := walkPlanItems(planWalk{
 		plan: in.plan, agents: in.agents, state: in.state, userHome: in.userHome, scope: in.scope, projectRoot: in.projectRoot,
 		matchOp: func(agent string, op adapter.FileOp) bool {

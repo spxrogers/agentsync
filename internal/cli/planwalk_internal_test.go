@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -442,9 +443,55 @@ func TestPlanItemIsNotASerializationSurface(t *testing.T) {
 			t.Errorf("planItem.%s carries a json tag %q — a planItem is not a serialization surface", f.Name, tag)
 		}
 	}
-	marshaler := reflect.TypeOf((*json.Marshaler)(nil)).Elem()
-	if typ.Implements(marshaler) || reflect.PointerTo(typ).Implements(marshaler) {
-		t.Error("planItem implements json.Marshaler — a planItem must never be marshalled")
+	// encoding/json also honours encoding.TextMarshaler, which would marshal
+	// the whole item as one string — same egress, different door.
+	for _, iface := range []reflect.Type{
+		reflect.TypeOf((*json.Marshaler)(nil)).Elem(),
+		reflect.TypeOf((*encoding.TextMarshaler)(nil)).Elem(),
+	} {
+		if typ.Implements(iface) || reflect.PointerTo(typ).Implements(iface) {
+			t.Errorf("planItem implements %s — a planItem must never be marshalled", iface)
+		}
+	}
+}
+
+// TestDestModePerm pins the (perm, regular) contract: `chmod 000` is a regular
+// file with perm 0, distinguishable from "not there" — the two the mode
+// predicates must not conflate.
+func TestDestModePerm(t *testing.T) {
+	h := t.TempDir()
+	reg, zero, link, dir := filepath.Join(h, "reg"), filepath.Join(h, "zero"), filepath.Join(h, "link"), filepath.Join(h, "dir")
+	mustWrite(t, reg, "x")
+	mustWrite(t, zero, "x")
+	if err := os.Chmod(reg, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(zero, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(reg, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, path  string
+		wantPerm    uint32
+		wantRegular bool
+	}{
+		{name: "regular", path: reg, wantPerm: 0o644, wantRegular: true},
+		{name: "chmod-000-is-still-regular", path: zero, wantPerm: 0, wantRegular: true},
+		{name: "absent", path: filepath.Join(h, "nope"), wantPerm: 0, wantRegular: false},
+		{name: "symlink-is-the-link-not-the-target", path: link, wantPerm: 0, wantRegular: false},
+		{name: "directory", path: dir, wantPerm: 0, wantRegular: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			perm, regular := destModePerm(tc.path)
+			if perm != tc.wantPerm || regular != tc.wantRegular {
+				t.Errorf("destModePerm = (%04o, %v); want (%04o, %v)", perm, regular, tc.wantPerm, tc.wantRegular)
+			}
+		})
 	}
 }
 

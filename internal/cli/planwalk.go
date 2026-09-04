@@ -24,9 +24,8 @@ import (
 // TestPlanItemIsNotASerializationSurface fails if a field is ever exported or
 // given a `json:` tag. Callers project a planItem into their own statusItem /
 // diffHunk / reconcileItem / explainItem and mask before display
-// (secrets.MaskResolved). Nothing here is ever logged.
+// (secrets.MaskResolved).
 type planItem struct {
-	// agent is the adapter whose op produced this item.
 	agent string
 
 	// op is the plan op that produced the item. For an ORPHAN it is SYNTHESIZED
@@ -110,8 +109,7 @@ func destModePerm(path string) (perm uint32, regular bool) {
 // planWalk is the input to walkPlanItems.
 type planWalk struct {
 	plan render.RenderPlan
-	// agents is the iteration order. Production callers pass reg.Names();
-	// unit callers pass a literal such as []string{"claude"}.
+	// agents is the iteration order (production callers pass reg.Names()).
 	agents []string
 	// state is REQUIRED, non-nil. status, reconcile and explain pass the
 	// loaded state; diff passes an empty state.New() because it never reads the
@@ -240,8 +238,6 @@ func walkPlanItems(w planWalk) []planItem {
 			it.cls = drift.Classify(it.hsrc, it.happlied, it.hdest)
 			if w.withText {
 				it.srcText = string(op.Content)
-				// Follows symlinks (hashFile does not) and answers "" on ANY
-				// read error, partial data included — diff's semantics.
 				if b, err := readDestBytes(op.Path); err == nil {
 					it.dstText = string(b)
 				}
@@ -268,7 +264,7 @@ func walkPlanItems(w planWalk) []planItem {
 				destRegular:  reg,
 			}
 			it.cls = drift.Classify("", it.happlied, it.hdest)
-			out = append(out, it) // srcText/dstText stay "" for an orphan
+			out = append(out, it)
 		}
 	}
 	return out

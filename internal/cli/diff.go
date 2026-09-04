@@ -258,10 +258,6 @@ func marshalPretty(v any) string {
 func collectDiffHunks(plan render.RenderPlan, names []string, filterPath string,
 	redact map[string]string,
 ) (hunks []diffHunk, filterMatched bool) {
-	// filterMatched tracks whether a <path> argument matched any rendered
-	// op across every selected agent, so a path that matches NOTHING (a
-	// typo, or an unmanaged file) can be reported distinctly from a managed
-	// path that is genuinely in sync ("no diff").
 	filterMatched = filterPath == ""
 	items := walkPlanItems(planWalk{
 		plan: plan, agents: names, state: state.New(),
@@ -287,12 +283,7 @@ func collectDiffHunks(plan render.RenderPlan, names []string, filterPath string,
 		}
 		// File-level diff.
 		if srcStr == dstStr {
-			// Content is identical, but the file MODE may have drifted from
-			// what apply maintains (op.Mode). A content-identical chmod
-			// produces no text hunk, so surface it as a small "mode" hunk
-			// instead of reporting "no diff" — the mode analog of a content
-			// drift hunk (render.Writer.Write re-converges it on the next
-			// apply).
+			// Content identical: surface a mode-only drift as a "mode" hunk.
 			if src, dst, ok := modeHunk(it); ok {
 				hunks = append(hunks, diffHunk{Path: it.op.Path, Pointer: "mode", Source: src, Dest: dst})
 			}

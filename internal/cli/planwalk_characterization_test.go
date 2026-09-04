@@ -883,7 +883,8 @@ func planFixtures() []planFixture {
 		// T-25: two agents own the SAME orphan path in state and neither renders
 		// it. status reports it under each owner (per-agent ownership view);
 		// reconcile prompts for the file ONCE, under the first owner in
-		// registry order — its orphan dedupe is global, not per agent.
+		// registry order — its orphan dedupe is global, not per agent; explain
+		// calls the path unmanaged — it never consults orphans.
 		{
 			name:       "orphan/two-agents-own-one-orphan",
 			diffFilter: func(h string) string { return dest(h, "P.md") },
@@ -915,11 +916,6 @@ func planFixtures() []planFixture {
 				}}
 			},
 			wantE: func(string) eProj { return eProj{unmanaged: true, pathManaged: false} },
-			extra: func(t *testing.T, _ string, _ sProj, _ dProj, r []rRow, _ eProj) {
-				if len(r) != 1 {
-					t.Errorf("reconcile offered the shared orphan %d times; want exactly once", len(r))
-				}
-			},
 		},
 
 		// T-24: a key-merge op whose Content is "{}" — the shape render.Plan

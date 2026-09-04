@@ -90,7 +90,7 @@ first time. Rule of thumb: import adopts, reconcile resolves.`,
 	}
 	cmd.Flags().BoolVar(&autoWB, "auto-writeback", false, "auto-resolve drift by writing dest back to source")
 	cmd.Flags().BoolVar(&autoOR, "auto-override", false, "auto-resolve drift by re-applying source to dest")
-	cmd.Flags().BoolVar(&autoSafe, "auto-safe", false, "auto-resolve only converged/pending/new (no-op)")
+	cmd.Flags().BoolVar(&autoSafe, "auto-safe", false, "non-interactive: resolve nothing, report every item that needs a human")
 	addAgentsFlag(cmd, &agentsCSV, "reconcile pass")
 	markScopeAware(cmd)
 	return cmd
@@ -321,8 +321,8 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 			case autoOR:
 				action = 'o'
 			case autoSafe:
-				// auto-safe: skip non-safe items (they require prompting, but
-				// auto-safe only silently handles safe ones which never reach here).
+				// auto-safe resolves nothing: everything that reaches this loop
+				// needs a human.
 				fmt.Fprintf(w, "skipped (needs manual review): %s (%s)\n", itemLabelDisp(it), it.cls)
 				autoSkipped++
 				action = 's'

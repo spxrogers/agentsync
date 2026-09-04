@@ -39,7 +39,7 @@ func TestPluginOwnerForKeyItem(t *testing.T) {
 
 		// NOTE: Continue's per-server SourceID ("mcp/<id>.toml") is deliberately
 		// NOT exercised here. Its op is MergeStrategy "replace", so it is a
-		// WHOLE-FILE item that never reaches this function — collectItems looks
+		// WHOLE-FILE item that never reaches this function — collectReconcileItems looks
 		// it up by SourceID instead. Asserting it here would test a shape that
 		// cannot occur; the real path is covered by
 		// TestPluginProvidedSourceIDs_RegistersBothServerKeyForms and the
@@ -102,7 +102,7 @@ func TestUnescapeJSONPointer(t *testing.T) {
 // the section-wide SourceID "mcp/* (multiple)" and only the JSON pointer names
 // the server — that is the "<kind>/<id>" key. Continue instead renders ONE FILE
 // PER SERVER with the per-server SourceID "mcp/<id>.toml", making it a whole-file
-// item that collectItems looks up by SourceID directly. Keying only the bare form
+// item that collectReconcileItems looks up by SourceID directly. Keying only the bare form
 // left that path unguarded: a plugin-provided server on Continue could still be
 // captured.
 func TestPluginProvidedSourceIDs_RegistersBothServerKeyForms(t *testing.T) {
