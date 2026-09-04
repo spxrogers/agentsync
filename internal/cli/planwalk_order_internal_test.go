@@ -54,7 +54,8 @@ func TestMergedKeyOrderIsDeterministic(t *testing.T) {
 			pointers: func(t *testing.T, userHome, _ string, plan render.RenderPlan, s *state.Targets) []string {
 				t.Helper()
 				var out []string
-				for _, it := range collectItems(plan, registryFactory(), s, adapter.ScopeUser, "", userHome, nil) {
+				items, _ := collectReconcileItems(plan, registryFactory(), s, adapter.ScopeUser, "", userHome, nil)
+				for _, it := range items {
 					out = append(out, it.ptr)
 				}
 				return out

@@ -16,12 +16,15 @@ import (
 
 // This file is the characterization harness for #229: it pins, fixture by
 // fixture, what the four plan→drift walks — buildStatusModel (S),
-// collectDiffHunks (D), collectItems ++ collectOrphanFileItems (R) and
-// buildExplainModel (E) — answer TODAY, before they are unified behind one
-// shared walk. Every golden below was written from the drift classifier's
-// truth table and each surface's documented rules, then confirmed against the
-// unmodified code; the harness is an oracle for the OLD behaviour, so a
-// refactor that needs to edit a golden here is not a refactor.
+// collectDiffHunks (D), collectReconcileItems (R) and buildExplainModel (E) —
+// answer TODAY, before they are unified behind one shared walk. Every golden
+// below was written from the drift classifier's truth table and each surface's
+// documented rules, then confirmed against the unmodified code; the harness is
+// an oracle for the OLD behaviour, so a refactor that needs to edit a golden
+// here is not a refactor. The two policy changes #229 defers to its PR-C
+// (axes 9 and 14) are the expected exceptions: they edit T-10
+// (whole-file/dest-is-symlink) and T-09 (whole-file/mode-drift-only), nothing
+// else.
 //
 // What is compared IN ORDER: agent order, op order across paths, status's
 // whole-file-before-key partition, reconcile's all-items-before-all-orphans
@@ -877,6 +880,48 @@ func planFixtures() []planFixture {
 			wantE: func(string) eProj { return eProj{unmanaged: true, pathManaged: false} },
 		},
 
+		// T-25: two agents own the SAME orphan path in state and neither renders
+		// it. status reports it under each owner (per-agent ownership view);
+		// reconcile prompts for the file ONCE, under the first owner in
+		// registry order — its orphan dedupe is global, not per agent.
+		{
+			name:       "orphan/two-agents-own-one-orphan",
+			diffFilter: func(h string) string { return dest(h, "P.md") },
+			target:     func(h string) string { return dest(h, "P.md") },
+			setup: func(t *testing.T, h string) (render.RenderPlan, *state.Targets) {
+				t.Helper()
+				p := dest(h, "P.md")
+				mustWrite(t, p, "APPLIED")
+				s := state.New()
+				s.Files[fileKey(h, "claude", p)] = state.FileEntry{SHA256: hf("APPLIED"), SourceID: "memory/AGENTS.md"}
+				s.Files[fileKey(h, "opencode", p)] = state.FileEntry{SHA256: hf("APPLIED"), SourceID: "memory/AGENTS.md"}
+				return planFor(map[string][]adapter.FileOp{"claude": nil, "opencode": nil}), s
+			},
+			wantS: func(h string) sProj {
+				return sProj{
+					agents: []sAgentProj{
+						{agent: "claude", rows: []sRow{{"claude", dest(h, "P.md"), "", "orphan"}}},
+						{agent: "opencode", rows: []sRow{{"opencode", dest(h, "P.md"), "", "orphan"}}},
+					},
+					summary: map[string]int{"orphan": 2},
+				}
+			},
+			wantD: func(string) dProj { return dProj{filterMatched: false} },
+			wantR: func(h string) []rRow {
+				return []rRow{{
+					agent: "claude", path: dest(h, "P.md"), cls: "orphan",
+					hsrc: "", happlied: hf("APPLIED"), hdest: hf("APPLIED"),
+					orphan: true,
+				}}
+			},
+			wantE: func(string) eProj { return eProj{unmanaged: true, pathManaged: false} },
+			extra: func(t *testing.T, _ string, _ sProj, _ dProj, r []rRow, _ eProj) {
+				if len(r) != 1 {
+					t.Errorf("reconcile offered the shared orphan %d times; want exactly once", len(r))
+				}
+			},
+		},
+
 		// T-24: a key-merge op whose Content is "{}" — the shape render.Plan
 		// synthesizes to clean up an emptied section — against a destination
 		// that still carries foreign keys there. It yields ZERO items, yet the
@@ -1004,8 +1049,7 @@ func projectE(m explainModel) eProj {
 // TestPlanWalkCharacterization runs every fixture through the four builders
 // and compares each projection to its golden. The four calls below mirror the
 // production call sites verbatim: reg.Names() as the agent order everywhere,
-// and reconcile's `collectItems(...) ++ collectOrphanFileItems(...)`
-// composition (reconcile.go, reconcileRun).
+// and reconcile's items-then-orphans composition (reconcile.go, reconcileRun).
 func TestPlanWalkCharacterization(t *testing.T) {
 	reg := registryFactory()
 	for _, tc := range planFixtures() {
@@ -1030,9 +1074,8 @@ func TestPlanWalkCharacterization(t *testing.T) {
 			}
 			gotD := projectD(collectDiffHunks(plan, reg.Names(), filter, nil))
 
-			items := collectItems(plan, reg, s, sc, root, userHome, nil)
-			items = append(items, collectOrphanFileItems(plan, reg, s, sc, root, userHome)...)
-			gotR := projectR(items)
+			items, orphans := collectReconcileItems(plan, reg, s, sc, root, userHome, nil)
+			gotR := projectR(append(items, orphans...))
 
 			gotE := projectE(buildExplainModel(explainInputs{
 				fs:            afero.NewMemMapFs(),

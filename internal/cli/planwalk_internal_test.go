@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -207,7 +208,7 @@ func TestWalkPlanItems(t *testing.T) {
 				del := fileOp(b, "B")
 				del.Action = "delete"
 				plan := planFor(map[string][]adapter.FileOp{
-					"claude":   {fileOp(a, "A"), fileOp(b, "B"), del, keyOp(b, "{}")},
+					"claude":   {fileOp(a, "A"), fileOp(a, "A"), fileOp(b, "B"), del, keyOp(b, "{}")},
 					"opencode": {fileOp(b, "B")},
 				})
 				var calls []string
@@ -219,8 +220,10 @@ func TestWalkPlanItems(t *testing.T) {
 					}
 				})
 				// Once per op that survives the Action filter, in walk order,
-				// with the agent name; the "delete" op never reaches it.
-				wantCalls := []string{"claude " + a, "claude " + b, "claude " + b, "opencode " + b}
+				// with the agent name; the "delete" op never reaches it, and the
+				// duplicate whole-file op at `a` is offered BEFORE the per-agent
+				// path dedupe drops it.
+				wantCalls := []string{"claude " + a, "claude " + a, "claude " + b, "claude " + b, "opencode " + b}
 				if !reflect.DeepEqual(calls, wantCalls) {
 					t.Errorf("matchOp calls: got %v want %v", calls, wantCalls)
 				}
@@ -432,9 +435,16 @@ func TestPlanItemIsNotASerializationSurface(t *testing.T) {
 		if f.IsExported() {
 			t.Errorf("planItem.%s is exported — a planItem must never be marshalled; keep every field unexported", f.Name)
 		}
+		if f.Anonymous {
+			t.Errorf("planItem embeds %s — an embedded type's exported fields are promoted into a marshalled form", f.Name)
+		}
 		if tag, ok := f.Tag.Lookup("json"); ok {
 			t.Errorf("planItem.%s carries a json tag %q — a planItem is not a serialization surface", f.Name, tag)
 		}
+	}
+	marshaler := reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+	if typ.Implements(marshaler) || reflect.PointerTo(typ).Implements(marshaler) {
+		t.Error("planItem implements json.Marshaler — a planItem must never be marshalled")
 	}
 }
 

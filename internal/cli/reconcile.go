@@ -659,14 +659,6 @@ func collectReconcileItems(plan render.RenderPlan, reg *adapter.Registry, s *sta
 			orphan:      it.orphan,
 		}
 		if it.orphan {
-			// The walk's synthesized op carries the state entry's SourceID: the
-			// reclaimable-KIND check behind this item's prompt wording is
-			// SourceID-keyed and silently degrades to "unknown kind" without it
-			// — which is exactly how that branch once shipped dead. Mode is
-			// deliberately NOT carried: this path removes via render.BackupFile
-			// + os.Remove, never Writer.Delete, so nothing reads it and setting
-			// it would only imply otherwise. No text: an orphan has no source
-			// side, so the prompt falls back to the hash display.
 			if rendered[it.op.Path] || seen[it.op.Path] {
 				continue
 			}
@@ -683,22 +675,6 @@ func collectReconcileItems(plan render.RenderPlan, reg *adapter.Registry, s *sta
 		items = append(items, ri)
 	}
 	return items, orphans
-}
-
-// collectItems is the rendered (non-orphan) half of collectReconcileItems, and
-// collectOrphanFileItems the orphan half. They remain as the two names the
-// characterization harness composes (`collectItems(...) ++
-// collectOrphanFileItems(...)`, the shape reconcileRun had before #229); the
-// production call site takes both halves from ONE collectReconcileItems call
-// so the plan is walked — and every destination read — once.
-func collectItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, userHome string, pluginOwners map[string]string) []reconcileItem {
-	items, _ := collectReconcileItems(plan, reg, s, sc, projectRoot, userHome, pluginOwners)
-	return items
-}
-
-func collectOrphanFileItems(plan render.RenderPlan, reg *adapter.Registry, s *state.Targets, sc adapter.Scope, projectRoot, userHome string) []reconcileItem {
-	_, orphans := collectReconcileItems(plan, reg, s, sc, projectRoot, userHome, nil)
-	return orphans
 }
 
 // pruneStateFilesForPath removes every agent's Files state entry for a single

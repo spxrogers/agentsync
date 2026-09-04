@@ -30,10 +30,8 @@ type planItem struct {
 	agent string
 
 	// op is the plan op that produced the item. For an ORPHAN it is SYNTHESIZED
-	// — adapter.FileOp{Action: "delete", Path: <orphan>, SourceID: <state
-	// entry's>} — carrying only what state knows. Mode is deliberately left 0:
-	// the orphan removal path uses render.BackupFile + os.Remove, never
-	// Writer.Delete, so nothing reads it and setting it would imply otherwise.
+	// from state — adapter.FileOp{Action: "delete", Path, SourceID} — with Mode
+	// left 0 because the orphan removal path never reads it.
 	op adapter.FileOp
 
 	// ptr is the RFC-6901 pointer for a key item; "" for a whole-file item.
@@ -43,7 +41,7 @@ type planItem struct {
 	// longer renders. The set is PER AGENT and UNFILTERED: a path another
 	// enabled agent still renders IS yielded (status's ownership view).
 	// reconcile applies its own cross-agent exclusion and path dedupe on top —
-	// see collectOrphanFileItems.
+	// see collectReconcileItems.
 	orphan bool
 
 	// cls is the CONTENT-only classification. It deliberately does NOT fold in
@@ -59,8 +57,7 @@ type planItem struct {
 	// unrecorded). destPerm/destRegular come from destModePerm: destRegular is
 	// false for an absent, symlinked or non-regular destination, which is what
 	// keeps `chmod 000` distinguishable from "absent" (destPerm 0, regular true
-	// vs destPerm 0, regular false). Populated for orphan items too; no caller
-	// consults them there today, and none may start to in #229 PR-B.
+	// vs destPerm 0, regular false).
 	recordedMode uint32
 	destPerm     uint32
 	destRegular  bool
@@ -99,13 +96,12 @@ func (i planItem) opModeDrifted() bool {
 }
 
 // destModePerm answers the permission bits of the REGULAR file at path.
-// regular is false — and perm 0 — for an absent, symlinked or non-regular
-// destination, so a caller can tell `chmod 000` (0, true) from "not there"
-// (0, false). It is the Lstat/symlink/IsRegular triage both mode predicates
-// share; it never opens the path.
+// regular is false — and perm 0 — for an absent, symlinked (Lstat: the link
+// itself is not regular) or non-regular destination, so a caller can tell
+// `chmod 000` (0, true) from "not there" (0, false).
 func destModePerm(path string) (perm uint32, regular bool) {
 	fi, err := os.Lstat(path)
-	if err != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.Mode().IsRegular() {
+	if err != nil || !fi.Mode().IsRegular() {
 		return 0, false
 	}
 	return uint32(fi.Mode().Perm()), true
@@ -117,8 +113,9 @@ type planWalk struct {
 	// agents is the iteration order. Production callers pass reg.Names();
 	// unit callers pass a literal such as []string{"claude"}.
 	agents []string
-	// state is REQUIRED, non-nil: every caller state.Load()s first. Do NOT add
-	// a state.New() fallback — a behavior change with no oracle.
+	// state is REQUIRED, non-nil. status, reconcile and explain pass the
+	// loaded state; diff passes an empty state.New() because it never reads the
+	// applied side. The walk itself must not fall back to one.
 	state *state.Targets
 	// userHome is the user's $HOME, the HomeRelative base for state keys.
 	userHome    string
@@ -132,7 +129,8 @@ type planWalk struct {
 	// record "the path matched an op" for an op that yields ZERO items (a
 	// synthesized orphan-cleanup op has Content "{}" → no pointers). Deriving
 	// those flags from len(items) is a regression — see #229 amendment A3.
-	// matchOp is NOT applied to orphan items.
+	// matchOp is NOT applied to orphan items: a filtered walk that also sets
+	// includeOrphans yields every orphan, not the matching ones.
 	matchOp func(agent string, op adapter.FileOp) bool
 
 	// includeOrphans appends each agent's render.OrphanFiles items AFTER that

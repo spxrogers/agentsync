@@ -193,16 +193,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   stable for the first time. `explain` already sorted and is unchanged.
 
 - **Internal: `status`, `diff`, `reconcile` and `explain` now share one
-  plan→drift walk.** They held four copies that had drifted apart; the copies
-  are gone ([#229](https://github.com/spxrogers/agentsync/issues/229)). One
-  further change rides along: `explain` now decodes a key-merged destination
-  once per rendered section rather than once per key, so every key in one file
-  is classified against the same snapshot. Behavior is otherwise unchanged in
-  this release — the disagreements the copies encoded (a permission-only change
-  that `status` calls drift, `reconcile` calls "nothing to reconcile" and
-  `explain` calls clean; a symlinked destination that `status` calls drift
-  forever while `diff` reads through it) are preserved deliberately, so each is
-  decided on its own rather than as a side effect of a refactor.
+  plan→drift walk** ([#229](https://github.com/spxrogers/agentsync/issues/229)).
+  `explain` now decodes a key-merged destination once per rendered section
+  rather than once per key, so every key in one file is classified against the
+  same snapshot. The ways the four surfaces still disagree (mode-only drift,
+  symlinked destinations) are unchanged and tracked in #229.
 
 - **`.state/targets.json` is now `schema_version: 2`.** The upgrade is automatic
   and requires nothing: every command reads the old keys, and the first command

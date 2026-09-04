@@ -321,14 +321,11 @@ func buildStatusModel(plan render.RenderPlan, names []string, s *state.Targets, 
 					continue
 				}
 				cls := it.cls.String()
-				// A file whose CONTENT is clean but whose permission bits drifted
-				// from what agentsync last RECORDED for it is still drift — the
-				// next apply re-converges the mode (render.Writer.Write chmods a
-				// content-identical file whose mode differs). Without this, a
-				// skill script that lost its +x bit reports "clean" yet the next
-				// apply would change it. Rendered whole-file items only: a merged
-				// key has no mode and an orphan's class is the classifier's alone.
-				if it.ptr == "" && !it.orphan && cls == drift.Clean.String() && it.recordedModeDrifted() {
+				// Content clean but permission bits drifted from what agentsync
+				// RECORDED is still drift: the next apply re-chmods it. Whole-file
+				// items only — a merged key has no mode. (An orphan never
+				// classifies clean, so it needs no exclusion.)
+				if it.ptr == "" && cls == drift.Clean.String() && it.recordedModeDrifted() {
 					cls = drift.Drift.String()
 				}
 				ag.Items = append(ag.Items, statusItem{Path: it.op.Path, Pointer: it.ptr, Class: cls})

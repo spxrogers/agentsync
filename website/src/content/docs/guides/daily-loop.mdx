@@ -63,14 +63,16 @@ flags instead of the menu:
 | --- | --- |
 | `--auto-writeback` | Adopt every destination edit. |
 | `--auto-override` | Re-impose source everywhere, discarding edits. |
-| `--auto-safe` | Only auto-resolve changes that **can't lose work** (`converged`, `pending`). |
+| `--auto-safe` | Resolve nothing; list every item as left unresolved. |
 
 ```bash
 agentsync reconcile --auto-safe
 ```
 
-`--auto-safe` is the conservative default for automation: it converges the
-no-risk cases and leaves anything that could discard work for a human.
+`--auto-safe` is the conservative choice for automation: nothing that reaches
+`reconcile` is safe to resolve unattended (`converged` and `pending` never reach
+it — the next `apply` handles those), so it changes nothing and reports what
+needs a human.
 
 <LinkCard
 	title="What the drift classes mean"
