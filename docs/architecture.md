@@ -893,7 +893,7 @@ fold permission drift into the class of a content-clean whole file — measured
 against `op.Mode`, the mode the next apply chmods to, which is the same question
 `diff`'s `mode` hunk asks (`planItem.classWithModeDrift`, one method, so the
 three cannot disagree). `reconcile` still ignores mode entirely; that gap is
-tracked as its own issue. `diff` masks and compares text, `reconcile` excludes
+#245. `diff` masks and compares text, `reconcile` excludes
 an orphan another agent still renders, `explain` groups by owner.
 
 A **symlinked** destination is read through only when

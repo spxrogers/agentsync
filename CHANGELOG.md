@@ -45,8 +45,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   content-identical chmod made `status` say `drift` and `explain` say `clean`
   about the same file in the same second; both now read the one folded class.
   `reconcile` still ignores mode entirely — it reports "nothing to reconcile"
-  for a drift the other three surfaces name — and that gap is tracked as its
-  own issue rather than fixed here.
+  for a drift the other three surfaces name — and that gap is
+  [#245](https://github.com/spxrogers/agentsync/issues/245), not fixed here.
 
 - **A FIFO at a managed destination no longer hangs `status`, `diff`, `explain`,
   or `reconcile`'s drift walk and write-back.** (A directory there never hung — `os.ReadFile`
