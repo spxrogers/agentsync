@@ -24,8 +24,9 @@ import (
 // internal/ and fails on either, anywhere outside NewCleanupOp's own body. A
 // whole-file write of "{}" (no strategy, no owned keys) is not the cleanup
 // shape and passes. Deliberately literal-only, like TestEverySkipLiteralSetsKind:
-// Content built from a variable or a call is not a static shape, and the
-// runtime tier for the pipeline path is TestApplyDryRun_CleanupOpNotCountedToWrite.
+// Content built from a variable or a call, or assigned after construction, is
+// not a static shape, and the runtime tier for the pipeline path is
+// TestApplyDryRun_CleanupOpNotCountedToWrite.
 func TestEveryCleanupLiteralUsesNewCleanupOp(t *testing.T) {
 	root := moduleInternalDir(t)
 	fset := token.NewFileSet()
@@ -70,8 +71,8 @@ func TestEveryCleanupLiteralUsesNewCleanupOp(t *testing.T) {
 }
 
 // scanCleanupLiterals walks one parsed production file and reports every FileOp
-// composite literal — direct, or an elided element of []adapter.FileOp{…} —
-// that bypasses NewCleanupOp: one that hand-rolls the cleanup shape, one that
+// composite literal — direct, or a type-elided element of a slice, array or map
+// of FileOp (nested containers included) — that bypasses NewCleanupOp: one that hand-rolls the cleanup shape, one that
 // stamps Kind: OpCleanup itself, or a positional literal the matchers cannot
 // read (flagged in the safe direction, like the Skip guard). Literals inside
 // NewCleanupOp's own body, in package adapter, are the one exempt site. It also
@@ -98,7 +99,29 @@ func scanCleanupLiterals(fset *token.FileSet, f *ast.File) (total int, offenders
 		case stampsOpCleanup(cl):
 			offenders = append(offenders, posOf(fset, cl)+": FileOp literal stamps Kind: OpCleanup by hand — call adapter.NewCleanupOp, its only producer")
 		case hasCleanupShape(cl):
-			offenders = append(offenders, posOf(fset, cl)+": FileOp literal hand-rolls the cleanup shape (an empty \"{}\" object into a key-merge destination) without the OpCleanup stamp — call adapter.NewCleanupOp")
+			offenders = append(offenders, posOf(fset, cl)+": FileOp literal hand-rolls the cleanup shape (an empty \"{}\" object into a key-merge destination) without the OpCleanup stamp — call adapter.NewCleanupOp; a whole-file write of \"{}\" names neither MergeStrategy nor OwnedKeys and is not flagged")
+		}
+	}
+	// checkElided walks a container literal whose element literals elide
+	// their type — `[]adapter.FileOp{{…}}`, `map[string]adapter.FileOp{"k": {…}}`,
+	// or a nesting of those — and checks each FileOp element it reaches. An
+	// element that spells its own type is left to the plain Inspect branch
+	// below, so nothing is counted twice.
+	var checkElided func(cl *ast.CompositeLit, elt ast.Expr)
+	checkElided = func(cl *ast.CompositeLit, elt ast.Expr) {
+		for _, el := range cl.Elts {
+			if kv, ok := el.(*ast.KeyValueExpr); ok {
+				el = kv.Value
+			}
+			ecl, ok := el.(*ast.CompositeLit)
+			if !ok || ecl.Type != nil {
+				continue
+			}
+			if isFileOpType(elt, inPkgAdapter) {
+				check(ecl)
+			} else if inner := containerElem(elt); inner != nil {
+				checkElided(ecl, inner)
+			}
 		}
 	}
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -108,20 +131,24 @@ func scanCleanupLiterals(fset *token.FileSet, f *ast.File) (total int, offenders
 		}
 		if isFileOpType(cl.Type, inPkgAdapter) {
 			check(cl)
-			return true
-		}
-		// `[]adapter.FileOp{ {...}, {...} }`: the element literals have an
-		// elided (nil) Type, so they are reached only through the slice here.
-		if at, ok := cl.Type.(*ast.ArrayType); ok && isFileOpType(at.Elt, inPkgAdapter) {
-			for _, el := range cl.Elts {
-				if ecl, ok := el.(*ast.CompositeLit); ok {
-					check(ecl)
-				}
-			}
+		} else if elt := containerElem(cl.Type); elt != nil {
+			checkElided(cl, elt)
 		}
 		return true
 	})
 	return total, offenders
+}
+
+// containerElem returns the element type of a slice or array, or the value
+// type of a map, or nil for any other type expression.
+func containerElem(t ast.Expr) ast.Expr {
+	switch c := t.(type) {
+	case *ast.ArrayType:
+		return c.Elt
+	case *ast.MapType:
+		return c.Value
+	}
+	return nil
 }
 
 // TestCleanupOpStaticGuardScan pins the scan on parsed snippets — above all the
@@ -168,6 +195,35 @@ func f(body []byte) adapter.FileOp { return adapter.FileOp{Kind: adapter.OpClean
 			name: "elided slice element is reached and flagged",
 			src: `package cli
 var ops = []adapter.FileOp{{Action: adapter.ActionWrite, Content: []byte(` + "`{}`" + `), OwnedKeys: ptrs}}`,
+			wantTotal: 1,
+			wantMsgs:  []string{"hand-rolls the cleanup shape"},
+		},
+		{
+			name: "an explicitly typed slice element is counted once",
+			src: `package cli
+var ops = []adapter.FileOp{adapter.FileOp{Content: []byte("{}"), OwnedKeys: ptrs}}`,
+			wantTotal: 1,
+			wantMsgs:  []string{"hand-rolls the cleanup shape"},
+		},
+		{
+			name: "elided map value is reached",
+			src: `package cli
+var byPath = map[string]adapter.FileOp{"a": {Content: []byte("{}"), OwnedKeys: ptrs}}`,
+			wantTotal: 1,
+			wantMsgs:  []string{"hand-rolls the cleanup shape"},
+		},
+		{
+			name: "elided element of a nested slice is reached",
+			src: `package cli
+var batches = [][]adapter.FileOp{{{Content: []byte("{}"), MergeStrategy: s}}}`,
+			wantTotal: 1,
+			wantMsgs:  []string{"hand-rolls the cleanup shape"},
+		},
+		{
+			name: "a method named NewCleanupOp grants no window",
+			src: `package adapter
+type T struct{}
+func (T) NewCleanupOp(s string) FileOp { return FileOp{Content: []byte("{}"), MergeStrategy: s} }`,
 			wantTotal: 1,
 			wantMsgs:  []string{"hand-rolls the cleanup shape"},
 		},
@@ -250,7 +306,7 @@ func TestCleanupOpStaticGuardMatchers(t *testing.T) {
 		{name: "hand-stamped OpCleanup", src: `adapter.FileOp{Kind: adapter.OpCleanup, Content: body}`, wantFileOp: true, wantStamp: true},
 		{name: "bare OpCleanup inside package adapter", src: `FileOp{Kind: OpCleanup}`, inPkgAdapter: true, wantFileOp: true, wantStamp: true},
 		{name: "OpRender is not a hand stamp", src: `adapter.FileOp{Kind: adapter.OpRender}`, wantFileOp: true},
-		{name: "positional literal", src: `adapter.FileOp{adapter.ActionWrite, adapter.OpRender, "p"}`, wantFileOp: true, wantPositional: true},
+		{name: "positional literal", src: `adapter.FileOp{adapter.ActionWrite, adapter.OpRender, "p", nil, 0, "", "", nil}`, wantFileOp: true, wantPositional: true},
 		{name: "empty literal is keyed enough", src: `adapter.FileOp{}`, wantFileOp: true},
 		{name: "bare FileOp inside package adapter", src: `FileOp{Content: []byte("{}"), OwnedKeys: o}`, inPkgAdapter: true, wantFileOp: true, wantEmptyObj: true, wantShape: true},
 		{name: "bare FileOp outside package adapter is some other type", src: `FileOp{Content: []byte("{}")}`, wantFileOp: false},
@@ -354,6 +410,9 @@ func hasCleanupShape(cl *ast.CompositeLit) bool {
 		return false
 	}
 	if bl, ok := strat.(*ast.BasicLit); ok && bl.Kind == token.STRING {
+		// A parser-produced string literal always unquotes; if one ever did
+		// not, it is treated like a non-literal strategy — not provably
+		// "replace", so still the shape.
 		s, err := strconv.Unquote(bl.Value)
 		return err != nil || s != "replace"
 	}
@@ -362,9 +421,11 @@ func hasCleanupShape(cl *ast.CompositeLit) bool {
 
 // hasEmptyObjectContent reports whether a FileOp literal sets Content to the
 // static empty object — `[]byte("{}")` or `[]byte(`{}`)`, ignoring all
-// whitespace, like the merge path does. Content built from a variable or a call
-// is not a static shape and is not matched; the guard is deliberately
-// literal-only, like its Skip sibling.
+// whitespace, like the merge path does. Content built from a variable or a
+// call, or assigned after construction, is not a static shape and is not
+// matched (nor is a string literal that fails to unquote, which the parser
+// never produces); the guard is deliberately literal-only, like its Skip
+// sibling.
 func hasEmptyObjectContent(cl *ast.CompositeLit) bool {
 	call, ok := keyedField(cl, "Content").(*ast.CallExpr)
 	if !ok || len(call.Args) != 1 {

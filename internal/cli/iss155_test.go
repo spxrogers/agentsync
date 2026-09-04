@@ -631,7 +631,17 @@ func TestApplyDryRun_CleanupOpNotCountedToWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "removed: 1 key(s)") || strings.Contains(out, "applied:") {
-		t.Fatalf("real apply should report the cleanup op as a removal only; got:\n%s", out)
+	var headline string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "removed: 1 key(s)") {
+			headline = line
+			break
+		}
+	}
+	if headline == "" {
+		t.Fatalf("real apply should report the cleanup op under \"removed: 1 key(s)\"; got:\n%s", out)
+	}
+	if strings.Contains(headline, "applied") {
+		t.Fatalf("the removal-only headline must carry no applied partition; got %q in:\n%s", headline, out)
 	}
 }

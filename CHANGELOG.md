@@ -250,7 +250,7 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   are gone. Orphan-cleanup ops — the empty key-merge write that prunes an
   emptied section's owned keys — are stamped `OpCleanup` at synthesis (by the
   single constructor `adapter.NewCleanupOp`, guarded by an AST test against
-  hand-rolled `{}` literals) instead of being detected by three copies of a
+  hand-rolled cleanup literals) instead of being detected by three copies of a
   `{}`+`OwnedKeys` shape sniff. No user-visible behaviour changes: the
   `apply --dry-run` labels, the `removed: N key(s), M file(s)` headline and
   every `--json` payload are byte-identical (`FileOp` is never serialized).
