@@ -176,4 +176,10 @@ func TestSymlinkedDestIsDriftWhenRefused(t *testing.T) {
 	if strings.Contains(h.Dest, target) || strings.Contains(h.Dest, "dotfiles") {
 		t.Errorf("symlink hunk embeds the link target; it must be a constant: %+v", h)
 	}
+	// The generic form of the same guard: no path of any kind, so a future
+	// edit cannot smuggle one in. (The unresolvable variant is pinned the same
+	// way, in-package, by TestWalkPlanItems/unresolvable-link-gets-its-own-diff-hunk.)
+	if strings.Contains(h.Dest, "/") {
+		t.Errorf("symlink hunk Dest contains a path separator; it must embed no path: %q", h.Dest)
+	}
 }

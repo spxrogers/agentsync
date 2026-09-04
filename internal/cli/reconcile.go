@@ -731,7 +731,7 @@ func shortVal(hash string) string {
 	if len(hash) > 16 && isHexDigest(hash) {
 		return hash[:16] + "..."
 	}
-	return hash // a sentinel ("symlink-not-regular-file") is shown whole
+	return hash // a sentinel (the symlink and shape tokens) is shown whole
 }
 
 func isHexDigest(s string) bool {
@@ -1106,12 +1106,6 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 // Both used to return nil with a success message, hiding data loss.
 func writeBackFileItem(home string, it reconcileItem) error {
 	readPath, why := destReadPath(it.op.Path)
-	if why != symlinkNone && !render.IsRegularOrAbsent(it.op.Path) {
-		// A link to a FIFO or device is a SHAPE problem first (IsRegularOrAbsent
-		// Stats, so it follows the link): take the shape arm below, which is
-		// the arm that must never suggest [o]verride.
-		why, readPath = symlinkNone, it.op.Path
-	}
 	switch why {
 	case symlinkRefusedByEnv:
 		// The drift walk classified this item without reading through the
@@ -1120,12 +1114,12 @@ func writeBackFileItem(home string, it reconcileItem) error {
 		// follows the link, and its mode arm chmods the TARGET through it
 		// before the symlink policy is consulted (#248).
 		return fmt.Errorf("read dest %s: destination is a symlink agentsync is not reading through — "+
-			"set %s=1 (for every command) to read and write through the link, replace the link with a "+
+			"set %s=1 (for apply and every drift command) to read and write through the link, replace the link with a "+
 			"regular file, or [i]gnore to suppress this item", it.op.Path, iox.AllowSymlinkDestEnv)
 	case symlinkUnresolvable:
 		return fmt.Errorf("read dest %s: destination is a symlink whose target cannot be resolved "+
-			"(dangling or loop; apply refuses it too) — fix or replace the link, or [i]gnore to "+
-			"suppress this item", it.op.Path)
+			"(dangling, loop, or unreadable; apply refuses it too) — fix or replace the link, or [i]gnore "+
+			"to suppress this item", it.op.Path)
 	}
 	data, err := readDestBytes(readPath)
 	if err != nil {

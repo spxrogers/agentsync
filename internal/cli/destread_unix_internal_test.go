@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -316,7 +317,42 @@ func TestHashFileSentinels(t *testing.T) {
 				}
 				return link
 			},
-			want: symlinkUnresolvableSentinel,
+			want: "symlink-target-unresolvable",
+		},
+		{
+			// A loop fails EvalSymlinks like a dangling link does; it must not
+			// slip into the shape gate (Stat fails with ELOOP, not "present").
+			name: "a symlink loop is unresolvable when the env is set",
+			setup: func(t *testing.T, tmp string) string {
+				t.Helper()
+				t.Setenv(iox.AllowSymlinkDestEnv, "1")
+				loop := filepath.Join(tmp, "loop")
+				if err := os.Symlink("loop", loop); err != nil {
+					t.Fatal(err)
+				}
+				return loop
+			},
+			want: "symlink-target-unresolvable",
+		},
+		{
+			// A link to a present non-regular target is a SHAPE problem whatever
+			// the switch says: every surface names the FIFO, not the link, so
+			// nobody is told to set a switch that would only reveal the FIFO.
+			name: "a symlink to a FIFO is refused by shape even when the env is unset",
+			setup: func(t *testing.T, tmp string) string {
+				t.Helper()
+				t.Setenv(iox.AllowSymlinkDestEnv, "")
+				if err := os.Unsetenv(iox.AllowSymlinkDestEnv); err != nil {
+					t.Fatal(err)
+				}
+				fifo := mkfifoDest(t, tmp)
+				link := filepath.Join(tmp, "link")
+				if err := os.Symlink(fifo, link); err != nil {
+					t.Fatal(err)
+				}
+				return link
+			},
+			want: "not-a-regular-file",
 		},
 		{
 			name:  "a FIFO is refused by shape",
@@ -415,7 +451,7 @@ func TestHashFileSentinels(t *testing.T) {
 // refused as a symlink reaches the prompt as drift; one keystroke later [w]
 // must not read THROUGH the link and capture a file the classification never
 // looked at. With the env unset the write-back refuses, names the switch and
-// says it is needed for every command; with it set the write-back captures
+// says apply and every drift command need it; with it set the write-back captures
 // the linked file — so the gate follows the policy rather than always
 // refusing.
 func TestWriteBackFileItemRefusesASymlinkItIsNotReadingThrough(t *testing.T) {
@@ -445,7 +481,7 @@ func TestWriteBackFileItemRefusesASymlinkItIsNotReadingThrough(t *testing.T) {
 			t.Fatal("writeBackFileItem = nil for a refused symlink, want an error: [w] must not " +
 				"capture through a link the classification did not read through")
 		}
-		for _, want := range []string{link, iox.AllowSymlinkDestEnv + "=1", "for every command", "[i]gnore"} {
+		for _, want := range []string{link, iox.AllowSymlinkDestEnv + "=1", "for apply and every drift command", "[i]gnore"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("error = %q, want it to contain %q", err, want)
 			}
@@ -498,6 +534,35 @@ func TestWriteBackFileItemRefusesASymlinkItIsNotReadingThrough(t *testing.T) {
 			t.Errorf("error = %q tells a user who already set the switch to set it, or offers [o]verride", err)
 		}
 	})
+
+	for _, env := range []string{"", "1"} {
+		t.Run("a symlink loop is refused without [o]verride, env="+strconv.Quote(env), func(t *testing.T) {
+			t.Setenv(iox.AllowSymlinkDestEnv, env)
+			if env == "" {
+				if err := os.Unsetenv(iox.AllowSymlinkDestEnv); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tmp := t.TempDir()
+			loop := filepath.Join(tmp, "loop.md")
+			if err := os.Symlink("loop.md", loop); err != nil {
+				t.Fatal(err)
+			}
+			err := writeBackFileItem(t.TempDir(), reconcileItem{op: adapter.FileOp{Path: loop, SourceID: "demo"}})
+			if err == nil {
+				t.Fatal("writeBackFileItem = nil for a symlink loop")
+			}
+			if strings.Contains(err.Error(), "[o]verride") || strings.Contains(err.Error(), "cannot stat") {
+				t.Errorf("error = %q: a loop must take a symlink arm (no [o]verride), not the generic one", err)
+			}
+			if env == "1" && !strings.Contains(err.Error(), "cannot be resolved") {
+				t.Errorf("error = %q, want the unresolvable-link refusal once opted in", err)
+			}
+			if env == "" && !strings.Contains(err.Error(), iox.AllowSymlinkDestEnv+"=1") {
+				t.Errorf("error = %q, want the switch named while it is unset", err)
+			}
+		})
+	}
 
 	t.Run("env set: captures the linked file", func(t *testing.T) {
 		t.Setenv(iox.AllowSymlinkDestEnv, "1")

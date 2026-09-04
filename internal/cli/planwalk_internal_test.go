@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/spf13/afero"
@@ -268,6 +269,32 @@ func TestWalkPlanItems(t *testing.T) {
 				items = walkUser(h, planFor(map[string][]adapter.FileOp{"claude": {op}}), s, []string{"claude"}, nil)
 				if got := items[0].classWithModeDrift(); got != drift.Converged {
 					t.Errorf("classWithModeDrift with the mode in sync = %v, want converged untouched", got)
+				}
+			},
+		},
+		{
+			// The unresolvable sentinel must reach diff as its own hunk: a user
+			// who already set the switch is told to fix the link, not to set it.
+			name: "unresolvable-link-gets-its-own-diff-hunk",
+			run: func(t *testing.T, h string) {
+				t.Setenv(iox.AllowSymlinkDestEnv, "1")
+				link, target := dest(h, "link.md"), filepath.Join(h, "gone")
+				if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatal(err)
+				}
+				hunks, _ := collectDiffHunks(planFor(map[string][]adapter.FileOp{"claude": {fileOp(link, "SOURCE")}}), []string{"claude"}, "", nil)
+				if len(hunks) != 1 || hunks[0].Pointer != "symlink" {
+					t.Fatalf("want one symlink hunk for an unresolvable link, got %+v", hunks)
+				}
+				d := hunks[0].Dest
+				if !strings.Contains(d, "cannot be resolved") || strings.Contains(d, iox.AllowSymlinkDestEnv) {
+					t.Errorf("Dest = %q: must say the link is broken and must not advise the switch", d)
+				}
+				if strings.Contains(d, target) || strings.Contains(d, "/") {
+					t.Errorf("Dest = %q embeds a path; it must be a constant", d)
 				}
 			},
 		},
@@ -600,5 +627,24 @@ func TestPathFilterFlagsSurviveAZeroItemOp(t *testing.T) {
 	if !model.Unmanaged || !model.pathManaged {
 		t.Errorf("buildExplainModel: Unmanaged=%v pathManaged=%v; want Unmanaged=true (no owners) and pathManaged=true (the path matched an op)",
 			model.Unmanaged, model.pathManaged)
+	}
+}
+
+// TestShortValShowsSentinelsWhole pins reconcile's prompt display: a digest is
+// abbreviated, a sentinel is not — "symlink-not-regu..." told a user nothing.
+func TestShortValShowsSentinelsWhole(t *testing.T) {
+	digest := strings.Repeat("ab", 32)
+	for _, tc := range []struct{ name, in, want string }{
+		{name: "absent", in: "", want: "<absent>"},
+		{name: "digest is abbreviated", in: digest, want: digest[:16] + "..."},
+		{name: "symlink sentinel shown whole", in: symlinkRefusedSentinel, want: "symlink-not-regular-file"},
+		{name: "unresolvable sentinel shown whole", in: "symlink-target-unresolvable", want: "symlink-target-unresolvable"},
+		{name: "shape sentinel shown whole", in: "not-a-regular-file", want: "not-a-regular-file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shortVal(tc.in); got != tc.want {
+				t.Errorf("shortVal(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
 	}
 }

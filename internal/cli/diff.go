@@ -229,16 +229,16 @@ func modeHunk(it planItem) (source, dest string, ok bool) {
 		fmt.Sprintf("mode %04o", os.FileMode(it.destPerm).Perm()), true
 }
 
-// symlinkHunkDest is the Dest of a "symlink" hunk. A CONSTANT, deliberately:
+// symlinkRefusedHunkDest is the Dest of a "symlink" hunk. A CONSTANT, deliberately:
 // the link TARGET is attacker-choosable and this string reaches the terminal
 // unsanitized (only the hunk label goes through ui.Sanitize), so embedding it
 // would reopen the #93/#171 escape-injection class.
-const symlinkHunkDest = "symlink (not compared through; set " + iox.AllowSymlinkDestEnv +
+const symlinkRefusedHunkDest = "symlink (not compared through; set " + iox.AllowSymlinkDestEnv +
 	"=1 to read and write through the link)"
 
 // symlinkUnresolvableHunkDest is its sibling for a link the user opted into
 // that does not resolve (dangling, loop); apply fails on it the same way.
-const symlinkUnresolvableHunkDest = "symlink (target cannot be resolved: dangling or loop; apply refuses it too)"
+const symlinkUnresolvableHunkDest = "symlink (target cannot be resolved: dangling, loop, or unreadable; apply refuses it too)"
 
 // symlinkHunk describes a destination that is a symlink the read side will not
 // look through — refused by AGENTSYNC_ALLOW_SYMLINK_DEST being unset, the same
@@ -253,7 +253,7 @@ func symlinkHunk(it planItem) (source, dest string, ok bool) {
 	if it.hdest == symlinkUnresolvableSentinel {
 		return "regular file", symlinkUnresolvableHunkDest, true
 	}
-	return "regular file", symlinkHunkDest, true
+	return "regular file", symlinkRefusedHunkDest, true
 }
 
 func marshalPretty(v any) string {

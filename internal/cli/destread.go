@@ -114,15 +114,15 @@ type symlinkRefusal int
 const (
 	symlinkNone         symlinkRefusal = iota // not a symlink, or resolved through it
 	symlinkRefusedByEnv                       // switch unset: apply would not write through it either
-	symlinkUnresolvable                       // opted in, but the link does not resolve (dangling, loop): apply fails on it too
+	symlinkUnresolvable                       // opted in, but the link does not resolve (dangling, loop, unreadable): apply fails on it too
 )
 
 // destReadPath applies the destination SYMLINK policy and answers the path the
 // whole-file destination reads should actually look at. why is symlinkNone when
 // resolved can be read; otherwise each caller answers its own "cannot read"
-// value (hashFile a sentinel per reason, destModePerm (0, false), readDestText
-// ""), and the two reasons are kept apart so the advice a user sees is right:
-// "set the switch" is wrong advice for a link that would not resolve anyway.
+// value. The two refusals stay apart so that, once a user has opted in, a link
+// that still cannot be read is reported as broken rather than as "set the
+// switch".
 //
 // It mirrors iox.resolveSymlinkDest, the write side, through the shared
 // iox.SymlinkDestAllowed, so the read side and apply cannot disagree about
@@ -138,6 +138,14 @@ const (
 func destReadPath(path string) (resolved string, why symlinkRefusal) {
 	fi, err := os.Lstat(path)
 	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return path, symlinkNone
+	}
+	// A link to a PRESENT non-regular target (FIFO, directory, device) is a
+	// shape problem whatever the switch says — opting in would only resolve
+	// to the shape refusal — so leave it to readDestBytes, and every surface
+	// names the shape rather than the link. A loop or a dangling link fails
+	// this Stat and stays a symlink refusal.
+	if ti, serr := os.Stat(path); serr == nil && !ti.Mode().IsRegular() {
 		return path, symlinkNone
 	}
 	if !iox.SymlinkDestAllowed() {

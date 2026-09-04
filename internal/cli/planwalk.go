@@ -100,12 +100,12 @@ func (i planItem) classWithModeDrift() drift.Class {
 }
 
 // destSymlinkRefused reports whether a whole-file destination is a symlink the
-// read side did not look through (destReadPath, AGENTSYNC_ALLOW_SYMLINK_DEST
-// unset). It is a DERIVATION from hdest, not a field: diff keys its symlink
+// read side did not look through (destReadPath: the switch unset, or the link
+// unresolvable once opted in). It is a DERIVATION from hdest, not a field: diff keys its symlink
 // hunk on the very hash status, reconcile and explain classified from, so the
 // four surfaces cannot disagree about it (#229 axis 9).
 func (i planItem) destSymlinkRefused() bool {
-	return i.ptr == "" && (i.hdest == symlinkSentinel || i.hdest == symlinkUnresolvableSentinel)
+	return i.ptr == "" && (i.hdest == symlinkRefusedSentinel || i.hdest == symlinkUnresolvableSentinel)
 }
 
 // destModePerm answers the permission bits of the REGULAR file at path.

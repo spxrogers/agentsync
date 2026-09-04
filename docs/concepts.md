@@ -120,7 +120,10 @@ recovery beyond your own source control of the destination.
 **clean** — both mean `apply` has nothing left to do, and the distinction
 above is bookkeeping the classifier and `status --json` need, not something a
 human scanning the report benefits from. `status --legend` prints this table
-(as a CLI reference); `status --json` always reports the real class.
+(as a CLI reference); `status --json` always reports the real class. One fold
+applies to both: a clean or converged whole file whose permission bits differ
+from what `apply` writes is reported as **drift**, because the next apply
+changes it.
 
 Granularity is **per-key** for structured files (JSON/JSONC/TOML, tracked by
 JSON pointer) and **per-file** for everything else. Keys agentsync never wrote

@@ -1062,7 +1062,7 @@ and the complete environment-variable table. The ones you'll reach for most:
 | Env var | Purpose |
 |---|---|
 | `AGENTSYNC_HOME` | Override the `~/.agentsync/` location. |
-| `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations, and compare through them when reading (e.g. chezmoi-managed files). Needed by every command — `status`/`diff`/`reconcile`/`explain` too — not only `apply`. |
+| `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations, and compare through them when reading (e.g. chezmoi-managed files). Needed by `apply` and by `status`/`diff`/`reconcile`/`explain`. |
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://`/`git://` plugin/marketplace sources. |
 | `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `check` validate reference *shape* only, skipping resolution (CI without an age key). |
 | `AGENTSYNC_NO_UPGRADE_NOTICE=1` | Never show the one-time first-run-after-upgrade notice. |
