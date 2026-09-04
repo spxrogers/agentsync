@@ -29,8 +29,8 @@ type planItem struct {
 	agent string
 
 	// op is the plan op that produced the item. For an ORPHAN it is SYNTHESIZED
-	// from state — adapter.FileOp{Action: adapter.ActionDelete, Path, SourceID} — with Mode
-	// left 0 because the orphan removal path never reads it.
+	// from state — adapter.FileOp{Action: adapter.ActionDelete, Path, SourceID}
+	// — with Mode left 0 because the orphan removal path never reads it.
 	op adapter.FileOp
 
 	// ptr is the RFC-6901 pointer for a key item; "" for a whole-file item.

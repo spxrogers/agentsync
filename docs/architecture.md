@@ -179,13 +179,18 @@ intake normalization: `Plan`, `Apply` and `PreviewApply` used to rewrite
 comment saying whether its ops were plan-normalized or raw adapter output;
 both are gone. `Kind` (`adapter.OpKind`) says why the op exists — an ordinary
 render (`OpRender`, the zero value) or a synthesized orphan cleanup
-(`OpCleanup`) — and is orthogonal to `Action`: a cleanup op is an `ActionWrite`
+(`OpCleanup`), not which source or plugin produced its content — and is
+orthogonal to `Action`: a cleanup op is an `ActionWrite`
 of `{}` whose only work is pruning an emptied section's owned keys (the merge
 path performs the removal via `OwnedKeys`), so the kind is what lets `apply`
 label and count it as a removal rather than sniffing `{}`+`OwnedKeys`. Cleanup
-ops are built by `adapter.CleanupOp` — the only producer of `OpCleanup`, called
-from `render.orphanCleanupOps` and from `agent disable --purge` — so the kind
-cannot be missed at a synthesis site.
+ops are built by `adapter.NewCleanupOp` — the only producer of `OpCleanup`,
+called from `render.orphanCleanupOps` and from `agent disable --purge` — and
+`TestEveryCleanupLiteralUsesNewCleanupOp` fails any production `FileOp` literal
+that hand-rolls the `{}` shape, so the kind cannot be missed at a synthesis
+site. `MergeStrategy` stays a plain string: typing it would change the
+published `Adapter` interface (`KeyMergeStrategy() string`) and is deferred to
+[#250](https://github.com/spxrogers/agentsync/issues/250).
 
 **Key-merge strategies and on-disk format.** `KeyMergeStrategy` /
 `FileOp.MergeStrategy` name how an adapter co-owns keys inside a shared config

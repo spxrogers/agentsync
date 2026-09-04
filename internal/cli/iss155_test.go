@@ -604,7 +604,20 @@ func TestApplyDryRun_CleanupOpNotCountedToWrite(t *testing.T) {
 	if !strings.Contains(dry, "1 removal op(s)") {
 		t.Fatalf("Plan headline should carry the removal-op partition; got:\n%s", dry)
 	}
-	if !strings.Contains(dry, "remove") {
-		t.Fatalf("the cleanup op should be listed with the remove label; got:\n%s", dry)
+	// Anchor the label check to the op's OWN line: the "Removals:" summary
+	// above also says "remove", so a bare Contains passed with the label wrong.
+	dest := filepath.Join(tmp, ".claude.json")
+	var opLine string
+	for _, line := range strings.Split(dry, "\n") {
+		if strings.HasSuffix(line, dest) {
+			opLine = line
+			break
+		}
+	}
+	if opLine == "" {
+		t.Fatalf("dry-run should list the cleanup op for %s; got:\n%s", dest, dry)
+	}
+	if !strings.Contains(opLine, " remove ") || strings.Contains(opLine, "write") || strings.Contains(opLine, "synced") {
+		t.Fatalf("the cleanup op's own line must carry the remove label, never write/synced; got %q in:\n%s", opLine, dry)
 	}
 }

@@ -430,8 +430,8 @@ func removalCounts(plan render.RenderPlan, s *state.Targets, userHome string, sc
 		}
 		for _, op := range res.Ops {
 			// An orphan-cleanup op (adapter.OpCleanup, stamped by
-			// adapter.CleanupOp) carries the owned pointers to delete and writes
-			// nothing else.
+			// adapter.NewCleanupOp) carries the owned pointers to delete and
+			// writes nothing else.
 			if op.Kind == adapter.OpCleanup {
 				removedKeys += len(op.OwnedKeys)
 				appliedOps-- // a removal, not an applied write

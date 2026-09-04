@@ -87,24 +87,26 @@ func (a Action) String() string {
 	}
 }
 
-// OpKind says why a FileOp exists, orthogonally to what it does (Action). The
-// zero value is OpRender — an ordinary op an adapter's Render emitted — so, as
-// with Action, the common case needs no stamp.
+// OpKind says why a FileOp exists — an ordinary render, or a synthesized
+// orphan cleanup — orthogonally to what it does (Action). The zero value is
+// OpRender, an ordinary op an adapter's Render emitted.
 type OpKind int
 
 const (
 	// OpRender is an ordinary rendered op. It is the zero value.
 	OpRender OpKind = iota
-	// OpCleanup is an orphan-cleanup op, defined by its shape: an ActionWrite
-	// of "{}" to a key-merge destination whose only work is pruning OwnedKeys
-	// — the merge path performs the removal, so the op writes nothing new. It
-	// is produced by CleanupOp (called from render.orphanCleanupOps when a
-	// key-merge section empties in the source, and from `agent disable
-	// --purge`); consumers read this kind instead of sniffing the shape.
+	// OpCleanup marks an orphan-cleanup op: an ActionWrite of "{}" to a
+	// key-merge destination whose only work is pruning OwnedKeys — the merge
+	// path performs the removal, so the op writes nothing new. Consumers
+	// identify it by this kind, never by that shape. NewCleanupOp is its
+	// producer (called from render.orphanCleanupOps when a key-merge section
+	// empties in the source, and from `agent disable --purge`).
 	OpCleanup
 )
 
-// String renders the kind for human notes: "render" | "cleanup" | "opkind(<n>)".
+// String is the Stringer form — "render" | "cleanup" | "opkind(<n>)" — kept
+// for symmetry with Action and for %v in test failures; nothing in production
+// prints a kind.
 func (k OpKind) String() string {
 	switch k {
 	case OpRender:
@@ -116,11 +118,13 @@ func (k OpKind) String() string {
 	}
 }
 
-// CleanupOp builds the op that prunes owned keys from a key-merge destination:
-// an ActionWrite of "{}" whose only work is the OwnedKeys removal the merge
-// path performs. It is the ONLY producer of OpCleanup — every site that
-// synthesizes a cleanup op must call it so the kind is never missed.
-func CleanupOp(path, strategy string, owned []string) FileOp {
+// NewCleanupOp builds the op that prunes owned keys from a key-merge
+// destination: an ActionWrite of "{}" whose only work is the OwnedKeys removal
+// the merge path performs. It is the only producer of OpCleanup: every site
+// that synthesizes a cleanup op must call it so the kind is never missed, and
+// TestEveryCleanupLiteralUsesNewCleanupOp fails any production FileOp literal
+// that hand-rolls the "{}" shape instead.
+func NewCleanupOp(path, strategy string, owned []string) FileOp {
 	return FileOp{
 		Action:        ActionWrite,
 		Kind:          OpCleanup,
@@ -167,7 +171,8 @@ type FileOp struct {
 	// render.Plan populates it from state — scoped to the top-level sections
 	// this op writes — whenever Plan is given a state (plugin explain/poll pass
 	// nil). A value an adapter's Render sets is only a fallback for Apply driven
-	// without the pipeline; Plan overwrites it whenever it has state.
+	// without the pipeline; Plan overwrites it on every key-merge op whenever it
+	// has state.
 	OwnedKeys []string
 }
 

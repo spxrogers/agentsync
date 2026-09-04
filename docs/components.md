@@ -143,7 +143,7 @@ shared cross-agent dir it writes into, and MUST return nil at project scope (see
 - **Key:** `Adapter` (interface); `DestWriter` (interface);
   `VersionedDirs` (optional interface, `VersionRoots`); `NonEmptyDirs` (helper);
   `Scope` (`ScopeUser`/`ScopeProject`); `FileOp` (with typed `Action` — zero
-  value `ActionWrite` — and `OpKind`; `CleanupOp` builds the one `OpCleanup`
+  value `ActionWrite` — and `OpKind`; `NewCleanupOp` builds the one `OpCleanup`
   op); `Skip` (with `SkipKind`);
   `Registry` (`NewRegistry`, `Register`, `Lookup`, `Names`). Component support is
   expressed by what `Render` emits — an unsupported component yields a `Skip`,
@@ -381,7 +381,7 @@ noop-registered agent unless `AGENTSYNC_ALLOW_UNIMPLEMENTED=1`.
 Orchestrates apply: canonical + registry → per-agent `FileOp`s/`Skip`s, runs
 collision detection and backups, records state, and builds the translation
 report. It reclaims two kinds of orphan: emptied key-merge sections (synthesized
-cleanup ops for orphaned owned keys — built by `adapter.CleanupOp` and stamped
+cleanup ops for orphaned owned keys — built by `adapter.NewCleanupOp` and stamped
 `adapter.OpCleanup`, so consumers identify them by kind rather than by shape)
 and **whole-file components** whose
 `source_id` is under `skills/`, `subagents/`, `commands/`, or the retired

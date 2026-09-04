@@ -249,10 +249,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   enum whose **zero value is write**, so the normalization and its comment tax
   are gone. Orphan-cleanup ops — the empty key-merge write that prunes an
   emptied section's owned keys — are stamped `OpCleanup` at synthesis (by the
-  single constructor `adapter.CleanupOp`) instead of being detected by three
-  copies of a `{}`+`OwnedKeys` shape sniff. No user-visible behaviour changes:
-  the `apply --dry-run` labels, the `removed: N key(s), M file(s)` headline and
+  single constructor `adapter.NewCleanupOp`, guarded by an AST test against
+  hand-rolled `{}` literals) instead of being detected by three copies of a
+  `{}`+`OwnedKeys` shape sniff. No user-visible behaviour changes: the
+  `apply --dry-run` labels, the `removed: N key(s), M file(s)` headline and
   every `--json` payload are byte-identical (`FileOp` is never serialized).
+  `MergeStrategy` stays a plain string — typing it changes the published
+  `Adapter` interface and is deferred to
+  [#250](https://github.com/spxrogers/agentsync/issues/250).
 
 - **`.state/targets.json` is now `schema_version: 2`.** The upgrade is automatic
   and requires nothing: every command reads the old keys, and the first command

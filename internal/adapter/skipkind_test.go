@@ -174,7 +174,7 @@ func TestSkipKindStaticGuardMatchers(t *testing.T) {
 	if !isSkipType(lit(`adapter.Skip{Kind: adapter.SkipDropped}`).Type, false) {
 		t.Error("isSkipType(adapter.Skip) = false, want true")
 	}
-	if isSkipType(lit(`adapter.FileOp{Action: "write"}`).Type, false) {
+	if isSkipType(lit(`adapter.FileOp{Path: "x"}`).Type, false) {
 		t.Error("isSkipType(adapter.FileOp) = true, want false")
 	}
 	bare := lit(`Skip{Kind: SkipDropped}`).Type

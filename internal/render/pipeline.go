@@ -327,7 +327,7 @@ func orphanCleanupOps(s *state.Targets, a adapter.Adapter, agent string, scope a
 		if _, err := os.Stat(abs); err != nil {
 			continue
 		}
-		cleanup = append(cleanup, adapter.CleanupOp(abs, strat, ownedByPath[path]))
+		cleanup = append(cleanup, adapter.NewCleanupOp(abs, strat, ownedByPath[path]))
 	}
 	return cleanup
 }
@@ -421,7 +421,10 @@ func applyPlan(
 		// are exported and accept a RenderPlan that never went through Plan, so
 		// the traversal check runs again here: a hand-built plan cannot smuggle
 		// an unanchored ".." path past the guard Plan enforces. (A Plan-built
-		// plan already passed it, so this is a no-op for it.)
+		// plan already passed it, so this is a no-op for it.) Scope honesty:
+		// this covers the Apply/PreviewApply funnel only — cli/reconcile.go and
+		// cli/agent.go call an adapter's Apply directly with plan-derived or
+		// state-derived ops and never pass through here.
 		for i := range res.Ops {
 			if res.Ops[i].Action == adapter.ActionWrite && pathEscapes(res.Ops[i].Path) {
 				return reports, written, unchanged, wouldChange, fmt.Errorf(

@@ -712,7 +712,7 @@ func purgeAgentDests(cmd *cobra.Command, name, home string, sc adapter.Scope, pr
 				if _, err := os.Stat(abs); err != nil {
 					continue // already gone; nothing to prune
 				}
-				ops = append(ops, adapter.CleanupOp(abs, strat, ptrs))
+				ops = append(ops, adapter.NewCleanupOp(abs, strat, ptrs))
 				prunedFiles++
 			}
 		}

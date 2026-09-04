@@ -58,14 +58,15 @@ func TestFileOpEnums_String(t *testing.T) {
 	}
 }
 
-// TestCleanupOp pins every field the single cleanup-op constructor sets. It is
-// the ONLY producer of OpCleanup — render.orphanCleanupOps and `agent disable
-// --purge` both call it — so a field it drops is dropped at every synthesis
-// site at once, and a missing Kind stamp here relabels every key removal as a
-// write in `apply`.
-func TestCleanupOp(t *testing.T) {
+// TestNewCleanupOp pins every field the single cleanup-op constructor sets. It
+// is the only producer of OpCleanup — render.orphanCleanupOps and `agent
+// disable --purge` both call it, and TestEveryCleanupLiteralUsesNewCleanupOp
+// keeps it that way — so a field it drops is dropped at every synthesis site
+// at once, and a missing Kind stamp here relabels every key removal as a write
+// in `apply`.
+func TestNewCleanupOp(t *testing.T) {
 	owned := []string{"/mcpServers/a", "/mcpServers/b"}
-	op := adapter.CleanupOp("/home/u/.claude.json", "merge-json-keys", owned)
+	op := adapter.NewCleanupOp("/home/u/.claude.json", "merge-json-keys", owned)
 	tests := []struct {
 		name      string
 		got, want any
