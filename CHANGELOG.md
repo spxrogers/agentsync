@@ -179,6 +179,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   The upgrade-notice probe's answer is unchanged, by design — a stricter answer
   there would fire a breaking-change banner at a brand-new user.
 
+- **`reconcile --help` no longer says `--auto-safe` "auto-resolve[s] only
+  converged/pending/new".** It resolves nothing: every item that reaches
+  `reconcile` needs a human, and the flag reports each one as left unresolved.
+  The user guide, the daily-loop guide and the CLI reference said the same
+  wrong thing and are corrected with it.
+
 ### Changed
 
 - **`status --json`, `diff` and `reconcile` now list a shared file's merged keys
