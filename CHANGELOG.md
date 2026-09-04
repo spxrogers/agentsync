@@ -242,6 +242,18 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   same snapshot. The ways the four surfaces disagreed (mode-only drift,
   symlinked destinations) are resolved in the same release; see Fixed above.
 
+- **Internal: `adapter.FileOp` carries a typed `Action` and an explicit op
+  `Kind`** ([#230](https://github.com/spxrogers/agentsync/issues/230)).
+  `Action` was a string with a `"" == "write"` convention normalized at three
+  pipeline intakes and re-asserted by a comment at every reader; it is now an
+  enum whose **zero value is write**, so the normalization and its comment tax
+  are gone. Orphan-cleanup ops — the empty key-merge write that prunes an
+  emptied section's owned keys — are stamped `OpCleanup` at synthesis (by the
+  single constructor `adapter.CleanupOp`) instead of being detected by three
+  copies of a `{}`+`OwnedKeys` shape sniff. No user-visible behaviour changes:
+  the `apply --dry-run` labels, the `removed: N key(s), M file(s)` headline and
+  every `--json` payload are byte-identical (`FileOp` is never serialized).
+
 - **`.state/targets.json` is now `schema_version: 2`.** The upgrade is automatic
   and requires nothing: every command reads the old keys, and the first command
   that WRITES state (`apply`, `import`, `reconcile`, `migrate`, `agent disable
