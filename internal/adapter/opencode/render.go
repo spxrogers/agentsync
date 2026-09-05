@@ -94,7 +94,7 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, erro
 		return nil, fmt.Errorf("marshal opencode mcp: %w", err)
 	}
 	return []adapter.FileOp{{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          p.Settings,
 		Content:       append(body, '\n'),
 		Mode:          0o644,

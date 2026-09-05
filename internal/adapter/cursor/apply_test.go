@@ -219,7 +219,7 @@ func TestApply_Hooks_OrphanCleanup_PreservesVersionAndForeign(t *testing.T) {
 			// agentsync previously rendered (/hooks/preToolUse). merge-json-keys then
 			// strips that owned-but-now-absent key while leaving foreign keys alone.
 			op := adapter.FileOp{
-				Action:        "write",
+				Action:        adapter.ActionWrite,
 				Path:          hooksPath,
 				Content:       []byte("{}\n"),
 				Mode:          0o644,

@@ -102,7 +102,7 @@ func TestStatus_ModeDriftUsesOpModeNotRecordedMode(t *testing.T) {
 	s := state.New()
 	s.Files[stateFileKey(userHome, "claude", adapter.ScopeUser, "", p)] = state.FileEntry{SHA256: hashContent([]byte(content)), Mode: 0o644}
 	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{"claude": {Ops: []adapter.FileOp{
-		{Action: "write", Path: p, Content: []byte(content), Mode: 0o755, SourceID: "skills/x/run.sh"},
+		{Action: adapter.ActionWrite, Path: p, Content: []byte(content), Mode: 0o755, SourceID: "skills/x/run.sh"},
 	}}}}
 	model := buildStatusModel(plan, []string{"claude"}, s, userHome, adapter.ScopeUser, "")
 	// Both halves, so a walk that emitted zero items cannot pass: exactly one

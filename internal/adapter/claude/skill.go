@@ -27,7 +27,7 @@ func SkillFileOps(skills []source.Skill, skillsDir string) ([]adapter.FileOp, er
 			return nil, fmt.Errorf("encode skill %s: %w", s.Name, err)
 		}
 		ops = append(ops, adapter.FileOp{
-			Action:        "write",
+			Action:        adapter.ActionWrite,
 			Path:          filepath.Join(skillsDir, s.Name, "SKILL.md"),
 			Content:       body,
 			Mode:          0o644,
@@ -40,7 +40,7 @@ func SkillFileOps(skills []source.Skill, skillsDir string) ([]adapter.FileOp, er
 				mode = 0o644
 			}
 			ops = append(ops, adapter.FileOp{
-				Action:        "write",
+				Action:        adapter.ActionWrite,
 				Path:          filepath.Join(skillsDir, s.Name, filepath.FromSlash(f.Path)),
 				Content:       f.Content,
 				Mode:          mode,

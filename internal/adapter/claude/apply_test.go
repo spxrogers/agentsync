@@ -16,7 +16,7 @@ func TestApply_NewSettings_WritesContent(t *testing.T) {
 	a := claude.New(claude.Options{TargetRoot: tmp})
 
 	op := adapter.FileOp{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          filepath.Join(tmp, ".claude.json"),
 		Content:       []byte(`{"mcpServers":{"github":{"command":"npx"}}}`),
 		Mode:          0o644,
@@ -40,7 +40,7 @@ func TestApply_PreservesForeignKeys(t *testing.T) {
 	_ = os.WriteFile(target, []byte(`{"foreign":{"x":1},"mcpServers":{"old":{}}}`), 0o644)
 
 	op := adapter.FileOp{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          target,
 		Content:       []byte(`{"mcpServers":{"new":{"command":"x"}}}`),
 		Mode:          0o644,
@@ -72,7 +72,7 @@ func TestApply_OrphanRemoval(t *testing.T) {
 	_ = os.WriteFile(target, []byte(`{"mcpServers":{"github":{"command":"old"},"stale":{}}}`), 0o644)
 
 	op := adapter.FileOp{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          target,
 		Content:       []byte(`{"mcpServers":{"github":{"command":"new"}}}`),
 		Mode:          0o644,

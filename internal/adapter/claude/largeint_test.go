@@ -22,7 +22,7 @@ func TestApply_PreservesForeignLargeInt(t *testing.T) {
 		t.Fatal(err)
 	}
 	op := adapter.FileOp{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          dest,
 		MergeStrategy: "merge-json-keys",
 		Content:       []byte(`{"mcpServers":{"github":{"command":"npx"}}}`),

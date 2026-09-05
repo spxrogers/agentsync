@@ -6,6 +6,7 @@ package adapter
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/spxrogers/agentsync/internal/secrets"
@@ -52,14 +53,92 @@ func (s Scope) String() string {
 	}
 }
 
-// FileOp describes one destination-side change. Action is "write" (the default;
-// the empty string is treated as "write") or "delete" — see the Action field and
-// DispatchOps, which both accept "" as write. render.Plan normalizes "" to
-// "write" as it collects each adapter's ops, and render.Apply/PreviewApply
-// re-normalize at intake before any pipeline guard runs (they are exported and
-// accept a caller-built RenderPlan that never went through Plan), so the
-// pipeline guards always see the literal "write"; only code reading raw
-// adapter Render output (or state-derived ops) must still accept "" as write.
+// Action says what a FileOp does to its destination. The zero value IS
+// ActionWrite — a FileOp built without naming an action writes — which is why
+// there is nothing to normalize at any intake: no empty spelling exists that
+// an executor would write while a guard matching "write" let it through.
+// Unlike SkipKind below, whose zero value is invalid by design so an unstamped
+// Skip fails TestEverySkipLiteralSetsKind, the zero values of Action and
+// OpKind are deliberately valid (write, render): the common case must need no
+// stamp.
+type Action int
+
+const (
+	// ActionWrite writes Content to Path — whole-file, or key-merged per
+	// MergeStrategy. It is the zero value.
+	ActionWrite Action = iota
+	// ActionDelete removes Path. No adapter renders one and none enters a
+	// plan's Ops: deletes are synthesized at apply time (orphan reclamation),
+	// by `agent disable --purge`, and as the drift walk's orphan item.
+	ActionDelete
+)
+
+// String renders the action for the dry-run op label and DispatchOps' error
+// text. %q on an Action quotes this, so an out-of-range value reads
+// "action(<n>)" rather than a bare integer.
+func (a Action) String() string {
+	switch a {
+	case ActionWrite:
+		return "write"
+	case ActionDelete:
+		return "delete"
+	default:
+		return fmt.Sprintf("action(%d)", int(a))
+	}
+}
+
+// OpKind says why a FileOp exists — an ordinary render, or a synthesized
+// orphan cleanup — orthogonally to what it does (Action). The zero value is
+// OpRender, an ordinary op an adapter's Render emitted.
+type OpKind int
+
+const (
+	// OpRender is an ordinary rendered op. It is the zero value.
+	OpRender OpKind = iota
+	// OpCleanup marks an orphan-cleanup op: an ActionWrite of "{}" to a
+	// key-merge destination whose only work is pruning OwnedKeys — the merge
+	// path performs the removal, so the op writes nothing new. Consumers
+	// identify it by this kind, never by that shape. NewCleanupOp is its
+	// producer (called from render.orphanCleanupOps when a key-merge section
+	// empties in the source, and from `agent disable --purge`).
+	OpCleanup
+)
+
+// String is the Stringer form — "render" | "cleanup" | "opkind(<n>)" — kept
+// for symmetry with Action and for %v in test failures; nothing in production
+// prints a kind.
+func (k OpKind) String() string {
+	switch k {
+	case OpRender:
+		return "render"
+	case OpCleanup:
+		return "cleanup"
+	default:
+		return fmt.Sprintf("opkind(%d)", int(k))
+	}
+}
+
+// NewCleanupOp builds the op that prunes owned keys from a key-merge
+// destination: an ActionWrite of "{}" whose only work is the OwnedKeys removal
+// the merge path performs. It is the only producer of OpCleanup: every site
+// that synthesizes a cleanup op must call it so the kind is never missed, and
+// TestEveryCleanupLiteralUsesNewCleanupOp fails any production FileOp literal
+// that hand-rolls the cleanup shape or stamps OpCleanup by hand instead.
+func NewCleanupOp(path, strategy string, owned []string) FileOp {
+	return FileOp{
+		Action:        ActionWrite,
+		Kind:          OpCleanup,
+		Path:          path,
+		Content:       []byte("{}"),
+		Mode:          0o644,
+		MergeStrategy: strategy,
+		OwnedKeys:     owned,
+	}
+}
+
+// FileOp describes one destination-side change. Action says what happens to
+// the destination (write — the zero value — or delete); Kind says why the op
+// exists (an ordinary render, or a synthesized orphan cleanup).
 // Path is absolute (after AGENTSYNC_TARGET_ROOT redirection).
 //
 // CONTRACT — Content is ALWAYS JSON for a key-merge op, regardless of the
@@ -80,13 +159,21 @@ func (s Scope) String() string {
 // format-specific merge). A new TOML/YAML-backed agent must keep Content JSON,
 // not emit the on-disk format here.
 type FileOp struct {
-	Action        string // "" | "write" | "delete"  ("" == "write"; render.Plan and render.Apply/PreviewApply rewrite "" → "write" at intake)
+	Action        Action // write (zero value) | delete
+	Kind          OpKind // render (zero value) | cleanup
 	Path          string
 	Content       []byte
 	Mode          uint32
-	SourceID      string   // canonical source path that produced this op
-	MergeStrategy string   // "replace" (default) | "merge-json-keys" | "merge-jsonc-keys" | "merge-toml-keys"
-	OwnedKeys     []string // JSON pointers owned by agentsync; populated by Apply from state, not Render
+	SourceID      string // canonical source path that produced this op
+	MergeStrategy string // "replace" (default) | "merge-json-keys" | "merge-jsonc-keys" | "merge-toml-keys"
+	// OwnedKeys lists the JSON pointers agentsync owns at this key-merge
+	// destination, so the merge can remove any the op no longer carries.
+	// render.Plan populates it from state — scoped to the top-level sections
+	// this op writes — whenever Plan is given a state (plugin explain/poll pass
+	// nil). A value an adapter's Render sets is only a fallback for Apply driven
+	// without the pipeline; Plan overwrites it on every key-merge op whenever it
+	// has state.
+	OwnedKeys []string
 }
 
 // SkipKind classifies how much of a component was lost, so consumers never have

@@ -57,7 +57,7 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths) ([]adapter.FileOp,
 			return nil, nil, fmt.Errorf("marshal command %s: %w", cmd.Name, err)
 		}
 		ops = append(ops, adapter.FileOp{
-			Action:        "write",
+			Action:        adapter.ActionWrite,
 			Path:          filepath.Join(p.CommandsDir, filepath.FromSlash(cmd.Name)+".toml"),
 			Content:       body,
 			Mode:          0o644,

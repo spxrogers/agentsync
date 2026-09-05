@@ -168,12 +168,12 @@ func ptrKey(userHome, agent, path, ptr string) state.Key {
 }
 
 func fileOp(path, content string) adapter.FileOp {
-	return adapter.FileOp{Action: "write", Path: path, Content: []byte(content), SourceID: "memory/AGENTS.md"}
+	return adapter.FileOp{Action: adapter.ActionWrite, Path: path, Content: []byte(content), SourceID: "memory/AGENTS.md"}
 }
 
 func keyOp(path, content string) adapter.FileOp {
 	return adapter.FileOp{
-		Action: "write", Path: path, Content: []byte(content),
+		Action: adapter.ActionWrite, Path: path, Content: []byte(content),
 		MergeStrategy: "merge-json-keys", SourceID: "mcp/* (multiple)",
 	}
 }

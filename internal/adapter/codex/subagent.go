@@ -104,7 +104,7 @@ func (a *Adapter) renderSubagents(c source.Canonical, p Paths) ([]adapter.FileOp
 			return nil, nil, fmt.Errorf("marshal subagent %s: %w", s.Name, err)
 		}
 		ops = append(ops, adapter.FileOp{
-			Action:        "write",
+			Action:        adapter.ActionWrite,
 			Path:          filepath.Join(p.AgentsDir, s.Name+".toml"),
 			Content:       body,
 			Mode:          0o644,

@@ -23,7 +23,7 @@ func TestRecordState_FilesAndKeys(t *testing.T) {
 	s := state.New()
 	// Use dir as home so the recorded state key uses HOME-relative form.
 	err := render.RecordOpsState(s, dir, "claude", adapter.ScopeUser, "", []adapter.FileOp{{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          p,
 		MergeStrategy: "merge-json-keys",
 		Content:       []byte(`{"mcpServers":{"github":{"command":"npx"}}}`),
@@ -49,7 +49,7 @@ func TestRecordState_FileReplace(t *testing.T) {
 
 	s := state.New()
 	err := render.RecordOpsState(s, dir, "claude", adapter.ScopeUser, "", []adapter.FileOp{{
-		Action:   "write",
+		Action:   adapter.ActionWrite,
 		Path:     p,
 		Content:  content,
 		Mode:     0o644,
@@ -83,7 +83,7 @@ func TestPruneStaleState_DropsRemovedFiles(t *testing.T) {
 	s.Files[otherAgent] = state.FileEntry{SHA256: "c"}
 
 	render.PruneStaleState(s, home, "claude", adapter.ScopeUser, "", []adapter.FileOp{
-		{Action: "write", Path: "/home/me/.claude/agents/keep.md"},
+		{Action: adapter.ActionWrite, Path: "/home/me/.claude/agents/keep.md"},
 	})
 	if _, ok := s.Files[keep]; !ok {
 		t.Fatal("kept entry was pruned")
@@ -106,7 +106,7 @@ func TestPruneStaleState_DropsRemovedKeys(t *testing.T) {
 	s.Keys[dropKey] = state.KeyEntry{SHA256: "b"}
 
 	render.PruneStaleState(s, home, "claude", adapter.ScopeUser, "", []adapter.FileOp{{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          clauJSON,
 		MergeStrategy: "merge-json-keys",
 		Content:       []byte(`{"mcpServers":{"keep":{"command":"x"}}}`),
@@ -138,7 +138,7 @@ func TestState_PortableAcrossHomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := render.RecordOpsState(s, macHome, "claude", adapter.ScopeUser, "", []adapter.FileOp{
-		{Action: "write", Path: macPath},
+		{Action: adapter.ActionWrite, Path: macPath},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestState_PortableAcrossHomes(t *testing.T) {
 	linuxHome := t.TempDir() // stand-in for /home/alice
 	linuxPath := filepath.Join(linuxHome, ".claude.json")
 	render.PruneStaleState(s, linuxHome, "claude", adapter.ScopeUser, "", []adapter.FileOp{
-		{Action: "write", Path: linuxPath},
+		{Action: adapter.ActionWrite, Path: linuxPath},
 	})
 	if _, ok := s.Files[gotKey]; !ok {
 		t.Fatalf("portable key pruned on machine B; have %v", s.Files)
@@ -174,8 +174,8 @@ func TestState_PortableAcrossHomes(t *testing.T) {
 // regression against anyone reintroducing string matching.
 func TestPruneStaleState_AmbiguousPathPrefixKeepsLiveKey(t *testing.T) {
 	ops := []adapter.FileOp{
-		{Action: "write", Path: "a", MergeStrategy: "merge-json-keys", Content: []byte(`{"x":1}`)},
-		{Action: "write", Path: "a:b", MergeStrategy: "merge-json-keys", Content: []byte(`{"realptr":1}`)},
+		{Action: adapter.ActionWrite, Path: "a", MergeStrategy: "merge-json-keys", Content: []byte(`{"x":1}`)},
+		{Action: adapter.ActionWrite, Path: "a:b", MergeStrategy: "merge-json-keys", Content: []byte(`{"realptr":1}`)},
 	}
 	liveKey := state.Key{Agent: "claude", Scope: "user", Path: "a:b", Pointer: "/realptr"}
 	for i := 0; i < 64; i++ {
@@ -193,7 +193,7 @@ func TestPruneStaleState_AmbiguousPathPrefixKeepsLiveKey(t *testing.T) {
 func TestRecordState_SkipsDeleteOps(t *testing.T) {
 	s := state.New()
 	err := render.RecordOpsState(s, "/tmp", "claude", adapter.ScopeUser, "", []adapter.FileOp{{
-		Action: "delete",
+		Action: adapter.ActionDelete,
 		Path:   "/some/path",
 	}})
 	if err != nil {

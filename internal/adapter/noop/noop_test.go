@@ -101,8 +101,8 @@ func (s *spyWriter) Delete(adapter.FileOp) error        { s.deletes++; return ni
 func TestNoop_ApplyIgnoresOps(t *testing.T) {
 	spy := &spyWriter{}
 	ops := []adapter.FileOp{
-		{Action: "write", Path: "/tmp/should-not-write", Content: []byte("nope"), Mode: 0o644},
-		{Action: "delete", Path: "/tmp/should-not-delete"},
+		{Action: adapter.ActionWrite, Path: "/tmp/should-not-write", Content: []byte("nope"), Mode: 0o644},
+		{Action: adapter.ActionDelete, Path: "/tmp/should-not-delete"},
 	}
 	if err := noop.New("test").Apply(ops, spy); err != nil {
 		t.Fatalf("Apply: %v", err)

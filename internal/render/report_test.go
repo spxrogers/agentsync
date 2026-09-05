@@ -20,7 +20,7 @@ func TestBuildReport_NoPlugins(t *testing.T) {
 		PerAgent: map[string]render.AgentResult{
 			"claude": {
 				Ops: []adapter.FileOp{
-					{Action: "write", Path: "/home/.claude.json", MergeStrategy: "merge-json-keys"},
+					{Action: adapter.ActionWrite, Path: "/home/.claude.json", MergeStrategy: "merge-json-keys"},
 				},
 				Skips: nil,
 			},
@@ -55,13 +55,13 @@ func TestBuildReport_WithPlugin(t *testing.T) {
 		PerAgent: map[string]render.AgentResult{
 			"claude": {
 				Ops: []adapter.FileOp{
-					{Action: "write", Path: "/home/.claude.json", MergeStrategy: "merge-json-keys"},
+					{Action: adapter.ActionWrite, Path: "/home/.claude.json", MergeStrategy: "merge-json-keys"},
 				},
 				Skips: nil,
 			},
 			"opencode": {
 				Ops: []adapter.FileOp{
-					{Action: "write", Path: "/home/.config/opencode/opencode.json", MergeStrategy: "merge-json-keys"},
+					{Action: adapter.ActionWrite, Path: "/home/.config/opencode/opencode.json", MergeStrategy: "merge-json-keys"},
 				},
 				Skips: nil,
 			},
@@ -116,7 +116,7 @@ func TestBuildReport_PartialCoverage(t *testing.T) {
 		PerAgent: map[string]render.AgentResult{
 			"claude": {
 				Ops: []adapter.FileOp{
-					{Action: "write", MergeStrategy: "merge-json-keys"},
+					{Action: adapter.ActionWrite, MergeStrategy: "merge-json-keys"},
 				},
 				Skips: []adapter.Skip{
 					{Component: "hook", Name: "pre-run", Reason: "unsupported", Kind: adapter.SkipDropped},
@@ -152,7 +152,7 @@ func TestBuildReport_SkipDetails(t *testing.T) {
 	plan := render.RenderPlan{
 		PerAgent: map[string]render.AgentResult{
 			"codex": {
-				Ops:   []adapter.FileOp{{Action: "write", MergeStrategy: "merge-toml-keys"}},
+				Ops:   []adapter.FileOp{{Action: adapter.ActionWrite, MergeStrategy: "merge-toml-keys"}},
 				Skips: skips,
 			},
 		},
@@ -214,7 +214,7 @@ func TestBuildReport_SkipDetails_BaseBranch(t *testing.T) {
 	plan := render.RenderPlan{
 		PerAgent: map[string]render.AgentResult{
 			"codex": {
-				Ops:   []adapter.FileOp{{Action: "write", MergeStrategy: "merge-toml-keys"}},
+				Ops:   []adapter.FileOp{{Action: adapter.ActionWrite, MergeStrategy: "merge-toml-keys"}},
 				Skips: []adapter.Skip{{Component: "lsp", Name: "gopls", Reason: "Codex has no LSP configuration concept", Kind: adapter.SkipDropped}},
 			},
 		},
@@ -245,7 +245,7 @@ func TestBuildReport_SkipDetails_OmittedWhenEmpty(t *testing.T) {
 	}
 	plan := render.RenderPlan{
 		PerAgent: map[string]render.AgentResult{
-			"claude": {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}}, // no skips
+			"claude": {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, MergeStrategy: "merge-json-keys"}}}, // no skips
 		},
 	}
 	report := render.BuildReport(c, plan, []string{"claude"})
@@ -274,12 +274,12 @@ func TestTranslationReport_PrintText(t *testing.T) {
 		PerAgent: map[string]render.AgentResult{
 			"claude": {
 				Ops: []adapter.FileOp{
-					{Action: "write", MergeStrategy: "merge-json-keys"},
+					{Action: adapter.ActionWrite, MergeStrategy: "merge-json-keys"},
 				},
 			},
 			"opencode": {
 				Ops: []adapter.FileOp{
-					{Action: "write", MergeStrategy: "merge-json-keys"},
+					{Action: adapter.ActionWrite, MergeStrategy: "merge-json-keys"},
 				},
 			},
 		},
@@ -317,8 +317,8 @@ func TestTranslationReport_PrintTextStyled(t *testing.T) {
 	}
 	plan := render.RenderPlan{
 		PerAgent: map[string]render.AgentResult{
-			"claude":   {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}},
-			"opencode": {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}},
+			"claude":   {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, MergeStrategy: "merge-json-keys"}}},
+			"opencode": {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, MergeStrategy: "merge-json-keys"}}},
 		},
 	}
 	report := render.BuildReport(c, plan, []string{"claude", "opencode"})
@@ -365,7 +365,7 @@ func TestTranslationReport_SanitizesUntrustedPluginLabel(t *testing.T) {
 			{ID: "evil", Plugin: source.PluginSpec{ID: evil, Version: "1.0.0", Disabled: disabled}},
 		}}
 		plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
-			"claude": {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}},
+			"claude": {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, MergeStrategy: "merge-json-keys"}}},
 		}}
 		return render.BuildReport(c, plan, []string{"claude"})
 	}
@@ -425,7 +425,7 @@ func TestTranslationReport_JSONKeepsUntrustedLabelRaw(t *testing.T) {
 		{ID: "evil", Plugin: source.PluginSpec{ID: evil}},
 	}}
 	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
-		"claude": {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}},
+		"claude": {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, MergeStrategy: "merge-json-keys"}}},
 	}}
 	report := render.BuildReport(c, plan, []string{"claude"})
 
@@ -455,7 +455,7 @@ func TestTranslationReport_PrintJSON(t *testing.T) {
 	plan := render.RenderPlan{
 		PerAgent: map[string]render.AgentResult{
 			"claude": {
-				Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}},
+				Ops: []adapter.FileOp{{Action: adapter.ActionWrite, MergeStrategy: "merge-json-keys"}},
 			},
 		},
 	}
@@ -489,8 +489,8 @@ func TestBuildReport_CountsItemsNotOps(t *testing.T) {
 		PerAgent: map[string]render.AgentResult{
 			"claude": {
 				Ops: []adapter.FileOp{
-					{Action: "write", Path: "/h/.claude.json", MergeStrategy: "merge-json-keys"},
-					{Action: "write", Path: "/h/.claude/CLAUDE.md", MergeStrategy: "replace"},
+					{Action: adapter.ActionWrite, Path: "/h/.claude.json", MergeStrategy: "merge-json-keys"},
+					{Action: adapter.ActionWrite, Path: "/h/.claude/CLAUDE.md", MergeStrategy: "replace"},
 				},
 			},
 		},
@@ -521,7 +521,7 @@ func TestBuildReport_InventoryCountsAllKinds(t *testing.T) {
 	}
 	plan := render.RenderPlan{
 		PerAgent: map[string]render.AgentResult{
-			"claude": {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}},
+			"claude": {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, MergeStrategy: "merge-json-keys"}}},
 		},
 	}
 	report := render.BuildReport(c, plan, []string{"claude"})
@@ -585,7 +585,7 @@ func TestBuildReport_CoveragePartialWhenSomethingRendered(t *testing.T) {
 	plan := render.RenderPlan{
 		PerAgent: map[string]render.AgentResult{
 			"codex": {
-				Ops:   []adapter.FileOp{{Action: "write", MergeStrategy: "replace"}}, // the skill rendered
+				Ops:   []adapter.FileOp{{Action: adapter.ActionWrite, MergeStrategy: "replace"}}, // the skill rendered
 				Skips: []adapter.Skip{{Component: "hook", Name: "x", Reason: "unknown event", Kind: adapter.SkipDropped}},
 			},
 		},
@@ -608,7 +608,7 @@ func TestBuildReport_BaseCoverageFromRendered(t *testing.T) {
 	c := source.Canonical{Skills: []source.Skill{{Name: "s"}}} // no Plugins → "(base)"
 	rendered := render.RenderPlan{PerAgent: map[string]render.AgentResult{
 		"codex": {
-			Ops:   []adapter.FileOp{{Action: "write", MergeStrategy: "replace"}},
+			Ops:   []adapter.FileOp{{Action: adapter.ActionWrite, MergeStrategy: "replace"}},
 			Skips: []adapter.Skip{{Component: "hook", Reason: "unknown event", Kind: adapter.SkipDropped}},
 		},
 	}}
@@ -642,8 +642,8 @@ func TestBuildReport_CountsHonorTargeting(t *testing.T) {
 		},
 	}
 	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
-		"claude": {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-json-keys"}}},
-		"codex":  {Ops: []adapter.FileOp{{Action: "write", MergeStrategy: "merge-toml-keys"}}},
+		"claude": {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, MergeStrategy: "merge-json-keys"}}},
+		"codex":  {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, MergeStrategy: "merge-toml-keys"}}},
 	}}
 	byAgent := map[string]render.PluginRow{}
 	for _, r := range render.BuildReport(c, plan, []string{"claude", "codex"}).Rows {
@@ -704,7 +704,7 @@ func TestBuildReport_NotTargetedRows(t *testing.T) {
 				Plugins:    []source.Plugin{{ID: "toolkit", Plugin: tc.spec}},
 			}
 			plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
-				tc.agent: {Ops: []adapter.FileOp{{Action: "write", Path: "/home/.claude.json"}}},
+				tc.agent: {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, Path: "/home/.claude.json"}}},
 			}}
 			report := render.BuildReport(c, plan, []string{tc.agent})
 			if len(report.Rows) != 1 {
@@ -746,11 +746,11 @@ func TestBuildReport_CoverageOutcomes(t *testing.T) {
 		want     string
 		wantMark string
 	}{
-		{name: "no skips", ops: []adapter.FileOp{{Action: "write", Path: "/x"}}, want: "full", wantMark: "✓ full"},
+		{name: "no skips", ops: []adapter.FileOp{{Action: adapter.ActionWrite, Path: "/x"}}, want: "full", wantMark: "✓ full"},
 		{
 			name:  "skipped something but still rendered",
 			skips: []adapter.Skip{{Component: "lsp", Name: "l", Reason: "no concept"}},
-			ops:   []adapter.FileOp{{Action: "write", Path: "/x"}},
+			ops:   []adapter.FileOp{{Action: adapter.ActionWrite, Path: "/x"}},
 			want:  "partial", wantMark: "◐ partial",
 		},
 		{
@@ -806,7 +806,7 @@ func TestBuildReport_CountsHonourPluginTargeting(t *testing.T) {
 		},
 	}
 	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
-		"claude": {Ops: []adapter.FileOp{{Action: "write", Path: "/x"}}},
+		"claude": {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, Path: "/x"}}},
 	}}
 	report := render.BuildReport(c, plan, []string{"claude"})
 	if len(report.Rows) != 1 {

@@ -124,18 +124,6 @@ func Plan(r secrets.Resolved, reg *adapter.Registry, agents []string, scope adap
 		if err != nil {
 			return out, fmt.Errorf("render %s: %w", name, err)
 		}
-		// Normalize the documented `"" == "write"` Action default ONCE at the
-		// plan boundary, before any guard runs: executors (DispatchOps) treat
-		// "" as write, but the containment backstop below and the apply-time
-		// dedup/divergence check match the literal "write" — so an op emitted
-		// with the empty spelling would be written by every adapter while
-		// dodging both guards. After this loop (and Plan's own synthesized
-		// ops, which set Action explicitly), plan ops never carry "".
-		for i := range ops {
-			if ops[i].Action == "" {
-				ops[i].Action = "write"
-			}
-		}
 		// Containment backstop (defense-in-depth): reject any write whose own cleaned
 		// path still contains a ".." segment (an unrooted / relative-with-leading-".."
 		// path). This is deliberately narrow — Plan does not know each adapter's dest
@@ -147,7 +135,7 @@ func Plan(r secrets.Resolved, reg *adapter.Registry, agents []string, scope adap
 		// derived from a filesystem walk via filepath.Rel with symlinks skipped, so a
 		// ".." can never enter them — this remains the last conservative net.
 		for _, op := range ops {
-			if op.Action == "write" && pathEscapes(op.Path) {
+			if op.Action == adapter.ActionWrite && pathEscapes(op.Path) {
 				return out, fmt.Errorf("render %s: refusing FileOp path %q: escapes its destination directory via '..'", name, op.Path)
 			}
 		}
@@ -339,14 +327,7 @@ func orphanCleanupOps(s *state.Targets, a adapter.Adapter, agent string, scope a
 		if _, err := os.Stat(abs); err != nil {
 			continue
 		}
-		cleanup = append(cleanup, adapter.FileOp{
-			Action:        "write",
-			Path:          abs,
-			Content:       []byte("{}"),
-			Mode:          0o644,
-			MergeStrategy: strat,
-			OwnedKeys:     ownedByPath[path],
-		})
+		cleanup = append(cleanup, adapter.NewCleanupOp(abs, strat, ownedByPath[path]))
 	}
 	return cleanup
 }
@@ -436,24 +417,16 @@ func applyPlan(
 		if a == nil {
 			return reports, written, unchanged, wouldChange, fmt.Errorf("adapter %q not registered at apply", name)
 		}
-		// Intake normalization + containment backstop for caller-built plans.
-		// Apply and PreviewApply are exported and accept a RenderPlan that never
-		// went through Plan, so an op here can still carry the documented
-		// `"" == "write"` Action default — which every executor writes, while
-		// the traversal backstop and the dedup/divergence check below match the
-		// literal "write". Normalize at this shared entry (a Plan-built plan is
-		// already normalized, so this is a no-op for it) and re-run the
-		// backstop, so a hand-built plan cannot smuggle an unanchored ".." path
-		// past the guards Plan enforces. Scope honesty: "shared" covers the
-		// Apply/PreviewApply funnel only — cli/reconcile.go and cli/agent.go
-		// call an adapter's Apply directly with plan-derived or explicit-Action
-		// ops and stay outside this normalization; raw-adapter-output consumers
-		// keep their own `"" ==` guards.
+		// Containment backstop for caller-built plans. Apply and PreviewApply
+		// are exported and accept a RenderPlan that never went through Plan, so
+		// the traversal check runs again here: a hand-built plan cannot smuggle
+		// an unanchored ".." path past the guard Plan enforces. (A Plan-built
+		// plan already passed it, so this is a no-op for it.) Scope honesty:
+		// this covers the Apply/PreviewApply funnel only — cli/reconcile.go and
+		// cli/agent.go call an adapter's Apply directly with plan-derived or
+		// state-derived ops and never pass through here.
 		for i := range res.Ops {
-			if res.Ops[i].Action == "" {
-				res.Ops[i].Action = "write"
-			}
-			if res.Ops[i].Action == "write" && pathEscapes(res.Ops[i].Path) {
+			if res.Ops[i].Action == adapter.ActionWrite && pathEscapes(res.Ops[i].Path) {
 				return reports, written, unchanged, wouldChange, fmt.Errorf(
 					"apply %s: refusing FileOp path %q: escapes its destination directory via '..'", name, res.Ops[i].Path,
 				)
@@ -468,7 +441,7 @@ func applyPlan(
 			// hooks, AND lspServers to settings.json), and each must run —
 			// the adapter re-reads and merges per op. Deduping them by path
 			// silently dropped every merge op after the first.
-			if op.Action == "write" && !IsKeyMerge(op.MergeStrategy) {
+			if op.Action == adapter.ActionWrite && !IsKeyMerge(op.MergeStrategy) {
 				if prev, ok := seen[op.Path]; ok {
 					// Identical content is the safe, expected dedup (claude and
 					// opencode render byte-identical SKILL.md). Divergent content

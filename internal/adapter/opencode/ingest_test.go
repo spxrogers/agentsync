@@ -43,7 +43,7 @@ func ownFiles(t *testing.T, targetRoot string, scope adapter.Scope, project stri
 	t.Helper()
 	ops := make([]adapter.FileOp, 0, len(files))
 	for _, f := range files {
-		ops = append(ops, adapter.FileOp{Action: "write", Path: f, Mode: 0o644})
+		ops = append(ops, adapter.FileOp{Action: adapter.ActionWrite, Path: f, Mode: 0o644})
 	}
 	seedOwnedState(t, targetRoot, scope, project, ops)
 }

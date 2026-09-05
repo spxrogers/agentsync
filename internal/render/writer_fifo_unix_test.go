@@ -51,7 +51,7 @@ func mkfifo(t *testing.T, path string) {
 func TestOrphanDeleteWillProceed_FIFO(t *testing.T) {
 	fifo := filepath.Join(t.TempDir(), "pipe.md")
 	mkfifo(t, fifo)
-	op := adapter.FileOp{Action: "delete", Path: fifo, SourceID: "subagents/pipe.md"}
+	op := adapter.FileOp{Action: adapter.ActionDelete, Path: fifo, SourceID: "subagents/pipe.md"}
 	withinTimeout(t, "OrphanDeleteWillProceed", func() {
 		if render.OrphanDeleteWillProceed(op) {
 			t.Error("a FIFO cannot be read or preserved; it must not be reported as reclaimable")
@@ -76,7 +76,7 @@ func TestWriterDelete_FIFODoesNotBlock(t *testing.T) {
 	mkfifo(t, fifo)
 
 	w := render.NewWriter(state.New(), home, tmp, adapter.ScopeUser, "", "claude")
-	op := adapter.FileOp{Action: "delete", Path: fifo, SourceID: "subagents/pipe.md"}
+	op := adapter.FileOp{Action: adapter.ActionDelete, Path: fifo, SourceID: "subagents/pipe.md"}
 	withinTimeout(t, "Writer.Delete", func() {
 		if err := w.Delete(op); err != nil {
 			t.Errorf("a non-regular destination must be SKIPPED, not error the run: %v", err)

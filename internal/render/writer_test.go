@@ -41,11 +41,11 @@ func (f *fakeJSONApply) KeyMergeStrategy() string { return "merge-json-keys" }
 func (f *fakeJSONApply) Apply(ops []adapter.FileOp, w adapter.DestWriter) error {
 	for _, op := range ops {
 		switch op.Action {
-		case "delete":
+		case adapter.ActionDelete:
 			if err := w.Delete(op); err != nil {
 				return err
 			}
-		case "", "write":
+		case adapter.ActionWrite:
 			if op.MergeStrategy == "merge-json-keys" {
 				existing := map[string]any{}
 				if data, err := os.ReadFile(op.Path); err == nil {
@@ -84,7 +84,7 @@ func TestWriter_SkipsUnchangedWrite(t *testing.T) {
 	}
 	st := state.New()
 	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
-	op := adapter.FileOp{Action: "write", Path: dest, Content: content, Mode: 0o644, SourceID: "note.md"}
+	op := adapter.FileOp{Action: adapter.ActionWrite, Path: dest, Content: content, Mode: 0o644, SourceID: "note.md"}
 	if err := w.Write(op, content); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestWriter_FileLevelBackup(t *testing.T) {
 	st := state.New()
 	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
 	op := adapter.FileOp{
-		Action:   "write",
+		Action:   adapter.ActionWrite,
 		Path:     dest,
 		Content:  []byte("---\nname: reviewer\n---\nNew shiny rendered prompt.\n"),
 		Mode:     0o644,
@@ -175,7 +175,7 @@ func TestWriter_KeyLevelBackup(t *testing.T) {
 	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
 	ours := []byte(`{"mcpServers":{"github":{"command":"npx","args":["-y","@m/server-github"]}}}`)
 	op := adapter.FileOp{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          dest,
 		Content:       ours,
 		MergeStrategy: "merge-json-keys",
@@ -237,7 +237,7 @@ func TestWriter_KeyLevelBackup_ForeignNonObjectAtOwnedKey(t *testing.T) {
 			w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
 			ours := []byte(`{"mcpServers":{"github":{"command":"npx"}}}`)
 			op := adapter.FileOp{
-				Action:        "write",
+				Action:        adapter.ActionWrite,
 				Path:          dest,
 				Content:       ours,
 				MergeStrategy: "merge-json-keys",
@@ -278,7 +278,7 @@ func TestWriter_KeyLevelBackup_ForeignNullAtOwnedPointer(t *testing.T) {
 	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
 	ours := []byte(`{"mcpServers":{"github":{"command":"npx"}}}`)
 	op := adapter.FileOp{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          dest,
 		Content:       ours,
 		MergeStrategy: "merge-json-keys",
@@ -314,7 +314,7 @@ func TestWriter_NoCollisionWhenAlreadyOwned(t *testing.T) {
 	st.Files[state.NewFileKey(tmp, "claude", "user", "", dest)] = state.FileEntry{SHA256: "anything"}
 
 	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
-	op := adapter.FileOp{Action: "write", Path: dest, Content: []byte("ours-v2"), Mode: 0o644}
+	op := adapter.FileOp{Action: adapter.ActionWrite, Path: dest, Content: []byte("ours-v2"), Mode: 0o644}
 	if err := w.Write(op, op.Content); err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestWriter_NoCollisionWhenContentMatches(t *testing.T) {
 
 	st := state.New()
 	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
-	if err := w.Write(adapter.FileOp{Action: "write", Path: dest, Content: content}, content); err != nil {
+	if err := w.Write(adapter.FileOp{Action: adapter.ActionWrite, Path: dest, Content: content}, content); err != nil {
 		t.Fatal(err)
 	}
 	if len(w.Reports()) != 0 {
@@ -358,7 +358,7 @@ func TestWriter_DeleteSkipsBackup(t *testing.T) {
 
 	st := state.New()
 	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "claude")
-	if err := w.Delete(adapter.FileOp{Action: "delete", Path: dest}); err != nil {
+	if err := w.Delete(adapter.FileOp{Action: adapter.ActionDelete, Path: dest}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {
@@ -389,9 +389,9 @@ func TestRenderApply_MultipleMergeOpsSamePathAllApplied(t *testing.T) {
 	plan := render.RenderPlan{
 		PerAgent: map[string]render.AgentResult{
 			"claude": {Ops: []adapter.FileOp{
-				{Action: "write", Path: dest, Content: []byte(`{"mcpServers":{"a":1}}`), MergeStrategy: "merge-json-keys", Mode: 0o644},
-				{Action: "write", Path: dest, Content: []byte(`{"hooks":{"PreToolUse":"echo"}}`), MergeStrategy: "merge-json-keys", Mode: 0o644},
-				{Action: "write", Path: dest, Content: []byte(`{"lspServers":{"go":{"command":"gopls"}}}`), MergeStrategy: "merge-json-keys", Mode: 0o644},
+				{Action: adapter.ActionWrite, Path: dest, Content: []byte(`{"mcpServers":{"a":1}}`), MergeStrategy: "merge-json-keys", Mode: 0o644},
+				{Action: adapter.ActionWrite, Path: dest, Content: []byte(`{"hooks":{"PreToolUse":"echo"}}`), MergeStrategy: "merge-json-keys", Mode: 0o644},
+				{Action: adapter.ActionWrite, Path: dest, Content: []byte(`{"lspServers":{"go":{"command":"gopls"}}}`), MergeStrategy: "merge-json-keys", Mode: 0o644},
 			}},
 		},
 	}
@@ -423,8 +423,8 @@ func TestRenderApply_MultipleMergeOpsSamePathAllApplied(t *testing.T) {
 func TestRenderApply_SharedWriteDivergence(t *testing.T) {
 	newPlan := func(dest, claudeBody, opencodeBody string) render.RenderPlan {
 		return render.RenderPlan{PerAgent: map[string]render.AgentResult{
-			"claude":   {Ops: []adapter.FileOp{{Action: "write", Path: dest, Content: []byte(claudeBody), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
-			"opencode": {Ops: []adapter.FileOp{{Action: "write", Path: dest, Content: []byte(opencodeBody), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
+			"claude":   {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, Path: dest, Content: []byte(claudeBody), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
+			"opencode": {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, Path: dest, Content: []byte(opencodeBody), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
 		}}
 	}
 
@@ -489,8 +489,8 @@ func TestRenderApply_IntraAgentDivergenceMessage(t *testing.T) {
 
 	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
 		"claude": {Ops: []adapter.FileOp{
-			{Action: "write", Path: dest, Content: []byte("from plugin A"), Mode: 0o644, SourceID: "subagents/code-reviewer.md"},
-			{Action: "write", Path: dest, Content: []byte("from plugin B"), Mode: 0o644, SourceID: "subagents/code-reviewer.md"},
+			{Action: adapter.ActionWrite, Path: dest, Content: []byte("from plugin A"), Mode: 0o644, SourceID: "subagents/code-reviewer.md"},
+			{Action: adapter.ActionWrite, Path: dest, Content: []byte("from plugin B"), Mode: 0o644, SourceID: "subagents/code-reviewer.md"},
 		}},
 	}}
 	_, _, _, err := render.Apply(plan, reg, state.New(), home, tmp, adapter.ScopeUser, "")
@@ -518,8 +518,8 @@ func TestPreviewApply_SharedWriteDivergence(t *testing.T) {
 	_ = reg.Register(&fakeJSONApply{name: "claude"})
 	_ = reg.Register(&fakeJSONApply{name: "opencode"})
 	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
-		"claude":   {Ops: []adapter.FileOp{{Action: "write", Path: dest, Content: []byte("A"), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
-		"opencode": {Ops: []adapter.FileOp{{Action: "write", Path: dest, Content: []byte("B"), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
+		"claude":   {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, Path: dest, Content: []byte("A"), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
+		"opencode": {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, Path: dest, Content: []byte("B"), Mode: 0o644, SourceID: "skills/x/SKILL.md"}}},
 	}}
 	if _, _, _, err := render.PreviewApply(plan, reg, state.New(), home, tmp, adapter.ScopeUser, ""); err == nil {
 		t.Fatal("expected dry-run preview to fail loud on divergent shared-path content")
@@ -549,9 +549,9 @@ func TestPreviewApply_SyncedVsWouldChange(t *testing.T) {
 	_ = reg.Register(&fakeJSONApply{name: "claude"})
 	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
 		"claude": {Ops: []adapter.FileOp{
-			{Action: "write", Path: synced, Content: []byte("same\n"), Mode: 0o644, SourceID: "skills/a/SKILL.md"},
-			{Action: "write", Path: changed, Content: []byte("new\n"), Mode: 0o644, SourceID: "skills/b/SKILL.md"},
-			{Action: "write", Path: missing, Content: []byte("new\n"), Mode: 0o644, SourceID: "skills/c/SKILL.md"},
+			{Action: adapter.ActionWrite, Path: synced, Content: []byte("same\n"), Mode: 0o644, SourceID: "skills/a/SKILL.md"},
+			{Action: adapter.ActionWrite, Path: changed, Content: []byte("new\n"), Mode: 0o644, SourceID: "skills/b/SKILL.md"},
+			{Action: adapter.ActionWrite, Path: missing, Content: []byte("new\n"), Mode: 0o644, SourceID: "skills/c/SKILL.md"},
 		}},
 	}}
 
@@ -598,7 +598,7 @@ func TestRenderApply_FullPathBacksUpAcrossAgents(t *testing.T) {
 	plan := render.RenderPlan{
 		PerAgent: map[string]render.AgentResult{
 			"claude": {Ops: []adapter.FileOp{{
-				Action:   "write",
+				Action:   adapter.ActionWrite,
 				Path:     claudeDest,
 				Content:  []byte("rendered-claude"),
 				Mode:     0o644,
@@ -668,7 +668,7 @@ func TestWriter_JSONCFallbackBacksUpWholeFile(t *testing.T) {
 	st := state.New() // nothing owned → must back up
 	w := render.NewWriter(st, home, tmp, adapter.ScopeUser, "", "opencode")
 	op := adapter.FileOp{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          dest,
 		Content:       []byte(`{"mcp":{"github":{"command":"new"}}}`),
 		MergeStrategy: "merge-json-keys",
@@ -717,7 +717,7 @@ func TestApply_UnreadableOrphanIsSkippedNotDeleted(t *testing.T) {
 	_ = reg.Register(&fakeJSONApply{name: "claude"})
 	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
 		"claude": {Ops: []adapter.FileOp{
-			{Action: "write", Path: live, Content: []byte("live"), Mode: 0o644, SourceID: "subagents/live.md"},
+			{Action: adapter.ActionWrite, Path: live, Content: []byte("live"), Mode: 0o644, SourceID: "subagents/live.md"},
 		}},
 	}}
 
@@ -766,7 +766,7 @@ func TestApply_UnreadableOrphanIsSkippedNotDeleted(t *testing.T) {
 func TestOrphanDeleteWillProceed(t *testing.T) {
 	tmp := t.TempDir()
 	op := func(name, sourceID string) adapter.FileOp {
-		return adapter.FileOp{Action: "delete", Path: filepath.Join(tmp, name), SourceID: sourceID}
+		return adapter.FileOp{Action: adapter.ActionDelete, Path: filepath.Join(tmp, name), SourceID: sourceID}
 	}
 
 	readable := filepath.Join(tmp, "readable.md")

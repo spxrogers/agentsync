@@ -29,8 +29,8 @@ type planItem struct {
 	agent string
 
 	// op is the plan op that produced the item. For an ORPHAN it is SYNTHESIZED
-	// from state — adapter.FileOp{Action: "delete", Path, SourceID} — with Mode
-	// left 0 because the orphan removal path never reads it.
+	// from state — adapter.FileOp{Action: adapter.ActionDelete, Path, SourceID}
+	// — with Mode left 0 because the orphan removal path never reads it.
 	op adapter.FileOp
 
 	// ptr is the RFC-6901 pointer for a key item; "" for a whole-file item.
@@ -214,7 +214,7 @@ func walkPlanItems(w planWalk) []planItem {
 		}
 		seenPath := map[string]bool{}
 		for _, op := range res.Ops {
-			if op.Action != "" && op.Action != "write" {
+			if op.Action != adapter.ActionWrite {
 				continue
 			}
 			if w.matchOp != nil && !w.matchOp(name, op) {
@@ -280,7 +280,7 @@ func walkPlanItems(w planWalk) []planItem {
 				// SourceID matters: the reclaimable-KIND check behind reconcile's
 				// prompt wording is SourceID-keyed and silently degrades to
 				// "unknown kind" without it.
-				op:          adapter.FileOp{Action: "delete", Path: orphan, SourceID: entry.SourceID},
+				op:          adapter.FileOp{Action: adapter.ActionDelete, Path: orphan, SourceID: entry.SourceID},
 				happlied:    entry.SHA256,
 				hdest:       hashFile(orphan),
 				destPerm:    perm,

@@ -171,6 +171,25 @@ runtime (e.g. a scope-gap branch) cannot hide from it. `TestEveryAdapterClassifi
 adapter at both scopes, fails on any unset `Kind`, and pins that both kind values
 are exercised.
 
+**`FileOp` is typed too.** `Action` (`adapter.Action`) is `ActionWrite` or
+`ActionDelete`, and **`ActionWrite` is the zero value** — a `FileOp` built
+without naming an action writes. There is no empty spelling and therefore no
+intake normalization: `Plan`, `Apply` and `PreviewApply` used to rewrite
+`"" → "write"` before their guards ran, and every downstream reader carried a
+comment saying whether its ops were plan-normalized or raw adapter output;
+both are gone. `Kind` (`adapter.OpKind`) says why the op exists — an ordinary
+render (`OpRender`, the zero value) or a synthesized orphan cleanup
+(`OpCleanup`), not which source or plugin produced its content — and is
+orthogonal to `Action`: a cleanup op is an `ActionWrite`
+of `{}` whose only work is pruning an emptied section's owned keys (the merge
+path performs the removal via `OwnedKeys`), so the kind is what lets `apply`
+label and count it as a removal rather than sniffing `{}`+`OwnedKeys`. Cleanup
+ops are built by `adapter.NewCleanupOp` — the only producer of `OpCleanup`,
+called from `render.orphanCleanupOps` and from `agent disable --purge` — and
+`TestEveryCleanupLiteralUsesNewCleanupOp` fails any production `FileOp` literal
+that hand-rolls the cleanup shape or stamps the kind by hand, so a hand-rolled
+cleanup literal cannot ship unstamped or hand-stamped.
+
 **Key-merge strategies and on-disk format.** `KeyMergeStrategy` /
 `FileOp.MergeStrategy` name how an adapter co-owns keys inside a shared config
 file: `merge-json-keys` (Claude's `.claude.json`/`settings.json`, a project's
@@ -192,6 +211,9 @@ widening the accessor to a per-path strategy first. A central guard
 MCP+hook fixture through every registered adapter and pins `KeyMergeStrategy()`
 against the `MergeStrategy` stamped on every key-merge `FileOp` it emits, so the
 accessor can never silently drift from what an adapter actually writes.
+`MergeStrategy` itself stays a plain string: typing it would change the
+published `Adapter` interface (`KeyMergeStrategy() string`) and is deferred to
+[#250](https://github.com/spxrogers/agentsync/issues/250).
 
 **Deep vs breadth-tier adapters.** The nine hand-written packages above are
 *deep* adapters — agent-specific, multi-component, often bidirectional. Beyond

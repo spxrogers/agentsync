@@ -37,7 +37,7 @@ func (a *Adapter) Render(r secrets.Resolved, scope adapter.Scope, project string
 		if memPath := a.memoryPath(scope, project); memPath != "" {
 			body := source.RenderManagedMemory(renderC.Memory.Body, renderC.Memory.Fragments, filepath.Base(memPath), renderC.Config.MemoryBannerEnabled())
 			ops = append(ops, adapter.FileOp{
-				Action:        "write",
+				Action:        adapter.ActionWrite,
 				Path:          memPath,
 				Content:       []byte(body),
 				Mode:          0o644,
@@ -141,7 +141,7 @@ func (a *Adapter) renderMCP(c source.Canonical, scope adapter.Scope, project str
 		return nil, nil, fmt.Errorf("marshal %s mcp: %w", a.spec.Name, err)
 	}
 	return []adapter.FileOp{{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          mcpPath,
 		Content:       append(body, '\n'),
 		Mode:          0o644,

@@ -50,7 +50,7 @@ func PruneStaleState(s *state.Targets, userHome, agent string, scope adapter.Sco
 	currentFiles := map[string]struct{}{}           // portable path → present
 	currentKeys := map[string]map[string]struct{}{} // portable path → set of pointers
 	for _, op := range ops {
-		if op.Action != "" && op.Action != "write" {
+		if op.Action != adapter.ActionWrite {
 			continue
 		}
 		portable := paths.HomeRelative(userHome, op.Path)
@@ -138,7 +138,7 @@ func OrphanFiles(s *state.Targets, userHome, agent string, scope adapter.Scope, 
 	portableProject := paths.HomeRelative(userHome, project)
 	current := map[string]struct{}{}
 	for _, op := range ops {
-		if op.Action != "" && op.Action != "write" {
+		if op.Action != adapter.ActionWrite {
 			continue
 		}
 		if IsKeyMerge(op.MergeStrategy) {
@@ -255,7 +255,7 @@ func orphanDeletes(s *state.Targets, userHome, agent string, scope adapter.Scope
 	portableProject := paths.HomeRelative(userHome, project)
 	rendered := map[string]struct{}{}
 	for _, op := range ops {
-		if op.Action != "" && op.Action != "write" {
+		if op.Action != adapter.ActionWrite {
 			continue
 		}
 		if IsKeyMerge(op.MergeStrategy) {
@@ -275,7 +275,7 @@ func orphanDeletes(s *state.Targets, userHome, agent string, scope adapter.Scope
 			continue
 		}
 		out = append(out, adapter.FileOp{
-			Action:   "delete",
+			Action:   adapter.ActionDelete,
 			Path:     key.AbsPath(userHome),
 			SourceID: entry.SourceID,
 			Mode:     entry.Mode,
@@ -299,7 +299,7 @@ func RecordOpsState(s *state.Targets, userHome, agent string, scope adapter.Scop
 	now := time.Now().UTC()
 	scopeName := scope.String()
 	for _, op := range ops {
-		if op.Action != "" && op.Action != "write" {
+		if op.Action != adapter.ActionWrite {
 			continue
 		}
 		switch op.MergeStrategy {

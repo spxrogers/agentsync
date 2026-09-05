@@ -34,8 +34,8 @@ func TestSaveBestEffortState_OnlyRecordsWrittenPaths(t *testing.T) {
 
 	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
 		"claude": {Ops: []adapter.FileOp{
-			{Action: "write", Path: writtenPath, Content: []byte(`{"a":1}`)},
-			{Action: "write", Path: foreignPath, Content: []byte(`{"a":2}`)},
+			{Action: adapter.ActionWrite, Path: writtenPath, Content: []byte(`{"a":1}`)},
+			{Action: adapter.ActionWrite, Path: foreignPath, Content: []byte(`{"a":2}`)},
 		}},
 	}}
 

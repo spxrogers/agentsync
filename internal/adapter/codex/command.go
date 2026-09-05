@@ -35,7 +35,7 @@ func (a *Adapter) renderCommands(c source.Canonical, p Paths, scope adapter.Scop
 			return nil, nil, fmt.Errorf("encode command %s: %w", cmd.Name, err)
 		}
 		ops = append(ops, adapter.FileOp{
-			Action:        "write",
+			Action:        adapter.ActionWrite,
 			Path:          filepath.Join(p.PromptsDir, cmd.Name+".md"),
 			Content:       body,
 			Mode:          0o644,

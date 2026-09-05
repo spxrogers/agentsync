@@ -25,7 +25,7 @@ func TestWrite_ChmodReconverges(t *testing.T) {
 	home := t.TempDir()
 	dest := filepath.Join(t.TempDir(), "run.sh")
 	content := []byte("#!/bin/sh\necho hi\n")
-	op := adapter.FileOp{Action: "write", Path: dest, Content: content, Mode: 0o755}
+	op := adapter.FileOp{Action: adapter.ActionWrite, Path: dest, Content: content, Mode: 0o755}
 	st := state.New()
 
 	// Initial write establishes content + 0755.
@@ -106,7 +106,7 @@ func TestRecordOpsState_MergeTomlNumericNoFalseDrift(t *testing.T) {
 			}
 			st := state.New()
 			op := adapter.FileOp{
-				Action:        "write",
+				Action:        adapter.ActionWrite,
 				Path:          dest,
 				Content:       []byte(tc.ours),
 				MergeStrategy: "merge-toml-keys",

@@ -704,9 +704,7 @@ func seedStateFromCurrentDest(agentsyncHome, srcHome, agentName string, reg *ada
 
 	now := time.Now().UTC()
 	for _, op := range ops {
-		// These ops are RAW adapter Render output (not plan-normalized), so ""
-		// must still be accepted as the documented "write" default.
-		if op.Action != "" && op.Action != "write" {
+		if op.Action != adapter.ActionWrite {
 			continue
 		}
 		switch {

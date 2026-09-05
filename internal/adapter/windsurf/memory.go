@@ -48,7 +48,7 @@ func (a *Adapter) renderMemory(c source.Canonical, p Paths) ([]adapter.FileOp, [
 		// truncates nor flags an oversized rule (documented in the capability matrix).
 		body := source.RenderManagedMemory(c.Memory.Body, c.Memory.Fragments, memoryRuleFile, banner)
 		return []adapter.FileOp{{
-			Action:        "write",
+			Action:        adapter.ActionWrite,
 			Path:          filepath.Join(p.RulesDir, memoryRuleFile),
 			Content:       []byte(memoryRuleFrontmatter + body),
 			Mode:          0o644,
@@ -66,7 +66,7 @@ func (a *Adapter) renderMemory(c source.Canonical, p Paths) ([]adapter.FileOp, [
 	}
 	body := source.RenderManagedMemory(c.Memory.Body, c.Memory.Fragments, filepath.Base(p.GlobalRules), banner)
 	return []adapter.FileOp{{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          p.GlobalRules,
 		Content:       []byte(body),
 		Mode:          0o644,

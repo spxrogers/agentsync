@@ -64,7 +64,7 @@ func TestPipeline_UnknownAgentError(t *testing.T) {
 func TestPipeline_DedupesIdenticalWritesAcrossAdapters(t *testing.T) {
 	sharedPath := "/tmp/fake-root/.claude/skills/my-skill/SKILL.md"
 	sharedOp := adapter.FileOp{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          sharedPath,
 		Content:       []byte("# My skill\n"),
 		Mode:          0o644,
@@ -223,7 +223,7 @@ func TestPlan_ContainmentBackstopRejectsEscapingFileOp(t *testing.T) {
 	esc := &countingAdapter{
 		Adapter: noop.New("claude"),
 		renderOps: []adapter.FileOp{{
-			Action:        "write",
+			Action:        adapter.ActionWrite,
 			Path:          "../escape.md", // filepath.Clean keeps the leading ".."
 			Content:       []byte("x"),
 			Mode:          0o644,
@@ -242,20 +242,24 @@ func TestPlan_ContainmentBackstopRejectsEscapingFileOp(t *testing.T) {
 	}
 }
 
-// TestPlan_NormalizesEmptyActionBeforeGuards pins the "" == "write" boundary
-// normalization: an adapter op emitted with the documented empty-Action default
-// would be WRITTEN by every executor, yet the containment backstop and the
-// apply-time dedup/divergence check match the literal "write" — so before Plan
-// normalized "" at intake, an escaping op with Action "" slid past the backstop.
-// The traversal path here must be refused exactly like the explicit-"write"
-// case above; a second, benign "" op proves the plan output carries "write".
-func TestPlan_NormalizesEmptyActionBeforeGuards(t *testing.T) {
-	t.Run("empty-Action traversal op is refused", func(t *testing.T) {
+// TestPlan_ZeroActionIsWriteAtTheGuards pins that the containment backstop
+// cannot be dodged by leaving Action unset. Before Action was typed, "" was a
+// documented write default that every executor wrote while the backstop and
+// the dedup/divergence check matched the literal "write" — so Plan rewrote ""
+// at intake, and this test pinned the rewrite. The rewrite is gone because
+// there is nothing left to rewrite: the zero value IS adapter.ActionWrite. The
+// property that survives is the one that mattered — there is no spelling that
+// writes while dodging a guard — so the ops here are built WITHOUT an Action on
+// purpose (do not "tidy" them to an explicit ActionWrite: the point is that the
+// zero value writes, and swapping the iota order so the zero value is
+// ActionDelete must fail this test).
+func TestPlan_ZeroActionIsWriteAtTheGuards(t *testing.T) {
+	t.Run("zero-Action traversal op is refused", func(t *testing.T) {
 		reg := adapter.NewRegistry()
 		esc := &countingAdapter{
 			Adapter: noop.New("claude"),
 			renderOps: []adapter.FileOp{{
-				Action:        "", // documented write default — must not dodge the backstop
+				// No Action: the zero value writes — and must not dodge the backstop.
 				Path:          "../escape.md",
 				Content:       []byte("x"),
 				Mode:          0o644,
@@ -267,18 +271,18 @@ func TestPlan_NormalizesEmptyActionBeforeGuards(t *testing.T) {
 		}
 		_, err := render.Plan(secrets.ForRender(source.Canonical{}), reg, []string{"claude"}, adapter.ScopeUser, "", nil, "/tmp")
 		if err == nil {
-			t.Fatal("Plan accepted an empty-Action FileOp whose path escapes via '..'; want rejection")
+			t.Fatal("Plan accepted a zero-Action FileOp whose path escapes via '..'; want rejection")
 		}
 		if !strings.Contains(err.Error(), "escapes its destination") {
 			t.Errorf("error %q does not describe the containment failure", err.Error())
 		}
 	})
-	t.Run("empty Action is rewritten to write in the plan", func(t *testing.T) {
+	t.Run("zero Action reads back as ActionWrite in the plan", func(t *testing.T) {
 		reg := adapter.NewRegistry()
 		a := &countingAdapter{
 			Adapter: noop.New("claude"),
 			renderOps: []adapter.FileOp{{
-				Action:        "",
+				// No Action on purpose: the zero value is the write.
 				Path:          "/tmp/dest/file.md",
 				Content:       []byte("x"),
 				Mode:          0o644,
@@ -293,29 +297,27 @@ func TestPlan_NormalizesEmptyActionBeforeGuards(t *testing.T) {
 			t.Fatal(err)
 		}
 		ops := plan.PerAgent["claude"].Ops
-		if len(ops) != 1 || ops[0].Action != "write" {
-			t.Fatalf("Plan must rewrite Action \"\" to \"write\" at intake, got %+v", ops)
+		if len(ops) != 1 || ops[0].Action != adapter.ActionWrite {
+			t.Fatalf("a zero-Action op must be an ActionWrite in the plan, got %+v", ops)
 		}
 	})
 }
 
-// TestApply_NormalizesEmptyActionForCallerBuiltPlans pins the same "" == "write"
-// intake normalization at the OTHER exported entries: Apply and PreviewApply
-// accept a caller-built RenderPlan that never went through Plan, so before they
-// re-normalized at intake, an op with the documented empty-Action default was
-// written by every executor while dodging both the traversal containment
-// backstop and the cross-agent divergence check (each matches the literal
-// "write"). A hand-built plan carrying an escaping empty-Action op must be
-// refused exactly like Plan refuses it, and a benign empty-Action op must reach
-// the adapter already normalized to "write".
-func TestApply_NormalizesEmptyActionForCallerBuiltPlans(t *testing.T) {
+// TestApply_ZeroActionForCallerBuiltPlans pins the same property at the OTHER
+// exported entries: Apply and PreviewApply accept a caller-built RenderPlan
+// that never went through Plan and re-run the containment backstop there. The
+// ops are built without an Action on purpose — the zero value writes — so a
+// hand-built plan carrying an escaping zero-Action op must be refused exactly
+// like Plan refuses it, and a benign zero-Action op must reach the adapter as
+// an ActionWrite (there is no intake rewrite left to make it one).
+func TestApply_ZeroActionForCallerBuiltPlans(t *testing.T) {
 	planFor := func(op adapter.FileOp) render.RenderPlan {
 		return render.RenderPlan{PerAgent: map[string]render.AgentResult{
 			"claude": {Ops: []adapter.FileOp{op}},
 		}}
 	}
 	escaping := adapter.FileOp{
-		Action:        "", // documented write default — hand-built, never normalized by Plan
+		// No Action: the zero value writes — hand-built, never seen by Plan.
 		Path:          "../escape.md",
 		Content:       []byte("x"),
 		Mode:          0o644,
@@ -336,7 +338,7 @@ func TestApply_NormalizesEmptyActionForCallerBuiltPlans(t *testing.T) {
 		}},
 	}
 	for _, e := range entries {
-		t.Run(e.name+"/empty-Action traversal op is refused", func(t *testing.T) {
+		t.Run(e.name+"/zero-Action traversal op is refused", func(t *testing.T) {
 			a := &countingAdapter{Adapter: noop.New("claude")}
 			reg := adapter.NewRegistry()
 			if err := reg.Register(a); err != nil {
@@ -344,7 +346,7 @@ func TestApply_NormalizesEmptyActionForCallerBuiltPlans(t *testing.T) {
 			}
 			err := e.run(planFor(escaping), reg)
 			if err == nil {
-				t.Fatalf("%s accepted an empty-Action FileOp whose path escapes via '..'; want refusal", e.name)
+				t.Fatalf("%s accepted a zero-Action FileOp whose path escapes via '..'; want refusal", e.name)
 			}
 			if !strings.Contains(err.Error(), "escapes its destination") {
 				t.Errorf("error %q does not describe the containment failure", err.Error())
@@ -354,7 +356,7 @@ func TestApply_NormalizesEmptyActionForCallerBuiltPlans(t *testing.T) {
 			}
 		})
 	}
-	t.Run("benign empty Action reaches the adapter as write", func(t *testing.T) {
+	t.Run("benign zero Action reaches the adapter as ActionWrite", func(t *testing.T) {
 		a := &countingAdapter{Adapter: noop.New("claude")}
 		reg := adapter.NewRegistry()
 		if err := reg.Register(a); err != nil {
@@ -365,8 +367,8 @@ func TestApply_NormalizesEmptyActionForCallerBuiltPlans(t *testing.T) {
 		if _, _, _, err := render.Apply(planFor(benign), reg, state.New(), t.TempDir(), t.TempDir(), adapter.ScopeUser, ""); err != nil {
 			t.Fatal(err)
 		}
-		if len(a.ops) != 1 || a.ops[0].Action != "write" {
-			t.Fatalf("Apply must rewrite Action \"\" to \"write\" at intake, got %+v", a.ops)
+		if len(a.ops) != 1 || a.ops[0].Action != adapter.ActionWrite {
+			t.Fatalf("a zero-Action op must reach the adapter as ActionWrite, got %+v", a.ops)
 		}
 	})
 }
@@ -377,7 +379,7 @@ func TestPipeline_OwnedKeysInjected(t *testing.T) {
 	home := "/tmp/fake-root"
 	destPath := "/tmp/fake-root/.claude.json"
 	mergeOp := adapter.FileOp{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          destPath,
 		Content:       []byte(`{"mcpServers":{"github":{}}}`),
 		Mode:          0o644,

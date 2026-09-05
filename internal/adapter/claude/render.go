@@ -161,7 +161,7 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths, scope adapter.Scope) ([
 	}
 
 	return []adapter.FileOp{{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          dest,
 		Content:       append(body, '\n'),
 		Mode:          0o644,

@@ -64,7 +64,7 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, erro
 		return nil, fmt.Errorf("marshal cursor mcp: %w", err)
 	}
 	return []adapter.FileOp{{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          p.MCP,
 		Content:       append(body, '\n'),
 		Mode:          0o644,

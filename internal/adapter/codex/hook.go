@@ -94,7 +94,7 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 	// hook orphan-cleanup path is exercised directly in settings_test.go
 	// (TestMergeTOML_RemovesOrphanedHookKey). See adapter.FileOp.OwnedKeys.
 	return []adapter.FileOp{{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          p.Config,
 		Content:       append(body, '\n'),
 		Mode:          0o644,

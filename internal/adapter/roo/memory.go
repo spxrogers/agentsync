@@ -17,7 +17,7 @@ func (a *Adapter) renderMemory(c source.Canonical, p Paths) ([]adapter.FileOp, e
 	}
 	body := source.RenderManagedMemory(c.Memory.Body, c.Memory.Fragments, memoryRuleFile, c.Config.MemoryBannerEnabled())
 	return []adapter.FileOp{{
-		Action:        "write",
+		Action:        adapter.ActionWrite,
 		Path:          filepath.Join(p.RulesDir, memoryRuleFile),
 		Content:       []byte(body),
 		Mode:          0o644,

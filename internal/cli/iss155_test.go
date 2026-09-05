@@ -604,7 +604,44 @@ func TestApplyDryRun_CleanupOpNotCountedToWrite(t *testing.T) {
 	if !strings.Contains(dry, "1 removal op(s)") {
 		t.Fatalf("Plan headline should carry the removal-op partition; got:\n%s", dry)
 	}
-	if !strings.Contains(dry, "remove") {
-		t.Fatalf("the cleanup op should be listed with the remove label; got:\n%s", dry)
+	// Anchor the label check to the op's OWN line: the "Removals:" summary
+	// above also says "remove", so a bare Contains passed with the label wrong.
+	dest := filepath.Join(tmp, ".claude.json")
+	var opLine string
+	for _, line := range strings.Split(dry, "\n") {
+		if strings.HasSuffix(line, dest) {
+			opLine = line
+			break
+		}
+	}
+	if opLine == "" {
+		t.Fatalf("dry-run should list the cleanup op for %s; got:\n%s", dest, dry)
+	}
+	// Check the label part only: t.TempDir embeds this test's name in dest,
+	// and that name contains "Write".
+	label := strings.TrimSuffix(opLine, dest)
+	if !strings.Contains(label, " remove ") || strings.Contains(label, "write") || strings.Contains(label, "synced") {
+		t.Fatalf("the cleanup op's own line must carry the remove label, never write/synced; got %q in:\n%s", opLine, dry)
+	}
+	// The real apply reports the same op as a removal ONLY: "removed: 1
+	// key(s)" with no "applied:" partition, which is what removalCounts'
+	// appliedOps-- exists to produce (without it the headline reads
+	// "applied: 1 ops, removed: 1 key(s)" for a run that wrote nothing).
+	out, err := runCLI(t, env, "apply")
+	if err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	var headline string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "removed: 1 key(s)") {
+			headline = line
+			break
+		}
+	}
+	if headline == "" {
+		t.Fatalf("real apply should report the cleanup op under \"removed: 1 key(s)\"; got:\n%s", out)
+	}
+	if strings.Contains(headline, "applied") {
+		t.Fatalf("the removal-only headline must carry no applied partition; got %q in:\n%s", headline, out)
 	}
 }

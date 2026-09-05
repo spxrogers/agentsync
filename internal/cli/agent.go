@@ -700,7 +700,7 @@ func purgeAgentDests(cmd *cobra.Command, name, home string, sc adapter.Scope, pr
 				sharedKept++
 				continue
 			}
-			ops = append(ops, adapter.FileOp{Action: "delete", Path: paths.FromHomeRelative(userHome, p)})
+			ops = append(ops, adapter.FileOp{Action: adapter.ActionDelete, Path: paths.FromHomeRelative(userHome, p)})
 			deletedFiles++
 		}
 		// Pointer prunes for key-owned dests: an empty merge op carrying only
@@ -712,14 +712,7 @@ func purgeAgentDests(cmd *cobra.Command, name, home string, sc adapter.Scope, pr
 				if _, err := os.Stat(abs); err != nil {
 					continue // already gone; nothing to prune
 				}
-				ops = append(ops, adapter.FileOp{
-					Action:        "write",
-					Path:          abs,
-					Content:       []byte("{}"),
-					Mode:          0o644,
-					MergeStrategy: strat,
-					OwnedKeys:     ptrs,
-				})
+				ops = append(ops, adapter.NewCleanupOp(abs, strat, ptrs))
 				prunedFiles++
 			}
 		}

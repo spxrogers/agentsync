@@ -105,7 +105,7 @@ func (a *Adapter) renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, []ad
 			return nil, nil, fmt.Errorf("marshal continue mcp %s: %w", m.ID, err)
 		}
 		ops = append(ops, adapter.FileOp{
-			Action:        "write",
+			Action:        adapter.ActionWrite,
 			Path:          filepath.Join(p.MCPDir, m.ID+".yaml"),
 			Content:       body,
 			Mode:          0o644,
