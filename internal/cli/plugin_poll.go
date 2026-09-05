@@ -141,46 +141,12 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 	// Compute pending bumps.
 	bumps := marketplace.ComputePendingBumps(st, c.Marketplaces, c.Plugins, fetched, c.Config.Updates.DefaultMode)
 
-	// --lossless: drop bumps whose candidate version
-	// would introduce a new translation loss (an adapter Skip) for any enabled
-	// agent. Each bump is evaluated by projecting the plugin's installed vs
-	// candidate manifest and diffing the skip identities a render emits;
-	// comparing both under identical conditions makes any render quirk cancel, so
-	// the delta is exactly the bump's effect. An excluded bump is REPORTED, never
-	// silently dropped. Evaluation failures are excluded too (conservative), but
-	// reported as what they are rather than as measured losses.
+	// --lossless: partition the bumps and report every exclusion. See
+	// reportLosslessExclusions for what is measured and why the caveat is
+	// printed where it is.
 	var excluded int
 	if o.lossless {
-		safe, lossy, unevaluable := filterSafeBumps(home, bumps, fetched, c.Config, userHome, warnW)
-		for _, b := range lossy {
-			p.Infof("lossless: skipping lossy bump %s %s → %s (candidate version drops translation for an agent)",
-				b.ID, b.From, b.To)
-		}
-		// Printed ONCE for the whole run rather than per bump: the caveat is a
-		// property of the check, not of any one bump, and repeating it per line
-		// would bury the bumps it is meant to qualify.
-		//
-		// Gated on `lossy` alone, NOT on everything excluded: the caveat says the
-		// loss may fall on an agent this plugin is not projected to, and offers
-		// re-running without --lossless. Neither sentence is true of a bump that
-		// could not be evaluated — there is no identified loss and no agent — and
-		// telling that user to drop the flag would invert a refusal that exists
-		// precisely because nothing is known.
-		//
-		// Emitted between the two loops, not after both. Detailf is an UNLABELED
-		// continuation line that hangs under whatever diagnostic precedes it, so
-		// printing it last would render it attached to an unevaluable bump — the
-		// very misattribution the gate above exists to prevent. Gating and
-		// placement have to agree.
-		if len(lossy) > 0 {
-			p.Detailf("%s", losslessTargetingCaveat)
-		}
-		for _, b := range unevaluable {
-			p.Infof("lossless: skipping bump %s %s → %s (could not be evaluated; see the warning above)",
-				b.ID, b.From, b.To)
-		}
-		excluded = len(lossy) + len(unevaluable)
-		bumps = safe
+		bumps, excluded = reportLosslessExclusions(p, home, bumps, fetched, c.Config, userHome, warnW)
 	}
 
 	if len(bumps) == 0 {
@@ -235,6 +201,49 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 		return nil
 	}
 	return reapplyAfterPluginChange(cmd, home)
+}
+
+// reportLosslessExclusions is the `--lossless` gate of `plugin upgrade --all`:
+// it drops every bump whose candidate version would introduce a new
+// translation loss (an adapter Skip) for any enabled agent, and REPORTS each
+// exclusion — a dropped bump is never silent. Each bump is evaluated by
+// projecting the plugin's installed vs candidate manifest and diffing the skip
+// identities a render emits; comparing both under identical conditions makes
+// any render quirk cancel, so the delta is exactly the bump's effect. A bump
+// that cannot be evaluated is excluded too (conservative), but reported as
+// what it is rather than as a measured loss. Returns the safe bumps and how
+// many were excluded. filterSafeBumps decides; this function only announces.
+func reportLosslessExclusions(p *ui.Printer, home string, bumps []marketplace.Bump, fetched map[string]map[string]marketplace.PluginEntry, cfg source.Config, userHome string, warn io.Writer) (safe []marketplace.Bump, excluded int) {
+	var lossy, unevaluable []marketplace.Bump
+	safe, lossy, unevaluable = filterSafeBumps(home, bumps, fetched, cfg, userHome, warn)
+	for _, b := range lossy {
+		p.Infof("lossless: skipping lossy bump %s %s → %s (candidate version drops translation for an agent)",
+			b.ID, b.From, b.To)
+	}
+	// Printed ONCE for the whole run rather than per bump: the caveat is a
+	// property of the check, not of any one bump, and repeating it per line
+	// would bury the bumps it is meant to qualify.
+	//
+	// Gated on `lossy` alone, NOT on everything excluded: the caveat says the
+	// loss may fall on an agent this plugin is not projected to, and offers
+	// re-running without --lossless. Neither sentence is true of a bump that
+	// could not be evaluated — there is no identified loss and no agent — and
+	// telling that user to drop the flag would invert a refusal that exists
+	// precisely because nothing is known.
+	//
+	// Emitted between the two loops, not after both. Detailf is an UNLABELED
+	// continuation line that hangs under whatever diagnostic precedes it, so
+	// printing it last would render it attached to an unevaluable bump — the
+	// very misattribution the gate above exists to prevent. Gating and
+	// placement have to agree.
+	if len(lossy) > 0 {
+		p.Detailf("%s", losslessTargetingCaveat)
+	}
+	for _, b := range unevaluable {
+		p.Infof("lossless: skipping bump %s %s → %s (could not be evaluated; see the warning above)",
+			b.ID, b.From, b.To)
+	}
+	return safe, len(lossy) + len(unevaluable)
 }
 
 // reapplyAfterPluginChange re-renders the canonical to the agents after a
