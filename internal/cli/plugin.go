@@ -418,11 +418,12 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string, lossless bool) error {
 	}
 
 	// Parse marketplace name from the stored id "name@marketplace". The
-	// "default" sentinel (bare-id install) names no real marketplace — map it
-	// to "" so the entry is re-resolved by searching all caches, exactly like
-	// the original install.
+	// defaultMarketplace sentinel (bare-id install) names no real marketplace —
+	// map it to "" so the entry is re-resolved by searching all caches, exactly
+	// like the original install. This is the ONE inverse of recordedMarketplace:
+	// every other reader folds "" TO the sentinel; this site folds it back.
 	_, mpName := splitPluginRef(existing.Plugin.ID.Unverified())
-	if mpName == "default" {
+	if mpName == defaultMarketplace {
 		mpName = ""
 	}
 
@@ -734,15 +735,16 @@ func checkPluginRefMarketplace(existing pluginTOML, id, typedMP string) error {
 	if recorded == typedMP {
 		return nil
 	}
-	// A bare-id install records the "default" SENTINEL (resolveMarketplaceName:
-	// the marketplace was searched across all caches, not named). "default"
-	// identifies no real marketplace, so a typed qualifier can be neither
-	// confirmed nor contradicted — refuse like the no-record branch below with
-	// an honest message, rather than claiming the plugin was "installed from
-	// marketplace \"default\"" (a marketplace that doesn't exist; the update
-	// flow depends on the sentinel staying recorded as-is, so re-recording the
-	// resolved name at install is a bigger change than this guard should make).
-	if recorded == "" || recorded == "default" {
+	// A bare-id install records the defaultMarketplace SENTINEL
+	// (resolveMarketplaceName: the marketplace was searched across all caches,
+	// not named). It identifies no real marketplace, so a typed qualifier can
+	// be neither confirmed nor contradicted — refuse like the no-record branch
+	// below with an honest message, rather than claiming the plugin was
+	// "installed from marketplace \"default\"" (a marketplace that doesn't
+	// exist; the update flow depends on the sentinel staying recorded as-is, so
+	// re-recording the resolved name at install is a bigger change than this
+	// guard should make).
+	if recorded == "" || recorded == defaultMarketplace {
 		return fmt.Errorf("plugin %q was installed by bare id (its marketplace is not recorded), so the ref %q cannot be verified; use the bare id %q",
 			id, id+"@"+typedMP, id)
 	}
@@ -750,18 +752,38 @@ func checkPluginRefMarketplace(existing pluginTOML, id, typedMP string) error {
 		id, recorded, typedMP, id+"@"+recorded, id)
 }
 
-// resolveMarketplaceName returns the marketplace name, defaulting to "default"
-// if empty. NOTE: "default" is a SENTINEL, not a marketplace — but nothing
-// reserves the name, so a user-registered marketplace literally named
-// "default" is ambiguous with it (its qualified refs get the "installed by
-// bare id" refusal and its upgrades re-search all caches). Accepted residual:
-// reserving the name would break any existing marketplace so named, and the
-// all-caches search still resolves the right entry.
+// defaultMarketplace is the SENTINEL recorded in a plugin's stored id
+// ("<id>@default") when the plugin was installed by bare id, i.e. the
+// marketplace was searched across all caches rather than named. It identifies
+// no real marketplace. The one place that needs a real name again
+// (pluginUpgradeRun's re-resolve) maps it BACK to "" so the entry is searched
+// across all caches, exactly like the original install. Nothing reserves the
+// name, so a user-registered marketplace literally named "default" is
+// ambiguous with it (its qualified refs get the "installed by bare id" refusal
+// and its upgrades re-search all caches). Accepted residual: reserving the
+// name would break any existing marketplace so named, and the all-caches
+// search still resolves the right entry.
+const defaultMarketplace = "default"
+
+// resolveMarketplaceName returns the marketplace name, folding an empty one
+// to the defaultMarketplace sentinel.
 func resolveMarketplaceName(name string) string {
 	if name == "" {
-		return "default"
+		return defaultMarketplace
 	}
 	return name
+}
+
+// recordedMarketplace returns the marketplace a stored plugin id
+// ("<id>@<marketplace>") names, folding an unqualified id to the
+// defaultMarketplace sentinel. The sentinel names no marketplace and is never
+// a key of the poll engine's fetched index (plugin_poll.go keys it by real
+// marketplace names), so a bare-id install is invisible to `plugin outdated`
+// and `plugin upgrade --all` (#251). This helper only unifies the spelling of
+// splitPluginRef + the sentinel default; it does not make that lookup work.
+func recordedMarketplace(storedID string) string {
+	_, mpName := splitPluginRef(storedID)
+	return resolveMarketplaceName(mpName)
 }
 
 // pluginCacheDir returns the cache directory for a plugin. The id is

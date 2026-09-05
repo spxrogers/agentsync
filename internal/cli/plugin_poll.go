@@ -307,10 +307,7 @@ func computeFreshPluginSHAs(home string, plugins []source.Plugin, fetched map[st
 		// plID is the raw plugin id for filesystem/map use; pl.ID prints itself
 		// sanitized when used directly in the warnings below.
 		plID := pl.ID.Unverified()
-		_, mpName := splitPluginRef(pl.Plugin.ID.Unverified())
-		if mpName == "" {
-			mpName = "default"
-		}
+		mpName := recordedMarketplace(pl.Plugin.ID.Unverified())
 		entries, ok := fetched[mpName]
 		if !ok {
 			continue
@@ -373,10 +370,7 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 	}
 
 	// Find the marketplace entry for re-fetch.
-	_, mpName := splitPluginRef(existing.Plugin.ID.Unverified())
-	if mpName == "" {
-		mpName = "default"
-	}
+	mpName := recordedMarketplace(existing.Plugin.ID.Unverified())
 
 	entries, ok := fetched[mpName]
 	if !ok {
@@ -506,10 +500,7 @@ func bumpIsLossy(home string, b marketplace.Bump, fetched map[string]map[string]
 	if err != nil {
 		return false, err
 	}
-	_, mpName := splitPluginRef(existing.Plugin.ID.Unverified())
-	if mpName == "" {
-		mpName = "default"
-	}
+	mpName := recordedMarketplace(existing.Plugin.ID.Unverified())
 	entries, ok := fetched[mpName]
 	if !ok {
 		return false, fmt.Errorf("marketplace %q not in fetched index", mpName)
