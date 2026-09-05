@@ -507,13 +507,8 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string, lossless bool) error {
 
 	// Re-apply so the upgraded plugin's components reach the agents now. Same
 	// ending state as `plugin upgrade --all` — see the command's doc comment.
-	userHome := paths.HomeDir(paths.OSEnv{})
-	statePath := filepath.Join(home, ".state", "targets.json")
-	// State is loaded inside reapplyAfterPluginChange, AFTER it reloads the
-	// source: that reload can run the pending subagent migration, which rewrites
-	// recorded source_ids, and a copy read here would be stale and would undo
-	// the rewrite when saved.
-	return reapplyAfterPluginChange(cmd, home, userHome, statePath)
+	// Source AND state are loaded inside the pipeline, in that order.
+	return reapplyAfterPluginChange(cmd, home)
 }
 
 // ---- enable -----------------------------------------------------------------

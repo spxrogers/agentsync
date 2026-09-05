@@ -558,8 +558,8 @@ func saveBestEffortState(s *state.Targets, statePath string, plan render.RenderP
 // loadProjectedForScope loads the canonical model with plugin projection AND
 // the active project overlay applied, returning the merged canonical plus the
 // resolved scope and project root. Every project-scope-aware command (apply,
-// status, diff, reconcile, update re-apply) goes through it so they project and
-// overlay identically.
+// status, diff, reconcile, the `plugin upgrade` re-apply) goes through it so
+// they project and overlay identically.
 //
 // At project scope the project's own source tree (<root>/.agentsync/) is loaded
 // as a full canonical and overlaid onto the user canonical via project.Merge —

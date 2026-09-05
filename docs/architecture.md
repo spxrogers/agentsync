@@ -623,9 +623,10 @@ Key stages:
    foreign-collision backups (`internal/render`, `internal/iox`).
 8. **Record** new hashes in `targets.json` (`internal/state`) and print the
    translation report.
-9. **Git-backup** (issue #118) — for a user-scope apply, checkpoint each destination
-   **directory** into its own **local-only** git repo (`internal/cli/gitbackup.go`
-   → `internal/git`). The unit is the directory, not the agent: every enabled
+9. **Git-backup** (issue #118) — for a user-scope apply (including the apply at the
+   tail of `plugin upgrade`), checkpoint each destination **directory** into its
+   own **local-only** git repo (`internal/cli/gitbackup.go` → `internal/git`).
+   The unit is the directory, not the agent: every enabled
    adapter declares its version roots via the optional `adapter.VersionedDirs`
    extension (its config dir plus any shared cross-agent dir it writes — Codex and
    several breadth agents all target `~/.agents/skills`; OpenCode targets
@@ -669,6 +670,18 @@ Key stages:
 + convergence check, no disk write) so it can label each destination `✓ synced`
 vs `→ write` and preview foreign-collision backups, and prints the plan/report —
 all without writing a byte (and it skips the git-backup step 9 entirely).
+
+**One implementation.** The pipeline above lives in a single callable,
+`runApplyPipeline` (`internal/cli/apply.go`), and `apply` is not its only
+caller: the re-apply tail of `plugin upgrade` and `plugin upgrade --all`
+(`reapplyAfterPluginChange`) runs the same function with the default options —
+a real apply of every enabled agent, git backup on. It used to be a second,
+hand-maintained transcription of steps 1–7 and the state-recording half of
+step 8, and the copy had already fallen behind: no translation report (the rest
+of step 8), no pre-apply baseline or checkpoint (step 9), no removal-aware
+headline, no backup pruning. Every apply-side invariant added from here holds
+on the plugin path by construction
+([#231](https://github.com/spxrogers/agentsync/issues/231)).
 
 ---
 
