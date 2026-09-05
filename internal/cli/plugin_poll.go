@@ -141,46 +141,12 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 	// Compute pending bumps.
 	bumps := marketplace.ComputePendingBumps(st, c.Marketplaces, c.Plugins, fetched, c.Config.Updates.DefaultMode)
 
-	// --lossless: drop bumps whose candidate version
-	// would introduce a new translation loss (an adapter Skip) for any enabled
-	// agent. Each bump is evaluated by projecting the plugin's installed vs
-	// candidate manifest and diffing the skip identities a render emits;
-	// comparing both under identical conditions makes any render quirk cancel, so
-	// the delta is exactly the bump's effect. An excluded bump is REPORTED, never
-	// silently dropped. Evaluation failures are excluded too (conservative), but
-	// reported as what they are rather than as measured losses.
+	// --lossless: partition the bumps and report every exclusion. See
+	// reportLosslessExclusions for what is measured and why the caveat is
+	// printed where it is.
 	var excluded int
 	if o.lossless {
-		safe, lossy, unevaluable := filterSafeBumps(home, bumps, fetched, c.Config, userHome, warnW)
-		for _, b := range lossy {
-			p.Infof("lossless: skipping lossy bump %s %s → %s (candidate version drops translation for an agent)",
-				b.ID, b.From, b.To)
-		}
-		// Printed ONCE for the whole run rather than per bump: the caveat is a
-		// property of the check, not of any one bump, and repeating it per line
-		// would bury the bumps it is meant to qualify.
-		//
-		// Gated on `lossy` alone, NOT on everything excluded: the caveat says the
-		// loss may fall on an agent this plugin is not projected to, and offers
-		// re-running without --lossless. Neither sentence is true of a bump that
-		// could not be evaluated — there is no identified loss and no agent — and
-		// telling that user to drop the flag would invert a refusal that exists
-		// precisely because nothing is known.
-		//
-		// Emitted between the two loops, not after both. Detailf is an UNLABELED
-		// continuation line that hangs under whatever diagnostic precedes it, so
-		// printing it last would render it attached to an unevaluable bump — the
-		// very misattribution the gate above exists to prevent. Gating and
-		// placement have to agree.
-		if len(lossy) > 0 {
-			p.Detailf("%s", losslessTargetingCaveat)
-		}
-		for _, b := range unevaluable {
-			p.Infof("lossless: skipping bump %s %s → %s (could not be evaluated; see the warning above)",
-				b.ID, b.From, b.To)
-		}
-		excluded = len(lossy) + len(unevaluable)
-		bumps = safe
+		bumps, excluded = reportLosslessExclusions(p, home, bumps, fetched, c.Config, userHome, warnW)
 	}
 
 	if len(bumps) == 0 {
@@ -234,83 +200,83 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 	if len(bumps) == 0 {
 		return nil
 	}
-	return reapplyAfterPluginChange(cmd, home, userHome, statePath)
+	return reapplyAfterPluginChange(cmd, home)
+}
+
+// reportLosslessExclusions is the `--lossless` gate of `plugin upgrade --all`:
+// it drops every bump whose candidate version would introduce a new
+// translation loss (an adapter Skip) for any enabled agent, and REPORTS each
+// exclusion — a dropped bump is never silent. Each bump is evaluated by
+// projecting the plugin's installed vs candidate manifest and diffing the skip
+// identities a render emits; comparing both under identical conditions makes
+// any render quirk cancel, so the delta is exactly the bump's effect. A bump
+// that cannot be evaluated is excluded too (conservative), but reported as
+// what it is rather than as a measured loss. Returns the safe bumps and how
+// many were excluded. filterSafeBumps decides; this function only announces.
+func reportLosslessExclusions(p *ui.Printer, home string, bumps []marketplace.Bump, fetched map[string]map[string]marketplace.PluginEntry, cfg source.Config, userHome string, warn io.Writer) (safe []marketplace.Bump, excluded int) {
+	var lossy, unevaluable []marketplace.Bump
+	safe, lossy, unevaluable = filterSafeBumps(home, bumps, fetched, cfg, userHome, warn)
+	for _, b := range lossy {
+		p.Infof("lossless: skipping lossy bump %s %s → %s (candidate version drops translation for an agent)",
+			b.ID, b.From, b.To)
+	}
+	// Printed ONCE for the whole run rather than per bump: the caveat is a
+	// property of the check, not of any one bump, and repeating it per line
+	// would bury the bumps it is meant to qualify.
+	//
+	// Gated on `lossy` alone, NOT on everything excluded: the caveat says the
+	// loss may fall on an agent this plugin is not projected to, and offers
+	// re-running without --lossless. Neither sentence is true of a bump that
+	// could not be evaluated — there is no identified loss and no agent — and
+	// telling that user to drop the flag would invert a refusal that exists
+	// precisely because nothing is known.
+	//
+	// Emitted between the two loops, not after both. Detailf is an UNLABELED
+	// continuation line that hangs under whatever diagnostic precedes it, so
+	// printing it last would render it attached to an unevaluable bump — the
+	// very misattribution the gate above exists to prevent. Gating and
+	// placement have to agree.
+	if len(lossy) > 0 {
+		p.Detailf("%s", losslessTargetingCaveat)
+	}
+	for _, b := range unevaluable {
+		p.Infof("lossless: skipping bump %s %s → %s (could not be evaluated; see the warning above)",
+			b.ID, b.From, b.To)
+	}
+	return safe, len(lossy) + len(unevaluable)
 }
 
 // reapplyAfterPluginChange re-renders the canonical to the agents after a
 // plugin's pinned version changed, so a plugin upgrade lands in the agents in
 // the same command rather than leaving them stale until the next `apply`.
 //
-// It mirrors the apply pipeline deliberately: project-overlay merge, secret
-// substitution, scope-aware state recording. Without the overlay a
-// project-scope user would have their project state silently ignored, and
-// without substitution ${secret:…} references would land literally in agent
-// native files.
-// The state is loaded HERE, after the source load, and deliberately not passed
-// in by the caller. loadProjectedForScope can run the pending subagent
-// migration, which rewrites this tree's recorded source_id values in
-// targets.json — so a *state.Targets read before that call is stale the moment
-// it happens, and saving it at the end silently undoes the rewrite. That was
-// reachable via `plugin upgrade <id>` on an unmigrated tree; it used to fail
-// loudly on a lock deadlock instead, which hid it.
-func reapplyAfterPluginChange(cmd *cobra.Command, home, userHome, statePath string) error {
-	c2, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, false)
-	if err != nil {
-		return fmt.Errorf("reload source after upgrade: %w", err)
+// It runs the REAL apply pipeline — runApplyPipeline, the same callable `apply`
+// runs — rather than a transcription of it. The previous copy had already
+// fallen behind: it took no pre-apply git baseline and no checkpoint
+// (#118/#143), so an upgrade overwrote ~/.claude with nothing for `agentsync
+// revert` to undo; it printed an unconditional "applied: N ops" instead of the
+// removal-aware headline; it never pruned the collision backups; and it
+// printed no translation report, which is what tells the user whether the new
+// version still translates (#231).
+//
+// applyOpts{} is the right zero: the plugin commands define none of `apply`'s
+// three flags (--dry-run, --no-git-backup, --agents), so the re-apply is a
+// real apply of every enabled agent, with git backup governed by
+// [destination_directory_git_backup] exactly as it is for `apply`.
+//
+// State is loaded INSIDE the pipeline, after the source reload, and
+// deliberately not passed in by the caller. loadProjectedForScope can run the
+// pending subagent migration, which rewrites this tree's recorded source_id
+// values in targets.json — so a *state.Targets read before that call is stale
+// the moment it happens, and saving it at the end silently undoes the rewrite.
+// That was reachable via `plugin upgrade <id>` on an unmigrated tree; it used
+// to fail loudly on a lock deadlock instead, which hid it. The ordering is
+// pinned by TestApplyPipelineLoadsStateAfterSourceReload, whose second half
+// also requires this function to stay a delegation.
+func reapplyAfterPluginChange(cmd *cobra.Command, home string) error {
+	if err := runApplyPipeline(cmd, home, applyOpts{}); err != nil {
+		return fmt.Errorf("re-apply after plugin upgrade: %w", err)
 	}
-
-	st, err := state.Load(statePath)
-	if err != nil {
-		return fmt.Errorf("load state after upgrade: %w", err)
-	}
-
-	secBackend := secrets.SelectBackend(c2.Config.Secrets, home, userHome)
-	envBackend := secrets.EnvBackend{}
-	resolved, serr := secrets.SubstituteCanonical(c2, secBackend, envBackend)
-	if serr != nil {
-		return fmt.Errorf("substitute secrets after upgrade: %w", serr)
-	}
-
-	agents := []string{}
-	for name, ag := range c2.Config.Agents {
-		if ag.Enabled {
-			agents = append(agents, name)
-		}
-	}
-	reg := registryFactory()
-	plan, err := render.Plan(resolved, reg, agents, sc, projectRoot, st, userHome)
-	if err != nil {
-		return fmt.Errorf("plan after upgrade: %w", err)
-	}
-	collisions, written, _, applyErr := render.Apply(plan, reg, st, home, userHome, sc, projectRoot)
-	if applyErr != nil {
-		// Mirror `apply`: if render.Apply fails mid-pipeline, the files
-		// that already landed must be recorded so the next apply doesn't
-		// treat them as foreign collisions. Without this best-effort save,
-		// a half-applied bump leaves the dest diverged from state.
-		_ = saveBestEffortState(st, statePath, plan, userHome, sc, projectRoot, written)
-		return fmt.Errorf("apply after upgrade: %w", applyErr)
-	}
-	if len(collisions) > 0 {
-		ew := cmd.ErrOrStderr()
-		ep := printerOn(cmd, ew)
-		ep.Warnf("plugin upgrade backed up %d pre-existing target(s):", len(collisions))
-		for _, r := range collisions {
-			ep.Fdetailf(ew, "%s", r.String())
-		}
-	}
-	for name, res := range plan.PerAgent {
-		render.PruneStaleState(st, userHome, name, sc, projectRoot, res.Ops)
-	}
-	for name, res := range plan.PerAgent {
-		if err := render.RecordOpsState(st, userHome, name, sc, projectRoot, res.Ops); err != nil {
-			return err
-		}
-	}
-	if err := state.Save(statePath, st); err != nil {
-		return err
-	}
-	printerOn(cmd, cmd.OutOrStdout()).Successf(ui.EmojiApplied, "applied: %d ops", plan.Total())
 	return nil
 }
 
@@ -341,10 +307,7 @@ func computeFreshPluginSHAs(home string, plugins []source.Plugin, fetched map[st
 		// plID is the raw plugin id for filesystem/map use; pl.ID prints itself
 		// sanitized when used directly in the warnings below.
 		plID := pl.ID.Unverified()
-		_, mpName := splitPluginRef(pl.Plugin.ID.Unverified())
-		if mpName == "" {
-			mpName = "default"
-		}
+		mpName := recordedMarketplace(pl.Plugin.ID.Unverified())
 		entries, ok := fetched[mpName]
 		if !ok {
 			continue
@@ -407,10 +370,7 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 	}
 
 	// Find the marketplace entry for re-fetch.
-	_, mpName := splitPluginRef(existing.Plugin.ID.Unverified())
-	if mpName == "" {
-		mpName = "default"
-	}
+	mpName := recordedMarketplace(existing.Plugin.ID.Unverified())
 
 	entries, ok := fetched[mpName]
 	if !ok {
@@ -540,10 +500,7 @@ func bumpIsLossy(home string, b marketplace.Bump, fetched map[string]map[string]
 	if err != nil {
 		return false, err
 	}
-	_, mpName := splitPluginRef(existing.Plugin.ID.Unverified())
-	if mpName == "" {
-		mpName = "default"
-	}
+	mpName := recordedMarketplace(existing.Plugin.ID.Unverified())
 	entries, ok := fetched[mpName]
 	if !ok {
 		return false, fmt.Errorf("marketplace %q not in fetched index", mpName)

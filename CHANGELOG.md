@@ -222,6 +222,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   The user guide, the daily-loop guide and the CLI reference said the same
   wrong thing and are corrected with it.
 
+- **`plugin upgrade` now git-backs-up the destinations it overwrites**
+  ([#231](https://github.com/spxrogers/agentsync/issues/231)). Both upgrade
+  forms end in a re-apply that writes user-scope destination dirs, but that
+  re-apply was a second copy of the apply pipeline with no
+  `[destination_directory_git_backup]` pass at all — so an upgrade overwrote
+  `~/.claude`, `~/.codex`, … with **no pre-apply baseline and no checkpoint**,
+  and `agentsync revert` could not undo it. The re-apply is now `apply` itself,
+  so the baseline/checkpoint (and the mode/prompt/`--no-input` policy) apply
+  identically.
+
 ### Changed
 
 - **`status --json`, `diff` and `reconcile` now list a shared file's merged keys
@@ -234,6 +244,22 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   reclassified; only the order changes — but a `status --json` diffed between
   runs, or a `reconcile` transcript compared against a previous one, will be
   stable for the first time. `explain` already sorted and is unchanged.
+
+- **`plugin upgrade` prints what `apply` prints**
+  ([#231](https://github.com/spxrogers/agentsync/issues/231)). Its re-apply now
+  goes through the one apply pipeline, so it announces the effective scope,
+  reports removals honestly (an upgrade that re-renders identical bytes says
+  `up to date: N ops, no changes` instead of claiming `applied: N ops`), warns
+  and exits 0 when no agents are enabled instead of printing `applied: 0 ops`,
+  prunes old collision backups, and prints the per-plugin translation report —
+  which is what tells you whether the new version still translates. Two strings
+  changed with it: the foreign-collision warning is now apply's wording, and the
+  five `… after upgrade:` error prefixes collapse into one
+  `re-apply after plugin upgrade:`. Under the default
+  `[destination_directory_git_backup] mode = "prompt"`, an unattended run
+  (cron, `--no-input`, no TTY) also prints apply's git-backup hint and its
+  `could not take a pre-apply baseline` warning on every run until the mode is
+  set to `on` or `off` — the same two lines an unattended `apply` prints.
 
 - **Internal: `status`, `diff`, `reconcile` and `explain` now share one
   plan→drift walk** ([#229](https://github.com/spxrogers/agentsync/issues/229)).

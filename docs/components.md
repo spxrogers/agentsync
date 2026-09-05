@@ -45,7 +45,11 @@ Wires every cobra subcommand into the root tree and dispatches to handlers; this
 is the only package that depends on nearly all the others.
 - **Key:** `NewRoot() *cobra.Command`, `Execute() int` (returns the process exit
   code and owns the terminal `✗ ERROR` line), `Version`/`Commit`/`Date`;
-  `walkPlanItems` — the single plan→state→destination drift walk behind
+  `runApplyPipeline` — the single apply pipeline (load-projected → resolve
+  secrets → plan → git baseline → write → record state → checkpoint → report),
+  shared by `apply` and the re-apply tail of `plugin upgrade` so the two cannot
+  diverge (#231); its `applyOpts` zero value is a real, all-agents, git-backed
+  apply; `walkPlanItems` — the single plan→state→destination drift walk behind
   `status`, `diff`, `reconcile` and `explain` (`planwalk.go`); its `planItem` is
   deliberately unexported field-for-field so it can never become a `--json`
   surface, because a plan built from `secrets.SubstituteCanonical` carries

@@ -271,10 +271,11 @@ instead lists each one as left unresolved, so it works as a non-interactive
 
 `apply` can keep each user-scope destination dir (`~/.claude`, `~/.codex`, …) in
 its **own local-only git repo**, recording a checkpoint commit after every apply
-that changes managed files there. **Even the first apply is revertible:** before
-that apply overwrites the dir, agentsync records a **pre-apply baseline** commit of
-the prior content of the files it is about to manage, so the apply checkpoint's parent
-is the genuine pre-apply state — there is no "the first apply can't be undone" gap.
+that changes managed files there — including the apply that ends a `plugin
+upgrade`. **Even the first apply is revertible:** before that apply overwrites the
+dir, agentsync records a **pre-apply baseline** commit of the prior content of the
+files it is about to manage, so the apply checkpoint's parent is the genuine
+pre-apply state — there is no "the first apply can't be undone" gap.
 Pre-existing files agentsync did **not** write (an agent's credentials, conversation
 transcripts, your own scratch files) are deliberately left **out** of the versioned
 history so it never becomes a durable copy of your secrets — they are untracked, so a
@@ -867,8 +868,10 @@ agentsync plugin upgrade --all --lossless      # same, skipping bumps that would
 agentsync plugin upgrade atlassian             # re-fetch one plugin, then re-apply
 ```
 
-Both `upgrade` forms end in a re-apply, so an upgrade lands in your agents in one
-command rather than leaving them stale until the next `apply`.
+Both `upgrade` forms end in a re-apply — and the re-apply **is** `apply`: same
+scope resolution, same destination git backup, same removal counts and
+translation report — so an upgrade lands in your agents in one command rather
+than leaving them stale until the next `apply`.
 
 `plugin outdated` is not a pure read despite the `npm outdated` prior: it uses
 the network and it writes state (each marketplace's fetch timestamp and head
@@ -882,7 +885,10 @@ fetch. It is simply the one the daily loop runs.
 
 Want nightly refreshes? agentsync ships no daemon — wire
 `agentsync plugin upgrade --all --lossless` into your own cron / launchd /
-systemd / Task Scheduler.
+systemd / Task Scheduler. Because the upgrade's re-apply is `apply`, an
+unattended run under the default `prompt` git-backup mode prints the same hint
+and baseline warning `apply` does; set `[destination_directory_git_backup] mode`
+to `on` (or `off`) to silence it.
 
 ---
 
@@ -988,7 +994,7 @@ Beta surface. `agentsync <command> --help` is always authoritative.
 | `migrate subagents` | One-shot move of the retired canonical `agents/` directory to `subagents/`, rewriting that tree's recorded `source_id` values. Run once per tree (`--scope project` / `--project <path>` for a project tree). Refuses, listing the names, if a file exists under both directories. | `--scope --project` |
 | `mcp add\|remove\|list\|enable\|disable <name>` | Manage MCP servers. `enable`/`disable` flip the server's `enabled` bit — keeping the definition but stopping the render (`remove` deletes it). `--header "Name: Value"` (repeatable, http/sse only) sets request headers — the usual remote-auth secret site, e.g. `--header "Authorization: Bearer ${secret:TOKEN}"`. | `--type --command --args --url --env --agents --header` |
 | `marketplace add\|remove\|list <url-or-name>` | Manage marketplaces. | |
-| `plugin add\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` / `outdated` / `explain` | Manage plugins (the lifecycle subcommands all accept the same `id[@marketplace]` ref `add` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). `outdated` **(network)** polls the marketplaces and reports pending bumps — it also writes each marketplace's fetch timestamp + head SHA to state. `upgrade` **(network)** re-fetches one plugin, or with `--all` every plugin with a pending bump, and **re-applies** in both cases; `--lossless` skips an upgrade that would introduce a new translation loss, reporting it. `explain` shows per-agent translation coverage. | `outdated` · `upgrade [<id>] --all --lossless --scope --project` · `explain [<id>...] --all --json` |
+| `plugin add\|upgrade\|enable\|disable\|remove <id[@marketplace]>` / `list` / `outdated` / `explain` | Manage plugins (the lifecycle subcommands all accept the same `id[@marketplace]` ref `add` accepts; the bare id also works, and a qualifier naming a different marketplace than the one the plugin was installed from is refused). `outdated` **(network)** polls the marketplaces and reports pending bumps — it also writes each marketplace's fetch timestamp + head SHA to state. `upgrade` **(network)** re-fetches one plugin, or with `--all` every plugin with a pending bump, and **runs the full `apply`** in both cases (git backup, removal counts and translation report included); `--lossless` skips an upgrade that would introduce a new translation loss, reporting it. `explain` shows per-agent translation coverage. | `outdated` · `upgrade [<id>] --all --lossless --scope --project` · `explain [<id>...] --all --json` |
 | `secret set\|get\|list\|remove <key>` / `secret edit` | Manage age-encrypted secrets (`list` prints KEYS only; `edit` opens the whole vault, no `<key>`; `set` refuses an empty value unless `--allow-empty`). All five require `[secrets].backend = "age"` (matched case-insensitively, exactly as `apply` matches it) and `[secrets].identity_file`; the three that re-encrypt — `set`, `edit`, `remove` — additionally require `[secrets].recipient`. | `set --stdin` |
 | `apply` | Render source → write agent configs (offline). Git-versions each user-scope destination dir into a local-only repo (opt-out) so a bad apply is revertible. A delete-only run (a component removed from source) reports `removed: N key(s), M file(s)` — key-removals and file-deletes counted distinctly — and a mixed run `applied: X ops, removed: …`, rather than mislabeling itself `up to date`/`applied: 0 ops`; `--dry-run` previews the same removal counts. | `--agents --dry-run --scope --project --no-git-backup` |
 | `revert <agent>` | Roll a destination dir back to a prior apply checkpoint (append-only). Default undoes the most recent apply; prints an out-of-sync notice. `--to` must name one of the dir's own checkpoints (the current one or an ancestor) — anything else is refused. A dir under which a foreign git repo has appeared (or that isn't an agentsync-managed backup) is an **error** when you name the agent, and a **skip with a warning** under `--all` — strictness follows the invocation; there is no `--strict` flag. | `--agents --to --all --dry-run` |

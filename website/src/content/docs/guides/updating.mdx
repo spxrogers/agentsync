@@ -19,8 +19,10 @@ agentsync plugin upgrade --all --lossless    # same, skipping bumps that would l
 agentsync plugin upgrade atlassian           # re-fetch one plugin, then re-apply
 ```
 
-Both `upgrade` forms end in a re-apply, so an upgrade reaches your agents in one
-command instead of leaving them stale until the next `apply`.
+Both `upgrade` forms end in a re-apply — and the re-apply **is** `apply`: same
+scope resolution, same destination git backup, same removal counts and
+translation report — so an upgrade reaches your agents in one command instead
+of leaving them stale until the next `apply`.
 
 <Aside type="caution" title="The top-level `update` command is gone">
 	It was removed outright in v0.11.0, with **no alias** — a cron line still
@@ -65,6 +67,10 @@ your own scheduler:
 ```bash
 agentsync plugin upgrade --all --lossless
 ```
+
+Because the upgrade's re-apply is `apply`, an unattended run under the default
+`prompt` git-backup mode prints the same hint and baseline warning `apply` does;
+set `[destination_directory_git_backup] mode` to `on` (or `off`) to silence it.
 
 | Platform | Mechanism |
 | --- | --- |

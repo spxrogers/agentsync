@@ -34,15 +34,16 @@ func newApplyCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := paths.AgentsyncHome(paths.OSEnv{})
+			o := applyOpts{dryRun: dryRun, noGitBackup: noGitBackup, agentsCSV: agentsCSV}
 			// Dry-run is read-only — it touches neither destinations nor
 			// state. Acquiring the global lock would needlessly block
 			// concurrent `status` / `diff` / other dry-runs behind a long
 			// real apply.
 			if dryRun {
-				return applyRun(cmd, home, dryRun, noGitBackup, agentsCSV)
+				return runApplyPipeline(cmd, home, o)
 			}
 			return withGlobalLock(home, func() error {
-				return applyRun(cmd, home, dryRun, noGitBackup, agentsCSV)
+				return runApplyPipeline(cmd, home, o)
 			})
 		},
 	}
@@ -65,9 +66,44 @@ func noAgentsEnabledHint(sc adapter.Scope, projectRoot string) string {
 	return "no agents enabled; run `agentsync agent add claude` (or opencode)"
 }
 
-// applyRun is the lock-protected body of the apply command. It is split
-// out from newApplyCmd so the lock acquisition lives in one obvious place.
-func applyRun(cmd *cobra.Command, home string, dryRun, noGitBackup bool, agentsCSV string) error {
+// applyOpts carries the per-run knobs of the apply pipeline. The ZERO VALUE is
+// a plain real apply of every enabled agent with destination git backup on —
+// which is exactly what a caller that is not the `apply` command wants. The
+// three fields are exactly `apply`'s three flags and nothing else: a behaviour
+// gate added here would recreate, one field at a time, the divergence #231
+// closed. Anything a caller wants to say differently is said at the call site,
+// before or after the call.
+type applyOpts struct {
+	// dryRun is `apply --dry-run`: compute and print the plan, write nothing,
+	// skip the git backup.
+	dryRun bool
+	// noGitBackup is `apply --no-git-backup`: skip the destination git
+	// baseline/checkpoint for this run only.
+	noGitBackup bool
+	// agentsCSV is the raw `--agents` value. selectAgents consults it only when
+	// the CALLING command reports cmd.Flags().Changed("agents") — the one
+	// non-persistent flag the pipeline reads (every other cmd read inside is a
+	// root persistent flag: --color, --scope, --project, --no-input). pflag
+	// answers false for a flag the command never registered, so a caller whose
+	// command does not define `--agents` gets every enabled agent whatever this
+	// holds (pinned by TestPluginUpgrade_RendersEveryEnabledAgent). The residual
+	// is a caller whose command defines a same-named `--agents` with a
+	// DIFFERENT meaning (`mcp add --agents`): it must pass an explicit
+	// agentsCSV rather than rely on the flag being absent.
+	agentsCSV string
+}
+
+// runApplyPipeline is the apply pipeline — load-projected source → resolve
+// secrets → plan → git baseline → write → record state → checkpoint → report —
+// and the lock-protected body of the apply command. It is split out from
+// newApplyCmd so the lock acquisition lives in one obvious place, and it is
+// called by BOTH `apply` and the re-apply tail of `plugin upgrade`
+// (reapplyAfterPluginChange) so the two cannot diverge: the second copy had
+// already lost the pre-apply baseline and checkpoint (#118/#143), the
+// removal-aware headline, the backup pruning and the translation report
+// (#231). home is the agentsync home; the printer, scope, secrets backend and
+// state path are all derived inside, so a caller cannot hand in a stale one.
+func runApplyPipeline(cmd *cobra.Command, home string, o applyOpts) error {
 	p, err := newPrinter(cmd)
 	if err != nil {
 		return err
@@ -108,7 +144,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun, noGitBackup bool, agentsC
 	// status/diff use (#200 F10). Applied after the enabled set is built, so an
 	// unknown or disabled name is rejected rather than silently rendering nothing.
 	if len(agents) > 0 {
-		sel, aerr := selectAgents(cmd, agents, enabled, agentsCSV)
+		sel, aerr := selectAgents(cmd, agents, enabled, o.agentsCSV)
 		if aerr != nil {
 			return aerr
 		}
@@ -139,7 +175,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun, noGitBackup bool, agentsC
 		return err
 	}
 
-	if dryRun {
+	if o.dryRun {
 		plan, err := render.Plan(resolved, reg, agents, sc, projectRoot, s, userHome)
 		if err != nil {
 			return err
@@ -228,7 +264,7 @@ func applyRun(cmd *cobra.Command, home string, dryRun, noGitBackup bool, agentsC
 	// checkpoint below so a fresh dir is inited/prompted exactly once. Best-effort with
 	// a loud warning — a baseline failure never aborts the apply (honors
 	// --no-git-backup / mode=off / project scope / a declined prompt, all as nil).
-	gb := newGitBackupSession(cmd, p, reg, agents, sc, projectRoot, home, c.Config.DestinationGitBackup, noGitBackup)
+	gb := newGitBackupSession(cmd, p, reg, agents, sc, projectRoot, home, c.Config.DestinationGitBackup, o.noGitBackup)
 	gb.baseline(baselinePaths(plan, s, userHome, sc, projectRoot))
 
 	collisions, written, unchanged, applyErr := render.Apply(plan, reg, s, home, userHome, sc, projectRoot)
@@ -522,8 +558,8 @@ func saveBestEffortState(s *state.Targets, statePath string, plan render.RenderP
 // loadProjectedForScope loads the canonical model with plugin projection AND
 // the active project overlay applied, returning the merged canonical plus the
 // resolved scope and project root. Every project-scope-aware command (apply,
-// status, diff, reconcile, update re-apply) goes through it so they project and
-// overlay identically.
+// status, diff, reconcile, the `plugin upgrade` re-apply) goes through it so
+// they project and overlay identically.
 //
 // At project scope the project's own source tree (<root>/.agentsync/) is loaded
 // as a full canonical and overlaid onto the user canonical via project.Merge —
