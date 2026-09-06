@@ -1337,6 +1337,11 @@ func TestPlugin_BareIDInstallSentinelQualifierHonest(t *testing.T) {
 	if out, err := runCLI(t, env, "plugin", "disable", "demo"); err != nil {
 		t.Fatalf("bare-id disable: %v\n%s", err, out)
 	}
+	// The recorded id carries the sentinel ON DISK — `demo@default`, never a
+	// bare `demo@` — which is what every later reader folds back from.
+	if raw, _ := readFileString(t, filepath.Join(tmp, ".agentsync", "plugins", "demo.toml")); !strings.Contains(raw, "demo@default") {
+		t.Fatalf("bare-id install must record the @default sentinel; got:\n%s", raw)
+	}
 	p := readPluginTOMLFixture(t, filepath.Join(tmp, ".agentsync", "plugins", "demo.toml"))
 	if !p.Plugin.Disabled {
 		t.Fatal("bare-id disable should have set disabled=true")

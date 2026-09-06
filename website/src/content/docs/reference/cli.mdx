@@ -386,7 +386,8 @@ manifest SHA and warns on a same-version re-upload. Full guide:
 
 ### `plugin upgrade [<id>] --all --lossless`
 **(network)** Re-fetches a plugin, updates its recorded version + manifest sha,
-and **re-applies** so the upgrade reaches your agents in the same command.
+and **runs the full `apply`** (git backup, removal counts, translation report)
+so the upgrade reaches your agents in the same command.
 `--all` first polls every marketplace (like `plugin outdated`), then upgrades
 every plugin with a pending bump and re-applies once. `--lossless` only upgrades
 when the candidate version introduces no *new* translation loss (an adapter

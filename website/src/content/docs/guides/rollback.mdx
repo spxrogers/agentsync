@@ -14,8 +14,9 @@ with `agentsync revert` — no manual git surgery, no lost work.
 
 ## The backup: what `apply` versions
 
-After a successful user-scope apply that changes managed files, `apply` commits a
-checkpoint to each affected destination dir's local repo. **Even the first apply is
+After a successful user-scope apply that changes managed files — including the
+apply at the end of `plugin upgrade` — `apply` commits a checkpoint to each
+affected destination dir's local repo. **Even the first apply is
 revertible:** before that apply overwrites the dir, agentsync records a **pre-apply
 baseline** commit of the prior content of the files it is about to manage, so the
 apply checkpoint's parent is the genuine pre-apply state — there is no "the first

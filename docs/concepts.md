@@ -261,7 +261,7 @@ plugin manager. These are deliberate outcomes, so they are never rendered in the
 ### Polling (the networked verb of the daily loop)
 `agentsync plugin outdated` is the command that touches the network in the daily
 loop: it polls marketplaces, refreshes the cache, and recomputes version pins.
-`agentsync plugin upgrade --all` then re-pins every pending bump and re-applies.
+`agentsync plugin upgrade --all` then re-pins every pending bump and runs the full `apply`.
 `apply` itself runs entirely from cache — the split keeps it fast, reproducible,
 and offline-safe. It is not the only networked command (`plugin add`,
 `marketplace add`, `import <agent>:plugin`, and `init <git-url>` all fetch), just
@@ -283,7 +283,7 @@ the one the loop runs.
                                                   (dest ▶ source capture)
 
    agentsync plugin outdated ─network─▶ refresh marketplace cache & pins
-   agentsync plugin upgrade --all      re-pin pending bumps, then re-apply
+   agentsync plugin upgrade --all      re-pin pending bumps, then run apply
                                        (plain apply renders from cache, offline)
 ```
 
