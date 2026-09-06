@@ -9,9 +9,8 @@ import { Aside, LinkCard } from '@astrojs/starlight/components';
 
 `apply` can keep each user-scope destination dir (`~/.claude`, `~/.codex`, …) in
 its **own local-only git repo**, recording a checkpoint commit after every apply
-that changes managed files there (including the apply at the end of `plugin
-upgrade`). If an apply ever goes wrong, you roll it back with `agentsync revert`
-— no manual git surgery, no lost work.
+that changes managed files there. If an apply ever goes wrong, you roll it back
+with `agentsync revert` — no manual git surgery, no lost work.
 
 ## The backup: what `apply` versions
 

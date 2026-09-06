@@ -11,7 +11,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/render"
 )
 
-// pluginReapplyFixture builds the home the two tests below share: an inited
+// pluginReapplyFixture builds the home the tests below share: an inited
 // agentsync home with the named agents enabled, a SOURCE skill, and the
 // versioned fixture marketplace with its `demo` plugin installed. It
 // deliberately does NOT run `apply`: the first write into the destinations

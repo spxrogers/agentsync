@@ -55,7 +55,7 @@ func TestPluginOutdated_ReportsPendingBumps(t *testing.T) {
 // the pipeline reports that as `up to date: N ops, no changes` rather than the
 // old copy's unconditional `applied: N ops` for a run that wrote nothing.
 // The fixture's bump is version-only, so that headline is deterministic and
-// is asserted exactly — it is the user-visible change this PR ships — and the
+// is asserted by its prefix — it is the user-visible change this PR ships — and the
 // per-plugin translation report (`plugin: demo@test-mp-v`), which only the
 // real pipeline emits, is required too, so a re-divergence into a hand-rolled
 // re-apply cannot fake either.
@@ -85,7 +85,7 @@ func TestPluginUpgradeAll_UpgradesAndReapplies(t *testing.T) {
 		t.Fatalf("plugin upgrade --all must re-apply through the pipeline, whose headline for a version-only bump is `up to date`; got:\n%s", out)
 	}
 	if !strings.Contains(out, "plugin: demo@test-mp-v") {
-		t.Fatalf("plugin upgrade --all must end in the real apply pipeline (no translation report); got:\n%s", out)
+		t.Fatalf("plugin upgrade --all must end in the real apply pipeline (the translation report is missing); got:\n%s", out)
 	}
 	// The re-applied render must still verify on a follow-up apply.
 	if out2, err2 := runCLI(t, env, "apply"); err2 != nil {
@@ -99,7 +99,7 @@ func TestPluginUpgradeAll_UpgradesAndReapplies(t *testing.T) {
 //
 // As for --all above, that re-apply is the real apply pipeline (#231): a
 // version-only bump re-renders identical bytes and is reported honestly as
-// `up to date: N ops, no changes`, never `applied: N ops` — asserted exactly —
+// `up to date: N ops, no changes`, never `applied: N ops` — asserted by its prefix —
 // and the translation report (`plugin: demo@test-mp-v`), which only the real
 // pipeline emits, is required as the second positive signal.
 func TestPluginUpgradeID_Reapplies(t *testing.T) {
@@ -127,7 +127,7 @@ func TestPluginUpgradeID_Reapplies(t *testing.T) {
 		t.Fatalf("plugin upgrade <id> must re-apply through the pipeline, whose headline for a version-only bump is `up to date`; got:\n%s", out)
 	}
 	if !strings.Contains(out, "plugin: demo@test-mp-v") {
-		t.Fatalf("plugin upgrade <id> must end in the real apply pipeline (no translation report); got:\n%s", out)
+		t.Fatalf("plugin upgrade <id> must end in the real apply pipeline (the translation report is missing); got:\n%s", out)
 	}
 	demoTOML, _ := readFileString(t, filepath.Join(tmp, ".agentsync", "plugins", "demo.toml"))
 	if !strings.Contains(demoTOML, "1.0.1") {

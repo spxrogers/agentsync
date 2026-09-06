@@ -765,9 +765,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
   - **`plugin upgrade` now re-applies, in BOTH forms.** `--all` carries over
     `update --apply`'s complete re-apply (scope resolution, secret
-    substitution, plan/apply, state recording), so it kept `update --apply`'s
+    substitution, plan/apply, state recording), so it keeps `update --apply`'s
     ending state; #231 above then made that re-apply `apply`'s own pipeline,
-    which prints more. The single-id `plugin upgrade <id>` gains that
+    which prints more and — see Fixed, above — git-backs-up the destinations
+    it overwrites. The single-id `plugin upgrade <id>` gains that
     same re-apply — a **behavior change**: it used to re-fetch and leave your
     agents stale until the next `apply`. One verb, one ending state.
   - **`--auto-safe` became `--lossless` on the plugin side**, because the name
@@ -850,8 +851,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   "re-apply".** Both `upgrade` forms genuinely run the full apply pipeline
   (`render.Plan` + `render.Apply`, honoring `--scope`/`--project`; since #231
   above, the one `apply` itself runs) — but in the `agentsync plugin` command
-  list, "and re-apply" read as loose jargon rather
-  than as "runs `agentsync apply`", so the one behavior a reader most needs to
+  list, "and re-apply" read as loose jargon rather than as "runs
+  `agentsync apply`", so the one behavior a reader most needs to
   know about the command — that it writes to your agents' native config, not
   just to the plugin cache — was the one the summary buried. Reworded to "and
   run apply" (and matched in the website CLI reference table). Behavior is

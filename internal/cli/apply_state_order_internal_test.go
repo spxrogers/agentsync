@@ -58,14 +58,15 @@ func TestApplyPipelineLoadsStateAfterSourceReload(t *testing.T) {
 		}
 		// funcBody stops at the first line that is just "}", so a raw string
 		// literal with a column-0 brace inside the function would silently
-		// shrink the text under test. BuildReport is the pipeline's last call
-		// (the translation report, after the checkpoint and the headline): if it
-		// is not in the captured body, the capture is truncated somewhere above
-		// it — which is also above every call this guard asserts on.
-		if !strings.Contains(body, "BuildReport(") {
-			t.Fatal("funcBody captured a truncated runApplyPipeline (BuildReport( is missing). Either a " +
-				"column-0 '}' inside the function cut the capture short (fix funcBody or the function), " +
-				"or BuildReport moved or was renamed — then pick another needle that sits after state.Load(")
+		// shrink the text under test. A complete capture ends with the
+		// function's own final statement — its top-level `return nil`, indented
+		// one tab — so anything else at the end means the capture was cut short
+		// somewhere, possibly below the calls this guard asserts on.
+		if !strings.HasSuffix(body, "\n\treturn nil") {
+			t.Fatal("funcBody captured a truncated runApplyPipeline (the body does not end at the " +
+				"function's top-level `return nil`). Either a column-0 '}' inside the function cut the " +
+				"capture short (fix funcBody or the function), or the function's final statement changed — " +
+				"then update this check")
 		}
 
 		reload := strings.Index(body, "loadProjectedForScope(")

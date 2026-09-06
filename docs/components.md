@@ -52,10 +52,9 @@ is the only package that depends on nearly all the others.
   opted out of git backup (the `[destination_directory_git_backup]` mode still
   governs it); `walkPlanItems` — the single plan→state→destination drift walk
   behind `status`, `diff`, `reconcile` and `explain` (`planwalk.go`); its
-  `planItem` is
-  deliberately unexported field-for-field so it can never become a `--json`
-  surface, because a plan built from `secrets.SubstituteCanonical` carries
-  resolved cleartext in `op.Content`; `destReadPath` / `readDestText`
+  `planItem` is deliberately unexported field-for-field so it can never become
+  a `--json` surface, because a plan built from `secrets.SubstituteCanonical`
+  carries resolved cleartext in `op.Content`; `destReadPath` / `readDestText`
   (`destread.go`) — the whole-file destination readers that carry the symlink
   policy (`AGENTSYNC_ALLOW_SYMLINK_DEST`), mirroring `iox.AtomicWrite`'s.
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,
