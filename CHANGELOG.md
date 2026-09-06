@@ -256,15 +256,15 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   changed with it: the foreign-collision warning is now apply's wording (and,
   as in `apply`, is printed even when the apply then fails partway), and the
   five `… after upgrade:` error prefixes collapse into one
-  `re-apply after plugin upgrade:`. Interactively, `apply`'s one-time question
+  `re-apply after plugin upgrade:`. Interactively, the question `apply` asks
   before its first write into an untracked destination dir (enable git backup
   for it?) can now appear during an upgrade, and answering `yes` / `don't ask
   again` persists the mode to `agentsync.toml` exactly as it does for `apply`.
-  Under the default
-  `[destination_directory_git_backup] mode = "prompt"`, an unattended run
-  (cron, `--no-input`, no TTY) also prints apply's git-backup hint and its
-  `could not take a pre-apply baseline` warning on every run until the mode is
-  set to `on` or `off` — the same two lines an unattended `apply` prints.
+  Under the default `[destination_directory_git_backup] mode = "prompt"`, an
+  unattended run (cron, `--no-input`, no TTY) also prints apply's git-backup
+  hint and its `could not take a pre-apply baseline` warning on every run until
+  the mode is set to `on` or `off` — the same two lines an unattended `apply`
+  prints.
 
 - **Internal: `status`, `diff`, `reconcile` and `explain` now share one
   plan→drift walk** ([#229](https://github.com/spxrogers/agentsync/issues/229)).
@@ -765,9 +765,9 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
   - **`plugin upgrade` now re-applies, in BOTH forms.** `--all` carries over
     `update --apply`'s complete re-apply (scope resolution, secret
-    substitution, plan/apply, state recording — as of #231 above, literally
-    `apply`'s own pipeline rather than a transcription of it), so it is behavior-identical to
-    what `update --apply` did. The single-id `plugin upgrade <id>` gains that
+    substitution, plan/apply, state recording), so it kept `update --apply`'s
+    ending state; #231 above then made that re-apply `apply`'s own pipeline,
+    which prints more. The single-id `plugin upgrade <id>` gains that
     same re-apply — a **behavior change**: it used to re-fetch and leave your
     agents stale until the next `apply`. One verb, one ending state.
   - **`--auto-safe` became `--lossless` on the plugin side**, because the name
@@ -849,8 +849,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 - **`plugin upgrade`'s one-line help now names `apply` instead of saying
   "re-apply".** Both `upgrade` forms genuinely run the full apply pipeline
   (`render.Plan` + `render.Apply`, honoring `--scope`/`--project`; since #231
-  above, the one `apply` itself runs) — but in the
-  `agentsync plugin` command list, "and re-apply" read as loose jargon rather
+  above, the one `apply` itself runs) — but in the `agentsync plugin` command
+  list, "and re-apply" read as loose jargon rather
   than as "runs `agentsync apply`", so the one behavior a reader most needs to
   know about the command — that it writes to your agents' native config, not
   just to the plugin cache — was the one the summary buried. Reworded to "and

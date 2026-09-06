@@ -752,7 +752,7 @@ func checkPluginRefMarketplace(existing pluginTOML, id, typedMP string) error {
 		id, recorded, typedMP, id+"@"+recorded, id)
 }
 
-// defaultMarketplaceSentinel is the SENTINEL recorded in a plugin's stored id
+// defaultMarketplaceSentinel is the sentinel recorded in a plugin's stored id
 // ("<id>@default") when the plugin was installed by bare id, i.e. the
 // marketplace was searched across all caches rather than named. It identifies
 // no real marketplace. The one place that needs a real name again

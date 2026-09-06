@@ -1,11 +1,14 @@
 package cli_test
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	agit "github.com/spxrogers/agentsync/internal/git"
+	"github.com/spxrogers/agentsync/internal/render"
 )
 
 // pluginReapplyFixture builds the home the two tests below share: an inited
@@ -112,5 +115,52 @@ func TestPluginUpgrade_RendersEveryEnabledAgent(t *testing.T) {
 		if !strings.Contains(got, "demo-mcp") {
 			t.Fatalf("%s does not carry the plugin's demo-mcp server after plugin upgrade:\n%s", dest, got)
 		}
+	}
+}
+
+// TestPluginUpgrade_WarnsWhenNoAgentsEnabled pins one of the headlines the
+// plugin path gained by routing through the pipeline (CHANGELOG): with no
+// agent enabled, the old copy printed `applied: 0 ops`; the pipeline warns
+// that there is nothing to apply and exits 0, exactly as `apply` does.
+func TestPluginUpgrade_WarnsWhenNoAgentsEnabled(t *testing.T) {
+	env, _ := pluginReapplyFixture(t) // no agents
+
+	out, err := runCLI(t, env, "plugin", "upgrade", "demo")
+	if err != nil {
+		t.Fatalf("plugin upgrade demo with no agents should exit 0: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "no agents are enabled") {
+		t.Fatalf("plugin upgrade demo with no agents should warn like apply does; got:\n%s", out)
+	}
+	if strings.Contains(out, "applied: 0 ops") {
+		t.Fatalf("plugin upgrade demo must not claim `applied: 0 ops` for a no-op run; got:\n%s", out)
+	}
+}
+
+// TestPluginUpgrade_PrunesOldBackups pins the other pipeline-only step the
+// CHANGELOG names for the plugin path: after a successful re-apply the
+// collision-backup directory under .state/backups is pruned to
+// render.DefaultBackupKeep entries, as `apply` prunes it. The old copy never
+// pruned, so a cron-driven upgrade loop grew that directory without bound.
+func TestPluginUpgrade_PrunesOldBackups(t *testing.T) {
+	env, tmp := pluginReapplyFixture(t, "claude")
+	root := filepath.Join(tmp, ".agentsync", ".state", "backups")
+	seeded := render.DefaultBackupKeep + 3
+	for i := range seeded {
+		if err := os.MkdirAll(filepath.Join(root, fmt.Sprintf("20260101T%06dZ-000000001", i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := runCLI(t, env, "plugin", "upgrade", "demo")
+	if err != nil {
+		t.Fatalf("plugin upgrade demo: %v\n%s", err, out)
+	}
+	left, rerr := os.ReadDir(root)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if len(left) != render.DefaultBackupKeep {
+		t.Fatalf("after the upgrade's re-apply %d backup dirs remain, want %d (the pipeline prunes; the old copy did not):\n%s", len(left), render.DefaultBackupKeep, out)
 	}
 }

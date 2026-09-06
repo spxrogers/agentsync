@@ -96,7 +96,7 @@ type applyOpts struct {
 
 // runApplyPipeline is the apply pipeline — load-projected source → resolve
 // secrets → plan → git baseline → write → record state → checkpoint → report —
-// and the body of the apply command (callers hold the global lock; only
+// and the body of the apply command (callers must hold the global lock; only
 // `apply --dry-run`, which writes nothing, runs without it). It is called by
 // BOTH `apply` and the re-apply tail of `plugin upgrade`
 // (reapplyAfterPluginChange) so the two cannot diverge: the second copy had

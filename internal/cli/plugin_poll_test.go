@@ -186,8 +186,9 @@ func TestPluginPoll_UpgradeAllPartialFailureRescuesState(t *testing.T) {
 
 	out, err := runCLI(t, env, "plugin", "upgrade", "--all")
 	// The one error prefix the plugin path adds (CHANGELOG: the five
-	// `… after upgrade:` prefixes collapsed into it).
-	if err != nil && !strings.Contains(out+err.Error(), "re-apply after plugin upgrade:") {
+	// `… after upgrade:` prefixes collapsed into it). The root command silences
+	// cobra's error echo, so the returned error is the only place it can be.
+	if err != nil && !strings.Contains(err.Error(), "re-apply after plugin upgrade:") {
 		t.Fatalf("plugin upgrade --all failure must carry the re-apply prefix; got err=%v\n%s", err, out)
 	}
 	if err == nil {
