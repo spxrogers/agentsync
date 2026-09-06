@@ -54,7 +54,13 @@ is the only package that depends on nearly all the others.
   behind `status`, `diff`, `reconcile` and `explain` (`planwalk.go`); its
   `planItem` is deliberately unexported field-for-field so it can never become
   a `--json` surface, because a plan built from `secrets.SubstituteCanonical`
-  carries resolved cleartext in `op.Content`; `destReadPath` / `readDestText`
+  carries resolved cleartext in `op.Content`; `reconcileSession` — one
+  `agentsync reconcile` pass (printer, scripted input, registry, loaded state,
+  redaction map) plus its run-scoped bookkeeping, so the two prompts, the
+  `--auto-*` dispatch, the action switch and the run's tail (`finish`) are
+  separately testable methods rather than five `goto`s over six loose locals
+  (#232); `finish` has exactly one call site and is never deferred, because it
+  writes and it returns the run's error; `destReadPath` / `readDestText`
   (`destread.go`) — the whole-file destination readers that carry the symlink
   policy (`AGENTSYNC_ALLOW_SYMLINK_DEST`), mirroring `iox.AtomicWrite`'s.
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,

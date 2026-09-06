@@ -98,6 +98,200 @@ first time. Rule of thumb: import adopts, reconcile resolves.`,
 	return cmd
 }
 
+// reconcileAction is the resolved outcome for one non-orphan item: what the
+// interactive prompt, a confirmed bulk choice, or an --auto-* mode decided to
+// do with it.
+//
+// Unlike adapter.Action, whose zero value is the valid common case (a write),
+// the zero value here is deliberately NOT an action — the adapter.SkipKind
+// convention, whose zero is likewise invalid. actionNone is the "nothing
+// decided yet" state both the unset bulk choice and "no --auto-* mode claimed
+// this item" need, so an unresolved item can never be mistaken for a resolved
+// one.
+// It replaces the byte the loop used to carry ('w'/'o'/'s'/'i'/'q', with a
+// `ch | 0x20` case fold open-coded at three sites); parseItemKey is now the one
+// place a keystroke becomes an action.
+type reconcileAction int
+
+const (
+	// actionNone is the zero value: no action chosen. It never reaches
+	// applyAction.
+	actionNone reconcileAction = iota
+	// actionWriteBack persists the destination value into the canonical source.
+	actionWriteBack
+	// actionOverride queues a re-apply of this item's op over the destination.
+	actionOverride
+	// actionSkip leaves the item alone.
+	actionSkip
+	// actionIgnore appends the item's label to ignore.toml.
+	actionIgnore
+	// actionQuit ends the pass; finish still runs.
+	actionQuit
+)
+
+// key is the lowercase hotkey that chooses the action. The bulk-confirm prompt
+// prints it ("apply 'w' to all N remaining items?"), so its spelling is
+// user-visible; 0 for actionNone, which is never printed.
+func (a reconcileAction) key() byte {
+	switch a {
+	case actionWriteBack:
+		return 'w'
+	case actionOverride:
+		return 'o'
+	case actionSkip:
+		return 's'
+	case actionIgnore:
+		return 'i'
+	case actionQuit:
+		return 'q'
+	}
+	return 0
+}
+
+// String is the Stringer form, kept for %v in test failure messages the way
+// adapter.Action's is; nothing in production prints an action's name (the
+// prompt prints key()).
+func (a reconcileAction) String() string {
+	switch a {
+	case actionNone:
+		return "none"
+	case actionWriteBack:
+		return "write-back"
+	case actionOverride:
+		return "override"
+	case actionSkip:
+		return "skip"
+	case actionIgnore:
+		return "ignore"
+	case actionQuit:
+		return "quit"
+	default:
+		return fmt.Sprintf("reconcileAction(%d)", int(a))
+	}
+}
+
+// parseItemKey maps one keystroke at the per-item prompt to what it means:
+// the action it chooses, whether it is the CAPITAL "apply to all remaining"
+// spelling, and whether it is [d]iff (which chooses no action and re-prompts).
+// ok is false for every other byte, which the prompt ignores and re-reads.
+//
+// The folding is deliberately NOT uniform, and that asymmetry is exactly what
+// the old `case 'w', 'W', 'o', 'O', 's', 'S', 'i', 'q', 'Q'` switch encoded by
+// omission: there is no bulk [i]gnore and no capital [D]iff, so 'I' and 'D' are
+// unknown keys. Case-folding every byte would silently add two accepted
+// keystrokes — one of them a bulk-ignore that has no confirmation path.
+func parseItemKey(ch byte) (act reconcileAction, bulk, diff, ok bool) {
+	switch ch {
+	case 'w':
+		return actionWriteBack, false, false, true
+	case 'W':
+		return actionWriteBack, true, false, true
+	case 'o':
+		return actionOverride, false, false, true
+	case 'O':
+		return actionOverride, true, false, true
+	case 's':
+		return actionSkip, false, false, true
+	case 'S':
+		return actionSkip, true, false, true
+	case 'i':
+		return actionIgnore, false, false, true
+	case 'q', 'Q':
+		return actionQuit, false, false, true
+	case 'd':
+		return actionNone, false, true, true
+	}
+	return actionNone, false, false, false
+}
+
+// reconcileAuto is the --auto-* mode for the run. At most one field is ever
+// set: reconcileRun rejects more than one before a session exists.
+type reconcileAuto struct {
+	writeBack bool // --auto-writeback
+	override  bool // --auto-override
+	safe      bool // --auto-safe
+}
+
+// active reports whether any auto mode is set, i.e. the run is not interactive.
+func (a reconcileAuto) active() bool { return a.writeBack || a.override || a.safe }
+
+// overrideOp is one item the user chose to [o]verride. finish re-applies ONLY
+// these ops, never the full plan — pressing [o] on one drifted item must not
+// silently re-apply every other item in the plan as a side effect.
+type overrideOp struct {
+	agentName string
+	op        adapter.FileOp
+}
+
+// reconcileSession is one `agentsync reconcile` pass: the wiring it was built
+// with (printer, input, registry, loaded state, scope, redaction map) and the
+// run-scoped bookkeeping the walk accumulates (the queued overrides, the bulk
+// choice, the three counters, the per-source write ledger).
+//
+// It exists because that bookkeeping used to travel as six loose locals inside
+// a 375-line reconcileRun whose only exits were five `goto done`s and two
+// labeled loops (issue #232). With the state on a receiver each phase — the two
+// prompts, the --auto-* dispatch, the action switch and the finish block — is a
+// method a test can drive directly, and every `goto done` is a plain return out
+// of walk with exactly one finish call site.
+//
+// It changes no dest→source write: [w]rite-back still runs through
+// writeBackItem → capture.Capture, and the one deletion-only exception
+// (removeDroppedSource) keeps its keystroke gate and its withinDir bound.
+type reconcileSession struct {
+	// --- wiring, fixed for the run ---
+	cmd *cobra.Command
+	p   *ui.Printer
+	// w is p.Out: the transcript every prompt, echo and result line writes to.
+	w  io.Writer
+	br *bufio.Reader
+	// reg is the adapter registry the plan was rendered with; finish looks up
+	// each override's adapter in it.
+	reg         *adapter.Registry
+	home        string // ~/.agentsync (canonical source root)
+	userHome    string
+	statePath   string
+	scope       adapter.Scope
+	projectRoot string
+	st          *state.Targets
+	auto        reconcileAuto
+	// hookEvents is the canonical hook-event vocabulary of the loaded model,
+	// computed once: it is the candidate set every hook pointer is inverted
+	// against, and the model cannot change mid-run.
+	hookEvents []string
+	// redact/canMask drive the prompt's masked value display: redact maps each
+	// resolved secret value back to its ${secret:…} placeholder, and canMask is
+	// false when some reference could not be resolved now — in which case the
+	// display falls back to SHA prefixes rather than risk printing a credential.
+	redact  map[string]string
+	canMask bool
+
+	// --- run-scoped bookkeeping ---
+	// bulk is the confirmed W/O/S choice applied to every remaining item;
+	// actionNone until the user confirms one.
+	bulk reconcileAction
+	// stateDirty tracks orphan removals so finish persists the pruned state.
+	stateDirty bool
+	// autoSkipped counts items an --auto-* mode left unresolved, so the run
+	// ends with a summary instead of silently doing nothing.
+	autoSkipped int
+	// writeBackFailed counts [w]rite-back attempts that errored. A failed
+	// write-back did NOT persist the user's dest edit, so the run must exit
+	// non-zero rather than report success (a scripted `reconcile --auto-writeback
+	// && deploy` must not proceed, and the next apply would clobber the edit).
+	writeBackFailed int
+	// writtenSources records, per canonical source file written this run, the
+	// bytes that landed — so a SECOND write-back to the same file (a server/skill
+	// that fanned out to multiple agents, each drifted differently) is detected
+	// instead of silently last-writer-wins clobbering the first.
+	writtenSources map[string][]byte
+	// overrideOps is the queue finish re-applies; dedupOverride keeps us from
+	// re-applying the same path twice when the user picks [o] for two pointers
+	// inside the same merge file.
+	overrideOps   []overrideOp
+	dedupOverride map[string]bool
+}
+
 func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe bool, agentsCSV string) error {
 	// The three auto modes are mutually exclusive — writeback (dest→source)
 	// and override (source→dest) are exact opposites, and silently accepting
@@ -105,18 +299,49 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 	if n := b2i(autoWB) + b2i(autoOR) + b2i(autoSafe); n > 1 {
 		return fmt.Errorf("--auto-writeback, --auto-override, and --auto-safe are mutually exclusive; pass at most one")
 	}
+	s, items, err := newReconcileSession(cmd, in, reconcileAuto{writeBack: autoWB, override: autoOR, safe: autoSafe}, agentsCSV)
+	if err != nil {
+		return err
+	}
+	// No actionable items?
+	if !anyRequiresAction(items) {
+		fmt.Fprintln(s.w, "nothing to reconcile")
+		return nil
+	}
+	// walk returns no error: every way out of the loop — the last item, an EOF
+	// at either prompt, an EOF mid bulk-confirm, and [q]uit at either prompt —
+	// is a plain return that lands here, so finish has exactly ONE call site and
+	// still runs on every path that used to `goto done`.
+	//
+	// finish is deliberately NOT deferred. It WRITES (the override re-apply and
+	// the state save) and it returns the run's error: a defer would run those
+	// writes while a panic unwound, and would have to clobber or swallow the
+	// error of any future early return added above it.
+	s.walk(items)
+	return s.finish()
+}
+
+// newReconcileSession loads everything one reconcile pass works from and
+// returns the session plus the classified items (drift items first, then
+// orphans).
+//
+// The load order is preserved from the inline setup this replaced — source
+// before the printer, state before the registry, plan before the item
+// collection — because it is observable: which step fails decides which error
+// the user sees, and the printer does not exist yet when the source load fails.
+func newReconcileSession(cmd *cobra.Command, in io.Reader, auto reconcileAuto, agentsCSV string) (*reconcileSession, []reconcileItem, error) {
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	userHome := paths.HomeDir(paths.OSEnv{})
 	// Project plugins like apply does so drift classification covers
 	// plugin-managed components instead of reporting them as untracked.
 	c, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, false)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	p, err := newPrinter(cmd)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	// Redaction map for the prompt/[d]iff value display. The destination content
@@ -132,9 +357,9 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 	canMask := len(secrets.UnresolvedSecretRefs(&c, secBackend, envBackend)) == 0
 
 	statePath := filepath.Join(home, ".state", "targets.json")
-	s, err := state.Load(statePath)
+	st, err := state.Load(statePath)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	reg := registryFactory()
 	var agents []string
@@ -149,15 +374,15 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 	if len(agents) > 0 {
 		sel, aerr := selectAgents(cmd, agents, enabled, agentsCSV)
 		if aerr != nil {
-			return aerr
+			return nil, nil, aerr
 		}
 		agents = sel
 	}
 	// reconcile hashes the rendered TEMPLATED source for drift; wrap as a
 	// render-only Resolved without substituting (no backend needed).
-	plan, err := render.Plan(secrets.ForRender(c), reg, agents, sc, projectRoot, s, userHome)
+	plan, err := render.Plan(secrets.ForRender(c), reg, agents, sc, projectRoot, st, userHome)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	// Collect all items in order, then append orphaned whole-file dests
@@ -170,56 +395,47 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 	if sc == adapter.ScopeProject && c.Project != nil {
 		ownerSrc = *c.Project
 	}
-	items, orphans := collectReconcileItems(plan, reg, s, sc, projectRoot, userHome, pluginProvidedSourceIDs(ownerSrc))
+	items, orphans := collectReconcileItems(plan, reg, st, sc, projectRoot, userHome, pluginProvidedSourceIDs(ownerSrc))
 	items = append(items, orphans...)
 
-	w := p.Out
-	// stateDirty tracks orphan removals so we persist the pruned state at the end.
-	stateDirty := false
+	return &reconcileSession{
+		cmd:            cmd,
+		p:              p,
+		w:              p.Out,
+		br:             bufio.NewReader(in),
+		reg:            reg,
+		home:           home,
+		userHome:       userHome,
+		statePath:      statePath,
+		scope:          sc,
+		projectRoot:    projectRoot,
+		st:             st,
+		auto:           auto,
+		hookEvents:     canonicalHookEvents(c),
+		redact:         redact,
+		canMask:        canMask,
+		writtenSources: map[string][]byte{},
+		dedupOverride:  map[string]bool{},
+	}, items, nil
+}
 
-	// No actionable items?
-	needsPrompt := 0
+// anyRequiresAction reports whether the pass has anything to ask about: an item
+// whose class requires action, or an orphan (which has its own remove/keep
+// prompt). When it is false the run prints "nothing to reconcile" and stops
+// before the session's walk — nothing is queued, so there is nothing to finish.
+func anyRequiresAction(items []reconcileItem) bool {
 	for _, it := range items {
 		if requiresAction(it.cls) || it.orphan {
-			needsPrompt++
+			return true
 		}
 	}
-	if needsPrompt == 0 {
-		fmt.Fprintln(w, "nothing to reconcile")
-		return nil
-	}
+	return false
+}
 
-	// Track ops the user explicitly chose to override (re-apply source on
-	// top of dest). We re-apply ONLY these ops at the end, never the full
-	// plan — pressing [o] on one drifted item must not silently re-apply
-	// every other item in the plan as a side effect.
-	type overrideOp struct {
-		agentName string
-		op        adapter.FileOp
-	}
-	var overrideOps []overrideOp
-	// dedupOverride keeps us from re-applying the same path twice when the
-	// user picks [o] for two pointers inside the same merge file.
-	dedupOverride := map[string]bool{}
-
-	// bulkAction is set when user presses W/O/S to apply to all remaining items.
-	bulkAction := byte(0)
-	// autoSkipped counts items an --auto-* mode left unresolved, so the run
-	// ends with a summary instead of silently doing nothing.
-	autoSkipped := 0
-	// writeBackFailed counts [w]rite-back attempts that errored. A failed
-	// write-back did NOT persist the user's dest edit, so the run must exit
-	// non-zero rather than report success (a scripted `reconcile --auto-writeback
-	// && deploy` must not proceed, and the next apply would clobber the edit).
-	writeBackFailed := 0
-	// writtenSources records, per canonical source file written this run, the
-	// bytes that landed — so a SECOND write-back to the same file (a server/skill
-	// that fanned out to multiple agents, each drifted differently) is detected
-	// instead of silently last-writer-wins clobbering the first.
-	writtenSources := map[string][]byte{}
-
-	br := bufio.NewReader(in)
-
+// walk runs the pass over items, resolving each one through the bulk choice,
+// the --auto-* dispatch, or the interactive prompt. It returns as soon as the
+// user quits or the input ends; the caller then calls finish exactly once.
+func (s *reconcileSession) walk(items []reconcileItem) {
 	for idx := range items {
 		it := items[idx]
 		if !requiresAction(it.cls) && !it.orphan {
@@ -229,247 +445,296 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 		// Orphans get a dedicated delete/keep prompt — deletion is never done
 		// in an auto mode (too destructive to do non-interactively).
 		if it.orphan {
-			if autoWB || autoOR || autoSafe {
-				fmt.Fprintf(w, "orphan left in place (run `agentsync reconcile` interactively to remove): %s\n", ui.Sanitize(it.op.Path))
-				autoSkipped++
+			if s.auto.active() {
+				fmt.Fprintf(s.w, "orphan left in place (run `agentsync reconcile` interactively to remove): %s\n", ui.Sanitize(it.op.Path))
+				s.autoSkipped++
 				continue
 			}
-			fmt.Fprintf(w, "\n%s  (orphan — source no longer produces this file)\n", ui.Sanitize(it.op.Path))
-			// [k]eep is honest only for the kinds `apply` does NOT auto-reclaim.
-			// Skills, subagents, and commands are reclaimed on the next apply, so
-			// "keep" there means "keep until then" — say so rather than imply it
-			// is permanent.
-			//
-			// This asks the KIND question (OrphanIsReclaimable), not the
-			// readability one (OrphanDeleteWillProceed): a reclaimable orphan that
-			// happens to be unreadable right now is retried on every subsequent
-			// apply, so "until the next apply reclaims it" is still the truth for
-			// it. Using the readability predicate here would print the permanent
-			// wording for exactly the file apply keeps coming back to.
-			if render.OrphanIsReclaimable(it.op.SourceID) {
-				fmt.Fprintf(w, "  [r]emove (backs up first)  [k]eep (until the next apply reclaims it)  [q]uit\n  > ")
-			} else {
-				fmt.Fprintf(w, "  [r]emove (backs up first)  [k]eep  [q]uit\n  > ")
-			}
-		orphanPrompt:
-			for {
-				ch, readErr := readChar(br)
-				if readErr != nil {
-					goto done // EOF → finish (persist any pruned state)
-				}
-				switch ch {
-				case 'r', 'R':
-					fmt.Fprintf(w, "%c\n", ch)
-					bk, berr := render.BackupFile(home, it.op.Path)
-					if berr != nil {
-						p.Fdiagf(w, ui.LevelError, "backup failed, NOT removing: %s", ui.Sanitize(berr.Error()))
-						break orphanPrompt
-					}
-					if bk != "" {
-						fmt.Fprintf(w, "  backup: %s\n", ui.Sanitize(bk))
-					}
-					if rmErr := os.Remove(it.op.Path); rmErr != nil && !os.IsNotExist(rmErr) { //nolint:forbidigo // the one NATIVE-destination delete outside DestWriter: interactive orphan removal, safe only because render.BackupFile succeeded just above
-						p.Fdiagf(w, ui.LevelError, "remove failed: %s", ui.Sanitize(rmErr.Error()))
-						break orphanPrompt
-					}
-					pruneStateFilesForPath(s, userHome, it.op.Path)
-					stateDirty = true
-					fmt.Fprintf(w, "  removed: %s\n", ui.Sanitize(it.op.Path))
-					break orphanPrompt
-				case 'k', 'K':
-					fmt.Fprintf(w, "%c\n", ch)
-					fmt.Fprintf(w, "  kept: %s\n", ui.Sanitize(it.op.Path))
-					break orphanPrompt
-				case 'q', 'Q':
-					fmt.Fprintln(w, "quit")
-					goto done
-				default:
-					// ignore unknown key, re-read
-				}
+			if s.promptOrphan(it) {
+				return
 			}
 			continue
 		}
 
-		// Apply bulk action if set.
-		action := bulkAction
-		if action == 0 {
-			switch {
-			case autoWB:
-				// ForeignCollision is a never-applied pre-existing native
-				// file. Writing it back would overwrite the curated source
-				// with foreign content — the worst data-loss path. Refuse to
-				// do that non-interactively; leave it for an explicit choice.
-				switch {
-				case it.cls == drift.ForeignCollision:
-					fmt.Fprintf(w, "skipped (foreign-collision, would overwrite source): %s — resolve interactively\n", itemLabelDisp(it))
-					autoSkipped++
-					action = 's'
-				case it.pluginOwner != "":
-					// A plugin-provided component cannot be written back at all —
-					// it has no canonical file of its own. That refusal is
-					// STRUCTURAL and permanent, not a transient failure, so
-					// letting it count as a write-back FAILURE would make
-					// `reconcile --auto-writeback` exit non-zero on every run
-					// forever, breaking any `reconcile && deploy` until the user
-					// disables the plugin. Skip it like a foreign collision — the
-					// same "cannot be resolved non-interactively" shape.
-					fmt.Fprintf(w, "skipped (provided by plugin %q, no canonical file to write into): %s — use [o]verride, or change it upstream\n",
-						ui.Sanitize(it.pluginOwner), itemLabelDisp(it))
-					autoSkipped++
-					action = 's'
-				default:
-					action = 'w'
-				}
-			case autoOR:
-				action = 'o'
-			case autoSafe:
-				// auto-safe resolves nothing: everything that reaches this loop
-				// needs a human.
-				fmt.Fprintf(w, "skipped (needs manual review): %s (%s)\n", itemLabelDisp(it), it.cls)
-				autoSkipped++
-				action = 's'
+		// A confirmed bulk choice wins; otherwise an --auto-* mode may claim the
+		// item; otherwise ask.
+		action := s.bulk
+		if action == actionNone {
+			action = s.resolveAuto(it)
+		}
+		if action == actionNone {
+			var stop bool
+			action, stop = s.promptItem(it, items[idx:])
+			if stop {
+				return
 			}
 		}
-
-		if action == 0 {
-			// Interactive prompt.
-			label := itemLabelDisp(it)
-			fmt.Fprintf(w, "\n%s  (%s)\n", label, it.cls)
-			renderItemValues(w, p, it, redact, canMask)
-			fmt.Fprintf(w, "  [w]rite-back  [o]verride  [s]kip  [i]gnore  [d]iff  [q]uit\n  > ")
-
-		prompt:
-			for {
-				ch, readErr := readChar(br)
-				if readErr != nil {
-					// EOF → finish gracefully, but reach `done:` so any queued
-					// [o]verride ops are applied and pruned/dirty state is flushed
-					// (a bare `return nil` here dropped both — issue #171).
-					goto done
-				}
-				switch ch {
-				case 'w', 'W', 'o', 'O', 's', 'S', 'i', 'q', 'Q':
-					if ch == 'W' || ch == 'O' || ch == 'S' {
-						// Capital letter = "apply this choice to all
-						// remaining items." Confirm before locking it
-						// in — a stray shift-W on a hooks item used to
-						// silently no-op data away across the whole
-						// queue. Show the count and require an
-						// explicit y/N. Default is N.
-						//
-						// The count is the TRUE blast radius of this bulk action:
-						// the items from HERE forward it will actually act on —
-						// remaining actionable, non-orphan items (orphans have their
-						// own r/k prompt and are never swept by a bulk choice). The
-						// prior count walked the WHOLE queue including items already
-						// handled, overstating the reach.
-						remaining := 0
-						for j := idx; j < len(items); j++ {
-							if requiresAction(items[j].cls) && !items[j].orphan {
-								remaining++
-							}
-						}
-						lower := ch | 0x20
-						fmt.Fprintf(w, "%c\n", ch)
-						fmt.Fprintf(w, "  apply '%c' to all %d remaining items? [y/N] ", lower, remaining)
-						confirm, readErr := readChar(br)
-						if readErr != nil {
-							goto done // EOF mid-confirm → flush queued overrides + state (issue #171)
-						}
-						fmt.Fprintf(w, "%c\n", confirm)
-						if confirm != 'y' && confirm != 'Y' {
-							fmt.Fprintln(w, "  cancelled; choose a per-item action")
-							continue
-						}
-						bulkAction = lower
-						action = lower
-						break prompt
-					}
-					action = ch | 0x20
-					fmt.Fprintf(w, "%c\n", ch)
-					break prompt
-				case 'd':
-					printItemDiff(w, p, it, redact, canMask)
-					fmt.Fprintf(w, "  [w]rite-back  [o]verride  [s]kip  [i]gnore  [d]iff  [q]uit\n  > ")
-				default:
-					// ignore unknown key
-				}
-			}
-		}
-
-		switch action {
-		case 'w':
-			// write-back: persist destination value into the canonical source.
-			if attemptWriteBack(cmd, p, w, home, it, canonicalHookEvents(c), writtenSources) {
-				writeBackFailed++
-			}
-		case 'o':
-			// override: queue a re-apply of this item's op.
-			dedupKey := it.agentName + "\x00" + it.op.Path
-			if !dedupOverride[dedupKey] {
-				dedupOverride[dedupKey] = true
-				overrideOps = append(overrideOps, overrideOp{it.agentName, it.op})
-			}
-		case 's':
-			// skip: do nothing.
-		case 'i':
-			// ignore: append to ignore.toml (best-effort).
-			_ = appendIgnore(home, itemLabel(it))
-			fmt.Fprintf(w, "  ignored: %s\n", itemLabelDisp(it))
-		case 'q':
-			fmt.Fprintln(w, "quit")
-			goto done
+		if s.applyAction(it, action) {
+			return
 		}
 	}
+}
 
-done:
+// promptOrphan runs the remove/keep prompt for one orphaned destination and
+// reports whether the whole run must stop — the user pressed [q]uit, or the
+// input ended. Both land on the same finish the walk's other exits do, so a
+// removal already made this run is still persisted (issue #171).
+func (s *reconcileSession) promptOrphan(it reconcileItem) bool {
+	w := s.w
+	fmt.Fprintf(w, "\n%s  (orphan — source no longer produces this file)\n", ui.Sanitize(it.op.Path))
+	// [k]eep is honest only for the kinds `apply` does NOT auto-reclaim.
+	// Skills, subagents, and commands are reclaimed on the next apply, so
+	// "keep" there means "keep until then" — say so rather than imply it
+	// is permanent.
+	//
+	// This asks the KIND question (OrphanIsReclaimable), not the
+	// readability one (OrphanDeleteWillProceed): a reclaimable orphan that
+	// happens to be unreadable right now is retried on every subsequent
+	// apply, so "until the next apply reclaims it" is still the truth for
+	// it. Using the readability predicate here would print the permanent
+	// wording for exactly the file apply keeps coming back to.
+	if render.OrphanIsReclaimable(it.op.SourceID) {
+		fmt.Fprintf(w, "  [r]emove (backs up first)  [k]eep (until the next apply reclaims it)  [q]uit\n  > ")
+	} else {
+		fmt.Fprintf(w, "  [r]emove (backs up first)  [k]eep  [q]uit\n  > ")
+	}
+	for {
+		ch, readErr := readChar(s.br)
+		if readErr != nil {
+			return true // EOF → finish (persist any pruned state)
+		}
+		switch ch {
+		case 'r', 'R':
+			fmt.Fprintf(w, "%c\n", ch)
+			bk, berr := render.BackupFile(s.home, it.op.Path)
+			if berr != nil {
+				s.p.Fdiagf(w, ui.LevelError, "backup failed, NOT removing: %s", ui.Sanitize(berr.Error()))
+				return false
+			}
+			if bk != "" {
+				fmt.Fprintf(w, "  backup: %s\n", ui.Sanitize(bk))
+			}
+			if rmErr := os.Remove(it.op.Path); rmErr != nil && !os.IsNotExist(rmErr) { //nolint:forbidigo // the one NATIVE-destination delete outside DestWriter: interactive orphan removal, safe only because render.BackupFile succeeded just above
+				s.p.Fdiagf(w, ui.LevelError, "remove failed: %s", ui.Sanitize(rmErr.Error()))
+				return false
+			}
+			pruneStateFilesForPath(s.st, s.userHome, it.op.Path)
+			s.stateDirty = true
+			fmt.Fprintf(w, "  removed: %s\n", ui.Sanitize(it.op.Path))
+			return false
+		case 'k', 'K':
+			fmt.Fprintf(w, "%c\n", ch)
+			fmt.Fprintf(w, "  kept: %s\n", ui.Sanitize(it.op.Path))
+			return false
+		case 'q', 'Q':
+			fmt.Fprintln(w, "quit")
+			return true
+		default:
+			// ignore unknown key, re-read
+		}
+	}
+}
+
+// resolveAuto is the --auto-* dispatch for one non-orphan item: the action the
+// mode chose, or actionNone when no mode is set and the item needs the
+// interactive prompt. The two refusals print their own line and count the skip,
+// because a refusal IS the mode's answer for that item.
+func (s *reconcileSession) resolveAuto(it reconcileItem) reconcileAction {
+	switch {
+	case s.auto.writeBack:
+		switch {
+		case it.cls == drift.ForeignCollision:
+			// ForeignCollision is a never-applied pre-existing native
+			// file. Writing it back would overwrite the curated source
+			// with foreign content — the worst data-loss path. Refuse to
+			// do that non-interactively; leave it for an explicit choice.
+			fmt.Fprintf(s.w, "skipped (foreign-collision, would overwrite source): %s — resolve interactively\n", itemLabelDisp(it))
+			s.autoSkipped++
+			return actionSkip
+		case it.pluginOwner != "":
+			// A plugin-provided component cannot be written back at all —
+			// it has no canonical file of its own. That refusal is
+			// STRUCTURAL and permanent, not a transient failure, so
+			// letting it count as a write-back FAILURE would make
+			// `reconcile --auto-writeback` exit non-zero on every run
+			// forever, breaking any `reconcile && deploy` until the user
+			// disables the plugin. Skip it like a foreign collision — the
+			// same "cannot be resolved non-interactively" shape.
+			fmt.Fprintf(s.w, "skipped (provided by plugin %q, no canonical file to write into): %s — use [o]verride, or change it upstream\n",
+				ui.Sanitize(it.pluginOwner), itemLabelDisp(it))
+			s.autoSkipped++
+			return actionSkip
+		default:
+			return actionWriteBack
+		}
+	case s.auto.override:
+		return actionOverride
+	case s.auto.safe:
+		// auto-safe resolves nothing: everything that reaches this loop
+		// needs a human.
+		fmt.Fprintf(s.w, "skipped (needs manual review): %s (%s)\n", itemLabelDisp(it), it.cls)
+		s.autoSkipped++
+		return actionSkip
+	}
+	return actionNone
+}
+
+// promptItem runs the per-item prompt and returns the action the user chose.
+// stop is true when the run must end without acting on this item: the input
+// ended at the prompt, or ended mid bulk-confirm — both reach finish so queued
+// [o]verride ops are applied and pruned state is flushed (issue #171).
+//
+// rest is the queue from this item forward; the bulk-confirm count is measured
+// over it. A confirmed bulk choice is recorded on the session, so every later
+// item skips this prompt entirely.
+func (s *reconcileSession) promptItem(it reconcileItem, rest []reconcileItem) (reconcileAction, bool) {
+	w := s.w
+	label := itemLabelDisp(it)
+	fmt.Fprintf(w, "\n%s  (%s)\n", label, it.cls)
+	renderItemValues(w, s.p, it, s.redact, s.canMask)
+	fmt.Fprintf(w, "  [w]rite-back  [o]verride  [s]kip  [i]gnore  [d]iff  [q]uit\n  > ")
+
+	for {
+		ch, readErr := readChar(s.br)
+		if readErr != nil {
+			return actionNone, true
+		}
+		act, bulk, diff, ok := parseItemKey(ch)
+		switch {
+		case !ok:
+			// ignore unknown key
+		case diff:
+			printItemDiff(w, s.p, it, s.redact, s.canMask)
+			fmt.Fprintf(w, "  [w]rite-back  [o]verride  [s]kip  [i]gnore  [d]iff  [q]uit\n  > ")
+		case bulk:
+			// Capital letter = "apply this choice to all
+			// remaining items." Confirm before locking it
+			// in — a stray shift-W on a hooks item used to
+			// silently no-op data away across the whole
+			// queue. Show the count and require an
+			// explicit y/N. Default is N.
+			remaining := bulkTargets(rest)
+			fmt.Fprintf(w, "%c\n", ch)
+			fmt.Fprintf(w, "  apply '%c' to all %d remaining items? [y/N] ", act.key(), remaining)
+			confirm, readErr := readChar(s.br)
+			if readErr != nil {
+				return actionNone, true
+			}
+			fmt.Fprintf(w, "%c\n", confirm)
+			if confirm != 'y' && confirm != 'Y' {
+				fmt.Fprintln(w, "  cancelled; choose a per-item action")
+				continue
+			}
+			s.bulk = act
+			return act, false
+		default:
+			fmt.Fprintf(w, "%c\n", ch)
+			return act, false
+		}
+	}
+}
+
+// bulkTargets is the TRUE blast radius of a bulk action chosen at the head of
+// rest: the items from HERE forward it will actually act on — remaining
+// actionable, non-orphan items, including the current one. Orphans have their
+// own r/k prompt and are never swept by a bulk choice. An earlier count walked
+// the WHOLE queue including items already handled, overstating the reach.
+func bulkTargets(rest []reconcileItem) int {
+	n := 0
+	for _, it := range rest {
+		if requiresAction(it.cls) && !it.orphan {
+			n++
+		}
+	}
+	return n
+}
+
+// applyAction performs the resolved action for one item and reports whether the
+// run must stop ([q]uit). It is the single place an action's meaning lives, so
+// the bulk, --auto-* and interactive paths cannot drift apart on what one does.
+func (s *reconcileSession) applyAction(it reconcileItem, action reconcileAction) bool {
+	switch action {
+	case actionWriteBack:
+		// write-back: persist destination value into the canonical source.
+		if s.attemptWriteBack(it) {
+			s.writeBackFailed++
+		}
+	case actionOverride:
+		// override: queue a re-apply of this item's op.
+		dedupKey := it.agentName + "\x00" + it.op.Path
+		if !s.dedupOverride[dedupKey] {
+			s.dedupOverride[dedupKey] = true
+			s.overrideOps = append(s.overrideOps, overrideOp{it.agentName, it.op})
+		}
+	case actionSkip:
+		// skip: do nothing.
+	case actionIgnore:
+		// ignore: append to ignore.toml (best-effort).
+		_ = appendIgnore(s.home, itemLabel(it))
+		fmt.Fprintf(s.w, "  ignored: %s\n", itemLabelDisp(it))
+	case actionQuit:
+		fmt.Fprintln(s.w, "quit")
+		return true
+	}
+	return false
+}
+
+// finish is the tail of every reconcile pass — the `done:` block the five
+// `goto done`s used to jump to. It re-applies the queued [o]verride ops,
+// persists state when an orphan removal pruned it, prints the unresolved
+// summary and decides the exit code.
+//
+// It has exactly one caller (reconcileRun, after walk returns) and is never
+// deferred: it writes and it returns the run's error.
+func (s *reconcileSession) finish() error {
+	w := s.w
 	// Execute override re-applies — ONLY for the ops the user opted into,
 	// grouped by adapter so each adapter sees its own ops. The previous
 	// implementation re-ran Apply for the entire plan, which silently
 	// re-applied every other agent's ops as a side effect.
-	if len(overrideOps) > 0 {
+	if len(s.overrideOps) > 0 {
 		byAgent := map[string][]adapter.FileOp{}
-		for _, oo := range overrideOps {
+		for _, oo := range s.overrideOps {
 			byAgent[oo.agentName] = append(byAgent[oo.agentName], oo.op)
 		}
 		for name, ops := range byAgent {
-			a := reg.Lookup(name)
+			a := s.reg.Lookup(name)
 			if a == nil {
 				return fmt.Errorf("reconcile override: adapter %q not registered", name)
 			}
-			rw := render.NewWriter(s, home, userHome, sc, projectRoot, name)
+			rw := render.NewWriter(s.st, s.home, s.userHome, s.scope, s.projectRoot, name)
 			if err := a.Apply(ops, rw); err != nil {
 				return fmt.Errorf("reconcile override apply %s: %w", name, err)
 			}
 			for _, r := range rw.Reports() {
 				fmt.Fprintf(w, "  backup: %s\n", r.String())
 			}
-			if err := render.RecordOpsState(s, userHome, name, sc, projectRoot, ops); err != nil {
+			if err := render.RecordOpsState(s.st, s.userHome, name, s.scope, s.projectRoot, ops); err != nil {
 				return err
 			}
 		}
-		if err := state.Save(statePath, s); err != nil {
+		if err := state.Save(s.statePath, s.st); err != nil {
 			return err
 		}
-		stateDirty = false // override save already persisted the pruned state
-		fmt.Fprintf(w, "override: applied %d item(s)\n", len(overrideOps))
+		s.stateDirty = false // override save already persisted the pruned state
+		fmt.Fprintf(w, "override: applied %d item(s)\n", len(s.overrideOps))
 	}
 
 	// Persist state if orphan removals pruned ownership and the override block
 	// above didn't already save.
-	if stateDirty {
-		if err := state.Save(statePath, s); err != nil {
+	if s.stateDirty {
+		if err := state.Save(s.statePath, s.st); err != nil {
 			return err
 		}
 	}
 
-	if autoSkipped > 0 {
-		fmt.Fprintf(w, "%d item(s) left unresolved; run `agentsync reconcile` interactively to handle them\n", autoSkipped)
+	if s.autoSkipped > 0 {
+		fmt.Fprintf(w, "%d item(s) left unresolved; run `agentsync reconcile` interactively to handle them\n", s.autoSkipped)
 	}
 	// A write-back that errored did NOT persist the edit; surface it as a
 	// non-zero exit so callers (and scripts) don't treat the sync as complete.
-	if writeBackFailed > 0 {
-		return fmt.Errorf("reconcile: %d item(s) failed to write back", writeBackFailed)
+	if s.writeBackFailed > 0 {
+		return fmt.Errorf("reconcile: %d item(s) failed to write back", s.writeBackFailed)
 	}
 	return nil
 }
@@ -796,36 +1061,37 @@ func readChar(r *bufio.Reader) (byte, error) {
 // file and this write changes it, revert to the first write and report a
 // conflict (counted as a failure → non-zero exit) for the user to resolve.
 // Returns true on failure/conflict.
-func attemptWriteBack(cmd *cobra.Command, p *ui.Printer, w io.Writer, home string, it reconcileItem, hookEvents []string, writtenSources map[string][]byte) bool {
-	srcFile := itemSourceFile(home, it, hookEvents)
+func (s *reconcileSession) attemptWriteBack(it reconcileItem) bool {
+	w := s.w
+	srcFile := s.itemSourceFile(it)
 	var prior []byte
 	priorWritten := false
 	if srcFile != "" {
-		prior, priorWritten = writtenSources[srcFile]
+		prior, priorWritten = s.writtenSources[srcFile]
 	}
-	werr := writeBackItem(cmd, home, it)
+	werr := writeBackItem(s.cmd, s.home, it)
 	if errors.Is(werr, errDestDroppedServer) {
 		// Tombstone: the user deleted this MCP server from the native config, and
 		// chose [w]rite-back to persist that. A pure deletion carries no secret, so
 		// remove the canonical mcp/<id>.toml directly (the same os.Remove primitive
 		// `mcp remove` uses) rather than routing an empty spec through capture.
-		return removeDroppedSource(p, w, home, it, srcFile, prior, priorWritten, writtenSources)
+		return s.removeDroppedSource(it, srcFile, prior, priorWritten)
 	}
 	if werr != nil {
-		p.Fdiagf(w, ui.LevelError, "write-back: %s", ui.Sanitize(werr.Error()))
+		s.p.Fdiagf(w, ui.LevelError, "write-back: %s", ui.Sanitize(werr.Error()))
 		return true
 	}
 	if srcFile != "" {
 		if after, rerr := os.ReadFile(srcFile); rerr == nil {
 			if priorWritten && string(prior) != string(after) {
 				revertSource(srcFile, prior) // undo this write; keep the first
-				rel, _ := filepath.Rel(home, srcFile)
+				rel, _ := filepath.Rel(s.home, srcFile)
 				fmt.Fprintf(w, "  conflict: %s — another agent drifted the same source (%s) to a different "+
 					"value this run; kept the first write and skipped this one. Make the agents agree, or "+
 					"reconcile one at a time, then re-run.\n", itemLabelDisp(it), ui.Sanitize(rel))
 				return true
 			}
-			writtenSources[srcFile] = after
+			s.writtenSources[srcFile] = after
 		}
 	}
 	fmt.Fprintf(w, "  write-back: %s\n", itemLabelDisp(it))
@@ -841,30 +1107,31 @@ func attemptWriteBack(cmd *cobra.Command, p *ui.Printer, w io.Writer, home strin
 // (nil bytes) in writtenSources so a LATER content write-back to the same file
 // this run is likewise flagged rather than silently resurrecting it. Returns true
 // on failure/conflict.
-func removeDroppedSource(p *ui.Printer, w io.Writer, home string, it reconcileItem, srcFile string, prior []byte, priorWritten bool, writtenSources map[string][]byte) bool {
+func (s *reconcileSession) removeDroppedSource(it reconcileItem, srcFile string, prior []byte, priorWritten bool) bool {
+	w := s.w
 	if srcFile == "" {
-		p.Fdiagf(w, ui.LevelError, "write-back: %s — cannot locate the canonical source file to delete", itemLabelDisp(it))
+		s.p.Fdiagf(w, ui.LevelError, "write-back: %s — cannot locate the canonical source file to delete", itemLabelDisp(it))
 		return true
 	}
 	// Defense-in-depth: srcFile derives from a native-config-supplied server id;
 	// never let a traversal segment escape ~/.agentsync into an arbitrary unlink.
-	if !withinDir(home, srcFile) {
-		p.Fdiagf(w, ui.LevelError, "write-back: %s — refusing to delete outside the source tree", itemLabelDisp(it))
+	if !withinDir(s.home, srcFile) {
+		s.p.Fdiagf(w, ui.LevelError, "write-back: %s — refusing to delete outside the source tree", itemLabelDisp(it))
 		return true
 	}
 	if priorWritten && len(prior) > 0 {
-		rel, _ := filepath.Rel(home, srcFile)
-		p.Fdiagf(w, ui.LevelError, "conflict: %s — another agent wrote this source (%s) this run, so it is still in use; "+
+		rel, _ := filepath.Rel(s.home, srcFile)
+		s.p.Fdiagf(w, ui.LevelError, "conflict: %s — another agent wrote this source (%s) this run, so it is still in use; "+
 			"not deleting it. Make the agents agree (remove it from every native config), then re-run.",
 			itemLabelDisp(it), ui.Sanitize(rel))
 		return true
 	}
 	if rmErr := os.Remove(srcFile); rmErr != nil && !os.IsNotExist(rmErr) { //nolint:forbidigo // removes a canonical source file under ~/.agentsync (withinDir-guarded above), not a native destination
-		p.Fdiagf(w, ui.LevelError, "write-back: remove %s: %s", itemLabelDisp(it), ui.Sanitize(rmErr.Error()))
+		s.p.Fdiagf(w, ui.LevelError, "write-back: remove %s: %s", itemLabelDisp(it), ui.Sanitize(rmErr.Error()))
 		return true
 	}
-	writtenSources[srcFile] = nil // deletion sentinel for a later same-file write
-	rel, _ := filepath.Rel(home, srcFile)
+	s.writtenSources[srcFile] = nil // deletion sentinel for a later same-file write
+	rel, _ := filepath.Rel(s.home, srcFile)
 	fmt.Fprintf(w, "  write-back: removed source %s (destination dropped %s)\n", ui.Sanitize(rel), itemLabelDisp(it))
 	return false
 }
@@ -884,14 +1151,14 @@ func revertSource(srcFile string, prior []byte) {
 // targets, so two agents writing the same component can be detected. Both the
 // claude (/mcpServers/<id>) and opencode (/mcp/<id>) pointers map to the SAME
 // mcp/<id>.toml. Returns "" for items with no single source-of-record.
-func itemSourceFile(home string, it reconcileItem, hookEvents []string) string {
+func (s *reconcileSession) itemSourceFile(it reconcileItem) string {
 	if it.ptr == "" {
 		if it.op.SourceID == "" || strings.HasSuffix(it.op.SourceID, "(multiple)") {
 			return ""
 		}
-		return filepath.Join(home, it.op.SourceID)
+		return filepath.Join(s.home, it.op.SourceID)
 	}
-	return pointerSourceFile(home, it.agentName, it.ptr, hookEvents)
+	return pointerSourceFile(s.home, it.agentName, it.ptr, s.hookEvents)
 }
 
 // pointerSourceFile maps a NATIVE key-merge JSON pointer back to the canonical

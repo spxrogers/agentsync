@@ -289,6 +289,23 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `Adapter` interface and is deferred to
   [#250](https://github.com/spxrogers/agentsync/issues/250).
 
+- **Internal: `reconcile`'s interactive pass is a session type**
+  ([#232](https://github.com/spxrogers/agentsync/issues/232)). `reconcileRun`
+  was 375 lines with five `goto done`s, two labeled loops and six pieces of
+  run-scoped state travelling as loose locals; it is now a 28-line entry point
+  over a `reconcileSession` whose methods are the two prompts, the `--auto-*`
+  dispatch, the action switch and the run's tail. Every `goto` is a plain
+  return, and the tail runs from exactly one call site — deliberately not a
+  `defer`, since it re-applies the queued `[o]verride` ops and saves state. The
+  bulk-action state machine is a typed enum instead of a `byte` with `ch | 0x20`
+  case folding, which also writes down the two keystrokes the prompt
+  deliberately does **not** fold (`I` is not a bulk ignore; `D` is not a
+  diff). No user-visible behaviour changes: 39 scripted-stdin scenarios —
+  every prompt, bulk confirmation, EOF, `[q]uit` (including a quit with a
+  queued override), `--auto-*` mode, project-scope override, exit code, masked
+  secret value and resulting source/state tree — are byte-identical to the
+  pre-change binary (`main` at `309fde0`).
+
 - **`.state/targets.json` is now `schema_version: 2`.** The upgrade is automatic
   and requires nothing: every command reads the old keys, and the first command
   that WRITES state (`apply`, `import`, `reconcile`, `migrate`, `agent disable
