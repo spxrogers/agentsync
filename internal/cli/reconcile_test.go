@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -563,5 +564,165 @@ func TestReconcile_EOFFlushesOverrides(t *testing.T) {
 	final, _ := os.ReadFile(dst)
 	if !strings.Contains(string(final), `"npx"`) {
 		t.Fatalf("EOF after [o]verride dropped the queued override (source value not restored):\n%s", final)
+	}
+}
+
+// TestReconcile_FinishRunsExactlyOnce is the behavioural half of the #232
+// decision that the run's tail (finish) has exactly ONE call site and is never
+// deferred. finish prints one summary line per run — "N item(s) left
+// unresolved" in an auto mode, "override: applied N item(s)" after an
+// [o]verride — so the observable trace of a finish that ran twice (a defer plus
+// the explicit call, or a second call added later) is exactly a duplicated line.
+//
+// Three exits are covered: the natural end of an --auto-safe pass, an EOF after
+// [o]verride, and [q]uit after [o]verride. The last one also pins that quitting
+// still APPLIES the queued override: both quits reach finish exactly as the
+// EOFs do (TestReconcile_EOFFlushesOverrides), but no test or scripted scenario
+// ever queued an override and then quit, so a quit that dropped the queue
+// failed nothing.
+func TestReconcile_FinishRunsExactlyOnce(t *testing.T) {
+	setup := func(t *testing.T) (env map[string]string, dst string) {
+		t.Helper()
+		tmp := t.TempDir()
+		env = map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+		mustRun(t, env, "init")
+		mustRun(t, env, "agent", "add", "claude")
+		for _, name := range []string{"aaa", "bbb"} {
+			mcp := filepath.Join(tmp, ".agentsync", "mcp", name+".toml")
+			_ = os.MkdirAll(filepath.Dir(mcp), 0o755)
+			_ = os.WriteFile(mcp, []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
+		}
+		mustRun(t, env, "apply")
+		// Drift BOTH servers in the destination (npx -> npm).
+		dst = filepath.Join(tmp, ".claude.json")
+		body, _ := os.ReadFile(dst)
+		if err := os.WriteFile(dst, []byte(strings.ReplaceAll(string(body), `"npx"`, `"npm"`)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return env, dst
+	}
+	// commandOf reads mcpServers.<id>.command from the claude destination.
+	commandOf := func(t *testing.T, dst, id string) string {
+		t.Helper()
+		var doc struct {
+			MCPServers map[string]struct {
+				Command string `json:"command"`
+			} `json:"mcpServers"`
+		}
+		body, err := os.ReadFile(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(body, &doc); err != nil {
+			t.Fatalf("parse %s: %v\n%s", dst, err, body)
+		}
+		return doc.MCPServers[id].Command
+	}
+
+	t.Run("auto-safe prints the unresolved summary once", func(t *testing.T) {
+		env, _ := setup(t)
+		out, err := runCLI(t, env, "reconcile", "--auto-safe")
+		if err != nil {
+			t.Fatalf("reconcile --auto-safe: %v\n%s", err, out)
+		}
+		if n := strings.Count(out, "item(s) left unresolved"); n != 1 {
+			t.Fatalf("the unresolved summary must be printed exactly once (finish ran %d times):\n%s", n, out)
+		}
+		if !strings.Contains(out, "2 item(s) left unresolved") {
+			t.Fatalf("both drifted servers should be counted; got:\n%s", out)
+		}
+	})
+
+	t.Run("EOF after override applies the queue once", func(t *testing.T) {
+		env, dst := setup(t)
+		out, err := runCLIWithStdin(t, env, "o", "reconcile")
+		if err != nil {
+			t.Fatalf("reconcile: %v\n%s", err, out)
+		}
+		if n := strings.Count(out, "override: applied"); n != 1 {
+			t.Fatalf("the override summary must be printed exactly once (finish ran %d times):\n%s", n, out)
+		}
+		if got := commandOf(t, dst, "aaa"); got != "npx" {
+			t.Fatalf("the queued override was not applied at EOF: aaa.command = %q, want npx", got)
+		}
+	})
+
+	t.Run("quit after override still applies the queue once", func(t *testing.T) {
+		env, dst := setup(t)
+		out, err := runCLIWithStdin(t, env, "oq", "reconcile")
+		if err != nil {
+			t.Fatalf("reconcile: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "quit") {
+			t.Fatalf("expected the [q]uit echo; got:\n%s", out)
+		}
+		if n := strings.Count(out, "override: applied 1 item(s)"); n != 1 {
+			t.Fatalf("[q]uit must still apply the ONE queued override, exactly once (got %d summary lines):\n%s", n, out)
+		}
+		// Only the first server is asserted: the queued op is the whole merge
+		// file's op (which is why dedupOverride keys by path), so the re-apply
+		// restores every owned key in .claude.json, not just aaa.
+		if got := commandOf(t, dst, "aaa"); got != "npx" {
+			t.Fatalf("[q]uit dropped the queued override: aaa.command = %q, want npx (restored from source)", got)
+		}
+	})
+}
+
+// TestReconcile_ProjectScope_OverrideRecordsProjectState pins the scope and
+// project root that finish hands to render.NewWriter and RecordOpsState. Every
+// other reconcile test runs at user scope, where a transposition to
+// ScopeUser/"" is invisible; at project scope it makes the writer look the
+// destination up under the wrong state key, treat the project's own .mcp.json
+// as a never-applied foreign file, back it up and print a "backup:" line, and
+// record the re-apply against the wrong scope.
+func TestReconcile_ProjectScope_OverrideRecordsProjectState(t *testing.T) {
+	tmpHome := t.TempDir()
+	projectDir := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmpHome}
+	mustRun(t, env, "init")
+	mustRun(t, env, "agent", "add", "claude")
+	mustRun(t, env, "init", "--scope", "project", "--project", projectDir)
+	declareProjectAgent(t, env, projectDir, "claude")
+	scaffoldProjectMCP(t, projectDir, "github", "npx")
+	mustRun(t, env, "apply", "--project", projectDir)
+
+	mcpPath := filepath.Join(projectDir, ".mcp.json")
+	body, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("read project .mcp.json: %v", err)
+	}
+	drifted := strings.ReplaceAll(string(body), `"npx"`, `"npm"`)
+	if drifted == string(body) {
+		t.Fatalf("fixture did not contain the expected command to drift:\n%s", body)
+	}
+	if err := os.WriteFile(mcpPath, []byte(drifted), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLIWithStdin(t, env, "o", "reconcile", "--project", projectDir)
+	if err != nil {
+		t.Fatalf("reconcile --project: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "override: applied 1 item(s)") {
+		t.Fatalf("expected the override to be applied; got:\n%s", out)
+	}
+	if strings.Contains(out, "backup:") {
+		t.Fatalf("the project's own destination was treated as a foreign collision (wrong scope in finish):\n%s", out)
+	}
+	if final, _ := os.ReadFile(mcpPath); !strings.Contains(string(final), `"npx"`) {
+		t.Fatalf("override did not restore the project source value:\n%s", final)
+	}
+	for _, backups := range []string{
+		filepath.Join(tmpHome, ".agentsync", ".state", "backups"),
+		filepath.Join(projectDir, ".agentsync", ".state", "backups"),
+	} {
+		if _, err := os.Stat(backups); !os.IsNotExist(err) {
+			t.Fatalf("no backup may be taken for an owned project destination; found %s (stat err=%v)", backups, err)
+		}
+	}
+	// The re-apply must be recorded against the project's state, so the tree
+	// reads clean at project scope afterwards.
+	if out, err := runCLI(t, env, "status", "--project", projectDir, "--exit-code"); err != nil {
+		t.Fatalf("status --project after override should be clean: %v\n%s", err, out)
 	}
 }
