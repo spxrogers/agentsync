@@ -604,7 +604,7 @@ func (s *reconcileSession) promptItem(it reconcileItem, rest []reconcileItem) (r
 		case !ok:
 			// ignore unknown key
 		case diff:
-			printItemDiff(w, s.p, it, s.redact, s.canMask)
+			renderItemValues(w, s.p, it, s.redact, s.canMask)
 			fmt.Fprintf(w, "  [w]rite-back  [o]verride  [s]kip  [i]gnore  [d]iff  [q]uit\n  > ")
 		case bulk:
 			// Capital letter = "apply this choice to all
@@ -1029,10 +1029,6 @@ func renderItemValues(w io.Writer, p *ui.Printer, it reconcileItem, redact map[s
 	for _, line := range strings.Split(renderDiffText(p, diffs), "\n") {
 		fmt.Fprintf(w, "  %s\n", line)
 	}
-}
-
-func printItemDiff(w io.Writer, p *ui.Printer, it reconcileItem, redact map[string]string, canMask bool) {
-	renderItemValues(w, p, it, redact, canMask)
 }
 
 // readChar reads a single non-whitespace character from r.
