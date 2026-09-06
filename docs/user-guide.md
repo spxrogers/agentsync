@@ -871,7 +871,10 @@ agentsync plugin upgrade atlassian             # re-fetch one plugin, then re-ap
 Both `upgrade` forms end in a re-apply — and the re-apply **is** `apply`: same
 scope resolution, same destination git backup, same removal counts and
 translation report — so an upgrade lands in your agents in one command rather
-than leaving them stale until the next `apply`.
+than leaving them stale until the next `apply`. Interactively, that includes
+`apply`'s one-time question before its first write into a destination dir it
+has not versioned yet (enable git backup for it?); answering it persists the
+mode to `agentsync.toml`, just as it does for `apply`.
 
 `plugin outdated` is not a pure read despite the `npm outdated` prior: it uses
 the network and it writes state (each marketplace's fetch timestamp and head

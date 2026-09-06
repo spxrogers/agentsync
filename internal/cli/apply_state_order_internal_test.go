@@ -45,62 +45,75 @@ func TestApplyPipelineLoadsStateAfterSourceReload(t *testing.T) {
 	}
 	dir := filepath.Dir(thisFile)
 
-	// Half A — the ordering contract, on the pipeline itself.
-	applySrc, err := os.ReadFile(filepath.Join(dir, "apply.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := funcBody(string(applySrc), "func runApplyPipeline(")
-	if body == "" {
-		t.Fatal("runApplyPipeline not found in apply.go — update this guard")
-	}
-
-	reload := strings.Index(body, "loadProjectedForScope(")
-	load := strings.Index(body, "state.Load(")
-	switch {
-	case reload < 0:
-		t.Fatal("runApplyPipeline no longer calls loadProjectedForScope — update this guard")
-	case load < 0:
-		t.Fatal("runApplyPipeline no longer calls state.Load — if state is passed in again, " +
-			"it is read before the reload that can rewrite it; see this test's doc comment")
-	case load < reload:
-		t.Fatal("runApplyPipeline reads state.Load BEFORE loadProjectedForScope. That reload " +
-			"can run the pending subagent migration, which rewrites recorded source_ids — so the copy " +
-			"read here is stale and saving it reverts the rewrite. Load state AFTER the reload.")
-	}
-
-	// The signature must not accept state either: a caller-supplied
-	// *state.Targets is read before this function runs, which has the same
-	// defect and is how the bug originally shipped.
-	sig := funcSignature(string(applySrc), "func runApplyPipeline(")
-	if strings.Contains(sig, "*state.Targets") {
-		t.Errorf("runApplyPipeline takes a *state.Targets again: %s\n"+
-			"A caller reads it before the source reload that can rewrite it. Load it inside, after the reload.", sig)
-	}
-
-	// Half B — the plugin re-apply must BE the pipeline, not a copy of it. The
-	// positive check and the four negatives are Errorf, not Fatal, so a
-	// hand-rolled re-apply reports every way it diverged in one run.
-	pollSrc, err := os.ReadFile(filepath.Join(dir, "plugin_poll.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	reapply := funcBody(string(pollSrc), "func reapplyAfterPluginChange(")
-	if reapply == "" {
-		t.Fatal("reapplyAfterPluginChange not found in plugin_poll.go — update this guard")
-	}
-	if !strings.Contains(reapply, "runApplyPipeline(") {
-		t.Errorf("reapplyAfterPluginChange no longer calls runApplyPipeline. The plugin re-apply must be " +
-			"the apply pipeline itself — a second transcription of it is the divergence #231 closed (that " +
-			"copy had already lost the git baseline/checkpoint, the removal-aware headline, backup pruning " +
-			"and the translation report).")
-	}
-	for _, own := range []string{"state.Load(", "render.Plan(", "render.Apply(", "state.Save("} {
-		if strings.Contains(reapply, own) {
-			t.Errorf("reapplyAfterPluginChange calls %s itself. Everything between the source reload and "+
-				"the report belongs to runApplyPipeline; a hand-rolled re-apply is the regression #231 closed.", own)
+	// The two halves are independent contracts; separate subtests so a Fatal
+	// in one never hides a failure in the other.
+	t.Run("pipeline loads state after the source reload", func(t *testing.T) {
+		applySrc, err := os.ReadFile(filepath.Join(dir, "apply.go"))
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
+		body := funcBody(string(applySrc), "func runApplyPipeline(")
+		if body == "" {
+			t.Fatal("runApplyPipeline not found in apply.go — update this guard")
+		}
+		// funcBody stops at the first line that is just "}", so a raw string
+		// literal with a column-0 brace inside the function would silently
+		// shrink the text under test. PruneBackups is the pipeline's last step:
+		// if it is not in the captured body, the capture is truncated.
+		if !strings.Contains(body, "PruneBackups(") {
+			t.Fatal("funcBody captured a truncated runApplyPipeline (PruneBackups( is missing) — " +
+				"a column-0 '}' inside the function? fix funcBody or the function, then re-run")
+		}
+
+		reload := strings.Index(body, "loadProjectedForScope(")
+		load := strings.Index(body, "state.Load(")
+		switch {
+		case reload < 0:
+			t.Fatal("runApplyPipeline no longer calls loadProjectedForScope — update this guard")
+		case load < 0:
+			t.Fatal("runApplyPipeline no longer calls state.Load — if state is passed in again, " +
+				"it is read before the reload that can rewrite it; see this test's doc comment")
+		case load < reload:
+			t.Fatal("runApplyPipeline reads state.Load BEFORE loadProjectedForScope. That reload " +
+				"can run the pending subagent migration, which rewrites recorded source_ids — so the copy " +
+				"read here is stale and saving it reverts the rewrite. Load state AFTER the reload.")
+		}
+
+		// The signature must not accept state either: a caller-supplied
+		// *state.Targets is read before this function runs, which has the same
+		// defect and is how the bug originally shipped.
+		sig := funcSignature(string(applySrc), "func runApplyPipeline(")
+		if strings.Contains(sig, "*state.Targets") {
+			t.Errorf("runApplyPipeline takes a *state.Targets again: %s\n"+
+				"A caller reads it before the source reload that can rewrite it. Load it inside, after the reload.", sig)
+		}
+	})
+
+	t.Run("plugin re-apply delegates to the pipeline", func(t *testing.T) {
+		// The plugin re-apply must BE the pipeline, not a copy of it. The
+		// positive check and the four negatives are Errorf, not Fatal, so a
+		// hand-rolled re-apply reports every way it diverged in one run.
+		pollSrc, err := os.ReadFile(filepath.Join(dir, "plugin_poll.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		reapply := funcBody(string(pollSrc), "func reapplyAfterPluginChange(")
+		if reapply == "" {
+			t.Fatal("reapplyAfterPluginChange not found in plugin_poll.go — update this guard")
+		}
+		if !strings.Contains(reapply, "runApplyPipeline(") {
+			t.Errorf("reapplyAfterPluginChange no longer calls runApplyPipeline. The plugin re-apply must be " +
+				"the apply pipeline itself — a second transcription of it is the divergence #231 closed (that " +
+				"copy had already lost the git baseline/checkpoint, the removal-aware headline, backup pruning " +
+				"and the translation report).")
+		}
+		for _, own := range []string{"state.Load(", "render.Plan(", "render.Apply(", "state.Save("} {
+			if strings.Contains(reapply, own) {
+				t.Errorf("reapplyAfterPluginChange calls %s itself. Everything between the source reload and "+
+					"the report belongs to runApplyPipeline; a hand-rolled re-apply is the regression #231 closed.", own)
+			}
+		}
+	})
 }
 
 // funcBody returns the source text of the function whose declaration starts

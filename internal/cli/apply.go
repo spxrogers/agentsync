@@ -67,7 +67,8 @@ func noAgentsEnabledHint(sc adapter.Scope, projectRoot string) string {
 }
 
 // applyOpts carries the per-run knobs of the apply pipeline. The ZERO VALUE is
-// a plain real apply of every enabled agent with destination git backup on —
+// a plain real apply of every enabled agent, not opted out of destination git
+// backup (the [destination_directory_git_backup] mode still governs it) —
 // which is exactly what a caller that is not the `apply` command wants. The
 // three fields are exactly `apply`'s three flags and nothing else: a behaviour
 // gate added here would recreate, one field at a time, the divergence #231
@@ -95,9 +96,9 @@ type applyOpts struct {
 
 // runApplyPipeline is the apply pipeline — load-projected source → resolve
 // secrets → plan → git baseline → write → record state → checkpoint → report —
-// and the lock-protected body of the apply command. It is split out from
-// newApplyCmd so the lock acquisition lives in one obvious place, and it is
-// called by BOTH `apply` and the re-apply tail of `plugin upgrade`
+// and the body of the apply command (callers hold the global lock; only
+// `apply --dry-run`, which writes nothing, runs without it). It is called by
+// BOTH `apply` and the re-apply tail of `plugin upgrade`
 // (reapplyAfterPluginChange) so the two cannot diverge: the second copy had
 // already lost the pre-apply baseline and checkpoint (#118/#143), the
 // removal-aware headline, the backup pruning and the translation report

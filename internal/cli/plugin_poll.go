@@ -206,13 +206,11 @@ func pollPluginsRun(cmd *cobra.Command, o pollOpts) error {
 // reportLosslessExclusions is the `--lossless` gate of `plugin upgrade --all`:
 // it drops every bump whose candidate version would introduce a new
 // translation loss (an adapter Skip) for any enabled agent, and REPORTS each
-// exclusion — a dropped bump is never silent. Each bump is evaluated by
-// projecting the plugin's installed vs candidate manifest and diffing the skip
-// identities a render emits; comparing both under identical conditions makes
-// any render quirk cancel, so the delta is exactly the bump's effect. A bump
-// that cannot be evaluated is excluded too (conservative), but reported as
-// what it is rather than as a measured loss. Returns the safe bumps and how
-// many were excluded. filterSafeBumps decides; this function only announces.
+// exclusion — a dropped bump is never silent. A bump that cannot be evaluated
+// is excluded too (conservative), but reported as what it is rather than as a
+// measured loss. Returns the safe bumps and how many were excluded.
+// filterSafeBumps decides (and bumpIsLossy says how a bump is measured); this
+// function only announces.
 func reportLosslessExclusions(p *ui.Printer, home string, bumps []marketplace.Bump, fetched map[string]map[string]marketplace.PluginEntry, cfg source.Config, userHome string, warn io.Writer) (safe []marketplace.Bump, excluded int) {
 	var lossy, unevaluable []marketplace.Bump
 	safe, lossy, unevaluable = filterSafeBumps(home, bumps, fetched, cfg, userHome, warn)

@@ -54,10 +54,11 @@ func TestPluginOutdated_ReportsPendingBumps(t *testing.T) {
 // honest one: a version-only bump re-renders byte-identical destinations, and
 // the pipeline reports that as `up to date: N ops, no changes` rather than the
 // old copy's unconditional `applied: N ops` for a run that wrote nothing.
-// Either headline is accepted below — and the oracle is then made STRONGER,
-// not merely relaxed: the per-plugin translation report (`plugin:
-// demo@test-mp-v`) is something only the real pipeline emits, so a
-// re-divergence into a hand-rolled re-apply cannot fake it.
+// The fixture's bump is version-only, so that headline is deterministic and
+// is asserted exactly — it is the user-visible change this PR ships — and the
+// per-plugin translation report (`plugin: demo@test-mp-v`), which only the
+// real pipeline emits, is required too, so a re-divergence into a hand-rolled
+// re-apply cannot fake either.
 func TestPluginUpgradeAll_UpgradesAndReapplies(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
@@ -80,8 +81,8 @@ func TestPluginUpgradeAll_UpgradesAndReapplies(t *testing.T) {
 	if !strings.Contains(demoTOML, "1.0.1") {
 		t.Fatalf("plugin upgrade --all did not bump the pin:\n%s", demoTOML)
 	}
-	if !strings.Contains(out, "applied:") && !strings.Contains(out, "up to date:") {
-		t.Fatalf("plugin upgrade --all must re-apply after the bump; got:\n%s", out)
+	if !strings.Contains(out, "up to date:") {
+		t.Fatalf("plugin upgrade --all must re-apply through the pipeline, whose headline for a version-only bump is `up to date`; got:\n%s", out)
 	}
 	if !strings.Contains(out, "plugin: demo@test-mp-v") {
 		t.Fatalf("plugin upgrade --all must end in the real apply pipeline (no translation report); got:\n%s", out)
@@ -98,9 +99,9 @@ func TestPluginUpgradeAll_UpgradesAndReapplies(t *testing.T) {
 //
 // As for --all above, that re-apply is the real apply pipeline (#231): a
 // version-only bump re-renders identical bytes and is reported honestly as
-// `up to date: N ops, no changes`, not `applied: N ops`, so either headline is
-// accepted — and the translation report (`plugin: demo@test-mp-v`), which only
-// the real pipeline emits, is required as the stronger positive signal.
+// `up to date: N ops, no changes`, never `applied: N ops` — asserted exactly —
+// and the translation report (`plugin: demo@test-mp-v`), which only the real
+// pipeline emits, is required as the second positive signal.
 func TestPluginUpgradeID_Reapplies(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
@@ -122,8 +123,8 @@ func TestPluginUpgradeID_Reapplies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plugin upgrade demo: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "applied:") && !strings.Contains(out, "up to date:") {
-		t.Fatalf("plugin upgrade <id> must re-apply; got:\n%s", out)
+	if !strings.Contains(out, "up to date:") {
+		t.Fatalf("plugin upgrade <id> must re-apply through the pipeline, whose headline for a version-only bump is `up to date`; got:\n%s", out)
 	}
 	if !strings.Contains(out, "plugin: demo@test-mp-v") {
 		t.Fatalf("plugin upgrade <id> must end in the real apply pipeline (no translation report); got:\n%s", out)

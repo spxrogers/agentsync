@@ -675,7 +675,8 @@ all without writing a byte (and it skips the git-backup step 9 entirely).
 `runApplyPipeline` (`internal/cli/apply.go`), and `apply` is not its only
 caller: the re-apply tail of `plugin upgrade` and `plugin upgrade --all`
 (`reapplyAfterPluginChange`) runs the same function with the default options —
-a real apply of every enabled agent, git backup on. It used to be a second,
+a real apply of every enabled agent, with destination git backup governed by
+`[destination_directory_git_backup]` exactly as for `apply`. It used to be a second,
 hand-maintained transcription of steps 1–7 and the state-recording half of
 step 8, and the copy had already fallen behind: no translation report (the rest
 of step 8), no pre-apply baseline or checkpoint (step 9), no removal-aware

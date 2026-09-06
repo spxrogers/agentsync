@@ -9,19 +9,20 @@ import (
 )
 
 // pluginReapplyFixture builds the home the two tests below share: an inited
-// agentsync home with the named agents enabled, optionally
-// `[destination_directory_git_backup] mode = "on"` (tests have no TTY, so the
-// default `prompt` fails closed and never inits a repo), a SOURCE skill, and
-// the versioned fixture marketplace with its `demo` plugin installed. It
+// agentsync home with the named agents enabled, a SOURCE skill, and the
+// versioned fixture marketplace with its `demo` plugin installed. It
 // deliberately does NOT run `apply`: the first write into the destinations
 // must be the upgrade's re-apply, or both tests would pass on what `apply`
-// had already done. Returns the fixture's env and its target root.
+// had already done. Returns the fixture's env and its target root. A test
+// that needs git backup sets `[destination_directory_git_backup] mode = "on"`
+// itself (enableGitBackupOn): tests have no TTY, so the default `prompt`
+// fails closed and never inits a repo.
 //
 // The skill matters: it renders to ~/.claude/skills/demo/SKILL.md, INSIDE a
 // version root. An MCP-only config only touches ~/.claude.json at $HOME, which
 // is never versioned (agentsync never inits a repo at $HOME) — a git-backup
 // test built on it would pass with the backup entirely absent.
-func pluginReapplyFixture(t *testing.T, gitBackup bool, agents ...string) (map[string]string, string) {
+func pluginReapplyFixture(t *testing.T, agents ...string) (map[string]string, string) {
 	t.Helper()
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
@@ -30,9 +31,6 @@ func pluginReapplyFixture(t *testing.T, gitBackup bool, agents ...string) (map[s
 	mustRun(t, env, "init")
 	for _, a := range agents {
 		mustRun(t, env, "agent", "add", a)
-	}
-	if gitBackup {
-		enableGitBackupOn(t, tmp)
 	}
 	writeSkillSource(t, tmp, "demo", "body")
 	mpDir := makeVersionedMarketplace(t, base, "1.0.0")
@@ -54,7 +52,8 @@ func pluginReapplyFixture(t *testing.T, gitBackup bool, agents ...string) (map[s
 // the baseline). Without this test, dropping the git-backup pass from the
 // plugin path (applyOpts{noGitBackup: true} at the call site) fails nothing.
 func TestPluginUpgrade_TakesGitBackupBaselineAndCheckpoint(t *testing.T) {
-	env, tmp := pluginReapplyFixture(t, true, "claude")
+	env, tmp := pluginReapplyFixture(t, "claude")
+	enableGitBackupOn(t, tmp)
 
 	out, err := runCLI(t, env, "plugin", "upgrade", "demo")
 	if err != nil {
@@ -96,7 +95,7 @@ func TestPluginUpgrade_TakesGitBackupBaselineAndCheckpoint(t *testing.T) {
 // mutation this test was written against. Two agents are enabled; after the
 // upgrade's re-apply both must hold the plugin's MCP server.
 func TestPluginUpgrade_RendersEveryEnabledAgent(t *testing.T) {
-	env, tmp := pluginReapplyFixture(t, false, "claude", "opencode")
+	env, tmp := pluginReapplyFixture(t, "claude", "opencode")
 
 	out, err := runCLI(t, env, "plugin", "upgrade", "demo")
 	if err != nil {
