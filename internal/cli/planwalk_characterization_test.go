@@ -1090,6 +1090,7 @@ func TestPlanWalkCharacterization(t *testing.T) {
 				target:        tc.target(userHome),
 				pointer:       tc.pointer,
 				plan:          plan,
+				reg:           reg,
 				agents:        reg.Names(),
 				state:         s,
 				userHome:      userHome,

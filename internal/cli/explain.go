@@ -252,6 +252,7 @@ func explainRun(cmd *cobra.Command, rawPath, ptr string, jsonOut bool) error {
 		target:        target,
 		pointer:       ptr,
 		plan:          plan,
+		reg:           reg,
 		agents:        reg.Names(),
 		canonical:     c,
 		state:         s,

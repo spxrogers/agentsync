@@ -304,7 +304,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   every prompt, bulk confirmation, EOF, `[q]uit` (including a quit with a
   queued override), `--auto-*` mode, project-scope override, exit code, masked
   secret value and resulting source/state tree — are byte-identical to the
-  pre-change binary (`main` at `309fde0`).
+  pre-change binary (`main` at `309fde0`). Two per-item rebuilds went with it:
+  `printItemDiff` was a pure alias of `renderItemValues`, and inverting a hook
+  pointer's native event spelling now uses the registry the caller already
+  holds instead of rebuilding all 31 adapters (~10 µs) on every resolution.
 
 - **`.state/targets.json` is now `schema_version: 2`.** The upgrade is automatic
   and requires nothing: every command reads the old keys, and the first command

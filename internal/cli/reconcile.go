@@ -246,7 +246,8 @@ type reconcileSession struct {
 	w  io.Writer
 	br *bufio.Reader
 	// reg is the adapter registry the plan was rendered with; finish looks up
-	// each override's adapter in it.
+	// each override's adapter in it, and it resolves a hook pointer's native
+	// event spelling on write-back, so no per-item registry rebuild is needed.
 	reg         *adapter.Registry
 	home        string // ~/.agentsync (canonical source root)
 	userHome    string
@@ -1154,7 +1155,7 @@ func (s *reconcileSession) itemSourceFile(it reconcileItem) string {
 		}
 		return filepath.Join(s.home, it.op.SourceID)
 	}
-	return pointerSourceFile(s.home, it.agentName, it.ptr, s.hookEvents)
+	return pointerSourceFile(s.reg, s.home, it.agentName, it.ptr, s.hookEvents)
 }
 
 // pointerSourceFile maps a NATIVE key-merge JSON pointer back to the canonical
@@ -1174,8 +1175,11 @@ func (s *reconcileSession) itemSourceFile(it reconcileItem) string {
 // comes from one of them, so scanning that set is both sufficient and free of a
 // second, drift-prone enumeration of the event vocabulary.
 //
+// reg is the caller's own registry — reconcile's session, explain's — so the
+// inversion costs a map lookup instead of rebuilding all 31 adapters per call.
+//
 // Returns "" when the pointer names no single canonical source-of-record.
-func pointerSourceFile(home, agent, ptr string, canonicalEvents []string) string {
+func pointerSourceFile(reg *adapter.Registry, home, agent, ptr string, canonicalEvents []string) string {
 	parts := strings.SplitN(strings.TrimPrefix(ptr, "/"), "/", 3)
 	if len(parts) < 2 || parts[1] == "" {
 		return ""
@@ -1186,7 +1190,7 @@ func pointerSourceFile(home, agent, ptr string, canonicalEvents []string) string
 	case "lspServers", "lsp":
 		return filepath.Join(home, "lsp", parts[1]+".toml")
 	case "hooks":
-		event, ok := canonicalHookEvent(agent, parts[1], canonicalEvents)
+		event, ok := canonicalHookEvent(reg, agent, parts[1], canonicalEvents)
 		if !ok {
 			return ""
 		}
@@ -1200,8 +1204,24 @@ func pointerSourceFile(home, agent, ptr string, canonicalEvents []string) string
 // codex — no HookEventNamer) passes the segment through. A renaming adapter is
 // inverted by asking it for the native spelling of each candidate canonical
 // event; ok is false when nothing matches.
-func canonicalHookEvent(agent, native string, canonicalEvents []string) (string, bool) {
-	namer, ok := registryFactory().Lookup(agent).(adapter.HookEventNamer)
+//
+// reg is the CALLER's registry (reconcile's session, explain's), not a fresh
+// registryFactory() per call: that spelling rebuilt all 31 adapters every time
+// a hook pointer was resolved (measured: ~10µs per call, building 31
+// adapters). Registry.Lookup returns a nil adapter.Adapter for an unregistered
+// name, and a comma-ok type assertion on a nil interface yields (nil, false)
+// rather than panicking, so an unknown agent is treated as non-renaming and
+// passes the segment through — unchanged from the registryFactory() spelling,
+// which had exactly the same contents.
+//
+// The precondition is a non-nil reg — every production caller holds one — but
+// Registry.Lookup dereferences its receiver, so a nil *Registry is guarded here
+// and treated exactly like an unregistered agent: the non-renaming passthrough.
+func canonicalHookEvent(reg *adapter.Registry, agent, native string, canonicalEvents []string) (string, bool) {
+	if reg == nil {
+		return native, true
+	}
+	namer, ok := reg.Lookup(agent).(adapter.HookEventNamer)
 	if !ok {
 		return native, true
 	}

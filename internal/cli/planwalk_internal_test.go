@@ -623,6 +623,7 @@ func TestPathFilterFlagsSurviveAZeroItemOp(t *testing.T) {
 		fs:          afero.NewMemMapFs(),
 		target:      d,
 		plan:        plan,
+		reg:         registryFactory(),
 		agents:      names,
 		state:       state.New(),
 		userHome:    userHome,
