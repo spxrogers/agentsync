@@ -588,6 +588,10 @@ func (s *reconcileSession) resolveAuto(it reconcileItem) reconcileAction {
 	return actionNone
 }
 
+// itemMenu is the per-item prompt's menu line. promptItem prints it before the
+// first read and again after [d]iff; one spelling keeps the two sites in step.
+const itemMenu = "  [w]rite-back  [o]verride  [s]kip  [i]gnore  [d]iff  [q]uit\n  > "
+
 // promptItem runs the per-item prompt and returns the action the user chose.
 // stop is true when the run must end without acting on this item: the input
 // ended at the prompt, or ended mid bulk-confirm — both reach finish so queued
@@ -601,7 +605,7 @@ func (s *reconcileSession) promptItem(it reconcileItem, rest []reconcileItem) (r
 	label := itemLabelDisp(it)
 	fmt.Fprintf(w, "\n%s  (%s)\n", label, it.cls)
 	renderItemValues(w, s.p, it, s.redact, s.canMask)
-	fmt.Fprintf(w, "  [w]rite-back  [o]verride  [s]kip  [i]gnore  [d]iff  [q]uit\n  > ")
+	fmt.Fprint(w, itemMenu)
 
 	for {
 		ch, readErr := readChar(s.br)
@@ -614,7 +618,7 @@ func (s *reconcileSession) promptItem(it reconcileItem, rest []reconcileItem) (r
 			// ignore unknown key
 		case diff:
 			renderItemValues(w, s.p, it, s.redact, s.canMask)
-			fmt.Fprintf(w, "  [w]rite-back  [o]verride  [s]kip  [i]gnore  [d]iff  [q]uit\n  > ")
+			fmt.Fprint(w, itemMenu)
 		case bulk:
 			// Capital letter = "apply this choice to all
 			// remaining items." Confirm before locking it

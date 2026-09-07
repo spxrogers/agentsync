@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -23,23 +24,21 @@ import (
 // pinned by nothing. Measured on the pre-#232 tree: mutating any of those five
 // exits failed zero tests.
 //
-// None of these tests touches the filesystem: every item carries hasText=false,
-// so the prompt renders the SHA-prefix fallback, and every action they exercise
-// (skip, quit) is a no-op or a print.
+// Every item carries hasText=false, so the prompt renders the SHA-prefix
+// fallback and no destination is read. The one test that writes,
+// TestApplyAction_IgnoreAppendsToIgnoreFile, points the session's home at a
+// temp dir first; everything else here is a no-op, a print or an in-memory
+// queue.
 
 // newTestSession builds a session wired to a scripted stdin and an in-memory
 // transcript. Only the fields the prompt/walk path reads are set; home, st and
-// reg are deliberately left zero, which bounds what these tests may drive: the
-// actions exercised below are [s]kip (a no-op), [o]verride (appends to
-// overrideOps and marks dedupOverride), [q]uit (prints) and, with home pointed
-// at a temp dir, [i]gnore (appends to ignore.toml under it). [w]rite-back needs
-// a real ~/.agentsync, a plan and a destination and is covered end to end in
-// reconcile_test.go instead. Two more arms would PANIC on this session rather
-// than misbehave, which is what bounds the orphan and override tests: the
-// orphan [r]emove arm (pruneStateFilesForPath on a nil st) and finish with a
-// queued override (Registry.Lookup on a nil reg) — so the orphan tests press
-// only [k], [q] or EOF, and nothing here calls finish;
-// TestReconcile_FinishRunsExactlyOnce covers it end to end.
+// reg are deliberately left zero, and that bounds what a test may drive. Two
+// arms PANIC on this session rather than misbehave — the orphan [r]emove arm
+// (pruneStateFilesForPath on a nil st) and finish with a queued override
+// (Registry.Lookup on a nil reg) — so the orphan tests press only [k], [q] or
+// EOF, nothing here calls finish (TestReconcile_FinishRunsExactlyOnce covers it
+// end to end), and [w]rite-back, which needs a real ~/.agentsync, a plan and a
+// destination, stays in reconcile_test.go. A test that needs home sets it.
 //
 // The reader is NOT a fake: it is the same *bufio.Reader production wraps stdin
 // in, over a strings.Reader, so readChar sees production's exact EOF behaviour.
@@ -294,13 +293,8 @@ func TestApplyAction_OnlyQuitStopsThePass(t *testing.T) {
 			if got := s.applyAction(it, tc.action); got != tc.wantStop {
 				t.Errorf("applyAction(%v) = %v, want %v", tc.action, got, tc.wantStop)
 			}
-			if tc.action == actionOverride {
-				if len(s.overrideOps) != 1 {
-					t.Fatalf("after one [o]: %d queued override ops, want 1", len(s.overrideOps))
-				}
-				if oo := s.overrideOps[0]; oo.agentName != "claude" || oo.op.Path != "/dest/a" {
-					t.Errorf("queued override = %+v, want claude's op for /dest/a", oo)
-				}
+			if tc.action == actionOverride && len(s.overrideOps) != 1 {
+				t.Fatalf("after one [o]: %d queued override ops, want 1", len(s.overrideOps))
 			}
 			// The same item a second time: nothing new may be queued, and
 			// stop must not change.
@@ -310,23 +304,37 @@ func TestApplyAction_OnlyQuitStopsThePass(t *testing.T) {
 			if len(s.overrideOps) != tc.wantQueue {
 				t.Errorf("after applying %v twice: %d queued override ops, want %d", tc.action, len(s.overrideOps), tc.wantQueue)
 			}
-			if tc.action == actionOverride {
-				// The dedup key is agent AND path: another agent's item at the
-				// same path is a different re-apply and must queue.
-				other := it
-				other.agentName = "opencode"
-				s.applyAction(other, actionOverride)
-				if len(s.overrideOps) != 2 {
-					t.Errorf("after a second agent's [o] on the same path: %d queued, want 2", len(s.overrideOps))
-				}
-			}
 		})
 	}
 }
 
-// itemMenu is the per-item prompt's menu line, pinned here so the tests below
-// can count how many times the user was (re)prompted.
-const itemMenu = "  [w]rite-back  [o]verride  [s]kip  [i]gnore  [d]iff  [q]uit\n  > "
+// TestApplyAction_OverrideDedupsByAgentAndPath pins the dedup key: [o] twice
+// on the same agent's item queues one re-apply of that path, but another
+// agent's item at the same path is a different re-apply and must queue too.
+func TestApplyAction_OverrideDedupsByAgentAndPath(t *testing.T) {
+	s, _ := newTestSession(t, "")
+	it := driftItem("/dest/a")
+	s.applyAction(it, actionOverride)
+	s.applyAction(it, actionOverride)
+	if len(s.overrideOps) != 1 {
+		t.Fatalf("after [o] twice on one item: %d queued, want 1", len(s.overrideOps))
+	}
+	if oo := s.overrideOps[0]; oo.agentName != "claude" || oo.op.Path != "/dest/a" {
+		t.Errorf("queued override = %+v, want claude's op for /dest/a", oo)
+	}
+	other := it
+	other.agentName = "opencode"
+	s.applyAction(other, actionOverride)
+	if len(s.overrideOps) != 2 {
+		t.Errorf("after a second agent's [o] on the same path: %d queued, want 2", len(s.overrideOps))
+	}
+}
+
+// wantItemMenu is deliberately a COPY of the production itemMenu, not a
+// reference to it: the tests below count it to see how many times the user was
+// (re)prompted, and a change to the menu's wording should fail here rather
+// than be absorbed by a constant both sides share.
+const wantItemMenu = "  [w]rite-back  [o]verride  [s]kip  [i]gnore  [d]iff  [q]uit\n  > "
 
 // TestPromptItem_DiffReprintsValuesAndMenu pins the [d]iff arm: it re-renders
 // the item's values and the menu, echoes nothing, chooses no action, and the
@@ -341,7 +349,7 @@ func TestPromptItem_DiffReprintsValuesAndMenu(t *testing.T) {
 		t.Fatalf("promptItem = (%v, stop=%v), want (%v, false): [d] must not choose, the [s] after it must", act, stop, actionSkip)
 	}
 	got := out.String()
-	if n := strings.Count(got, itemMenu); n != 2 {
+	if n := strings.Count(got, wantItemMenu); n != 2 {
 		t.Errorf("menu printed %d time(s), want 2 (once before [d], once after); transcript:\n%s", n, got)
 	}
 	if n := strings.Count(got, "  destination: "); n != 2 {
@@ -371,7 +379,7 @@ func TestPromptItem_DeclinedBulkDoesNotReprintMenu(t *testing.T) {
 	if !strings.HasSuffix(got, want) {
 		t.Errorf("after declining, the next key is read at the same prompt with no menu re-print; transcript must end %q, got:\n%q", want, got)
 	}
-	if n := strings.Count(got, itemMenu); n != 1 {
+	if n := strings.Count(got, wantItemMenu); n != 1 {
 		t.Errorf("menu printed %d time(s), want exactly 1; transcript:\n%s", n, got)
 	}
 }
@@ -387,7 +395,7 @@ func TestPromptItem_UnknownKeyIsIgnored(t *testing.T) {
 	if stop || act != actionSkip {
 		t.Fatalf("promptItem = (%v, stop=%v), want (%v, false)", act, stop, actionSkip)
 	}
-	if got := out.String(); !strings.HasSuffix(got, itemMenu+"s\n") {
+	if got := out.String(); !strings.HasSuffix(got, wantItemMenu+"s\n") {
 		t.Errorf("an unknown key must leave the transcript untouched until a known one arrives; want it to end with the menu then the echoed s, got:\n%q", got)
 	}
 }
@@ -407,7 +415,7 @@ func TestWalk_BulkNeverSweepsOrphans(t *testing.T) {
 	if !strings.Contains(got, "apply 's' to all 2 remaining items? [y/N] y\n") {
 		t.Errorf("the blast radius must count the two drift items and not the orphan; transcript:\n%s", got)
 	}
-	if n := strings.Count(got, itemMenu); n != 1 {
+	if n := strings.Count(got, wantItemMenu); n != 1 {
 		t.Errorf("item menu printed %d time(s), want 1 — the bulk choice answers /dest/c; transcript:\n%s", n, got)
 	}
 	if !strings.Contains(got, "  kept: /dest/b\n") {
@@ -446,6 +454,12 @@ func TestApplyAction_IgnoreAppendsToIgnoreFile(t *testing.T) {
 // with two modes can be built (resolveAuto's switch would otherwise let
 // writeBack win silently, the data-loss shape the check exists to prevent).
 func TestNewReconcileSession_RejectsMultipleAutoModes(t *testing.T) {
+	// A constructor that regressed to loading BEFORE checking would read the
+	// ambient ~/.agentsync; point both home lookups at an empty temp dir so
+	// that regression fails against nothing real.
+	root := t.TempDir()
+	t.Setenv("AGENTSYNC_TARGET_ROOT", root)
+	t.Setenv("AGENTSYNC_HOME", filepath.Join(root, ".agentsync"))
 	for _, auto := range []reconcileAuto{
 		{writeBack: true, override: true},
 		{writeBack: true, safe: true},
@@ -458,6 +472,53 @@ func TestNewReconcileSession_RejectsMultipleAutoModes(t *testing.T) {
 		}
 		if s != nil || items != nil {
 			t.Errorf("newReconcileSession(%+v) returned a session or items alongside the error", auto)
+		}
+	}
+}
+
+// TestNewReconcileSession_ChecksModesBeforeLoading is the source-text guard for
+// the constructor doc's "as its first step, before it loads anything": the
+// mutual-exclusion check must precede every load in newReconcileSession, so a
+// bad flag combination costs no I/O and is the FIRST error the user sees even
+// when the source itself is unloadable. Measured before this guard existed:
+// moving the check below loadProjectedForScope left
+// TestNewReconcileSession_RejectsMultipleAutoModes passing — the ordering is
+// behaviour that nothing else pins. Same shape as the apply pipeline's
+// TestApplyPipelineLoadsStateAfterSourceReload.
+func TestNewReconcileSession_ChecksModesBeforeLoading(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	src, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "reconcile.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := funcBody(string(src), "func newReconcileSession(")
+	if body == "" {
+		t.Fatal("newReconcileSession not found in reconcile.go")
+	}
+	// The capture must end at the constructor's top-level return of the
+	// session literal; anything else means funcBody was cut short above the
+	// calls this guard orders.
+	if !strings.HasSuffix(body, "\t}, items, nil") {
+		t.Fatalf("funcBody captured a truncated newReconcileSession (the body does not end at the "+
+			"`}, items, nil` return); tail: %q", body[len(body)-min(80, len(body)):])
+	}
+	check := strings.Index(body, "b2i(auto.writeBack)")
+	if check < 0 {
+		t.Fatal("newReconcileSession no longer checks the auto modes with b2i(auto.writeBack); update this guard")
+	}
+	for _, load := range []string{
+		"loadProjectedForScope(", "newPrinter(", "state.Load(", "registryFactory()", "selectAgents(", "render.Plan(",
+	} {
+		at := strings.Index(body, load)
+		if at < 0 {
+			t.Errorf("newReconcileSession no longer calls %s; update this guard", load)
+			continue
+		}
+		if at < check {
+			t.Errorf("%s runs before the --auto-* mutual-exclusion check; the check must be the constructor's first step", load)
 		}
 	}
 }

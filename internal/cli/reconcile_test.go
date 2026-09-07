@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spxrogers/agentsync/internal/paths"
+	"github.com/spxrogers/agentsync/internal/state"
 	"github.com/spxrogers/agentsync/internal/ui"
 )
 
@@ -37,12 +39,37 @@ func TestReconcile_OrphanFile(t *testing.T) {
 
 	t.Run("remove backs up and deletes", func(t *testing.T) {
 		env, dest := setup(t)
+		// apply recorded the dest in state.Files; [r] must prune that entry AND
+		// the run must persist the prune, or the next apply still believes it
+		// owns a file that is gone (issue #171). Measured before this assertion
+		// existed: dropping the prune's stateDirty flag failed zero tests.
+		root := env["AGENTSYNC_TARGET_ROOT"]
+		stateOwnsDest := func() bool {
+			t.Helper()
+			st, err := state.Load(filepath.Join(root, ".agentsync", ".state", "targets.json"))
+			if err != nil {
+				t.Fatalf("load state: %v", err)
+			}
+			portable := paths.HomeRelative(root, dest)
+			for key := range st.Files {
+				if key.Path == portable {
+					return true
+				}
+			}
+			return false
+		}
+		if !stateOwnsDest() {
+			t.Fatal("precondition: apply should have recorded the dest skill in state.Files")
+		}
 		out, err := runCLIWithStdin(t, env, "r", "reconcile")
 		if err != nil {
 			t.Fatalf("reconcile: %v\n%s", err, out)
 		}
 		if _, err := os.Stat(dest); !os.IsNotExist(err) {
 			t.Fatalf("orphan dest should have been removed; stat err=%v\n%s", err, out)
+		}
+		if stateOwnsDest() {
+			t.Fatalf("state still owns the removed orphan: the prune was not persisted\n%s", out)
 		}
 		// A backup of the removed file must exist.
 		backups := filepath.Join(env["AGENTSYNC_TARGET_ROOT"], ".agentsync", ".state", "backups")
