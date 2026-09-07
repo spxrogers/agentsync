@@ -308,6 +308,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `printItemDiff` was a pure alias of `renderItemValues`, and inverting a hook
   pointer's native event spelling now uses the registry the caller already
   holds instead of rebuilding all 31 adapters (~10 µs) on every resolution.
+  The docs' description of `removeDroppedSource`'s gate (SECURITY.md,
+  architecture §5, the project memory file) now names the three write-back
+  routes that reach it — a per-item `[w]`, a confirmed bulk `[W]`, or
+  `--auto-writeback` — instead of calling it "keystroke-gated", which
+  `--auto-writeback` never was.
 
 - **`.state/targets.json` is now `schema_version: 2`.** The upgrade is automatic
   and requires nothing: every command reads the old keys, and the first command

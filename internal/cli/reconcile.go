@@ -240,9 +240,9 @@ type overrideOp struct {
 //
 // It changes no dest→source write: [w]rite-back still runs through
 // writeBackItem → capture.Capture, and the one deletion-only exception
-// (removeDroppedSource) keeps its gate — it runs only for a chosen write-back,
-// interactive [w] or --auto-writeback, whose destination dropped the server —
-// and its withinDir bound.
+// (removeDroppedSource) keeps its gate — it runs only for a chosen write-back
+// (a per-item [w], a confirmed bulk [W], or --auto-writeback) whose destination
+// dropped the server — and its withinDir bound.
 type reconcileSession struct {
 	// --- wiring, fixed for the run ---
 	cmd *cobra.Command

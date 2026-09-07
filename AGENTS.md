@@ -232,14 +232,15 @@ Capture **refuses the whole write** rather than persist cleartext. It errs towar
 refusing; the user updates the vault or edits the canonical source directly.
 Two narrow **deletion-only** exceptions sit outside the funnel: `reconcile`'s
 `removeDroppedSource` (`internal/cli/reconcile.go`) unlinks a canonical
-`mcp/<id>.toml` when the user explicitly chooses `[w]rite-back` for a
-destination-side server deletion, and `source.RemoveHooks` deletes a stale
-`hooks/<event>.toml` during import's stale-hook retirement. Both are safe
-without Capture because a pure deletion carries no content to re-reference —
-there is no secret material to persist — and both are guarded (the reconcile
-path is keystroke-gated and `withinDir`-bounded to `~/.agentsync`; RemoveHooks
-validates the native-supplied event id before touching a path). Anything that
-*writes content* dest→source still MUST go through `capture.Capture`.
+`mcp/<id>.toml` when the user chooses write-back for a destination-side server
+deletion — a per-item `[w]`, a confirmed bulk `[W]`, or `--auto-writeback` —
+and `source.RemoveHooks` deletes a stale `hooks/<event>.toml` during import's
+stale-hook retirement. Both are safe without Capture because a pure deletion
+carries no content to re-reference — there is no secret material to persist —
+and both are guarded (the reconcile path runs only for that chosen write-back
+and is `withinDir`-bounded to `~/.agentsync`; RemoveHooks validates the
+native-supplied event id before touching a path). Anything that *writes
+content* dest→source still MUST go through `capture.Capture`.
 
 **3. Resolved vs templated types.** `secrets.SubstituteCanonical` returns
 `secrets.Resolved` (a wrapper, NOT assignable to `source.Canonical`); it is the
