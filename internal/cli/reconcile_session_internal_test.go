@@ -2,8 +2,12 @@ package cli
 
 import (
 	"bufio"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/drift"
@@ -27,10 +31,15 @@ import (
 // transcript. Only the fields the prompt/walk path reads are set; home, st and
 // reg are deliberately left zero, which bounds what these tests may drive: the
 // actions exercised below are [s]kip (a no-op), [o]verride (appends to
-// overrideOps and marks dedupOverride) and [q]uit (prints). [w]rite-back and
-// [i]gnore need a real ~/.agentsync and
-// are covered end to end in reconcile_test.go instead — driving them from here
-// would write relative to the test's working directory.
+// overrideOps and marks dedupOverride), [q]uit (prints) and, with home pointed
+// at a temp dir, [i]gnore (appends to ignore.toml under it). [w]rite-back needs
+// a real ~/.agentsync, a plan and a destination and is covered end to end in
+// reconcile_test.go instead. Two more arms would PANIC on this session rather
+// than misbehave, which is what bounds the orphan and override tests: the
+// orphan [r]emove arm (pruneStateFilesForPath on a nil st) and finish with a
+// queued override (Registry.Lookup on a nil reg) — so the orphan tests press
+// only [k], [q] or EOF, and nothing here calls finish;
+// TestReconcile_FinishRunsExactlyOnce covers it end to end.
 //
 // The reader is NOT a fake: it is the same *bufio.Reader production wraps stdin
 // in, over a strings.Reader, so readChar sees production's exact EOF behaviour.
@@ -285,8 +294,13 @@ func TestApplyAction_OnlyQuitStopsThePass(t *testing.T) {
 			if got := s.applyAction(it, tc.action); got != tc.wantStop {
 				t.Errorf("applyAction(%v) = %v, want %v", tc.action, got, tc.wantStop)
 			}
-			if tc.action == actionOverride && len(s.overrideOps) != 1 {
-				t.Fatalf("after one [o]: %d queued override ops, want 1", len(s.overrideOps))
+			if tc.action == actionOverride {
+				if len(s.overrideOps) != 1 {
+					t.Fatalf("after one [o]: %d queued override ops, want 1", len(s.overrideOps))
+				}
+				if oo := s.overrideOps[0]; oo.agentName != "claude" || oo.op.Path != "/dest/a" {
+					t.Errorf("queued override = %+v, want claude's op for /dest/a", oo)
+				}
 			}
 			// The same item a second time: nothing new may be queued, and
 			// stop must not change.
@@ -296,6 +310,154 @@ func TestApplyAction_OnlyQuitStopsThePass(t *testing.T) {
 			if len(s.overrideOps) != tc.wantQueue {
 				t.Errorf("after applying %v twice: %d queued override ops, want %d", tc.action, len(s.overrideOps), tc.wantQueue)
 			}
+			if tc.action == actionOverride {
+				// The dedup key is agent AND path: another agent's item at the
+				// same path is a different re-apply and must queue.
+				other := it
+				other.agentName = "opencode"
+				s.applyAction(other, actionOverride)
+				if len(s.overrideOps) != 2 {
+					t.Errorf("after a second agent's [o] on the same path: %d queued, want 2", len(s.overrideOps))
+				}
+			}
 		})
+	}
+}
+
+// itemMenu is the per-item prompt's menu line, pinned here so the tests below
+// can count how many times the user was (re)prompted.
+const itemMenu = "  [w]rite-back  [o]verride  [s]kip  [i]gnore  [d]iff  [q]uit\n  > "
+
+// TestPromptItem_DiffReprintsValuesAndMenu pins the [d]iff arm: it re-renders
+// the item's values and the menu, echoes nothing, chooses no action, and the
+// next key still decides the item. Measured on the pre-#232 tree and on commit
+// 1: deleting the re-render failed zero tests — the arm was pinned only by the
+// scripted-stdin harness.
+func TestPromptItem_DiffReprintsValuesAndMenu(t *testing.T) {
+	s, out := newTestSession(t, "ds")
+	it := driftItem("/dest/a")
+	act, stop := s.promptItem(it, []reconcileItem{it})
+	if stop || act != actionSkip {
+		t.Fatalf("promptItem = (%v, stop=%v), want (%v, false): [d] must not choose, the [s] after it must", act, stop, actionSkip)
+	}
+	got := out.String()
+	if n := strings.Count(got, itemMenu); n != 2 {
+		t.Errorf("menu printed %d time(s), want 2 (once before [d], once after); transcript:\n%s", n, got)
+	}
+	if n := strings.Count(got, "  destination: "); n != 2 {
+		t.Errorf("values rendered %d time(s), want 2; transcript:\n%s", n, got)
+	}
+	if !strings.HasSuffix(got, "  > s\n") {
+		t.Errorf("[d] is not echoed and only the deciding key is; the transcript must end at the echoed s, got:\n%q", got)
+	}
+}
+
+// TestPromptItem_DeclinedBulkDoesNotReprintMenu pins the cancel path of the
+// bulk confirmation: [N] prints "cancelled; choose a per-item action", records
+// no bulk choice, and reads the next key WITHOUT re-printing the menu — the
+// user is still at the same prompt, not a new one.
+func TestPromptItem_DeclinedBulkDoesNotReprintMenu(t *testing.T) {
+	s, out := newTestSession(t, "Wns")
+	it := driftItem("/dest/a")
+	act, stop := s.promptItem(it, []reconcileItem{it, driftItem("/dest/b")})
+	if stop || act != actionSkip {
+		t.Fatalf("promptItem = (%v, stop=%v), want (%v, false)", act, stop, actionSkip)
+	}
+	if s.bulk != actionNone {
+		t.Errorf("a declined bulk choice must not be recorded; s.bulk = %v", s.bulk)
+	}
+	got := out.String()
+	want := "apply 'w' to all 2 remaining items? [y/N] n\n  cancelled; choose a per-item action\ns\n"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("after declining, the next key is read at the same prompt with no menu re-print; transcript must end %q, got:\n%q", want, got)
+	}
+	if n := strings.Count(got, itemMenu); n != 1 {
+		t.Errorf("menu printed %d time(s), want exactly 1; transcript:\n%s", n, got)
+	}
+}
+
+// TestPromptItem_UnknownKeyIsIgnored pins what the prompt does with a byte
+// parseItemKey rejects: nothing — no echo, no re-prompt, just the next read. The
+// byte is a capital I, so this also pins that "not a bulk ignore" means ignored
+// as a keystroke, not accepted as something else.
+func TestPromptItem_UnknownKeyIsIgnored(t *testing.T) {
+	s, out := newTestSession(t, "Is")
+	it := driftItem("/dest/a")
+	act, stop := s.promptItem(it, []reconcileItem{it})
+	if stop || act != actionSkip {
+		t.Fatalf("promptItem = (%v, stop=%v), want (%v, false)", act, stop, actionSkip)
+	}
+	if got := out.String(); !strings.HasSuffix(got, itemMenu+"s\n") {
+		t.Errorf("an unknown key must leave the transcript untouched until a known one arrives; want it to end with the menu then the echoed s, got:\n%q", got)
+	}
+}
+
+// TestWalk_BulkNeverSweepsOrphans pins that a confirmed bulk choice acts on
+// the remaining actionable items only: an orphan in the queue still gets its
+// own remove/keep prompt, and the confirmation's count excludes it.
+func TestWalk_BulkNeverSweepsOrphans(t *testing.T) {
+	s, out := newTestSession(t, "Syk")
+	orphan := driftItem("/dest/b")
+	orphan.orphan = true
+	s.walk([]reconcileItem{driftItem("/dest/a"), orphan, driftItem("/dest/c")})
+	got := out.String()
+	if s.bulk != actionSkip {
+		t.Fatalf("s.bulk = %v, want %v", s.bulk, actionSkip)
+	}
+	if !strings.Contains(got, "apply 's' to all 2 remaining items? [y/N] y\n") {
+		t.Errorf("the blast radius must count the two drift items and not the orphan; transcript:\n%s", got)
+	}
+	if n := strings.Count(got, itemMenu); n != 1 {
+		t.Errorf("item menu printed %d time(s), want 1 — the bulk choice answers /dest/c; transcript:\n%s", n, got)
+	}
+	if !strings.Contains(got, "  kept: /dest/b\n") {
+		t.Errorf("the orphan must still be prompted and [k]ept; transcript:\n%s", got)
+	}
+}
+
+// TestApplyAction_IgnoreAppendsToIgnoreFile pins the [i]gnore arm: the item's
+// RAW label lands in ignore.toml under home and the transcript says so.
+// Measured on commit 1: deleting the append and the print failed zero tests.
+// home is the one piece of wiring this test sets, because appendIgnore writes
+// under it; nothing else here needs a filesystem.
+func TestApplyAction_IgnoreAppendsToIgnoreFile(t *testing.T) {
+	s, out := newTestSession(t, "")
+	s.home = t.TempDir()
+	it := driftItem("/dest/.claude.json")
+	it.ptr = "/mcpServers/demo"
+	if stop := s.applyAction(it, actionIgnore); stop {
+		t.Fatal("applyAction(actionIgnore) = stop, want the pass to continue")
+	}
+	data, err := os.ReadFile(filepath.Join(s.home, "ignore.toml"))
+	if err != nil {
+		t.Fatalf("ignore.toml not written: %v", err)
+	}
+	if want := "ignore = \"/dest/.claude.json#/mcpServers/demo\"\n"; string(data) != want {
+		t.Errorf("ignore.toml = %q, want %q", data, want)
+	}
+	if got, want := out.String(), "  ignored: /dest/.claude.json#/mcpServers/demo\n"; got != want {
+		t.Errorf("transcript = %q, want %q", got, want)
+	}
+}
+
+// TestNewReconcileSession_RejectsMultipleAutoModes pins that the constructor,
+// not its caller, enforces reconcileAuto's "at most one mode" invariant — and
+// does so before loading anything, so the check costs no I/O and no session
+// with two modes can be built (resolveAuto's switch would otherwise let
+// writeBack win silently, the data-loss shape the check exists to prevent).
+func TestNewReconcileSession_RejectsMultipleAutoModes(t *testing.T) {
+	for _, auto := range []reconcileAuto{
+		{writeBack: true, override: true},
+		{writeBack: true, safe: true},
+		{override: true, safe: true},
+		{writeBack: true, override: true, safe: true},
+	} {
+		s, items, err := newReconcileSession(&cobra.Command{}, strings.NewReader(""), auto, "")
+		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Errorf("newReconcileSession(%+v) error = %v, want the mutually-exclusive error", auto, err)
+		}
+		if s != nil || items != nil {
+			t.Errorf("newReconcileSession(%+v) returned a session or items alongside the error", auto)
+		}
 	}
 }

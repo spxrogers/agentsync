@@ -291,8 +291,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 - **Internal: `reconcile`'s interactive pass is a session type**
   ([#232](https://github.com/spxrogers/agentsync/issues/232)). `reconcileRun`
-  was 375 lines with five `goto done`s, two labeled loops and six pieces of
-  run-scoped state travelling as loose locals; it is now a 28-line entry point
+  was 375 lines with five `goto done`s, two labeled loops and seven pieces of
+  run-scoped state travelling as loose locals; it is now a 22-line entry point
   over a `reconcileSession` whose methods are the two prompts, the `--auto-*`
   dispatch, the action switch and the run's tail. Every `goto` is a plain
   return, and the tail runs from exactly one call site — deliberately not a
@@ -304,7 +304,7 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   every prompt, bulk confirmation, EOF, `[q]uit` (including a quit with a
   queued override), `--auto-*` mode, project-scope override, exit code, masked
   secret value and resulting source/state tree — are byte-identical to the
-  pre-change binary (`main` at `309fde0`). Two per-item rebuilds went with it:
+  pre-change binary (`main` at `309fde0`). Two smaller things went with it:
   `printItemDiff` was a pure alias of `renderItemValues`, and inverting a hook
   pointer's native event spelling now uses the registry the caller already
   holds instead of rebuilding all 31 adapters (~10 µs) on every resolution.

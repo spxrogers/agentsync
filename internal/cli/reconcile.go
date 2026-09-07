@@ -205,7 +205,8 @@ func parseItemKey(ch byte) (act reconcileAction, bulk, diff, ok bool) {
 }
 
 // reconcileAuto is the --auto-* mode for the run. At most one field is ever
-// set: reconcileRun rejects more than one before a session exists.
+// set: newReconcileSession rejects more than one as its first step, before it
+// loads anything, so no session with two modes can exist.
 type reconcileAuto struct {
 	writeBack bool // --auto-writeback
 	override  bool // --auto-override
@@ -228,7 +229,7 @@ type overrideOp struct {
 // run-scoped bookkeeping the walk accumulates (the queued overrides, the bulk
 // choice, the three counters, the per-source write ledger).
 //
-// It exists because that bookkeeping used to travel as six loose locals inside
+// It exists because that bookkeeping used to travel as seven loose locals inside
 // a 375-line reconcileRun whose only exits were five `goto done`s and two
 // labeled loops (issue #232). With the state on a receiver each phase — the two
 // prompts, the --auto-* dispatch, the action switch and the finish block — is a
@@ -237,7 +238,9 @@ type overrideOp struct {
 //
 // It changes no dest→source write: [w]rite-back still runs through
 // writeBackItem → capture.Capture, and the one deletion-only exception
-// (removeDroppedSource) keeps its keystroke gate and its withinDir bound.
+// (removeDroppedSource) keeps its gate — it runs only for a chosen write-back,
+// interactive [w] or --auto-writeback, whose destination dropped the server —
+// and its withinDir bound.
 type reconcileSession struct {
 	// --- wiring, fixed for the run ---
 	cmd *cobra.Command
@@ -294,12 +297,6 @@ type reconcileSession struct {
 }
 
 func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe bool, agentsCSV string) error {
-	// The three auto modes are mutually exclusive — writeback (dest→source)
-	// and override (source→dest) are exact opposites, and silently accepting
-	// both (writeback won) was a data-loss footgun.
-	if n := b2i(autoWB) + b2i(autoOR) + b2i(autoSafe); n > 1 {
-		return fmt.Errorf("--auto-writeback, --auto-override, and --auto-safe are mutually exclusive; pass at most one")
-	}
 	s, items, err := newReconcileSession(cmd, in, reconcileAuto{writeBack: autoWB, override: autoOR, safe: autoSafe}, agentsCSV)
 	if err != nil {
 		return err
@@ -331,6 +328,15 @@ func reconcileRun(cmd *cobra.Command, in io.Reader, autoWB, autoOR, autoSafe boo
 // collection — because it is observable: which step fails decides which error
 // the user sees, and the printer does not exist yet when the source load fails.
 func newReconcileSession(cmd *cobra.Command, in io.Reader, auto reconcileAuto, agentsCSV string) (*reconcileSession, []reconcileItem, error) {
+	// The three auto modes are mutually exclusive — writeback (dest→source)
+	// and override (source→dest) are exact opposites, and silently accepting
+	// both (writeback won) was a data-loss footgun. The check is the
+	// constructor's, not the caller's, so the invariant reconcileAuto's doc
+	// states is enforced where a session is built: resolveAuto's switch would
+	// otherwise let writeBack win again for a hand-built session.
+	if n := b2i(auto.writeBack) + b2i(auto.override) + b2i(auto.safe); n > 1 {
+		return nil, nil, fmt.Errorf("--auto-writeback, --auto-override, and --auto-safe are mutually exclusive; pass at most one")
+	}
 	home := paths.AgentsyncHome(paths.OSEnv{})
 	userHome := paths.HomeDir(paths.OSEnv{})
 	// Project plugins like apply does so drift classification covers
@@ -1215,11 +1221,15 @@ func pointerSourceFile(reg *adapter.Registry, home, agent, ptr string, canonical
 // which had exactly the same contents.
 //
 // The precondition is a non-nil reg — every production caller holds one — but
-// Registry.Lookup dereferences its receiver, so a nil *Registry is guarded here
-// and treated exactly like an unregistered agent: the non-renaming passthrough.
+// Registry.Lookup dereferences its receiver, so a nil *Registry is guarded here.
+// It resolves NOTHING (ok is false) rather than passing the segment through: a
+// caller that forgot its registry would otherwise get a plausible wrong answer
+// (gemini's /hooks/BeforeTool as hooks/BeforeTool.toml) that no test could tell
+// from a right one, whereas "no source" is visibly incomplete in explain and
+// leaves reconcile's write-back no file to touch.
 func canonicalHookEvent(reg *adapter.Registry, agent, native string, canonicalEvents []string) (string, bool) {
 	if reg == nil {
-		return native, true
+		return "", false
 	}
 	namer, ok := reg.Lookup(agent).(adapter.HookEventNamer)
 	if !ok {

@@ -58,7 +58,7 @@ is the only package that depends on nearly all the others.
   `agentsync reconcile` pass (printer, scripted input, registry, loaded state,
   redaction map) plus its run-scoped bookkeeping, so the two prompts, the
   `--auto-*` dispatch, the action switch and the run's tail (`finish`) are
-  separately testable methods rather than five `goto`s over six loose locals
+  separately testable methods rather than five `goto`s over seven loose locals
   (#232); `finish` has exactly one call site and is never deferred, because it
   writes and it returns the run's error; `destReadPath` / `readDestText`
   (`destread.go`) — the whole-file destination readers that carry the symlink

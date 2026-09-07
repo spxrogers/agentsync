@@ -19,8 +19,9 @@ import (
 //     nil-safe only by Go's assertion semantics, never by an explicit guard, and
 //     nothing asserted it.
 //   - a NIL registry is guarded explicitly (Registry.Lookup dereferences its
-//     receiver) and takes that same passthrough; the precondition is a non-nil
-//     registry, and the guard is what a caller that forgot to set one gets.
+//     receiver) and resolves nothing: the precondition is a non-nil registry,
+//     and a caller that forgot to set one gets "no source" rather than the
+//     plausible wrong path a passthrough would hand it.
 //
 // The renaming rows are the ones that must keep working: a gemini
 // `/hooks/BeforeTool` pointer has to resolve to hooks/PreToolUse.toml, or
@@ -45,7 +46,7 @@ func TestCanonicalHookEvent(t *testing.T) {
 		{name: "renaming agent, unknown native spelling", agent: "gemini", native: "NoSuchEvent"},
 		{name: "unregistered agent passes through", agent: "no-such-agent", native: "PreToolUse", want: "PreToolUse", wantOK: true},
 		{name: "empty agent passes through", agent: "", native: "PreToolUse", want: "PreToolUse", wantOK: true},
-		{name: "nil registry passes through", nilReg: true, agent: "gemini", native: "BeforeTool", want: "BeforeTool", wantOK: true},
+		{name: "nil registry resolves nothing", nilReg: true, agent: "gemini", native: "BeforeTool"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
