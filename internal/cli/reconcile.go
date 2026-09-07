@@ -206,7 +206,9 @@ func parseItemKey(ch byte) (act reconcileAction, bulk, diff, ok bool) {
 
 // reconcileAuto is the --auto-* mode for the run. At most one field is ever
 // set: newReconcileSession rejects more than one as its first step, before it
-// loads anything, so no session with two modes can exist.
+// loads anything, so no session it builds can carry two modes. (A struct
+// literal bypasses that check; the session tests build one and set at most one
+// mode.)
 type reconcileAuto struct {
 	writeBack bool // --auto-writeback
 	override  bool // --auto-override
