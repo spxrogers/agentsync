@@ -24,10 +24,10 @@ func TestReconcile_OrphanFile(t *testing.T) {
 		env = map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 		mustRun(t, env, "init")
 		mustRun(t, env, "agent", "add", "claude")
-		// Two skills: demo becomes the orphan; keep stays in sync, so its
+		// Two skills: demo becomes the orphan; insync stays in sync, so its
 		// state entry must survive the orphan's prune — a wiped state file
 		// would pass a "demo is gone" check for the wrong reason.
-		for _, name := range []string{"demo", "keep"} {
+		for _, name := range []string{"demo", "insync"} {
 			skill := filepath.Join(tmp, ".agentsync", "skills", name, "SKILL.md")
 			_ = os.MkdirAll(filepath.Dir(skill), 0o755)
 			_ = os.WriteFile(skill, []byte("---\nname: "+name+"\ndescription: d\n---\nbody\n"), 0o644)
@@ -49,7 +49,7 @@ func TestReconcile_OrphanFile(t *testing.T) {
 		// owns a file that is gone (issue #171). Measured before this assertion
 		// existed: dropping the prune's stateDirty flag failed zero tests.
 		root := env["AGENTSYNC_TARGET_ROOT"]
-		keep := filepath.Join(root, ".claude", "skills", "keep", "SKILL.md")
+		insync := filepath.Join(root, ".claude", "skills", "insync", "SKILL.md")
 		stateOwns := func(p string) bool {
 			t.Helper()
 			st, err := state.Load(filepath.Join(root, ".agentsync", ".state", "targets.json"))
@@ -64,7 +64,7 @@ func TestReconcile_OrphanFile(t *testing.T) {
 			}
 			return false
 		}
-		if !stateOwns(dest) || !stateOwns(keep) {
+		if !stateOwns(dest) || !stateOwns(insync) {
 			t.Fatal("precondition: apply should have recorded both skills in state.Files")
 		}
 		out, err := runCLIWithStdin(t, env, "r", "reconcile")
@@ -77,7 +77,7 @@ func TestReconcile_OrphanFile(t *testing.T) {
 		if stateOwns(dest) {
 			t.Fatalf("state still owns the removed orphan: the prune was not persisted\n%s", out)
 		}
-		if !stateOwns(keep) {
+		if !stateOwns(insync) {
 			t.Fatalf("the prune must be exact: the in-sync sibling's state entry is gone too\n%s", out)
 		}
 		// A backup of the removed file must exist.
@@ -813,11 +813,18 @@ func TestReconcile_DroppedServer_WriteBackRemovesSource(t *testing.T) {
 		name  string
 		stdin string
 		args  []string
-		want  string // a transcript line unique to the route
+		// want is a transcript line only this route prints; noPrompt is the
+		// pin for the route that prints nothing route-specific — an auto mode
+		// never asks, so the prompt marker must be absent.
+		want     string
+		noPrompt bool
 	}{
 		{name: "per-item [w]", stdin: "ww", want: "  > w\n"},
 		{name: "confirmed bulk [W]", stdin: "Wy", want: "apply 'w' to all 2 remaining items? [y/N] y\n"},
-		{name: "--auto-writeback", stdin: "", args: []string{"--auto-writeback"}, want: "write-back: "},
+		// The [q] on stdin must never be read: a flag that regressed into the
+		// interactive pass would quit at the first prompt and fail the shared
+		// assertions below, instead of blocking on a terminal's stdin.
+		{name: "--auto-writeback", stdin: "q", args: []string{"--auto-writeback"}, noPrompt: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -826,8 +833,11 @@ func TestReconcile_DroppedServer_WriteBackRemovesSource(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reconcile: %v\n%s", err, out)
 			}
-			if !strings.Contains(out, tc.want) {
+			if tc.want != "" && !strings.Contains(out, tc.want) {
 				t.Fatalf("transcript should show the %s route; want %q in:\n%s", tc.name, tc.want, out)
+			}
+			if tc.noPrompt && strings.Contains(out, "  > ") {
+				t.Fatalf("%s must not prompt; transcript:\n%s", tc.name, out)
 			}
 			if !strings.Contains(out, "write-back: removed source mcp/dropped.toml (destination dropped ") {
 				t.Errorf("the dropped server's source removal must be reported; transcript:\n%s", out)

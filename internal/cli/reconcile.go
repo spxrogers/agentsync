@@ -61,7 +61,8 @@ type reconcileItem struct {
 // native config. attemptWriteBack turns it into a guarded deletion of the
 // canonical mcp/<id>.toml: a pure deletion carries no secret to re-reference, so
 // os.Remove (the same primitive `mcp remove` uses) is the approved funnel, and it
-// runs only when the user explicitly chose [w]rite-back for that item.
+// runs only for a chosen write-back on that item — a per-item [w], a confirmed
+// bulk [W], or --auto-writeback.
 var errDestDroppedServer = errors.New("destination dropped server")
 
 func newReconcileCmd() *cobra.Command {
@@ -1082,7 +1083,8 @@ func (s *reconcileSession) attemptWriteBack(it reconcileItem) bool {
 	werr := writeBackItem(s.cmd, s.home, it)
 	if errors.Is(werr, errDestDroppedServer) {
 		// Tombstone: the user deleted this MCP server from the native config, and
-		// chose [w]rite-back to persist that. A pure deletion carries no secret, so
+		// chose write-back (per-item [w], confirmed bulk [W], or --auto-writeback)
+		// to persist that. A pure deletion carries no secret, so
 		// remove the canonical mcp/<id>.toml directly (the same os.Remove primitive
 		// `mcp remove` uses) rather than routing an empty spec through capture.
 		return s.removeDroppedSource(it, srcFile, prior, priorWritten)

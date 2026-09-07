@@ -489,7 +489,7 @@ func TestNewReconcileSession_RejectsMultipleAutoModes(t *testing.T) {
 // behaviour that nothing else pins. Same shape as the apply pipeline's
 // TestApplyPipelineLoadsStateAfterSourceReload.
 func TestNewReconcileSession_ChecksModesBeforeLoading(t *testing.T) {
-	body := funcBody(pkgSource(t, "reconcile.go"), "func newReconcileSession(")
+	body := funcBody(readFileForGuard(t, repoRootFromCaller(t), "internal/cli/reconcile.go"), "func newReconcileSession(")
 	if body == "" {
 		t.Fatal("newReconcileSession not found in reconcile.go")
 	}

@@ -1,9 +1,6 @@
 package cli
 
 import (
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -42,7 +39,7 @@ func TestApplyPipelineLoadsStateAfterSourceReload(t *testing.T) {
 	// The two halves are independent contracts; separate subtests so a Fatal
 	// in one never hides a failure in the other.
 	t.Run("pipeline loads state after the source reload", func(t *testing.T) {
-		applySrc := pkgSource(t, "apply.go")
+		applySrc := readFileForGuard(t, repoRootFromCaller(t), "internal/cli/apply.go")
 		body := funcBody(applySrc, "func runApplyPipeline(")
 		if body == "" {
 			t.Fatal("runApplyPipeline not found in apply.go — update this guard")
@@ -88,7 +85,7 @@ func TestApplyPipelineLoadsStateAfterSourceReload(t *testing.T) {
 		// The plugin re-apply must BE the pipeline, not a copy of it. The
 		// positive check and the four negatives are Errorf, not Fatal, so a
 		// hand-rolled re-apply reports every way it diverged in one run.
-		reapply := funcBody(pkgSource(t, "plugin_poll.go"), "func reapplyAfterPluginChange(")
+		reapply := funcBody(readFileForGuard(t, repoRootFromCaller(t), "internal/cli/plugin_poll.go"), "func reapplyAfterPluginChange(")
 		if reapply == "" {
 			t.Fatal("reapplyAfterPluginChange not found in plugin_poll.go — update this guard")
 		}
@@ -109,23 +106,6 @@ func TestApplyPipelineLoadsStateAfterSourceReload(t *testing.T) {
 
 // funcBody returns the source text of the function whose declaration starts
 // with decl, from the opening brace to the first line that is exactly "}".
-// pkgSource returns the text of a production source file in this package,
-// located from this test file's own path so the neutral cwd TestMain switches
-// to does not matter. The source-text guards read the code they pin through
-// it.
-func pkgSource(t *testing.T, name string) string {
-	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	src, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(src)
-}
-
 func funcBody(src, decl string) string {
 	i := strings.Index(src, decl)
 	if i < 0 {
