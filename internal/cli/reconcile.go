@@ -110,7 +110,7 @@ first time. Rule of thumb: import adopts, reconcile resolves.`,
 // this item" need, so an unresolved item can never be mistaken for a resolved
 // one.
 // It replaces the byte the loop used to carry ('w'/'o'/'s'/'i'/'q', with a
-// `ch | 0x20` case fold open-coded at three sites); parseItemKey is now the one
+// `ch | 0x20` case fold open-coded at two sites); parseItemKey is now the one
 // place a keystroke becomes an action.
 type reconcileAction int
 
@@ -1059,9 +1059,6 @@ func readChar(r *bufio.Reader) (byte, error) {
 	}
 }
 
-// writeBackItem persists the current destination value for item it back into
-// the canonical source (~/.agentsync/). Only MCP-server items are fully
-// supported in v1; other item types fall back to a raw file copy.
 // attemptWriteBack writes one item back and guards against silent
 // last-writer-wins when a single reconcile run writes the SAME canonical source
 // file from more than one agent. A server/skill that fans out to claude AND
@@ -1274,6 +1271,9 @@ func canonicalHookEvents(c source.Canonical) []string {
 	return out
 }
 
+// writeBackItem persists the current destination value for item it back into
+// the canonical source (~/.agentsync/). Only MCP-server items are fully
+// supported in v1; other item types fall back to a raw file copy.
 func writeBackItem(cmd *cobra.Command, home string, it reconcileItem) error {
 	// A plugin-provided component has no canonical file of its own: it is
 	// re-derived from the plugin cache on every load. Writing the destination
@@ -1337,7 +1337,8 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 		specRaw, ok := mcpServers[serverID]
 		if !ok {
 			// Server removed from dest: the user deleted it from the native
-			// config and chose [w]rite-back to persist that. Signal a tombstone;
+			// config and chose write-back (per-item [w], confirmed bulk [W], or
+			// --auto-writeback) to persist that. Signal a tombstone;
 			// attemptWriteBack deletes the canonical mcp/<id>.toml through the
 			// approved os.Remove funnel (a pure deletion carries no secret), with
 			// the multi-agent fan-out guard.
