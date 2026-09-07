@@ -237,10 +237,10 @@ deletion — a per-item `[w]`, a confirmed bulk `[W]`, or `--auto-writeback` —
 and `source.RemoveHooks` deletes a stale `hooks/<event>.toml` during import's
 stale-hook retirement. Both are safe without Capture because a pure deletion
 carries no content to re-reference — there is no secret material to persist —
-and both are guarded (the reconcile path runs only for that chosen write-back
-and is `withinDir`-bounded to `~/.agentsync`; RemoveHooks validates the
-native-supplied event id before touching a path). Anything that *writes
-content* dest→source still MUST go through `capture.Capture`.
+and both are guarded (the reconcile path is `withinDir`-bounded to
+`~/.agentsync`; RemoveHooks validates the native-supplied event id before
+touching a path). Anything that *writes content* dest→source still MUST go
+through `capture.Capture`.
 
 **3. Resolved vs templated types.** `secrets.SubstituteCanonical` returns
 `secrets.Resolved` (a wrapper, NOT assignable to `source.Canonical`); it is the

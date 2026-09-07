@@ -588,8 +588,9 @@ func (s *reconcileSession) resolveAuto(it reconcileItem) reconcileAction {
 	return actionNone
 }
 
-// itemMenu is the per-item prompt's menu line. promptItem prints it before the
-// first read and again after [d]iff; one spelling keeps the two sites in step.
+// itemMenu is the per-item menu line and the "> " prompt that follows it.
+// promptItem prints it before the first read and again after [d]iff; one
+// spelling keeps the two sites in step.
 const itemMenu = "  [w]rite-back  [o]verride  [s]kip  [i]gnore  [d]iff  [q]uit\n  > "
 
 // promptItem runs the per-item prompt and returns the action the user chose.

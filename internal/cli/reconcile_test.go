@@ -24,9 +24,14 @@ func TestReconcile_OrphanFile(t *testing.T) {
 		env = map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 		mustRun(t, env, "init")
 		mustRun(t, env, "agent", "add", "claude")
-		skill := filepath.Join(tmp, ".agentsync", "skills", "demo", "SKILL.md")
-		_ = os.MkdirAll(filepath.Dir(skill), 0o755)
-		_ = os.WriteFile(skill, []byte("---\nname: demo\ndescription: d\n---\nbody\n"), 0o644)
+		// Two skills: demo becomes the orphan; keep stays in sync, so its
+		// state entry must survive the orphan's prune — a wiped state file
+		// would pass a "demo is gone" check for the wrong reason.
+		for _, name := range []string{"demo", "keep"} {
+			skill := filepath.Join(tmp, ".agentsync", "skills", name, "SKILL.md")
+			_ = os.MkdirAll(filepath.Dir(skill), 0o755)
+			_ = os.WriteFile(skill, []byte("---\nname: "+name+"\ndescription: d\n---\nbody\n"), 0o644)
+		}
 		mustRun(t, env, "apply")
 		dest = filepath.Join(tmp, ".claude", "skills", "demo", "SKILL.md")
 		if _, err := os.Stat(dest); err != nil {
@@ -44,13 +49,14 @@ func TestReconcile_OrphanFile(t *testing.T) {
 		// owns a file that is gone (issue #171). Measured before this assertion
 		// existed: dropping the prune's stateDirty flag failed zero tests.
 		root := env["AGENTSYNC_TARGET_ROOT"]
-		stateOwnsDest := func() bool {
+		keep := filepath.Join(root, ".claude", "skills", "keep", "SKILL.md")
+		stateOwns := func(p string) bool {
 			t.Helper()
 			st, err := state.Load(filepath.Join(root, ".agentsync", ".state", "targets.json"))
 			if err != nil {
 				t.Fatalf("load state: %v", err)
 			}
-			portable := paths.HomeRelative(root, dest)
+			portable := paths.HomeRelative(root, p)
 			for key := range st.Files {
 				if key.Path == portable {
 					return true
@@ -58,8 +64,8 @@ func TestReconcile_OrphanFile(t *testing.T) {
 			}
 			return false
 		}
-		if !stateOwnsDest() {
-			t.Fatal("precondition: apply should have recorded the dest skill in state.Files")
+		if !stateOwns(dest) || !stateOwns(keep) {
+			t.Fatal("precondition: apply should have recorded both skills in state.Files")
 		}
 		out, err := runCLIWithStdin(t, env, "r", "reconcile")
 		if err != nil {
@@ -68,8 +74,11 @@ func TestReconcile_OrphanFile(t *testing.T) {
 		if _, err := os.Stat(dest); !os.IsNotExist(err) {
 			t.Fatalf("orphan dest should have been removed; stat err=%v\n%s", err, out)
 		}
-		if stateOwnsDest() {
+		if stateOwns(dest) {
 			t.Fatalf("state still owns the removed orphan: the prune was not persisted\n%s", out)
+		}
+		if !stateOwns(keep) {
+			t.Fatalf("the prune must be exact: the in-sync sibling's state entry is gone too\n%s", out)
 		}
 		// A backup of the removed file must exist.
 		backups := filepath.Join(env["AGENTSYNC_TARGET_ROOT"], ".agentsync", ".state", "backups")
@@ -751,5 +760,88 @@ func TestReconcile_ProjectScope_OverrideRecordsProjectState(t *testing.T) {
 	// reads clean at project scope afterwards.
 	if out, err := runCLI(t, env, "status", "--project", projectDir, "--exit-code"); err != nil {
 		t.Fatalf("status --project after override should be clean: %v\n%s", err, out)
+	}
+}
+
+// TestReconcile_DroppedServer_WriteBackRemovesSource pins the deletion-only
+// exception to the capture funnel, removeDroppedSource, on each of the three
+// routes the secret-handling docs name for it: a per-item [w], a confirmed
+// bulk [W], and --auto-writeback. Each must unlink the canonical mcp/<id>.toml
+// of the server the destination dropped, while the drifted sibling is written
+// back normally. Before this test the function had no in-repo coverage at all;
+// only the out-of-tree scripted-stdin harness reached it.
+func TestReconcile_DroppedServer_WriteBackRemovesSource(t *testing.T) {
+	setup := func(t *testing.T) (env map[string]string, srcDir string) {
+		t.Helper()
+		tmp := t.TempDir()
+		env = map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+		mustRun(t, env, "init")
+		mustRun(t, env, "agent", "add", "claude")
+		srcDir = filepath.Join(tmp, ".agentsync", "mcp")
+		_ = os.MkdirAll(srcDir, 0o755)
+		for _, name := range []string{"dropped", "kept"} {
+			_ = os.WriteFile(filepath.Join(srcDir, name+".toml"), []byte("[server]\ntype=\"stdio\"\ncommand=\"npx\"\n"), 0o644)
+		}
+		mustRun(t, env, "apply")
+		// The destination drops one server outright and drifts the other.
+		dst := filepath.Join(tmp, ".claude.json")
+		body, err := os.ReadFile(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(body, &doc); err != nil {
+			t.Fatalf("parse %s: %v\n%s", dst, err, body)
+		}
+		servers, _ := doc["mcpServers"].(map[string]any)
+		if servers == nil || servers["dropped"] == nil || servers["kept"] == nil {
+			t.Fatalf("apply did not render both servers into %s:\n%s", dst, body)
+		}
+		delete(servers, "dropped")
+		servers["kept"].(map[string]any)["command"] = "npm"
+		out, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, out, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return env, srcDir
+	}
+
+	tests := []struct {
+		name  string
+		stdin string
+		args  []string
+		want  string // a transcript line unique to the route
+	}{
+		{name: "per-item [w]", stdin: "ww", want: "  > w\n"},
+		{name: "confirmed bulk [W]", stdin: "Wy", want: "apply 'w' to all 2 remaining items? [y/N] y\n"},
+		{name: "--auto-writeback", stdin: "", args: []string{"--auto-writeback"}, want: "write-back: "},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env, srcDir := setup(t)
+			out, err := runCLIWithStdin(t, env, tc.stdin, append([]string{"reconcile"}, tc.args...)...)
+			if err != nil {
+				t.Fatalf("reconcile: %v\n%s", err, out)
+			}
+			if !strings.Contains(out, tc.want) {
+				t.Fatalf("transcript should show the %s route; want %q in:\n%s", tc.name, tc.want, out)
+			}
+			if !strings.Contains(out, "write-back: removed source mcp/dropped.toml (destination dropped ") {
+				t.Errorf("the dropped server's source removal must be reported; transcript:\n%s", out)
+			}
+			if _, err := os.Stat(filepath.Join(srcDir, "dropped.toml")); !os.IsNotExist(err) {
+				t.Errorf("mcp/dropped.toml should have been unlinked; stat err = %v\n%s", err, out)
+			}
+			kept, err := os.ReadFile(filepath.Join(srcDir, "kept.toml"))
+			if err != nil {
+				t.Fatalf("mcp/kept.toml must survive: %v", err)
+			}
+			if !strings.Contains(string(kept), "npm") {
+				t.Errorf("the drifted sibling should have been written back to npm; kept.toml:\n%s", kept)
+			}
+		})
 	}
 }

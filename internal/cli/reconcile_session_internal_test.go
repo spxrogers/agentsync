@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -449,10 +448,14 @@ func TestApplyAction_IgnoreAppendsToIgnoreFile(t *testing.T) {
 }
 
 // TestNewReconcileSession_RejectsMultipleAutoModes pins that the constructor,
-// not its caller, enforces reconcileAuto's "at most one mode" invariant — and
-// does so before loading anything, so the check costs no I/O and no session
-// with two modes can be built (resolveAuto's switch would otherwise let
-// writeBack win silently, the data-loss shape the check exists to prevent).
+// not its caller, enforces reconcileAuto's "at most one mode" invariant, so no
+// session with two modes can be built (resolveAuto's switch would otherwise
+// let writeBack win silently, the data-loss shape the check exists to
+// prevent). That the check runs BEFORE anything loads is
+// TestNewReconcileSession_ChecksModesBeforeLoading's job: measured, a check
+// moved below the loads still passes this test against the empty temp home
+// set up here, which only keeps a regressed constructor away from the real
+// ~/.agentsync.
 func TestNewReconcileSession_RejectsMultipleAutoModes(t *testing.T) {
 	// A constructor that regressed to loading BEFORE checking would read the
 	// ambient ~/.agentsync; point both home lookups at an empty temp dir so
@@ -486,15 +489,7 @@ func TestNewReconcileSession_RejectsMultipleAutoModes(t *testing.T) {
 // behaviour that nothing else pins. Same shape as the apply pipeline's
 // TestApplyPipelineLoadsStateAfterSourceReload.
 func TestNewReconcileSession_ChecksModesBeforeLoading(t *testing.T) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	src, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "reconcile.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := funcBody(string(src), "func newReconcileSession(")
+	body := funcBody(pkgSource(t, "reconcile.go"), "func newReconcileSession(")
 	if body == "" {
 		t.Fatal("newReconcileSession not found in reconcile.go")
 	}

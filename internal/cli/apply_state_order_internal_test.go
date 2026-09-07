@@ -39,20 +39,11 @@ import (
 // If this ever gains a genuine observable (a component the re-apply does not
 // re-record), replace half A with a test of that.
 func TestApplyPipelineLoadsStateAfterSourceReload(t *testing.T) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	dir := filepath.Dir(thisFile)
-
 	// The two halves are independent contracts; separate subtests so a Fatal
 	// in one never hides a failure in the other.
 	t.Run("pipeline loads state after the source reload", func(t *testing.T) {
-		applySrc, err := os.ReadFile(filepath.Join(dir, "apply.go"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		body := funcBody(string(applySrc), "func runApplyPipeline(")
+		applySrc := pkgSource(t, "apply.go")
+		body := funcBody(applySrc, "func runApplyPipeline(")
 		if body == "" {
 			t.Fatal("runApplyPipeline not found in apply.go — update this guard")
 		}
@@ -86,7 +77,7 @@ func TestApplyPipelineLoadsStateAfterSourceReload(t *testing.T) {
 		// The signature must not accept state either: a caller-supplied
 		// *state.Targets is read before this function runs, which has the same
 		// defect and is how the bug originally shipped.
-		sig := funcSignature(string(applySrc), "func runApplyPipeline(")
+		sig := funcSignature(applySrc, "func runApplyPipeline(")
 		if strings.Contains(sig, "*state.Targets") {
 			t.Errorf("runApplyPipeline takes a *state.Targets again: %s\n"+
 				"A caller reads it before the source reload that can rewrite it. Load it inside, after the reload.", sig)
@@ -97,11 +88,7 @@ func TestApplyPipelineLoadsStateAfterSourceReload(t *testing.T) {
 		// The plugin re-apply must BE the pipeline, not a copy of it. The
 		// positive check and the four negatives are Errorf, not Fatal, so a
 		// hand-rolled re-apply reports every way it diverged in one run.
-		pollSrc, err := os.ReadFile(filepath.Join(dir, "plugin_poll.go"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		reapply := funcBody(string(pollSrc), "func reapplyAfterPluginChange(")
+		reapply := funcBody(pkgSource(t, "plugin_poll.go"), "func reapplyAfterPluginChange(")
 		if reapply == "" {
 			t.Fatal("reapplyAfterPluginChange not found in plugin_poll.go — update this guard")
 		}
@@ -122,6 +109,23 @@ func TestApplyPipelineLoadsStateAfterSourceReload(t *testing.T) {
 
 // funcBody returns the source text of the function whose declaration starts
 // with decl, from the opening brace to the first line that is exactly "}".
+// pkgSource returns the text of a production source file in this package,
+// located from this test file's own path so the neutral cwd TestMain switches
+// to does not matter. The source-text guards read the code they pin through
+// it.
+func pkgSource(t *testing.T, name string) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	src, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(src)
+}
+
 func funcBody(src, decl string) string {
 	i := strings.Index(src, decl)
 	if i < 0 {
