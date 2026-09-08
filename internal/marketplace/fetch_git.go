@@ -268,7 +268,11 @@ func extractSubdir(dir, subPath string) error {
 	_ = os.RemoveAll(tmp)
 	_ = os.RemoveAll(old)
 
-	if err := copyDir(resolvedSub, tmp); err != nil {
+	// resolvedSub, not the clone root, is the symlink boundary: the extracted
+	// tree is all that survives the swap below, so a link reaching into a part
+	// of the clone that is about to be discarded would dangle. Before in-tree
+	// links were copied at all this was moot — copyDir refused every symlink.
+	if err := copyDir(resolvedSub, resolvedSub, tmp); err != nil {
 		_ = os.RemoveAll(tmp)
 		return fmt.Errorf("copy subdir to tmp: %w", err)
 	}

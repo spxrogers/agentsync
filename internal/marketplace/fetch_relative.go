@@ -93,7 +93,7 @@ func (f *RelativeFetcher) Fetch(src Source, into string) (FetchResult, error) {
 		copySrc = resolvedAbs
 	}
 
-	if err := copyDir(copySrc, into); err != nil {
+	if err := copyDir(copySrc, copySrc, into); err != nil {
 		from := copySrc
 		if copySrc != abs {
 			// Name the user-recognizable path too — the resolved spelling alone
@@ -128,8 +128,38 @@ func pathContains(parent, child string) bool {
 	return true
 }
 
-// copyDir recursively copies src directory tree into dst, creating dst if needed.
-func copyDir(src, dst string) error {
+// resolveInTreeSymlink resolves the symlink at path and returns the target it
+// may be copied from, requiring that target to stay inside root. It fails
+// closed, mirroring the git fetcher's rejectEscapingSymlinks: a dangling or
+// otherwise unresolvable link is refused rather than guessed.
+//
+// The ancestor check has no counterpart in the git fetcher, which preserves
+// links instead of following them and so never faces the case: dereferencing a
+// link that points at one of its own ancestors would recurse until the
+// filesystem ran out of path.
+func resolveInTreeSymlink(root, path string) (string, error) {
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("relative fetcher: resolve tree root %s: %w", root, err)
+	}
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("relative fetcher: cannot resolve symlink %s (refusing): %w", path, err)
+	}
+	if !pathContains(resolvedRoot, target) {
+		return "", fmt.Errorf("relative fetcher: %s is a symlink pointing outside the marketplace tree (refusing — would copy host files into the plugin cache)", path)
+	}
+	if pathContains(target, path) {
+		return "", fmt.Errorf("relative fetcher: %s is a symlink to its own ancestor %s (refusing — dereferencing it would recurse)", path, target)
+	}
+	return target, nil
+}
+
+// copyDir recursively copies src directory tree into dst, creating dst if
+// needed. root is the top of the tree being copied; it does NOT change across
+// the recursion, because it is the boundary every symlink target discovered in
+// the walk must stay inside.
+func copyDir(root, src, dst string) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
@@ -140,18 +170,45 @@ func copyDir(src, dst string) error {
 	for _, entry := range entries {
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
-		// Reject symlinks rather than dereferencing them. copyFile does
-		// os.Open (which follows the link), so a marketplace tree with a
-		// symlink to /etc/passwd (or a dir symlink escaping the root) would
-		// otherwise have its target's content copied into the plugin cache
-		// and projected into agent config. The RootDir containment check
-		// only validates the top-level source path, not links discovered
-		// during the walk — mirror the npm fetcher's loud reject.
+		// A symlink is resolved and then judged, not refused outright. An
+		// ESCAPING link is still the hole this guard exists to close: copyFile
+		// does os.Open (which follows the link), so a tree with a symlink to
+		// /etc/passwd would otherwise have that content copied into the plugin
+		// cache and projected into agent config, and the RootDir containment
+		// check only validates the top-level source path, never links found
+		// during the walk. But an IN-TREE link is legitimate and must be
+		// copied, mirroring the git fetcher's in-tree-symlink policy
+		// (rejectEscapingSymlinks) and the same policy this fetcher already
+		// applies to a symlinked SOURCE path: one repo must not be registrable
+		// as `github:` yet refused as a local path. A repo that keeps one
+		// component tree and links the per-agent views at it (.claude/skills/x
+		// -> .agents/skills/x) is the shape that motivated this.
 		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("relative fetcher: %s is a symlink (refusing — marketplace trees must contain only regular files and directories)", srcPath)
+			target, terr := resolveInTreeSymlink(root, srcPath)
+			if terr != nil {
+				return terr
+			}
+			info, serr := os.Stat(target)
+			if serr != nil {
+				return fmt.Errorf("relative fetcher: stat symlink target of %s: %w", srcPath, serr)
+			}
+			// Dereference rather than recreate the link: the cache is left with
+			// no symlinks at all, so nothing reading it later can be redirected
+			// by one, and an absolute in-tree link does not have to be rewritten
+			// to stay valid under the new root.
+			if info.IsDir() {
+				if err := copyDir(root, target, dstPath); err != nil {
+					return err
+				}
+			} else {
+				if err := copyFile(target, dstPath); err != nil {
+					return err
+				}
+			}
+			continue
 		}
 		if entry.IsDir() {
-			if err := copyDir(srcPath, dstPath); err != nil {
+			if err := copyDir(root, srcPath, dstPath); err != nil {
 				return err
 			}
 		} else {
