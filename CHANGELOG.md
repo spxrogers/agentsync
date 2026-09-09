@@ -24,15 +24,15 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   The move now reports its failures and the add stops before registering
   anything. It also **replaces** an existing cache instead of failing on it,
   fixing the routine case: re-adding an already-registered marketplace hit the
-  same swallowed failure every time (a rename onto a non-empty directory), so
+  same swallowed failure every time (a rename onto an existing directory), so
   the cache was never refreshed — a plugin published since the first add stayed
   invisible while, for a git source, the recorded `head_sha` moved on — and a
   duplicate copy accumulated under the URL-derived name. A failed add now also
-  discards its
-  fetched tree, so nothing is left behind that a bare-id `plugin add` could pick
-  up as an unregistered marketplace; and when two sources declare the same name,
-  the later add now replaces the earlier one's cache along with the
-  `marketplaces/<name>.toml` and state record it already overwrote.
+  discards its fetched tree, so nothing is left behind that a bare-id
+  `plugin add` could pick up as an unregistered marketplace; and when two
+  sources declare the same name, the later add now replaces the earlier one's
+  cache along with the `marketplaces/<name>.toml` and state record it already
+  overwrote.
   `import <agent>:plugin` registers marketplaces through the same code and now
   warns and skips instead of registering a phantom.
 

@@ -13,8 +13,8 @@ import (
 // under the marketplace's DECLARED name (#233): that name is what every later
 // lookup derives the cache dir from, so a move that does not happen — or happens
 // only partially — must never be reported as success. The stale-destination case
-// is the routine one: os.Rename onto a non-empty directory fails with ENOTEMPTY,
-// so before the fix EVERY re-add kept the STALE tree and orphaned the fresh one.
+// is the routine one: os.Rename onto an existing directory always fails, so
+// before the fix EVERY re-add kept the STALE tree and orphaned the fresh one.
 // Replacing that destination must never cost a marketplace a cache it already
 // has: not when the source is missing, and not when the destination IS the
 // source under another spelling (a case-insensitive filesystem).
@@ -23,8 +23,8 @@ func TestReslotMarketplaceCache(t *testing.T) {
 		name    string
 		setup   func(t *testing.T, root string) (from, to string)
 		wantErr string // substring; "" means the move must succeed
-		// after runs once the error has been checked, for arms whose contract
-		// is about what the failure did NOT touch.
+		// after runs once the outcome has been checked, for arms whose contract
+		// is also about what the move did NOT touch.
 		after func(t *testing.T, from, to string)
 	}{
 		{
@@ -59,14 +59,6 @@ func TestReslotMarketplaceCache(t *testing.T) {
 			wantErr: "prepare marketplace cache dir",
 		},
 		{
-			name: "propagates a failure to move the tree",
-			setup: func(t *testing.T, root string) (string, string) {
-				// Nothing at `from`: the rename cannot succeed.
-				return filepath.Join(root, "slug"), filepath.Join(root, "declared")
-			},
-			wantErr: "move marketplace cache",
-		},
-		{
 			name: "leaves an existing destination alone when there is nothing to move",
 			setup: func(t *testing.T, root string) (string, string) {
 				to := filepath.Join(root, "declared")
@@ -83,14 +75,54 @@ func TestReslotMarketplaceCache(t *testing.T) {
 		{
 			// On a case-insensitive filesystem (macOS, Windows) a slug and a
 			// declared name that differ only in case are ONE directory; this
-			// Linux-only suite stands that in with identical paths. A replace
-			// here would remove the fresh tree and then fail to rename what is
-			// gone; the move must adopt the spelling and keep the tree.
-			name: "adopts the declared spelling when the destination already names the fetched tree",
+			// Linux-only suite stands that in with identical paths, which reach
+			// the same guard. A replace here would remove the fresh tree and then
+			// fail to rename what is gone; the tree must be left in place.
+			name: "keeps the tree when the destination already is the fetched tree",
 			setup: func(t *testing.T, root string) (string, string) {
 				from := filepath.Join(root, "slug")
 				mustWrite(t, filepath.Join(from, "marker.txt"), "fresh")
 				return from, from
+			},
+		},
+		{
+			// A symlink standing at the destination is a LINK to unlink, not the
+			// tree under another name, and replacing it must never reach through
+			// to whatever it points at.
+			name: "replaces a symlink at the destination without touching its target",
+			setup: func(t *testing.T, root string) (string, string) {
+				from := filepath.Join(root, "slug")
+				mustWrite(t, filepath.Join(from, "marker.txt"), "fresh")
+				mustWrite(t, filepath.Join(root, "elsewhere", "keep.txt"), "keep")
+				to := filepath.Join(root, "declared")
+				if err := os.Symlink(filepath.Join(root, "elsewhere"), to); err != nil {
+					t.Fatal(err)
+				}
+				return from, to
+			},
+			after: func(t *testing.T, _, to string) {
+				if _, err := os.Stat(filepath.Join(filepath.Dir(to), "elsewhere", "keep.txt")); err != nil {
+					t.Errorf("replacing a symlinked destination must unlink the link, never its target: %v", err)
+				}
+				if fi, err := os.Lstat(to); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+					t.Errorf("the destination must now be the real tree, not a link (err=%v)", err)
+				}
+			},
+		},
+		{
+			// A symlink at the destination that points at the SOURCE is what a
+			// following stat would mistake for "already in place": the tree must
+			// still move under the declared name, or the slug directory becomes
+			// an orphan behind a link that `marketplace remove` unlinks alone.
+			name: "replaces a symlink at the destination even when it points at the source",
+			setup: func(t *testing.T, root string) (string, string) {
+				from := filepath.Join(root, "slug")
+				mustWrite(t, filepath.Join(from, "marker.txt"), "fresh")
+				to := filepath.Join(root, "declared")
+				if err := os.Symlink(from, to); err != nil {
+					t.Fatal(err)
+				}
+				return from, to
 			},
 		},
 	}
@@ -129,6 +161,9 @@ func TestReslotMarketplaceCache(t *testing.T) {
 			}
 			if _, err := os.Lstat(from); from != to && !os.IsNotExist(err) {
 				t.Errorf("the slug directory must not survive the move (it would be an orphan cache): %s (err=%v)", from, err)
+			}
+			if tc.after != nil {
+				tc.after(t, from, to)
 			}
 		})
 	}

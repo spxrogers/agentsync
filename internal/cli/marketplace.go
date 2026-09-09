@@ -145,10 +145,11 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string, wa
 			// Discard the fetched tree rather than leave it under the slug: no
 			// record points at that directory, `marketplace remove` cannot reach
 			// it, and searchAllMarketplaces would still offer it to a bare-id
-			// `plugin add` as an unregistered marketplace. A re-run re-fetches.
+			// `plugin add` as an unregistered marketplace. Best-effort: a re-run
+			// re-fetches into whatever is left and re-slots it.
 			_ = os.RemoveAll(cacheDir) //nolint:forbidigo // discards the marketplace fetch cache under .state/cache, not a native destination
 			return "", "", fmt.Errorf("register marketplace %q: %w; nothing was written to marketplaces/ "+
-				"or the state record, but a cache already under that name may be gone — fix the cause above "+
+				"or the state record, but a cache already under that name may be gone — fix the cause "+
 				"and re-run to fetch it again", mpName, err)
 		}
 	}
@@ -231,9 +232,10 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string, wa
 // An EXISTING destination is replaced, not merged (swapDir): it is a stale tree
 // from an earlier add of this marketplace — or of another one declaring the same
 // name, whose marketplaces/<name>.toml and state record this add overwrites
-// regardless, so the cache must follow. os.Rename onto a non-empty directory
-// fails with ENOTEMPTY, which is why a re-add used to keep the STALE cache and
-// orphan the freshly fetched tree under the slug while reporting success (#233).
+// regardless, so the cache must follow. os.Rename onto an existing directory
+// always fails (Go refuses a directory destination before the syscall), which
+// is why a re-add used to keep the STALE cache and orphan the freshly fetched
+// tree under the slug while reporting success (#233).
 //
 // The move is a plain os.Rename first. That is the whole job when nothing is at
 // the destination, and on a case-insensitive filesystem (macOS, Windows) also
@@ -244,7 +246,9 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string, wa
 // destination while the source is still there. That is decided by stat, not by
 // the error: Linux reports EEXIST for an occupied destination, Windows reports
 // access denied, and a missing source or a permission failure must never be
-// answered by removing the cache the marketplace already has.
+// answered by removing the cache the marketplace already has. Lstat, not Stat:
+// a symlink standing at the destination is a link to unlink (swapDir removes
+// the link, never what it points at), not this tree under another name.
 //
 // Every failure is returned. The one destructive window left is a rename that
 // fails after swapDir has removed the destination (a same-parent rename with an
@@ -262,8 +266,8 @@ func reslotMarketplaceCache(from, to string) error {
 	if err == nil {
 		return nil
 	}
-	fromInfo, ferr := os.Stat(from)
-	toInfo, terr := os.Stat(to)
+	fromInfo, ferr := os.Lstat(from)
+	toInfo, terr := os.Lstat(to)
 	if ferr != nil || terr != nil {
 		// No source to move, or nothing standing in the way: the failure is
 		// genuine, and the destination is left exactly as it was.

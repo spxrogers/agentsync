@@ -56,8 +56,8 @@ func TestMarketplaceAdd_CacheIsSlottedUnderTheRegisteredName(t *testing.T) {
 
 // TestMarketplaceAdd_ReAddRefreshesTheCache is the regression for the silent
 // half of #233. A re-add re-fetches into the slug directory and re-slots it, but
-// os.Rename onto the ALREADY-POPULATED declared-name directory fails with
-// ENOTEMPTY. With that discarded, `marketplace add` printed success and wrote a
+// os.Rename onto the EXISTING declared-name directory always fails. With that
+// discarded, `marketplace add` printed success and wrote a
 // fresh head_sha while the cache it points at kept the OLD tree (the fresh one
 // orphaned under the slug), so a plugin published since the first add stayed
 // invisible forever.
@@ -92,7 +92,7 @@ func TestMarketplaceAdd_ReAddRefreshesTheCache(t *testing.T) {
 // behaviour change the fix makes on purpose. When two different sources declare
 // the same name, marketplaces/<name>.toml and the state record were already
 // last-writer-wins; the cache now follows them instead of keeping the first
-// source's tree (os.Rename onto it failed with ENOTEMPTY, silently), so the
+// source's tree (os.Rename onto it failed, silently), so the
 // registration and the cache describe the same source again.
 func TestMarketplaceAdd_SameDeclaredNameReplacesTheEarlierCache(t *testing.T) {
 	tmp := t.TempDir()
