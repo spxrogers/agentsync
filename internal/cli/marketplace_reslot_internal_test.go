@@ -15,11 +15,17 @@ import (
 // only partially — must never be reported as success. The stale-destination case
 // is the routine one: os.Rename onto a non-empty directory fails with ENOTEMPTY,
 // so before the fix EVERY re-add kept the STALE tree and orphaned the fresh one.
+// Replacing that destination must never cost a marketplace a cache it already
+// has: not when the source is missing, and not when the destination IS the
+// source under another spelling (a case-insensitive filesystem).
 func TestReslotMarketplaceCache(t *testing.T) {
 	tests := []struct {
 		name    string
 		setup   func(t *testing.T, root string) (from, to string)
 		wantErr string // substring; "" means the move must succeed
+		// after runs once the error has been checked, for arms whose contract
+		// is about what the failure did NOT touch.
+		after func(t *testing.T, from, to string)
 	}{
 		{
 			name: "moves the fetched tree under the declared name",
@@ -60,6 +66,33 @@ func TestReslotMarketplaceCache(t *testing.T) {
 			},
 			wantErr: "move marketplace cache",
 		},
+		{
+			name: "leaves an existing destination alone when there is nothing to move",
+			setup: func(t *testing.T, root string) (string, string) {
+				to := filepath.Join(root, "declared")
+				mustWrite(t, filepath.Join(to, "stale.txt"), "stale")
+				return filepath.Join(root, "slug"), to
+			},
+			wantErr: "move marketplace cache",
+			after: func(t *testing.T, _, to string) {
+				if _, err := os.Stat(filepath.Join(to, "stale.txt")); err != nil {
+					t.Errorf("a missing source must not cost the marketplace its existing cache; stale.txt under %s: %v", to, err)
+				}
+			},
+		},
+		{
+			// On a case-insensitive filesystem (macOS, Windows) a slug and a
+			// declared name that differ only in case are ONE directory; this
+			// Linux-only suite stands that in with identical paths. A replace
+			// here would remove the fresh tree and then fail to rename what is
+			// gone; the move must adopt the spelling and keep the tree.
+			name: "adopts the declared spelling when the destination already names the fetched tree",
+			setup: func(t *testing.T, root string) (string, string) {
+				from := filepath.Join(root, "slug")
+				mustWrite(t, filepath.Join(from, "marker.txt"), "fresh")
+				return from, from
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -76,6 +109,9 @@ func TestReslotMarketplaceCache(t *testing.T) {
 				if !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("error must name the failing step %q; got: %v", tc.wantErr, err)
 				}
+				if tc.after != nil {
+					tc.after(t, from, to)
+				}
 				return
 			}
 			if err != nil {
@@ -91,7 +127,7 @@ func TestReslotMarketplaceCache(t *testing.T) {
 			if _, err := os.Lstat(filepath.Join(to, "gone.txt")); err == nil {
 				t.Errorf("a stale cache must be replaced, not merged: gone.txt survived at %s", to)
 			}
-			if _, err := os.Lstat(from); !os.IsNotExist(err) {
+			if _, err := os.Lstat(from); from != to && !os.IsNotExist(err) {
 				t.Errorf("the slug directory must not survive the move (it would be an orphan cache): %s (err=%v)", from, err)
 			}
 		})

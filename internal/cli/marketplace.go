@@ -2,7 +2,9 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -133,14 +135,12 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string, wa
 	// The URL-derived slug and the declared name differ (the common case for a
 	// git marketplace): re-slot the fetched cache under the declared name. Every
 	// later lookup derives the cache dir from the name this function goes on to
-	// record, so the two MUST agree — a re-slot that fails and is IGNORED
-	// registers a marketplace whose cache nothing can find, and the miss reports
-	// "marketplace %q not found in cache; run: agentsync marketplace add <url>"
-	// for a marketplace the user just added, with a remedy that repeats the same
-	// failure (#233). Fail the add instead: the TOML and the state record are
-	// written below, so an early return leaves nothing half-registered. Both
-	// names are sanitizeSlug-clean, so marketplaceCacheDir maps them to distinct
-	// sibling directories whenever they differ.
+	// record, so the two MUST agree; a re-slot that fails and is ignored
+	// registers a marketplace whose cache nothing can find (#233). Fail the add
+	// instead: the TOML and the state record are written below, so an early
+	// return leaves nothing half-registered. Both names are sanitizeSlug-clean
+	// (one path segment each); reslotMarketplaceCache handles the filesystems
+	// that fold their case.
 	if mpName != slug {
 		newCacheDir := marketplaceCacheDir(home, mpName)
 		if err := reslotMarketplaceCache(cacheDir, newCacheDir); err != nil {
@@ -150,7 +150,8 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string, wa
 			// `plugin add` as an unregistered marketplace. A re-run re-fetches.
 			_ = os.RemoveAll(cacheDir) //nolint:forbidigo // discards the marketplace fetch cache under .state/cache, not a native destination
 			return "", "", fmt.Errorf("register marketplace %q: %w; nothing was written to marketplaces/ "+
-				"or the state record — fix the cause above and re-run", mpName, err)
+				"or the state record, but a cache already under that name may be gone — fix the cause above "+
+				"and re-run to fetch it again", mpName, err)
 		}
 	}
 
@@ -236,15 +237,41 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string, wa
 // fails with ENOTEMPTY, which is why a re-add used to keep the STALE cache and
 // orphan the freshly fetched tree under the slug while reporting success (#233).
 //
-// Every failure is returned. The destination is removed before the rename, so a
-// failure after that leaves this marketplace with no cache at all — the add
-// says so, naming both paths, and a re-run re-fetches and completes (unlike the
-// swallowed failure, which no re-run could repair).
+// The move is a plain os.Rename first. That is the whole job when nothing is at
+// the destination, and on a case-insensitive filesystem (macOS, Windows) also
+// when the destination is this very tree under another spelling — a slug and a
+// declared name that differ only in case — because os.Rename accepts a case-only
+// rename of the same directory. It reports EEXIST when a DIFFERENT directory is
+// already there, and anything else (a missing source, permissions) before the
+// destination has been touched; only the EEXIST case goes on to the replace, and
+// never when the destination turns out to be the source itself.
+//
+// Every failure is returned. The one destructive window left is a rename that
+// fails after swapDir has removed the destination (a same-parent rename with an
+// existing source: I/O or permission failures only): this marketplace then has
+// no cache under either name, the add's error says a cache may be gone, and a
+// re-run re-fetches and completes (unlike the swallowed failure, which no re-run
+// could repair).
 func reslotMarketplaceCache(from, to string) error {
 	// Belt and braces: the fetch just created `from` under this same parent, so
 	// the only way the parent is missing here is a concurrent removal.
 	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
 		return fmt.Errorf("prepare marketplace cache dir %s: %w", filepath.Dir(to), err)
+	}
+	err := os.Rename(from, to) //nolint:forbidigo // moves the marketplace fetch cache under .state/cache, not a native destination
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("move marketplace cache %s → %s: %w", from, to, err)
+	}
+	// Never replace the destination with itself: identical paths, or an alias
+	// the rename above did not resolve, would have swapDir delete the fresh tree
+	// and then fail to rename what is gone. The tree is already where it belongs.
+	if fromInfo, ferr := os.Stat(from); ferr == nil {
+		if toInfo, terr := os.Stat(to); terr == nil && os.SameFile(fromInfo, toInfo) {
+			return nil
+		}
 	}
 	if err := swapDir(from, to); err != nil {
 		return fmt.Errorf("move marketplace cache %s → %s: %w", from, to, err)

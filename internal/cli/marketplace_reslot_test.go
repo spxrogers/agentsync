@@ -87,3 +87,37 @@ func TestMarketplaceAdd_ReAddRefreshesTheCache(t *testing.T) {
 		t.Fatalf("a re-add must leave no orphan slug cache behind; cache dirs = %v, want [test-mp]", got)
 	}
 }
+
+// TestMarketplaceAdd_SameDeclaredNameReplacesTheEarlierCache pins the one
+// behaviour change the fix makes on purpose. When two different sources declare
+// the same name, marketplaces/<name>.toml and the state record were already
+// last-writer-wins; the cache now follows them instead of keeping the first
+// source's tree (os.Rename onto it failed with ENOTEMPTY, silently), so the
+// registration and the cache describe the same source again.
+func TestMarketplaceAdd_SameDeclaredNameReplacesTheEarlierCache(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp, "NO_COLOR": "1"}
+	first := writeMarketplaceFixture(t, filepath.Join(tmp, "first-mp"), "shared")
+	second := writeMarketplaceFixture(t, filepath.Join(tmp, "second-mp"), "shared")
+	// Distinct plugin lists tell the two trees apart once cached.
+	for dir, plugin := range map[string]string{first: "alpha", second: "beta"} {
+		body := `{"name": "shared", "owner": {"name": "x"}, "plugins": [{"name": "` + plugin + `", "source": "./plugins/` + plugin + `"}]}`
+		if err := os.WriteFile(filepath.Join(dir, ".claude-plugin", "marketplace.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustRun(t, env, "init")
+	mustRun(t, env, "marketplace", "add", first)
+	mustRun(t, env, "marketplace", "add", second)
+
+	cached, err := os.ReadFile(filepath.Join(tmp, ".agentsync", ".state", "cache", "marketplaces", "shared", ".claude-plugin", "marketplace.json"))
+	if err != nil {
+		t.Fatalf("read the cache under the shared name: %v", err)
+	}
+	if !strings.Contains(string(cached), `"beta"`) || strings.Contains(string(cached), `"alpha"`) {
+		t.Fatalf("the later add must replace the earlier source's cache along with its record; cached marketplace.json:\n%s", cached)
+	}
+	if got := marketplaceCacheNames(t, tmp); len(got) != 1 || got[0] != "shared" {
+		t.Fatalf("no orphan may remain under either slug; cache dirs = %v, want [shared]", got)
+	}
+}
