@@ -13,11 +13,12 @@ import (
 // under the marketplace's DECLARED name (#233): that name is what every later
 // lookup derives the cache dir from, so a move that does not happen — or happens
 // only partially — must never be reported as success. The stale-destination case
-// is the routine one: os.Rename onto an existing directory always fails, so
+// is the routine one: os.Rename onto a different existing directory fails, so
 // before the fix EVERY re-add kept the STALE tree and orphaned the fresh one.
 // Replacing that destination must never cost a marketplace a cache it already
-// has: not when the source is missing, and not when the destination IS the
-// source under another spelling (a case-insensitive filesystem).
+// has: not when the source is missing or is a link rather than a tree, and not
+// when the destination IS the source under another spelling (a case-insensitive
+// filesystem).
 func TestReslotMarketplaceCache(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -45,6 +46,13 @@ func TestReslotMarketplaceCache(t *testing.T) {
 				mustWrite(t, filepath.Join(to, "gone.txt"), "stale")
 				return from, to
 			},
+			after: func(t *testing.T, _, to string) {
+				// The stale tree is renamed aside while the fresh one moves in and
+				// discarded only afterwards; a completed replace leaves no aside.
+				if _, err := os.Lstat(to + "..old"); !os.IsNotExist(err) {
+					t.Errorf("a completed replace must discard the tree it moved aside: %s..old (err=%v)", to, err)
+				}
+			},
 		},
 		{
 			name: "propagates a failure to prepare the cache root",
@@ -69,6 +77,34 @@ func TestReslotMarketplaceCache(t *testing.T) {
 			after: func(t *testing.T, _, to string) {
 				if _, err := os.Stat(filepath.Join(to, "stale.txt")); err != nil {
 					t.Errorf("a missing source must not cost the marketplace its existing cache; stale.txt under %s: %v", to, err)
+				}
+			},
+		},
+		{
+			// A link where the fetched tree should be is not a tree to move: no
+			// fetcher leaves one, and installing the link as the cache (a link to
+			// the destination itself would dangle once the stale tree is gone)
+			// must be refused with the destination untouched.
+			name: "refuses a symlink at the source rather than moving the link",
+			setup: func(t *testing.T, root string) (string, string) {
+				to := filepath.Join(root, "declared")
+				mustWrite(t, filepath.Join(to, "stale.txt"), "stale")
+				from := filepath.Join(root, "slug")
+				if err := os.Symlink(to, from); err != nil {
+					t.Fatal(err)
+				}
+				return from, to
+			},
+			wantErr: "move marketplace cache",
+			after: func(t *testing.T, from, to string) {
+				if _, err := os.Stat(filepath.Join(to, "stale.txt")); err != nil {
+					t.Errorf("a refused move must leave the existing cache alone; stale.txt under %s: %v", to, err)
+				}
+				if fi, err := os.Lstat(to); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+					t.Errorf("the destination must still be the real tree, not a link (err=%v)", err)
+				}
+				if fi, err := os.Lstat(from); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+					t.Errorf("the refused link must be left where it was (err=%v)", err)
 				}
 			},
 		},

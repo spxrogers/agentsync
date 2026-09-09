@@ -32,7 +32,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `plugin add` could pick up as an unregistered marketplace; and when two
   sources declare the same name, the later add now replaces the earlier one's
   cache along with the `marketplaces/<name>.toml` and state record it already
-  overwrote.
+  overwrote. The replace itself — shared with the cache swap `plugin upgrade`
+  performs — keeps the old tree until the new one is in place, so a replace
+  that fails part-way leaves the marketplace or plugin the cache it had rather
+  than none.
   `import <agent>:plugin` registers marketplaces through the same code and now
   warns and skips instead of registering a phantom.
 

@@ -437,14 +437,33 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 	return nil
 }
 
-// swapDir replaces dst with src by removing dst and renaming src into place.
-// src and dst must be on the same filesystem (callers create src as a sibling
-// of dst). After a successful swap src no longer exists.
+// swapDir replaces dst with src: dst is renamed aside, src is renamed into
+// place, and only then is the old tree discarded. src and dst must be on the
+// same filesystem (callers create src as a sibling of dst). After a successful
+// swap src no longer exists.
+//
+// The old tree survives until the new one is standing at dst. A rename that
+// fails part-way is rolled back, so a marketplace or plugin never loses the
+// cache it had to a replace that did not complete — the shape extractSubdir in
+// internal/marketplace documents (RemoveAll-then-Rename destroyed the cache
+// whenever the rename then failed). The aside is a sibling of dst whose name
+// holds "..", which sanitizeCacheKey never lets into a cache key, so it can
+// never be another plugin's or marketplace's cache; a leftover from an
+// interrupted earlier swap is cleared first, as extractSubdir clears its own.
 func swapDir(src, dst string) error {
-	if err := os.RemoveAll(dst); err != nil {
+	aside := dst + "..old"
+	if err := os.RemoveAll(aside); err != nil {
 		return err
 	}
-	return os.Rename(src, dst)
+	if err := os.Rename(dst, aside); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(src, dst); err != nil {
+		_ = os.Rename(aside, dst) // best-effort rollback; a no-op when dst was absent
+		return err
+	}
+	_ = os.RemoveAll(aside) // best-effort; the next swap clears a leftover
+	return nil
 }
 
 // filterSafeBumps partitions bumps for `plugin upgrade --all --lossless` into

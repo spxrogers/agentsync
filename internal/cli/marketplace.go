@@ -149,8 +149,7 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string, wa
 			// re-fetches into whatever is left and re-slots it.
 			_ = os.RemoveAll(cacheDir) //nolint:forbidigo // discards the marketplace fetch cache under .state/cache, not a native destination
 			return "", "", fmt.Errorf("register marketplace %q: %w; nothing was written to marketplaces/ "+
-				"or the state record, but a cache already under that name may be gone — fix the cause "+
-				"and re-run to fetch it again", mpName, err)
+				"or the state record — fix the cause and re-run", mpName, err)
 		}
 	}
 
@@ -232,30 +231,32 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string, wa
 // An EXISTING destination is replaced, not merged (swapDir): it is a stale tree
 // from an earlier add of this marketplace — or of another one declaring the same
 // name, whose marketplaces/<name>.toml and state record this add overwrites
-// regardless, so the cache must follow. os.Rename onto an existing directory
-// always fails (Go refuses a directory destination before the syscall), which
-// is why a re-add used to keep the STALE cache and orphan the freshly fetched
-// tree under the slug while reporting success (#233).
+// regardless, so the cache must follow. os.Rename onto a DIFFERENT existing
+// directory fails (on Unix Go refuses it before the syscall, on Windows the
+// syscall does; only a case-only alias of the same directory goes through),
+// which is why a re-add used to keep the STALE cache and orphan the freshly
+// fetched tree under the slug while reporting success (#233).
 //
 // The move is a plain os.Rename first. That is the whole job when nothing is at
 // the destination, and on a case-insensitive filesystem (macOS, Windows) also
 // when the destination is this very tree under another spelling — a slug and a
 // declared name that differ only in case — because a case-only rename of the
 // same directory is accepted. A rename that fails has touched nothing; it goes
-// on to the replace only when a DIFFERENT directory is standing at the
-// destination while the source is still there. That is decided by stat, not by
-// the error: Linux reports EEXIST for an occupied destination, Windows reports
-// access denied, and a missing source or a permission failure must never be
-// answered by removing the cache the marketplace already has. Lstat, not Stat:
-// a symlink standing at the destination is a link to unlink (swapDir removes
-// the link, never what it points at), not this tree under another name.
+// on to the replace only when a DIFFERENT entry (a directory or a symlink) is
+// standing at the destination while the fetched tree is still at the source.
+// That is decided by stat, not by the error: Linux reports EEXIST for an
+// occupied destination, Windows reports access denied, and a missing source or
+// a permission failure must never be answered by touching the cache the
+// marketplace already has. Lstat, not Stat: a symlink standing at the
+// destination is a link to unlink (swapDir removes the link, never what it
+// points at), not this tree under another name; and a symlink standing at the
+// SOURCE is not a fetched tree to move — no fetcher leaves one — so it is
+// refused rather than installed as the cache.
 //
-// Every failure is returned. The one destructive window left is a rename that
-// fails after swapDir has removed the destination (a same-parent rename with an
-// existing source: I/O or permission failures only): this marketplace then has
-// no cache under either name, the add's error says a cache may be gone, and a
-// re-run re-fetches and completes (unlike the swallowed failure, which no re-run
-// could repair).
+// Every failure is returned, and none costs the marketplace the cache it had:
+// swapDir keeps the old tree until the fresh one is standing in its place, so a
+// replace that fails part-way leaves the destination as it was and the source
+// where it was, and a re-run re-fetches and completes.
 func reslotMarketplaceCache(from, to string) error {
 	// Belt and braces: the fetch just created `from` under this same parent, so
 	// the only way the parent is missing here is a concurrent removal.
@@ -272,6 +273,12 @@ func reslotMarketplaceCache(from, to string) error {
 		// No source to move, or nothing standing in the way: the failure is
 		// genuine, and the destination is left exactly as it was.
 		return fmt.Errorf("move marketplace cache %s → %s: %w", from, to, err)
+	}
+	if fromInfo.Mode()&os.ModeSymlink != 0 {
+		// A link where the fetched tree should be: moving it would install a
+		// link (to anywhere, the destination itself included) as the cache, and
+		// the replace below would first unlink what the marketplace has.
+		return fmt.Errorf("move marketplace cache %s → %s: the source is a symlink, not a fetched tree", from, to)
 	}
 	if os.SameFile(fromInfo, toInfo) {
 		// Identical paths, or an alias the rename above did not resolve: the
