@@ -11,6 +11,30 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`marketplace add` no longer registers a marketplace whose cache it failed to
+  put in place** ([#233](https://github.com/spxrogers/agentsync/issues/233)).
+  When a marketplace's declared name differs from the name derived from its URL
+  (typically every `github:owner/repo` source), the fetched cache is moved under
+  the declared name — the name the TOML and the state record use, and the only
+  name any later lookup derives the cache directory from. That move's failures
+  were discarded while the registration went ahead, so `marketplace add` printed
+  `✅ added marketplace …`, `marketplace list` showed it, and the very next
+  `plugin add <id>@<name>` failed with `marketplace "<name>" not found in cache;
+  run: agentsync marketplace add <url>` — advice that repeated the failure.
+  The move now reports its failures and the add stops before registering
+  anything. It also **replaces** an existing cache instead of failing on it,
+  fixing the routine case: re-adding an already-registered marketplace hit the
+  same swallowed failure every time (a rename onto a non-empty directory), so
+  the cache was never refreshed — a plugin published since the first add stayed
+  invisible while the recorded `head_sha` moved on — and a duplicate copy
+  accumulated under the URL-derived name. A failed add now also discards its
+  fetched tree, so nothing is left behind that a bare-id `plugin add` could pick
+  up as an unregistered marketplace; and when two sources declare the same name,
+  the later add now replaces the earlier one's cache along with the
+  `marketplaces/<name>.toml` and state record it already overwrote.
+  `import <agent>:plugin` registers marketplaces through the same code and now
+  warns and skips instead of registering a phantom.
+
 - **A symlinked destination under `AGENTSYNC_ALLOW_SYMLINK_DEST=1` is no
   longer reported as permanently drifted**
   ([#229](https://github.com/spxrogers/agentsync/issues/229)). In the
