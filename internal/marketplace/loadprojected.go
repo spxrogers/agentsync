@@ -529,7 +529,7 @@ func resolveInstalledEntry(fs afero.Fs, home, id, mpName string, idx marketplace
 		return PluginEntry{Name: untrusted.Wrap(id)}
 	}
 	for _, d := range dirs {
-		if !d.IsDir() {
+		if !d.IsDir() || IsCacheAside(d.Name()) {
 			continue
 		}
 		data, rerr := afero.ReadFile(fs, filepath.Join(cacheRoot, d.Name(), ".claude-plugin", "marketplace.json"))
@@ -578,7 +578,7 @@ func buildMarketplaceIndex(fs afero.Fs, home string) marketplaceIndex {
 		return idx
 	}
 	for _, d := range dirs {
-		if !d.IsDir() {
+		if !d.IsDir() || IsCacheAside(d.Name()) {
 			continue
 		}
 		data, rerr := afero.ReadFile(fs, filepath.Join(cacheRoot, d.Name(), ".claude-plugin", "marketplace.json"))

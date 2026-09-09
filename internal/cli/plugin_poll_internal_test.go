@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/spxrogers/agentsync/internal/marketplace"
 )
 
 // TestSwapDir pins the replace both cache callers rely on — the plugin-upgrade
@@ -50,7 +52,7 @@ func TestSwapDir(t *testing.T) {
 			setup: func(t *testing.T, src, dst string) {
 				mustWrite(t, filepath.Join(src, "marker.txt"), "fresh")
 				mustWrite(t, filepath.Join(dst, "marker.txt"), "stale")
-				mustWrite(t, filepath.Join(dst+"..old", "marker.txt"), "older")
+				mustWrite(t, filepath.Join(dst+marketplace.CacheAsideSuffix, "marker.txt"), "older")
 			},
 			wantDst: "fresh",
 		},
@@ -74,12 +76,52 @@ func TestSwapDir(t *testing.T) {
 			if string(got) != tc.wantDst {
 				t.Errorf("destination marker.txt = %q, want %q", got, tc.wantDst)
 			}
-			if _, lerr := os.Lstat(dst + "..old"); !os.IsNotExist(lerr) {
-				t.Errorf("no aside may survive the swap: %s..old (err=%v)", dst, lerr)
+			if _, lerr := os.Lstat(dst + marketplace.CacheAsideSuffix); !os.IsNotExist(lerr) {
+				t.Errorf("no aside may survive the swap: %s%s (err=%v)", dst, marketplace.CacheAsideSuffix, lerr)
 			}
 			if _, lerr := os.Lstat(src); !tc.wantErr && !os.IsNotExist(lerr) {
 				t.Errorf("a completed swap must consume the source: %s (err=%v)", src, lerr)
 			}
 		})
+	}
+}
+
+// TestSwapDir_KeepsBothTreesWhenTheRenameInFails forces the failure the
+// rollback exists for with a source the swap cannot move: a tree on another
+// filesystem (/dev/shm is a tmpfs on Linux; the test skips where it is missing,
+// unwritable, or on the same filesystem as the test's temp dir). Unlike a
+// missing source, this tree survives the failed rename, so the arm also pins
+// that the source is left where it was — and it is the one witness the closed
+// window has: a swap that checks the source first and then removes the
+// destination passes every other test in the package.
+func TestSwapDir_KeepsBothTreesWhenTheRenameInFails(t *testing.T) {
+	shm, err := os.MkdirTemp("/dev/shm", "agentsync-swapdir-")
+	if err != nil {
+		t.Skipf("no writable /dev/shm to force a cross-device rename: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(shm) })
+	root := t.TempDir()
+	probe := filepath.Join(shm, "probe")
+	mustWrite(t, filepath.Join(probe, "x"), "x")
+	if err := os.Rename(probe, filepath.Join(root, "probe")); err == nil {
+		t.Skip("/dev/shm and the test temp dir are one filesystem; a rename between them cannot fail")
+	}
+	src, dst := filepath.Join(shm, "incoming"), filepath.Join(root, "cache")
+	mustWrite(t, filepath.Join(src, "marker.txt"), "fresh")
+	mustWrite(t, filepath.Join(dst, "marker.txt"), "stale")
+
+	err = swapDir(src, dst)
+
+	if err == nil {
+		t.Fatal("a cross-device rename must fail the swap; got nil")
+	}
+	if got, rerr := os.ReadFile(filepath.Join(dst, "marker.txt")); rerr != nil || string(got) != "stale" {
+		t.Errorf("the old tree must be put back; marker.txt = %q (err=%v)", got, rerr)
+	}
+	if got, rerr := os.ReadFile(filepath.Join(src, "marker.txt")); rerr != nil || string(got) != "fresh" {
+		t.Errorf("the source must be left where it was; marker.txt = %q (err=%v)", got, rerr)
+	}
+	if _, lerr := os.Lstat(dst + marketplace.CacheAsideSuffix); !os.IsNotExist(lerr) {
+		t.Errorf("no aside may survive the swap (err=%v)", lerr)
 	}
 }

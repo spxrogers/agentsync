@@ -80,3 +80,28 @@ func TestResolveInstalledEntry_MemoizedScan(t *testing.T) {
 		t.Fatalf("scan should miss after cache deletion, returning a bare entry; got desc=%q", got.Description)
 	}
 }
+
+// TestBuildMarketplaceIndex_SkipsCacheAsides: the cli's cache replace parks the
+// old tree at <dir>..old until the new one is in place, and an interrupted
+// replace leaves it there. Neither the index nor the direct scan may take
+// entries from that copy — under the live marketplace's declared name, a
+// plugin removed upstream would otherwise outlive its removal.
+func TestBuildMarketplaceIndex_SkipsCacheAsides(t *testing.T) {
+	home := t.TempDir()
+	osfs := afero.NewOsFs()
+	writeMarketplaceCacheJSON(t, home, "a",
+		`{"name":"mpA","plugins":[{"name":"plug1"}]}`)
+	writeMarketplaceCacheJSON(t, home, "a"+CacheAsideSuffix,
+		`{"name":"mpA","plugins":[{"name":"ghost","description":"from the aside"}]}`)
+
+	idx := buildMarketplaceIndex(osfs, home)
+
+	if got := len(idx["mpA"]); got != 1 {
+		t.Fatalf("the aside's entries must not be indexed; idx[mpA] has %d entries: %v", got, idx["mpA"])
+	}
+	for _, viaIdx := range []marketplaceIndex{idx, nil} {
+		if got := resolveInstalledEntry(osfs, home, "ghost", "mpA", viaIdx); got.Description == "from the aside" {
+			t.Errorf("an aside's entry resolved (index=%v): %+v", viaIdx != nil, got)
+		}
+	}
+}

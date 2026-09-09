@@ -33,9 +33,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   sources declare the same name, the later add now replaces the earlier one's
   cache along with the `marketplaces/<name>.toml` and state record it already
   overwrote. The replace itself — shared with the cache swap `plugin upgrade`
-  performs — keeps the old tree until the new one is in place, so a replace
-  that fails part-way leaves the marketplace or plugin the cache it had rather
-  than none.
+  performs — keeps the old tree until the new one is in place and puts it back
+  when the new one cannot be moved in, so a replace that fails leaves the
+  marketplace or plugin the cache it had rather than none (and says where the
+  old tree sits should even that fail); the cache-root scans treat the aside
+  such a replace parks the old tree at as scratch, never as a marketplace of
+  its own.
   `import <agent>:plugin` registers marketplaces through the same code and now
   warns and skips instead of registering a phantom.
 

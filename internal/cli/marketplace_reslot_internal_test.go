@@ -49,8 +49,8 @@ func TestReslotMarketplaceCache(t *testing.T) {
 			after: func(t *testing.T, _, to string) {
 				// The stale tree is renamed aside while the fresh one moves in and
 				// discarded only afterwards; a completed replace leaves no aside.
-				if _, err := os.Lstat(to + "..old"); !os.IsNotExist(err) {
-					t.Errorf("a completed replace must discard the tree it moved aside: %s..old (err=%v)", to, err)
+				if _, err := os.Lstat(to + marketplace.CacheAsideSuffix); !os.IsNotExist(err) {
+					t.Errorf("a completed replace must discard the tree it moved aside: %s%s (err=%v)", to, marketplace.CacheAsideSuffix, err)
 				}
 			},
 		},
@@ -102,6 +102,29 @@ func TestReslotMarketplaceCache(t *testing.T) {
 				}
 				if fi, err := os.Lstat(to); err != nil || fi.Mode()&os.ModeSymlink != 0 {
 					t.Errorf("the destination must still be the real tree, not a link (err=%v)", err)
+				}
+				if fi, err := os.Lstat(from); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+					t.Errorf("the refused link must be left where it was (err=%v)", err)
+				}
+			},
+		},
+		{
+			// The plain rename moves a link into an EMPTY slot as happily as a
+			// tree — the first-add path — so the refusal has to come before it,
+			// not only once a stale tree has made the rename fail.
+			name: "refuses a symlink at the source even when nothing is at the destination",
+			setup: func(t *testing.T, root string) (string, string) {
+				mustWrite(t, filepath.Join(root, "elsewhere", "keep.txt"), "keep")
+				from := filepath.Join(root, "slug")
+				if err := os.Symlink(filepath.Join(root, "elsewhere"), from); err != nil {
+					t.Fatal(err)
+				}
+				return from, filepath.Join(root, "declared")
+			},
+			wantErr: "move marketplace cache",
+			after: func(t *testing.T, from, to string) {
+				if _, err := os.Lstat(to); !os.IsNotExist(err) {
+					t.Errorf("the link must not be installed as the cache: %s exists (err=%v)", to, err)
 				}
 				if fi, err := os.Lstat(from); err != nil || fi.Mode()&os.ModeSymlink == 0 {
 					t.Errorf("the refused link must be left where it was (err=%v)", err)
@@ -236,5 +259,21 @@ func TestAddMarketplaceSource_ReslotFailureRegistersNothing(t *testing.T) {
 	}
 	if entries, rerr := os.ReadDir(filepath.Join(home, ".state", "cache", "marketplaces")); rerr == nil && len(entries) != 0 {
 		t.Errorf("a failed add must leave no fetch cache behind (searchAllMarketplaces would offer it to a bare-id plugin add as an unregistered marketplace); cache root holds %d entr(y/ies)", len(entries))
+	}
+}
+
+// TestSearchAllMarketplaces_SkipsCacheAsides pins the other half of the aside
+// contract. swapDir parks the old tree at <name>..old while a replace is in
+// flight, and an interrupted replace leaves it there; a bare-id `plugin add`
+// must never resolve against that copy — it would register the plugin under a
+// name no cache directory can be derived from, the #233 shape again.
+func TestSearchAllMarketplaces_SkipsCacheAsides(t *testing.T) {
+	home := t.TempDir()
+	aside := filepath.Join(home, ".state", "cache", "marketplaces", "shared"+marketplace.CacheAsideSuffix)
+	mustWrite(t, filepath.Join(aside, ".claude-plugin", "marketplace.json"),
+		`{"name": "shared", "owner": {"name": "x"}, "plugins": [{"name": "ghost", "source": "./ghost"}]}`)
+
+	if _, _, via, err := searchAllMarketplaces(home, "ghost"); err == nil {
+		t.Fatalf("a cache aside must not be searched as a marketplace; ghost resolved via %q", via)
 	}
 }
