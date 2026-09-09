@@ -29,10 +29,11 @@ can resolve secrets into native config files. Areas of particular interest:
   cannot verify the source's `${secret:…}` refs (the leak check would be blind),
   so a locked vault never silently degrades into persisting a credential. The
   only write-backs outside this path are two guarded pure *deletions* of
-  canonical files (reconcile's dest-dropped MCP-server removal, keystroke-gated
-  and path-bounded to `~/.agentsync`; import's stale-hook retirement) — a
-  deletion carries no secret content to persist, and anything that writes
-  content back still goes through `capture.Capture`.
+  canonical files (reconcile's dest-dropped MCP-server removal, which runs only
+  for a chosen write-back — per-item `[w]`, confirmed bulk `[W]`, or
+  `--auto-writeback` — and is path-bounded to `~/.agentsync`; import's
+  stale-hook retirement) — a deletion carries no secret content to persist,
+  and anything that writes content back still goes through `capture.Capture`.
   The alternative `backend = "env"` stores nothing: `${secret:…}` resolves from
   the process environment at apply time, so there is no vault, no identity file
   and no decryption — the credential's protection is whatever protects the

@@ -18,10 +18,13 @@ import (
 // explainInputs bundles everything buildExplainModel needs, so the builder stays
 // a pure-ish function the tests can drive without a cobra command.
 type explainInputs struct {
-	fs            afero.Fs
-	target        string
-	pointer       string
-	plan          render.RenderPlan
+	fs      afero.Fs
+	target  string
+	pointer string
+	plan    render.RenderPlan
+	// reg is the registry the plan was rendered with; it resolves a renaming
+	// adapter's native hook-event spelling back to the canonical one.
+	reg           *adapter.Registry
 	agents        []string // registry order, for stable owner ordering
 	canonical     source.Canonical
 	state         *state.Targets
@@ -173,7 +176,7 @@ func fileItem(in explainInputs, it planItem, skips []adapter.Skip,
 func keyItem(in explainInputs, it planItem, skips []adapter.Skip, origins map[string]explainPluginOrigin,
 	secretRefs map[secrets.RefLocation][]string, hookEvents []string,
 ) explainItem {
-	kind, name := componentFromPointer(it.agent, it.ptr, hookEvents)
+	kind, name := componentFromPointer(in.reg, it.agent, it.ptr, hookEvents)
 
 	item := explainItem{
 		Pointer:    it.ptr,
@@ -245,7 +248,7 @@ func sourceOf(in explainInputs, srcID, kind string) *explainSource {
 // pointer shape (the mcp/lsp/hooks container families), falling back to the
 // op-level SourceID when the pointer names no single source.
 func pointerSource(in explainInputs, agent, ptr, opSourceID string, hookEvents []string) *explainSource {
-	abs := pointerSourceFile(in.srcHome, agent, ptr, hookEvents)
+	abs := pointerSourceFile(in.reg, in.srcHome, agent, ptr, hookEvents)
 	if abs == "" {
 		if opSourceID == "" {
 			return nil
@@ -297,7 +300,7 @@ func componentFromSourceID(srcID string) (kind, name string) {
 
 // componentFromPointer maps a NATIVE key-merge pointer to (kind, name), routing
 // hooks through the same canonical-event inversion reconcile's write-back uses.
-func componentFromPointer(agent, ptr string, hookEvents []string) (kind, name string) {
+func componentFromPointer(reg *adapter.Registry, agent, ptr string, hookEvents []string) (kind, name string) {
 	parts := strings.SplitN(strings.TrimPrefix(ptr, "/"), "/", 3)
 	if len(parts) < 2 || parts[1] == "" {
 		return "", ""
@@ -308,7 +311,7 @@ func componentFromPointer(agent, ptr string, hookEvents []string) (kind, name st
 	case "lspServers", "lsp":
 		return "lsp", parts[1]
 	case "hooks":
-		if event, ok := canonicalHookEvent(agent, parts[1], hookEvents); ok {
+		if event, ok := canonicalHookEvent(reg, agent, parts[1], hookEvents); ok {
 			return "hook", event
 		}
 		return "hook", ""

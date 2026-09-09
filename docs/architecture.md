@@ -716,7 +716,8 @@ to `int64`/`float64` before writing. No other
 code path writes destination data back into the source. (Two guarded code paths
 *delete* canonical files without going through Capture: `reconcile`'s
 `removeDroppedSource` unlinks `mcp/<id>.toml` when the user writes back a
-destination-side server deletion — keystroke-gated, `withinDir`-bounded to
+destination-side server deletion — gated on that chosen write-back (a per-item
+`[w]`, a confirmed bulk `[W]`, or `--auto-writeback`), `withinDir`-bounded to
 `~/.agentsync` — and import's stale-hook retirement calls `source.RemoveHooks`
 on `hooks/<event>.toml`. A pure deletion carries no content to re-reference, so
 the funnel's secret guarantees are not in play; anything that writes *content*
