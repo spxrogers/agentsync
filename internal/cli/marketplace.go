@@ -2,9 +2,7 @@ package cli
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -240,11 +238,13 @@ func addMarketplaceSource(home string, src marketplace.Source, rawURL string, wa
 // The move is a plain os.Rename first. That is the whole job when nothing is at
 // the destination, and on a case-insensitive filesystem (macOS, Windows) also
 // when the destination is this very tree under another spelling — a slug and a
-// declared name that differ only in case — because os.Rename accepts a case-only
-// rename of the same directory. It reports EEXIST when a DIFFERENT directory is
-// already there, and anything else (a missing source, permissions) before the
-// destination has been touched; only the EEXIST case goes on to the replace, and
-// never when the destination turns out to be the source itself.
+// declared name that differ only in case — because a case-only rename of the
+// same directory is accepted. A rename that fails has touched nothing; it goes
+// on to the replace only when a DIFFERENT directory is standing at the
+// destination while the source is still there. That is decided by stat, not by
+// the error: Linux reports EEXIST for an occupied destination, Windows reports
+// access denied, and a missing source or a permission failure must never be
+// answered by removing the cache the marketplace already has.
 //
 // Every failure is returned. The one destructive window left is a rename that
 // fails after swapDir has removed the destination (a same-parent rename with an
@@ -262,16 +262,18 @@ func reslotMarketplaceCache(from, to string) error {
 	if err == nil {
 		return nil
 	}
-	if !errors.Is(err, fs.ErrExist) {
+	fromInfo, ferr := os.Stat(from)
+	toInfo, terr := os.Stat(to)
+	if ferr != nil || terr != nil {
+		// No source to move, or nothing standing in the way: the failure is
+		// genuine, and the destination is left exactly as it was.
 		return fmt.Errorf("move marketplace cache %s → %s: %w", from, to, err)
 	}
-	// Never replace the destination with itself: identical paths, or an alias
-	// the rename above did not resolve, would have swapDir delete the fresh tree
-	// and then fail to rename what is gone. The tree is already where it belongs.
-	if fromInfo, ferr := os.Stat(from); ferr == nil {
-		if toInfo, terr := os.Stat(to); terr == nil && os.SameFile(fromInfo, toInfo) {
-			return nil
-		}
+	if os.SameFile(fromInfo, toInfo) {
+		// Identical paths, or an alias the rename above did not resolve: the
+		// tree is already where it belongs. Replacing it would delete the fresh
+		// tree and then fail to rename what is gone.
+		return nil
 	}
 	if err := swapDir(from, to); err != nil {
 		return fmt.Errorf("move marketplace cache %s → %s: %w", from, to, err)
