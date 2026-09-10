@@ -183,11 +183,11 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 		if err != nil {
 			return c, fmt.Errorf("parse %s: %w", p.Settings, err)
 		}
-		// IngestHooks takes any and does its own map assertion (mirroring the
+		// ingestHooks takes any and does its own map assertion (mirroring the
 		// gemini adapter's call site), so pass the raw value straight through.
 		// Refused events surface via RefusedHookEvents (adapter.HookIngestGuard):
 		// import uses that to retire a stale canonical hooks/<event>.toml.
-		hooks, _ := IngestHooks(top["hooks"], warn)
+		hooks, _ := ingestHooks(top["hooks"], warn)
 		c.Hooks = append(c.Hooks, hooks...)
 	}
 

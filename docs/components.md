@@ -243,11 +243,11 @@ trigger retirement.
 The dedicated Grok Build adapter: user/project instructions, complete skills,
 legacy Markdown commands, TOML MCP, and JSON command hooks. Uses
 `codex.MergeTOML`, `jsonkeys.ConvertNumbers`, `claude.SkillFileOps`, and
-`claude.IngestHooks`; no new parser or canonical schema. Implements
+a Grok-local hook parser; no canonical schema changes. Implements
 `PathKeyMerger` for mixed-format cleanup, `HookIngestGuard` for enriched-event
 retirement, `WarnEmitter`, and `VersionedDirs`. See [Grok support](grok.md).
 - **Key:** `New(Options) *Adapter`, `IngestMCPSpec`.
-- **Files:** `grok.go`, `paths.go`, `render.go`, `mcp.go`, `hook.go`, `ingest.go`,
+- **Files:** `grok.go`, `paths.go`, `render.go`, `mcp.go`, `hook.go`, `hook-ingest.go`, `ingest.go`,
   `apply.go`.
 
 ### `internal/adapter/cursor`

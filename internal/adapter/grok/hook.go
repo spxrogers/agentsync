@@ -7,7 +7,6 @@ import (
 	"slices"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
-	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/source"
 )
@@ -75,7 +74,7 @@ func readHooks(path string, warn io.Writer) ([]source.Hook, []string, error) {
 			return nil, nil, fmt.Errorf("parse %s: hooks must be an object", path)
 		}
 	}
-	hooks, refused := claude.IngestHooks(top["hooks"], warn)
+	hooks, refused := ingestHooks(top["hooks"], warn)
 	var out []source.Hook
 	for _, h := range hooks {
 		if slices.Contains(hookEvents, h.Event.Unverified()) {

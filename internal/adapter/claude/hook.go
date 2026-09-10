@@ -81,13 +81,13 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 // per-event definition can carry keys beyond {matcher, hooks} and an individual
 // handler keys beyond {type, command} (e.g. `timeout`). These enumerate the
 // fields the canonical model CAN represent; anything else in an event makes that
-// event unrepresentable — see IngestHooks.
+// event unrepresentable — see ingestHooks.
 var (
 	claudeHookDefModeledKeys   = map[string]bool{"matcher": true, "hooks": true}
 	claudeHookEntryModeledKeys = map[string]bool{"type": true, "command": true}
 )
 
-// IngestHooks decodes settings.json's `hooks` object into canonical hooks,
+// ingestHooks decodes settings.json's `hooks` object into canonical hooks,
 // warning on anything it cannot capture. Inverse of renderHooks: each
 // {type, command} handler becomes a source.Hook sharing the group's matcher.
 // Unlike Gemini there is NO event-name remapping — every Claude event name is
@@ -105,7 +105,7 @@ var (
 // Gemini's twin carries the same structural diagnostics and refusal reporting
 // (parity landed with the epic #178 residual close); its refused list maps
 // native event names back to canonical, since Gemini renames events.
-func IngestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) {
+func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) {
 	hooks, ok := raw.(map[string]any)
 	if !ok {
 		return nil, nil
@@ -240,7 +240,7 @@ func IngestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 
 // RefusedHookEvents implements adapter.HookIngestGuard — see the interface doc
 // for the shared contract (semantic-only refusals, canonical names, the issue
-// #124 corruption class this closes) and IngestHooks for what claude refuses.
+// #124 corruption class this closes) and ingestHooks for what claude refuses.
 // Claude leg: settings.json is re-read with the same strict-JSON UseNumber
 // decode Ingest uses (jsonkeys.DecodeObject); claude spells events
 // canonically, so refused needs no name mapping. Warnings are discarded here —
@@ -261,6 +261,6 @@ func (a *Adapter) RefusedHookEvents(scope adapter.Scope, project string) ([]stri
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", p.Settings, err)
 	}
-	_, refused := IngestHooks(top["hooks"], io.Discard)
+	_, refused := ingestHooks(top["hooks"], io.Discard)
 	return refused, nil
 }

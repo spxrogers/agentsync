@@ -253,18 +253,34 @@ func TestReportedLimitsAndTargeting(t *testing.T) {
 
 func TestHookCaptureRefusesLossAndLeavesOtherFiles(t *testing.T) {
 	for _, tc := range []struct {
-		name, handler string
-		refused       bool
+		name, value string
+		refused     bool
 	}{
-		{"timeout", `{"type":"command","command":"check","timeout":10}`, true},
-		{"http", `{"type":"http","url":"https://example.test"}`, true},
-		{"missing-command", `{"type":"command"}`, false},
-		{"malformed-command", `{"type":"command","command":42}`, false},
+		{"timeout", `[{"hooks":[{"type":"command","command":"check","timeout":10}]}]`, true},
+		{"http", `[{"hooks":[{"type":"http","url":"https://example.test"}]}]`, true},
+		{"definition-extra", `[{"hooks":[],"timeout":10}]`, true},
+		{"unmodeled-before-missing-command", `[{"hooks":[{"timeout":10}]}]`, true},
+		{"missing-command", `[{"hooks":[{"type":"command"}]}]`, false},
+		{"malformed-command", `[{"hooks":[{"type":"command","command":42}]}]`, false},
+		{"malformed-type", `[{"hooks":[{"type":42,"command":"check"}]}]`, false},
+		{"malformed-handler", `[{"hooks":[42]}]`, false},
+		{"malformed-matcher", `[{"matcher":42,"hooks":[]}]`, false},
+		{"missing-handlers", `[{}]`, false},
+		{"malformed-handlers", `[{"hooks":42}]`, false},
+		{"malformed-definition", `[42]`, false},
+		{"malformed-event", `42`, false},
+		{"structural-before-semantic", `[42,{"hooks":[{"timeout":10}]}]`, false},
+		{"semantic-before-structural", `[{"hooks":[{"timeout":10}]},42]`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			path := filepath.Join(root, ".grok", "hooks", "agentsync.json")
-			writeFile(t, path, []byte(`{"hooks":{"PreToolUse":[{"hooks":[`+tc.handler+`]}]}}`), 0o644)
+			value := tc.value
+			if strings.HasPrefix(value, "[") {
+				// One invalid group must prevent capture of valid sibling groups.
+				value = `[{"hooks":[{"type":"command","command":"valid"}]},` + value[1:]
+			}
+			writeFile(t, path, []byte(`{"hooks":{"PreToolUse":`+value+`}}`), 0o644)
 			other := filepath.Join(filepath.Dir(path), "personal.json")
 			original := []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"personal"}]}]}}`)
 			writeFile(t, other, original, 0o644)
