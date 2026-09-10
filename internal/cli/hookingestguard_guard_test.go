@@ -118,10 +118,10 @@ func TestHookIngestGuard_ReportsCanonicalNames(t *testing.T) {
 			}
 		})
 	}
-	// Vacuity guard: the four adapters whose hook ingests refuse semantically
+	// Vacuity guard: the adapters whose hook ingests refuse semantically
 	// must implement HookIngestGuard BY NAME — losing one silently reopens the
 	// issue #124 second-order clobber for that agent.
-	for _, agent := range []string{"claude", "gemini", "cursor", "codex"} {
+	for _, agent := range []string{"claude", "gemini", "cursor", "codex", "grok"} {
 		if !guards[agent] {
 			t.Fatalf("agent %s no longer implements adapter.HookIngestGuard — its native "+
 				"hook enrichments would silently stop triggering import's stale-hook retirement", agent)

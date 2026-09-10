@@ -70,7 +70,7 @@ func TestIngest_RefusesMalformedEntryShapes(t *testing.T) {
 // well-formed entries). Every structurally-malformed shape — a settings.json
 // typo — warns at Ingest but must NOT appear here, because import deletes the
 // canonical hooks/<event>.toml for every returned event and a native typo must
-// never be destructive. One subtest per structural refusal site in ingestHooks.
+// never be destructive. One subtest per structural refusal site in IngestHooks.
 func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 	testenv.RequireContainer(t)
 	tests := []struct {

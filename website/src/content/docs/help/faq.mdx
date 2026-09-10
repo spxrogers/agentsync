@@ -69,13 +69,17 @@ global MCP is VS Code app-storage (not targeted). **Cline** — MCP via the CLI'
 `~/.cline/mcp.json` (user scope), memory (`.clinerules/`) and slash commands
 (`.clinerules/workflows/`) at project scope. No LSP concept on any of them.
 
-Beyond these nine **deep** adapters, a **breadth tier** of 22 more agents (amp,
+**Grok Build** also supports instructions, skills, Markdown commands, TOML MCP,
+and command hooks at user and project scope. See the
+[capability matrix](/reference/capability-matrix/) for its intentional limits.
+
+Beyond these ten **deep** adapters, a **breadth tier** of 22 more agents (amp,
 goose, qwen, warp, jules, junie, openhands, amazonq, zed, kilocode, kiro, trae,
 jetbrains, firebase, antigravity, augmentcode, copilot, copilot-cli, crush,
 factory, pi, mistral) is supported via one data-driven generic adapter — **memory**
 for all, **MCP** wherever the agent reads a JSON server-map agentsync can express,
 and **Agent Skills** wherever the agent natively scans a `SKILL.md` directory (18 of
-the 22) — taking agentsync to **31 agents**. See the
+the 22), taking agentsync to **32 agents**. See the
 [capability matrix → Breadth tier](/reference/capability-matrix/#breadth-tier).
 
 ## What about Aider?

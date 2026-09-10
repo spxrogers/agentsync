@@ -6,15 +6,15 @@
 
 Define your MCP servers, memory, skills, and marketplace plugins once in
 `~/.agentsync/`. Run `agentsync apply`. They land — correctly translated — in
-**31 agents**: nine deep adapters (Claude Code, OpenCode, Codex CLI, Cursor,
-Gemini CLI, Continue, Windsurf, Roo Code, Cline) plus a breadth tier of 22 more
+**32 agents**: ten deep adapters (Claude Code, OpenCode, Codex CLI, Cursor,
+Gemini CLI, Continue, Windsurf, Roo Code, Cline, Grok Build) plus a breadth tier of 22 more
 (amp, goose, qwen, warp, zed, kiro, junie, factory, copilot, crush, …).
 
 [Quickstart](#quickstart) · [Install](#install) · **[Docs site → agentsync.cc](https://agentsync.cc)** · [User guide](docs/user-guide.md) · [Known limits](#known-limits)
 
 </div>
 
-> **Status: beta (v0.1.0).** Ships 31 agents — nine deep adapters (Claude, OpenCode, Codex, Cursor, Gemini, Continue, Windsurf, Roo, Cline) + a 22-agent breadth tier — end-to-end.
+> **Status: beta (v0.1.0).** Ships 32 agents — ten deep adapters (Claude, OpenCode, Codex, Cursor, Gemini, Continue, Windsurf, Roo, Cline, Grok Build) + a 22-agent breadth tier — end-to-end.
 > The tool is functional and tested under `just test-release`; the canonical
 > layout, CLI surface, and state schema are stabilizing toward `1.0.0` and may
 > still change. A few documented trade-offs remain (see [Known limits](#known-limits)).
@@ -77,7 +77,7 @@ canonical markdown also lives in [`docs/`](docs/):
 
 ## Supported agents at a glance
 
-The nine **deep adapters** (rich, agent-specific, often bidirectional):
+The ten **deep adapters** (rich, agent-specific, often bidirectional):
 
 | Agent | Status | Component coverage |
 | --- | --- | --- |
@@ -90,6 +90,7 @@ The nine **deep adapters** (rich, agent-specific, often bidirectional):
 | **Windsurf** | ✓ adapter | MCP (`~/.codeium/windsurf/mcp_config.json`, user scope), memory (◐, `.windsurf/rules/`, project scope), slash commands (◐, `.windsurf/workflows/`, project scope). No skills/subagents/hooks/LSP concept. |
 | **Roo Code** | ✓ adapter | MCP (`.roo/mcp.json`, project scope), memory (`.roo/rules/`) + slash commands (◐, `.roo/commands/`) at both scopes. No skills/subagents/hooks/LSP concept. |
 | **Cline** | ✓ adapter | MCP (`~/.cline/mcp.json` CLI, user scope), memory (◐, `.clinerules/`) + slash commands (◐, `.clinerules/workflows/`) at project scope. No skills/subagents/hooks/LSP concept. |
+| **Grok Build** | ✓ adapter | MCP (◐, TOML), instructions, complete skills, commands (◐), and command hooks (◐) at user and project scopes. [Supported paths and limits](docs/grok.md). Subagent/LSP projection and plugin import deferred. |
 
 Plus a **breadth tier** of 22 more via one data-driven generic adapter — **memory**
 for all, **MCP** where the agent reads a JSON server-map (15 of 22), and **Agent

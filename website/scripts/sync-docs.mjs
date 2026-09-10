@@ -27,6 +27,7 @@ const pageMap = {
   'components.md': '/internals/components/',
   'capability-matrix.md': '/reference/capability-matrix/',
   'comparison.md': '/comparison/',
+  'grok.md': `${GH_BLOB}/docs/grok.md`,
   'user-guide.md': '/getting-started/introduction/',
 };
 

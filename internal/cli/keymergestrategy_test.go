@@ -16,7 +16,7 @@ import (
 // Cursor/Gemini/Windsurf/generic all co-own MCP keys in a shared file) and one
 // command hook (Claude/Codex/Cursor/Gemini co-own the hooks key). Rendering it
 // forces each adapter to emit whatever key-merge FileOps it produces, so the
-// test can compare KeyMergeStrategy() against the strategy actually stamped on
+// test can compare MergeStrategyForPath against the strategy actually stamped on
 // those ops instead of against a hand-built op.
 func keyMergeFixture() source.Canonical {
 	enabled := true
@@ -42,7 +42,7 @@ func keyMergeFixture() source.Canonical {
 }
 
 // TestKeyMergeStrategy_MatchesEmittedOps is the C3 dual-list guard: an adapter's
-// single KeyMergeStrategy() accessor is the *only* input to orphanCleanupOps'
+// MergeStrategyForPath accessor is the *only* input to orphanCleanupOps'
 // destructive cleanup write, yet the strategy is separately hand-stamped onto
 // each key-merge FileOp in the adapter's Render. If the two drift, a cleanup
 // write could decode a JSONC/TOML file as strict JSON and clobber it. This test
@@ -70,7 +70,6 @@ func TestKeyMergeStrategy_MatchesEmittedOps(t *testing.T) {
 			t.Fatalf("registry has name %q but Lookup returned nil", name)
 		}
 		t.Run(name, func(t *testing.T) {
-			accessor := a.KeyMergeStrategy()
 			cases := []scopeCase{
 				{"user", adapter.ScopeUser, ""},
 				{"project", adapter.ScopeProject, t.TempDir()},
@@ -81,37 +80,22 @@ func TestKeyMergeStrategy_MatchesEmittedOps(t *testing.T) {
 					t.Errorf("[%s] Render(%s) errored: %v", name, sc.name, err)
 					continue
 				}
-				distinct := map[string]bool{}
 				keyMergeCount := 0
 				for _, op := range ops {
 					if !render.IsKeyMerge(op.MergeStrategy) {
 						continue
 					}
 					keyMergeCount++
-					distinct[op.MergeStrategy] = true
+					accessor := adapter.MergeStrategyForPath(a, op.Path)
 					// (a) every key-merge op must carry the accessor's strategy.
 					if op.MergeStrategy != accessor {
 						t.Errorf("[%s/%s] key-merge op %q has MergeStrategy %q but "+
-							"KeyMergeStrategy() = %q — the accessor feeds orphanCleanupOps' "+
+							"MergeStrategyForPath() = %q — the accessor feeds orphanCleanupOps' "+
 							"destructive write and MUST match every emitted op",
 							name, sc.name, op.Path, op.MergeStrategy, accessor)
 					}
 				}
 				totalKeyMergeOps += keyMergeCount
-				// (b) an empty accessor must mean the adapter emits no key-merge ops.
-				if accessor == "" && keyMergeCount > 0 {
-					t.Errorf("[%s/%s] KeyMergeStrategy() = \"\" but the adapter emitted "+
-						"%d key-merge op(s) — the accessor claims no key merging",
-						name, sc.name, keyMergeCount)
-				}
-				// (c) single-strategy invariant: at most one distinct key-merge
-				// strategy across all ops (orphanCleanupOps applies the single
-				// accessor value to every key-merge destination).
-				if len(distinct) > 1 {
-					t.Errorf("[%s/%s] adapter emitted %d distinct key-merge strategies %v; "+
-						"a single KeyMergeStrategy() accessor cannot be exact for all of them",
-						name, sc.name, len(distinct), distinct)
-				}
 			}
 		})
 	}

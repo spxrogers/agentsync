@@ -265,15 +265,11 @@ func firstPointerSegment(ptr string) string {
 // dead key lingers in the destination forever.
 //
 // Safety (validated): the strategy is the adapter's exact, static
-// KeyMergeStrategy() — never inferred — so a JSONC opencode.json is never
+// MergeStrategyForPath — never inferred — so a JSONC opencode.json is never
 // merged with the strict-JSON path (which would clobber it). A dest that no
 // longer exists on disk is skipped (no empty "{}" file is created); the stale
 // state entry is dropped by PruneStaleState instead.
 func orphanCleanupOps(s *state.Targets, a adapter.Adapter, agent string, scope adapter.Scope, project, userHome string, rendered []adapter.FileOp) []adapter.FileOp {
-	strat := a.KeyMergeStrategy()
-	if strat == "" {
-		return nil // adapter doesn't merge keys
-	}
 	// Portable dest path → set of escaped top-level sections the agent rendered
 	// a key-merge op for this run. A section that still has a real op handles
 	// its own per-key removals via that op's (section-scoped) OwnedKeys; only a
@@ -328,7 +324,9 @@ func orphanCleanupOps(s *state.Targets, a adapter.Adapter, agent string, scope a
 		if _, err := os.Stat(abs); err != nil {
 			continue
 		}
-		cleanup = append(cleanup, adapter.NewCleanupOp(abs, strat, ownedByPath[path]))
+		if strat := adapter.MergeStrategyForPath(a, abs); strat != "" {
+			cleanup = append(cleanup, adapter.NewCleanupOp(abs, strat, ownedByPath[path]))
+		}
 	}
 	return cleanup
 }
