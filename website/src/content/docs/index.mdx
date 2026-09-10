@@ -6,7 +6,7 @@ hero:
   title: <span class="as-wordmark">agentsync</span>
   tagline: Define your MCP servers, memory, skills, and plugins once. Run <code>agentsync apply</code>. They land — correctly translated — in every AI coding agent on your machine.
   # Decorative fan-out visual (styled in src/styles/custom.css): the canonical source
-  # applying out to the nine deep adapters + the 22-agent breadth tier (31 total —
+  # applying out to the ten deep adapters + the 22-agent breadth tier (32 total —
   # keep the chip list in sync with the capability matrix).
   image:
     html: |-
@@ -148,6 +148,7 @@ That `github` MCP server now lives in **both** `~/.claude.json` and
 | **Windsurf** | ✓ adapter | MCP (`~/.codeium/windsurf/mcp_config.json`, user scope), memory (`.windsurf/rules/` + global `memories/global_rules.md`) + slash commands (◐, `.windsurf/workflows/` + global `global_workflows/`) at both scopes. No skills/subagents/hooks/LSP concept. |
 | **Roo Code** | ✓ adapter | MCP (`.roo/mcp.json`, project scope), memory (`.roo/rules/`) + slash commands (◐, `.roo/commands/`) at both scopes. No skills/subagents/hooks/LSP concept. |
 | **Cline** | ✓ adapter | MCP (`~/.cline/mcp.json` CLI, user scope), memory (◐, `.clinerules/`) + slash commands (◐, `.clinerules/workflows/`) at project scope. No skills/subagents/hooks/LSP concept. |
+| **Grok Build** | ✓ adapter | MCP (◐, TOML), instructions, complete skills, commands (◐), and command hooks (◐) at user and project scopes. [Supported paths and limits](https://github.com/spxrogers/agentsync/blob/main/docs/grok.md). Subagent/LSP projection and plugin import deferred. |
 
 Plus a **breadth tier** of 22 more agents via one data-driven generic adapter
 (memory for all, MCP where the agent reads a JSON server-map, and Agent Skills
@@ -157,7 +158,7 @@ firebase, antigravity, augmentcode, copilot, copilot-cli, crush, factory, pi,
 mistral. See the [capability matrix → Breadth tier](/reference/capability-matrix/#breadth-tier).
 
 <Aside type="caution" title="Status: beta">
-	v1.0 ships 31 agents — nine deep adapters (Claude, OpenCode, Codex, Cursor, Gemini, Continue, Windsurf, Roo, Cline) plus a 22-agent breadth tier — end-to-end. The tool is
+	v1.0 ships 32 agents — ten deep adapters (Claude, OpenCode, Codex, Cursor, Gemini, Continue, Windsurf, Roo, Cline, Grok Build) plus a 22-agent breadth tier — end-to-end. The tool is
 	functional and tested under `just test-release`; package-manager distribution
 	and a few documented trade-offs are still being finalized. Found a rough edge?
 	[Open an issue](https://github.com/spxrogers/agentsync/issues).

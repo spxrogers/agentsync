@@ -16,6 +16,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
 	"github.com/spxrogers/agentsync/internal/adapter/codex"
+	"github.com/spxrogers/agentsync/internal/adapter/grok"
 	"github.com/spxrogers/agentsync/internal/adapter/opencode"
 	"github.com/spxrogers/agentsync/internal/capture"
 	"github.com/spxrogers/agentsync/internal/drift"
@@ -1354,12 +1355,20 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 			}
 			spec = opencode.IngestMCPSpec(rawMap)
 		case "mcp_servers":
-			// Codex native shape (TOML-decoded map) → canonical.
+			// Grok and Codex share the table name, but use different header keys.
 			rawMap, _ := specRaw.(map[string]any)
 			if rawMap == nil {
-				return fmt.Errorf("codex mcp spec %s is not an object", serverIDDisp)
+				return fmt.Errorf("TOML mcp spec %s is not an object", serverIDDisp)
 			}
-			spec = codex.IngestMCPSpec(rawMap)
+			if it.agentName == "grok" {
+				var err error
+				spec, err = grok.IngestMCPSpec(rawMap)
+				if err != nil {
+					return fmt.Errorf("parse grok mcp spec %s: %w", serverIDDisp, err)
+				}
+			} else {
+				spec = codex.IngestMCPSpec(rawMap)
+			}
 		default:
 			// Claude's mcpServers value matches the canonical model 1:1.
 			specBytes, err := json.Marshal(specRaw)
@@ -1389,7 +1398,7 @@ func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
 	}
 	// Unsupported pointer shape (hooks, lsp, …). DO NOT silently no-op —
 	// the success message would be a lie.
-	return fmt.Errorf("write-back for pointer %q is not implemented in v1; only /mcpServers/* (claude), /mcp/* (opencode) and /mcp_servers/* (codex) items can be written back today — choose [o]verride to push canonical to the dest, or [i]gnore to suppress this item", it.ptr)
+	return fmt.Errorf("write-back for pointer %q is not implemented in v1; only /mcpServers/* (claude), /mcp/* (opencode) and /mcp_servers/* (codex, grok) items can be written back today — choose [o]verride to push canonical to the dest, or [i]gnore to suppress this item", it.ptr)
 }
 
 // writeBackFileItem handles file-level (replace strategy) items by copying

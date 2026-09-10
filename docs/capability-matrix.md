@@ -29,6 +29,7 @@ nothing is dropped silently.
 | **Windsurf** | ✅ Adapter (scope-asymmetric MCP) | MCP, memory, and slash commands. **MCP is global-only** (`~/.codeium/windsurf/mcp_config.json`, JSON `mcpServers`; stdio command/args/env, remote `serverUrl` + `headers` — a native `url` key ingests but re-renders as `serverUrl`), so it renders at **user scope** and is skipped (reported) at project scope. **Memory** renders at both scopes: project → `.windsurf/rules/agentsync.md` carrying the documented `trigger: always_on` activation frontmatter (workspace rules declare their trigger in frontmatter; ingest strips it, so the canonical body round-trips byte-clean); user → the single global rules file `~/.codeium/windsurf/memories/global_rules.md` (always-on, frontmatter-less, verbatim; Windsurf documents a 6,000-character limit it enforces itself). **Commands** render at both scopes as plain-markdown workflows invoked as `/<name>`: project `.windsurf/workflows/`, user `~/.codeium/windsurf/global_workflows/` (command frontmatter drops). Upstream now prefers `.devin/rules|workflows/` with `.windsurf/` as the supported fallback; agentsync targets `.windsurf/`, which every released version reads. **Skills, subagents, hooks, and LSP** have no Windsurf concept and are skipped. No `PluginIngester`; it still *receives* plugin-projected components on `apply`. |
 | **Roo Code** | ✅ Adapter (some components projected) | MCP, memory, and slash commands — clean filesystem `.roo/` paths (rulesync and ruler converged on these). **MCP → `.roo/mcp.json`** (project-level, `mcpServers` with explicit `type: streamable-http`/`sse` for remote + `url`/`headers`; merge-by-server-name preserves foreign servers). Roo's *global* MCP lives in VS Code globalStorage (OS/editor-specific), which agentsync intentionally does **not** target — so user-scope MCP is reported as a skip. **Memory → `.roo/rules/agentsync.md`** (plain-markdown always-applied rule) and **commands → `.roo/commands/<name>.md`** (markdown + frontmatter — Roo keeps **both** `description` *and* `argument-hint`; only `allowed-tools` drops), both at **user and project scope** (`~/.roo/` + `<repo>/.roo/`). **Skills, hooks, and LSP** have no Roo concept, and Roo's "custom modes" are not per-file **subagents**, so all four are skipped. No `PluginIngester`; it still *receives* plugin-projected components on `apply`. |
 | **Cline** | ✅ Adapter (scope-asymmetric) | MCP, memory, and slash commands. **MCP → `~/.cline/mcp.json`** at **user scope** — the Cline CLI's clean config (`mcpServers`, transport inferred: stdio command/args/env, remote `url` + `headers`). Cline has no project MCP file, and its VS Code-extension MCP lives in OS/editor-specific globalStorage no config-sync tool writes, so project-scope MCP is reported as a skip. **Memory → `.clinerules/agentsync.md`** (plain markdown — Cline concatenates `.clinerules/`) and **commands → `.clinerules/workflows/<name>.md`** (plain markdown workflows invoked as `/<name>.md`; command frontmatter drops), both at **project scope** (Cline's global rules and workflows live in `~/Documents/Cline/`, a non-XDG app path agentsync deliberately does not target). **Skills, subagents, hooks, and LSP** have no Cline concept and are skipped. No `PluginIngester`; it still *receives* plugin-projected components on `apply`. |
+| **Grok Build** | ✅ Dedicated adapter | User/project instructions, skills with bundled files, legacy Markdown commands, TOML MCP, and JSON command hooks. Import captures the managed hook file only; unsupported handler fields are refused. See [Grok support](grok.md) for paths, trust requirements, verified upstream contracts, and limitations. |
 | **Breadth tier (22 agents)** | ✅ Generic adapter (memory + MCP + skills) | A long tail of agents supported by one data-driven [generic adapter](#breadth-tier) — **memory** (rules file) for all, **MCP** where the agent reads a JSON server-map agentsync can express (15 of 22), and **Agent Skills** where the agent natively scans a `SKILL.md` directory (18 of 22). Each is a *verified* spec, not a hand-written package; see the [Breadth tier](#breadth-tier) table for per-agent coverage. They flow through the normal apply/import pipeline (drift, secrets, capture), unlike a one-way rules dump. |
 
 ## Plugin import/apply: the shared invariant
@@ -81,15 +82,15 @@ because it can be a silent endpoint hijack. See
 
 Component support across agents.
 
-| Component | Claude | OpenCode | Codex | Cursor | Gemini | Continue | Windsurf | Roo | Cline |
-|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
-| **MCP server** | ✓ `~/.claude.json` (user) · `.mcp.json` (project) | ✓ `opencode.json` | ✓ `config.toml` | ✓ `.cursor/mcp.json` | ✓ `.gemini/settings.json` | ✓ `.continue/mcpServers/` | ✓ `mcp_config.json` (user-only) | ✓ `.roo/mcp.json` (project-only) | ✓ `~/.cline/mcp.json` (user-only) |
-| **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ✓ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` | ✓ `GEMINI.md` | ✓ `.continue/rules/` | ✓ `.windsurf/rules/` + `global_rules.md` | ✓ `.roo/rules/` | ◐ `.clinerules/` (project-only) |
-| **Skill** | ✓ `~/.claude/skills/X/` (dir) | ✓ shared `.claude/skills/` | ✓ `~/.agents/skills/` | ✓ `.cursor/skills/` | ✗ no skills concept | ✗ no skills concept | ✗ no skills concept | ✗ no skills concept | ✗ no skills concept |
-| **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/` | ◐ `.gemini/agents/` | ✗ top-level assistants only | ✗ no subagent concept | ✗ custom modes only | ✗ no subagent concept |
-| **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ◐ `~/.codex/prompts/` | ◐ `.cursor/commands/` | ◐ `.gemini/commands/` (TOML, namespaced) | ◐ `.continue/prompts/` | ◐ `.windsurf/workflows/` + `global_workflows/` | ◐ `.roo/commands/` (`allowed-tools` dropped) | ◐ `.clinerules/workflows/` (project-only) |
-| **Hook** | ◐ JSON in settings (command hooks; other handler types/fields reported) | ✗ skip (JS/TS plugins) | ◐ `config.toml` `[hooks.*]` | ◐ `.cursor/hooks.json` | ◐ `settings.json` `hooks` | ✗ no hook concept | ✗ no hook concept | ✗ no hook concept | ✗ no hook concept |
-| **LSP server** | ✗ skip (Claude loads LSP only from plugin manifests) | ✗ skip (deferred) | ✗ no LSP concept | ✗ no LSP config | ✗ no LSP concept | ✗ no LSP concept | ✗ no LSP concept | ✗ no LSP concept | ✗ no LSP concept |
+| Component | Claude | OpenCode | Codex | Cursor | Gemini | Continue | Windsurf | Roo | Cline | Grok |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| **MCP server** | ✓ `~/.claude.json` (user) · `.mcp.json` (project) | ✓ `opencode.json` | ✓ `config.toml` | ✓ `.cursor/mcp.json` | ✓ `.gemini/settings.json` | ✓ `.continue/mcpServers/` | ✓ `mcp_config.json` (user-only) | ✓ `.roo/mcp.json` (project-only) | ✓ `~/.cline/mcp.json` (user-only) | ◐ `config.toml` |
+| **Memory** | ✓ `CLAUDE.md` | ✓ `AGENTS.md` | ✓ `~/.codex/AGENTS.md` | ◐ `AGENTS.md` | ✓ `GEMINI.md` | ✓ `.continue/rules/` | ✓ `.windsurf/rules/` + `global_rules.md` | ✓ `.roo/rules/` | ◐ `.clinerules/` (project-only) | ✓ `AGENTS.md` |
+| **Skill** | ✓ `~/.claude/skills/X/` (dir) | ✓ shared `.claude/skills/` | ✓ `~/.agents/skills/` | ✓ `.cursor/skills/` | ✗ no skills concept | ✗ no skills concept | ✗ no skills concept | ✗ no skills concept | ✗ no skills concept | ✓ `.grok/skills/` |
+| **Subagent** | ✓ `~/.claude/agents/X.md` | ◐ frontmatter munged | ◐ markdown → TOML | ◐ `.cursor/agents/` | ◐ `.gemini/agents/` | ✗ top-level assistants only | ✗ no subagent concept | ✗ custom modes only | ✗ no subagent concept | ✗ deferred |
+| **Slash command** | ✓ `~/.claude/commands/X.md` | ◐ `argument-hint` dropped | ◐ `~/.codex/prompts/` | ◐ `.cursor/commands/` | ◐ `.gemini/commands/` (TOML, namespaced) | ◐ `.continue/prompts/` | ◐ `.windsurf/workflows/` + `global_workflows/` | ◐ `.roo/commands/` (`allowed-tools` dropped) | ◐ `.clinerules/workflows/` (project-only) | ◐ `.grok/commands/` |
+| **Hook** | ◐ JSON in settings (command hooks; other handler types/fields reported) | ✗ skip (JS/TS plugins) | ◐ `config.toml` `[hooks.*]` | ◐ `.cursor/hooks.json` | ◐ `settings.json` `hooks` | ✗ no hook concept | ✗ no hook concept | ✗ no hook concept | ✗ no hook concept | ◐ `.grok/hooks/agentsync.json` |
+| **LSP server** | ✗ skip (Claude loads LSP only from plugin manifests) | ✗ skip (deferred) | ✗ no LSP concept | ✗ no LSP config | ✗ no LSP concept | ✗ no LSP concept | ✗ no LSP concept | ✗ no LSP concept | ✗ no LSP concept | ✗ deferred |
 
 > The ◐/✗ cells are *features*, not bugs: agentsync refuses to invent a
 > translation that would mislead you. Every ◐ and ✗ is printed in the apply
@@ -97,7 +98,7 @@ Component support across agents.
 
 ## Breadth tier
 
-The nine adapters above are **deep, agent-specific** packages. Beyond them,
+The ten adapters above are **deep, agent-specific** packages. Beyond them,
 agentsync covers a long tail of agents through a single **data-driven generic
 adapter** (`internal/adapter/generic`): each agent is a *verified Spec* — a row in
 a table — rather than a hand-written package. The generic tier deliberately
@@ -376,6 +377,21 @@ literally, never resolved.)
   refused whole, never captured lossily — and the adapter implements
   `HookIngestGuard`, so a natively-enriched event triggers import's stale-hook
   retirement (reported under its *canonical* name) exactly as it does for Claude.
+
+**Grok Build**
+
+- **MCP** preserves command/args/env, URL/headers, and native extras. SSE's
+  separate transport label normalizes to HTTP on capture. Native `${VAR}`
+  expansion is reported without exposing values. TOML comments are not retained.
+- **Commands** retain Markdown frontmatter/body; `allowed-tools` is metadata in
+  Grok, not a permission restriction. No argument syntax translation.
+- **Hooks** support the documented command lifecycle events in
+  `.grok/hooks/agentsync.json`. Unsupported events/types are skipped. Events with
+  native `timeout`/HTTP fields are refused whole on import; other hook files are
+  left untouched to avoid duplicate execution. Project trust remains Grok-owned.
+  Hook scripts must handle Grok's own input/output contract.
+- **Subagents / LSP / plugin discovery** are deferred. See [Grok support](grok.md)
+  for all paths, limits, and the adapter/CLI tests backing this coverage.
 
 **Continue**
 

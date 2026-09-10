@@ -5,9 +5,9 @@
 **One source of truth for every AI coding agent on your machine.**
 
 Define your MCP servers, memory, skills, and marketplace plugins *once*.
-Run `agentsync apply`. Watch them land — correctly translated — across **31
-agents**: nine deep adapters (Claude Code, OpenCode, Codex CLI, Cursor, Gemini CLI,
-Continue, Windsurf, Roo Code, Cline) plus a 22-agent breadth tier (amp, goose,
+Run `agentsync apply`. Watch them land — correctly translated — across **32
+agents**: ten deep adapters (Claude Code, OpenCode, Codex CLI, Cursor, Gemini CLI,
+Continue, Windsurf, Roo Code, Cline, Grok Build) plus a 22-agent breadth tier (amp, goose,
 qwen, warp, zed, kiro, junie, factory, copilot, crush, …).
 
 [Why agentsync](#why-agentsync) · [Install](#install) · [Your first sync](#your-first-sync-5-minutes) · [Already have configs?](#already-have-configs) · [The daily loop](#the-daily-loop) · [Building your config](#building-your-config) · [Command reference](#command-reference)
@@ -402,8 +402,8 @@ there (see [Project-local config](#project-local-config)). At project scope,
 `--purge` cleans up that agent's rendered files across every scope and project
 (the historical behavior).
 
-> All nine deep adapters (`claude`, `opencode`, `codex`, `cursor`, `gemini`,
-> `continue`, `windsurf`, `roo`, `cline`) plus 22 breadth-tier agents work with
+> All ten deep adapters (`claude`, `opencode`, `codex`, `cursor`, `gemini`,
+> `continue`, `windsurf`, `roo`, `cline`, `grok`) plus 22 breadth-tier agents work with
 > `agent add` — run `agentsync agent list --all` for the full set, or see the
 > [capability matrix](capability-matrix.md).
 
@@ -942,21 +942,21 @@ Not every agent supports every component, and agentsync never pretends
 otherwise. Each component is marked **✓ native**, **◐ projected** (lossy, but
 reported), or **✗ skipped** (no honest translation) per agent.
 
-Claude, OpenCode, Codex, Cursor, Gemini CLI, Continue, Windsurf, Roo Code, and Cline are all real adapters.
+Claude, OpenCode, Codex, Cursor, Gemini CLI, Continue, Windsurf, Roo Code, Cline, and Grok Build are all real adapters.
 
-| Component | Claude | OpenCode | Codex | Cursor | Gemini | Continue | Windsurf | Roo | Cline |
-|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
-| MCP server | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Memory | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ✓ | ✓ | ◐ |
-| Skill | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
-| Subagent | ✓ | ◐ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ |
-| Slash command | ✓ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ |
-| Hook | ◐ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ |
-| LSP server | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Component | Claude | OpenCode | Codex | Cursor | Gemini | Continue | Windsurf | Roo | Cline | Grok |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| MCP server | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ◐ |
+| Memory | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ |
+| Skill | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ |
+| Subagent | ✓ | ◐ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Slash command | ✓ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ | ◐ |
+| Hook | ◐ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ | ◐ |
+| LSP server | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
 
 (Some adapters are scope-asymmetric: Windsurf's and Cline's MCP is global-only and renders at user scope — Windsurf memory + commands render at both scopes, Cline's at project scope; Roo renders MCP at project scope only — VS Code agents keep global MCP in app-storage. See the [capability matrix](capability-matrix.md).)
 
-Beyond these nine deep adapters, a **breadth tier** of 22 more agents (amp, goose,
+Beyond these ten deep adapters, a **breadth tier** of 22 more agents (amp, goose,
 qwen, warp, zed, kiro, junie, factory, copilot, crush, …) is supported via one
 data-driven generic adapter — memory for all, MCP where the agent reads a JSON
 server-map, and Agent Skills (`SKILL.md` directories) where the agent natively scans

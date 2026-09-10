@@ -41,7 +41,7 @@ fidelity claim.
 
 | Tool | Lang | Agents | Mem | Sk | MCP | Sub | Cmd | Hooks | Bidirectional / drift | Secrets |
 |---|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|---|---|
-| ⭐️ **agentsync** ⭐️ *(this tool)* | **Go** | **31**[^breadth] | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ **3-state classifier + `reconcile`/`import` capture** | ✅ **age vault, `${secret:}`/`${env:}`, re-ref + leak backstop** |
+| ⭐️ **agentsync** ⭐️ *(this tool)* | **Go** | **32**[^breadth] | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ **3-state classifier + `reconcile`/`import` capture** | ✅ **age vault, `${secret:}`/`${env:}`, re-ref + leak backstop** |
 | [agentsmesh](https://github.com/sampleXbro/agentsmesh) | TS/Py | 30+ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `generate`/`import`/`check` (lock-file drift in CI) | ❌ (defers to your store) |
 | [rulesync](https://github.com/dyoshikawa/rulesync) | TS | 25+ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ `generate` + `import` (one-shot ingest, no state model) | ❌ |
 | [gaal](https://github.com/getgaal/gaal) | **Go** | 17–20 | ◐ files | ✅ | ✅ | ❌ | ◐ files | ✅ | ❌ one-way (`--prune`, `init --import-all` bootstrap) | ❌ |
@@ -92,8 +92,8 @@ same bytes everywhere, no translation or secrets).
   multi-component surface (subagents, commands, hooks) to only ~9; rulesync, by
   contrast, builds genuine per-tool adapters across a wide set, with coverage
   that thins along its long tail. agentsync makes the same split explicit
-  (**31**: a 22-agent data-driven generic tier for memory + same-shape MCP)
-  *while also* keeping nine **deep** adapters that do multi-component,
+  (**32**: a 22-agent data-driven generic tier for memory + same-shape MCP)
+  *while also* keeping ten **deep** adapters that do multi-component,
   bidirectional projection — and even the breadth tier runs through the
   drift/secrets/capture pipeline, not a one-way dump. Each breadth entry's paths
   are verified against upstream docs, so the count is honest rather than a long
@@ -158,9 +158,9 @@ Primary sources (repos / project sites), verified mid-2026:
 [AGENTS.md](https://agents.md/).
 
 [^breadth]: Counted the same way the field's other large numbers are — every
-    agent that reads a config file. Of agentsync's, **9 are deep adapters**
+    agent that reads a config file. Of agentsync's, **10 are deep adapters**
     (multi-component, bidirectional projection — Claude Code, OpenCode, Codex,
-    Cursor, Gemini CLI, Continue, Windsurf, Roo Code, Cline) and the rest a
+    Cursor, Gemini CLI, Continue, Windsurf, Roo Code, Cline, Grok Build) and the rest a
     data-driven **breadth tier** (memory + same-shape MCP + Agent Skills). This breadth/depth
     split is common in the field: agentsmesh, for one, reaches almost all of its
     ~30 agents with memory + skills but the full multi-component surface
