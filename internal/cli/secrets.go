@@ -80,6 +80,16 @@ func newSecretsSetCmd() *cobra.Command {
 	return cmd
 }
 
+// vaultFor binds the resolved [secrets] config to a secrets.Vault. It is the
+// one place the CLI supplies the user home the vault expands ${env:HOME}/~
+// against, so every `secret` subcommand resolves the same two paths.
+//
+// The read-modify-write itself (decrypt, mutate, validate, re-encrypt, verify,
+// roll back) is secrets.Vault's, not this package's: see internal/secrets/vault.go.
+func vaultFor(cfg source.SecretsConfig, home string) secrets.Vault {
+	return secrets.NewVault(cfg, home, paths.HomeDir(paths.OSEnv{}))
+}
+
 // loadSecretsConfig returns the SecretsConfig and the agentsync home directory.
 func loadSecretsConfig() (source.SecretsConfig, string, error) {
 	home := paths.AgentsyncHome(paths.OSEnv{})
@@ -98,151 +108,6 @@ func loadSecretsConfig() (source.SecretsConfig, string, error) {
 	return cfg.Secrets, home, nil
 }
 
-// resolveAgePath returns the absolute path to the secrets.age file, applying
-// the same default + ${env:HOME}/~ expansion the apply path uses.
-func resolveAgePath(cfg source.SecretsConfig, home string) string {
-	return secrets.ResolveAgeFile(cfg, home, paths.HomeDir(paths.OSEnv{}))
-}
-
-// resolveIdentityPath returns the absolute identity_file path, expanding
-// ${env:HOME}/~ the same way the apply path does — without this, `secrets
-// get/set/edit` would os.ReadFile a literal "${env:HOME}/..." string and
-// fail even though the documented init template uses exactly that form.
-func resolveIdentityPath(cfg source.SecretsConfig, home string) string {
-	return secrets.ResolveIdentityFile(cfg, home, paths.HomeDir(paths.OSEnv{}))
-}
-
-// decryptToMap decrypts secrets.age and returns the top-level map.
-// If the file does not exist, returns an empty map.
-func decryptToMap(cfg source.SecretsConfig, home string) (map[string]any, error) {
-	agePath := resolveAgePath(cfg, home)
-	if _, err := os.Stat(agePath); os.IsNotExist(err) {
-		return map[string]any{}, nil
-	}
-	plain, err := secrets.Decrypt(agePath, resolveIdentityPath(cfg, home))
-	if err != nil {
-		return nil, err
-	}
-	var m map[string]any
-	if err := toml.Unmarshal(plain, &m); err != nil {
-		return nil, fmt.Errorf("parse secrets TOML: %w", err)
-	}
-	if m == nil {
-		m = map[string]any{}
-	}
-	return m, nil
-}
-
-// encryptMap marshals m as TOML and encrypts to secrets.age, verifying the
-// result is decryptable by the configured identity (see writeSecretsVerified).
-//
-// Before persisting, it validates the marshaled bytes against apply's flatten
-// contract (secrets.ValidateVaultTOML: string-only leaves, no dup/colliding
-// keys) — the SAME guard the `secrets edit` path applies — so a `set` that would
-// yield a vault apply later refuses is rejected at save time instead of being
-// silently encrypted. Validation runs on the EXACT bytes that get encrypted
-// (one marshal), so validated bytes == written bytes; nothing can drift between
-// the check and the write.
-func encryptMap(m map[string]any, cfg source.SecretsConfig, home string) error {
-	plain, err := toml.Marshal(m)
-	if err != nil {
-		return fmt.Errorf("marshal secrets TOML: %w", err)
-	}
-	if err := secrets.ValidateVaultTOML(plain); err != nil {
-		return fmt.Errorf("resulting secrets are invalid (not saved): %w", err)
-	}
-	return writeSecretsVerified(plain, cfg, home)
-}
-
-// writeSecretsVerified encrypts plain to the age store and then verifies the
-// configured identity_file can actually decrypt the result, rolling back the
-// previous store on failure. Without this, a recipient that does not match the
-// identity (a typo, or a key swap) silently re-encrypts the whole store to a
-// key the user cannot read — locking them out of their own secrets with a
-// cheerful "set" message.
-func writeSecretsVerified(plain []byte, cfg source.SecretsConfig, home string) error {
-	agePath := resolveAgePath(cfg, home)
-	prev, hadPrev := []byte(nil), false
-	// Through the shape gate, not os.ReadFile: os.ReadFile blocks on a FIFO
-	// exactly as os.Open does, and `secret edit` reaches here WITHOUT having
-	// decrypted whenever the vault was absent at its own stat (the
-	// os.IsNotExist arm below), so nothing else refuses a non-regular vault
-	// first. A non-regular path simply reports no previous vault to preserve,
-	// which is the truth: a FIFO is not a vault.
-	if data, err := secrets.ReadVault(agePath); err == nil {
-		prev, hadPrev = data, true
-	}
-	if err := secrets.Encrypt(plain, cfg.Recipient, agePath); err != nil {
-		return err
-	}
-	if _, err := secrets.Decrypt(agePath, resolveIdentityPath(cfg, home)); err != nil {
-		// Roll back so a misconfiguration can never destroy access to the store.
-		if hadPrev {
-			_ = os.WriteFile(agePath, prev, 0o600) //nolint:forbidigo // vault rollback: restores secrets.age (canonical source), not a native destination
-		} else {
-			_ = os.Remove(agePath) //nolint:forbidigo // vault rollback: removes the just-written secrets.age (canonical source), not a native destination
-		}
-		return fmt.Errorf("the new secrets would be unreadable by identity_file (recipient %q does not match it); "+
-			"refusing to lock you out — check [secrets].recipient and identity_file: %w", cfg.Recipient, err)
-	}
-	return nil
-}
-
-// setNestedKey sets a dotted key in a nested map, creating intermediate maps as
-// needed. It refuses *destructive type changes* rather than silently destroying
-// vault content — the secrets.age vault is often the only copy of a cleartext
-// secret, so an overwrite here is irreversible loss:
-//
-//   - Nesting under an existing scalar parent (e.g. `set token.scope=…` when
-//     `token` is already a scalar secret) would drop the parent's value; refused.
-//   - A leaf assignment that would overwrite an existing table (e.g. `set a=…`
-//     when `a` is a `[a]` table) would drop the whole sub-table; refused.
-//
-// The legitimate cases still succeed: an in-place scalar update (scalar leaf →
-// new scalar leaf) and a new nested key under an absent or table parent. Error
-// messages name the FULL dotted paths the user typed (e.g. `a.b.c` clashing
-// with scalar `a.b`, not the recursion's local `b.c`/`b`) and carry only KEY
-// names, never a secret *value* byte (the no-secret-in-stderr convention
-// honored by resolveSecretKeyValue).
-func setNestedKey(m map[string]any, dottedKey, value string) error {
-	return setNestedKeyAt(m, "", dottedKey, value)
-}
-
-// setNestedKeyAt is setNestedKey's recursion. prefix is the dotted path already
-// consumed by outer levels ("" at the root); joining it back onto the local key
-// names is what lets a refusal deep in the recursion report the full paths the
-// user typed.
-func setNestedKeyAt(m map[string]any, prefix, dottedKey, value string) error {
-	full := func(k string) string {
-		if prefix == "" {
-			return k
-		}
-		return prefix + "." + k
-	}
-	parts := strings.SplitN(dottedKey, ".", 2)
-	if len(parts) == 1 {
-		if existing, ok := m[parts[0]]; ok {
-			if _, isMap := existing.(map[string]any); isMap {
-				return fmt.Errorf("setting %q would overwrite the existing table at %q; refusing to destroy it — choose a different key or remove %q first",
-					full(parts[0]), full(parts[0]), full(parts[0]))
-			}
-		}
-		m[parts[0]] = value
-		return nil
-	}
-	sub, ok := m[parts[0]]
-	if !ok {
-		sub = map[string]any{}
-		m[parts[0]] = sub
-	}
-	subMap, ok := sub.(map[string]any)
-	if !ok {
-		return fmt.Errorf("setting %q would overwrite the existing secret at %q (a scalar value); refusing to destroy it — choose a different key or remove %q first",
-			full(dottedKey), full(parts[0]), full(parts[0]))
-	}
-	return setNestedKeyAt(subMap, full(parts[0]), parts[1], value)
-}
-
 // editorArgv builds the editor argv from $EDITOR and the file to edit. $EDITOR
 // may be empty, whitespace-only, or carry flags ("code --wait"); it is
 // word-split, with a "vi" fallback when it yields no words — so the launch
@@ -255,25 +120,6 @@ func editorArgv(editorEnv, file string) []string {
 	return append(parts, file)
 }
 
-// getNestedKey retrieves a dotted key from a nested map, returning the raw
-// value so the caller can enforce the string-only contract (apply rejects
-// non-string leaves; `get` must not print a value apply would refuse).
-func getNestedKey(m map[string]any, dottedKey string) (any, bool) {
-	parts := strings.SplitN(dottedKey, ".", 2)
-	v, ok := m[parts[0]]
-	if !ok {
-		return nil, false
-	}
-	if len(parts) == 1 {
-		return v, true
-	}
-	sub, ok := v.(map[string]any)
-	if !ok {
-		return nil, false
-	}
-	return getNestedKey(sub, parts[1])
-}
-
 func secretsEdit(cmd *cobra.Command, _ []string) error {
 	cfg, home, err := loadSecretsConfig()
 	if err != nil {
@@ -283,12 +129,13 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	agePath := resolveAgePath(cfg, home)
+	vault := vaultFor(cfg, home)
+	agePath := vault.AgeFile()
 	var plain []byte
 	if _, err := os.Stat(agePath); os.IsNotExist(err) {
 		plain = []byte("# agentsync secret vault — TOML format\n# Example:\n# [github]\n# token = \"ghp_...\"\n")
 	} else {
-		plain, err = secrets.Decrypt(agePath, resolveIdentityPath(cfg, home))
+		plain, err = secrets.Decrypt(agePath, vault.IdentityFile())
 		if err != nil {
 			return fmt.Errorf("decrypt: %w", err)
 		}
@@ -304,6 +151,11 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 		// Always remove cleartext tmp; errors ignored.
 		_ = os.Remove(tmpPath) //nolint:forbidigo // cleartext temp file in os.TempDir(), not a native destination
 	}()
+	// The hard os.Exit(130) below stays for now: replacing it with an injectable
+	// cleanup hook is a BEHAVIOUR change (the process stops exiting from a
+	// goroutine) and is the only way to test it, so it is item 9b of #235 and
+	// lands in that issue's behaviour-change PR, not in this boundary move.
+	//
 	// A plain defer does NOT run when the process dies on an unhandled signal —
 	// and aborting the editor with Ctrl-C (SIGINT) is the normal way to bail on
 	// an edit, which would otherwise leave the decrypted secrets on disk. Remove
@@ -355,7 +207,7 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 	if err := secrets.ValidateVaultTOML(edited); err != nil {
 		return fmt.Errorf("edited secrets are invalid (not saved): %w", err)
 	}
-	if err := writeSecretsVerified(edited, cfg, home); err != nil {
+	if err := vault.WriteVerified(edited); err != nil {
 		return fmt.Errorf("re-encrypt: %w", err)
 	}
 
@@ -372,11 +224,11 @@ func secretsGet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	m, err := decryptToMap(cfg, home)
+	m, err := vaultFor(cfg, home).Load()
 	if err != nil {
 		return err
 	}
-	v, ok := getNestedKey(m, args[0])
+	v, ok := secrets.GetNestedKey(m, args[0])
 	if !ok {
 		return fmt.Errorf("secret %q not found", args[0])
 	}
@@ -429,17 +281,17 @@ func secretsSet(cmd *cobra.Command, arg string, useStdin, allowEmpty bool) error
 		return fmt.Errorf("refusing to store an empty value for secret %q; pass --allow-empty to store it deliberately", key)
 	}
 
-	m, err := decryptToMap(cfg, home)
+	m, err := vaultFor(cfg, home).Load()
 	if err != nil {
 		return err
 	}
 	// Refuse destructive type changes BEFORE any encryption, so a refused set
-	// never reaches encryptMap/writeSecretsVerified and the on-disk vault is left
+	// never reaches Vault.Save/WriteVerified and the on-disk vault is left
 	// byte-for-byte unchanged.
-	if err := setNestedKey(m, key, value); err != nil {
+	if err := secrets.SetNestedKey(m, key, value); err != nil {
 		return err
 	}
-	if err := encryptMap(m, cfg, home); err != nil {
+	if err := vaultFor(cfg, home).Save(m); err != nil {
 		return err
 	}
 	success(cmd, ui.EmojiSuccess, "secret %q set", key)
@@ -526,11 +378,11 @@ func newSecretsListCmd() *cobra.Command {
 			if err := secrets.RequireAgeVault(cfg, "secret list", secrets.VaultRead); err != nil {
 				return err
 			}
-			m, err := decryptToMap(cfg, home)
+			m, err := vaultFor(cfg, home).Load()
 			if err != nil {
 				return err
 			}
-			keys := flattenSecretKeys(m, "")
+			keys := secrets.FlattenKeys(m, "")
 			sort.Strings(keys)
 			w := cmd.OutOrStdout()
 			if len(keys) == 0 {
@@ -543,24 +395,6 @@ func newSecretsListCmd() *cobra.Command {
 			return nil
 		},
 	}
-}
-
-// flattenSecretKeys walks the decrypted vault and returns dotted key paths. Only
-// the PATHS are collected — no value ever leaves this function.
-func flattenSecretKeys(m map[string]any, prefix string) []string {
-	var out []string
-	for k, v := range m {
-		path := k
-		if prefix != "" {
-			path = prefix + "." + k
-		}
-		if nested, ok := v.(map[string]any); ok {
-			out = append(out, flattenSecretKeys(nested, path)...)
-			continue
-		}
-		out = append(out, path)
-	}
-	return out
 }
 
 // newSecretsRemoveCmd deletes one key from the vault and re-encrypts (#200 F4).
@@ -591,47 +425,19 @@ func secretsRemove(cmd *cobra.Command, key string) error {
 	if err := secrets.RequireAgeVault(cfg, "secret remove", secrets.VaultWrite); err != nil {
 		return err
 	}
-	m, err := decryptToMap(cfg, home)
+	m, err := vaultFor(cfg, home).Load()
 	if err != nil {
 		return err
 	}
-	if _, ok := getNestedKey(m, key); !ok {
+	if _, ok := secrets.GetNestedKey(m, key); !ok {
 		return fmt.Errorf("secret %q not found; run `agentsync secret list` to see the keys in the vault", key)
 	}
-	if !deleteNestedKey(m, key) {
+	if !secrets.DeleteNestedKey(m, key) {
 		return fmt.Errorf("secret %q could not be removed (it is a table, not a value); edit the vault with `agentsync secret edit`", key)
 	}
-	if err := encryptMap(m, cfg, home); err != nil {
+	if err := vaultFor(cfg, home).Save(m); err != nil {
 		return err
 	}
 	success(cmd, ui.EmojiRemoved, "secret %q removed", key)
 	return nil
-}
-
-// deleteNestedKey removes a dotted key path from the decrypted vault map,
-// reporting whether a VALUE was removed. A path naming an intermediate table is
-// refused (ok=false): deleting a whole subtree on a typo'd key is not a thing a
-// one-word command should do silently.
-func deleteNestedKey(m map[string]any, key string) bool {
-	parts := strings.Split(key, ".")
-	cur := m
-	for i, p := range parts {
-		v, ok := cur[p]
-		if !ok {
-			return false
-		}
-		if i == len(parts)-1 {
-			if _, isTable := v.(map[string]any); isTable {
-				return false
-			}
-			delete(cur, p)
-			return true
-		}
-		next, isTable := v.(map[string]any)
-		if !isTable {
-			return false
-		}
-		cur = next
-	}
-	return false
 }

@@ -1,6 +1,6 @@
 //go:build unix
 
-package cli
+package secrets
 
 import (
 	"os"
@@ -12,10 +12,13 @@ import (
 	"filippo.io/age"
 
 	"github.com/spxrogers/agentsync/internal/source"
+	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
-// TestWriteSecretsVerifiedSurvivesNonRegularVault pins the one vault read that
-// lives outside internal/secrets: writeSecretsVerified's rollback snapshot.
+// TestWriteSecretsVerifiedSurvivesNonRegularVault pins the vault read that has
+// no other gate in front of it: Vault.WriteVerified's rollback snapshot. (It
+// kept its name through the move from internal/cli, where the method was the
+// package-level writeSecretsVerified.)
 //
 // It used to be a bare os.ReadFile, and os.ReadFile blocks on a FIFO exactly as
 // os.Open does. The reason no earlier gate saved it is the reason this test
@@ -31,6 +34,7 @@ import (
 // The timeout is the assertion. A regression here does not fail, it HANGS, so a
 // plain call would wedge CI with no diagnostic instead of reporting in 5s.
 func TestWriteSecretsVerifiedSurvivesNonRegularVault(t *testing.T) {
+	testenv.RequireContainer(t)
 	id, err := age.GenerateX25519Identity()
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +54,8 @@ func TestWriteSecretsVerifiedSurvivesNonRegularVault(t *testing.T) {
 		File:         "secrets/secrets.age",
 		IdentityFile: idPath,
 	}
-	vault := resolveAgePath(cfg, home)
+	v := NewVault(cfg, home, "")
+	vault := v.AgeFile()
 
 	// The FIFO stands in for whatever put a non-regular file at the vault path
 	// during the edit window. It is never opened here: mkfifo and chmod do not
@@ -66,17 +71,17 @@ func TestWriteSecretsVerifiedSurvivesNonRegularVault(t *testing.T) {
 	// the assertions under -race.
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- writeSecretsVerified([]byte("[demo]\nkey = \"v\"\n"), cfg, home)
+		errCh <- v.WriteVerified([]byte("[demo]\nkey = \"v\"\n"))
 	}()
 	select {
 	case err := <-errCh:
 		if err != nil {
-			t.Fatalf("writeSecretsVerified = %v, want success: a non-regular vault carries "+
+			t.Fatalf("WriteVerified = %v, want success: a non-regular vault carries "+
 				"no previous secrets to preserve, so the snapshot reports none and the "+
 				"encrypt replaces the path atomically", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatalf("writeSecretsVerified BLOCKED on %s — the rollback snapshot must go "+
+		t.Fatalf("WriteVerified BLOCKED on %s — the rollback snapshot must go "+
 			"through the shape gate: os.ReadFile waits for a writer that never comes, "+
 			"and `secret edit` reaches here without having decrypted", vault)
 	}

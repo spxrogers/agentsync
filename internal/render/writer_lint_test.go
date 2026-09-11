@@ -118,9 +118,10 @@ func TestNoDirectDestructiveOSCallsOutsideAllowedFiles(t *testing.T) {
 		"internal/marketplace/fetch_git.go":      true, // fetch scratch dirs + swap-in rename
 		"internal/marketplace/fetch_relative.go": true, // copies fetched files into the cache
 		"internal/marketplace/fetch_npm.go":      true, // unpacks the npm tarball into the cache
+		"internal/secrets/vault.go":              true, // vault rollback: restores/removes secrets.age (canonical source)
 		"internal/cli/init.go":                   true, // scaffolds ~/.agentsync (canonical source)
 		"internal/source/subagentdir.go":         true, // moves the canonical agents/ dir to subagents/ (canonical source)
-		"internal/cli/secrets.go":                true, // vault rollback + cleartext temp cleanup
+		"internal/cli/secrets.go":                true, // cleartext temp cleanup in os.TempDir()
 		"internal/cli/marketplace.go":            true, // canonical source + marketplace cache
 		"internal/cli/plugin.go":                 true, // canonical source + plugin cache
 		"internal/cli/plugin_poll.go":            true, // marketplace/plugin cache scratch + swap-in rename
