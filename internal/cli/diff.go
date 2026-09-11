@@ -44,130 +44,7 @@ func newDiffCmd() *cobra.Command {
 		Short: "print unified diff between source-rendered content and destination",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p, perr := newPrinter(cmd)
-			if perr != nil {
-				return perr
-			}
-			filterPath := ""
-			if len(args) == 1 {
-				fp, err := filepath.Abs(args[0])
-				if err != nil {
-					return fmt.Errorf("resolve path: %w", err)
-				}
-				filterPath = fp
-			}
-
-			home := paths.AgentsyncHome(paths.OSEnv{})
-			// Load WITH the plugin cache so the preview projects installed
-			// plugins exactly as `apply` does — otherwise diff omits every
-			// plugin-derived MCP server / skill / command and silently
-			// disagrees with what apply will write.
-			userHome := paths.HomeDir(paths.OSEnv{})
-			c, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, true)
-			if err != nil {
-				return err
-			}
-
-			statePath := filepath.Join(home, ".state", "targets.json")
-			s, err := state.Load(statePath)
-			if err != nil {
-				return err
-			}
-			reg := registryFactory()
-			enabledAgents, enabled := enabledAgentNames(c.Config)
-			// --agents narrows the diff to a validated allowlist, mirroring
-			// `status --agents` exactly (same split/star/validation and the same
-			// empty-rejection message) so the two read-only commands stay
-			// symmetric.
-			selected, aerr := selectAgents(cmd, enabledAgents, enabled, agentsCSV)
-			if aerr != nil {
-				return aerr
-			}
-			if len(selected) == 0 {
-				if jsonOut {
-					return emitJSON(p.Out, diffModel{Hunks: []diffHunk{}})
-				}
-				fmt.Fprintln(p.Out, noAgentsEnabledHint(sc, projectRoot))
-				return nil
-			}
-			// diff renders the TEMPLATED canonical (it masks the destination's
-			// resolved cleartext separately, below); wrap as a render-only
-			// Resolved without substituting so it works even when the secrets
-			// backend is locked.
-			plan, err := render.Plan(secrets.ForRender(c), reg, selected, sc, projectRoot, s, userHome)
-			if err != nil {
-				return err
-			}
-
-			// Build the secret-redaction map BEFORE diffing. The
-			// destination file was written by a prior apply with secrets
-			// substituted in cleartext (ghp_…, sk-…), so reading it back
-			// and printing the diff would otherwise leak credentials to
-			// stdout / log files / screenshots. We resolve every
-			// reference in the canonical, then mask its resolved value
-			// in both src and dst before the diff runs.
-			secBackend := secrets.SelectBackend(c.Config.Secrets, home, userHome)
-			envBackend := secrets.EnvBackend{}
-			// Fail closed: if any ${secret:…} reference cannot be resolved now
-			// (age identity locked/absent, backend misconfigured), the cleartext
-			// value a prior apply substituted into the destination file cannot be
-			// redacted — CollectResolved silently skips unresolvable refs — so
-			// printing the diff would leak it. Refuse with an actionable message
-			// rather than risk emitting a credential to stdout / logs.
-			if missing := secrets.UnresolvedSecretRefs(&c, secBackend, envBackend); len(missing) > 0 {
-				return fmt.Errorf("diff: cannot resolve reference(s) %s; "+
-					"the destination file may contain a cleartext secret/env value that diff cannot redact "+
-					"(an env var set at apply time but unset now, or a locked secrets backend). "+
-					"Set the env var(s) / unlock the backend ([secrets] in agentsync.toml) and retry",
-					strings.Join(missing, ", "))
-			}
-			redact := secrets.CollectResolved(&c, secBackend, envBackend)
-
-			// Collect all hunks (masked src/dst) first, then render either the
-			// formatted diff or --json. Pretty rendering and JSON share the
-			// same masked strings, so the secret-leak guards above protect
-			// both modes.
-			hunks, filterMatched := collectDiffHunks(plan, reg.Names(), filterPath, redact)
-
-			// A <path> that matched no rendered op is a typo or an unmanaged file
-			// — distinct from a managed path that is in sync ("no diff"). Fail with
-			// an actionable message rather than the ambiguous "no diff" so the user
-			// knows the path (not the sync state) was the problem.
-			if !filterMatched {
-				return fmt.Errorf("path %s is not managed by agentsync (no enabled agent renders it); "+
-					"diff takes a filesystem path, not an agent name", ui.Sanitize(filterPath))
-			}
-
-			switch {
-			case jsonOut:
-				if err := emitJSON(p.Out, diffModel{Hunks: hunks}); err != nil {
-					return err
-				}
-			case len(hunks) == 0:
-				fmt.Fprintln(p.Out, "no diff")
-			default:
-				dmp := diffmatchpatch.New()
-				for _, h := range hunks {
-					label := h.Path
-					if h.Pointer != "" {
-						label = h.Path + "#" + h.Pointer
-					}
-					// label embeds a config-derived component name/id; sanitize on
-					// display so an ESC in a shared config's name can't inject escapes
-					// into the diff header (issue #93/#171).
-					label = ui.Sanitize(label)
-					fmt.Fprintf(p.Out, "%s %s\n", p.Red("--- source"), label)
-					fmt.Fprintf(p.Out, "%s %s\n", p.Green("+++ dest  "), label)
-					fmt.Fprintln(p.Out, renderDiffText(p, hunkDiffs(dmp, h)))
-				}
-			}
-			// --exit-code turns diff into a CI gate: non-zero (stable) when any
-			// hunk exists, 0 when clean. The diff above is emitted first, so output
-			// is unchanged — only the process exit differs.
-			if exitCode && len(hunks) > 0 {
-				return newDriftExitError()
-			}
-			return nil
+			return diffRun(cmd, args, diffOpts{jsonOut: jsonOut, exitCode: exitCode, agentsCSV: agentsCSV})
 		},
 	}
 	markScopeAware(cmd)
@@ -175,6 +52,145 @@ func newDiffCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&exitCode, "exit-code", false, fmt.Sprintf("exit %d if any diff hunk exists (0 when clean); for CI gates", exitCodeDrift))
 	addAgentsFlag(cmd, &agentsCSV, "diff")
 	return cmd
+}
+
+// diffOpts carries `diff`'s flag values into diffRun. It is a value, not a
+// pointer: diffRun must not be able to write back into the command literal's
+// closure variables.
+type diffOpts struct {
+	jsonOut   bool
+	exitCode  bool
+	agentsCSV string
+}
+
+// diffRun is the body of `agentsync diff`, lifted out of the command literal so
+// the pipeline is a named function that reads top-to-bottom instead of a
+// 125-line closure wedged between Short and the flag declarations.
+func diffRun(cmd *cobra.Command, args []string, o diffOpts) error {
+	p, perr := newPrinter(cmd)
+	if perr != nil {
+		return perr
+	}
+	filterPath := ""
+	if len(args) == 1 {
+		fp, err := filepath.Abs(args[0])
+		if err != nil {
+			return fmt.Errorf("resolve path: %w", err)
+		}
+		filterPath = fp
+	}
+
+	home := paths.AgentsyncHome(paths.OSEnv{})
+	// Load WITH the plugin cache so the preview projects installed
+	// plugins exactly as `apply` does — otherwise diff omits every
+	// plugin-derived MCP server / skill / command and silently
+	// disagrees with what apply will write.
+	userHome := paths.HomeDir(paths.OSEnv{})
+	c, sc, projectRoot, err := loadProjectedForScope(cmd, afero.NewOsFs(), home, true)
+	if err != nil {
+		return err
+	}
+
+	statePath := filepath.Join(home, ".state", "targets.json")
+	s, err := state.Load(statePath)
+	if err != nil {
+		return err
+	}
+	reg := registryFactory()
+	enabledAgents, enabled := enabledAgentNames(c.Config)
+	// --agents narrows the diff to a validated allowlist, mirroring
+	// `status --agents` exactly (same split/star/validation and the same
+	// empty-rejection message) so the two read-only commands stay
+	// symmetric.
+	selected, aerr := selectAgents(cmd, enabledAgents, enabled, o.agentsCSV)
+	if aerr != nil {
+		return aerr
+	}
+	if len(selected) == 0 {
+		if o.jsonOut {
+			return emitJSON(p.Out, diffModel{Hunks: []diffHunk{}})
+		}
+		fmt.Fprintln(p.Out, noAgentsEnabledHint(sc, projectRoot))
+		return nil
+	}
+	// diff renders the TEMPLATED canonical (it masks the destination's
+	// resolved cleartext separately, below); wrap as a render-only
+	// Resolved without substituting so it works even when the secrets
+	// backend is locked.
+	plan, err := render.Plan(secrets.ForRender(c), reg, selected, sc, projectRoot, s, userHome)
+	if err != nil {
+		return err
+	}
+
+	// Build the secret-redaction map BEFORE diffing. The
+	// destination file was written by a prior apply with secrets
+	// substituted in cleartext (ghp_…, sk-…), so reading it back
+	// and printing the diff would otherwise leak credentials to
+	// stdout / log files / screenshots. We resolve every
+	// reference in the canonical, then mask its resolved value
+	// in both src and dst before the diff runs.
+	secBackend := secrets.SelectBackend(c.Config.Secrets, home, userHome)
+	envBackend := secrets.EnvBackend{}
+	// Fail closed: if any ${secret:…} reference cannot be resolved now
+	// (age identity locked/absent, backend misconfigured), the cleartext
+	// value a prior apply substituted into the destination file cannot be
+	// redacted — CollectResolved silently skips unresolvable refs — so
+	// printing the diff would leak it. Refuse with an actionable message
+	// rather than risk emitting a credential to stdout / logs.
+	if missing := secrets.UnresolvedSecretRefs(&c, secBackend, envBackend); len(missing) > 0 {
+		return fmt.Errorf("diff: cannot resolve reference(s) %s; "+
+			"the destination file may contain a cleartext secret/env value that diff cannot redact "+
+			"(an env var set at apply time but unset now, or a locked secrets backend). "+
+			"Set the env var(s) / unlock the backend ([secrets] in agentsync.toml) and retry",
+			strings.Join(missing, ", "))
+	}
+	redact := secrets.CollectResolved(&c, secBackend, envBackend)
+
+	// Collect all hunks (masked src/dst) first, then render either the
+	// formatted diff or --json. Pretty rendering and JSON share the
+	// same masked strings, so the secret-leak guards above protect
+	// both modes.
+	hunks, filterMatched := collectDiffHunks(plan, reg.Names(), filterPath, redact)
+
+	// A <path> that matched no rendered op is a typo or an unmanaged file
+	// — distinct from a managed path that is in sync ("no diff"). Fail with
+	// an actionable message rather than the ambiguous "no diff" so the user
+	// knows the path (not the sync state) was the problem.
+	if !filterMatched {
+		return fmt.Errorf("path %s is not managed by agentsync (no enabled agent renders it); "+
+			"diff takes a filesystem path, not an agent name", ui.Sanitize(filterPath))
+	}
+
+	switch {
+	case o.jsonOut:
+		if err := emitJSON(p.Out, diffModel{Hunks: hunks}); err != nil {
+			return err
+		}
+	case len(hunks) == 0:
+		fmt.Fprintln(p.Out, "no diff")
+	default:
+		dmp := diffmatchpatch.New()
+		for _, h := range hunks {
+			label := h.Path
+			if h.Pointer != "" {
+				label = h.Path + "#" + h.Pointer
+			}
+			// label embeds a config-derived component name/id; sanitize on
+			// display so an ESC in a shared config's name can't inject escapes
+			// into the diff header (issue #93/#171).
+			label = ui.Sanitize(label)
+			fmt.Fprintf(p.Out, "%s %s\n", p.Red("--- source"), label)
+			fmt.Fprintf(p.Out, "%s %s\n", p.Green("+++ dest  "), label)
+			fmt.Fprintln(p.Out, renderDiffText(p, hunkDiffs(dmp, h)))
+		}
+	}
+	// --exit-code turns diff into a CI gate: non-zero (stable) when any
+	// hunk exists, 0 when clean. The diff above is emitted first, so output
+	// is unchanged — only the process exit differs.
+	if o.exitCode && len(hunks) > 0 {
+		return newDriftExitError()
+	}
+	return nil
 }
 
 // renderDiffText turns a diffmatchpatch result into a printable string. In

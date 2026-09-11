@@ -24,103 +24,109 @@ func newDoctorCmd() *cobra.Command {
 		Use:   "doctor",
 		Short: "diagnose first-run readiness: environment, schema, secrets, adapters",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			p, err := newPrinter(cmd)
-			if err != nil {
-				return err
-			}
-			home := paths.AgentsyncHome(paths.OSEnv{})
-
-			fmt.Fprintln(p.Out, p.Bold("agentsync doctor"))
-			fmt.Fprintln(p.Out, "  AGENTSYNC_HOME:", home)
-			fmt.Fprintln(p.Out, "  Go version:    ", runtime.Version())
-			fmt.Fprintln(p.Out, "  OS / arch:     ", runtime.GOOS, runtime.GOARCH)
-
-			fmt.Fprintln(p.Out, "")
-			p.Section("Source repo")
-			fails := 0
-			fails += checkHomeDir(p, home)
-			fails += checkStateDir(p, home)
-			fails += checkSubagentLayout(p, home)
-			c, schemaOK := checkSchema(p, home)
-			if !schemaOK {
-				fails++
-			}
-
-			fmt.Fprintln(p.Out, "")
-			p.Section("Secrets")
-			if schemaOK {
-				fails += checkSecrets(p, c.Config.Secrets, home)
-				// Beyond the [secrets] block's shape, actually try to resolve every
-				// ${secret:…}/${env:…} reference the canonical carries — a typo'd or
-				// missing key would otherwise pass as healthy and only surface as a
-				// broken apply.
-				fails += checkSecretReferences(p, c, home)
-			} else {
-				fmt.Fprintln(p.Out, "  skipped (schema invalid above)")
-			}
-
-			fmt.Fprintln(p.Out, "")
-			p.Section("Adapter detection")
-			// Detection is INFORMATIONAL — each adapter's Detect() stats its config
-			// dir under the target root and falls back to a PATH lookup. It never
-			// touches the fails counter: a not-detected agent is a normal state (the
-			// user may author config for a machine where the agent isn't installed).
-			reg := registryFactory()
-			for _, name := range allAgentNames() {
-				a := reg.Lookup(name)
-				if a == nil {
-					// #160 guarantees every valid agent has a registered adapter, so a
-					// nil lookup should be unreachable — but report it gracefully rather
-					// than panic if that invariant ever regresses.
-					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint("no adapter registered"))
-					continue
-				}
-				detected, derr := a.Detect()
-				switch {
-				case derr != nil:
-					// A Detect error is still informational — surface it, never fail.
-					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint(fmt.Sprintf("detection error: %v", derr)))
-				case detected:
-					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Green(ui.GlyphOK), name, p.Faint("detected"))
-				default:
-					fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint("not detected"))
-				}
-			}
-
-			fmt.Fprintln(p.Out, "")
-			p.Section("Plugins")
-			if schemaOK {
-				checkPlugins(p, home)
-			} else {
-				fmt.Fprintln(p.Out, "  skipped (schema invalid above)")
-			}
-
-			fmt.Fprintln(p.Out, "")
-			p.Section("Destination git backup")
-			if schemaOK {
-				checkDestinationGitBackup(p, c.Config.DestinationGitBackup)
-			} else {
-				fmt.Fprintln(p.Out, "  skipped (schema invalid above)")
-			}
-
-			fmt.Fprintln(p.Out, "")
-			if fails > 0 {
-				// The summary is part of doctor's REPORT (stdout, where the
-				// per-check lines went), so it keeps the report's ✗ rather than
-				// becoming a stderr ERROR diagnostic. The returned error is what
-				// reaches the terminal ERROR line, one level up.
-				fmt.Fprintf(p.Out, "%s %s\n", p.Red(ui.GlyphErr),
-					p.Red(fmt.Sprintf("%d issue(s) detected — fix before running `agentsync apply`", fails)))
-				return fmt.Errorf("doctor: %d issue(s) detected", fails)
-			}
-			p.Successf(ui.EmojiSuccess, "all checks passed")
-			return nil
-		},
+		RunE:  doctorRun,
 	}
 	markScopeUnaware(cmd, "doctor reports on THIS MACHINE (paths, adapters, the secrets backend), which is not scoped; "+
 		"to validate a project tree's config run `agentsync check --scope project`")
 	return cmd
+}
+
+// doctorRun is the body of `agentsync doctor`, lifted out of the command
+// literal. The report is a sequence of sections that each return a fail count;
+// as a named function the sequence is the function, rather than a 90-line
+// closure inside a struct literal.
+func doctorRun(cmd *cobra.Command, _ []string) error {
+	p, err := newPrinter(cmd)
+	if err != nil {
+		return err
+	}
+	home := paths.AgentsyncHome(paths.OSEnv{})
+
+	fmt.Fprintln(p.Out, p.Bold("agentsync doctor"))
+	fmt.Fprintln(p.Out, "  AGENTSYNC_HOME:", home)
+	fmt.Fprintln(p.Out, "  Go version:    ", runtime.Version())
+	fmt.Fprintln(p.Out, "  OS / arch:     ", runtime.GOOS, runtime.GOARCH)
+
+	fmt.Fprintln(p.Out, "")
+	p.Section("Source repo")
+	fails := 0
+	fails += checkHomeDir(p, home)
+	fails += checkStateDir(p, home)
+	fails += checkSubagentLayout(p, home)
+	c, schemaOK := checkSchema(p, home)
+	if !schemaOK {
+		fails++
+	}
+
+	fmt.Fprintln(p.Out, "")
+	p.Section("Secrets")
+	if schemaOK {
+		fails += checkSecrets(p, c.Config.Secrets, home)
+		// Beyond the [secrets] block's shape, actually try to resolve every
+		// ${secret:…}/${env:…} reference the canonical carries — a typo'd or
+		// missing key would otherwise pass as healthy and only surface as a
+		// broken apply.
+		fails += checkSecretReferences(p, c, home)
+	} else {
+		fmt.Fprintln(p.Out, "  skipped (schema invalid above)")
+	}
+
+	fmt.Fprintln(p.Out, "")
+	p.Section("Adapter detection")
+	// Detection is INFORMATIONAL — each adapter's Detect() stats its config
+	// dir under the target root and falls back to a PATH lookup. It never
+	// touches the fails counter: a not-detected agent is a normal state (the
+	// user may author config for a machine where the agent isn't installed).
+	reg := registryFactory()
+	for _, name := range allAgentNames() {
+		a := reg.Lookup(name)
+		if a == nil {
+			// #160 guarantees every valid agent has a registered adapter, so a
+			// nil lookup should be unreachable — but report it gracefully rather
+			// than panic if that invariant ever regresses.
+			fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint("no adapter registered"))
+			continue
+		}
+		detected, derr := a.Detect()
+		switch {
+		case derr != nil:
+			// A Detect error is still informational — surface it, never fail.
+			fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint(fmt.Sprintf("detection error: %v", derr)))
+		case detected:
+			fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Green(ui.GlyphOK), name, p.Faint("detected"))
+		default:
+			fmt.Fprintf(p.Out, "  %s %-12s %s\n", p.Faint(ui.GlyphInfo), name, p.Faint("not detected"))
+		}
+	}
+
+	fmt.Fprintln(p.Out, "")
+	p.Section("Plugins")
+	if schemaOK {
+		checkPlugins(p, home)
+	} else {
+		fmt.Fprintln(p.Out, "  skipped (schema invalid above)")
+	}
+
+	fmt.Fprintln(p.Out, "")
+	p.Section("Destination git backup")
+	if schemaOK {
+		checkDestinationGitBackup(p, c.Config.DestinationGitBackup)
+	} else {
+		fmt.Fprintln(p.Out, "  skipped (schema invalid above)")
+	}
+
+	fmt.Fprintln(p.Out, "")
+	if fails > 0 {
+		// The summary is part of doctor's REPORT (stdout, where the
+		// per-check lines went), so it keeps the report's ✗ rather than
+		// becoming a stderr ERROR diagnostic. The returned error is what
+		// reaches the terminal ERROR line, one level up.
+		fmt.Fprintf(p.Out, "%s %s\n", p.Red(ui.GlyphErr),
+			p.Red(fmt.Sprintf("%d issue(s) detected — fix before running `agentsync apply`", fails)))
+		return fmt.Errorf("doctor: %d issue(s) detected", fails)
+	}
+	p.Successf(ui.EmojiSuccess, "all checks passed")
+	return nil
 }
 
 // okCheck / failCheck / warnCheck render one readiness line. The label carries
