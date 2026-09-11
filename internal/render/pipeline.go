@@ -408,6 +408,9 @@ func applyPlan(
 	seen := map[string][]byte{}
 	seenBy := map[string]string{}
 	deletedOrphans := map[string]struct{}{}
+	// Paths any enabled agent still writes this run. orphanDeletes is per-agent
+	// and would otherwise delete a shared dest a sibling still renders (#246).
+	stillRendered := StillRenderedWholeFiles(p, userHome)
 	for _, name := range reg.Names() {
 		res, ok := p.PerAgent[name]
 		if !ok {
@@ -475,6 +478,9 @@ func applyPlan(
 		// path across agents that share a skills dir (claude + opencode →
 		// .claude/skills/), since the first agent's writer already removed it.
 		for _, del := range orphanDeletes(st, userHome, name, scope, project, res.Ops) {
+			if _, keep := stillRendered[paths.HomeRelative(userHome, del.Path)]; keep {
+				continue
+			}
 			if _, done := deletedOrphans[del.Path]; done {
 				continue
 			}
