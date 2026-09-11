@@ -633,15 +633,8 @@ func projectedSkips(entry marketplace.PluginEntry, cacheDir string, cfg source.C
 	if err != nil {
 		return nil, err
 	}
-	mini := source.Canonical{
-		Config:     cfg,
-		MCPServers: proj.MCPServers,
-		Skills:     proj.Skills,
-		Subagents:  proj.Subagents,
-		Commands:   proj.Commands,
-		Hooks:      proj.Hooks,
-		LSPServers: proj.LSPServers,
-	}
+	mini := proj.Canonical()
+	mini.Config = cfg
 	plan, err := render.Plan(secrets.ForRender(mini), reg, agents, adapter.ScopeUser, "", nil, userHome)
 	if err != nil {
 		return nil, err

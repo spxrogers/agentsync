@@ -433,15 +433,7 @@ func pluginOrigins(in explainInputs) map[string]explainPluginOrigin {
 			ID:      pluginOriginLabel(pl),
 			Version: pl.Plugin.Version.Unverified(),
 		}
-		projected := source.Canonical{
-			MCPServers: proj.MCPServers,
-			Skills:     proj.Skills,
-			Subagents:  proj.Subagents,
-			Commands:   proj.Commands,
-			Hooks:      proj.Hooks,
-			LSPServers: proj.LSPServers,
-		}
-		for _, k := range canonicalComponentKeys(projected) {
+		for _, k := range canonicalComponentKeys(proj.Canonical()) {
 			o := origin
 			o.AlsoAuthored = authored[k]
 			// First plugin wins the slot, matching the concatenation order

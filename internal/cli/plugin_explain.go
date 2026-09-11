@@ -222,12 +222,7 @@ func explainPluginReport(fs afero.Fs, c source.Canonical, pl source.Plugin, agen
 	}
 	// Replace (not append to) the flattened component lists with only this
 	// plugin's, so the plan and the report's counts cover this plugin alone.
-	scoped.MCPServers = proj.MCPServers
-	scoped.Skills = proj.Skills
-	scoped.Subagents = proj.Subagents
-	scoped.Commands = proj.Commands
-	scoped.Hooks = proj.Hooks
-	scoped.LSPServers = proj.LSPServers
+	proj.ReplaceComponentsIn(&scoped)
 
 	plan, err := render.Plan(secrets.ForRender(scoped), reg, agents, adapter.ScopeUser, "", nil, paths.HomeDir(paths.OSEnv{}))
 	if err != nil {
