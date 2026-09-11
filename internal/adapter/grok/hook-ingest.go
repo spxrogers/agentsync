@@ -12,12 +12,12 @@ import (
 
 var (
 	hookDefModeledKeys   = map[string]bool{"matcher": true, "hooks": true}
-	hookEntryModeledKeys = map[string]bool{"type": true, "command": true}
+	hookEntryModeledKeys = map[string]bool{"type": true, "command": true, "timeout": true}
 )
 
 // ingestHooks captures only whole events representable by source.Hook. Native
-// fields such as timeout and HTTP handlers refuse the event, allowing import to
-// retire stale canonical hooks. Malformed shapes only warn and never retire.
+// fields such as failClosed and HTTP handlers refuse the event, allowing import to
+// retire stale canonical hooks. Timeout is modeled. Malformed shapes only warn and never retire.
 // The first invalid definition or handler determines the refusal classification.
 func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) {
 	hooks, ok := raw.(map[string]any)
@@ -100,11 +100,19 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 					structural = true
 					break defs
 				}
+				timeout, tok, timeoutStructural := adapter.ParseHookTimeout(h)
+				if !tok {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler whose \"timeout\" is not an integer; event not captured\n", event)
+					representable = false
+					structural = timeoutStructural
+					break defs
+				}
 				captured = append(captured, source.Hook{
 					Event:   untrusted.Wrap(event), // native hooks JSON map key
 					Matcher: matcher,
 					Type:    asStr(h["type"]),
 					Command: asStr(h["command"]),
+					Timeout: timeout,
 				})
 			}
 		}

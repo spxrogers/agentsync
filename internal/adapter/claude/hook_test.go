@@ -30,8 +30,8 @@ func TestIngest_HookArtifactRoundTrip(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// (a) PreToolUse: a command handler carrying an unmodeled field (timeout).
-	// (b) Notification: a non-command ("prompt") handler.
+	// (a) PreToolUse: a command handler carrying a modeled timeout.
+	// (b) Notification: a non-command ("prompt") handler — still refused.
 	// (c) PostToolUse: a clean command-only event.
 	native := `{
   "hooks": {
@@ -49,16 +49,27 @@ func TestIngest_HookArtifactRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
-	// Only the clean command-only event is captured.
-	if len(out.Hooks) != 1 || out.Hooks[0].Event != "PostToolUse" {
-		t.Fatalf("expected only the clean PostToolUse event captured, got %+v", out.Hooks)
+	if len(out.Hooks) != 2 {
+		t.Fatalf("expected PreToolUse (timeout) and PostToolUse captured, got %+v", out.Hooks)
+	}
+	var pre, post *source.Hook
+	for i := range out.Hooks {
+		switch out.Hooks[i].Event.Unverified() {
+		case "PreToolUse":
+			pre = &out.Hooks[i]
+		case "PostToolUse":
+			post = &out.Hooks[i]
+		}
+	}
+	if pre == nil || post == nil || pre.Timeout != 30 || pre.Command != "echo before" {
+		t.Fatalf("expected PreToolUse timeout=30 and PostToolUse, got %+v", out.Hooks)
 	}
 	// Modify the captured command so the rendered PostToolUse DIFFERS from the
 	// native fixture. Otherwise a no-op Apply (or a stubbed Render) would leave
 	// "echo after" in place and the round-trip assertion below would pass
 	// vacuously — a correct Apply must materialize this new value through the
 	// owned-key merge while leaving the guarded foreign events untouched.
-	out.Hooks[0].Command = "echo after (rerendered)"
+	post.Command = "echo after (rerendered)"
 
 	ops, _, err := a.Render(secrets.ForRender(out), adapter.ScopeUser, "")
 	if err != nil {
@@ -104,15 +115,13 @@ func TestIngest_HookArtifactRoundTrip(t *testing.T) {
 		return h
 	}
 
-	t.Run("extra-field hook left untouched", func(t *testing.T) {
+	t.Run("modeled timeout round-trips", func(t *testing.T) {
 		h := handler(t, "PreToolUse")
 		if h["command"] != "echo before" {
 			t.Errorf("PreToolUse command corrupted: %+v", h)
 		}
-		// The unmodeled timeout field must survive verbatim (it was never
-		// captured, so the array was never owned/overwritten).
-		if _, ok := h["timeout"]; !ok {
-			t.Errorf("PreToolUse lost its unmodeled timeout field: %+v", h)
+		if h["timeout"] != float64(30) {
+			t.Errorf("PreToolUse lost its timeout field: %+v", h)
 		}
 	})
 
@@ -250,8 +259,8 @@ func TestIngest_HookGuardWarnsAndSkips(t *testing.T) {
 	}{
 		{
 			name:      "unmodeled handler field",
-			hooks:     `{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo before", "timeout": 30 } ] } ] }`,
-			wantWarns: []string{"unmodeled fields (\"timeout\")", "event not captured"},
+			hooks:     `{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "echo before", "failClosed": true } ] } ] }`,
+			wantWarns: []string{"unmodeled fields (\"failClosed\")", "event not captured"},
 		},
 		{
 			name:      "non-command handler",

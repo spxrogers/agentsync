@@ -71,12 +71,14 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 				Kind:      adapter.SkipReduced,
 			})
 		}
+		handler := map[string]any{
+			"type":    h.Type,
+			"command": h.Command,
+		}
+		adapter.SetHookTimeout(handler, h.Timeout)
 		entry := map[string]any{
 			"matcher": h.Matcher,
-			"hooks": []map[string]any{{
-				"type":    h.Type,
-				"command": h.Command,
-			}},
+			"hooks":   []map[string]any{handler},
 		}
 		byEvent[event] = append(byEvent[event], entry)
 	}

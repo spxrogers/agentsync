@@ -172,7 +172,7 @@ func TestGrokHookEnrichmentRetiresStaleSource(t *testing.T) {
 	if _, err := os.Stat(src); err != nil {
 		t.Fatal(err)
 	}
-	const enriched = `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"check","timeout":10}]}]}}`
+	const enriched = `{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"check","failClosed":true}]}]}}`
 	writeGrokFixture(t, path, enriched)
 	mustRun(t, env, "import", "grok")
 	if _, err := os.Stat(src); !os.IsNotExist(err) {

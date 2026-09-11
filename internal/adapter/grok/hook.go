@@ -34,6 +34,7 @@ func renderHooks(hooks []source.Hook, p Paths) ([]adapter.FileOp, []adapter.Skip
 		if h.Type != "" {
 			handler["type"] = h.Type
 		}
+		adapter.SetHookTimeout(handler, h.Timeout)
 		groups := byEvent[event]
 		// Restore consecutive handlers in the same matcher group, preserving
 		// their execution order across native -> canonical -> native capture.

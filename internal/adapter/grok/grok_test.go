@@ -256,10 +256,10 @@ func TestHookCaptureRefusesLossAndLeavesOtherFiles(t *testing.T) {
 		name, value string
 		refused     bool
 	}{
-		{"timeout", `[{"hooks":[{"type":"command","command":"check","timeout":10}]}]`, true},
 		{"http", `[{"hooks":[{"type":"http","url":"https://example.test"}]}]`, true},
 		{"definition-extra", `[{"hooks":[],"timeout":10}]`, true},
-		{"unmodeled-before-missing-command", `[{"hooks":[{"timeout":10}]}]`, true},
+		{"unmodeled-before-missing-command", `[{"hooks":[{"failClosed":true}]}]`, true},
+		{"timeout-without-command", `[{"hooks":[{"timeout":10}]}]`, false},
 		{"missing-command", `[{"hooks":[{"type":"command"}]}]`, false},
 		{"malformed-command", `[{"hooks":[{"type":"command","command":42}]}]`, false},
 		{"malformed-type", `[{"hooks":[{"type":42,"command":"check"}]}]`, false},
@@ -269,8 +269,8 @@ func TestHookCaptureRefusesLossAndLeavesOtherFiles(t *testing.T) {
 		{"malformed-handlers", `[{"hooks":42}]`, false},
 		{"malformed-definition", `[42]`, false},
 		{"malformed-event", `42`, false},
-		{"structural-before-semantic", `[42,{"hooks":[{"timeout":10}]}]`, false},
-		{"semantic-before-structural", `[{"hooks":[{"timeout":10}]},42]`, true},
+		{"structural-before-semantic", `[42,{"hooks":[{"failClosed":true}]}]`, false},
+		{"semantic-before-structural", `[{"hooks":[{"failClosed":true}]},42]`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -308,6 +308,45 @@ func TestHookCaptureRefusesLossAndLeavesOtherFiles(t *testing.T) {
 				t.Fatal("foreign hook file changed")
 			}
 		})
+	}
+}
+
+func TestHookCapturePreservesTimeout(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".grok", "hooks", "agentsync.json")
+	writeFile(t, path, []byte(`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"check","timeout":10}]}]}}`), 0o644)
+	var warn bytes.Buffer
+	a := grok.New(grok.Options{TargetRoot: root, Stderr: &warn})
+	c, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if warn.Len() != 0 {
+		t.Fatalf("modeled timeout must not warn: %s", warn.String())
+	}
+	if len(c.Hooks) != 1 || c.Hooks[0].Command != "check" || c.Hooks[0].Timeout != 10 {
+		t.Fatalf("timeout not captured: %#v", c.Hooks)
+	}
+	ops, skips, err := a.Render(secrets.ForRender(c), adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skips) != 0 {
+		t.Fatalf("unexpected skips: %v", skips)
+	}
+	if err := a.Apply(ops, adapter.PassThroughWriter{}); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(readFile(t, path), &got); err != nil {
+		t.Fatal(err)
+	}
+	events := got["hooks"].(map[string]any)
+	defs := events["PreToolUse"].([]any)
+	handlers := defs[0].(map[string]any)["hooks"].([]any)
+	handler := handlers[0].(map[string]any)
+	if handler["command"] != "check" || handler["timeout"] != float64(10) {
+		t.Fatalf("timeout dropped on render: %#v", handler)
 	}
 }
 

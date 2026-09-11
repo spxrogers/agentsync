@@ -1136,10 +1136,10 @@ func TestImport_UnknownComponent(t *testing.T) {
 
 // TestImport_RetiresStaleHookOnNativeEnrichment closes the second-order
 // issue #124 corruption path: a hook event captured while it was a clean
-// command hook, then enriched natively (here: a "timeout" field), is refused by
+// command hook, then enriched natively (here: a "failClosed" field), is refused by
 // ingest — but before this fix the stale canonical hooks/<event>.toml kept the
 // next apply owning the whole per-event array, rewriting the user's enriched
-// native entry without the timeout. import must retire the stale canonical file
+// native entry without the extra field. import must retire the stale canonical file
 // so apply leaves the native entry byte-untouched.
 func TestImport_RetiresStaleHookOnNativeEnrichment(t *testing.T) {
 	tmp, env := importTestEnv(t)
@@ -1165,7 +1165,7 @@ func TestImport_RetiresStaleHookOnNativeEnrichment(t *testing.T) {
 
 	// The user enriches the native entry with a field agentsync cannot model.
 	enriched := `{
-		"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 30}]}]}
+		"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "failClosed": true}]}]}
 	}`
 	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
 		t.Fatal(err)
@@ -1230,7 +1230,7 @@ func TestImport_RetiresStaleHookOnGeminiEnrichment(t *testing.T) {
 	// The user enriches the native BeforeTool entry with a field agentsync
 	// cannot model.
 	enriched := `{
-		"hooks": {"BeforeTool": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 30}]}]}
+		"hooks": {"BeforeTool": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "failClosed": true}]}]}
 	}`
 	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
 		t.Fatal(err)
@@ -1297,7 +1297,7 @@ func TestImport_RetiresStaleHookOnCursorEnrichment(t *testing.T) {
 	// cannot model.
 	enriched := `{
 		"version": 1,
-		"hooks": {"preToolUse": [{"command": "echo hi", "matcher": "Bash", "timeout": 30}]}
+		"hooks": {"preToolUse": [{"command": "echo hi", "matcher": "Bash", "failClosed": true}]}
 	}`
 	if err := os.WriteFile(hooksPath, []byte(enriched), 0o644); err != nil {
 		t.Fatal(err)
@@ -1369,7 +1369,7 @@ matcher = "Bash"
 [[hooks.PreToolUse.hooks]]
 type = "command"
 command = "echo hi"
-timeout = 30
+failClosed = true
 `
 	if err := os.WriteFile(cfgPath, []byte(enriched), 0o644); err != nil {
 		t.Fatal(err)
@@ -1491,7 +1491,7 @@ func TestImport_RetireFreezesOtherAgentsHooks(t *testing.T) {
 	}
 
 	// Claude's native entry is enriched; re-import retires the SHARED canonical.
-	enriched := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 30}]}]}}`
+	enriched := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "failClosed": true}]}]}}`
 	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1552,8 +1552,8 @@ func TestImport_NamedHookRetireScopedToName(t *testing.T) {
 	}
 	// BOTH native events get enriched (both now refused by ingest).
 	enriched := `{"hooks": {
-		"PreToolUse":  [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo pre", "timeout": 5}]}],
-		"PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo post", "timeout": 5}]}]
+		"PreToolUse":  [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo pre", "failClosed": true}]}],
+		"PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo post", "failClosed": true}]}]
 	}}`
 	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
 		t.Fatal(err)
@@ -1646,7 +1646,7 @@ func TestImport_RetireDisownIsScopeExact(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	enriched := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 30}]}]}}`
+	enriched := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "failClosed": true}]}]}}`
 	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1741,7 +1741,7 @@ func TestImport_RetireDisownIsProjectExact(t *testing.T) {
 
 	// Make the event unrepresentable so ingest refuses it and the canonical file
 	// is retired, which is what triggers the disown.
-	enriched := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 30}]}]}}`
+	enriched := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "failClosed": true}]}]}}`
 	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1796,7 +1796,7 @@ func TestImport_DryRunPreviewsStaleHookRetirement(t *testing.T) {
 
 	// The user enriches the native entry with a field agentsync cannot model,
 	// so ingest refuses the event and a REAL import would retire the file.
-	enriched := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 30}]}]}}`
+	enriched := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "failClosed": true}]}]}}`
 	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1856,7 +1856,7 @@ func TestImport_RetireStateFailureLeavesCanonicalIntact(t *testing.T) {
 	if out, err := runCLI(t, env, "import", "claude:hook:PreToolUse"); err != nil {
 		t.Fatalf("import clean hook: %v\n%s", err, out)
 	}
-	enriched := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "timeout": 30}]}]}}`
+	enriched := `{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi", "failClosed": true}]}]}}`
 	if err := os.WriteFile(settings, []byte(enriched), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -29,8 +29,12 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 		wantRefused bool
 	}{
 		{
+			"modeled: timeout with command is representable",
+			`{ "preToolUse": [ { "command": "x", "timeout": 30 } ] }`, false,
+		},
+		{
 			"semantic: unmodeled entry field",
-			`{ "preToolUse": [ { "command": "x", "timeout": 30 } ] }`, true,
+			`{ "preToolUse": [ { "command": "x", "failClosed": true } ] }`, true,
 		},
 		{
 			"semantic: prompt-type entry",
@@ -42,11 +46,15 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 		},
 		{
 			"semantic: unmodeled entry field without a command (unmodeled wins over the absent-command structural check)",
-			`{ "preToolUse": [ { "timeout": 30 } ] }`, true,
+			`{ "preToolUse": [ { "failClosed": true } ] }`, true,
 		},
 		{
 			"semantic: unmodeled entry field with a non-string command (unmodeled wins over the non-string-command structural check)",
-			`{ "preToolUse": [ { "command": 123, "timeout": 30 } ] }`, true,
+			`{ "preToolUse": [ { "command": 123, "failClosed": true } ] }`, true,
+		},
+		{
+			"structural: modeled timeout without a command",
+			`{ "preToolUse": [ { "timeout": 30 } ] }`, false,
 		},
 		{
 			"structural: event value not an array",

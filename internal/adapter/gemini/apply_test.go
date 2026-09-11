@@ -159,9 +159,9 @@ func TestApply_JSONC_CommentedSettings_NoClobber(t *testing.T) {
 
 // TestIngest_JSONC_CommentedSettings verifies ingest tolerates a commented
 // settings.json (instead of hard-failing the whole import) and that hook events
-// agentsync cannot fully represent — Gemini-only events, or handlers with
-// unmodeled fields like timeout — are left uncaptured with a warning, so a later
-// apply never owns an array it would lossily rewrite.
+// agentsync cannot fully represent — Gemini-only events — are left uncaptured
+// with a warning, so a later apply never owns an array it would lossily rewrite.
+// A command handler's timeout is modeled and captured.
 func TestIngest_JSONC_CommentedSettings(t *testing.T) {
 	tmp := t.TempDir()
 	settingsPath := filepath.Join(tmp, ".gemini", "settings.json")
@@ -189,16 +189,26 @@ func TestIngest_JSONC_CommentedSettings(t *testing.T) {
 	if len(got.MCPServers) != 1 || got.MCPServers[0].ID != "gh" {
 		t.Fatalf("MCP not ingested from commented settings: %+v", got.MCPServers)
 	}
-	if len(got.Hooks) != 1 || got.Hooks[0].Event != "PreToolUse" {
-		t.Fatalf("only the fully-representable BeforeTool event should be captured, got %+v", got.Hooks)
+	if len(got.Hooks) != 2 {
+		t.Fatalf("BeforeTool and AfterTool (timeout) should be captured, got %+v", got.Hooks)
+	}
+	var sawPre, sawPost bool
+	for _, h := range got.Hooks {
+		switch h.Event.Unverified() {
+		case "PreToolUse":
+			sawPre = true
+		case "PostToolUse":
+			sawPost = h.Timeout == 5000 && h.Command == "slow.sh"
+		}
+	}
+	if !sawPre || !sawPost {
+		t.Fatalf("expected PreToolUse and PostToolUse timeout=5000, got %+v", got.Hooks)
 	}
 	out := warn.String()
-	for _, wantMsg := range []string{
-		`unmodeled fields ("timeout")`,
-		`"BeforeModel" has no canonical equivalent`,
-	} {
-		if !strings.Contains(out, wantMsg) {
-			t.Errorf("missing warning %q in:\n%s", wantMsg, out)
-		}
+	if !strings.Contains(out, `"BeforeModel" has no canonical equivalent`) {
+		t.Errorf("missing BeforeModel warning in:\n%s", out)
+	}
+	if strings.Contains(out, `unmodeled fields ("timeout")`) {
+		t.Errorf("modeled timeout must not warn as unmodeled:\n%s", out)
 	}
 }

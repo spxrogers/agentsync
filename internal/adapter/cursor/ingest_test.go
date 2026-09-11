@@ -190,7 +190,8 @@ func TestIngest_Hooks_SkipsUnrepresentableEvents(t *testing.T) {
     "preToolUse": [ { "command": "echo ok", "matcher": "Shell" } ],
     "postToolUse": [ { "command": "echo slow", "timeout": 30 } ],
     "sessionStart": [ { "type": "prompt", "prompt": "review the diff", "model": "fast" } ],
-    "afterFileEdit": [ { "command": "./format.sh" } ]
+    "afterFileEdit": [ { "command": "./format.sh" } ],
+    "stop": [ { "command": "echo stop", "failClosed": true } ]
   }
 }`
 	if err := os.WriteFile(hooksPath, []byte(native), 0o644); err != nil {
@@ -204,12 +205,24 @@ func TestIngest_Hooks_SkipsUnrepresentableEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(got.Hooks) != 1 || got.Hooks[0].Event != "PreToolUse" || got.Hooks[0].Command != "echo ok" {
-		t.Fatalf("only the fully-representable preToolUse event should be captured, got %+v", got.Hooks)
+	if len(got.Hooks) != 2 {
+		t.Fatalf("preToolUse and postToolUse (timeout) should be captured, got %+v", got.Hooks)
+	}
+	var sawPre, sawPost bool
+	for _, h := range got.Hooks {
+		switch h.Event.Unverified() {
+		case "PreToolUse":
+			sawPre = h.Command == "echo ok"
+		case "PostToolUse":
+			sawPost = h.Command == "echo slow" && h.Timeout == 30
+		}
+	}
+	if !sawPre || !sawPost {
+		t.Fatalf("expected PreToolUse and PostToolUse timeout=30, got %+v", got.Hooks)
 	}
 	out := warn.String()
 	for _, wantMsg := range []string{
-		`unmodeled fields ("timeout")`,
+		`unmodeled fields ("failClosed")`,
 		`"prompt"-type entry`,
 		`"afterFileEdit" has no canonical equivalent`,
 	} {

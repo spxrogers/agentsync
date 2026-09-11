@@ -334,6 +334,7 @@ type hookEntryOut struct {
 	Matcher string `toml:"matcher,omitempty"`
 	Type    string `toml:"type"`
 	Command string `toml:"command"`
+	Timeout int    `toml:"timeout,omitempty"`
 }
 
 // WriteHooks writes hooks/<event>.toml for the given event. Overwrites atomically.
@@ -351,6 +352,7 @@ func WriteHooks(home, event string, hooks []Hook) error {
 			Matcher: h.Matcher,
 			Type:    h.Type,
 			Command: h.Command,
+			Timeout: h.Timeout,
 		})
 	}
 	body, err := toml.Marshal(hf)

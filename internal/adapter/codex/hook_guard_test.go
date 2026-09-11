@@ -47,13 +47,23 @@ command = "x"
 `, true,
 		},
 		{
-			"semantic: unmodeled handler field",
+			"modeled: timeout with command is representable",
 			`[[hooks.PreToolUse]]
 matcher = "Bash"
 [[hooks.PreToolUse.hooks]]
 type = "command"
 command = "x"
 timeout = 30
+`, false,
+		},
+		{
+			"semantic: unmodeled handler field",
+			`[[hooks.PreToolUse]]
+matcher = "Bash"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "x"
+failClosed = true
 `, true,
 		},
 		{
@@ -72,7 +82,7 @@ matcher = "Bash"
 [[hooks.PreToolUse.hooks]]
 type = "command"
 command = 123
-timeout = 30
+failClosed = true
 `, true,
 		},
 		{

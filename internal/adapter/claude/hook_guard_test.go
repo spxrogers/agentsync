@@ -83,8 +83,12 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 			`{ "PreToolUse": [ { "matcher": "Bash", "sequential": true, "hooks": [ { "type": "command", "command": "x" } ] } ] }`, true,
 		},
 		{
+			"modeled: timeout with command is representable",
+			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "x", "timeout": 30 } ] } ] }`, false,
+		},
+		{
 			"semantic: unmodeled handler field",
-			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "x", "timeout": 30 } ] } ] }`, true,
+			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "x", "failClosed": true } ] } ] }`, true,
 		},
 		{
 			"semantic: non-command handler",
@@ -96,11 +100,15 @@ func TestRefusedHookEvents_StructuralVsSemantic(t *testing.T) {
 		},
 		{
 			"semantic: unmodeled handler field without a command (unmodeled wins over the absent-command structural check)",
-			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "timeout": 30 } ] } ] }`, true,
+			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "failClosed": true } ] } ] }`, true,
 		},
 		{
 			"semantic: unmodeled handler field with a non-string command (unmodeled wins over the non-string-command structural check)",
-			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": 123, "timeout": 30 } ] } ] }`, true,
+			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": 123, "failClosed": true } ] } ] }`, true,
+		},
+		{
+			"structural: modeled timeout without a command",
+			`{ "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "timeout": 30 } ] } ] }`, false,
 		},
 		{
 			"semantic: typeless converted engine shape (unmodeled field, no type, no command)",
