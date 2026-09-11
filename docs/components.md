@@ -482,11 +482,13 @@ manifests into canonical components.
   provenance — including the providing plugin's `agents`/`native_agents`
   targeting, which travels with the component because the flattened canonical
   drops the association — so two plugins shipping one name cannot collide at a
-  destination path — see architecture.md § Plugin component namespacing).
+  destination path — see architecture.md § Plugin component namespacing);
+  `CacheAsideSuffix`/`IsCacheAside` (the `<dir>..old` sibling a cache replace
+  parks the old tree at, which every cache-root scan skips as scratch).
 - **Depends on:** source, log.
 - **Files:** `manifest.go`, `treehash.go` (the `tree:v1:` content hash),
-  `projection.go`, `loadprojected.go`, `fetcher.go`, `fetch_git.go`,
-  `fetch_npm.go`, `fetch_relative.go`, `update.go`.
+  `projection.go`, `loadprojected.go`, `cache_aside.go`, `fetcher.go`,
+  `fetch_git.go`, `fetch_npm.go`, `fetch_relative.go`, `update.go`.
 
 ---
 

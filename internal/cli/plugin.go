@@ -891,7 +891,10 @@ func searchAllMarketplaces(home, pluginID string) ([]byte, marketplace.PluginEnt
 	}
 
 	for _, e := range entries {
-		if !e.IsDir() {
+		// The aside a cache replace parks the old tree at is a stale copy, not
+		// a marketplace: offered here, it would resolve a bare id under a name
+		// no cache directory can be derived from (the #233 shape again).
+		if !e.IsDir() || marketplace.IsCacheAside(e.Name()) {
 			continue
 		}
 		mpJSONPath := filepath.Join(cacheRoot, e.Name(), ".claude-plugin", "marketplace.json")

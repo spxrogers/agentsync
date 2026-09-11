@@ -427,7 +427,8 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 
 	// TOML committed; swap the fetched cache into place. If the swap fails,
 	// roll the TOML back so cache (old) and TOML (old) stay consistent rather
-	// than leaving a new-SHA TOML over an old cache.
+	// than leaving a new-SHA TOML over an old cache (swapDir puts the old cache
+	// back, and names where it remains should even that fail).
 	if err := swapDir(tmpCache, cacheDir); err != nil {
 		if prevTOML != nil {
 			_ = iox.AtomicWrite(pluginPath, prevTOML, 0o644)
@@ -437,14 +438,48 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 	return nil
 }
 
-// swapDir replaces dst with src by removing dst and renaming src into place.
-// src and dst must be on the same filesystem (callers create src as a sibling
-// of dst). After a successful swap src no longer exists.
+// swapDir replaces dst with src: dst is renamed aside, src is renamed into
+// place, and only then is the old tree discarded. src and dst must be on the
+// same filesystem (callers create src as a sibling of dst). After a successful
+// swap src no longer exists.
+//
+// The old tree survives until the new one is standing at dst. When src cannot
+// be moved in, the old tree is renamed back and the error returned — the shape
+// extractSubdir in internal/marketplace documents (RemoveAll-then-Rename
+// destroyed the cache whenever the rename then failed). Should that restore
+// fail too, the error says so and names the aside, where the old tree remains.
+// The aside is dst + marketplace.CacheAsideSuffix: a sibling whose name holds
+// "..", which sanitizeCacheKey never lets into a cache key, so it can never be
+// another plugin's or marketplace's cache, and which every cache-root scan
+// treats as scratch (marketplace.IsCacheAside). A leftover aside beside a
+// standing dst is cleared first, as extractSubdir clears its own — a fresh
+// replacement is in hand by then. A leftover beside NO dst is the old tree an
+// earlier replace could not put back (or was interrupted before it could): it
+// is put back before this swap proceeds, so a retry can never be the step that
+// loses it. Discarding the aside after a completed swap is best-effort; the
+// next swap clears it.
 func swapDir(src, dst string) error {
-	if err := os.RemoveAll(dst); err != nil {
+	aside := dst + marketplace.CacheAsideSuffix
+	if _, err := os.Lstat(dst); os.IsNotExist(err) {
+		if err := os.Rename(aside, dst); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if err := os.RemoveAll(aside); err != nil {
 		return err
 	}
-	return os.Rename(src, dst)
+	if err := os.Rename(dst, aside); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(src, dst); err != nil {
+		// Put the old tree back; there is none to put back when dst was absent.
+		if rerr := os.Rename(aside, dst); rerr != nil && !os.IsNotExist(rerr) {
+			return fmt.Errorf("%w; restoring the previous tree failed (%v), it remains at %s", err, rerr, aside)
+		}
+		return err
+	}
+	_ = os.RemoveAll(aside)
+	return nil
 }
 
 // filterSafeBumps partitions bumps for `plugin upgrade --all --lossless` into
