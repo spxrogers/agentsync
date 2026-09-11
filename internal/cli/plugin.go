@@ -64,36 +64,6 @@ func findSub(parent *cobra.Command, name string) *cobra.Command {
 	return nil
 }
 
-// pluginTOML is the shape of plugins/<id>.toml.
-type pluginTOML struct {
-	Plugin pluginTOMLSpec `toml:"plugin"`
-}
-
-type pluginTOMLSpec struct {
-	// ID/Version mirror source.PluginSpec and originate from fetched marketplace
-	// metadata, so they are untrusted.Text (sanitize-on-print). The SHA/update
-	// fields are agentsync-controlled and stay plain strings.
-	ID          untrusted.Text `toml:"id"`
-	Version     untrusted.Text `toml:"version,omitempty"`
-	ManifestSHA string         `toml:"manifest_sha,omitempty"`
-	Update      string         `toml:"update,omitempty"`
-	Agents      []string       `toml:"agents,omitempty"`
-	// NativeAgents mirrors source.PluginSpec.NativeAgents — agents whose own
-	// plugin manager already installs this plugin, so apply must not project its
-	// components there. Populated by `import` and preserved across re-installs
-	// like every other lifecycle field.
-	//
-	// It is a POINTER for the same reason the canonical field is: `omitempty`
-	// drops an EMPTY slice, so a user's explicit `native_agents = []` ("defer to
-	// nobody, stop asking") vanished on the next rewrite and the decision was
-	// silently reverted — after which the next import re-seeded it, under
-	// --no-input without even asking. A nil pointer omits the key; a pointer to
-	// an empty slice writes `native_agents = []`. Pinned by
-	// TestPluginTOML_NativeAgentsRoundTrip.
-	NativeAgents *[]string `toml:"native_agents,omitempty"`
-	Disabled     bool      `toml:"disabled,omitempty"`
-}
-
 // ---- install ----------------------------------------------------------------
 
 // newPluginAddCmd is `plugin add`. It was `plugin install` until #200 F4, which
@@ -151,7 +121,7 @@ func pluginAddRun(cmd *cobra.Command, args []string) error {
 // spec matches those defaults — a genuine first install, or a re-install over a
 // TOML that already held the defaults — so the install status line only mentions
 // preserved state when there is some to mention.
-func keptLifecycleSummary(spec pluginTOMLSpec) string {
+func keptLifecycleSummary(spec source.PluginSpec) string {
 	var parts []string
 	defaultAgents := len(spec.Agents) == 1 && spec.Agents[0] == "*"
 	if !defaultAgents {
@@ -199,11 +169,11 @@ func pluginNativeAgentsUnset(home, id string) bool {
 // (it is ignored when plugins/<id>.toml already exists — an existing file's
 // lifecycle fields always win, per #140). `import` passes the agents whose
 // native config already enables this plugin; `plugin add` passes nil.
-func installPluginInto(home, id, mpName string, defaultNativeAgents []string) (pluginTOMLSpec, error) {
+func installPluginInto(home, id, mpName string, defaultNativeAgents []string) (source.PluginSpec, error) {
 	// Resolve marketplace.json from the marketplace cache.
 	mpData, mpEntry, resolvedMP, err := resolveMarketplaceEntry(home, mpName, id)
 	if err != nil {
-		return pluginTOMLSpec{}, err
+		return source.PluginSpec{}, err
 	}
 
 	// Compute cache path.
@@ -225,7 +195,7 @@ func installPluginInto(home, id, mpName string, defaultNativeAgents []string) (p
 	fetcher := marketplace.Dispatch(src)
 	result, err := fetcher.Fetch(src, cacheDir)
 	if err != nil {
-		return pluginTOMLSpec{}, fmt.Errorf("fetch plugin %s: %w", id, err)
+		return source.PluginSpec{}, fmt.Errorf("fetch plugin %s: %w", id, err)
 	}
 
 	// Compute manifest SHA.
@@ -285,12 +255,12 @@ func installPluginInto(home, id, mpName string, defaultNativeAgents []string) (p
 		// comment-only — parses to rerr==nil above and legitimately carries no allowlist
 		// to preserve, so it falls through to defaults. agentsync's own iox.AtomicWrite
 		// never produces such a file; only external truncation would.)
-		return pluginTOMLSpec{}, fmt.Errorf("existing %s is unreadable (%w); refusing to overwrite its agents/update/disabled with defaults — fix or remove it, then re-install", pluginPath, rerr)
+		return source.PluginSpec{}, fmt.Errorf("existing %s is unreadable (%w); refusing to overwrite its agents/update/disabled with defaults — fix or remove it, then re-install", pluginPath, rerr)
 	}
 	// A genuine first install (readPluginTOML returned os.ErrNotExist) keeps the
 	// byte-identical defaults so install/import still produce identical artifacts.
 
-	spec := pluginTOMLSpec{
+	spec := source.PluginSpec{
 		// id/marketplace are validated cache keys; wrap the composed id as Text to
 		// match the canonical model (the ManifestSHA below stays a plain string).
 		ID:           untrusted.Wrap(id + "@" + resolveMarketplaceName(mpName)),
@@ -304,12 +274,12 @@ func installPluginInto(home, id, mpName string, defaultNativeAgents []string) (p
 	if result.Version != "" {
 		spec.Version = untrusted.Wrap(result.Version)
 	}
-	data, err := toml.Marshal(pluginTOML{Plugin: spec})
+	data, err := toml.Marshal(source.Plugin{Plugin: spec})
 	if err != nil {
-		return pluginTOMLSpec{}, fmt.Errorf("marshal plugin toml: %w", err)
+		return source.PluginSpec{}, fmt.Errorf("marshal plugin toml: %w", err)
 	}
 	if err := iox.AtomicWrite(pluginPath, data, 0o644); err != nil {
-		return pluginTOMLSpec{}, fmt.Errorf("write %s: %w", pluginPath, err)
+		return source.PluginSpec{}, fmt.Errorf("write %s: %w", pluginPath, err)
 	}
 	return spec, nil
 }
@@ -678,7 +648,7 @@ func pluginListRun(cmd *cobra.Command, _ []string) error {
 	}
 
 	var names []string
-	plugins := map[string]pluginTOMLSpec{}
+	plugins := map[string]source.PluginSpec{}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".toml") {
 			continue
@@ -727,7 +697,7 @@ func splitPluginRef(ref string) (id, mpName string) {
 // `plugin disable demo@wrong-mp` act on the demo installed from another
 // marketplace. An unqualified ref (typedMP == "") is unchanged. The recorded
 // value comes from a hand-editable file; %q renders any control bytes inert.
-func checkPluginRefMarketplace(existing pluginTOML, id, typedMP string) error {
+func checkPluginRefMarketplace(existing source.Plugin, id, typedMP string) error {
 	if typedMP == "" {
 		return nil
 	}
@@ -944,15 +914,31 @@ func computeManifestSHA(home, id string, entry marketplace.PluginEntry, mpData [
 }
 
 // readPluginTOML reads and parses a plugins/<id>.toml file.
-func readPluginTOML(path string) (pluginTOML, error) {
+//
+// The file has exactly ONE shape, source.Plugin — the canonical model the
+// loader, the projection layer and source.WritePlugin already use. The CLI used
+// to carry a private field-for-field duplicate of that struct, which is how a
+// lifecycle field could be added to one and missed by the other (#234).
+// Marshalling either produced identical bytes, so there was nothing to keep
+// them honest.
+//
+// Decoding is deliberately PERMISSIVE, unlike source.Load's strict decode: the
+// lifecycle verbs (enable/disable/upgrade) must be able to read and rewrite a
+// file whose stray key the loader would reject, so `plugin disable` still works
+// on a hand-edited registry rather than failing with a decode error the user
+// cannot act on from here. Plugin.ID (toml:"-") is filled from the filename
+// stem exactly as loadPlugins fills it, so a source.Plugin from this function
+// means the same thing as one from source.Load.
+func readPluginTOML(path string) (source.Plugin, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return pluginTOML{}, fmt.Errorf("read %s: %w", path, err)
+		return source.Plugin{}, fmt.Errorf("read %s: %w", path, err)
 	}
-	var p pluginTOML
+	var p source.Plugin
 	if err := toml.Unmarshal(data, &p); err != nil {
-		return pluginTOML{}, fmt.Errorf("parse %s: %w", path, err)
+		return source.Plugin{}, fmt.Errorf("parse %s: %w", path, err)
 	}
+	p.ID = untrusted.Wrap(strings.TrimSuffix(filepath.Base(path), ".toml"))
 	return p, nil
 }
 
