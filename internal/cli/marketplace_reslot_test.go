@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spxrogers/agentsync/internal/marketplace"
 )
 
 // marketplaceCacheNames lists the marketplace cache directories under home.
@@ -118,5 +120,24 @@ func TestMarketplaceAdd_SameDeclaredNameReplacesTheEarlierCache(t *testing.T) {
 	}
 	if got := marketplaceCacheNames(t, tmp); len(got) != 1 || got[0] != "shared" {
 		t.Fatalf("no orphan may remain under either slug; cache dirs = %v, want [shared]", got)
+	}
+}
+
+// TestMarketplaceRemove_ClearsTheCacheAside: the aside a replace parks the old
+// tree at is skipped by every cache-root scan, so once the marketplace is gone
+// nothing would ever clear it; `marketplace remove` takes it with the cache.
+func TestMarketplaceRemove_ClearsTheCacheAside(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp, "NO_COLOR": "1"}
+	fixture := writeMarketplaceFixture(t, filepath.Join(tmp, "fixture-mp"), "test-mp")
+	mustRun(t, env, "init")
+	mustRun(t, env, "marketplace", "add", fixture)
+	aside := filepath.Join(tmp, ".agentsync", ".state", "cache", "marketplaces", "test-mp"+marketplace.CacheAsideSuffix)
+	writeFile(t, filepath.Join(aside, "marker.txt"), "stranded")
+
+	mustRun(t, env, "marketplace", "remove", "test-mp")
+
+	if names := marketplaceCacheNames(t, tmp); len(names) != 0 {
+		t.Errorf("remove must clear the cache and its aside; the cache root still holds %v", names)
 	}
 }

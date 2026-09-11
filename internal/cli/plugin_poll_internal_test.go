@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -56,6 +57,26 @@ func TestSwapDir(t *testing.T) {
 			},
 			wantDst: "fresh",
 		},
+		{
+			// An earlier replace that could not put the old tree back (or was
+			// interrupted before it could) leaves it at the aside with nothing
+			// at the destination. A retry must put it back before proceeding,
+			// so that a second failure restores it rather than losing it.
+			name: "puts a stranded old tree back when the new one cannot be moved in",
+			setup: func(t *testing.T, _, dst string) {
+				mustWrite(t, filepath.Join(dst+marketplace.CacheAsideSuffix, "marker.txt"), "stranded")
+			},
+			wantErr: true,
+			wantDst: "stranded",
+		},
+		{
+			name: "replaces a stranded old tree when nothing else is at the destination",
+			setup: func(t *testing.T, src, dst string) {
+				mustWrite(t, filepath.Join(src, "marker.txt"), "fresh")
+				mustWrite(t, filepath.Join(dst+marketplace.CacheAsideSuffix, "marker.txt"), "stranded")
+			},
+			wantDst: "fresh",
+		},
 	}
 
 	for _, tc := range tests {
@@ -100,20 +121,34 @@ func TestSwapDir_KeepsBothTreesWhenTheRenameInFails(t *testing.T) {
 		t.Skipf("no writable /dev/shm to force a cross-device rename: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(shm) })
+	// A /dev/shm that exists but cannot take a file (full, or mounted with
+	// size=0) is a reason to skip, not a failure of the swap.
+	writeOrSkip := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Skipf("cannot write under /dev/shm to force a cross-device rename: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Skipf("cannot write under /dev/shm to force a cross-device rename: %v", err)
+		}
+	}
 	root := t.TempDir()
 	probe := filepath.Join(shm, "probe")
-	mustWrite(t, filepath.Join(probe, "x"), "x")
+	writeOrSkip(filepath.Join(probe, "x"), "x")
 	if err := os.Rename(probe, filepath.Join(root, "probe")); err == nil {
 		t.Skip("/dev/shm and the test temp dir are one filesystem; a rename between them cannot fail")
 	}
 	src, dst := filepath.Join(shm, "incoming"), filepath.Join(root, "cache")
-	mustWrite(t, filepath.Join(src, "marker.txt"), "fresh")
+	writeOrSkip(filepath.Join(src, "marker.txt"), "fresh")
 	mustWrite(t, filepath.Join(dst, "marker.txt"), "stale")
 
 	err = swapDir(src, dst)
 
-	if err == nil {
-		t.Fatal("a cross-device rename must fail the swap; got nil")
+	// The failure must be the rename that moves the new tree IN — the one the
+	// restore exists for — not an earlier step that touched nothing.
+	var le *os.LinkError
+	if !errors.As(err, &le) || le.Old != src {
+		t.Fatalf("the swap must fail at moving the new tree in (rename %s → %s); got: %v", src, dst, err)
 	}
 	if got, rerr := os.ReadFile(filepath.Join(dst, "marker.txt")); rerr != nil || string(got) != "stale" {
 		t.Errorf("the old tree must be put back; marker.txt = %q (err=%v)", got, rerr)

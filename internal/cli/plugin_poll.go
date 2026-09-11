@@ -451,12 +451,20 @@ func applyPluginBump(home string, b marketplace.Bump, fetched map[string]map[str
 // The aside is dst + marketplace.CacheAsideSuffix: a sibling whose name holds
 // "..", which sanitizeCacheKey never lets into a cache key, so it can never be
 // another plugin's or marketplace's cache, and which every cache-root scan
-// treats as scratch (marketplace.IsCacheAside). A leftover from an interrupted
-// earlier swap is cleared first, as extractSubdir clears its own — a fresh
-// replacement is in hand by then — and discarding the aside after a completed
-// swap is best-effort for the same reason.
+// treats as scratch (marketplace.IsCacheAside). A leftover aside beside a
+// standing dst is cleared first, as extractSubdir clears its own — a fresh
+// replacement is in hand by then. A leftover beside NO dst is the old tree an
+// earlier replace could not put back (or was interrupted before it could): it
+// is put back before this swap proceeds, so a retry can never be the step that
+// loses it. Discarding the aside after a completed swap is best-effort; the
+// next swap clears it.
 func swapDir(src, dst string) error {
 	aside := dst + marketplace.CacheAsideSuffix
+	if _, err := os.Lstat(dst); os.IsNotExist(err) {
+		if err := os.Rename(aside, dst); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
 	if err := os.RemoveAll(aside); err != nil {
 		return err
 	}

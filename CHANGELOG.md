@@ -36,9 +36,7 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   performs — keeps the old tree until the new one is in place and puts it back
   when the new one cannot be moved in, so a replace that fails leaves the
   marketplace or plugin the cache it had rather than none (and says where the
-  old tree sits should even that fail); the cache-root scans treat the aside
-  such a replace parks the old tree at as scratch, never as a marketplace of
-  its own.
+  old tree sits should even that fail).
   `import <agent>:plugin` registers marketplaces through the same code and now
   warns and skips instead of registering a phantom.
 

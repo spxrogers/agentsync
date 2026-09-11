@@ -14,6 +14,10 @@ func TestSanitizeCacheKey(t *testing.T) {
 		{"", "_"},
 		{".", "_"},
 		{"..", "_"},
+		// No output may hold "..": that is what makes a cache aside
+		// (marketplace.CacheAsideSuffix) unmistakable for a cache key.
+		{"shared..old", "shared_old"},
+		{"...", "_."},
 	}
 	for _, tc := range cases {
 		got := sanitizeCacheKey(tc.in)

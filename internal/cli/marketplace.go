@@ -266,8 +266,8 @@ func reslotMarketplaceCache(from, to string) error {
 	}
 	// A link where the fetched tree should be: a rename would install it
 	// (pointing anywhere, the destination itself included) as the cache, and a
-	// replace would first unlink what the marketplace has. A missing source is
-	// left to the rename to report.
+	// replace would first unlink what the marketplace has. A missing or
+	// unreadable source is left to the rename to report.
 	if fi, lerr := os.Lstat(from); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("move marketplace cache %s → %s: the source is a symlink, not a fetched tree", from, to)
 	}
@@ -336,6 +336,12 @@ func marketplaceRemoveRun(cmd *cobra.Command, args []string) error {
 	cacheDir := marketplaceCacheDir(home, name)
 	if err := os.RemoveAll(cacheDir); err != nil { //nolint:forbidigo // removes the marketplace cache under .state/cache, not a native destination
 		return fmt.Errorf("remove cache %s: %w", cacheDir, err)
+	}
+	// The aside a replace parks the old tree at goes with the cache: every scan
+	// skips it, so once the name is gone nothing would ever clear it.
+	aside := cacheDir + marketplace.CacheAsideSuffix
+	if err := os.RemoveAll(aside); err != nil { //nolint:forbidigo // removes the marketplace cache aside under .state/cache, not a native destination
+		return fmt.Errorf("remove cache aside %s: %w", aside, err)
 	}
 
 	// Remove from state.json (best-effort). Same rule as addMarketplaceSource:

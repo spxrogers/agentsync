@@ -129,6 +129,9 @@ func TestReslotMarketplaceCache(t *testing.T) {
 				if fi, err := os.Lstat(from); err != nil || fi.Mode()&os.ModeSymlink == 0 {
 					t.Errorf("the refused link must be left where it was (err=%v)", err)
 				}
+				if _, err := os.Stat(filepath.Join(filepath.Dir(from), "elsewhere", "keep.txt")); err != nil {
+					t.Errorf("a refused move must touch nothing, least of all the link's target: %v", err)
+				}
 			},
 		},
 		{
@@ -273,7 +276,12 @@ func TestSearchAllMarketplaces_SkipsCacheAsides(t *testing.T) {
 	mustWrite(t, filepath.Join(aside, ".claude-plugin", "marketplace.json"),
 		`{"name": "shared", "owner": {"name": "x"}, "plugins": [{"name": "ghost", "source": "./ghost"}]}`)
 
-	if _, _, via, err := searchAllMarketplaces(home, "ghost"); err == nil {
+	_, _, via, err := searchAllMarketplaces(home, "ghost")
+	if err == nil {
 		t.Fatalf("a cache aside must not be searched as a marketplace; ghost resolved via %q", via)
+	}
+	// The miss must be the scan's own, not the cache root going unread.
+	if !strings.Contains(err.Error(), "not found in any cached marketplace") {
+		t.Fatalf("the search must run and miss; got: %v", err)
 	}
 }
