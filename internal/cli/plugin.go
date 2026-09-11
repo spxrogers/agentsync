@@ -160,6 +160,77 @@ func pluginNativeAgentsUnset(home, id string) bool {
 	return existing.Plugin.NativeAgents == nil
 }
 
+// pluginInstallRefresh names the ONLY fields a (re-)install recomputes from the
+// fetched marketplace metadata. Everything else in source.PluginSpec is
+// USER-AUTHORED lifecycle state that a re-install must carry forward untouched.
+//
+// It is a struct, not three lines inline, so the refreshed half of the
+// classification lives in production code, in one place a test can reflect
+// over; the preserved half is the test-side pluginSpecPreserved, and
+// TestPluginSpecFieldsAreClassified forces the two to partition
+// source.PluginSpec exactly — it fails when the struct grows a field that is
+// neither named here nor classified as preserved, which is what stops the #140
+// bug class from reappearing through a field nobody remembered to add to the
+// merge (#234).
+type pluginInstallRefresh struct {
+	ID          untrusted.Text
+	Version     untrusted.Text
+	ManifestSHA string
+}
+
+// applyTo overwrites the refreshed fields on base and returns the result. base
+// carries every other field through unchanged — preservation is the DEFAULT, so
+// a lifecycle field added to source.PluginSpec tomorrow survives a re-install
+// without anyone editing this function.
+func (r pluginInstallRefresh) applyTo(base source.PluginSpec) source.PluginSpec {
+	base.ID = r.ID
+	base.Version = r.Version
+	base.ManifestSHA = r.ManifestSHA
+	return base
+}
+
+// pluginLifecycleBase returns the spec a (re-)install starts from, before the
+// install-refreshed fields are stamped onto it.
+//
+// existing is the spec already in plugins/<id>.toml, or nil for a first
+// install. Its lifecycle fields (the Agents allowlist, the Update policy, the
+// NativeAgents deferral, the Disabled bit) are user-authored, security-relevant
+// on-disk state — the allowlist scopes which agents a credential-bearing plugin
+// fans out to — so they are carried forward WHOLESALE rather than field by
+// field (issue #140).
+//
+// The three backfills below are for keys the file may legitimately OMIT, not a
+// re-listing of the lifecycle: each restores the value the omission means, so a
+// re-install over a file with no `agents` key still writes agents = ['*'] and a
+// first install (existing == nil, every field zero) produces the historical
+// artifact byte-for-byte — agents = ['*'], update = 'track', no disabled key —
+// which is what keeps `plugin add` and `import` producing identical canonical
+// files (see installPluginInto's doc comment).
+func pluginLifecycleBase(existing *source.PluginSpec, defaultNativeAgents []string) source.PluginSpec {
+	var base source.PluginSpec
+	if existing != nil {
+		base = *existing
+	}
+	if len(base.Agents) == 0 {
+		base.Agents = []string{"*"}
+	}
+	if base.Update == "" {
+		base.Update = "track"
+	}
+	// The caller's seed applies only when the key is ABSENT. An existing
+	// deferral list wins for the same reason the allowlist does: a user who
+	// removed an agent from native_agents (having uninstalled the native copy)
+	// must not have it re-added by the next import, which would silently stop
+	// projecting to an agent they deliberately adopted. A deliberately EMPTIED
+	// list is itself a decision ("defer to nobody"), so it is preserved as-is —
+	// which is why the field is a pointer and this tests nil, not len.
+	if base.NativeAgents == nil && defaultNativeAgents != nil {
+		seed := defaultNativeAgents
+		base.NativeAgents = &seed
+	}
+	return base
+}
+
 // installPluginInto fetches plugin id from the named marketplace into the
 // plugin cache and writes plugins/<id>.toml, returning the written spec. mpName
 // may be empty (the marketplace is then searched for across all caches). It
@@ -207,70 +278,30 @@ func installPluginInto(home, id, mpName string, defaultNativeAgents []string) (s
 	// Write plugins/<id>.toml.
 	pluginPath := filepath.Join(home, "plugins", id+".toml")
 
-	// Lifecycle fields (Agents allowlist, Update policy, Disabled bit) are
-	// user-authored, security-relevant on-disk state: the allowlist scopes which
-	// agents a credential-bearing plugin fans out to. A re-install over an
-	// existing plugins/<id>.toml must PRESERVE them rather than reset them to the
-	// first-install defaults — silently re-broadening a narrowed allowlist would
-	// ship those credentials to agents the user deliberately excluded (issue
-	// #140). Only ID/Version/ManifestSHA are legitimately refreshed by install.
-	//
-	// A genuine first install (no prior TOML — a not-exist read falls through
-	// here) keeps the historical defaults byte-for-byte, so `install` and
-	// `import` still produce byte-identical canonical artifacts (see the doc
-	// comment above): Agents=["*"], Update="track", Disabled absent.
-	agents := []string{"*"}
-	var nativeAgents *[]string
-	if defaultNativeAgents != nil {
-		seed := defaultNativeAgents
-		nativeAgents = &seed
-	}
-	update := "track"
-	disabled := false
+	// Read the existing registry entry, if any. A parse failure on a file that
+	// EXISTS refuses the install: falling through to the first-install defaults
+	// would silently re-broaden a narrowed allowlist — the exact #140 loss this
+	// path exists to prevent — so refuse rather than reset a corrupt-but-present
+	// lifecycle file. The user can fix or remove it and re-install. ("Unparseable"
+	// here means a TOML *parse error*; a semantically-empty file — blank or
+	// comment-only — parses to rerr==nil and legitimately carries no lifecycle
+	// state, so it takes the defaults. agentsync's own iox.AtomicWrite never
+	// produces such a file; only external truncation would.)
+	var existingSpec *source.PluginSpec
 	switch existing, rerr := readPluginTOML(pluginPath); {
 	case rerr == nil:
-		if len(existing.Plugin.Agents) > 0 {
-			agents = existing.Plugin.Agents
-		}
-		// An existing file's deferral list wins over the caller's default, for
-		// the same reason the allowlist does: a user who removed an agent from
-		// native_agents (having uninstalled the native copy) must not have it
-		// re-added by the next import, which would silently stop projecting to
-		// an agent they deliberately adopted. Re-seed only when the key is
-		// absent — a deliberately EMPTIED list is a decision, so it is
-		// preserved as-is (non-nil and empty reads as "defer to nobody").
-		if existing.Plugin.NativeAgents != nil {
-			nativeAgents = existing.Plugin.NativeAgents
-		}
-		if existing.Plugin.Update != "" {
-			update = existing.Plugin.Update
-		}
-		disabled = existing.Plugin.Disabled
+		existingSpec = &existing.Plugin
 	case !errors.Is(rerr, os.ErrNotExist):
-		// The file EXISTS but is unparseable. Falling through to the ["*"]/track/false
-		// defaults would silently re-broaden a narrowed allowlist — the exact #140 loss
-		// this preserve path prevents — so refuse rather than reset a corrupt-but-present
-		// lifecycle file. The user can fix or remove it and re-install. ("Unparseable"
-		// here means a TOML *parse error*; a semantically-empty file — blank or
-		// comment-only — parses to rerr==nil above and legitimately carries no allowlist
-		// to preserve, so it falls through to defaults. agentsync's own iox.AtomicWrite
-		// never produces such a file; only external truncation would.)
 		return source.PluginSpec{}, fmt.Errorf("existing %s is unreadable (%w); refusing to overwrite its agents/update/disabled with defaults — fix or remove it, then re-install", pluginPath, rerr)
 	}
-	// A genuine first install (readPluginTOML returned os.ErrNotExist) keeps the
-	// byte-identical defaults so install/import still produce identical artifacts.
 
-	spec := source.PluginSpec{
+	spec := pluginInstallRefresh{
 		// id/marketplace are validated cache keys; wrap the composed id as Text to
-		// match the canonical model (the ManifestSHA below stays a plain string).
-		ID:           untrusted.Wrap(id + "@" + resolveMarketplaceName(mpName)),
-		Version:      mpEntry.Version,
-		ManifestSHA:  manifestSHA,
-		Update:       update,
-		Agents:       agents,
-		NativeAgents: nativeAgents,
-		Disabled:     disabled,
-	}
+		// match the canonical model (ManifestSHA stays a plain string).
+		ID:          untrusted.Wrap(id + "@" + resolveMarketplaceName(mpName)),
+		Version:     mpEntry.Version,
+		ManifestSHA: manifestSHA,
+	}.applyTo(pluginLifecycleBase(existingSpec, defaultNativeAgents))
 	if result.Version != "" {
 		spec.Version = untrusted.Wrap(result.Version)
 	}

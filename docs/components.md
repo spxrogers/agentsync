@@ -62,7 +62,14 @@ is the only package that depends on nearly all the others.
   (#232); `finish` has exactly one call site and is never deferred, because it
   writes and it returns the run's error; `destReadPath` / `readDestText`
   (`destread.go`) — the whole-file destination readers that carry the symlink
-  policy (`AGENTSYNC_ALLOW_SYMLINK_DEST`), mirroring `iox.AtomicWrite`'s.
+  policy (`AGENTSYNC_ALLOW_SYMLINK_DEST`), mirroring `iox.AtomicWrite`'s;
+  `readPluginTOML` + `pluginLifecycleBase` / `pluginInstallRefresh`
+  (`plugin.go`) — `plugins/<id>.toml` has ONE shape, the canonical
+  `source.Plugin`, and a re-install carries the whole existing entry forward and
+  overwrites only the re-fetched `ID`/`Version`/`ManifestSHA`, so a field added
+  to `source.PluginSpec` is preserved by default rather than dropped by default
+  (#234; the CLI's private duplicate of the struct, and the field-by-field merge
+  that went with it, are gone).
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,
   `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
   `mcp {add,remove,list,enable,disable}`,
