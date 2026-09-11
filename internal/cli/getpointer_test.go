@@ -7,8 +7,8 @@ import "testing"
 // CollectPointers escapes those (~→~0, /→~1), but getPointerValue split the
 // pointer without decoding, so it looked up the literal "foo~0bar" key instead
 // of the real "foo~bar" key → nil source value → phantom drift forever. Every
-// other pointer getter (getJSONPointer, render.getPointerOK, jsonkeys
-// splitPointer) decodes; this one didn't.
+// other pointer getter decoded; this one didn't. All of them now share
+// jsonkeys.Get.
 func TestGetPointerValue_DecodesRFC6901(t *testing.T) {
 	m := map[string]any{
 		"mcpServers": map[string]any{

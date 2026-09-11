@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/capture"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/project"
@@ -97,7 +98,7 @@ func collectStateSeedPointers(m map[string]any) []string {
 // matches render.RecordOpsState skipping never-landed pointers — a present-null
 // value still hashes.
 func hashAtPointer(m map[string]any, ptr string) string {
-	v, ok := getJSONPointer(m, ptr)
+	v, ok := jsonkeys.Get(m, ptr)
 	if !ok {
 		return ""
 	}
@@ -107,37 +108,6 @@ func hashAtPointer(m map[string]any, ptr string) string {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
-}
-
-// getJSONPointer resolves a "/a/b/c" RFC 6901 pointer against m. The bool is
-// false when any segment is missing — distinct from a present value that
-// happens to be null. We re-implement here rather than exporting
-// render.getPointer because keeping that helper unexported preserves the
-// current package boundary.
-func getJSONPointer(m map[string]any, ptr string) (any, bool) {
-	if ptr == "" || ptr[0] != '/' {
-		return m, true
-	}
-	parts := strings.Split(ptr[1:], "/")
-	for i, p := range parts {
-		// Decode RFC 6901 escapes.
-		p = strings.ReplaceAll(p, "~1", "/")
-		p = strings.ReplaceAll(p, "~0", "~")
-		parts[i] = p
-	}
-	var cur any = m
-	for _, p := range parts {
-		mm, ok := cur.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		v, exists := mm[p]
-		if !exists {
-			return nil, false
-		}
-		cur = v
-	}
-	return cur, true
 }
 
 // newImportCmd returns the "import" subcommand.
@@ -614,7 +584,7 @@ func unimportedDestPointers(agentsyncHome, srcHome, agentName string, reg *adapt
 		ownedPtrs := map[string]bool{}
 		ourSections := map[string]bool{}
 		for k := range ours {
-			ourSections[escapePointerSegment(k)] = true
+			ourSections[jsonkeys.EscapeToken(k)] = true
 		}
 		for _, p := range collectStateSeedPointers(ours) {
 			ownedPtrs[p] = true
@@ -651,15 +621,6 @@ func firstPointerSegmentEsc(ptr string) string {
 		return ptr[:i]
 	}
 	return ptr
-}
-
-// escapePointerSegment escapes a top-level map key into its JSON-pointer form
-// (~ → ~0, / → ~1), matching the encoding collectStateSeedPointers emits, so
-// the section set used for filtering agrees byte-for-byte.
-func escapePointerSegment(k string) string {
-	k = strings.ReplaceAll(k, "~", "~0")
-	k = strings.ReplaceAll(k, "/", "~1")
-	return k
 }
 
 // seedStateFromCurrentDest re-renders the canonical for agent and writes

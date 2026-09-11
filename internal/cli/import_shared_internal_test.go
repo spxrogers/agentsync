@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/ui"
 )
@@ -175,4 +176,97 @@ func TestMatchImportable(t *testing.T) {
 			t.Fatal("an unusable plugin filter must refuse the import, not proceed with an empty skip set")
 		}
 	})
+}
+
+// TestHashAtPointerSeesOnlyRootedPointers keeps a now-dead branch dead.
+//
+// hashAtPointer used to call a private getJSONPointer that answered a pointer
+// with no leading "/" by returning the WHOLE document; it now calls
+// jsonkeys.Get, which treats a bare "abc" as "/abc". That difference is
+// unreachable, and this test is what makes "unreachable" a fact rather than a
+// claim: hashAtPointer's only pointer source is collectStateSeedPointers, which
+// is render.CollectPointers, which builds every pointer by prefixing "/".
+//
+// If a future caller feeds hashAtPointer pointers from somewhere else — the
+// state file, say, which is user-editable — this test is the place that stops
+// being true, and the rooted-pointer guard getPointerValue keeps is the pattern
+// to copy.
+func TestHashAtPointerSeesOnlyRootedPointers(t *testing.T) {
+	// Keys chosen to exercise the escape path, including ones that would
+	// produce an unrooted pointer if the "/" prefix were ever dropped.
+	dest := map[string]any{
+		"mcpServers": map[string]any{"a/b": map[string]any{"command": "x"}, "a~b": "y"},
+		"scalar":     "s",
+		"":           "empty key",
+		"/leading":   "slash key",
+	}
+	ptrs := collectStateSeedPointers(dest)
+	if len(ptrs) == 0 {
+		t.Fatal("no pointers collected — the test would pass vacuously")
+	}
+	for _, p := range ptrs {
+		if !strings.HasPrefix(p, "/") {
+			t.Errorf("collectStateSeedPointers emitted an unrooted pointer %q; "+
+				"hashAtPointer's jsonkeys.Get would resolve it as a top-level key lookup", p)
+		}
+		// And every one of them must actually resolve, which is the other half
+		// of the claim: a pointer whose escaping disagreed with the document's
+		// real keys would hash "" forever and report phantom drift.
+		if h := hashAtPointer(dest, p); h == "" {
+			t.Errorf("pointer %q collected from the document does not resolve in it", p)
+		}
+	}
+}
+
+// TestGetPointerValueRefusesAnUnrootedPointer pins the one thing
+// getPointerValue does that jsonkeys.Get deliberately does not.
+//
+// jsonkeys.Get is lenient about the leading "/" (RFC 6901 leaves a malformed
+// pointer undefined, and the key-merge machinery builds its own pointers). This
+// caller cannot be: planwalk resolves pointers read back from the state FILE,
+// which a user can hand-edit, and answering `"mcpServers"` — a string that is
+// not a pointer — with a top-level key lookup would silently compare the wrong
+// value and report clean or drifted on the strength of it.
+func TestGetPointerValueRefusesAnUnrootedPointer(t *testing.T) {
+	m := map[string]any{
+		"mcpServers": map[string]any{"a": "v"},
+		"top":        "t",
+	}
+	for _, ptr := range []string{"mcpServers", "top", "mcpServers/a", ""} {
+		if got := getPointerValue(m, ptr); got != nil {
+			t.Errorf("getPointerValue(%q) = %#v, want nil — a string with no leading %q is not a pointer", ptr, got, "/")
+		}
+	}
+	// The rooted forms still resolve, so the guard is a guard and not a mute.
+	if got := getPointerValue(m, "/top"); got != "t" {
+		t.Errorf(`getPointerValue("/top") = %#v, want "t"`, got)
+	}
+	if got := getPointerValue(m, "/mcpServers/a"); got != "v" {
+		t.Errorf(`getPointerValue("/mcpServers/a") = %#v, want "v"`, got)
+	}
+	// A lone "/" is rooted and names the WHOLE document (jsonkeys.Get yields
+	// no tokens for it), not the "" key RFC 6901 assigns it — the one contract
+	// the copy this replaced did not share. Pinned so the change is deliberate.
+	if got := getPointerValue(m, "/"); !reflect.DeepEqual(got, m) {
+		t.Errorf(`getPointerValue("/") = %#v, want the whole document`, got)
+	}
+}
+
+// TestUnimportedSectionSetAgreesWithSeedPointers pins that the section set
+// unimportedDestPointers filters against is built with the SAME escaping
+// collectStateSeedPointers uses for its pointers' first segment. A key holding
+// a '/' or a '~' escapes to something other than itself, so a section set
+// keyed by the raw key would never match the seed pointer for it and the
+// whole section would be misreported as foreign.
+func TestUnimportedSectionSetAgreesWithSeedPointers(t *testing.T) {
+	ours := map[string]any{"a~b": map[string]any{"x": 1}, "c/d": "v", "plain": map[string]any{"y": 2}}
+	sections := map[string]bool{}
+	for k := range ours {
+		sections[jsonkeys.EscapeToken(k)] = true
+	}
+	for _, p := range collectStateSeedPointers(ours) {
+		if !sections[firstPointerSegmentEsc(p)] {
+			t.Errorf("seed pointer %q: no section in %v", p, sections)
+		}
+	}
 }

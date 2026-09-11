@@ -20,6 +20,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/capture"
 	"github.com/spxrogers/agentsync/internal/drift"
 	"github.com/spxrogers/agentsync/internal/iox"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
@@ -868,14 +869,7 @@ func pluginOwnerForKeyItem(sourceID, ptr string, owners map[string]string) strin
 	if len(parts) < 2 {
 		return ""
 	}
-	return owners[kind+"/"+unescapeJSONPointer(parts[1])]
-}
-
-// unescapeJSONPointer decodes one JSON-pointer reference token (RFC 6901 §3):
-// "~1" is '/' and "~0" is '~'. Order matters — ~0 must be decoded last, or
-// "~01" would wrongly become "/" instead of "~1".
-func unescapeJSONPointer(tok string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(tok, "~1", "/"), "~0", "~")
+	return owners[kind+"/"+jsonkeys.UnescapeToken(parts[1])]
 }
 
 // collectReconcileItems builds reconcile's flat item list from a rendered plan

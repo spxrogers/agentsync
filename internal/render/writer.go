@@ -17,6 +17,7 @@ import (
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/iox"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/state"
 	"github.com/spxrogers/agentsync/internal/untrusted"
@@ -543,7 +544,7 @@ func (w *Writer) maybeBackupKeyOp(op adapter.FileOp) error {
 			backupPath = dest
 		}
 		w.reports = append(w.reports, CollisionReport{
-			Agent: w.agent, Path: op.Path, Pointer: "/" + escapeJSONPointer(k), BackupTo: backupPath,
+			Agent: w.agent, Path: op.Path, Pointer: "/" + jsonkeys.EscapeToken(k), BackupTo: backupPath,
 		})
 	}
 
@@ -552,7 +553,7 @@ func (w *Writer) maybeBackupKeyOp(op adapter.FileOp) error {
 		if _, owned := w.state.Keys[stateKey]; owned {
 			continue
 		}
-		ev, present := getPointerOK(existingMap, ptr)
+		ev, present := jsonkeys.Get(existingMap, ptr)
 		if !present {
 			continue
 		}

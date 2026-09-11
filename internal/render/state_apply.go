@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
@@ -320,7 +321,7 @@ func RecordOpsState(s *state.Targets, userHome, agent string, scope adapter.Scop
 				return fmt.Errorf("parse our payload for %s: %w", op.Path, err)
 			}
 			for _, ptr := range CollectPointers(ours, "") {
-				v, present := getPointerOK(final, ptr)
+				v, present := jsonkeys.Get(final, ptr)
 				if !present {
 					// The pointer is not in the post-apply file. In a normal
 					// (full-success) apply every pointer in `ours` lands on
@@ -373,12 +374,12 @@ func RecordOpsState(s *state.Targets, userHome, agent string, scope adapter.Scop
 func CollectPointers(m map[string]any, prefix string) []string {
 	var out []string
 	for k, v := range m {
-		ptr := prefix + "/" + escapeJSONPointer(k)
+		ptr := prefix + "/" + jsonkeys.EscapeToken(k)
 		switch vv := v.(type) {
 		case map[string]any:
 			// Drill one level: each child key becomes a pointer.
 			for kk := range vv {
-				out = append(out, ptr+"/"+escapeJSONPointer(kk))
+				out = append(out, ptr+"/"+jsonkeys.EscapeToken(kk))
 			}
 		default:
 			out = append(out, ptr)
@@ -387,76 +388,13 @@ func CollectPointers(m map[string]any, prefix string) []string {
 	return out
 }
 
-func escapeJSONPointer(s string) string {
-	s = replaceAll(s, "~", "~0")
-	s = replaceAll(s, "/", "~1")
-	return s
-}
-
-func replaceAll(s, from, to string) string {
-	out := make([]byte, 0, len(s))
-	for i := 0; i < len(s); {
-		if i+len(from) <= len(s) && s[i:i+len(from)] == from {
-			out = append(out, to...)
-			i += len(from)
-			continue
-		}
-		out = append(out, s[i])
-		i++
-	}
-	return string(out)
-}
-
+// getPointer is jsonkeys.Get with the presence signal discarded, for the one
+// caller that cannot act on the difference between "absent" and "present and
+// null". RecordOpsState uses jsonkeys.Get directly because it MUST tell them
+// apart — it records a hash only for a pointer that actually landed on disk.
 func getPointer(m map[string]any, ptr string) any {
-	v, _ := getPointerOK(m, ptr)
+	v, _ := jsonkeys.Get(m, ptr)
 	return v
-}
-
-// getPointerOK is getPointer with an explicit presence signal so callers can
-// distinguish "pointer absent from the document" from "pointer present with a
-// null value" — getPointer returns nil for both. RecordOpsState relies on this
-// to avoid recording a pointer that never landed on disk.
-func getPointerOK(m map[string]any, ptr string) (any, bool) {
-	parts := splitPtr(ptr)
-	var cur any = m
-	for _, p := range parts {
-		mm, ok := cur.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		v, present := mm[p]
-		if !present {
-			return nil, false
-		}
-		cur = v
-	}
-	return cur, true
-}
-
-func splitPtr(ptr string) []string {
-	if len(ptr) > 0 && ptr[0] == '/' {
-		ptr = ptr[1:]
-	}
-	if ptr == "" {
-		return nil
-	}
-	parts := []string{}
-	cur := []byte{}
-	for i := 0; i < len(ptr); i++ {
-		if ptr[i] == '/' {
-			parts = append(parts, string(cur))
-			cur = cur[:0]
-			continue
-		}
-		cur = append(cur, ptr[i])
-	}
-	parts = append(parts, string(cur))
-	for i, p := range parts {
-		p = replaceAll(p, "~1", "/")
-		p = replaceAll(p, "~0", "~")
-		parts[i] = p
-	}
-	return parts
 }
 
 func hashAny(v any) string {

@@ -14,6 +14,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
@@ -236,7 +237,7 @@ func scopeOwnedToSections(owned []string, content []byte) []string {
 	}
 	sections := make(map[string]struct{}, len(ours))
 	for k := range ours {
-		sections[escapeJSONPointer(k)] = struct{}{}
+		sections[jsonkeys.EscapeToken(k)] = struct{}{}
 	}
 	var out []string
 	for _, p := range owned {
@@ -294,7 +295,7 @@ func orphanCleanupOps(s *state.Targets, a adapter.Adapter, agent string, scope a
 		var ours map[string]any
 		if json.Unmarshal(op.Content, &ours) == nil {
 			for k := range ours {
-				secs[escapeJSONPointer(k)] = struct{}{}
+				secs[jsonkeys.EscapeToken(k)] = struct{}{}
 			}
 		}
 	}

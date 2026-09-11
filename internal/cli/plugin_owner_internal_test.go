@@ -78,22 +78,10 @@ func TestPluginOwnerForKeyItem(t *testing.T) {
 	}
 }
 
-// TestUnescapeJSONPointer pins the decode order: ~0 must be decoded LAST, or
-// "~01" would wrongly become "/" instead of the literal "~1".
-func TestUnescapeJSONPointer(t *testing.T) {
-	for _, tc := range []struct{ in, want string }{
-		{"plain", "plain"},
-		{"with~1slash", "with/slash"},
-		{"with~0tilde", "with~tilde"},
-		{"~01", "~1"},
-		{"~1~0", "/~"},
-		{"", ""},
-	} {
-		if got := unescapeJSONPointer(tc.in); got != tc.want {
-			t.Errorf("unescapeJSONPointer(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
+// The decode-order test that used to live here moved to
+// internal/jsonkeys/pointer_test.go (TestEscapeUnescapeToken) along with the
+// implementation: pluginOwnerForKeyItem now calls jsonkeys.UnescapeToken rather
+// than carrying the fourth hand-rolled copy of those two ReplaceAlls.
 
 // TestPluginProvidedSourceIDs_RegistersBothServerKeyForms pins the dual keying
 // that the key-item table above deliberately does not cover.
