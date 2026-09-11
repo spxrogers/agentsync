@@ -168,10 +168,9 @@ func pluginNativeAgentsUnset(home, id string) bool {
 // and fails when source.PluginSpec grows a field that is in neither (#234).
 //
 // `plugin upgrade` (pluginUpgradeRun) and the poll engine (applyPluginBump)
-// refresh Version and ManifestSHA on their own, outside applyTo: each rewrites
-// the whole decoded entry, so it preserves by construction, and its refreshed
-// set differs (no ID; a SHA only when one was computed). A field added here
-// does not reach them.
+// refresh only Version and ManifestSHA, each on its own conditions and outside
+// applyTo: both rewrite the whole decoded entry, so they preserve by
+// construction. A field added here does not reach them.
 type pluginInstallRefresh struct {
 	ID          untrusted.Text
 	Version     untrusted.Text

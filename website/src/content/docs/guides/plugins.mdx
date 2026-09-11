@@ -144,12 +144,12 @@ agentsync plugin remove   <id[@marketplace]>
 agentsync plugin list
 ```
 
-`disable`/`enable` flip only the `disabled` bit, and `add` rewrites only the
-three fields it re-fetches (`id`, `version`, `manifest_sha`) — every other
-field agentsync models in `plugins/<id>.toml` is carried forward from the file
-you have (an omitted key is written with its default; the file is rewritten, so
-comments and unmodelled keys are not kept), so your `agents` and
-`native_agents` targeting survives the full lifecycle untouched.
+`disable`/`enable` flip only the `disabled` bit. `add` rewrites only the three
+fields it re-fetches (`id`, `version`, `manifest_sha`) and carries every other
+field agentsync models in `plugins/<id>.toml` forward from the file you have; a
+key you omitted, or an `agents` you left empty, is written with its default.
+The file is rewritten, so comments and unmodelled keys are not kept. Your
+`agents` and `native_agents` targeting survives the full lifecycle.
 
 <LinkCard
 	title="Agent capability matrix"
