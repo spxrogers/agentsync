@@ -932,14 +932,26 @@ func (i *importIO) detailf(format string, args ...any) {
 	i.p.Fdetailf(i.err, format, args...)
 }
 
-// notef emits an INFO diagnostic about how agentsync is proceeding, as opposed
-// to warn's "something about your data needs attention".
+// notef is note + fmt.Sprintf, mirroring warnf/warn.
 //
-// Both tiers exist deliberately: an import that silently changes course (seeding
-// state, retiring a stale hook) is worth saying out loud, but saying it at WARN
-// would train the user to ignore the label that actually means "look at this".
+// The two used to be independent one-liners over ui.Fdiagf, differing only in
+// that note wrapped its message in a "%s" and notef passed the format through —
+// a distinction without a difference, since Fdiagf itself Sprintf's. Two
+// spellings of one output tier meant a change to that tier (its label, its
+// stream, its prefix) had to be made twice or be made inconsistent. Byte
+// equality is pinned by TestImportIONotefEqualsNote.
+//
+// note, not notef, is the spelling for an ALREADY-FORMATTED message: notef
+// Sprintf's, so a percent verb left in the text would still be reinterpreted.
+// `go vet` enforces that split — its printf analyzer recognizes notef as a
+// wrapper and rejects a non-constant format here.
+//
+// Both tiers (note/notef vs warn/warnf) exist deliberately: an import that
+// silently changes course (seeding state, retiring a stale hook) is worth
+// saying out loud, but saying it at WARN would train the user to ignore the
+// label that actually means "look at this".
 func (i *importIO) notef(format string, args ...any) {
-	i.p.Fdiagf(i.err, ui.LevelInfo, format, args...)
+	i.note(fmt.Sprintf(format, args...))
 }
 
 // infof prints an informational RESULT line on stdout — a "nothing to do"
@@ -1116,21 +1128,9 @@ func importAllComponents(io *importIO, home string, a adapter.Adapter, agentName
 // re-references secrets and preserves source-only fields for every server.
 // When io.dryRun is set it reports the targets without writing.
 func importMCP(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
-	var matched []source.MCPServer
-	for _, m := range c.MCPServers {
-		if name == "" || m.ID == name {
-			matched = append(matched, m)
-		}
-	}
-	matched, err := skipPluginProvided(io, "mcp", name, matched, func(m source.MCPServer) string { return m.ID }, nil)
-	if err != nil {
+	matched, err := matchImportable(io, "mcp", "mcp server", name, c.MCPServers, func(m source.MCPServer) string { return m.ID })
+	if err != nil || len(matched) == 0 {
 		return nil, err
-	}
-	if len(matched) == 0 {
-		if name != "" {
-			return nil, fmt.Errorf("mcp server %q not found in native config", name)
-		}
-		return nil, nil
 	}
 	// Validate ids up front (before any write, and in dry-run) so the preview
 	// matches a real import and a bulk write is atomic on a bad id.
@@ -1346,6 +1346,52 @@ func hookDisplay(h source.Hook) string {
 // it exists because a hook's key is an opaque length-prefixed signature rather
 // than a name anyone could act on. Pass nil wherever the key IS the display name,
 // which is every kind except hooks.
+// matchImportable is the head every per-component importer shares: narrow the
+// ingested components to the requested one (name == "" means all), drop the
+// entries an installed plugin already provides, and turn "you asked for a
+// specific item and it is not there" into the one refusal message all five
+// spell the same way.
+//
+// kind is the skipPluginProvided/pluginProvided key ("mcp", "lsp", "skill",
+// "subagent", "command"); label is how that kind is spoken in the not-found
+// error ("mcp server", not "mcp"). The two differ for exactly the two server
+// kinds, which is why they are separate parameters rather than one string used
+// twice.
+//
+// An EMPTY result with no error is the "nothing to do" answer, NOT an error:
+// a bulk import of an agent that has no skills is a success that imports
+// nothing. Callers must return early on it rather than falling through — the
+// two capture-backed importers would otherwise hand capture.Capture an empty
+// component list. The idiom at every call site is:
+//
+//	matched, err := matchImportable(…)
+//	if err != nil || len(matched) == 0 {
+//		return nil, err
+//	}
+//
+// The TAIL stays per-component on purpose: the five disagree about id
+// validation (command downgrades an invalid name to a warning in bulk mode so
+// one bad native file cannot abort the run; the rest refuse outright) and about
+// the write funnel (mcp/lsp go through capture.Capture, the file-backed three
+// through source.Write*). Folding those into a table would mean a config
+// parameter per disagreement, which is the same code with more indirection.
+func matchImportable[T any](io *importIO, kind, label, name string, items []T, key func(T) string) ([]T, error) {
+	var matched []T
+	for _, it := range items {
+		if name == "" || key(it) == name {
+			matched = append(matched, it)
+		}
+	}
+	matched, err := skipPluginProvided(io, kind, name, matched, key, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(matched) == 0 && name != "" {
+		return nil, fmt.Errorf("%s %q not found in native config", label, name)
+	}
+	return matched, nil
+}
+
 func skipPluginProvided[T any](io *importIO, kind, name string, items []T, nameOf func(T) string, displayOf func(T) string) ([]T, error) {
 	// Nothing matched → nothing to wrongly capture, so an unusable filter is
 	// harmless here. Checking this FIRST keeps a broken plugin cache from
@@ -1392,21 +1438,9 @@ func skipPluginProvided[T any](io *importIO, kind, name string, items []T, nameO
 }
 
 func importSkill(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
-	var matched []source.Skill
-	for _, sk := range c.Skills {
-		if name == "" || sk.Name == name {
-			matched = append(matched, sk)
-		}
-	}
-	matched, err := skipPluginProvided(io, "skill", name, matched, func(sk source.Skill) string { return sk.Name }, nil)
-	if err != nil {
+	matched, err := matchImportable(io, "skill", "skill", name, c.Skills, func(sk source.Skill) string { return sk.Name })
+	if err != nil || len(matched) == 0 {
 		return nil, err
-	}
-	if len(matched) == 0 {
-		if name != "" {
-			return nil, fmt.Errorf("skill %q not found in native config", name)
-		}
-		return nil, nil
 	}
 	for _, sk := range matched {
 		if err := source.ValidateComponentID("skill", sk.Name); err != nil {
@@ -1437,21 +1471,9 @@ func importSkill(io *importIO, home string, c source.Canonical, name string) ([]
 }
 
 func importSubagent(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
-	var matched []source.Subagent
-	for _, sa := range c.Subagents {
-		if name == "" || sa.Name == name {
-			matched = append(matched, sa)
-		}
-	}
-	matched, err := skipPluginProvided(io, "subagent", name, matched, func(sa source.Subagent) string { return sa.Name }, nil)
-	if err != nil {
+	matched, err := matchImportable(io, "subagent", "subagent", name, c.Subagents, func(sa source.Subagent) string { return sa.Name })
+	if err != nil || len(matched) == 0 {
 		return nil, err
-	}
-	if len(matched) == 0 {
-		if name != "" {
-			return nil, fmt.Errorf("subagent %q not found in native config", name)
-		}
-		return nil, nil
 	}
 	for _, sa := range matched {
 		if err := source.ValidateComponentID("subagent", sa.Name); err != nil {
@@ -1475,21 +1497,9 @@ func importSubagent(io *importIO, home string, c source.Canonical, name string) 
 }
 
 func importCommand(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
-	var matched []source.Command
-	for _, cm := range c.Commands {
-		if name == "" || cm.Name == name {
-			matched = append(matched, cm)
-		}
-	}
-	matched, err := skipPluginProvided(io, "command", name, matched, func(cm source.Command) string { return cm.Name }, nil)
-	if err != nil {
+	matched, err := matchImportable(io, "command", "command", name, c.Commands, func(cm source.Command) string { return cm.Name })
+	if err != nil || len(matched) == 0 {
 		return nil, err
-	}
-	if len(matched) == 0 {
-		if name != "" {
-			return nil, fmt.Errorf("command %q not found in native config", name)
-		}
-		return nil, nil
 	}
 	// An invalid captured name (a namespaced Gemini command like "git/commit"
 	// carries its subdirectory in the name, which the canonical flat namespace
@@ -1585,21 +1595,9 @@ func importHook(io *importIO, home string, c source.Canonical, name string) ([]s
 }
 
 func importLSP(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
-	var matched []source.LSPServer
-	for _, ls := range c.LSPServers {
-		if name == "" || ls.ID == name {
-			matched = append(matched, ls)
-		}
-	}
-	matched, err := skipPluginProvided(io, "lsp", name, matched, func(ls source.LSPServer) string { return ls.ID }, nil)
-	if err != nil {
+	matched, err := matchImportable(io, "lsp", "lsp server", name, c.LSPServers, func(ls source.LSPServer) string { return ls.ID })
+	if err != nil || len(matched) == 0 {
 		return nil, err
-	}
-	if len(matched) == 0 {
-		if name != "" {
-			return nil, fmt.Errorf("lsp server %q not found in native config", name)
-		}
-		return nil, nil
 	}
 	for _, ls := range matched {
 		if err := source.ValidateComponentID("lsp", ls.ID); err != nil {
