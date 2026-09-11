@@ -20,7 +20,7 @@ import (
 // lossiness probe, with nothing to fail.
 //
 // The guard works by NAME, not by position: it fills every field of a fresh
-// ProjectionResult with a one-element slice, runs the copy, and requires the
+// ProjectionResult with a two-element slice, runs the copy, and requires the
 // same-named field on source.Canonical to be non-empty afterwards. A field
 // added to ProjectionResult with no Canonical counterpart fails the lookup arm
 // instead — which is the right failure: a projected component kind the canonical
@@ -30,13 +30,20 @@ import (
 // headers, so each copied list must share its backing array with the
 // projection's. A deep copy would pass the coverage arm and silently change
 // what a caller that later appends to or mutates the projection observes.
+// Each field is filled with TWO elements, not one, so a copy of a one-element
+// prefix (r.X[:1] — same first-element address, wrong length) fails the length
+// arm rather than passing the aliasing arm. A zero-sized element type would
+// let a fresh MakeSlice and a deep copy share the runtime's zero-size base
+// address and pass the aliasing arm vacuously; every component type is a
+// struct with fields, so none is zero-sized today.
 func TestProjectionResultAsCanonicalCoversEveryField(t *testing.T) {
 	var r marketplace.ProjectionResult
 	rv := reflect.ValueOf(&r).Elem()
 	rt := rv.Type()
 
-	// Fill each field with exactly one zero-valued element, so "did it arrive"
-	// is a length check that cannot be satisfied by a nil slice.
+	// Fill each field with exactly two zero-valued elements, so "did it arrive"
+	// is a length check that cannot be satisfied by a nil slice or by a
+	// one-element prefix of the right backing array.
 	for i := 0; i < rt.NumField(); i++ {
 		f := rv.Field(i)
 		if f.Kind() != reflect.Slice {
@@ -44,7 +51,7 @@ func TestProjectionResultAsCanonicalCoversEveryField(t *testing.T) {
 				"teach this guard what a non-slice field means before adding one",
 				rt.Field(i).Name, rt.Field(i).Name, f.Kind())
 		}
-		f.Set(reflect.MakeSlice(f.Type(), 1, 1))
+		f.Set(reflect.MakeSlice(f.Type(), 2, 2))
 	}
 	if rt.NumField() == 0 {
 		t.Fatal("ProjectionResult has no fields — the guard would pass vacuously")
@@ -62,9 +69,9 @@ func TestProjectionResultAsCanonicalCoversEveryField(t *testing.T) {
 					what, name, name)
 				continue
 			}
-			if cf.Len() != 1 {
-				t.Errorf("%s: ProjectionResult.%s was not copied (Canonical.%s has %d entries, want 1) — "+
-					"add it to ProjectionResult.%s", what, name, name, cf.Len(), what)
+			if cf.Len() != 2 {
+				t.Errorf("%s: ProjectionResult.%s was not copied whole (Canonical.%s has %d entries, want 2) — "+
+					"add it to ProjectionResult.%s, as a header copy of the full list", what, name, name, cf.Len(), what)
 				continue
 			}
 			if cf.Pointer() != rv.Field(i).Pointer() {
@@ -82,10 +89,10 @@ func TestProjectionResultAsCanonicalCoversEveryField(t *testing.T) {
 	target := source.Canonical{
 		Config: source.Config{Agents: map[string]source.Agent{"claude": {Enabled: true}}},
 		Memory: source.Memory{Body: "keep me"},
-		// TWO plugins, not one: the "was it copied" arm below looks for
-		// exactly one element, so a pre-filled field of length one could mask a
-		// field ReplaceComponentsIn forgot to copy.
-		Plugins: []source.Plugin{{}, {}},
+		// THREE plugins, not two: the "was it copied" arm below looks for
+		// exactly two elements, so a pre-filled field of length two could mask
+		// a field ReplaceComponentsIn forgot to copy.
+		Plugins: []source.Plugin{{}, {}, {}},
 	}
 	r.ReplaceComponentsIn(&target)
 	check(t, "ReplaceComponentsIn()", target)
@@ -95,7 +102,7 @@ func TestProjectionResultAsCanonicalCoversEveryField(t *testing.T) {
 	if len(target.Config.Agents) != 1 {
 		t.Errorf("ReplaceComponentsIn clobbered Config.Agents: %v", target.Config.Agents)
 	}
-	if len(target.Plugins) != 2 {
+	if len(target.Plugins) != 3 {
 		t.Errorf("ReplaceComponentsIn clobbered Plugins: %v", target.Plugins)
 	}
 }

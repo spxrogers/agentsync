@@ -566,6 +566,9 @@ func unimportedDestPointers(agentsyncHome, srcHome, agentName string, reg *adapt
 		return nil
 	}
 	var out []string
+	// ops is a slice in the adapter's render order, and each op's pointers come
+	// back sorted from foreignPointersInOurSections, so the list is stable end
+	// to end: per destination file, in that file's pointer order.
 	for _, op := range ops {
 		if !render.IsKeyMerge(op.MergeStrategy) {
 			continue

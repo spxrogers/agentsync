@@ -307,11 +307,8 @@ func walkPlanItems(w planWalk) []planItem {
 // (RFC 6901 leaves the malformed case undefined); the refusal is this caller's
 // policy, applied where the untrusted input enters.
 //
-// `/` names the WHOLE document, as jsonkeys.Get documents — the reading
-// internal/render already had; the CLI resolver this replaced answered `/`
-// with the `""` key. It is reachable from a hand-edited state key, or from
-// render.CollectPointers over a rendered document with a top-level `""` key,
-// which no adapter renders today.
+// `/` names the WHOLE document, not the `""` key; jsonkeys.Get documents that
+// reading, where it came from, and where such a pointer can arise.
 func getPointerValue(m map[string]any, ptr string) any {
 	if !strings.HasPrefix(ptr, "/") {
 		return nil

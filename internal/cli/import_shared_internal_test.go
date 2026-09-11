@@ -288,9 +288,12 @@ func TestGetPointerValueRefusesAnUnrootedPointer(t *testing.T) {
 //
 // Second, the result is sorted. It is printed verbatim as the "exists in the
 // destination but agentsync did not capture" list, and the walk underneath
-// ranges a map; the fixture has eight foreign pointers so that map order
-// cannot come out sorted by accident (1 in 40320) and the expected slice is
-// compared WITHOUT sorting it first.
+// ranges a map. The fixture has eight foreign pointers in four sections and
+// the expected slice is compared WITHOUT sorting it first. That is not a free
+// permutation of eight — render.CollectPointers emits each section's children
+// contiguously, so the unsorted walk reaches only a few dozen orderings — but
+// measured with the sort removed, the sorted one came up well under once in a
+// hundred runs: an unsorted implementation fails here on essentially every run.
 func TestForeignPointersInOurSections(t *testing.T) {
 	ours := map[string]any{
 		"a~b":   map[string]any{"x": 1},
