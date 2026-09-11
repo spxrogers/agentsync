@@ -237,6 +237,42 @@ func OrphanDeletes(s *state.Targets, userHome, agent string, scope adapter.Scope
 	return orphanDeletes(s, userHome, agent, scope, project, ops)
 }
 
+// StillRenderedWholeFiles is every whole-file write destination any agent in
+// the plan still emits, keyed HOME-relative like state file keys. Apply uses
+// it to keep shared dests (e.g. ~/.agents/skills) when one agent stops
+// rendering them and another still does (#246).
+func StillRenderedWholeFiles(p RenderPlan, userHome string) map[string]struct{} {
+	keep := map[string]struct{}{}
+	for _, res := range p.PerAgent {
+		for _, op := range res.Ops {
+			if op.Action != adapter.ActionWrite {
+				continue
+			}
+			if IsKeyMerge(op.MergeStrategy) {
+				continue
+			}
+			keep[paths.HomeRelative(userHome, op.Path)] = struct{}{}
+		}
+	}
+	return keep
+}
+
+// FilterOrphanDeletes drops deletes for paths another agent in the plan still
+// renders. removalCounts / baselinePaths must use the same rule as Apply.
+func FilterOrphanDeletes(dels []adapter.FileOp, keep map[string]struct{}, userHome string) []adapter.FileOp {
+	if len(keep) == 0 {
+		return dels
+	}
+	out := dels[:0]
+	for _, del := range dels {
+		if _, ok := keep[paths.HomeRelative(userHome, del.Path)]; ok {
+			continue
+		}
+		out = append(out, del)
+	}
+	return out
+}
+
 // orphanDeletes returns delete FileOps for files this agent owns in state —
 // entries whose SourceID is under one of orphanReclaimedPrefixes — that the
 // current plan no longer renders. It is how `apply` converges a destination when

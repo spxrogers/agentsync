@@ -79,14 +79,12 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				continue
 			}
 			skillDir := filepath.Join(p.SkillsDir, e.Name())
-			data, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
+			data, present, err := adapter.ReadFileOptional(filepath.Join(skillDir, "SKILL.md"))
 			if err != nil {
-				// A directory with no SKILL.md is not a skill — skip silently.
-				// A present-but-unreadable SKILL.md is surfaced (never a silent
-				// drop) so the user can fix it, matching the parse-error warning.
-				if !os.IsNotExist(err) {
-					fmt.Fprintf(warn, "warning: skipping skill %q: read SKILL.md: %v\n", e.Name(), err)
-				}
+				fmt.Fprintf(warn, "warning: skipping skill %q: read SKILL.md: %v\n", e.Name(), err)
+				continue
+			}
+			if !present {
 				continue
 			}
 			fm, body, lenient, err := ParseFrontmatterWithReport(data)

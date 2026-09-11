@@ -190,6 +190,26 @@ func TestPruneStaleState_AmbiguousPathPrefixKeepsLiveKey(t *testing.T) {
 	}
 }
 
+func TestFilterOrphanDeletes_KeepsSharedPath(t *testing.T) {
+	home := "/Users/me"
+	shared := filepath.Join(home, ".agents", "skills", "demo", "SKILL.md")
+	dels := []adapter.FileOp{{Action: adapter.ActionDelete, Path: shared}}
+	keep := render.StillRenderedWholeFiles(render.RenderPlan{
+		PerAgent: map[string]render.AgentResult{
+			"codex": {Ops: []adapter.FileOp{{Action: adapter.ActionWrite, Path: shared, Content: []byte("x")}}},
+		},
+	}, home)
+	got := render.FilterOrphanDeletes(dels, keep, home)
+	if len(got) != 0 {
+		t.Fatalf("a dest another agent still writes must not be deleted: %+v", got)
+	}
+	alone := filepath.Join(home, ".agents", "skills", "gone", "SKILL.md")
+	got = render.FilterOrphanDeletes([]adapter.FileOp{{Action: adapter.ActionDelete, Path: alone}}, keep, home)
+	if len(got) != 1 || got[0].Path != alone {
+		t.Fatalf("an unshared orphan must still delete: %+v", got)
+	}
+}
+
 func TestRecordState_SkipsDeleteOps(t *testing.T) {
 	s := state.New()
 	err := render.RecordOpsState(s, "/tmp", "claude", adapter.ScopeUser, "", []adapter.FileOp{{

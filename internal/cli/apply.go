@@ -454,8 +454,9 @@ func planSyncCounts(plan render.RenderPlan, wouldChange map[string]bool) (toWrit
 func removalCounts(plan render.RenderPlan, s *state.Targets, userHome string, sc adapter.Scope, projectRoot string) (removedKeys, removedFiles, appliedOps int) {
 	appliedOps = plan.Total()
 	fileDeletes := map[string]bool{}
+	keep := render.StillRenderedWholeFiles(plan, userHome)
 	for name, res := range plan.PerAgent {
-		for _, del := range render.OrphanDeletes(s, userHome, name, sc, projectRoot, res.Ops) {
+		for _, del := range render.FilterOrphanDeletes(render.OrphanDeletes(s, userHome, name, sc, projectRoot, res.Ops), keep, userHome) {
 			// Count only what apply will actually remove. An orphan whose
 			// destination cannot be read is SKIPPED with a warning, and its state
 			// entry is kept so the next run retries — so counting it here would
@@ -510,11 +511,12 @@ func removedLabel(keys, files int) string {
 // reads.
 func baselinePaths(plan render.RenderPlan, s *state.Targets, userHome string, sc adapter.Scope, projectRoot string) map[string]bool {
 	out := map[string]bool{}
+	keep := render.StillRenderedWholeFiles(plan, userHome)
 	for name, res := range plan.PerAgent {
 		for _, op := range res.Ops {
 			out[op.Path] = true
 		}
-		for _, del := range render.OrphanDeletes(s, userHome, name, sc, projectRoot, res.Ops) {
+		for _, del := range render.FilterOrphanDeletes(render.OrphanDeletes(s, userHome, name, sc, projectRoot, res.Ops), keep, userHome) {
 			out[del.Path] = true
 		}
 	}

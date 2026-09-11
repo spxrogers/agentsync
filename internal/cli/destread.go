@@ -118,7 +118,7 @@ const (
 // so that, once a user has opted in, a link that still cannot be read is
 // reported as broken rather than as "set the switch".
 //
-// It mirrors iox.resolveSymlinkDest, the write side, through the shared
+// It mirrors iox.ResolveSymlinkDest, the write side, through the shared
 // iox.SymlinkDestAllowed, so the read side and apply cannot disagree about
 // whether a symlinked destination is supported. The mirror is a POLICY one, not
 // a literal prediction: apply only errors when the CONTENT differs (its

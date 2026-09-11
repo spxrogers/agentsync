@@ -197,6 +197,12 @@ func (w *Writer) Write(op adapter.FileOp, finalBytes []byte) error {
 	// so there is nothing to back up. The same read drives the dry-run preview:
 	// it is what lets `apply --dry-run` label a converged destination "synced"
 	// rather than "write".
+	// Shape first: os.ReadFile on a FIFO blocks forever (#241). A symlink to a
+	// regular file is Stat-regular, so this still allows the content compare;
+	// chmod below must not follow that link unless the user opted in (#248).
+	if !isRegularOrAbsent(op.Path) {
+		return fmt.Errorf("write %s: destination is not a regular file", op.Path)
+	}
 	if cur, err := os.ReadFile(op.Path); err == nil && bytes.Equal(cur, finalBytes) {
 		// Bytes converged — but the file MODE may still have drifted (e.g. an
 		// executable skill script that lost its +x bit). A content-identical
@@ -214,8 +220,12 @@ func (w *Writer) Write(op adapter.FileOp, finalBytes []byte) error {
 					w.wouldChange[op.Path] = true
 					return nil
 				}
-				if cerr := os.Chmod(op.Path, want); cerr != nil {
-					return fmt.Errorf("chmod %s to %o: %w", op.Path, want, cerr)
+				chmodPath, rerr := iox.ResolveSymlinkDest(op.Path)
+				if rerr != nil {
+					return rerr
+				}
+				if cerr := os.Chmod(chmodPath, want); cerr != nil {
+					return fmt.Errorf("chmod %s to %o: %w", chmodPath, want, cerr)
 				}
 				// A real (mode-only) change: owned and written, NOT unchanged, so
 				// the apply summary counts it rather than reporting "up to date".
@@ -379,10 +389,9 @@ func IsRegularOrAbsent(path string) bool { return isRegularOrAbsent(path) }
 // caught as well as a bare one. That matters because os.Open on a FIFO with no
 // writer BLOCKS rather than failing: without this, the pre-delete read below
 // would hang forever on a FIFO left at a destination path, in the real apply and
-// in `apply --dry-run` alike. It does NOT cover Writer.Write's convergence read,
-// which never calls it — so `apply --dry-run` still hangs on a FIFO at a
-// RENDERED destination (#241). A dangling symlink reports absent, which is
-// the right answer — the link is removable and carries nothing to preserve.
+// in `apply --dry-run` alike. Writer.Write's convergence read uses this same
+// gate (#241). A dangling symlink reports absent, which is the right answer —
+// the link is removable and carries nothing to preserve.
 func isRegularOrAbsent(path string) bool {
 	fi, err := os.Stat(path)
 	if err != nil {

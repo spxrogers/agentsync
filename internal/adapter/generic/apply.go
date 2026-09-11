@@ -1,10 +1,7 @@
 package generic
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/jsonkeys"
@@ -31,8 +28,8 @@ func (a *Adapter) applyWrite(op adapter.FileOp, w adapter.DestWriter) error {
 	if op.MergeStrategy != "merge-jsonc-keys" {
 		return w.Write(op, op.Content)
 	}
-	existing, err := os.ReadFile(op.Path)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	existing, err := adapter.ReadExisting(op.Path)
+	if err != nil {
 		return fmt.Errorf("read %s: %w", op.Path, err)
 	}
 	ours, err := jsonkeys.DecodeObject(op.Content)
