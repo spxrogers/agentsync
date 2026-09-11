@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
@@ -33,58 +32,6 @@ import (
 // canonical repo when seeding state — the OS FS is correct here because
 // state lives on the same disk as ~/.agentsync/.
 func loaderFsForState() afero.Fs { return afero.NewOsFs() }
-
-// jsonUnmarshalLoose is a thin wrapper that returns nil on empty input
-// (so callers can treat empty as "absent") and surfaces real parse errors.
-// It accepts JSONC (comments, trailing commas) via hujson so seeding state
-// from a hand-commented opencode.json doesn't mis-hash the dest as null —
-// matching the apply/ingest read path.
-func jsonUnmarshalLoose(data []byte, v *map[string]any) error {
-	if len(data) == 0 {
-		*v = map[string]any{}
-		return nil
-	}
-	std, err := standardizeJSONC(data)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(std, v)
-}
-
-// decodeDestBytes decodes a destination config file's bytes into a generic map
-// per the op's merge strategy: TOML for merge-toml-keys (Codex config.toml),
-// otherwise the JSONC-tolerant loose reader (which standardizes comments/trailing
-// commas in a hand-edited opencode.json). A rendered op.Content is always JSON
-// regardless of the on-disk format, so callers still decode op.Content with
-// jsonUnmarshalLoose. This is the single CLI-side dest decoder; the render
-// package has its own (decodeDestObject) whose JSON arm is plain encoding/json
-// because apply re-writes those dests as standard JSON. The key-merge predicate
-// is shared: render.IsKeyMerge.
-func decodeDestBytes(strategy string, data []byte, v *map[string]any) error {
-	if strategy == "merge-toml-keys" {
-		if len(data) == 0 {
-			*v = map[string]any{}
-			return nil
-		}
-		return toml.Unmarshal(data, v)
-	}
-	return jsonUnmarshalLoose(data, v)
-}
-
-// readDestFile reads a destination file and decodes it per the op's merge
-// strategy, swallowing read/parse errors into an empty map — the behavior the
-// drift diagnostics (status/diff/reconcile) want so a missing or transiently
-// unreadable dest classifies as "absent" rather than crashing. Replaces the
-// JSON-only readJSONFile so a TOML config.toml decodes correctly.
-func readDestFile(strategy, path string) map[string]any {
-	data, err := readDestBytes(path)
-	if err != nil {
-		return map[string]any{}
-	}
-	m := map[string]any{}
-	_ = decodeDestBytes(strategy, data, &m)
-	return m
-}
 
 // collectStateSeedPointers returns the JSON pointers we record state for
 // when seeding from a freshly imported canonical. We borrow the same
