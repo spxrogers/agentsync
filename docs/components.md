@@ -67,8 +67,8 @@ is the only package that depends on nearly all the others.
   (`plugin.go`) — `plugins/<id>.toml` has ONE shape, the canonical
   `source.Plugin`, and a re-install carries the whole existing entry forward and
   overwrites only the re-fetched `ID`/`Version`/`ManifestSHA` (backfilling just
-  the default an omitted or empty key means), so a field added
-  to `source.PluginSpec` is preserved by default rather than dropped by default
+  the default an omitted or empty key means), so a field added to
+  `source.PluginSpec` is preserved by default rather than dropped by default
   (#234; the CLI's private duplicate of the struct, and the field-by-field merge
   that went with it, are gone).
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,

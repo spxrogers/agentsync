@@ -643,15 +643,15 @@ config is touched either way — the deferral lives entirely in your canonical
 source, which is what keeps `apply` reproducible from a dotfiles repo alone
 rather than dependent on whatever the machine happens to have installed.
 
-Both keys — and every other field in `plugins/<id>.toml` beyond the three a
-re-install re-fetches (`id`, `version`, `manifest_sha`) — survive re-installs
-and re-imports untouched (issues #140, #234), so a narrowed allowlist or an
-adopted plugin is never silently reset. A re-install carries every other
-modelled field forward from the file you have; a key you omitted, or an
-`agents` or `update` you left empty, is written with its default
-(`agents = ['*']`, `update = 'track'`). The file is rewritten in canonical
-form, not patched: comments and keys agentsync does not model are not kept,
-and `disabled = false` is written as no key at all.
+Both keys — and every other field agentsync models in `plugins/<id>.toml`
+beyond the three a re-install re-fetches (`id`, `version`, `manifest_sha`) —
+survive re-installs and re-imports (issues #140, #234), so a narrowed allowlist
+or an adopted plugin is never silently reset. A re-install carries every other
+field forward from the file you have; a key you omitted, or an `agents` or
+`update` you left empty, is written with its default (`agents = ['*']`,
+`update = 'track'`). The file is rewritten, not patched: comments and keys
+agentsync does not model are not kept, `disabled = false` is written as no key
+at all, and keys come out in agentsync's order.
 
 Because apply's plan never reads the destination, agentsync cannot notice a
 plugin you install natively AFTER declaring it. `status` and `doctor` do read

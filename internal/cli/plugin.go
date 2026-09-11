@@ -198,7 +198,7 @@ func (r pluginInstallRefresh) applyTo(base source.PluginSpec) source.PluginSpec 
 // fans out to — so they are carried forward WHOLESALE rather than field by
 // field (issue #140).
 //
-// The three backfills below are for keys the file may legitimately OMIT, not a
+// The three backfills below are for keys the file may omit or leave empty, not a
 // re-listing of the lifecycle: each restores the value the omission means, so a
 // re-install over a file with no `agents` key still writes agents = ['*'] and a
 // first install (the zero spec, every field zero) produces the historical

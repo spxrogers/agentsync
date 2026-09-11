@@ -275,9 +275,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   [#140](https://github.com/spxrogers/agentsync/issues/140). The CLI now reads
   and writes the canonical struct, and a re-install starts from the whole
   existing entry and overwrites only the three fields it re-fetches (`id`,
-  `version`, `manifest_sha`), backfilling just the default an omitted key means
-  — so every other modelled field is preserved by default rather than dropped
-  by default, and a test fails if a new field is
+  `version`, `manifest_sha`) — so every other modelled field is preserved by
+  default rather than dropped by default, and a test fails if a new field is
   neither classified as re-fetched nor as preserved. The on-disk bytes are
   unchanged: a first install still writes `agents = ['*']` and
   `update = 'track'` with no `disabled` key, whether it comes from `plugin add`

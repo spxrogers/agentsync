@@ -14,22 +14,19 @@ import (
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
-// pluginTOMLFixture is the on-disk plugins/<id>.toml shape — the canonical
-// source.Plugin itself, not a third hand-maintained copy of the [plugin]
-// table (#234) — so lifecycle tests can assert against the REAL file on disk
-// (read back + parsed), not an in-memory struct that never touched the
-// filesystem — per CLAUDE.md's
-// "models must stay faithful to their on-disk artifacts" doctrine.
-type pluginTOMLFixture = source.Plugin
-
-// readPluginTOMLFixture reads plugins/<id>.toml back from disk and parses it.
-func readPluginTOMLFixture(t *testing.T, path string) pluginTOMLFixture {
+// readPluginTOMLFixture reads plugins/<id>.toml back from disk and parses it
+// into the canonical source.Plugin — the file's one shape, not a test-side copy
+// of the [plugin] table (#234) — so lifecycle tests assert against the REAL
+// file on disk (read back + parsed), not an in-memory struct that never touched
+// the filesystem, per CLAUDE.md's "models must stay faithful to their on-disk
+// artifacts" doctrine.
+func readPluginTOMLFixture(t *testing.T, path string) source.Plugin {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	var p pluginTOMLFixture
+	var p source.Plugin
 	if err := toml.Unmarshal(data, &p); err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}
@@ -717,6 +714,45 @@ agents = ["claude"]
 	}
 }
 
+// TestPlugin_DisableEnablePreservesNativeAgents pins what the plugins guide
+// promises for the lifecycle verbs: `disable` and `enable` flip only the
+// disabled bit and carry every other modelled field forward — here the
+// native_agents deferral, which neither verb reads or writes on its own. The
+// bit itself is asserted too, so a verb that refused to rewrite the file could
+// not pass as "preserving"; and the allowlist is left EMPTY on purpose, so the
+// verbs are also caught backfilling `agents = ['*']` — that default is `add`'s
+// to write, and the guide attributes it to `add` alone.
+func TestPlugin_DisableEnablePreservesNativeAgents(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "marketplace", "add", makeLocalMarketplace(t, t.TempDir()))
+	mustRun(t, env, "plugin", "add", "demo@test-mp")
+	pluginPath := filepath.Join(tmp, ".agentsync", "plugins", "demo.toml")
+	writePluginTOMLBody(t, pluginPath,
+		"[plugin]\nid = 'demo@test-mp'\nupdate = 'track'\nagents = []\nnative_agents = ['claude']\n")
+
+	for _, tc := range []struct {
+		verb         string
+		wantDisabled bool
+	}{{"disable", true}, {"enable", false}} {
+		mustRun(t, env, "plugin", tc.verb, "demo")
+		data, err := os.ReadFile(pluginPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(string(data), "disabled = true"); got != tc.wantDisabled {
+			t.Errorf("plugin %s must flip the disabled bit (want disabled=%v); file after %s:\n%s", tc.verb, tc.wantDisabled, tc.verb, data)
+		}
+		if !strings.Contains(string(data), "native_agents = ['claude']") {
+			t.Errorf("plugin %s must carry native_agents forward; file after %s:\n%s", tc.verb, tc.verb, data)
+		}
+		if strings.Contains(string(data), "agents = ['*']") {
+			t.Errorf("plugin %s must not backfill the allowlist default — only add does; file after %s:\n%s", tc.verb, tc.verb, data)
+		}
+	}
+}
+
 // TestPlugin_ReinstallPreservesAgentsUpdateDisabled is the regression for issue
 // #140's re-install data loss: `installPluginInto` hard-reset Agents/Update/
 // Disabled to the first-install defaults on every write, so re-installing an
@@ -765,8 +801,9 @@ func TestPlugin_ReinstallOverCorruptTOMLRefuses(t *testing.T) {
 // comment-only) parses successfully to an empty spec, so it carries no allowlist to
 // preserve and a re-install legitimately falls through to the defaults — unlike a corrupt/
 // unparseable file, which refuses (TestPlugin_ReinstallOverCorruptTOMLRefuses). The same
-// defaults apply to keys that are PRESENT but empty (`agents = []`, an empty `update`): the
-// backfill tests the value, not the key, which is what the user guide promises.
+// defaults apply to keys that are PRESENT but empty: `agents = []` decodes to a non-nil
+// empty slice (the case a nil check would miss) and an empty `update` decodes like an
+// absent one; both come back as the default, which is what the user guide promises.
 func TestPlugin_ReinstallOverEmptyTOMLUsesDefaults(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
@@ -1375,39 +1412,5 @@ func TestPlugin_UpgradeAfterBareIDInstall(t *testing.T) {
 	}
 	if out, err := runCLI(t, env, "plugin", "upgrade", "demo"); err != nil {
 		t.Fatalf("upgrade of a bare-id-installed plugin must re-search the caches, not look for a %q marketplace: %v\n%s", "default", err, out)
-	}
-}
-
-// TestPlugin_DisableEnablePreservesNativeAgents pins what the plugins guide
-// promises for the lifecycle verbs: `disable` and `enable` flip only the
-// disabled bit and carry every other modelled field forward — here the
-// native_agents deferral, which neither verb reads or writes on its own. The
-// bit itself is asserted too, so a verb that refused to rewrite the file could
-// not pass as "preserving".
-func TestPlugin_DisableEnablePreservesNativeAgents(t *testing.T) {
-	tmp := t.TempDir()
-	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
-	mustRun(t, env, "init")
-	mustRun(t, env, "marketplace", "add", makeLocalMarketplace(t, t.TempDir()))
-	mustRun(t, env, "plugin", "add", "demo@test-mp")
-	pluginPath := filepath.Join(tmp, ".agentsync", "plugins", "demo.toml")
-	writePluginTOMLBody(t, pluginPath,
-		"[plugin]\nid = 'demo@test-mp'\nupdate = 'track'\nagents = ['*']\nnative_agents = ['claude']\n")
-
-	for _, tc := range []struct {
-		verb         string
-		wantDisabled bool
-	}{{"disable", true}, {"enable", false}} {
-		mustRun(t, env, "plugin", tc.verb, "demo")
-		data, err := os.ReadFile(pluginPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := strings.Contains(string(data), "disabled = true"); got != tc.wantDisabled {
-			t.Errorf("plugin %s must flip the disabled bit (want disabled=%v); file after %s:\n%s", tc.verb, tc.wantDisabled, tc.verb, data)
-		}
-		if !strings.Contains(string(data), "native_agents = ['claude']") {
-			t.Errorf("plugin %s must carry native_agents forward; file after %s:\n%s", tc.verb, tc.verb, data)
-		}
 	}
 }
