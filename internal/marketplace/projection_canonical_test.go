@@ -8,9 +8,9 @@ import (
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
-// TestProjectionResultCanonicalCoversEveryField is the reflective guard for the
-// six-field copy: every exported field of ProjectionResult must reach the
-// source.Canonical that Canonical() returns.
+// TestProjectionResultAsCanonicalCoversEveryField is the reflective guard for
+// the six-field copy: every exported field of ProjectionResult must reach the
+// source.Canonical that AsCanonical() returns.
 //
 // This is the CLAUDE.md "model drifts from its artifact" class in miniature. The
 // copy used to live in three CLI call sites, so adding a seventh component kind
@@ -25,7 +25,7 @@ import (
 // added to ProjectionResult with no Canonical counterpart fails the lookup arm
 // instead — which is the right failure: a projected component kind the canonical
 // model cannot hold is a schema change, not a copy bug.
-func TestProjectionResultCanonicalCoversEveryField(t *testing.T) {
+func TestProjectionResultAsCanonicalCoversEveryField(t *testing.T) {
 	var r marketplace.ProjectionResult
 	rv := reflect.ValueOf(&r).Elem()
 	rt := rv.Type()
@@ -59,12 +59,12 @@ func TestProjectionResultCanonicalCoversEveryField(t *testing.T) {
 			}
 			if cf.Len() != 1 {
 				t.Errorf("%s: ProjectionResult.%s was not copied (Canonical.%s has %d entries, want 1) — "+
-					"add it to ProjectionResult.Canonical()", what, name, name, cf.Len())
+					"add it to ProjectionResult.%s", what, name, name, cf.Len(), what)
 			}
 		}
 	}
 
-	check(t, "Canonical()", r.Canonical())
+	check(t, "AsCanonical()", r.AsCanonical())
 
 	// ReplaceComponentsIn must cover exactly the same set, and must leave the
 	// non-component fields of its target alone — that is the whole reason it

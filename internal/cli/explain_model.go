@@ -433,7 +433,7 @@ func pluginOrigins(in explainInputs) map[string]explainPluginOrigin {
 			ID:      pluginOriginLabel(pl),
 			Version: pl.Plugin.Version.Unverified(),
 		}
-		for _, k := range canonicalComponentKeys(proj.Canonical()) {
+		for _, k := range canonicalComponentKeys(proj.AsCanonical()) {
 			o := origin
 			o.AlsoAuthored = authored[k]
 			// First plugin wins the slot, matching the concatenation order

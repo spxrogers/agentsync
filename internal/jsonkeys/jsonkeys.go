@@ -1,5 +1,9 @@
 // Package jsonkeys implements per-key JSON pointer merge used by adapters that
 // need to own a subset of keys inside a shared JSON (or JSONC) config file.
+//
+// It is also the single home for RFC 6901 pointer mechanics (pointer.go):
+// EscapeToken and UnescapeToken for reference tokens, SplitPointer, and Get,
+// the one pointer resolver every package walks a document with.
 package jsonkeys
 
 import (

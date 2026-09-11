@@ -2,13 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
-	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/ui"
 )
@@ -216,6 +220,26 @@ func TestHashAtPointerSeesOnlyRootedPointers(t *testing.T) {
 			t.Errorf("pointer %q collected from the document does not resolve in it", p)
 		}
 	}
+
+	// The fixture's top-level "" key makes collectStateSeedPointers emit the
+	// pointer "/" — so "/" CAN come from CollectPointers, and this is where the
+	// one contract the unification changed is pinned on the import side: "/"
+	// names the WHOLE document (as internal/render always read it), not the ""
+	// key the deleted CLI resolver answered with. Requiring the whole-document
+	// hash is what makes the assertion load-bearing; "hashes to something" held
+	// under both readings.
+	if !slices.Contains(ptrs, "/") {
+		t.Fatalf("the fixture's top-level %q key must yield the pointer \"/\"; got %q", "", ptrs)
+	}
+	whole, err := json.Marshal(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(whole)
+	if got, want := hashAtPointer(dest, "/"), hex.EncodeToString(sum[:]); got != want {
+		t.Errorf("hashAtPointer(dest, \"/\") = %s, want the whole-document hash %s "+
+			"(a resolver answering \"/\" with dest[\"\"] hashes \"empty key\" instead)", got, want)
+	}
 }
 
 // TestGetPointerValueRefusesAnUnrootedPointer pins the one thing
@@ -256,17 +280,60 @@ func TestGetPointerValueRefusesAnUnrootedPointer(t *testing.T) {
 // unimportedDestPointers filters against is built with the SAME escaping
 // collectStateSeedPointers uses for its pointers' first segment. A key holding
 // a '/' or a '~' escapes to something other than itself, so a section set
-// keyed by the raw key would never match the seed pointer for it and the
-// whole section would be misreported as foreign.
+// keyed by the raw key would never match the seed pointer for it, and every
+// foreign pointer under that section would go unreported.
+//
+// It exercises the PRODUCTION function, foreignPointersInOurSections, not a
+// re-spelling of its section set: drop the escape there and the two escaped
+// sections below vanish from the result.
 func TestUnimportedSectionSetAgreesWithSeedPointers(t *testing.T) {
-	ours := map[string]any{"a~b": map[string]any{"x": 1}, "c/d": "v", "plain": map[string]any{"y": 2}}
-	sections := map[string]bool{}
-	for k := range ours {
-		sections[jsonkeys.EscapeToken(k)] = true
+	ours := map[string]any{
+		"a~b":   map[string]any{"x": 1},
+		"c/d":   map[string]any{"y": 2},
+		"plain": map[string]any{"z": 3},
 	}
-	for _, p := range collectStateSeedPointers(ours) {
-		if !sections[firstPointerSegmentEsc(p)] {
-			t.Errorf("seed pointer %q: no section in %v", p, sections)
-		}
+	existing := map[string]any{
+		"a~b":       map[string]any{"x": 1, "foreign1": true},
+		"c/d":       map[string]any{"y": 2, "foreign2": true},
+		"plain":     map[string]any{"z": 3, "foreign3": true},
+		"unmodeled": map[string]any{"w": 4}, // a section ours does not render: out of scope
+	}
+	got := foreignPointersInOurSections(ours, existing)
+	sort.Strings(got)
+	want := []string{"/a~0b/foreign1", "/c~1d/foreign2", "/plain/foreign3"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("foreign pointers = %q, want %q "+
+			"(an escaped section gone missing means the section set was keyed by the raw key)", got, want)
+	}
+}
+
+// TestImportersSpeakTheirLabelOnANamedMiss pins the label WIRING at the five
+// real call sites, which TestMatchImportable cannot: that table hands the
+// helper its own (kind, label) pairs, so it proves the helper and not the
+// strings each importer passes. Every tail starts with matchImportable, so an
+// empty canonical and a name that is not there refuse before home is touched.
+func TestImportersSpeakTheirLabelOnANamedMiss(t *testing.T) {
+	type importer func(io *importIO, home string, c source.Canonical, name string) ([]string, error)
+	for _, tc := range []struct {
+		name string
+		run  importer
+		want string
+	}{
+		{"mcp", importMCP, `mcp server "nope" not found in native config`},
+		{"skill", importSkill, `skill "nope" not found in native config`},
+		{"subagent", importSubagent, `subagent "nope" not found in native config`},
+		{"command", importCommand, `command "nope" not found in native config`},
+		{"lsp", importLSP, `lsp server "nope" not found in native config`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			io, _ := newImportIOForTest()
+			_, err := tc.run(io, "", source.Canonical{}, "nope")
+			if err == nil {
+				t.Fatal("naming an absent item must refuse")
+			}
+			if err.Error() != tc.want {
+				t.Fatalf("err = %q, want %q", err.Error(), tc.want)
+			}
+		})
 	}
 }

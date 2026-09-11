@@ -74,10 +74,11 @@ is the only package that depends on nearly all the others.
   the one "which agents may this run touch" extraction, returning the exact
   `([]string, map[string]bool)` pair `selectAgents` takes, SORTED (eight commands
   open-coded it, in three different shapes, before #235); `matchImportable`
-  (`import.go`) — the head every per-component importer shares (filter by name,
-  drop plugin-provided entries, refuse a named miss), while the tail stays
-  per-component because the five genuinely disagree about id validation and
-  write funnel.
+  (`import.go`) — the head five of the six per-component importers share
+  (filter by name, drop plugin-provided entries, refuse a named miss; hooks keep
+  their own because their join key is an opaque signature), while the tail
+  stays per-component because the five genuinely disagree about id validation
+  and write funnel.
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,
   `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
   `mcp {add,remove,list,enable,disable}`,
@@ -488,7 +489,7 @@ drift state's `SchemaVersion`.
 Models the Claude marketplace/plugin format, fetches sources, and projects plugin
 manifests into canonical components.
 - **Key:** `Marketplace`, `PluginEntry`, `Source`, `PluginManifest`;
-  `ProjectionResult` + its `Canonical()` / `ReplaceComponentsIn()` (the
+  `ProjectionResult` + its `AsCanonical()` / `ReplaceComponentsIn()` (the
   projection→canonical component copy lives next to the struct, not in three CLI
   call sites, so a new component kind cannot be added here and silently dropped
   from every diagnostic surface — reflectively guarded);
@@ -544,7 +545,7 @@ Atomic file IO and locking.
 ### `internal/jsonkeys`
 Per-key JSON-pointer merge that preserves foreign keys and uses `json.Number`
 (no float64 rounding). It is also the single home for RFC 6901 pointer
-mechanics: `EscapeToken`/`UnescapeToken` were hand-rolled five times across
+mechanics: `EscapeToken`/`UnescapeToken` were hand-rolled seven times across
 three packages before #235, and their order of operations is not symmetric
 (escape does `~` first, decode does `~1` first), so getting either backwards
 silently corrupts any key holding a `/` or a `~`.

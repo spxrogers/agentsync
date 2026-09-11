@@ -4,14 +4,16 @@ import "strings"
 
 // RFC 6901 reference-token escaping lives here and ONLY here.
 //
-// Before #235 there were five hand-rolled copies of these four lines — in this
-// package, in internal/render (twice, over a hand-written replaceAll), and in
-// three internal/cli helpers. Each copy had to get the ORDER right in both
-// directions, and the order is not symmetric: escaping does '~' first, decoding
-// does "~1" first. Get either backwards and "~01" decodes to "/" instead of the
-// "~1" the user wrote — a managed MCP server id containing a '/' or '~' then
-// looks up a key that does not exist and reports phantom drift forever. Five
-// chances to get it wrong, one place to fix it.
+// Before #235 there were seven hand-rolled copies of these lines — two
+// encoders and five decoders: a decoder in this package; an encoder and a
+// decoder in internal/render (over a hand-written replaceAll); and an encoder
+// and three decoders across internal/cli's import, status and reconcile
+// helpers. Each copy had to get the ORDER right in both directions, and the
+// order is not symmetric: escaping does '~' first, decoding does "~1" first.
+// Get either backwards and "~01" decodes to "/" instead of the "~1" the user
+// wrote — a managed MCP server id containing a '/' or '~' then looks up a key
+// that does not exist and reports phantom drift forever. Seven chances to get
+// it wrong, one place to fix it.
 
 // EscapeToken encodes one string as an RFC 6901 §3 reference token: '~' becomes
 // "~0" and '/' becomes "~1".
@@ -63,8 +65,11 @@ func SplitPointer(ptr string) []string {
 // the CLI's drift diagnostics discard it and treat absent as nil.
 //
 // `/` yields no tokens and names the WHOLE document, not the `""` key RFC 6901
-// assigns it. The two CLI resolvers this replaced answered `/` with the `""`
-// key; `/` never comes from CollectPointers, only from a hand-edited state key.
+// assigns it — the reading internal/render's resolver already had. The two CLI
+// resolvers this replaced answered `/` with the `""` key instead, so this is
+// the one pointer the copies disagreed on. It is reachable from a hand-edited
+// state key, or from CollectPointers over a rendered document with a top-level
+// `""` key, which no adapter renders today.
 func Get(m map[string]any, ptr string) (any, bool) {
 	var cur any = m
 	for _, p := range SplitPointer(ptr) {

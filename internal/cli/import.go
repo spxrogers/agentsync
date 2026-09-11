@@ -581,32 +581,48 @@ func unimportedDestPointers(agentsyncHome, srcHome, agentName string, reg *adapt
 		if jsonErr := jsonUnmarshalLoose(op.Content, &ours); jsonErr != nil {
 			continue
 		}
-		ownedPtrs := map[string]bool{}
-		ourSections := map[string]bool{}
-		for k := range ours {
-			ourSections[jsonkeys.EscapeToken(k)] = true
-		}
-		for _, p := range collectStateSeedPointers(ours) {
-			ownedPtrs[p] = true
-		}
-		// Walk existing's second-level pointers and flag ones agentsync's
-		// canonical doesn't own — but ONLY under top-level sections the
-		// canonical actually renders (mirrors render.scopeOwnedToSections).
-		// Pointers under sections agentsync doesn't model at all (Claude
-		// Code's runtime state, telemetry, unmodeled settings) are out of
-		// scope: the merge-keys writer leaves them untouched on apply, so
-		// flagging them would be noise — and the previous "will trigger
-		// ForeignCollision" prediction for them was factually wrong (the
-		// per-pointer OwnedKeys check fires only for keys this op writes).
-		for _, p := range collectStateSeedPointers(existing) {
-			if ownedPtrs[p] {
-				continue
-			}
-			if !ourSections[firstPointerSegmentEsc(p)] {
-				continue
-			}
+		for _, p := range foreignPointersInOurSections(ours, existing) {
 			out = append(out, op.Path+"#"+p)
 		}
+	}
+	return out
+}
+
+// foreignPointersInOurSections walks existing's second-level pointers and
+// returns the ones agentsync's canonical (ours) doesn't own — but ONLY under
+// top-level sections the canonical actually renders (mirrors
+// render.scopeOwnedToSections). Pointers under sections agentsync doesn't model
+// at all (Claude Code's runtime state, telemetry, unmodeled settings) are out
+// of scope: the merge-keys writer leaves them untouched on apply, so flagging
+// them would be noise — and the previous "will trigger ForeignCollision"
+// prediction for them was factually wrong (the per-pointer OwnedKeys check
+// fires only for keys this op writes).
+//
+// The section set is keyed by the ESCAPED top-level key because it is compared
+// against the first segment of a collectStateSeedPointers pointer, which is
+// escaped: a key holding a '/' or a '~' escapes to something other than
+// itself, so a set keyed by the raw key would never match, and every foreign
+// pointer under that section would go unreported. Pure, with no I/O, so
+// TestUnimportedSectionSetAgreesWithSeedPointers can pin exactly that on the
+// production code rather than on a re-spelling of it.
+func foreignPointersInOurSections(ours, existing map[string]any) []string {
+	ownedPtrs := map[string]bool{}
+	ourSections := map[string]bool{}
+	for k := range ours {
+		ourSections[jsonkeys.EscapeToken(k)] = true
+	}
+	for _, p := range collectStateSeedPointers(ours) {
+		ownedPtrs[p] = true
+	}
+	var out []string
+	for _, p := range collectStateSeedPointers(existing) {
+		if ownedPtrs[p] {
+			continue
+		}
+		if !ourSections[firstPointerSegmentEsc(p)] {
+			continue
+		}
+		out = append(out, p)
 	}
 	return out
 }
@@ -1307,52 +1323,6 @@ func hookDisplay(h source.Hook) string {
 // it exists because a hook's key is an opaque length-prefixed signature rather
 // than a name anyone could act on. Pass nil wherever the key IS the display name,
 // which is every kind except hooks.
-// matchImportable is the head every per-component importer shares: narrow the
-// ingested components to the requested one (name == "" means all), drop the
-// entries an installed plugin already provides, and turn "you asked for a
-// specific item and it is not there" into the one refusal message all five
-// spell the same way.
-//
-// kind is the skipPluginProvided/pluginProvided key ("mcp", "lsp", "skill",
-// "subagent", "command"); label is how that kind is spoken in the not-found
-// error ("mcp server", not "mcp"). The two differ for exactly the two server
-// kinds, which is why they are separate parameters rather than one string used
-// twice.
-//
-// An EMPTY result with no error is the "nothing to do" answer, NOT an error:
-// a bulk import of an agent that has no skills is a success that imports
-// nothing. Callers must return early on it rather than falling through — the
-// two capture-backed importers would otherwise hand capture.Capture an empty
-// component list. The idiom at every call site is:
-//
-//	matched, err := matchImportable(…)
-//	if err != nil || len(matched) == 0 {
-//		return nil, err
-//	}
-//
-// The TAIL stays per-component on purpose: the five disagree about id
-// validation (command downgrades an invalid name to a warning in bulk mode so
-// one bad native file cannot abort the run; the rest refuse outright) and about
-// the write funnel (mcp/lsp go through capture.Capture, the file-backed three
-// through source.Write*). Folding those into a table would mean a config
-// parameter per disagreement, which is the same code with more indirection.
-func matchImportable[T any](io *importIO, kind, label, name string, items []T, key func(T) string) ([]T, error) {
-	var matched []T
-	for _, it := range items {
-		if name == "" || key(it) == name {
-			matched = append(matched, it)
-		}
-	}
-	matched, err := skipPluginProvided(io, kind, name, matched, key, nil)
-	if err != nil {
-		return nil, err
-	}
-	if len(matched) == 0 && name != "" {
-		return nil, fmt.Errorf("%s %q not found in native config", label, name)
-	}
-	return matched, nil
-}
-
 func skipPluginProvided[T any](io *importIO, kind, name string, items []T, nameOf func(T) string, displayOf func(T) string) ([]T, error) {
 	// Nothing matched → nothing to wrongly capture, so an unusable filter is
 	// harmless here. Checking this FIRST keeps a broken plugin cache from
@@ -1396,6 +1366,53 @@ func skipPluginProvided[T any](io *importIO, kind, name string, items []T, nameO
 			"(capturing it would collide with the plugin's own on the next apply)", kind, display, plugin)
 	}
 	return out, nil
+}
+
+// matchImportable is the head five of the six per-component importers share
+// (hooks keep their own: their join key is an opaque signature that needs
+// skipPluginProvided's displayOf): narrow the ingested components to the
+// requested one (name == "" means all), drop the entries an installed plugin
+// already provides, and turn "you asked for a specific item and it is not
+// there" into the one refusal message all five spell the same way.
+//
+// kind is the skipPluginProvided/pluginProvided key ("mcp", "lsp", "skill",
+// "subagent", "command"); label is how that kind is spoken in the not-found
+// error ("mcp server", not "mcp"). The two differ for exactly the two server
+// kinds, which is why they are separate parameters rather than one string used
+// twice.
+//
+// An EMPTY result with no error is the "nothing to do" answer, NOT an error:
+// a bulk import of an agent that has no skills is a success that imports
+// nothing. Callers must return early on it rather than falling through — the
+// two capture-backed importers would otherwise hand capture.Capture an empty
+// component list. The idiom at every call site is:
+//
+//	matched, err := matchImportable(…)
+//	if err != nil || len(matched) == 0 {
+//		return nil, err
+//	}
+//
+// The TAIL stays per-component on purpose: the five disagree about id
+// validation (command downgrades an invalid name to a warning in bulk mode so
+// one bad native file cannot abort the run; the rest refuse outright) and about
+// the write funnel (mcp/lsp go through capture.Capture, the file-backed three
+// through source.Write*). Folding those into a table would mean a config
+// parameter per disagreement, which is the same code with more indirection.
+func matchImportable[T any](io *importIO, kind, label, name string, items []T, key func(T) string) ([]T, error) {
+	var matched []T
+	for _, it := range items {
+		if name == "" || key(it) == name {
+			matched = append(matched, it)
+		}
+	}
+	matched, err := skipPluginProvided(io, kind, name, matched, key, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(matched) == 0 && name != "" {
+		return nil, fmt.Errorf("%s %q not found in native config", label, name)
+	}
+	return matched, nil
 }
 
 func importSkill(io *importIO, home string, c source.Canonical, name string) ([]string, error) {

@@ -37,8 +37,10 @@ type ProjectionResult struct {
 	LSPServers []source.LSPServer
 }
 
-// Canonical returns this projection as a source.Canonical carrying ONLY the
-// projected components — no Config, no Memory, no Plugins.
+// AsCanonical returns this projection as a source.Canonical carrying ONLY the
+// projected components — no Config, no Memory, no Plugins. It copies slice
+// HEADERS, not elements: the returned lists alias the projection's backing
+// arrays, exactly as the three hand-copies it replaced did.
 //
 // Three callers in internal/cli hand-copied the same six fields out of a
 // ProjectionResult (explain's plugin attribution, `plugin explain`'s per-plugin
@@ -47,9 +49,9 @@ type ProjectionResult struct {
 // kind here and all three keep compiling while quietly projecting nothing for
 // it — no test fails, no invariant breaks, the data is just gone. Owning the
 // copy next to the struct means the seventh field is added in one place, and
-// TestProjectionResultCanonicalCoversEveryField fails if it is added to the
+// TestProjectionResultAsCanonicalCoversEveryField fails if it is added to the
 // struct and not to this method.
-func (r ProjectionResult) Canonical() source.Canonical {
+func (r ProjectionResult) AsCanonical() source.Canonical {
 	return source.Canonical{
 		MCPServers: r.MCPServers,
 		Skills:     r.Skills,
@@ -62,11 +64,11 @@ func (r ProjectionResult) Canonical() source.Canonical {
 
 // ReplaceComponentsIn overwrites c's component lists with this projection's,
 // leaving everything else on c (Config, Memory, Plugins) untouched. It is the
-// "narrow an already-loaded canonical to one plugin" spelling of Canonical();
+// "narrow an already-loaded canonical to one plugin" spelling of AsCanonical();
 // both copy the same fields, so neither can see a component kind the other
 // misses.
 func (r ProjectionResult) ReplaceComponentsIn(c *source.Canonical) {
-	proj := r.Canonical()
+	proj := r.AsCanonical()
 	c.MCPServers = proj.MCPServers
 	c.Skills = proj.Skills
 	c.Subagents = proj.Subagents
