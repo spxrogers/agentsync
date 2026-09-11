@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 
@@ -18,6 +17,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/project"
 	"github.com/spxrogers/agentsync/internal/render"
+	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/state"
 	"github.com/spxrogers/agentsync/internal/ui"
 )
@@ -250,69 +250,26 @@ func buildAgentsSection(agents map[string]map[string]any) string {
 }
 
 func writeAgents(p string, raw []byte, agents map[string]map[string]any) error {
-	// Round-trip: regenerate the [agents] block in inline-table format, then
-	// splice it back in preserving everything OUTSIDE the agents config.
+	// Regenerate the [agents] block in inline-table format, then splice it back
+	// in preserving everything OUTSIDE the agents config.
 	//
-	// We work line-by-line and drop every agents-owned line — both the inline
-	// `[agents]` header form AND the idiomatic `[agents.<name>]` sub-table form
-	// — then reinsert the regenerated block where the first agents section was.
-	// The old string-search for a literal "[agents]" missed the sub-table form
-	// entirely: it appended a second [agents] block while leaving the
-	// sub-tables, defining agents.<name> twice and bricking the config (go-toml
-	// rejects the duplicate on the next load).
+	// Both agents-owned spellings are dropped — the inline `[agents]` header form
+	// AND the idiomatic `[agents.<name>]` sub-table form — which is what
+	// IncludeSubtables asks for. The old string-search for a literal "[agents]"
+	// missed the sub-table form entirely: it appended a second [agents] block
+	// while leaving the sub-tables, defining agents.<name> twice and bricking the
+	// config (go-toml rejects the duplicate on the next load).
 	newSection := strings.TrimRight(buildAgentsSection(agents), "\n")
-	newLines := strings.Split(newSection, "\n")
+	content := []byte(source.SpliceTOMLTable(string(raw), "agents", newSection, source.SpliceOptions{IncludeSubtables: true}))
 
-	lines := strings.Split(string(raw), "\n")
-	out := make([]string, 0, len(lines)+len(newLines))
-	insertAt := -1
-	inAgents := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") {
-			// New section header: agents-owned iff it's [agents] or [agents.*].
-			inAgents = trimmed == "[agents]" || strings.HasPrefix(trimmed, "[agents.")
-			if inAgents {
-				if insertAt < 0 {
-					insertAt = len(out) // first agents section → reinsert here
-				}
-				continue // drop the header
-			}
-		}
-		if inAgents {
-			continue // drop lines inside an agents section
-		}
-		out = append(out, line)
-	}
-
-	if insertAt < 0 {
-		// No agents section existed; append after a blank-line separator.
-		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
-			out = append(out, "")
-		}
-		out = append(out, newLines...)
-	} else {
-		tail := append([]string(nil), out[insertAt:]...)
-		out = append(out[:insertAt], newLines...)
-		// Keep a blank line between the regenerated [agents] block and whatever
-		// section follows, so repeated agent edits don't collapse the file's
-		// section spacing. The loop above drops blank lines inside the agents
-		// section, so a single separator is re-added each run (no accumulation).
-		if len(tail) > 0 && strings.TrimSpace(tail[0]) != "" {
-			out = append(out, "")
-		}
-		out = append(out, tail...)
-	}
-
-	// Fail-closed backstop: the splicer above is line-based, not a TOML parser,
-	// so a construct it cannot see (e.g. a multi-line string whose CONTENT
-	// contains an "[agents]" line) could corrupt the file — either bricking
-	// every subsequent load, or worse, silently mangling ANOTHER table's data
-	// while still parsing. Before writing, re-parse the spliced result and
-	// require BOTH that the agents table matches the intended entries AND that
-	// everything outside [agents] is semantically unchanged from the original;
-	// refuse the write (leaving the on-disk file untouched) otherwise.
-	content := []byte(strings.Join(out, "\n"))
+	// Fail-closed backstop: the splicer is line-based, not a TOML parser, so a
+	// construct it cannot see (e.g. a multi-line string whose CONTENT contains an
+	// "[agents]" line) could corrupt the file — either bricking every subsequent
+	// load, or worse, silently mangling ANOTHER table's data while still parsing.
+	// Before writing, re-parse the spliced result and require BOTH that the
+	// agents table matches the intended entries AND that everything outside
+	// [agents] is semantically unchanged from the original; refuse the write
+	// (leaving the on-disk file untouched) otherwise.
 	var check agentsyncCfg
 	if err := toml.Unmarshal(content, &check); err != nil {
 		return fmt.Errorf("refusing to rewrite %s: the regenerated config does not parse (%v); "+
@@ -323,7 +280,7 @@ func writeAgents(p string, raw []byte, agents map[string]map[string]any) error {
 		return fmt.Errorf("refusing to rewrite %s: the regenerated [agents] table does not round-trip; "+
 			"edit the [agents] table by hand", p)
 	}
-	same, err := nonAgentsUnchanged(raw, content)
+	same, err := source.TableOutsideUnchanged(raw, content, "agents")
 	if err != nil {
 		return fmt.Errorf("refusing to rewrite %s: %w; edit the [agents] table by hand", p, err)
 	}
@@ -333,24 +290,6 @@ func writeAgents(p string, raw []byte, agents map[string]map[string]any) error {
 			"containing an \"[agents]\" line) — edit the [agents] table by hand", p)
 	}
 	return iox.AtomicWrite(p, content, 0o644)
-}
-
-// nonAgentsUnchanged reports whether every table EXCEPT [agents] decodes to
-// the same value in the original and the spliced config. Comments and
-// whitespace are free to differ; data outside the section the rewriter owns is
-// not — a splice that still parses but changed another table's values is
-// silent corruption and must be refused.
-func nonAgentsUnchanged(oldRaw, newRaw []byte) (bool, error) {
-	var oldDoc, newDoc map[string]any
-	if err := toml.Unmarshal(oldRaw, &oldDoc); err != nil {
-		return false, fmt.Errorf("re-parse original config: %w", err)
-	}
-	if err := toml.Unmarshal(newRaw, &newDoc); err != nil {
-		return false, fmt.Errorf("re-parse regenerated config: %w", err)
-	}
-	delete(oldDoc, "agents")
-	delete(newDoc, "agents")
-	return reflect.DeepEqual(oldDoc, newDoc), nil
 }
 
 // agentsTablesEqual reports whether a re-parsed agents table carries exactly
