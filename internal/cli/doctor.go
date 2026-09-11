@@ -357,11 +357,11 @@ func checkPlugins(p *ui.Printer, home string) {
 		return
 	}
 	reg := registryFactory()
-	undeclared := undeclaredNativePlugins(c, reg, reg.Names())
+	undeclared := adapter.UndeclaredNativePlugins(c, reg, reg.Names())
 	// A plugin the agent installs itself that agentsync ALSO projects there
 	// duplicates every component it ships. apply cannot see this (its plan never
 	// reads the destination), so doctor is one of the two places it surfaces.
-	duplicated := duplicatedNativePlugins(c, reg, reg.Names())
+	duplicated := adapter.DuplicatedNativePlugins(c, reg, reg.Names())
 	if len(undeclared) == 0 && len(duplicated) == 0 {
 		okCheck(p, "", "ok (no undeclared or duplicated native plugins)")
 		return

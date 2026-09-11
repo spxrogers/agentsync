@@ -777,7 +777,7 @@ func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry
 	// Nudge: plugins installed natively in an enabled agent but not yet declared
 	// in source. agentsync treats them as foreign-managed (never drift), so this
 	// is informational — it points at `import`.
-	undeclared := undeclaredNativePlugins(c, reg, selected)
+	undeclared := adapter.UndeclaredNativePlugins(c, reg, selected)
 	for _, name := range reg.Names() {
 		missing := undeclared[name]
 		if len(missing) == 0 {
@@ -803,7 +803,7 @@ func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry
 	// mismatch. (The undeclared nudge above is correctly unscoped: "is this
 	// declared anywhere in my source" is a question about the merged view.)
 	rc := reportCanonical(c, sc)
-	duplicated := duplicatedNativePlugins(rc, reg, selected)
+	duplicated := adapter.DuplicatedNativePlugins(rc, reg, selected)
 	warned := false
 	for _, name := range reg.Names() {
 		dupes := duplicated[name]
@@ -828,15 +828,15 @@ func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry
 	// the loop above prints nothing at all.
 	//
 	// Both halves of the guard mirror the check itself rather than re-deriving
-	// it. `rc` is the same canonical duplicatedNativePlugins was given (see the
-	// scope comment above) and declaredPlugins applies the same !Disabled filter
+	// it. `rc` is the same canonical adapter.DuplicatedNativePlugins was given (see the
+	// scope comment above) and adapter.DeclaredPlugins applies the same !Disabled filter
 	// it early-returns on, so the note cannot claim a check that never ran. And
 	// only agents with a native plugin manager can duplicate anything, so an
 	// agent without one going unexamined is not a gap worth reporting — naming
 	// the agents beats a bare count, and lets the note fall silent when nothing
 	// examinable was narrowed away.
-	if unexamined := unexaminedPluginAgents(reg, enabled, selected); len(unexamined) > 0 && len(declaredPlugins(rc)) > 0 {
-		// "reported above" rather than "found": duplicatedNativePlugins skips an
+	if unexamined := unexaminedPluginAgents(reg, enabled, selected); len(unexamined) > 0 && len(adapter.DeclaredPlugins(rc)) > 0 {
+		// "reported above" rather than "found": adapter.DuplicatedNativePlugins skips an
 		// agent whose IngestPlugins probe errors, so an absent warning means
 		// nothing was REPORTED, which is not the same as nothing being there.
 		// Before this note the distinction did not surface — the failure mode was
@@ -859,7 +859,7 @@ func emitStatusWarnings(p *ui.Printer, c source.Canonical, reg *adapter.Registry
 // unexaminedPluginAgents returns the enabled agents a `--agents`-narrowed run
 // left out of the duplicate check AND that could actually have carried a
 // duplicate — i.e. those whose adapter implements adapter.PluginIngester, the
-// same capability duplicatedNativePlugins requires before it examines an agent.
+// same capability adapter.DuplicatedNativePlugins requires before it examines an agent.
 //
 // Filtering on it is what keeps the scoping note honest. An agent with no
 // native plugin concept can never duplicate a plugin, so counting it would

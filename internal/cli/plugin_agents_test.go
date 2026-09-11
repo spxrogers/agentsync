@@ -761,7 +761,7 @@ func TestProjectScope_NativeAgentsIsHonoured(t *testing.T) {
 // TestProjectScope_ScopingNoteFollowsTheScopedCanonical pins the half of the
 // note's guard that user-scope tests structurally cannot reach.
 //
-// The guard asks "was there anything to check?" via declaredPlugins(rc), where
+// The guard asks "was there anything to check?" via adapter.DeclaredPlugins(rc), where
 // rc is reportCanonical(c, sc). At USER scope rc == c, so swapping one for the
 // other changes nothing and every user-scope test stays green — a mutation
 // sweep confirmed exactly that. Only at PROJECT scope do they diverge, because
@@ -971,7 +971,7 @@ func TestStatus_JSONStaysParseableWhenNarrowed(t *testing.T) {
 // TestStatus_ScopingNoteStaysSilentWhenNothingWasHidden pins the note's guard,
 // on the two conditions that make a narrowing harmless.
 //
-// The note qualifies duplicatedNativePlugins' silence, so it must fire on the
+// The note qualifies adapter.DuplicatedNativePlugins' silence, so it must fire on the
 // same conditions that check runs on. Round 1 of the review loop reproduced the
 // alternative in both directions: a note that blames the narrowing for a
 // silence the narrowing did not cause, and a note that stays quiet when the
@@ -994,7 +994,7 @@ func TestStatus_ScopingNoteStaysSilentWhenNothingWasHidden(t *testing.T) {
 			t.Fatalf("plugin add: %v\n%s", err, out)
 		}
 		// Disabled: still IN c.Plugins, but not effectively declared — so
-		// duplicatedNativePlugins returns having examined nothing.
+		// adapter.DuplicatedNativePlugins returns having examined nothing.
 		if out, err := runCLI(t, env, "plugin", "disable", "toolkit"); err != nil {
 			t.Fatalf("plugin disable: %v\n%s", err, out)
 		}

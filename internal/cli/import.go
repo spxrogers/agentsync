@@ -1668,7 +1668,7 @@ func importPlugins(io *importIO, home, agentName string, a adapter.Adapter, name
 	// Probed ONCE for the whole import (each probe reads a native config) and
 	// across every PluginIngester, since a plugin can be installed natively in
 	// more than the agent being imported from.
-	owners := nativePluginOwners(registryFactory())
+	owners := adapter.NativePluginOwners(registryFactory())
 
 	// Resolve (and, on a real run, fetch) each needed marketplace exactly once.
 	// The cached value is the agentsync marketplace name a plugin installs from;
@@ -1781,7 +1781,7 @@ func importPlugins(io *importIO, home, agentName string, a adapter.Adapter, name
 // Declining records NO key rather than an empty list, so a later import asks
 // again — and asks only if the duplicate still exists. Acting on the warning
 // (disabling the plugin inside the agent) removes that agent from
-// nativePluginOwners, so the question stops being asked on its own; ignoring it
+// adapter.NativePluginOwners, so the question stops being asked on its own; ignoring it
 // leaves a duplicate worth raising again. A hand-written `native_agents = []`
 // is how a user says "defer to nobody, stop asking" — installPluginInto
 // preserves that, and it survives a rewrite because the field is a pointer.

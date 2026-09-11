@@ -1,15 +1,24 @@
-package cli
+package adapter
 
 import (
 	"slices"
 	"sort"
 
-	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
-// nativePluginOwners maps a plugin NAME to the agents whose own plugin manager
+// The three reports below are queries over the PluginIngester contract declared
+// in adapter.go: each one walks a Registry, asks every adapter that implements
+// the read-only extension what its agent has installed, and compares that
+// against the canonical source. They live here rather than in a caller because
+// `status`, `doctor` and `import` all ask the same questions and must get the
+// same answers, and because the questions are about this package's own
+// interface — PluginIngester has no Render-side counterpart by design (see
+// docs/architecture.md § "PluginIngester (read-only)"), so "what does the agent
+// already have?" is the only direction there is to ask in.
+
+// NativePluginOwners maps a plugin NAME to the agents whose own plugin manager
 // already has it enabled. It is the input to `native_agents`: an agent that
 // installs a plugin itself must not also receive agentsync's projection of that
 // plugin's components, or every skill/subagent/command lands twice and every
@@ -23,21 +32,21 @@ import (
 // correct if the user enables it later.
 //
 // Matching is by NAME (the plugins/<id>.toml stem), mirroring
-// undeclaredNativePlugins: the marketplace id an agent records natively can
+// UndeclaredNativePlugins: the marketplace id an agent records natively can
 // differ from the declared marketplace name agentsync keys its file on. A
 // discovery error is skipped silently — a missing or malformed native config
 // means "no plugins discovered", never a failed import.
-func nativePluginOwners(reg *adapter.Registry) map[string][]string {
+func NativePluginOwners(reg *Registry) map[string][]string {
 	out := map[string][]string{}
 	// reg.Names() is already sorted, so the owner lists this builds are stable
 	// without re-sorting — and stability matters: the list is written into
 	// plugins/<id>.toml, which is usually a committed dotfiles repo.
 	for _, agentName := range reg.Names() {
-		pi, ok := reg.Lookup(agentName).(adapter.PluginIngester)
+		pi, ok := reg.Lookup(agentName).(PluginIngester)
 		if !ok {
 			continue
 		}
-		_, plugins, err := pi.IngestPlugins(adapter.ScopeUser, "")
+		_, plugins, err := pi.IngestPlugins(ScopeUser, "")
 		if err != nil {
 			continue
 		}
@@ -57,18 +66,18 @@ func nativePluginOwners(reg *adapter.Registry) map[string][]string {
 	return out
 }
 
-// declaredPlugins returns the plugins a canonical EFFECTIVELY declares — every
+// DeclaredPlugins returns the plugins a canonical EFFECTIVELY declares — every
 // non-disabled entry, keyed by the plugins/<id>.toml stem.
 //
 // Extracted as a helper because two call sites must agree on it exactly:
-// duplicatedNativePlugins returns nil (having checked nothing) when this set is
+// DuplicatedNativePlugins returns nil (having checked nothing) when this set is
 // empty, and status's `--agents` scoping note exists to qualify that very
 // silence. A note computing "did we have anything to check?" its own way — off
 // the merged canonical rather than the scoped one, or counting disabled pins —
 // disagrees with the check in both directions: it claims a narrowed check that
 // never ran, and it stays quiet when narrowing really did hide a duplicate.
-// Callers must pass the SAME canonical they pass to duplicatedNativePlugins.
-func declaredPlugins(c source.Canonical) map[string]source.PluginSpec {
+// Callers must pass the SAME canonical they pass to DuplicatedNativePlugins.
+func DeclaredPlugins(c source.Canonical) map[string]source.PluginSpec {
 	declared := make(map[string]source.PluginSpec, len(c.Plugins))
 	for _, pl := range c.Plugins {
 		if !pl.Plugin.Disabled {
@@ -78,13 +87,13 @@ func declaredPlugins(c source.Canonical) map[string]source.PluginSpec {
 	return declared
 }
 
-// duplicatedNativePlugins reports, per agent, the declared plugins that agent
+// DuplicatedNativePlugins reports, per agent, the declared plugins that agent
 // installs ITSELF and that agentsync also projects to it — the duplicate: every
 // skill, subagent, and command lands twice (once from the agent's own install
 // dir, once from agentsync's projection into the agent's standalone paths) and
 // every hook handler fires twice.
 //
-// It is the counterpart to undeclaredNativePlugins, and the safety net for a
+// It is the counterpart to UndeclaredNativePlugins, and the safety net for a
 // deliberate design choice: apply's output is a pure function of canonical state
 // and never probes the destination, so a plugin installed natively AFTER it was
 // declared in agentsync cannot be noticed at apply time. `import` seeds
@@ -92,15 +101,15 @@ func declaredPlugins(c source.Canonical) map[string]source.PluginSpec {
 //
 // A plugin is duplicated for an agent when all of:
 //   - the agent's native config has it enabled (matched by NAME, the
-//     plugins/<id>.toml stem, as in undeclaredNativePlugins);
+//     plugins/<id>.toml stem, as in UndeclaredNativePlugins);
 //   - the canonical source declares it and it is not disabled;
 //   - agentsync projects it to this agent — i.e. the `agents` allowlist targets
 //     the agent and `native_agents` does NOT already defer to it.
 //
 // Read-only and best-effort: a discovery error is skipped, never surfaced as a
 // failure, exactly like the sibling nudge.
-func duplicatedNativePlugins(c source.Canonical, reg *adapter.Registry, agents []string) map[string][]untrusted.Text {
-	declared := declaredPlugins(c)
+func DuplicatedNativePlugins(c source.Canonical, reg *Registry, agents []string) map[string][]untrusted.Text {
+	declared := DeclaredPlugins(c)
 	if len(declared) == 0 {
 		return nil
 	}
@@ -115,11 +124,11 @@ func duplicatedNativePlugins(c source.Canonical, reg *adapter.Registry, agents [
 		if !c.Config.Agents[name].Enabled {
 			continue
 		}
-		pi, ok := reg.Lookup(name).(adapter.PluginIngester)
+		pi, ok := reg.Lookup(name).(PluginIngester)
 		if !ok {
 			continue
 		}
-		_, plugins, err := pi.IngestPlugins(adapter.ScopeUser, "")
+		_, plugins, err := pi.IngestPlugins(ScopeUser, "")
 		if err != nil {
 			continue
 		}
@@ -148,14 +157,14 @@ func duplicatedNativePlugins(c source.Canonical, reg *adapter.Registry, agents [
 	return out
 }
 
-// undeclaredNativePlugins reports, per agent, the plugins enabled in that
+// UndeclaredNativePlugins reports, per agent, the plugins enabled in that
 // agent's native config that are NOT declared in the canonical source — a
 // read-only nudge surfaced by `status` and `doctor`.
 //
 // agentsync treats natively-installed plugins as foreign-managed (the design's
 // "jointly-owned cache" note), so this never blocks or auto-imports; it just
 // points the user at `import <agent>:plugin`. Only agents whose adapter
-// implements adapter.PluginIngester are probed (others yield nothing), and a
+// implements PluginIngester are probed (others yield nothing), and a
 // discovery error is skipped silently since the nudge is best-effort.
 //
 // Matching is by plugin NAME — the plugins/<name>.toml stem — not by
@@ -167,18 +176,18 @@ func duplicatedNativePlugins(c source.Canonical, reg *adapter.Registry, agents [
 // author influences it, and status/doctor print it), so matching/dedup keys off
 // its raw Unverified() value while the value handed to the print sites keeps the
 // Text wrapper and sanitizes on display.
-func undeclaredNativePlugins(c source.Canonical, reg *adapter.Registry, agents []string) map[string][]untrusted.Text {
+func UndeclaredNativePlugins(c source.Canonical, reg *Registry, agents []string) map[string][]untrusted.Text {
 	declared := make(map[string]bool, len(c.Plugins))
 	for _, pl := range c.Plugins {
 		declared[pl.ID.Unverified()] = true
 	}
 	out := map[string][]untrusted.Text{}
 	for _, name := range agents {
-		pi, ok := reg.Lookup(name).(adapter.PluginIngester)
+		pi, ok := reg.Lookup(name).(PluginIngester)
 		if !ok {
 			continue
 		}
-		_, plugins, err := pi.IngestPlugins(adapter.ScopeUser, "")
+		_, plugins, err := pi.IngestPlugins(ScopeUser, "")
 		if err != nil {
 			continue
 		}

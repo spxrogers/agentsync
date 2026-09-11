@@ -109,7 +109,7 @@ func TestStatus_SanitizesUndeclaredPluginName(t *testing.T) {
 }
 
 // TestDoctor_SanitizesUndeclaredPluginName mirrors the status guard for doctor's
-// own undeclared-native-plugin report, which shares the undeclaredNativePlugins
+// own undeclared-native-plugin report, which shares the adapter.UndeclaredNativePlugins
 // source and the same ui.Sanitize display boundary — so a refactor dropping the
 // doctor wrap fails a test too, not just the status one.
 func TestDoctor_SanitizesUndeclaredPluginName(t *testing.T) {
