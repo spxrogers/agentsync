@@ -1370,3 +1370,29 @@ func TestPlugin_UpgradeAfterBareIDInstall(t *testing.T) {
 		t.Fatalf("upgrade of a bare-id-installed plugin must re-search the caches, not look for a %q marketplace: %v\n%s", "default", err, out)
 	}
 }
+
+// TestPlugin_EnableDisablePreserveNativeAgents pins what the plugins guide
+// promises for the lifecycle verbs: `disable` and `enable` flip only the
+// disabled bit and carry every other modelled field forward — here the
+// native_agents deferral, which neither verb reads or writes on its own.
+func TestPlugin_EnableDisablePreserveNativeAgents(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "marketplace", "add", makeLocalMarketplace(t, t.TempDir()))
+	mustRun(t, env, "plugin", "add", "demo@test-mp")
+	pluginPath := filepath.Join(tmp, ".agentsync", "plugins", "demo.toml")
+	writePluginTOMLBody(t, pluginPath,
+		"[plugin]\nid = 'demo@test-mp'\nupdate = 'track'\nagents = ['*']\nnative_agents = ['claude']\n")
+
+	for _, verb := range []string{"disable", "enable"} {
+		mustRun(t, env, "plugin", verb, "demo")
+		data, err := os.ReadFile(pluginPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), "native_agents = ['claude']") {
+			t.Errorf("plugin %s must carry native_agents forward; file after %s:\n%s", verb, verb, data)
+		}
+	}
+}

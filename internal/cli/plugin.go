@@ -160,18 +160,18 @@ func pluginNativeAgentsUnset(home, id string) bool {
 	return existing.Plugin.NativeAgents == nil
 }
 
-// pluginInstallRefresh names the ONLY fields a (re-)install recomputes from the
-// fetched marketplace metadata. Everything else in source.PluginSpec is
-// USER-AUTHORED lifecycle state that a re-install must carry forward untouched.
+// pluginInstallRefresh names the fields installPluginInto recomputes from the
+// fetched marketplace metadata; everything else in source.PluginSpec is
+// user-authored lifecycle state a re-install carries forward untouched (#140).
+// It is a struct so that half of the classification lives in one place a test
+// can reflect over: TestPluginSpecFieldsAreClassified holds the preserved half
+// and fails when source.PluginSpec grows a field that is in neither (#234).
 //
-// It is a struct, not three lines inline, so the refreshed half of the
-// classification lives in production code, in one place a test can reflect
-// over; the preserved half is the test-side pluginSpecPreserved, and
-// TestPluginSpecFieldsAreClassified forces the two to partition
-// source.PluginSpec exactly — it fails when the struct grows a field that is
-// neither named here nor classified as preserved, which is what stops the #140
-// bug class from reappearing through a field nobody remembered to add to the
-// merge (#234).
+// `plugin upgrade` (pluginUpgradeRun) and the poll engine (applyPluginBump)
+// refresh Version and ManifestSHA on their own, outside applyTo: each rewrites
+// the whole decoded entry, so it preserves by construction, and its refreshed
+// set differs (no ID; a SHA only when one was computed). A field added here
+// does not reach them.
 type pluginInstallRefresh struct {
 	ID          untrusted.Text
 	Version     untrusted.Text
@@ -192,9 +192,9 @@ func (r pluginInstallRefresh) applyTo(base source.PluginSpec) source.PluginSpec 
 // pluginLifecycleBase returns the spec a (re-)install starts from, before the
 // install-refreshed fields are stamped onto it.
 //
-// existing is the spec already in plugins/<id>.toml, or nil for a first
-// install. Its lifecycle fields (the Agents allowlist, the Update policy, the
-// NativeAgents deferral, the Disabled bit) are user-authored, security-relevant
+// existing is the spec already in plugins/<id>.toml, or the zero spec for a
+// first install. Its lifecycle fields (the Agents allowlist, the Update policy,
+// the NativeAgents deferral, the Disabled bit) are user-authored, security-relevant
 // on-disk state — the allowlist scopes which agents a credential-bearing plugin
 // fans out to — so they are carried forward WHOLESALE rather than field by
 // field (issue #140).
@@ -202,15 +202,12 @@ func (r pluginInstallRefresh) applyTo(base source.PluginSpec) source.PluginSpec 
 // The three backfills below are for keys the file may legitimately OMIT, not a
 // re-listing of the lifecycle: each restores the value the omission means, so a
 // re-install over a file with no `agents` key still writes agents = ['*'] and a
-// first install (existing == nil, every field zero) produces the historical
+// first install (the zero spec, every field zero) produces the historical
 // artifact byte-for-byte — agents = ['*'], update = 'track', no disabled key —
-// which is what keeps `plugin add` and `import` producing identical canonical
-// files (see installPluginInto's doc comment).
-func pluginLifecycleBase(existing *source.PluginSpec, defaultNativeAgents []string) source.PluginSpec {
-	var base source.PluginSpec
-	if existing != nil {
-		base = *existing
-	}
+// the same defaults whether the install comes from `plugin add` or `import`
+// (see installPluginInto's doc comment).
+func pluginLifecycleBase(existing source.PluginSpec, defaultNativeAgents []string) source.PluginSpec {
+	base := existing
 	if len(base.Agents) == 0 {
 		base.Agents = []string{"*"}
 	}
@@ -234,12 +231,13 @@ func pluginLifecycleBase(existing *source.PluginSpec, defaultNativeAgents []stri
 // installPluginInto fetches plugin id from the named marketplace into the
 // plugin cache and writes plugins/<id>.toml, returning the written spec. mpName
 // may be empty (the marketplace is then searched for across all caches). It
-// does not print or acquire the global lock — callers do. Both `plugin install`
-// and `import` use it so the two produce byte-identical canonical artifacts.
-// defaultNativeAgents, when non-nil, seeds `native_agents` on a FIRST install
-// (it is ignored when plugins/<id>.toml already exists — an existing file's
-// lifecycle fields always win, per #140). `import` passes the agents whose
-// native config already enables this plugin; `plugin add` passes nil.
+// does not print or acquire the global lock — callers do. Both `plugin add` and
+// `import` use it, so the two write the same defaults into a new file.
+// defaultNativeAgents, when non-nil, seeds `native_agents` when the file has no
+// such key — on a first install, or over an existing file that never recorded
+// one; an existing key, even an empty list, always wins (#140). `import` passes
+// the agents whose native config already enables this plugin; `plugin add`
+// passes nil.
 func installPluginInto(home, id, mpName string, defaultNativeAgents []string) (source.PluginSpec, error) {
 	// Resolve marketplace.json from the marketplace cache.
 	mpData, mpEntry, resolvedMP, err := resolveMarketplaceEntry(home, mpName, id)
@@ -287,10 +285,10 @@ func installPluginInto(home, id, mpName string, defaultNativeAgents []string) (s
 	// comment-only — parses to rerr==nil and legitimately carries no lifecycle
 	// state, so it takes the defaults. agentsync's own iox.AtomicWrite never
 	// produces such a file; only external truncation would.)
-	var existingSpec *source.PluginSpec
+	var existingSpec source.PluginSpec
 	switch existing, rerr := readPluginTOML(pluginPath); {
 	case rerr == nil:
-		existingSpec = &existing.Plugin
+		existingSpec = existing.Plugin
 	case !errors.Is(rerr, os.ErrNotExist):
 		return source.PluginSpec{}, fmt.Errorf("existing %s is unreadable (%w); refusing to overwrite its agents/update/disabled with defaults — fix or remove it, then re-install", pluginPath, rerr)
 	}
@@ -957,7 +955,10 @@ func computeManifestSHA(home, id string, entry marketplace.PluginEntry, mpData [
 // lifecycle verbs (enable/disable/upgrade) must be able to read and rewrite a
 // file whose stray key the loader would reject, so `plugin disable` still works
 // on a hand-edited registry rather than failing with a decode error the user
-// cannot act on from here. Plugin.ID (toml:"-") is filled from the filename
+// cannot act on from here. The rewrite that follows keeps only the fields
+// source.Plugin models: a stray key, like a comment, is not carried into the
+// new file — which is why the docs promise to carry every MODELLED field
+// forward, not every key. Plugin.ID (toml:"-") is filled from the filename
 // stem exactly as loadPlugins fills it, so a source.Plugin from this function
 // means the same thing as one from source.Load.
 func readPluginTOML(path string) (source.Plugin, error) {

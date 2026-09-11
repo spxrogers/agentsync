@@ -145,10 +145,11 @@ agentsync plugin list
 ```
 
 `disable`/`enable` flip only the `disabled` bit, and `add` rewrites only the
-three fields it re-fetches (`id`, `version`, `manifest_sha`) — every other key
-in `plugins/<id>.toml` is carried forward from the file you have (an omitted key
-is written with its default), so your `agents` and `native_agents` targeting
-survives the full lifecycle untouched.
+three fields it re-fetches (`id`, `version`, `manifest_sha`) — every other
+field agentsync models in `plugins/<id>.toml` is carried forward from the file
+you have (an omitted key is written with its default; the file is rewritten, so
+comments and unmodelled keys are not kept), so your `agents` and
+`native_agents` targeting survives the full lifecycle untouched.
 
 <LinkCard
 	title="Agent capability matrix"

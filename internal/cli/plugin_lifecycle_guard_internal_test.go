@@ -91,6 +91,10 @@ func plantSentinels(t *testing.T, spec *source.PluginSpec) {
 	for i := 0; i < v.NumField(); i++ {
 		f := v.Field(i)
 		name := v.Type().Field(i).Name
+		if !f.CanSet() {
+			t.Fatalf("source.PluginSpec.%s is unexported; this proof plants by reflection and cannot "+
+				"reach it — export it, or teach plantSentinels another way in", name)
+		}
 		sentinel := "sentinel-" + name
 		switch {
 		case f.Kind() == reflect.String:
@@ -146,6 +150,24 @@ func TestInstallPreservesEveryLifecycleField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read back the written artifact: %v", err)
 	}
+	// What a refresh must write is what a FIRST install of the same fixture
+	// writes — the same entry and cache tree, in a home with no existing file.
+	// "Differs from the sentinel" alone would let a refresh that blanks a field
+	// pass, and the fixture's version is what makes Version load-bearing here.
+	fresh := t.TempDir()
+	writeMarketplaceCacheFixture(t, fresh, "test-mp", "demo")
+	first, err := installPluginInto(fresh, "demo", "test-mp", nil)
+	if err != nil {
+		t.Fatalf("first install for the expected refreshed values: %v", err)
+	}
+	if first.Version.Unverified() != "1.2.3" || first.ManifestSHA == "" {
+		t.Fatalf("the fixture must yield a non-empty version and manifest SHA for the refresh check to bite; got %+v", first)
+	}
+	wantRefreshed := map[string]any{
+		"ID":          first.ID,
+		"Version":     first.Version,
+		"ManifestSHA": first.ManifestSHA,
+	}
 
 	refreshed := map[string]bool{}
 	rt := reflect.TypeOf(pluginInstallRefresh{})
@@ -164,8 +186,13 @@ func TestInstallPreservesEveryLifecycleField(t *testing.T) {
 					name, why, gotF, wantF)
 			}
 		case refreshed[name]:
-			if reflect.DeepEqual(gotF, wantF) {
-				t.Errorf("re-install did not refresh %s: it still holds the stale on-disk value %#v", name, gotF)
+			exp, known := wantRefreshed[name]
+			if !known {
+				t.Fatalf("pluginInstallRefresh.%s has no expected value in this test; add it to wantRefreshed", name)
+			}
+			if !reflect.DeepEqual(gotF, exp) {
+				t.Errorf("re-install did not refresh %s: on disk %#v, want the fetched %#v (the stale sentinel was %#v)",
+					name, gotF, exp, wantF)
 			}
 		default:
 			// Unclassified: TestPluginSpecFieldsAreClassified reports it. Asserting
@@ -175,8 +202,8 @@ func TestInstallPreservesEveryLifecycleField(t *testing.T) {
 	// The caller's native_agents seed must NOT override an existing list — the
 	// sentinel above is an existing one. (Asserted separately because the loop
 	// above would also pass if the seed happened to equal the sentinel.)
-	if after.Plugin.NativeAgents == nil || (*after.Plugin.NativeAgents)[0] == "seed-agent" {
-		t.Errorf("the caller's native_agents seed overwrote an existing deferral list: %v", after.Plugin.NativeAgents)
+	if got := after.Plugin.DeferredAgents(); reflect.DeepEqual(got, []string{"seed-agent"}) {
+		t.Errorf("the caller's native_agents seed overwrote an existing deferral list: %v", got)
 	}
 }
 
@@ -187,7 +214,7 @@ func writeMarketplaceCacheFixture(t *testing.T, home, mpName, plugin string) {
 	t.Helper()
 	root := marketplaceCacheDir(home, mpName)
 	mpJSON := `{"name": "` + mpName + `", "owner": {"name": "tester"}, "plugins": [` +
-		`{"name": "` + plugin + `", "source": "./plugins/` + plugin + `"}]}`
+		`{"name": "` + plugin + `", "source": "./plugins/` + plugin + `", "version": "1.2.3"}]}`
 	mustWrite(t, filepath.Join(root, ".claude-plugin", "marketplace.json"), mpJSON)
 	mustWrite(t, filepath.Join(root, "plugins", plugin, ".claude-plugin", "plugin.json"),
 		`{"name": "`+plugin+`", "version": "1.0.0"}`)

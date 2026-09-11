@@ -263,7 +263,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
-- **A plugin's `plugins/<id>.toml` now has one schema and one preserve rule**
+- **Internal: a plugin's `plugins/<id>.toml` has one schema and one preserve
+  rule**
   ([#234](https://github.com/spxrogers/agentsync/issues/234)). The file was
   described by two identical structs — the canonical `source.PluginSpec` and a
   private copy inside the CLI — and a re-install merged the existing file into
@@ -274,11 +275,13 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   [#140](https://github.com/spxrogers/agentsync/issues/140). The CLI now reads
   and writes the canonical struct, and a re-install starts from the whole
   existing entry and overwrites only the three fields it re-fetches (`id`,
-  `version`, `manifest_sha`) — so every other key is preserved by default
-  rather than dropped by default, and a test fails if a new key is neither
-  classified as re-fetched nor as preserved. The on-disk bytes are unchanged: a
-  first install still writes `agents = ['*']` and `update = 'track'` with no
-  `disabled` key, and `plugin add` and `import` still produce identical files.
+  `version`, `manifest_sha`) — so every other modelled field is preserved by
+  default rather than dropped by default, and a test fails if a new field is
+  neither classified as re-fetched nor as preserved. The on-disk bytes are
+  unchanged: a first install still writes `agents = ['*']` and
+  `update = 'track'` with no `disabled` key, whether it comes from `plugin add`
+  or `import`.
+
 - **`status --json`, `diff` and `reconcile` now list a shared file's merged keys
   in a stable, sorted order.** The three walked `render.CollectPointers`' output
   directly, which ranges a Go map, so with five MCP servers in one
