@@ -70,7 +70,14 @@ is the only package that depends on nearly all the others.
   the default an omitted or empty key means), so a field added to
   `source.PluginSpec` is preserved by default rather than dropped by default
   (#234; the CLI's private duplicate of the struct, and the field-by-field merge
-  that went with it, are gone).
+  that went with it, are gone); `enabledAgentNames(cfg)` (`agents_flag.go`) —
+  the one "which agents may this run touch" extraction, returning the exact
+  `([]string, map[string]bool)` pair `selectAgents` takes, SORTED (eight commands
+  open-coded it, in three different shapes, before #235); `matchImportable`
+  (`import.go`) — the head every per-component importer shares (filter by name,
+  drop plugin-provided entries, refuse a named miss), while the tail stays
+  per-component because the five genuinely disagree about id validation and
+  write funnel.
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,
   `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
   `mcp {add,remove,list,enable,disable}`,
@@ -80,7 +87,7 @@ is the only package that depends on nearly all the others.
   `migrate subagents`, `explain <path>`,
   `version`.
 - **Depends on:** adapter, source, state, secrets, paths, render, marketplace,
-  project, drift, git, iox, ui, log.
+  project, drift, git, iox, jsonkeys, ui, log.
 - **Files:** `root.go` + one file per command group + shared helpers
   (`destread.go`, `planwalk.go`).
 
@@ -481,7 +488,11 @@ drift state's `SchemaVersion`.
 Models the Claude marketplace/plugin format, fetches sources, and projects plugin
 manifests into canonical components.
 - **Key:** `Marketplace`, `PluginEntry`, `Source`, `PluginManifest`;
-  `ProjectionResult`; `Project`/`ProjectWithReader`; `ProjectInstalled`
+  `ProjectionResult` + its `Canonical()` / `ReplaceComponentsIn()` (the
+  projection→canonical component copy lives next to the struct, not in three CLI
+  call sites, so a new component kind cannot be added here and silently dropped
+  from every diagnostic surface — reflectively guarded);
+  `Project`/`ProjectWithReader`; `ProjectInstalled`
   (one installed plugin in isolation — lets `explain <id>` attribute coverage to
   the named plugin rather than the flattened union); `Fetcher` (interface) with
   `GitFetcher`/`NPMFetcher`/`RelativeFetcher`; `LoadProjected`/
@@ -532,9 +543,17 @@ Atomic file IO and locking.
 
 ### `internal/jsonkeys`
 Per-key JSON-pointer merge that preserves foreign keys and uses `json.Number`
-(no float64 rounding).
-- **Key:** `DecodeObject`; `DecodeYAML`; `MergeKeys(existing, ours, ownedPointers)`.
-- **Files:** `jsonkeys.go`.
+(no float64 rounding). It is also the single home for RFC 6901 pointer
+mechanics: `EscapeToken`/`UnescapeToken` were hand-rolled five times across
+three packages before #235, and their order of operations is not symmetric
+(escape does `~` first, decode does `~1` first), so getting either backwards
+silently corrupts any key holding a `/` or a `~`.
+- **Key:** `DecodeObject`; `DecodeYAML`; `MergeKeys(existing, ours, ownedPointers)`;
+  `EscapeToken`/`UnescapeToken`/`SplitPointer`; `Get(m, ptr) (any, bool)` — the
+  one pointer resolver, whose presence bool separates "absent" from "present and
+  null" (`render.RecordOpsState` needs the difference; the CLI's drift
+  diagnostics discard it).
+- **Files:** `jsonkeys.go`, `jsonc.go`, `pointer.go`.
 
 ### `internal/paths`
 Resolves `AGENTSYNC_HOME`, `AGENTSYNC_TARGET_ROOT`, and `$HOME`; converts between
