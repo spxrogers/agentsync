@@ -133,14 +133,7 @@ func runApplyPipeline(cmd *cobra.Command, home string, o applyOpts) error {
 		return err
 	}
 
-	agents := []string{}
-	enabled := map[string]bool{}
-	for name, ag := range c.Config.Agents {
-		if ag.Enabled {
-			agents = append(agents, name)
-			enabled[name] = true
-		}
-	}
+	agents, enabled := enabledAgentNames(c.Config)
 	// --agents narrows the apply to a validated allowlist, with the SAME parsing
 	// status/diff use (#200 F10). Applied after the enabled set is built, so an
 	// unknown or disabled name is rejected rather than silently rendering nothing.

@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/spf13/afero"
@@ -219,13 +218,7 @@ func explainRun(cmd *cobra.Command, rawPath, ptr string, jsonOut bool) error {
 	}
 
 	reg := registryFactory()
-	var agents []string
-	for name, ag := range c.Config.Agents {
-		if ag.Enabled {
-			agents = append(agents, name)
-		}
-	}
-	sort.Strings(agents)
+	agents, _ := enabledAgentNames(c.Config)
 	// Resolve secrets for HASHING only, exactly as `status` does: apply writes
 	// (and RecordOpsState hashes) the secret-RESOLVED content, so hashing a
 	// templated render would classify every synced ${secret:…}/${env:…} item as

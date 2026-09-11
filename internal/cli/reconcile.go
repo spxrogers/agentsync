@@ -372,14 +372,7 @@ func newReconcileSession(cmd *cobra.Command, in io.Reader, auto reconcileAuto, a
 		return nil, nil, err
 	}
 	reg := registryFactory()
-	var agents []string
-	enabled := map[string]bool{}
-	for name, ag := range c.Config.Agents {
-		if ag.Enabled {
-			agents = append(agents, name)
-			enabled[name] = true
-		}
-	}
+	agents, enabled := enabledAgentNames(c.Config)
 	// --agents narrows the pass, with the same parsing status/diff/apply use.
 	if len(agents) > 0 {
 		sel, aerr := selectAgents(cmd, agents, enabled, agentsCSV)

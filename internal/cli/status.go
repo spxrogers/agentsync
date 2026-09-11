@@ -148,14 +148,7 @@ func newStatusCmd() *cobra.Command {
 				return err
 			}
 			reg := registryFactory()
-			var enabledAgents []string
-			enabled := map[string]bool{}
-			for name, ag := range c.Config.Agents {
-				if ag.Enabled {
-					enabledAgents = append(enabledAgents, name)
-					enabled[name] = true
-				}
-			}
+			enabledAgents, enabled := enabledAgentNames(c.Config)
 			// --agents narrows the report (and the plan) to the requested
 			// agent(s); orphan-state warnings still consider the FULL enabled
 			// set so a deselected agent isn't mistaken for an orphaned one.
