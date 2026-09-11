@@ -11,35 +11,22 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/pelletier/go-toml/v2"
+	"github.com/spxrogers/agentsync/internal/source"
 )
 
-// pluginTOMLFixture mirrors the on-disk plugins/<id>.toml [plugin] table so
-// lifecycle tests can assert against the REAL file on disk (read back + parsed),
-// not an in-memory struct that never touched the filesystem — per CLAUDE.md's
-// "models must stay faithful to their on-disk artifacts" doctrine.
-type pluginTOMLFixture struct {
-	Plugin struct {
-		ID          string   `toml:"id"`
-		Version     string   `toml:"version"`
-		ManifestSHA string   `toml:"manifest_sha"`
-		Update      string   `toml:"update"`
-		Agents      []string `toml:"agents"`
-		// A POINTER, mirroring the production spec: this fixture exists to read
-		// the real artifact, so it must be able to tell "no key" from
-		// "native_agents = []" — the distinction the pointer exists for.
-		NativeAgents *[]string `toml:"native_agents"`
-		Disabled     bool      `toml:"disabled"`
-	} `toml:"plugin"`
-}
-
-// readPluginTOMLFixture reads plugins/<id>.toml back from disk and parses it.
-func readPluginTOMLFixture(t *testing.T, path string) pluginTOMLFixture {
+// readPluginTOMLFixture reads plugins/<id>.toml back from disk and parses it
+// into the canonical source.Plugin — the file's one shape, not a test-side copy
+// of the [plugin] table (#234) — so lifecycle tests assert against the REAL
+// file on disk (read back + parsed), not an in-memory struct that never touched
+// the filesystem, per CLAUDE.md's "models must stay faithful to their on-disk
+// artifacts" doctrine.
+func readPluginTOMLFixture(t *testing.T, path string) source.Plugin {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	var p pluginTOMLFixture
+	var p source.Plugin
 	if err := toml.Unmarshal(data, &p); err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}
@@ -727,6 +714,45 @@ agents = ["claude"]
 	}
 }
 
+// TestPlugin_DisableEnablePreservesNativeAgents pins what the plugins guide
+// promises for the lifecycle verbs: `disable` and `enable` flip only the
+// disabled bit and carry every other modelled field forward — here the
+// native_agents deferral, which neither verb reads or writes on its own. The
+// bit itself is asserted too, so a verb that refused to rewrite the file could
+// not pass as "preserving"; and the allowlist is left EMPTY on purpose, so the
+// verbs are also caught backfilling `agents = ['*']` — that default is `add`'s
+// to write, and the guide attributes it to `add` alone.
+func TestPlugin_DisableEnablePreservesNativeAgents(t *testing.T) {
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	mustRun(t, env, "init")
+	mustRun(t, env, "marketplace", "add", makeLocalMarketplace(t, t.TempDir()))
+	mustRun(t, env, "plugin", "add", "demo@test-mp")
+	pluginPath := filepath.Join(tmp, ".agentsync", "plugins", "demo.toml")
+	writePluginTOMLBody(t, pluginPath,
+		"[plugin]\nid = 'demo@test-mp'\nupdate = 'track'\nagents = []\nnative_agents = ['claude']\n")
+
+	for _, tc := range []struct {
+		verb         string
+		wantDisabled bool
+	}{{"disable", true}, {"enable", false}} {
+		mustRun(t, env, "plugin", tc.verb, "demo")
+		data, err := os.ReadFile(pluginPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(string(data), "disabled = true"); got != tc.wantDisabled {
+			t.Errorf("plugin %s must flip the disabled bit (want disabled=%v); file after %s:\n%s", tc.verb, tc.wantDisabled, tc.verb, data)
+		}
+		if !strings.Contains(string(data), "native_agents = ['claude']") {
+			t.Errorf("plugin %s must carry native_agents forward; file after %s:\n%s", tc.verb, tc.verb, data)
+		}
+		if strings.Contains(string(data), "agents = ['*']") {
+			t.Errorf("plugin %s must not backfill the allowlist default — only add does; file after %s:\n%s", tc.verb, tc.verb, data)
+		}
+	}
+}
+
 // TestPlugin_ReinstallPreservesAgentsUpdateDisabled is the regression for issue
 // #140's re-install data loss: `installPluginInto` hard-reset Agents/Update/
 // Disabled to the first-install defaults on every write, so re-installing an
@@ -774,7 +800,10 @@ func TestPlugin_ReinstallOverCorruptTOMLRefuses(t *testing.T) {
 // documented in installPluginInto: a semantically-EMPTY plugins/<id>.toml (blank or
 // comment-only) parses successfully to an empty spec, so it carries no allowlist to
 // preserve and a re-install legitimately falls through to the defaults — unlike a corrupt/
-// unparseable file, which refuses (TestPlugin_ReinstallOverCorruptTOMLRefuses).
+// unparseable file, which refuses (TestPlugin_ReinstallOverCorruptTOMLRefuses). The same
+// defaults apply to keys that are PRESENT but empty: `agents = []` decodes to a non-nil
+// empty slice (the case a nil check would miss) and an empty `update` decodes like an
+// absent one; both come back as the default, which is what the user guide promises.
 func TestPlugin_ReinstallOverEmptyTOMLUsesDefaults(t *testing.T) {
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
@@ -805,6 +834,21 @@ func TestPlugin_ReinstallOverEmptyTOMLUsesDefaults(t *testing.T) {
 	}
 	if got.Plugin.Update != "track" {
 		t.Fatalf("empty toml should fall through to default update=track, got %q", got.Plugin.Update)
+	}
+
+	// Present-but-empty keys: `agents = []` decodes to a non-nil empty slice and
+	// `update = ''` to the empty string; both mean "the default" and must be
+	// written as it, not carried forward as literally empty.
+	writePluginTOMLBody(t, pluginPath, "[plugin]\nid = 'demo@test-mp'\nagents = []\nupdate = ''\n")
+	if out, err := runCLI(t, env, "plugin", "add", "demo@test-mp"); err != nil {
+		t.Fatalf("re-install over empty keys should succeed, got: %v\n%s", err, out)
+	}
+	got = readPluginTOMLFixture(t, pluginPath)
+	if len(got.Plugin.Agents) != 1 || got.Plugin.Agents[0] != "*" {
+		t.Fatalf("an empty agents list should be written as the default [\"*\"], got %v", got.Plugin.Agents)
+	}
+	if got.Plugin.Update != "track" {
+		t.Fatalf("an empty update should be written as the default track, got %q", got.Plugin.Update)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
+	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/testenv"
 	"github.com/spxrogers/agentsync/internal/ui"
 )
@@ -387,11 +388,11 @@ func TestPluginTOML_NativeAgentsRoundTrip(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			first, err := toml.Marshal(pluginTOML{Plugin: pluginTOMLSpec{ID: "toolkit@mp", NativeAgents: tc.in}})
+			first, err := toml.Marshal(source.Plugin{Plugin: source.PluginSpec{ID: "toolkit@mp", NativeAgents: tc.in}})
 			if err != nil {
 				t.Fatal(err)
 			}
-			var decoded pluginTOML
+			var decoded source.Plugin
 			if err := toml.Unmarshal(first, &decoded); err != nil {
 				t.Fatal(err)
 			}
@@ -451,7 +452,7 @@ func TestNativeAgentsSuffix_SanitizesAndStaysQuiet(t *testing.T) {
 func TestKeptLifecycleSummary_Sanitizes(t *testing.T) {
 	testenv.RequireContainer(t)
 	hostile := []string{"claude\x1b[31m"}
-	got := keptLifecycleSummary(pluginTOMLSpec{
+	got := keptLifecycleSummary(source.PluginSpec{
 		Agents:       []string{"codex\x1b[32m"},
 		NativeAgents: &hostile,
 		Update:       "track",

@@ -212,7 +212,11 @@ type SkillFile struct {
 type Plugin struct {
 	// ID is the plugin's filesystem id (the plugins/<id>.toml stem), originating
 	// from a marketplace install — untrusted.Text so a print site sanitizes it by
-	// construction; use Unverified() for path/lookup use.
+	// construction; use Unverified() for path/lookup use. The toml:"-" is
+	// load-bearing: the CLI fills this field from the filename and re-marshals
+	// the whole struct on every lifecycle rewrite, so a key tag here would put an
+	// `id` above [plugin]. Pinned by TestReadPluginTOML_OuterIDNeverReachesTheFile
+	// (internal/cli).
 	ID     untrusted.Text `toml:"-"`
 	Plugin PluginSpec     `toml:"plugin"`
 }
