@@ -78,7 +78,14 @@ is the only package that depends on nearly all the others.
   (filter by name, drop plugin-provided entries, refuse a named miss; hooks keep
   their own because their join key is an opaque signature), while the tail
   stays per-component because the five genuinely disagree about id validation
-  and write funnel.
+  and write funnel. The convention for a command body is a NAMED run: the four
+  that still carried their whole implementation as an anonymous `RunE`
+  (`diffRun`, `checkRun`, `doctorRun`, `revertRun`) joined
+  `agentAddRun`/`mcpAddRun`/`importRun` in #235, so a `cobra.Command` literal
+  declares the surface and the body is a function you can read and stack-trace
+  by name; flag values reach such a run in a by-value opts struct rather than
+  through a closure it could write back into. (Other commands still run inline
+  literals — `status`'s is the largest — and are candidates for the same lift.)
 - **Commands:** `init`, `agent {add,remove,list,enable,disable}`, `apply`,
   `revert`, `status`, `diff`, `reconcile`, `import`, `doctor`, `check`,
   `mcp {add,remove,list,enable,disable}`,
@@ -89,8 +96,13 @@ is the only package that depends on nearly all the others.
   `version`.
 - **Depends on:** adapter, source, state, secrets, paths, render, marketplace,
   project, drift, git, iox, jsonkeys, ui, log.
-- **Files:** `root.go` + one file per command group + shared helpers
-  (`destread.go`, `planwalk.go`).
+- **Files:** `root.go` + one file per command group + shared helpers, which are
+  named for what they hold rather than for the command that first needed them:
+  `destread.go` (the destination-read gate AND the dest decoders `import.go`
+  used to own), `hash.go` (content/file hashing + the opaque shape/symlink
+  sentinels), `statekey.go` (the two `state.Key` constructors), `scope.go`
+  (scope resolution, project discovery, the scope prompt), `load.go`
+  (`loadProjectedForScope` and the project overlay), `planwalk.go`.
 
 ---
 
@@ -114,10 +126,20 @@ memory-fragment expansion.
   import's capture-refusal filter deliberately does NOT narrow the same way; its
   refusal set is WIDER than the render set, because the destination can still
   hold un-reclaimed output from before a deferral was recorded. Do not restore
-  symmetry between them — see `docs/architecture.md`).
-- **Depends on:** iox, jsonkeys.
+  symmetry between them — see `docs/architecture.md`);
+  `MigrateSubagentTree` / `MigratedSourceID` (the retired `agents/` →
+  `subagents/` move, beside the directory names, the legacy-file lister and the
+  pending-migration error that define the condition it resolves — the CLI keeps
+  the prompt, the lock and the state rewrite);
+  `SpliceTOMLTable` + `TableOutsideUnchanged` (the ONE comment-preserving
+  rewriter behind `agent add/remove/enable/disable` and the git-backup mode
+  setter: replace one table's run in `agentsync.toml` and leave every other
+  table's bytes alone, then refuse the write unless a re-parse proves nothing
+  outside that table changed. `SpliceOptions.IncludeSubtables` is what tells
+  `[agents]`, which also owns `[agents.<name>]`, from a table that does not).
+- **Depends on:** iox, jsonkeys, untrusted.
 - **Files:** `schema.go`, `loader.go`, `writer.go`, `memory.go`,
-  `provenance.go`, `targeting.go`.
+  `provenance.go`, `targeting.go`, `subagentdir.go`, `tomltable.go`.
 
 ### `internal/secrets`
 Resolves `${secret:dotted.key}` and `${env:NAME}` at apply time; re-references
@@ -134,13 +156,22 @@ The `Resolved` wrapper type is the load-bearing leak guard.
   `RequireAgeVault` (the `secret` group's age-vault precondition, sharing
   `NormalizeBackend`);
   `Resolved.ForAgent` (per-agent narrowing at the render waist,
-  delegating to `source.FilterForAgent`); and the single field list
+  delegating to `source.FilterForAgent`); `Vault` (`NewVault`, `AgeFile`,
+  `IdentityFile`, `Load`, `Save`, `WriteVerified`) plus `SetNestedKey` /
+  `GetNestedKey` / `DeleteNestedKey` / `FlattenKeys` — the age vault's own
+  read-modify-write, which the `secret` subcommands used to carry: decrypt to a
+  map, mutate by dotted key refusing destructive type changes, validate against
+  apply's flatten contract, encrypt, verify the identity can read the result
+  back, roll the previous store in if it cannot. It is the vault FILE, the input
+  side of resolution — it touches no `source.Write*` and unwraps no `Resolved`;
+  and the single field list
   `walkSecretFields` (in `walk.go`).
 - **Depends on:** source, iox, untrusted.
 - **Files:** `secrets.go`, `age.go`, `resolved.go`, `substitute.go`,
   `rereference.go`, `mask.go`, `refs.go`, `walk.go`, `secretpaths.go`,
   `validate.go` (the `ValidateConfig` contract), `leakscan.go`
-  (the `ResidualSecretCleartext` backstop), `runtime.go`.
+  (the `ResidualSecretCleartext` backstop), `vault.go` (the age vault's
+  read-modify-write), `runtime.go`.
 
 ### `internal/project`
 Discovers a repo's project-scope source tree — a `.agentsync/` **directory**
@@ -174,8 +205,16 @@ shared cross-agent dir it writes into, and MUST return nil at project scope (see
   op); `Skip` (with `SkipKind`);
   `Registry` (`NewRegistry`, `Register`, `Lookup`, `Names`). Component support is
   expressed by what `Render` emits — an unsupported component yields a `Skip`,
-  not an absent capability flag.
-- **Files:** `adapter.go`, `registry.go`.
+  not an absent capability flag. `PluginIngester` (optional, READ-ONLY — see
+  [architecture § PluginIngester](architecture.md#pluginingester-read-only))
+  brings the four reports that interrogate it: `NativePluginOwners` (which
+  agents install a plugin themselves — what seeds `native_agents` at import),
+  `DuplicatedNativePlugins` (declared AND natively installed AND projected
+  there — every component would land twice), `UndeclaredNativePlugins` (the
+  `status`/`doctor` nudge), and `DeclaredPlugins`, the non-disabled declared set
+  the first two must agree on. They live beside the interface because there is
+  no Render-side counterpart to ask the same question of.
+- **Files:** `adapter.go`, `registry.go`, `nativeplugins.go`.
 
 ### `internal/adapter/claude`
 The reference adapter — MCP, memory, skills, subagents, commands, and hooks, with per-key merge

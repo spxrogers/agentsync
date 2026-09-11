@@ -263,6 +263,34 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
+- **Internal: shared helpers, command bodies and domain logic move to where
+  they belong** ([#235](https://github.com/spxrogers/agentsync/issues/235)).
+  Nothing a user runs changes. Helpers every drift surface calls were reachable
+  only by knowing which command file they happened to land in: destination
+  decoding lived in `import.go`, content hashing and the JSONC reader in
+  `status.go`, scope resolution and the projected load in `apply.go`. They now
+  sit in files named for what they hold. The four commands that still carried
+  their whole implementation as an anonymous `RunE` inside a struct literal —
+  `diff`, `check`, `doctor`, `revert` — have named runs like `agent add`,
+  `mcp add`, `import` and `apply`, with flag values passed by value instead of
+  through a closure they could write back into. Three pieces of domain logic left `internal/cli` entirely:
+  the native-plugin reports to `internal/adapter`, beside the `PluginIngester`
+  contract they query; the retired `agents/` → `subagents/` move to
+  `internal/source`, beside the directory names and the error that defines the
+  condition it resolves; and the age vault's read-modify-write to
+  `internal/secrets`, so decrypt/mutate/encrypt/verify/roll-back no longer lives
+  in the cobra layer. The vault move adds no path from a resolved value to the
+  canonical source: `capture.Capture` and the single secret-field list are
+  untouched. Finally, the two hand-rolled line splicers that rewrite one table
+  of your `agentsync.toml` in place — the `[agents]` registry and
+  `[destination_directory_git_backup]` — are one `source.SpliceTOMLTable`, with
+  both fail-closed backstops preserved: a rewrite that no longer parses, or that
+  would alter any other table's values, is still refused with your file left
+  byte-for-byte untouched. Verified by running every rewrite over sixteen
+  agentsync.toml layouts (comments, sub-table form, no trailing newline, CRLF,
+  arrays of tables, multi-line strings containing a table header) before and
+  after: identical bytes and identical refusal text in all 112.
+
 - **Internal: four duplicated helpers in the CLI collapse to one each**
   ([#235](https://github.com/spxrogers/agentsync/issues/235)). Eight commands
   open-coded the same walk over `[agents]` to answer "which agents may this run
