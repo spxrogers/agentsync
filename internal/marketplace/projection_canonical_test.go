@@ -25,6 +25,11 @@ import (
 // added to ProjectionResult with no Canonical counterpart fails the lookup arm
 // instead — which is the right failure: a projected component kind the canonical
 // model cannot hold is a schema change, not a copy bug.
+//
+// It also pins the documented aliasing contract: both methods copy slice
+// headers, so each copied list must share its backing array with the
+// projection's. A deep copy would pass the coverage arm and silently change
+// what a caller that later appends to or mutates the projection observes.
 func TestProjectionResultAsCanonicalCoversEveryField(t *testing.T) {
 	var r marketplace.ProjectionResult
 	rv := reflect.ValueOf(&r).Elem()
@@ -60,6 +65,11 @@ func TestProjectionResultAsCanonicalCoversEveryField(t *testing.T) {
 			if cf.Len() != 1 {
 				t.Errorf("%s: ProjectionResult.%s was not copied (Canonical.%s has %d entries, want 1) — "+
 					"add it to ProjectionResult.%s", what, name, name, cf.Len(), what)
+				continue
+			}
+			if cf.Pointer() != rv.Field(i).Pointer() {
+				t.Errorf("%s: ProjectionResult.%s was deep-copied — the documented contract is a header copy "+
+					"that aliases the projection's backing array", what, name)
 			}
 		}
 	}

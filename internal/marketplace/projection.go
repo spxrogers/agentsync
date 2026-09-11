@@ -38,9 +38,10 @@ type ProjectionResult struct {
 }
 
 // AsCanonical returns this projection as a source.Canonical carrying ONLY the
-// projected components — no Config, no Memory, no Plugins. It copies slice
-// HEADERS, not elements: the returned lists alias the projection's backing
-// arrays, exactly as the three hand-copies it replaced did.
+// projected components — no Config, no Memory, no Plugins. Both it and
+// ReplaceComponentsIn copy slice HEADERS, never elements: the lists they hand
+// out alias the projection's backing arrays, as the three hand-copies they
+// replaced did, and the guard test pins that alongside field coverage.
 //
 // Three callers in internal/cli hand-copied the same six fields out of a
 // ProjectionResult (explain's plugin attribution, `plugin explain`'s per-plugin

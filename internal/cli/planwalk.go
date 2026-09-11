@@ -310,8 +310,8 @@ func walkPlanItems(w planWalk) []planItem {
 // `/` names the WHOLE document, as jsonkeys.Get documents — the reading
 // internal/render already had; the CLI resolver this replaced answered `/`
 // with the `""` key. It is reachable from a hand-edited state key, or from
-// CollectPointers over a rendered document with a top-level `""` key, which no
-// adapter renders today.
+// render.CollectPointers over a rendered document with a top-level `""` key,
+// which no adapter renders today.
 func getPointerValue(m map[string]any, ptr string) any {
 	if !strings.HasPrefix(ptr, "/") {
 		return nil

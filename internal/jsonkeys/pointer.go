@@ -41,7 +41,10 @@ func UnescapeToken(tok string) string {
 
 // SplitPointer splits a JSON pointer into its decoded reference tokens. A
 // leading "/" is optional; the empty pointer (the whole document) yields no
-// tokens.
+// tokens — and so does "/": the leading slash is stripped BEFORE the empty
+// check, so "/" is the empty pointer here, not the one-token pointer naming
+// the "" key that RFC 6901 makes it. This is where the "/" reading Get
+// documents is implemented.
 func SplitPointer(ptr string) []string {
 	ptr = strings.TrimPrefix(ptr, "/")
 	if ptr == "" {
@@ -68,8 +71,8 @@ func SplitPointer(ptr string) []string {
 // assigns it — the reading internal/render's resolver already had. The two CLI
 // resolvers this replaced answered `/` with the `""` key instead, so this is
 // the one pointer the copies disagreed on. It is reachable from a hand-edited
-// state key, or from CollectPointers over a rendered document with a top-level
-// `""` key, which no adapter renders today.
+// state key, or from render.CollectPointers over a rendered document with a
+// top-level `""` key, which no adapter renders today.
 func Get(m map[string]any, ptr string) (any, bool) {
 	var cur any = m
 	for _, p := range SplitPointer(ptr) {

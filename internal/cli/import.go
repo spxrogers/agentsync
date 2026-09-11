@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -603,8 +604,12 @@ func unimportedDestPointers(agentsyncHome, srcHome, agentName string, reg *adapt
 // escaped: a key holding a '/' or a '~' escapes to something other than
 // itself, so a set keyed by the raw key would never match, and every foreign
 // pointer under that section would go unreported. Pure, with no I/O, so
-// TestUnimportedSectionSetAgreesWithSeedPointers can pin exactly that on the
-// production code rather than on a re-spelling of it.
+// TestForeignPointersInOurSections can pin exactly that on the production code
+// rather than on a re-spelling of it.
+//
+// The result is SORTED: it is printed to the user, and collectStateSeedPointers
+// walks a map, so without the sort the same destination file would list its
+// uncaptured items in a different order on every run.
 func foreignPointersInOurSections(ours, existing map[string]any) []string {
 	ownedPtrs := map[string]bool{}
 	ourSections := map[string]bool{}
@@ -624,6 +629,7 @@ func foreignPointersInOurSections(ours, existing map[string]any) []string {
 		}
 		out = append(out, p)
 	}
+	sort.Strings(out)
 	return out
 }
 
@@ -1627,7 +1633,7 @@ func importMemory(io *importIO, home string, c source.Canonical) ([]string, erro
 		// No markers (collision/legacy) but the source is fragment-composed:
 		// writing the expanded body would inline the @imports and orphan the
 		// fragment files — skip with a warning rather than flatten silently.
-		io.notef("skipping memory import — canonical memory uses fragments/ and the imported memory has no reversible markers; writing it back would inline the fragments and orphan their files. Edit memory/ directly, then apply.")
+		io.note("skipping memory import — canonical memory uses fragments/ and the imported memory has no reversible markers; writing it back would inline the fragments and orphan their files. Edit memory/ directly, then apply.")
 		return nil, nil
 	default:
 		if !io.dryRun {

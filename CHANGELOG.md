@@ -281,15 +281,16 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   disagreed on, `/`, now names the whole document everywhere, as
   `internal/render` already read it (the CLI's two resolvers read it as the
   `""` key); it can only come from a hand-edited state key or a rendered
-  document with a top-level empty key, which no adapter produces. The
-  `ProjectionResult` → `source.Canonical` component copy moved out of its three
-  CLI call sites and next to the struct it copies, with a reflective guard, so a
-  seventh component kind cannot be added to a plugin projection and silently
-  dropped from `explain`, `plugin explain` and `plugin poll`. And import's five
-  per-component importers share their opening filter rather than repeating it
-  five times. Verified with a scripted 44-command lifecycle across four agents:
-  the transcript and every file under the home are byte-identical before and
-  after.
+  document with a top-level empty key, which no adapter produces today. The list
+  of destination items `import` reports as present but not captured is now
+  sorted rather than in map order. The `ProjectionResult` → `source.Canonical`
+  component copy moved out of its three CLI call sites and next to the struct it
+  copies, with a reflective guard, so a seventh component kind cannot be added
+  to a plugin projection and silently dropped from `explain`, `plugin explain`
+  and `plugin poll`. And import's five per-component importers share their
+  opening filter rather than repeating it five times. Verified with a scripted
+  44-command lifecycle across four agents: the transcript and every file under
+  the home are byte-identical before and after.
 
 - **Internal: a plugin's `plugins/<id>.toml` has one schema and one preserve
   rule**

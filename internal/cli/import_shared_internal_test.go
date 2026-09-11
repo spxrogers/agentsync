@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
-	"sort"
 	"strings"
 	"testing"
 
@@ -276,34 +275,47 @@ func TestGetPointerValueRefusesAnUnrootedPointer(t *testing.T) {
 	}
 }
 
-// TestUnimportedSectionSetAgreesWithSeedPointers pins that the section set
-// unimportedDestPointers filters against is built with the SAME escaping
+// TestForeignPointersInOurSections pins the two things unimportedDestPointers'
+// walk must get right before its result reaches the user.
+//
+// First, the section set it filters against is built with the SAME escaping
 // collectStateSeedPointers uses for its pointers' first segment. A key holding
 // a '/' or a '~' escapes to something other than itself, so a section set
 // keyed by the raw key would never match the seed pointer for it, and every
-// foreign pointer under that section would go unreported.
+// foreign pointer under that section would go unreported. This exercises the
+// PRODUCTION function, not a re-spelling of its section set: drop the escape
+// there and the escaped sections below vanish from the result.
 //
-// It exercises the PRODUCTION function, foreignPointersInOurSections, not a
-// re-spelling of its section set: drop the escape there and the two escaped
-// sections below vanish from the result.
-func TestUnimportedSectionSetAgreesWithSeedPointers(t *testing.T) {
+// Second, the result is sorted. It is printed verbatim as the "exists in the
+// destination but agentsync did not capture" list, and the walk underneath
+// ranges a map; the fixture has eight foreign pointers so that map order
+// cannot come out sorted by accident (1 in 40320) and the expected slice is
+// compared WITHOUT sorting it first.
+func TestForeignPointersInOurSections(t *testing.T) {
 	ours := map[string]any{
 		"a~b":   map[string]any{"x": 1},
 		"c/d":   map[string]any{"y": 2},
 		"plain": map[string]any{"z": 3},
+		"~":     map[string]any{"w": 4},
 	}
 	existing := map[string]any{
-		"a~b":       map[string]any{"x": 1, "foreign1": true},
-		"c/d":       map[string]any{"y": 2, "foreign2": true},
-		"plain":     map[string]any{"z": 3, "foreign3": true},
-		"unmodeled": map[string]any{"w": 4}, // a section ours does not render: out of scope
+		"a~b":       map[string]any{"x": 1, "f2": true, "f1": true},
+		"c/d":       map[string]any{"y": 2, "f4": true, "f3": true},
+		"plain":     map[string]any{"z": 3, "f6": true, "f5": true},
+		"~":         map[string]any{"w": 4, "f8": true, "f7": true},
+		"unmodeled": map[string]any{"v": 5}, // a section ours does not render: out of scope
 	}
 	got := foreignPointersInOurSections(ours, existing)
-	sort.Strings(got)
-	want := []string{"/a~0b/foreign1", "/c~1d/foreign2", "/plain/foreign3"}
+	want := []string{
+		"/a~0b/f1", "/a~0b/f2",
+		"/c~1d/f3", "/c~1d/f4",
+		"/plain/f5", "/plain/f6",
+		"/~0/f7", "/~0/f8",
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("foreign pointers = %q, want %q "+
-			"(an escaped section gone missing means the section set was keyed by the raw key)", got, want)
+			"(an escaped section gone missing means the section set was keyed by the raw key; "+
+			"the right set in another order means the result is no longer sorted)", got, want)
 	}
 }
 
