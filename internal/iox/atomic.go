@@ -21,7 +21,7 @@ var ErrSymlinkDest = errors.New("destination is a symlink")
 
 // SymlinkDestAllowed reports whether the user has opted in to symlinked
 // destinations. It is the single reading of AllowSymlinkDestEnv: the write side
-// (resolveSymlinkDest) and the diagnostic read side (internal/cli/destread.go)
+// (ResolveSymlinkDest) and the diagnostic read side (internal/cli/destread.go)
 // both ask it, so they cannot disagree about whether a symlinked destination is
 // a supported configuration.
 func SymlinkDestAllowed() bool { return os.Getenv(AllowSymlinkDestEnv) == "1" }
@@ -63,7 +63,7 @@ func SymlinkDestAllowed() bool { return os.Getenv(AllowSymlinkDestEnv) == "1" }
 //
 // Parent directory is created if missing (with mode 0o755).
 func AtomicWrite(dest string, data []byte, mode os.FileMode) error {
-	resolved, err := resolveSymlinkDest(dest)
+	resolved, err := ResolveSymlinkDest(dest)
 	if err != nil {
 		return err
 	}
@@ -120,12 +120,12 @@ func AtomicWrite(dest string, data []byte, mode os.FileMode) error {
 	return nil
 }
 
-// resolveSymlinkDest inspects dest. If it is a symlink, it is either
+// ResolveSymlinkDest inspects dest. If it is a symlink, it is either
 // rejected (default) or resolved (when AGENTSYNC_ALLOW_SYMLINK_DEST=1)
 // so the underlying file is updated in place. This preserves the symlink
 // itself, which is what chezmoi/Stow users want — a rename onto the link
 // would replace it with a regular file.
-func resolveSymlinkDest(dest string) (string, error) {
+func ResolveSymlinkDest(dest string) (string, error) {
 	info, err := os.Lstat(dest)
 	if err != nil {
 		// Missing dest is fine — caller is about to create it.

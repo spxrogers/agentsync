@@ -2,7 +2,6 @@ package codex
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/jsonkeys"
@@ -32,8 +31,8 @@ func (a *Adapter) applyWrite(op adapter.FileOp, w adapter.DestWriter) error {
 	// coerced to "empty file": MergeTOML would then merge our section into an
 	// empty map and the write would silently drop the user's foreign config.toml
 	// keys. Fail loud instead.
-	existing, err := os.ReadFile(op.Path)
-	if err != nil && !os.IsNotExist(err) {
+	existing, err := adapter.ReadExisting(op.Path)
+	if err != nil {
 		return fmt.Errorf("read %s: %w", op.Path, err)
 	}
 	ours, err := jsonkeys.DecodeObject(op.Content)

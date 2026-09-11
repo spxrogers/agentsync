@@ -2,7 +2,6 @@ package opencode
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/jsonkeys"
@@ -20,7 +19,10 @@ func (a *Adapter) Apply(ops []adapter.FileOp, w adapter.DestWriter) error {
 
 func (a *Adapter) applyWrite(op adapter.FileOp, w adapter.DestWriter) error {
 	if op.MergeStrategy == "merge-jsonc-keys" {
-		existing, _ := os.ReadFile(op.Path)
+		existing, err := adapter.ReadExisting(op.Path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", op.Path, err)
+		}
 		ours, err := jsonkeys.DecodeObject(op.Content)
 		if err != nil {
 			return fmt.Errorf("parse our payload: %w", err)
