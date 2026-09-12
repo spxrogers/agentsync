@@ -64,3 +64,49 @@ func TestVaultLoad_EmptyVaultYieldsWritableMap(t *testing.T) {
 		t.Fatalf("round trip after an empty vault: got %v, %v", got, ok)
 	}
 }
+
+// TestVaultWriteVerified_RollsBackToNothingWhenNoVaultExisted pins the arm of
+// the rollback that TestSecretsSet_RejectsRecipientIdentityMismatch cannot: a
+// FIRST write whose recipient the identity cannot read back. There is no
+// previous store to restore, so the just-written file must be removed rather
+// than left behind as a vault nobody can open — "refusing to lock you out"
+// means no vault, not a locked one.
+func TestVaultWriteVerified_RollsBackToNothingWhenNoVaultExisted(t *testing.T) {
+	testenv.RequireContainer(t)
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	idPath := filepath.Join(home, "identity.txt")
+	if err := os.WriteFile(idPath, []byte(id.String()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "secrets"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Recipient is a DIFFERENT key from the identity: the encrypt succeeds and
+	// the verify decrypt fails, which is the lock-out this arm exists for.
+	cfg := source.SecretsConfig{
+		Backend:      "age",
+		Recipient:    other.Recipient().String(),
+		File:         "secrets/secrets.age",
+		IdentityFile: idPath,
+	}
+	v := secrets.NewVault(cfg, home, "")
+	if _, err := os.Stat(v.AgeFile()); !os.IsNotExist(err) {
+		t.Fatalf("precondition: no vault yet, got %v", err)
+	}
+
+	err = v.WriteVerified([]byte("[a]\nb = \"c\"\n"))
+	if err == nil {
+		t.Fatal("a store the identity cannot decrypt must be refused")
+	}
+	if _, statErr := os.Stat(v.AgeFile()); !os.IsNotExist(statErr) {
+		t.Fatalf("the unreadable vault must be removed, not left behind: stat = %v", statErr)
+	}
+}

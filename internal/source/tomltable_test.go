@@ -79,6 +79,10 @@ func TestSpliceTOMLTable(t *testing.T) {
 			// The git-backup caller does NOT opt in. A hand-written sub-table is
 			// content this rewriter has never owned, so it survives untouched
 			// where the main table is replaced in place.
+			//
+			// CHARACTERIZATION, not an endorsement: the input ends in "\n" and
+			// the output does not — splicing the LAST table of a newline-
+			// terminated file drops the trailing newline (pre-existing; #267).
 			name:  "sub-table spelling is left alone when not opted in",
 			raw:   "[destination_directory_git_backup.extra]\nk = 1\n\n[destination_directory_git_backup]\nmode = \"off\"\n",
 			table: "destination_directory_git_backup",

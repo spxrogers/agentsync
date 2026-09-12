@@ -214,9 +214,10 @@ shared cross-agent dir it writes into, and MUST return nil at project scope (see
   `DuplicatedNativePlugins` (declared AND natively installed AND projected
   there — every component would land twice), `UndeclaredNativePlugins` (the
   `status`/`doctor` nudge) — plus `DeclaredPlugins`, the non-disabled declared
-  set the first two must agree on, which is a pure filter over the canonical and
-  asks no ingester anything. They live beside the interface because there is no
-  Render-side counterpart to ask the same question of.
+  set that `DuplicatedNativePlugins` and `status`'s `--agents` scoping note must
+  agree on (a pure filter over the canonical; it asks no ingester anything). They
+  live beside the interface because there is no Render-side counterpart to ask
+  the same question of.
 - **Files:** `adapter.go`, `registry.go`, `nativeplugins.go`.
 
 ### `internal/adapter/claude`

@@ -16,10 +16,10 @@ import (
 	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
-// TestWriteSecretsVerifiedSurvivesNonRegularVault pins the vault read that has
+// TestVaultWriteVerified_SurvivesNonRegularVault pins the vault read that has
 // no other gate in front of it: Vault.WriteVerified's rollback snapshot. (It
-// kept its name through the move from internal/cli, where the method was the
-// package-level writeSecretsVerified.)
+// moved here from internal/cli with the method, which was the package-level
+// writeSecretsVerified there.)
 //
 // It used to be a bare os.ReadFile, and os.ReadFile blocks on a FIFO exactly as
 // os.Open does. The reason no earlier gate saved it is the reason this test
@@ -34,7 +34,7 @@ import (
 //
 // The timeout is the assertion. A regression here does not fail, it HANGS, so a
 // plain call would wedge CI with no diagnostic instead of reporting in 5s.
-func TestWriteSecretsVerifiedSurvivesNonRegularVault(t *testing.T) {
+func TestVaultWriteVerified_SurvivesNonRegularVault(t *testing.T) {
 	testenv.RequireContainer(t)
 	id, err := age.GenerateX25519Identity()
 	if err != nil {

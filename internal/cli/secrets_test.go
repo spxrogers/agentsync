@@ -182,8 +182,11 @@ func TestSecretsSet_RejectsRecipientIdentityMismatch(t *testing.T) {
 	if gerr != nil || !strings.Contains(out, "c") {
 		t.Fatalf("original store not preserved after rejected set: err=%v out=%q", gerr, out)
 	}
-	// And still private: the rollback writes the previous bytes back into the
-	// vault path, and a vault is owner-only however it got there.
+	// And still owner-only. The mode is Encrypt's (iox.AtomicWrite, 0600): the
+	// rollback rewrites the previous bytes into the file Encrypt just created
+	// and cannot change its mode, so what this pins is that a refused set leaves
+	// the vault at the mode a vault is written with — the one CLI-level pin on
+	// that mode.
 	info, err := os.Stat(agePath)
 	if err != nil {
 		t.Fatal(err)
