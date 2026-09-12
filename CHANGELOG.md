@@ -314,6 +314,21 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
+- **`secret edit` no longer exits the process from a signal handler
+  goroutine** ([#235](https://github.com/spxrogers/agentsync/issues/235)).
+  SIGINT/SIGTERM while the decrypted vault was on disk removed the temp file and
+  then called `os.Exit(130)` directly, which skipped every *other* deferred
+  cleanup (the global lock's release above all), could fire in the middle of
+  re-encrypting the vault, and was untestable by construction — an `os.Exit`
+  from a goroutine takes the test binary with it, so nothing could assert that
+  the cleartext copy was actually gone. The interrupt now cancels the editor's
+  context: the editor is signalled (and, if it ignores that, stopped after a
+  two-second grace, so the command can never hang waiting for it), the command
+  returns through the normal error path so every deferred cleanup runs, and the
+  process still exits **130** and still prints nothing. Nothing is saved once
+  the user has interrupted, including an interrupt that lands after the editor
+  exits but before the re-encrypt.
+
 - **Internal: shared helpers, command bodies and domain logic move to where
   they belong** ([#235](https://github.com/spxrogers/agentsync/issues/235)).
   Nothing a user runs changes. Helpers every drift surface calls were reachable

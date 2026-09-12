@@ -47,9 +47,12 @@ type statusModel struct {
 // detected" apart from "the command itself failed".
 const exitCodeDrift = 2
 
-// ExitCoder is implemented by the quiet sentinel error `status`/`diff` return
-// under --exit-code. main() maps it to a process exit code and prints nothing
-// (the sentinel's Error() is empty), so a CI gate gets a stable non-zero exit
+// ExitCoder is implemented by the quiet sentinel errors that carry their OWN
+// process exit code: `status`/`diff` under --exit-code (exitCodeDrift), and
+// `secret edit`'s interrupt sentinel (exitCodeInterrupted). main() maps it to
+// that code and prints NOTHING — reportErrorTo returns on the ExitCoder branch
+// before any formatting, so the sentinel's message never reaches the user
+// whether it is empty or not. A CI gate therefore gets a stable non-zero exit
 // without a spurious "agentsync: ..." line. The root command already sets
 // SilenceErrors, so cobra prints nothing for it either.
 type ExitCoder interface{ ExitCode() int }

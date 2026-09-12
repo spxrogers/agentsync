@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
@@ -108,6 +110,65 @@ func loadSecretsConfig() (source.SecretsConfig, string, error) {
 	return cfg.Secrets, home, nil
 }
 
+// exitCodeInterrupted is the process exit code `secret edit` reports when a
+// SIGINT/SIGTERM ends the edit: 128 + SIGINT, the shell convention for "killed
+// by Ctrl-C". It is the code the old hard `os.Exit(130)` produced, preserved
+// exactly — what changed is HOW it is reached.
+const exitCodeInterrupted = 130
+
+// secretEditGrace is how long a signalled editor is given to exit on its own
+// before exec's WaitDelay kills it. An editor that handles the signal needs a
+// moment to restore the terminal it put into raw mode; an editor that ignores
+// even SIGTERM must not be able to wedge the command forever, which is what a
+// bare Wait would allow. The one tunable in this path.
+const secretEditGrace = 2 * time.Second
+
+// errSecretEditInterrupted is the quiet sentinel `secret edit` returns when a
+// SIGINT/SIGTERM arrives while a decrypted copy of the vault is on disk. It
+// carries exit code 130 via ExitCoder, so the root maps it to the process exit
+// code and prints nothing (reportErrorTo returns before any formatting) —
+// byte-identical output to the hard exit it replaces.
+//
+// Returning an error rather than calling os.Exit is the whole point: every
+// deferred cleanup runs, starting with the os.Remove of the cleartext temp file
+// and including the global lock's release, and the path becomes testable at all
+// (an os.Exit from a goroutine takes the test binary with it).
+var errSecretEditInterrupted error = secretEditInterruptedError{}
+
+type secretEditInterruptedError struct{}
+
+func (secretEditInterruptedError) Error() string { return "interrupted" }
+func (secretEditInterruptedError) ExitCode() int { return exitCodeInterrupted }
+
+// commandContext returns cmd's context, or context.Background() when it has
+// none. cobra's Command.Context() returns the field verbatim and only
+// Execute/ExecuteContext ever sets it, so a command invoked directly — a unit
+// test, or any future non-cobra caller — hands back nil, and context.WithCancel
+// panics on a nil parent. Every production path goes through Execute and has
+// one; this is the guard that keeps a direct call from panicking instead of
+// running.
+func commandContext(cmd *cobra.Command) context.Context {
+	if ctx := cmd.Context(); ctx != nil {
+		return ctx
+	}
+	return context.Background()
+}
+
+// secretEditSignals arms SIGINT/SIGTERM notification for the window in which a
+// decrypted copy of the vault exists on disk, returning a context cancelled on
+// the first such signal plus the stop function that disarms it. Injectable (the
+// gitBackupPrompter / subagentMigrationPrompter precedent) so a test can drive
+// the interrupt deterministically instead of signalling the test process.
+var secretEditSignals = notifySecretEditSignals
+
+// notifySecretEditSignals is the production arming: stdlib signal.NotifyContext,
+// the same primitive as `signal.Notify` + a goroutine but with the cancellation
+// plumbing already written. While it is armed the default disposition is
+// suppressed, so the signal cannot kill the process out from under the edit.
+func notifySecretEditSignals(parent context.Context) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+}
+
 // editorArgv builds the editor argv from $EDITOR and the file to edit. $EDITOR
 // may be empty, whitespace-only, or carry flags ("code --wait"); it is
 // word-split, with a "vi" fallback when it yields no words — so the launch
@@ -151,30 +212,28 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 		// Always remove cleartext tmp; errors ignored.
 		_ = os.Remove(tmpPath) //nolint:forbidigo // cleartext temp file in os.TempDir(), not a native destination
 	}()
-	// The hard os.Exit(130) below stays for now: replacing it with an injectable
-	// cleanup hook is a BEHAVIOUR change (the process stops exiting from a
-	// goroutine) and is the only way to test it, so it is item 9b of #235 and
-	// lands in that issue's behaviour-change PR, not in this boundary move.
-	//
 	// A plain defer does NOT run when the process dies on an unhandled signal —
 	// and aborting the editor with Ctrl-C (SIGINT) is the normal way to bail on
-	// an edit, which would otherwise leave the decrypted secrets on disk. Remove
-	// the cleartext tmp on SIGINT/SIGTERM before exiting.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	editDone := make(chan struct{})
-	go func() {
-		select {
-		case <-sigCh:
-			_ = os.Remove(tmpPath) //nolint:forbidigo // cleartext temp file in os.TempDir(), not a native destination
-			os.Exit(130)           // 128 + SIGINT
-		case <-editDone:
-		}
-	}()
-	defer func() {
-		signal.Stop(sigCh)
-		close(editDone)
-	}()
+	// an edit, which would otherwise leave the decrypted secrets on disk. So arm
+	// notification for exactly the window in which a cleartext copy exists: from
+	// here (BEFORE the plaintext is written below) until this function returns.
+	//
+	// This replaces a goroutine that removed the temp file and then called
+	// os.Exit(130) directly. That spelling skipped every OTHER deferred cleanup
+	// (the global lock's release most of all), could fire mid-WriteVerified, and
+	// was untestable by construction — an os.Exit from a goroutine takes the
+	// test binary with it, so nothing could assert the temp file was gone.
+	//
+	// Now the signal cancels sigCtx. The editor runs under it, so exec signals
+	// the editor and Run returns; the interrupt checks below then return
+	// errSecretEditInterrupted and the command unwinds through the NORMAL error
+	// path — the deferred os.Remove above runs, the lock is released, and the
+	// process still exits 130 because the root maps the sentinel's ExitCoder.
+	// (A signal that lands before the editor is even started is handled by the
+	// same check: exec.CommandContext's Start fails immediately on an
+	// already-cancelled context.)
+	sigCtx, stopSignals := secretEditSignals(commandContext(cmd))
+	defer stopSignals()
 	if _, err := tmpFile.Write(plain); err != nil {
 		_ = tmpFile.Close()
 		return err
@@ -187,12 +246,28 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 	// ("code --wait", "vim -u NONE", "emacsclient -c"); split on whitespace so
 	// they aren't treated as part of the executable path (which fails outright).
 	argv := editorArgv(os.Getenv("EDITOR"), tmpPath)
-	editorCmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec
+	editorCmd := exec.CommandContext(sigCtx, argv[0], argv[1:]...) //nolint:gosec
+	// Forward SIGTERM rather than exec's default SIGKILL, so an editor that put
+	// the terminal into raw mode gets the chance to restore it — and TERM rather
+	// than INT on purpose: the full-screen editors this is most likely running
+	// (vi, vim, nano) all treat SIGINT as an in-editor key and keep running,
+	// while SIGTERM is their "deadly signal" path, on which each restores the
+	// terminal and exits at once (measured under a pty). WaitDelay escalates
+	// to a kill for one that ignores even that, so the command can never wedge
+	// waiting for it.
+	editorCmd.Cancel = func() error { return editorCmd.Process.Signal(syscall.SIGTERM) }
+	editorCmd.WaitDelay = secretEditGrace
 	editorCmd.Stdin = os.Stdin
 	editorCmd.Stdout = os.Stdout
 	editorCmd.Stderr = os.Stderr
-	if err := editorCmd.Run(); err != nil {
-		return fmt.Errorf("editor: %w", err)
+	runErr := editorCmd.Run()
+	if sigCtx.Err() != nil {
+		// Interrupted: abandon the edit. Nothing is re-encrypted, and the
+		// deferred os.Remove takes the cleartext temp file with it.
+		return errSecretEditInterrupted
+	}
+	if runErr != nil {
+		return fmt.Errorf("editor: %w", runErr)
 	}
 
 	// Read back edited bytes and validate with the SAME contract apply uses
@@ -206,6 +281,14 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 	}
 	if err := secrets.ValidateVaultTOML(edited); err != nil {
 		return fmt.Errorf("edited secrets are invalid (not saved): %w", err)
+	}
+	// A signal that lands between the editor exiting and the vault being
+	// rewritten still means "abandon": the old goroutine would have os.Exit'd
+	// here — mid-WriteVerified if it was unlucky — so checking once more before
+	// the write is strictly safer than what it replaces, and it is the last
+	// point at which abandoning costs nothing.
+	if sigCtx.Err() != nil {
+		return errSecretEditInterrupted
 	}
 	if err := vault.WriteVerified(edited); err != nil {
 		return fmt.Errorf("re-encrypt: %w", err)
