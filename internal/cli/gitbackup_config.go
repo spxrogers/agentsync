@@ -49,7 +49,7 @@ func setDestinationGitBackupMode(home, mode string) error {
 	// No IncludeSubtables: this table has no sub-table form, and claiming
 	// `[destination_directory_git_backup.x]` would consume content this rewriter
 	// has never owned.
-	out := source.SpliceTOMLTable(string(raw), gitBackupTable, block, source.SpliceOptions{})
+	content := source.SpliceTOMLTable(raw, gitBackupTable, block, source.SpliceOptions{})
 
 	// Fail-closed backstop (issue #171): SpliceTOMLTable is line-based, not a TOML
 	// parser — it assumes the target table is a simple contiguous block and does not
@@ -61,7 +61,6 @@ func setDestinationGitBackupMode(home, mode string) error {
 	// that it parses as a full canonical config AND that everything outside the
 	// git-backup table is unchanged; refuse the write (leaving agentsync.toml
 	// byte-for-byte untouched) otherwise.
-	content := []byte(out)
 	var check source.Config
 	if err := toml.Unmarshal(content, &check); err != nil {
 		return fmt.Errorf("refusing to rewrite %s: the regenerated config no longer parses (%v); "+

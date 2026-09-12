@@ -182,6 +182,15 @@ func TestSecretsSet_RejectsRecipientIdentityMismatch(t *testing.T) {
 	if gerr != nil || !strings.Contains(out, "c") {
 		t.Fatalf("original store not preserved after rejected set: err=%v out=%q", gerr, out)
 	}
+	// And still private: the rollback writes the previous bytes back into the
+	// vault path, and a vault is owner-only however it got there.
+	info, err := os.Stat(agePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("vault mode after rollback = %o, want 0600", perm)
+	}
 }
 
 func TestSecretsGet_MissingKey(t *testing.T) {

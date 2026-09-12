@@ -1,6 +1,6 @@
 //go:build unix
 
-package secrets
+package secrets_test
 
 import (
 	"os"
@@ -11,6 +11,7 @@ import (
 
 	"filippo.io/age"
 
+	"github.com/spxrogers/agentsync/internal/secrets"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/testenv"
 )
@@ -54,7 +55,7 @@ func TestWriteSecretsVerifiedSurvivesNonRegularVault(t *testing.T) {
 		File:         "secrets/secrets.age",
 		IdentityFile: idPath,
 	}
-	v := NewVault(cfg, home, "")
+	v := secrets.NewVault(cfg, home, "")
 	vault := v.AgeFile()
 
 	// The FIFO stands in for whatever put a non-regular file at the vault path

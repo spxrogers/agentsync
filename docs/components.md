@@ -101,7 +101,9 @@ is the only package that depends on nearly all the others.
   `destread.go` (the destination-read gate AND the dest decoders `import.go`
   used to own), `hash.go` (content/file hashing + the opaque shape/symlink
   sentinels), `statekey.go` (the two `state.Key` constructors), `scope.go`
-  (scope resolution, project discovery, the scope prompt), `load.go`
+  (scope resolution, project discovery, the scope prompt), `scope_flags.go`
+  (the root's `--scope`/`--project` declaration and every command's scope
+  stance, `markScopeAware`/`markScopeUnaware`), `load.go`
   (`loadProjectedForScope` and the project overlay), `planwalk.go`.
 
 ---
@@ -207,13 +209,14 @@ shared cross-agent dir it writes into, and MUST return nil at project scope (see
   expressed by what `Render` emits — an unsupported component yields a `Skip`,
   not an absent capability flag. `PluginIngester` (optional, READ-ONLY — see
   [architecture § PluginIngester](architecture.md#pluginingester-read-only))
-  brings the four reports that interrogate it: `NativePluginOwners` (which
+  brings the three reports that interrogate it — `NativePluginOwners` (which
   agents install a plugin themselves — what seeds `native_agents` at import),
   `DuplicatedNativePlugins` (declared AND natively installed AND projected
   there — every component would land twice), `UndeclaredNativePlugins` (the
-  `status`/`doctor` nudge), and `DeclaredPlugins`, the non-disabled declared set
-  the first two must agree on. They live beside the interface because there is
-  no Render-side counterpart to ask the same question of.
+  `status`/`doctor` nudge) — plus `DeclaredPlugins`, the non-disabled declared
+  set the first two must agree on, which is a pure filter over the canonical and
+  asks no ingester anything. They live beside the interface because there is no
+  Render-side counterpart to ask the same question of.
 - **Files:** `adapter.go`, `registry.go`, `nativeplugins.go`.
 
 ### `internal/adapter/claude`

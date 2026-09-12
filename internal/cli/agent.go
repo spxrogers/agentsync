@@ -260,7 +260,7 @@ func writeAgents(p string, raw []byte, agents map[string]map[string]any) error {
 	// while leaving the sub-tables, defining agents.<name> twice and bricking the
 	// config (go-toml rejects the duplicate on the next load).
 	newSection := strings.TrimRight(buildAgentsSection(agents), "\n")
-	content := []byte(source.SpliceTOMLTable(string(raw), "agents", newSection, source.SpliceOptions{IncludeSubtables: true}))
+	content := source.SpliceTOMLTable(raw, "agents", newSection, source.SpliceOptions{IncludeSubtables: true})
 
 	// Fail-closed backstop: the splicer is line-based, not a TOML parser, so a
 	// construct it cannot see (e.g. a multi-line string whose CONTENT contains an

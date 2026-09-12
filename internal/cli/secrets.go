@@ -382,7 +382,7 @@ func newSecretsListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			keys := secrets.FlattenKeys(m, "")
+			keys := secrets.FlattenKeys(m)
 			sort.Strings(keys)
 			w := cmd.OutOrStdout()
 			if len(keys) == 0 {

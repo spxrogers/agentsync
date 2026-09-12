@@ -289,7 +289,9 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   byte-for-byte untouched. Verified by running every rewrite over sixteen
   agentsync.toml layouts (comments, sub-table form, no trailing newline, CRLF,
   arrays of tables, multi-line strings containing a table header) before and
-  after: identical bytes and identical refusal text in all 112.
+  after: identical bytes and identical refusal text in all 112. In-tree,
+  `tomltable_test.go` anchors the rewriter to those bytes over the layouts a
+  real file takes and pins both backstop arms.
 
 - **Internal: four duplicated helpers in the CLI collapse to one each**
   ([#235](https://github.com/spxrogers/agentsync/issues/235)). Eight commands

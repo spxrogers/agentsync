@@ -28,9 +28,9 @@ import (
 // A Vault is a value: the caller resolves the three inputs and hands them over,
 // which is what keeps this package cobra-free and free of internal/paths.
 type Vault struct {
-	cfg      source.SecretsConfig
-	home     string
-	userHome string
+	cfg           source.SecretsConfig
+	agentsyncHome string
+	userHome      string
 }
 
 // NewVault binds a vault to its configuration. agentsyncHome anchors relative
@@ -38,18 +38,18 @@ type Vault struct {
 // pass paths.HomeDir(env), so AGENTSYNC_TARGET_ROOT is honoured exactly as the
 // apply path honours it.
 func NewVault(cfg source.SecretsConfig, agentsyncHome, userHome string) Vault {
-	return Vault{cfg: cfg, home: agentsyncHome, userHome: userHome}
+	return Vault{cfg: cfg, agentsyncHome: agentsyncHome, userHome: userHome}
 }
 
 // AgeFile returns the absolute path to the secrets.age file, applying the same
 // default + ${env:HOME}/~ expansion the apply path uses.
-func (v Vault) AgeFile() string { return ResolveAgeFile(v.cfg, v.home, v.userHome) }
+func (v Vault) AgeFile() string { return ResolveAgeFile(v.cfg, v.agentsyncHome, v.userHome) }
 
 // IdentityFile returns the absolute identity_file path, expanding ${env:HOME}/~
 // the same way the apply path does — without this, `secret get/set/edit` would
 // os.ReadFile a literal "${env:HOME}/..." string and fail even though the
 // documented init template uses exactly that form.
-func (v Vault) IdentityFile() string { return ResolveIdentityFile(v.cfg, v.home, v.userHome) }
+func (v Vault) IdentityFile() string { return ResolveIdentityFile(v.cfg, v.agentsyncHome, v.userHome) }
 
 // Load decrypts secrets.age and returns the top-level map.
 // If the file does not exist, returns an empty map.
@@ -99,6 +99,12 @@ func (v Vault) Save(m map[string]any) error {
 // typo, or a key swap) silently re-encrypts the whole store to a key the user
 // cannot read — locking them out of their own secrets with a cheerful "set"
 // message.
+//
+// It does NOT validate plain against apply's flatten contract: Save does, on
+// the bytes it marshals itself. A caller that brings its own bytes — `secret
+// edit`, handing back what the editor wrote — MUST run ValidateVaultTOML first,
+// as that caller does; this method's job is the encrypt-verify-roll-back step
+// and nothing about the document's shape.
 func (v Vault) WriteVerified(plain []byte) error {
 	agePath := v.AgeFile()
 	prev, hadPrev := []byte(nil), false
@@ -231,7 +237,13 @@ func DeleteNestedKey(m map[string]any, key string) bool {
 
 // FlattenKeys walks the decrypted vault and returns dotted key paths. Only
 // the PATHS are collected — no value ever leaves this function.
-func FlattenKeys(m map[string]any, prefix string) []string {
+func FlattenKeys(m map[string]any) []string {
+	return flattenKeysAt(m, "")
+}
+
+// flattenKeysAt is FlattenKeys's recursion; prefix is the dotted path already
+// consumed by the outer levels ("" at the root).
+func flattenKeysAt(m map[string]any, prefix string) []string {
 	var out []string
 	for k, v := range m {
 		path := k
@@ -239,7 +251,7 @@ func FlattenKeys(m map[string]any, prefix string) []string {
 			path = prefix + "." + k
 		}
 		if nested, ok := v.(map[string]any); ok {
-			out = append(out, FlattenKeys(nested, path)...)
+			out = append(out, flattenKeysAt(nested, path)...)
 			continue
 		}
 		out = append(out, path)

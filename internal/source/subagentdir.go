@@ -125,8 +125,8 @@ func CheckSubagentLayout(fs afero.Fs, home string) error {
 }
 
 // MigrateSubagentTree moves <srcHome>/agents/*.md to <srcHome>/subagents/ and
-// returns the moved base names, sorted. It is the ON-DISK half of the
-// agents/ → subagents/ migration only.
+// returns the moved base names, in the sorted order LegacySubagentFiles lists
+// them. It is the ON-DISK half of the agents/ → subagents/ migration only.
 //
 // The other half — rewriting the `agents/<name>.md` SourceID spelling in the
 // central state file for the entries belonging to THIS tree — stays with the
@@ -215,7 +215,8 @@ func MigrateSubagentTree(srcHome string) ([]string, error) {
 	// gone by now.
 	_ = os.Remove(legacyDir) //nolint:forbidigo // removes the emptied canonical agents/ dir under an agentsync home, not a native destination
 
-	sort.Strings(names)
+	// names is already sorted: LegacySubagentFiles sorts what it lists, and the
+	// loop above moved them in that order.
 	return names, nil
 }
 

@@ -164,7 +164,3 @@ func TestNativePluginOwners_ProbesEveryIngester(t *testing.T) {
 		t.Fatalf("owners = %v, want both harnesses that install it natively [claude codex]", got)
 	}
 }
-
-// fakePlain is an adapter with NO native plugin manager: it does not implement
-// PluginIngester, so it can never be serving a plugin natively and can
-// never be hiding a duplicate.

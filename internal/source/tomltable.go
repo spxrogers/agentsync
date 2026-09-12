@@ -35,11 +35,11 @@ import (
 // an array-of-tables `[[x]]`. Both are handled the same way: by refusing to
 // write. Every caller MUST re-parse the result and run TableOutsideUnchanged
 // before persisting it — see the two callers in internal/cli.
-func SpliceTOMLTable(raw, table, block string, opts SpliceOptions) string {
+func SpliceTOMLTable(raw []byte, table, block string, opts SpliceOptions) []byte {
 	header := "[" + table + "]"
 	subPrefix := "[" + table + "."
 	newLines := strings.Split(block, "\n")
-	lines := strings.Split(raw, "\n")
+	lines := strings.Split(string(raw), "\n")
 	out := make([]string, 0, len(lines)+len(newLines))
 	insertAt := -1
 	inTable := false
@@ -75,7 +75,7 @@ func SpliceTOMLTable(raw, table, block string, opts SpliceOptions) string {
 		}
 		out = append(out, tail...)
 	}
-	return strings.Join(out, "\n")
+	return []byte(strings.Join(out, "\n"))
 }
 
 // SpliceOptions selects which headers SpliceTOMLTable treats as the target

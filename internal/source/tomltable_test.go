@@ -1,6 +1,7 @@
 package source_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
@@ -102,7 +103,7 @@ func TestSpliceTOMLTable(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := source.SpliceTOMLTable(tc.raw, tc.table, tc.block, tc.opts)
+			got := string(source.SpliceTOMLTable([]byte(tc.raw), tc.table, tc.block, tc.opts))
 			if got != tc.want {
 				t.Errorf("SpliceTOMLTable bytes differ\n got: %q\nwant: %q", got, tc.want)
 			}
@@ -174,14 +175,25 @@ func TestTableOutsideUnchanged(t *testing.T) {
 			t.Fatal("want an error naming the re-parse; the callers word 'does not parse' and " +
 				"'would alter content outside' differently to the user")
 		}
+		// The two error arms are worded for the caller: which side failed to
+		// parse is the difference between "the file you already have is broken"
+		// and "the rewrite would have broken it", so the text is part of the
+		// contract, not decoration.
+		if !strings.Contains(err.Error(), "regenerated") {
+			t.Fatalf("err = %q, want it to name the REGENERATED config", err)
+		}
 		if same {
 			t.Fatal("same must be false alongside the error")
 		}
 	})
 
 	t.Run("an unparseable ORIGINAL is an error too", func(t *testing.T) {
-		if _, err := source.TableOutsideUnchanged([]byte("[oops\n"), []byte(base), "agents"); err == nil {
+		_, err := source.TableOutsideUnchanged([]byte("[oops\n"), []byte(base), "agents")
+		if err == nil {
 			t.Fatal("want an error naming the original re-parse")
+		}
+		if !strings.Contains(err.Error(), "original") {
+			t.Fatalf("err = %q, want it to name the ORIGINAL config", err)
 		}
 	})
 }
