@@ -119,6 +119,12 @@ func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
 	}
 }
 
+// IngestMCPSpec satisfies adapter.MCPSpecIngester by delegating to the package
+// translator Ingest uses, so the dialect has exactly one definition.
+func (a *Adapter) IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
+	return IngestMCPSpec(raw)
+}
+
 func asStr(v any) string { s, _ := v.(string); return s }
 
 // asBoolPtr returns a pointer to v when it is a bool, else nil. Used so an

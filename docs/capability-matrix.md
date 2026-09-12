@@ -134,6 +134,12 @@ flow is unaffected). The Gemini-lineage **qwen** dialect is the exception: it sp
 the two remote transports across two url keys (`httpUrl` = streamable HTTP, `url` =
 SSE), so it preserves `sse`.
 
+Every one of these dialect knobs is honored on `reconcile` write-back as well as
+on `import`, because the write-back asks the rendering adapter for the inverse
+rather than guessing from the config's top-level key — which matters most in
+this tier, where five different top-level keys are in play and two of them
+(`mcpServers`, crush's `mcp`) are also a deep adapter's.
+
 **Detection.** Detect is informational only (it drives `doctor`'s per-agent line;
 it never gates apply), and most breadth agents are detected by a binary on `PATH`
 or a user-home config dir. Two are **not auto-detectable** and are only ever active
@@ -226,6 +232,26 @@ doesn't model (e.g. `timeout`, `disabled`, `cwd`) are preserved verbatim through
 passthrough `[server.extra]` table on import/reconcile and re-rendered on apply,
 rather than dropped. (`Extra` is verbatim only — `${secret:…}` there is written
 literally, never resolved.)
+
+Conversely, a field agentsync DOES model never ends up in that passthrough table:
+`reconcile`'s `[w]rite-back` reads a native MCP entry back through the **rendering
+adapter's own** inverse-of-render (`adapter.MCPSpecIngester`), so every
+**key-merge** dialect on this page — deep and breadth-tier — round-trips through
+`reconcile` exactly as it does through `import`, including the transport
+normalizations described below. Continue, the one adapter that renders each MCP
+server as a whole file, is the exception: `reconcile` refuses to write that file
+back (the whole-file path copies bytes verbatim and can neither translate the
+YAML nor re-reference secrets) and points at `agentsync import
+continue:mcp:<id>`, which round-trips it. Pinned by
+`TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer` (every registered
+adapter's own render→ingest round trip keeps the modeled fields modeled),
+`TestReconcile_Writeback_MCPDialects` (the end-to-end apply → hand-edit →
+write-back path, per dialect) and
+`TestReconcile_Writeback_ContinueWholeFileIsRefused`. One documented edge on
+that converse: a
+non-string value inside a string-typed native field (a number in `args`, a bool
+in `env`) is dropped by every dialect's inverse, on `import` and on `reconcile`
+write-back alike — it is neither modeled nor passed through.
 
 **Claude**
 

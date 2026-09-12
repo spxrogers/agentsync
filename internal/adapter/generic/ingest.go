@@ -170,6 +170,14 @@ func ingestMCPSpec(t MCPTarget, raw map[string]any) source.MCPServerSpec {
 	}
 }
 
+// IngestMCPSpec satisfies adapter.MCPSpecIngester for the breadth tier by
+// applying THIS agent's Spec dialect — the same MCPTarget Ingest reads with, so
+// a per-agent knob (RootKey, TransportKey, StdioValue, RemoteURLKey, SSEURLKey)
+// can never be honored on read and missed on write-back.
+func (a *Adapter) IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
+	return ingestMCPSpec(a.spec.MCP, raw)
+}
+
 func asStr(v any) string { s, _ := v.(string); return s }
 
 func asStrSlice(v any) []string {

@@ -382,6 +382,64 @@ type PluginIngester interface {
 	IngestPlugins(scope Scope, project string) ([]NativeMarketplace, []NativePlugin, error)
 }
 
+// MCPSpecIngester is an OPTIONAL extension to Adapter: an agent whose native MCP
+// config is a KEY-MERGE object — one root key holding one entry per server —
+// implements it so a dest→source write-back can translate a SINGLE native server
+// entry back to the canonical model in that agent's own dialect. Callers
+// type-assert for it (`reconcile`'s key-level [w]rite-back); an adapter that does
+// not implement it has its MCP key items refused rather than mistranslated.
+//
+// **Read-only by design, like PluginIngester.** IngestMCPSpec is an INVERSE of
+// Render, never a second render path: the spec it returns is destination-derived
+// and goes to the canonical source only through capture.Capture, which
+// re-references secrets and runs the fail-closed leak backstop. It must not
+// write anything.
+//
+// The operand is the value at `<root key>/<server id>` in the DECODED
+// destination object (`map[string]any` — JSON, JSONC, or TOML; the pipeline's
+// merge currency), exactly what the adapter's own Ingest passes to its
+// translator. The implementation MUST therefore be the same function Ingest
+// uses, not a second copy: the dialect is the thing that drifts (OpenCode's
+// array-shaped `command` and `environment`; Codex's `http_headers`; Gemini's
+// `httpUrl`; Windsurf's `serverUrl`; Roo's `streamable-http`; the generic tier's
+// per-Spec `MCPTarget` knobs), and a divergent copy silently moves modeled
+// fields into `Extra` on capture.
+//
+// **Why an optional interface rather than a method on Adapter or a
+// registry-side table.** A method on Adapter would force all 31 adapters —
+// including `noop` and Continue, neither of which has a root-keyed MCP object —
+// to implement a method whose contract they cannot honor. A registry-side
+// name→func table is exactly the hand-maintained allowlist this interface
+// exists to delete: it rots the moment an agent is added. The optional
+// interface follows the PluginIngester precedent (name what the implementor
+// DOES) and puts the dialect in the one place that already owns it — the
+// adapter that rendered the bytes being read back.
+//
+// The signature returns no error: a native value the dialect cannot represent
+// (a number inside a string-typed field such as `args`, say) is DROPPED, on
+// write-back exactly as on Ingest, never stringified and never passed through
+// Extra. Refusing instead would need every implementor and every Ingest to
+// return an error; the residual is documented at the reconcile call site and in
+// the capability matrix, and pinned by characterization tests.
+//
+// Implemented by every adapter that renders MCP as a key-merge op: claude,
+// opencode, codex, cursor, gemini, windsurf, roo, cline, and the generic
+// breadth tier (per its Spec's MCPTarget). Continue does NOT implement it — it
+// renders one whole FILE per server (`MergeStrategy: "replace"`), and its own
+// IngestMCPSpec operand is an element of a YAML `mcpServers` LIST inside a
+// block, not a root-keyed value. Its MCP write-back reaches the whole-file arm
+// but is REFUSED there: that arm copies the destination verbatim, which for a
+// secret-bearing kind would put YAML into a canonical TOML file and persist
+// resolved secrets in cleartext, so reconcile refuses the kind and points at
+// `agentsync import continue:mcp:<id>`, which captures the edit through Ingest
+// and capture.Capture. The registry-wide guard TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer
+// (internal/cli) renders a real MCP fixture through every registered adapter and
+// fails if one emits an MCP key-merge FileOp without implementing this
+// interface, so a new MCP-capable adapter cannot ship without its inverse.
+type MCPSpecIngester interface {
+	IngestMCPSpec(raw map[string]any) source.MCPServerSpec
+}
+
 // HookIngestGuard is an OPTIONAL extension to Adapter for agents whose hook
 // ingest REFUSES unrepresentable native events (unmodeled fields; on most
 // adapters also non-command handlers) rather than capturing a lossy subset. RefusedHookEvents re-reads the

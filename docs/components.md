@@ -202,6 +202,14 @@ shared cross-agent dir it writes into, and MUST return nil at project scope (see
 [architecture § VersionedDirs](architecture.md#versioneddirs-optional)).
 - **Key:** `Adapter` (interface); `DestWriter` (interface);
   `VersionedDirs` (optional interface, `VersionRoots`); `NonEmptyDirs` (helper);
+  `MCPSpecIngester` (optional interface, READ-ONLY — `IngestMCPSpec(raw
+  map[string]any) source.MCPServerSpec`: the native→canonical inverse for ONE
+  server entry of a key-merge MCP object, in the rendering adapter's own
+  dialect. It is how reconcile's key-level write-back picks a translator without
+  a pointer-root allowlist — root keys collide (`/mcpServers` is six deep
+  adapters plus eleven breadth agents; `/mcp` is OpenCode and Crush), so only
+  the adapter that wrote the bytes can invert them. See
+  [architecture § MCPSpecIngester](architecture.md#mcpspecingester-read-only));
   `Scope` (`ScopeUser`/`ScopeProject`); `FileOp` (with typed `Action` — zero
   value `ActionWrite` — and `OpKind`; `NewCleanupOp` builds the one `OpCleanup`
   op); `Skip` (with `SkipKind`);
@@ -256,8 +264,9 @@ agentsync-internal namespace — symmetric on capture and render — so one adap
 synthetic metadata (continuedev's `__block_version`/`__block_schema`) can never
 leak into another agent's config; see
 [architecture.md § 8](architecture.md#8-secrets--how-the-leak-is-prevented).
-- **Key:** `New(Options) *Adapter`; the `Adapter` + `PluginIngester` methods;
-  `ParseFrontmatter`/`EncodeFrontmatter`; `MergeKeys`; `MergeExtra`/`ExtraNativeKeys`.
+- **Key:** `New(Options) *Adapter`; the `Adapter` + `PluginIngester` +
+  `MCPSpecIngester` methods; `ParseFrontmatter`/`EncodeFrontmatter`; `MergeKeys`;
+  `IngestMCPSpec`; `MergeExtra`/`ExtraNativeKeys`.
 - **Depends on:** adapter, secrets, source, paths, iox, jsonkeys.
 - **Files:** `claude.go`, `homedir.go`, `render.go`, `ingest.go`, `ingest_plugins.go`,
   `apply.go`, `paths.go`, `frontmatter.go`, `skill.go`, `command.go`,
@@ -266,7 +275,8 @@ leak into another agent's config; see
 ### `internal/adapter/opencode`
 The OpenCode adapter — MCP, memory, skills, subagents, commands via JSONC
 round-trip (`tailscale/hujson`). Skips Hook and LSP (reported with a warning).
-- **Key:** `New(Options) *Adapter`; the `Adapter` methods.
+- **Key:** `New(Options) *Adapter`; the `Adapter` + `MCPSpecIngester` methods;
+  `IngestMCPSpec`.
 - **Depends on:** adapter, secrets, source, paths, iox.
 - **Files:** `opencode.go`, `homedir.go`, `render.go`, `ingest.go`, `apply.go`, `paths.go`,
   `skill.go`, `subagent.go`, `command.go`, `memory.go`, `settings.go`.
@@ -290,8 +300,8 @@ the claude/gemini/cursor twins: a non-`command` handler *type* is representable
 (Codex parses-and-skips unknown types; Render re-emits `Type` verbatim with a
 reported reduced Skip) and therefore never refused — only unmodeled fields
 trigger retirement.
-- **Key:** `New(Options) *Adapter`; the `Adapter` + `PluginIngester` methods;
-  `MergeTOML`; `IngestMCPSpec`.
+- **Key:** `New(Options) *Adapter`; the `Adapter` + `PluginIngester` +
+  `MCPSpecIngester` methods; `MergeTOML`; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter helpers), secrets, source,
   paths, iox, jsonkeys, go-toml/v2.
 - **Files:** `codex.go`, `homedir.go`, `render.go`, `mcp.go`, `ingest.go`, `ingest_plugins.go`,
@@ -317,7 +327,8 @@ refused whole, never captured lossily — and implements
 `adapter.HookIngestGuard` (`RefusedHookEvents`, reporting refused events under
 their *canonical* names), so a Cursor-side native enrichment triggers import's
 stale-hook retirement just like a Claude- or Gemini-side one.
-- **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
+- **Key:** `New(Options) *Adapter`; the `Adapter` + `MCPSpecIngester` methods;
+  `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter/skill/extra helpers),
   secrets, source, paths, iox, jsonkeys, afero.
 - **Files:** `cursor.go`, `homedir.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
@@ -339,7 +350,8 @@ never captured lossily — and implements `adapter.HookIngestGuard`
 (`RefusedHookEvents`, reporting refused events under their *canonical* names),
 so a Gemini-side native enrichment triggers import's stale-hook retirement just
 like a Claude-side one.
-- **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
+- **Key:** `New(Options) *Adapter`; the `Adapter` + `MCPSpecIngester` methods;
+  `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter helpers), secrets, source,
   paths, iox, jsonkeys, go-toml/v2.
 - **Files:** `gemini.go`, `homedir.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
@@ -355,7 +367,14 @@ Continue "blocks" — one file per item, so there is **no key-merge**
 frontmatter-less always-apply rule); commands → `.continue/prompts/<name>.md`
 prompt blocks. Skills/subagents/hooks/LSP have no faithful Continue target and
 are skipped with a report (Skill/Subagent/Hook/LSP). No
-`PluginIngester`.
+`PluginIngester`. Deliberately implements **no** `adapter.MCPSpecIngester`: its
+MCP is one whole FILE per server (`replace`), and its own `IngestMCPSpec`
+operand is an element of a block's YAML `mcpServers` LIST, not a root-keyed
+value — the interface's contract would not hold. `reconcile`'s write-back
+refuses that file rather than copying it verbatim (the whole-file arm can
+neither translate the YAML nor re-reference secrets); `agentsync import
+continue:mcp:<id>` captures the edit. See
+[architecture § MCPSpecIngester](architecture.md#mcpspecingester-read-only).
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter/Extra helpers), secrets,
   source, paths, iox, sigs.k8s.io/yaml.
@@ -374,7 +393,8 @@ remote uses `serverUrl`), skipped (reported) at project scope. **Memory** and
 skipped. It **implements `WarnEmitter`**: `Ingest` emits a warning when a workspace
 rule lacks the agentsync-rendered `trigger: always_on` frontmatter. No
 `PluginIngester`.
-- **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
+- **Key:** `New(Options) *Adapter`; the `Adapter` + `MCPSpecIngester` methods;
+  `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (Extra helpers), secrets, source,
   paths, iox, jsonkeys.
 - **Files:** `windsurf.go`, `homedir.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
@@ -389,7 +409,8 @@ The Roo Code adapter — MCP, memory, and slash commands via clean filesystem
 `argument-hint`), both at user *and* project scope. Roo's global MCP is VS Code
 globalStorage (not targeted — user-scope MCP is reported as a skip). Skips
 Skill/Subagent/Hook/LSP. No `PluginIngester`.
-- **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
+- **Key:** `New(Options) *Adapter`; the `Adapter` + `MCPSpecIngester` methods;
+  `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter/Extra helpers), secrets,
   source, paths, iox, jsonkeys.
 - **Files:** `roo.go`, `homedir.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`, `paths.go`,
@@ -407,7 +428,8 @@ global rules live in `~/Documents/Cline/` (also not targeted). Skills/subagents/
 hooks/LSP have no Cline concept and are skipped. Emits no Ingest warnings
 (rules/workflows are plain markdown), so it does not implement `WarnEmitter`. No
 `PluginIngester`.
-- **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
+- **Key:** `New(Options) *Adapter`; the `Adapter` + `MCPSpecIngester` methods;
+  `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (Extra helpers), secrets, source,
   paths, iox, jsonkeys.
 - **Files:** `cline.go`, `homedir.go`, `render.go`, `mcp.go`, `ingest.go`, `apply.go`,
@@ -430,8 +452,13 @@ uniform — so the tier reuses the deep adapters' shared `claude.SkillFileOps`
 projection; an agent's `Skills` target is usually the cross-vendor `.agents/skills/`
 (byte-identical to Codex, so the render pipeline dedupes the ops). Breadth agents
 register through the normal registry and flow through apply/import (drift, secrets,
-capture). Adding an agent is a verified table row, not a package.
-- **Key:** `Spec`, `New(Spec, Options) *Adapter`; the `Adapter` methods; `Specs()`.
+capture). Adding an agent is a verified table row, not a package. It implements
+`adapter.MCPSpecIngester` per-Spec, so reconcile's key-level write-back inverts a
+native entry through THIS agent's dialect knobs — the collision that made a
+pointer-root allowlist unfixable (crush's `/mcp` is OpenCode's; eleven breadth
+agents share Claude's `/mcpServers`) is answered by asking the rendering adapter.
+- **Key:** `Spec`, `New(Spec, Options) *Adapter`; the `Adapter` +
+  `MCPSpecIngester` methods; `Specs()`.
 - **Depends on:** adapter, adapter/claude (Extra + SkillFileOps helpers), secrets,
   source, paths, iox, jsonkeys.
 - **Files:** `generic.go`, `homedir.go`, `render.go`, `ingest.go`, `apply.go`, `specs.go`.

@@ -32,9 +32,9 @@ var errDestNotRegular = errors.New("not a regular file")
 // which keys on that token, words its advice for both.
 var errDestUnstattable = errors.New("cannot stat destination")
 
-// pathlessStatErr strips the redundant path from a *fs.PathError, mirroring
+// pathlessErr strips the redundant path from a *fs.PathError, mirroring
 // secrets.pathlessErr. errors.Is still matches the underlying errno.
-func pathlessStatErr(err error) error {
+func pathlessErr(err error) error {
 	var pe *fs.PathError
 	if errors.As(err, &pe) {
 		return pe.Err
@@ -95,10 +95,10 @@ func readDestBytes(path string) ([]byte, error) {
 		if _, serr := os.Stat(path); serr != nil {
 			// Pathless, for the reason errDestNotRegular carries no path: the
 			// caller supplies it, and a *fs.PathError would make reconcile print
-			// "read dest X: cannot stat destination: stat X: ...". Unwrapping to
+			// "read destination X: cannot stat destination: stat X: ...". Unwrapping to
 			// the bare errno keeps errors.Is matching BOTH this sentinel and the
 			// underlying syscall error.
-			return nil, fmt.Errorf("%w: %w", errDestUnstattable, pathlessStatErr(serr))
+			return nil, fmt.Errorf("%w: %w", errDestUnstattable, pathlessErr(serr))
 		}
 		return nil, errDestNotRegular
 	}

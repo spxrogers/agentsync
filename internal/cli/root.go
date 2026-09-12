@@ -145,10 +145,11 @@ func reportErrorTo(w io.Writer, mode ui.ColorMode, err error) int {
 	if err == nil {
 		return 0
 	}
-	// A quiet exit-code sentinel (status/diff --exit-code) carries its own
-	// process exit code and an empty message: map it to that code and print
-	// nothing, so a CI gate gets a stable non-zero exit with no spurious
-	// diagnostic line.
+	// A quiet exit-code sentinel (status/diff --exit-code, secret edit's
+	// interrupt) carries its own process exit code: map it to that code and
+	// print nothing — not even its message — so a CI gate gets a stable
+	// non-zero exit with no spurious diagnostic line, and an interrupted edit
+	// looks like the Ctrl-C it was.
 	var ec ExitCoder
 	if errors.As(err, &ec) {
 		return ec.ExitCode()

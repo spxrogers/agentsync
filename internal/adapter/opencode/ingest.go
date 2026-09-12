@@ -274,6 +274,12 @@ func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
 	}
 }
 
+// IngestMCPSpec satisfies adapter.MCPSpecIngester by delegating to the package
+// translator Ingest uses, so the dialect has exactly one definition.
+func (a *Adapter) IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
+	return IngestMCPSpec(raw)
+}
+
 // canonicalMCPType maps OpenCode's transport ("local"/"remote") back to the
 // canonical model's stdio/http. OpenCode has no separate sse transport, so a
 // remote server normalises to "http" on write-back (an apply-only flow is

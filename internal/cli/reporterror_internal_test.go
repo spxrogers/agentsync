@@ -174,10 +174,12 @@ func TestReportErrorCarriesTheErrorLabel(t *testing.T) {
 	}
 }
 
-// The quiet exit-code sentinel (`status --exit-code`, `diff --exit-code`) carries
-// its own code and an empty message: it must map to that code and print NOTHING,
-// so a CI gate gets a stable non-zero exit with no spurious diagnostic line. It
-// must be found through a `%w` wrapper too, since commands wrap on the way up.
+// The quiet exit-code sentinels (`status --exit-code`, `diff --exit-code`, and
+// `secret edit`'s interrupt) carry their own code: each must map to that code
+// and print NOTHING — whether its message is empty or not — so a CI gate gets a
+// stable non-zero exit with no spurious diagnostic line and an interrupted edit
+// looks like the Ctrl-C it was. A sentinel must be found through a `%w` wrapper
+// too, since commands wrap on the way up.
 func TestReportErrorQuietSentinel(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -186,6 +188,7 @@ func TestReportErrorQuietSentinel(t *testing.T) {
 	}{
 		{"direct", quietExitErr(3), 3},
 		{"wrapped", fmt.Errorf("status: %w", quietExitErr(2)), 2},
+		{"secret edit interrupt, non-empty message", errSecretEditInterrupted, exitCodeInterrupted},
 		{"nil", nil, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

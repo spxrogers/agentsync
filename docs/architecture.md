@@ -236,7 +236,14 @@ comments in the rewritten file (a documented v1 limit).
 
 ### PluginIngester (read-only)
 
-One **optional** extension sits beside the core interface:
+Several **optional** extensions sit beside the core interface — an adapter
+implements one only if the agent has the concept, and callers type-assert for
+it: `PluginIngester` (below), `MCPSpecIngester`, `HookIngestGuard`,
+`HookEventNamer`, `VersionedDirs` and `WarnEmitter`. The first two are
+**read-only by construction**: they exist to let the *capture* direction ask the
+adapter a question, and neither has a `Render`-side counterpart.
+
+The first of them:
 
 ```go
 type PluginIngester interface {
@@ -384,6 +391,66 @@ read-only-on-import, components-only-on-apply rule above:
   on `apply` like every other adapter.
 
 See the capability matrix for source links.
+
+### MCPSpecIngester (read-only)
+
+```go
+type MCPSpecIngester interface {
+    IngestMCPSpec(raw map[string]any) source.MCPServerSpec
+}
+```
+
+An agent whose native MCP config is a **key-merge object** — one root key
+holding one entry per server — implements this **optional** extension so the
+dest→source path can translate a *single* native server entry back to the
+canonical model **in that agent's own dialect**. Reconcile's key-level
+`[w]rite-back` type-asserts for it; an adapter that does not implement it has
+its MCP key items refused rather than mistranslated.
+
+Read-only, on the same terms as `PluginIngester`: `IngestMCPSpec` is an inverse
+of `Render`, not a second render path, and the spec it returns reaches
+`~/.agentsync/` only through `capture.Capture` (§5).
+
+**Why the dialect must come from the rendering adapter, not from the pointer's
+root key.** Root keys are per-agent *data*, not a fixed set, and they
+**collide**: `/mcpServers` is Claude's *and* Cursor's, Gemini's, Windsurf's,
+Roo's, Cline's and eleven breadth-tier agents'; `/mcp` is OpenCode's *and*
+Crush's. Selecting the translator by root key therefore cannot be made correct
+— it silently hands a Crush entry to OpenCode's inverse (array-shaped
+`command`, `environment`), demoting `args`/`env` into the `Extra` passthrough,
+and hands Gemini's `httpUrl` / Windsurf's `serverUrl` to Claude's 1:1 shape,
+dropping the URL out of the model entirely. The rendering adapter is the only
+thing that knows which bytes it wrote, so the inverse belongs to it.
+
+An **optional interface** rather than a method on `Adapter` (which would force
+all 31 adapters, `noop` and Continue included, to implement a contract they
+cannot honor) or a registry-side `name → func` table (which is exactly the
+hand-maintained allowlist this interface exists to delete). The name follows
+the `PluginIngester` precedent: it says what the implementor *does*.
+
+Implemented by every adapter that renders MCP as a key-merge op — claude,
+opencode, codex, cursor, gemini, windsurf, roo, cline, and the generic breadth
+tier (per its `Spec`'s `MCPTarget`, so each dialect knob is honored on
+write-back exactly as on ingest). **Continue does not implement it**: it renders
+one whole *file* per server (`MergeStrategy: "replace"`), and its own
+`IngestMCPSpec` operand is an element of a YAML `mcpServers` list inside a block
+rather than a root-keyed value. Its MCP write-back reaches the whole-file arm
+but is refused there — that arm copies the destination verbatim, which for a
+secret-bearing kind would put YAML into a canonical TOML file and persist
+resolved secrets in cleartext — and `reconcile` points at
+`agentsync import continue:mcp:<id>` instead (see §5). Each implementation delegates to
+the SAME package translator the adapter's `Ingest` uses, so a dialect has
+exactly one definition.
+
+The registry-wide guard `TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer`
+(`internal/cli`) renders a real two-server MCP fixture (one stdio, one remote)
+through every registered adapter at both scopes and fails if one emits an MCP
+key-merge `FileOp` without implementing the interface — *and* asserts that
+feeding each adapter's own rendered entry back through its own
+`IngestMCPSpec` returns the modeled fields as modeled fields, never demoted
+into `Extra`. That second half is what makes "route write-back through the
+rendering adapter" a guarantee: the routing is only correct if each
+implementor's inverse is faithful to its own render.
 
 ### Plugin component namespacing
 
@@ -776,6 +843,46 @@ pointer resolve to it, refusing write-back of the user's own MCP server and
 blaming a plugin that does not own it. Continue is the one adapter that renders MCP as a
 **whole-file** op (one file per server), so servers are registered under both the
 bare `mcp/<id>` key and the `mcp/<id>.toml` SourceID form.
+
+**Key-level write-back derives BOTH the kind and the dialect.** The kind comes
+from the op's SourceID, exactly as above (`cli.keyItemKind`, the single
+derivation the plugin-owner lookup, the pointer→source inversion and `explain`'s
+pointer→component mapping all share).
+The **dialect** — how to read one native server entry back into the canonical
+model — comes from the **rendering adapter**, through the optional
+[`adapter.MCPSpecIngester`](#mcpspecingester-read-only) extension, never from
+the pointer's root key. Selecting a translator by root key cannot be made
+correct, because root keys *collide*: `/mcpServers` is Claude's and also
+Cursor's, Gemini's, Windsurf's, Roo's, Cline's and eleven breadth-tier agents';
+`/mcp` is OpenCode's and also Crush's. A root-keyed selector therefore handed a
+Crush entry to OpenCode's inverse — demoting `args`/`env` into the `Extra`
+passthrough — and Gemini's `httpUrl` or Windsurf's `serverUrl` to Claude's 1:1
+shape, dropping the URL out of the model entirely, while refusing every root
+nobody had added to the list. Asking the adapter that wrote the bytes removes
+the whole class. An adapter that renders an MCP key-merge op without declaring
+its inverse is REFUSED rather than guessed at, and the registry-wide guard
+`TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer` turns that state into a
+failing test.
+
+**The whole-file arm applies the same rule from the other side.** It copies the
+destination verbatim into the canonical file the SourceID names — right for the
+text components (skills, subagents, commands, memory), whose canonical form *is*
+the rendered text, and wrong for the structured, secret-bearing kinds
+`walkSecretFields` visits — so a SourceID under `mcp/`, `lsp/` or `hooks/` is
+refused there by kind, with `agentsync import <agent>:<component>:<name>` as the
+remedy (it captures the edit through the adapter's `Ingest` and
+`capture.Capture`). Continue's per-server YAML is the one render that reaches
+that arm today; before the refusal, `[w]` overwrote `~/.agentsync/mcp/<id>.toml`
+with the YAML and persisted the resolved secrets in cleartext, outside
+`capture.Capture`. Pinned by `TestWriteBackFileItem_Refusals` and
+`TestReconcile_Writeback_ContinueWholeFileIsRefused`.
+
+Pointer segments are RFC 6901 encoded, so the entry segment is DECODED
+(`jsonkeys.UnescapeToken`) before it is used as a destination map key or a
+canonical filename. Using it raw was a live bug: an MCP server id containing
+`~` arrived as `til~0de`, missed the destination map, and a miss is the
+tombstone signal — so an *edited* server was reported as a destination-side
+deletion and the user's edit was discarded.
 
 Both lookups are scoped to the canonical the render actually uses: at project
 scope that is the project-only overlay, so a user-scope plugin never shadows a

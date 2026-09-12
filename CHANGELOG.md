@@ -11,6 +11,73 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`reconcile`'s MCP write-back translates through the agent that rendered the
+  destination, instead of guessing from the JSON pointer's top-level key**
+  ([#235](https://github.com/spxrogers/agentsync/issues/235)). The key-level
+  `[w]rite-back` picked its native→canonical MCP translation from a hard-coded
+  list of three pointer roots — `mcpServers` → Claude's 1:1 JSON shape, `mcp` →
+  OpenCode, `mcp_servers` → Codex — and those roots are neither a fixed set nor
+  unique to one agent, so the list was wrong three separate ways:
+  - **Crush was silently translated as OpenCode.** Crush's config also keys MCP
+    under `mcp`, so its entries went through OpenCode's dialect (an array-shaped
+    `command`, `environment` rather than `env`). A stdio server's `args` and
+    `env` were moved out of the canonical model into the `[server.extra]`
+    passthrough table — corrupting the server for every *other* agent it fans
+    out to. For a server whose `env` held a `${secret:…}` value the damage was
+    visible instead: `Extra` is outside re-reference's reach, so
+    `capture.Capture`'s fail-closed leak backstop refused the whole write-back
+    and the edit could never be persisted at all.
+  - **Cursor, Gemini, Windsurf, Roo and Cline were silently translated as
+    Claude.** All five also key MCP under `mcpServers`. Gemini's `httpUrl` and
+    Windsurf's `serverUrl` are not Claude's `url`, so a remote server's URL left
+    the canonical model entirely and reappeared as an `[server.extra]` key with
+    an empty `type`; Roo's `streamable-http` was not canonicalized to `http`.
+    Cursor's dialect happens to match Claude's, so it was unaffected in fact.
+    Gemini's mismatch also produced a spurious `conflict:` and a non-zero exit
+    when one server fanned out to Gemini *and* a correctly-translated agent.
+  - **Every other root was refused.** Zed (`context_servers`), Copilot
+    (`servers`) and Amp (the flat `amp.mcpServers`) reported `write-back for
+    pointer … is not implemented in v1` and exited non-zero, and
+    `agentsync explain <path>#<pointer>` answered "assembled from several
+    canonical sources" for them rather than naming `mcp/<id>.toml` — and
+    printed no `component:` line at all, so none of the item's transforms,
+    plugin origin or secret references could be matched either.
+
+  Both the component kind and the dialect are now derived: the kind from the
+  op's `SourceID` (the way the plugin-owner lookup already did it), the dialect
+  from the rendering adapter via the new optional `adapter.MCPSpecIngester`
+  extension. A registry-wide guard fails the build if an adapter renders an MCP
+  key-merge op without declaring its inverse, so the class cannot come back as
+  agents are added. The refusal that remains names the *component kind* rather
+  than a list of roots, and a destination that cannot be read or parsed at the
+  moment of write-back (missing, non-regular, truncated) is refused by name
+  instead of being reported as a missing root key.
+- **`reconcile`'s write-back of a Continue MCP file no longer copies the native
+  YAML verbatim into the canonical source**
+  ([#235](https://github.com/spxrogers/agentsync/issues/235)). Continue is the
+  one adapter that renders an MCP server as a whole file
+  (`.continue/mcpServers/<id>.yaml`), so a hand-edited server went down the
+  whole-file write-back path — the verbatim copy meant for skills, subagents,
+  commands and memory. `[w]` / `--auto-writeback` then overwrote
+  `~/.agentsync/mcp/<id>.toml` with the YAML (every later command failed with
+  `toml: expected character =`) and, because that path bypasses
+  `capture.Capture`, persisted the `${secret:…}` values the render had resolved
+  in cleartext. The whole-file arm now refuses every MCP, LSP and hook component
+  by kind and points at `agentsync import continue:mcp:<id>`, which captures the
+  edit through Continue's own translator with the secrets re-referenced. The bug
+  predates the write-back change above; its review found it.
+- **`reconcile` no longer reports an edited MCP server as deleted when its id
+  contains `~`** ([#235](https://github.com/spxrogers/agentsync/issues/235)).
+  JSON pointer segments are RFC 6901 encoded, so a server id such as `til~de`
+  reaches write-back as the segment `til~0de`. That segment was used raw to look
+  the server up in the destination, the lookup missed, and a miss is the
+  signal for "the user deleted this server natively" — so `reconcile
+  --auto-writeback` printed `write-back: removed source mcp/til~0de.toml
+  (destination dropped …)`, silently discarded the user's edit, and left the
+  next `apply` to overwrite the destination back (and `explain` named the
+  component `til~0de`). The segment is now decoded before it is used as a
+  destination key, a canonical filename or a component name.
+
 - **`marketplace add` no longer registers a marketplace whose cache it failed to
   put in place** ([#233](https://github.com/spxrogers/agentsync/issues/233)).
   When a marketplace's declared name differs from the name derived from its URL
@@ -262,6 +329,23 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   identically.
 
 ### Changed
+
+- **`secret edit` no longer exits the process from a signal handler
+  goroutine** ([#235](https://github.com/spxrogers/agentsync/issues/235)).
+  SIGINT/SIGTERM while the decrypted vault was on disk removed the temp file and
+  then called `os.Exit(130)` directly from a goroutine, which could fire in the
+  middle of re-encrypting the vault, left a still-running editor orphaned on the
+  terminal, and was untestable by construction — an `os.Exit` from a goroutine
+  takes the test binary with it, so nothing could assert that the cleartext copy
+  was actually gone. The interrupt now cancels the editor's
+  context: the editor is signalled (and, if it ignores that, stopped after a
+  two-second grace, so the command can never hang waiting for it), the command
+  returns through the normal error path so every deferred cleanup runs, and —
+  for an interrupt that lands before the re-encrypt begins, including one that
+  lands after the editor exits — nothing is saved, the process still exits
+  **130** and still prints nothing. An interrupt during the re-encrypt itself is
+  absorbed so the vault is never left half-written: that save completes and is
+  reported as usual, with exit code 0.
 
 - **Internal: shared helpers, command bodies and domain logic move to where
   they belong** ([#235](https://github.com/spxrogers/agentsync/issues/235)).

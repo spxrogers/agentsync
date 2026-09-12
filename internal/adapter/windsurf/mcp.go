@@ -140,6 +140,12 @@ func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
 	}
 }
 
+// IngestMCPSpec satisfies adapter.MCPSpecIngester by delegating to the package
+// translator Ingest uses, so the dialect has exactly one definition.
+func (a *Adapter) IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
+	return IngestMCPSpec(raw)
+}
+
 // agentTargeted reports whether the agents allowlist includes windsurf. An
 // empty/nil list or a "*" entry means all agents are targeted.
 func agentTargeted(name string, agents []string) bool {

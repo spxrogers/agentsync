@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,9 +13,6 @@ import (
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
-	"github.com/spxrogers/agentsync/internal/adapter/claude"
-	"github.com/spxrogers/agentsync/internal/adapter/codex"
-	"github.com/spxrogers/agentsync/internal/adapter/opencode"
 	"github.com/spxrogers/agentsync/internal/capture"
 	"github.com/spxrogers/agentsync/internal/drift"
 	"github.com/spxrogers/agentsync/internal/iox"
@@ -819,6 +815,55 @@ func pluginProvidedSourceIDs(c source.Canonical) map[string]string {
 	return out
 }
 
+// keyItemKind returns the canonical component kind a key-merge op's SourceID
+// names — "mcp", "lsp" or "hooks" — or "" for an op with no per-entry canonical
+// provenance. Every key-merge op carries a section-wide SourceID naming its kind
+// ("mcp/* (multiple)", "hooks/* (multiple)"), and Continue's whole-file MCP form
+// is "mcp/<id>.toml", so a prefix test covers both spellings.
+//
+// This is the ONE place the kind is derived, shared by write-back, the
+// pointer→source-file inversion, `explain`'s pointer→component mapping, the
+// plugin-owner lookup and the registry guard test. It is deliberately NOT
+// derived from the pointer's root key: root keys are per-agent data that both
+// grow and COLLIDE (see pluginOwnerForKeyItem's comment), so any root-keyed
+// classification is wrong for some agent.
+func keyItemKind(sourceID string) string {
+	switch {
+	case strings.HasPrefix(sourceID, "mcp/"):
+		return "mcp"
+	case strings.HasPrefix(sourceID, "lsp/"):
+		return "lsp"
+	case strings.HasPrefix(sourceID, "hooks/"):
+		return "hooks"
+	default:
+		return ""
+	}
+}
+
+// keyItemPointerParts splits a key-merge JSON pointer into its DECODED
+// container root key and DECODED second segment (the server id / hook event).
+// ok is false when the pointer has no non-empty second segment, i.e. it names
+// no single entry.
+//
+// Both segments are JSON-pointer ENCODED on the way in — render.CollectPointers
+// builds every pointer with jsonkeys.EscapeToken on each key — so both are
+// decoded (RFC 6901 §3: ~1 → "/", ~0 → "~") before use: the root key indexes
+// the decoded destination object, the id becomes a map key and a canonical
+// filename. Using the id raw was a live bug: an MCP server id containing "~"
+// reached write-back as "srv~0id", missed the destination map, and was reported
+// as a destination-side DELETION ("write-back: removed source mcp/srv~0id.toml")
+// — discarding the user's edit while telling them it had been persisted. No
+// rendered root key holds "~" or "/" today, so decoding it changes nothing
+// observable; it is decoded so the two segments cannot disagree the day one
+// does, which would be that same phantom tombstone one level up.
+func keyItemPointerParts(ptr string) (rootKey, id string, ok bool) {
+	parts := strings.SplitN(strings.TrimPrefix(ptr, "/"), "/", 3)
+	if len(parts) < 2 || parts[1] == "" {
+		return "", "", false
+	}
+	return jsonkeys.UnescapeToken(parts[0]), jsonkeys.UnescapeToken(parts[1]), true
+}
+
 // pluginOwnerForKeyItem resolves the plugin owning the MCP/LSP server a
 // key-level item points at, or "" for a hand-declared one.
 //
@@ -853,23 +898,18 @@ func pluginProvidedSourceIDs(c source.Canonical) map[string]string {
 // implemented, this returns "" rather than silently permitting the capture — the
 // empty map is the thing to fix, and it is one place.
 //
-// Pointer segments are JSON-pointer encoded, so ~1/~0 are decoded first
-// (RFC 6901 §3) — an id containing '/' would otherwise never match.
+// Pointer segments are JSON-pointer encoded, so keyItemPointerParts decodes
+// ~1/~0 first (RFC 6901 §3) — an id containing '/' would otherwise never match.
 func pluginOwnerForKeyItem(sourceID, ptr string, owners map[string]string) string {
-	var kind string
-	switch {
-	case strings.HasPrefix(sourceID, "mcp/"):
-		kind = "mcp"
-	case strings.HasPrefix(sourceID, "lsp/"):
-		kind = "lsp"
-	default:
+	kind := keyItemKind(sourceID)
+	if kind != "mcp" && kind != "lsp" {
 		return "" // hooks, or a shape with no per-entry provenance
 	}
-	parts := strings.SplitN(strings.TrimPrefix(ptr, "/"), "/", 3)
-	if len(parts) < 2 {
+	_, id, ok := keyItemPointerParts(ptr)
+	if !ok {
 		return ""
 	}
-	return owners[kind+"/"+jsonkeys.UnescapeToken(parts[1])]
+	return owners[kind+"/"+id]
 }
 
 // collectReconcileItems builds reconcile's flat item list from a rendered plan
@@ -1064,7 +1104,7 @@ func (s *reconcileSession) attemptWriteBack(it reconcileItem) bool {
 	if srcFile != "" {
 		prior, priorWritten = s.writtenSources[srcFile]
 	}
-	werr := writeBackItem(s.cmd, s.home, it)
+	werr := s.writeBackItem(it)
 	if errors.Is(werr, errDestDroppedServer) {
 		// Tombstone: the user deleted this MCP server from the native config, and
 		// chose write-back (per-item [w], confirmed bulk [W], or --auto-writeback)
@@ -1154,13 +1194,23 @@ func (s *reconcileSession) itemSourceFile(it reconcileItem) string {
 		}
 		return filepath.Join(s.home, it.op.SourceID)
 	}
-	return pointerSourceFile(s.reg, s.home, it.agentName, it.ptr, s.hookEvents)
+	return pointerSourceFile(s.reg, s.home, it.agentName, it.op.SourceID, it.ptr, s.hookEvents)
 }
 
 // pointerSourceFile maps a NATIVE key-merge JSON pointer back to the canonical
 // source file that produced it. It is shared by reconcile's write-back and
 // `agentsync explain <path>#<pointer>`, which is the feature that made the
 // renamed-hook-event translation below load-bearing rather than latent.
+//
+// sourceID is the op's SourceID and is what names the component KIND
+// (keyItemKind) — never the pointer's root key. Root keys are per-agent data
+// that grow with every agent added and collide across agents, so the old
+// root allowlist ("mcpServers"/"mcp"/"mcp_servers", "lspServers"/"lsp") answered
+// "" for every breadth-tier root nobody remembered to add: `explain
+// <path>#/context_servers/<id>` (zed), `#/servers/<id>` (copilot) and
+// `#/amp.mcpServers/<id>` (amp) reported "assembled from several canonical
+// sources" instead of naming mcp/<id>.toml, and reconcile's multi-agent fan-out
+// guard could not see those items at all.
 //
 // agent names the rendering adapter, which matters for hooks: a RENAMING agent
 // (gemini `BeforeTool`, cursor `preToolUse`) spells the pointer segment
@@ -1178,18 +1228,18 @@ func (s *reconcileSession) itemSourceFile(it reconcileItem) string {
 // inversion costs a map lookup instead of rebuilding all 31 adapters per call.
 //
 // Returns "" when the pointer names no single canonical source-of-record.
-func pointerSourceFile(reg *adapter.Registry, home, agent, ptr string, canonicalEvents []string) string {
-	parts := strings.SplitN(strings.TrimPrefix(ptr, "/"), "/", 3)
-	if len(parts) < 2 || parts[1] == "" {
+func pointerSourceFile(reg *adapter.Registry, home, agent, sourceID, ptr string, canonicalEvents []string) string {
+	_, id, ok := keyItemPointerParts(ptr)
+	if !ok {
 		return ""
 	}
-	switch parts[0] {
-	case "mcpServers", "mcp", "mcp_servers":
-		return filepath.Join(home, "mcp", parts[1]+".toml")
-	case "lspServers", "lsp":
-		return filepath.Join(home, "lsp", parts[1]+".toml")
+	switch keyItemKind(sourceID) {
+	case "mcp":
+		return filepath.Join(home, "mcp", id+".toml")
+	case "lsp":
+		return filepath.Join(home, "lsp", id+".toml")
 	case "hooks":
-		event, ok := canonicalHookEvent(reg, agent, parts[1], canonicalEvents)
+		event, ok := canonicalHookEvent(reg, agent, id, canonicalEvents)
 		if !ok {
 			return ""
 		}
@@ -1261,7 +1311,12 @@ func canonicalHookEvents(c source.Canonical) []string {
 // writeBackItem persists the current destination value for item it back into
 // the canonical source (~/.agentsync/). Only MCP-server items are fully
 // supported in v1; other item types fall back to a raw file copy.
-func writeBackItem(cmd *cobra.Command, home string, it reconcileItem) error {
+//
+// A session method, not a free function, because the key-item path needs the
+// session's adapter registry: the native→canonical MCP translation belongs to
+// the adapter that RENDERED the destination (adapter.MCPSpecIngester), and the
+// registry is the only thing that maps it.agentName to that adapter.
+func (s *reconcileSession) writeBackItem(it reconcileItem) error {
 	// A plugin-provided component has no canonical file of its own: it is
 	// re-derived from the plugin cache on every load. Writing the destination
 	// back would MINT one under ~/.agentsync/, and the next load would hold two
@@ -1286,97 +1341,151 @@ func writeBackItem(cmd *cobra.Command, home string, it reconcileItem) error {
 			what, it.pluginOwner, it.pluginOwner)
 	}
 	if it.ptr != "" {
-		return writeBackKeyItem(cmd, home, it)
+		return s.writeBackKeyItem(it)
 	}
-	return writeBackFileItem(home, it)
+	return writeBackFileItem(s.home, it)
 }
 
-// writeBackKeyItem handles key-level (merge-json-keys / merge-jsonc-keys) items.
-// For MCP servers it reconstructs a source.MCPServer from the destination JSON
-// and writes it with source.WriteMCP.
+// writeBackKeyItem handles key-level (merge-json-keys / merge-jsonc-keys /
+// merge-toml-keys) items. For MCP servers it reconstructs a source.MCPServer
+// from the destination and writes it through capture.Capture.
+//
+// Two things are DERIVED rather than matched against a list of pointer roots,
+// for the same reason pluginOwnerForKeyItem derives its kind (see the long
+// comment there):
+//
+//   - The component KIND comes from the op's SourceID ("mcp/…"). Root keys are
+//     per-agent DATA, not a fixed set — and they COLLIDE. `/mcpServers` is
+//     Claude's and also Cursor's, Gemini's, Windsurf's, Roo's, Cline's and
+//     eleven breadth-tier agents'; `/mcp` is OpenCode's and also Crush's. A
+//     hand-maintained root allowlist therefore cannot be made correct: it
+//     refused every root nobody remembered to add (zed's /context_servers,
+//     copilot's /servers, amp's /amp.mcpServers) AND silently mistranslated
+//     every root it matched for the wrong agent.
+//   - The DIALECT comes from the RENDERING ADAPTER, via the optional
+//     adapter.MCPSpecIngester extension. Only the adapter that wrote the bytes
+//     knows how to read them back: OpenCode's array-shaped `command` and
+//     `environment`, Codex's `http_headers`, Gemini's `httpUrl`, Windsurf's
+//     `serverUrl`, Roo's `streamable-http`, the breadth tier's per-Spec
+//     MCPTarget knobs. Routing by root key handed a Crush entry to OpenCode's
+//     inverse (demoting `args`/`env` into the Extra passthrough) and Gemini's
+//     or Windsurf's to Claude's 1:1 shape (dropping the URL out of the model
+//     entirely). Both were silent.
 //
 // For other key-level items (hooks, LSP, future shapes) write-back is not
 // implemented and we return a clear error so the user is not silently lied
 // to: the prior code returned nil and printed "write-back: <label>", giving
 // the impression the hand-edit had been persisted when in fact it had not
 // — the next apply would then destroy the user's edit.
-func writeBackKeyItem(cmd *cobra.Command, home string, it reconcileItem) error {
-	dest := readDestFile(it.op.MergeStrategy, it.op.Path)
-	// Expected ptr shape: /mcpServers/<serverID>/... (claude), /mcp/<serverID>/...
-	// (opencode), or /mcp_servers/<serverID>/... (codex). The container key also
-	// tells us the dest shape: Claude's `mcpServers` value matches the canonical
-	// model 1:1, but OpenCode's `mcp` and Codex's `mcp_servers` values are NATIVE
-	// shapes (OpenCode: command as a string array, `environment` not `env`, type
-	// local|remote; Codex: `http_headers`, url-implies-http), so they must be
-	// translated through the adapter's inverse-of-Render rather than unmarshaled.
-	parts := strings.SplitN(strings.TrimPrefix(it.ptr, "/"), "/", 3)
-	if len(parts) >= 2 && (parts[0] == "mcpServers" || parts[0] == "mcp" || parts[0] == "mcp_servers") {
-		topKey := parts[0]
-		serverID := parts[1]
-		// serverID comes from the (native-config-derived) JSON pointer and can
-		// hold control bytes; keep the raw value for lookup/canonical ID but use
-		// a sanitized copy in any error surfaced to the terminal (issue #93/#171).
-		serverIDDisp := ui.Sanitize(serverID)
-		mcpServers, _ := dest[topKey].(map[string]any)
-		if mcpServers == nil {
-			return fmt.Errorf("%s not found in destination", topKey)
-		}
-		specRaw, ok := mcpServers[serverID]
-		if !ok {
-			// Server removed from dest: the user deleted it from the native
-			// config and chose write-back (per-item [w], confirmed bulk [W], or
-			// --auto-writeback) to persist that. Signal a tombstone;
-			// attemptWriteBack deletes the canonical mcp/<id>.toml through the
-			// approved os.Remove funnel (a pure deletion carries no secret), with
-			// the multi-agent fan-out guard.
-			return errDestDroppedServer
-		}
-		var spec source.MCPServerSpec
-		switch topKey {
-		case "mcp":
-			// OpenCode native shape → canonical, via the single adapter translator.
-			rawMap, _ := specRaw.(map[string]any)
-			if rawMap == nil {
-				return fmt.Errorf("opencode mcp spec %s is not an object", serverIDDisp)
-			}
-			spec = opencode.IngestMCPSpec(rawMap)
-		case "mcp_servers":
-			// Codex native shape (TOML-decoded map) → canonical.
-			rawMap, _ := specRaw.(map[string]any)
-			if rawMap == nil {
-				return fmt.Errorf("codex mcp spec %s is not an object", serverIDDisp)
-			}
-			spec = codex.IngestMCPSpec(rawMap)
-		default:
-			// Claude's mcpServers value matches the canonical model 1:1.
-			specBytes, err := json.Marshal(specRaw)
-			if err != nil {
-				return fmt.Errorf("marshal mcp spec %s: %w", serverIDDisp, err)
-			}
-			if err := json.Unmarshal(specBytes, &spec); err != nil {
-				return fmt.Errorf("unmarshal mcp spec %s: %w", serverIDDisp, err)
-			}
-			// json.Unmarshal into the struct drops unmodeled native keys; capture
-			// them into Extra so write-back is not field-lossy (matching ingest and
-			// the opencode/codex branches above).
-			if rawMap, ok := specRaw.(map[string]any); ok {
-				spec.Extra = claude.ExtraNativeKeys(rawMap, "type", "command", "args", "env", "url", "headers")
-			}
-		}
-		// The spec was reconstructed from the destination, where apply wrote any
-		// ${secret:…} as resolved cleartext and which never carries source-only
-		// fields (agents/enabled). capture.Capture re-references the secrets and
-		// preserves those fields before writing — the same single boundary import
-		// uses, so the two paths can't drift apart again.
-		single := source.Canonical{MCPServers: []source.MCPServer{{ID: serverID, Server: spec}}}
-		if _, err := capture.Capture(home, &single, capture.Opts{Warn: cmd.ErrOrStderr()}); err != nil {
-			return err
-		}
-		return nil
+func (s *reconcileSession) writeBackKeyItem(it reconcileItem) error {
+	if keyItemKind(it.op.SourceID) != "mcp" {
+		// Unsupported component kind (hooks, lsp, or an op with no per-entry
+		// canonical provenance). DO NOT silently no-op — the success message
+		// would be a lie.
+		return fmt.Errorf("write-back for pointer %q is not implemented in v1; only MCP-server items can be "+
+			"written back today — choose [o]verride to push canonical to the dest, or [i]gnore to suppress this item", it.ptr)
 	}
-	// Unsupported pointer shape (hooks, lsp, …). DO NOT silently no-op —
-	// the success message would be a lie.
-	return fmt.Errorf("write-back for pointer %q is not implemented in v1; only /mcpServers/* (claude), /mcp/* (opencode) and /mcp_servers/* (codex) items can be written back today — choose [o]verride to push canonical to the dest, or [i]gnore to suppress this item", it.ptr)
+	rootKey, serverID, ok := keyItemPointerParts(it.ptr)
+	if !ok {
+		// Defensive, and unreachable while render.CollectPointers emits a
+		// one-segment pointer only for a SCALAR root value: an MCP root is an
+		// object, so every mcp/ key item carries a server segment. Kept so a
+		// future pointer shape refuses rather than indexes a nil map.
+		return fmt.Errorf("write-back for pointer %q names no MCP server (expected /<root key>/<server id>) — "+
+			"choose [o]verride to push canonical to the dest, or [i]gnore to suppress this item", it.ptr)
+	}
+	// serverID is decoded from a JSON pointer and becomes a canonical filename;
+	// keep the raw value for the dest lookup and the canonical ID but use a
+	// sanitized copy in any error surfaced to the terminal (issue #93/#171).
+	serverIDDisp := ui.Sanitize(serverID)
+	ing, ok := s.reg.Lookup(it.agentName).(adapter.MCPSpecIngester)
+	if !ok {
+		// Defensive, and unreachable while the registry-wide guard
+		// TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer holds: an adapter
+		// that renders an MCP key-merge op MUST declare its inverse. Refusing
+		// beats guessing a dialect — a wrong guess writes a mistranslated
+		// canonical server that the next apply pushes to every other agent.
+		return fmt.Errorf("write-back for pointer %q is not implemented for agent %s: its adapter declares no "+
+			"native MCP translation — choose [o]verride to push canonical to the dest, or [i]gnore to suppress this item",
+			it.ptr, ui.Sanitize(it.agentName))
+	}
+	// Read and decode by hand rather than through readDestFile, which swallows
+	// read and parse errors into an empty map for the drift walk's benefit: a
+	// destination the user broke between the walk and the [w] keystroke (a
+	// truncated edit, a file moved away) must be named as such, not reported as
+	// a missing root key.
+	data, err := readDestBytes(it.op.Path)
+	if err != nil {
+		return destReadRefusal(it.op.Path, err)
+	}
+	dest := map[string]any{}
+	if err := decodeDestBytes(it.op.MergeStrategy, data, &dest); err != nil {
+		return fmt.Errorf("destination %s does not parse (%s): %w — choose [o]verride to push canonical to "+
+			"the dest, or [i]gnore to suppress this item", it.op.Path, it.op.MergeStrategy, err)
+	}
+	servers, _ := dest[rootKey].(map[string]any)
+	if servers == nil {
+		return fmt.Errorf("%s is absent from the destination or is not an object", ui.Sanitize(rootKey))
+	}
+	specRaw, ok := servers[serverID]
+	if !ok {
+		// Server removed from dest: the user deleted it from the native
+		// config and chose write-back (per-item [w], confirmed bulk [W], or
+		// --auto-writeback) to persist that. Signal a tombstone;
+		// attemptWriteBack deletes the canonical mcp/<id>.toml through the
+		// approved os.Remove funnel (a pure deletion carries no secret), with
+		// the multi-agent fan-out guard.
+		return errDestDroppedServer
+	}
+	rawMap, _ := specRaw.(map[string]any)
+	if rawMap == nil {
+		return fmt.Errorf("%s mcp spec %s is not an object", ui.Sanitize(it.agentName), serverIDDisp)
+	}
+	// The inverse COERCES: a non-string element inside a string-typed native
+	// field (a number in `args`, a bool in `env`) is dropped, on write-back
+	// exactly as on `import` — every dialect's translator has always read that
+	// way, and Claude's 1:1 shape used to refuse such an entry only because it
+	// went through a typed json.Unmarshal. Documented in the capability matrix;
+	// a refusal instead would need the interface to return an error (#267).
+	//
+	// The spec is reconstructed from the destination through the rendering
+	// adapter's own inverse-of-Render, where apply wrote any ${secret:…} as
+	// resolved cleartext and which never carries source-only fields
+	// (agents/enabled). capture.Capture re-references the secrets and preserves
+	// those fields before writing — the same single boundary import uses, so the
+	// two paths can't drift apart again.
+	single := source.Canonical{MCPServers: []source.MCPServer{{ID: serverID, Server: ing.IngestMCPSpec(rawMap)}}}
+	if _, err := capture.Capture(s.home, &single, capture.Opts{Warn: s.cmd.ErrOrStderr()}); err != nil {
+		return err
+	}
+	return nil
+}
+
+// destReadRefusal words a failed destination read for the prompt, for both
+// the key-item and the whole-file write-back: the path once (os.ReadFile's
+// *fs.PathError carries it and readDestBytes' sentinels deliberately do not,
+// so pathlessErr strips the copy), and a named next step — the user is
+// mid-prompt with a keystroke to choose, and "not a regular file" alone does
+// not say which one gets them unstuck.
+//
+// The next step deliberately omits [o]verride for a NON-REGULAR destination.
+// Override re-applies through render.Writer.Write, whose convergence read is
+// not shape-guarded, so on that exact item it does not fail — it HANGS
+// (measured: `reconcile --auto-override` rc=124, #241). An earlier version of
+// the whole-file message recommended it, which walked the user out of a clean
+// refusal and into an unbounded wedge; restore the suggestion only once #241
+// is fixed. Every other read failure keeps the peers' remedy set: the common
+// one is an ABSENT destination — the user deleted a managed file, which is
+// itself drift — and there [o]verride is both safe and usually the fix, since
+// Writer.Write's convergence read gets ENOENT and falls straight through to
+// the write.
+func destReadRefusal(path string, err error) error {
+	if errors.Is(err, errDestNotRegular) {
+		return fmt.Errorf("read destination %s: %w — remove or replace the non-regular file at that "+
+			"path and re-run, or [i]gnore to suppress this item", path, err)
+	}
+	return fmt.Errorf("read destination %s: %w — use [o]verride to restore it from canonical, or "+
+		"[i]gnore to suppress this item", path, pathlessErr(err))
 }
 
 // writeBackFileItem handles file-level (replace strategy) items by copying
@@ -1399,40 +1508,19 @@ func writeBackFileItem(home string, it reconcileItem) error {
 		// arm's advice suggests [o]verride: Writer.Write's convergence read
 		// follows the link, and its mode arm chmods the TARGET through it
 		// before the symlink policy is consulted (#248).
-		return fmt.Errorf("read dest %s: destination is a symlink agentsync is not reading through — "+
+		return fmt.Errorf("read destination %s: destination is a symlink agentsync is not reading through — "+
 			"set %s=1 (for apply, status, diff, reconcile and explain) to read and write through the link, replace the link with a "+
 			"regular file, or [i]gnore to suppress this item", it.op.Path, iox.AllowSymlinkDestEnv)
 	case symlinkUnresolvable:
-		return fmt.Errorf("read dest %s: destination is a symlink whose target cannot be resolved "+
+		return fmt.Errorf("read destination %s: destination is a symlink whose target cannot be resolved "+
 			"(dangling, loop, or unreadable; apply refuses it too) — fix or replace the link, or [i]gnore "+
 			"to suppress this item", it.op.Path)
 	}
 	data, err := readDestBytes(readPath)
 	if err != nil {
-		// Named next steps, like this function's other refusals: the user is
-		// mid-prompt with a keystroke to choose, and "read dest X: not a regular
-		// file" alone does not tell them which one gets them unstuck.
-		//
-		// This arm's advice deliberately omits [o]verride, as the symlink
-		// arms' does, unlike the absent arm below. It re-applies through
-		// render.Writer.Write, whose convergence read is not
-		// shape-guarded, so on this exact item it does not fail — it HANGS
-		// (measured: `reconcile --auto-override` rc=124).
-		// An earlier version of this message recommended it, which walked the
-		// user out of a clean refusal and into an unbounded wedge. Restore that
-		// suggestion only once #241 is fixed.
-		if errors.Is(err, errDestNotRegular) {
-			return fmt.Errorf("read dest %s: %w — remove or replace the non-regular file at "+
-				"that path and re-run, or [i]gnore to suppress this item", it.op.Path, err)
-		}
-		// Any other read failure keeps the peers' remedy set. The common one is
-		// an ABSENT destination — the user deleted a managed file, which is
-		// itself drift — and there [o]verride is both safe and usually the fix:
-		// Writer.Write's convergence read gets ENOENT and falls straight
-		// through to the write. Leaving it out of the advice is only right for
-		// the non-regular case above.
-		return fmt.Errorf("read dest %s: %w — use [o]verride to restore it from canonical, "+
-			"or [i]gnore to suppress this item", it.op.Path, err)
+		// The symlink arms above omit [o]verride for their own reason (#248);
+		// destReadRefusal omits it for a non-regular file for #241's.
+		return destReadRefusal(it.op.Path, err)
 	}
 	srcID := it.op.SourceID
 	if srcID == "" {
@@ -1440,6 +1528,29 @@ func writeBackFileItem(home string, it reconcileItem) error {
 	}
 	if strings.HasSuffix(srcID, "(multiple)") {
 		return fmt.Errorf("write-back for %s is unsafe: the dest is the concatenation of multiple source fragments. Persisting the whole dest into one of them would strand the others. Edit the source fragments under %s/ directly, then apply", it.op.Path, home)
+	}
+	// The whole-file arm copies the destination VERBATIM into the canonical file
+	// the SourceID names. That is right for the text components — skills,
+	// subagents, commands, memory — whose canonical form IS the rendered text.
+	// It is wrong for the structured, secret-bearing kinds walkSecretFields
+	// visits (MCP, LSP, hooks): the render wrote the agent's native dialect with
+	// every `${secret:…}` RESOLVED, so a verbatim copy would put that dialect
+	// (Continue's YAML) into a canonical TOML file — every later load fails to
+	// parse it — and persist the resolved cleartext outside capture.Capture's
+	// re-reference and leak backstop, the bug class the secret invariants exist
+	// to prevent. Continue's per-server MCP file is the one whole-file render of
+	// such a kind today; `import <agent>:<component>:<name>` captures the same
+	// edit through the adapter's Ingest and capture.Capture, so point there.
+	// (ToSlash: Continue builds the SourceID with filepath.Join.)
+	if kind := keyItemKind(filepath.ToSlash(srcID)); kind != "" {
+		name := strings.TrimSuffix(filepath.Base(srcID), ".toml")
+		component := strings.TrimSuffix(kind, "s") // import's selector grammar: mcp | lsp | hook
+		return fmt.Errorf("write-back for %s is refused: it is %s's whole-file render of the %s component %q, and the "+
+			"whole-file path copies the destination verbatim — that would put %s's native dialect into the canonical "+
+			"TOML file and persist the secrets the render resolved in cleartext. Capture the edit with "+
+			"`agentsync import %s:%s:%s` (which translates it and re-references the secrets), or edit %s directly, "+
+			"then apply; or use [o]verride / [i]gnore",
+			it.op.Path, it.agentName, kind, name, it.agentName, it.agentName, component, name, filepath.Join(home, srcID))
 	}
 	// Memory is fragment-aware. If apply wrote fragment markers, reverse them
 	// into AGENTS.md + the fragment files instead of writing the expanded dest
