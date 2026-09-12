@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
 // writeCanonicalMCP seeds one canonical mcp/<id>.toml under home.
@@ -115,12 +113,12 @@ GITHUB_TOKEN = "tok"
 		{
 			// CHARACTERIZATION, not an endorsement, of the documented coercion
 			// (docs/capability-matrix.md, #267): every dialect's inverse SKIPS a
-			// non-string element inside a
-			// string-typed native field — it is neither stringified nor passed
-			// through Extra. Claude's 1:1 shape used to refuse such an entry on
-			// write-back only because it went through a typed json.Unmarshal; it
-			// now reads exactly as `import` always has. A future refusal or
-			// stringification is a deliberate change that fails this row.
+			// non-string element inside a string-typed native field — it is
+			// neither stringified nor passed through Extra. Claude's 1:1 shape
+			// used to refuse such an entry on write-back only because it went
+			// through a typed json.Unmarshal; it now reads exactly as `import`
+			// always has. A future refusal or stringification is a deliberate
+			// change that fails this row.
 			name: "a number in args is skipped, not stringified or passed through", agent: "claude",
 			native: ".claude.json", src: stdioSrc,
 			old: `"-y"`, new: `"-y", 7`,
@@ -352,7 +350,6 @@ GITHUB_TOKEN = "${secret:GH_TOKEN}"
 // over a REMOTE server, which only the rendering adapter's own inverse reads
 // right.
 func TestReconcile_Writeback_DifferentDialectsAgree(t *testing.T) {
-	testenv.RequireContainer(t)
 	tmp := t.TempDir()
 	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
 	for _, a := range [][]string{{"init"}, {"agent", "add", "claude"}, {"agent", "add", "gemini"}} {
@@ -412,7 +409,6 @@ func TestReconcile_Writeback_DifferentDialectsAgree(t *testing.T) {
 // the whole package green while reconcile printed "write-back:" and exited 0
 // with the canonical file untouched.
 func TestReconcile_Writeback_RotatedSecretIsRefused(t *testing.T) {
-	testenv.RequireContainer(t)
 	const before = "ghp_OLD_VALUE_DO_NOT_PERSIST"
 	tmp := t.TempDir()
 	t.Setenv("GH_TOKEN", before)

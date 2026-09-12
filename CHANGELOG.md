@@ -49,7 +49,9 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   extension. A registry-wide guard fails the build if an adapter renders an MCP
   key-merge op without declaring its inverse, so the class cannot come back as
   agents are added. The refusal that remains names the *component kind* rather
-  than a list of roots.
+  than a list of roots, and a destination that cannot be read or parsed at the
+  moment of write-back (missing, non-regular, truncated) is refused by name
+  instead of being reported as a missing root key.
 - **`reconcile` no longer reports an edited MCP server as deleted when its id
   contains `~`** ([#235](https://github.com/spxrogers/agentsync/issues/235)).
   JSON pointer segments are RFC 6901 encoded, so a server id such as `til~de`

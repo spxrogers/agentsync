@@ -179,7 +179,7 @@ func TestComponentFromPointer_KindFromSourceID(t *testing.T) {
 }
 
 // noInverseAdapter is an adapter that is REGISTERED but declares no
-// MCPSpecIngester: the shape the registry-wide guard makes unrepresentable for
+// MCPSpecIngester: the shape the registry-wide guard turns into a failing test for
 // the real adapters, driven here by hand so the refusal it exists to guard
 // (writeBackKeyItem's "declares no native MCP translation") has a test that
 // fails when the refusal is removed. The embedded Adapter is nil — only Name()
@@ -207,10 +207,10 @@ func TestWriteBackKeyItem_Refusals(t *testing.T) {
 	// cmd is set so a refusal that regressed into a fall-through reports as the
 	// assertion below, not as a nil-deref panic at capture.Capture's Warn.
 	s := &reconcileSession{reg: reg, home: t.TempDir(), cmd: &cobra.Command{}}
-	item := func(agent, strategy, dest, ptr string) reconcileItem {
+	item := func(agent, strategy, sourceID, dest, ptr string) reconcileItem {
 		return reconcileItem{
 			agentName: agent,
-			op:        adapter.FileOp{Path: dest, MergeStrategy: strategy, SourceID: "mcp/* (multiple)"},
+			op:        adapter.FileOp{Path: dest, MergeStrategy: strategy, SourceID: sourceID},
 			ptr:       ptr,
 		}
 	}
@@ -218,12 +218,38 @@ func TestWriteBackKeyItem_Refusals(t *testing.T) {
 		name     string
 		agent    string
 		strategy string
+		sourceID string // "" means the ordinary "mcp/* (multiple)"
 		dest     string // the destination's bytes; "" with missing=true means no file at all
 		missing  bool
+		dir      bool // the destination path is a directory
 		ptr      string
 		want     []string // substrings the error must carry
 		reject   []string // substrings it must NOT carry
 	}{
+		{
+			// The kind gate: a key item whose SourceID is not an MCP section is
+			// refused before anything is read. TestReconcile_HookWriteBackIsRefused
+			// pins it end to end; this row pins it beside its siblings.
+			name: "component kind is not mcp", agent: "claude", strategy: "merge-json-keys",
+			sourceID: "hooks/* (multiple)", dest: `{"hooks": {"PreToolUse": []}}`, ptr: "/hooks/PreToolUse",
+			want: []string{"not implemented in v1", "MCP-server items"},
+		},
+		{
+			// Defensive in production (the render never emits a one-segment
+			// pointer for an object root), reachable here: the refusal must
+			// still refuse rather than index a nil map.
+			name: "pointer names no server", agent: "claude", strategy: "merge-json-keys",
+			dest: `{"mcpServers": {"github": {"command": "npx"}}}`, ptr: "/mcpServers",
+			want: []string{"names no MCP server"},
+		},
+		{
+			// The non-regular arm of the read refusal: no [o]verride offered,
+			// because the re-render's convergence read would hang on it (#241).
+			name: "destination is a directory", agent: "claude", strategy: "merge-json-keys",
+			dir: true, ptr: "/mcpServers/github",
+			want:   []string{"read destination", "not a regular file", "remove or replace", "[i]gnore"},
+			reject: []string{"[o]verride"},
+		},
 		{
 			name: "root key absent", agent: "claude", strategy: "merge-json-keys", dest: `{}`, ptr: "/mcpServers/github",
 			want: []string{"mcpServers", "absent"},
@@ -270,7 +296,7 @@ func TestWriteBackKeyItem_Refusals(t *testing.T) {
 		{
 			// Reachable only by hand: the registry-wide guard makes a REAL
 			// adapter that renders MCP key items without the inverse
-			// unrepresentable. The refusal must still refuse — a nil here would
+			// a failing test. The refusal must still refuse — a nil here would
 			// call a nil interface, and a guess at a dialect would be worse.
 			name: "agent declares no inverse", agent: "noinverse", strategy: "merge-json-keys",
 			dest: `{"mcpServers": {"github": {"command": "npx"}}}`, ptr: "/mcpServers/github",
@@ -280,12 +306,21 @@ func TestWriteBackKeyItem_Refusals(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			dest := filepath.Join(t.TempDir(), "dest")
-			if !tc.missing {
+			switch {
+			case tc.dir:
+				if err := os.Mkdir(dest, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			case !tc.missing:
 				if err := os.WriteFile(dest, []byte(tc.dest), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			}
-			err := s.writeBackKeyItem(item(tc.agent, tc.strategy, dest, tc.ptr))
+			sourceID := tc.sourceID
+			if sourceID == "" {
+				sourceID = "mcp/* (multiple)"
+			}
+			err := s.writeBackKeyItem(item(tc.agent, tc.strategy, sourceID, dest, tc.ptr))
 			if err == nil {
 				t.Fatal("writeBackKeyItem = nil, want a refusal: a nil here prints \"write-back:\" for an edit that was not persisted")
 			}
@@ -299,7 +334,7 @@ func TestWriteBackKeyItem_Refusals(t *testing.T) {
 					t.Errorf("err = %q names the wrong cause (%q)", err, r)
 				}
 			}
-			if tc.missing {
+			if tc.missing || tc.dir {
 				// os.ReadFile's error carries the path too; the refusal must not
 				// print it twice ("read destination X: open X: …").
 				if n := strings.Count(err.Error(), dest); n != 1 {
@@ -317,7 +352,7 @@ func TestWriteBackKeyItem_Refusals(t *testing.T) {
 		if err := os.WriteFile(dest, []byte(`{"mcpServers": {"bad\u001b[31mid": 5}}`), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		err := s.writeBackKeyItem(item("claude", "merge-json-keys", dest, "/mcpServers/bad\x1b[31mid"))
+		err := s.writeBackKeyItem(item("claude", "merge-json-keys", "mcp/* (multiple)", dest, "/mcpServers/bad\x1b[31mid"))
 		if err == nil {
 			t.Fatal("want a refusal")
 		}
@@ -328,4 +363,22 @@ func TestWriteBackKeyItem_Refusals(t *testing.T) {
 			t.Fatalf("err = %q carries the raw ESC byte from the native id", err)
 		}
 	})
+}
+
+// TestWriteBackFileItem_ReadRefusalNamesThePathOnce pins the whole-file arm of
+// destReadRefusal the way the key-item table pins its own: os.ReadFile's error
+// already carries the path, so the message must not print it twice.
+func TestWriteBackFileItem_ReadRefusalNamesThePathOnce(t *testing.T) {
+	testenv.RequireContainer(t)
+	dest := filepath.Join(t.TempDir(), "gone.md")
+	err := writeBackFileItem(t.TempDir(), reconcileItem{op: adapter.FileOp{Path: dest, SourceID: "demo"}})
+	if err == nil {
+		t.Fatal("writeBackFileItem = nil for a missing destination, want the read refusal")
+	}
+	if !strings.Contains(err.Error(), "[o]verride") {
+		t.Fatalf("err = %q, want the absent-destination remedy", err)
+	}
+	if n := strings.Count(err.Error(), dest); n != 1 {
+		t.Fatalf("err = %q names the path %d times, want once", err, n)
+	}
 }

@@ -1416,18 +1416,7 @@ func (s *reconcileSession) writeBackKeyItem(it reconcileItem) error {
 	// a missing root key.
 	data, err := readDestBytes(it.op.Path)
 	if err != nil {
-		// The same split writeBackFileItem makes: [o]verride is the right
-		// remedy for an absent or unreadable file (the re-render restores it)
-		// and the WRONG one for a non-regular file, where the convergence read
-		// hangs (#241). pathlessStatErr keeps the path to one mention:
-		// os.ReadFile's *fs.PathError carries it, readDestBytes' sentinels
-		// deliberately do not.
-		if errors.Is(err, errDestNotRegular) {
-			return fmt.Errorf("read destination %s: %w — remove or replace the non-regular file at that "+
-				"path and re-run, or [i]gnore to suppress this item", it.op.Path, err)
-		}
-		return fmt.Errorf("read destination %s: %w — use [o]verride to restore it from canonical, or "+
-			"[i]gnore to suppress this item", it.op.Path, pathlessStatErr(err))
+		return destReadRefusal(it.op.Path, err)
 	}
 	dest := map[string]any{}
 	if err := decodeDestBytes(it.op.MergeStrategy, data, &dest); err != nil {
@@ -1472,6 +1461,33 @@ func (s *reconcileSession) writeBackKeyItem(it reconcileItem) error {
 	return nil
 }
 
+// destReadRefusal words a failed destination read for the prompt, for both
+// the key-item and the whole-file write-back: the path once (os.ReadFile's
+// *fs.PathError carries it and readDestBytes' sentinels deliberately do not,
+// so pathlessErr strips the copy), and a named next step — the user is
+// mid-prompt with a keystroke to choose, and "not a regular file" alone does
+// not say which one gets them unstuck.
+//
+// The next step deliberately omits [o]verride for a NON-REGULAR destination.
+// Override re-applies through render.Writer.Write, whose convergence read is
+// not shape-guarded, so on that exact item it does not fail — it HANGS
+// (measured: `reconcile --auto-override` rc=124, #241). An earlier version of
+// the whole-file message recommended it, which walked the user out of a clean
+// refusal and into an unbounded wedge; restore the suggestion only once #241
+// is fixed. Every other read failure keeps the peers' remedy set: the common
+// one is an ABSENT destination — the user deleted a managed file, which is
+// itself drift — and there [o]verride is both safe and usually the fix, since
+// Writer.Write's convergence read gets ENOENT and falls straight through to
+// the write.
+func destReadRefusal(path string, err error) error {
+	if errors.Is(err, errDestNotRegular) {
+		return fmt.Errorf("read destination %s: %w — remove or replace the non-regular file at that "+
+			"path and re-run, or [i]gnore to suppress this item", path, err)
+	}
+	return fmt.Errorf("read destination %s: %w — use [o]verride to restore it from canonical, or "+
+		"[i]gnore to suppress this item", path, pathlessErr(err))
+}
+
 // writeBackFileItem handles file-level (replace strategy) items by copying
 // the destination file back into the corresponding source location verbatim.
 // This covers subagents, commands, memory, and skill files in v1.
@@ -1502,30 +1518,9 @@ func writeBackFileItem(home string, it reconcileItem) error {
 	}
 	data, err := readDestBytes(readPath)
 	if err != nil {
-		// Named next steps, like this function's other refusals: the user is
-		// mid-prompt with a keystroke to choose, and "read dest X: not a regular
-		// file" alone does not tell them which one gets them unstuck.
-		//
-		// This arm's advice deliberately omits [o]verride, as the symlink
-		// arms' does, unlike the absent arm below. It re-applies through
-		// render.Writer.Write, whose convergence read is not
-		// shape-guarded, so on this exact item it does not fail — it HANGS
-		// (measured: `reconcile --auto-override` rc=124).
-		// An earlier version of this message recommended it, which walked the
-		// user out of a clean refusal and into an unbounded wedge. Restore that
-		// suggestion only once #241 is fixed.
-		if errors.Is(err, errDestNotRegular) {
-			return fmt.Errorf("read dest %s: %w — remove or replace the non-regular file at "+
-				"that path and re-run, or [i]gnore to suppress this item", it.op.Path, err)
-		}
-		// Any other read failure keeps the peers' remedy set. The common one is
-		// an ABSENT destination — the user deleted a managed file, which is
-		// itself drift — and there [o]verride is both safe and usually the fix:
-		// Writer.Write's convergence read gets ENOENT and falls straight
-		// through to the write. Leaving it out of the advice is only right for
-		// the non-regular case above.
-		return fmt.Errorf("read dest %s: %w — use [o]verride to restore it from canonical, "+
-			"or [i]gnore to suppress this item", it.op.Path, pathlessStatErr(err))
+		// The symlink arms above omit [o]verride for their own reason (#248);
+		// destReadRefusal omits it for a non-regular file for #241's.
+		return destReadRefusal(it.op.Path, err)
 	}
 	srcID := it.op.SourceID
 	if srcID == "" {

@@ -857,8 +857,8 @@ shape, dropping the URL out of the model entirely, while refusing every root
 nobody had added to the list. Asking the adapter that wrote the bytes removes
 the whole class. An adapter that renders an MCP key-merge op without declaring
 its inverse is REFUSED rather than guessed at, and the registry-wide guard
-`TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer` makes that state
-unrepresentable.
+`TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer` turns that state into a
+failing test.
 
 Pointer segments are RFC 6901 encoded, so the entry segment is DECODED
 (`jsonkeys.UnescapeToken`) before it is used as a destination map key or a
