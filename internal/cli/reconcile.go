@@ -20,6 +20,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/capture"
 	"github.com/spxrogers/agentsync/internal/drift"
 	"github.com/spxrogers/agentsync/internal/iox"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/secrets"
@@ -372,14 +373,7 @@ func newReconcileSession(cmd *cobra.Command, in io.Reader, auto reconcileAuto, a
 		return nil, nil, err
 	}
 	reg := registryFactory()
-	var agents []string
-	enabled := map[string]bool{}
-	for name, ag := range c.Config.Agents {
-		if ag.Enabled {
-			agents = append(agents, name)
-			enabled[name] = true
-		}
-	}
+	agents, enabled := enabledAgentNames(c.Config)
 	// --agents narrows the pass, with the same parsing status/diff/apply use.
 	if len(agents) > 0 {
 		sel, aerr := selectAgents(cmd, agents, enabled, agentsCSV)
@@ -875,14 +869,7 @@ func pluginOwnerForKeyItem(sourceID, ptr string, owners map[string]string) strin
 	if len(parts) < 2 {
 		return ""
 	}
-	return owners[kind+"/"+unescapeJSONPointer(parts[1])]
-}
-
-// unescapeJSONPointer decodes one JSON-pointer reference token (RFC 6901 §3):
-// "~1" is '/' and "~0" is '~'. Order matters — ~0 must be decoded last, or
-// "~01" would wrongly become "/" instead of "~1".
-func unescapeJSONPointer(tok string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(tok, "~1", "/"), "~0", "~")
+	return owners[kind+"/"+jsonkeys.UnescapeToken(parts[1])]
 }
 
 // collectReconcileItems builds reconcile's flat item list from a rendered plan

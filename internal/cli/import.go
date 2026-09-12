@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/capture"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/marketplace"
 	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/project"
@@ -97,7 +99,7 @@ func collectStateSeedPointers(m map[string]any) []string {
 // matches render.RecordOpsState skipping never-landed pointers — a present-null
 // value still hashes.
 func hashAtPointer(m map[string]any, ptr string) string {
-	v, ok := getJSONPointer(m, ptr)
+	v, ok := jsonkeys.Get(m, ptr)
 	if !ok {
 		return ""
 	}
@@ -107,37 +109,6 @@ func hashAtPointer(m map[string]any, ptr string) string {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
-}
-
-// getJSONPointer resolves a "/a/b/c" RFC 6901 pointer against m. The bool is
-// false when any segment is missing — distinct from a present value that
-// happens to be null. We re-implement here rather than exporting
-// render.getPointer because keeping that helper unexported preserves the
-// current package boundary.
-func getJSONPointer(m map[string]any, ptr string) (any, bool) {
-	if ptr == "" || ptr[0] != '/' {
-		return m, true
-	}
-	parts := strings.Split(ptr[1:], "/")
-	for i, p := range parts {
-		// Decode RFC 6901 escapes.
-		p = strings.ReplaceAll(p, "~1", "/")
-		p = strings.ReplaceAll(p, "~0", "~")
-		parts[i] = p
-	}
-	var cur any = m
-	for _, p := range parts {
-		mm, ok := cur.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		v, exists := mm[p]
-		if !exists {
-			return nil, false
-		}
-		cur = v
-	}
-	return cur, true
 }
 
 // newImportCmd returns the "import" subcommand.
@@ -595,6 +566,9 @@ func unimportedDestPointers(agentsyncHome, srcHome, agentName string, reg *adapt
 		return nil
 	}
 	var out []string
+	// ops is a slice in the adapter's render order, and each op's pointers come
+	// back sorted from foreignPointersInOurSections, so the list is stable end
+	// to end: per destination file, in that file's pointer order.
 	for _, op := range ops {
 		if !render.IsKeyMerge(op.MergeStrategy) {
 			continue
@@ -611,33 +585,54 @@ func unimportedDestPointers(agentsyncHome, srcHome, agentName string, reg *adapt
 		if jsonErr := jsonUnmarshalLoose(op.Content, &ours); jsonErr != nil {
 			continue
 		}
-		ownedPtrs := map[string]bool{}
-		ourSections := map[string]bool{}
-		for k := range ours {
-			ourSections[escapePointerSegment(k)] = true
-		}
-		for _, p := range collectStateSeedPointers(ours) {
-			ownedPtrs[p] = true
-		}
-		// Walk existing's second-level pointers and flag ones agentsync's
-		// canonical doesn't own — but ONLY under top-level sections the
-		// canonical actually renders (mirrors render.scopeOwnedToSections).
-		// Pointers under sections agentsync doesn't model at all (Claude
-		// Code's runtime state, telemetry, unmodeled settings) are out of
-		// scope: the merge-keys writer leaves them untouched on apply, so
-		// flagging them would be noise — and the previous "will trigger
-		// ForeignCollision" prediction for them was factually wrong (the
-		// per-pointer OwnedKeys check fires only for keys this op writes).
-		for _, p := range collectStateSeedPointers(existing) {
-			if ownedPtrs[p] {
-				continue
-			}
-			if !ourSections[firstPointerSegmentEsc(p)] {
-				continue
-			}
+		for _, p := range foreignPointersInOurSections(ours, existing) {
 			out = append(out, op.Path+"#"+p)
 		}
 	}
+	return out
+}
+
+// foreignPointersInOurSections walks existing's second-level pointers and
+// returns the ones agentsync's canonical (ours) doesn't own — but ONLY under
+// top-level sections the canonical actually renders (mirrors
+// render.scopeOwnedToSections). Pointers under sections agentsync doesn't model
+// at all (Claude Code's runtime state, telemetry, unmodeled settings) are out
+// of scope: the merge-keys writer leaves them untouched on apply, so flagging
+// them would be noise — and the previous "will trigger ForeignCollision"
+// prediction for them was factually wrong (the per-pointer OwnedKeys check
+// fires only for keys this op writes).
+//
+// The section set is keyed by the ESCAPED top-level key because it is compared
+// against the first segment of a collectStateSeedPointers pointer, which is
+// escaped: a key holding a '/' or a '~' escapes to something other than
+// itself, so a set keyed by the raw key would never match, and every foreign
+// pointer under that section would go unreported. Pure, with no I/O, so
+// TestForeignPointersInOurSections can pin exactly that on the production code
+// rather than on a re-spelling of it.
+//
+// The result is SORTED: it is printed to the user, and collectStateSeedPointers
+// walks a map, so without the sort the same destination file would list its
+// uncaptured items in a different order on every run.
+func foreignPointersInOurSections(ours, existing map[string]any) []string {
+	ownedPtrs := map[string]bool{}
+	ourSections := map[string]bool{}
+	for k := range ours {
+		ourSections[jsonkeys.EscapeToken(k)] = true
+	}
+	for _, p := range collectStateSeedPointers(ours) {
+		ownedPtrs[p] = true
+	}
+	var out []string
+	for _, p := range collectStateSeedPointers(existing) {
+		if ownedPtrs[p] {
+			continue
+		}
+		if !ourSections[firstPointerSegmentEsc(p)] {
+			continue
+		}
+		out = append(out, p)
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -651,15 +646,6 @@ func firstPointerSegmentEsc(ptr string) string {
 		return ptr[:i]
 	}
 	return ptr
-}
-
-// escapePointerSegment escapes a top-level map key into its JSON-pointer form
-// (~ → ~0, / → ~1), matching the encoding collectStateSeedPointers emits, so
-// the section set used for filtering agrees byte-for-byte.
-func escapePointerSegment(k string) string {
-	k = strings.ReplaceAll(k, "~", "~0")
-	k = strings.ReplaceAll(k, "/", "~1")
-	return k
 }
 
 // seedStateFromCurrentDest re-renders the canonical for agent and writes
@@ -932,14 +918,26 @@ func (i *importIO) detailf(format string, args ...any) {
 	i.p.Fdetailf(i.err, format, args...)
 }
 
-// notef emits an INFO diagnostic about how agentsync is proceeding, as opposed
-// to warn's "something about your data needs attention".
+// notef is note + fmt.Sprintf, mirroring warnf/warn.
 //
-// Both tiers exist deliberately: an import that silently changes course (seeding
-// state, retiring a stale hook) is worth saying out loud, but saying it at WARN
-// would train the user to ignore the label that actually means "look at this".
+// The two used to be independent one-liners over ui.Fdiagf, differing only in
+// that note wrapped its message in a "%s" and notef passed the format through —
+// a distinction without a difference, since Fdiagf itself Sprintf's. Two
+// spellings of one output tier meant a change to that tier (its label, its
+// stream, its prefix) had to be made twice or be made inconsistent. Byte
+// equality is pinned by TestImportIONotefEqualsNote.
+//
+// note, not notef, is the spelling for an ALREADY-FORMATTED message: notef
+// Sprintf's, so a percent verb left in the text would still be reinterpreted.
+// `go vet` enforces that split — its printf analyzer recognizes notef as a
+// wrapper and rejects a non-constant format here.
+//
+// Both tiers (note/notef vs warn/warnf) exist deliberately: an import that
+// silently changes course (seeding state, retiring a stale hook) is worth
+// saying out loud, but saying it at WARN would train the user to ignore the
+// label that actually means "look at this".
 func (i *importIO) notef(format string, args ...any) {
-	i.p.Fdiagf(i.err, ui.LevelInfo, format, args...)
+	i.note(fmt.Sprintf(format, args...))
 }
 
 // infof prints an informational RESULT line on stdout — a "nothing to do"
@@ -1116,21 +1114,9 @@ func importAllComponents(io *importIO, home string, a adapter.Adapter, agentName
 // re-references secrets and preserves source-only fields for every server.
 // When io.dryRun is set it reports the targets without writing.
 func importMCP(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
-	var matched []source.MCPServer
-	for _, m := range c.MCPServers {
-		if name == "" || m.ID == name {
-			matched = append(matched, m)
-		}
-	}
-	matched, err := skipPluginProvided(io, "mcp", name, matched, func(m source.MCPServer) string { return m.ID }, nil)
-	if err != nil {
+	matched, err := matchImportable(io, "mcp", "mcp server", name, c.MCPServers, func(m source.MCPServer) string { return m.ID })
+	if err != nil || len(matched) == 0 {
 		return nil, err
-	}
-	if len(matched) == 0 {
-		if name != "" {
-			return nil, fmt.Errorf("mcp server %q not found in native config", name)
-		}
-		return nil, nil
 	}
 	// Validate ids up front (before any write, and in dry-run) so the preview
 	// matches a real import and a bulk write is atomic on a bad id.
@@ -1391,22 +1377,57 @@ func skipPluginProvided[T any](io *importIO, kind, name string, items []T, nameO
 	return out, nil
 }
 
-func importSkill(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
-	var matched []source.Skill
-	for _, sk := range c.Skills {
-		if name == "" || sk.Name == name {
-			matched = append(matched, sk)
+// matchImportable is the head five of the six per-component importers share
+// (hooks keep their own: their join key is an opaque signature that needs
+// skipPluginProvided's displayOf): narrow the ingested components to the
+// requested one (name == "" means all), drop the entries an installed plugin
+// already provides, and turn "you asked for a specific item and it is not
+// there" into the one refusal message all five spell the same way.
+//
+// kind is the skipPluginProvided/pluginProvided key ("mcp", "lsp", "skill",
+// "subagent", "command"); label is how that kind is spoken in the not-found
+// error ("mcp server", not "mcp"). The two differ for exactly the two server
+// kinds, which is why they are separate parameters rather than one string used
+// twice.
+//
+// An EMPTY result with no error is the "nothing to do" answer, NOT an error:
+// a bulk import of an agent that has no skills is a success that imports
+// nothing. Callers must return early on it rather than falling through — the
+// two capture-backed importers would otherwise hand capture.Capture an empty
+// component list. The idiom at every call site is:
+//
+//	matched, err := matchImportable(…)
+//	if err != nil || len(matched) == 0 {
+//		return nil, err
+//	}
+//
+// The TAIL stays per-component on purpose: the five disagree about id
+// validation (command downgrades an invalid name to a warning in bulk mode so
+// one bad native file cannot abort the run; the rest refuse outright) and about
+// the write funnel (mcp/lsp go through capture.Capture, the file-backed three
+// through source.Write*). Folding those into a table would mean a config
+// parameter per disagreement, which is the same code with more indirection.
+func matchImportable[T any](io *importIO, kind, label, name string, items []T, key func(T) string) ([]T, error) {
+	var matched []T
+	for _, it := range items {
+		if name == "" || key(it) == name {
+			matched = append(matched, it)
 		}
 	}
-	matched, err := skipPluginProvided(io, "skill", name, matched, func(sk source.Skill) string { return sk.Name }, nil)
+	matched, err := skipPluginProvided(io, kind, name, matched, key, nil)
 	if err != nil {
 		return nil, err
 	}
-	if len(matched) == 0 {
-		if name != "" {
-			return nil, fmt.Errorf("skill %q not found in native config", name)
-		}
-		return nil, nil
+	if len(matched) == 0 && name != "" {
+		return nil, fmt.Errorf("%s %q not found in native config", label, name)
+	}
+	return matched, nil
+}
+
+func importSkill(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
+	matched, err := matchImportable(io, "skill", "skill", name, c.Skills, func(sk source.Skill) string { return sk.Name })
+	if err != nil || len(matched) == 0 {
+		return nil, err
 	}
 	for _, sk := range matched {
 		if err := source.ValidateComponentID("skill", sk.Name); err != nil {
@@ -1437,21 +1458,9 @@ func importSkill(io *importIO, home string, c source.Canonical, name string) ([]
 }
 
 func importSubagent(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
-	var matched []source.Subagent
-	for _, sa := range c.Subagents {
-		if name == "" || sa.Name == name {
-			matched = append(matched, sa)
-		}
-	}
-	matched, err := skipPluginProvided(io, "subagent", name, matched, func(sa source.Subagent) string { return sa.Name }, nil)
-	if err != nil {
+	matched, err := matchImportable(io, "subagent", "subagent", name, c.Subagents, func(sa source.Subagent) string { return sa.Name })
+	if err != nil || len(matched) == 0 {
 		return nil, err
-	}
-	if len(matched) == 0 {
-		if name != "" {
-			return nil, fmt.Errorf("subagent %q not found in native config", name)
-		}
-		return nil, nil
 	}
 	for _, sa := range matched {
 		if err := source.ValidateComponentID("subagent", sa.Name); err != nil {
@@ -1475,21 +1484,9 @@ func importSubagent(io *importIO, home string, c source.Canonical, name string) 
 }
 
 func importCommand(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
-	var matched []source.Command
-	for _, cm := range c.Commands {
-		if name == "" || cm.Name == name {
-			matched = append(matched, cm)
-		}
-	}
-	matched, err := skipPluginProvided(io, "command", name, matched, func(cm source.Command) string { return cm.Name }, nil)
-	if err != nil {
+	matched, err := matchImportable(io, "command", "command", name, c.Commands, func(cm source.Command) string { return cm.Name })
+	if err != nil || len(matched) == 0 {
 		return nil, err
-	}
-	if len(matched) == 0 {
-		if name != "" {
-			return nil, fmt.Errorf("command %q not found in native config", name)
-		}
-		return nil, nil
 	}
 	// An invalid captured name (a namespaced Gemini command like "git/commit"
 	// carries its subdirectory in the name, which the canonical flat namespace
@@ -1585,21 +1582,9 @@ func importHook(io *importIO, home string, c source.Canonical, name string) ([]s
 }
 
 func importLSP(io *importIO, home string, c source.Canonical, name string) ([]string, error) {
-	var matched []source.LSPServer
-	for _, ls := range c.LSPServers {
-		if name == "" || ls.ID == name {
-			matched = append(matched, ls)
-		}
-	}
-	matched, err := skipPluginProvided(io, "lsp", name, matched, func(ls source.LSPServer) string { return ls.ID }, nil)
-	if err != nil {
+	matched, err := matchImportable(io, "lsp", "lsp server", name, c.LSPServers, func(ls source.LSPServer) string { return ls.ID })
+	if err != nil || len(matched) == 0 {
 		return nil, err
-	}
-	if len(matched) == 0 {
-		if name != "" {
-			return nil, fmt.Errorf("lsp server %q not found in native config", name)
-		}
-		return nil, nil
 	}
 	for _, ls := range matched {
 		if err := source.ValidateComponentID("lsp", ls.ID); err != nil {
@@ -1651,7 +1636,7 @@ func importMemory(io *importIO, home string, c source.Canonical) ([]string, erro
 		// No markers (collision/legacy) but the source is fragment-composed:
 		// writing the expanded body would inline the @imports and orphan the
 		// fragment files — skip with a warning rather than flatten silently.
-		io.notef("skipping memory import — canonical memory uses fragments/ and the imported memory has no reversible markers; writing it back would inline the fragments and orphan their files. Edit memory/ directly, then apply.")
+		io.note("skipping memory import — canonical memory uses fragments/ and the imported memory has no reversible markers; writing it back would inline the fragments and orphan their files. Edit memory/ directly, then apply.")
 		return nil, nil
 	default:
 		if !io.dryRun {

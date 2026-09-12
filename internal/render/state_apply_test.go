@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -392,5 +394,27 @@ func TestPruneStaleState_SiblingColonProjectRootSurvives(t *testing.T) {
 	if _, ok := s.Files[longKey]; !ok {
 		t.Fatalf("a SIBLING project whose root merely shares a ':'-delimited prefix "+
 			"must keep its ownership; have %+v", s.Files)
+	}
+}
+
+// TestCollectPointersEscapesKeys pins, in the package that MINTS the state
+// file's keys, that CollectPointers escapes every segment per RFC 6901 with '~'
+// handled before '/': "a/b" must become "a~1b" and "c~d" must become "c~0d",
+// never "a~01b" or "c~10d". The cli-side tests pin the same order through
+// jsonkeys; this one fails on its own if render ever stops routing through it.
+func TestCollectPointersEscapesKeys(t *testing.T) {
+	doc := map[string]any{
+		"a/b":  map[string]any{"c~d": 1, "plain": 2},
+		"~":    "lone tilde",
+		"/":    "lone slash",
+		"~1":   "already-escaped-looking",
+		"":     "empty key",
+		"leaf": true,
+	}
+	got := render.CollectPointers(doc, "")
+	sort.Strings(got)
+	want := []string{"/", "/a~1b/c~0d", "/a~1b/plain", "/leaf", "/~0", "/~01", "/~1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("CollectPointers = %q, want %q", got, want)
 	}
 }

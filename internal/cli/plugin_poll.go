@@ -499,12 +499,7 @@ func swapDir(src, dst string) error {
 // agent and was not about targeting at all.
 func filterSafeBumps(home string, bumps []marketplace.Bump, fetched map[string]map[string]marketplace.PluginEntry, cfg source.Config, userHome string, warn io.Writer) (safe, lossy, unevaluable []marketplace.Bump) {
 	reg := registryFactory()
-	var agents []string
-	for name, ag := range cfg.Agents {
-		if ag.Enabled {
-			agents = append(agents, name)
-		}
-	}
+	agents, _ := enabledAgentNames(cfg)
 	for _, b := range bumps {
 		isLossy, err := bumpIsLossy(home, b, fetched, cfg, reg, agents, userHome)
 		if err != nil {
@@ -638,15 +633,8 @@ func projectedSkips(entry marketplace.PluginEntry, cacheDir string, cfg source.C
 	if err != nil {
 		return nil, err
 	}
-	mini := source.Canonical{
-		Config:     cfg,
-		MCPServers: proj.MCPServers,
-		Skills:     proj.Skills,
-		Subagents:  proj.Subagents,
-		Commands:   proj.Commands,
-		Hooks:      proj.Hooks,
-		LSPServers: proj.LSPServers,
-	}
+	mini := proj.AsCanonical()
+	mini.Config = cfg
 	plan, err := render.Plan(secrets.ForRender(mini), reg, agents, adapter.ScopeUser, "", nil, userHome)
 	if err != nil {
 		return nil, err

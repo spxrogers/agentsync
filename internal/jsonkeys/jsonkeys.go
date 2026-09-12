@@ -1,12 +1,15 @@
 // Package jsonkeys implements per-key JSON pointer merge used by adapters that
 // need to own a subset of keys inside a shared JSON (or JSONC) config file.
+//
+// It is also the single home for RFC 6901 pointer mechanics (pointer.go):
+// EscapeToken and UnescapeToken for reference tokens, SplitPointer, and Get,
+// the one pointer resolver every package walks a document with.
 package jsonkeys
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"sigs.k8s.io/yaml"
 )
@@ -205,7 +208,7 @@ func deepCopyValue(v any) any {
 }
 
 func pointerExists(m map[string]any, ptr string) bool {
-	parts := splitPointer(ptr)
+	parts := SplitPointer(ptr)
 	var cur any = m
 	for _, p := range parts {
 		mp, ok := cur.(map[string]any)
@@ -221,7 +224,7 @@ func pointerExists(m map[string]any, ptr string) bool {
 }
 
 func deletePointer(m map[string]any, ptr string) {
-	parts := splitPointer(ptr)
+	parts := SplitPointer(ptr)
 	if len(parts) == 0 {
 		return
 	}
@@ -237,19 +240,4 @@ func deletePointer(m map[string]any, ptr string) {
 		}
 		cur = next
 	}
-}
-
-func splitPointer(ptr string) []string {
-	ptr = strings.TrimPrefix(ptr, "/")
-	if ptr == "" {
-		return nil
-	}
-	raw := strings.Split(ptr, "/")
-	out := make([]string, len(raw))
-	for i, s := range raw {
-		s = strings.ReplaceAll(s, "~1", "/")
-		s = strings.ReplaceAll(s, "~0", "~")
-		out[i] = s
-	}
-	return out
 }

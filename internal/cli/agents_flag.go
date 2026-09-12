@@ -2,8 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/spf13/cobra"
+
+	"github.com/spxrogers/agentsync/internal/source"
 )
 
 // `--agents` is the ONE grammar for "which agents does this RUN act on"
@@ -55,4 +58,38 @@ func selectAgents(cmd *cobra.Command, enabledAgents []string, enabled map[string
 		return enabledAgents, nil
 	}
 	return resolveAgentFilter(names, enabled)
+}
+
+// enabledAgentNames answers "which agents is this run allowed to touch" in the
+// exact pair selectAgents takes: the enabled names as a slice, and the same set
+// as a membership map for the --agents allowlist check.
+//
+// Eight commands needed that pair and each open-coded the same five-line map
+// walk (apply, status, diff, reconcile, explain, plugin upgrade --lossless,
+// plugin explain, plugin poll). Four of them also built the `enabled` map,
+// four did not, and two re-sorted afterwards — so "enabled agents" had two
+// shapes and three orderings depending on which file you read. One helper
+// means a change to what "enabled" means (a future per-scope override, say)
+// lands once.
+//
+// The result is SORTED. The map walk it replaces was unordered, so every caller
+// already had to be order-insensitive; sorting only removes a source of
+// nondeterminism (render.Plan visits agents in this order, so an error from two
+// mis-rendering agents used to name whichever one the runtime happened to reach
+// first). explain and plugin explain sorted explicitly for exactly this reason
+// — that sort now lives here, once, for all of them.
+//
+// Both returns are non-nil even when nothing is enabled: callers test len(), and
+// an empty map is a valid "nothing is enabled" answer for selectAgents.
+func enabledAgentNames(cfg source.Config) ([]string, map[string]bool) {
+	names := make([]string, 0, len(cfg.Agents))
+	enabled := make(map[string]bool, len(cfg.Agents))
+	for name, ag := range cfg.Agents {
+		if ag.Enabled {
+			names = append(names, name)
+			enabled[name] = true
+		}
+	}
+	sort.Strings(names)
+	return names, enabled
 }

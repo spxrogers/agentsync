@@ -74,14 +74,7 @@ func newDiffCmd() *cobra.Command {
 				return err
 			}
 			reg := registryFactory()
-			var enabledAgents []string
-			enabled := map[string]bool{}
-			for name, ag := range c.Config.Agents {
-				if ag.Enabled {
-					enabledAgents = append(enabledAgents, name)
-					enabled[name] = true
-				}
-			}
+			enabledAgents, enabled := enabledAgentNames(c.Config)
 			// --agents narrows the diff to a validated allowlist, mirroring
 			// `status --agents` exactly (same split/star/validation and the same
 			// empty-rejection message) so the two read-only commands stay

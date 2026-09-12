@@ -446,12 +446,7 @@ func pluginUpgradeRun(cmd *cobra.Command, args []string, lossless bool) error {
 		if cerr != nil {
 			return fmt.Errorf("load source: %w", cerr)
 		}
-		var agents []string
-		for name, ag := range c.Config.Agents {
-			if ag.Enabled {
-				agents = append(agents, name)
-			}
-		}
+		agents, _ := enabledAgentNames(c.Config)
 		isLossy, lerr := entryIsLossy(home, id, mpEntry, marketplaceCacheDir(home, resolvedMP), c.Config, registryFactory(), agents, userHome)
 		switch {
 		case lerr != nil:

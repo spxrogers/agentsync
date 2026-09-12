@@ -263,6 +263,36 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Changed
 
+- **Internal: four duplicated helpers in the CLI collapse to one each**
+  ([#235](https://github.com/spxrogers/agentsync/issues/235)). Eight commands
+  open-coded the same walk over `[agents]` to answer "which agents may this run
+  touch"; four of them also built the membership map the `--agents` filter
+  validates against and four did not, and two sorted the result while six left
+  it in Go's randomized map order. There is now one `enabledAgentNames`, and it
+  SORTS — so every command visits agents in a stable order rather than a
+  different one each run. Every list agentsync currently PRINTS was already
+  sorted or grouped downstream, so no output moves; what changes is the answer
+  when the order is load-bearing. Measured with two unregistered agents enabled,
+  over forty runs: `apply` blamed either agent before (36/4) and the same one
+  after (40/0). RFC 6901 pointer escaping had seven hand-rolled copies across
+  three packages, each of which had to get a non-symmetric order right in both
+  directions; it now lives once in `internal/jsonkeys`, with the order argument
+  written down and pinned by a round-trip table. The one pointer those copies
+  disagreed on, `/`, now names the whole document everywhere, as
+  `internal/render` already read it (the CLI's two resolvers read it as the
+  `""` key); it can only come from a hand-edited state key or a rendered
+  document with a top-level empty key, which no adapter produces today. The list
+  of destination items `import` reports as present but not captured is now
+  sorted within each destination file rather than in map order. The
+  `ProjectionResult` → `source.Canonical` component copy moved out of its three
+  CLI call sites and next to the struct it copies, with a reflective guard, so a
+  seventh component kind cannot be added to a plugin projection and silently
+  dropped from `explain`, `plugin explain` and `plugin poll`. And import's five
+  per-component importers share their opening filter rather than repeating it
+  five times. Verified with a scripted 44-command lifecycle across four agents:
+  the transcript and every file under the home are byte-identical before and
+  after.
+
 - **Internal: a plugin's `plugins/<id>.toml` has one schema and one preserve
   rule**
   ([#234](https://github.com/spxrogers/agentsync/issues/234)). The file was

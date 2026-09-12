@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/drift"
+	"github.com/spxrogers/agentsync/internal/jsonkeys"
 	"github.com/spxrogers/agentsync/internal/render"
 	"github.com/spxrogers/agentsync/internal/state"
 )
@@ -291,4 +293,26 @@ func walkPlanItems(w planWalk) []planItem {
 		}
 	}
 	return out
+}
+
+// getPointerValue resolves ptr against m for the drift diagnostics, which treat
+// "absent" and "present and null" alike (both mean "no value to compare"), so
+// jsonkeys.Get's presence signal is discarded.
+//
+// The rooted-pointer guard is NOT dead code and does not belong in jsonkeys:
+// planwalk feeds this pointers read back from the state file, which is a file on
+// disk a user can hand-edit. A pointer that does not start with "/" is not a
+// pointer, and answering it with a top-level key lookup would silently compare
+// the wrong thing. jsonkeys.Get is deliberately lenient about the leading slash
+// (RFC 6901 leaves the malformed case undefined); the refusal is this caller's
+// policy, applied where the untrusted input enters.
+//
+// `/` names the WHOLE document, not the `""` key; jsonkeys.Get documents that
+// reading, where it came from, and where such a pointer can arise.
+func getPointerValue(m map[string]any, ptr string) any {
+	if !strings.HasPrefix(ptr, "/") {
+		return nil
+	}
+	v, _ := jsonkeys.Get(m, ptr)
+	return v
 }

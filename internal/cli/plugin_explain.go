@@ -140,15 +140,9 @@ func runExplainEmpty(p *ui.Printer, jsonOut bool) error {
 // subagents/LSPs. We re-project each requested plugin in isolation
 // (marketplace.ProjectInstalled) and build its plan from only those components.
 func runExplain(w io.Writer, p *ui.Printer, fs afero.Fs, c source.Canonical, wanted []source.Plugin, home, pluginCacheRoot string, jsonOut bool) error {
-	// Collect enabled agents. Sort so `--json` row order is deterministic
-	// (PrintJSON emits rows in this slice order verbatim).
-	var agents []string
-	for name, ag := range c.Config.Agents {
-		if ag.Enabled {
-			agents = append(agents, name)
-		}
-	}
-	sort.Strings(agents)
+	// Enabled agents, sorted by enabledAgentNames so `--json` row order is
+	// deterministic (PrintJSON emits rows in this slice order verbatim).
+	agents, _ := enabledAgentNames(c.Config)
 
 	reg := registryFactory()
 
@@ -228,12 +222,7 @@ func explainPluginReport(fs afero.Fs, c source.Canonical, pl source.Plugin, agen
 	}
 	// Replace (not append to) the flattened component lists with only this
 	// plugin's, so the plan and the report's counts cover this plugin alone.
-	scoped.MCPServers = proj.MCPServers
-	scoped.Skills = proj.Skills
-	scoped.Subagents = proj.Subagents
-	scoped.Commands = proj.Commands
-	scoped.Hooks = proj.Hooks
-	scoped.LSPServers = proj.LSPServers
+	proj.ReplaceComponentsIn(&scoped)
 
 	plan, err := render.Plan(secrets.ForRender(scoped), reg, agents, adapter.ScopeUser, "", nil, paths.HomeDir(paths.OSEnv{}))
 	if err != nil {

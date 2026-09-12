@@ -148,14 +148,7 @@ func newStatusCmd() *cobra.Command {
 				return err
 			}
 			reg := registryFactory()
-			var enabledAgents []string
-			enabled := map[string]bool{}
-			for name, ag := range c.Config.Agents {
-				if ag.Enabled {
-					enabledAgents = append(enabledAgents, name)
-					enabled[name] = true
-				}
-			}
+			enabledAgents, enabled := enabledAgentNames(c.Config)
 			// --agents narrows the report (and the plan) to the requested
 			// agent(s); orphan-state warnings still consider the FULL enabled
 			// set so a deselected agent isn't mistaken for an orphaned one.
@@ -1031,26 +1024,4 @@ func standardizeJSONC(data []byte) ([]byte, error) {
 	}
 	v.Standardize()
 	return v.Pack(), nil
-}
-
-func getPointerValue(m map[string]any, ptr string) any {
-	if !strings.HasPrefix(ptr, "/") {
-		return nil
-	}
-	parts := strings.Split(strings.TrimPrefix(ptr, "/"), "/")
-	var cur any = m
-	for _, p := range parts {
-		// Decode RFC 6901 escapes so a managed id containing '~' or '/'
-		// (which CollectPointers escaped to ~0/~1) matches the real key.
-		// Without this, status/diff looked up the literal escaped key, found
-		// nothing, and reported phantom drift forever for that item.
-		p = strings.ReplaceAll(p, "~1", "/")
-		p = strings.ReplaceAll(p, "~0", "~")
-		mp, ok := cur.(map[string]any)
-		if !ok {
-			return nil
-		}
-		cur = mp[p]
-	}
-	return cur
 }
