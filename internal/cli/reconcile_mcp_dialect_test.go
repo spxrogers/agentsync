@@ -112,6 +112,27 @@ GITHUB_TOKEN = "tok"
 			want:   []string{"type = 'http'\n", "url = 'https://api.edited.com/mcp'"},
 			reject: []string{"[server.extra]"},
 		},
+		{
+			// CHARACTERIZATION of the documented coercion (docs/capability-matrix.md,
+			// #267): every dialect's inverse SKIPS a non-string element inside a
+			// string-typed native field — it is neither stringified nor passed
+			// through Extra. Claude's 1:1 shape used to refuse such an entry on
+			// write-back only because it went through a typed json.Unmarshal; it
+			// now reads exactly as `import` always has. A future refusal or
+			// stringification is a deliberate change that fails this row.
+			name: "a number in args is skipped, not stringified or passed through", agent: "claude",
+			native: ".claude.json", src: stdioSrc,
+			old: `"-y"`, new: `"-y", 7`,
+			want:   []string{"args = ['-y', '@modelcontextprotocol/server-github']"},
+			reject: []string{"'7'", "[server.extra]"},
+		},
+		{
+			name: "a bool in env is skipped, not stringified or passed through", agent: "claude",
+			native: ".claude.json", src: stdioSrc,
+			old: `"tok"`, new: `"tok", "NUM": true`,
+			want:   []string{"[server.env]", "GITHUB_TOKEN = 'tok'"},
+			reject: []string{"NUM", "[server.extra]"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -360,6 +381,11 @@ func TestReconcile_Writeback_DifferentDialectsAgree(t *testing.T) {
 	}
 	if strings.Contains(out, "conflict:") {
 		t.Fatalf("reconcile reported a conflict between two agents that hold the SAME edit:\n%s", out)
+	}
+	// Both key items must have been written back, or the "no conflict" above is
+	// satisfied by the claude-only outcome.
+	if n := strings.Count(out, "write-back:"); n != 2 {
+		t.Fatalf("want two write-back lines (one per agent), got %d:\n%s", n, out)
 	}
 	got, err := os.ReadFile(srcFile)
 	if err != nil {

@@ -233,6 +233,13 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 	// already-cancelled context.)
 	sigCtx, stopSignals := secretEditSignals(commandContext(cmd))
 	defer stopSignals()
+	if sigCtx.Err() != nil {
+		// Already interrupted: do not put the plaintext on disk at all. The
+		// checks below would abandon the edit anyway (and the deferred remove
+		// would take the file), so this is a narrower cleartext window, not a
+		// different outcome — which is also why no test can tell it apart.
+		return errSecretEditInterrupted
+	}
 
 	// Write to a tmp file in os.TempDir() (RAM-backed on macOS).
 	tmpFile, err := os.CreateTemp("", "agentsync-secrets-*.toml")
@@ -264,7 +271,10 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 	// while SIGTERM is their "deadly signal" path, on which each restores the
 	// terminal and exits at once (measured under a pty). WaitDelay escalates
 	// to a kill for one that ignores even that, so the command can never wedge
-	// waiting for it.
+	// waiting for it. Where the signal cannot be sent at all (Windows has no
+	// SIGTERM delivery), exec reports the Cancel error through Wait, the
+	// interrupt check below wins over it, and the outcome degrades to the
+	// grace-period kill rather than to a hang.
 	editorCmd.Cancel = func() error { return editorCmd.Process.Signal(syscall.SIGTERM) }
 	editorCmd.WaitDelay = secretEditGrace
 	editorCmd.Stdin = os.Stdin

@@ -36,8 +36,10 @@ import (
 // (pruneStateFilesForPath on a nil st) and finish with a queued override
 // (Registry.Lookup on a nil reg) — so the orphan tests press only [k], [q] or
 // EOF, nothing here calls finish (TestReconcile_FinishRunsExactlyOnce covers it
-// end to end), and [w]rite-back, which needs a real ~/.agentsync, a plan and a
-// destination, stays in reconcile_test.go. A test that needs home sets it.
+// end to end), and [w]rite-back is driven end to end from reconcile_test.go and
+// the dialect table, with its refusals driven directly by
+// TestWriteBackKeyItem_Refusals on a session that sets reg and home. A test
+// that needs home sets it.
 //
 // The reader is NOT a fake: it is the same *bufio.Reader production wraps stdin
 // in, over a strings.Reader, so readChar sees production's exact EOF behaviour.

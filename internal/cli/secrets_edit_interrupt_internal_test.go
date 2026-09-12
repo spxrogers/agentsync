@@ -181,11 +181,14 @@ func seamCancelWhenReadBlocks(t *testing.T, marker string) {
 	})
 }
 
-// seamNeverCancels is the no-signal shape, so the happy path exercises the seam
-// too rather than bypassing it.
-func seamNeverCancels(t *testing.T) {
+// dirIsEmpty reports whether dir holds no entries at all.
+func dirIsEmpty(t *testing.T, dir string) bool {
 	t.Helper()
-	swapSeam(t, context.WithCancel)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(entries) == 0
 }
 
 func swapSeam(t *testing.T, fn func(context.Context) (context.Context, context.CancelFunc)) {
@@ -403,10 +406,29 @@ func TestSecretsEdit_UninterruptedStillSaves(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.editor(t, `for a in "$@"; do f="$a"; done; printf '[edited]\nval = "yes"\n' > "$f"`)
-	seamNeverCancels(t)
+	// The seam's stop is the deferred stopSignals. The signal is armed BEFORE the
+	// temp file is created precisely so that defer LIFO removes the cleartext
+	// while the signal is still caught — so at the moment stop runs, the plain
+	// dir must already be empty. Arm after the file instead and this records
+	// false.
+	var plainEmptyAtStop *bool
+	swapSeam(t, func(parent context.Context) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(parent)
+		return ctx, func() {
+			empty := dirIsEmpty(t, f.plainDir)
+			plainEmptyAtStop = &empty
+			cancel()
+		}
+	})
 
 	if err := runSecretsEdit(t); err != nil {
 		t.Fatalf("secretsEdit with no interrupt: %v", err)
+	}
+	if plainEmptyAtStop == nil {
+		t.Fatal("the seam's stop never ran: stopSignals is not deferred")
+	} else if !*plainEmptyAtStop {
+		t.Error("stopSignals ran while the cleartext temp file still existed: the signal must stay " +
+			"armed until the file is removed, i.e. be armed BEFORE the file is created")
 	}
 	after, err := os.ReadFile(f.agePath)
 	if err != nil {

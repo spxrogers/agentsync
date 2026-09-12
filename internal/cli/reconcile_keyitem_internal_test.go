@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/testenv"
 )
@@ -186,7 +187,9 @@ func TestComponentFromPointer_KindFromSourceID(t *testing.T) {
 // would have turned a plausible hand-edit into a silent "write-back:" lie.
 func TestWriteBackKeyItem_Refusals(t *testing.T) {
 	testenv.RequireContainer(t)
-	s := &reconcileSession{reg: registryFactory(), home: t.TempDir()}
+	// cmd is set so a refusal that regressed into a fall-through reports as the
+	// assertion below, not as a nil-deref panic at capture.Capture's Warn.
+	s := &reconcileSession{reg: registryFactory(), home: t.TempDir(), cmd: &cobra.Command{}}
 	item := func(dest, ptr string) reconcileItem {
 		return reconcileItem{
 			agentName: "claude",
@@ -241,6 +244,44 @@ func TestWriteBackKeyItem_Refusals(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), "\x1b") {
 			t.Fatalf("err = %q carries the raw ESC byte from the native id", err)
+		}
+	})
+}
+
+// TestWriteBackKeyItem_UnreadableDestination pins the third refusal: a
+// destination that cannot be read or parsed at the moment of the [w] keystroke
+// (reconcile is interactive, so the user can break the file between the drift
+// walk and the write-back) is named as such, rather than reported as a missing
+// root key by readDestFile's error-swallowing read.
+func TestWriteBackKeyItem_UnreadableDestination(t *testing.T) {
+	testenv.RequireContainer(t)
+	// cmd is set so a refusal that regressed into a fall-through reports as the
+	// assertion below, not as a nil-deref panic at capture.Capture's Warn.
+	s := &reconcileSession{reg: registryFactory(), home: t.TempDir(), cmd: &cobra.Command{}}
+	item := func(dest string) reconcileItem {
+		return reconcileItem{
+			agentName: "claude",
+			op:        adapter.FileOp{Path: dest, MergeStrategy: "merge-json-keys", SourceID: "mcp/* (multiple)"},
+			ptr:       "/mcpServers/github",
+		}
+	}
+	t.Run("missing file", func(t *testing.T) {
+		err := s.writeBackKeyItem(item(filepath.Join(t.TempDir(), "gone.json")))
+		if err == nil || !strings.Contains(err.Error(), "read destination") {
+			t.Fatalf("err = %v, want the read refusal", err)
+		}
+	})
+	t.Run("truncated file", func(t *testing.T) {
+		dest := filepath.Join(t.TempDir(), "claude.json")
+		if err := os.WriteFile(dest, []byte(`{ "mcpServers": `), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := s.writeBackKeyItem(item(dest))
+		if err == nil || !strings.Contains(err.Error(), "does not parse") {
+			t.Fatalf("err = %v, want the parse refusal", err)
+		}
+		if strings.Contains(err.Error(), "absent from the destination") {
+			t.Fatalf("err = %q names a missing root key for a file that does not parse", err)
 		}
 	})
 }

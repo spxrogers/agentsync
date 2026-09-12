@@ -821,11 +821,12 @@ func pluginProvidedSourceIDs(c source.Canonical) map[string]string {
 // ("mcp/* (multiple)", "hooks/* (multiple)"), and Continue's whole-file MCP form
 // is "mcp/<id>.toml", so a prefix test covers both spellings.
 //
-// This is the ONE place the kind is derived, shared by write-back and the
-// pointer→source-file inversion. It is deliberately NOT derived from the
-// pointer's root key: root keys are per-agent data that both grow and COLLIDE
-// (see pluginOwnerForKeyItem's comment), so any root-keyed classification is
-// wrong for some agent.
+// This is the ONE place the kind is derived, shared by write-back, the
+// pointer→source-file inversion, `explain`'s pointer→component mapping, the
+// plugin-owner lookup and the registry guard test. It is deliberately NOT
+// derived from the pointer's root key: root keys are per-agent data that both
+// grow and COLLIDE (see pluginOwnerForKeyItem's comment), so any root-keyed
+// classification is wrong for some agent.
 func keyItemKind(sourceID string) string {
 	switch {
 	case strings.HasPrefix(sourceID, "mcp/"):
@@ -1404,7 +1405,19 @@ func (s *reconcileSession) writeBackKeyItem(it reconcileItem) error {
 			"native MCP translation — choose [o]verride to push canonical to the dest, or [i]gnore to suppress this item",
 			it.ptr, ui.Sanitize(it.agentName))
 	}
-	dest := readDestFile(it.op.MergeStrategy, it.op.Path)
+	// Read and decode by hand rather than through readDestFile, which swallows
+	// read and parse errors into an empty map for the drift walk's benefit: a
+	// destination the user broke between the walk and the [w] keystroke (a
+	// truncated edit, a file moved away) must be named as such, not reported as
+	// a missing root key.
+	data, err := readDestBytes(it.op.Path)
+	if err != nil {
+		return fmt.Errorf("read destination %s: %w", it.op.Path, err)
+	}
+	dest := map[string]any{}
+	if err := decodeDestBytes(it.op.MergeStrategy, data, &dest); err != nil {
+		return fmt.Errorf("destination %s does not parse (%s): %w", it.op.Path, it.op.MergeStrategy, err)
+	}
 	servers, _ := dest[rootKey].(map[string]any)
 	if servers == nil {
 		return fmt.Errorf("%s is absent from the destination or is not an object", ui.Sanitize(rootKey))

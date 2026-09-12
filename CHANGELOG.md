@@ -325,9 +325,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   context: the editor is signalled (and, if it ignores that, stopped after a
   two-second grace, so the command can never hang waiting for it), the command
   returns through the normal error path so every deferred cleanup runs, and the
-  process still exits **130** and still prints nothing. Nothing is saved once
-  the user has interrupted, including an interrupt that lands after the editor
-  exits but before the re-encrypt.
+  process still exits **130** and still prints nothing. Nothing is saved when
+  the interrupt lands before the re-encrypt begins, including one that lands
+  after the editor exits; an interrupt during the re-encrypt itself is absorbed
+  so the vault is never left half-written.
 
 - **Internal: shared helpers, command bodies and domain logic move to where
   they belong** ([#235](https://github.com/spxrogers/agentsync/issues/235)).
