@@ -129,10 +129,12 @@ const secretEditGrace = 2 * time.Second
 // code and prints nothing (reportErrorTo returns before any formatting) —
 // byte-identical output to the hard exit it replaces.
 //
-// Returning an error rather than calling os.Exit is the whole point: every
-// deferred cleanup runs, starting with the os.Remove of the cleartext temp file
-// and including the global lock's release, and the path becomes testable at all
-// (an os.Exit from a goroutine takes the test binary with it).
+// Returning an error rather than calling os.Exit is the whole point: the
+// command unwinds through its deferred cleanups (the os.Remove of the cleartext
+// temp file first), nothing can fire between the encrypt and the verify, the
+// editor is signalled and reaped rather than orphaned on the terminal, and the
+// path becomes testable at all (an os.Exit from a goroutine takes the test
+// binary with it).
 var errSecretEditInterrupted error = secretEditInterruptedError{}
 
 type secretEditInterruptedError struct{}
@@ -202,6 +204,36 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	// A plain defer does NOT run when the process dies on an unhandled signal —
+	// and aborting the editor with Ctrl-C (SIGINT) is the normal way to bail on
+	// an edit, which would otherwise leave the decrypted secrets on disk. So arm
+	// notification for the whole window in which a cleartext copy can exist:
+	// from here, BEFORE the temp file is even created, until this function
+	// returns. Arming first also orders the defers: LIFO runs the os.Remove
+	// below BEFORE stopSignals, so a second Ctrl-C arriving while the file is
+	// being removed is still caught rather than hitting the restored default
+	// disposition and killing the process with the cleartext still on disk.
+	//
+	// This replaces a goroutine that removed the temp file and then called
+	// os.Exit(130) directly. That spelling could fire mid-WriteVerified (between
+	// the encrypt and the verify), left a still-running editor orphaned on the
+	// terminal, and was untestable by construction — an os.Exit from a goroutine
+	// takes the test binary with it, so nothing could assert the temp file was
+	// gone. (The global lock is an flock the kernel releases on exit; it was
+	// never at stake.)
+	//
+	// Now the signal cancels sigCtx. The editor runs under it, so exec signals
+	// the editor and Run returns; the interrupt checks below then return
+	// errSecretEditInterrupted and the command unwinds through the NORMAL error
+	// path — the deferred os.Remove above runs, the editor has been signalled
+	// and reaped, and the process still exits 130 because the root maps the
+	// sentinel's ExitCoder.
+	// (A signal that lands before the editor is even started is handled by the
+	// same check: exec.CommandContext's Start fails immediately on an
+	// already-cancelled context.)
+	sigCtx, stopSignals := secretEditSignals(commandContext(cmd))
+	defer stopSignals()
+
 	// Write to a tmp file in os.TempDir() (RAM-backed on macOS).
 	tmpFile, err := os.CreateTemp("", "agentsync-secrets-*.toml")
 	if err != nil {
@@ -212,28 +244,6 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 		// Always remove cleartext tmp; errors ignored.
 		_ = os.Remove(tmpPath) //nolint:forbidigo // cleartext temp file in os.TempDir(), not a native destination
 	}()
-	// A plain defer does NOT run when the process dies on an unhandled signal —
-	// and aborting the editor with Ctrl-C (SIGINT) is the normal way to bail on
-	// an edit, which would otherwise leave the decrypted secrets on disk. So arm
-	// notification for exactly the window in which a cleartext copy exists: from
-	// here (BEFORE the plaintext is written below) until this function returns.
-	//
-	// This replaces a goroutine that removed the temp file and then called
-	// os.Exit(130) directly. That spelling skipped every OTHER deferred cleanup
-	// (the global lock's release most of all), could fire mid-WriteVerified, and
-	// was untestable by construction — an os.Exit from a goroutine takes the
-	// test binary with it, so nothing could assert the temp file was gone.
-	//
-	// Now the signal cancels sigCtx. The editor runs under it, so exec signals
-	// the editor and Run returns; the interrupt checks below then return
-	// errSecretEditInterrupted and the command unwinds through the NORMAL error
-	// path — the deferred os.Remove above runs, the lock is released, and the
-	// process still exits 130 because the root maps the sentinel's ExitCoder.
-	// (A signal that lands before the editor is even started is handled by the
-	// same check: exec.CommandContext's Start fails immediately on an
-	// already-cancelled context.)
-	sigCtx, stopSignals := secretEditSignals(commandContext(cmd))
-	defer stopSignals()
 	if _, err := tmpFile.Write(plain); err != nil {
 		_ = tmpFile.Close()
 		return err

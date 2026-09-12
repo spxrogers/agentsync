@@ -1,8 +1,13 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/spxrogers/agentsync/internal/adapter"
+	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
 // TestKeyItemKind pins the ONE derivation of a key-merge item's component kind.
@@ -63,6 +68,7 @@ func TestKeyItemPointerParts(t *testing.T) {
 		{"tilde is decoded", "/mcpServers/til~0de", "mcpServers", "til~de", true},
 		{"slash is decoded", "/mcpServers/a~1b", "mcpServers", "a/b", true},
 		{"tilde-one is decoded in the right order", "/mcpServers/x~01", "mcpServers", "x~1", true},
+		{"root key is decoded too", "/a~1b/github", "a/b", "github", true},
 		{"hook event segment", "/hooks/BeforeTool", "hooks", "BeforeTool", true},
 		{"root only", "/mcpServers", "", "", false},
 		{"empty id", "/mcpServers/", "", "", false},
@@ -169,4 +175,72 @@ func TestComponentFromPointer_KindFromSourceID(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestWriteBackKeyItem_Refusals pins the two refusals a hand-edited destination
+// can trigger before any translation happens — the root key missing or not an
+// object, and the entry not an object — and that the id surfaced in the second
+// is sanitized: the id comes from a native file, so a control byte in it must
+// not reach the terminal raw (issue #93/#171). Both refusals used to fail no
+// test: replacing either with `return nil` was green across the package, which
+// would have turned a plausible hand-edit into a silent "write-back:" lie.
+func TestWriteBackKeyItem_Refusals(t *testing.T) {
+	testenv.RequireContainer(t)
+	s := &reconcileSession{reg: registryFactory(), home: t.TempDir()}
+	item := func(dest, ptr string) reconcileItem {
+		return reconcileItem{
+			agentName: "claude",
+			op:        adapter.FileOp{Path: dest, MergeStrategy: "merge-json-keys", SourceID: "mcp/* (multiple)"},
+			ptr:       ptr,
+		}
+	}
+	tests := []struct {
+		name string
+		dest string // the destination's JSON
+		ptr  string
+		want []string // substrings the error must carry
+	}{
+		{"root key absent", `{}`, "/mcpServers/github", []string{"mcpServers", "absent"}},
+		{"root key is an array", `{"mcpServers": []}`, "/mcpServers/github", []string{"mcpServers", "not an object"}},
+		{"root key is a scalar", `{"mcpServers": 1}`, "/mcpServers/github", []string{"mcpServers", "not an object"}},
+		{"entry is a scalar", `{"mcpServers": {"github": 5}}`, "/mcpServers/github", []string{"claude", "github", "not an object"}},
+		{"entry is an array", `{"mcpServers": {"github": []}}`, "/mcpServers/github", []string{"github", "not an object"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dest := filepath.Join(t.TempDir(), "claude.json")
+			if err := os.WriteFile(dest, []byte(tc.dest), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err := s.writeBackKeyItem(item(dest, tc.ptr))
+			if err == nil {
+				t.Fatal("writeBackKeyItem = nil, want a refusal: a nil here prints \"write-back:\" for an edit that was not persisted")
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("err = %q, want it to mention %q", err, w)
+				}
+			}
+		})
+	}
+
+	t.Run("a control byte in the id is sanitized on the way out", func(t *testing.T) {
+		dest := filepath.Join(t.TempDir(), "claude.json")
+		// The id holds an ESC byte (JSON-escaped so the file parses, as a native
+		// file would spell it); the entry is a scalar so the refusal that
+		// interpolates the id is the one that fires.
+		if err := os.WriteFile(dest, []byte(`{"mcpServers": {"bad\u001b[31mid": 5}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := s.writeBackKeyItem(item(dest, "/mcpServers/bad\x1b[31mid"))
+		if err == nil {
+			t.Fatal("want a refusal")
+		}
+		if !strings.Contains(err.Error(), "not an object") {
+			t.Fatalf("err = %q, want the entry refusal (the one that names the id)", err)
+		}
+		if strings.Contains(err.Error(), "\x1b") {
+			t.Fatalf("err = %q carries the raw ESC byte from the native id", err)
+		}
+	})
 }

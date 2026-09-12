@@ -203,6 +203,32 @@ func runSecretsEdit(t *testing.T) error {
 	return secretsEdit(cmd, nil)
 }
 
+// secretEditReturnBound is how long a row waits for secretsEdit to come back
+// before declaring it wedged. Generous against a loaded runner (ten grace
+// periods), tiny against the alternative: without exec's WaitDelay, an editor
+// that ignores the forwarded signal keeps secretsEdit in Wait for as long as
+// the editor lives, and the only signal used to be the package's own timeout.
+const secretEditReturnBound = 10 * secretEditGrace
+
+// runSecretsEditWithin runs secretsEdit and FAILS, rather than hangs, when it
+// does not return within bound. secretsEdit touches nothing of t, so running it
+// on another goroutine is safe; on the failure path the fake editor's `sleep`
+// is left to `go test` to report, which is the ugly-but-finite outcome this
+// exists to guarantee.
+func runSecretsEditWithin(t *testing.T, bound time.Duration) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- runSecretsEdit(t) }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(bound):
+		t.Fatalf("secretsEdit did not return within %s: an interrupted edit must end on the "+
+			"forwarded signal or on the grace-period kill, never by waiting for the editor", bound)
+		return nil
+	}
+}
+
 // TestSecretsEdit_InterruptAbandonsTheEdit is the test that could not exist
 // before. `secret edit` used to handle SIGINT/SIGTERM in a goroutine that
 // removed the temp file and then called os.Exit(130) directly — and an os.Exit
@@ -229,6 +255,7 @@ func TestSecretsEdit_InterruptAbandonsTheEdit(t *testing.T) {
 		name     string
 		setup    func(t *testing.T, f editFixture)
 		minTaken time.Duration // lower bound on elapsed time, for the escalation row
+		maxTaken time.Duration // upper bound, for the row that must NOT need the escalation
 	}{
 		{
 			name: "before the editor starts",
@@ -259,9 +286,10 @@ exec sleep 600`)
 			// An editor that IGNORES the forwarded signal must not be able to wedge
 			// the command. This is the row that pins exec's WaitDelay escalation:
 			// the script sets TERM (and INT) to ignored, so the forward does nothing
-			// and only the grace-period kill ends it. Without WaitDelay this row
-			// does not fail, it HANGS — which is exactly the regression it exists to
-			// catch.
+			// and only the grace-period kill ends it. Without WaitDelay secretsEdit
+			// waits for the editor for as long as it lives; runSecretsEditWithin
+			// turns that into a failure at secretEditReturnBound instead of a
+			// package-level hang.
 			//
 			// `exec sleep` keeps the editor a single process: an ignored
 			// disposition survives execve (POSIX), so the `sleep` still ignores the
@@ -280,6 +308,25 @@ exec sleep 600`)
 				seamCancelOnMarker(t, f.marker("opened"))
 			},
 			minTaken: secretEditGrace,
+		},
+		{
+			// The forwarded signal is SIGTERM, not SIGINT, on purpose: the
+			// full-screen editors this is most likely running (vi, vim, nano) treat
+			// SIGINT as an in-editor key and keep going, while SIGTERM is their
+			// "deadly signal" path. This editor models exactly that — INT ignored,
+			// TERM honoured — and must be gone well before the grace period, i.e.
+			// on the forward itself, not on the escalation. Forward SIGINT instead
+			// and it sits out the whole grace until the kill, so the upper bound
+			// fires.
+			name: "an editor that ignores SIGINT but honours SIGTERM exits on the forward",
+			setup: func(t *testing.T, f editFixture) {
+				f.editor(t, `trap "" INT
+for a in "$@"; do f="$a"; done
+touch `+f.marker("opened")+`
+exec sleep 600`)
+				seamCancelOnMarker(t, f.marker("opened"))
+			},
+			maxTaken: secretEditGrace,
 		},
 		{
 			// The window between the editor exiting and the vault being rewritten:
@@ -310,12 +357,16 @@ exit 0`)
 			tc.setup(t, f)
 
 			started := time.Now()
-			gotErr := runSecretsEdit(t)
+			gotErr := runSecretsEditWithin(t, secretEditReturnBound)
 			taken := time.Since(started)
 			if tc.minTaken > 0 && taken < tc.minTaken {
 				t.Errorf("returned after %s, want at least %s: an editor that ignores the interrupt "+
 					"should have been killed by the grace-period escalation, not exited on its own",
 					taken, tc.minTaken)
+			}
+			if tc.maxTaken > 0 && taken >= tc.maxTaken {
+				t.Errorf("returned after %s, want under %s: an editor that honours SIGTERM should have "+
+					"exited on the forward, not waited out the grace period for the kill", taken, tc.maxTaken)
 			}
 
 			if !errors.Is(gotErr, errSecretEditInterrupted) {

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
 // writeCanonicalMCP seeds one canonical mcp/<id>.toml under home.
@@ -86,28 +88,28 @@ GITHUB_TOKEN = "tok"
 			name: "gemini httpUrl is inverted", agent: "gemini",
 			native: ".gemini/settings.json", src: remoteSrc,
 			old: "api.example.com", new: "api.edited.com",
-			want:   []string{"type = 'http'", "url = 'https://api.edited.com/mcp'"},
+			want:   []string{"type = 'http'\n", "url = 'https://api.edited.com/mcp'"},
 			reject: []string{"[server.extra]", "httpUrl"},
 		},
 		{
 			name: "windsurf serverUrl is inverted", agent: "windsurf",
 			native: ".codeium/windsurf/mcp_config.json", src: remoteSrc,
 			old: "api.example.com", new: "api.edited.com",
-			want:   []string{"type = 'http'", "url = 'https://api.edited.com/mcp'"},
+			want:   []string{"type = 'http'\n", "url = 'https://api.edited.com/mcp'"},
 			reject: []string{"[server.extra]", "serverUrl"},
 		},
 		{
 			name: "amp flat namespaced root", agent: "amp",
 			native: ".config/amp/settings.json", src: remoteSrc,
 			old: "api.example.com", new: "api.edited.com",
-			want:   []string{"type = 'http'", "url = 'https://api.edited.com/mcp'"},
+			want:   []string{"type = 'http'\n", "url = 'https://api.edited.com/mcp'"},
 			reject: []string{"[server.extra]"},
 		},
 		{
 			name: "zed context_servers root", agent: "zed",
 			native: ".config/zed/settings.json", src: remoteSrc,
 			old: "api.example.com", new: "api.edited.com",
-			want:   []string{"type = 'http'", "url = 'https://api.edited.com/mcp'"},
+			want:   []string{"type = 'http'\n", "url = 'https://api.edited.com/mcp'"},
 			reject: []string{"[server.extra]"},
 		},
 	}
@@ -310,5 +312,62 @@ GITHUB_TOKEN = "${secret:GH_TOKEN}"
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestReconcile_Writeback_DifferentDialectsAgree pins the fourth symptom of the
+// root-key allowlist: one canonical server fanned out to two agents with
+// DIFFERENT dialects, both edited identically, used to trip the multi-agent
+// fan-out guard — not because the edits differed, but because the
+// mistranslated side (Gemini read as Claude: `httpUrl` dropped, `type` empty)
+// produced a different canonical value from the correctly-translated one, so
+// reconcile printed a spurious `conflict:` and exited non-zero. The existing
+// identical-write-back test pairs claude with opencode over a STDIO server,
+// which both dialects already read correctly; this one pairs claude with gemini
+// over a REMOTE server, which only the rendering adapter's own inverse reads
+// right.
+func TestReconcile_Writeback_DifferentDialectsAgree(t *testing.T) {
+	testenv.RequireContainer(t)
+	tmp := t.TempDir()
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	for _, a := range [][]string{{"init"}, {"agent", "add", "claude"}, {"agent", "add", "gemini"}} {
+		if out, err := runCLI(t, env, a...); err != nil {
+			t.Fatalf("%v: %v\n%s", a, err, out)
+		}
+	}
+	home := filepath.Join(tmp, ".agentsync")
+	srcFile := writeCanonicalMCP(t, home, "shared", "[server]\ntype = \"http\"\nurl = \"https://orig.example.com/mcp\"\nagents = [\"*\"]\n")
+	if out, err := runCLI(t, env, "apply", "--scope", "user"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	for _, native := range []string{".claude.json", filepath.Join(".gemini", "settings.json")} {
+		dest := filepath.Join(tmp, native)
+		body, err := os.ReadFile(dest)
+		if err != nil {
+			t.Fatalf("read rendered dest %s: %v", native, err)
+		}
+		if !strings.Contains(string(body), "orig.example.com") {
+			t.Fatalf("rendered %s does not carry the server url:\n%s", native, body)
+		}
+		edited := strings.Replace(string(body), "orig.example.com", "same.example.com", 1)
+		if err := os.WriteFile(dest, []byte(edited), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := runCLI(t, env, "reconcile", "--scope", "user", "--auto-writeback")
+	if err != nil {
+		t.Fatalf("identical edits behind two dialects must not conflict: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "conflict:") {
+		t.Fatalf("reconcile reported a conflict between two agents that hold the SAME edit:\n%s", out)
+	}
+	got, err := os.ReadFile(srcFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{"type = 'http'\n", "url = 'https://same.example.com/mcp'"} {
+		if !strings.Contains(string(got), w) {
+			t.Errorf("canonical mcp/shared.toml is missing %q:\n%s", w, got)
+		}
 	}
 }

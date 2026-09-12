@@ -88,7 +88,7 @@ func TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer(t *testing.T) {
 					t.Fatalf("[%s/%s] Render: %v", name, sc.name, err)
 				}
 				for _, op := range ops {
-					if !render.IsKeyMerge(op.MergeStrategy) || !isMCPSourceID(op.SourceID) {
+					if !render.IsKeyMerge(op.MergeStrategy) || keyItemKind(op.SourceID) != "mcp" {
 						continue
 					}
 					ing, ok := a.(adapter.MCPSpecIngester)
@@ -106,6 +106,13 @@ func TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer(t *testing.T) {
 					if servers == nil {
 						t.Fatalf("[%s/%s] rendered MCP op %s carries no root object holding the "+
 							"fixture servers; content=%s", name, sc.name, op.Path, op.Content)
+					}
+					if len(servers) != len(want) {
+						// mcpRootServers accepts a SUBSET of the fixture ids, so a
+						// dialect that dropped one server would otherwise shrink the
+						// fidelity check silently.
+						t.Fatalf("[%s/%s] rendered %d of the %d fixture servers; content=%s",
+							name, sc.name, len(servers), len(want), op.Content)
 					}
 					for id, raw := range servers {
 						entry, ok := raw.(map[string]any)
@@ -125,11 +132,6 @@ func TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer(t *testing.T) {
 		t.Fatal("no adapter rendered an MCP key-merge op for the fixture; the guard is vacuous")
 	}
 }
-
-// isMCPSourceID reports whether a FileOp's SourceID names the MCP component —
-// the same SourceID-derived kind test reconcile's write-back and plugin-owner
-// lookup use, rather than a pointer-root allowlist.
-func isMCPSourceID(id string) bool { return len(id) >= 4 && id[:4] == "mcp/" }
 
 // mcpRootServers finds the rendered op's server map without knowing the
 // adapter's root key: it is the top-level value that is an object keyed by the

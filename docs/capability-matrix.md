@@ -130,13 +130,15 @@ transport is inferred from which url key is present) has nowhere to record it, s
 canonical `sse` server is written with just its url and **canonicalizes back as
 `http`** if later captured via `import`/`reconcile` — the same acknowledged
 `sse → http` flip the deep OpenCode/Windsurf/Cline adapters carry (an apply-only
-flow is unaffected). Every one of these dialect knobs is honored on
-`reconcile` write-back as well as on `import`, because the write-back asks the
-rendering adapter for the inverse rather than guessing from the config's
-top-level key — which matters most here, where four different top-level keys are
-in play and two of them collide with a deep adapter's. The Gemini-lineage **qwen** dialect is the exception: it splits
+flow is unaffected). The Gemini-lineage **qwen** dialect is the exception: it splits
 the two remote transports across two url keys (`httpUrl` = streamable HTTP, `url` =
 SSE), so it preserves `sse`.
+
+Every one of these dialect knobs is honored on `reconcile` write-back as well as
+on `import`, because the write-back asks the rendering adapter for the inverse
+rather than guessing from the config's top-level key — which matters most in
+this tier, where five different top-level keys are in play and two of them
+(`mcpServers`, crush's `mcp`) are also a deep adapter's.
 
 **Detection.** Detect is informational only (it drives `doctor`'s per-agent line;
 it never gates apply), and most breadth agents are detected by a binary on `PATH`
@@ -239,7 +241,10 @@ does through `import`, including the transport normalizations described below.
 Pinned by `TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer` (every registered
 adapter's own render→ingest round trip keeps the modeled fields modeled) and
 `TestReconcile_Writeback_MCPDialects` (the end-to-end apply → hand-edit →
-write-back path, per dialect).
+write-back path, per dialect). One documented edge on that converse: a
+non-string value inside a string-typed native field (a number in `args`, a bool
+in `env`) is dropped by every dialect's inverse, on `import` and on `reconcile`
+write-back alike — it is neither modeled nor passed through.
 
 **Claude**
 

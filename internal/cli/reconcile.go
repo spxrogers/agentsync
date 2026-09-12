@@ -839,28 +839,28 @@ func keyItemKind(sourceID string) string {
 	}
 }
 
-// keyItemPointerParts splits a key-merge JSON pointer into its container root
-// key and the DECODED second segment (the server id / hook event). ok is false
-// when the pointer has no non-empty second segment, i.e. it names no single
-// entry.
+// keyItemPointerParts splits a key-merge JSON pointer into its DECODED
+// container root key and DECODED second segment (the server id / hook event).
+// ok is false when the pointer has no non-empty second segment, i.e. it names
+// no single entry.
 //
-// The second segment is JSON-pointer ENCODED on the way in — render.CollectPointers
-// builds every pointer with jsonkeys.EscapeToken — so it must be decoded before
-// it is used as a map key or a canonical filename (RFC 6901 §3: ~1 → "/", ~0 →
-// "~"). Using it raw was a live bug: an MCP server id containing "~" reached
-// write-back as "srv~0id", missed the destination map, and was reported as a
-// destination-side DELETION ("write-back: removed source mcp/srv~0id.toml") —
-// discarding the user's edit while telling them it had been persisted.
-//
-// The root key is returned VERBATIM: it is a single pointer segment produced by
-// the adapter's own render, and it is only ever used to index the decoded
-// destination object, never as a path.
+// Both segments are JSON-pointer ENCODED on the way in — render.CollectPointers
+// builds every pointer with jsonkeys.EscapeToken on each key — so both are
+// decoded (RFC 6901 §3: ~1 → "/", ~0 → "~") before use: the root key indexes
+// the decoded destination object, the id becomes a map key and a canonical
+// filename. Using the id raw was a live bug: an MCP server id containing "~"
+// reached write-back as "srv~0id", missed the destination map, and was reported
+// as a destination-side DELETION ("write-back: removed source mcp/srv~0id.toml")
+// — discarding the user's edit while telling them it had been persisted. No
+// rendered root key holds "~" or "/" today, so decoding it changes nothing
+// observable; it is decoded so the two segments cannot disagree the day one
+// does, which would be that same phantom tombstone one level up.
 func keyItemPointerParts(ptr string) (rootKey, id string, ok bool) {
 	parts := strings.SplitN(strings.TrimPrefix(ptr, "/"), "/", 3)
 	if len(parts) < 2 || parts[1] == "" {
 		return "", "", false
 	}
-	return parts[0], jsonkeys.UnescapeToken(parts[1]), true
+	return jsonkeys.UnescapeToken(parts[0]), jsonkeys.UnescapeToken(parts[1]), true
 }
 
 // pluginOwnerForKeyItem resolves the plugin owning the MCP/LSP server a
@@ -900,13 +900,8 @@ func keyItemPointerParts(ptr string) (rootKey, id string, ok bool) {
 // Pointer segments are JSON-pointer encoded, so keyItemPointerParts decodes
 // ~1/~0 first (RFC 6901 §3) — an id containing '/' would otherwise never match.
 func pluginOwnerForKeyItem(sourceID, ptr string, owners map[string]string) string {
-	var kind string
-	switch {
-	case strings.HasPrefix(sourceID, "mcp/"):
-		kind = "mcp"
-	case strings.HasPrefix(sourceID, "lsp/"):
-		kind = "lsp"
-	default:
+	kind := keyItemKind(sourceID)
+	if kind != "mcp" && kind != "lsp" {
 		return "" // hooks, or a shape with no per-entry provenance
 	}
 	_, id, ok := keyItemPointerParts(ptr)
@@ -1412,7 +1407,7 @@ func (s *reconcileSession) writeBackKeyItem(it reconcileItem) error {
 	dest := readDestFile(it.op.MergeStrategy, it.op.Path)
 	servers, _ := dest[rootKey].(map[string]any)
 	if servers == nil {
-		return fmt.Errorf("%s not found in destination", ui.Sanitize(rootKey))
+		return fmt.Errorf("%s is absent from the destination or is not an object", ui.Sanitize(rootKey))
 	}
 	specRaw, ok := servers[serverID]
 	if !ok {
@@ -1428,6 +1423,13 @@ func (s *reconcileSession) writeBackKeyItem(it reconcileItem) error {
 	if rawMap == nil {
 		return fmt.Errorf("%s mcp spec %s is not an object", ui.Sanitize(it.agentName), serverIDDisp)
 	}
+	// The inverse COERCES: a non-string element inside a string-typed native
+	// field (a number in `args`, a bool in `env`) is dropped, on write-back
+	// exactly as on `import` — every dialect's translator has always read that
+	// way, and Claude's 1:1 shape used to refuse such an entry only because it
+	// went through a typed json.Unmarshal. Documented in the capability matrix;
+	// a refusal instead would need the interface to return an error (#267).
+	//
 	// The spec is reconstructed from the destination through the rendering
 	// adapter's own inverse-of-Render, where apply wrote any ${secret:…} as
 	// resolved cleartext and which never carries source-only fields
