@@ -50,65 +50,7 @@ An agent may version more than one directory (its config dir plus a shared dir l
 ([destination_directory_git_backup]) and run an apply first.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// --agents is the shared selector every other command uses (#200
-			// F10). On revert it is a spelling of the positional form, so the
-			// three ways of saying "which agents" stay mutually exclusive rather
-			// than becoming a fourth grammar to reconcile at runtime.
-			if cmd.Flags().Changed("agents") {
-				if all {
-					return fmt.Errorf("--agents and --all both choose which dirs to revert; pass one")
-				}
-				if len(args) > 0 {
-					return fmt.Errorf("--agents and a positional agent both choose which dirs to revert; pass one")
-				}
-				names := splitAgents(agentsCSV)
-				if len(names) == 0 {
-					return fmt.Errorf(`--agents cannot be empty; pass "*" for every managed dir or name one or more`)
-				}
-				if containsStar(names) {
-					all = true
-				} else {
-					if toRef != "" && len(names) > 1 {
-						return fmt.Errorf("--to names a checkpoint in one repo and can't apply across %d agents; revert a single agent with --to", len(names))
-					}
-					args = names
-				}
-			}
-			if all && len(args) > 0 {
-				return fmt.Errorf("--all reverts every managed dir; do not also name an agent")
-			}
-			if all && toRef != "" {
-				return fmt.Errorf("--to names a checkpoint in one repo and can't apply across --all; revert a single agent with --to")
-			}
-			if !all && len(args) == 0 {
-				return fmt.Errorf("name an agent to revert (e.g. `agentsync revert claude`) or pass --all")
-			}
-			p, err := newPrinter(cmd)
-			if err != nil {
-				return err
-			}
-			home := paths.AgentsyncHome(paths.OSEnv{})
-			reg := registryFactory()
-			id := revertIdentity(home)
-
-			// A revert mutates destination repos; take the same global lock apply
-			// holds so a concurrent apply/revert can't interleave go-git index writes
-			// on the same dir. Dry-run is read-only and skips the lock.
-			run := func() error {
-				if all {
-					return revertAll(p, reg, dryRun, id)
-				}
-				for _, name := range args {
-					if err := revertAgent(p, reg, name, toRef, dryRun, id, true); err != nil {
-						return err
-					}
-				}
-				return nil
-			}
-			if dryRun {
-				return run()
-			}
-			return withGlobalLock(home, run)
+			return revertRun(cmd, args, revertOpts{toRef: toRef, all: all, dryRun: dryRun, agentsCSV: agentsCSV})
 		},
 	}
 	cmd.Flags().StringVar(&toRef, "to", "", "checkpoint to restore (commit hash or relative like HEAD~2); default: undo the most recent apply")
@@ -118,6 +60,86 @@ An agent may version more than one directory (its config dir plus a shared dir l
 	markScopeUnaware(cmd, "revert rolls back USER-scope destination directories (~/.claude, ~/.codex, …), which is "+
 		"where the local git backup lives; a project's rendered files are versioned by the project's own repo")
 	return cmd
+}
+
+// revertOpts carries `revert`'s flag values into revertRun. It is built fresh
+// from the flag variables on every run and revertRun mutates its own copy: the
+// flag triangulation rewrites `all` (and `args`) in place when --agents names
+// "*", and before the lift that rewrite landed on the command literal's
+// closure variables themselves, where a second Execute on the same
+// *cobra.Command would have inherited it. The copy is the protection; the
+// observable behaviour of a single run is unchanged.
+type revertOpts struct {
+	toRef     string
+	all       bool
+	dryRun    bool
+	agentsCSV string
+}
+
+// revertRun is the body of `agentsync revert`, lifted out of the command
+// literal. Two thirds of it is the triangulation that keeps --agents, --all and
+// the positional agent mutually exclusive; each refusal is an exact message a
+// user reads, so the lift changes none of them.
+func revertRun(cmd *cobra.Command, args []string, o revertOpts) error {
+	// --agents is the shared selector every other command uses (#200
+	// F10). On revert it is a spelling of the positional form, so the
+	// three ways of saying "which agents" stay mutually exclusive rather
+	// than becoming a fourth grammar to reconcile at runtime.
+	if cmd.Flags().Changed("agents") {
+		if o.all {
+			return fmt.Errorf("--agents and --all both choose which dirs to revert; pass one")
+		}
+		if len(args) > 0 {
+			return fmt.Errorf("--agents and a positional agent both choose which dirs to revert; pass one")
+		}
+		names := splitAgents(o.agentsCSV)
+		if len(names) == 0 {
+			return fmt.Errorf(`--agents cannot be empty; pass "*" for every managed dir or name one or more`)
+		}
+		if containsStar(names) {
+			o.all = true
+		} else {
+			if o.toRef != "" && len(names) > 1 {
+				return fmt.Errorf("--to names a checkpoint in one repo and can't apply across %d agents; revert a single agent with --to", len(names))
+			}
+			args = names
+		}
+	}
+	if o.all && len(args) > 0 {
+		return fmt.Errorf("--all reverts every managed dir; do not also name an agent")
+	}
+	if o.all && o.toRef != "" {
+		return fmt.Errorf("--to names a checkpoint in one repo and can't apply across --all; revert a single agent with --to")
+	}
+	if !o.all && len(args) == 0 {
+		return fmt.Errorf("name an agent to revert (e.g. `agentsync revert claude`) or pass --all")
+	}
+	p, err := newPrinter(cmd)
+	if err != nil {
+		return err
+	}
+	home := paths.AgentsyncHome(paths.OSEnv{})
+	reg := registryFactory()
+	id := revertIdentity(home)
+
+	// A revert mutates destination repos; take the same global lock apply
+	// holds so a concurrent apply/revert can't interleave go-git index writes
+	// on the same dir. Dry-run is read-only and skips the lock.
+	run := func() error {
+		if o.all {
+			return revertAll(p, reg, o.dryRun, id)
+		}
+		for _, name := range args {
+			if err := revertAgent(p, reg, name, o.toRef, o.dryRun, id, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if o.dryRun {
+		return run()
+	}
+	return withGlobalLock(home, run)
 }
 
 // revertIdentity loads the commit identity from agentsync.toml (best-effort;

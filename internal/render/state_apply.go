@@ -184,9 +184,10 @@ func OrphanFiles(s *state.Targets, userHome, agent string, scope adapter.Scope, 
 // deliberately. The canonical directory rename (agents/ → subagents/) ships in
 // the same release as namespacing, so an upgrading user's state still holds
 // "agents/<name>.md" entries — and the only rewriter, migrate's
-// rewriteSubagentStateIDs, runs solely from migrateSubagentTree, which returns
-// early when <home>/agents/ holds no files. A user whose subagents come ONLY
-// from plugins has no such directory, so their state is never rewritten.
+// rewriteSubagentStateIDs, runs solely from runSubagentMigration, which
+// returns before it when source.MigrateSubagentTree moved nothing (that is,
+// <home>/agents/ holds no files). A user whose subagents come ONLY from
+// plugins has no such directory, so their state is never rewritten.
 //
 // That is exactly the reported scenario (#211: two plugins, no hand-authored
 // subagents). Without this prefix their pre-rename ~/.claude/agents/

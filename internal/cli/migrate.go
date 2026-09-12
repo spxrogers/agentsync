@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/spf13/afero"
@@ -111,9 +109,21 @@ func runSubagentMigration(p *ui.Printer, userAgentsyncHome string, sc adapter.Sc
 	// doc and TestEnsureSubagentLayout_AcceptUnderLockHoldingCommand.
 	var moved []string
 	if err := withGlobalLock(userAgentsyncHome, func() error {
-		var merr error
-		moved, merr = migrateSubagentTree(userAgentsyncHome, srcHome, sc, projectRoot)
-		return merr
+		// The move and the state rewrite are one logical step and must stay
+		// inside one lock hold: the rewrite bridges the recorded entries for the
+		// files that just moved. source.MigrateSubagentTree owns the on-disk
+		// half (it owns the layout the rename is between); the state half stays
+		// here, where the scope→state-key conversion lives — internal/source
+		// does not, and should not, know about .state/targets.json.
+		names, merr := source.MigrateSubagentTree(srcHome)
+		if merr != nil || len(names) == 0 {
+			return merr
+		}
+		if rerr := rewriteSubagentStateIDs(userAgentsyncHome, sc, projectRoot); rerr != nil {
+			return rerr
+		}
+		moved = names
+		return nil
 	}); err != nil {
 		return err
 	}
@@ -131,96 +141,6 @@ func runSubagentMigration(p *ui.Printer, userAgentsyncHome string, sc adapter.Sc
 		p.Infof("~/.agentsync is often a committed dotfiles repo — commit the rename so other machines pick it up.")
 	}
 	return nil
-}
-
-// migrateSubagentTree moves <srcHome>/agents/*.md to <srcHome>/subagents/ and
-// rewrites the SourceID spelling in the state entries belonging to THIS tree.
-// It returns the moved base names, sorted.
-//
-// The two halves are one logical step: the files move first, then the state
-// rewrite bridges the recorded entries so the next apply matches them against
-// the same dest paths instead of treating them as orphans. The rewrite is a
-// bridge, not a correctness requirement — RecordOpsState overwrites SourceID on
-// every apply, so an entry this misses (a teammate migrated the committed
-// project tree and you pulled it, so your local state never saw a legacy dir)
-// self-heals on the next apply.
-//
-// The state rewrite is SCOPED to the tree being migrated: state is central and
-// holds keys for every project, and other project trees migrate on their own
-// schedule.
-func migrateSubagentTree(userAgentsyncHome, srcHome string, sc adapter.Scope, projectRoot string) ([]string, error) {
-	fs := afero.NewOsFs()
-	names, err := source.LegacySubagentFiles(fs, srcHome)
-	if err != nil {
-		return nil, err
-	}
-	if len(names) == 0 {
-		return nil, nil
-	}
-
-	legacyDir := filepath.Join(srcHome, source.LegacySubagentsDir)
-	newDir := filepath.Join(srcHome, source.SubagentsDir)
-
-	// Both-dirs conflict policy: a hand-started migration is fine as long as no
-	// filename collides. On any collision, refuse with the colliding names —
-	// never overwrite, never guess which copy the user meant to keep.
-	var collisions []string
-	for _, name := range names {
-		if _, statErr := fs.Stat(filepath.Join(newDir, name)); statErr == nil {
-			collisions = append(collisions, name)
-		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return nil, fmt.Errorf("stat %s: %w", filepath.Join(newDir, name), statErr)
-		}
-	}
-	if len(collisions) > 0 {
-		return nil, fmt.Errorf(
-			"refusing to migrate: %d file(s) exist under BOTH %s and %s (%s). "+
-				"Nothing was moved. Reconcile the duplicates by hand (keep one copy of each), then re-run",
-			// Sanitize: these are basenames off disk in what is routinely a
-			// cloned dotfiles repo, and this error goes straight to a terminal.
-			len(collisions), legacyDir, newDir, ui.Sanitize(strings.Join(collisions, ", ")),
-		)
-	}
-
-	if err := os.MkdirAll(newDir, 0o755); err != nil {
-		return nil, fmt.Errorf("mkdir %s: %w", newDir, err)
-	}
-	// The loop is NOT atomic, and deliberately so: an all-or-nothing move would
-	// mean unwinding renames that already succeeded, which is a second failure
-	// path over the same filesystem that just failed. A partial move is instead
-	// made SAFE to leave — every moved file is already in its final location,
-	// the collision check above only ever sees what still remains in agents/,
-	// and re-running therefore picks up exactly the remainder. The state rewrite
-	// is skipped on this path, which self-heals on the next apply
-	// (RecordOpsState overwrites SourceID unconditionally).
-	//
-	// Say all of that in the error. The collision branch above states "Nothing
-	// was moved" precisely because a user who reads a bare move failure has to
-	// assume the worst and reconcile two directories by hand.
-	for i, name := range names {
-		from := filepath.Join(legacyDir, name)
-		to := filepath.Join(newDir, name)
-		if err := os.Rename(from, to); err != nil { //nolint:forbidigo // moves a canonical subagent file inside an agentsync home, not a native destination
-			return nil, fmt.Errorf(
-				"move %s → %s: %w. %d of %d file(s) were already moved and are correctly placed in %s; "+
-					"the rest remain in %s. Nothing was lost or overwritten — fix the cause and re-run "+
-					"`agentsync migrate subagents`, which resumes with the files still left behind",
-				from, to, err, i, len(names), newDir, legacyDir,
-			)
-		}
-	}
-	// Drop the legacy directory once the move emptied it. A failure here is
-	// deliberately NOT an error: os.Remove refuses a non-empty directory, and a
-	// user's stray README or nested dir is theirs to keep. Leaving the directory
-	// behind is harmless — the gate only ever fires on *.md files, which are all
-	// gone by now.
-	_ = os.Remove(legacyDir) //nolint:forbidigo // removes the emptied canonical agents/ dir under an agentsync home, not a native destination
-
-	if err := rewriteSubagentStateIDs(userAgentsyncHome, sc, projectRoot); err != nil {
-		return nil, err
-	}
-	sort.Strings(names)
-	return names, nil
 }
 
 // rewriteSubagentStateIDs rewrites `agents/<name>.md` SourceID values to
@@ -241,7 +161,7 @@ func rewriteSubagentStateIDs(userAgentsyncHome string, sc adapter.Scope, project
 		if key.Scope != scopeName || key.Project != portableProject {
 			continue
 		}
-		if id, ok := migratedSourceID(entry.SourceID); ok {
+		if id, ok := source.MigratedSourceID(entry.SourceID); ok {
 			entry.SourceID = id
 			st.Files[key] = entry
 			changed = true
@@ -251,7 +171,7 @@ func rewriteSubagentStateIDs(userAgentsyncHome string, sc adapter.Scope, project
 		if key.Scope != scopeName || key.Project != portableProject {
 			continue
 		}
-		if id, ok := migratedSourceID(entry.SourceID); ok {
+		if id, ok := source.MigratedSourceID(entry.SourceID); ok {
 			entry.SourceID = id
 			st.Keys[key] = entry
 			changed = true
@@ -261,21 +181,6 @@ func rewriteSubagentStateIDs(userAgentsyncHome string, sc adapter.Scope, project
 		return nil
 	}
 	return state.Save(statePath, st)
-}
-
-// migratedSourceID rewrites a legacy `agents/<name>.md` SourceID to the
-// `subagents/` spelling. ok is false for every other SourceID (mcp/*, skills/*,
-// the "(multiple)" sentinels, an already-migrated id), which is left untouched.
-func migratedSourceID(id string) (string, bool) {
-	if id == "" {
-		return "", false
-	}
-	slash := filepath.ToSlash(id)
-	rest, found := strings.CutPrefix(slash, source.LegacySubagentsDir+"/")
-	if !found || rest == "" {
-		return "", false
-	}
-	return filepath.Join(source.SubagentsDir, filepath.FromSlash(rest)), true
 }
 
 // ensureSubagentLayout is the interactive half of the migration gate. Every

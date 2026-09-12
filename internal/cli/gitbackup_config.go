@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -12,7 +11,12 @@ import (
 	"github.com/spxrogers/agentsync/internal/source"
 )
 
-const gitBackupTableHeader = "[destination_directory_git_backup]"
+// gitBackupTable is the bare TOML table name; gitBackupTableHeader is its
+// bracketed spelling, which only the generated block needs.
+const (
+	gitBackupTable       = "destination_directory_git_backup"
+	gitBackupTableHeader = "[" + gitBackupTable + "]"
+)
 
 // setDestinationGitBackupMode writes mode into the
 // [destination_directory_git_backup] table of <home>/agentsync.toml via a
@@ -42,9 +46,12 @@ func setDestinationGitBackupMode(home, mode string) error {
 		return fmt.Errorf("parse %s: %w", p, err)
 	}
 	block := buildGitBackupSection(mode, cfg.Table.AuthorName, cfg.Table.AuthorEmail)
-	out := spliceTOMLTable(string(raw), gitBackupTableHeader, block)
+	// No IncludeSubtables: this table has no sub-table form, and claiming
+	// `[destination_directory_git_backup.x]` would consume content this rewriter
+	// has never owned.
+	content := source.SpliceTOMLTable(raw, gitBackupTable, block, source.SpliceOptions{})
 
-	// Fail-closed backstop (issue #171): spliceTOMLTable is line-based, not a TOML
+	// Fail-closed backstop (issue #171): SpliceTOMLTable is line-based, not a TOML
 	// parser — it assumes the target table is a simple contiguous block and does not
 	// distinguish `[x]` from an array-of-tables `[[x]]`. On an unusual-but-valid
 	// layout (the table mid-file followed by an `[[array.of.tables]]`, interleaved
@@ -54,14 +61,13 @@ func setDestinationGitBackupMode(home, mode string) error {
 	// that it parses as a full canonical config AND that everything outside the
 	// git-backup table is unchanged; refuse the write (leaving agentsync.toml
 	// byte-for-byte untouched) otherwise.
-	content := []byte(out)
 	var check source.Config
 	if err := toml.Unmarshal(content, &check); err != nil {
 		return fmt.Errorf("refusing to rewrite %s: the regenerated config no longer parses (%v); "+
 			"the file likely uses a TOML construct the git-backup splicer cannot handle — "+
 			"edit the [destination_directory_git_backup] table by hand (mode change aborted)", p, err)
 	}
-	same, err := nonGitBackupUnchanged(raw, content)
+	same, err := source.TableOutsideUnchanged(raw, content, gitBackupTable)
 	if err != nil {
 		return fmt.Errorf("refusing to rewrite %s: %w (mode change aborted)", p, err)
 	}
@@ -73,22 +79,6 @@ func setDestinationGitBackupMode(home, mode string) error {
 		return fmt.Errorf("write %s: %w", p, err)
 	}
 	return nil
-}
-
-// nonGitBackupUnchanged reports whether everything OUTSIDE the git-backup table is
-// semantically identical between the original and spliced config — the backstop's
-// oracle that the splice touched only its own table (issue #171).
-func nonGitBackupUnchanged(oldRaw, newRaw []byte) (bool, error) {
-	var oldDoc, newDoc map[string]any
-	if err := toml.Unmarshal(oldRaw, &oldDoc); err != nil {
-		return false, fmt.Errorf("re-parse original config: %w", err)
-	}
-	if err := toml.Unmarshal(newRaw, &newDoc); err != nil {
-		return false, fmt.Errorf("re-parse regenerated config: %w", err)
-	}
-	delete(oldDoc, "destination_directory_git_backup")
-	delete(newDoc, "destination_directory_git_backup")
-	return reflect.DeepEqual(oldDoc, newDoc), nil
 }
 
 // buildGitBackupSection renders the [destination_directory_git_backup] block,
@@ -104,56 +94,4 @@ func buildGitBackupSection(mode, authorName, authorEmail string) string {
 		fmt.Fprintf(&sb, "author_email = %q\n", authorEmail)
 	}
 	return strings.TrimRight(sb.String(), "\n")
-}
-
-// spliceTOMLTable replaces the simple TOML table named by header (e.g.
-// "[destination_directory_git_backup]") with newBlock, preserving the content of
-// every OTHER table. A table's "run" is from its header line to the next line
-// beginning with "[", so a trailing comment or blank line between the table's
-// keys and the following "[header]" is part of THIS table's run and is replaced
-// along with it — comment fidelity is therefore best-effort for lines adjacent
-// to the spliced table (the caller's fail-closed re-parse backstop, not this
-// line-splice, is what guarantees no data outside the table is lost). If the
-// table is absent, newBlock is appended after a blank-line separator. Mirrors
-// writeAgents' approach so config edits never clobber hand-written content.
-func spliceTOMLTable(raw, header, newBlock string) string {
-	newLines := strings.Split(newBlock, "\n")
-	lines := strings.Split(raw, "\n")
-	out := make([]string, 0, len(lines)+len(newLines))
-	insertAt := -1
-	inSection := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") {
-			// A new table header: ours iff it matches header exactly.
-			inSection = trimmed == header
-			if inSection {
-				if insertAt < 0 {
-					insertAt = len(out)
-				}
-				continue // drop the old header
-			}
-		}
-		if inSection {
-			continue // drop lines inside the old table
-		}
-		out = append(out, line)
-	}
-	if insertAt < 0 {
-		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
-			out = append(out, "")
-		}
-		out = append(out, newLines...)
-	} else {
-		tail := append([]string(nil), out[insertAt:]...)
-		out = append(out[:insertAt], newLines...)
-		// Keep a blank line before whatever section follows so repeated edits
-		// don't collapse the file's spacing (the loop drops blanks inside the
-		// table, so one separator is re-added each run — no accumulation).
-		if len(tail) > 0 && strings.TrimSpace(tail[0]) != "" {
-			out = append(out, "")
-		}
-		out = append(out, tail...)
-	}
-	return strings.Join(out, "\n")
 }

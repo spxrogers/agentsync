@@ -63,17 +63,17 @@ type AgeBackend struct {
 // must remember to call first, because a gate you can forget to call is
 // fail-open by construction: obtaining the file IS the check.
 //
-// The one caller outside this package that needs the vault's raw bytes goes
-// through ReadVault, which is this same gate: writeSecretsVerified's rollback
-// snapshot (internal/cli/secrets.go) previously reached for os.ReadFile, and
-// os.ReadFile blocks on a FIFO exactly as os.Open does. It was reachable, not
-// theoretical — `secret edit` with an ABSENT vault takes a branch that never
-// decrypts (internal/cli/secrets.go, the os.IsNotExist arm), so no earlier
-// refusal stood between that read and an unkillable hang; an $EDITOR that
-// created a FIFO at the vault path during its own edit window wedged the
-// command deterministically. Exporting the READ rather than a predicate keeps
-// the property that makes this shape work: bytes cannot be obtained without
-// passing the gate, so there is no separate check to forget.
+// The one caller that needs the vault's raw bytes goes through ReadVault,
+// which is this same gate: Vault.WriteVerified's rollback snapshot (vault.go)
+// previously reached for os.ReadFile, and os.ReadFile blocks on a FIFO exactly
+// as os.Open does. It was reachable, not theoretical — `secret edit` with an
+// ABSENT vault takes a branch that never decrypts (internal/cli/secrets.go,
+// the os.IsNotExist arm), so no earlier refusal stood between that read and
+// an unkillable hang; an $EDITOR that created a FIFO at the vault path during
+// its own edit window wedged the command deterministically. Exporting the
+// READ rather than a predicate keeps the property that makes this shape work:
+// bytes cannot be obtained without passing the gate, so there is no separate
+// check to forget.
 //
 // A stat FAILURE falls through to the open deliberately. Unlike the identity,
 // an ABSENT vault is the ordinary state of a fresh install that has not run
@@ -99,9 +99,11 @@ func openVault(path string) (*os.File, error) {
 }
 
 // ReadVault reads the whole encrypted vault at path, refusing any path that is
-// not a regular file before the open. It is the cross-package form of
-// openVault; see that function for why the gate returns data rather than a
-// verdict.
+// not a regular file before the open. It is the whole-file form of openVault;
+// its one production caller is Vault.WriteVerified's rollback snapshot, in
+// this package, and it is exported so the secrets_test shape-gate table
+// (age_fifo_unix_test.go) can assert this read too. See openVault for why the
+// gate returns data rather than a verdict.
 func ReadVault(path string) ([]byte, error) {
 	f, err := openVault(path)
 	if err != nil {

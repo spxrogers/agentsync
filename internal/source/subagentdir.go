@@ -123,3 +123,114 @@ func CheckSubagentLayout(fs afero.Fs, home string) error {
 	}
 	return &LegacySubagentDirError{Home: home, Files: files}
 }
+
+// MigrateSubagentTree moves <srcHome>/agents/*.md to <srcHome>/subagents/ and
+// returns the moved base names, in the sorted order LegacySubagentFiles lists
+// them. It is the ON-DISK half of the agents/ → subagents/ migration only.
+//
+// The other half — rewriting the `agents/<name>.md` SourceID spelling in the
+// central state file for the entries belonging to THIS tree — stays with the
+// CLI (rewriteSubagentStateIDs in internal/cli/migrate.go), which runs it right
+// after this returns a non-empty list, inside the same lock hold. It does not
+// live here because internal/source does not know about .state/targets.json,
+// and reaching internal/state from the canonical model would be a new layering
+// edge. The two halves are still one logical step: the files move first, then
+// the rewrite bridges the recorded entries so the next apply matches them
+// against the same dest paths instead of treating them as orphans. That
+// rewrite is a bridge, not a correctness requirement — RecordOpsState
+// overwrites SourceID on every apply, so an entry it misses (a teammate
+// migrated the committed project tree and you pulled it, so your local state
+// never saw a legacy dir) self-heals on the next apply, which is also why the
+// caller skips it when this returns an error after a partial move.
+func MigrateSubagentTree(srcHome string) ([]string, error) {
+	// The OS filesystem, not an injected afero.Fs: the mutation half below is
+	// os.Rename/os.Remove, so accepting a MemMapFs here would let a caller
+	// believe it was migrating a virtual tree while real files moved.
+	fs := afero.NewOsFs()
+	names, err := LegacySubagentFiles(fs, srcHome)
+	if err != nil {
+		return nil, err
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+
+	legacyDir := filepath.Join(srcHome, LegacySubagentsDir)
+	newDir := filepath.Join(srcHome, SubagentsDir)
+
+	// Both-dirs conflict policy: a hand-started migration is fine as long as no
+	// filename collides. On any collision, refuse with the colliding names —
+	// never overwrite, never guess which copy the user meant to keep.
+	var collisions []string
+	for _, name := range names {
+		if _, statErr := fs.Stat(filepath.Join(newDir, name)); statErr == nil {
+			collisions = append(collisions, name)
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return nil, fmt.Errorf("stat %s: %w", filepath.Join(newDir, name), statErr)
+		}
+	}
+	if len(collisions) > 0 {
+		return nil, fmt.Errorf(
+			"refusing to migrate: %d file(s) exist under BOTH %s and %s (%s). "+
+				"Nothing was moved. Reconcile the duplicates by hand (keep one copy of each), then re-run",
+			// Sanitize: these are basenames off disk in what is routinely a
+			// cloned dotfiles repo, and this error goes straight to a terminal.
+			// untrusted.Sanitize, not ui.Sanitize — the latter is a one-line
+			// delegation to it and internal/source sits below internal/ui.
+			len(collisions), legacyDir, newDir, untrusted.Sanitize(strings.Join(collisions, ", ")),
+		)
+	}
+
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
+		return nil, fmt.Errorf("mkdir %s: %w", newDir, err)
+	}
+	// The loop is NOT atomic, and deliberately so: an all-or-nothing move would
+	// mean unwinding renames that already succeeded, which is a second failure
+	// path over the same filesystem that just failed. A partial move is instead
+	// made SAFE to leave — every moved file is already in its final location,
+	// the collision check above only ever sees what still remains in agents/,
+	// and re-running therefore picks up exactly the remainder. The state rewrite
+	// is skipped on this path, which self-heals on the next apply
+	// (RecordOpsState overwrites SourceID unconditionally).
+	//
+	// Say all of that in the error. The collision branch above states "Nothing
+	// was moved" precisely because a user who reads a bare move failure has to
+	// assume the worst and reconcile two directories by hand.
+	for i, name := range names {
+		from := filepath.Join(legacyDir, name)
+		to := filepath.Join(newDir, name)
+		if err := os.Rename(from, to); err != nil { //nolint:forbidigo // moves a canonical subagent file inside an agentsync home, not a native destination
+			return nil, fmt.Errorf(
+				"move %s → %s: %w. %d of %d file(s) were already moved and are correctly placed in %s; "+
+					"the rest remain in %s. Nothing was lost or overwritten — fix the cause and re-run "+
+					"`agentsync migrate subagents`, which resumes with the files still left behind",
+				from, to, err, i, len(names), newDir, legacyDir,
+			)
+		}
+	}
+	// Drop the legacy directory once the move emptied it. A failure here is
+	// deliberately NOT an error: os.Remove refuses a non-empty directory, and a
+	// user's stray README or nested dir is theirs to keep. Leaving the directory
+	// behind is harmless — the gate only ever fires on *.md files, which are all
+	// gone by now.
+	_ = os.Remove(legacyDir) //nolint:forbidigo // removes the emptied canonical agents/ dir under an agentsync home, not a native destination
+
+	// names is already sorted: LegacySubagentFiles sorts what it lists, and the
+	// loop above moved them in that order.
+	return names, nil
+}
+
+// MigratedSourceID rewrites a legacy `agents/<name>.md` SourceID to the
+// `subagents/` spelling. ok is false for every other SourceID (mcp/*, skills/*,
+// the "(multiple)" sentinels, an already-migrated id), which is left untouched.
+func MigratedSourceID(id string) (string, bool) {
+	if id == "" {
+		return "", false
+	}
+	slash := filepath.ToSlash(id)
+	rest, found := strings.CutPrefix(slash, LegacySubagentsDir+"/")
+	if !found || rest == "" {
+		return "", false
+	}
+	return filepath.Join(SubagentsDir, filepath.FromSlash(rest)), true
+}

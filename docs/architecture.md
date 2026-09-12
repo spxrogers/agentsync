@@ -343,7 +343,7 @@ Two properties are load-bearing:
 The residual — a plugin installed natively AFTER it was declared in agentsync —
 is invisible to apply by construction. `status` and `doctor` do read native
 state, and report a plugin that is both installed in an agent and projected to
-it (`duplicatedNativePlugins`), naming both remedies.
+it (`adapter.DuplicatedNativePlugins`), naming both remedies.
 
 #### Per-adapter
 

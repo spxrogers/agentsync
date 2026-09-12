@@ -259,9 +259,9 @@ func TestVaultShapeGate(t *testing.T) {
 					}
 					return err
 				},
-				// The cross-package read. internal/cli's rollback snapshot
-				// calls it, and that caller is reachable with a non-regular
-				// vault (see TestWriteSecretsVerifiedSurvivesNonRegularVault).
+				// The raw read. Vault.WriteVerified's rollback snapshot calls
+				// it, and that caller is reachable with a non-regular vault
+				// (see TestVaultWriteVerified_SurvivesNonRegularVault).
 				"secrets.ReadVault": func() error {
 					raw, err := secrets.ReadVault(vault)
 					if err == nil && len(raw) == 0 {
