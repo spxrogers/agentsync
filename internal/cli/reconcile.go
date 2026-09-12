@@ -1387,6 +1387,10 @@ func (s *reconcileSession) writeBackKeyItem(it reconcileItem) error {
 	}
 	rootKey, serverID, ok := keyItemPointerParts(it.ptr)
 	if !ok {
+		// Defensive, and unreachable while render.CollectPointers emits a
+		// one-segment pointer only for a SCALAR root value: an MCP root is an
+		// object, so every mcp/ key item carries a server segment. Kept so a
+		// future pointer shape refuses rather than indexes a nil map.
 		return fmt.Errorf("write-back for pointer %q names no MCP server (expected /<root key>/<server id>) — "+
 			"choose [o]verride to push canonical to the dest, or [i]gnore to suppress this item", it.ptr)
 	}
@@ -1412,11 +1416,23 @@ func (s *reconcileSession) writeBackKeyItem(it reconcileItem) error {
 	// a missing root key.
 	data, err := readDestBytes(it.op.Path)
 	if err != nil {
-		return fmt.Errorf("read destination %s: %w", it.op.Path, err)
+		// The same split writeBackFileItem makes: [o]verride is the right
+		// remedy for an absent or unreadable file (the re-render restores it)
+		// and the WRONG one for a non-regular file, where the convergence read
+		// hangs (#241). pathlessStatErr keeps the path to one mention:
+		// os.ReadFile's *fs.PathError carries it, readDestBytes' sentinels
+		// deliberately do not.
+		if errors.Is(err, errDestNotRegular) {
+			return fmt.Errorf("read destination %s: %w — remove or replace the non-regular file at that "+
+				"path and re-run, or [i]gnore to suppress this item", it.op.Path, err)
+		}
+		return fmt.Errorf("read destination %s: %w — use [o]verride to restore it from canonical, or "+
+			"[i]gnore to suppress this item", it.op.Path, pathlessStatErr(err))
 	}
 	dest := map[string]any{}
 	if err := decodeDestBytes(it.op.MergeStrategy, data, &dest); err != nil {
-		return fmt.Errorf("destination %s does not parse (%s): %w", it.op.Path, it.op.MergeStrategy, err)
+		return fmt.Errorf("destination %s does not parse (%s): %w — choose [o]verride to push canonical to "+
+			"the dest, or [i]gnore to suppress this item", it.op.Path, it.op.MergeStrategy, err)
 	}
 	servers, _ := dest[rootKey].(map[string]any)
 	if servers == nil {
@@ -1509,7 +1525,7 @@ func writeBackFileItem(home string, it reconcileItem) error {
 		// through to the write. Leaving it out of the advice is only right for
 		// the non-regular case above.
 		return fmt.Errorf("read dest %s: %w — use [o]verride to restore it from canonical, "+
-			"or [i]gnore to suppress this item", it.op.Path, err)
+			"or [i]gnore to suppress this item", it.op.Path, pathlessStatErr(err))
 	}
 	srcID := it.op.SourceID
 	if srcID == "" {

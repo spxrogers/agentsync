@@ -228,16 +228,20 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 	// path — the deferred os.Remove above runs, the editor has been signalled
 	// and reaped, and the process still exits 130 because the root maps the
 	// sentinel's ExitCoder.
-	// (A signal that lands before the editor is even started is handled by the
-	// same check: exec.CommandContext's Start fails immediately on an
-	// already-cancelled context.)
+	// (A signal that has already landed when the arming returns is caught by
+	// the check just below; one that lands between that check and the editor's
+	// start is caught by exec.CommandContext's Start, which fails on a
+	// cancelled context, and then by the same post-Run check as any other.)
 	sigCtx, stopSignals := secretEditSignals(commandContext(cmd))
 	defer stopSignals()
 	if sigCtx.Err() != nil {
 		// Already interrupted: do not put the plaintext on disk at all. The
 		// checks below would abandon the edit anyway (and the deferred remove
-		// would take the file), so this is a narrower cleartext window, not a
-		// different outcome — which is also why no test can tell it apart.
+		// would take the file), so on an ordinary run this only narrows the
+		// cleartext window. What it changes is the failure mode when the temp
+		// file cannot be created: without it, an interrupted edit on an
+		// unwritable TMPDIR exits 1 with "create tmp file", not 130 — the row
+		// that sets TMPDIR to a missing directory pins that.
 		return errSecretEditInterrupted
 	}
 

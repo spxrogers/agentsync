@@ -113,8 +113,9 @@ GITHUB_TOKEN = "tok"
 			reject: []string{"[server.extra]"},
 		},
 		{
-			// CHARACTERIZATION of the documented coercion (docs/capability-matrix.md,
-			// #267): every dialect's inverse SKIPS a non-string element inside a
+			// CHARACTERIZATION, not an endorsement, of the documented coercion
+			// (docs/capability-matrix.md, #267): every dialect's inverse SKIPS a
+			// non-string element inside a
 			// string-typed native field — it is neither stringified nor passed
 			// through Extra. Claude's 1:1 shape used to refuse such an entry on
 			// write-back only because it went through a typed json.Unmarshal; it
@@ -156,9 +157,12 @@ GITHUB_TOKEN = "tok"
 			if err != nil {
 				t.Fatalf("read rendered dest %s: %v", tc.native, err)
 			}
-			if !strings.Contains(string(body), tc.old) {
-				t.Fatalf("rendered %s does not contain %q; the fixture no longer drives this dialect:\n%s",
-					tc.native, tc.old, body)
+			if n := strings.Count(string(body), tc.old); n != 1 {
+				// Exactly once, so the single Replace below edits the intended slot:
+				// a row whose `want` asserts the ORIGINAL survives (the coercion
+				// rows) would otherwise pass with the edit landing elsewhere.
+				t.Fatalf("rendered %s contains %q %d times, want exactly once; the fixture no longer drives this dialect:\n%s",
+					tc.native, tc.old, n, body)
 			}
 			edited := strings.Replace(string(body), tc.old, tc.new, 1)
 			if err := os.WriteFile(dest, []byte(edited), 0o644); err != nil {
@@ -395,5 +399,93 @@ func TestReconcile_Writeback_DifferentDialectsAgree(t *testing.T) {
 		if !strings.Contains(string(got), w) {
 			t.Errorf("canonical mcp/shared.toml is missing %q:\n%s", w, got)
 		}
+	}
+}
+
+// TestReconcile_Writeback_RotatedSecretIsRefused pins the one refusal in the
+// write-back path with a security consequence: capture.Capture's fail-closed
+// leak backstop. Between apply and reconcile the secret is rotated, so the
+// resolved value in the destination no longer matches any live secret,
+// re-reference cannot restore the ${secret:…} reference, and the write MUST be
+// refused rather than persist the old cleartext value into ~/.agentsync. The
+// error return of that call was unpinned before this test: swallowing it left
+// the whole package green while reconcile printed "write-back:" and exited 0
+// with the canonical file untouched.
+func TestReconcile_Writeback_RotatedSecretIsRefused(t *testing.T) {
+	testenv.RequireContainer(t)
+	const before = "ghp_OLD_VALUE_DO_NOT_PERSIST"
+	tmp := t.TempDir()
+	t.Setenv("GH_TOKEN", before)
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(tmp, ".agentsync")
+	cfg := filepath.Join(home, "agentsync.toml")
+	existing, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, append(existing, []byte("\n[secrets]\nbackend = \"env\"\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "agent", "add", "claude"); err != nil {
+		t.Fatalf("agent add claude: %v\n%s", err, out)
+	}
+	srcBody := `[server]
+type = "stdio"
+command = "npx"
+agents = ["claude"]
+[server.env]
+GITHUB_TOKEN = "${secret:GH_TOKEN}"
+`
+	srcFile := writeCanonicalMCP(t, home, "github", srcBody)
+	if out, err := runCLI(t, env, "apply", "--scope", "user"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	dest := filepath.Join(tmp, ".claude.json")
+	body, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), before) {
+		t.Fatalf("apply did not resolve the secret into the destination:\n%s", body)
+	}
+	if err := os.WriteFile(dest, []byte(strings.Replace(string(body), `"npx"`, `"npm"`, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rotate: the destination still holds the OLD value, which no live secret
+	// matches, so re-reference cannot put the reference back.
+	t.Setenv("GH_TOKEN", "ghp_NEW_VALUE")
+	out, err := runCLI(t, env, "reconcile", "--scope", "user", "--auto-writeback")
+	if err == nil {
+		t.Fatalf("reconcile --auto-writeback succeeded against a rotated secret; the leak backstop's refusal was swallowed:\n%s", out)
+	}
+	if !strings.Contains(out, "refusing") && !strings.Contains(out, "failed to write back") {
+		t.Fatalf("reconcile failed for a reason other than the write-back refusal:\n%s", out)
+	}
+	got, err := os.ReadFile(srcFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != srcBody {
+		t.Errorf("a refused write-back changed the canonical file:\n%s", got)
+	}
+	if err := filepath.WalkDir(home, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return nil
+		}
+		if strings.Contains(string(data), before) {
+			rel, _ := filepath.Rel(home, p)
+			t.Errorf("the rotated-away cleartext was persisted into the canonical source at %s", rel)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

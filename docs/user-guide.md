@@ -724,13 +724,15 @@ to store an empty value deliberately.
 `secret edit` decrypts the vault to a temp file for `$EDITOR`, so there is a
 window in which your secrets exist in cleartext on disk. **Interrupting it
 (Ctrl-C, or `kill`) is safe**: agentsync signals the editor, removes the
-decrypted copy, saves nothing (unless the interrupt lands during the final
-re-encrypt, which is allowed to finish so the vault is never half-written), and
-exits `130` — the shell's "killed by Ctrl-C"
+decrypted copy, saves nothing, and exits `130` — the shell's "killed by Ctrl-C"
 code — without printing anything. An editor that ignores the interrupt is given
 a couple of seconds to exit on its own and then stopped, so the command can
 never hang waiting for it. Nothing is written to the vault unless the editor
 exits normally *and* the edited file passes the same validation `apply` uses.
+The one exception is an interrupt that lands during the final re-encrypt
+itself: that write is allowed to finish so the vault is never half-written, and
+the command then reports the save and exits `0` as if it had not been
+interrupted.
 
 `${secret:…}` is resolved at apply time and written into native config; `${env:…}`
 pulls from the environment. The resolved value is **never** captured back into

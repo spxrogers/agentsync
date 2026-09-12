@@ -271,6 +271,18 @@ func TestSecretsEdit_InterruptAbandonsTheEdit(t *testing.T) {
 			},
 		},
 		{
+			// The one observable the pre-CreateTemp check adds: an interrupt that
+			// has already landed must exit 130 EVEN IF the temp file could not
+			// have been created. Without the check this row returns "create tmp
+			// file: …" — exit 1, no ExitCoder — instead of the sentinel.
+			name: "before the editor starts, with an unwritable temp dir",
+			setup: func(t *testing.T, f editFixture) {
+				f.editor(t, "exit 0")
+				t.Setenv("TMPDIR", filepath.Join(f.root, "no-such-dir"))
+				seamCancelNow(t)
+			},
+		},
+		{
 			name: "while the editor is running",
 			setup: func(t *testing.T, f editFixture) {
 				// `exec` on the last line matters: without it the shell's

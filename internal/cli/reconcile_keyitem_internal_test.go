@@ -178,50 +178,132 @@ func TestComponentFromPointer_KindFromSourceID(t *testing.T) {
 	}
 }
 
-// TestWriteBackKeyItem_Refusals pins the two refusals a hand-edited destination
-// can trigger before any translation happens — the root key missing or not an
-// object, and the entry not an object — and that the id surfaced in the second
-// is sanitized: the id comes from a native file, so a control byte in it must
-// not reach the terminal raw (issue #93/#171). Both refusals used to fail no
-// test: replacing either with `return nil` was green across the package, which
-// would have turned a plausible hand-edit into a silent "write-back:" lie.
+// noInverseAdapter is an adapter that is REGISTERED but declares no
+// MCPSpecIngester: the shape the registry-wide guard makes unrepresentable for
+// the real adapters, driven here by hand so the refusal it exists to guard
+// (writeBackKeyItem's "declares no native MCP translation") has a test that
+// fails when the refusal is removed. The embedded Adapter is nil — only Name()
+// is called on the way to the refusal.
+type noInverseAdapter struct {
+	adapter.Adapter
+	name string
+}
+
+func (a noInverseAdapter) Name() string { return a.name }
+
+// TestWriteBackKeyItem_Refusals pins every refusal a key-item write-back can
+// raise before any translation happens, and that the id surfaced in the
+// entry refusal is sanitized (the id comes from a native file, so a control
+// byte in it must not reach the terminal raw — issue #93/#171). These used to
+// fail no test: replacing any of them with `return nil` was green across the
+// package, which would have turned a plausible hand-edit into a silent
+// "write-back:" lie.
 func TestWriteBackKeyItem_Refusals(t *testing.T) {
 	testenv.RequireContainer(t)
+	reg := registryFactory()
+	if err := reg.Register(noInverseAdapter{name: "noinverse"}); err != nil {
+		t.Fatal(err)
+	}
 	// cmd is set so a refusal that regressed into a fall-through reports as the
 	// assertion below, not as a nil-deref panic at capture.Capture's Warn.
-	s := &reconcileSession{reg: registryFactory(), home: t.TempDir(), cmd: &cobra.Command{}}
-	item := func(dest, ptr string) reconcileItem {
+	s := &reconcileSession{reg: reg, home: t.TempDir(), cmd: &cobra.Command{}}
+	item := func(agent, strategy, dest, ptr string) reconcileItem {
 		return reconcileItem{
-			agentName: "claude",
-			op:        adapter.FileOp{Path: dest, MergeStrategy: "merge-json-keys", SourceID: "mcp/* (multiple)"},
+			agentName: agent,
+			op:        adapter.FileOp{Path: dest, MergeStrategy: strategy, SourceID: "mcp/* (multiple)"},
 			ptr:       ptr,
 		}
 	}
 	tests := []struct {
-		name string
-		dest string // the destination's JSON
-		ptr  string
-		want []string // substrings the error must carry
+		name     string
+		agent    string
+		strategy string
+		dest     string // the destination's bytes; "" with missing=true means no file at all
+		missing  bool
+		ptr      string
+		want     []string // substrings the error must carry
+		reject   []string // substrings it must NOT carry
 	}{
-		{"root key absent", `{}`, "/mcpServers/github", []string{"mcpServers", "absent"}},
-		{"root key is an array", `{"mcpServers": []}`, "/mcpServers/github", []string{"mcpServers", "not an object"}},
-		{"root key is a scalar", `{"mcpServers": 1}`, "/mcpServers/github", []string{"mcpServers", "not an object"}},
-		{"entry is a scalar", `{"mcpServers": {"github": 5}}`, "/mcpServers/github", []string{"claude", "github", "not an object"}},
-		{"entry is an array", `{"mcpServers": {"github": []}}`, "/mcpServers/github", []string{"github", "not an object"}},
+		{
+			name: "root key absent", agent: "claude", strategy: "merge-json-keys", dest: `{}`, ptr: "/mcpServers/github",
+			want: []string{"mcpServers", "absent"},
+		},
+		{
+			name: "root key is an array", agent: "claude", strategy: "merge-json-keys", dest: `{"mcpServers": []}`, ptr: "/mcpServers/github",
+			want: []string{"mcpServers", "not an object"},
+		},
+		{
+			name: "root key is a scalar", agent: "claude", strategy: "merge-json-keys", dest: `{"mcpServers": 1}`, ptr: "/mcpServers/github",
+			want: []string{"mcpServers", "not an object"},
+		},
+		{
+			name: "entry is a scalar", agent: "claude", strategy: "merge-json-keys", dest: `{"mcpServers": {"github": 5}}`, ptr: "/mcpServers/github",
+			want: []string{"claude", "github", "not an object"},
+		},
+		{
+			name: "entry is an array", agent: "claude", strategy: "merge-json-keys", dest: `{"mcpServers": {"github": []}}`, ptr: "/mcpServers/github",
+			want: []string{"github", "not an object"},
+		},
+		{
+			// The `>`-clobber shape. Whichever refusal names it, it must be refused:
+			// a zero-byte destination holds no server to write back.
+			name: "zero-byte file", agent: "claude", strategy: "merge-json-keys", dest: "", ptr: "/mcpServers/github",
+			want: []string{"mcpServers"},
+		},
+		{
+			// A destination the user broke between the drift walk and the [w]
+			// keystroke: readDestFile would swallow the parse error and report a
+			// missing root key; the by-hand read names the real cause.
+			name: "truncated JSON", agent: "claude", strategy: "merge-json-keys", dest: `{ "mcpServers": `, ptr: "/mcpServers/github",
+			want: []string{"does not parse", "merge-json-keys"}, reject: []string{"absent from the destination"},
+		},
+		{
+			// TOML decodes through a different arm than JSON/JSONC, and codex's
+			// config.toml is a live write-back destination.
+			name: "truncated TOML", agent: "codex", strategy: "merge-toml-keys", dest: "[mcp_servers.github\n", ptr: "/mcp_servers/github",
+			want: []string{"does not parse", "merge-toml-keys"}, reject: []string{"absent from the destination"},
+		},
+		{
+			name: "missing file", agent: "claude", strategy: "merge-json-keys", missing: true, ptr: "/mcpServers/github",
+			want: []string{"read destination", "[o]verride"},
+		},
+		{
+			// Reachable only by hand: the registry-wide guard makes a REAL
+			// adapter that renders MCP key items without the inverse
+			// unrepresentable. The refusal must still refuse — a nil here would
+			// call a nil interface, and a guess at a dialect would be worse.
+			name: "agent declares no inverse", agent: "noinverse", strategy: "merge-json-keys",
+			dest: `{"mcpServers": {"github": {"command": "npx"}}}`, ptr: "/mcpServers/github",
+			want: []string{"noinverse", "declares no native MCP translation"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			dest := filepath.Join(t.TempDir(), "claude.json")
-			if err := os.WriteFile(dest, []byte(tc.dest), 0o644); err != nil {
-				t.Fatal(err)
+			dest := filepath.Join(t.TempDir(), "dest")
+			if !tc.missing {
+				if err := os.WriteFile(dest, []byte(tc.dest), 0o644); err != nil {
+					t.Fatal(err)
+				}
 			}
-			err := s.writeBackKeyItem(item(dest, tc.ptr))
+			err := s.writeBackKeyItem(item(tc.agent, tc.strategy, dest, tc.ptr))
 			if err == nil {
 				t.Fatal("writeBackKeyItem = nil, want a refusal: a nil here prints \"write-back:\" for an edit that was not persisted")
 			}
 			for _, w := range tc.want {
 				if !strings.Contains(err.Error(), w) {
 					t.Errorf("err = %q, want it to mention %q", err, w)
+				}
+			}
+			for _, r := range tc.reject {
+				if strings.Contains(err.Error(), r) {
+					t.Errorf("err = %q names the wrong cause (%q)", err, r)
+				}
+			}
+			if tc.missing {
+				// os.ReadFile's error carries the path too; the refusal must not
+				// print it twice ("read destination X: open X: …").
+				if n := strings.Count(err.Error(), dest); n != 1 {
+					t.Errorf("err = %q names the path %d times, want once", err, n)
 				}
 			}
 		})
@@ -235,7 +317,7 @@ func TestWriteBackKeyItem_Refusals(t *testing.T) {
 		if err := os.WriteFile(dest, []byte(`{"mcpServers": {"bad\u001b[31mid": 5}}`), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		err := s.writeBackKeyItem(item(dest, "/mcpServers/bad\x1b[31mid"))
+		err := s.writeBackKeyItem(item("claude", "merge-json-keys", dest, "/mcpServers/bad\x1b[31mid"))
 		if err == nil {
 			t.Fatal("want a refusal")
 		}
@@ -244,44 +326,6 @@ func TestWriteBackKeyItem_Refusals(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), "\x1b") {
 			t.Fatalf("err = %q carries the raw ESC byte from the native id", err)
-		}
-	})
-}
-
-// TestWriteBackKeyItem_UnreadableDestination pins the third refusal: a
-// destination that cannot be read or parsed at the moment of the [w] keystroke
-// (reconcile is interactive, so the user can break the file between the drift
-// walk and the write-back) is named as such, rather than reported as a missing
-// root key by readDestFile's error-swallowing read.
-func TestWriteBackKeyItem_UnreadableDestination(t *testing.T) {
-	testenv.RequireContainer(t)
-	// cmd is set so a refusal that regressed into a fall-through reports as the
-	// assertion below, not as a nil-deref panic at capture.Capture's Warn.
-	s := &reconcileSession{reg: registryFactory(), home: t.TempDir(), cmd: &cobra.Command{}}
-	item := func(dest string) reconcileItem {
-		return reconcileItem{
-			agentName: "claude",
-			op:        adapter.FileOp{Path: dest, MergeStrategy: "merge-json-keys", SourceID: "mcp/* (multiple)"},
-			ptr:       "/mcpServers/github",
-		}
-	}
-	t.Run("missing file", func(t *testing.T) {
-		err := s.writeBackKeyItem(item(filepath.Join(t.TempDir(), "gone.json")))
-		if err == nil || !strings.Contains(err.Error(), "read destination") {
-			t.Fatalf("err = %v, want the read refusal", err)
-		}
-	})
-	t.Run("truncated file", func(t *testing.T) {
-		dest := filepath.Join(t.TempDir(), "claude.json")
-		if err := os.WriteFile(dest, []byte(`{ "mcpServers": `), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		err := s.writeBackKeyItem(item(dest))
-		if err == nil || !strings.Contains(err.Error(), "does not parse") {
-			t.Fatalf("err = %v, want the parse refusal", err)
-		}
-		if strings.Contains(err.Error(), "absent from the destination") {
-			t.Fatalf("err = %q names a missing root key for a file that does not parse", err)
 		}
 	})
 }
