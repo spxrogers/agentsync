@@ -427,10 +427,10 @@ type PluginIngester interface {
 // breadth tier (per its Spec's MCPTarget). Continue does NOT implement it — it
 // renders one whole FILE per server (`MergeStrategy: "replace"`), and its own
 // IngestMCPSpec operand is an element of a YAML `mcpServers` LIST inside a
-// block, not a root-keyed value. Its MCP write-back does not go through the
-// whole-file path either: that arm copies the destination verbatim, which for a
+// block, not a root-keyed value. Its MCP write-back reaches the whole-file arm
+// but is REFUSED there: that arm copies the destination verbatim, which for a
 // secret-bearing kind would put YAML into a canonical TOML file and persist
-// resolved secrets in cleartext, so reconcile REFUSES it and points at
+// resolved secrets in cleartext, so reconcile refuses the kind and points at
 // `agentsync import continue:mcp:<id>`, which captures the edit through Ingest
 // and capture.Capture. The registry-wide guard TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer
 // (internal/cli) renders a real MCP fixture through every registered adapter and

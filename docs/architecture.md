@@ -434,11 +434,11 @@ tier (per its `Spec`'s `MCPTarget`, so each dialect knob is honored on
 write-back exactly as on ingest). **Continue does not implement it**: it renders
 one whole *file* per server (`MergeStrategy: "replace"`), and its own
 `IngestMCPSpec` operand is an element of a YAML `mcpServers` list inside a block
-rather than a root-keyed value. Its MCP write-back does not go down the
-whole-file path either — that arm copies the destination verbatim, which for a
+rather than a root-keyed value. Its MCP write-back reaches the whole-file arm
+but is refused there — that arm copies the destination verbatim, which for a
 secret-bearing kind would put YAML into a canonical TOML file and persist
-resolved secrets in cleartext — so `reconcile` refuses it and points at
-`agentsync import continue:mcp:<id>` (see §5). Each implementation delegates to
+resolved secrets in cleartext — and `reconcile` points at
+`agentsync import continue:mcp:<id>` instead (see §5). Each implementation delegates to
 the SAME package translator the adapter's `Ingest` uses, so a dialect has
 exactly one definition.
 
