@@ -485,3 +485,108 @@ GITHUB_TOKEN = "${secret:GH_TOKEN}"
 		t.Fatal(err)
 	}
 }
+
+// TestReconcile_Writeback_ContinueWholeFileIsRefused pins the one MCP write-back
+// that does NOT go through an adapter inverse. Continue renders each server as
+// a whole YAML file (MergeStrategy "replace", SourceID mcp/<id>.toml), so a
+// hand-edited server reaches writeBackFileItem — the verbatim copy meant for
+// text components. Before the kind gate, `--auto-writeback` overwrote
+// ~/.agentsync/mcp/<id>.toml with the YAML (every later load then failed to
+// parse it) and, because that arm bypasses capture.Capture, persisted the
+// `${secret:…}` value the render had resolved in cleartext. Three things must
+// hold: the run is refused and names the import selector that captures the
+// edit correctly, the canonical file is byte-unchanged, and the resolved value
+// is nowhere under ~/.agentsync.
+func TestReconcile_Writeback_ContinueWholeFileIsRefused(t *testing.T) {
+	const live = "ghp_LIVE_VALUE_DO_NOT_PERSIST"
+	tmp := t.TempDir()
+	t.Setenv("GH_TOKEN", live)
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp}
+	if _, err := runCLI(t, env, "init"); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(tmp, ".agentsync")
+	cfg := filepath.Join(home, "agentsync.toml")
+	existing, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, append(existing, []byte("\n[secrets]\nbackend = \"env\"\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runCLI(t, env, "agent", "add", "continue"); err != nil {
+		t.Fatalf("agent add continue: %v\n%s", err, out)
+	}
+	srcBody := `[server]
+type = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+agents = ["continue"]
+[server.env]
+GITHUB_TOKEN = "${secret:GH_TOKEN}"
+`
+	srcFile := writeCanonicalMCP(t, home, "github", srcBody)
+	if out, err := runCLI(t, env, "apply", "--scope", "user"); err != nil {
+		t.Fatalf("apply: %v\n%s", err, out)
+	}
+	dest := filepath.Join(tmp, ".continue", "mcpServers", "github.yaml")
+	body, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), live) {
+		t.Fatalf("apply did not resolve the secret into the destination:\n%s", body)
+	}
+	if !strings.Contains(string(body), "command: npx") {
+		t.Fatalf("unexpected continue render (the hand-edit below targets `command: npx`):\n%s", body)
+	}
+	if err := os.WriteFile(dest, []byte(strings.Replace(string(body), "command: npx", "command: npm", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCLI(t, env, "reconcile", "--scope", "user", "--auto-writeback")
+	if err == nil {
+		t.Fatalf("reconcile --auto-writeback succeeded on a Continue MCP file; the whole-file arm copied YAML into the canonical TOML:\n%s", out)
+	}
+	for _, want := range []string{"refused", "verbatim", "`agentsync import continue:mcp:github`"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("reconcile output lacks %q:\n%s", want, out)
+		}
+	}
+	got, err := os.ReadFile(srcFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != srcBody {
+		t.Errorf("a refused write-back changed the canonical file:\n%s", got)
+	}
+	if err := filepath.WalkDir(home, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return nil
+		}
+		if strings.Contains(string(data), live) {
+			rel, _ := filepath.Rel(home, p)
+			t.Errorf("the resolved cleartext was persisted into the canonical source at %s", rel)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The remedy the refusal names must actually work: the edit lands in the
+	// canonical file through Continue's own translator with the secret
+	// re-referenced, and the cleartext still never touches ~/.agentsync.
+	if out, err := runCLI(t, env, "import", "continue:mcp:github", "--scope", "user"); err != nil {
+		t.Fatalf("import continue:mcp:github: %v\n%s", err, out)
+	}
+	got, err = os.ReadFile(srcFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "npm") || !strings.Contains(string(got), "${secret:GH_TOKEN}") || strings.Contains(string(got), live) {
+		t.Fatalf("import did not capture the edit with the secret re-referenced:\n%s", got)
+	}
+}

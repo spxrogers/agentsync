@@ -179,8 +179,8 @@ func TestComponentFromPointer_KindFromSourceID(t *testing.T) {
 }
 
 // noInverseAdapter is an adapter that is REGISTERED but declares no
-// MCPSpecIngester: the shape the registry-wide guard turns into a failing test for
-// the real adapters, driven here by hand so the refusal it exists to guard
+// MCPSpecIngester: the shape the registry-wide guard turns into a failing test
+// for the real adapters, driven here by hand so the refusal it exists to guard
 // (writeBackKeyItem's "declares no native MCP translation") has a test that
 // fails when the refusal is removed. The embedded Adapter is nil — only Name()
 // is called on the way to the refusal.
@@ -294,10 +294,10 @@ func TestWriteBackKeyItem_Refusals(t *testing.T) {
 			want: []string{"read destination", "[o]verride"},
 		},
 		{
-			// Reachable only by hand: the registry-wide guard makes a REAL
-			// adapter that renders MCP key items without the inverse
-			// a failing test. The refusal must still refuse — a nil here would
-			// call a nil interface, and a guess at a dialect would be worse.
+			// Reachable only by hand: for a REAL adapter that renders MCP key
+			// items without the inverse, the registry-wide guard is a failing
+			// test. The refusal must still refuse — a nil here would call a nil
+			// interface, and a guess at a dialect would be worse.
 			name: "agent declares no inverse", agent: "noinverse", strategy: "merge-json-keys",
 			dest: `{"mcpServers": {"github": {"command": "npx"}}}`, ptr: "/mcpServers/github",
 			want: []string{"noinverse", "declares no native MCP translation"},
@@ -381,4 +381,94 @@ func TestWriteBackFileItem_ReadRefusalNamesThePathOnce(t *testing.T) {
 	if n := strings.Count(err.Error(), dest); n != 1 {
 		t.Fatalf("err = %q names the path %d times, want once", err, n)
 	}
+}
+
+// TestWriteBackFileItem_Refusals pins the whole-file arm's own refusals the way
+// TestWriteBackKeyItem_Refusals pins the key item's: each row is one
+// `return fmt.Errorf(...)` in writeBackFileItem that must fail a test when it
+// becomes `return nil`. The two SourceID refusals had no such test. The
+// secret-bearing-kind refusal is new: Continue's per-server MCP file — the one
+// whole-file render of a kind walkSecretFields visits — used to be copied
+// VERBATIM into ~/.agentsync/mcp/<id>.toml: the agent's YAML into a canonical
+// TOML file, with the secrets the render had resolved in cleartext, outside
+// capture.Capture. A refusal that still wrote would be the same bug with a
+// message, so every row also asserts the canonical tree stayed empty.
+func TestWriteBackFileItem_Refusals(t *testing.T) {
+	testenv.RequireContainer(t)
+	tests := []struct {
+		name     string
+		agent    string
+		sourceID string
+		want     []string
+	}{
+		{
+			name: "no SourceID", agent: "claude", sourceID: "",
+			want: []string{"requires a single source-of-record", "[o]verride"},
+		},
+		{
+			name: "multiple source fragments", agent: "claude", sourceID: "skills/* (multiple)",
+			want: []string{"concatenation of multiple source fragments", "strand the others"},
+		},
+		{
+			name: "mcp whole-file render (continue)", agent: "continue", sourceID: filepath.Join("mcp", "gh.toml"),
+			want: []string{
+				"refused", "continue's whole-file render of the mcp component \"gh\"", "verbatim", "cleartext",
+				"`agentsync import continue:mcp:gh`", "[o]verride",
+			},
+		},
+		{
+			name: "lsp whole-file render", agent: "x", sourceID: "lsp/gopls.toml",
+			want: []string{"refused", "lsp component \"gopls\"", "`agentsync import x:lsp:gopls`"},
+		},
+		{
+			name: "hooks whole-file render", agent: "x", sourceID: "hooks/PreToolUse.toml",
+			want: []string{"refused", "hooks component \"PreToolUse\"", "`agentsync import x:hook:PreToolUse`"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			dest := filepath.Join(t.TempDir(), "dest.yaml")
+			if err := os.WriteFile(dest, []byte("mcpServers:\n- name: gh\n  command: npm\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err := writeBackFileItem(home, reconcileItem{agentName: tc.agent, op: adapter.FileOp{Path: dest, SourceID: tc.sourceID}})
+			if err == nil {
+				t.Fatal("writeBackFileItem = nil, want a refusal")
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("err = %q\n  missing %q", err, w)
+				}
+			}
+			entries, rerr := os.ReadDir(home)
+			if rerr != nil {
+				t.Fatal(rerr)
+			}
+			if len(entries) != 0 {
+				t.Errorf("a refusal still wrote into the canonical tree: %v", entries)
+			}
+		})
+	}
+	// Positive control: a text component — whose canonical form IS the rendered
+	// text — still writes back verbatim, so the kind gate is not over-broad.
+	t.Run("text component still writes back verbatim", func(t *testing.T) {
+		home := t.TempDir()
+		dest := filepath.Join(t.TempDir(), "hello.md")
+		const body = "# hello\n"
+		if err := os.WriteFile(dest, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		it := reconcileItem{agentName: "claude", op: adapter.FileOp{Path: dest, SourceID: filepath.Join("commands", "hello.md")}}
+		if err := writeBackFileItem(home, it); err != nil {
+			t.Fatalf("writeBackFileItem = %v for a command, want the verbatim write", err)
+		}
+		got, err := os.ReadFile(filepath.Join(home, "commands", "hello.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != body {
+			t.Fatalf("canonical commands/hello.md = %q, want %q", got, body)
+		}
+	})
 }

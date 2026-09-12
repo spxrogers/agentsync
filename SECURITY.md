@@ -34,6 +34,11 @@ can resolve secrets into native config files. Areas of particular interest:
   `--auto-writeback` — and is path-bounded to `~/.agentsync`; import's
   stale-hook retirement) — a deletion carries no secret content to persist,
   and anything that writes content back still goes through `capture.Capture`.
+  The whole-file text write-back (skills, subagents, commands, memory) copies
+  rendered text that was never secret-resolved, and refuses the secret-bearing
+  kinds — MCP, LSP, hooks — by kind, so an agent that renders a server as a
+  whole file (Continue) cannot have its resolved YAML copied verbatim into the
+  canonical tree.
   The alternative `backend = "env"` stores nothing: `${secret:…}` resolves from
   the process environment at apply time, so there is no vault, no identity file
   and no decryption — the credential's protection is whatever protects the

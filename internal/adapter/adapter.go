@@ -415,13 +415,24 @@ type PluginIngester interface {
 // DOES) and puts the dialect in the one place that already owns it — the
 // adapter that rendered the bytes being read back.
 //
+// The signature returns no error: a native value the dialect cannot represent
+// (a number inside a string-typed field such as `args`, say) is DROPPED, on
+// write-back exactly as on Ingest, never stringified and never passed through
+// Extra. Refusing instead would need every implementor and every Ingest to
+// return an error; the residual is documented at the reconcile call site and in
+// the capability matrix, and pinned by characterization tests.
+//
 // Implemented by every adapter that renders MCP as a key-merge op: claude,
 // opencode, codex, cursor, gemini, windsurf, roo, cline, and the generic
 // breadth tier (per its Spec's MCPTarget). Continue does NOT implement it — it
-// renders one whole FILE per server (`MergeStrategy: "replace"`), so its
-// write-back goes through the whole-file path and its own IngestMCPSpec operand
-// is an element of a YAML `mcpServers` LIST inside a block, not a root-keyed
-// value. The registry-wide guard TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer
+// renders one whole FILE per server (`MergeStrategy: "replace"`), and its own
+// IngestMCPSpec operand is an element of a YAML `mcpServers` LIST inside a
+// block, not a root-keyed value. Its MCP write-back does not go through the
+// whole-file path either: that arm copies the destination verbatim, which for a
+// secret-bearing kind would put YAML into a canonical TOML file and persist
+// resolved secrets in cleartext, so reconcile REFUSES it and points at
+// `agentsync import continue:mcp:<id>`, which captures the edit through Ingest
+// and capture.Capture. The registry-wide guard TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer
 // (internal/cli) renders a real MCP fixture through every registered adapter and
 // fails if one emits an MCP key-merge FileOp without implementing this
 // interface, so a new MCP-capable adapter cannot ship without its inverse.

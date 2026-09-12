@@ -52,6 +52,20 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   than a list of roots, and a destination that cannot be read or parsed at the
   moment of write-back (missing, non-regular, truncated) is refused by name
   instead of being reported as a missing root key.
+- **`reconcile`'s write-back of a Continue MCP file no longer copies the native
+  YAML verbatim into the canonical source**
+  ([#235](https://github.com/spxrogers/agentsync/issues/235)). Continue is the
+  one adapter that renders an MCP server as a whole file
+  (`.continue/mcpServers/<id>.yaml`), so a hand-edited server went down the
+  whole-file write-back path — the verbatim copy meant for skills, subagents,
+  commands and memory. `[w]` / `--auto-writeback` then overwrote
+  `~/.agentsync/mcp/<id>.toml` with the YAML (every later command failed with
+  `toml: expected character =`) and, because that path bypasses
+  `capture.Capture`, persisted the `${secret:…}` values the render had resolved
+  in cleartext. The whole-file arm now refuses every MCP, LSP and hook component
+  by kind and points at `agentsync import continue:mcp:<id>`, which captures the
+  edit through Continue's own translator with the secrets re-referenced. The bug
+  predates the write-back change above; its review found it.
 - **`reconcile` no longer reports an edited MCP server as deleted when its id
   contains `~`** ([#235](https://github.com/spxrogers/agentsync/issues/235)).
   JSON pointer segments are RFC 6901 encoded, so a server id such as `til~de`

@@ -603,8 +603,8 @@ func TestReadDestBytesReportsAStatFailureAsItself(t *testing.T) {
 			"to the shape sentinel and keep base parity", err)
 	}
 	// Pathless, like its sibling sentinel: the caller supplies the path, and a
-	// *fs.PathError here makes reconcile print "read dest X: cannot stat
-	// destination: stat X: ...". Counting occurrences rather than asserting a
+	// *fs.PathError here makes reconcile print "read destination X: cannot
+	// stat destination: stat X: ...". Counting occurrences rather than asserting a
 	// literal keeps this from breaking on a reworded message.
 	if n := strings.Count(err.Error(), a); n != 0 {
 		t.Errorf("error = %q names the path %d time(s); it must carry none — the caller "+

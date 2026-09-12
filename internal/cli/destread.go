@@ -95,7 +95,7 @@ func readDestBytes(path string) ([]byte, error) {
 		if _, serr := os.Stat(path); serr != nil {
 			// Pathless, for the reason errDestNotRegular carries no path: the
 			// caller supplies it, and a *fs.PathError would make reconcile print
-			// "read dest X: cannot stat destination: stat X: ...". Unwrapping to
+			// "read destination X: cannot stat destination: stat X: ...". Unwrapping to
 			// the bare errno keeps errors.Is matching BOTH this sentinel and the
 			// underlying syscall error.
 			return nil, fmt.Errorf("%w: %w", errDestUnstattable, pathlessErr(serr))

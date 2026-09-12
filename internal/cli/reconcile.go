@@ -1508,11 +1508,11 @@ func writeBackFileItem(home string, it reconcileItem) error {
 		// arm's advice suggests [o]verride: Writer.Write's convergence read
 		// follows the link, and its mode arm chmods the TARGET through it
 		// before the symlink policy is consulted (#248).
-		return fmt.Errorf("read dest %s: destination is a symlink agentsync is not reading through — "+
+		return fmt.Errorf("read destination %s: destination is a symlink agentsync is not reading through — "+
 			"set %s=1 (for apply, status, diff, reconcile and explain) to read and write through the link, replace the link with a "+
 			"regular file, or [i]gnore to suppress this item", it.op.Path, iox.AllowSymlinkDestEnv)
 	case symlinkUnresolvable:
-		return fmt.Errorf("read dest %s: destination is a symlink whose target cannot be resolved "+
+		return fmt.Errorf("read destination %s: destination is a symlink whose target cannot be resolved "+
 			"(dangling, loop, or unreadable; apply refuses it too) — fix or replace the link, or [i]gnore "+
 			"to suppress this item", it.op.Path)
 	}
@@ -1528,6 +1528,29 @@ func writeBackFileItem(home string, it reconcileItem) error {
 	}
 	if strings.HasSuffix(srcID, "(multiple)") {
 		return fmt.Errorf("write-back for %s is unsafe: the dest is the concatenation of multiple source fragments. Persisting the whole dest into one of them would strand the others. Edit the source fragments under %s/ directly, then apply", it.op.Path, home)
+	}
+	// The whole-file arm copies the destination VERBATIM into the canonical file
+	// the SourceID names. That is right for the text components — skills,
+	// subagents, commands, memory — whose canonical form IS the rendered text.
+	// It is wrong for the structured, secret-bearing kinds walkSecretFields
+	// visits (MCP, LSP, hooks): the render wrote the agent's native dialect with
+	// every `${secret:…}` RESOLVED, so a verbatim copy would put that dialect
+	// (Continue's YAML) into a canonical TOML file — every later load fails to
+	// parse it — and persist the resolved cleartext outside capture.Capture's
+	// re-reference and leak backstop, the bug class the secret invariants exist
+	// to prevent. Continue's per-server MCP file is the one whole-file render of
+	// such a kind today; `import <agent>:<component>:<name>` captures the same
+	// edit through the adapter's Ingest and capture.Capture, so point there.
+	// (ToSlash: Continue builds the SourceID with filepath.Join.)
+	if kind := keyItemKind(filepath.ToSlash(srcID)); kind != "" {
+		name := strings.TrimSuffix(filepath.Base(srcID), ".toml")
+		component := strings.TrimSuffix(kind, "s") // import's selector grammar: mcp | lsp | hook
+		return fmt.Errorf("write-back for %s is refused: it is %s's whole-file render of the %s component %q, and the "+
+			"whole-file path copies the destination verbatim — that would put %s's native dialect into the canonical "+
+			"TOML file and persist the secrets the render resolved in cleartext. Capture the edit with "+
+			"`agentsync import %s:%s:%s` (which translates it and re-references the secrets), or edit %s directly, "+
+			"then apply; or use [o]verride / [i]gnore",
+			it.op.Path, it.agentName, kind, name, it.agentName, it.agentName, component, name, filepath.Join(home, srcID))
 	}
 	// Memory is fragment-aware. If apply wrote fragment markers, reverse them
 	// into AGENTS.md + the fragment files instead of writing the expanded dest

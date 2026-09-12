@@ -432,11 +432,15 @@ Implemented by every adapter that renders MCP as a key-merge op — claude,
 opencode, codex, cursor, gemini, windsurf, roo, cline, and the generic breadth
 tier (per its `Spec`'s `MCPTarget`, so each dialect knob is honored on
 write-back exactly as on ingest). **Continue does not implement it**: it renders
-one whole *file* per server (`MergeStrategy: "replace"`), so its write-back goes
-down the whole-file path, and its own `IngestMCPSpec` operand is an element of a
-YAML `mcpServers` list inside a block rather than a root-keyed value. Each
-implementation delegates to the SAME package translator the adapter's `Ingest`
-uses, so a dialect has exactly one definition.
+one whole *file* per server (`MergeStrategy: "replace"`), and its own
+`IngestMCPSpec` operand is an element of a YAML `mcpServers` list inside a block
+rather than a root-keyed value. Its MCP write-back does not go down the
+whole-file path either — that arm copies the destination verbatim, which for a
+secret-bearing kind would put YAML into a canonical TOML file and persist
+resolved secrets in cleartext — so `reconcile` refuses it and points at
+`agentsync import continue:mcp:<id>` (see §5). Each implementation delegates to
+the SAME package translator the adapter's `Ingest` uses, so a dialect has
+exactly one definition.
 
 The registry-wide guard `TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer`
 (`internal/cli`) renders a real two-server MCP fixture (one stdio, one remote)
@@ -859,6 +863,19 @@ the whole class. An adapter that renders an MCP key-merge op without declaring
 its inverse is REFUSED rather than guessed at, and the registry-wide guard
 `TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer` turns that state into a
 failing test.
+
+**The whole-file arm applies the same rule from the other side.** It copies the
+destination verbatim into the canonical file the SourceID names — right for the
+text components (skills, subagents, commands, memory), whose canonical form *is*
+the rendered text, and wrong for the structured, secret-bearing kinds
+`walkSecretFields` visits — so a SourceID under `mcp/`, `lsp/` or `hooks/` is
+refused there by kind, with `agentsync import <agent>:<component>:<name>` as the
+remedy (it captures the edit through the adapter's `Ingest` and
+`capture.Capture`). Continue's per-server YAML is the one render that reaches
+that arm today; before the refusal, `[w]` overwrote `~/.agentsync/mcp/<id>.toml`
+with the YAML and persisted the resolved secrets in cleartext, outside
+`capture.Capture`. Pinned by `TestWriteBackFileItem_Refusals` and
+`TestReconcile_Writeback_ContinueWholeFileIsRefused`.
 
 Pointer segments are RFC 6901 encoded, so the entry segment is DECODED
 (`jsonkeys.UnescapeToken`) before it is used as a destination map key or a

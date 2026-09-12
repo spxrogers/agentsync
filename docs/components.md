@@ -368,10 +368,12 @@ frontmatter-less always-apply rule); commands → `.continue/prompts/<name>.md`
 prompt blocks. Skills/subagents/hooks/LSP have no faithful Continue target and
 are skipped with a report (Skill/Subagent/Hook/LSP). No
 `PluginIngester`. Deliberately implements **no** `adapter.MCPSpecIngester`: its
-MCP is one whole FILE per server (`replace`), so write-back goes down the
-whole-file path, and its own `IngestMCPSpec` operand is an element of a block's
-YAML `mcpServers` LIST, not a root-keyed value — the interface's contract would
-not hold. See
+MCP is one whole FILE per server (`replace`), and its own `IngestMCPSpec`
+operand is an element of a block's YAML `mcpServers` LIST, not a root-keyed
+value — the interface's contract would not hold. `reconcile`'s write-back
+refuses that file rather than copying it verbatim (the whole-file arm can
+neither translate the YAML nor re-reference secrets); `agentsync import
+continue:mcp:<id>` captures the edit. See
 [architecture § MCPSpecIngester](architecture.md#mcpspecingester-read-only).
 - **Key:** `New(Options) *Adapter`; the `Adapter` methods; `IngestMCPSpec`.
 - **Depends on:** adapter, adapter/claude (frontmatter/Extra helpers), secrets,
