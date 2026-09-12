@@ -198,24 +198,33 @@ repo-root `.mcp.json` for project-scope MCP servers, Cursor's `.cursor/mcp.json`
 and Cline's `~/.cline/mcp.json`),
 `merge-jsonc-keys` (OpenCode's comment-tolerant `opencode.json` and Gemini's
 `.gemini/settings.json` — which co-owns both `mcpServers` and `hooks`), and
-`merge-toml-keys` (Codex's `config.toml`). The Continue adapter co-owns no shared
+`merge-toml-keys` (Codex and Grok `config.toml`). Grok hooks use
+`merge-json-keys` in `.grok/hooks/agentsync.json`. The Continue adapter co-owns no shared
 file (it projects one block file per item), so it has no key-merge strategy.
 
-Each adapter has **exactly one** key-merge strategy. `orphanCleanupOps`
-(`internal/render/pipeline.go`) synthesizes destructive cleanup writes from the
-single, static `KeyMergeStrategy()` value and applies it to *every* key-merge
-destination the adapter owns, so an adapter co-owning keys across files of
-*different* on-disk formats is **not currently supported** — it would require
-widening the accessor to a per-path strategy first. A central guard
-(`TestKeyMergeStrategy_MatchesEmittedOps`, `internal/cli`) renders a real
-MCP+hook fixture through every registered adapter and pins `KeyMergeStrategy()`
-against the `MergeStrategy` stamped on every key-merge `FileOp` it emits, so the
-accessor can never silently drift from what an adapter actually writes.
+Single-format adapters declare their format through `KeyMergeStrategy()`.
+An adapter owning shared files of different formats implements the optional
+`PathKeyMerger` interface:
+
+```go
+type PathKeyMerger interface {
+    KeyMergeStrategyForPath(path string) string
+}
+```
+
+`adapter.MergeStrategyForPath` resolves this per absolute destination path,
+falling back to `KeyMergeStrategy()` for existing adapters. Both orphan cleanup
+and `agent disable --purge` use that helper. Grok is the first mixed-format
+adapter: `config.toml` uses `merge-toml-keys`, while
+`hooks/agentsync.json` uses `merge-json-keys`. The registry-wide
+`TestKeyMergeStrategy_MatchesEmittedOps` pins the resolved strategy against every
+rendered shared-file op at both scopes. Grok's CLI lifecycle tests exercise
+actual state-driven cleanup and purge for both formats.
 `MergeStrategy` itself stays a plain string: typing it would change the
 published `Adapter` interface (`KeyMergeStrategy() string`) and is deferred to
 [#250](https://github.com/spxrogers/agentsync/issues/250).
 
-**Deep vs breadth-tier adapters.** The nine hand-written packages above are
+**Deep vs breadth-tier adapters.** The ten hand-written packages above are
 *deep* adapters — agent-specific, multi-component, often bidirectional. Beyond
 them, a single data-driven *generic* adapter (`internal/adapter/generic`) serves a
 long tail of agents from a verified `Spec` table — memory, (where expressible)
@@ -559,11 +568,11 @@ type HookEventNamer interface {
 }
 ```
 
-- **`HookIngestGuard`** (claude, gemini, cursor, codex — every hook-rendering
+- **`HookIngestGuard`** (claude, gemini, cursor, codex, grok — every hook-rendering
   adapter) re-reads the destination and returns the hook events ingest
   *semantically* refused: unmodeled fields on well-formed entries, plus
   non-command handlers where the adapter's render cannot round-trip them
-  (claude, gemini, cursor); codex re-renders non-command types verbatim, so
+  (claude, gemini, cursor, grok); codex re-renders non-command types verbatim, so
   it refuses unmodeled fields only.
   Structurally-malformed shapes (a settings.json typo) are excluded, because
   import deletes the canonical file for every returned event and a native
@@ -1446,7 +1455,7 @@ flowchart TD
     CLI["internal/cli — cobra command tree"]
     REN["internal/render — apply pipeline"]
     CAP["internal/capture — dest▶source funnel"]
-    AD["internal/adapter (+ 9 deep adapters, generic breadth tier, noop)"]
+    AD["internal/adapter (+ 10 deep adapters, generic breadth tier, noop)"]
     SRC["internal/source — canonical model + loaders/writers"]
     SEC["internal/secrets — resolve / re-reference / mask"]
     MKT["internal/marketplace — fetch + project plugins"]

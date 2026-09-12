@@ -413,6 +413,7 @@ type hookEntry struct {
 	Matcher string `toml:"matcher"`
 	Type    string `toml:"type"`
 	Command string `toml:"command"`
+	Timeout int    `toml:"timeout,omitempty"`
 }
 
 // loadHooks walks hooks/<event>.toml files. Each file corresponds to one
@@ -448,6 +449,7 @@ func loadHooks(fs afero.Fs, home string) ([]Hook, error) {
 				Matcher: h.Matcher,
 				Type:    h.Type,
 				Command: h.Command,
+				Timeout: h.Timeout,
 			})
 		}
 	}

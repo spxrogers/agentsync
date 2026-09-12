@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
@@ -11,6 +12,7 @@ import (
 	"github.com/spxrogers/agentsync/internal/adapter/cursor"
 	"github.com/spxrogers/agentsync/internal/adapter/gemini"
 	"github.com/spxrogers/agentsync/internal/adapter/generic"
+	"github.com/spxrogers/agentsync/internal/adapter/grok"
 	"github.com/spxrogers/agentsync/internal/adapter/opencode"
 	"github.com/spxrogers/agentsync/internal/adapter/roo"
 	"github.com/spxrogers/agentsync/internal/adapter/windsurf"
@@ -45,6 +47,12 @@ var registryFactory = func() *adapter.Registry {
 	mustRegister(windsurf.New(windsurf.Options{TargetRoot: home}))
 	mustRegister(roo.New(roo.Options{TargetRoot: home}))
 	mustRegister(cline.New(cline.Options{TargetRoot: home}))
+	// A redirected target root must never escape to the real GROK_HOME.
+	grokHome := ""
+	if os.Getenv("AGENTSYNC_TARGET_ROOT") == "" {
+		grokHome = os.Getenv("GROK_HOME")
+	}
+	mustRegister(grok.New(grok.Options{TargetRoot: home, GrokHome: grokHome}))
 	// Breadth tier: one generic adapter per verified Spec (memory + optional MCP).
 	for _, spec := range generic.Specs() {
 		mustRegister(generic.New(spec, generic.Options{TargetRoot: home}))

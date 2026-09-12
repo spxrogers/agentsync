@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"encoding/json"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,4 +35,45 @@ func QuotedKeys(keys []string) string {
 		qs[i] = strconv.Quote(k)
 	}
 	return strings.Join(qs, ", ")
+}
+
+// ParseHookTimeout reads a native handler's timeout (seconds). Missing is
+// ok with value 0. A present non-integer is malformed (structural).
+func ParseHookTimeout(h map[string]any) (timeout int, ok bool, structural bool) {
+	raw, present := h["timeout"]
+	if !present {
+		return 0, true, false
+	}
+	switch n := raw.(type) {
+	case int:
+		if n < 0 {
+			return 0, false, true
+		}
+		return n, true, false
+	case int64:
+		if n < 0 {
+			return 0, false, true
+		}
+		return int(n), true, false
+	case float64:
+		if n < 0 || n != float64(int(n)) {
+			return 0, false, true
+		}
+		return int(n), true, false
+	case json.Number:
+		i, err := n.Int64()
+		if err != nil || i < 0 {
+			return 0, false, true
+		}
+		return int(i), true, false
+	default:
+		return 0, false, true
+	}
+}
+
+// SetHookTimeout writes timeout onto a native handler object when > 0.
+func SetHookTimeout(handler map[string]any, timeout int) {
+	if timeout > 0 {
+		handler["timeout"] = timeout
+	}
 }

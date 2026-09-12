@@ -363,6 +363,7 @@ type Hook struct {
 	Matcher string         // glob/regex string
 	Type    string         // "command"
 	Command string         // shell command
+	Timeout int            // seconds; 0 omits the native field
 	// Plugin is the id of the plugin providing this handler, empty when the user
 	// declared it in hooks/<event>.toml. Hooks are neither namespaced nor
 	// id-keyed — a canonical hooks/<event>.toml holds MANY handlers from many

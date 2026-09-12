@@ -9,6 +9,14 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ## [Unreleased]
 
+### Added
+
+- **Dedicated Grok Build adapter** (`agentsync agent add grok`) with user/project
+  instructions, complete skill directories, legacy Markdown commands, TOML MCP,
+  and JSON command hooks. Includes detection, `GROK_HOME`, import/reconcile,
+  mixed-format cleanup/purge, and guarded hook capture. Unsupported subagent/LSP
+  projection, hook handlers, and other limits are documented in [Grok support](docs/grok.md).
+
 ### Fixed
 
 - **`marketplace add` no longer registers a marketplace whose cache it failed to

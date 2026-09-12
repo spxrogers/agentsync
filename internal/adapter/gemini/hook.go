@@ -125,6 +125,7 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 		if h.Type != "" {
 			handler["type"] = h.Type
 		}
+		adapter.SetHookTimeout(handler, h.Timeout)
 		// Coalesce with the previous group iff this Hook shares its (event,
 		// matcher) — reconstructing the native multi-handler group (one group, an
 		// N-element `hooks` array) rather than exploding into N single-handler
@@ -164,12 +165,12 @@ func (a *Adapter) renderHooks(c source.Canonical, p Paths) ([]adapter.FileOp, []
 }
 
 // Gemini's documented hook schema is wider than the canonical source.Hook:
-// definitions can carry `sequential`, and individual handlers `name`/`timeout`.
-// These enumerate the fields the canonical model CAN represent; anything else in
-// an event makes that event unrepresentable — see ingestHooks.
+// definitions can carry `sequential`, and individual handlers `name`. Timeout
+// is modeled. These enumerate the fields the canonical model CAN represent;
+// anything else in an event makes that event unrepresentable — see ingestHooks.
 var (
 	geminiHookDefModeledKeys   = map[string]bool{"matcher": true, "hooks": true}
-	geminiHookEntryModeledKeys = map[string]bool{"type": true, "command": true}
+	geminiHookEntryModeledKeys = map[string]bool{"type": true, "command": true, "timeout": true}
 )
 
 // ingestHooks decodes settings.json's `hooks` object into canonical hooks,
@@ -181,7 +182,7 @@ var (
 // exist for it, so there is nothing for import to retire. For a mappable
 // event, if ANY definition carries an unmodeled key (`sequential`), or ANY
 // handler is a non-empty non-"command" type, or ANY handler carries an
-// unmodeled key (`name`, `timeout`, …), the WHOLE event is left uncaptured
+// unmodeled key (`name`, …), the WHOLE event is left uncaptured
 // with a warning: capturing a lossy subset would let the next apply — which
 // owns the whole per-event array — rewrite the user's native entry without
 // those fields.
@@ -300,11 +301,19 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 					structural = true
 					break defs
 				}
+				timeout, tok, timeoutStructural := adapter.ParseHookTimeout(h)
+				if !tok {
+					fmt.Fprintf(warn, "warning: hook event %q has a handler whose \"timeout\" is not an integer; event not captured\n", geminiEvent)
+					representable = false
+					structural = timeoutStructural
+					break defs
+				}
 				captured = append(captured, source.Hook{
 					Event:   untrusted.Wrap(canonEvent), // remapped from native config
 					Matcher: matcher,
 					Type:    asStr(h["type"]),
 					Command: asStr(h["command"]),
+					Timeout: timeout,
 				})
 			}
 		}

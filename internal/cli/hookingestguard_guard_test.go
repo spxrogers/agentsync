@@ -19,7 +19,7 @@ import (
 // only by per-adapter tables). For every registered adapter implementing the
 // guard, it renders a canonical command hook into the adapter's own native
 // file, asserts a clean render refuses nothing, then enriches every emitted
-// handler object with an unmodeled "timeout" and asserts the refusal
+// handler object with an unmodeled "failClosed" and asserts the refusal
 // surfaces as exactly ["PreToolUse"] — a renaming adapter that reported its
 // native spelling (preToolUse, BeforeTool) fails the equality.
 //
@@ -118,10 +118,10 @@ func TestHookIngestGuard_ReportsCanonicalNames(t *testing.T) {
 			}
 		})
 	}
-	// Vacuity guard: the four adapters whose hook ingests refuse semantically
+	// Vacuity guard: the adapters whose hook ingests refuse semantically
 	// must implement HookIngestGuard BY NAME — losing one silently reopens the
 	// issue #124 second-order clobber for that agent.
-	for _, agent := range []string{"claude", "gemini", "cursor", "codex"} {
+	for _, agent := range []string{"claude", "gemini", "cursor", "codex", "grok"} {
 		if !guards[agent] {
 			t.Fatalf("agent %s no longer implements adapter.HookIngestGuard — its native "+
 				"hook enrichments would silently stop triggering import's stale-hook retirement", agent)
@@ -130,13 +130,13 @@ func TestHookIngestGuard_ReportsCanonicalNames(t *testing.T) {
 }
 
 // injectUnmodeledField walks any decoded JSON value and adds an unmodeled
-// "timeout" field to every object that carries a "command" key — the handler
+// "failClosed" field to every object that carries a "command" key — the handler
 // objects, wherever an adapter's native hook shape nests them.
 func injectUnmodeledField(v any) {
 	switch x := v.(type) {
 	case map[string]any:
 		if _, ok := x["command"]; ok {
-			x["timeout"] = 30
+			x["failClosed"] = true
 		}
 		for _, child := range x {
 			injectUnmodeledField(child)

@@ -26,7 +26,7 @@ import (
 // breadth-tier generic specs). The full valid-agent set is these plus every
 // generic.Specs() entry — see allAgentNames.
 var deepAdapterNames = []string{
-	"claude", "opencode", "codex", "cursor", "gemini", "continue", "windsurf", "roo", "cline",
+	"claude", "opencode", "codex", "cursor", "gemini", "continue", "windsurf", "roo", "cline", "grok",
 }
 
 // deepAgentBinaries maps a deep adapter to the executable agentsync looks for on
@@ -42,6 +42,7 @@ var deepAgentBinaries = map[string]string{
 	"windsurf": "windsurf",
 	"roo":      "roo",
 	"cline":    "cline",
+	"grok":     "grok",
 }
 
 // allAgentNames returns every valid agent name — deep adapters plus breadth-tier
@@ -706,9 +707,9 @@ func purgeAgentDests(cmd *cobra.Command, name, home string, sc adapter.Scope, pr
 		// Pointer prunes for key-owned dests: an empty merge op carrying only
 		// this agent's owned pointers, so MergeKeys removes exactly those and
 		// preserves the user's (and any other agent's) keys in the shared file.
-		if strat := a.KeyMergeStrategy(); strat != "" {
-			for p, ptrs := range purgedKeyPtrs {
-				abs := paths.FromHomeRelative(userHome, p)
+		for p, ptrs := range purgedKeyPtrs {
+			abs := paths.FromHomeRelative(userHome, p)
+			if strat := adapter.MergeStrategyForPath(a, abs); strat != "" {
 				if _, err := os.Stat(abs); err != nil {
 					continue // already gone; nothing to prune
 				}
