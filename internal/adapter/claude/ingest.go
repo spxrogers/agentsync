@@ -52,15 +52,7 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				if !ok {
 					continue
 				}
-				m := source.MCPServer{ID: id, Server: source.MCPServerSpec{
-					Type:    asStr(spec["type"]),
-					Command: asStr(spec["command"]),
-					Args:    asStrSlice(spec["args"]),
-					Env:     asStrMap(spec["env"]),
-					URL:     asStr(spec["url"]),
-					Headers: asStrMap(spec["headers"]),
-					Extra:   ExtraNativeKeys(spec, "type", "command", "args", "env", "url", "headers"),
-				}}
+				m := source.MCPServer{ID: id, Server: IngestMCPSpec(spec)}
 				c.MCPServers = append(c.MCPServers, m)
 			}
 		}
@@ -206,6 +198,34 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 	}
 
 	return c, nil
+}
+
+// IngestMCPSpec translates one Claude-native MCP server table — the value under
+// `~/.claude.json` / `.mcp.json` `mcpServers.<id>` — into the canonical
+// MCPServerSpec. Claude's on-disk shape matches the canonical model 1:1, so the
+// modeled fields carry over verbatim and any other native key (timeout,
+// disabled, cwd, …) is preserved in Extra.
+//
+// Exported and used by Ingest so reconcile's key-level write-back reconstructs a
+// Claude MCP server through the SAME translation the adapter reads with, rather
+// than through a json.Unmarshal that happens to agree today. See
+// adapter.MCPSpecIngester.
+func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
+	return source.MCPServerSpec{
+		Type:    asStr(raw["type"]),
+		Command: asStr(raw["command"]),
+		Args:    asStrSlice(raw["args"]),
+		Env:     asStrMap(raw["env"]),
+		URL:     asStr(raw["url"]),
+		Headers: asStrMap(raw["headers"]),
+		Extra:   ExtraNativeKeys(raw, "type", "command", "args", "env", "url", "headers"),
+	}
+}
+
+// IngestMCPSpec satisfies adapter.MCPSpecIngester by delegating to the package
+// translator Ingest uses, so the dialect has exactly one definition.
+func (a *Adapter) IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
+	return IngestMCPSpec(raw)
 }
 
 func asStr(v any) string { s, _ := v.(string); return s }
