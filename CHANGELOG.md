@@ -273,7 +273,8 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   their whole implementation as an anonymous `RunE` inside a struct literal —
   `diff`, `check`, `doctor`, `revert` — have named runs like `agent add`,
   `mcp add`, `import` and `apply`, with flag values passed by value instead of
-  through a closure they could write back into. Three pieces of domain logic left `internal/cli` entirely:
+  through a closure they could write back into. Three pieces of domain logic
+  left `internal/cli` entirely:
   the native-plugin reports to `internal/adapter`, beside the `PluginIngester`
   contract they query; the retired `agents/` → `subagents/` move to
   `internal/source`, beside the directory names and the error that defines the

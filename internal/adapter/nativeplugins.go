@@ -8,10 +8,11 @@ import (
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
-// The three reports below are queries over the PluginIngester contract declared
-// in adapter.go: each one walks a Registry, asks every adapter that implements
-// the read-only extension what its agent has installed, and compares that
-// against the canonical source. They live here rather than in a caller because
+// Three of the four functions below are reports over the PluginIngester
+// contract declared in adapter.go: each walks a Registry, asks every adapter
+// that implements the read-only extension what its agent has installed, and
+// compares that against the canonical source; the fourth, DeclaredPlugins, is
+// the pure filter they share. They live here rather than in a caller because
 // `status`, `doctor` and `import` all ask the same questions and must get the
 // same answers, and because the questions are about this package's own
 // interface — PluginIngester has no Render-side counterpart by design (see

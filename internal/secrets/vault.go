@@ -149,6 +149,10 @@ func (v Vault) WriteVerified(plain []byte) error {
 // with scalar `a.b`, not the recursion's local `b.c`/`b`) and carry only KEY
 // names, never a secret *value* byte (the no-secret-in-stderr convention
 // honored by the CLI's resolveSecretKeyValue).
+//
+// m must be non-nil: a nil map cannot be assigned into, and this function has
+// no way to hand a fresh one back. Vault.Load returns a writable map even for
+// an empty vault, so its callers never see that panic.
 func SetNestedKey(m map[string]any, dottedKey, value string) error {
 	return setNestedKeyAt(m, "", dottedKey, value)
 }

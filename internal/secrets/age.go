@@ -99,9 +99,10 @@ func openVault(path string) (*os.File, error) {
 }
 
 // ReadVault reads the whole encrypted vault at path, refusing any path that is
-// not a regular file before the open. It is the cross-package form of
-// openVault; see that function for why the gate returns data rather than a
-// verdict.
+// not a regular file before the open. It is the whole-file form of openVault,
+// exported for the one caller that needs the raw bytes (Vault.WriteVerified's
+// rollback snapshot); see openVault for why the gate returns data rather than
+// a verdict.
 func ReadVault(path string) ([]byte, error) {
 	f, err := openVault(path)
 	if err != nil {

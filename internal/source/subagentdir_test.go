@@ -48,10 +48,10 @@ func TestMigrateSubagentTree_MovesInSortedOrder(t *testing.T) {
 			t.Errorf("%s arrived with the wrong content %q: want a move, not a rewrite", name, data)
 		}
 	}
-	// Removal of the legacy dir is best-effort (a stray non-.md file keeps it);
-	// the move emptied it here, so the best effort must have succeeded.
+	// Removal of the legacy dir is best-effort (a stray non-.md file keeps it;
+	// see the next test); nothing was left to keep it here.
 	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
-		t.Errorf("the emptied %s dir should be gone: stat = %v", source.LegacySubagentsDir, err)
+		t.Errorf("the emptied %s dir is still there: stat = %v", source.LegacySubagentsDir, err)
 	}
 }
 
@@ -92,5 +92,36 @@ func TestMigrateSubagentTree_KeepsLegacyDirWithStrayFile(t *testing.T) {
 	}
 	if string(data) != "mine, not a subagent\n" {
 		t.Errorf("notes.txt = %q, want it untouched", data)
+	}
+}
+
+// TestMigratedSourceID pins both arms of the state-id rewrite: the legacy
+// spelling is rewritten, and EVERYTHING else answers false, so the caller
+// leaves it alone. The negative arm is the one that matters — the rewrite runs
+// over every entry in the state file, and a version that lost its prefix check
+// would spell every mcp/skill/already-migrated id under subagents/ in one pass.
+func TestMigratedSourceID(t *testing.T) {
+	cases := []struct {
+		name string
+		id   string
+		want string
+		ok   bool
+	}{
+		{"legacy subagent", source.LegacySubagentsDir + "/x.md", filepath.Join(source.SubagentsDir, "x.md"), true},
+		{"already migrated", source.SubagentsDir + "/x.md", "", false},
+		{"mcp", "mcp/x.toml", "", false},
+		{"skill", "skills/x/SKILL.md", "", false},
+		{"multiple sentinel", "(multiple)", "", false},
+		{"empty", "", "", false},
+		{"legacy dir itself", source.LegacySubagentsDir + "/", "", false},
+		{"prefix is a path segment, not a string prefix", source.LegacySubagentsDir + "x/y.md", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := source.MigratedSourceID(tc.id)
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("MigratedSourceID(%q) = %q, %v; want %q, %v", tc.id, got, ok, tc.want, tc.ok)
+			}
+		})
 	}
 }

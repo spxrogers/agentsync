@@ -96,9 +96,9 @@ is the only package that depends on nearly all the others.
   `version`.
 - **Depends on:** adapter, source, state, secrets, paths, render, marketplace,
   project, drift, git, iox, jsonkeys, ui, log.
-- **Files:** `root.go` + one file per command group + shared helpers, which are
-  named for what they hold rather than for the command that first needed them:
-  `destread.go` (the destination-read gate AND the dest decoders `import.go`
+- **Files:** `root.go` + one file per command group + shared helpers named for
+  what they hold rather than for the command that first needed them — among
+  them `destread.go` (the destination-read gate AND the dest decoders `import.go`
   used to own), `hash.go` (content/file hashing + the opaque shape/symlink
   sentinels), `statekey.go` (the two `state.Key` constructors), `scope.go`
   (scope resolution, project discovery, the scope prompt), `scope_flags.go`
