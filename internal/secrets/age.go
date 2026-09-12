@@ -63,17 +63,17 @@ type AgeBackend struct {
 // must remember to call first, because a gate you can forget to call is
 // fail-open by construction: obtaining the file IS the check.
 //
-// The one caller outside this package that needs the vault's raw bytes goes
-// through ReadVault, which is this same gate: writeSecretsVerified's rollback
-// snapshot (internal/cli/secrets.go) previously reached for os.ReadFile, and
-// os.ReadFile blocks on a FIFO exactly as os.Open does. It was reachable, not
-// theoretical — `secret edit` with an ABSENT vault takes a branch that never
-// decrypts (internal/cli/secrets.go, the os.IsNotExist arm), so no earlier
-// refusal stood between that read and an unkillable hang; an $EDITOR that
-// created a FIFO at the vault path during its own edit window wedged the
-// command deterministically. Exporting the READ rather than a predicate keeps
-// the property that makes this shape work: bytes cannot be obtained without
-// passing the gate, so there is no separate check to forget.
+// The one caller that needs the vault's raw bytes goes through ReadVault,
+// which is this same gate: Vault.WriteVerified's rollback snapshot (vault.go)
+// previously reached for os.ReadFile, and os.ReadFile blocks on a FIFO exactly
+// as os.Open does. It was reachable, not theoretical — `secret edit` with an
+// ABSENT vault takes a branch that never decrypts (internal/cli/secrets.go,
+// the os.IsNotExist arm), so no earlier refusal stood between that read and
+// an unkillable hang; an $EDITOR that created a FIFO at the vault path during
+// its own edit window wedged the command deterministically. Exporting the
+// READ rather than a predicate keeps the property that makes this shape work:
+// bytes cannot be obtained without passing the gate, so there is no separate
+// check to forget.
 //
 // A stat FAILURE falls through to the open deliberately. Unlike the identity,
 // an ABSENT vault is the ordinary state of a fresh install that has not run

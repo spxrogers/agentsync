@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/spxrogers/agentsync/internal/source"
-	"github.com/spxrogers/agentsync/internal/testenv"
 	"github.com/spxrogers/agentsync/internal/untrusted"
 )
 
@@ -12,6 +11,11 @@ import (
 // Driving the real adapters would need a whole native config on disk per case;
 // this isolates the gate logic, which is what these tests are about. The
 // embedded Adapter is nil — only Name() and IngestPlugins are called.
+//
+// Everything here is in memory — no file is read or written — which is why
+// these tests carry no container gate: `just test-fast` runs this package on
+// the host, and a gate inherited from internal/cli's package-wide policy would
+// fail there.
 type fakeIngester struct {
 	Adapter
 	name    string
@@ -47,7 +51,6 @@ func (f *fakeIngester) IngestPlugins(Scope, string) ([]NativeMarketplace, []Nati
 // left to the caller doctor warned about agents agentsync does not render to at
 // all, and told the user to uninstall working functionality.
 func TestDuplicatedNativePlugins(t *testing.T) {
-	testenv.RequireContainer(t)
 	claudeOnly := []string{"claude"}
 	cases := []struct {
 		name        string
@@ -103,7 +106,6 @@ func TestDuplicatedNativePlugins(t *testing.T) {
 // plugin it has never heard of, and telling the user to uninstall it, is the
 // same false "uninstall this" advice the agent-enabled gate produced.
 func TestDuplicatedNativePlugins_IgnoresUndeclaredPlugins(t *testing.T) {
-	testenv.RequireContainer(t)
 	c := source.Canonical{
 		Config: source.Config{Agents: map[string]source.Agent{"claude": {Enabled: true}}},
 		Plugins: []source.Plugin{{
@@ -129,7 +131,6 @@ func TestDuplicatedNativePlugins_IgnoresUndeclaredPlugins(t *testing.T) {
 // (`native_agents = ["claude","claude"]`) would be committed and shown back to
 // the user on every subsequent install summary.
 func TestNativePluginOwners_DedupesPerAgent(t *testing.T) {
-	testenv.RequireContainer(t)
 	reg := NewRegistry()
 	// alsoNative repeats "toolkit", i.e. the same plugin name a second time from
 	// this one agent — what two marketplaces carrying the same name looks like.
@@ -148,7 +149,6 @@ func TestNativePluginOwners_DedupesPerAgent(t *testing.T) {
 // Claude and Codex needs BOTH deferrals — recording only the one you imported
 // from leaves the other duplicating silently.
 func TestNativePluginOwners_ProbesEveryIngester(t *testing.T) {
-	testenv.RequireContainer(t)
 	reg := NewRegistry()
 	for _, f := range []*fakeIngester{
 		{name: "claude", enabled: true},

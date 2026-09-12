@@ -4,15 +4,12 @@ package secrets_test
 
 import (
 	"os"
-	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
 
 	"filippo.io/age"
 
-	"github.com/spxrogers/agentsync/internal/secrets"
-	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
@@ -40,22 +37,7 @@ func TestVaultWriteVerified_SurvivesNonRegularVault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	home := t.TempDir()
-	idPath := filepath.Join(home, "identity.txt")
-	if err := os.WriteFile(idPath, []byte(id.String()+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(home, "secrets"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := source.SecretsConfig{
-		Backend:      "age",
-		Recipient:    id.Recipient().String(),
-		File:         "secrets/secrets.age",
-		IdentityFile: idPath,
-	}
-	v := secrets.NewVault(cfg, home, "")
+	v := newTestVault(t, id, id.Recipient())
 	vault := v.AgeFile()
 
 	// The FIFO stands in for whatever put a non-regular file at the vault path

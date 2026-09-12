@@ -2,13 +2,12 @@ package secrets_test
 
 import (
 	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 
 	"filippo.io/age"
 
 	"github.com/spxrogers/agentsync/internal/secrets"
-	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
@@ -23,22 +22,8 @@ func TestVaultLoad_EmptyVaultYieldsWritableMap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	home := t.TempDir()
-	idPath := filepath.Join(home, "identity.txt")
-	if err := os.WriteFile(idPath, []byte(id.String()+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(home, "secrets"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	cfg := source.SecretsConfig{
-		Backend:      "age",
-		Recipient:    id.Recipient().String(),
-		File:         "secrets/secrets.age",
-		IdentityFile: idPath,
-	}
-	v := secrets.NewVault(cfg, home, "")
-	if err := secrets.Encrypt([]byte("# nothing left\n"), cfg.Recipient, v.AgeFile()); err != nil {
+	v := newTestVault(t, id, id.Recipient())
+	if err := secrets.Encrypt([]byte("# nothing left\n"), id.Recipient().String(), v.AgeFile()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -81,23 +66,9 @@ func TestVaultWriteVerified_RollsBackToNothingWhenNoVaultExisted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	home := t.TempDir()
-	idPath := filepath.Join(home, "identity.txt")
-	if err := os.WriteFile(idPath, []byte(id.String()+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(home, "secrets"), 0o700); err != nil {
-		t.Fatal(err)
-	}
 	// Recipient is a DIFFERENT key from the identity: the encrypt succeeds and
 	// the verify decrypt fails, which is the lock-out this arm exists for.
-	cfg := source.SecretsConfig{
-		Backend:      "age",
-		Recipient:    other.Recipient().String(),
-		File:         "secrets/secrets.age",
-		IdentityFile: idPath,
-	}
-	v := secrets.NewVault(cfg, home, "")
+	v := newTestVault(t, id, other.Recipient())
 	if _, err := os.Stat(v.AgeFile()); !os.IsNotExist(err) {
 		t.Fatalf("precondition: no vault yet, got %v", err)
 	}
@@ -105,6 +76,12 @@ func TestVaultWriteVerified_RollsBackToNothingWhenNoVaultExisted(t *testing.T) {
 	err = v.WriteVerified([]byte("[a]\nb = \"c\"\n"))
 	if err == nil {
 		t.Fatal("a store the identity cannot decrypt must be refused")
+	}
+	// The refusal must be the VERIFY step's, not an encrypt that never wrote:
+	// "no file afterwards" alone would also hold for an Encrypt that failed
+	// early, which is not the arm this test exists for.
+	if !strings.Contains(err.Error(), "refusing to lock you out") {
+		t.Fatalf("err = %q, want the identity-mismatch refusal", err)
 	}
 	if _, statErr := os.Stat(v.AgeFile()); !os.IsNotExist(statErr) {
 		t.Fatalf("the unreadable vault must be removed, not left behind: stat = %v", statErr)

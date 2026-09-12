@@ -18,8 +18,9 @@ import (
 // avoided — so every case below states the expected output string in full.
 //
 // The fixtures are layouts a real agentsync.toml takes: the table mid-file
-// between two others, absent, last with no trailing newline, in the
-// `[agents.<name>]` sub-table spelling, and CRLF.
+// between two others, absent (with and without a trailing newline on the
+// input), last with no trailing newline, in the `[agents.<name>]` sub-table
+// spelling, and CRLF.
 func TestSpliceTOMLTable(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -48,6 +49,17 @@ func TestSpliceTOMLTable(t *testing.T) {
 		{
 			name:  "absent — appended after a blank-line separator",
 			raw:   "# top\n[secrets]\nbackend = \"age\"\n",
+			table: "agents",
+			block: "[agents]\nclaude = { enabled = true }",
+			opts:  source.SpliceOptions{IncludeSubtables: true},
+			want:  "# top\n[secrets]\nbackend = \"age\"\n\n[agents]\nclaude = { enabled = true }",
+		},
+		{
+			// The separator is the splice's own, not the input's: with no
+			// trailing newline to split on, the blank line still goes in, so
+			// the appended header never lands on the last line's heels.
+			name:  "absent, input has no trailing newline — separator still inserted",
+			raw:   "# top\n[secrets]\nbackend = \"age\"",
 			table: "agents",
 			block: "[agents]\nclaude = { enabled = true }",
 			opts:  source.SpliceOptions{IncludeSubtables: true},

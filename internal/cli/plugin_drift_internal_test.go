@@ -15,15 +15,16 @@ import (
 // internal/adapter and carry their own richer stub.
 type fakeIngester struct {
 	adapter.Adapter
-	name    string
-	enabled bool
+	name string
 }
 
 func (f *fakeIngester) Name() string { return f.name }
 
+// The plugin's Enabled bit is fixed: unexaminedPluginAgents asks only whether
+// the agent HAS a plugin manager, never what it reports.
 func (f *fakeIngester) IngestPlugins(adapter.Scope, string) ([]adapter.NativeMarketplace, []adapter.NativePlugin, error) {
 	return nil, []adapter.NativePlugin{{
-		Name: untrusted.Wrap("toolkit"), MarketplaceID: "mp", Enabled: f.enabled,
+		Name: untrusted.Wrap("toolkit"), MarketplaceID: "mp", Enabled: true,
 	}}, nil
 }
 
@@ -47,8 +48,8 @@ func TestUnexaminedPluginAgents(t *testing.T) {
 	testenv.RequireContainer(t)
 	reg := adapter.NewRegistry()
 	for _, a := range []adapter.Adapter{
-		&fakeIngester{name: "claude", enabled: true},
-		&fakeIngester{name: "codex", enabled: true},
+		&fakeIngester{name: "claude"},
+		&fakeIngester{name: "codex"},
 		&fakePlain{name: "opencode"},
 	} {
 		if err := reg.Register(a); err != nil {
