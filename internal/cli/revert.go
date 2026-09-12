@@ -62,12 +62,13 @@ An agent may version more than one directory (its config dir plus a shared dir l
 	return cmd
 }
 
-// revertOpts carries `revert`'s flag values into revertRun. It is taken BY
-// VALUE and revertRun mutates its own copy: the flag triangulation rewrites
-// `all` (and `args`) in place when --agents names "*", and a pointer would let
-// that rewrite escape back into the command literal's closure variables, where
-// a second Execute on the same *cobra.Command would inherit it. The observable
-// behaviour of a single run is unchanged.
+// revertOpts carries `revert`'s flag values into revertRun. It is built fresh
+// from the flag variables on every run and revertRun mutates its own copy: the
+// flag triangulation rewrites `all` (and `args`) in place when --agents names
+// "*", and before the lift that rewrite landed on the command literal's
+// closure variables themselves, where a second Execute on the same
+// *cobra.Command would have inherited it. The copy is the protection; the
+// observable behaviour of a single run is unchanged.
 type revertOpts struct {
 	toRef     string
 	all       bool

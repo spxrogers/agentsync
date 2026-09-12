@@ -12,12 +12,13 @@ import (
 // contract declared in adapter.go: each walks a Registry, asks every adapter
 // that implements the read-only extension what its agent has installed, and
 // compares that against the canonical source; the fourth, DeclaredPlugins, is
-// the pure filter they share. They live here rather than in a caller because
-// `status`, `doctor` and `import` all ask the same questions and must get the
-// same answers, and because the questions are about this package's own
-// interface — PluginIngester has no Render-side counterpart by design (see
-// docs/architecture.md § "PluginIngester (read-only)"), so "what does the agent
-// already have?" is the only direction there is to ask in.
+// the pure filter DuplicatedNativePlugins and `status` must agree on. They
+// live here rather than in a caller because `status`, `doctor` and `import`
+// all ask the same questions and must get the same answers, and because the
+// questions are about this package's own interface — PluginIngester has no
+// Render-side counterpart by design (see docs/architecture.md § "PluginIngester
+// (read-only)"), so "what does the agent already have?" is the only direction
+// there is to ask in.
 
 // NativePluginOwners maps a plugin NAME to the agents whose own plugin manager
 // already has it enabled. It is the input to `native_agents`: an agent that

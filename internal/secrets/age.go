@@ -99,10 +99,11 @@ func openVault(path string) (*os.File, error) {
 }
 
 // ReadVault reads the whole encrypted vault at path, refusing any path that is
-// not a regular file before the open. It is the whole-file form of openVault,
-// exported for the one caller that needs the raw bytes (Vault.WriteVerified's
-// rollback snapshot); see openVault for why the gate returns data rather than
-// a verdict.
+// not a regular file before the open. It is the whole-file form of openVault;
+// its one production caller is Vault.WriteVerified's rollback snapshot, in
+// this package, and it is exported so the secrets_test shape-gate table
+// (age_fifo_unix_test.go) can assert this read too. See openVault for why the
+// gate returns data rather than a verdict.
 func ReadVault(path string) ([]byte, error) {
 	f, err := openVault(path)
 	if err != nil {
