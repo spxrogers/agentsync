@@ -11,6 +11,57 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **`reconcile`'s MCP write-back translates through the agent that rendered the
+  destination, instead of guessing from the JSON pointer's top-level key**
+  ([#235](https://github.com/spxrogers/agentsync/issues/235)). The key-level
+  `[w]rite-back` picked its native→canonical MCP translation from a hard-coded
+  list of three pointer roots — `mcpServers` → Claude's 1:1 JSON shape, `mcp` →
+  OpenCode, `mcp_servers` → Codex — and those roots are neither a fixed set nor
+  unique to one agent, so the list was wrong three separate ways:
+  - **Crush was silently translated as OpenCode.** Crush's config also keys MCP
+    under `mcp`, so its entries went through OpenCode's dialect (an array-shaped
+    `command`, `environment` rather than `env`). A stdio server's `args` and
+    `env` were moved out of the canonical model into the `[server.extra]`
+    passthrough table — corrupting the server for every *other* agent it fans
+    out to. For a server whose `env` held a `${secret:…}` value the damage was
+    visible instead: `Extra` is outside re-reference's reach, so
+    `capture.Capture`'s fail-closed leak backstop refused the whole write-back
+    and the edit could never be persisted at all.
+  - **Cursor, Gemini, Windsurf, Roo and Cline were silently translated as
+    Claude.** All five also key MCP under `mcpServers`. Gemini's `httpUrl` and
+    Windsurf's `serverUrl` are not Claude's `url`, so a remote server's URL left
+    the canonical model entirely and reappeared as an `[server.extra]` key with
+    an empty `type`; Roo's `streamable-http` was not canonicalized to `http`.
+    Cursor's dialect happens to match Claude's, so it was unaffected in fact.
+    Gemini's mismatch also produced a spurious `conflict:` and a non-zero exit
+    when one server fanned out to Gemini *and* a correctly-translated agent.
+  - **Every other root was refused.** Zed (`context_servers`), Copilot
+    (`servers`) and Amp (the flat `amp.mcpServers`) reported `write-back for
+    pointer … is not implemented in v1` and exited non-zero, and
+    `agentsync explain <path>#<pointer>` answered "assembled from several
+    canonical sources" for them rather than naming `mcp/<id>.toml` — and
+    printed no `component:` line at all, so none of the item's transforms,
+    plugin origin or secret references could be matched either.
+
+  Both the component kind and the dialect are now derived: the kind from the
+  op's `SourceID` (the way the plugin-owner lookup already did it), the dialect
+  from the rendering adapter via the new optional `adapter.MCPSpecIngester`
+  extension. A registry-wide guard fails the build if an adapter renders an MCP
+  key-merge op without declaring its inverse, so the class cannot come back as
+  agents are added. The refusal that remains names the *component kind* rather
+  than a list of roots.
+- **`reconcile` no longer reports an edited MCP server as deleted when its id
+  contains `~`** ([#235](https://github.com/spxrogers/agentsync/issues/235)).
+  JSON pointer segments are RFC 6901 encoded, so a server id such as `til~de`
+  reaches write-back as the segment `til~0de`. That segment was used raw to look
+  the server up in the destination, the lookup missed, and a miss is the
+  signal for "the user deleted this server natively" — so `reconcile
+  --auto-writeback` printed `write-back: removed source mcp/til~0de.toml
+  (destination dropped …)`, silently discarded the user's edit, and left the
+  next `apply` to overwrite the destination back (and `explain` named the
+  component `til~0de`). The segment is now decoded before it is used as a
+  destination key, a canonical filename or a component name.
+
 - **`marketplace add` no longer registers a marketplace whose cache it failed to
   put in place** ([#233](https://github.com/spxrogers/agentsync/issues/233)).
   When a marketplace's declared name differs from the name derived from its URL

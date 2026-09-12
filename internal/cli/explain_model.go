@@ -176,7 +176,7 @@ func fileItem(in explainInputs, it planItem, skips []adapter.Skip,
 func keyItem(in explainInputs, it planItem, skips []adapter.Skip, origins map[string]explainPluginOrigin,
 	secretRefs map[secrets.RefLocation][]string, hookEvents []string,
 ) explainItem {
-	kind, name := componentFromPointer(in.reg, it.agent, it.ptr, hookEvents)
+	kind, name := componentFromPointer(in.reg, it.agent, it.op.SourceID, it.ptr, hookEvents)
 
 	item := explainItem{
 		Pointer:    it.ptr,
@@ -248,7 +248,7 @@ func sourceOf(in explainInputs, srcID, kind string) *explainSource {
 // pointer shape (the mcp/lsp/hooks container families), falling back to the
 // op-level SourceID when the pointer names no single source.
 func pointerSource(in explainInputs, agent, ptr, opSourceID string, hookEvents []string) *explainSource {
-	abs := pointerSourceFile(in.reg, in.srcHome, agent, ptr, hookEvents)
+	abs := pointerSourceFile(in.reg, in.srcHome, agent, opSourceID, ptr, hookEvents)
 	if abs == "" {
 		if opSourceID == "" {
 			return nil
@@ -300,18 +300,27 @@ func componentFromSourceID(srcID string) (kind, name string) {
 
 // componentFromPointer maps a NATIVE key-merge pointer to (kind, name), routing
 // hooks through the same canonical-event inversion reconcile's write-back uses.
-func componentFromPointer(reg *adapter.Registry, agent, ptr string, hookEvents []string) (kind, name string) {
-	parts := strings.SplitN(strings.TrimPrefix(ptr, "/"), "/", 3)
-	if len(parts) < 2 || parts[1] == "" {
+//
+// The kind comes from the op's SourceID (keyItemKind) and the name from the
+// DECODED pointer segment (keyItemPointerParts) — the same two derivations
+// reconcile's write-back and pointerSourceFile use. This used to be a fourth
+// copy of the pointer-root allowlist, with the same two defects: a breadth-tier
+// root nobody had listed (zed's /context_servers, copilot's /servers, amp's
+// /amp.mcpServers) answered ("", "") so `explain` printed no component line and
+// matched no skip, plugin origin or secret reference for the item, and a
+// `~`-bearing server id was reported under its escaped spelling (`til~0de`).
+func componentFromPointer(reg *adapter.Registry, agent, sourceID, ptr string, hookEvents []string) (kind, name string) {
+	_, id, ok := keyItemPointerParts(ptr)
+	if !ok {
 		return "", ""
 	}
-	switch parts[0] {
-	case "mcpServers", "mcp", "mcp_servers":
-		return "mcp", parts[1]
-	case "lspServers", "lsp":
-		return "lsp", parts[1]
+	switch keyItemKind(sourceID) {
+	case "mcp":
+		return "mcp", id
+	case "lsp":
+		return "lsp", id
 	case "hooks":
-		if event, ok := canonicalHookEvent(reg, agent, parts[1], hookEvents); ok {
+		if event, ok := canonicalHookEvent(reg, agent, id, hookEvents); ok {
 			return "hook", event
 		}
 		return "hook", ""

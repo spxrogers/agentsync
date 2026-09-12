@@ -840,6 +840,33 @@ blaming a plugin that does not own it. Continue is the one adapter that renders 
 **whole-file** op (one file per server), so servers are registered under both the
 bare `mcp/<id>` key and the `mcp/<id>.toml` SourceID form.
 
+**Key-level write-back derives BOTH the kind and the dialect.** The kind comes
+from the op's SourceID, exactly as above (`cli.keyItemKind`, the single
+derivation the plugin-owner lookup, the pointer→source inversion and `explain`'s
+pointer→component mapping all share).
+The **dialect** — how to read one native server entry back into the canonical
+model — comes from the **rendering adapter**, through the optional
+[`adapter.MCPSpecIngester`](#mcpspecingester-read-only) extension, never from
+the pointer's root key. Selecting a translator by root key cannot be made
+correct, because root keys *collide*: `/mcpServers` is Claude's and also
+Cursor's, Gemini's, Windsurf's, Roo's, Cline's and eleven breadth-tier agents';
+`/mcp` is OpenCode's and also Crush's. A root-keyed selector therefore handed a
+Crush entry to OpenCode's inverse — demoting `args`/`env` into the `Extra`
+passthrough — and Gemini's `httpUrl` or Windsurf's `serverUrl` to Claude's 1:1
+shape, dropping the URL out of the model entirely, while refusing every root
+nobody had added to the list. Asking the adapter that wrote the bytes removes
+the whole class. An adapter that renders an MCP key-merge op without declaring
+its inverse is REFUSED rather than guessed at, and the registry-wide guard
+`TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer` makes that state
+unrepresentable.
+
+Pointer segments are RFC 6901 encoded, so the entry segment is DECODED
+(`jsonkeys.UnescapeToken`) before it is used as a destination map key or a
+canonical filename. Using it raw was a live bug: an MCP server id containing
+`~` arrived as `til~0de`, missed the destination map, and a miss is the
+tombstone signal — so an *edited* server was reported as a destination-side
+deletion and the user's edit was discarded.
+
 Both lookups are scoped to the canonical the render actually uses: at project
 scope that is the project-only overlay, so a user-scope plugin never shadows a
 project component that merely shares its name.

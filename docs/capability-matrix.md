@@ -130,7 +130,11 @@ transport is inferred from which url key is present) has nowhere to record it, s
 canonical `sse` server is written with just its url and **canonicalizes back as
 `http`** if later captured via `import`/`reconcile` — the same acknowledged
 `sse → http` flip the deep OpenCode/Windsurf/Cline adapters carry (an apply-only
-flow is unaffected). The Gemini-lineage **qwen** dialect is the exception: it splits
+flow is unaffected). Every one of these dialect knobs is honored on
+`reconcile` write-back as well as on `import`, because the write-back asks the
+rendering adapter for the inverse rather than guessing from the config's
+top-level key — which matters most here, where four different top-level keys are
+in play and two of them collide with a deep adapter's. The Gemini-lineage **qwen** dialect is the exception: it splits
 the two remote transports across two url keys (`httpUrl` = streamable HTTP, `url` =
 SSE), so it preserves `sse`.
 
@@ -226,6 +230,16 @@ doesn't model (e.g. `timeout`, `disabled`, `cwd`) are preserved verbatim through
 passthrough `[server.extra]` table on import/reconcile and re-rendered on apply,
 rather than dropped. (`Extra` is verbatim only — `${secret:…}` there is written
 literally, never resolved.)
+
+Conversely, a field agentsync DOES model never ends up in that passthrough table:
+`reconcile`'s `[w]rite-back` reads a native MCP entry back through the **rendering
+adapter's own** inverse-of-render (`adapter.MCPSpecIngester`), so every dialect on
+this page — deep and breadth-tier — round-trips through `reconcile` exactly as it
+does through `import`, including the transport normalizations described below.
+Pinned by `TestMCPSpecIngester_CoversEveryKeyMergeMCPRenderer` (every registered
+adapter's own render→ingest round trip keeps the modeled fields modeled) and
+`TestReconcile_Writeback_MCPDialects` (the end-to-end apply → hand-edit →
+write-back path, per dialect).
 
 **Claude**
 
