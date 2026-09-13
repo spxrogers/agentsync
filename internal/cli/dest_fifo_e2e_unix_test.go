@@ -113,10 +113,10 @@ func TestCommandsDoNotHangOnNonRegularDestination(t *testing.T) {
 				{args: []string{"status"}},
 				{args: []string{"diff"}},
 				{args: []string{"reconcile", "--auto-safe"}},
-				{args: []string{"apply", "--dry-run"}, skip: "#241: render.Writer.Write's convergence read is unguarded"},
-				{args: []string{"apply"}, skip: "#241: render.Writer.Write's convergence read is unguarded"},
+				{args: []string{"apply", "--dry-run"}},
+				{args: []string{"apply"}},
 				{args: []string{"reconcile", "--auto-override"}, skip: "#241: [o]verride queues into render.Writer.Write"},
-				{args: []string{"import", "claude"}, skip: "#242: the adapter Ingest reads are unguarded"},
+				{args: []string{"import", "claude"}},
 			} {
 				args := tc.args
 				t.Run(strings.Join(args, " "), func(t *testing.T) {

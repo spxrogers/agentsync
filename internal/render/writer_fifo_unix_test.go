@@ -66,6 +66,24 @@ func TestOrphanDeleteWillProceed_FIFO(t *testing.T) {
 //
 // The FIFO must also survive: agentsync cannot read it, so it cannot rule out
 // content worth preserving, so it must not remove it.
+func TestWriterWrite_FIFODoesNotBlock(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(tmp, "pipe.md")
+	mkfifo(t, fifo)
+	w := render.NewWriter(state.New(), home, tmp, adapter.ScopeUser, "", "claude")
+	op := adapter.FileOp{Action: adapter.ActionWrite, Path: fifo, Content: []byte("x"), Mode: 0o644}
+	withinTimeout(t, "Writer.Write FIFO", func() {
+		err := w.Write(op, []byte("x"))
+		if err == nil {
+			t.Error("write through a FIFO must error, not succeed")
+		}
+	})
+}
+
 func TestWriterDelete_FIFODoesNotBlock(t *testing.T) {
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, ".agentsync")

@@ -467,6 +467,56 @@ func TestRenderApply_SharedWriteDivergence(t *testing.T) {
 	})
 }
 
+// TestRenderApply_SharedOrphanKeptWhenSiblingStillWrites is #246: both agents
+// own a shared dest in state; this run only the keeper still renders it.
+// Registry order is alphabetical, so opencode (dropper) runs after claude
+// (keeper). Without the keep-set, apply deleted the dest after the keeper
+// wrote, then RecordOpsState failed on the missing file.
+func TestRenderApply_SharedOrphanKeptWhenSiblingStillWrites(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, ".agentsync")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(tmp, ".claude", "skills", "x", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("shared-body")
+	if err := os.WriteFile(dest, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	write := adapter.FileOp{Action: adapter.ActionWrite, Path: dest, Content: body, Mode: 0o644, SourceID: "skills/x/SKILL.md"}
+	st := state.New()
+	if err := render.RecordOpsState(st, tmp, "claude", adapter.ScopeUser, "", []adapter.FileOp{write}); err != nil {
+		t.Fatal(err)
+	}
+	if err := render.RecordOpsState(st, tmp, "opencode", adapter.ScopeUser, "", []adapter.FileOp{write}); err != nil {
+		t.Fatal(err)
+	}
+	reg := adapter.NewRegistry()
+	if err := reg.Register(&fakeJSONApply{name: "claude"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(&fakeJSONApply{name: "opencode"}); err != nil {
+		t.Fatal(err)
+	}
+	plan := render.RenderPlan{PerAgent: map[string]render.AgentResult{
+		"claude":   {Ops: []adapter.FileOp{write}},
+		"opencode": {},
+	}}
+	if _, _, _, err := render.Apply(plan, reg, st, home, tmp, adapter.ScopeUser, ""); err != nil {
+		t.Fatalf("apply must succeed when the dropper sorts after the keeper: %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("shared dest was deleted: %v", err)
+	}
+	if string(got) != "shared-body" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 // TestRenderApply_IntraAgentDivergenceMessage pins that the shared-write guard
 // tells the truth about WHO collided.
 //

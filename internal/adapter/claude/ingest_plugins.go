@@ -3,7 +3,6 @@ package claude
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -32,12 +31,12 @@ func (a *Adapter) IngestPlugins(scope adapter.Scope, project string) ([]adapter.
 		return nil, nil, err
 	}
 	p := ResolvePaths(a.opts.TargetRoot, project, scope == adapter.ScopeProject)
-	data, err := os.ReadFile(p.Settings)
+	data, present, err := adapter.ReadFileOptional(p.Settings)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil, nil
-		}
 		return nil, nil, fmt.Errorf("read %s: %w", p.Settings, err)
+	}
+	if !present {
+		return nil, nil, nil
 	}
 	var top map[string]any
 	if json.Unmarshal(data, &top) != nil {

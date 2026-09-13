@@ -65,6 +65,30 @@ func TestWrite_ChmodReconverges(t *testing.T) {
 	}
 }
 
+func TestWrite_ChmodRefusesSymlinkDest(t *testing.T) {
+	testenv.RequireContainer(t)
+	home := t.TempDir()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "run.sh")
+	content := []byte("#!/bin/sh\necho hi\n")
+	if err := os.WriteFile(target, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.sh")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	op := adapter.FileOp{Action: adapter.ActionWrite, Path: link, Content: content, Mode: 0o755}
+	w := render.NewWriter(state.New(), home, home, adapter.ScopeUser, "", "claude")
+	err := w.Write(op, content)
+	if err == nil {
+		t.Fatal("chmod through a symlink dest must refuse when AGENTSYNC_ALLOW_SYMLINK_DEST is unset")
+	}
+	if fi, _ := os.Stat(target); fi.Mode().Perm() != 0o644 {
+		t.Fatalf("target mode mutated through the link: %v", fi.Mode().Perm())
+	}
+}
+
 // TestRecordOpsState_MergeTomlNumericNoFalseDrift pins issue #162 item F after
 // the review-loop correction: a merge-toml-keys owned value whose leaf is numeric
 // (e.g. a codex MCP `timeout` — a routine passthrough Extra field) records
