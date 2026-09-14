@@ -147,8 +147,62 @@ nfpms:
 # repo, so `brew tap spxrogers/tap && brew install agentsync` works on macOS.
 # The default Actions GITHUB_TOKEN can't write a *different* repo, so the
 # release workflow supplies HOMEBREW_TAP_GITHUB_TOKEN (a token with
-# contents:write on the tap). The post-install hook strips the macOS quarantine
+# contents:write on the tap). The post-install step strips the macOS quarantine
 # xattr Gatekeeper would otherwise put on the unsigned binary.
+#
+# HOMEBREW 7.0 DEPRECATIONS (2026-09) — why this block looks the way it does.
+# Homebrew 7.0 deprecated two things this cask used to emit, and it warns on
+# EVERY `brew` command that loads the tap (not just on install):
+#
+#   1. `url ..., verified: "…"` — Homebrew now verifies the download URL
+#      against the cask's own `homepage` by itself, so the parameter is a
+#      no-op. Our URL (github.com/spxrogers/agentsync/releases/download/…) is
+#      prefixed by our homepage (github.com/spxrogers/agentsync), so default
+#      verification covers it. Fix: drop the `url.verified` key entirely.
+#      https://docs.brew.sh/Cask-Cookbook#additional-url-parameters
+#
+#   2. `postflight do … end` — superseded by the declarative `postflight_steps`
+#      DSL, which stores steps in Homebrew's JSON API instead of evaluating
+#      arbitrary cask Ruby. Fix is NOT simply renaming the stanza: a steps block
+#      may only contain supported step calls with LITERAL arguments (`run`,
+#      `on_macos`, …) — no `OS.mac?`, no `system_command`, and no Ruby
+#      `#{…}` interpolation. Install-time values use `{{…}}` runtime tokens
+#      (`{{staged_path}}`) that stay literal in the JSON and are expanded by the
+#      step runner. `must_succeed: false` restores the old block's tolerance:
+#      `system_command` (unlike `system_command!`) never raised, whereas a
+#      failing `run` step aborts the install by default — and `xattr -d` exits
+#      non-zero when the attribute is already absent.
+#      https://docs.brew.sh/Cask-Cookbook#stanza-flight_steps
+#
+# No RELEASED goreleaser can emit this natively — upgrading is not the fix.
+# 2.16.0's cask template hard-codes `postflight do` for
+# `homebrew_casks.hooks.post.install`, and so do v2.17.x, v2.18.0 and the
+# latest stable v2.18.1 (2026-09-05) — and so does `main`
+# (goreleaser/goreleaser#6870). The proposed fix, goreleaser/goreleaser#6873,
+# adds four new `hooks.{pre,post}.{install,uninstall}_steps` options plus
+# `.StagedPath`/`.AppDir` template fields (it cannot translate the existing
+# raw-Ruby hooks automatically, so it deprecates them alongside rather than
+# renaming); it was still OPEN and unmilestoned as of 2026-09-14. So the hook
+# is expressed through `custom_block`, which goreleaser emits verbatim. Two
+# consequences to know about:
+#
+#   * `custom_block` lands at the TOP of the cask (right after `cask "…" do`,
+#     before `version`), not in Homebrew's canonical stanza order. Stanza order
+#     is a `brew style` concern for official taps only; the cask DSL records
+#     each stanza regardless of position and install phases run in a fixed
+#     order, so this is cosmetic. Once goreleaser/goreleaser#6873 (or its
+#     successor) lands and we upgrade, replace this whole custom_block with
+#     `hooks.post.install_steps` — which restores canonical stanza order AND
+#     retires the escape below, since `{{ .StagedPath }}` becomes a goreleaser
+#     template field rather than a literal Homebrew token to smuggle through.
+#   * goreleaser runs the ENTIRE rendered cask through its own Go text/template
+#     as the last step (internal/pipe/cask/cask.go, `doBuildCask`). A bare
+#     `{{staged_path}}` would be parsed as a call to an undefined template
+#     function and FAIL the release, so the Homebrew token is escaped as a Go
+#     string literal — `{{ "{{staged_path}}" }}` renders to `{{staged_path}}`.
+#     The goreleaser-snapshot CI job asserts the rendered cask actually contains
+#     the literal token (and neither deprecated stanza), so this escape can't
+#     silently rot.
 # --------------------------------------------------------------------------
 
 homebrew_casks:
@@ -163,17 +217,18 @@ homebrew_casks:
     homepage: https://github.com/spxrogers/agentsync
     description: Centrally manage AI coding-agent configurations
     license: MIT
-    url:
-      verified: "github.com/spxrogers/agentsync/"
     commit_author:
       name: goreleaser-bot
       email: goreleaser@users.noreply.github.com
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/agentsync"]
-          end
+    # Emitted verbatim into the cask. See the Homebrew 7.0 note above for why
+    # this is a custom_block rather than `hooks.post.install`, and why the
+    # `{{staged_path}}` token is escaped as a Go string literal.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}/agentsync"], must_succeed: false
+        end
+      end
 
 # --------------------------------------------------------------------------
 # Windows — Scoop (issue #74). Writes bucket/agentsync.json into

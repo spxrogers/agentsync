@@ -213,3 +213,47 @@ jobs:
           # validates the signs: block's schema. CI only proves the cross-build
           # stays viable — release.yml is the run that actually signs.
           args: release --snapshot --skip=publish,chocolatey,sign --clean
+      # The cask Homebrew actually loads is GENERATED, so a deprecated stanza in
+      # it is invisible in this repo — the only pre-tag copy is the one the
+      # snapshot above just wrote to dist/. Homebrew 7.0 (2026-09) deprecated
+      # the Ruby `postflight` block and the url `verified:` parameter, and warns
+      # about each on EVERY `brew` command that loads the tap — not just on
+      # install — so a regression here is loud for every user and silent for us
+      # until someone runs `brew upgrade`. goreleaser 2.16.0 emits both unless
+      # the config routes around them (goreleaser/goreleaser#6870; see the
+      # Homebrew block in .goreleaser.yaml for the full why). Assert the
+      # rendered cask (a) carries the declarative `postflight_steps` stanza,
+      # (b) still carries the LITERAL `{{staged_path}}` token — which proves the
+      # Go-template escape in `custom_block` survived goreleaser's whole-file
+      # templating pass, the one part of this that cannot be checked by reading
+      # the YAML — and (c) contains neither deprecated form. A goreleaser
+      # upgrade that reintroduces either fails here, not at `brew upgrade`.
+      - name: Guard rendered Homebrew cask is free of deprecated stanzas
+        run: |
+          set -euo pipefail
+          cask=dist/homebrew/Casks/agentsync.rb
+          if [ ! -f "$cask" ]; then
+            echo "::error::$cask was not rendered by the snapshot — did the cask pipe move or get skipped?"
+            exit 1
+          fi
+          fails=0
+          if ! grep -qE '^[[:space:]]*postflight_steps do' "$cask"; then
+            echo '::error file=.goreleaser.yaml::rendered cask is missing the declarative postflight_steps stanza (the macOS quarantine strip)'
+            fails=1
+          fi
+          if ! grep -qF '{{staged_path}}' "$cask"; then
+            echo '::error file=.goreleaser.yaml::rendered cask lost the literal {{staged_path}} token — the Go-template escape in homebrew_casks.custom_block no longer survives goreleaser templating'
+            fails=1
+          fi
+          if grep -qE '^[[:space:]]*(uninstall_)?(pre|post)flight do' "$cask"; then
+            echo '::error file=.goreleaser.yaml::rendered cask uses a Ruby flight block deprecated by Homebrew 7.0 — express it as a *_steps stanza via homebrew_casks.custom_block'
+            fails=1
+          fi
+          if grep -qE '^[[:space:]]*verified:' "$cask"; then
+            echo '::error file=.goreleaser.yaml::rendered cask sets the url verified: parameter deprecated by Homebrew 7.0 — drop homebrew_casks.url.verified'
+            fails=1
+          fi
+          if [ "$fails" -eq 0 ]; then
+            echo "rendered cask is free of Homebrew 7.0 deprecations"
+          fi
+          exit $fails

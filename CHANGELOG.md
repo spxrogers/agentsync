@@ -11,6 +11,44 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **The Homebrew cask no longer emits stanzas Homebrew 7.0 deprecated**, which
+  warned on *every* `brew` command that loaded the tap — `brew upgrade`,
+  `brew list`, `brew info` — not just on install. Two stanzas, both generated
+  into `Casks/agentsync.rb` by goreleaser and therefore not fixable in the tap
+  itself (the file is overwritten on each release):
+  - `url ..., verified: "github.com/spxrogers/agentsync/"` — Homebrew now
+    verifies the download URL against the cask's own `homepage` by itself, so
+    the parameter is a no-op. Our download URL is prefixed by our homepage, so
+    dropping `homebrew_casks.url.verified` keeps verification, silently and by
+    default.
+  - `postflight do … end` — superseded by the declarative `postflight_steps`
+    DSL, which records steps in Homebrew's JSON API instead of evaluating
+    arbitrary cask Ruby. The macOS quarantine strip (what Gatekeeper would
+    otherwise put on the unsigned binary) is now
+    `postflight_steps { on_macos { run "/usr/bin/xattr", … } }`: `on_macos`
+    replaces `if OS.mac?`, `run` replaces `system_command`, the install-time
+    `{{staged_path}}` token replaces Ruby `#{staged_path}` interpolation, and
+    `must_succeed: false` preserves the old block's tolerance of a non-zero
+    `xattr` exit (the attribute may already be absent).
+
+  Behavior is unchanged — `brew install agentsync` still lands an unquarantined
+  binary; only the warnings go away, from the next tagged release onward.
+  No released goreleaser can emit the steps DSL natively, so upgrading is not
+  the fix: 2.16.0's cask template hard-codes `postflight do` for
+  `homebrew_casks.hooks.post.install`, and so does the latest stable v2.18.1
+  (and `main`) —
+  [goreleaser/goreleaser#6870](https://github.com/goreleaser/goreleaser/issues/6870).
+  The proposed fix,
+  [goreleaser/goreleaser#6873](https://github.com/goreleaser/goreleaser/pull/6873),
+  adds new `hooks.*.install_steps` options plus a `.StagedPath` template field
+  and was still open as of 2026-09-14. The stanza is therefore emitted through
+  `custom_block`. A new
+  `goreleaser-snapshot` CI step asserts the *rendered* cask carries
+  `postflight_steps` and the literal `{{staged_path}}` token and neither
+  deprecated form — the token being the one part that can't be checked by
+  reading the YAML, since goreleaser runs the whole generated cask through its
+  own Go template and the Homebrew token has to survive that pass escaped.
+
 - **`reconcile`'s MCP write-back translates through the agent that rendered the
   destination, instead of guessing from the JSON pointer's top-level key**
   ([#235](https://github.com/spxrogers/agentsync/issues/235)). The key-level
