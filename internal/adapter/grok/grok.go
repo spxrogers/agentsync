@@ -22,7 +22,12 @@ type Options struct {
 // Adapter implements Grok Build's native render and capture boundary.
 type Adapter struct{ opts Options }
 
-func New(opts Options) *Adapter { return &Adapter{opts: opts} }
+func New(opts Options) *Adapter {
+	if opts.GrokHome != "" {
+		opts.GrokHome = filepath.Clean(opts.GrokHome)
+	}
+	return &Adapter{opts: opts}
+}
 
 func (a *Adapter) Name() string { return "grok" }
 
@@ -61,11 +66,12 @@ func (a *Adapter) VersionRoots(scope adapter.Scope, project string) []string {
 	if scope != adapter.ScopeUser || a.validateHome() != nil {
 		return nil
 	}
-	return []string{a.resolvePaths(scope, project).ConfigDir}
+	return []string{filepath.Clean(a.resolvePaths(scope, project).ConfigDir)}
 }
 
 var (
 	_ adapter.Adapter         = (*Adapter)(nil)
 	_ adapter.PathKeyMerger   = (*Adapter)(nil)
 	_ adapter.HookIngestGuard = (*Adapter)(nil)
+	_ adapter.MCPSpecIngester = (*Adapter)(nil)
 )

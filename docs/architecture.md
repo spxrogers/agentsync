@@ -432,13 +432,13 @@ dropping the URL out of the model entirely. The rendering adapter is the only
 thing that knows which bytes it wrote, so the inverse belongs to it.
 
 An **optional interface** rather than a method on `Adapter` (which would force
-all 31 adapters, `noop` and Continue included, to implement a contract they
+all 32 adapters, `noop` and Continue included, to implement a contract they
 cannot honor) or a registry-side `name → func` table (which is exactly the
 hand-maintained allowlist this interface exists to delete). The name follows
 the `PluginIngester` precedent: it says what the implementor *does*.
 
 Implemented by every adapter that renders MCP as a key-merge op — claude,
-opencode, codex, cursor, gemini, windsurf, roo, cline, and the generic breadth
+opencode, codex, cursor, gemini, windsurf, roo, cline, grok, and the generic breadth
 tier (per its `Spec`'s `MCPTarget`, so each dialect knob is honored on
 write-back exactly as on ingest). **Continue does not implement it**: it renders
 one whole *file* per server (`MergeStrategy: "replace"`), and its own

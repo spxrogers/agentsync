@@ -77,10 +77,21 @@ are not captured, but do not trigger destructive retirement.
 Project hooks require Grok's own trust approval. AgentSync never writes trust
 decisions or changes permissions. Hook commands and matchers are copied without
 rewriting scripts: Grok's stdin event fields, environment, and blocking behavior
-differ from Claude's, so scripts must support Grok's hook contract. Compatibility
-hooks and native plugins can also load independently; configure Grok's own
-compatibility settings and AgentSync's existing `native_agents` exclusions to
-avoid duplicate execution where needed.
+differ from Claude's, so scripts must support Grok's hook contract.
+
+## Claude compatibility (duplicate execution warning)
+
+Grok natively reads `CLAUDE.md`, `~/.claude/skills/`, and `.claude/settings.json`
+hooks out of the box. Anyone running Claude Code and Grok Build on the same
+machine will have instructions loaded twice, skills duplicated, and hook commands
+executed twice unless Grok's built-in Claude compatibility is disabled.
+
+When managing both agents with AgentSync, avoid duplicate execution by:
+- Disabling Grok's native Claude compatibility in Grok configuration
+  (`[compat.claude]` in `config.toml` or `GROK_CLAUDE_*_ENABLED=false` environment
+  variables), OR
+- Restricting components in AgentSync using `agents` allowlists and `native_agents`
+  exclusions in canonical configuration.
 
 ## Deferred features and verification
 

@@ -5,8 +5,8 @@ Project memory for Claude Code / agent sessions working on agentsync.
 ## What this is
 
 agentsync is a single-machine Go CLI that centrally manages AI coding-agent
-configurations (31 agents: nine deep adapters — Claude Code, OpenCode, Codex,
-Cursor, Gemini CLI, Continue, Windsurf, Roo Code, Cline — plus a 22-agent generic
+configurations (32 agents: ten deep adapters — Claude Code, OpenCode, Codex,
+Cursor, Gemini CLI, Continue, Windsurf, Roo Code, Cline, Grok Build — plus a 22-agent generic
 "breadth tier" for memory + MCP + skills). The
 user keeps a canonical config in `~/.agentsync/` (small TOML + markdown,
 committable to a dotfiles repo); `agentsync apply` renders it into each agent's

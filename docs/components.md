@@ -226,7 +226,7 @@ shared cross-agent dir it writes into, and MUST return nil at project scope (see
   agree on (a pure filter over the canonical; it asks no ingester anything). They
   live beside the interface because there is no Render-side counterpart to ask
   the same question of.
-- **Files:** `adapter.go`, `registry.go`, `nativeplugins.go`.
+- **Files:** `adapter.go`, `registry.go`, `nativeplugins.go`, `merge_strategy.go`.
 
 ### `internal/adapter/claude`
 The reference adapter — MCP, memory, skills, subagents, commands, and hooks, with per-key merge
@@ -315,8 +315,9 @@ legacy Markdown commands, TOML MCP, and JSON command hooks. Uses
 a Grok-local hook parser; no canonical schema changes. Implements
 `PathKeyMerger` for mixed-format cleanup, `HookIngestGuard` for enriched-event
 retirement, `WarnEmitter`, and `VersionedDirs`. See [Grok support](grok.md).
-- **Key:** `New(Options) *Adapter`, `IngestMCPSpec`.
-- **Files:** `grok.go`, `paths.go`, `render.go`, `mcp.go`, `hook.go`, `hook-ingest.go`, `ingest.go`,
+- **Key:** `New(Options) *Adapter`; the `Adapter` + `MCPSpecIngester` methods;
+  `IngestMCPSpec`.
+- **Files:** `grok.go`, `paths.go`, `render.go`, `mcp.go`, `hook.go`, `hook_ingest.go`, `ingest.go`,
   `apply.go`.
 
 ### `internal/adapter/cursor`

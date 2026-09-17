@@ -75,17 +75,7 @@ func readHooks(path string, warn io.Writer) ([]source.Hook, []string, error) {
 		}
 	}
 	hooks, refused := ingestHooks(top["hooks"], warn)
-	var out []source.Hook
-	for _, h := range hooks {
-		if slices.Contains(hookEvents, h.Event.Unverified()) {
-			out = append(out, h)
-		} else {
-			fmt.Fprintf(warn, "warning: Grok hook event %q is unsupported; event not captured\n", h.Event.Unverified())
-			refused = append(refused, h.Event.Unverified())
-		}
-	}
-	slices.Sort(refused)
-	return out, slices.Compact(refused), nil
+	return hooks, refused, nil
 }
 
 func (a *Adapter) RefusedHookEvents(scope adapter.Scope, project string) ([]string, error) {

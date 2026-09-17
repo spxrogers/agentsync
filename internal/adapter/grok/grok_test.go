@@ -315,7 +315,7 @@ func TestReadAndMergeErrorsPreserveDestinations(t *testing.T) {
 	for _, tc := range []struct{ name, relative, content string }{
 		{"toml", "config.toml", "[broken"},
 		{"mcp-shape", "config.toml", "mcp_servers = 7"},
-		{"mcp-field", "config.toml", "[mcp_servers.bad]\ncommand = 7"},
+		{"mcp-server-shape", "config.toml", "[mcp_servers]\nbad = 7"},
 		{"json", "hooks/agentsync.json", "{broken"},
 		{"hooks-shape", "hooks/agentsync.json", `{"hooks":7}`},
 	} {
@@ -353,5 +353,51 @@ func TestReadAndMergeErrorsPreserveDestinations(t *testing.T) {
 				t.Fatal("unreadable path treated as absent")
 			}
 		})
+	}
+}
+
+func TestHookCaptureSkipsUnsupportedEventsWithoutRefusal(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".grok", "hooks", "agentsync.json")
+	// UnknownEvent has no canonical equivalent. It must warn and skip capture,
+	// but NEVER be added to RefusedHookEvents (which would delete canonical hooks).
+	content := []byte(`{"hooks":{"UnknownEvent":[{"hooks":[{"type":"command","command":"echo hello"}]}]}}`)
+	writeFile(t, path, content, 0o644)
+	var warn bytes.Buffer
+	a := grok.New(grok.Options{TargetRoot: root, Stderr: &warn})
+	c, err := a.Ingest(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Hooks) != 0 {
+		t.Fatalf("unsupported hook event was captured: %v", c.Hooks)
+	}
+	if !strings.Contains(warn.String(), "UnknownEvent") {
+		t.Fatalf("expected warning for unsupported hook event, got: %q", warn.String())
+	}
+	refused, err := a.RefusedHookEvents(adapter.ScopeUser, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refused) != 0 {
+		t.Fatalf("unsupported event was refused (would retire canonical hook): %v", refused)
+	}
+}
+
+func TestGrokHomeValidationAndCleaning(t *testing.T) {
+	root := t.TempDir()
+	unclean := filepath.Join(root, "foo", "..", "bar")
+	a := grok.New(grok.Options{TargetRoot: root, GrokHome: unclean})
+	roots := a.VersionRoots(adapter.ScopeUser, "")
+	if len(roots) != 1 || roots[0] != filepath.Join(root, "bar") {
+		t.Fatalf("expected cleaned version root %q, got %v", filepath.Join(root, "bar"), roots)
+	}
+
+	rel := grok.New(grok.Options{TargetRoot: root, GrokHome: "relative/path"})
+	if _, err := rel.Detect(); err == nil {
+		t.Fatal("expected error on relative GROK_HOME")
+	}
+	if roots := rel.VersionRoots(adapter.ScopeUser, ""); roots != nil {
+		t.Fatalf("expected nil version roots on invalid GROK_HOME, got %v", roots)
 	}
 }

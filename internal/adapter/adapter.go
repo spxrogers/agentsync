@@ -417,7 +417,7 @@ type PluginIngester interface {
 // the capability matrix, and pinned by characterization tests.
 //
 // Implemented by every adapter that renders MCP as a key-merge op: claude,
-// opencode, codex, cursor, gemini, windsurf, roo, cline, and the generic
+// opencode, codex, cursor, gemini, windsurf, roo, cline, grok, and the generic
 // breadth tier (per its Spec's MCPTarget). Continue does NOT implement it — it
 // renders one whole FILE per server (`MergeStrategy: "replace"`), and its own
 // IngestMCPSpec operand is an element of a YAML `mcpServers` LIST inside a

@@ -19,7 +19,7 @@ type Paths struct {
 func (a *Adapter) resolvePaths(scope adapter.Scope, project string) Paths {
 	dir := filepath.Join(a.opts.TargetRoot, ".grok")
 	if a.opts.GrokHome != "" {
-		dir = a.opts.GrokHome
+		dir = filepath.Clean(a.opts.GrokHome)
 	}
 	memory := filepath.Join(dir, "AGENTS.md")
 	if scope == adapter.ScopeProject {

@@ -91,31 +91,58 @@ func renderMCP(c source.Canonical, p Paths) ([]adapter.FileOp, []adapter.Skip, e
 	}}, skips, nil
 }
 
-// IngestMCPSpec preserves unmodeled native keys through the shared Extra
-// contract. Typed decoding refuses malformed modeled fields instead of
-// capturing an incomplete server that a later apply would overwrite.
-func IngestMCPSpec(raw map[string]any) (source.MCPServerSpec, error) {
-	var native struct {
-		Command string            `json:"command"`
-		Args    []string          `json:"args"`
-		Env     map[string]string `json:"env"`
-		URL     string            `json:"url"`
-		Headers map[string]string `json:"headers"`
-	}
-	data, err := json.Marshal(raw)
-	if err != nil {
-		return source.MCPServerSpec{}, err
-	}
-	if err := json.Unmarshal(data, &native); err != nil {
-		return source.MCPServerSpec{}, err
-	}
+// IngestMCPSpec translates one Grok-native MCP server table — the value under
+// config.toml `[mcp_servers.<id>]` — into the canonical MCPServerSpec. It is the
+// inverse of renderMCP. Grok's headers key is "headers" (unlike Codex's
+// "http_headers"). A server carrying a URL is canonicalised to the "http"
+// transport; otherwise "stdio". Native extra fields survive capture through
+// Extra.
+func IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
+	url := asStr(raw["url"])
 	typ := "stdio"
-	if native.URL != "" {
+	if url != "" {
 		typ = "http"
 	}
 	return source.MCPServerSpec{
-		Type: typ, Command: native.Command, Args: native.Args,
-		Env: native.Env, URL: native.URL, Headers: native.Headers,
-		Extra: claude.ExtraNativeKeys(raw, "command", "args", "env", "url", "headers"),
-	}, nil
+		Type:    typ,
+		Command: asStr(raw["command"]),
+		Args:    asStrSlice(raw["args"]),
+		Env:     asStrMap(raw["env"]),
+		URL:     url,
+		Headers: asStrMap(raw["headers"]),
+		Extra:   claude.ExtraNativeKeys(raw, "command", "args", "env", "url", "headers"),
+	}
+}
+
+// IngestMCPSpec satisfies adapter.MCPSpecIngester.
+func (a *Adapter) IngestMCPSpec(raw map[string]any) source.MCPServerSpec {
+	return IngestMCPSpec(raw)
+}
+
+func asStrSlice(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, x := range arr {
+		if s, ok := x.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func asStrMap(v any) map[string]string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, val := range m {
+		if s, ok := val.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
 }

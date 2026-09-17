@@ -18,6 +18,7 @@ var (
 // ingestHooks captures only whole events representable by source.Hook. Native
 // fields such as timeout and HTTP handlers refuse the event, allowing import to
 // retire stale canonical hooks. Malformed shapes only warn and never retire.
+// Unsupported events have no canonical equivalent and are skipped without refusal.
 // The first invalid definition or handler determines the refusal classification.
 func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) {
 	hooks, ok := raw.(map[string]any)
@@ -25,6 +26,10 @@ func ingestHooks(raw any, warn io.Writer) (out []source.Hook, refused []string) 
 		return nil, nil
 	}
 	for event, rawEntries := range hooks {
+		if !slices.Contains(hookEvents, event) {
+			fmt.Fprintf(warn, "warning: hook event %q has no canonical equivalent; not captured\n", event)
+			continue
+		}
 		entries, ok := rawEntries.([]any)
 		if !ok {
 			fmt.Fprintf(warn, "warning: hook event %q value is not an array; event not captured\n", event)

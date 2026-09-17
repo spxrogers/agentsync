@@ -44,10 +44,7 @@ func (a *Adapter) Ingest(scope adapter.Scope, project string) (source.Canonical,
 				if !ok {
 					return c, fmt.Errorf("parse %s: MCP server %q must be a table", p.Config, id)
 				}
-				s, err := IngestMCPSpec(spec)
-				if err != nil {
-					return c, fmt.Errorf("parse MCP server %q: %w", id, err)
-				}
+				s := IngestMCPSpec(spec)
 				c.MCPServers = append(c.MCPServers, source.MCPServer{ID: id, Server: s})
 			}
 		}
