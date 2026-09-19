@@ -761,7 +761,10 @@ and the parity check between the scrub list and the configured-environment CI
 legs.
 - **Key:** `RequireContainer(t)`; `MustRunInContainer()`; `ScrubAmbient()`;
   `InContainer() bool`; `EnvVar` (`AGENTSYNC_TEST_IN_CONTAINER`).
-- **Files:** `container.go`.
+- **Files:** `container.go`; `guards_test.go` (the source-scan and parity
+  guards, plus `TestConfiguredLegIsLive`, which observes from inside a test
+  that the configured container leg's fake agent binaries are what `PATH`
+  resolves).
 
 ---
 

@@ -57,14 +57,22 @@ if [[ "${AGENTSYNC_TEST_CONFIGURED_ENV:-}" == "1" ]]; then
         chmod +x "$AMBIENT_BIN/$bin"
     done
     export PATH="$AMBIENT_BIN:$PATH"
-    # Self-check the wiring at runtime, not by reading this file: if the stubs
-    # are not what PATH resolves, the leg is inert and must fail loudly here
-    # rather than pass every test for the wrong reason (#271 review round 6:
-    # the flag was once never forwarded into the container, and nothing noticed).
+    # Self-check at runtime that the stubs shadow everything else on PATH; a
+    # stub dir that is not what PATH resolves would pass every test for the
+    # wrong reason. (This cannot catch an UNFORWARDED flag — then this whole
+    # block is skipped — which is why the marker below and the Go-side
+    # TestConfiguredLegIsLive exist, and why TestConfiguredEnvLegCoversAmbientVars
+    # pins the forward inside the runner's configured block.)
     if [[ "$(command -v codex)" != "$AMBIENT_BIN/codex" ]]; then
         echo "error: configured-environment leg did not take effect (codex resolves to '$(command -v codex || true)')" >&2
         exit 1
     fi
+    # Marker for the Go side: internal/testenv's TestConfiguredLegIsLive asserts,
+    # whenever this is set, that exec.LookPath resolves the stubs — the fact
+    # itself, observed from a test, in every mode where it is true. (Keyed on
+    # this marker rather than AGENTSYNC_TEST_CONFIGURED_ENV because the runner's
+    # `shell` / `--` modes forward the flag but bypass this entrypoint.)
+    export AGENTSYNC_TEST_AMBIENT_BIN="$AMBIENT_BIN"
     echo "==> configured-environment leg: $(ls "$AMBIENT_BIN" | wc -l) fake agent binaries on PATH ($AMBIENT_BIN)"
 fi
 

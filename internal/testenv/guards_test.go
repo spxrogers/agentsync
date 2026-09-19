@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -238,16 +239,74 @@ func TestConfiguredEnvLegCoversAmbientVars(t *testing.T) {
 	if !strings.Contains(ci, "recipe: [test-release, test-release-configured]") {
 		t.Error("ci.yml: the test-release matrix must run the test-release-configured recipe")
 	}
-	// The flag must cross INTO the container: the entrypoint's fake-PATH block
-	// keys off it there. Round 6 of the #271 review found it read only on the
-	// host, which left that block dead in every leg while a text-only guard
-	// stayed green — so the entrypoint also self-checks at runtime.
-	if !strings.Contains(script, `-e "AGENTSYNC_TEST_CONFIGURED_ENV=1"`) {
-		t.Error("scripts/test-in-container.sh configured leg must forward AGENTSYNC_TEST_CONFIGURED_ENV=1 into the container")
+	// The flag must cross INTO the container — the entrypoint's fake-PATH block
+	// keys off it there (round 6 of the #271 review found it read only on the
+	// host, leaving that block dead in every leg) — and it must cross ONLY on
+	// the configured leg: the forward has to sit inside the runner's
+	// `if [[ … == "1" ]]` block, or the pristine leg stops being pristine and
+	// nothing else would notice (round 7). So the asserts below are scoped to
+	// that block, not the whole file.
+	configuredBlock := shellIfBlock(t, script, `if [[ "${AGENTSYNC_TEST_CONFIGURED_ENV:-}" == "1" ]]`)
+	for _, v := range append([]string{"AGENTSYNC_TEST_CONFIGURED_ENV=1", "AGENTSYNC_HOME="}, ambientVars...) {
+		if !strings.Contains(configuredBlock, `-e "`+v) {
+			t.Errorf("scripts/test-in-container.sh: `-e %q…` must be inside the configured-leg if-block, and only there", v)
+		}
+	}
+	// Outside that block no `-e` may carry a configured-env variable (prose
+	// mentions in comments are fine; only the `-e "NAME=` form reaches the container).
+	pristine := strings.Replace(script, configuredBlock, "", 1)
+	for _, v := range append([]string{"AGENTSYNC_TEST_CONFIGURED_ENV", "AGENTSYNC_HOME"}, ambientVars...) {
+		if strings.Contains(pristine, `-e "`+v+`=`) {
+			t.Errorf("scripts/test-in-container.sh: `-e %q=…` outside the configured-leg if-block would make the pristine leg configured too", v)
+		}
 	}
 	entrypoint := readFile(t, filepath.Join(root, "test", "container", "entrypoint.sh"))
-	if !strings.Contains(entrypoint, `"${AGENTSYNC_TEST_CONFIGURED_ENV:-}" == "1"`) || !strings.Contains(entrypoint, `command -v codex`) {
-		t.Error("test/container/entrypoint.sh must gate the fake-PATH block on AGENTSYNC_TEST_CONFIGURED_ENV and self-check that a stub resolves")
+	entryBlock := shellIfBlock(t, entrypoint, `if [[ "${AGENTSYNC_TEST_CONFIGURED_ENV:-}" == "1" ]]`)
+	for _, want := range []string{`command -v codex`, `export AGENTSYNC_TEST_AMBIENT_BIN=`} {
+		if !strings.Contains(entryBlock, want) {
+			t.Errorf("test/container/entrypoint.sh configured block must contain %q (runtime self-check / Go-side marker)", want)
+		}
+	}
+}
+
+// shellIfBlock returns the text from the first line containing header through
+// the matching top-level `fi` (the first line that is exactly "fi"), so guards
+// can assert what is and is not inside a shell if-block.
+func shellIfBlock(t *testing.T, src, header string) string {
+	t.Helper()
+	start := strings.Index(src, header)
+	if start < 0 {
+		t.Fatalf("shell source has no %q block", header)
+	}
+	end := strings.Index(src[start:], "\nfi\n")
+	if end < 0 {
+		t.Fatalf("shell source: no closing `fi` for %q", header)
+	}
+	return src[start : start+end+len("\nfi\n")]
+}
+
+// TestConfiguredLegIsLive is the behavioural counterpart of the text guards
+// above: when the container entrypoint has installed the fake agent binaries it
+// exports AGENTSYNC_TEST_AMBIENT_BIN, and from inside a test exec.LookPath must
+// then resolve an agent binary INTO that directory. It is keyed on the marker,
+// not on AGENTSYNC_TEST_CONFIGURED_ENV, because the runner's `shell` / `--`
+// modes forward the flag but bypass the entrypoint. It deliberately does NOT
+// assert the opposite on a pristine run — "no codex on PATH" would re-import
+// exactly the host dependence #270 is about (the host test-fast legs may well
+// have a real agent installed). Pure-unit: no filesystem writes.
+func TestConfiguredLegIsLive(t *testing.T) {
+	dir, ok := os.LookupEnv("AGENTSYNC_TEST_AMBIENT_BIN")
+	if !ok {
+		t.Skip("not the configured container leg (AGENTSYNC_TEST_AMBIENT_BIN unset)")
+	}
+	for _, bin := range []string{"codex", "claude", "grok"} {
+		got, err := exec.LookPath(bin)
+		if err != nil {
+			t.Fatalf("configured leg claims stubs in %s but LookPath(%q) failed: %v", dir, bin, err)
+		}
+		if filepath.Dir(got) != filepath.Clean(dir) {
+			t.Fatalf("LookPath(%q) = %s; want the stub in %s — the fake-PATH leg is not what PATH resolves", bin, got, dir)
+		}
 	}
 }
 
