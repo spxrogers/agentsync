@@ -170,9 +170,11 @@ func TestAgentsyncHome(t *testing.T) {
 	}
 }
 
-// TestContainsDir pins the shared containment predicate on paths that need not
-// exist (pure-unit; the symlink and case-folding behaviour is covered by the
-// container-gated grok and cli tests, which can create real directories).
+// TestContainsDir pins the lexical containment predicate (spelling only, no
+// filesystem access) and, on paths that need not exist, its resolved sibling —
+// the two agree whenever no symlink is involved. The symlink and case-folding
+// behaviour of the resolved form is covered by the container-gated cli and grok
+// tests, which can create real directories, and by TestNormalizeDir_CaseFold.
 func TestContainsDir(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -192,11 +194,14 @@ func TestContainsDir(t *testing.T) {
 			if got := paths.ContainsDir(tc.parent, tc.child); got != tc.want {
 				t.Fatalf("ContainsDir(%q, %q) = %v, want %v", tc.parent, tc.child, got, tc.want)
 			}
+			if got := paths.ContainsDirResolved(tc.parent, tc.child); got != tc.want {
+				t.Fatalf("ContainsDirResolved(%q, %q) = %v, want %v (no symlinks involved: must agree with ContainsDir)", tc.parent, tc.child, got, tc.want)
+			}
 		})
 	}
 }
 
-func TestSameDir(t *testing.T) {
+func TestSameDirResolved(t *testing.T) {
 	cases := []struct {
 		name string
 		a, b string
@@ -210,8 +215,8 @@ func TestSameDir(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := paths.SameDir(tc.a, tc.b); got != tc.want {
-				t.Fatalf("SameDir(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+			if got := paths.SameDirResolved(tc.a, tc.b); got != tc.want {
+				t.Fatalf("SameDirResolved(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
 			}
 		})
 	}

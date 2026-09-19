@@ -25,9 +25,11 @@ import (
 // by the time the checkpoint pass opens it, and a dir the user declined (or a foreign
 // dir) is remembered rather than prompted/hinted twice.
 type gitBackupSession struct {
-	cmd           *cobra.Command
-	p             *ui.Printer
-	agentsyncHome string // the canonical source root (agentsync.toml lives here) — NOT the user home; see userHome in partitionVersionRoots
+	cmd *cobra.Command
+	p   *ui.Printer
+	// agentsyncHome is the canonical source root (agentsync.toml lives here) —
+	// NOT the user's home directory, which partitionVersionRoots calls userHome.
+	agentsyncHome string
 	id            agit.Identity
 	mode          string
 	// roots is the union of every enabled agent's declared version roots, de-nested
@@ -385,8 +387,11 @@ func enabledVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Scop
 //
 // NEVER AT OR ABOVE $HOME (issue #270): userHome is the user's home directory
 // (paths.HomeDir), and any declared root that CONTAINS it — $HOME itself, or an
-// ancestor such as `/` or `/home`, in any spelling paths.ContainsDir normalizes
-// (symlinks, case on macOS/Windows) — is dropped before de-nesting. Such a root
+// ancestor such as `/` or `/home`, in any spelling paths.ContainsDirResolved
+// normalizes (symlinks, case on macOS/Windows) — is dropped before de-nesting.
+// Identity, not spelling, is the right test HERE: the cost of a miss is a repo
+// at $HOME. De-nesting below deliberately uses the lexical predicate instead
+// (see denestRoots). Such a root
 // would otherwise fold every other agent's dir into itself and have agentsync
 // `git init` the user's home, breaking the documented invariant that it never
 // inits a repo at $HOME. No hardcoded adapter root can do this, but an
@@ -427,7 +432,7 @@ func partitionVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Sc
 				continue
 			}
 			seen[c] = true
-			if userHome != "" && paths.ContainsDir(c, userHome) {
+			if userHome != "" && paths.ContainsDirResolved(c, userHome) {
 				swallowing = append(swallowing, c)
 				continue
 			}
@@ -447,7 +452,7 @@ func dropHomeSwallowing(roots []string, userHome string) []string {
 	}
 	out := make([]string, 0, len(roots))
 	for _, r := range roots {
-		if !paths.ContainsDir(r, userHome) {
+		if !paths.ContainsDirResolved(r, userHome) {
 			out = append(out, r)
 		}
 	}
@@ -522,38 +527,30 @@ func ownersFor(owners map[string][]string, root string) []string {
 }
 
 // denestRoots returns roots sorted, with any root nested under another removed.
+// Lexical sort places an ancestor before its descendants (the ancestor path is a
+// prefix), so a single forward pass keeping non-nested roots is sufficient.
 //
-// Containment is paths.ContainsDir, which resolves symlinks, so "nested" means
-// nested in the directory tree git actually sees — not in the spelling. Two
-// consequences worth naming (issue #270): a not-yet-created child under a
-// symlinked parent (`~/.claude/skills` under `~/.claude → /data/claude` on a
-// first apply) still folds into the parent, because both spellings resolve
-// through the same existing ancestor; and a child root that is itself a symlink
-// OUT of its parent (`~/.claude/skills → /data/skills`) is kept as its own root,
-// because git does not follow symlinks into directories, so a repo there is not
-// a repo inside the parent's — and its contents were previously never versioned
-// at all (the parent repo tracked only the link). Because resolution can make a
-// later-sorting root the ancestor of an earlier one, every root is checked
-// against every OTHER root rather than only the ones already kept; two
-// spellings of one directory keep the first.
+// Containment is the LEXICAL paths.ContainsDir — the declared spelling, not the
+// resolved directory — by design, revisited in the #271 review: git backup inits,
+// opens and stages by the declared path, and agit.Detect walks that spelling's
+// ancestors, so a child root that is a symlink OUT of its parent
+// (`~/.claude/skills → /data/skills`) must fold into the parent exactly as a
+// real subdirectory would. Keeping it separate was measured to (a) never actually
+// init the child — Detect finds the parent's .git first and opens that — and (b)
+// make the parent permanently un-revertable once a child repo does exist, since
+// agit.HasNestedRepoBelow probes symlinked subdirs. The $HOME guard in
+// partitionVersionRoots is the one place containment must follow identity, and
+// it uses paths.ContainsDirResolved.
 func denestRoots(roots []string) []string {
 	sort.Strings(roots)
 	var kept []string
-	for i, r := range roots {
+	for _, r := range roots {
 		nested := false
-		for j, k := range roots {
-			if i == j {
-				continue
+		for _, k := range kept {
+			if paths.ContainsDir(k, r) {
+				nested = true
+				break
 			}
-			if !paths.ContainsDir(k, r) {
-				continue
-			}
-			// Same directory under two spellings: keep the first spelling only.
-			if paths.ContainsDir(r, k) && j > i {
-				continue
-			}
-			nested = true
-			break
 		}
 		if !nested {
 			kept = append(kept, r)

@@ -10,15 +10,14 @@ import (
 	"github.com/spxrogers/agentsync/internal/testenv"
 )
 
-// TestDenestRoots_SymlinkedParentFirstApply pins the round-2 regression fix
-// (issue #270): when the PARENT root reaches its directory through a symlink and
-// the nested root does not exist yet (a first apply — the apply tail computes
-// roots before any write), the nested root must still fold into the parent.
-// With a naive "resolve only what exists" normalization the two spellings land
-// in different trees, both survive de-nesting, and apply inits a repo inside a
-// repo. paths.ContainsDir resolves through the deepest EXISTING ancestor for
-// exactly this case.
-func TestDenestRoots_SymlinkedParentFirstApply(t *testing.T) {
+// TestContainsDirResolved_PendingChildUnderSymlinkedParent pins the resolved
+// predicate's symmetry (issue #270, #271 review round 2): a path that does not
+// exist yet under a parent that reaches its directory through a symlink must
+// resolve through the deepest EXISTING ancestor, so the pending child and the
+// real tree agree. A naive "resolve only what exists" would put the two in
+// different trees. The $HOME guard relies on this whenever a declared root under
+// a symlinked home has not been created yet.
+func TestContainsDirResolved_PendingChildUnderSymlinkedParent(t *testing.T) {
 	testenv.RequireContainer(t)
 	base := t.TempDir()
 	real := filepath.Join(base, "real-claude")
@@ -31,29 +30,28 @@ func TestDenestRoots_SymlinkedParentFirstApply(t *testing.T) {
 	}
 	child := filepath.Join(link, "skills") // does NOT exist yet
 
-	if !paths.ContainsDir(link, child) {
-		t.Fatalf("ContainsDir(%q, %q) = false for a not-yet-created child under a symlinked parent", link, child)
+	if !paths.ContainsDirResolved(real, child) {
+		t.Fatalf("ContainsDirResolved(%q, %q) = false; the pending child must resolve through the link into the real tree", real, child)
 	}
-	if !paths.ContainsDir(real, child) {
-		t.Fatalf("ContainsDir(%q, %q) = false; the child must resolve through the link into the real tree", real, child)
+	if !paths.SameDirResolved(real, link) {
+		t.Fatalf("SameDirResolved(%q, %q) = false; a symlink and its target are one directory", real, link)
 	}
-	if got := denestRoots([]string{child, link}); !reflect.DeepEqual(got, []string{link}) {
-		t.Fatalf("denestRoots = %v; want the child folded into the symlinked parent [%s]", got, link)
-	}
-	// And the two spellings of the parent itself are one root.
-	if got := denestRoots([]string{real, link}); len(got) != 1 {
-		t.Fatalf("denestRoots(real, link) = %v; want one root — they are the same directory", got)
+	// The lexical predicate, by contrast, sees only spellings.
+	if paths.ContainsDir(real, child) {
+		t.Fatalf("ContainsDir(%q, %q) = true; the lexical predicate must not resolve symlinks", real, child)
 	}
 }
 
-// TestDenestRoots_ChildSymlinkedOut pins the deliberate behaviour change that
-// came with resolving symlinks in containment: a child root that is itself a
-// symlink OUT of its parent (`~/.claude/skills → /data/skills`) is no longer
-// de-nested. git does not follow symlinks into directories, so a repo at the
-// target is not a repo inside the parent's — and before this change the
-// target's contents were never versioned at all (the parent repo tracked only
-// the link).
-func TestDenestRoots_ChildSymlinkedOut(t *testing.T) {
+// TestDenestRoots_IsLexical pins the de-nesting decision the #271 review settled:
+// containment for git-backup topology follows the DECLARED spelling. A child root
+// that is a symlink out of its parent (`~/.claude/skills → /data/skills`) folds
+// into the parent like a real subdirectory — a separate repo at the link's target
+// would never be opened (agit.Detect walks the link spelling into the parent's
+// .git first) and would make the parent un-revertable through the nested-repo
+// probe. And two roots that are the same directory under different spellings
+// are NOT de-duplicated here (that is identity, not topology); the byte-exact
+// dedup upstream and Detect's filesystem walk make that harmless.
+func TestDenestRoots_IsLexical(t *testing.T) {
 	testenv.RequireContainer(t)
 	base := t.TempDir()
 	parent := filepath.Join(base, "dot-claude")
@@ -67,36 +65,16 @@ func TestDenestRoots_ChildSymlinkedOut(t *testing.T) {
 	if err := os.Symlink(target, child); err != nil {
 		t.Skipf("symlinks unavailable here: %v", err)
 	}
-	if paths.ContainsDir(parent, child) {
-		t.Fatalf("ContainsDir(%q, %q) = true; a symlink out of the parent is a different directory", parent, child)
+	if got := denestRoots([]string{child, parent}); !reflect.DeepEqual(got, []string{parent}) {
+		t.Fatalf("denestRoots = %v; want the symlinked-out child folded into its parent [%s]", got, parent)
 	}
-	got := denestRoots([]string{parent, child})
-	if !reflect.DeepEqual(got, []string{parent, child}) {
-		t.Fatalf("denestRoots = %v; want both roots kept — the child lives outside the parent's tree", got)
+	// A not-yet-created child folds too (no filesystem access is involved at all).
+	pending := filepath.Join(parent, "commands")
+	if got := denestRoots([]string{pending, parent}); !reflect.DeepEqual(got, []string{parent}) {
+		t.Fatalf("denestRoots = %v; want the pending child folded into [%s]", got, parent)
 	}
-}
-
-// TestDenestRoots_LaterSortingAncestor pins that de-nesting checks every root
-// against every other, not only against roots already kept: after symlink
-// resolution a root that SORTS later can be the ancestor of one that sorts
-// earlier, and a single forward pass would keep the nested one.
-func TestDenestRoots_LaterSortingAncestor(t *testing.T) {
-	testenv.RequireContainer(t)
-	base := t.TempDir()
-	real := filepath.Join(base, "real")
-	if err := os.MkdirAll(filepath.Join(real, "sub"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// "a-child" sorts BEFORE "z-parent", but resolves to a dir under z-parent's.
-	aChild := filepath.Join(base, "a-child")
-	zParent := filepath.Join(base, "z-parent")
-	if err := os.Symlink(filepath.Join(real, "sub"), aChild); err != nil {
-		t.Skipf("symlinks unavailable here: %v", err)
-	}
-	if err := os.Symlink(real, zParent); err != nil {
-		t.Fatal(err)
-	}
-	if got := denestRoots([]string{aChild, zParent}); !reflect.DeepEqual(got, []string{zParent}) {
-		t.Fatalf("denestRoots = %v; want only the ancestor [%s]", got, zParent)
+	// Two spellings of one directory stay two roots here: lexical means lexical.
+	if got := denestRoots([]string{parent, filepath.Join(base, "link-to-parent")}); len(got) != 2 {
+		t.Fatalf("denestRoots = %v; want both spellings kept by the lexical pass", got)
 	}
 }

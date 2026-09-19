@@ -73,6 +73,11 @@ func TestEnabledVersionRoots_NeverAtOrAboveHome(t *testing.T) {
 	if got := dropHomeSwallowing([]string{home, outside}, home); !reflect.DeepEqual(got, []string{outside}) {
 		t.Fatalf("dropHomeSwallowing = %v, want [%s]", got, outside)
 	}
+	// An empty userHome (HOME unset, no redirect) disables the guard deliberately:
+	// there is no home to protect. Pinned so the documented behaviour cannot drift.
+	if kept, swallowing := partitionVersionRoots(reg, []string{"swallower"}, adapter.ScopeUser, "", ""); len(swallowing) != 0 || len(kept) == 0 {
+		t.Fatalf("with userHome=\"\": kept=%v swallowing=%v; want nothing dropped", kept, swallowing)
+	}
 
 	// The drop is never silent: the apply-tail session warns once per dropped root.
 	var errBuf bytes.Buffer
@@ -111,10 +116,16 @@ func TestDoctorReportsHomeSwallowingRoot(t *testing.T) {
 	var out bytes.Buffer
 	p := ui.New(&out, &out, ui.ColorNever)
 	checkDestinationGitBackup(p, source.DestinationGitBackupConfig{Mode: source.GitBackupModeOn})
-	for _, want := range []string{filepath.Dir(home), "never inits a repo at or above $HOME"} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("doctor output does not report the swallowing root (%q missing):\n%s", want, out.String())
+	// The root and the reason must be on the SAME line: the root string alone is
+	// a prefix of $HOME and would match any line naming a path under it.
+	found := false
+	for _, line := range strings.Split(out.String(), "\n") {
+		if strings.Contains(line, "never inits a repo at or above $HOME") && strings.Contains(line, filepath.Dir(home)+" — ") {
+			found = true
 		}
+	}
+	if !found {
+		t.Fatalf("doctor output has no line reporting %s as a home-swallowing root:\n%s", filepath.Dir(home), out.String())
 	}
 }
 
@@ -126,9 +137,15 @@ func TestRevertAgent_SkipsHomeSwallowingRoot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("GROK_HOME", filepath.Dir(home))
+	reg := registryFactory()
+	// Precondition: grok really DECLARED the ancestor root (validateHome accepts
+	// it), so the error below proves the drop, not an upstream nil.
+	if _, swallowing := partitionVersionRoots(reg, []string{"grok"}, adapter.ScopeUser, "", home); !reflect.DeepEqual(swallowing, []string{filepath.Dir(home)}) {
+		t.Fatalf("precondition: grok must declare %s and the guard must classify it as swallowing; got %v", filepath.Dir(home), swallowing)
+	}
 	var out bytes.Buffer
 	p := ui.New(&out, &out, ui.ColorNever)
-	err := revertAgent(p, registryFactory(), "grok", "", true, agit.Identity{}, true)
+	err := revertAgent(p, reg, "grok", "", true, agit.Identity{}, true)
 	if err == nil || !strings.Contains(err.Error(), "no user-scope destination dir") {
 		t.Fatalf("revertAgent(grok) = %v; want the no-revertable-root error once the home-swallowing root is dropped", err)
 	}

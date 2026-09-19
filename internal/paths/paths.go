@@ -66,44 +66,64 @@ func AgentsyncHome(e Env) string {
 	return filepath.Join(HomeDir(e), ".agentsync")
 }
 
-// ContainsDir reports whether parent is child itself or one of its ancestors.
-// It is THE containment predicate for destination roots and home directories
-// (issue #270): the git-backup de-nesting pass, the "never init a repo at or
-// above $HOME" guard, the grok GROK_HOME refusal and the traversal guard's
-// containment assertion all share it, so they cannot disagree.
-//
-// Both paths are normalized before comparison, because the invariants this
-// backs are about the DIRECTORY, not its spelling: each is cleaned, symlinks
-// are resolved best-effort (a path that does not exist yet keeps its cleaned
-// spelling), and on the case-insensitive platforms (macOS, Windows) the
-// comparison ignores case — `/Users/Alice` and `/users/alice` are one
-// directory there, and a byte compare would let `GROK_HOME=/Users/Alice` walk
-// past a guard written for `$HOME=/users/alice`.
+// ContainsDir reports whether parent is child itself or one of its ancestors,
+// comparing the paths as SPELLED (cleaned, no filesystem access). It is the
+// containment predicate for destination-root topology — the git-backup
+// de-nesting pass, its owner map, and the traversal guard TEST's containment
+// assertion (reconcile's own write-back bound, withinDir, is a separate
+// Abs-based check) — where the declared spelling is the thing that matters:
+// git backup inits, opens
+// and stages by the path an adapter declared, and agit.Detect walks that
+// spelling's ancestors, so a child root that is a symlink OUT of its parent
+// must still fold into the parent (a separate repo at the link's target would
+// never be opened, and would make the parent un-revertable through the
+// nested-repo probe). Resolving symlinks here was tried and reverted in the
+// #271 review for exactly that reason. For directory IDENTITY — is this
+// GROK_HOME really $HOME under another name? — use ContainsDirResolved /
+// SameDirResolved.
 func ContainsDir(parent, child string) bool {
-	p, c := normalizeDir(parent), normalizeDir(child)
-	rel, err := filepath.Rel(p, c)
+	return containsClean(filepath.Clean(parent), filepath.Clean(child))
+}
+
+// ContainsDirResolved is ContainsDir on directory IDENTITY rather than spelling:
+// both paths are cleaned, resolved through symlinks, and compared ignoring case
+// on the case-insensitive platforms (macOS, Windows). It backs the guards whose
+// cost of a miss is a repo at or above $HOME — the central never-at-or-above-
+// $HOME check in git backup and Grok's GROK_HOME refusal — where
+// `GROK_HOME=/Users/Alice`, or a symlink to the home directory, must not walk
+// past a check written for `$HOME=/users/alice` (issue #270).
+//
+// Resolution goes through the deepest EXISTING ancestor and re-appends the
+// rest of the path unchanged, so a path that does not exist yet and one that
+// does normalize into the same tree (see resolveExistingPrefix). The answer
+// therefore depends on filesystem state and can change once a pending path is
+// created — acceptable for the identity checks above ($HOME always exists),
+// and the reason this predicate is NOT used for de-nesting.
+func ContainsDirResolved(parent, child string) bool {
+	return containsClean(normalizeDir(parent), normalizeDir(child))
+}
+
+// SameDirResolved reports whether a and b name the same directory under
+// ContainsDirResolved's normalization.
+func SameDirResolved(a, b string) bool {
+	return normalizeDir(a) == normalizeDir(b)
+}
+
+// containsClean is the shared Rel-based containment over two already-normalized
+// paths: parent contains child when child is parent or lies beneath it with no
+// ".." escape. Sibling prefixes (`/home/alice` vs `/home/alice-evil`) are not
+// containment.
+func containsClean(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
 	if err != nil {
 		return false
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
-// SameDir reports whether a and b name the same directory under ContainsDir's
-// normalization (clean, symlinks resolved best-effort, case-insensitive where
-// the platform is).
-func SameDir(a, b string) bool {
-	return normalizeDir(a) == normalizeDir(b)
-}
-
-// normalizeDir is the shared canonical form behind ContainsDir and SameDir.
-//
-// Symlink resolution must be SYMMETRIC for a path that exists and one that does
-// not yet: on a first apply the parent root (`~/.claude`) exists but the nested
-// one (`~/.claude/skills`) is about to be created, and if only the existing
-// side were resolved through a symlinked `~/.claude` the two would normalize
-// into different trees and de-nesting would keep both — a repo inside a repo.
-// So a path that does not fully exist is resolved through its deepest EXISTING
-// ancestor and the remaining components are re-appended unchanged.
+// normalizeDir is the canonical form behind ContainsDirResolved and
+// SameDirResolved: clean, symlinks resolved through the deepest existing
+// ancestor, case-folded where the platform's filesystem is.
 func normalizeDir(p string) string {
 	p = resolveExistingPrefix(filepath.Clean(p))
 	if caseInsensitiveFS {
@@ -112,22 +132,20 @@ func normalizeDir(p string) string {
 	return p
 }
 
-// resolveExistingPrefix returns p with its deepest existing ancestor (possibly
-// p itself) passed through filepath.EvalSymlinks and the non-existent tail
-// re-appended. A path with no existing ancestor at all (or one that errors for
-// any other reason) is returned cleaned but otherwise unchanged.
+// resolveExistingPrefix returns cleaned p with its deepest existing ancestor
+// (possibly p itself) passed through filepath.EvalSymlinks and the non-existent
+// tail re-appended. Because every candidate ancestor is a literal prefix of p,
+// the tail is simply the remainder of p past that prefix. A path with no
+// resolvable ancestor at all is returned unchanged.
 func resolveExistingPrefix(p string) string {
-	var tail []string
 	for cur := p; ; {
 		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
-			parts := append([]string{filepath.Clean(resolved)}, tail...)
-			return filepath.Join(parts...)
+			return filepath.Join(filepath.Clean(resolved), p[len(cur):])
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur {
-			return p // reached the root without resolving anything
+			return p // no resolvable ancestor (unreadable root or volume)
 		}
-		tail = append([]string{filepath.Base(cur)}, tail...)
 		cur = parent
 	}
 }

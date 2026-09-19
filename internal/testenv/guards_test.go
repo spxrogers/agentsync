@@ -25,21 +25,56 @@ import (
 // bypass the AGENTSYNC_TARGET_ROOT sandbox and re-open the class of leak that
 // #270 fixed.
 //
-// It also enforces the scrub's reach: any production package that reads the
-// environment at all (any os.Getenv / os.LookupEnv call) must have a test file
-// importing internal/testenv, or its tests run without the ambient scrub and
-// can depend on the developer's shell.
-//
-// Known residual, deliberately accepted: the agent-home check matches only a
-// string-literal argument, so `os.Getenv(someConst)` evades it. Every raw env
-// read in this repo uses a literal or a package const named *Env for the
-// harness's OWN knobs; a new agent-home read would be reviewed against
-// testenv.agentHomeVars regardless.
+// Known residual, deliberately accepted: the check matches only a direct call
+// with a string-literal argument, so `os.Getenv(someConst)` and a stored func
+// value (`var lookup = os.LookupEnv; lookup("X")`, as internal/secrets does for
+// its own knob) evade it. Every raw env read in this repo is a literal or a
+// package const named *Env for the harness's OWN knobs; a new agent-home read
+// would be reviewed against testenv.agentHomeVars regardless.
 func TestAgentHomeVarsReadOnlyThroughPaths(t *testing.T) {
+	offenders, _, parsed := scanEnvReads(t)
+	// Vacuity guard: the walk must actually have parsed the production tree.
+	if parsed < 50 {
+		t.Fatalf("parsed only %d production files — the walk's filters are skipping the tree", parsed)
+	}
+	if len(offenders) != 0 {
+		t.Fatalf("agent home variables must be read through paths.AgentHomeOverride, never raw:\n  %s",
+			strings.Join(offenders, "\n  "))
+	}
+}
+
+// TestEnvReadingPackagesScrubAmbient enforces the scrub's reach: any production
+// package that reads the environment raw (any os.Getenv / os.LookupEnv call)
+// must have a _test.go file importing internal/testenv, or its default test
+// binary runs without the ambient scrub and can depend on the developer's shell.
+//
+// The check is a per-directory proxy for the real invariant, "every test binary
+// imports testenv": it ignores build constraints (a `//go:build live`-only
+// import would satisfy it while the default binary stays unscrubbed — not the
+// case today; internal/marketplace's default main_test.go is the importer) and
+// it does not see packages that only reach an env read through a dependency
+// (those are scrubbed if the binary imports testenv, which the FS-touching
+// guards make true for every such package here). A dir with no tests has no
+// binary to scrub and is exempt (test/bdd/support is compiled only into the bdd
+// binary, whose TestMain imports testenv).
+func TestEnvReadingPackagesScrubAmbient(t *testing.T) {
+	_, envReaders, _ := scanEnvReads(t)
 	root := moduleRoot(t)
-	var offenders []string
-	envReaders := map[string]bool{} // package dir (module-relative) → reads env raw
-	parsed := 0
+	for dir := range envReaders {
+		hasTests, imports := dirTestsImportTestenv(t, filepath.Join(root, filepath.FromSlash(dir)))
+		if hasTests && !imports {
+			t.Errorf("%s reads the environment raw but none of its _test.go files import internal/testenv, so its tests run unscrubbed (add `import _ \"github.com/spxrogers/agentsync/internal/testenv\"` or a guard call)", dir)
+		}
+	}
+}
+
+// scanEnvReads parses every non-test Go source outside internal/paths and
+// internal/testenv and returns the raw agent-home reads (offenders), the set of
+// package dirs with any raw env read, and the number of files parsed.
+func scanEnvReads(t *testing.T) (offenders []string, envReaders map[string]bool, parsed int) {
+	t.Helper()
+	root := moduleRoot(t)
+	envReaders = map[string]bool{} // package dir (module-relative) → reads env raw
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -98,28 +133,12 @@ func TestAgentHomeVarsReadOnlyThroughPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Vacuity guard: the walk must actually have parsed the production tree.
-	if parsed < 50 {
-		t.Fatalf("parsed only %d production files — the walk's filters are skipping the tree", parsed)
-	}
-	if len(offenders) != 0 {
-		t.Fatalf("agent home variables must be read through paths.AgentHomeOverride, never raw:\n  %s",
-			strings.Join(offenders, "\n  "))
-	}
-	for dir := range envReaders {
-		hasTests, imports := dirTestsImportTestenv(t, filepath.Join(root, filepath.FromSlash(dir)))
-		// A package with no _test.go files has no test binary of its own to
-		// scrub (test/bdd/support is compiled only into the bdd binary, whose
-		// TestMain imports testenv), so the requirement is per test binary.
-		if hasTests && !imports {
-			t.Errorf("%s reads the environment raw but none of its _test.go files import internal/testenv, so its tests run unscrubbed (add `import _ \"github.com/spxrogers/agentsync/internal/testenv\"` or a guard call)", dir)
-		}
-	}
+	return offenders, envReaders, parsed
 }
 
 // dirTestsImportTestenv reports whether dir has any _test.go files and whether
-// one of them imports this package (directly; the guard is per test binary, not
-// transitive).
+// one of them imports this package (directly; build constraints are not
+// evaluated). imports is meaningful only when hasTests is true.
 func dirTestsImportTestenv(t *testing.T, dir string) (hasTests, imports bool) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -157,12 +176,19 @@ func TestConfiguredEnvLegCoversAmbientVars(t *testing.T) {
 	root := moduleRoot(t)
 	script := readFile(t, filepath.Join(root, "scripts", "test-in-container.sh"))
 	ci := readFile(t, filepath.Join(root, ".github", "workflows", "ci.yml"))
+	// Only the test-fast job's text counts, so a key relocated to another job
+	// cannot satisfy the check.
+	start, end := strings.Index(ci, "\n  test-fast:"), strings.Index(ci, "\n  test-release:")
+	if start < 0 || end < 0 || end < start {
+		t.Fatalf("ci.yml: could not locate the test-fast job block (start=%d end=%d)", start, end)
+	}
+	testFast := ci[start:end]
 	want := append([]string{"AGENTSYNC_HOME"}, ambientVars...)
 	for _, v := range want {
 		if !strings.Contains(script, `-e "`+v+`=`) {
 			t.Errorf("scripts/test-in-container.sh configured leg does not export %s", v)
 		}
-		if !regexp.MustCompile(`(?m)^\s+` + regexp.QuoteMeta(v) + `:\s`).MatchString(ci) {
+		if !regexp.MustCompile(`(?m)^\s+` + regexp.QuoteMeta(v) + `:\s`).MatchString(testFast) {
 			t.Errorf(".github/workflows/ci.yml test-fast configured step does not export %s", v)
 		}
 	}

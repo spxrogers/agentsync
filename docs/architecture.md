@@ -610,11 +610,14 @@ reports directories to back up. The contract every implementor honours:
    `~/.claude/skills`. The apply tail **unions** these across every enabled adapter,
    **de-nests** them (drops a root nested under another — never a repo inside a
    repo), and **de-dups** them (a shared dir is one repo, checkpointed once).
-   "Nested" is decided by `paths.ContainsDir`, which follows the directory tree
-   git sees rather than the spelling: symlinks are resolved (through the deepest
-   *existing* ancestor, so a not-yet-created child under a symlinked parent still
-   folds in on a first apply), and a child root that is itself a symlink out of
-   its parent is its own root — git does not follow symlinks into directories.
+   "Nested" is decided by the *lexical* `paths.ContainsDir` — the declared
+   spelling, no symlink resolution — because git backup inits, opens and stages
+   by the declared path and `agit.Detect` walks that spelling's ancestors: a
+   child root that is a symlink out of its parent folds into the parent like a
+   real subdirectory (a separate repo at the link's target would never be
+   opened, and would make the parent un-revertable through the nested-repo
+   probe). Only the never-at-`$HOME` guard below compares directory *identity*
+   (`paths.ContainsDirResolved`).
 3. **Paths are absolute, after `AGENTSYNC_TARGET_ROOT` redirection** — they match
    the `FileOp.Path` values the adapter emits, so tests redirect `$HOME` uniformly.
 4. **`$HOME`-level strays are excluded.** A deep agent may also write a top-level
@@ -622,7 +625,9 @@ reports directories to back up. The contract every implementor honours:
    intentionally **not** versioned — agentsync never inits a repo at `$HOME`.
    The apply tail enforces that invariant centrally: a declared root that *is*
    `$HOME` or an ancestor of it (`/`, `/home`, a symlinked or case-varied
-   spelling — `paths.ContainsDir` normalizes all three) is dropped from the
+   spelling — `paths.ContainsDirResolved` normalizes all three, resolving
+   through the deepest *existing* ancestor so a pending path and an existing
+   one agree) is dropped from the
    union with a warning, before de-nesting could fold every other root into it
    (`enabledVersionRoots` / `partitionVersionRoots`,
    `TestEnabledVersionRoots_NeverAtOrAboveHome`). No hardcoded adapter root can

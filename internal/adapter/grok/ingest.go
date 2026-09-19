@@ -139,7 +139,7 @@ func (a *Adapter) readMarkdown(path string) (map[string]any, string, bool, error
 //   - $HOME itself (the adapter's TargetRoot) — same collapse, plus agentsync
 //     would `git init` the user's home directory, breaking the documented
 //     invariant that it never inits a repo at $HOME. Compared with
-//     paths.SameDir, so a symlinked or (on macOS/Windows) case-varied spelling
+//     paths.SameDirResolved, so a symlinked or (on macOS/Windows) case-varied spelling
 //     of $HOME is caught too, not just the byte-identical one.
 //
 // An absolute GROK_HOME anywhere else, inside or outside $HOME, is what upstream
@@ -170,7 +170,7 @@ func (a *Adapter) validateHome() error {
 	if h == filepath.VolumeName(h)+string(filepath.Separator) {
 		return fmt.Errorf("GROK_HOME must not be the filesystem root (%s); point it at a directory such as %s", h, suggest)
 	}
-	if home != "" && home != "." && paths.SameDir(h, home) {
+	if home != "" && home != "." && paths.SameDirResolved(h, home) {
 		return fmt.Errorf("GROK_HOME must not be your home directory (%s); point it at a directory such as %s", h, suggest)
 	}
 	return nil

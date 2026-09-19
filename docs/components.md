@@ -645,9 +645,11 @@ forms for portable state. `AGENTSYNC_TARGET_ROOT` is the sandbox switch: when se
 every resolved path lives under it and the user-facing overrides are ignored
 (issue #270).
 - **Key:** `Env` (interface), `OSEnv`, `MapEnv`; `HomeDir`; `AgentsyncHome`;
-  `AgentHomeOverride`; `ContainsDir`/`SameDir` (the one containment predicate —
-  clean, symlink-resolved, case-folded on macOS/Windows — behind de-nesting, the
-  never-at-`$HOME` guard, and the `GROK_HOME` refusal);
+  `AgentHomeOverride`; `ContainsDir` (lexical containment by declared spelling —
+  de-nesting, the owner map, the traversal guard's assertion) and
+  `ContainsDirResolved`/`SameDirResolved` (directory identity — symlinks
+  resolved through the deepest existing ancestor, case-folded on macOS/Windows —
+  behind the never-at-`$HOME` guard and the `GROK_HOME` refusal);
   `HomeRelative`/`FromHomeRelative`.
 - **Files:** `paths.go`.
 
