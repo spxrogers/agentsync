@@ -66,16 +66,20 @@ var envOverrideDocExempt = map[string]string{
 //
 // Accepted residuals, written down so nobody mistakes them for coverage: a
 // non-AGENTSYNC variable read through a const or a stored func value is
-// invisible (every such read today is a literal); HOME (read through the
-// injected paths.Env), PATH (exec.LookPath) and TMPDIR (os.TempDir, where
-// `secret edit` parks the decrypted vault) are the standard variables the
-// prose carves out, not rows; `${env:NAME}` references resolve whatever the
-// user names and are a feature, not an override; and only the NAME SET is
-// checked — a row's description can drift freely. The harness's own
-// AGENTSYNC_TEST_* / AGENTSYNC_LIVE_* signals are contributor-only
-// (CONTRIBUTING.md lists them) and are rejected as rows, except
-// AGENTSYNC_TEST_IN_CONTAINER, which a user debugging a single test is told to
-// set.
+// invisible (every such read today is a literal); standard process-environment
+// conventions honoured by Go and its libraries rather than by agentsync — HOME
+// (through the injected paths.Env), PATH (exec.LookPath), TMPDIR / TMP / TEMP
+// (os.TempDir: `secret edit`'s decrypted vault, plugin scratch dirs),
+// HTTP_PROXY / HTTPS_PROXY / NO_PROXY (net/http and go-git fetches),
+// SSH_AUTH_SOCK (go-git ssh), cobra's completion-time AGENTSYNC_ACTIVE_HELP
+// (a name it builds at runtime) — are described in the prose as such, not
+// rows; `${env:NAME}` references resolve whatever the user names and are a
+// feature, not an override; and only the NAME SET is checked — a row's
+// description can drift freely. The harness's own AGENTSYNC_TEST_* /
+// AGENTSYNC_LIVE_* signals are contributor-only (CONTRIBUTING.md lists them)
+// and are rejected as rows, except AGENTSYNC_TEST_IN_CONTAINER, which a user
+// debugging a single test is told to set and which the prose promises, so it
+// is REQUIRED in both tables.
 func TestEnvOverridesDocumented(t *testing.T) {
 	root := moduleRoot(t)
 	found, parsed := scanEnvNamesForDocs(t, root)
@@ -90,13 +94,13 @@ func TestEnvOverridesDocumented(t *testing.T) {
 	harness := func(name string) bool {
 		return strings.HasPrefix(name, "AGENTSYNC_TEST_") || strings.HasPrefix(name, "AGENTSYNC_LIVE_")
 	}
-	want := map[string]bool{}
+	want := map[string]bool{"AGENTSYNC_TEST_IN_CONTAINER": true} // the one harness signal the user tables promise
 	for name := range found {
 		if !harness(name) && envOverrideDocExempt[name] == "" {
 			want[name] = true
 		}
 	}
-	if len(want) < 10 {
+	if len(want) < minEnvTableRows {
 		t.Fatalf("collected only %d production env variables — the scan is not seeing the tree: %v", len(want), sortedKeys(want))
 	}
 	documented := make([]map[string]bool, len(envOverrideDocs))
@@ -105,12 +109,12 @@ func TestEnvOverridesDocumented(t *testing.T) {
 		documented[i] = names
 		for _, name := range sortedKeys(want) {
 			if !names[name] {
-				t.Errorf("%s: production code reads or names %s but the %q table has no row for it", doc.path, name, doc.heading)
+				t.Errorf("%s: %s needs a row in the %q table (production code reads or names it, or the docs promise it) — none found", doc.path, name, doc.heading)
 			}
 		}
 		for _, name := range sortedKeys(names) {
 			switch {
-			case want[name], name == "AGENTSYNC_TEST_IN_CONTAINER":
+			case want[name]:
 			case harness(name):
 				t.Errorf("%s: row %s is a test-harness signal — contributor-only signals belong in CONTRIBUTING.md, not the user tables", doc.path, name)
 			case envOverrideDocExempt[name] != "":
@@ -138,6 +142,11 @@ func TestEnvOverridesDocumented(t *testing.T) {
 // ALL-CAPS identifier and captures the identifier (`| `AGENTSYNC_X=1` | …` → AGENTSYNC_X).
 var envTableRowRE = regexp.MustCompile("(?m)^\\| `([A-Z][A-Z0-9_]*)")
 
+// minEnvTableRows is the vacuity floor for both the scan and each table: well
+// under today's count (15 rows, 15 variables) but far above what a broken
+// regexp or a truncated section yields, so a silent narrowing fails loudly.
+const minEnvTableRows = 10
+
 // envTableRows returns the variable names in doc's table: the rows between its
 // heading and the next Markdown heading or JSX tag (`<Aside`). Fails loudly if
 // the heading is missing or the section holds too few rows to be the table.
@@ -155,8 +164,8 @@ func envTableRows(t *testing.T, doc envOverrideDoc, text string) map[string]bool
 	for _, m := range envTableRowRE.FindAllStringSubmatch(section, -1) {
 		names[m[1]] = true
 	}
-	if len(names) < 10 {
-		t.Fatalf("%s: found only %d env-var rows under %q — the row regexp no longer matches the table", doc.path, len(names), doc.heading)
+	if len(names) < minEnvTableRows {
+		t.Fatalf("%s: found only %d env-var rows under %q — the table must sit directly under its heading (a heading of any level, an HTML comment or a JSX tag at line start ends the section), or the row format changed so `| `NAME` no longer opens each row", doc.path, len(names), doc.heading)
 	}
 	return names
 }

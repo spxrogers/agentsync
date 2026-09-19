@@ -230,17 +230,21 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 | `EDITOR` | The editor `secret edit` opens the decrypted vault in (default `vi`; flags are allowed, e.g. `code --wait`). |
 | `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |
 
-This table is complete: every environment override agentsync honours is in it,
-`AGENTSYNC_*` or not. It leaves out only the standard `HOME`, `PATH` and
-`TMPDIR` (where `secret edit` parks the decrypted vault while your editor is
-open) and the `${env:NAME}` references you write yourself. A guard test
-(`TestEnvOverridesDocumented`, `internal/testenv`) keeps it that way: it fails
-when production code reads or names a variable that this table or the
-[website reference](https://agentsync.cc/reference/environment/) lacks, when
-the two tables disagree, or when a row names something the code no longer
-reads. The test harness's own `AGENTSYNC_TEST_*` / `AGENTSYNC_LIVE_*` signals
-(beyond `AGENTSYNC_TEST_IN_CONTAINER`, kept here because debugging a single
-test needs it) are contributor-only;
+This table is complete for everything agentsync gives its own meaning to: every
+`AGENTSYNC_*` override, `GROK_HOME`, and the two standard variables it honours
+specially (`NO_COLOR`, `EDITOR`). Standard process-environment conventions that
+Go and its libraries honour behave as they do for any program and are not
+listed — `HOME`, `PATH`, `TMPDIR` (`TMP`/`TEMP` on Windows; where scratch files
+land, including the vault `secret edit` decrypts while your editor is open),
+`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` for marketplace fetches, `SSH_AUTH_SOCK`
+for ssh plugin sources — nor are the `${env:NAME}` references you write
+yourself. A guard test (`TestEnvOverridesDocumented`, `internal/testenv`) keeps
+the table complete: it fails when production code reads or names a variable
+that this table or the [website reference](https://agentsync.cc/reference/environment/)
+lacks, when the two tables disagree, or when a row names something the code no
+longer reads. The test harness's own `AGENTSYNC_TEST_*` / `AGENTSYNC_LIVE_*`
+signals (beyond `AGENTSYNC_TEST_IN_CONTAINER`, kept here because debugging a
+single test needs it) are contributor-only;
 [CONTRIBUTING.md](CONTRIBUTING.md#test-harness-environment-signals) lists them.
 
 ## Troubleshooting
