@@ -17,6 +17,35 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   mixed-format cleanup/purge, and guarded hook capture. Unsupported subagent/LSP
   projection, hook handlers, and other limits are documented in [Grok support](docs/grok.md).
 
+### Documentation
+
+- **The environment-override tables are complete, and a guard keeps them so.**
+  The website's environment reference claimed to list "every `AGENTSYNC_*`
+  override" but omitted `AGENTSYNC_LOCK_TIMEOUT_MS` (the README's table had
+  it), and both tables omitted the two non-`AGENTSYNC_` variables the CLI reads:
+  `NO_COLOR` (disables color under `--color=auto`) and `EDITOR` (what
+  `secret edit` opens). All three rows are in both tables now, and
+  `TestEnvOverridesDocumented` (`internal/testenv`) fails when production code
+  reads a variable either table lacks, when a row names a variable nothing
+  reads, when a row the docs promise is missing, or when the two tables
+  disagree. The harness-only `AGENTSYNC_TEST_*` / `AGENTSYNC_LIVE_*` signals
+  (all but `AGENTSYNC_TEST_IN_CONTAINER`, which a user debugging a single test
+  is told to set) are listed in `CONTRIBUTING.md` instead.
+- **The declared-subset env tables are held to their word.** The user guide's
+  "ones you'll reach for most" table and the website's "Common" table are
+  checked by `TestEnvOverrideSubsetsAreSubsets`: every row must be in both
+  complete tables, and each must stay strictly smaller than them.
+- **`SECURITY.md` documents `secret edit`'s cleartext window** — the `0600`
+  temp file in the system temp dir, its removal on every exit path including
+  interrupt, and the `TMPDIR` advice for shared temp dirs — which the user
+  guide and website already described but the security policy did not.
+- The `go test -run` example in the README and `CONTRIBUTING.md` names its test
+  exactly (`TestApply_FirstRunBacksUpForeignFile`).
+- **`.gitattributes`** pins `*.sh` and the `justfile` to LF in the working tree
+  (`* text=auto` for the rest), so a Windows checkout with `core.autocrlf=true`
+  — CI's `windows-latest` `just test-fast` leg — still gets scripts `bash` and
+  `just` can run. No tracked file was CRLF, so nothing is renormalized.
+
 ### Fixed
 
 - **`AGENTSYNC_TARGET_ROOT` is a real sandbox, and the test suite is hermetic

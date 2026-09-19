@@ -225,8 +225,27 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 | `AGENTSYNC_NO_UPGRADE_NOTICE=1` | Never show the one-time first-run-after-upgrade notice. |
 | `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` | Skip the 0600 **mode** check on the age identity file (ACL'd NFS). The identity must still be a regular file. |
 | `AGENTSYNC_MAX_TARBALL_MB=<N>` | Override the per-tarball decompressed-bytes cap (default 512). 0 disables. |
-| `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |
 | `AGENTSYNC_LOCK_TIMEOUT_MS=<N>` | Override how long a mutating command waits for the global lock before erroring (default 30000ms). |
+| `NO_COLOR` | Disable ANSI color and bold under the default `--color=auto` (any value counts, even empty). `--color=always` still forces color on. |
+| `EDITOR` | The editor `secret edit` opens the decrypted vault in (default `vi`; flags are allowed, e.g. `code --wait`). |
+| `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |
+
+This table is complete for everything agentsync gives its own meaning to: every
+`AGENTSYNC_*` override, `GROK_HOME`, and the standard variables it honours
+specially (`NO_COLOR`, `EDITOR`). Standard process-environment conventions that
+Go and its libraries honour behave as they do for any program and are not
+listed — `HOME`, `PATH`, `TMPDIR` (`TMP`/`TEMP` on Windows; where scratch files
+land, including the vault `secret edit` decrypts while your editor is open),
+`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` for marketplace fetches, `SSH_AUTH_SOCK`
+for ssh plugin sources — nor are the `${env:NAME}` references you write
+yourself. A guard test (`TestEnvOverridesDocumented`, `internal/testenv`) keeps
+the table complete: it fails when production code reads or names a variable
+that this table or the [website reference](https://agentsync.cc/reference/environment/)
+lacks, when the two tables disagree, or when a row names something the code no
+longer reads. The test harness's own `AGENTSYNC_TEST_*` / `AGENTSYNC_LIVE_*`
+signals (beyond `AGENTSYNC_TEST_IN_CONTAINER`, kept here because debugging a
+single test needs it) are contributor-only;
+[CONTRIBUTING.md](CONTRIBUTING.md#test-harness-environment-signals) lists them.
 
 ## Troubleshooting
 
@@ -273,7 +292,7 @@ packages refuse to run on the host and print a long banner pointing you
 at the recipes above. To bypass the guard manually (e.g. for `go test -run`
 on a single test), set `AGENTSYNC_TEST_IN_CONTAINER=1`:
 
-    AGENTSYNC_TEST_IN_CONTAINER=1 go test ./internal/cli/ -run TestApply_FirstRun
+    AGENTSYNC_TEST_IN_CONTAINER=1 go test ./internal/cli/ -run TestApply_FirstRunBacksUpForeignFile
 
 `just test-live` runs the **live cohort** (build tag `live`) — currently the
 `obra/superpowers` projection check, which clones the real upstream plugin

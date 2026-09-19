@@ -295,7 +295,13 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
   through `paths.AgentHomeOverride` (a source-scan test rejects a raw
   `os.Getenv`), add it to `testenv.agentHomeVars`, and to the configured-env leg
   in `scripts/test-in-container.sh` + `ci.yml` (a parity test checks) — issue
-  #270 is what happens otherwise. `PATH` cannot be scrubbed: a test whose result
+  #270 is what happens otherwise. Any NEW environment variable production code
+  reads or names also needs a row in BOTH `README.md`'s env table and
+  `website/src/content/docs/reference/environment.mdx` —
+  `TestEnvOverridesDocumented` (`internal/testenv`) fails until it has one, and
+  fails on a row nothing reads; a new harness `AGENTSYNC_TEST_*` /
+  `AGENTSYNC_LIVE_*` signal goes in `CONTRIBUTING.md`'s table instead and is
+  REJECTED from those two. `PATH` cannot be scrubbed: a test whose result
   depends on an agent binary being ABSENT sets `"PATH": t.TempDir()` itself; the
   configured leg (`test/container/entrypoint.sh`) puts a stub for every probed
   agent binary on PATH so a test that forgets is red in CI.

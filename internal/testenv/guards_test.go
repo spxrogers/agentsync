@@ -71,7 +71,11 @@ func TestEnvReadingPackagesScrubAmbient(t *testing.T) {
 
 // scanEnvReads parses every non-test Go source outside internal/paths and
 // internal/testenv and returns the raw agent-home reads (offenders), the set of
-// package dirs with any raw env read, and the number of files parsed.
+// package dirs with any raw env read, and the number of files parsed. Its
+// sibling scanEnvNamesForDocs (envdocs_test.go) walks the same tree to answer a
+// different question — which variable NAMES production code reads or names —
+// for the documentation-parity guard; the two are kept separate because "read"
+// means a raw call site here and a documented name there.
 func scanEnvReads(t *testing.T) (offenders []string, envReaders map[string]bool, parsed int) {
 	t.Helper()
 	root := moduleRoot(t)

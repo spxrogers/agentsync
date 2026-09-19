@@ -46,8 +46,29 @@ FS-touching tests refuse to run on the host. To run a single one outside the
 container during debugging:
 
 ```bash
-AGENTSYNC_TEST_IN_CONTAINER=1 go test ./internal/cli/ -run TestApply_FirstRun
+AGENTSYNC_TEST_IN_CONTAINER=1 go test ./internal/cli/ -run TestApply_FirstRunBacksUpForeignFile
 ```
+
+### Test-harness environment signals
+
+These are read by the test harness only, never by the `agentsync` binary, so
+they are deliberately absent from the user-facing environment tables in
+`README.md` and the website — all but `AGENTSYNC_TEST_IN_CONTAINER`, which
+those tables keep because a user debugging a single test is told to set it. A
+guard, `TestEnvOverridesDocumented`, keeps the two tables complete, in step
+with the code, and free of every other signal listed here. The harness scrubs
+every other `AGENTSYNC_*` variable from the environment at init; these survive.
+
+| Signal | Read by | Purpose |
+|---|---|---|
+| `AGENTSYNC_TEST_IN_CONTAINER=1` | `internal/testenv` | Hermeticity signal exported by the container entrypoint; FS-touching tests refuse to run without it. |
+| `AGENTSYNC_TEST_CONFIGURED_ENV=1` | `scripts/test-in-container.sh`, `test/container/entrypoint.sh`, `justfile` | Run the configured-environment leg (exported `AGENTSYNC_HOME`/`GROK_HOME`, a stub for every agent binary on `PATH`). `just test-release-configured` sets it. |
+| `AGENTSYNC_TEST_AMBIENT_BIN` | `test/container/entrypoint.sh` → `internal/testenv` | Marker the entrypoint exports on the configured leg naming the stub-binary dir; `TestConfiguredLegIsLive` asserts `PATH` resolves into it. |
+| `AGENTSYNC_TEST_DEBUG=1` | `scripts/test-in-container.sh`, `test/container/entrypoint.sh` | `set -x` in the runner and entrypoint. |
+| `AGENTSYNC_TEST_ALLOW_NETWORK=1` | `scripts/test-in-container.sh` | Drop `--network=none` for the container run. |
+| `AGENTSYNC_TEST_SKIP_LINT=1`, `AGENTSYNC_TEST_SKIP_GORELEASER=1` | `test/container/entrypoint.sh` | Skip the optional in-container lint / goreleaser gates when those tools are on `PATH`. |
+| `AGENTSYNC_LIVE_PLUGIN_TEST=1` | `internal/marketplace` live tests | Opt into the network-dependent live cohort (`just test-live`). |
+| `AGENTSYNC_TEST_GITIGNORE_*` | `internal/cli` tests | Re-exec plumbing for the git-ignore helper tests. |
 
 ## Lint & format
 
