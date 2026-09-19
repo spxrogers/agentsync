@@ -8,9 +8,11 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 agentsync reads a handful of environment overrides. The common ones come first;
-the rest are escape hatches you'll rarely need. The full table lists every
-variable the CLI itself reads, `AGENTSYNC_*` or not — a guard test in the
-repository fails when the code reads one this page does not list. The test
+the rest are escape hatches you'll rarely need. The full table is complete:
+every override agentsync honours is in it, `AGENTSYNC_*` or not. It leaves out
+only the standard `HOME` and `PATH`, which every CLI reads, and the
+`${env:NAME}` references you write yourself. A guard test in the repository
+fails when the code reads or names a variable the table lacks. The test
 harness's own `AGENTSYNC_TEST_*` / `AGENTSYNC_LIVE_*` signals (beyond
 `AGENTSYNC_TEST_IN_CONTAINER`) are contributor-only; the repository's
 [CONTRIBUTING.md](https://github.com/spxrogers/agentsync/blob/main/CONTRIBUTING.md#test-harness-environment-signals)
@@ -25,6 +27,7 @@ lists them.
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept `http://` / `git://` plugin & marketplace sources. |
 | `AGENTSYNC_ALLOW_OFFLINE_VERIFY=1` | Let `check` validate reference *shape* only, skipping resolution (CI without an age key). |
 | `AGENTSYNC_NO_UPGRADE_NOTICE=1` | Never show the one-time [upgrade notice](/reference/upgrading/). |
+| `NO_COLOR` | Disable ANSI color and bold under the default `--color=auto` (any value counts, even empty). |
 
 ## All overrides
 

@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -72,7 +71,11 @@ func TestEnvReadingPackagesScrubAmbient(t *testing.T) {
 
 // scanEnvReads parses every non-test Go source outside internal/paths and
 // internal/testenv and returns the raw agent-home reads (offenders), the set of
-// package dirs with any raw env read, and the number of files parsed.
+// package dirs with any raw env read, and the number of files parsed. Its
+// sibling scanEnvNamesForDocs (envdocs_test.go) walks the same tree to answer a
+// different question — which variable NAMES production code reads or names —
+// for the documentation-parity guard; the two are kept separate because "read"
+// means a raw call site here and a documented name there.
 func scanEnvReads(t *testing.T) (offenders []string, envReaders map[string]bool, parsed int) {
 	t.Helper()
 	root := moduleRoot(t)
@@ -327,208 +330,6 @@ func TestConfiguredLegIsLive(t *testing.T) {
 			t.Fatalf("LookPath(%q) = %s; want the stub in %s — the fake-PATH leg is not what PATH resolves", bin, got, dir)
 		}
 	}
-}
-
-// envOverrideDocs are the two hand-maintained environment-override tables that
-// claim completeness: README.md's "Environment overrides" and the website's
-// reference page. docs/user-guide.md carries a deliberate SUBSET ("the ones
-// you'll reach for most") and defers to the README, so it is not checked.
-var envOverrideDocs = []string{
-	"README.md",
-	"website/src/content/docs/reference/environment.mdx",
-}
-
-// envOverrideDocExempt names AGENTSYNC_-prefixed string literals in production
-// code that are NOT environment variables, so the doc guard does not demand a
-// table row for them. Each entry says what the literal is.
-var envOverrideDocExempt = map[string]string{
-	"AGENTSYNC_LOCAL_HISTORY": "git.NoticeFile — a filename written into versioned destination dirs",
-}
-
-// TestEnvOverridesDocumented enforces the completeness claim both tables make
-// ("every variable the CLI itself reads"): every environment variable the
-// production code reads or names must have a row in BOTH tables, the two tables
-// must list the same set, and every row must name a variable the module really
-// reads (no phantom rows). PR #272 fixed AGENTSYNC_LOCK_TIMEOUT_MS missing from
-// the website page and NO_COLOR / EDITOR missing from both — the second such
-// drift; this guard is what turns the doc claim into a checked one.
-//
-// "Reads or names" is deliberate: an AGENTSYNC_* name inside any production
-// string literal counts — an error hint telling the user to set a variable is a
-// contract the tables must carry, and the ALLOW_SYMLINK_DEST / NO_UPGRADE_NOTICE
-// / AGE_SKIP_PERM_CHECK reads go through package consts a literal-argument scan
-// of os.Getenv would miss. Non-AGENTSYNC variables are collected only from a
-// direct os.Getenv / os.LookupEnv literal argument (EDITOR, NO_COLOR) or a
-// paths.AgentHomeOverride literal argument (GROK_HOME); HOME, read through the
-// injected paths.Env, is covered by the AGENTSYNC_TARGET_ROOT row's prose and
-// not a table row. The harness's own AGENTSYNC_TEST_* / AGENTSYNC_LIVE_* signals
-// are contributor-only (CONTRIBUTING.md lists them) and are exempt, except that
-// AGENTSYNC_TEST_IN_CONTAINER may appear in the tables because a user debugging
-// a single test is told to set it.
-func TestEnvOverridesDocumented(t *testing.T) {
-	root := moduleRoot(t)
-	read, named, parsed := scanEnvNames(t, root)
-	if parsed < 50 {
-		t.Fatalf("parsed only %d production files — the walk's filters are skipping the tree", parsed)
-	}
-	harness := func(name string) bool {
-		return strings.HasPrefix(name, "AGENTSYNC_TEST_") || strings.HasPrefix(name, "AGENTSYNC_LIVE_")
-	}
-	want := map[string]bool{}
-	for name := range read {
-		if !harness(name) && envOverrideDocExempt[name] == "" {
-			want[name] = true
-		}
-	}
-	if len(want) < 10 {
-		t.Fatalf("collected only %d production env variables — the scan is not seeing the tree: %v", len(want), sortedKeys(want))
-	}
-	rowRE := regexp.MustCompile("(?m)^\\| `([A-Z][A-Z0-9_]*)")
-	documented := map[string]map[string]bool{} // doc → names
-	for _, doc := range envOverrideDocs {
-		names := map[string]bool{}
-		for _, m := range rowRE.FindAllStringSubmatch(readFile(t, filepath.Join(root, filepath.FromSlash(doc))), -1) {
-			names[m[1]] = true
-		}
-		if len(names) < 10 {
-			t.Fatalf("%s: found only %d env-var table rows — the row regexp no longer matches the table", doc, len(names))
-		}
-		documented[doc] = names
-		for _, name := range sortedKeys(want) {
-			if !names[name] {
-				t.Errorf("%s: production code reads %s but the environment table has no `| `%s` row", doc, name, name)
-			}
-		}
-		for _, name := range sortedKeys(names) {
-			if want[name] || name == "AGENTSYNC_TEST_IN_CONTAINER" {
-				continue
-			}
-			if named[name] {
-				t.Errorf("%s: row %s names a variable only the test harness reads — contributor-only signals belong in CONTRIBUTING.md", doc, name)
-			} else {
-				t.Errorf("%s: row %s names a variable nothing in the module reads (phantom row, or a rename the docs missed)", doc, name)
-			}
-		}
-	}
-	// The two tables must agree with each other, not merely each cover the code.
-	a, b := documented[envOverrideDocs[0]], documented[envOverrideDocs[1]]
-	for _, name := range sortedKeys(a) {
-		if !b[name] {
-			t.Errorf("%s lists %s but %s does not", envOverrideDocs[0], name, envOverrideDocs[1])
-		}
-	}
-	for _, name := range sortedKeys(b) {
-		if !a[name] {
-			t.Errorf("%s lists %s but %s does not", envOverrideDocs[1], name, envOverrideDocs[0])
-		}
-	}
-}
-
-var agentsyncVarRE = regexp.MustCompile(`\bAGENTSYNC_[A-Z0-9_]+`)
-
-// scanEnvNames walks every non-test Go source in the module and returns the
-// environment-variable names production code reads or names (read: outside
-// internal/testenv), the names any non-test source in the module names at all
-// (named: internal/testenv included, so a harness signal documented in a table
-// can be told apart from a phantom), and the number of production files parsed.
-func scanEnvNames(t *testing.T, root string) (read, named map[string]bool, parsed int) {
-	t.Helper()
-	read, named = map[string]bool{}, map[string]bool{}
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(root, path)
-		rel = filepath.ToSlash(rel)
-		if d.IsDir() {
-			if !strings.Contains(rel, "/") {
-				switch d.Name() {
-				case ".git", "node_modules", "website", "dist", "bin":
-					return filepath.SkipDir
-				case "test":
-					// e2e / BDD harness support (test/bdd/support reads PATH, TZ
-					// and its own AGENTSYNC_BDD_* plumbing): not the CLI.
-					return filepath.SkipDir
-				}
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		isHarness := strings.HasPrefix(rel, "internal/testenv/")
-		f, perr := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-		if perr != nil {
-			return perr
-		}
-		if !isHarness {
-			parsed++
-		}
-		record := func(name string) {
-			named[name] = true
-			if !isHarness {
-				read[name] = true
-			}
-		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			switch n := n.(type) {
-			case *ast.BasicLit:
-				if n.Kind != token.STRING {
-					return true
-				}
-				s, err := strconv.Unquote(n.Value)
-				if err != nil {
-					return true
-				}
-				for _, name := range agentsyncVarRE.FindAllString(s, -1) {
-					record(name)
-				}
-			case *ast.CallExpr:
-				if len(n.Args) == 0 {
-					return true
-				}
-				sel, ok := n.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				pkg, ok := sel.X.(*ast.Ident)
-				if !ok {
-					return true
-				}
-				// os.Getenv("X") / os.LookupEnv("X") take the name first;
-				// paths.AgentHomeOverride(env, "X") takes it last.
-				var arg ast.Expr
-				switch {
-				case pkg.Name == "os" && (sel.Sel.Name == "Getenv" || sel.Sel.Name == "LookupEnv") && len(n.Args) == 1:
-					arg = n.Args[0]
-				case pkg.Name == "paths" && sel.Sel.Name == "AgentHomeOverride" && len(n.Args) == 2:
-					arg = n.Args[1]
-				default:
-					return true
-				}
-				if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-					if name, err := strconv.Unquote(lit.Value); err == nil {
-						record(name)
-					}
-				}
-			}
-			return true
-		})
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return read, named, parsed
-}
-
-func sortedKeys(m map[string]bool) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 func moduleRoot(t *testing.T) string {
