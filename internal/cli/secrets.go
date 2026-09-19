@@ -245,7 +245,10 @@ func secretsEdit(cmd *cobra.Command, _ []string) error {
 		return errSecretEditInterrupted
 	}
 
-	// Write to a tmp file in os.TempDir() (RAM-backed on macOS).
+	// Write to a tmp file in os.TempDir() (TMPDIR; TMP/TEMP on Windows). It is
+	// ordinary disk on every platform's default — macOS's per-user
+	// /var/folders/…/T is on the APFS boot volume, not RAM — so SECURITY.md
+	// tells users with a shared or backed-up temp dir to point TMPDIR elsewhere.
 	tmpFile, err := os.CreateTemp("", "agentsync-secrets-*.toml")
 	if err != nil {
 		return fmt.Errorf("create tmp file: %w", err)

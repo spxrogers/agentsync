@@ -116,13 +116,16 @@ Do not commit your age identity file, decrypted secrets, or
 
 **`secret edit` has a cleartext window.** It decrypts the whole vault to a
 temp file (mode `0600`, created with `os.CreateTemp` in the system temp dir —
-`TMPDIR`, or `TMP`/`TEMP` on Windows; RAM-backed on macOS) and opens `$EDITOR`
-on it, so for as long as the editor is open your secrets exist in cleartext on
-disk. The file is removed on every exit path: a saved edit, an editor error, a
-rejected edit, and an interrupt (Ctrl-C or `kill` signals the editor, deletes
-the file, saves nothing and exits `130`). Nothing is re-encrypted until the
-editor exits cleanly. On a machine whose temp dir is shared or backed up, point
-`TMPDIR` at a private, ephemeral directory for the duration of the edit.
+`TMPDIR`, or `TMP`/`TEMP` on Windows) and opens `$EDITOR` on it, so for as long
+as the editor is open your secrets exist in cleartext on disk. The file is
+removed on every exit path: a saved edit, an editor error, a rejected edit, and
+an interrupt (Ctrl-C or `kill` signals the editor, deletes the file, saves
+nothing and exits `130`; the one exception is an interrupt that lands during
+the final re-encrypt, which is allowed to finish so the vault is never
+half-written, and then exits `0` reporting the save). Nothing is re-encrypted
+until the editor exits cleanly. On a machine whose temp dir is shared or backed
+up, point `TMPDIR` at a private, ephemeral directory for the duration of the
+edit.
 
 ## Supported versions
 

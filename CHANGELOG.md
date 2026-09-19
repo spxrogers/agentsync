@@ -37,8 +37,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   complete tables, and each must stay strictly smaller than them.
 - **`SECURITY.md` documents `secret edit`'s cleartext window** — the `0600`
   temp file in the system temp dir, its removal on every exit path including
-  interrupt, and the `TMPDIR` advice for shared temp dirs — which the user
-  guide and website already described but the security policy did not.
+  interrupt (and the documented exception: an interrupt during the final
+  re-encrypt finishes the write and exits `0`), and the `TMPDIR` advice for
+  shared temp dirs — which the user guide and website already described but
+  the security policy did not.
 - The `go test -run` example in the README and `CONTRIBUTING.md` names its test
   exactly (`TestApply_FirstRunBacksUpForeignFile`).
 - **`.gitattributes`** pins `*.sh` and the `justfile` to LF in the working tree
