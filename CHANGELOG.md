@@ -28,10 +28,9 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `TestEnvOverridesDocumented` (`internal/testenv`) fails when production code
   reads a variable either table lacks, when a row names a variable nothing
   reads, or when the two tables disagree. The harness-only `AGENTSYNC_TEST_*` /
-  `AGENTSYNC_LIVE_*` signals are listed in `CONTRIBUTING.md` instead. The
-  `go test -run` example in the README and `CONTRIBUTING.md` now names the
-  test exactly (`TestApply_FirstRunBacksUpForeignFile`) rather than by a
-  prefix that happened to match.
+  `AGENTSYNC_LIVE_*` signals are listed in `CONTRIBUTING.md` instead.
+- The `go test -run` example in the README and `CONTRIBUTING.md` names its test
+  exactly (`TestApply_FirstRunBacksUpForeignFile`).
 - **`.gitattributes`** pins `*.sh` and the `justfile` to LF in the working tree
   (`* text=auto` for the rest), so a Windows checkout with `core.autocrlf=true`
   — CI's `windows-latest` `just test-fast` leg — still gets scripts `bash` and

@@ -15,13 +15,20 @@ import (
 
 // envOverrideDoc is one hand-maintained environment-override table that claims
 // completeness. heading is the Markdown heading that opens the section holding
-// the table; the table is read from there to the next heading or JSX tag, so
-// other tables in the same file (the website page's "Common" subset, any future
-// table with backticked ALL-CAPS first cells) are neither counted nor able to
-// satisfy the guard.
+// the table; rows are read from there to the next heading OF ANY LEVEL or JSX
+// tag (envSectionEndRE), so other tables in the same file — the website page's
+// "Common" subset, a future `### Deprecated` table tucked under the heading, any
+// table with backticked ALL-CAPS first cells — are neither counted nor able to
+// satisfy the guard. The table has to sit directly under its heading.
 type envOverrideDoc struct {
 	path, heading string
 }
+
+// envSectionEndRE ends a doc section: any Markdown heading (`#` to `######`,
+// so a sub-heading inside the section closes it too — measured in the #272
+// review: a `### ` table under the heading otherwise satisfied the guard) or a
+// line opening a JSX tag (the mdx page's `<Aside>` follows its table).
+var envSectionEndRE = regexp.MustCompile(`(?m)^(#{1,6} |<)`)
 
 // envOverrideDocs are the two tables. docs/user-guide.md carries a deliberate
 // SUBSET ("the ones you'll reach for most") and defers to the README, so it is
@@ -60,7 +67,8 @@ var envOverrideDocExempt = map[string]string{
 // Accepted residuals, written down so nobody mistakes them for coverage: a
 // non-AGENTSYNC variable read through a const or a stored func value is
 // invisible (every such read today is a literal); HOME (read through the
-// injected paths.Env) and PATH (exec.LookPath) are the standard variables the
+// injected paths.Env), PATH (exec.LookPath) and TMPDIR (os.TempDir, where
+// `secret edit` parks the decrypted vault) are the standard variables the
 // prose carves out, not rows; `${env:NAME}` references resolve whatever the
 // user names and are a feature, not an override; and only the NAME SET is
 // checked — a row's description can drift freely. The harness's own
@@ -97,7 +105,7 @@ func TestEnvOverridesDocumented(t *testing.T) {
 		documented[i] = names
 		for _, name := range sortedKeys(want) {
 			if !names[name] {
-				t.Errorf("%s: production code reads or names %s but the %q table has no `| `%s` row", doc.path, name, doc.heading, name)
+				t.Errorf("%s: production code reads or names %s but the %q table has no row for it", doc.path, name, doc.heading)
 			}
 		}
 		for _, name := range sortedKeys(names) {
@@ -105,6 +113,8 @@ func TestEnvOverridesDocumented(t *testing.T) {
 			case want[name], name == "AGENTSYNC_TEST_IN_CONTAINER":
 			case harness(name):
 				t.Errorf("%s: row %s is a test-harness signal — contributor-only signals belong in CONTRIBUTING.md, not the user tables", doc.path, name)
+			case envOverrideDocExempt[name] != "":
+				t.Errorf("%s: row %s is not an environment variable (%s) — drop the row", doc.path, name, envOverrideDocExempt[name])
 			default:
 				t.Errorf("%s: row %s names a variable production code neither reads nor names (phantom row, or a rename the docs missed)", doc.path, name)
 			}
@@ -138,7 +148,7 @@ func envTableRows(t *testing.T, doc envOverrideDoc, text string) map[string]bool
 		t.Fatalf("%s: no %q heading — the env table moved or was renamed", doc.path, doc.heading)
 	}
 	section := text[start[1]:]
-	if end := regexp.MustCompile(`(?m)^(##? |<)`).FindStringIndex(section); end != nil {
+	if end := envSectionEndRE.FindStringIndex(section); end != nil {
 		section = section[:end[0]]
 	}
 	names := map[string]bool{}

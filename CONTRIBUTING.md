@@ -53,9 +53,11 @@ AGENTSYNC_TEST_IN_CONTAINER=1 go test ./internal/cli/ -run TestApply_FirstRunBac
 
 These are read by the test harness only, never by the `agentsync` binary, so
 they are deliberately absent from the user-facing environment tables in
-`README.md` and the website (a guard, `TestEnvOverridesDocumented`, keeps those
-two tables complete and in step with the code). The harness scrubs every other
-`AGENTSYNC_*` variable from the environment at init; these survive.
+`README.md` and the website — all but `AGENTSYNC_TEST_IN_CONTAINER`, which
+those tables keep because a user debugging a single test is told to set it. A
+guard, `TestEnvOverridesDocumented`, keeps the two tables complete, in step
+with the code, and free of every other signal listed here. The harness scrubs
+every other `AGENTSYNC_*` variable from the environment at init; these survive.
 
 | Signal | Read by | Purpose |
 |---|---|---|

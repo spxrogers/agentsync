@@ -299,7 +299,9 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
   reads or names also needs a row in BOTH `README.md`'s env table and
   `website/src/content/docs/reference/environment.mdx` —
   `TestEnvOverridesDocumented` (`internal/testenv`) fails until it has one, and
-  fails on a row nothing reads. `PATH` cannot be scrubbed: a test whose result
+  fails on a row nothing reads; a new harness `AGENTSYNC_TEST_*` /
+  `AGENTSYNC_LIVE_*` signal goes in `CONTRIBUTING.md`'s table instead and is
+  REJECTED from those two. `PATH` cannot be scrubbed: a test whose result
   depends on an agent binary being ABSENT sets `"PATH": t.TempDir()` itself; the
   configured leg (`test/container/entrypoint.sh`) puts a stub for every probed
   agent binary on PATH so a test that forgets is red in CI.

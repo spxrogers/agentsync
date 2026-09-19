@@ -231,15 +231,17 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 | `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |
 
 This table is complete: every environment override agentsync honours is in it,
-`AGENTSYNC_*` or not. The only variables it leaves out are the standard `HOME`
-and `PATH` (which every CLI reads) and the `${env:NAME}` references you write
-yourself. A guard test (`TestEnvOverridesDocumented`, `internal/testenv`) keeps
-it that way: it fails when production code reads or names a variable that this
-table or the [website reference](https://agentsync.cc/reference/environment/)
-lacks, when the two tables disagree, or when a row names something the code no
-longer reads. The test harness's own `AGENTSYNC_TEST_*` / `AGENTSYNC_LIVE_*`
-signals are contributor-only; [CONTRIBUTING.md](CONTRIBUTING.md#test-harness-environment-signals)
-lists them.
+`AGENTSYNC_*` or not. It leaves out only the standard `HOME`, `PATH` and
+`TMPDIR` (where `secret edit` parks the decrypted vault while your editor is
+open) and the `${env:NAME}` references you write yourself. A guard test
+(`TestEnvOverridesDocumented`, `internal/testenv`) keeps it that way: it fails
+when production code reads or names a variable that this table or the
+[website reference](https://agentsync.cc/reference/environment/) lacks, when
+the two tables disagree, or when a row names something the code no longer
+reads. The test harness's own `AGENTSYNC_TEST_*` / `AGENTSYNC_LIVE_*` signals
+(beyond `AGENTSYNC_TEST_IN_CONTAINER`, kept here because debugging a single
+test needs it) are contributor-only;
+[CONTRIBUTING.md](CONTRIBUTING.md#test-harness-environment-signals) lists them.
 
 ## Troubleshooting
 

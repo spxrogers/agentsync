@@ -10,8 +10,9 @@ import { Aside } from '@astrojs/starlight/components';
 agentsync reads a handful of environment overrides. The common ones come first;
 the rest are escape hatches you'll rarely need. The full table is complete:
 every override agentsync honours is in it, `AGENTSYNC_*` or not. It leaves out
-only the standard `HOME` and `PATH`, which every CLI reads, and the
-`${env:NAME}` references you write yourself. A guard test in the repository
+only the standard `HOME`, `PATH` and `TMPDIR` (where `secret edit` parks the
+decrypted vault while your editor is open) and the `${env:NAME}` references
+you write yourself. A guard test in the repository
 fails when the code reads or names a variable the table lacks. The test
 harness's own `AGENTSYNC_TEST_*` / `AGENTSYNC_LIVE_*` signals (beyond
 `AGENTSYNC_TEST_IN_CONTAINER`) are contributor-only; the repository's
