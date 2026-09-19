@@ -202,33 +202,41 @@ func TestImportsTestenv(t *testing.T) {
 	}
 }
 
-// TestConfiguredEnvLegCoversAmbientVars is the parity guard for the three
-// places that name the ambient variables: this package's list (the scrub), the
-// container runner's configured leg (scripts/test-in-container.sh), and the
-// host test-fast configured leg (.github/workflows/ci.yml). A variable the
-// scrub knows about but the CI legs never export is a variable whose leak CI
-// can never catch — the same dual-list drift class the goreleaser pin guard
-// closes. The ci.yml match is anchored to a YAML mapping key at any indent
-// (`^\s+NAME:\s`) rather than a fixed indentation, so re-indenting the workflow
-// does not break it while a removed key still does.
+// TestConfiguredEnvLegCoversAmbientVars is the parity guard for every place
+// that names the ambient variables or wires the configured leg: this package's
+// list (the scrub), the container runner's configured if-block
+// (scripts/test-in-container.sh), the host test-fast configured STEP
+// (.github/workflows/ci.yml), the justfile recipe, and the entrypoint's
+// configured block (test/container/entrypoint.sh). A variable the scrub knows
+// about but the CI legs never export is a variable whose leak CI can never
+// catch — the same dual-list drift class the goreleaser pin guard closes — and
+// a configured-env variable that reaches the PRISTINE leg quietly destroys the
+// two-leg design. Every check is therefore scoped to the block it belongs in
+// (shellIfBlock; the ci.yml step slice), never the whole file. The ci.yml key
+// match is a YAML mapping key at any indent (`^\s+NAME:\s`) so re-indenting the
+// workflow does not break it while a removed key still does.
 func TestConfiguredEnvLegCoversAmbientVars(t *testing.T) {
 	root := moduleRoot(t)
 	script := readFile(t, filepath.Join(root, "scripts", "test-in-container.sh"))
 	ci := readFile(t, filepath.Join(root, ".github", "workflows", "ci.yml"))
-	// Only the test-fast job's text counts, so a key relocated to another job
-	// cannot satisfy the check.
-	start, end := strings.Index(ci, "\n  test-fast:"), strings.Index(ci, "\n  test-release:")
-	if start < 0 || end < 0 || end < start {
-		t.Fatalf("ci.yml: could not locate the test-fast job block (start=%d end=%d)", start, end)
+	// Only the test-fast job's CONFIGURED step counts: the slice runs from that
+	// step's `if:` to the next job, so a key moved to job-level `env:` (which
+	// would make the three pristine legs configured too) no longer satisfies it.
+	stepStart := strings.Index(ci, "- if: matrix.configured == '1'")
+	jobEnd := strings.Index(ci, "\n  test-release:")
+	if stepStart < 0 || jobEnd < 0 || jobEnd < stepStart {
+		t.Fatalf("ci.yml: could not locate the test-fast configured step (start=%d end=%d)", stepStart, jobEnd)
 	}
-	testFast := ci[start:end]
+	configuredStep := ci[stepStart:jobEnd]
+	pristineCI := ci[:stepStart] + ci[jobEnd:]
 	want := append([]string{"AGENTSYNC_HOME"}, ambientVars...)
 	for _, v := range want {
-		if !strings.Contains(script, `-e "`+v+`=`) {
-			t.Errorf("scripts/test-in-container.sh configured leg does not export %s", v)
-		}
-		if !regexp.MustCompile(`(?m)^\s+` + regexp.QuoteMeta(v) + `:\s`).MatchString(testFast) {
+		key := regexp.MustCompile(`(?m)^\s+` + regexp.QuoteMeta(v) + `:\s`)
+		if !key.MatchString(configuredStep) {
 			t.Errorf(".github/workflows/ci.yml test-fast configured step does not export %s", v)
+		}
+		if key.MatchString(pristineCI) {
+			t.Errorf(".github/workflows/ci.yml exports %s outside the configured step — the pristine legs would no longer be pristine", v)
 		}
 	}
 	// And the configured recipe really is what CI runs and what the script keys on.
@@ -249,15 +257,17 @@ func TestConfiguredEnvLegCoversAmbientVars(t *testing.T) {
 	configuredBlock := shellIfBlock(t, script, `if [[ "${AGENTSYNC_TEST_CONFIGURED_ENV:-}" == "1" ]]`)
 	for _, v := range append([]string{"AGENTSYNC_TEST_CONFIGURED_ENV=1", "AGENTSYNC_HOME="}, ambientVars...) {
 		if !strings.Contains(configuredBlock, `-e "`+v) {
-			t.Errorf("scripts/test-in-container.sh: `-e %q…` must be inside the configured-leg if-block, and only there", v)
+			t.Errorf("scripts/test-in-container.sh: `-e \"%s…\"` must be inside the configured-leg if-block, and only there", v)
 		}
 	}
 	// Outside that block no `-e` may carry a configured-env variable (prose
 	// mentions in comments are fine; only the `-e "NAME=` form reaches the container).
 	pristine := strings.Replace(script, configuredBlock, "", 1)
+	// Both the quoted and unquoted `-e` spellings are checked; `--env` is not
+	// used anywhere in this repo's scripts and would be a style break on its own.
 	for _, v := range append([]string{"AGENTSYNC_TEST_CONFIGURED_ENV", "AGENTSYNC_HOME"}, ambientVars...) {
-		if strings.Contains(pristine, `-e "`+v+`=`) {
-			t.Errorf("scripts/test-in-container.sh: `-e %q=…` outside the configured-leg if-block would make the pristine leg configured too", v)
+		if strings.Contains(pristine, `-e "`+v+`=`) || strings.Contains(pristine, `-e `+v+`=`) {
+			t.Errorf("scripts/test-in-container.sh: `-e \"%s=…\"` outside the configured-leg if-block would make the pristine leg configured too", v)
 		}
 	}
 	entrypoint := readFile(t, filepath.Join(root, "test", "container", "entrypoint.sh"))
@@ -269,15 +279,20 @@ func TestConfiguredEnvLegCoversAmbientVars(t *testing.T) {
 	}
 }
 
-// shellIfBlock returns the text from the first line containing header through
-// the matching top-level `fi` (the first line that is exactly "fi"), so guards
-// can assert what is and is not inside a shell if-block.
+// shellIfBlock returns the text from the line that STARTS with header (so a
+// comment quoting the header cannot anchor it) through the first following
+// line that is exactly "fi" — the first column-0 `fi`, not a bracket-matched
+// one, which is enough because every nested `fi` in these scripts is indented;
+// a nested `fi` at column 0 would truncate the block and the assertions on its
+// tail fail loudly (measured in the #271 review). Guards use it to assert what
+// is and is not inside a shell if-block.
 func shellIfBlock(t *testing.T, src, header string) string {
 	t.Helper()
-	start := strings.Index(src, header)
-	if start < 0 {
-		t.Fatalf("shell source has no %q block", header)
+	loc := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(header)).FindStringIndex(src)
+	if loc == nil {
+		t.Fatalf("shell source has no line starting with %q", header)
 	}
+	start := loc[0]
 	end := strings.Index(src[start:], "\nfi\n")
 	if end < 0 {
 		t.Fatalf("shell source: no closing `fi` for %q", header)
@@ -299,6 +314,9 @@ func TestConfiguredLegIsLive(t *testing.T) {
 	if !ok {
 		t.Skip("not the configured container leg (AGENTSYNC_TEST_AMBIENT_BIN unset)")
 	}
+	// These three must stay in the entrypoint's stub list; that list is itself
+	// kept in step with the probed binaries by TestConfiguredLegFakesEveryAgentBinary
+	// (internal/cli), so an agent that stops being probed must be removed here too.
 	for _, bin := range []string{"codex", "claude", "grok"} {
 		got, err := exec.LookPath(bin)
 		if err != nil {
