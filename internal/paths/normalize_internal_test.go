@@ -1,6 +1,10 @@
 package paths
 
-import "testing"
+import (
+	"path/filepath"
+	"runtime"
+	"testing"
+)
 
 // TestNormalizeDir_CaseFold exercises the platform case-fold (of the RESOLVED
 // predicates only; the lexical ContainsDir never folds) on every OS by
@@ -21,6 +25,12 @@ func TestNormalizeDir_CaseFold(t *testing.T) {
 	}
 
 	caseInsensitiveFS = false
+	if runtime.GOOS == "windows" {
+		// filepath.Rel compares path elements case-insensitively on Windows
+		// regardless of our fold, so "fold off ⇒ case-sensitive" is not
+		// observable there; the fold-on half above is the load-bearing one.
+		return
+	}
 	if SameDirResolved("/Users/Alice", "/users/alice") {
 		t.Fatal("with the fold off, spellings that differ in case are different directories")
 	}
@@ -48,6 +58,9 @@ func TestResolveExistingPrefix_RelativePassesThrough(t *testing.T) {
 }
 
 func TestIsComponentPrefix(t *testing.T) {
+	// Rows are written with `/` and converted to the platform separator, since
+	// the production check compares against filepath.Separator on paths that
+	// filepath.Clean has already normalized (`\` on Windows).
 	cases := []struct {
 		p, prefix string
 		want      bool
@@ -62,8 +75,9 @@ func TestIsComponentPrefix(t *testing.T) {
 		{"foo/bar", ".", false},
 	}
 	for _, tc := range cases {
-		if got := isComponentPrefix(tc.p, tc.prefix); got != tc.want {
-			t.Errorf("isComponentPrefix(%q, %q) = %v, want %v", tc.p, tc.prefix, got, tc.want)
+		p, prefix := filepath.FromSlash(tc.p), filepath.FromSlash(tc.prefix)
+		if got := isComponentPrefix(p, prefix); got != tc.want {
+			t.Errorf("isComponentPrefix(%q, %q) = %v, want %v", p, prefix, got, tc.want)
 		}
 	}
 }

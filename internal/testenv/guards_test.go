@@ -340,11 +340,31 @@ func moduleRoot(t *testing.T) string {
 	return root
 }
 
+// readFile returns the file's text with CRLF normalized to LF: a Windows
+// checkout with core.autocrlf rewrites the shell scripts and YAML, and every
+// line-anchored match here (`\nfi\n`, `(?m)^…`) assumes LF. The scripts run
+// only on Linux, where they are LF; the guards must not depend on the runner's
+// checkout settings.
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(b)
+	return strings.ReplaceAll(string(b), "\r\n", "\n")
+}
+
+// TestShellIfBlock_CRLF pins that normalization end to end for the helper the
+// Windows test-fast leg tripped on: a CRLF-encoded script must yield the same
+// block as its LF twin.
+func TestShellIfBlock_CRLF(t *testing.T) {
+	lf := "x=1\nif [[ \"$A\" == \"1\" ]]; then\n    if true; then\n        :\n    fi\n    export MARK=1\nfi\necho done\n"
+	want := "if [[ \"$A\" == \"1\" ]]; then\n    if true; then\n        :\n    fi\n    export MARK=1\nfi\n"
+	crlf := strings.ReplaceAll(lf, "\n", "\r\n")
+	normalized := strings.ReplaceAll(crlf, "\r\n", "\n") // what readFile does
+	for name, src := range map[string]string{"lf": lf, "crlf-normalized": normalized} {
+		if got := shellIfBlock(t, src, `if [[ "$A" == "1" ]]`); got != want {
+			t.Errorf("%s: shellIfBlock = %q, want %q", name, got, want)
+		}
+	}
 }
