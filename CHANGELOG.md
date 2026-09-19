@@ -17,14 +17,28 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   mixed-format cleanup/purge, and guarded hook capture. Unsupported subagent/LSP
   projection, hook handlers, and other limits are documented in [Grok support](docs/grok.md).
 
+### Documentation
+
+- **The environment-override tables are complete, and a guard keeps them so.**
+  The website's environment reference claimed to list "every `AGENTSYNC_*`
+  override" but omitted `AGENTSYNC_LOCK_TIMEOUT_MS` (the README's table had
+  it), and both tables omitted the two non-`AGENTSYNC_` variables the CLI reads:
+  `NO_COLOR` (disables color under `--color=auto`) and `EDITOR` (what
+  `secret edit` opens). All three rows are in both tables now, and
+  `TestEnvOverridesDocumented` (`internal/testenv`) fails when production code
+  reads a variable either table lacks, when a row names a variable nothing
+  reads, or when the two tables disagree. The harness-only `AGENTSYNC_TEST_*` /
+  `AGENTSYNC_LIVE_*` signals are listed in `CONTRIBUTING.md` instead. The
+  `go test -run` example in the README and `CONTRIBUTING.md` now names the
+  test exactly (`TestApply_FirstRunBacksUpForeignFile`) rather than by a
+  prefix that happened to match.
+- **`.gitattributes`** pins `*.sh` and the `justfile` to LF in the working tree
+  (`* text=auto` for the rest), so a Windows checkout with `core.autocrlf=true`
+  — CI's `windows-latest` `just test-fast` leg — still gets scripts `bash` and
+  `just` can run. No tracked file was CRLF, so nothing is renormalized.
+
 ### Fixed
 
-- **Docs: the website's environment-variables reference lists every override
-  the CLI reads.** It omitted `AGENTSYNC_LOCK_TIMEOUT_MS` (the README's table
-  had it) while claiming to be complete; the page now carries the row and
-  scopes its claim to CLI-read overrides, pointing contributors at the test
-  harness's own `AGENTSYNC_TEST_*` signals. The README's `go test -run`
-  example also named a test that no longer exists.
 - **`AGENTSYNC_TARGET_ROOT` is a real sandbox, and the test suite is hermetic
   against a configured shell**
   ([#270](https://github.com/spxrogers/agentsync/issues/270)). While the

@@ -225,8 +225,17 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 | `AGENTSYNC_NO_UPGRADE_NOTICE=1` | Never show the one-time first-run-after-upgrade notice. |
 | `AGENTSYNC_AGE_SKIP_PERM_CHECK=1` | Skip the 0600 **mode** check on the age identity file (ACL'd NFS). The identity must still be a regular file. |
 | `AGENTSYNC_MAX_TARBALL_MB=<N>` | Override the per-tarball decompressed-bytes cap (default 512). 0 disables. |
-| `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |
 | `AGENTSYNC_LOCK_TIMEOUT_MS=<N>` | Override how long a mutating command waits for the global lock before erroring (default 30000ms). |
+| `NO_COLOR` | Disable ANSI color and bold under the default `--color=auto` (any value counts, even empty). `--color=always` still forces color on. |
+| `EDITOR` | The editor `secret edit` opens the decrypted vault in (default `vi`; flags are allowed, e.g. `code --wait`). |
+| `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |
+
+Every variable the CLI reads is in this table, `AGENTSYNC_*` or not — a guard test
+(`TestEnvOverridesDocumented`, `internal/testenv`) fails when production code
+reads one this table and the [website reference](https://agentsync.cc/reference/environment/)
+do not both list. The test harness's own `AGENTSYNC_TEST_*` / `AGENTSYNC_LIVE_*`
+signals are contributor-only; [CONTRIBUTING.md](CONTRIBUTING.md#test-harness-environment-signals)
+lists them.
 
 ## Troubleshooting
 

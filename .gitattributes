@@ -1,8 +1,11 @@
-# Normalize line endings in the repository to LF for every text file.
+# Normalize line endings to LF in the repository for every text file. No
+# tracked file is CRLF today, so this renormalizes nothing; it keeps it that way.
 * text=auto
 
-# Shell scripts run inside the Linux test container (and in CI) whatever the
-# host checkout's core.autocrlf says: a CRLF `#!/usr/bin/env bash` line breaks
-# the interpreter lookup, so pin them to LF on checkout too.
+# Pin LF in the WORKING TREE too, whatever the host's core.autocrlf says. The
+# load-bearing case is the justfile: CI runs `just test-fast` on windows-latest,
+# where a default checkout is CRLF. The shell scripts only ever execute inside
+# the Linux test container, but a CRLF `#!/usr/bin/env bash` line breaks the
+# interpreter lookup, so they get the same pin rather than relying on luck.
 *.sh text eol=lf
 justfile text eol=lf
