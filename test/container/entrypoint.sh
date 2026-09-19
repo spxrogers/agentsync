@@ -37,6 +37,29 @@ cd /workspace
 # that touch the filesystem refuse to run unless this is exported.
 export AGENTSYNC_TEST_IN_CONTAINER=1
 
+# Configured-environment leg (issue #270): a developer who actually uses these
+# agents has their binaries on PATH, and PATH is the one ambient input the
+# harness cannot scrub (the toolchain needs it). Every `exec.LookPath` in
+# agentsync — adapter Detect, `agent add`'s "binary not found" hint — reads it,
+# so a test whose outcome depends on an agent being ABSENT must neutralize PATH
+# itself (`"PATH": t.TempDir()`). This leg puts a stub for every agent binary
+# agentsync probes on PATH so a test that forgets is red here, not on a
+# developer's machine. The list mirrors internal/cli's deepAgentBinaries plus
+# every generic Spec's DetectBin; TestConfiguredLegFakesEveryAgentBinary
+# (internal/cli) fails if a probed binary is missing from it.
+if [[ "${AGENTSYNC_TEST_CONFIGURED_ENV:-}" == "1" ]]; then
+    AMBIENT_BIN="$(mktemp -d)/ambient-agent-bins"
+    mkdir -p "$AMBIENT_BIN"
+    for bin in claude opencode codex cursor gemini cn windsurf roo cline grok \
+               agy amp auggie copilot crush droid goose jules junie kilocode kiro \
+               openhands pi q qwen vibe warp zed; do
+        printf '#!/bin/sh\nexit 0\n' > "$AMBIENT_BIN/$bin"
+        chmod +x "$AMBIENT_BIN/$bin"
+    done
+    export PATH="$AMBIENT_BIN:$PATH"
+    echo "==> configured-environment leg: $(ls "$AMBIENT_BIN" | wc -l) fake agent binaries on PATH ($AMBIENT_BIN)"
+fi
+
 step() {
     printf '\n\033[1;36m==> %s\033[0m\n' "$1"
 }

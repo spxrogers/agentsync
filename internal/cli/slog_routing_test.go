@@ -198,7 +198,10 @@ func mustJSON(t *testing.T, v any) string {
 func TestSuccessAndDiagUseTheRightStreams(t *testing.T) {
 	testenv.RequireContainer(t)
 	tmp := t.TempDir()
-	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp, "NO_COLOR": "1"}
+	// An empty PATH guarantees no agent binary is found, so the WARN branch
+	// asserted below fires regardless of what the developer has installed —
+	// with a real `codex` on PATH this test used to pass only in CI (#270).
+	env := map[string]string{"AGENTSYNC_TARGET_ROOT": tmp, "HOME": tmp, "NO_COLOR": "1", "PATH": t.TempDir()}
 	if _, err := runCLI(t, env, "init"); err != nil {
 		t.Fatal(err)
 	}
@@ -220,8 +223,8 @@ func TestSuccessAndDiagUseTheRightStreams(t *testing.T) {
 		}
 	}
 
-	// codex is genuinely absent from PATH in the test container, so `agent add`
-	// emits a WARN through `diag` — which belongs on stderr.
+	// codex is absent from the (empty) PATH, so `agent add` emits a WARN through
+	// `diag` — which belongs on stderr.
 	stdout2, stderr2, err := runCLISplit(t, env, "agent", "add", "codex")
 	if err != nil {
 		t.Fatalf("agent add codex: %v\nstderr:\n%s", err, stderr2)

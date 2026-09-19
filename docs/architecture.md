@@ -1128,7 +1128,11 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    variables exported (`just test-release-configured`;
    `TestConfiguredEnvLegCoversAmbientVars` keeps the three lists in step).
    `internal/cli`'s TestMain also runs under a throwaway `HOME` and fails the
-   package if any test wrote there instead of into its redirect.
+   package if any test wrote there instead of into its redirect. `PATH` cannot
+   be scrubbed, so a test whose outcome depends on an agent binary being absent
+   neutralizes it itself (`"PATH": t.TempDir()`), and the configured container
+   leg puts a stub for every probed agent binary on `PATH`
+   (`TestConfiguredLegFakesEveryAgentBinary` keeps that list complete).
 4. **First-apply backups** — the `foreign-collision` case copies the pre-existing
    destination into `.state/backups/<ts>/` before writing. Symlinked
    destinations are refused by default — and, on the read path, classified as

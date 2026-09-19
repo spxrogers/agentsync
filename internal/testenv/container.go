@@ -45,6 +45,18 @@ var conventionVars = []string{"NO_COLOR", "EDITOR"}
 // production code reads that can move a test's result. AGENTSYNC_* overrides
 // are scrubbed by prefix instead (see ScrubAmbient), so they never need
 // listing.
+//
+// Two ambient inputs are deliberately NOT here and cannot be scrubbed:
+//
+//   - PATH — the Go toolchain and git need it, yet every `exec.LookPath` in
+//     agentsync (adapter Detect, `agent add`'s "binary not found" hint) reads
+//     it, so a developer with a real `codex` or `grok` installed sees a
+//     different result. A test whose outcome depends on an agent binary being
+//     ABSENT must set `"PATH": t.TempDir()` itself (doctor_test.go is the
+//     precedent); the configured-environment container leg puts fake agent
+//     binaries on PATH so a test that forgets is caught in CI.
+//   - HOME — the effective home for every adapter; internal/cli's TestMain
+//     points it at a throwaway dir and fails the package if a test writes there.
 var ambientVars = append(append([]string{}, agentHomeVars...), conventionVars...)
 
 // keepPrefixes are the AGENTSYNC_* families ScrubAmbient leaves alone: the

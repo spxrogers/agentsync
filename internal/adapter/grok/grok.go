@@ -17,6 +17,10 @@ type Options struct {
 	TargetRoot string
 	GrokHome   string // optional absolute GROK_HOME override; user scope only
 	Stderr     io.Writer
+	// LookPath overrides exec.LookPath for testing. nil means use exec.LookPath.
+	// Every deep adapter carries this hook so Detect never depends on what the
+	// developer happens to have on PATH (issue #270).
+	LookPath func(file string) (string, error)
 }
 
 // Adapter implements Grok Build's native render and capture boundary.
@@ -47,7 +51,11 @@ func (a *Adapter) Detect() (bool, error) {
 	if info, err := os.Stat(a.resolvePaths(adapter.ScopeUser, "").ConfigDir); err == nil && info.IsDir() {
 		return true, nil
 	}
-	_, err := exec.LookPath("grok")
+	lookPath := a.opts.LookPath
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	_, err := lookPath("grok")
 	return err == nil, nil
 }
 

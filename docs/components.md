@@ -646,11 +646,11 @@ every resolved path lives under it and the user-facing overrides are ignored
 (issue #270).
 - **Key:** `Env` (interface), `OSEnv`, `MapEnv`; `HomeDir`; `AgentsyncHome`;
   `AgentHomeOverride`; `ContainsDir` (lexical containment by declared spelling —
-  de-nesting, the owner map, the traversal guard's assertion) and
-  `ContainsDirResolved`/`SameDirResolved` (directory identity — symlinks
-  resolved through the deepest existing ancestor, case-folded on macOS/Windows —
-  behind the never-at-`$HOME` guard and the `GROK_HOME` refusal);
-  `HomeRelative`/`FromHomeRelative`.
+  de-nesting, the owner map, the traversal guard's assertion, and the spelling
+  leg of the never-at-`$HOME` guard) and `ContainsDirResolved`/`SameDirResolved`
+  (directory identity — symlinks resolved through the deepest existing
+  ancestor, case-folded on macOS/Windows — the identity leg of that guard and
+  the `GROK_HOME` refusal); `HomeRelative`/`FromHomeRelative`.
 - **Files:** `paths.go`.
 
 ### `internal/log`

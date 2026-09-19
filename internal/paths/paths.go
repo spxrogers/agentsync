@@ -74,8 +74,10 @@ func AgentsyncHome(e Env) string {
 // — where the declared spelling is what git backup inits, opens and stages by;
 // see denestRoots in internal/cli for why resolving symlinks there is wrong.
 // For directory IDENTITY (is this GROK_HOME really $HOME under another name?)
-// use ContainsDirResolved / SameDirResolved. The two agree whenever no symlink
-// or case difference is involved.
+// use ContainsDirResolved / SameDirResolved; a guard whose miss would be
+// costly tests both (the never-at-$HOME guard drops a root that contains the
+// home by spelling OR by identity). The two agree whenever no symlink or case
+// difference is involved.
 func ContainsDir(parent, child string) bool {
 	return containsNormalized(filepath.Clean(parent), filepath.Clean(child))
 }

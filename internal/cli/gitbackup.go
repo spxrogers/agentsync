@@ -397,7 +397,11 @@ func enabledVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Scop
 // dropping; de-nesting below deliberately uses the lexical predicate alone (see
 // denestRoots). Left in, such a root would fold every other agent's dir into
 // itself and have agentsync `git init` the user's home, breaking the documented
-// invariant that it never inits a repo at $HOME. No hardcoded adapter root can do this, but an
+// invariant that it never inits a repo at $HOME. A userHome that is relative or
+// a literal `~` (a broken shell) is never contained by an absolute root under
+// either predicate, so the guard is silently off there too — the same state in
+// which every adapter's TargetRoot is relative, i.e. already broken upstream
+// of this guard. No hardcoded adapter root can do this, but an
 // env-derived one (Grok's GROK_HOME) can; the adapter refuses the two obvious
 // values (`/`, $HOME) with an error, and this is the central backstop for the
 // rest. Callers that can talk to the user (the apply-tail session, doctor) report
@@ -549,8 +553,8 @@ func ownersFor(owners map[string][]string, root string) []string {
 // init the child — Detect finds the parent's .git first and opens that — and (b)
 // make the parent permanently un-revertable once a child repo does exist, since
 // agit.HasNestedRepoBelow probes symlinked subdirs. The $HOME guard in
-// partitionVersionRoots is the one place containment must follow identity, and
-// it uses paths.ContainsDirResolved.
+// partitionVersionRoots is the one place containment must also follow identity,
+// and it tests both predicates (swallowsHome).
 func denestRoots(roots []string) []string {
 	sort.Strings(roots)
 	var kept []string
