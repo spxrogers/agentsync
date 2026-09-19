@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 )
@@ -62,11 +63,33 @@ func (a *Adapter) KeyMergeStrategyForPath(path string) string {
 	return a.KeyMergeStrategy()
 }
 
+// VersionRoots declares the user-scope config dir for destination git backup. An
+// absolute GROK_HOME may legitimately live outside $HOME (that is what upstream
+// provides it for) and is versioned there like any other root — with ONE
+// exclusion: a GROK_HOME that is $HOME itself or an ancestor of it (`/`, `$HOME`,
+// `/home`) declares NO root. Such a root would swallow every other agent's dir in
+// the apply tail's de-nesting pass and have agentsync `git init` the user's home
+// directory (or the filesystem root), breaking the documented invariant that
+// agentsync never inits a repo at `$HOME` (issue #270). The rest of the adapter
+// still renders there; only the git backup opts out, and docs/grok.md says so.
 func (a *Adapter) VersionRoots(scope adapter.Scope, project string) []string {
 	if scope != adapter.ScopeUser || a.validateHome() != nil {
 		return nil
 	}
-	return []string{filepath.Clean(a.resolvePaths(scope, project).ConfigDir)}
+	root := filepath.Clean(a.resolvePaths(scope, project).ConfigDir)
+	if a.opts.GrokHome != "" && containsDir(root, filepath.Clean(a.opts.TargetRoot)) {
+		return nil
+	}
+	return []string{root}
+}
+
+// containsDir reports whether child is parent itself or nested under it.
+func containsDir(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 var (

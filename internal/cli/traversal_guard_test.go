@@ -39,6 +39,13 @@ func TestEveryAdapterRejectsTraversalComponentName(t *testing.T) {
 	// registryFactory); resolve it the same way so the user-scope containment
 	// assertion knows the expected root.
 	userHome := paths.HomeDir(paths.OSEnv{})
+	// Grok's user-scope root is env-derived: an absolute GROK_HOME legitimately
+	// lives OUTSIDE $HOME (that is what upstream provides it for), so it is a
+	// second legitimate destination root, not an escape. The harness scrubs an
+	// ambient GROK_HOME (testenv.ScrubAmbient), so this is "" in a normal run;
+	// resolving it through the same helper registryFactory uses keeps the
+	// assertion honest if a test ever sets one deliberately (issue #270).
+	grokHome := paths.AgentHomeOverride(paths.OSEnv{}, "GROK_HOME")
 
 	// Malicious names — mirror internal/source/writer_test.go's degenerate and
 	// control/deceptive-rune tables. A raw rune would smuggle a terminal escape
@@ -103,10 +110,11 @@ func TestEveryAdapterRejectsTraversalComponentName(t *testing.T) {
 					// file at project scope, so accept either — the point is that
 					// nothing escapes to an arbitrary location like /tmp or /etc.
 					contained := underRoot(op.Path, userHome) ||
-						(sc.project != "" && underRoot(op.Path, sc.project))
+						(sc.project != "" && underRoot(op.Path, sc.project)) ||
+						(name == "grok" && grokHome != "" && underRoot(op.Path, grokHome))
 					if !contained {
-						t.Errorf("%s: FileOp path %q escapes the destination root (HOME=%q, project=%q)",
-							name, op.Path, userHome, sc.project)
+						t.Errorf("%s: FileOp path %q escapes the destination root (HOME=%q, project=%q, GROK_HOME=%q)",
+							name, op.Path, userHome, sc.project, grokHome)
 					}
 				}
 			})

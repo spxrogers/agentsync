@@ -147,12 +147,59 @@ func TestAgentsyncHome(t *testing.T) {
 			env:  map[string]string{"AGENTSYNC_TARGET_ROOT": "/tmp/x", "HOME": "/Users/real"},
 			want: filepath.Join("/tmp/x", ".agentsync"),
 		},
+		{
+			// Issue #270: the test-isolation redirect must outrank an ambient
+			// AGENTSYNC_HOME, or every test resolving the canonical source lands
+			// on the developer's real tree.
+			name: "AGENTSYNC_TARGET_ROOT outranks AGENTSYNC_HOME",
+			env: map[string]string{
+				"AGENTSYNC_TARGET_ROOT": "/tmp/x",
+				"AGENTSYNC_HOME":        "/Users/real/.agentsync",
+				"HOME":                  "/Users/real",
+			},
+			want: filepath.Join("/tmp/x", ".agentsync"),
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := paths.AgentsyncHome(paths.MapEnv(tc.env))
 			if got != tc.want {
 				t.Fatalf("AgentsyncHome = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAgentHomeOverride pins the sandbox rule for third-party agent home
+// variables: honoured for real users, ignored under AGENTSYNC_TARGET_ROOT so a
+// redirected run can never escape to the agent's real home (issue #270).
+func TestAgentHomeOverride(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{
+			name: "honoured when no redirect is set",
+			env:  map[string]string{"GROK_HOME": "/opt/grok", "HOME": "/Users/real"},
+			want: "/opt/grok",
+		},
+		{
+			name: "empty when unset",
+			env:  map[string]string{"HOME": "/Users/real"},
+			want: "",
+		},
+		{
+			name: "ignored under AGENTSYNC_TARGET_ROOT",
+			env:  map[string]string{"GROK_HOME": "/opt/grok", "AGENTSYNC_TARGET_ROOT": "/tmp/x", "HOME": "/Users/real"},
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := paths.AgentHomeOverride(paths.MapEnv(tc.env), "GROK_HOME")
+			if got != tc.want {
+				t.Fatalf("AgentHomeOverride = %q, want %q", got, tc.want)
 			}
 		})
 	}

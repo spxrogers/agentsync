@@ -639,10 +639,13 @@ silently corrupts any key holding a `/` or a `~`.
 - **Files:** `jsonkeys.go`, `jsonc.go`, `pointer.go`.
 
 ### `internal/paths`
-Resolves `AGENTSYNC_HOME`, `AGENTSYNC_TARGET_ROOT`, and `$HOME`; converts between
-absolute and `${HOME}`-relative forms for portable state.
+Resolves `AGENTSYNC_HOME`, `AGENTSYNC_TARGET_ROOT`, `$HOME`, and third-party agent
+home overrides (`GROK_HOME`); converts between absolute and `${HOME}`-relative
+forms for portable state. `AGENTSYNC_TARGET_ROOT` is the sandbox switch: when set,
+every resolved path lives under it and the user-facing overrides are ignored
+(issue #270).
 - **Key:** `Env` (interface), `OSEnv`, `MapEnv`; `HomeDir`; `AgentsyncHome`;
-  `HomeRelative`/`FromHomeRelative`.
+  `AgentHomeOverride`; `HomeRelative`/`FromHomeRelative`.
 - **Files:** `paths.go`.
 
 ### `internal/log`
@@ -742,9 +745,13 @@ construction. The gap was only ever plain `string` values read out of native con
 - **Files:** `ui.go`, `diag.go`, `slog.go`, `spinner.go`.
 
 ### `internal/testenv`
-Guards FS-touching tests so they only run in the hermetic container.
-- **Key:** `RequireContainer(t)`; `MustRunInContainer()`; `InContainer() bool`;
-  `EnvVar` (`AGENTSYNC_TEST_IN_CONTAINER`).
+Guards FS-touching tests so they only run in the hermetic container, and scrubs
+the ambient environment so no test's result depends on what the developer's
+shell exports: every `AGENTSYNC_*` override (except the harness's own
+`AGENTSYNC_TEST_*` / `AGENTSYNC_LIVE_*` signals) plus `GROK_HOME`, `NO_COLOR`
+and `EDITOR` are unset by both guards before a test runs (issue #270).
+- **Key:** `RequireContainer(t)`; `MustRunInContainer()`; `ScrubAmbient()`;
+  `InContainer() bool`; `EnvVar` (`AGENTSYNC_TEST_IN_CONTAINER`).
 - **Files:** `container.go`.
 
 ---

@@ -364,13 +364,21 @@ func baselineMessage(root string) string {
 // nested under another (e.g. ~/.claude/skills under ~/.claude) is dropped in favor
 // of the ancestor — so agentsync never creates a repo inside another repo.
 //
-// DEDUP CASING (nit, issue #175): the seen[] key is the BYTE-EXACT cleaned path
-// (filepath.Clean), so on a case-insensitive filesystem two roots differing only in
-// case would be treated as distinct and could both be inited. That is safe today
-// because every version root is a hardcoded string literal with fixed casing (the
-// deep adapters' Paths + generic.versionRootOf), so no two roots ever differ only in
-// case — the dedup relies on that. If a future adapter derives a root from a
-// case-varying source, this key would need case-folding on case-insensitive FSes.
+// DEDUP CASING (nit, issue #175; revisited in #270): the seen[] key is the
+// BYTE-EXACT cleaned path (filepath.Clean), so on a case-insensitive filesystem two
+// roots differing only in case are treated as distinct. Every version root but one
+// is a hardcoded string literal with fixed casing (the deep adapters' Paths +
+// generic.versionRootOf), so those can never collide by case alone. The exception
+// is Grok's user-scope root, which derives from the user-typed GROK_HOME: a
+// GROK_HOME that differs from another agent's root ONLY in case (say `~/.Codex` on
+// macOS) is not de-duped against it, and both names reach the init/checkpoint pass.
+// The consequence is bounded: resolveBackupRepo gates on agit.Detect, which follows
+// the filesystem, so the second spelling detects as agentsync-owned (the .git the
+// first spelling created) and is opened, not inited — the same repo is checkpointed
+// twice under two names (a no-op commit the second time), never a repo inside a
+// repo and never data loss. That is why the key stays byte-exact rather than
+// growing a case-folding branch that would have to detect FS case-sensitivity at
+// runtime.
 func enabledVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Scope, project string) []string {
 	seen := map[string]bool{}
 	var all []string

@@ -454,18 +454,18 @@ func TestCheck_AcceptsBackendSpellingsApplyAccepts(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			tmp := t.TempDir()
-			// The perm-check opt-out and AGENTSYNC_HOME are pinned so an
-			// exported value in a developer's shell cannot change what this
-			// test exercises: AGENTSYNC_AGE_SKIP_PERM_CHECK=1 short-circuits
+			// The perm-check opt-out is pinned so an exported value in a
+			// developer's shell cannot change what this test exercises:
+			// AGENTSYNC_AGE_SKIP_PERM_CHECK=1 short-circuits
 			// CheckIdentityPermissions, so the age rows would pass without the
-			// 0600 identity below ever being inspected, and AGENTSYNC_HOME
-			// outranks AGENTSYNC_TARGET_ROOT in paths.AgentsyncHome, so an
-			// exported one would aim check at the developer's real home.
+			// 0600 identity below ever being inspected. (The harness scrubs it
+			// anyway — testenv.ScrubAmbient — but this test's claim depends on it,
+			// so it stays explicit.) AGENTSYNC_HOME needs no pin:
+			// AGENTSYNC_TARGET_ROOT outranks it in paths.AgentsyncHome.
 			env := map[string]string{
 				"AGENTSYNC_TARGET_ROOT":         tmp,
 				"HOME":                          tmp,
 				"AGENTSYNC_AGE_SKIP_PERM_CHECK": "",
-				"AGENTSYNC_HOME":                "",
 			}
 			if _, err := runCLI(t, env, "init"); err != nil {
 				t.Fatalf("init: %v", err)
@@ -496,14 +496,13 @@ func TestCheck_AcceptsBackendSpellingsApplyAccepts(t *testing.T) {
 // while `doctor` reports both.
 func TestCheck_ReportsEveryMissingSecretsField(t *testing.T) {
 	tmp := t.TempDir()
+	// AGENTSYNC_TARGET_ROOT outranks AGENTSYNC_HOME in paths.AgentsyncHome, so
+	// check aims at this tmp tree whatever the developer's shell exports. No
+	// identity file exists in this fixture, so the perm-check opt-out is not in
+	// play here.
 	env := map[string]string{
 		"AGENTSYNC_TARGET_ROOT": tmp,
 		"HOME":                  tmp,
-		// AGENTSYNC_HOME outranks AGENTSYNC_TARGET_ROOT in paths.AgentsyncHome,
-		// so an exported one would aim check at the developer's real home. No
-		// identity file exists in this fixture, so the perm-check opt-out is not
-		// in play here.
-		"AGENTSYNC_HOME": "",
 	}
 	if _, err := runCLI(t, env, "init"); err != nil {
 		t.Fatalf("init: %v", err)
@@ -531,12 +530,11 @@ func TestCheck_ReportsEveryMissingSecretsField(t *testing.T) {
 // a path this config never mentions.
 func TestCheck_LabelsSecretsFailureWithItsField(t *testing.T) {
 	tmp := t.TempDir()
-	// AGENTSYNC_HOME outranks AGENTSYNC_TARGET_ROOT in paths.AgentsyncHome, so
-	// an exported one would aim check at the developer's real home.
+	// AGENTSYNC_TARGET_ROOT outranks AGENTSYNC_HOME in paths.AgentsyncHome, so
+	// check aims at this tmp tree whatever the developer's shell exports.
 	env := map[string]string{
 		"AGENTSYNC_TARGET_ROOT": tmp,
 		"HOME":                  tmp,
-		"AGENTSYNC_HOME":        "",
 	}
 	if _, err := runCLI(t, env, "init"); err != nil {
 		t.Fatalf("init: %v", err)

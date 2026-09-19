@@ -65,16 +65,13 @@ func TestSourceInitProbeAgreement(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			tmp := t.TempDir()
+			// No AGENTSYNC_HOME pin needed: AGENTSYNC_TARGET_ROOT outranks it in
+			// paths.AgentsyncHome and the harness scrubs ambient overrides
+			// (testenv.ScrubAmbient), so both commands aim at the planted tree.
 			env := map[string]string{
 				"AGENTSYNC_TARGET_ROOT": tmp,
 				"HOME":                  tmp,
 				"NO_COLOR":              "1",
-				// AGENTSYNC_HOME outranks AGENTSYNC_TARGET_ROOT in
-				// paths.AgentsyncHome, so an exported one would aim both commands
-				// at the developer's real home instead of the planted tree. No
-				// row here touches [secrets], so the perm-check opt-out is not in
-				// play.
-				"AGENTSYNC_HOME": "",
 			}
 			tc.plant(t, tmp)
 
@@ -175,14 +172,12 @@ func TestSourceInitUnreadableNamesTheFileThatFailed(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			tmp := t.TempDir()
+			// No AGENTSYNC_HOME pin needed: AGENTSYNC_TARGET_ROOT outranks it in
+			// paths.AgentsyncHome and the harness scrubs ambient overrides.
 			env := map[string]string{
 				"AGENTSYNC_TARGET_ROOT": tmp,
 				"HOME":                  tmp,
 				"NO_COLOR":              "1",
-				// AGENTSYNC_HOME outranks AGENTSYNC_TARGET_ROOT in
-				// paths.AgentsyncHome, so an exported one would aim both commands
-				// at the developer's real home instead of the planted tree.
-				"AGENTSYNC_HOME": "",
 			}
 			failing := tc.plant(t, tmp)
 

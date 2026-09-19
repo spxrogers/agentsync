@@ -106,6 +106,24 @@ RUN_ARGS=(
     -e "AGENTSYNC_TEST_DEBUG=${AGENTSYNC_TEST_DEBUG:-}"
 )
 
+# Configured-environment fidelity leg (issue #270). The default run is a
+# pristine environment — none of our variables set — which is also exactly
+# what CI looks like, so the suite had never been validated against a
+# machine that actually USES agentsync until an exported AGENTSYNC_HOME
+# redded out 535 tests. With AGENTSYNC_TEST_CONFIGURED_ENV=1 the container
+# gets the variables a configured machine exports, with fixed values so the
+# leg is deterministic; the harness (internal/testenv.ScrubAmbient) must
+# neutralize every one of them. Add a variable here whenever production code
+# starts reading a new ambient one. CI runs both legs (see ci.yml).
+if [[ "${AGENTSYNC_TEST_CONFIGURED_ENV:-}" == "1" ]]; then
+    echo "==> configured-environment leg: exporting ambient AGENTSYNC_HOME / GROK_HOME / NO_COLOR into the container"
+    RUN_ARGS+=(
+        -e "AGENTSYNC_HOME=/tmp/agentsync-ambient/agentsync-home"
+        -e "GROK_HOME=/tmp/agentsync-ambient/grok-home"
+        -e "NO_COLOR=1"
+    )
+fi
+
 # Allow `--network=none` to be relaxed if the user explicitly passed it.
 # (Useful when iterating locally; CI must keep network off.)
 if [[ "${AGENTSYNC_TEST_ALLOW_NETWORK:-}" == "1" ]]; then

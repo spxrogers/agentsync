@@ -283,6 +283,16 @@ doc, `.golangci.yml` (forbidigo rules), and `SECURITY.md`.
 
 - `just build` / `just test-fast`; full gate `just test-release` (hermetic container).
 - FS-touching tests refuse to run on host without `AGENTSYNC_TEST_IN_CONTAINER=1`.
+- **The harness scrubs the ambient environment** (`testenv.ScrubAmbient`, called
+  by both container guards and by `internal/ui`'s TestMain): every `AGENTSYNC_*`
+  override except the harness's own `AGENTSYNC_TEST_*`/`AGENTSYNC_LIVE_*`
+  signals, plus `GROK_HOME`, `NO_COLOR`, `EDITOR`. A test that needs one sets it
+  with `t.Setenv`. `AGENTSYNC_TARGET_ROOT` is a sandbox that outranks
+  `AGENTSYNC_HOME`/`GROK_HOME` in `internal/paths`. If production code starts
+  reading a NEW third-party variable, route it through `paths.Env`
+  (`paths.AgentHomeOverride`) and add it to `testenv.ambientVars` + the
+  configured-environment leg (`just test-release-configured`, `ci.yml`) — issue
+  #270 is what happens otherwise.
 - Lint/format/tidy with `just lint` — the single dev entry point. It rewrites Go
   sources (`gofmt -s` + gofumpt) and deliberately tidies `go.mod`/`go.sum`
   (`go mod tidy`) in place, then runs golangci-lint via `go run

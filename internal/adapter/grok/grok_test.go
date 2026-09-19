@@ -401,3 +401,43 @@ func TestGrokHomeValidationAndCleaning(t *testing.T) {
 		t.Fatalf("expected nil version roots on invalid GROK_HOME, got %v", roots)
 	}
 }
+
+// TestGrokVersionRootsNeverSwallowHome pins the one exclusion in VersionRoots
+// (issue #270): a GROK_HOME at or above $HOME declares no version root, because
+// de-nesting would fold every other agent's root into it and git-init the home
+// directory. A GROK_HOME outside $HOME — upstream's intended use — is still
+// versioned, and the rest of the adapter keeps rendering either way.
+func TestGrokVersionRootsNeverSwallowHome(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home", "alice")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name     string
+		grokHome string
+		want     []string
+	}{
+		{name: "default ~/.grok", grokHome: "", want: []string{filepath.Join(home, ".grok")}},
+		{name: "GROK_HOME under $HOME", grokHome: filepath.Join(home, "grok-cfg"), want: []string{filepath.Join(home, "grok-cfg")}},
+		{name: "GROK_HOME outside $HOME is versioned", grokHome: filepath.Join(base, "opt", "grok"), want: []string{filepath.Join(base, "opt", "grok")}},
+		{name: "GROK_HOME == $HOME declares no root", grokHome: home, want: nil},
+		{name: "GROK_HOME ancestor of $HOME declares no root", grokHome: filepath.Join(base, "home"), want: nil},
+		{name: "GROK_HOME=/ declares no root", grokHome: string(filepath.Separator), want: nil},
+		{name: "unclean ancestor spelling is still caught", grokHome: filepath.Join(home, "..", "..", "home"), want: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := grok.New(grok.Options{TargetRoot: home, GrokHome: tc.grokHome})
+			got := a.VersionRoots(adapter.ScopeUser, "")
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("VersionRoots(GROK_HOME=%q) = %v, want %v", tc.grokHome, got, tc.want)
+			}
+			// The exclusion is git-backup-only: the adapter still resolves and
+			// validates the same home for rendering/detection.
+			if _, err := a.Detect(); err != nil {
+				t.Fatalf("Detect must not error for an absolute GROK_HOME: %v", err)
+			}
+		})
+	}
+}

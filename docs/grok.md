@@ -14,8 +14,17 @@ Enable the dedicated adapter with `agentsync agent add grok`, then run
 
 An absolute `GROK_HOME` replaces `~/.grok` at user scope. Project paths stay
 project-local. `AGENTSYNC_TARGET_ROOT` takes precedence over `GROK_HOME` to
-keep redirected runs isolated. Detection checks the resolved config directory
-or the `grok` executable on `PATH`.
+keep redirected runs isolated (it is read through `paths.AgentHomeOverride`,
+never a raw `os.Getenv`). Detection checks the resolved config directory or the
+`grok` executable on `PATH`.
+
+A `GROK_HOME` outside `$HOME` is versioned by destination git backup like any
+other root. The one exclusion: a `GROK_HOME` that *is* `$HOME` or an ancestor of
+it (`/`, `$HOME`, `/home`) declares no version root — the apply tail's
+de-nesting pass would otherwise fold every other agent's directory into it and
+`git init` the home directory, breaking the invariant that agentsync never inits
+a repo at `$HOME`. Rendering and capture still use that directory; only the git
+backup opts out (`TestGrokVersionRootsNeverSwallowHome`).
 
 ## MCP and ownership
 

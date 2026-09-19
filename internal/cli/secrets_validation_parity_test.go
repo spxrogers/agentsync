@@ -383,14 +383,15 @@ func TestSecretsValidationParity(t *testing.T) {
 				//     secrets.CheckIdentityPermissions return nil (it tests the
 				//     value against "1"), so the group-readable row would pass
 				//     where CI fails it. "" re-arms the check.
-				//   - AGENTSYNC_HOME outranks AGENTSYNC_TARGET_ROOT in
-				//     paths.AgentsyncHome, so an exported one would point both
-				//     commands at the developer's real home instead of tmp.
 				//   - AGENTSYNC_ALLOW_OFFLINE_VERIFY=1 skips check's
 				//     resolvability pass over ${secret:…}/${env:…}, changing
 				//     which code path produces check's half of the parity claim.
+				//
+				// The harness scrubs both anyway (testenv.ScrubAmbient), but the
+				// parity claim depends on them, so they stay explicit. AGENTSYNC_HOME
+				// needs no pin: AGENTSYNC_TARGET_ROOT outranks it in
+				// paths.AgentsyncHome (issue #270).
 				"AGENTSYNC_AGE_SKIP_PERM_CHECK":  "",
-				"AGENTSYNC_HOME":                 "",
 				"AGENTSYNC_ALLOW_OFFLINE_VERIFY": "",
 			}
 			if _, err := runCLI(t, env, "init"); err != nil {

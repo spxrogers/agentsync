@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 	"github.com/spxrogers/agentsync/internal/adapter/claude"
@@ -32,7 +31,8 @@ import (
 // backstop. See #160.
 var registryFactory = func() *adapter.Registry {
 	r := adapter.NewRegistry()
-	home := paths.HomeDir(paths.OSEnv{})
+	env := paths.OSEnv{}
+	home := paths.HomeDir(env)
 	mustRegister := func(a adapter.Adapter) {
 		if err := r.Register(a); err != nil {
 			panic(fmt.Errorf("agentsync: adapter registry wiring bug: %w", err))
@@ -47,12 +47,11 @@ var registryFactory = func() *adapter.Registry {
 	mustRegister(windsurf.New(windsurf.Options{TargetRoot: home}))
 	mustRegister(roo.New(roo.Options{TargetRoot: home}))
 	mustRegister(cline.New(cline.Options{TargetRoot: home}))
-	// A redirected target root must never escape to the real GROK_HOME.
-	grokHome := ""
-	if os.Getenv("AGENTSYNC_TARGET_ROOT") == "" {
-		grokHome = os.Getenv("GROK_HOME")
-	}
-	mustRegister(grok.New(grok.Options{TargetRoot: home, GrokHome: grokHome}))
+	// GROK_HOME goes through paths.Env like every other path input — never a raw
+	// os.Getenv — and paths.AgentHomeOverride blanks it under
+	// AGENTSYNC_TARGET_ROOT, so a redirected run can never escape to the real
+	// GROK_HOME (issue #270).
+	mustRegister(grok.New(grok.Options{TargetRoot: home, GrokHome: paths.AgentHomeOverride(env, "GROK_HOME")}))
 	// Breadth tier: one generic adapter per verified Spec (memory + optional MCP).
 	for _, spec := range generic.Specs() {
 		mustRegister(generic.New(spec, generic.Options{TargetRoot: home}))

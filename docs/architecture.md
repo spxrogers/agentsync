@@ -1093,7 +1093,18 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    `apply`/`reconcile`. `apply --dry-run` is read-only and takes no lock.
 3. **`AGENTSYNC_TARGET_ROOT`** — every dest path resolves through one helper
    (`internal/paths`), so tests redirect `$HOME` to a tmpdir. A `forbidigo` rule
-   bans `os.UserHomeDir()` in `_test.go`.
+   bans `os.UserHomeDir()` in `_test.go`. The redirect is a *sandbox*: while it
+   is set, the canonical source resolves to `<root>/.agentsync` and the
+   user-facing overrides (`AGENTSYNC_HOME`, Grok's `GROK_HOME`) are ignored —
+   otherwise an override exported on a machine that actually uses agentsync
+   would outrank the redirect and every test resolving the canonical source
+   would land on the developer's real tree (issue #270). Third-party agent home
+   variables are read only through `paths.AgentHomeOverride`, never a raw
+   `os.Getenv`. The test harness (`internal/testenv`) additionally scrubs every
+   ambient `AGENTSYNC_*` override plus `GROK_HOME`/`NO_COLOR`/`EDITOR` from the
+   process before any test runs (`ScrubAmbient`, called by both container
+   guards), and CI runs the suite once pristine and once with those variables
+   exported (`just test-release-configured`).
 4. **First-apply backups** — the `foreign-collision` case copies the pre-existing
    destination into `.state/backups/<ts>/` before writing. Symlinked
    destinations are refused by default — and, on the read path, classified as
