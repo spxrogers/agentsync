@@ -624,10 +624,11 @@ reports directories to back up. The contract every implementor honours:
    file outside any returned dir (Claude's `~/.claude.json`); those are
    intentionally **not** versioned — agentsync never inits a repo at `$HOME`.
    The apply tail enforces that invariant centrally: a declared root that *is*
-   `$HOME` or an ancestor of it (`/`, `/home`, a symlinked or case-varied
-   spelling — `paths.ContainsDirResolved` normalizes all three, resolving
-   through the deepest *existing* ancestor so a pending path and an existing
-   one agree) is dropped from the
+   `$HOME` or an ancestor of it — by identity (`paths.ContainsDirResolved`:
+   symlinks resolved through the deepest *existing* ancestor, case folded on
+   macOS/Windows) *or* by spelling (`paths.ContainsDir`, so `/home` is refused
+   even when `$HOME=/home/alice` is itself a symlink to `/data/alice`) — is
+   dropped from the
    union with a warning, before de-nesting could fold every other root into it
    (`enabledVersionRoots` / `partitionVersionRoots`,
    `TestEnabledVersionRoots_NeverAtOrAboveHome`). No hardcoded adapter root can

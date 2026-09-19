@@ -1,7 +1,9 @@
 // Package paths centralizes filesystem path resolution honoring AGENTSYNC_HOME,
-// AGENTSYNC_TARGET_ROOT, and third-party agent home overrides (GROK_HOME).
-// Production code MUST use this package; lint forbids os.UserHomeDir in
-// *_test.go files.
+// AGENTSYNC_TARGET_ROOT, and third-party agent home overrides (GROK_HOME), and
+// holds the two directory-containment predicates (lexical ContainsDir; the
+// symlink-resolving, and therefore filesystem-reading, ContainsDirResolved /
+// SameDirResolved). Production code MUST use this package; lint forbids
+// os.UserHomeDir in *_test.go files.
 //
 // AGENTSYNC_TARGET_ROOT is the sandbox switch: when set, EVERY path this package
 // resolves — the effective home, the canonical source, an agent's own home
@@ -67,22 +69,15 @@ func AgentsyncHome(e Env) string {
 }
 
 // ContainsDir reports whether parent is child itself or one of its ancestors,
-// comparing the paths as SPELLED (cleaned, no filesystem access). It is the
-// containment predicate for destination-root topology — the git-backup
-// de-nesting pass, its owner map, and the traversal guard TEST's containment
-// assertion (reconcile's own write-back bound, withinDir, is a separate
-// Abs-based check) — where the declared spelling is the thing that matters:
-// git backup inits, opens
-// and stages by the path an adapter declared, and agit.Detect walks that
-// spelling's ancestors, so a child root that is a symlink OUT of its parent
-// must still fold into the parent (a separate repo at the link's target would
-// never be opened, and would make the parent un-revertable through the
-// nested-repo probe). Resolving symlinks here was tried and reverted in the
-// #271 review for exactly that reason. For directory IDENTITY — is this
-// GROK_HOME really $HOME under another name? — use ContainsDirResolved /
-// SameDirResolved.
+// comparing the paths as SPELLED (cleaned, no filesystem access). Use it for
+// destination-root TOPOLOGY — the git-backup de-nesting pass and its owner map
+// — where the declared spelling is what git backup inits, opens and stages by;
+// see denestRoots in internal/cli for why resolving symlinks there is wrong.
+// For directory IDENTITY (is this GROK_HOME really $HOME under another name?)
+// use ContainsDirResolved / SameDirResolved. The two agree whenever no symlink
+// or case difference is involved.
 func ContainsDir(parent, child string) bool {
-	return containsClean(filepath.Clean(parent), filepath.Clean(child))
+	return containsNormalized(filepath.Clean(parent), filepath.Clean(child))
 }
 
 // ContainsDirResolved is ContainsDir on directory IDENTITY rather than spelling:
@@ -91,7 +86,11 @@ func ContainsDir(parent, child string) bool {
 // cost of a miss is a repo at or above $HOME — the central never-at-or-above-
 // $HOME check in git backup and Grok's GROK_HOME refusal — where
 // `GROK_HOME=/Users/Alice`, or a symlink to the home directory, must not walk
-// past a check written for `$HOME=/users/alice` (issue #270).
+// past a check written for `$HOME=/users/alice` (issue #270). Those guards
+// test BOTH predicates and refuse if either says contained: identity catches
+// the aliased spelling, and the lexical check still catches an ancestor of the
+// home's own spelling when the home itself is a symlink elsewhere
+// (`$HOME=/home/alice → /data/alice`, root `/home`).
 //
 // Resolution goes through the deepest EXISTING ancestor and re-appends the
 // rest of the path unchanged, so a path that does not exist yet and one that
@@ -100,7 +99,7 @@ func ContainsDir(parent, child string) bool {
 // created — acceptable for the identity checks above ($HOME always exists),
 // and the reason this predicate is NOT used for de-nesting.
 func ContainsDirResolved(parent, child string) bool {
-	return containsClean(normalizeDir(parent), normalizeDir(child))
+	return containsNormalized(normalizeDir(parent), normalizeDir(child))
 }
 
 // SameDirResolved reports whether a and b name the same directory under
@@ -109,11 +108,11 @@ func SameDirResolved(a, b string) bool {
 	return normalizeDir(a) == normalizeDir(b)
 }
 
-// containsClean is the shared Rel-based containment over two already-normalized
-// paths: parent contains child when child is parent or lies beneath it with no
-// ".." escape. Sibling prefixes (`/home/alice` vs `/home/alice-evil`) are not
-// containment.
-func containsClean(parent, child string) bool {
+// containsNormalized is the shared Rel-based containment over two paths already
+// brought to the same canonical form: parent contains child when child is
+// parent or lies beneath it with no ".." escape. Sibling prefixes
+// (`/home/alice` vs `/home/alice-evil`) are not containment.
+func containsNormalized(parent, child string) bool {
 	rel, err := filepath.Rel(parent, child)
 	if err != nil {
 		return false
@@ -134,11 +133,17 @@ func normalizeDir(p string) string {
 
 // resolveExistingPrefix returns cleaned p with its deepest existing ancestor
 // (possibly p itself) passed through filepath.EvalSymlinks and the non-existent
-// tail re-appended. Because every candidate ancestor is a literal prefix of p,
-// the tail is simply the remainder of p past that prefix. A path with no
-// resolvable ancestor at all is returned unchanged.
+// tail re-appended. For an ABSOLUTE path every candidate ancestor is a
+// component-wise prefix of p, so the tail is the remainder past that prefix. A
+// relative path is returned unchanged (apart from Clean) once the walk reaches
+// ".", which is not a component prefix of anything but itself: the callers only
+// ever pass absolute paths, and silently resolving a relative one against the
+// cwd would be a different contract.
 func resolveExistingPrefix(p string) string {
 	for cur := p; ; {
+		if !isComponentPrefix(p, cur) {
+			return p // relative path walked up to "." — nothing to anchor on
+		}
 		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
 			return filepath.Join(filepath.Clean(resolved), p[len(cur):])
 		}
@@ -148,6 +153,19 @@ func resolveExistingPrefix(p string) string {
 		}
 		cur = parent
 	}
+}
+
+// isComponentPrefix reports whether prefix is p itself or an ancestor spelling
+// of p that ends exactly on a path component — so "/" and "/a" are prefixes of
+// "/a/b", but "." is not a prefix of ".claude" and "/a" is not one of "/ab".
+func isComponentPrefix(p, prefix string) bool {
+	if prefix == p {
+		return true
+	}
+	if !strings.HasPrefix(p, prefix) {
+		return false
+	}
+	return strings.HasSuffix(prefix, string(filepath.Separator)) || p[len(prefix)] == filepath.Separator
 }
 
 // caseInsensitiveFS is true on the platforms whose default filesystems fold

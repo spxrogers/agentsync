@@ -150,17 +150,55 @@ func dirTestsImportTestenv(t *testing.T, dir string) (hasTests, imports bool) {
 			continue
 		}
 		hasTests = true
-		f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, e.Name()), nil, parser.ImportsOnly)
+		src, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, imp := range f.Imports {
-			if strings.Trim(imp.Path.Value, `"`) == "github.com/spxrogers/agentsync/internal/testenv" {
-				return true, true
-			}
+		if importsTestenv(t, e.Name(), src) {
+			return true, true
 		}
 	}
 	return hasTests, false
+}
+
+// importsTestenv reports whether a Go source imports this package. Split from
+// the directory walk so the negative case can be unit-tested from a fixture
+// string with no filesystem (this package runs in the host test-fast set).
+func importsTestenv(t *testing.T, name string, src []byte) bool {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), name, src, parser.ImportsOnly)
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	for _, imp := range f.Imports {
+		if strings.Trim(imp.Path.Value, `"`) == "github.com/spxrogers/agentsync/internal/testenv" {
+			return true
+		}
+	}
+	return false
+}
+
+// TestImportsTestenv makes the env-reading-packages rule load-bearing on its
+// own: every production package complies today, so without this the detector
+// could rot to "always true" unnoticed.
+func TestImportsTestenv(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{name: "direct import", src: "package x_test\nimport \"github.com/spxrogers/agentsync/internal/testenv\"\nvar _ = testenv.EnvVar\n", want: true},
+		{name: "blank import", src: "package x\nimport _ \"github.com/spxrogers/agentsync/internal/testenv\"\n", want: true},
+		{name: "no import", src: "package x_test\nimport \"testing\"\nfunc TestX(*testing.T) {}\n", want: false},
+		{name: "lookalike path", src: "package x\nimport _ \"github.com/other/agentsync/internal/testenv\"\n", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := importsTestenv(t, "x_test.go", []byte(tc.src)); got != tc.want {
+				t.Fatalf("importsTestenv = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
 
 // TestConfiguredEnvLegCoversAmbientVars is the parity guard for the three

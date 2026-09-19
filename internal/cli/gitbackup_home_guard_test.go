@@ -44,9 +44,7 @@ func TestEnabledVersionRoots_NeverAtOrAboveHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	homeLink := filepath.Join(base, "home-link")
-	if err := os.Symlink(home, homeLink); err != nil {
-		t.Skipf("symlinks unavailable here: %v", err)
-	}
+	mustSymlink(t, home, homeLink)
 	outside := filepath.Join(base, "opt", "grok")
 	under := filepath.Join(home, ".grok")
 
@@ -148,5 +146,54 @@ func TestRevertAgent_SkipsHomeSwallowingRoot(t *testing.T) {
 	err := revertAgent(p, reg, "grok", "", true, agit.Identity{}, true)
 	if err == nil || !strings.Contains(err.Error(), "no user-scope destination dir") {
 		t.Fatalf("revertAgent(grok) = %v; want the no-revertable-root error once the home-swallowing root is dropped", err)
+	}
+}
+
+// TestEnabledVersionRoots_LexicalAncestorOfSymlinkedHome pins the guard's second
+// leg (#271 review round 4): when the home directory is ITSELF a symlink
+// elsewhere (`$HOME=/home/alice → /data/alice`), a declared root that is an
+// ancestor of the home's spelling (`/home`) does not contain the resolved
+// directory — identity alone would keep it and agentsync would offer to
+// `git init /home`. The lexical leg drops it. A root that is an ancestor of
+// neither spelling stays.
+func TestEnabledVersionRoots_LexicalAncestorOfSymlinkedHome(t *testing.T) {
+	testenv.RequireContainer(t)
+	base := t.TempDir()
+	real := filepath.Join(base, "data", "alice")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkDir := filepath.Join(base, "home")
+	if err := os.MkdirAll(linkDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userHome := filepath.Join(linkDir, "alice") // the $HOME spelling
+	mustSymlink(t, real, userHome)
+
+	unrelated := filepath.Join(base, "opt", "grok")
+	reg := adapter.NewRegistry()
+	if err := reg.Register(homeSwallowingAdapter{name: "swallower", roots: []string{linkDir, filepath.Join(base, "data"), unrelated}}); err != nil {
+		t.Fatal(err)
+	}
+	kept, swallowing := partitionVersionRoots(reg, []string{"swallower"}, adapter.ScopeUser, "", userHome)
+	if !reflect.DeepEqual(kept, []string{unrelated}) {
+		t.Fatalf("kept = %v, want only %s", kept, unrelated)
+	}
+	// Both ancestors are dropped: /home by spelling, /data by identity.
+	if want := []string{filepath.Join(base, "data"), linkDir}; !reflect.DeepEqual(swallowing, want) {
+		t.Fatalf("swallowing = %v, want %v", swallowing, want)
+	}
+	if !swallowsHome(linkDir, userHome) || !swallowsHome(filepath.Join(base, "data"), userHome) || swallowsHome(unrelated, userHome) {
+		t.Fatal("swallowsHome must be true for the spelling ancestor and the identity ancestor, false for an unrelated dir")
+	}
+}
+
+// mustSymlink creates link → target, skipping the test where symlinks are
+// unavailable (never the case in the Linux container, but the skip keeps the
+// intent honest on any other host).
+func mustSymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable here: %v", err)
 	}
 }

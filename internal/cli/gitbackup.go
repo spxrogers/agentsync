@@ -387,14 +387,17 @@ func enabledVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Scop
 //
 // NEVER AT OR ABOVE $HOME (issue #270): userHome is the user's home directory
 // (paths.HomeDir), and any declared root that CONTAINS it — $HOME itself, or an
-// ancestor such as `/` or `/home`, in any spelling paths.ContainsDirResolved
-// normalizes (symlinks, case on macOS/Windows) — is dropped before de-nesting.
-// Identity, not spelling, is the right test HERE: the cost of a miss is a repo
-// at $HOME. De-nesting below deliberately uses the lexical predicate instead
-// (see denestRoots). Such a root
-// would otherwise fold every other agent's dir into itself and have agentsync
-// `git init` the user's home, breaking the documented invariant that it never
-// inits a repo at $HOME. No hardcoded adapter root can do this, but an
+// ancestor such as `/` or `/home` — is dropped before de-nesting. Containment is
+// tested BOTH ways and either suffices: by identity (paths.ContainsDirResolved:
+// symlinks, case on macOS/Windows — so `GROK_HOME=/Users/Alice` or a link to
+// the home cannot slip past) and by spelling (paths.ContainsDir — so when the
+// home itself is a symlink elsewhere, `$HOME=/home/alice → /data/alice`, the
+// root `/home` is still refused although it does not contain `/data/alice`).
+// The cost of a miss here is a repo at $HOME, so the guard errs toward
+// dropping; de-nesting below deliberately uses the lexical predicate alone (see
+// denestRoots). Left in, such a root would fold every other agent's dir into
+// itself and have agentsync `git init` the user's home, breaking the documented
+// invariant that it never inits a repo at $HOME. No hardcoded adapter root can do this, but an
 // env-derived one (Grok's GROK_HOME) can; the adapter refuses the two obvious
 // values (`/`, $HOME) with an error, and this is the central backstop for the
 // rest. Callers that can talk to the user (the apply-tail session, doctor) report
@@ -432,7 +435,7 @@ func partitionVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Sc
 				continue
 			}
 			seen[c] = true
-			if userHome != "" && paths.ContainsDirResolved(c, userHome) {
+			if userHome != "" && swallowsHome(c, userHome) {
 				swallowing = append(swallowing, c)
 				continue
 			}
@@ -452,11 +455,18 @@ func dropHomeSwallowing(roots []string, userHome string) []string {
 	}
 	out := make([]string, 0, len(roots))
 	for _, r := range roots {
-		if !paths.ContainsDirResolved(r, userHome) {
+		if !swallowsHome(r, userHome) {
 			out = append(out, r)
 		}
 	}
 	return out
+}
+
+// swallowsHome is the one containment test behind the never-at-or-above-$HOME
+// guard: root contains userHome by identity OR by spelling (see
+// partitionVersionRoots for why both).
+func swallowsHome(root, userHome string) bool {
+	return paths.ContainsDirResolved(root, userHome) || paths.ContainsDir(root, userHome)
 }
 
 // versionRootOwners maps each post-de-nest version root to the sorted set of

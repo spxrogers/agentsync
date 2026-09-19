@@ -43,10 +43,11 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `GROK_HOME` — and that adapter now refuses `GROK_HOME=/` and
   `GROK_HOME=$HOME` outright on every command, with an error naming the
   variable and suggesting `~/.grok` (see [Grok support](docs/grok.md)).
-  This guard follows the *directory*, not the spelling: a symlink to your
-  home, or a case-varied spelling of it on macOS/Windows, is caught too.
-  De-nesting (one repo per declared directory tree) is unchanged and stays
-  by declared path.
+  The guard tests both the *directory* and the *spelling*: a symlink to your
+  home or a case-varied spelling of it on macOS/Windows is caught, and so is
+  an ancestor of your home's own path when the home itself is a symlink
+  elsewhere. De-nesting (one repo per declared directory tree) is unchanged
+  and stays by declared path.
 
 - **`reconcile`'s MCP write-back translates through the agent that rendered the
   destination, instead of guessing from the JSON pointer's top-level key**
