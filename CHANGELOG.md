@@ -27,8 +27,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   `secret edit` opens). All three rows are in both tables now, and
   `TestEnvOverridesDocumented` (`internal/testenv`) fails when production code
   reads a variable either table lacks, when a row names a variable nothing
-  reads, or when the two tables disagree. The harness-only `AGENTSYNC_TEST_*` /
-  `AGENTSYNC_LIVE_*` signals are listed in `CONTRIBUTING.md` instead.
+  reads, when a row the docs promise is missing, or when the two tables
+  disagree. The harness-only `AGENTSYNC_TEST_*` / `AGENTSYNC_LIVE_*` signals
+  (all but `AGENTSYNC_TEST_IN_CONTAINER`, which a user debugging a single test
+  is told to set) are listed in `CONTRIBUTING.md` instead.
 - The `go test -run` example in the README and `CONTRIBUTING.md` names its test
   exactly (`TestApply_FirstRunBacksUpForeignFile`).
 - **`.gitattributes`** pins `*.sh` and the `justfile` to LF in the working tree

@@ -15,8 +15,8 @@ import (
 
 // envOverrideDoc is one hand-maintained environment-override table that claims
 // completeness. heading is the Markdown heading that opens the section holding
-// the table; rows are read from there to the next heading OF ANY LEVEL or JSX
-// tag (envSectionEndRE), so other tables in the same file — the website page's
+// the table; rows are read from there to the next heading OF ANY LEVEL, HTML
+// comment or JSX tag (envSectionEndRE), so other tables in the same file — the website page's
 // "Common" subset, a future `### Deprecated` table tucked under the heading, any
 // table with backticked ALL-CAPS first cells — are neither counted nor able to
 // satisfy the guard. The table has to sit directly under its heading.
@@ -27,7 +27,8 @@ type envOverrideDoc struct {
 // envSectionEndRE ends a doc section: any Markdown heading (`#` to `######`,
 // so a sub-heading inside the section closes it too — measured in the #272
 // review: a `### ` table under the heading otherwise satisfied the guard) or a
-// line opening a JSX tag (the mdx page's `<Aside>` follows its table).
+// line opening with `<` — a JSX tag (the mdx page's `<Aside>` follows its
+// table) or an HTML comment.
 var envSectionEndRE = regexp.MustCompile(`(?m)^(#{1,6} |<)`)
 
 // envOverrideDocs are the two tables. docs/user-guide.md carries a deliberate
@@ -45,6 +46,16 @@ var envOverrideDocs = []envOverrideDoc{
 // coverage while pinning nothing (cf. internal/cli's renamed-commands guard).
 var envOverrideDocExempt = map[string]string{
 	"AGENTSYNC_LOCAL_HISTORY": "git.NoticeFile — a filename written into versioned destination dirs",
+}
+
+// envOverrideDocRequired is the mirror image of envOverrideDocExempt: rows the
+// tables must carry although no production code reads the variable, because
+// the docs promise them. Each entry says why. Unlike the exemptions these
+// cannot be staleness-checked against the scan (the scan skips internal/testenv,
+// the only reader), so an entry here is kept honest by CONTRIBUTING.md's
+// harness table naming the same variable.
+var envOverrideDocRequired = map[string]string{
+	"AGENTSYNC_TEST_IN_CONTAINER": "the one harness signal a user debugging a single test is told to set; README and CONTRIBUTING promise the row",
 }
 
 // TestEnvOverridesDocumented enforces the completeness claim both tables make
@@ -79,7 +90,7 @@ var envOverrideDocExempt = map[string]string{
 // AGENTSYNC_LIVE_* signals are contributor-only (CONTRIBUTING.md lists them)
 // and are rejected as rows, except AGENTSYNC_TEST_IN_CONTAINER, which a user
 // debugging a single test is told to set and which the prose promises, so it
-// is REQUIRED in both tables.
+// is REQUIRED in both tables (envOverrideDocRequired).
 func TestEnvOverridesDocumented(t *testing.T) {
 	root := moduleRoot(t)
 	found, parsed := scanEnvNamesForDocs(t, root)
@@ -94,7 +105,7 @@ func TestEnvOverridesDocumented(t *testing.T) {
 	harness := func(name string) bool {
 		return strings.HasPrefix(name, "AGENTSYNC_TEST_") || strings.HasPrefix(name, "AGENTSYNC_LIVE_")
 	}
-	want := map[string]bool{"AGENTSYNC_TEST_IN_CONTAINER": true} // the one harness signal the user tables promise
+	want := map[string]bool{}
 	for name := range found {
 		if !harness(name) && envOverrideDocExempt[name] == "" {
 			want[name] = true
@@ -103,13 +114,20 @@ func TestEnvOverridesDocumented(t *testing.T) {
 	if len(want) < minEnvTableRows {
 		t.Fatalf("collected only %d production env variables — the scan is not seeing the tree: %v", len(want), sortedKeys(want))
 	}
+	for name := range envOverrideDocRequired { // after the floor, so a promised row never pads the scan's count
+		want[name] = true
+	}
 	documented := make([]map[string]bool, len(envOverrideDocs))
 	for i, doc := range envOverrideDocs {
 		names := envTableRows(t, doc, readFile(t, filepath.Join(root, filepath.FromSlash(doc.path))))
 		documented[i] = names
 		for _, name := range sortedKeys(want) {
 			if !names[name] {
-				t.Errorf("%s: %s needs a row in the %q table (production code reads or names it, or the docs promise it) — none found", doc.path, name, doc.heading)
+				why := "production code reads or names it"
+				if r := envOverrideDocRequired[name]; r != "" {
+					why = r
+				}
+				t.Errorf("%s: %s needs a row in the %q table (%s) — none found", doc.path, name, doc.heading, why)
 			}
 		}
 		for _, name := range sortedKeys(names) {
@@ -148,7 +166,7 @@ var envTableRowRE = regexp.MustCompile("(?m)^\\| `([A-Z][A-Z0-9_]*)")
 const minEnvTableRows = 10
 
 // envTableRows returns the variable names in doc's table: the rows between its
-// heading and the next Markdown heading or JSX tag (`<Aside`). Fails loudly if
+// heading and the next Markdown heading, HTML comment or JSX tag (`<Aside`). Fails loudly if
 // the heading is missing or the section holds too few rows to be the table.
 func envTableRows(t *testing.T, doc envOverrideDoc, text string) map[string]bool {
 	t.Helper()

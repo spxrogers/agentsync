@@ -231,7 +231,7 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 | `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |
 
 This table is complete for everything agentsync gives its own meaning to: every
-`AGENTSYNC_*` override, `GROK_HOME`, and the two standard variables it honours
+`AGENTSYNC_*` override, `GROK_HOME`, and the standard variables it honours
 specially (`NO_COLOR`, `EDITOR`). Standard process-environment conventions that
 Go and its libraries honour behave as they do for any program and are not
 listed — `HOME`, `PATH`, `TMPDIR` (`TMP`/`TEMP` on Windows; where scratch files
