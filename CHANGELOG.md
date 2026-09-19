@@ -19,6 +19,12 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
+- **Docs: the website's environment-variables reference lists every override
+  the CLI reads.** It omitted `AGENTSYNC_LOCK_TIMEOUT_MS` (the README's table
+  had it) while claiming to be complete; the page now carries the row and
+  scopes its claim to CLI-read overrides, pointing contributors at the test
+  harness's own `AGENTSYNC_TEST_*` signals. The README's `go test -run`
+  example also named a test that no longer exists.
 - **`AGENTSYNC_TARGET_ROOT` is a real sandbox, and the test suite is hermetic
   against a configured shell**
   ([#270](https://github.com/spxrogers/agentsync/issues/270)). While the

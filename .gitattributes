@@ -1,0 +1,8 @@
+# Normalize line endings in the repository to LF for every text file.
+* text=auto
+
+# Shell scripts run inside the Linux test container (and in CI) whatever the
+# host checkout's core.autocrlf says: a CRLF `#!/usr/bin/env bash` line breaks
+# the interpreter lookup, so pin them to LF on checkout too.
+*.sh text eol=lf
+justfile text eol=lf

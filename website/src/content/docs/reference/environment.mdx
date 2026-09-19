@@ -1,6 +1,6 @@
 ---
 title: Environment variables
-description: Every AGENTSYNC_* environment override — what it does and when you'd reach for it.
+description: The environment overrides the agentsync CLI reads — what each does and when you'd reach for it.
 sidebar:
   order: 3
 ---
@@ -8,7 +8,10 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 agentsync reads a handful of environment overrides. The common ones come first;
-the rest are escape hatches you'll rarely need.
+the rest are escape hatches you'll rarely need. This page covers every variable
+the CLI itself reads; the test harness's own `AGENTSYNC_TEST_*` / `AGENTSYNC_LIVE_*`
+signals (beyond `AGENTSYNC_TEST_IN_CONTAINER`) are contributor-only and live in
+`scripts/test-in-container.sh` and the `justfile`.
 
 ## Common
 
@@ -36,6 +39,7 @@ the rest are escape hatches you'll rarely need.
 | `AGENTSYNC_MAX_TARBALL_MB=<N>` | Override the per-tarball decompressed-bytes cap (default 512; 0 disables). |
 | `AGENTSYNC_NO_UPGRADE_NOTICE=1` | Suppress the one-time first-run-after-upgrade notice (see [Upgrading](/reference/upgrading/)). Nothing is printed and nothing is recorded, so unsetting it later still surfaces an unseen notice. |
 | `AGENTSYNC_TEST_IN_CONTAINER=1` | Bypass the host test guard (use only with `go test -run` for a single case). |
+| `AGENTSYNC_LOCK_TIMEOUT_MS=<N>` | Override how long a mutating command waits for the global lock before erroring (default 30000ms). |
 
 <Aside type="caution" title="The ALLOW_* flags loosen a safety default">
 	Each `AGENTSYNC_ALLOW_*` flag disables a guard that exists for a reason —

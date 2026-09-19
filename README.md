@@ -273,7 +273,7 @@ packages refuse to run on the host and print a long banner pointing you
 at the recipes above. To bypass the guard manually (e.g. for `go test -run`
 on a single test), set `AGENTSYNC_TEST_IN_CONTAINER=1`:
 
-    AGENTSYNC_TEST_IN_CONTAINER=1 go test ./internal/cli/ -run TestApply_FirstRun
+    AGENTSYNC_TEST_IN_CONTAINER=1 go test ./internal/cli/ -run TestApply_FirstRunBacksUpForeignFile
 
 `just test-live` runs the **live cohort** (build tag `live`) — currently the
 `obra/superpowers` projection check, which clones the real upstream plugin
