@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spxrogers/agentsync/internal/adapter"
 	agit "github.com/spxrogers/agentsync/internal/git"
+	"github.com/spxrogers/agentsync/internal/paths"
 	"github.com/spxrogers/agentsync/internal/source"
 	"github.com/spxrogers/agentsync/internal/ui"
 )
@@ -72,13 +73,20 @@ func newGitBackupSession(
 	if mode == source.GitBackupModeOff {
 		return nil
 	}
+	userHome := paths.HomeDir(paths.OSEnv{})
+	roots, swallowing := partitionVersionRoots(reg, agents, sc, projectRoot, userHome)
+	for _, r := range swallowing {
+		// Never silent (CLAUDE.md: capture it or acknowledge it): the user
+		// pointed an agent's home at or above $HOME and loses git backup for it.
+		p.Warnf("git backup: skipping %s — it contains your home directory %s, and agentsync never inits a repo at or above $HOME.", r, userHome)
+	}
 	return &gitBackupSession{
 		cmd:     cmd,
 		p:       p,
 		home:    home,
 		id:      agit.Identity{Name: cfg.AuthorName, Email: cfg.AuthorEmail},
 		mode:    mode,
-		roots:   enabledVersionRoots(reg, agents, sc, projectRoot),
+		roots:   roots,
 		handled: map[string]bool{},
 	}
 }
@@ -374,12 +382,33 @@ func baselineMessage(root string) string {
 // macOS) is not de-duped against it, and both names reach the init/checkpoint pass.
 // The consequence is bounded: resolveBackupRepo gates on agit.Detect, which follows
 // the filesystem, so the second spelling detects as agentsync-owned (the .git the
-// first spelling created) and is opened, not inited — the same repo is checkpointed
-// twice under two names (a no-op commit the second time), never a repo inside a
-// repo and never data loss. That is why the key stays byte-exact rather than
-// growing a case-folding branch that would have to detect FS case-sensitivity at
-// runtime.
-func enabledVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Scope, project string) []string {
+// first spelling created) and is opened, not inited — one repo is checkpointed
+// under two names, each commit staging that name's own managed files, never a repo
+// inside a repo and never data loss. That is why the key stays byte-exact rather
+// than growing a case-folding branch that would have to detect FS case-sensitivity
+// at runtime. (The $HOME guard below is a different matter and DOES fold case and
+// symlinks, via paths.ContainsDir — there the cost of a miss is a repo at $HOME.)
+//
+// NEVER AT OR ABOVE $HOME (issue #270): userHome is the user's home directory
+// (paths.HomeDir), and any declared root that CONTAINS it — $HOME itself, or an
+// ancestor such as `/` or `/home` — is dropped before de-nesting. Such a root
+// would otherwise fold every other agent's dir into itself and have agentsync
+// `git init` the user's home, breaking the documented invariant that it never
+// inits a repo at $HOME. No hardcoded adapter root can do this, but an
+// env-derived one (Grok's GROK_HOME) can; the adapter refuses the two obvious
+// values (`/`, $HOME) with an error, and this is the central backstop for the
+// rest (`/home`, `/Users`, a symlinked spelling). Callers that can talk to the
+// user (the apply-tail session) use partitionVersionRoots to warn about what
+// was dropped, so the loss of git backup is never silent.
+func enabledVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Scope, project, userHome string) []string {
+	kept, _ := partitionVersionRoots(reg, agents, sc, project, userHome)
+	return kept
+}
+
+// partitionVersionRoots is enabledVersionRoots plus the roots it dropped for
+// containing userHome (cleaned, de-duped, sorted; NOT de-nested — each is
+// reported on its own).
+func partitionVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Scope, project, userHome string) (kept, swallowing []string) {
 	seen := map[string]bool{}
 	var all []string
 	for _, name := range agents {
@@ -396,21 +425,43 @@ func enabledVersionRoots(reg *adapter.Registry, agents []string, sc adapter.Scop
 				continue
 			}
 			c := filepath.Clean(r)
-			if !seen[c] {
-				seen[c] = true
-				all = append(all, c)
+			if seen[c] {
+				continue
 			}
+			seen[c] = true
+			if userHome != "" && paths.ContainsDir(c, userHome) {
+				swallowing = append(swallowing, c)
+				continue
+			}
+			all = append(all, c)
 		}
 	}
-	return denestRoots(all)
+	sort.Strings(swallowing)
+	return denestRoots(all), swallowing
+}
+
+// dropHomeSwallowing filters a single agent's declared roots by the same
+// never-at-or-above-$HOME rule partitionVersionRoots applies to the union, so
+// `revert <agent>` can never operate on a root the apply tail refused to init.
+func dropHomeSwallowing(roots []string, userHome string) []string {
+	if userHome == "" {
+		return roots
+	}
+	out := make([]string, 0, len(roots))
+	for _, r := range roots {
+		if !paths.ContainsDir(r, userHome) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // versionRootOwners maps each post-de-nest version root to the sorted set of
 // agents whose declared dirs land under it. A root with more than one owner is
 // SHARED (e.g. ~/.agents/skills ← codex + warp + …) — reverting it rolls back every
 // owner's files, which the revert path warns about.
-func versionRootOwners(reg *adapter.Registry, agents []string, sc adapter.Scope, project string) map[string][]string {
-	roots := enabledVersionRoots(reg, agents, sc, project)
+func versionRootOwners(reg *adapter.Registry, agents []string, sc adapter.Scope, project, userHome string) map[string][]string {
+	roots := enabledVersionRoots(reg, agents, sc, project, userHome)
 	owners := map[string]map[string]bool{}
 	for _, name := range agents {
 		ad := reg.Lookup(name)
@@ -493,16 +544,12 @@ func denestRoots(roots []string) []string {
 	return kept
 }
 
-// isUnderDir reports whether child is the same as, or nested under, parent.
+// isUnderDir reports whether child is the same as, or nested under, parent. It is
+// paths.ContainsDir with the (child, parent) argument order this file's call
+// sites read naturally; the predicate itself lives in paths so every containment
+// decision in agentsync agrees (issue #270).
 func isUnderDir(child, parent string) bool {
-	if child == parent {
-		return true
-	}
-	rel, err := filepath.Rel(parent, child)
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return paths.ContainsDir(parent, child)
 }
 
 // ensureUntrackedRepo returns a repo to commit into for an untracked dir, honoring

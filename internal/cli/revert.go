@@ -171,7 +171,8 @@ func revertAgent(p *ui.Printer, reg *adapter.Registry, name, toRef string, dryRu
 		}
 		return nil
 	}
-	roots := denestRoots(cleanAll(vd.VersionRoots(adapter.ScopeUser, "")))
+	userHome := paths.HomeDir(paths.OSEnv{})
+	roots := denestRoots(dropHomeSwallowing(cleanAll(vd.VersionRoots(adapter.ScopeUser, "")), userHome))
 	if len(roots) == 0 {
 		if strict {
 			return fmt.Errorf("agent %q has no user-scope destination dir to revert", name)
@@ -181,7 +182,7 @@ func revertAgent(p *ui.Printer, reg *adapter.Registry, name, toRef string, dryRu
 	if toRef != "" && len(roots) > 1 {
 		return fmt.Errorf("agent %q versions %d directories; --to is ambiguous — omit it to undo the most recent apply on each", name, len(roots))
 	}
-	owners := versionRootOwners(reg, reg.Names(), adapter.ScopeUser, "")
+	owners := versionRootOwners(reg, reg.Names(), adapter.ScopeUser, "", userHome)
 	var anyManaged bool
 	for _, root := range roots {
 		// ownersFor (not owners[root]): this agent's own de-nested root may be a
@@ -202,7 +203,7 @@ func revertAgent(p *ui.Printer, reg *adapter.Registry, name, toRef string, dryRu
 
 // revertAll reverts every agentsync-managed version root across all adapters.
 func revertAll(p *ui.Printer, reg *adapter.Registry, dryRun bool, id agit.Identity) error {
-	roots := enabledVersionRoots(reg, reg.Names(), adapter.ScopeUser, "")
+	roots := enabledVersionRoots(reg, reg.Names(), adapter.ScopeUser, "", paths.HomeDir(paths.OSEnv{}))
 	var any bool
 	for _, root := range roots {
 		// Under --all every owner is reverted anyway, so no cross-agent surprise.

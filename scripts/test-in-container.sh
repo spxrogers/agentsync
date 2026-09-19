@@ -116,11 +116,14 @@ RUN_ARGS=(
 # neutralize every one of them. Add a variable here whenever production code
 # starts reading a new ambient one. CI runs both legs (see ci.yml).
 if [[ "${AGENTSYNC_TEST_CONFIGURED_ENV:-}" == "1" ]]; then
-    echo "==> configured-environment leg: exporting ambient AGENTSYNC_HOME / GROK_HOME / NO_COLOR into the container"
+    echo "==> configured-environment leg: exporting ambient AGENTSYNC_HOME / GROK_HOME / NO_COLOR / EDITOR into the container"
+    # Keep this list in step with internal/testenv's ambient list;
+    # TestConfiguredEnvLegCoversAmbientVars fails if a variable is missing here.
     RUN_ARGS+=(
         -e "AGENTSYNC_HOME=/tmp/agentsync-ambient/agentsync-home"
         -e "GROK_HOME=/tmp/agentsync-ambient/grok-home"
         -e "NO_COLOR=1"
+        -e "EDITOR=/usr/bin/false"
     )
 fi
 

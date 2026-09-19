@@ -90,7 +90,7 @@ func TestEnabledVersionRoots_DedupAndDenest(t *testing.T) {
 	reg := registryFactory()
 
 	// codex + warp both write to ~/.agents/skills → it must appear exactly once.
-	roots := enabledVersionRoots(reg, []string{"codex", "warp"}, adapter.ScopeUser, "")
+	roots := enabledVersionRoots(reg, []string{"codex", "warp"}, adapter.ScopeUser, "", root)
 	agentsSkills := filepath.Join(root, ".agents", "skills")
 	if n := countEq(roots, agentsSkills); n != 1 {
 		t.Errorf("shared %s appears %d times across codex+warp roots, want 1: %v", agentsSkills, n, roots)
@@ -98,7 +98,7 @@ func TestEnabledVersionRoots_DedupAndDenest(t *testing.T) {
 
 	// claude + opencode: opencode declares ~/.claude/skills, nested under claude's
 	// ~/.claude → de-nested away (claude's repo captures it).
-	roots = enabledVersionRoots(reg, []string{"claude", "opencode"}, adapter.ScopeUser, "")
+	roots = enabledVersionRoots(reg, []string{"claude", "opencode"}, adapter.ScopeUser, "", root)
 	claudeSkills := filepath.Join(root, ".claude", "skills")
 	if contains(roots, claudeSkills) {
 		t.Errorf("~/.claude/skills should be de-nested under ~/.claude, but appears in %v", roots)
@@ -122,7 +122,7 @@ func TestVersionRootOwners_SharedDir(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("AGENTSYNC_TARGET_ROOT", root)
 	reg := registryFactory()
-	owners := versionRootOwners(reg, []string{"codex", "warp"}, adapter.ScopeUser, "")
+	owners := versionRootOwners(reg, []string{"codex", "warp"}, adapter.ScopeUser, "", root)
 	agentsSkills := filepath.Join(root, ".agents", "skills")
 	got := owners[agentsSkills]
 	if !contains(got, "codex") || !contains(got, "warp") {
@@ -164,7 +164,7 @@ func TestOwnersFor_RecoversFoldedRoot(t *testing.T) {
 	t.Setenv("AGENTSYNC_TARGET_ROOT", root)
 	reg := registryFactory()
 
-	owners := versionRootOwners(reg, []string{"claude", "opencode"}, adapter.ScopeUser, "")
+	owners := versionRootOwners(reg, []string{"claude", "opencode"}, adapter.ScopeUser, "", root)
 	claudeSkills := filepath.Join(root, ".claude", "skills") // opencode's own de-nested root
 
 	// Precondition: the child root is folded away — it is NOT an exact key.

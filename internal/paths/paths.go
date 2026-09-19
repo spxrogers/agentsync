@@ -13,6 +13,7 @@ package paths
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -62,8 +63,55 @@ func AgentsyncHome(e Env) string {
 	if h := e.Get("AGENTSYNC_HOME"); h != "" {
 		return h
 	}
-	return filepath.Join(e.Get("HOME"), ".agentsync")
+	return filepath.Join(HomeDir(e), ".agentsync")
 }
+
+// ContainsDir reports whether parent is child itself or one of its ancestors.
+// It is THE containment predicate for destination roots and home directories
+// (issue #270): the git-backup de-nesting pass, the "never init a repo at or
+// above $HOME" guard, the grok GROK_HOME refusal and the traversal guard's
+// containment assertion all share it, so they cannot disagree.
+//
+// Both paths are normalized before comparison, because the invariants this
+// backs are about the DIRECTORY, not its spelling: each is cleaned, symlinks
+// are resolved best-effort (a path that does not exist yet keeps its cleaned
+// spelling), and on the case-insensitive platforms (macOS, Windows) the
+// comparison ignores case — `/Users/Alice` and `/users/alice` are one
+// directory there, and a byte compare would let `GROK_HOME=/Users/Alice` walk
+// past a guard written for `$HOME=/users/alice`.
+func ContainsDir(parent, child string) bool {
+	p, c := normalizeDir(parent), normalizeDir(child)
+	rel, err := filepath.Rel(p, c)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// SameDir reports whether a and b name the same directory under ContainsDir's
+// normalization (clean, symlinks resolved best-effort, case-insensitive where
+// the platform is).
+func SameDir(a, b string) bool {
+	return normalizeDir(a) == normalizeDir(b)
+}
+
+// normalizeDir is the shared canonical form behind ContainsDir and SameDir.
+func normalizeDir(p string) string {
+	p = filepath.Clean(p)
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		p = filepath.Clean(resolved)
+	}
+	if caseInsensitiveFS {
+		p = strings.ToLower(p)
+	}
+	return p
+}
+
+// caseInsensitiveFS is true on the platforms whose default filesystems fold
+// case (APFS/HFS+ on macOS, NTFS on Windows). A per-path probe would be more
+// precise but would have to write to disk; the platform default is what every
+// user of those systems actually has.
+var caseInsensitiveFS = runtime.GOOS == "darwin" || runtime.GOOS == "windows"
 
 // AgentHomeOverride returns the value of a third-party agent's own home-override
 // variable (e.g. Grok Build's GROK_HOME), or "" when AGENTSYNC_TARGET_ROOT is set.

@@ -48,40 +48,42 @@ jobs:
       # would no longer be pristine.
       - if: matrix.configured != '1'
         run: just test-fast
+      # Keep this list in step with internal/testenv's ambient list;
+      # TestConfiguredEnvLegCoversAmbientVars fails if a variable is missing here.
       - if: matrix.configured == '1'
         run: just test-fast
         env:
           AGENTSYNC_HOME: /tmp/agentsync-ambient/agentsync-home
           GROK_HOME: /tmp/agentsync-ambient/grok-home
           NO_COLOR: "1"
+          EDITOR: /usr/bin/false
 
   # The release-readiness gate: every FS-touching test layer in one
   # hermetic container run. Linux only — the Containerfile targets
   # linux/amd64 and the container is the hermeticity guarantee.
   #
-  # Two legs (issue #270): the pristine run, and the same gate with
-  # AGENTSYNC_HOME / GROK_HOME / NO_COLOR exported into the container the way
-  # a developer who actually uses agentsync has them (`just
+  # Two legs (issue #270): the pristine run (`just test-release`), and the same
+  # gate with AGENTSYNC_HOME / GROK_HOME / NO_COLOR / EDITOR exported into the
+  # container the way a developer who actually uses agentsync has them (`just
   # test-release-configured`; the runner script injects fixed values). The
   # harness must neutralize them — an exported AGENTSYNC_HOME once redded out
   # 535 tests, the secret-leak guard among them, and a pristine-only CI could
-  # never see it.
+  # never see it. The matrix names the recipe so CI runs exactly what a
+  # contributor runs locally.
   test-release:
-    name: test-release (hermetic gate${{ matrix.configured == '1' && ', configured env' || '' }})
+    name: test-release (${{ matrix.recipe == 'test-release' && 'hermetic gate' || 'hermetic gate, configured env' }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        configured: ["", "1"]
-    env:
-      AGENTSYNC_TEST_CONFIGURED_ENV: ${{ matrix.configured }}
+        recipe: [test-release, test-release-configured]
     # If this job ever fails again with no obvious cause, set
     # `AGENTSYNC_TEST_DEBUG: "1"` here to enable `set -x` tracing in the
     # runner script + entrypoint. Off by default to keep logs readable.
     steps:
       - uses: actions/checkout@v4
       - uses: extractions/setup-just@v3
-      - run: just test-release
+      - run: just ${{ matrix.recipe }}
 
   # Lint = format + tidy + golangci-lint, via the same `just lint` recipe
   # contributors run locally, then a diff guard so an uncommitted format/tidy

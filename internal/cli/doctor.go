@@ -415,7 +415,14 @@ func checkDestinationGitBackup(p *ui.Printer, cfg source.DestinationGitBackupCon
 	// foreign/owned destination dirs the user should know about even for agents that
 	// aren't enabled; the os.Stat filter below drops any root that doesn't exist yet.
 	reg := registryFactory()
-	for _, root := range enabledVersionRoots(reg, reg.Names(), adapter.ScopeUser, "") {
+	userHome := paths.HomeDir(paths.OSEnv{})
+	roots, swallowing := partitionVersionRoots(reg, reg.Names(), adapter.ScopeUser, "", userHome)
+	for _, root := range swallowing {
+		// A declared root at or above $HOME is never git-versioned (issue #270);
+		// say so here rather than silently omitting the agent from the table.
+		warnCheck(p, root+" — ", "contains your home directory; agentsync never inits a repo at or above $HOME, so this dir is not git-versioned")
+	}
+	for _, root := range roots {
 		if _, err := os.Stat(root); err != nil {
 			continue // dir not created yet — nothing to report
 		}

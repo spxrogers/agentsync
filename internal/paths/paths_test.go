@@ -170,6 +170,53 @@ func TestAgentsyncHome(t *testing.T) {
 	}
 }
 
+// TestContainsDir pins the shared containment predicate on paths that need not
+// exist (pure-unit; the symlink and case-folding behaviour is covered by the
+// container-gated grok and cli tests, which can create real directories).
+func TestContainsDir(t *testing.T) {
+	cases := []struct {
+		name          string
+		parent, child string
+		want          bool
+	}{
+		{name: "identical", parent: "/home/alice", child: "/home/alice", want: true},
+		{name: "direct child", parent: "/home/alice", child: "/home/alice/.grok", want: true},
+		{name: "deep descendant", parent: "/", child: "/home/alice/.grok/skills", want: true},
+		{name: "unclean spellings normalize", parent: "/home/alice/", child: "/home/alice/x/../.grok", want: true},
+		{name: "parent of parent is not contained", parent: "/home/alice", child: "/home", want: false},
+		{name: "sibling with shared prefix is not contained", parent: "/home/alice", child: "/home/alice-evil/x", want: false},
+		{name: "unrelated", parent: "/opt/grok", child: "/home/alice", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := paths.ContainsDir(tc.parent, tc.child); got != tc.want {
+				t.Fatalf("ContainsDir(%q, %q) = %v, want %v", tc.parent, tc.child, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSameDir(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{name: "identical", a: "/home/alice", b: "/home/alice", want: true},
+		{name: "trailing separator", a: "/home/alice/", b: "/home/alice", want: true},
+		{name: "dot-dot spelling", a: "/home/alice/x/..", b: "/home/alice", want: true},
+		{name: "child is not the same", a: "/home/alice/.grok", b: "/home/alice", want: false},
+		{name: "prefix sibling is not the same", a: "/home/alice2", b: "/home/alice", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := paths.SameDir(tc.a, tc.b); got != tc.want {
+				t.Fatalf("SameDir(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestAgentHomeOverride pins the sandbox rule for third-party agent home
 // variables: honoured for real users, ignored under AGENTSYNC_TARGET_ROOT so a
 // redirected run can never escape to the agent's real home (issue #270).

@@ -615,6 +615,14 @@ reports directories to back up. The contract every implementor honours:
 4. **`$HOME`-level strays are excluded.** A deep agent may also write a top-level
    file outside any returned dir (Claude's `~/.claude.json`); those are
    intentionally **not** versioned — agentsync never inits a repo at `$HOME`.
+   The apply tail enforces that invariant centrally: a declared root that *is*
+   `$HOME` or an ancestor of it (`/`, `/home`, a symlinked or case-varied
+   spelling — `paths.ContainsDir` normalizes all three) is dropped from the
+   union with a warning, before de-nesting could fold every other root into it
+   (`enabledVersionRoots` / `partitionVersionRoots`,
+   `TestEnabledVersionRoots_NeverAtOrAboveHome`). No hardcoded adapter root can
+   trip it; an env-derived one (Grok's `GROK_HOME`) can, and the adapter refuses
+   the two obvious values (`/`, `$HOME`) with an error before it gets this far.
 
 An adapter with no versionable directory (e.g. `noop`) does not implement it. The
 apply tail's use of these roots is the step-9 narrative in §4.
@@ -1100,11 +1108,16 @@ All present in v1.0 (`internal/iox`, `internal/render`, `internal/state`):
    would outrank the redirect and every test resolving the canonical source
    would land on the developer's real tree (issue #270). Third-party agent home
    variables are read only through `paths.AgentHomeOverride`, never a raw
-   `os.Getenv`. The test harness (`internal/testenv`) additionally scrubs every
-   ambient `AGENTSYNC_*` override plus `GROK_HOME`/`NO_COLOR`/`EDITOR` from the
-   process before any test runs (`ScrubAmbient`, called by both container
-   guards), and CI runs the suite once pristine and once with those variables
-   exported (`just test-release-configured`).
+   `os.Getenv` (`TestAgentHomeVarsReadOnlyThroughPaths` scans the sources). The
+   test harness (`internal/testenv`) additionally scrubs every ambient
+   `AGENTSYNC_*` override plus `GROK_HOME`/`NO_COLOR`/`EDITOR` from the process
+   at package init — before any TestMain or `t.Setenv` — simply by being
+   imported (`ScrubAmbient`; `TestScrubRunsAtInit` re-executes the test binary
+   to pin the wiring), and CI runs the suite once pristine and once with those
+   variables exported (`just test-release-configured`;
+   `TestConfiguredEnvLegCoversAmbientVars` keeps the three lists in step).
+   `internal/cli`'s TestMain also runs under a throwaway `HOME` and fails the
+   package if any test wrote there instead of into its redirect.
 4. **First-apply backups** — the `foreign-collision` case copies the pre-existing
    destination into `.state/backups/<ts>/` before writing. Symlinked
    destinations are refused by default — and, on the read path, classified as

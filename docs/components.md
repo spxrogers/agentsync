@@ -645,7 +645,10 @@ forms for portable state. `AGENTSYNC_TARGET_ROOT` is the sandbox switch: when se
 every resolved path lives under it and the user-facing overrides are ignored
 (issue #270).
 - **Key:** `Env` (interface), `OSEnv`, `MapEnv`; `HomeDir`; `AgentsyncHome`;
-  `AgentHomeOverride`; `HomeRelative`/`FromHomeRelative`.
+  `AgentHomeOverride`; `ContainsDir`/`SameDir` (the one containment predicate —
+  clean, symlink-resolved, case-folded on macOS/Windows — behind de-nesting, the
+  never-at-`$HOME` guard, and the `GROK_HOME` refusal);
+  `HomeRelative`/`FromHomeRelative`.
 - **Files:** `paths.go`.
 
 ### `internal/log`
@@ -745,11 +748,15 @@ construction. The gap was only ever plain `string` values read out of native con
 - **Files:** `ui.go`, `diag.go`, `slog.go`, `spinner.go`.
 
 ### `internal/testenv`
-Guards FS-touching tests so they only run in the hermetic container, and scrubs
-the ambient environment so no test's result depends on what the developer's
-shell exports: every `AGENTSYNC_*` override (except the harness's own
-`AGENTSYNC_TEST_*` / `AGENTSYNC_LIVE_*` signals) plus `GROK_HOME`, `NO_COLOR`
-and `EDITOR` are unset by both guards before a test runs (issue #270).
+Guards FS-touching tests so they only run in the hermetic container, and — by
+being imported — scrubs the ambient environment at package init so no test's
+result depends on what the developer's shell exports: every `AGENTSYNC_*`
+override (except the harness's own `AGENTSYNC_TEST_*` / `AGENTSYNC_LIVE_*`
+signals) plus `GROK_HOME`, `NO_COLOR` and `EDITOR` are unset before any
+TestMain or `t.Setenv` can run (issue #270). Its tests double as guards: the
+source scan that keeps agent-home variables behind `paths.AgentHomeOverride`,
+and the parity check between the scrub list and the configured-environment CI
+legs.
 - **Key:** `RequireContainer(t)`; `MustRunInContainer()`; `ScrubAmbient()`;
   `InContainer() bool`; `EnvVar` (`AGENTSYNC_TEST_IN_CONTAINER`).
 - **Files:** `container.go`.

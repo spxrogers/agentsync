@@ -19,32 +19,30 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
 
 ### Fixed
 
-- **`AGENTSYNC_TARGET_ROOT` is now a real sandbox: it outranks `AGENTSYNC_HOME`
-  and `GROK_HOME`, and the test suite is hermetic against a configured shell**
-  ([#270](https://github.com/spxrogers/agentsync/issues/270)). `go test ./...`
-  passed only in an environment where none of agentsync's variables were set —
-  which is exactly what CI is — so the suite had never been run the way a
-  machine that actually *uses* agentsync runs it. An exported `AGENTSYNC_HOME`
-  outranked the tests' `AGENTSYNC_TARGET_ROOT` redirect in `paths.AgentsyncHome`
-  and aimed 535 `internal/cli` tests (the secret-leak guard among them) at the
-  developer's real `~/.agentsync`; an exported `NO_COLOR` flipped two colour
-  tests; an exported `GROK_HOME` moved the grok adapter's root out from under
-  the traversal guard. Fixes: (1) while `AGENTSYNC_TARGET_ROOT` is set, the
-  canonical source resolves to `<root>/.agentsync` and `AGENTSYNC_HOME` /
-  `GROK_HOME` are ignored — for real users, who never set the redirect,
-  `AGENTSYNC_HOME` still wins over the `~/.agentsync` default (pinned by
-  `TestAgentsyncHome_Precedence`); (2) the test harness scrubs every ambient
-  `AGENTSYNC_*` override plus `GROK_HOME`/`NO_COLOR`/`EDITOR` before any test
-  runs (`testenv.ScrubAmbient`); (3) `GROK_HOME` is read through `paths.Env`
-  (`paths.AgentHomeOverride`) instead of a raw `os.Getenv`; (4) CI runs the
-  suite twice, pristine and with those variables exported
-  (`just test-release-configured`). Also closes the git-backup hazard the same
-  issue measured: a `GROK_HOME` that is `$HOME` or an ancestor of it (`/`)
-  would have collapsed every other agent's version root into it and
-  `git init`-ed the home directory. `GROK_HOME=/` and `GROK_HOME=$HOME` are now
-  refused on every command with an error naming the variable; any other
-  ancestor of `$HOME` is accepted for rendering but declares no version root
-  (see [Grok support](docs/grok.md)).
+- **`AGENTSYNC_TARGET_ROOT` is a real sandbox, and the test suite is hermetic
+  against a configured shell**
+  ([#270](https://github.com/spxrogers/agentsync/issues/270)). While the
+  testing redirect is set, the canonical source resolves to
+  `<root>/.agentsync` and `AGENTSYNC_HOME` / `GROK_HOME` are ignored;
+  previously an exported `AGENTSYNC_HOME` outranked it, so on a machine that
+  actually uses agentsync `go test ./...` aimed 535 `internal/cli` tests (the
+  secret-leak guard among them) at the developer's real `~/.agentsync`. For
+  real users, who never set the redirect, `AGENTSYNC_HOME` still wins over the
+  `~/.agentsync` default. The harness now scrubs ambient `AGENTSYNC_*` /
+  `GROK_HOME` / `NO_COLOR` / `EDITOR` values before any test runs, and CI runs
+  the suite both pristine and with them exported (`just
+  test-release-configured`).
+
+- **agentsync never inits a git backup repo at or above `$HOME`, enforced
+  centrally** ([#270](https://github.com/spxrogers/agentsync/issues/270)). A
+  version root that is your home directory or an ancestor of it (`/`, `/home`,
+  a symlinked or case-varied spelling) would have folded every other agent's
+  directory into itself on de-nesting and had `apply` `git init` your home.
+  Such roots are now dropped from git backup with a warning, and `doctor`
+  reports them. Only an env-derived root can trip this — Grok Build's
+  `GROK_HOME` — and that adapter now refuses `GROK_HOME=/` and
+  `GROK_HOME=$HOME` outright on every command, with an error naming the
+  variable and suggesting `~/.grok` (see [Grok support](docs/grok.md)).
 
 - **`reconcile`'s MCP write-back translates through the agent that rendered the
   destination, instead of guessing from the JSON pointer's top-level key**

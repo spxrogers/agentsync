@@ -215,7 +215,8 @@ If you lose your age private key, you lose access to all encrypted secrets. Reco
 | Env var | Purpose |
 | --- | --- |
 | `AGENTSYNC_HOME` | Override `~/.agentsync/` location (absolute path). |
-| `AGENTSYNC_TARGET_ROOT` | Redirect `$HOME` for testing (used by the hermetic test container). A sandbox: every path — the canonical source included — resolves under it, and `AGENTSYNC_HOME` / `GROK_HOME` are ignored while it is set. |
+| `AGENTSYNC_TARGET_ROOT` | Redirect `$HOME` for testing (used by the hermetic test container). A sandbox: every path agentsync resolves — the canonical source included — lands under it, and `AGENTSYNC_HOME` / `GROK_HOME` are ignored while it is set. |
+| `GROK_HOME` | Grok Build's own home override, honoured at user scope (absolute path; see [Grok support](docs/grok.md)). `/` and your home directory are refused. |
 | `AGENTSYNC_ALLOW_SYMLINK_DEST=1` | Write through symlinked destinations, and compare through them when reading (chezmoi-managed files). Needed by `apply` and by `status`/`diff`/`reconcile`/`explain`. |
 | `AGENTSYNC_ALLOW_INSECURE_URLS=1` | Accept http:// and git:// plugin / marketplace sources. |
 | `AGENTSYNC_ALLOW_UNIMPLEMENTED=1` | Register an agent that has no implemented adapter yet (none today — every valid agent is real). |

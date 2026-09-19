@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/spxrogers/agentsync/internal/adapter"
 )
@@ -65,33 +64,17 @@ func (a *Adapter) KeyMergeStrategyForPath(path string) string {
 
 // VersionRoots declares the user-scope config dir for destination git backup. An
 // absolute GROK_HOME may legitimately live outside $HOME (that is what upstream
-// provides it for) and is versioned there like any other root. Two layers keep
-// it from ever swallowing the other agents' roots (issue #270): validateHome
-// refuses `/` and $HOME outright (every path errors, not just this one), and
-// this method additionally declares NO root for any other ancestor of $HOME
-// (`/home`, `/Users`) — such a root would fold every other agent's dir into
-// itself in the apply tail's de-nesting pass and have agentsync `git init` above
-// the user's home, breaking the documented invariant that agentsync never inits
-// a repo at `$HOME`. For that ancestor case the rest of the adapter still
-// renders there; only the git backup opts out, and docs/grok.md says so.
+// provides it for) and is versioned there like any other root. validateHome
+// refuses `/` and $HOME outright (every path errors, not just this one); a
+// GROK_HOME that is some other ancestor of $HOME (`/home`, `/Users`) is declared
+// here like any root and dropped — with a warning — by the apply tail's central
+// never-at-or-above-$HOME guard (internal/cli enabledVersionRoots), which owns
+// that invariant for every adapter (issue #270).
 func (a *Adapter) VersionRoots(scope adapter.Scope, project string) []string {
 	if scope != adapter.ScopeUser || a.validateHome() != nil {
 		return nil
 	}
-	root := filepath.Clean(a.resolvePaths(scope, project).ConfigDir)
-	if a.opts.GrokHome != "" && containsDir(root, filepath.Clean(a.opts.TargetRoot)) {
-		return nil
-	}
-	return []string{root}
-}
-
-// containsDir reports whether child is parent itself or nested under it.
-func containsDir(parent, child string) bool {
-	rel, err := filepath.Rel(parent, child)
-	if err != nil {
-		return false
-	}
-	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+	return []string{filepath.Clean(a.resolvePaths(scope, project).ConfigDir)}
 }
 
 var (

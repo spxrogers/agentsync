@@ -232,6 +232,10 @@ func TestExecuteWiresTheColorFlagToTheErrorLine(t *testing.T) {
 	} {
 		t.Run(tc.flag, func(t *testing.T) {
 			detachAfter(t)
+			// `mcp remove` takes the global lock under the canonical source, so
+			// redirect like every other test — without this the command created
+			// $HOME/.agentsync/.state/agentsync.lock in the REAL home (#270).
+			t.Setenv("AGENTSYNC_TARGET_ROOT", t.TempDir())
 			var buf bytes.Buffer
 			// `mcp remove nope` fails predictably with a plain error.
 			code := executeWith(&buf, "mcp", "remove", "nope", tc.flag)
