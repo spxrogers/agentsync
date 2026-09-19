@@ -41,8 +41,10 @@ source layout, CLI surface, and state schema are stabilizing but may still chang
   (`just test-release-configured`). Also closes the git-backup hazard the same
   issue measured: a `GROK_HOME` that is `$HOME` or an ancestor of it (`/`)
   would have collapsed every other agent's version root into it and
-  `git init`-ed the home directory; such a `GROK_HOME` now declares no version
-  root (rendering is unaffected — see [Grok support](docs/grok.md)).
+  `git init`-ed the home directory. `GROK_HOME=/` and `GROK_HOME=$HOME` are now
+  refused on every command with an error naming the variable; any other
+  ancestor of `$HOME` is accepted for rendering but declares no version root
+  (see [Grok support](docs/grok.md)).
 
 - **`reconcile`'s MCP write-back translates through the agent that rendered the
   destination, instead of guessing from the JSON pointer's top-level key**

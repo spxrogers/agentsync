@@ -402,11 +402,12 @@ func TestGrokHomeValidationAndCleaning(t *testing.T) {
 	}
 }
 
-// TestGrokVersionRootsNeverSwallowHome pins the one exclusion in VersionRoots
-// (issue #270): a GROK_HOME at or above $HOME declares no version root, because
-// de-nesting would fold every other agent's root into it and git-init the home
-// directory. A GROK_HOME outside $HOME — upstream's intended use — is still
-// versioned, and the rest of the adapter keeps rendering either way.
+// TestGrokVersionRootsNeverSwallowHome pins the two layers that keep a GROK_HOME
+// from swallowing the other agents' version roots (issue #270): validateHome
+// REFUSES `/` and $HOME on every path (Detect errors, VersionRoots is nil), and
+// VersionRoots declares no root for any other ancestor of $HOME while the
+// adapter keeps rendering there. A GROK_HOME outside $HOME — upstream's intended
+// use — is versioned like any other root.
 func TestGrokVersionRootsNeverSwallowHome(t *testing.T) {
 	base := t.TempDir()
 	home := filepath.Join(base, "home", "alice")
@@ -417,13 +418,16 @@ func TestGrokVersionRootsNeverSwallowHome(t *testing.T) {
 		name     string
 		grokHome string
 		want     []string
+		refused  bool // validateHome rejects it: Detect must error
 	}{
 		{name: "default ~/.grok", grokHome: "", want: []string{filepath.Join(home, ".grok")}},
 		{name: "GROK_HOME under $HOME", grokHome: filepath.Join(home, "grok-cfg"), want: []string{filepath.Join(home, "grok-cfg")}},
 		{name: "GROK_HOME outside $HOME is versioned", grokHome: filepath.Join(base, "opt", "grok"), want: []string{filepath.Join(base, "opt", "grok")}},
-		{name: "GROK_HOME == $HOME declares no root", grokHome: home, want: nil},
-		{name: "GROK_HOME ancestor of $HOME declares no root", grokHome: filepath.Join(base, "home"), want: nil},
-		{name: "GROK_HOME=/ declares no root", grokHome: string(filepath.Separator), want: nil},
+		{name: "GROK_HOME == $HOME is refused", grokHome: home, want: nil, refused: true},
+		{name: "GROK_HOME == $HOME with trailing separator is refused", grokHome: home + string(filepath.Separator), want: nil, refused: true},
+		{name: "GROK_HOME == $HOME spelled through .. is refused", grokHome: filepath.Join(home, "grok-cfg", ".."), want: nil, refused: true},
+		{name: "GROK_HOME=/ is refused", grokHome: string(filepath.Separator), want: nil, refused: true},
+		{name: "GROK_HOME ancestor of $HOME renders but declares no root", grokHome: filepath.Join(base, "home"), want: nil},
 		{name: "unclean ancestor spelling is still caught", grokHome: filepath.Join(home, "..", "..", "home"), want: nil},
 	}
 	for _, tc := range cases {
@@ -433,11 +437,44 @@ func TestGrokVersionRootsNeverSwallowHome(t *testing.T) {
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("VersionRoots(GROK_HOME=%q) = %v, want %v", tc.grokHome, got, tc.want)
 			}
-			// The exclusion is git-backup-only: the adapter still resolves and
-			// validates the same home for rendering/detection.
-			if _, err := a.Detect(); err != nil {
-				t.Fatalf("Detect must not error for an absolute GROK_HOME: %v", err)
+			_, err := a.Detect()
+			if tc.refused {
+				if err == nil {
+					t.Fatalf("Detect(GROK_HOME=%q) = nil error; want validateHome to refuse it", tc.grokHome)
+				}
+				if !strings.Contains(err.Error(), "GROK_HOME") {
+					t.Fatalf("refusal must name GROK_HOME so the user can act on it; got: %v", err)
+				}
+				return
+			}
+			// Not refused: the adapter still resolves and validates the same home
+			// for rendering/detection, whether or not it declares a version root.
+			if err != nil {
+				t.Fatalf("Detect(GROK_HOME=%q) = %v; want nil (an absolute GROK_HOME below the root and off $HOME is legitimate)", tc.grokHome, err)
 			}
 		})
+	}
+}
+
+// TestGrokValidateHome_RefusalIsUniform pins that the `/` and $HOME refusal is
+// the SAME gate on every path — Detect, Render, Ingest, VersionRoots — not a
+// Detect-only nicety, so no command can write to `/` or `$HOME` as if it were
+// Grok's config dir.
+func TestGrokValidateHome_RefusalIsUniform(t *testing.T) {
+	home := t.TempDir()
+	for _, bad := range []string{string(filepath.Separator), home} {
+		a := grok.New(grok.Options{TargetRoot: home, GrokHome: bad, Stderr: io.Discard})
+		if _, err := a.Detect(); err == nil {
+			t.Errorf("Detect(GROK_HOME=%q): want refusal", bad)
+		}
+		if _, err := a.Ingest(adapter.ScopeUser, ""); err == nil {
+			t.Errorf("Ingest(GROK_HOME=%q): want refusal", bad)
+		}
+		if _, _, err := a.Render(secrets.ForRender(source.Canonical{Memory: source.Memory{Body: "x\n"}}), adapter.ScopeUser, ""); err == nil {
+			t.Errorf("Render(GROK_HOME=%q): want refusal", bad)
+		}
+		if roots := a.VersionRoots(adapter.ScopeUser, ""); roots != nil {
+			t.Errorf("VersionRoots(GROK_HOME=%q) = %v; want nil", bad, roots)
+		}
 	}
 }

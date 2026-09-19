@@ -65,13 +65,15 @@ func (a *Adapter) KeyMergeStrategyForPath(path string) string {
 
 // VersionRoots declares the user-scope config dir for destination git backup. An
 // absolute GROK_HOME may legitimately live outside $HOME (that is what upstream
-// provides it for) and is versioned there like any other root — with ONE
-// exclusion: a GROK_HOME that is $HOME itself or an ancestor of it (`/`, `$HOME`,
-// `/home`) declares NO root. Such a root would swallow every other agent's dir in
-// the apply tail's de-nesting pass and have agentsync `git init` the user's home
-// directory (or the filesystem root), breaking the documented invariant that
-// agentsync never inits a repo at `$HOME` (issue #270). The rest of the adapter
-// still renders there; only the git backup opts out, and docs/grok.md says so.
+// provides it for) and is versioned there like any other root. Two layers keep
+// it from ever swallowing the other agents' roots (issue #270): validateHome
+// refuses `/` and $HOME outright (every path errors, not just this one), and
+// this method additionally declares NO root for any other ancestor of $HOME
+// (`/home`, `/Users`) — such a root would fold every other agent's dir into
+// itself in the apply tail's de-nesting pass and have agentsync `git init` above
+// the user's home, breaking the documented invariant that agentsync never inits
+// a repo at `$HOME`. For that ancestor case the rest of the adapter still
+// renders there; only the git backup opts out, and docs/grok.md says so.
 func (a *Adapter) VersionRoots(scope adapter.Scope, project string) []string {
 	if scope != adapter.ScopeUser || a.validateHome() != nil {
 		return nil

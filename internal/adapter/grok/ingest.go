@@ -128,10 +128,36 @@ func (a *Adapter) readMarkdown(path string) (map[string]any, string, bool, error
 	return fm, body, true, nil
 }
 
-// Never turn a relative override into writes relative to agentsync's cwd.
+// validateHome is the single gate every GROK_HOME-consuming path goes through
+// (Detect, Render, Ingest, hooks, VersionRoots). It refuses three values that are
+// never a legitimate Grok config directory and would make agentsync misbehave:
+//
+//   - a relative path — it would turn into writes relative to agentsync's cwd;
+//   - the filesystem root — `/config.toml`, `/AGENTS.md`, `/skills/…`, and a
+//     version root that swallows every other agent's dir;
+//   - $HOME itself (the adapter's TargetRoot) — same collapse, plus agentsync
+//     would `git init` the user's home directory, breaking the documented
+//     invariant that it never inits a repo at $HOME.
+//
+// An absolute GROK_HOME anywhere else, inside or outside $HOME, is what upstream
+// provides the variable for and is accepted. An ANCESTOR of $HOME other than the
+// root (`/home`, `/Users`) is not refused here — that is a plausible if odd
+// place to keep a config dir — but VersionRoots still declares no version root
+// for it, so the git-backup collapse cannot happen either way (issue #270).
 func (a *Adapter) validateHome() error {
-	if a.opts.GrokHome != "" && !filepath.IsAbs(a.opts.GrokHome) {
+	h := a.opts.GrokHome
+	if h == "" {
+		return nil
+	}
+	if !filepath.IsAbs(h) {
 		return fmt.Errorf("GROK_HOME must be an absolute path")
+	}
+	h = filepath.Clean(h)
+	if h == filepath.VolumeName(h)+string(filepath.Separator) {
+		return fmt.Errorf("GROK_HOME must not be the filesystem root (%s)", h)
+	}
+	if home := filepath.Clean(a.opts.TargetRoot); home != "" && home != "." && h == home {
+		return fmt.Errorf("GROK_HOME must not be your home directory (%s); point it at a directory such as %s", h, filepath.Join(home, ".grok"))
 	}
 	return nil
 }

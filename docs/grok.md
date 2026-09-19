@@ -18,13 +18,18 @@ keep redirected runs isolated (it is read through `paths.AgentHomeOverride`,
 never a raw `os.Getenv`). Detection checks the resolved config directory or the
 `grok` executable on `PATH`.
 
-A `GROK_HOME` outside `$HOME` is versioned by destination git backup like any
-other root. The one exclusion: a `GROK_HOME` that *is* `$HOME` or an ancestor of
-it (`/`, `$HOME`, `/home`) declares no version root — the apply tail's
-de-nesting pass would otherwise fold every other agent's directory into it and
-`git init` the home directory, breaking the invariant that agentsync never inits
-a repo at `$HOME`. Rendering and capture still use that directory; only the git
-backup opts out (`TestGrokVersionRootsNeverSwallowHome`).
+Two values are refused outright, on every command: a `GROK_HOME` of `/` and a
+`GROK_HOME` equal to your home directory. Neither is ever a real Grok config
+dir (`/config.toml`, `~/AGENTS.md`, `~/skills/…`), and either would have the
+apply tail's de-nesting pass fold every other agent's directory into it and
+`git init` your home directory or the filesystem root, breaking the invariant
+that agentsync never inits a repo at `$HOME`. The error names `GROK_HOME` and
+suggests `~/.grok`. A `GROK_HOME` outside `$HOME` is versioned by destination
+git backup like any other root. One further exclusion: a `GROK_HOME` that is
+some *other* ancestor of `$HOME` (`/home`, `/Users`) is accepted for rendering
+and capture but declares no version root, so the git backup opts out for the
+same reason (`TestGrokVersionRootsNeverSwallowHome`,
+`TestGrokValidateHome_RefusalIsUniform`).
 
 ## MCP and ownership
 
